@@ -5,13 +5,17 @@ import com.cretas.aims.dto.approval.ExecutionContext;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.entity.ProductType;
@@ -33,6 +37,7 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -203,7 +208,11 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalWorkflowService approvalWorkflowService;
 
-    /** N9: optional graph executor for factories that published SALES_ORDER_APPROVAL workflows. */
+    /** N9: persisted workflow engine for factories that published SALES_ORDER_APPROVAL workflows. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
+
+    /** Legacy in-memory executor retained for compatibility with older partial deployments. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ApprovalWorkflowExecutor approvalWorkflowExecutor;
 
@@ -825,11 +834,18 @@ public class SalesServiceImpl implements SalesService {
         validatePriceBeforeFinanceReview(factoryId, order.getId(), order);
 
         Map<String, Object> context = buildSalesApprovalContext(order);
+        if (Boolean.TRUE.equals(context.get("externalOrder"))) {
+            return approveFinanceForOrder(factoryId, order, "外部渠道订单免审，自动通过", null, reviewerId);
+        }
+
+        if (hasActiveSalesWorkflow(factoryId)) {
+            return routeSalesOrderByWorkflow(factoryId, order, context, notes, reviewerId);
+        }
+
         boolean requiresApproval = approvalChainService != null
                 && approvalChainService.requiresApproval(factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
 
         if (requiresApproval) {
-            startSalesApprovalWorkflowIfConfigured(factoryId, order, context);
             checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
             order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
             order.setFinanceReviewedBy(null);
@@ -845,13 +861,19 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private boolean hasSalesApprovalPolicy(String factoryId) {
-        boolean hasGraph = approvalWorkflowService != null
-                && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
-        if (hasGraph) {
+        if (hasActiveSalesWorkflow(factoryId)) {
             return true;
         }
         return approvalChainService != null
                 && !approvalChainService.getConfigsByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isEmpty();
+    }
+
+    private boolean hasActiveSalesWorkflow(String factoryId) {
+        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, "SALES_ORDER")) {
+            return true;
+        }
+        return approvalWorkflowService != null
+                && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
     }
 
     private Map<String, Object> buildSalesApprovalContext(SalesOrder order) {
@@ -864,8 +886,101 @@ public class SalesServiceImpl implements SalesService {
         context.put("customerId", order.getCustomerId() != null ? order.getCustomerId() : "");
         context.put("customerName", order.getCustomerName() != null ? order.getCustomerName() : "");
         context.put("externalOrderTitle", order.getExternalOrderTitle() != null ? order.getExternalOrderTitle() : "");
-        context.put("externalOrder", order.getExternalOrderTitle() != null && !order.getExternalOrderTitle().isBlank());
+        context.put("externalOrder", isExternalChannelOrder(order));
         return context;
+    }
+
+    private boolean isExternalChannelOrder(SalesOrder order) {
+        if (order == null) {
+            return false;
+        }
+        if (hasText(order.getExternalOrderTitle())) {
+            return true;
+        }
+        Customer customer = null;
+        if (customerRepository != null && hasText(order.getCustomerId())) {
+            try {
+                Optional<Customer> found = customerRepository.findByIdAndFactoryId(order.getCustomerId(), order.getFactoryId());
+                if (found != null && found.isPresent()) {
+                    customer = found.get();
+                }
+            } catch (Exception e) {
+                log.warn("加载客户渠道信息失败，按普通销售订单处理: orderId={}, customerId={}, error={}",
+                        order.getId(), order.getCustomerId(), e.getMessage());
+            }
+        }
+        String customerName = customer != null ? customer.getName() : order.getCustomerName();
+        String businessType = customer != null ? customer.getBusinessType() : null;
+        String customerType = customer != null ? customer.getCustomerType() : null;
+        String type = customer != null ? customer.getType() : null;
+        CustomerSource source = customer != null ? customer.getSource() : null;
+        return source == CustomerSource.PLATFORM
+                || hasExternalChannelToken(customerName)
+                || hasExternalChannelToken(businessType)
+                || hasExternalChannelToken(customerType)
+                || hasExternalChannelToken(type);
+    }
+
+    private boolean hasExternalChannelToken(String value) {
+        if (!hasText(value)) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("external")
+                || normalized.contains("channel")
+                || normalized.contains("platform")
+                || normalized.contains("marketplace")
+                || normalized.contains("third_party")
+                || normalized.contains("外部")
+                || normalized.contains("渠道")
+                || normalized.contains("平台");
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private SalesOrder routeSalesOrderByWorkflow(String factoryId, SalesOrder order, Map<String, Object> context,
+                                                 String notes, Long reviewerId) {
+        if (workflowEngine == null) {
+            throw new BusinessException(409,
+                    "销售订单审批工作流已配置，但审批引擎不可用，无法判定是否需要财审")
+                    .withHint("请检查审批工作流引擎配置，或改用审批链金额阈值配置")
+                    .withHintTarget("approvalWorkflow");
+        }
+
+        ApprovalWorkflowInstance instance = workflowEngine.getCurrentInstance(factoryId, "SALES_ORDER", order.getId())
+                .filter(existing -> existing.getStatus() == InstanceStatus.RUNNING)
+                .orElseGet(() -> workflowEngine.startWorkflow(
+                        factoryId, "SALES_ORDER", order.getId(), context, order.getCreatedBy()));
+
+        if (instance.getStatus() == InstanceStatus.RUNNING) {
+            checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
+            order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+            order.setFinanceReviewedBy(null);
+            order.setFinanceReviewedAt(null);
+            order.setFinanceReviewNotes(notes);
+            SalesOrder saved = salesOrderRepository.save(order);
+            log.info("销售订单进入审批工作流: orderId={}, orderNumber={}, instanceId={}, amount={}",
+                    order.getId(), saved.getOrderNumber(), instance.getId(), saved.getTotalAmount());
+            return saved;
+        }
+
+        if (instance.getStatus() == InstanceStatus.APPROVED) {
+            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, reviewerId);
+        }
+
+        if (instance.getStatus() == InstanceStatus.REJECTED) {
+            checkTransitionAllowed(factoryId, order.getStatus().name(), "FINANCE_REJECTED");
+            order.setStatus(SalesOrderStatus.FINANCE_REJECTED);
+            order.setFinanceReviewNotes("销售审批工作流自动拒绝");
+            return salesOrderRepository.save(order);
+        }
+
+        throw new BusinessException(409,
+                "销售订单审批工作流未得到有效审批结果: " + instance.getStatus())
+                .withHint("请检查销售订单审批工作流配置后重试")
+                .withHintTarget("approvalWorkflow");
     }
 
     private void startSalesApprovalWorkflowIfConfigured(
