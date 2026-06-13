@@ -86,6 +86,7 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     public enum MaterialCategory {
         RAW,        // 原料
         AUXILIARY,  // 辅料
-        PACKAGING   // 包装
+        PACKAGING,  // 包装
+        SEMI_FINISHED // 半成品
     }
 }

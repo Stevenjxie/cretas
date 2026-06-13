@@ -752,6 +752,10 @@ public class PrintController {
             p.put("productionDate", p.get("plannedDate"));
             p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
                     ? plan.getExpectedCompletionDate().toString() : "-");
+            p.put("createdBy", plan.getCreatedBy() != null ? plan.getCreatedBy().toString() : "-");
+            p.put("createdByName", plan.getCreatedByName() != null && !plan.getCreatedByName().isBlank()
+                    ? plan.getCreatedByName() : "-");
+            p.put("preparedBy", p.get("createdByName"));
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {

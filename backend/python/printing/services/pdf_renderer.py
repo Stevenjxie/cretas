@@ -608,7 +608,7 @@ def render_production_work_order(data: dict) -> bytes:
       factoryName, planId, planNumber, productionOrderNumber, salesOrderNumbers,
       productName, productUnit, plannedQuantity, expectedOutput, status,
       plannedDate, productionDate, expectedCompletionDate, printDate,
-      printedBy, printedAccount,
+      createdByName, createdBy, printedBy, printedAccount,
       materialItems: [{materialName, category, unit, plannedRawQty,
                       plannedAuxiliaryQty, plannedSemiFinishedQty, actualUsedQty}],
       processes: [{seq, name, standardHours, operator}],
@@ -633,6 +633,8 @@ def render_production_work_order(data: dict) -> bytes:
             ("状态", data.get("status", "-")),
             ("生产日期", data.get("productionDate") or data.get("plannedDate", "-")),
             ("打印日期", data.get("printDate", "-")),
+            ("制单人", data.get("createdByName") or data.get("preparedBy", "-")),
+            ("制单账号", data.get("createdBy", "-")),
             ("打印人", data.get("printedBy", "-")),
             ("打印账号", data.get("printedAccount", "-")),
             ("预计完成", data.get("expectedCompletionDate", "-")),
@@ -658,6 +660,10 @@ def render_production_work_order(data: dict) -> bytes:
             s["font"],
         ),
     ]
+    if not data.get("materialItems"):
+        story.extend([Spacer(1, 0.2 * cm), Paragraph("暂无真实物料需求数据，未填充假物料。", s["body"])])
+    if not data.get("processes"):
+        story.extend([Spacer(1, 0.2 * cm), Paragraph("暂无真实工序任务数据，未填充假工序。", s["body"])])
     if data.get("remark"):
         story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
                       Paragraph(str(data["remark"]), s["body"])])

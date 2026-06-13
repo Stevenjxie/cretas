@@ -78,6 +78,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
     /**
      * T144: 读取物料的实际库存单位 = AVAILABLE 批次的 {@code MaterialBatch.quantityUnit} (称重口径 kg),
      * <b>不是</b> {@code RawMaterialType.unit} (箱). 物料需求单需求量与仓库实际称重领料口径一致.
@@ -181,9 +185,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setRequisition(mr);
             item.setMaterialTypeId(bom.getMaterialTypeId());
             item.setMaterialName(bom.getMaterialName());
-            // P0-14: 从 BOM 透传物料分类 (RAW/AUXILIARY/PACKAGING)
+            // P0-14/N5: 从 BOM 透传物料分类; 半成品 BOM 行用引用字段识别, 不伪造分类.
             MaterialCategory category = MaterialCategory.RAW;
-            if (bom.getMaterialCategory() != null) {
+            if (hasText(bom.getSemiFinishedRefCode()) || hasText(bom.getSubProductTypeId())) {
+                category = MaterialCategory.SEMI_FINISHED;
+            } else if (bom.getMaterialCategory() != null) {
                 try {
                     category = MaterialCategory.valueOf(bom.getMaterialCategory());
                 } catch (IllegalArgumentException ex) {
