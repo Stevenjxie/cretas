@@ -183,7 +183,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<YieldReportRequest.LaborSegment> segs = effSegs;
         BigDecimal laborCost = computeLaborCost(segs, effReqWorkerCount, effReqWorkMinutes, hourlyRate);
         BigDecimal materialCost = computeMaterialCost(effMaterialRefs,
-                sourceWip, effSourceWipQuantity,
+                sourceWip, effSourceWipQuantity, effInput,
                 factoryId, t.getWorkProcessId(), effOutput);
 
         // 适配单元3: 多段工时时, totalWorkMinutes = Σ段时长, totalWorkers = MAX headcount (峰值, 修 M2);
@@ -973,7 +973,8 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 调料/包材 recipe 未配置 (factoryId/workProcessId 为 null, 或无 active recipe) → 该项 0 贡献不影响其他项。
      */
     private BigDecimal computeMaterialCost(List<MaterialBatchRef> refs,
-                                           SemiFinishedInventory sourceWip, BigDecimal inputQuantity,
+                                           SemiFinishedInventory sourceWip, BigDecimal sourceWipQuantity,
+                                           BigDecimal recipeInputQuantity,
                                            String factoryId, String workProcessId, BigDecimal outputQuantity) {
         BigDecimal cost = null;  // null = 至今无任何有价项
         // 1) 原料领用: 每个 ref 的 quantity × 批次 unitPrice (unitPrice 可能被脱敏为 null)
@@ -987,8 +988,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
         // 2) 半成品领用: consumedQty (= 本道 inputQuantity) × sourceWip.unitCost
-        if (sourceWip != null && sourceWip.getUnitCost() != null && inputQuantity != null) {
-            BigDecimal line = inputQuantity.multiply(sourceWip.getUnitCost());
+        if (sourceWip != null && sourceWip.getUnitCost() != null && sourceWipQuantity != null) {
+            BigDecimal line = sourceWipQuantity.multiply(sourceWip.getUnitCost());
             cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
         }
         // 3) P5: 调料/包材配方成本 (叠加, 不与原料/WIP 重复)
@@ -999,9 +1000,9 @@ public class YieldReportServiceImpl implements YieldReportService {
                 if (recipe.getUnitCost() == null || !Boolean.TRUE.equals(recipe.getIsActive())) continue;
                 BigDecimal line = null;
                 if (recipe.getRecipeType() == ProcessMaterialRecipe.RecipeType.SEASONING
-                        && inputQuantity != null) {
+                        && recipeInputQuantity != null) {
                     // 调料: 元/kg投入 × 本道投入量
-                    line = recipe.getUnitCost().multiply(inputQuantity);
+                    line = recipe.getUnitCost().multiply(recipeInputQuantity);
                 } else if (recipe.getRecipeType() == ProcessMaterialRecipe.RecipeType.PACKAGING
                         && outputQuantity != null) {
                     // 包材: 元/盒产出 × 本道产出量 (盒)

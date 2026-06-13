@@ -64,7 +64,9 @@ class RBACWarehouseManagerIsolationTest {
             // 税率 (百分比, 不是钱)
             "taxRate",
             // 是否价格敏感 entity-level boolean 标志, PR #423 之前/之后都不是钱
-            "priceSensitive"
+            "priceSensitive",
+            // Sales-order warning messages only surface rule text; numeric price fields stay separately masked.
+            "priceWarnings"
     );
 
     /**
