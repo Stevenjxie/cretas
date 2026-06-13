@@ -869,6 +869,10 @@ function isStartable(status: string) {
   return status === 'PENDING';
 }
 
+function canPrintPlanDocuments(status: string) {
+  return ['PENDING', 'CONFIRMED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(String(status || '').toUpperCase());
+}
+
 function planRowClassName({ row }: { row: TableRow }): string {
   return planRowClassNameByStatus(String(row.status || ''));
 }
@@ -1097,11 +1101,12 @@ function handleAiFill(params: TableRow) {
     >
       <template #default>
         <div style="font-size: 13px; line-height: 1.7;">
-          <strong>计划确认后，根据 BOM 配方和库存情况选择以下路径之一：</strong>
+          <strong>计划确认后，先进入未完成列表；原料库存不足只做预警，不阻断开工或结单：</strong>
           <ul style="margin: 4px 0 4px 18px; padding: 0;">
             <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。</li>
-            <li><strong>开工（转为批次）</strong>：主操作。将计划转为生产批次并开始生产（自动建批次 + 工序任务，供 APP 逐道报工）。开工前系统先校验原料库存是否充足，不足会阻断并提示缺口。</li>
-            <li><strong>仅标进行中（不建批次）</strong>：在「更多」菜单中。只把计划标成进行中、不建批次，适用于不需逐道报工、直接在 PC 端录产量的场景（同样先校验库存）。</li>
+            <li><strong>完成生产</strong>：PC 文员逐单勾选未完成计划，录入实际产量后结单；缺料信息会在列表和弹窗里作为参考值显示。</li>
+            <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
+            <li><strong>仅标进行中（不建批次）</strong>：在「更多」菜单中。只把计划标成进行中、不建批次，适用于不需逐道报工、直接在 PC 端录产量的场景。</li>
           </ul>
           <strong>完成后</strong>：可通过 APP「报工审批」逐工序上报，或在 PC 端「完成生产」录入实际产量结束计划。
           <span style="color: var(--text-color-secondary, #909399);">
@@ -1270,16 +1275,26 @@ function handleAiFill(params: TableRow) {
         <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看</el-button>
-            <!-- T138 方案A: 转为批次 = 开工主路径(建批次+spawn工序任务, F006逐道报工), 单一主操作显著按钮 -->
+            <el-button
+              v-if="canWrite && isUnfinishedStatus(row.status)"
+              type="primary"
+              size="small"
+              :icon="CircleCheck"
+              :disabled="actionLoading"
+              title="PC 文员逐单录入实际产量并完成计划"
+              @click="handleComplete(row)"
+            >完成</el-button>
+            <!-- 6.12 复核: PC 主路径是未完成列表直接完成；转批次保留给 APP 逐道报工。 -->
             <el-button
               v-if="canWrite && isStartable(row.status)"
-              type="primary"
+              type="success"
+              link
               size="small"
               :icon="VideoPlay"
               :disabled="actionLoading"
               title="转为生产批次并开工(建批次+工序任务, 用于 APP 逐道报工)"
               @click="handleCreateBatch(row)"
-            >开工</el-button>
+            >APP报工</el-button>
             <el-button
               v-if="canWrite && isStartable(row.status)"
               type="warning"
@@ -1288,15 +1303,6 @@ function handleAiFill(params: TableRow) {
               :disabled="actionLoading"
               @click="handleGenerateTransfer(row)"
             >生成调拨单</el-button>
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status)"
-              type="primary"
-              link
-              size="small"
-              :icon="CircleCheck"
-              :disabled="actionLoading"
-              @click="handleComplete(row)"
-            >完成</el-button>
             <el-button
               v-if="canWrite && (isPendingStatus(row.status) || row.status === 'IN_PROGRESS')"
               type="danger"
@@ -1308,19 +1314,19 @@ function handleAiFill(params: TableRow) {
             >取消</el-button>
             <!-- SP12: 打印生产工单 (PrintController /print/production-work-order/{planId}) -->
             <el-button
-              v-if="['CONFIRMED','APPROVED','IN_PROGRESS','COMPLETED'].includes(String(row.status))"
+              v-if="canPrintPlanDocuments(row.status)"
               type="info"
               link
               size="small"
-              @click="safePrint('production-work-order', factoryId.value, String(row.id), { fileName: `生产工单_${row.planNumber || row.id}` })"
+              @click="safePrint('production-work-order', factoryId, String(row.id), { fileName: `生产工单_${row.planNumber || row.id}` })"
             >打印工单</el-button>
             <!-- SP12: 打印汇总领料单 (PrintController /print/consolidated-material-requisition/{planId}) -->
             <el-button
-              v-if="['CONFIRMED','APPROVED','IN_PROGRESS','COMPLETED'].includes(String(row.status))"
+              v-if="canPrintPlanDocuments(row.status)"
               type="info"
               link
               size="small"
-              @click="safePrint('consolidated-material-requisition', factoryId.value, String(row.id), { fileName: `汇总领料单_${row.planNumber || row.id}` })"
+              @click="safePrint('consolidated-material-requisition', factoryId, String(row.id), { fileName: `汇总领料单_${row.planNumber || row.id}` })"
             >领料单</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
