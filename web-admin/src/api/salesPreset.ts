@@ -9,68 +9,76 @@ import { getFactoryId } from '@/api/smartbi/common';
 
 const base = () => `/api/smartbi/${getFactoryId()}/sales-preset`;
 
-export interface DailyReport {
+export interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  message: string;
+}
+
+export interface TaxBreakdown {
+  revenue: number;
+  taxableAmount: number;
+  taxAmount: number;
+  totalAmountWithTax: number;
+}
+
+export interface DailyReport extends TaxBreakdown {
   date: string;
   orderCount: number;
-  revenue: number;
   paid: number;
   unpaid: number;
 }
 
-export interface MonthlyReport {
+export interface MonthlyReport extends TaxBreakdown {
   yearMonth: string;
   orderCount: number;
-  revenue: number;
   paid: number;
   unpaid: number;
-  daily: Array<{ date: string; orderCount: number; revenue: number }>;
+  daily: Array<{ date: string; orderCount: number } & TaxBreakdown>;
 }
 
-export interface YearlyReport {
+export interface YearlyReport extends TaxBreakdown {
   year: number;
   orderCount: number;
-  revenue: number;
   paid: number;
-  monthly: Array<{ month: number; orderCount: number; revenue: number }>;
+  monthly: Array<{ month: number; orderCount: number } & TaxBreakdown>;
 }
 
-export interface CustomerRankRow {
+export interface CustomerRankRow extends TaxBreakdown {
   rank: number;
   customerId: string;
   customerName: string;
   orderCount: number;
-  revenue: number;
   paid: number;
 }
 
-export interface ProductRankRow {
+export interface ProductRankRow extends TaxBreakdown {
   rank: number;
   productTypeId: string;
   productName: string | null;
   totalQty: number;
   unit: string | null;
-  revenue: number;
   orderCount: number;
 }
 
-export function fetchDailyReport(date?: string): Promise<{ success: boolean; data: DailyReport }> {
+export function fetchDailyReport(date?: string): Promise<ApiResponse<DailyReport>> {
   const q = date ? `?date=${encodeURIComponent(date)}` : '';
   return pythonFetch(`${base()}/daily-report${q}`);
 }
 
-export function fetchMonthlyReport(yearMonth?: string): Promise<{ success: boolean; data: MonthlyReport }> {
+export function fetchMonthlyReport(yearMonth?: string): Promise<ApiResponse<MonthlyReport>> {
   const q = yearMonth ? `?yearMonth=${encodeURIComponent(yearMonth)}` : '';
   return pythonFetch(`${base()}/monthly-report${q}`);
 }
 
-export function fetchYearlyReport(year?: number): Promise<{ success: boolean; data: YearlyReport }> {
+export function fetchYearlyReport(year?: number): Promise<ApiResponse<YearlyReport>> {
   const q = year ? `?year=${year}` : '';
   return pythonFetch(`${base()}/yearly-report${q}`);
 }
 
 export function fetchCustomerRank(
   startDate?: string, endDate?: string, limit = 20,
-): Promise<{ success: boolean; data: { startDate: string; endDate: string; rank: CustomerRankRow[] } }> {
+): Promise<ApiResponse<{ startDate: string; endDate: string; rank: CustomerRankRow[] }>> {
   const q = new URLSearchParams();
   if (startDate) q.set('startDate', startDate);
   if (endDate) q.set('endDate', endDate);
@@ -80,7 +88,7 @@ export function fetchCustomerRank(
 
 export function fetchProductRank(
   startDate?: string, endDate?: string, limit = 20,
-): Promise<{ success: boolean; data: { startDate: string; endDate: string; rank: ProductRankRow[] } }> {
+): Promise<ApiResponse<{ startDate: string; endDate: string; rank: ProductRankRow[] }>> {
   const q = new URLSearchParams();
   if (startDate) q.set('startDate', startDate);
   if (endDate) q.set('endDate', endDate);

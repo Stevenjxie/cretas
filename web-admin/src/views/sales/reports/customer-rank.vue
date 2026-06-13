@@ -8,6 +8,10 @@ const loading = ref(false);
 const dateRange = ref<[string, string] | null>(null);
 const limit = ref(20);
 
+function money(value: number | null | undefined): string {
+  return `¥ ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -47,11 +51,17 @@ onMounted(load);
       <el-table-column prop="rank" label="排名" width="80" />
       <el-table-column prop="customerName" label="客户" min-width="200" />
       <el-table-column prop="orderCount" label="订单数" width="100" />
-      <el-table-column label="销售额" width="160">
-        <template #default="{ row }">¥ {{ row.revenue.toLocaleString() }}</template>
+      <el-table-column label="含税销售额" width="160">
+        <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
+      </el-table-column>
+      <el-table-column label="未税金额" width="160">
+        <template #default="{ row }">{{ money(row.taxableAmount) }}</template>
+      </el-table-column>
+      <el-table-column label="税额" width="140">
+        <template #default="{ row }">{{ money(row.taxAmount) }}</template>
       </el-table-column>
       <el-table-column label="已收款" width="160">
-        <template #default="{ row }">¥ {{ row.paid.toLocaleString() }}</template>
+        <template #default="{ row }">{{ money(row.paid) }}</template>
       </el-table-column>
     </el-table>
   </div>

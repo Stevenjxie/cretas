@@ -7,6 +7,10 @@ const data = ref<DailyReport | null>(null);
 const loading = ref(false);
 const selectedDate = ref<string>(new Date().toISOString().slice(0, 10));
 
+function money(value: number | null | undefined): string {
+  return `¥ ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -47,16 +51,24 @@ onMounted(load);
         <div class="value">{{ data.orderCount }}</div>
       </el-card>
       <el-card class="kpi primary">
-        <div class="label">销售额</div>
-        <div class="value">¥ {{ data.revenue.toLocaleString() }}</div>
+        <div class="label">含税销售额</div>
+        <div class="value">{{ money(data.totalAmountWithTax) }}</div>
+      </el-card>
+      <el-card class="kpi">
+        <div class="label">未税金额</div>
+        <div class="value">{{ money(data.taxableAmount) }}</div>
+      </el-card>
+      <el-card class="kpi">
+        <div class="label">税额</div>
+        <div class="value">{{ money(data.taxAmount) }}</div>
       </el-card>
       <el-card class="kpi success">
         <div class="label">已收款</div>
-        <div class="value">¥ {{ data.paid.toLocaleString() }}</div>
+        <div class="value">{{ money(data.paid) }}</div>
       </el-card>
       <el-card class="kpi warning">
         <div class="label">未收款</div>
-        <div class="value">¥ {{ data.unpaid.toLocaleString() }}</div>
+        <div class="value">{{ money(data.unpaid) }}</div>
       </el-card>
     </div>
   </div>
