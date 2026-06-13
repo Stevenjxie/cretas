@@ -24,6 +24,30 @@ describe('menuConfig — baseline structure (pre-merge)', () => {
   });
 });
 
+describe('menuConfig - Liushanmen department workflow entries', () => {
+  function childPaths(groupPath: string): string[] {
+    return findGroup(groupPath)?.children?.map((c) => c.path) ?? [];
+  }
+
+  it('keeps finance review queues discoverable under business modules and finance', () => {
+    expect(childPaths('/procurement')).toContain('/procurement/finance-review');
+    expect(childPaths('/sales')).toContain('/sales/finance-review');
+    expect(childPaths('/finance')).toEqual(expect.arrayContaining([
+      '/sales/finance-review',
+      '/procurement/finance-review',
+    ]));
+  });
+
+  it('keeps department management and workflow setup reachable', () => {
+    expect(childPaths('/hr')).toContain('/hr/departments');
+    expect(childPaths('/system')).toEqual(expect.arrayContaining([
+      '/system/approval-chains',
+      '/system/workflow-designer',
+      '/canvas-editor',
+    ]));
+  });
+});
+
 describe('menuConfig — merged 数据与分析 group (WS4 经营分析合并)', () => {
   it('顶级 /analytics 组已删除 (合并入 /smart-bi)', () => {
     expect(menuConfig.find((m) => m.path === '/analytics')).toBeUndefined();

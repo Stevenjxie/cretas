@@ -7,6 +7,16 @@ import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import { buildHubRedirect } from './analysisHubRedirect';
 
+const financeReviewRoles = [
+  'factory_super_admin',
+  'platform_admin',
+  'procurement_manager',
+  'finance_manager',
+  'dispatcher',
+  'permission_admin',
+  'department_admin',
+];
+
 // 基础路由 - 不需要权限
 const baseRoutes: RouteRecordRaw[] = [
   {
@@ -502,7 +512,7 @@ const businessRoutes: RouteRecordRaw[] = [
               requiresAuth: true,
               title: '财务待审采购单',
               module: 'finance',
-              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'dispatcher', 'permission_admin', 'department_admin']
+              roles: financeReviewRoles
             }
           },
           {
@@ -514,7 +524,7 @@ const businessRoutes: RouteRecordRaw[] = [
               title: '财务审核详情',
               module: 'finance',
               hidden: true,
-              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'dispatcher', 'permission_admin', 'department_admin']
+              roles: financeReviewRoles
             }
           },
           // P-NUCLEAR-1 (28-Backlog #30): 核价单 询价 → 核价 → 采购 pipeline
@@ -715,13 +725,13 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'finance-review',
             name: 'SalesOrderFinanceReviewList',
             component: () => import('@/views/sales/finance-review/list.vue'),
-            meta: { requiresAuth: true, title: '财务待审销售单', module: 'finance' }
+            meta: { requiresAuth: true, title: '财务待审销售单', module: 'finance', roles: financeReviewRoles }
           },
           {
             path: 'finance-review/:id',
             name: 'SalesOrderFinanceReviewDetail',
             component: () => import('@/views/sales/finance-review/detail.vue'),
-            meta: { requiresAuth: true, title: '销售财务审核详情', module: 'finance', hidden: true }
+            meta: { requiresAuth: true, title: '销售财务审核详情', module: 'finance', hidden: true, roles: financeReviewRoles }
           },
           // Sprint 4 W2 S-REMIND-1: 我的提醒
           {
