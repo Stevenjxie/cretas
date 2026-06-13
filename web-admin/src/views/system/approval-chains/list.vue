@@ -40,9 +40,12 @@ const form = ref({
   decisionType: 'FORCE_INSERT',
   name: '',
   description: '',
+  triggerCondition: '',
   approvalLevel: 1,
   requiredApprovers: 1,
   approverRoles: '',
+  autoApproveCondition: '',
+  autoRejectCondition: '',
   timeoutMinutes: null as number | null,
   priority: 0,
   enabled: true,
@@ -56,9 +59,12 @@ function openCreate() {
     decisionType: 'FORCE_INSERT',
     name: '',
     description: '',
+    triggerCondition: '',
     approvalLevel: 1,
     requiredApprovers: 1,
     approverRoles: '',
+    autoApproveCondition: '',
+    autoRejectCondition: '',
     timeoutMinutes: null,
     priority: 0,
     enabled: true,
@@ -72,6 +78,7 @@ function openEdit(row: TableRow) {
     decisionType: String(row.decisionType || 'FORCE_INSERT'),
     name: String(row.name || ''),
     description: String(row.description || ''),
+    triggerCondition: String(row.triggerCondition || ''),
     approvalLevel: Number(row.approvalLevel || 1),
     requiredApprovers: Number(row.requiredApprovers || 1),
     // 后端存的是 JSON 数组字符串, 编辑时转回逗号分隔友好格式
@@ -83,6 +90,8 @@ function openEdit(row: TableRow) {
         return Array.isArray(arr) ? arr.join(',') : String(raw);
       } catch { return String(raw); }
     })(),
+    autoApproveCondition: String(row.autoApproveCondition || ''),
+    autoRejectCondition: String(row.autoRejectCondition || ''),
     timeoutMinutes: row.timeoutMinutes as number | null ?? null,
     priority: Number(row.priority || 0),
     enabled: row.enabled !== false,
@@ -137,6 +146,11 @@ const decisionTypeMap: Record<string, string> = {
   PRODUCTION_PLAN_CHANGE: '生产计划变更',
   EQUIPMENT_STATUS_CHANGE: '设备状态变更',
   PRODUCTION_REVERSAL_APPROVAL: '生产撤单审批', // SP12
+  PURCHASE_ORDER_APPROVAL: '采购订单审批',
+  PURCHASE_PAYMENT_APPROVAL: '采购付款审批',
+  PURCHASE_RETURN_APPROVAL: '采购退货审批',
+  SALES_ORDER_APPROVAL: '销售订单审批',
+  SALES_RETURN_APPROVAL: '销售退货审批',
   CUSTOM: '自定义',
 };
 </script>
@@ -165,6 +179,8 @@ const decisionTypeMap: Record<string, string> = {
         <el-table-column prop="approvalLevel" label="审批级别" width="100" align="center" />
         <el-table-column prop="requiredApprovers" label="所需审批人数" width="120" align="center" />
         <el-table-column prop="approverRoles" label="审批角色" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="triggerCondition" label="触发条件" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="autoApproveCondition" label="自动通过条件" min-width="180" show-overflow-tooltip />
         <el-table-column prop="timeoutMinutes" label="超时(分钟)" width="100" />
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
@@ -199,6 +215,30 @@ const decisionTypeMap: Record<string, string> = {
         </el-form-item>
         <el-form-item label="审批角色">
           <el-input v-model="form.approverRoles" placeholder="多个角色用逗号分隔, 如 finance_manager,factory_super_admin" />
+        </el-form-item>
+        <el-form-item label="触发条件 JSON">
+          <el-input
+            v-model="form.triggerCondition"
+            type="textarea"
+            :rows="2"
+            placeholder='如 {"amount": ">5000"}'
+          />
+        </el-form-item>
+        <el-form-item label="自动通过 JSON">
+          <el-input
+            v-model="form.autoApproveCondition"
+            type="textarea"
+            :rows="2"
+            placeholder='如 {"externalOrder": true}'
+          />
+        </el-form-item>
+        <el-form-item label="自动拒绝 JSON">
+          <el-input
+            v-model="form.autoRejectCondition"
+            type="textarea"
+            :rows="2"
+            placeholder="可留空"
+          />
         </el-form-item>
         <el-form-item label="超时 (分钟)">
           <el-input-number v-model="form.timeoutMinutes" :min="0" style="width: 100%" />
