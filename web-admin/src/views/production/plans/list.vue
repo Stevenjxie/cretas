@@ -37,6 +37,12 @@ import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import { safePrint, printWorkOrderMulti } from '@/api/printApi';
+import {
+  getPlanStatusText,
+  getPlanStatusType,
+  planRowClassNameByStatus,
+  planStatusClass,
+} from './statusVisuals';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -863,52 +869,16 @@ function isStartable(status: string) {
   return status === 'PENDING';
 }
 
-function normalizePlanStatus(status: string): string {
-  return String(status || '').toUpperCase();
-}
-
 function planRowClassName({ row }: { row: TableRow }): string {
-  const status = normalizePlanStatus(String(row.status || ''));
-  if (status === 'PLANNED' || status === 'PENDING') return 'plan-row-pending';
-  if (status === 'IN_PROGRESS') return 'plan-row-in-progress';
-  if (status === 'COMPLETED') return 'plan-row-completed';
-  if (status === 'CANCELLED') return 'plan-row-cancelled';
-  return '';
-}
-
-function planStatusClass(status: string): string {
-  const normalized = normalizePlanStatus(status);
-  if (normalized === 'PLANNED' || normalized === 'PENDING') return 'plan-status-pending';
-  if (normalized === 'IN_PROGRESS') return 'plan-status-in-progress';
-  if (normalized === 'COMPLETED') return 'plan-status-completed';
-  if (normalized === 'CANCELLED') return 'plan-status-cancelled';
-  return 'plan-status-default';
+  return planRowClassNameByStatus(String(row.status || ''));
 }
 
 function getStatusType(status: string) {
-  const map: Record<string, string> = {
-    PLANNED: 'warning',
-    PENDING: 'warning',
-    PREPARED: 'info',  // M-PREP-1: 草稿态
-    IN_PROGRESS: 'warning',
-    COMPLETED: 'success',
-    CANCELLED: 'danger',
-    PAUSED: 'warning'
-  };
-  return map[status?.toUpperCase()] || 'info';
+  return getPlanStatusType(status);
 }
 
 function getStatusText(status: string) {
-  const map: Record<string, string> = {
-    PLANNED: '待执行',
-    PENDING: '未完成',
-    PREPARED: '草稿',  // M-PREP-1: 草稿态
-    IN_PROGRESS: '进行中',
-    COMPLETED: '已完成',
-    CANCELLED: '已取消',
-    PAUSED: '暂停'
-  };
-  return map[status?.toUpperCase()] || status;
+  return getPlanStatusText(status);
 }
 
 // ==================== View Plan ====================
@@ -1975,6 +1945,10 @@ function handleAiFill(params: TableRow) {
   color: var(--text-color-secondary, #909399);
 }
 
+:deep(.el-table__body tr.plan-row-exception > td.el-table__cell) {
+  background: #fde8e8 !important;
+}
+
 :deep(.el-table__body tr.plan-row-pending:hover > td.el-table__cell) {
   background: #ffe9a8 !important;
 }
@@ -1985,6 +1959,10 @@ function handleAiFill(params: TableRow) {
 
 :deep(.el-table__body tr.plan-row-completed:hover > td.el-table__cell) {
   background: #dcf3d0 !important;
+}
+
+:deep(.el-table__body tr.plan-row-exception:hover > td.el-table__cell) {
+  background: #fad1d1 !important;
 }
 
 .plan-status-tag {
@@ -2014,6 +1992,11 @@ function handleAiFill(params: TableRow) {
 
 .plan-status-cancelled {
   --el-tag-bg-color: #909399;
+  --el-tag-text-color: #ffffff;
+}
+
+.plan-status-exception {
+  --el-tag-bg-color: #f56c6c;
   --el-tag-text-color: #ffffff;
 }
 
