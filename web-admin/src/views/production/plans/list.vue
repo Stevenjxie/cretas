@@ -18,8 +18,14 @@ import {
   createSecondaryPlan,
   getReportModeDefault,
   getMaterialAdvisory,
+  getProductionSettlement,
+  confirmProductionWarehouseReceipt,
 } from '@/api/productionPlan';
-import type { ProductionPlanMaterialAdvisory, WipInventoryItem } from '@/api/productionPlan';
+import type {
+  ProductionPlanMaterialAdvisory,
+  ProductionSettlementStatus,
+  WipInventoryItem,
+} from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
 import type { ProductWorkProcessItem } from '@/api/processProduction';
 import { copyProductionPlan } from '@/api/orderCopy';
@@ -49,6 +55,11 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
+const canConfirmReceiptWrite = computed(() =>
+  permissionStore.canWrite('warehouse')
+  || permissionStore.canWrite('production')
+  || permissionStore.canWrite('scheduling')
+);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 function rowActionsFor(row: TableRow) {
@@ -111,6 +122,7 @@ const loading = ref(false);
 const actionLoading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>({});
+const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
 function handleSelectionChange(rows: TableRow[]) {
@@ -388,6 +400,7 @@ async function loadData() {
       tableData.value = response.data.content || [];
       pagination.value.total = response.data.totalElements || 0;
       void loadMaterialAdvisories(tableData.value);
+      void loadSettlementStatuses(tableData.value);
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载生产计划失败');
     }
@@ -430,6 +443,40 @@ async function loadMaterialAdvisories(rows: TableRow[]) {
   materialAdvisoryMap.value = next;
   if (failed) {
     ElMessage({ message: '部分生产计划原料预警加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+  }
+}
+
+async function loadSettlementStatuses(rows: TableRow[]) {
+  if (!factoryId.value) return;
+  const settledRows = rows.filter((row) =>
+    String(row.status || '').toUpperCase() === 'COMPLETED'
+  );
+  if (settledRows.length === 0) {
+    settlementStatusMap.value = {};
+    return;
+  }
+  const entries = await Promise.allSettled(
+    settledRows.map(async (row) => {
+      const planId = String(row.id);
+      const res = await getProductionSettlement(factoryId.value, planId);
+      if (!res.success || !res.data) {
+        throw new Error(res.message || '加载结单状态失败');
+      }
+      return [planId, res.data] as const;
+    })
+  );
+  const next: Record<string, ProductionSettlementStatus> = {};
+  let failed = false;
+  entries.forEach((entry) => {
+    if (entry.status === 'fulfilled') {
+      next[entry.value[0]] = entry.value[1];
+    } else {
+      failed = true;
+    }
+  });
+  settlementStatusMap.value = next;
+  if (failed) {
+    ElMessage({ message: '部分已结单计划入库状态加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -756,6 +803,177 @@ async function submitComplete() {
   }
 }
 
+// ==================== 仓库确认入库 dialog (6.12 中转仓) ====================
+const RECEIPT_VARIANCE_REASON_OPTIONS = [
+  { value: '仓库实收短少', label: '仓库实收短少' },
+  { value: '生产少交', label: '生产少交' },
+  { value: '称重误差', label: '称重误差' },
+  { value: '破损/返工待处理', label: '破损/返工待处理' },
+  { value: '其他', label: '其他（请补充说明）' },
+];
+const RECEIPT_RESPONSIBILITY_OPTIONS = [
+  { value: 'PENDING', label: '待核对' },
+  { value: 'PRODUCTION', label: '生产侧处理' },
+  { value: 'WAREHOUSE', label: '仓库侧处理' },
+  { value: 'WEIGHING_ERROR', label: '称重误差' },
+];
+const receiptDialogVisible = ref(false);
+const receiptLoading = ref(false);
+const receiptRow = ref<TableRow | null>(null);
+const receiptSettlement = ref<ProductionSettlementStatus | null>(null);
+const receiptForm = ref({
+  receivedQuantity: 0,
+  quantityUnit: '',
+  varianceReason: '',
+  otherVarianceReason: '',
+  responsibilitySide: 'PENDING',
+  varianceNote: '',
+});
+
+function getSettlementStatus(row: TableRow): ProductionSettlementStatus | null {
+  return settlementStatusMap.value[String(row.id)] ?? null;
+}
+
+function postingStatusText(status?: string | null): string {
+  const map: Record<string, string> = {
+    PENDING_WAREHOUSE_RECEIPT: '待仓库确认',
+    PENDING_CLEARING: '中转挂账',
+    POSTED_WITH_TOLERANCE: '已入库(容差)',
+    POSTED: '已入库',
+    PENDING_POSTING: '待过账',
+  };
+  return map[String(status || '')] || String(status || '未结单');
+}
+
+function postingStatusType(status?: string | null): string {
+  const map: Record<string, string> = {
+    PENDING_WAREHOUSE_RECEIPT: 'warning',
+    PENDING_CLEARING: 'danger',
+    POSTED_WITH_TOLERANCE: 'success',
+    POSTED: 'success',
+    PENDING_POSTING: 'info',
+  };
+  return map[String(status || '')] || 'info';
+}
+
+function canConfirmReceipt(row: TableRow): boolean {
+  const settlement = getSettlementStatus(row);
+  return canConfirmReceiptWrite.value
+    && String(row.status || '').toUpperCase() === 'COMPLETED'
+    && settlement?.postingStatus === 'PENDING_WAREHOUSE_RECEIPT';
+}
+
+const receiptProductName = computed(() => {
+  const r = receiptRow.value;
+  if (!r) return '';
+  return String(r.productTypeName || r.productName || r.productTypeId || '');
+});
+const receiptPlanNumber = computed(() => {
+  const r = receiptRow.value;
+  if (!r) return '';
+  return String(r.planNumber || r.id || '');
+});
+const receiptReportedQuantity = computed(() =>
+  Number(receiptSettlement.value?.actualFinishedQuantity || 0)
+);
+const receiptReceivedQuantity = computed(() =>
+  Number(receiptForm.value.receivedQuantity || 0)
+);
+const receiptUnit = computed(() =>
+  receiptForm.value.quantityUnit || receiptSettlement.value?.quantityUnit || '件'
+);
+const receiptTolerance = computed(() => {
+  const unit = receiptUnit.value.toLowerCase();
+  if (unit === 'kg' || unit === '公斤' || unit === '千克') return 10;
+  if (unit === 'g' || unit === '克') return 10000;
+  return 0;
+});
+const receiptVarianceQuantity = computed(() =>
+  receiptReportedQuantity.value - receiptReceivedQuantity.value
+);
+const receiptNeedsReason = computed(() => {
+  const variance = Math.abs(receiptVarianceQuantity.value);
+  return variance > 0 && variance > receiptTolerance.value;
+});
+const receiptSubmitDisabledReason = computed(() => {
+  if (!receiptSettlement.value) return '请先加载生产结单状态';
+  if (!receiptReceivedQuantity.value || receiptReceivedQuantity.value <= 0) return '请输入仓库实际收到数量';
+  if (receiptReceivedQuantity.value > receiptReportedQuantity.value) return '仓库实收不能超过生产报产，请先让生产修正结单';
+  if (receiptNeedsReason.value && !receiptForm.value.varianceReason) return '超出容差的差异必须选择原因';
+  if (receiptNeedsReason.value && receiptForm.value.varianceReason === '其他' && !receiptForm.value.otherVarianceReason.trim()) {
+    return '请选择“其他”时必须补充说明';
+  }
+  return '';
+});
+const receiptCanSubmit = computed(() => receiptSubmitDisabledReason.value === '');
+
+function buildReceiptIdempotencyKey(row: TableRow): string {
+  const planId = String(row.id || row.planNumber || 'unknown');
+  return `web-receipt-${planId}-${Date.now()}`;
+}
+
+async function handleWarehouseReceipt(row: TableRow) {
+  if (!factoryId.value || actionLoading.value) return;
+  receiptRow.value = row;
+  receiptLoading.value = true;
+  receiptDialogVisible.value = true;
+  try {
+    const res = await getProductionSettlement(factoryId.value, String(row.id));
+    if (!res.success || !res.data) {
+      ElMessage({ message: res.message || '加载结单状态失败', type: 'error', duration: 0, showClose: true });
+      receiptDialogVisible.value = false;
+      return;
+    }
+    receiptSettlement.value = res.data;
+    receiptForm.value = {
+      receivedQuantity: Number(res.data.actualFinishedQuantity || 0),
+      quantityUnit: String(row.unit || row.quantityUnit || ''),
+      varianceReason: '',
+      otherVarianceReason: '',
+      responsibilitySide: 'PENDING',
+      varianceNote: '',
+    };
+  } catch (error) {
+    handleCatchError(error, '加载结单状态失败');
+    receiptDialogVisible.value = false;
+  } finally {
+    receiptLoading.value = false;
+  }
+}
+
+async function submitWarehouseReceipt() {
+  if (!factoryId.value || !receiptRow.value || !receiptSettlement.value) return;
+  if (!receiptCanSubmit.value) {
+    ElMessage({ message: receiptSubmitDisabledReason.value, type: 'error', duration: 0, showClose: true });
+    return;
+  }
+  actionLoading.value = true;
+  try {
+    const varianceReason = receiptForm.value.varianceReason === '其他'
+      ? receiptForm.value.otherVarianceReason.trim()
+      : receiptForm.value.varianceReason;
+    const res = await confirmProductionWarehouseReceipt(factoryId.value, String(receiptRow.value.id), {
+      idempotencyKey: buildReceiptIdempotencyKey(receiptRow.value),
+      receivedQuantity: receiptReceivedQuantity.value,
+      quantityUnit: receiptUnit.value,
+      varianceReason: varianceReason || null,
+      responsibilitySide: receiptNeedsReason.value ? receiptForm.value.responsibilitySide : null,
+      varianceNote: receiptForm.value.varianceNote || null,
+    });
+    if (res.success) {
+      ElMessage.success(res.data?.message || res.message || '仓库已确认入库');
+      receiptDialogVisible.value = false;
+      await loadData();
+    } else {
+      ElMessage({ message: res.message || '仓库确认失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error) {
+    handleCatchError(error, '仓库确认失败');
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
 // ==================== 取消原因 dialog (#743) ====================
 // 快捷下拉 + 自定义补充, 替代纯 textarea
 const CANCEL_REASON_OPTIONS = [
@@ -938,7 +1156,15 @@ function canPrintPlanDocuments(status: string) {
 
 function nextStepText(row: TableRow) {
   const status = String(row.status || '').toUpperCase();
-  if (status === 'COMPLETED') return '待仓库确认/成本查看';
+  if (status === 'COMPLETED') {
+    const settlement = getSettlementStatus(row);
+    if (!settlement) return '加载入库状态';
+    if (settlement.postingStatus === 'PENDING_WAREHOUSE_RECEIPT') return '仓库确认入库';
+    if (settlement.postingStatus === 'PENDING_CLEARING') return '中转挂账清账';
+    if (settlement.postingStatus === 'POSTED_WITH_TOLERANCE') return '已入库(容差)';
+    if (settlement.postingStatus === 'POSTED') return '成品库存已入库';
+    return postingStatusText(settlement.postingStatus);
+  }
   if (status === 'IN_PROGRESS') return '继续 APP 报工或核对结单';
   if (status === 'PENDING') {
     return row.skipProcessReporting === false ? 'APP 报工下发工序任务' : '核对结单或生成调拨单';
@@ -950,7 +1176,7 @@ function nextStepText(row: TableRow) {
 
 function nextStepTagType(row: TableRow) {
   const status = String(row.status || '').toUpperCase();
-  if (status === 'COMPLETED') return 'success';
+  if (status === 'COMPLETED') return postingStatusType(getSettlementStatus(row)?.postingStatus);
   if (status === 'IN_PROGRESS') return 'warning';
   if (status === 'PENDING') return row.skipProcessReporting === false ? 'primary' : 'info';
   if (status === 'CANCELLED') return 'danger';
@@ -1304,6 +1530,22 @@ function handleAiFill(params: TableRow) {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="入库状态" width="125" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="getSettlementStatus(row)"
+              :type="postingStatusType(getSettlementStatus(row)?.postingStatus)"
+              size="small"
+              effect="plain"
+            >
+              {{ postingStatusText(getSettlementStatus(row)?.postingStatus) }}
+            </el-tag>
+            <el-tag v-else-if="String(row.status || '').toUpperCase() === 'COMPLETED'" type="info" size="small">
+              结单加载中
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="原料参考" width="130" align="center">
           <template #default="{ row }">
             <el-tooltip
@@ -1383,6 +1625,15 @@ function handleAiFill(params: TableRow) {
               title="PC 文员核对实际产量、领用和工时后结单"
               @click="handleComplete(row)"
             >核对结单</el-button>
+            <el-button
+              v-if="canConfirmReceipt(row)"
+              type="success"
+              size="small"
+              :icon="CircleCheck"
+              :disabled="actionLoading"
+              title="仓库确认实际收到数量后，成品才正式入库；差异进入中转挂账"
+              @click="handleWarehouseReceipt(row)"
+            >确认入库</el-button>
             <!-- 6.12 复核: PC 主路径是未完成列表直接完成；转批次保留给 APP 逐道报工。 -->
             <el-button
               v-if="canWrite && isStartable(row.status)"
@@ -1935,6 +2186,153 @@ function handleAiFill(params: TableRow) {
       </template>
     </el-dialog>
 
+    <!-- 6.12: 生产报产与仓库实收必须双方核对；差异进入中转挂账 -->
+    <el-dialog
+      v-model="receiptDialogVisible"
+      :title="receiptProductName ? `仓库确认入库 — ${receiptProductName}` : '仓库确认入库'"
+      width="720px"
+      top="6vh"
+      class="settlement-dialog"
+      destroy-on-close
+      append-to-body
+    >
+      <el-form v-loading="receiptLoading" label-width="124px" class="settlement-form">
+        <div class="settlement-context">
+          <div>
+            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-value">{{ receiptPlanNumber || '-' }}</div>
+          </div>
+          <div>
+            <div class="settlement-context-label">生产报产</div>
+            <div class="settlement-context-value">
+              {{ receiptReportedQuantity }} {{ receiptUnit }}
+            </div>
+          </div>
+          <div>
+            <div class="settlement-context-label">容差</div>
+            <div class="settlement-context-value">
+              {{ receiptTolerance }} {{ receiptUnit }}
+            </div>
+          </div>
+        </div>
+
+        <el-alert
+          title="生产结单后不直接入成品库存；仓库确认实收后才入库。实收短少超过容差会生成中转挂账，待责任归属清账。"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin: 12px 0"
+        />
+
+        <el-form-item label="仓库实收" required>
+          <el-input-number
+            v-model="receiptForm.receivedQuantity"
+            :min="0"
+            :max="receiptReportedQuantity"
+            :precision="2"
+            style="width: 100%"
+          />
+          <div class="settlement-help">
+            上限为生产报产 {{ receiptReportedQuantity }} {{ receiptUnit }}，超过上限需先退回生产修正结单。
+          </div>
+        </el-form-item>
+
+        <div class="receipt-diff-panel">
+          <div>
+            <span>生产报产</span>
+            <strong>{{ receiptReportedQuantity }} {{ receiptUnit }}</strong>
+          </div>
+          <div>
+            <span>仓库实收</span>
+            <strong>{{ receiptReceivedQuantity }} {{ receiptUnit }}</strong>
+          </div>
+          <div :class="{ danger: receiptVarianceQuantity > receiptTolerance }">
+            <span>待核差异</span>
+            <strong>{{ receiptVarianceQuantity }} {{ receiptUnit }}</strong>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="receiptReceivedQuantity > receiptReportedQuantity"
+          title="仓库实收不能超过生产报产，系统已禁止提交。"
+          type="error"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-else-if="receiptNeedsReason"
+          title="差异超过容差，本次确认会生成中转挂账；请选择原因和责任侧。"
+          type="error"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-else-if="receiptVarianceQuantity > 0"
+          title="差异在称重容差内，系统会记录为容差入库，不生成中转挂账。"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+
+        <el-form-item v-if="receiptNeedsReason" label="差异原因" required>
+          <el-select v-model="receiptForm.varianceReason" placeholder="请选择差异原因" style="width: 100%">
+            <el-option
+              v-for="opt in RECEIPT_VARIANCE_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="receiptNeedsReason && receiptForm.varianceReason === '其他'" label="原因补充" required>
+          <el-input
+            v-model="receiptForm.otherVarianceReason"
+            type="textarea"
+            :rows="2"
+            placeholder="请说明差异现场原因"
+          />
+        </el-form-item>
+        <el-form-item v-if="receiptNeedsReason" label="责任侧" required>
+          <el-select v-model="receiptForm.responsibilitySide" placeholder="请选择责任侧" style="width: 100%">
+            <el-option
+              v-for="opt in RECEIPT_RESPONSIBILITY_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="receiptForm.varianceNote"
+            type="textarea"
+            :rows="2"
+            placeholder="可记录称重单号、交接人、现场说明"
+          />
+        </el-form-item>
+        <el-alert
+          v-if="receiptSubmitDisabledReason"
+          :title="receiptSubmitDisabledReason"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 4px"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="receiptDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="actionLoading"
+          :disabled="!receiptCanSubmit"
+          @click="submitWarehouseReceipt"
+        >确认入库</el-button>
+      </template>
+    </el-dialog>
+
     <!-- #743 取消原因 dialog (快捷下拉 + 品名) -->
     <el-dialog
       v-model="cancelDialogVisible"
@@ -2427,6 +2825,46 @@ function handleAiFill(params: TableRow) {
 
   p {
     margin: 0;
+  }
+}
+
+.receipt-diff-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px 124px;
+}
+
+.receipt-diff-panel > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.receipt-diff-panel span {
+  color: var(--text-color-secondary, #909399);
+  font-size: 12px;
+}
+
+.receipt-diff-panel strong {
+  overflow: hidden;
+  color: var(--text-color-primary, #303133);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-diff-panel .danger {
+  border-color: var(--color-danger-light-5, #fab6b6);
+  background: var(--color-danger-light-9, #fef0f0);
+
+  strong {
+    color: var(--color-danger, #f56c6c);
   }
 }
 

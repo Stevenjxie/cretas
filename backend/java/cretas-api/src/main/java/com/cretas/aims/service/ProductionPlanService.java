@@ -8,6 +8,8 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import java.io.InputStream;
@@ -120,6 +122,12 @@ public interface ProductionPlanService {
 
     ProductionSettlementResponse settleProduction(String factoryId, String planId,
                                                   ProductionSettlementRequest request, Long settledBy);
+
+    ProductionSettlementResponse getProductionSettlement(String factoryId, String planId);
+
+    ProductionWarehouseReceiptResponse confirmWarehouseReceipt(String factoryId, String planId,
+                                                               ProductionWarehouseReceiptRequest request,
+                                                               Long receivedBy);
      /**
      * 取消生产计划
       */

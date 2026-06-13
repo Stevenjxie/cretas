@@ -74,6 +74,61 @@ export function getMaterialAdvisory(factoryId: string, planId: string) {
   return get<ProductionPlanMaterialAdvisory>(`/${factoryId}/production-plans/${planId}/material-advisory`)
 }
 
+export interface ProductionSettlementStatus {
+  settlementId: string
+  productionPlanId: string
+  planNumber: string
+  status: string
+  plannedQuantity: number
+  actualFinishedQuantity: number
+  actualSemiFinishedQuantity: number
+  quantityUnit?: string | null
+  postingStatus: string
+  postingMessage?: string | null
+  warehouseReceivedQuantity?: number | null
+  warehouseVarianceQuantity?: number | null
+  finishedGoodsBatchId?: string | null
+  transitLedgerId?: string | null
+  warnings?: string[]
+}
+
+export interface ProductionWarehouseReceiptRequest {
+  idempotencyKey: string
+  receivedQuantity: number
+  quantityUnit?: string | null
+  varianceReason?: string | null
+  responsibilitySide?: string | null
+  varianceNote?: string | null
+}
+
+export interface ProductionWarehouseReceiptResponse {
+  settlementId: string
+  productionPlanId: string
+  planNumber: string
+  productionReportedQuantity: number
+  warehouseReceivedQuantity: number
+  varianceQuantity: number
+  toleranceQuantity: number
+  quantityUnit: string
+  postingStatus: string
+  finishedGoodsBatchId?: string | null
+  transitLedgerId?: string | null
+  message?: string | null
+  warnings?: string[]
+}
+
+export function getProductionSettlement(factoryId: string, planId: string) {
+  return get<ProductionSettlementStatus>(`/${factoryId}/production-plans/${planId}/settlement`)
+}
+
+export function confirmProductionWarehouseReceipt(
+  factoryId: string,
+  planId: string,
+  data: ProductionWarehouseReceiptRequest,
+) {
+  return post<ProductionWarehouseReceiptResponse>(`/${factoryId}/production-plans/${planId}/warehouse-receipt`, data)
+}
+
 /** SP2: WIP 半成品可用库存列表 (GET /wip/available) */
 export interface WipInventoryItem {
   id: number
