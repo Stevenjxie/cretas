@@ -11,6 +11,7 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionPlan;
@@ -349,6 +350,25 @@ public class ProductionPlanController {
     /**
      * 核对生产结单
      */
+    @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/transit-ledger/clear")
+    @Operation(summary = "清理生产中转挂账", description = "六扇门: 仓库确认入库产生差异挂账后, 由责任侧处理并清账")
+    public ApiResponse<ProductionWarehouseReceiptResponse> clearProductionTransitLedger(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody ProductionTransitClearingRequest request) {
+
+        Long userId = extractUserId(authorization);
+        log.info("清理生产中转挂账: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        ProductionWarehouseReceiptResponse response =
+                productionPlanService.clearProductionTransitLedger(factoryId, planId, request, userId);
+        return ApiResponse.success("生产中转挂账已清账", response);
+    }
+
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/settle")

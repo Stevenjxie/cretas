@@ -20,6 +20,7 @@ import {
   getMaterialAdvisory,
   getProductionSettlement,
   confirmProductionWarehouseReceipt,
+  clearProductionTransitLedger,
 } from '@/api/productionPlan';
 import type {
   ProductionPlanMaterialAdvisory,
@@ -712,6 +713,13 @@ interface MaterialBatchOption {
   warehouseId?: string | null;
 }
 
+interface FactoryWarehouseOption {
+  id: string;
+  code?: string | null;
+  type?: string | null;
+  name?: string | null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
@@ -741,6 +749,7 @@ const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
 const materialBatchListLoading = ref(false);
 const materialBatchOptions = ref<MaterialBatchOption[]>([]);
+const rawWarehouseId = ref('');
 const completeForm = ref<SettlementCompleteForm>({
   actualQuantity: 0,
   semiFinishedOutputQuantity: 0,
@@ -885,14 +894,46 @@ function removeWipConsumptionLine(index: number) {
   completeForm.value.semiFinishedConsumptions.splice(index, 1);
 }
 
+function isFactoryWarehouseOption(value: unknown): value is FactoryWarehouseOption {
+  return isRecord(value) && typeof value.id === 'string';
+}
+
+async function ensureRawWarehouseId(): Promise<string | null> {
+  if (rawWarehouseId.value) return rawWarehouseId.value;
+  if (!factoryId.value) return null;
+  const res = await get<unknown>(`/${factoryId.value}/factory/warehouses`);
+  if (!res.success || !Array.isArray(res.data)) {
+    ElMessage({ message: res.message || '原料仓列表加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    return null;
+  }
+  const warehouses = res.data.filter(isFactoryWarehouseOption);
+  const raw = warehouses.find((w) => w.code === 'WH-LOG')
+    ?? warehouses.find((w) => w.type === 'RAW' || w.type === 'LOGISTICS');
+  if (!raw) {
+    ElMessage({ message: '未找到原料仓/物流仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
+    return null;
+  }
+  rawWarehouseId.value = raw.id;
+  return raw.id;
+}
+
 async function loadSettlementInventoryOptions(row: TableRow) {
   if (!factoryId.value) return;
   materialBatchListLoading.value = true;
   wipListLoading.value = true;
   try {
+    const warehouseId = await ensureRawWarehouseId();
+    if (!warehouseId) {
+      materialBatchOptions.value = [];
+      wipList.value = [];
+      return;
+    }
     const [materialRes, wipRes] = await Promise.allSettled([
       get<unknown>(`/${factoryId.value}/material-batches/status/AVAILABLE`, {
-        params: row.productTypeId ? { productTypeId: String(row.productTypeId) } : undefined,
+        params: {
+          warehouseId,
+          ...(row.productTypeId ? { productTypeId: String(row.productTypeId) } : {}),
+        },
       }),
       listAvailableWip(factoryId.value),
     ]);
@@ -1021,6 +1062,13 @@ const RECEIPT_RESPONSIBILITY_OPTIONS = [
   { value: 'WAREHOUSE', label: '仓库侧处理' },
   { value: 'WEIGHING_ERROR', label: '称重误差' },
 ];
+const CLEARING_REASON_OPTIONS = [
+  { value: '生产侧已处理', label: '生产侧已补产/承担差异' },
+  { value: '仓库侧已处理', label: '仓库侧已盘点/承担差异' },
+  { value: '称重误差已复核', label: '称重误差已复核' },
+  { value: '财务已确认差异', label: '财务已确认差异' },
+  { value: '其他', label: '其他（请补充说明）' },
+];
 const receiptDialogVisible = ref(false);
 const receiptLoading = ref(false);
 const receiptRow = ref<TableRow | null>(null);
@@ -1032,6 +1080,15 @@ const receiptForm = ref({
   otherVarianceReason: '',
   responsibilitySide: '',
   varianceNote: '',
+});
+const clearingDialogVisible = ref(false);
+const clearingLoading = ref(false);
+const clearingRow = ref<TableRow | null>(null);
+const clearingSettlement = ref<ProductionSettlementStatus | null>(null);
+const clearingForm = ref({
+  clearingReason: '',
+  otherClearingReason: '',
+  clearingNote: '',
 });
 
 function getSettlementStatus(row: TableRow): ProductionSettlementStatus | null {
@@ -1065,6 +1122,13 @@ function canConfirmReceipt(row: TableRow): boolean {
   return canConfirmReceiptWrite.value
     && String(row.status || '').toUpperCase() === 'COMPLETED'
     && settlement?.postingStatus === 'PENDING_WAREHOUSE_RECEIPT';
+}
+
+function canClearTransit(row: TableRow): boolean {
+  const settlement = getSettlementStatus(row);
+  return canConfirmReceiptWrite.value
+    && String(row.status || '').toUpperCase() === 'COMPLETED'
+    && settlement?.postingStatus === 'PENDING_CLEARING';
 }
 
 const receiptProductName = computed(() => {
@@ -1112,6 +1176,25 @@ const receiptSubmitDisabledReason = computed(() => {
   return '';
 });
 const receiptCanSubmit = computed(() => receiptSubmitDisabledReason.value === '');
+const clearingProductName = computed(() => {
+  const r = clearingRow.value;
+  if (!r) return '';
+  return String(r.productTypeName || r.productName || r.productTypeId || '');
+});
+const clearingPlanNumber = computed(() => {
+  const r = clearingRow.value;
+  if (!r) return '';
+  return String(r.planNumber || r.id || '');
+});
+const clearingDisabledReason = computed(() => {
+  if (!clearingSettlement.value) return '请先加载中转挂账状态';
+  if (!clearingForm.value.clearingReason) return '请选择清账原因';
+  if (clearingForm.value.clearingReason === '其他' && !clearingForm.value.otherClearingReason.trim()) {
+    return '选择“其他”时必须补充清账原因';
+  }
+  return '';
+});
+const clearingCanSubmit = computed(() => clearingDisabledReason.value === '');
 
 function buildReceiptIdempotencyKey(row: TableRow): string {
   const planId = String(row.id || row.planNumber || 'unknown');
@@ -1175,6 +1258,79 @@ async function submitWarehouseReceipt() {
     }
   } catch (error) {
     handleCatchError(error, '仓库确认失败');
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+async function handleTransitClearing(row: TableRow) {
+  if (!factoryId.value || actionLoading.value) return;
+  clearingRow.value = row;
+  clearingSettlement.value = getSettlementStatus(row);
+  clearingForm.value = {
+    clearingReason: '',
+    otherClearingReason: '',
+    clearingNote: '',
+  };
+  clearingLoading.value = true;
+  clearingDialogVisible.value = true;
+  try {
+    const res = await getProductionSettlement(factoryId.value, String(row.id));
+    if (!res.success || !res.data) {
+      ElMessage({ message: res.message || '加载中转挂账状态失败', type: 'error', duration: 0, showClose: true });
+      clearingDialogVisible.value = false;
+      return;
+    }
+    clearingSettlement.value = res.data;
+    if (res.data.postingStatus !== 'PENDING_CLEARING') {
+      ElMessage({
+        message: `当前状态为 ${postingStatusText(res.data.postingStatus)}，没有待清账的中转挂账`,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      });
+      clearingDialogVisible.value = false;
+    }
+  } catch (error) {
+    handleCatchError(error, '加载中转挂账状态失败');
+    clearingDialogVisible.value = false;
+  } finally {
+    clearingLoading.value = false;
+  }
+}
+
+async function submitTransitClearing() {
+  if (!factoryId.value || !clearingRow.value || !clearingSettlement.value) return;
+  if (!clearingCanSubmit.value) {
+    ElMessage({ message: clearingDisabledReason.value, type: 'error', duration: 0, showClose: true });
+    return;
+  }
+  actionLoading.value = true;
+  try {
+    const clearingReason = clearingForm.value.clearingReason === '其他'
+      ? clearingForm.value.otherClearingReason.trim()
+      : clearingForm.value.clearingReason;
+    const res = await clearProductionTransitLedger(factoryId.value, String(clearingRow.value.id), {
+      clearingReason,
+      clearingNote: clearingForm.value.clearingNote || null,
+    });
+    if (res.success) {
+      ElMessage.success(res.data?.message || res.message || '中转挂账已清账');
+      const rowId = String(clearingRow.value.id);
+      if (settlementStatusMap.value[rowId]) {
+        settlementStatusMap.value[rowId] = {
+          ...settlementStatusMap.value[rowId],
+          postingStatus: res.data?.postingStatus || 'POSTED',
+          postingMessage: res.data?.message || res.message || '中转挂账已清账',
+        };
+      }
+      clearingDialogVisible.value = false;
+      await loadData();
+    } else {
+      ElMessage({ message: res.message || '中转挂账清账失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error) {
+    handleCatchError(error, '中转挂账清账失败');
   } finally {
     actionLoading.value = false;
   }
@@ -1840,6 +1996,15 @@ function handleAiFill(params: TableRow) {
               title="仓库确认实际收到数量后，成品才正式入库；差异进入中转挂账"
               @click="handleWarehouseReceipt(row)"
             >确认入库</el-button>
+            <el-button
+              v-if="canClearTransit(row)"
+              type="danger"
+              size="small"
+              :icon="Warning"
+              :disabled="actionLoading"
+              title="处理差异并关闭生产中转挂账"
+              @click="handleTransitClearing(row)"
+            >清账</el-button>
             <!-- 6.12 复核: PC 主路径是未完成列表直接完成；转批次保留给 APP 逐道报工。 -->
             <el-button
               v-if="canWrite && isStartable(row.status)"
@@ -2603,6 +2768,91 @@ function handleAiFill(params: TableRow) {
           :disabled="!receiptCanSubmit"
           @click="submitWarehouseReceipt"
         >确认入库</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="clearingDialogVisible"
+      :title="clearingProductName ? `中转挂账清账 — ${clearingProductName}` : '中转挂账清账'"
+      width="560px"
+      class="settlement-dialog"
+      destroy-on-close
+      append-to-body
+    >
+      <el-form v-loading="clearingLoading" label-width="112px" class="settlement-form">
+        <div class="settlement-context">
+          <div>
+            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-value">{{ clearingPlanNumber || '-' }}</div>
+          </div>
+          <div>
+            <div class="settlement-context-label">当前状态</div>
+            <div class="settlement-context-value">
+              {{ postingStatusText(clearingSettlement?.postingStatus) }}
+            </div>
+          </div>
+          <div>
+            <div class="settlement-context-label">挂账说明</div>
+            <div class="settlement-context-value">
+              {{ clearingSettlement?.postingMessage || '-' }}
+            </div>
+          </div>
+        </div>
+
+        <el-alert
+          title="清账只表示生产与仓库已处理并确认差异归属；未清账前该结单仍停留在中转挂账。"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin: 12px 0"
+        />
+
+        <el-form-item label="清账原因" required>
+          <el-select
+            v-model="clearingForm.clearingReason"
+            placeholder="请选择清账原因"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in CLEARING_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="clearingForm.clearingReason === '其他'" label="原因补充" required>
+          <el-input
+            v-model="clearingForm.otherClearingReason"
+            type="textarea"
+            :rows="2"
+            placeholder="请说明生产/仓库/财务如何处理该差异"
+          />
+        </el-form-item>
+        <el-form-item label="清账说明">
+          <el-input
+            v-model="clearingForm.clearingNote"
+            type="textarea"
+            :rows="3"
+            placeholder="可填写交接人、盘点单号、财务确认记录等"
+          />
+        </el-form-item>
+        <el-alert
+          v-if="clearingDisabledReason"
+          :title="clearingDisabledReason"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="clearingDialogVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="actionLoading"
+          :disabled="!clearingCanSubmit"
+          @click="submitTransitClearing"
+        >确认清账</el-button>
       </template>
     </el-dialog>
 

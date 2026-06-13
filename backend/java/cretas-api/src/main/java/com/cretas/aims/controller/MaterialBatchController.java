@@ -342,10 +342,12 @@ public class MaterialBatchController {
             @Parameter(description = "状态", required = true, example = "AVAILABLE")
             @PathVariable MaterialBatchStatus status,
             @Parameter(description = "产品类型ID (可选, 传入则按 BOM 原料过滤)", example = "PT-F001-001")
-            @RequestParam(required = false) String productTypeId) {
+            @RequestParam(required = false) String productTypeId,
+            @Parameter(description = "仓库ID (可选, 传入则限定仓库)", example = "WH-LOG-ID")
+            @RequestParam(required = false) String warehouseId) {
 
         List<MaterialBatchDTO> batches = materialBatchService.getMaterialBatchesByStatus(
-                factoryId, status, productTypeId);
+                factoryId, status, productTypeId, warehouseId);
         return ApiResponse.success(batches);
     }
 

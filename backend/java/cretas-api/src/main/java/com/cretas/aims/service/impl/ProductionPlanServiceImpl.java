@@ -11,9 +11,12 @@ import com.cretas.aims.dto.production.ProductionPlanImportDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.*;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -26,6 +29,8 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.*;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -193,6 +198,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionTransitLedgerRepository productionTransitLedgerRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BomRecipeRepository bomRecipeRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BomRecipeItemRepository bomRecipeItemRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
@@ -1317,9 +1328,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         validateSettlementRequest(plan, request);
 
         List<ProductionSettlementConsumption> consumptionLines = new ArrayList<>();
-        appendConsumptionLines(factoryId, planId, "RAW_MATERIAL", request.getRawMaterialConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, planId, "SEMI_FINISHED", request.getSemiFinishedConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, planId, "AUXILIARY", request.getAuxiliaryConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "RAW_MATERIAL", request.getRawMaterialConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "SEMI_FINISHED", request.getSemiFinishedConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "AUXILIARY", request.getAuxiliaryConsumptions(), consumptionLines);
 
         ProductionSettlement settlement = new ProductionSettlement();
         settlement.setId(UUID.randomUUID().toString());
@@ -1480,6 +1491,54 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(), warnings);
     }
 
+    @Override
+    @Transactional
+    public ProductionWarehouseReceiptResponse clearProductionTransitLedger(String factoryId, String planId,
+                                                                          ProductionTransitClearingRequest request,
+                                                                          Long clearedBy) {
+        if (request == null || isBlank(request.getClearingReason())) {
+            throw new BusinessException(400, "清账原因不能为空")
+                    .withHintTarget("中转挂账清账");
+        }
+        ensurePostingDependencies();
+
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产结单", "productionPlanId", planId));
+
+        if (!"PENDING_CLEARING".equals(settlement.getPostingStatus())) {
+            throw new BusinessException(409, "该生产结单没有待清账的中转挂账")
+                    .withCode("PRODUCTION_TRANSIT_NOT_PENDING")
+                    .withHint("当前状态: " + settlement.getPostingStatus())
+                    .withHintTarget("中转挂账清账");
+        }
+
+        ProductionTransitLedger ledger = productionTransitLedgerRepository
+                .findOpenByFactoryIdAndSettlementIdForUpdate(factoryId, settlement.getId(), "OPEN")
+                .orElseThrow(() -> new BusinessException(409, "未找到待清账的生产中转挂账")
+                        .withCode("PRODUCTION_TRANSIT_LEDGER_NOT_FOUND")
+                        .withHintTarget("中转挂账清账"));
+
+        String clearingNote = firstNonBlank(request.getClearingNote(), "");
+        String note = firstNonBlank(ledger.getNote(), "");
+        String appended = "清账原因: " + request.getClearingReason()
+                + (clearingNote.isBlank() ? "" : "; 清账说明: " + clearingNote)
+                + "; clearedBy=" + (clearedBy != null ? clearedBy : 0L);
+        ledger.setNote(note.isBlank() ? appended : note + "\n" + appended);
+        ledger.setStatus("RESOLVED");
+        productionTransitLedgerRepository.save(ledger);
+
+        settlement.setPostingStatus("POSTED");
+        settlement.setPostingMessage("中转挂账已清账，成品库存入库闭环完成");
+        productionSettlementRepository.save(settlement);
+
+        return toWarehouseReceiptResponse(settlement,
+                "中转挂账已清账: " + plan.getPlanNumber(),
+                List.of("责任侧已处理差异并完成清账"));
+    }
+
     private void validateSettlementRequest(ProductionPlan plan, ProductionSettlementRequest request) {
         if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
                 && plan.getStatus() != ProductionPlanStatus.PENDING) {
@@ -1522,7 +1581,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
-    private void appendConsumptionLines(String factoryId, String planId, String sourceType,
+    private void appendConsumptionLines(String factoryId, ProductionPlan plan, String sourceType,
                                         List<ProductionSettlementRequest.ConsumptionLine> requestLines,
                                         List<ProductionSettlementConsumption> target) {
         if (isEmpty(requestLines)) {
@@ -1531,7 +1590,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         for (ProductionSettlementRequest.ConsumptionLine requestLine : requestLines) {
             ProductionSettlementConsumption line = new ProductionSettlementConsumption();
             line.setFactoryId(factoryId);
-            line.setProductionPlanId(planId);
+            line.setProductionPlanId(plan.getId());
             line.setSourceType(sourceType);
             line.setMaterialBatchId(trimToNull(requestLine.getMaterialBatchId()));
             line.setSemiFinishedInventoryId(requestLine.getSemiFinishedInventoryId());
@@ -1541,12 +1600,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setUnit(trimToNull(requestLine.getUnit()));
             line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
             line.setNote(trimToNull(requestLine.getNote()));
-            line.setAvailableBefore(resolveAvailableBefore(factoryId, sourceType, requestLine));
+            line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine));
             target.add(line);
         }
     }
 
-    private BigDecimal resolveAvailableBefore(String factoryId, String sourceType,
+    private BigDecimal resolveAvailableBefore(String factoryId, ProductionPlan plan,
+                                              String sourceType,
                                               ProductionSettlementRequest.ConsumptionLine line) {
         if ("SEMI_FINISHED".equals(sourceType)) {
             if (line.getSemiFinishedInventoryId() == null) {
@@ -1572,6 +1632,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
+        ensureMaterialBatchAllowedForSettlement(factoryId, plan, batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
         if (line.getBatchNumber() == null) {
@@ -1587,6 +1648,59 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setWarehouseId(batch.getWarehouseId());
         }
         return available;
+    }
+
+    private void ensureMaterialBatchAllowedForSettlement(String factoryId,
+                                                         ProductionPlan plan,
+                                                         MaterialBatch batch,
+                                                         String hintTarget) {
+        if (warehouseResolver == null) {
+            throw new BusinessException(500, "仓库解析服务未初始化，不能核对生产领料")
+                    .withHintTarget(hintTarget);
+        }
+        String rawWarehouseId = warehouseResolver.resolveLogisticsId(factoryId);
+        if (isBlank(rawWarehouseId)) {
+            throw new BusinessException(500, "未配置原料仓/物流仓，不能核对生产领料")
+                    .withCode("PRODUCTION_RAW_WAREHOUSE_NOT_CONFIGURED")
+                    .withHint("请先维护工厂仓库配置")
+                    .withHintTarget(hintTarget);
+        }
+        if (isBlank(batch.getWarehouseId()) || !rawWarehouseId.equals(batch.getWarehouseId())) {
+            throw new BusinessException(409, "生产结单原料只能从原料仓/物流仓领用，不能从其他仓库扣减")
+                    .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")
+                    .withHint("请重新选择原料仓批次后再提交")
+                    .withHintTarget(hintTarget);
+        }
+
+        if (plan == null || isBlank(plan.getProductTypeId())
+                || bomRecipeRepository == null || bomRecipeItemRepository == null) {
+            return;
+        }
+        Optional<BomRecipe> recipe = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, plan.getProductTypeId());
+        if (recipe.isEmpty()) {
+            throw new BusinessException(409, "该产品没有当前 BOM，不能直接核对原料领用")
+                    .withCode("PRODUCTION_BOM_REQUIRED")
+                    .withHint("请先维护产品 BOM，或由主管确认物料差异后再结单")
+                    .withHintTarget(hintTarget);
+        }
+        Set<String> bomMaterialTypeIds = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.get().getId())
+                .stream()
+                .map(BomRecipeItem::getMaterialTypeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (bomMaterialTypeIds.isEmpty()) {
+            throw new BusinessException(409, "该产品当前 BOM 没有原料明细，不能直接核对原料领用")
+                    .withCode("PRODUCTION_BOM_ITEMS_REQUIRED")
+                    .withHint("请先维护 BOM 原料明细")
+                    .withHintTarget(hintTarget);
+        }
+        if (!bomMaterialTypeIds.contains(batch.getMaterialTypeId())) {
+            throw new BusinessException(409, "所选原料批次不属于该产品当前 BOM")
+                    .withCode("PRODUCTION_CONSUMPTION_NOT_IN_BOM")
+                    .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
+                    .withHintTarget(hintTarget);
+        }
     }
 
     private void ensureQuantityWithinAvailable(String label, BigDecimal requested, BigDecimal available, String hintTarget) {
@@ -1621,6 +1735,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
+        ensureMaterialBatchAllowedForSettlement(factoryId, null, batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 
@@ -1771,7 +1886,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
         batch.setStorageLocation("仓库确认入库");
         batch.setProductionPlanId(plan.getId());
-        batch.setWarehouseId(warehouseResolver.resolveLogisticsId(settlement.getFactoryId()));
+        batch.setWarehouseId(warehouseResolver.resolveWorkshopId(settlement.getFactoryId()));
         batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
