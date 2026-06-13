@@ -2,12 +2,16 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
@@ -22,12 +26,15 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementLaborRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,6 +90,9 @@ class ProductionPlanSettlementTest {
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
     @Mock private ProductionSettlementLaborRepository productionSettlementLaborRepository;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepository;
+    @Mock private ProductionTransitLedgerRepository productionTransitLedgerRepository;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock private WarehouseResolver warehouseResolver;
 
     private ProductionPlanServiceImpl service;
 
@@ -98,6 +108,9 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", productionSettlementConsumptionRepository);
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository", productionSettlementLaborRepository);
         ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiFinishedInventoryRepository);
+        ReflectionTestUtils.setField(service, "productionTransitLedgerRepository", productionTransitLedgerRepository);
+        ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
+        ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -195,6 +208,113 @@ class ProductionPlanSettlementTest {
         verify(productionSettlementRepository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("仓库确认实收等于报产时生成成品库存且不挂中转账")
+    void confirmWarehouseReceipt_exactMatch_postsFinishedGoodsOnly() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-1");
+            return batch;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
+
+        assertEquals("POSTED", response.getPostingStatus());
+        assertEquals("fg-1", response.getFinishedGoodsBatchId());
+        assertEquals(null, response.getTransitLedgerId());
+        assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
+        verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("仓库实收短少超过10kg容差时生成中转挂账")
+    void confirmWarehouseReceipt_shortBeyondTolerance_createsTransitLedger() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-1");
+            return batch;
+        });
+        when(productionTransitLedgerRepository.save(any(ProductionTransitLedger.class))).thenAnswer(inv -> {
+            ProductionTransitLedger ledger = inv.getArgument(0);
+            ledger.setId("ledger-1");
+            return ledger;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-2", "70", "kg", "仓库实收短少", "WAREHOUSE"), 11L);
+
+        assertEquals("PENDING_CLEARING", response.getPostingStatus());
+        assertEquals("fg-1", response.getFinishedGoodsBatchId());
+        assertEquals("ledger-1", response.getTransitLedgerId());
+        assertEquals(new BigDecimal("20"), response.getVarianceQuantity());
+        assertTrue(response.getWarnings().get(0).contains("中转挂账"));
+    }
+
+    @Test
+    @DisplayName("仓库实收短少超过容差但责任侧待核对时拒绝确认")
+    void confirmWarehouseReceipt_shortBeyondTolerancePendingResponsibility_rejected() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(
+                        FACTORY_ID, PLAN_ID,
+                        receiptRequest("receipt-3", "70", "kg", "仓库实收短少", "PENDING"),
+                        11L));
+
+        assertEquals("PRODUCTION_RECEIPT_RESPONSIBILITY_REQUIRED", ex.getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("同一仓库确认幂等键重复提交返回原入库结果")
+    void confirmWarehouseReceipt_sameIdempotencyAfterReceipt_returnsExisting() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setWarehouseReceivedAt(java.time.LocalDateTime.now());
+        settlement.setWarehouseReceiptIdempotencyKey("receipt-1");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("90"));
+        settlement.setWarehouseVarianceQuantity(BigDecimal.ZERO);
+        settlement.setPostingStatus("POSTED");
+        settlement.setFinishedGoodsBatchId("fg-1");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
+
+        assertEquals("POSTED", response.getPostingStatus());
+        assertEquals("fg-1", response.getFinishedGoodsBatchId());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
     private ProductionPlan plan() {
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -227,6 +347,32 @@ class ProductionPlanSettlementTest {
                         .headcount(2)
                         .build()))
                 .build();
+    }
+
+    private ProductionSettlement settled() {
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId("settlement-1");
+        settlement.setFactoryId(FACTORY_ID);
+        settlement.setProductionPlanId(PLAN_ID);
+        settlement.setPlanNumber("P-001");
+        settlement.setPlannedQuantity(new BigDecimal("100"));
+        settlement.setActualFinishedQuantity(new BigDecimal("90"));
+        settlement.setActualSemiFinishedQuantity(BigDecimal.ZERO);
+        settlement.setQuantityUnit("kg");
+        settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
+        settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
+        return settlement;
+    }
+
+    private ProductionWarehouseReceiptRequest receiptRequest(String key, String quantity, String unit,
+                                                            String reason, String responsibilitySide) {
+        ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
+        request.setIdempotencyKey(key);
+        request.setReceivedQuantity(new BigDecimal(quantity));
+        request.setQuantityUnit(unit);
+        request.setVarianceReason(reason);
+        request.setResponsibilitySide(responsibilitySide);
+        return request;
     }
 
     private MaterialBatch materialBatch() {

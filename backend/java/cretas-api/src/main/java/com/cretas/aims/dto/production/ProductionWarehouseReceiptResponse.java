@@ -13,28 +13,20 @@ import java.util.List;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ProductionSettlementResponse {
+public class ProductionWarehouseReceiptResponse {
     private String settlementId;
     private String productionPlanId;
     private String planNumber;
-    private String status;
-    private BigDecimal plannedQuantity;
-    private BigDecimal actualFinishedQuantity;
-    private BigDecimal actualSemiFinishedQuantity;
+    private BigDecimal productionReportedQuantity;
+    private BigDecimal warehouseReceivedQuantity;
+    private BigDecimal varianceQuantity;
+    private BigDecimal toleranceQuantity;
     private String quantityUnit;
     private String postingStatus;
-    private String postingMessage;
-    private BigDecimal warehouseReceivedQuantity;
-    private BigDecimal warehouseVarianceQuantity;
     private String finishedGoodsBatchId;
     private String transitLedgerId;
+    private String message;
 
     @Builder.Default
     private List<String> warnings = new ArrayList<>();
-
-    @Builder.Default
-    private List<String> createdClearingLedgerIds = new ArrayList<>();
-
-    @Builder.Default
-    private List<String> createdInventoryTxnIds = new ArrayList<>();
 }

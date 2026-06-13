@@ -11,6 +11,8 @@ import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
+import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -347,9 +349,6 @@ public class ProductionPlanController {
     /**
      * 核对生产结单
      */
-    /**
-     * 取消生产计划
-     */
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/settle")
@@ -367,6 +366,39 @@ public class ProductionPlanController {
         ProductionSettlementResponse response =
                 productionPlanService.settleProduction(factoryId, planId, request, userId);
         return ApiResponse.success("生产结单已提交", response);
+    }
+
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/{planId}/settlement")
+    @Operation(summary = "查询生产结单状态", description = "六扇门: 查询文员结单、仓库确认入库和中转挂账状态")
+    public ApiResponse<ProductionSettlementResponse> getProductionSettlement(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId) {
+
+        ProductionSettlementResponse response = productionPlanService.getProductionSettlement(factoryId, planId);
+        return ApiResponse.success("生产结单状态", response);
+    }
+
+    @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/warehouse-receipt")
+    @Operation(summary = "仓库确认生产入库", description = "六扇门: 仓库确认实收后才生成成品库存; 差异超容差进入中转挂账")
+    public ApiResponse<ProductionWarehouseReceiptResponse> confirmWarehouseReceipt(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody ProductionWarehouseReceiptRequest request) {
+
+        Long userId = extractUserId(authorization);
+        log.info("仓库确认生产入库: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        ProductionWarehouseReceiptResponse response =
+                productionPlanService.confirmWarehouseReceipt(factoryId, planId, request, userId);
+        return ApiResponse.success("仓库已确认生产入库", response);
     }
 
     @RequirePermission({"production:read_write", "scheduling:read_write"})

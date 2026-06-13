@@ -88,6 +88,36 @@ public class ProductionSettlement extends BaseEntity {
     @Column(name = "posting_message", columnDefinition = "TEXT")
     private String postingMessage;
 
+    @Column(name = "warehouse_receipt_idempotency_key", length = 128)
+    private String warehouseReceiptIdempotencyKey;
+
+    @Column(name = "warehouse_received_quantity", precision = 12, scale = 2)
+    private BigDecimal warehouseReceivedQuantity;
+
+    @Column(name = "warehouse_variance_quantity", precision = 12, scale = 2)
+    private BigDecimal warehouseVarianceQuantity;
+
+    @Column(name = "warehouse_variance_reason", length = 64)
+    private String warehouseVarianceReason;
+
+    @Column(name = "warehouse_responsibility_side", length = 30)
+    private String warehouseResponsibilitySide;
+
+    @Column(name = "warehouse_variance_note", columnDefinition = "TEXT")
+    private String warehouseVarianceNote;
+
+    @Column(name = "finished_goods_batch_id", length = 191)
+    private String finishedGoodsBatchId;
+
+    @Column(name = "transit_ledger_id", length = 191)
+    private String transitLedgerId;
+
+    @Column(name = "warehouse_received_by")
+    private Long warehouseReceivedBy;
+
+    @Column(name = "warehouse_received_at")
+    private LocalDateTime warehouseReceivedAt;
+
     @Column(name = "settled_by")
     private Long settledBy;
 
