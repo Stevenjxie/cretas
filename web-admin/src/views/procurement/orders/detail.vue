@@ -243,32 +243,40 @@ function priceRowClassName({ row }: { row: PriceComparison }): string {
   return row.priceAlert ? 'price-alert-row' : '';
 }
 
-// P0 (六扇门 May 7 transcript): 下载 PDF (供货单) — 含 Code128 + QR 条码,
-// 供应商打印后送货员带过来,仓管员扫码进入入库流程。
+// P0/N3 (六扇门): 下载 PDF — 对外供货单必须完全移除价格列,
+// 内部审批版才允许有价格列且继续受 procurement:price:view 保护。
 const pdfDownloading = ref(false);
-async function handleDownloadPdf() {
+async function handleDownloadPdf(externalVersion: boolean) {
   if (!factoryId.value || !orderId.value || pdfDownloading.value) return;
   pdfDownloading.value = true;
   try {
     const response = await request.get(
       `/${factoryId.value}/purchase/orders/${orderId.value}/pdf`,
-      { responseType: 'blob' }
+      {
+        params: { external: externalVersion },
+        responseType: 'blob',
+      }
     );
     const blob = new Blob([response.data], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     const orderNum = order.value?.orderNumber || orderId.value;
-    link.download = `供货单_${orderNum}.pdf`;
+    link.download = externalVersion ? `供货单_对外_${orderNum}.pdf` : `采购订单_内部_${orderNum}.pdf`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    ElMessage.success('PDF 下载成功');
+    ElMessage.success(externalVersion ? '对外供货单下载成功' : '内部审批版下载成功');
   } catch (e) {
     // axios interceptor 已经 toast — 但 blob 响应 error 跳过 interceptor json parse, 兜底
     console.error('[PDF 下载失败]', e);
-    ElMessage.error('PDF 下载失败,请稍后重试');
+    ElMessage({
+      type: 'error',
+      message: 'PDF 下载失败,请稍后重试',
+      duration: 0,
+      showClose: true,
+    });
   } finally {
     pdfDownloading.value = false;
   }
@@ -313,8 +321,9 @@ async function confirmReceive(receiveId: string) {
             </el-tag>
           </div>
           <div class="header-right" v-if="order">
-            <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含条码) 给所有读权限角色可见 -->
-            <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">下载 PDF</el-button>
+            <!-- N3: 对外供货单给供应商, 后端 external=true 会完全移除价格列. -->
+            <el-button type="primary" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(true)">对外供货单</el-button>
+            <el-button v-if="canViewPrice" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(false)">内部审批版</el-button>
             <template v-if="canWrite">
             <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
             <el-button v-if="order.status === 'SUBMITTED'" type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>

@@ -693,7 +693,10 @@ async function handleDownloadPdf(row: TableRow) {
   try {
     const response = await request.get(
       `/${factoryId.value}/purchase/orders/${id}/pdf`,
-      { responseType: 'blob' }
+      {
+        params: { external: true },
+        responseType: 'blob',
+      }
     );
     const blob = new Blob([response.data], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
@@ -941,7 +944,7 @@ function handleAiFill(params: TableRow) {
             <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含 Code128 + QR 条码) -->
             <el-button type="info" link size="small" :icon="Download"
               :loading="pdfDownloadingIds.has(String(row.id))"
-              @click="handleDownloadPdf(row)">PDF</el-button>
+              @click="handleDownloadPdf(row)">对外供货单</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
             <el-button v-if="row.status === 'SUBMITTED' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'approve')">审批</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>

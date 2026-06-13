@@ -51,7 +51,9 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
     private static final String PRICE_MASK_PLACEHOLDER = "—";
 
     @Override
-    public byte[] generatePurchaseOrderPdf(String factoryId, String orderId, boolean maskPrice) {
+    public byte[] generatePurchaseOrderPdf(String factoryId, String orderId, boolean maskPrice, boolean externalVersion) {
+        boolean hidePrice = maskPrice || externalVersion;
+
         // 1. 加载订单 (PurchaseService 已校验工厂归属 + hydrate 关联字段)
         PurchaseOrder order = purchaseService.getPurchaseOrderById(factoryId, orderId);
 
@@ -63,10 +65,10 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
         // 3. 加载工厂信息 (用于 PDF 抬头)
         Factory factory = factoryRepository.findById(factoryId).orElse(null);
 
-        log.info("生成采购订单 PDF: factoryId={}, orderId={}, orderNumber={}, itemCount={}, maskPrice={}",
+        log.info("生成采购订单 PDF: factoryId={}, orderId={}, orderNumber={}, itemCount={}, maskPrice={}, externalVersion={}",
                 factoryId, orderId, order.getOrderNumber(),
                 order.getItems() != null ? order.getItems().size() : 0,
-                maskPrice);
+                maskPrice, externalVersion);
 
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Document document = new Document(PageSize.A4, 36, 36, 36, 36);
@@ -82,7 +84,7 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             Font boldFont = new Font(bfChinese, 10, Font.BOLD);
 
             // ===== 标题 (供货单 / 采购订单) =====
-            Paragraph title = new Paragraph("供货单 / 采购订单", titleFont);
+            Paragraph title = new Paragraph(externalVersion ? "供货单（对外）" : "供货单 / 采购订单", titleFont);
             title.setAlignment(Element.ALIGN_CENTER);
             title.setSpacingAfter(12);
             document.add(title);
@@ -99,6 +101,7 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             String factoryName = factory != null && factory.getName() != null ? factory.getName() : factoryId;
             leftCell.addElement(new Paragraph("采购方: " + factoryName, subTitleFont));
             leftCell.addElement(new Paragraph("订单编号: " + safe(order.getOrderNumber()), normalFont));
+            leftCell.addElement(new Paragraph("销售订单号: " + salesOrderLabel(order), normalFont));
             leftCell.addElement(new Paragraph("下单日期: " + (order.getOrderDate() != null
                     ? order.getOrderDate().format(DATE_FORMATTER) : "-"), normalFont));
             if (order.getExpectedDeliveryDate() != null) {
@@ -170,12 +173,19 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             itemsHeader.setSpacingAfter(4);
             document.add(itemsHeader);
 
-            PdfPTable itemsTable = new PdfPTable(7);
+            PdfPTable itemsTable = new PdfPTable(externalVersion ? 5 : 7);
             itemsTable.setWidthPercentage(100);
-            itemsTable.setWidths(new float[]{1, 4, 2, 2, 1, 2, 2});
-            addTableHeader(itemsTable, new String[]{
-                    "序号", "原料名称 / 规格", "数量", "单位", "箱数", "单价", "小计"
-            }, boldFont);
+            if (externalVersion) {
+                itemsTable.setWidths(new float[]{1, 5, 2, 1.5f, 2});
+                addTableHeader(itemsTable, new String[]{
+                        "序号", "原料名称 / 规格", "数量", "单位", "件数"
+                }, boldFont);
+            } else {
+                itemsTable.setWidths(new float[]{1, 4, 2, 2, 1, 2, 2});
+                addTableHeader(itemsTable, new String[]{
+                        "序号", "原料名称 / 规格", "数量", "单位", "件数", "单价", "小计"
+                }, boldFont);
+            }
 
             BigDecimal grandTotal = BigDecimal.ZERO;
             if (order.getItems() != null) {
@@ -192,33 +202,37 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
                     addBodyCell(itemsTable,
                             item.getBoxQuantity() != null ? formatDecimal(item.getBoxQuantity()) : "-",
                             normalFont, Element.ALIGN_RIGHT);
-                    // 单价 / 小计: maskPrice=true 时以 "—" 占位 (RBAC defense-in-depth, mirrors @PriceSensitive JSON strip)
-                    addBodyCell(itemsTable,
-                            maskPrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(item.getUnitPrice()),
-                            normalFont, Element.ALIGN_RIGHT);
                     BigDecimal lineAmount = item.getLineAmount();
-                    addBodyCell(itemsTable,
-                            maskPrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(lineAmount),
-                            normalFont, Element.ALIGN_RIGHT);
-                    if (!maskPrice) {
-                        grandTotal = grandTotal.add(lineAmount);
+                    if (!externalVersion) {
+                        // 单价 / 小计: maskPrice=true 时以 "—" 占位 (RBAC defense-in-depth, mirrors @PriceSensitive JSON strip)
+                        addBodyCell(itemsTable,
+                                hidePrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(item.getUnitPrice()),
+                                normalFont, Element.ALIGN_RIGHT);
+                        addBodyCell(itemsTable,
+                                hidePrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(lineAmount),
+                                normalFont, Element.ALIGN_RIGHT);
+                        if (!hidePrice) {
+                            grandTotal = grandTotal.add(lineAmount);
+                        }
                     }
                 }
             }
 
-            // 合计行 — label 保留 (布局一致性), 数值在 maskPrice=true 时同样以 "—" 占位
-            PdfPCell totalLabelCell = new PdfPCell(new Phrase("合计", boldFont));
-            totalLabelCell.setColspan(6);
-            totalLabelCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-            totalLabelCell.setPadding(5);
-            totalLabelCell.setBackgroundColor(new BaseColor(240, 240, 240));
-            itemsTable.addCell(totalLabelCell);
-            PdfPCell totalValueCell = new PdfPCell(new Phrase(
-                    maskPrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(grandTotal), boldFont));
-            totalValueCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-            totalValueCell.setPadding(5);
-            totalValueCell.setBackgroundColor(new BaseColor(240, 240, 240));
-            itemsTable.addCell(totalValueCell);
+            if (!externalVersion) {
+                // 合计行 — label 保留 (布局一致性), 数值在 maskPrice=true 时同样以 "—" 占位
+                PdfPCell totalLabelCell = new PdfPCell(new Phrase("合计", boldFont));
+                totalLabelCell.setColspan(6);
+                totalLabelCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+                totalLabelCell.setPadding(5);
+                totalLabelCell.setBackgroundColor(new BaseColor(240, 240, 240));
+                itemsTable.addCell(totalLabelCell);
+                PdfPCell totalValueCell = new PdfPCell(new Phrase(
+                        hidePrice ? PRICE_MASK_PLACEHOLDER : formatDecimal(grandTotal), boldFont));
+                totalValueCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+                totalValueCell.setPadding(5);
+                totalValueCell.setBackgroundColor(new BaseColor(240, 240, 240));
+                itemsTable.addCell(totalValueCell);
+            }
 
             itemsTable.setSpacingAfter(10);
             document.add(itemsTable);
@@ -278,6 +292,10 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
 
     private static String safe(String s) {
         return s == null ? "-" : s;
+    }
+
+    private static String salesOrderLabel(PurchaseOrder order) {
+        return coalesce(order.getSalesOrderNumber(), order.getSalesOrderId(), "-");
     }
 
     private static String coalesce(String... candidates) {

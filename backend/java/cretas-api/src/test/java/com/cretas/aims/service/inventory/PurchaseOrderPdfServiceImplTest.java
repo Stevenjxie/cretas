@@ -204,6 +204,52 @@ class PurchaseOrderPdfServiceImplTest {
     }
 
     @Test
+    @DisplayName("N3: externalVersion=true → 价格权限用户下载对外版也不出现价格列和价格值")
+    void generatePdf_externalVersion_removesPriceColumnsAndValuesForAnyCaller() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N3-EXTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, true);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("SO-20260612-001"), "External PDF must include sales order number; text=" + summarize(text));
+        assertTrue(text.contains("件数"), "External PDF must include piece count column; text=" + summarize(text));
+        assertFalse(text.contains("单价"), "External PDF must remove unit price column label; text=" + summarize(text));
+        assertFalse(text.contains("小计"), "External PDF must remove line amount column label; text=" + summarize(text));
+        assertFalse(text.contains("合计"), "External PDF must remove grand total row; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "5"), "External PDF must not leak unitPrice 5; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "8.5"), "External PDF must not leak unitPrice 8.5; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "500"), "External PDF must not leak lineAmount 500; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "170"), "External PDF must not leak lineAmount 170; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "670"), "External PDF must not leak grandTotal 670; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N3: internalVersion → 头部显示销售订单号, 内部审批版保留价格列")
+    void generatePdf_internalVersion_includesSalesOrderNumberAndPrices() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N3-INTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("SO-20260612-001"), "Internal PDF must include sales order number; text=" + summarize(text));
+        assertTrue(text.contains("件数"), "Internal PDF must rename box count as piece count; text=" + summarize(text));
+        assertTrue(text.contains("单价"), "Internal PDF must keep unit price column label; text=" + summarize(text));
+        assertTrue(text.contains("小计"), "Internal PDF must keep line amount column label; text=" + summarize(text));
+        assertTrue(text.contains("合计"), "Internal PDF must keep grand total row; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "5"), "Internal PDF must show unitPrice 5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "8.5"), "Internal PDF must show unitPrice 8.5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "500"), "Internal PDF must show lineAmount 500; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "170"), "Internal PDF must show lineAmount 170; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "670"), "Internal PDF must show grandTotal 670; text=" + summarize(text));
+    }
+
+    @Test
     @DisplayName("RBAC P0-C: 结构完整 — 即使 maskPrice=true, 货品名称 / 数量 / 单位 / 条码 / 签收区仍可见 (warehouse 仍能做收货 audit)")
     void generatePdf_maskPriceTrue_nonPriceFieldsStillVisible() throws Exception {
         PurchaseOrder order = makeOrder("PO-RBAC-STRUCT", buildItems());
@@ -269,6 +315,8 @@ class PurchaseOrderPdfServiceImplTest {
         order.setSupplierId(SUPPLIER_ID);
         order.setOrderDate(LocalDate.of(2026, 5, 11));
         order.setExpectedDeliveryDate(LocalDate.of(2026, 5, 22));
+        order.setSalesOrderId("so-uuid-001");
+        order.setSalesOrderNumber("SO-20260612-001");
         order.setStatus(PurchaseOrderStatus.APPROVED);
         order.setTotalAmount(new BigDecimal("500.00"));
         order.setRemark("六扇门牛肉测试供货单");

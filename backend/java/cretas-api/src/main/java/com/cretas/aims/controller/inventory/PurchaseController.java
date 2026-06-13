@@ -173,11 +173,12 @@ public class PurchaseController {
     @GetMapping("/orders/{orderId}/pdf")
     @Operation(summary = "下载采购订单 PDF (供货单)",
             description = "生成包含 Code128 条码 + QR 二维码的 PDF 供货单, 供应商打印 / 仓管员扫码入库 (六扇门 May 7 transcript). "
-                    + "RBAC: 仓库管理员/质检员等无 procurement:price:view 权限的角色, PDF 中 单价/小计/合计 显示 '—'.")
+                    + "external=true 生成供应商对外版本, 完全移除价格列; internal 默认版本继续按 procurement:price:view 做价格脱敏.")
     @RequirePermission({"procurement:read_write", "procurement:read"})
     public ResponseEntity<byte[]> downloadOrderPdf(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
+            @RequestParam(defaultValue = "false") boolean external,
             @RequestHeader("Authorization") String authorization) {
         PurchaseOrder order = purchaseService.getPurchaseOrderById(factoryId, orderId);
 
@@ -186,13 +187,15 @@ public class PurchaseController {
         // 这里 mirror PermissionService.PRICE_VIEW_ROLES (镜像 @PriceSensitive JSON strip 决策),
         // 把 user 看不见的字段在 PDF 渲染入口替换为 "—".
         User currentUser = resolveCurrentUser(authorization);
-        boolean maskPrice = currentUser == null
+        boolean maskPriceByPermission = currentUser == null
                 || !permissionService.hasPermission(currentUser, PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION);
+        boolean maskPrice = external || maskPriceByPermission;
 
-        byte[] pdfBytes = purchaseOrderPdfService.generatePurchaseOrderPdf(factoryId, orderId, maskPrice);
+        byte[] pdfBytes = purchaseOrderPdfService.generatePurchaseOrderPdf(factoryId, orderId, maskPrice, external);
 
         // 文件名 = 供货单_{订单号}.pdf, 含中文需 RFC 5987 编码
-        String filename = "供货单_" + (order.getOrderNumber() != null ? order.getOrderNumber() : orderId) + ".pdf";
+        String filename = (external ? "供货单_对外_" : "采购订单_内部_")
+                + (order.getOrderNumber() != null ? order.getOrderNumber() : orderId) + ".pdf";
         String encoded = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
 
         HttpHeaders headers = new HttpHeaders();
@@ -200,8 +203,8 @@ public class PurchaseController {
         headers.add(HttpHeaders.CONTENT_DISPOSITION,
                 "attachment; filename=\"order.pdf\"; filename*=UTF-8''" + encoded);
         headers.setContentLength(pdfBytes.length);
-        log.info("下载采购订单 PDF: factoryId={}, orderId={}, bytes={}, maskPrice={}, userId={}",
-                factoryId, orderId, pdfBytes.length, maskPrice,
+        log.info("下载采购订单 PDF: factoryId={}, orderId={}, bytes={}, external={}, maskPrice={}, userId={}",
+                factoryId, orderId, pdfBytes.length, external, maskPrice,
                 currentUser != null ? currentUser.getId() : null);
         return ResponseEntity.ok().headers(headers).body(pdfBytes);
     }

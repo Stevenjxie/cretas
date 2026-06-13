@@ -39,5 +39,22 @@ public interface PurchaseOrderPdfService {
      * @return PDF 字节内容
      * @throws com.cretas.aims.exception.BusinessException 订单不存在 / 跨工厂访问
      */
-    byte[] generatePurchaseOrderPdf(String factoryId, String orderId, boolean maskPrice);
+    default byte[] generatePurchaseOrderPdf(String factoryId, String orderId, boolean maskPrice) {
+        return generatePurchaseOrderPdf(factoryId, orderId, maskPrice, false);
+    }
+
+    /**
+     * 生成采购订单 PDF (供货单) 字节流.
+     *
+     * <p>{@code externalVersion}=true 时生成供应商对外版本: 完全移除 单价/小计/合计
+     * 等价格列, 只保留货品、数量、单位、件数和扫码/签收信息. 该开关独立于 RBAC,
+     * 价格授权用户下载对外版时也不能带出价格.
+     *
+     * @param factoryId        工厂 ID (path)
+     * @param orderId          采购订单 ID (path)
+     * @param maskPrice        {@code true} → 内部版价格值显示 "—"
+     * @param externalVersion  {@code true} → 对外版完全移除价格列和合计
+     * @return PDF 字节内容
+     */
+    byte[] generatePurchaseOrderPdf(String factoryId, String orderId, boolean maskPrice, boolean externalVersion);
 }
