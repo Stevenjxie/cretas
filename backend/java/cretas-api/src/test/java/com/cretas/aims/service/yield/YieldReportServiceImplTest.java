@@ -2460,6 +2460,28 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void submitReport_doublePicking_rejectsSourceWipQuantityAboveTotalInput() {
+        WorkProcessTask t = task(71L, 1, "WP-COST");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setInputQuantity(new BigDecimal("50"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-1");
+        req.setSourceWipQuantity(new BigDecimal("80"));
+        req.setReportKind("INPUT");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("半成品领用数量不能超过本次总投入量");
+
+        verify(wipInventoryService, never()).validateSourceWip(anyString(), anyString(), any(), anyString(), any());
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
     void submitReport_wipRollup_accumulatedCostAndUnitCost() {
         WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006")
                 .unit("kg").standardHourlyRate(new BigDecimal("20.00")).build();

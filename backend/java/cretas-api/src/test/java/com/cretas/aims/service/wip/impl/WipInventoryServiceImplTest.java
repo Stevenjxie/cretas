@@ -201,6 +201,37 @@ class WipInventoryServiceImplTest {
     }
 
     @Test
+    @DisplayName("N2 double picking rejects sourceWipQuantity above report inputQuantity")
+    void postApprovedOutput_sourceWipQuantityCannotExceedTotalInput() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7000L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9000L)
+                .workProcessId("WP-000")
+                .productTypeId("PROD-000")
+                .processOrder(1)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport report = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(499L)
+                .batchId(9000L)
+                .workProcessTaskId(7000L)
+                .sourceWipNo("WIP-S1")
+                .inputQuantity(new BigDecimal("50"))
+                .inputUnit("kg")
+                .customFields(Map.of("sourceWipQuantity", new BigDecimal("80")))
+                .build();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.postApprovedOutput(FACTORY_ID, report, task, 10L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("WIP_INPUT_EXCEEDS_TOTAL", ex.getErrorCode());
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+    }
+
+    @Test
     @DisplayName("postApprovedOutput creates a produced WIP row for approved output")
     void postApprovedOutput_createsProducedWip() {
         WorkProcessTask task = WorkProcessTask.builder()

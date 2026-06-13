@@ -531,19 +531,35 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     }
 
     private BigDecimal sourceWipQuantity(ProductionReport report) {
+        BigDecimal qty = null;
         if (report.getCustomFields() != null) {
             Object value = report.getCustomFields().get("sourceWipQuantity");
             if (value instanceof BigDecimal bd) {
-                return bd;
-            }
-            if (value instanceof Number number) {
-                return BigDecimal.valueOf(number.doubleValue());
-            }
-            if (value instanceof String str && !str.isBlank()) {
-                return new BigDecimal(str);
+                qty = bd;
+            } else if (value instanceof Number number) {
+                qty = BigDecimal.valueOf(number.doubleValue());
+            } else if (value instanceof String str && !str.isBlank()) {
+                qty = new BigDecimal(str);
             }
         }
-        return report.getInputQuantity();
+        if (qty == null) {
+            qty = report.getInputQuantity();
+        }
+        if (qty != null && qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(409, "半成品领用数量必须大于 0")
+                    .withCode("WIP_INPUT_REQUIRED")
+                    .withHint("请填写实际领用的半成品数量")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("sourceWipQuantity");
+        }
+        if (qty != null && report.getInputQuantity() != null && qty.compareTo(report.getInputQuantity()) > 0) {
+            throw new BusinessException(409, "半成品领用数量不能超过本次总投入量")
+                    .withCode("WIP_INPUT_EXCEEDS_TOTAL")
+                    .withHint("请核对原料领用量和半成品领用量；总投入量必须等于两者合计")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("sourceWipQuantity");
+        }
+        return qty;
     }
 
     private void validateAvailable(SemiFinishedInventory sourceWip, BigDecimal inputQuantity, BigDecimal pendingReserved) {
