@@ -32,6 +32,7 @@ public class PrintDocumentTool extends AbstractBusinessTool {
             "PURCHASE_ORDER", "purchase-order",
             "QUOTATION", "quotation",
             "PRODUCTION_TASK", "production-task",
+            "PRODUCTION_WORK_ORDER", "production-work-order",
             "MATERIAL_REQUISITION", "material-requisition"
     );
 
@@ -40,6 +41,7 @@ public class PrintDocumentTool extends AbstractBusinessTool {
             "PURCHASE_ORDER", "采购订单",
             "QUOTATION", "报价单",
             "PRODUCTION_TASK", "生产任务单",
+            "PRODUCTION_WORK_ORDER", "生产工单",
             "MATERIAL_REQUISITION", "领料单"
     );
 
@@ -60,7 +62,7 @@ public class PrintDocumentTool extends AbstractBusinessTool {
         Map<String, Object> docType = new HashMap<>();
         docType.put("type", "string");
         docType.put("enum", new ArrayList<>(TYPE_TO_PATH.keySet()));
-        docType.put("description", "单据类型: SALES_ORDER / PURCHASE_ORDER / QUOTATION / PRODUCTION_TASK / MATERIAL_REQUISITION");
+        docType.put("description", "单据类型: SALES_ORDER / PURCHASE_ORDER / QUOTATION / PRODUCTION_TASK / PRODUCTION_WORK_ORDER / MATERIAL_REQUISITION");
 
         Map<String, Object> docId = new HashMap<>();
         docId.put("type", "string");

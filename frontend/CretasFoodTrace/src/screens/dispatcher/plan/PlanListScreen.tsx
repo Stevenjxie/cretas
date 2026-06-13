@@ -79,7 +79,7 @@ export default function PlanListScreen() {
       if (plan) navigation.navigate('PlanDetail', { planId: e.id, planData: plan });
     },
     cancel: (e: RowContext) => Alert.alert('取消', `取消计划 ${e.id} (待接 cancel API)`),
-    'print-pdf': (e: RowContext) => { void safePrint('production-task', e.id); },
+    'print-pdf': (e: RowContext) => { void safePrint('production-work-order', e.id); },
     copy: (e: RowContext) => Alert.alert('复制', `复制计划 ${e.id} (待接 API)`),
   }), [navigation, plans]);
 
