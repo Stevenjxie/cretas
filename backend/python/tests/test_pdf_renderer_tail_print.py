@@ -28,6 +28,7 @@ try:
     from printing.services.pdf_renderer import (  # noqa: E402
         RENDERERS,
         render_consolidated_material_requisition,
+        render_production_work_order,
         render_transfer_instruction,
     )
 except ModuleNotFoundError as _exc:  # pragma: no cover — reportlab optional
@@ -60,6 +61,53 @@ def test_renderers_dict_still_has_consolidated_material_requisition():
     """existing consolidated-material-requisition key still registered."""
     assert "consolidated-material-requisition" in RENDERERS
     assert callable(RENDERERS["consolidated-material-requisition"])
+
+
+def test_renderers_dict_still_has_production_work_order():
+    """N5: production-work-order key must stay registered."""
+    assert "production-work-order" in RENDERERS
+    assert callable(RENDERERS["production-work-order"])
+
+
+# ==================== N5 生产工单 ====================
+
+
+def test_render_production_work_order_n5_fields():
+    """N5: 生产工单含双单号、打印留痕、三类报名值、实际领用填写列和签字区."""
+    pdf = render_production_work_order({
+        "factoryName": "白垩纪食品 — F006",
+        "planId": "plan-n5-001",
+        "planNumber": "PP-20260612-001",
+        "productionOrderNumber": "PP-20260612-001",
+        "salesOrderNumbers": "SO-20260612-009",
+        "productName": "六扇门卤牛腱",
+        "productUnit": "kg",
+        "plannedQuantity": "1000",
+        "expectedOutput": "1000",
+        "status": "IN_PROGRESS",
+        "productionDate": "2026-06-12",
+        "printDate": "2026-06-13",
+        "printedBy": "planner01",
+        "printedAccount": "10086",
+        "expectedCompletionDate": "2026-06-13",
+        "materialItems": [
+            {"materialName": "牛腱", "category": "原料", "unit": "kg",
+             "plannedRawQty": "800", "plannedAuxiliaryQty": "",
+             "plannedSemiFinishedQty": "", "actualUsedQty": "________"},
+            {"materialName": "香辛料包", "category": "辅料", "unit": "袋",
+             "plannedRawQty": "", "plannedAuxiliaryQty": "20",
+             "plannedSemiFinishedQty": "", "actualUsedQty": "________"},
+            {"materialName": "预制卤汤", "category": "半成品", "unit": "kg",
+             "plannedRawQty": "", "plannedAuxiliaryQty": "",
+             "plannedSemiFinishedQty": "180", "actualUsedQty": "________"},
+        ],
+        "processes": [
+            {"seq": 1, "name": "清洗", "standardHours": "1.0", "operator": ""},
+            {"seq": 2, "name": "卤制", "standardHours": "2.5", "operator": ""},
+        ],
+        "remark": "计划下达后开工打印, 实际领用结单填写",
+    })
+    _assert_valid_pdf(pdf, min_size=1800)
 
 
 # ==================== C-051 双单号渲染 ====================

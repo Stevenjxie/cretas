@@ -573,7 +573,7 @@ public class PrintController {
         }
     }
 
-    // ==================== Payload builders (Day 6 MVP — stub, 后续 PR 填实体 fetch) ====================
+    // ==================== Payload builders ====================
     //
     // TODO 后续 PR 把以下 stub 替换为真实 Service 调用:
     //   - SalesOrderService.getById(factoryId, id) → DTO → Map
@@ -716,48 +716,48 @@ public class PrintController {
     /**
      * 生产工单 payload builder.
      *
-     * <p>尽量从 {@link ProductionPlanService} 取真实数据; service 未注入时 fallback 到 stub.
-     * 工序列表 (processes) 由 Python 模板渲染, 后续 PR 可从 ProductionBatch.getWorkProcessTasks() 填入.
+     * <p>计划头必须从 {@link ProductionPlanService} 取真实数据; 计划不存在时直接报错.
+     * 工序/材料明细如果还未生成, 返回空列表, 不伪造占位行.
      */
     private Map<String, Object> buildProductionWorkOrderPayload(
             String factoryId, String planId, Map<String, String> overrides) {
         Map<String, Object> p = new HashMap<>();
-        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("factoryName", "白垩纪食品 — " + factoryId);
         p.put("planId", planId);
         p.put("printDate", java.time.LocalDate.now().toString());
-        p.put("printedBy", or(overrides, "printedBy", "-"));
-        p.put("printedAccount", or(overrides, "printedAccount", "-"));
-        p.put("printedBy", or(overrides, "printedBy", "-"));
-        p.put("printedAccount", or(overrides, "printedAccount", "-"));
+        p.put("printedBy", "-");
+        p.put("printedAccount", "-");
 
-        if (productionPlanService != null) {
-            try {
-                ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
-                String planNumber = plan.getPlanNumber() != null ? plan.getPlanNumber() : planId;
-                p.put("planNumber", planNumber);
-                p.put("productionOrderNumber", planNumber);
-                p.put("salesOrderNumbers", salesOrderNumbers(plan));
-                p.put("sourceOrderId", plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
-                p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
-                p.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
-                p.put("plannedQuantity", plan.getPlannedQuantity() != null
-                        ? plan.getPlannedQuantity().toPlainString() : "0");
-                p.put("expectedOutput", plan.getPlannedQuantity() != null
-                        ? plan.getPlannedQuantity().toPlainString() : "0");
-                p.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
-                p.put("plannedDate", plan.getPlannedDate() != null
-                        ? plan.getPlannedDate().toString()
-                        : java.time.LocalDate.now().toString());
-                p.put("productionDate", p.get("plannedDate"));
-                p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
-                        ? plan.getExpectedCompletionDate().toString() : "-");
-            } catch (Exception e) {
-                log.warn("printProductionWorkOrder: failed to load plan {} — using stub data: {}",
-                        planId, e.getMessage());
-                fillProductionWorkOrderStub(p, planId, overrides);
-            }
-        } else {
-            fillProductionWorkOrderStub(p, planId, overrides);
+        if (productionPlanService == null) {
+            throw new BusinessException(503, "生产计划服务不可用 — 无法生成真实生产工单");
+        }
+
+        try {
+            ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+            String planNumber = plan.getPlanNumber() != null ? plan.getPlanNumber() : planId;
+            p.put("planNumber", planNumber);
+            p.put("productionOrderNumber", planNumber);
+            p.put("salesOrderNumbers", salesOrderNumbers(plan));
+            p.put("sourceOrderId", plan.getSourceOrderId() != null ? plan.getSourceOrderId() : "-");
+            p.put("productName", plan.getProductName() != null ? plan.getProductName() : "-");
+            p.put("productUnit", plan.getProductUnit() != null ? plan.getProductUnit() : "kg");
+            p.put("plannedQuantity", plan.getPlannedQuantity() != null
+                    ? plan.getPlannedQuantity().toPlainString() : "0");
+            p.put("expectedOutput", plan.getPlannedQuantity() != null
+                    ? plan.getPlannedQuantity().toPlainString() : "0");
+            p.put("status", plan.getStatus() != null ? plan.getStatus().name() : "-");
+            p.put("plannedDate", plan.getPlannedDate() != null
+                    ? plan.getPlannedDate().toString()
+                    : java.time.LocalDate.now().toString());
+            p.put("productionDate", p.get("plannedDate"));
+            p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
+                    ? plan.getExpectedCompletionDate().toString() : "-");
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("printProductionWorkOrder: failed to load plan {} for factory {}: {}",
+                    planId, factoryId, e.getMessage());
+            throw new BusinessException(404, "生产计划不存在或不可访问 — 无法生成生产工单: " + planId);
         }
 
         // 工序列表: 从该计划下所有批次的 WorkProcessTask 取 (去重, 按 processOrder 升序)
@@ -962,23 +962,6 @@ public class PrintController {
         }
         return plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()
                 ? plan.getSourceOrderId() : "-";
-    }
-
-    private void fillProductionWorkOrderStub(Map<String, Object> p, String planId,
-            Map<String, String> overrides) {
-        p.put("planNumber", or(overrides, "planNumber", planId));
-        p.put("productionOrderNumber", or(overrides, "productionOrderNumber", p.get("planNumber")));
-        p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
-        p.put("sourceOrderId", or(overrides, "sourceOrderId", "-"));
-        p.put("productName", or(overrides, "productName", "(产品)"));
-        p.put("productUnit", or(overrides, "productUnit", "kg"));
-        p.put("plannedQuantity", or(overrides, "plannedQuantity", "0"));
-        p.put("expectedOutput", or(overrides, "expectedOutput", p.get("plannedQuantity")));
-        p.put("status", or(overrides, "status", "-"));
-        p.put("plannedDate", or(overrides, "plannedDate",
-                java.time.LocalDate.now().toString()));
-        p.put("productionDate", or(overrides, "productionDate", p.get("plannedDate")));
-        p.put("expectedCompletionDate", or(overrides, "expectedCompletionDate", "-"));
     }
 
     /**

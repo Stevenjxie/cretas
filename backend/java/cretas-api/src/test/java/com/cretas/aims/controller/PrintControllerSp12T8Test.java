@@ -7,6 +7,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
@@ -27,8 +28,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -111,49 +112,44 @@ class PrintControllerSp12T8Test {
     }
 
     @Test
-    @DisplayName("T8-PWO-2: service 抛异常时 payload fallback 到 stub")
-    void buildProductionWorkOrderPayload_serviceThrows_fallsBackToStub() throws Exception {
+    @DisplayName("T8-PWO-2: service 抛异常时不伪造 stub, 直接返回业务错误")
+    void buildProductionWorkOrderPayload_serviceThrows_throwsBusinessException() {
         when(productionPlanService.getProductionPlanById(eq("F006"), any()))
                 .thenThrow(new RuntimeException("plan not found"));
 
-        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "nonexistent-plan", null);
-
-        // stub 填了 planId 本身作为 planNumber
-        assertThat(payload).containsKey("planNumber");
-        assertThat(payload.get("planNumber").toString()).isEqualTo("nonexistent-plan");
-        assertThat(payload).containsKey("productName");
-        assertThat(payload).containsKey("processes");
+        assertThatThrownBy(() -> invokeBuildProductionWorkOrderPayload("F006", "nonexistent-plan", null))
+                .hasCauseInstanceOf(BusinessException.class)
+                .hasRootCauseMessage("生产计划不存在或不可访问 — 无法生成生产工单: nonexistent-plan");
     }
 
     @Test
-    @DisplayName("T8-PWO-3: service 为 null 时 payload fallback 到 stub")
-    void buildProductionWorkOrderPayload_noService_returnsStub() throws Exception {
+    @DisplayName("T8-PWO-3: service 为 null 时不伪造 stub, 直接返回服务不可用")
+    void buildProductionWorkOrderPayload_noService_throwsBusinessException() {
         // detach service
         ReflectionTestUtils.setField(controller, "productionPlanService", null);
 
-        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "plan-xyz", null);
-
-        assertThat(payload).containsKeys("planNumber", "productionOrderNumber", "salesOrderNumbers",
-                "productName", "productUnit",
-                "plannedQuantity", "status", "plannedDate", "expectedCompletionDate",
-                "processes", "materialItems", "factoryName", "printDate", "printedBy", "printedAccount");
+        assertThatThrownBy(() -> invokeBuildProductionWorkOrderPayload("F006", "plan-xyz", null))
+                .hasCauseInstanceOf(BusinessException.class)
+                .hasRootCauseMessage("生产计划服务不可用 — 无法生成真实生产工单");
     }
 
     @Test
-    @DisplayName("T8-PWO-4: overrides 参数覆盖 stub 中的默认值")
-    void buildProductionWorkOrderPayload_overridesApplied() throws Exception {
-        // No service injected → pure stub path, override is visible
-        ReflectionTestUtils.setField(controller, "productionPlanService", null);
-        // workProcessTaskService/productionBatchRepository still injected but planService null
-        // → stub fills plan fields; buildProcessList will get null batches → empty processes
+    @DisplayName("T8-PWO-4: overrides 仅允许补备注, 不覆盖真实计划字段")
+    void buildProductionWorkOrderPayload_overridesDoNotReplacePlanData() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-REAL");
+        plan.setProductName("真实产品");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(BigDecimal.TEN);
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-real")).thenReturn(plan);
 
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
-                "F006", "plan-xyz",
+                "F006", "plan-real",
                 Map.of("productName", "定制猪蹄", "remark", "备注内容"));
 
-        assertThat(payload.get("productName")).isEqualTo("定制猪蹄");
+        assertThat(payload.get("productName")).isEqualTo("真实产品");
         assertThat(payload.get("remark")).isEqualTo("备注内容");
     }
 
@@ -246,7 +242,14 @@ class PrintControllerSp12T8Test {
     void buildProductionWorkOrderPayload_noTaskService_emptyProcesses() throws Exception {
         ReflectionTestUtils.setField(controller, "workProcessTaskService", null);
         ReflectionTestUtils.setField(controller, "productionBatchRepository", null);
-        ReflectionTestUtils.setField(controller, "productionPlanService", null);
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-NO-TASK-SERVICE");
+        plan.setProductName("测试产品");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(BigDecimal.TEN);
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-xyz")).thenReturn(plan);
 
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
                 "F006", "plan-xyz", null);
