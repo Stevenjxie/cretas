@@ -14,6 +14,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuickActionsStore, QuickAction } from '../../store/quickActionsStore';
 
+type MaterialIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+
 interface Props {
   role: string;
   allActions: QuickAction[];
@@ -79,7 +81,10 @@ export function QuickActionsGrid({ role, allActions, onActionPress, guides, tuto
     // 找下一个未展示的引导
     const remaining = visibleActions.filter(a => guides?.[a.id] && !newShown[a.id]);
     if (remaining.length > 0) {
-      setActiveGuide(remaining[0].id);
+      const nextGuide = remaining[0];
+      if (nextGuide) {
+        setActiveGuide(nextGuide.id);
+      }
     } else {
       setActiveGuide(null);
       await AsyncStorage.setItem(`quick_action_guide_${role}`, JSON.stringify(newShown));
@@ -123,6 +128,7 @@ export function QuickActionsGrid({ role, allActions, onActionPress, guides, tuto
         {displayActions.map((action) => {
           const visible = isActionVisible(role, action.id);
           const showGuide = activeGuide === action.id && !editMode;
+          const guideText = guides?.[action.id];
 
           return (
             <View
@@ -158,7 +164,7 @@ export function QuickActionsGrid({ role, allActions, onActionPress, guides, tuto
                   editMode && !visible && styles.iconWrapHidden,
                 ]}>
                   <MaterialCommunityIcons
-                    name={action.icon as any}
+                    name={action.icon as MaterialIconName}
                     size={22}
                     color={editMode && !visible ? '#ccc' : action.iconColor}
                   />
@@ -181,9 +187,9 @@ export function QuickActionsGrid({ role, allActions, onActionPress, guides, tuto
               </TouchableOpacity>
 
               {/* 气泡引导 */}
-              {showGuide && guides?.[action.id] && (
+              {showGuide && guideText && (
                 <GuideBubble
-                  text={guides[action.id]}
+                  text={guideText}
                   onDismiss={() => dismissGuide(action.id)}
                 />
               )}

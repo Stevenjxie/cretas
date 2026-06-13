@@ -324,8 +324,19 @@ export type FAHomeStackParamList = {
   FAHome: undefined;
   TodayProduction: undefined;
   TodayBatches: undefined;
-  MaterialBatch: undefined;
+  MaterialBatch: { statusFilter?: string } | undefined;
   AIAlerts: undefined;
+  SalesOrderList: { statusFilter?: string } | undefined;
+  PurchaseOrderList: { statusFilter?: string } | undefined;
+  ProductionPlanManagement: { statusFilter?: string } | undefined;
+  FinanceAnalysis: { statusFilter?: string } | undefined;
+  AIChat: {
+    entryContext?: {
+      module: 'sales' | 'purchase' | 'production' | 'finance' | 'inventory' | string;
+      node?: string;
+      factoryId?: string;
+    };
+  } | undefined;
   // 详情页
   BatchDetail: { batchId: string; readonly?: boolean };
   MaterialBatchDetail: { batchId: string };
@@ -374,6 +385,7 @@ export type FAManagementStackParamList = {
   // 其他管理页面 (可复用现有)
   ProductTypeManagement: undefined;
   MaterialTypeManagement: undefined;
+  MaterialConversionDetail: { materialTypeId?: string; materialName?: string } | undefined;
   DepartmentManagement: undefined;
   SupplierManagement: undefined;
   CustomerManagement: undefined;
@@ -439,6 +451,7 @@ export type FAManagementStackParamList = {
   // Sprint2-J P-FIN-1: 财务审核 (PENDING_FINANCE_REVIEW 列表 + 详情审核页)
   PurchaseOrderFinanceReviewList: undefined;
   PurchaseOrderFinanceReview: { orderId: string };
+  ProcessTaskApproval: undefined;
   SalesOrderList: undefined;
   SalesOrderDetail: { orderId: string };
   /** Sprint 2 Track E (S-MRP-1 / N31) — 销售单财务审核通过后的缺料分析 chain-card. Day 4 接入 navigator. */
@@ -559,6 +572,15 @@ export type WSHomeStackParamList = {
   YieldStepReport: YieldStepReportParams;
   ProcessOperation: undefined;
   MyWorkReports: undefined;
+  EquipmentMonitoring: undefined;
+  ProductionPlanManagement: { statusFilter?: string } | undefined;
+  AIChat: {
+    entryContext?: {
+      module: 'sales' | 'purchase' | 'production' | 'finance' | 'inventory' | string;
+      node?: string;
+      factoryId?: string;
+    };
+  } | undefined;
 };
 
 export type WSBatchesStackParamList = {
@@ -665,6 +687,14 @@ export type WHHomeStackParamList = {
   // 调拨（领料审批）
   TransferList: undefined;
   TransferDetail: { transferId: string };
+  WHInventoryList: { statusFilter?: string } | undefined;
+  AIChat: {
+    entryContext?: {
+      module: 'sales' | 'purchase' | 'production' | 'finance' | 'inventory' | string;
+      node?: string;
+      factoryId?: string;
+    };
+  } | undefined;
 };
 
 export type WHInboundStackParamList = {

@@ -160,7 +160,8 @@ export function MissingFieldsPrompt({
   const handleSubmit = () => {
     const newErrors: Record<string, string> = {};
     fields.forEach(f => {
-      if (f.required && (!values[f.fieldName] || values[f.fieldName].trim() === '')) {
+      const currentValue = values[f.fieldName] ?? '';
+      if (f.required && currentValue.trim() === '') {
         newErrors[f.fieldName] = `${f.displayName}是必填项`;
       }
     });

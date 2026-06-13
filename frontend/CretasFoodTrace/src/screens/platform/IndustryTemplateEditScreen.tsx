@@ -89,6 +89,8 @@ const ENTITY_TYPE_INFO: Record<EntityType, { name: string; description: string; 
   SCALE_DEVICE: { name: '电子秤设备', description: 'IoT电子秤设备相关字段', icon: 'scale' },
   SCALE_PROTOCOL: { name: '电子秤协议', description: '电子秤协议文档相关字段', icon: 'file-document-outline' },
   ISAPI_DEVICE: { name: 'ISAPI设备', description: 'ISAPI摄像头设备相关字段', icon: 'video' },
+  RAW_MATERIAL_TYPE: { name: '原料类型', description: '原料类型配置字段', icon: 'package-variant-closed' },
+  PURCHASE_ORDER: { name: '采购订单', description: '采购订单表单字段', icon: 'file-document-edit' },
 };
 
 // 默认 Schema 模板
@@ -400,6 +402,46 @@ const DEFAULT_SCHEMAS: Record<EntityType, object> = {
         title: '状态',
         enum: ['在线', '离线', '故障'],
         'x-component': 'Select',
+      },
+    },
+  },
+  RAW_MATERIAL_TYPE: {
+    type: 'object',
+    properties: {
+      name: {
+        type: 'string',
+        title: '原料名称',
+        'x-component': 'Input',
+      },
+      unit: {
+        type: 'string',
+        title: '单位',
+        'x-component': 'Input',
+      },
+      storageCondition: {
+        type: 'string',
+        title: '存储条件',
+        'x-component': 'Input',
+      },
+    },
+  },
+  PURCHASE_ORDER: {
+    type: 'object',
+    properties: {
+      supplierName: {
+        type: 'string',
+        title: '供应商',
+        'x-component': 'Input',
+      },
+      orderDate: {
+        type: 'string',
+        title: '采购日期',
+        'x-component': 'DatePicker',
+      },
+      remarks: {
+        type: 'string',
+        title: '备注',
+        'x-component': 'TextArea',
       },
     },
   },

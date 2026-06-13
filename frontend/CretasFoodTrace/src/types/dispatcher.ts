@@ -408,6 +408,7 @@ export interface SchedulingDashboard {
     completionProbability: number;
     riskLevel: 'low' | 'medium' | 'high';
     suggestions: string[];
+    optimizationPotential?: number;
   };
 }
 
@@ -765,6 +766,7 @@ export type DispatcherStackParamList = {
   PlanCreate: undefined;
   PlanEdit: { planId: string };
   PlanCancel: { planId: string };
+  ProcessRunOverview: { productionRunId: string };
   TaskAssignment: { scheduleId: string };
   TaskEdit: { taskId: string };
   BatchWorkers: { scheduleId: string };
