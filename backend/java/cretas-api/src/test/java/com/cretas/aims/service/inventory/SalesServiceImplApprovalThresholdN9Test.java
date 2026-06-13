@@ -1,7 +1,9 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
@@ -102,24 +104,43 @@ class SalesServiceImplApprovalThresholdN9Test {
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        assertEquals("未触发销售审批阈值或满足免审配置，自动通过", result.getFinanceReviewNotes());
+        verify(approvalChainService)
+                .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_external_channel_order_auto_finance_approves_by_config() {
+    void confirm_external_order_title_auto_finance_approves_without_threshold_check() {
         SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
         order.setExternalOrderTitle("external-channel-0601-T2");
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
-                .thenReturn(false);
 
         SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        assertEquals("未触发销售审批阈值或满足免审配置，自动通过", result.getFinanceReviewNotes());
-        verify(approvalChainService)
+        verify(approvalChainService, never())
+                .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
+        verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
+    }
+
+    @Test
+    void confirm_platform_customer_auto_finance_approves_without_channel_specific_logic() {
+        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
+        Customer customer = new Customer();
+        customer.setId("C-001");
+        customer.setFactoryId(FACTORY);
+        customer.setName("Marketplace Customer");
+        customer.setSource(CustomerSource.PLATFORM);
+
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
+        when(customerRepository.findByIdAndFactoryId("C-001", FACTORY)).thenReturn(Optional.of(customer));
+
+        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
+
+        assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
+        verify(approvalChainService, never())
                 .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
