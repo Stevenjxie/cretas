@@ -1,18 +1,25 @@
 package com.cretas.aims.service.reversal.impl;
 
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -99,6 +106,30 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
+
+    /**
+     * R3 修复 (2026-06-14, 六扇门撤回库存恢复): 撤回必须回扣结单消耗的原料量。
+     *
+     * <p><b>为什么必须回扣</b>: 结单 ({@code ProductionPlanServiceImpl.postMaterialBatchConsumption})
+     * 消耗原料时 {@code MaterialBatch.usedQuantity += 领用量}。撤回若不回扣, 原料仍显示已用
+     * → 原料库存永久少账 ({@code currentQuantity = receiptQuantity - usedQuantity - reservedQuantity}
+     * 是 @Transient 计算值, 回扣 usedQuantity 自动恢复 currentQuantity)。
+     *
+     * <p><b>消耗权威源</b>: {@link ProductionSettlementConsumption} —— 结单逐行迭代它写
+     * usedQuantity, 每行记录精确的 {@code (materialBatchId, quantity, sourceType)}, 1:1 对应。
+     * (非 {@code ProductionReport.materialBatchRefs} —— 那是报工时 JSONB 快照, 不是实际结单领用量。)
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 单一 @Transactional 内执行 (禁 fail-soft,
+     * 失败应整体回滚)。repo 未注入 (老 context / 单测未提供) → 跳过 (旧行为, 不抛异常)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MaterialBatchRepository materialBatchRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementRepository productionSettlementRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
 
     /**
      * SP12 快速撤回时间窗口 (分钟)。
@@ -299,6 +330,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // repo 未注入 (老 context) → 跳过 (旧行为). 详见字段注释.
         clearBackfilledCostUnitPrice(factoryId, batchId, log_.getPlanId());
 
+        // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
+        // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
+        restoreSettlementConsumption(factoryId, log_.getPlanId());
+
         // ④ 更新 ReportReversalLog → DONE
         log_.setStatus(ReportReversalLog.ReversalStatus.DONE);
         log_.setRevertedTxnIds(revertedTxnIds);
@@ -495,6 +530,153 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     /**
+     * R3 修复 (2026-06-14): 撤回回扣结单消耗的原料 {@code usedQuantity} (+ 恢复被领用的半成品余量),
+     * 并软删结单, 让库存归还且允许重新结单。
+     *
+     * <p><b>流程</b>: 撤回日志 planId → {@link ProductionSettlement} (按 factoryId+planId) →
+     * 其 {@link ProductionSettlementConsumption} 行:
+     * <ul>
+     *   <li>非 SEMI_FINISHED 行: 悲观锁 {@link MaterialBatch} → {@code usedQuantity -= 领用量}
+     *       (clamp ≥0 防脏数据为负) → usedQuantity 归 0 时若 status 为 USED_UP/DEPLETED 恢复 AVAILABLE。</li>
+     *   <li>SEMI_FINISHED 行: 悲观锁 {@link SemiFinishedInventory} → {@code consumedQuantity -= 领用量},
+     *       {@code availableQuantity += 领用量} (恢复被领走的量), 恢复 AVAILABLE。
+     *       (否则软删结单后重新结单会二次扣减半成品 = 重复结算。不改 WipInventoryServiceImpl, 仅反冲 settlement 路径。)</li>
+     * </ul>
+     * 最后软删 settlement + 所有 consumption 行 ({@code @Where deleted_at IS NULL} 隐藏 →
+     * 结单幂等检查 {@code findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull} 重新放行)。
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 单一 @Transactional 内 (禁 fail-soft,
+     * 失败整体回滚)。repo 未注入 → 跳过 (向后兼容)。无 settlement (报工未结单) → 无消耗可回扣, 直接返回。
+     *
+     * @param factoryId 工厂ID
+     * @param planId    撤回日志的计划ID
+     */
+    private void restoreSettlementConsumption(String factoryId, String planId) {
+        if (materialBatchRepository == null
+                || productionSettlementRepository == null
+                || productionSettlementConsumptionRepository == null) {
+            log.debug("[SP2] restoreSettlementConsumption: repo 未注入, 跳过 planId={}", planId);
+            return;
+        }
+        if (planId == null) {
+            return;
+        }
+
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                .orElse(null);
+        if (settlement == null) {
+            // 报工但未结单 → usedQuantity 未被结单路径增加, 无需回扣。
+            log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
+            return;
+        }
+
+        List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
+                .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
+
+        LocalDateTime now = LocalDateTime.now();
+        int restoredMaterial = 0;
+        int restoredSemi = 0;
+        for (ProductionSettlementConsumption line : lines) {
+            BigDecimal qty = line.getQuantity();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            if ("SEMI_FINISHED".equals(line.getSourceType())) {
+                if (restoreSemiFinishedConsumption(factoryId, line.getSemiFinishedInventoryId(), qty)) {
+                    restoredSemi++;
+                }
+            } else {
+                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty)) {
+                    restoredMaterial++;
+                }
+            }
+            // 软删消耗行 (防重新结单时重复回扣 / 重复统计)
+            line.setDeletedAt(now);
+            productionSettlementConsumptionRepository.save(line);
+        }
+
+        // 软删结单本身 → 幂等检查放行, 允许重新录入结单
+        settlement.setDeletedAt(now);
+        productionSettlementRepository.save(settlement);
+
+        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
+                planId, settlement.getId(), restoredMaterial, restoredSemi);
+    }
+
+    /**
+     * R3: 回扣单个原料批次的 {@code usedQuantity} (clamp ≥0), usedQuantity 归 0 时恢复可用状态。
+     *
+     * @return true = 已回扣并保存; false = 批次不存在或入参不合法 (跳过)
+     */
+    private boolean restoreMaterialBatchConsumption(String factoryId, String materialBatchId, BigDecimal qty) {
+        if (materialBatchId == null) {
+            log.warn("[SP2] restoreMaterialBatchConsumption: 消耗行缺 materialBatchId, 跳过 (qty={})", qty);
+            return false;
+        }
+        MaterialBatch batch = materialBatchRepository
+                .findByIdAndFactoryIdForUpdate(materialBatchId, factoryId)
+                .orElse(null);
+        if (batch == null) {
+            log.warn("[SP2] restoreMaterialBatchConsumption: 原料批次不存在 id={} factoryId={}, 跳过",
+                    materialBatchId, factoryId);
+            return false;
+        }
+        BigDecimal used = batch.getUsedQuantity() != null ? batch.getUsedQuantity() : BigDecimal.ZERO;
+        BigDecimal newUsed = used.subtract(qty);
+        if (newUsed.compareTo(BigDecimal.ZERO) < 0) {
+            // 脏数据防御: 回扣量超过已用量 → clamp 到 0 (不让 usedQuantity 为负, entity @PositiveOrZero)
+            log.warn("[SP2] restoreMaterialBatchConsumption: 回扣量 {} 超过已用 {} (batchId={}), clamp 到 0",
+                    qty, used, materialBatchId);
+            newUsed = BigDecimal.ZERO;
+        }
+        batch.setUsedQuantity(newUsed);
+        // usedQuantity 归 0 且原状态是消耗终态 → 恢复 AVAILABLE (撤回后批次重新可用)。
+        // 其他状态 (EXPIRED/SCRAPPED/DEFECTIVE/RESERVED 等独立决策) 不动。
+        if (newUsed.compareTo(BigDecimal.ZERO) == 0
+                && (MaterialBatchStatus.USED_UP == batch.getStatus()
+                    || MaterialBatchStatus.DEPLETED == batch.getStatus())) {
+            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        }
+        materialBatchRepository.save(batch);
+        return true;
+    }
+
+    /**
+     * R3: 反冲被结单领用的半成品 (恢复 {@code availableQuantity}, 减 {@code consumedQuantity}),
+     * 镜像 {@code ProductionPlanServiceImpl.postSemiFinishedConsumption} 的逆操作。
+     * 防止软删结单后重新结单二次扣减半成品 (重复结算)。
+     *
+     * @return true = 已恢复并保存; false = 库存不存在或入参不合法 (跳过)
+     */
+    private boolean restoreSemiFinishedConsumption(String factoryId, Long semiFinishedInventoryId, BigDecimal qty) {
+        if (semiFinishedInventoryId == null) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 消耗行缺 semiFinishedInventoryId, 跳过 (qty={})", qty);
+            return false;
+        }
+        SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(semiFinishedInventoryId).orElse(null);
+        if (sfi == null) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 半成品库存不存在 id={}, 跳过", semiFinishedInventoryId);
+            return false;
+        }
+        BigDecimal consumed = sfi.getConsumedQuantity() != null ? sfi.getConsumedQuantity() : BigDecimal.ZERO;
+        BigDecimal newConsumed = consumed.subtract(qty);
+        if (newConsumed.compareTo(BigDecimal.ZERO) < 0) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 回扣量 {} 超过已领 {} (sfiId={}), clamp 到 0",
+                    qty, consumed, semiFinishedInventoryId);
+            newConsumed = BigDecimal.ZERO;
+        }
+        BigDecimal available = sfi.getAvailableQuantity() != null ? sfi.getAvailableQuantity() : BigDecimal.ZERO;
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(available.add(qty));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(sfi);
+        return true;
+    }
+
+    /**
      * SP12 快速撤回资格检查。
      *
      * <p>返回 null 表示满足快速撤回全部条件 (提交人本人 + 报工在时间窗口内)。
@@ -543,8 +725,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     /**
-     * 移动均价回放: 查询该 SFI 所有未冲销 IN 行 (按 createdAt ASC), 重算 unitCost。
-     * 若无剩余有效 IN → unitCost = null, availableQuantity = 0, status = DEPLETED。
+     * 移动均价回放: 查询该 SFI 所有流水 (按 createdAt ASC), 重算 unitCost / producedQuantity /
+     * availableQuantity。
+     *
+     * <p><b>三个量的口径</b>:
+     * <ul>
+     *   <li>{@code producedQuantity} (净产出) = ΣIN + ΣREVERSE (REVERSE 为负冲销 IN)。
+     *       unitCost / accumulatedCost 只由 IN/REVERSE 加权 (OUT 不影响单价)。</li>
+     *   <li>{@code availableQuantity} (可领余量) = producedQuantity − ΣconsumedOut (R5 修复)。
+     *       <b>OUT 已被下游领用</b>, 必须从可用量扣减, 否则把已发出的量算回可用 → 幻影库存。
+     *       OUT 流水 quantity 存负量 (见 {@code WipInventoryServiceImpl} {@code qty.negate()},
+     *       实体注释 "IN 为正; OUT/REVERSE 为负"), 这里取其绝对值累加到 consumedOut。</li>
+     * </ul>
+     * 若净产出 ≤ 0 → producedQuantity = 0, availableQuantity = 0, unitCost = null, status = DEPLETED。
      */
     private void replayMovingAverage(Long sfiId, String factoryId, LocalDateTime asOf) {
         SemiFinishedInventory sfi = wipRepo.findById(sfiId)
@@ -557,52 +750,61 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         List<SemiFinishedInventoryTransaction> allTxns =
                 txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId);
 
-        // 收集被 REVERSE 行对应冲销的 IN 行 id (REVERSE 的 sourceRef = "reversal-log:XXX")
-        // 策略: 遍历, 统计每个 sfiId+txnType=IN 被多少 REVERSE 行覆盖 (按比 1:1 匹配数量)
-        // 简化: 重放所有 IN, 跳过被 REVERSE 完全抵消的部分
-        BigDecimal totalQty = BigDecimal.ZERO;
+        // producedQty = ΣIN + ΣREVERSE (净产出, REVERSE 负数冲销); weightedCost 只由 IN/REVERSE 加权。
+        // consumedOut = Σ|OUT| (下游已领用, R5: 必须从 availableQuantity 扣减)。
+        BigDecimal producedQty = BigDecimal.ZERO;
         BigDecimal weightedCost = BigDecimal.ZERO;
+        BigDecimal consumedOut = BigDecimal.ZERO;
 
         for (SemiFinishedInventoryTransaction txn : allTxns) {
             if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
                 BigDecimal q = txn.getQuantity();
                 if (q != null && q.compareTo(BigDecimal.ZERO) > 0 && txn.getUnitCostAtTxn() != null) {
-                    totalQty = totalQty.add(q);
+                    producedQty = producedQty.add(q);
                     weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
                 } else if (q != null && q.compareTo(BigDecimal.ZERO) > 0) {
                     // qty without cost — add qty but keep cost null below
-                    totalQty = totalQty.add(q);
+                    producedQty = producedQty.add(q);
                 }
             } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())) {
                 // REVERSE 行减去 IN 的贡献 (quantity 为负)
                 BigDecimal q = txn.getQuantity(); // 负数
                 if (q != null && txn.getUnitCostAtTxn() != null) {
-                    totalQty = totalQty.add(q); // 负数相加 = 减
+                    producedQty = producedQty.add(q); // 负数相加 = 减
                     weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
                 } else if (q != null) {
-                    totalQty = totalQty.add(q);
+                    producedQty = producedQty.add(q);
                 }
             } else if (SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
-                // OUT 不影响 unitCost 计算 (仅影响 availableQuantity)
+                // R5 修复: OUT 已被下游领用 — 计入 consumedOut, 从 availableQuantity 扣减。
+                // OUT quantity 存负量 (WipInventoryServiceImpl qty.negate()), 取绝对值累加。
+                // OUT 不影响 unitCost (单价只由 IN/REVERSE 加权, 这点现状对, 保留)。
+                BigDecimal q = txn.getQuantity();
+                if (q != null) {
+                    consumedOut = consumedOut.add(q.abs());
+                }
             }
         }
 
-        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
-            // 无剩余有效库存
+        if (producedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            // 无剩余有效产出
             sfi.setProducedQuantity(BigDecimal.ZERO);  // BUG-R1 fix: IN 净额归零
             sfi.setAvailableQuantity(BigDecimal.ZERO);
             sfi.setUnitCost(null);
             sfi.setAccumulatedCost(null);
             sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
         } else {
-            sfi.setProducedQuantity(totalQty);  // BUG-R1 fix: 更新 IN 净额
-            sfi.setAvailableQuantity(totalQty.max(BigDecimal.ZERO));
+            sfi.setProducedQuantity(producedQty);  // BUG-R1 fix: 更新 IN 净额
+            // R5 修复: 可用 = 净产出 − 已领用 OUT (clamp ≥0)。旧 bug 直接用净产出, 忽略 OUT → 幻影库存。
+            BigDecimal available = producedQty.subtract(consumedOut).max(BigDecimal.ZERO);
+            sfi.setAvailableQuantity(available);
             if (weightedCost.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal newUnitCost = weightedCost.divide(totalQty, 4, RoundingMode.HALF_UP);
+                BigDecimal newUnitCost = weightedCost.divide(producedQty, 4, RoundingMode.HALF_UP);
                 sfi.setUnitCost(newUnitCost);
                 sfi.setAccumulatedCost(weightedCost.setScale(2, RoundingMode.HALF_UP));
             }
-            sfi.setStatus(totalQty.compareTo(BigDecimal.ZERO) > 0
+            // status 反映可领余量: 还有余量 AVAILABLE, 全部领走 DEPLETED。
+            sfi.setStatus(available.compareTo(BigDecimal.ZERO) > 0
                     ? SemiFinishedInventory.Status.AVAILABLE
                     : SemiFinishedInventory.Status.DEPLETED);
         }
