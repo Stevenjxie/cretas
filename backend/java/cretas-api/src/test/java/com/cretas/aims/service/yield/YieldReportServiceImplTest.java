@@ -1454,7 +1454,9 @@ class YieldReportServiceImplTest {
 
     @Test
     void getYield_aggregatesWorkMinutesAndWorkers_toBatchTotal() {
-        // 两道各带工时/人数 → batch totalWorkMinutes/totalWorkers = Σ steps
+        // 两道各带工时/人数:
+        //   batch totalWorkMinutes = Σ steps (120+90=210, 工时累计合理)
+        //   batch totalWorkers = MAX steps (max(2,3)=3, Q1修: 同批工人参与多道工序, SUM会重复计虚高N倍; 峰值人力才是正确口径)
         ProductionReport r1 = ProductionReport.builder()
                 .workProcessTaskId(80L).processOrder(1).productTypeId("PT-LU")
                 .inputQuantity(new BigDecimal("998")).inputUnit("kg")
@@ -1474,8 +1476,8 @@ class YieldReportServiceImplTest {
 
         BatchYieldDTO dto = svc.getYield("F006", 14L);
 
-        assertThat(dto.getTotalWorkMinutes()).isEqualTo(210);
-        assertThat(dto.getTotalWorkers()).isEqualTo(5);
+        assertThat(dto.getTotalWorkMinutes()).isEqualTo(210);          // Σ steps: 120+90=210 ✓
+        assertThat(dto.getTotalWorkers()).isEqualTo(3);                 // MAX steps: max(2,3)=3 (Q1: 峰值人力, 非SUM虚高)
         assertThat(dto.getSteps().get(0).getTotalWorkMinutes()).isEqualTo(120);
         assertThat(dto.getSteps().get(0).getTotalWorkers()).isEqualTo(2);
     }
