@@ -32,37 +32,44 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
 };
 
 // 路演 demo 租户 (DEMO_*) 侧边栏策展: 隐藏内部/无数据模块, 让可见模块都有充足数据。
-// 餐饮 demo 无销售订单/客户 → 藏 sales; 工厂 demo 无质检/设备/调度数据 → 藏 (hr 保留, 员工管理有 75 人)。
-// system 是内部管理 (用户/权限/日志/平台配置), 两业态都藏。
+// 工厂 demo (DEMO_FACTORY2, 源 F006 六扇门 卤味加工厂) 以生产报工链为核心 — 财务无凭证 →
+// 藏 finance; 餐饮 demo (DEMO_REST) 无工厂销售订单 → 藏 sales。system 内部管理两业态都藏。
 const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: ['sales', 'system'],
-  FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
+  // F006 无财务凭证/开票/收款 (invoice=0 payment=0 fact_finance_voucher=0) → 财务概览/应收应付/
+  // 报表全 ¥0 → 整组藏。quality/equipment/scheduling 无数据。
+  FACTORY: ['quality', 'equipment', 'scheduling', 'system', 'finance'],
 };
-// 路径前缀级隐藏 (按业态). 工厂工作台有数据 (生产/销售/财务排产, AI 起产建议) → 不藏;
-// 工厂 HR 仅员工管理有数据 → 藏空的考勤/部门/工种/白名单. 餐饮工作台薄 → 整组藏.
-//
-// 数据与分析子页策展 (2026-06-14, DB ground-truth 逐表核实 + headed 验证):
-//   工厂 (DEMO_FACTORY): 经营驾驶舱/进销存/AI问答 有数据 → 留; 经营分析(hub)/异常预警/
-//     车间报表/生产分析/人效/成本 因 fact_production_report=0·fact_cost_line=0·
-//     smart_bi_finance_data=0 全空 → 藏.
-//   餐饮 (DEMO_REST): 经营驾驶舱/经营分析(hub)/收入报表/AI问答 有数据 → 留;
-//     AI体检默认当月+ops聚合稀疏降级·异常预警空 → 藏.
-//   两业态共藏: 数据管理工具组(Excel上传/查询模板/数据完整度/分析概览) + AI运维组
-//     (知识库反馈/AI追问日志/行为校准) — 内部工具, 非演示数据.
+// 路径前缀级隐藏 (按业态). 2026-06-14 DB ground-truth (每表 count) + headed 逐页核实:
+//   工厂 (DEMO_FACTORY2, F006): 报工链是亮点 — 生产批次(104)/计划(133)/报工审批·工序投入产出·
+//     人效双口径(production_reports 335)/BOM达成率/生产数据分析(fact_production_report 335)/
+//     成品(30)/采购(30)/销售订单(97)/客户(16)/物料(73)/经营驾驶舱(agg_daily 合成 ¥710万)/
+//     AI问答/进销存/员工(36) 都有数据 → 留。藏 (count=0): 物料需求/研发样品/备货看板(当日空)/
+//     报损/盘点/经营分析hub(smart_bi_finance=0)/异常预警/车间报表(当日空)/成本分析(fact_cost_line=0)/
+//     人效分析(数据与分析组, 与生产组人效双口径重复) + 数据管理/AI运维工具组。
+//   餐饮 (DEMO_REST): 留 经营驾驶舱/经营分析hub/收入报表/AI问答/菜品分析/门店对比/价格预警/
+//     配方/损耗。藏 AI体检(降级)/异常预警(空)/经营看板role-kpi(毛利计算异常)/平台口碑(无点评)/
+//     ETL状态·菜品名称匹配·数据完整度(内部工具) + 数据管理/AI运维工具组。
 const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: [
     '/workdesk', '/sales/finished-goods',
     '/smart-bi/health-report', '/analytics/alert-dashboard',
+    '/restaurant/analytics/role-kpi', '/restaurant/analytics/platform',
+    '/restaurant/data-completeness', '/restaurant/admin/etl-status', '/restaurant/admin/name-resolution',
     '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
     '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
     '/smart-bi/calibration',
   ],
   FACTORY: [
-    '/sales/finished-goods', '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
+    '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
+    '/sales/payment-requests', '/sales/returns',
+    '/production/material-requisitions', '/production/restock-board', '/rd/samples',
+    '/warehouse/wastage-reports', '/warehouse/stocktaking',
     '/smart-bi/analysis-hub', '/analytics/alert-dashboard', '/analytics/production-report',
-    '/production-analytics', '/smart-bi/upload', '/smart-bi/query-templates',
-    '/smart-bi/data-completeness', '/analytics/overview', '/smart-bi/food-kb-feedback',
-    '/smart-bi/fallback-log', '/smart-bi/calibration',
+    '/production-analytics/efficiency', '/production-analytics/cost',
+    '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
+    '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
+    '/smart-bi/calibration',
   ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
