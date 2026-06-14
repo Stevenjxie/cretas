@@ -464,4 +464,238 @@ class ReportReversalMaterialRestoreTest {
         assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(sfi.getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 修1 (honest-null 成本传导): replayMovingAverage 缺成本时 unitCost=null,
+    //   不稀释 (混合 known+null) / 不残留旧值 (全 null)。
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("修1: 混合 known+null 成本 IN → unitCost=null (不把未知量当 ¥0 稀释)")
+    void replayMovingAverage_mixedKnownAndNullCost_unitCostNull() {
+        // 100kg @¥10 (已知) + 50kg @null (未知成本) → producedQuantity=150,
+        // 旧 bug: weightedCost=1000, unitCost=1000/150=6.6667 (把未知 50kg 当 ¥0 稀释)。
+        // 正确: 有未知成本量 → unitCost/accumulatedCost 诚实置 null, 不稀释。
+        SemiFinishedInventoryTransaction inKnown = SemiFinishedInventoryTransaction.builder()
+                .id(1L).semiFinishedId(77L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("100.000000"))
+                .unitCostAtTxn(new BigDecimal("10.0000"))
+                .build();
+        SemiFinishedInventoryTransaction inNull = SemiFinishedInventoryTransaction.builder()
+                .id(2L).semiFinishedId(77L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("50.000000"))
+                .unitCostAtTxn(null) // 缺成本
+                .build();
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(77L).factoryId(FACTORY_ID)
+                .producedQuantity(new BigDecimal("100.00"))
+                .availableQuantity(new BigDecimal("100.00"))
+                .unitCost(new BigDecimal("10.0000"))       // 回放前旧值
+                .accumulatedCost(new BigDecimal("1000.00")) // 回放前旧值
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
+                .thenReturn(List.of(inKnown, inNull));
+
+        ReflectionTestUtils.invokeMethod(service, "replayMovingAverage",
+                77L, FACTORY_ID, java.time.LocalDateTime.now());
+
+        // producedQuantity 仍为净 IN = 150 (数量口径不受成本未知影响)
+        assertThat(sfi.getProducedQuantity()).isEqualByComparingTo(new BigDecimal("150.00"));
+        // 关键: 有未知成本量 → unitCost / accumulatedCost 诚实 null, 不是 6.6667 稀释值
+        assertThat(sfi.getUnitCost()).as("混合未知成本 → unitCost 诚实 null").isNull();
+        assertThat(sfi.getAccumulatedCost()).as("混合未知成本 → accumulatedCost 诚实 null").isNull();
+    }
+
+    @Test
+    @DisplayName("修1: 全部成本未知 (weightedCost=0) → unitCost/accumulatedCost 清 null (不残留旧值)")
+    void replayMovingAverage_allNullCost_clearsStaleValues() {
+        // 只 50kg @null → producedQuantity=50, weightedCost=0。
+        // 旧 bug: if(weightedCost>0) 不进, 无 else → unitCost/accumulatedCost 保持回放前旧值 (脏残留)。
+        SemiFinishedInventoryTransaction inNull = SemiFinishedInventoryTransaction.builder()
+                .id(1L).semiFinishedId(77L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("50.000000"))
+                .unitCostAtTxn(null)
+                .build();
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(77L).factoryId(FACTORY_ID)
+                .producedQuantity(new BigDecimal("50.00"))
+                .availableQuantity(new BigDecimal("50.00"))
+                .unitCost(new BigDecimal("99.9999"))        // 回放前脏旧值
+                .accumulatedCost(new BigDecimal("4999.99")) // 回放前脏旧值
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
+                .thenReturn(List.of(inNull));
+
+        ReflectionTestUtils.invokeMethod(service, "replayMovingAverage",
+                77L, FACTORY_ID, java.time.LocalDateTime.now());
+
+        assertThat(sfi.getProducedQuantity()).isEqualByComparingTo(new BigDecimal("50.00"));
+        // 关键: weightedCost=0 时清空, 不残留回放前的 99.9999 / 4999.99
+        assertThat(sfi.getUnitCost()).as("全未知成本 → unitCost 清 null 不残留").isNull();
+        assertThat(sfi.getAccumulatedCost()).as("全未知成本 → accumulatedCost 清 null 不残留").isNull();
+    }
+
+    @Test
+    @DisplayName("修1: 全部成本已知 → unitCost = 加权均价 (正常路径不退化)")
+    void replayMovingAverage_allKnownCost_computesWeightedAverage() {
+        // 100kg @¥10 + 50kg @¥4 → weightedCost=1200, producedQuantity=150, unitCost=8.0000。
+        SemiFinishedInventoryTransaction in1 = SemiFinishedInventoryTransaction.builder()
+                .id(1L).semiFinishedId(77L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("100.000000"))
+                .unitCostAtTxn(new BigDecimal("10.0000"))
+                .build();
+        SemiFinishedInventoryTransaction in2 = SemiFinishedInventoryTransaction.builder()
+                .id(2L).semiFinishedId(77L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("50.000000"))
+                .unitCostAtTxn(new BigDecimal("4.0000"))
+                .build();
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(77L).factoryId(FACTORY_ID)
+                .producedQuantity(new BigDecimal("100.00"))
+                .availableQuantity(new BigDecimal("100.00"))
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
+                .thenReturn(List.of(in1, in2));
+
+        ReflectionTestUtils.invokeMethod(service, "replayMovingAverage",
+                77L, FACTORY_ID, java.time.LocalDateTime.now());
+
+        assertThat(sfi.getProducedQuantity()).isEqualByComparingTo(new BigDecimal("150.00"));
+        // weightedCost = 100*10 + 50*4 = 1200; unitCost = 1200/150 = 8.0000
+        assertThat(sfi.getUnitCost()).isEqualByComparingTo(new BigDecimal("8.0000"));
+        assertThat(sfi.getAccumulatedCost()).isEqualByComparingTo(new BigDecimal("1200.00"));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 修2 (fail-closed): repo 已注入但 restore 失败 (批次缺失/工厂不匹配) →
+    //   抛 BusinessException 整体回滚, 不软删消耗行/settlement, 不置 DONE。
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("修2: repo已注入但原料批次不存在 → 抛异常, 消耗行/settlement 未软删 (fail-closed)")
+    void executeReversal_restoreFails_throwsAndDoesNotSoftDelete() {
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                .thenReturn(Collections.emptyList());
+
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId(SETTLEMENT_ID);
+        settlement.setFactoryId(FACTORY_ID);
+        settlement.setProductionPlanId(PLAN_ID);
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
+        cons.setId(1L);
+        cons.setSettlementId(SETTLEMENT_ID);
+        cons.setSourceType("MATERIAL_BATCH");
+        cons.setMaterialBatchId("MB-MISSING");
+        cons.setQuantity(new BigDecimal("30.00"));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(cons));
+
+        // 批次不存在 → restoreMaterialBatchConsumption 返 false → 应 fail-closed 抛异常
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-MISSING", FACTORY_ID))
+                .thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+
+        // 关键: 失败 → 消耗行/settlement 未软删 (允许修数据后重跑), 不丢库存
+        assertThat(cons.getDeletedAt()).as("恢复失败 → 消耗行不软删").isNull();
+        assertThat(settlement.getDeletedAt()).as("恢复失败 → settlement 不软删").isNull();
+        verify(productionSettlementConsumptionRepository, never()).save(cons);
+        verify(productionSettlementRepository, never()).save(settlement);
+    }
+
+    @Test
+    @DisplayName("修2: 半成品恢复失败 (库存不存在) → 抛异常, 不软删 (fail-closed)")
+    void executeReversal_semiFinishedRestoreFails_throws() {
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                .thenReturn(Collections.emptyList());
+
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId(SETTLEMENT_ID);
+        settlement.setFactoryId(FACTORY_ID);
+        settlement.setProductionPlanId(PLAN_ID);
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        ProductionSettlementConsumption sfLine = new ProductionSettlementConsumption();
+        sfLine.setId(1L);
+        sfLine.setSettlementId(SETTLEMENT_ID);
+        sfLine.setSourceType("SEMI_FINISHED");
+        sfLine.setSemiFinishedInventoryId(88L);
+        sfLine.setQuantity(new BigDecimal("15.00"));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(sfLine));
+
+        // 半成品库存不存在 → restoreSemiFinishedConsumption 返 false → fail-closed
+        when(wipRepo.findByIdForUpdate(88L)).thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+
+        assertThat(sfLine.getDeletedAt()).isNull();
+        assertThat(settlement.getDeletedAt()).isNull();
+        verify(productionSettlementConsumptionRepository, never()).save(sfLine);
+        verify(productionSettlementRepository, never()).save(settlement);
+    }
+
+    @Test
+    @DisplayName("修2: 全部恢复成功 → 正常软删 + DONE (回归保护)")
+    void executeReversal_allRestoreSucceed_softDeletesAndDone() {
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
+                .thenReturn(Collections.emptyList());
+
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId(SETTLEMENT_ID);
+        settlement.setFactoryId(FACTORY_ID);
+        settlement.setProductionPlanId(PLAN_ID);
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
+        cons.setId(1L);
+        cons.setSettlementId(SETTLEMENT_ID);
+        cons.setSourceType("MATERIAL_BATCH");
+        cons.setMaterialBatchId("MB-1");
+        cons.setQuantity(new BigDecimal("30.00"));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(cons));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("MB-1");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(new BigDecimal("30.00"));
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setStatus(MaterialBatchStatus.USED_UP);
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+
+        service.executeReversal(LOG_ID, FACTORY_ID);
+
+        // 恢复成功 → 正常软删 + DONE
+        assertThat(cons.getDeletedAt()).isNotNull();
+        assertThat(settlement.getDeletedAt()).isNotNull();
+        ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
+        verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+    }
 }

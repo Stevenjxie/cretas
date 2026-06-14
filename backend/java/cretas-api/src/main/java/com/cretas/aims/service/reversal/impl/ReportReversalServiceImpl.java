@@ -577,21 +577,40 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         LocalDateTime now = LocalDateTime.now();
         int restoredMaterial = 0;
         int restoredSemi = 0;
+        // fail-closed (修2): repo 已注入 (走到这里说明顶部未注入跳过分支没触发) → 每一笔应恢复的消耗
+        //   都必须成功, 任一返回 false (批次缺失 / 工厂不匹配 / 数量异常) → 抛 BusinessException 整体回滚,
+        //   绝不软删消耗行 / settlement (否则库存没还却把记录删了, reversal 置 DONE → 不可重跑, 静默丢库存)。
+        //   软删放在全部恢复成功之后 (两阶段), 保证"还库存"与"删记录"原子一致。
+        for (ProductionSettlementConsumption line : lines) {
+            BigDecimal qty = line.getQuantity();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue; // 无可恢复量 — 正常跳过 (非失败)
+            }
+            if ("SEMI_FINISHED".equals(line.getSourceType())) {
+                if (restoreSemiFinishedConsumption(factoryId, line.getSemiFinishedInventoryId(), qty)) {
+                    restoredSemi++;
+                } else {
+                    throw new BusinessException(409, String.format(
+                            "撤回失败: 半成品消耗恢复失败 (sfiId=%s, qty=%s) — 库存未还, 已回滚, 请修正数据后重试",
+                            line.getSemiFinishedInventoryId(), qty));
+                }
+            } else {
+                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty)) {
+                    restoredMaterial++;
+                } else {
+                    throw new BusinessException(409, String.format(
+                            "撤回失败: 原料批次消耗恢复失败 (materialBatchId=%s, qty=%s) — 库存未还, 已回滚, 请修正数据后重试",
+                            line.getMaterialBatchId(), qty));
+                }
+            }
+        }
+
+        // 全部恢复成功后才软删消耗行 (防重新结单时重复回扣 / 重复统计)
         for (ProductionSettlementConsumption line : lines) {
             BigDecimal qty = line.getQuantity();
             if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
-            if ("SEMI_FINISHED".equals(line.getSourceType())) {
-                if (restoreSemiFinishedConsumption(factoryId, line.getSemiFinishedInventoryId(), qty)) {
-                    restoredSemi++;
-                }
-            } else {
-                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty)) {
-                    restoredMaterial++;
-                }
-            }
-            // 软删消耗行 (防重新结单时重复回扣 / 重复统计)
             line.setDeletedAt(now);
             productionSettlementConsumptionRepository.save(line);
         }
@@ -752,9 +771,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // producedQty = ΣIN + ΣREVERSE (净产出, REVERSE 负数冲销); weightedCost 只由 IN/REVERSE 加权。
         // consumedOut = Σ|OUT| (下游已领用, R5: 必须从 availableQuantity 扣减)。
+        // hasUnknownCost: 存在"有数量但 unitCostAtTxn 未知"的 IN/REVERSE 流水 → 成本不可信,
+        //   honest-null: 不把未知量当 ¥0 加权稀释, 最终 unitCost/accumulatedCost 置 null (修1)。
         BigDecimal producedQty = BigDecimal.ZERO;
         BigDecimal weightedCost = BigDecimal.ZERO;
         BigDecimal consumedOut = BigDecimal.ZERO;
+        boolean hasUnknownCost = false;
 
         for (SemiFinishedInventoryTransaction txn : allTxns) {
             if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
@@ -763,8 +785,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     producedQty = producedQty.add(q);
                     weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
                 } else if (q != null && q.compareTo(BigDecimal.ZERO) > 0) {
-                    // qty without cost — add qty but keep cost null below
+                    // 有正数量但缺成本 — 数量计入净产出, 但标记成本未知 (不当 ¥0 稀释)
                     producedQty = producedQty.add(q);
+                    hasUnknownCost = true;
                 }
             } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())) {
                 // REVERSE 行减去 IN 的贡献 (quantity 为负)
@@ -773,7 +796,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     producedQty = producedQty.add(q); // 负数相加 = 减
                     weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
                 } else if (q != null) {
+                    // 有 REVERSE 数量但缺成本 — 标记成本未知 (加权口径不可信)
                     producedQty = producedQty.add(q);
+                    hasUnknownCost = true;
                 }
             } else if (SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
                 // R5 修复: OUT 已被下游领用 — 计入 consumedOut, 从 availableQuantity 扣减。
@@ -798,10 +823,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             // R5 修复: 可用 = 净产出 − 已领用 OUT (clamp ≥0)。旧 bug 直接用净产出, 忽略 OUT → 幻影库存。
             BigDecimal available = producedQty.subtract(consumedOut).max(BigDecimal.ZERO);
             sfi.setAvailableQuantity(available);
-            if (weightedCost.compareTo(BigDecimal.ZERO) > 0) {
+            // 修1 (honest-null 成本传导): 只要存在未知成本的产出量 → 成本不可信, 诚实置 null
+            //   (不把未知量当 ¥0 稀释加权均价)。否则按已知成本算加权均价。
+            //   else 兜底清空, 防回放前旧值脏残留 (旧 bug: weightedCost=0 时无 else 残留旧 unitCost)。
+            if (!hasUnknownCost && weightedCost.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal newUnitCost = weightedCost.divide(producedQty, 4, RoundingMode.HALF_UP);
                 sfi.setUnitCost(newUnitCost);
                 sfi.setAccumulatedCost(weightedCost.setScale(2, RoundingMode.HALF_UP));
+            } else {
+                sfi.setUnitCost(null);
+                sfi.setAccumulatedCost(null);
             }
             // status 反映可领余量: 还有余量 AVAILABLE, 全部领走 DEPLETED。
             sfi.setStatus(available.compareTo(BigDecimal.ZERO) > 0
