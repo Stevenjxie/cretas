@@ -426,6 +426,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                             "[wip] row missing after ensureRowExists, wipNo=" + wipNo));
         }
 
+        // 修2: 累加前快照历史产出量 + 单价 (用于诚实 null 毒化判定, 必须在 setProducedQuantity 前取)。
+        BigDecimal wipPriorProduced = wip.getProducedQuantity();
+        BigDecimal wipPriorUnitCost = wip.getUnitCost();
+
         // 统一累加路径 (占位行 producedQuantity=0 → 累加结果与历史全量新行字节一致; 既有行直接累加)。
         BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
         BigDecimal consumed = nz(wip.getConsumedQuantity());
@@ -442,8 +446,23 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             wip.setMaterialBatchRefs(report.getMaterialBatchRefs());
         }
 
+        // 修2 (🔴红线) 诚实 null: FINISHED 路径与半成品 applyMovingAverageIn 对齐 —
+        //   "有正产出量但本次/历史成本未知" 不得当 ¥0 摊薄稀释 unitCost。
+        //   历史 bug: 老 100kg@accumulated=1000 + 新 50kg@(rollLabor=null,rollMaterial=null) →
+        //            accumulatedCost 仍 1000, produced=150 → unitCost=1000/150=6.67 (把未知 50kg 当 ¥0)。
+        //
+        //   判据 (任一为真 → 整体 unitCost 诚实 null):
+        //   - 本次贡献: out>0 且本次 rollup 成本完全未知 (rollLabor 与 rollMaterial 都 null);
+        //   - 历史已被毒化: 既有行 producedQuantity>0 但 unitCost 为 null (此前某次"有量无成本"已置 null) —
+        //     既然历史段成本未知, 累加后仍无法诚实摊。
+        //   仅当两者皆"成本已知/不毒化"时才计算 accumulatedCost/produced 加权 (与历史字节一致)。
+        BigDecimal priorProduced = nz(wipPriorProduced);
+        boolean priorPoisoned = priorProduced.signum() > 0 && wipPriorUnitCost == null;
+        boolean inCostUnknown = out.signum() > 0 && rollLaborCost == null && rollMaterialCost == null;
+
         wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), rollLaborCost, rollMaterialCost));
-        if (wip.getAccumulatedCost() != null && produced.signum() > 0) {
+        if (!priorPoisoned && !inCostUnknown
+                && wip.getAccumulatedCost() != null && produced.signum() > 0) {
             wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
         } else {
             wip.setUnitCost(null);
@@ -723,6 +742,58 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         txnRepo.save(outTxn);
         log.info("[SP2] deductForSecondaryPlan wipId={} qty={} newAvail={} factoryId={}",
                 wipId, qty, newAvail, factoryId);
+    }
+
+    /**
+     * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆: 还回开工扣的半成品余量。
+     *
+     * <p>调用方必须持有 @Transactional。findByIdForUpdate 悲观写锁防并发 (与 deduct 对称)。
+     */
+    @Override
+    public void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId) {
+        if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "反冲数量必须大于 0");
+        }
+        // 悲观写锁 (与 deductForSecondaryPlan 对称)
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
+        if (!factoryId.equals(wip.getFactoryId())) {
+            throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
+        }
+        BigDecimal newAvail = nz(wip.getAvailableQuantity()).add(qty);
+        BigDecimal newConsumed = nz(wip.getConsumedQuantity()).subtract(qty);
+        // 防御: consumed 不应反冲到负 (反冲量超过历史扣减量)。诚实报错而非静默置 0。
+        if (newConsumed.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(409, String.format(
+                    "反冲数量超过已消耗量: 请求 %s, 已消耗 %s (批次号: %s)",
+                    qty, nz(wip.getConsumedQuantity()), wip.getIntermediateBatchNo()))
+                    .withCode("WIP_REVERSE_OVER_CONSUMED");
+        }
+        wip.setAvailableQuantity(newAvail);
+        wip.setConsumedQuantity(newConsumed);
+        // 还量后有余量 → 从 DEPLETED 恢复 AVAILABLE (RETURNED 终态不动)。
+        if (newAvail.compareTo(BigDecimal.ZERO) > 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
+            wip.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(wip);
+
+        // 写 REVERSE/REVERSAL 反向流水 (数量为正 = 还回); 不修改原 OUT 行 (流水不可变)。
+        SemiFinishedInventoryTransaction revTxn = SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(wip.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("secondary-plan-reverse:" + wipId)
+                .quantity(qty)
+                .unitCostAtTxn(wip.getUnitCost())
+                .balanceAfter(newAvail)
+                .balanceCostAfter(wip.getUnitCost())
+                .operatorId(operatorId)
+                .build();
+        txnRepo.save(revTxn);
+        log.info("[修1] reverseSecondaryDeduct wipId={} qty={} newAvail={} newConsumed={} factoryId={}",
+                wipId, qty, newAvail, newConsumed, factoryId);
     }
 
     /**

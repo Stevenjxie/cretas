@@ -998,4 +998,258 @@ class WipInventoryServiceImplTest {
         assertEquals(0, resp.getItems().size());
         verify(workProcessRepo, never()).findByFactoryIdAndId(anyString(), anyString());
     }
+
+    // ==================== 修2 (🔴): FINISHED 路径混合成本诚实 null ====================
+
+    @Test
+    @DisplayName("修2: FINISHED 既有行有成本 + 本次产出无成本 → unitCost 诚实 null (不被未知成本稀释为 6.67)")
+    void postApprovedOutput_finishedPath_mixedKnownThenUnknownCost_unitCostHonestNull() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7301L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9301L)
+                .productTypeId("PROD-030")
+                .processOrder(2)
+                .plannedUnit("kg")
+                .build();
+        // 第二次报工: 本次 50kg 产出但 labor/material 全 null (本道成本未知)
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(731L)
+                .batchId(9301L)
+                .workProcessTaskId(7301L)
+                .outputQuantity(new BigDecimal("50"))
+                .outputUnit("kg")
+                // laborCost / materialCost 均 null → 本次贡献 50kg 量但成本未知
+                .build();
+        String wipNo = "PROD-030-B9301-S2-7301";
+        // 既有行: 第一次产出 100kg, accumulatedCost=1000 (已知), unitCost=10.0000
+        SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                .id(5301L)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(wipNo)
+                .producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal("100"))
+                .accumulatedCost(new BigDecimal("1000.00"))
+                .unitCost(new BigDecimal("10.0000"))
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenReturn(Optional.of(existing));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 13L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("150"), saved.getProducedQuantity(), "produced = 100 + 50");
+        // 🔴 关键: 本次 50kg 成本未知 → 整体 unitCost 必须诚实 null, 不能是 1000/150 = 6.6667 (把未知当 ¥0 稀释)
+        assertNull(saved.getUnitCost(),
+                "[修2] 混合 known+unknown → unitCost 诚实 null (不退化成 1000/150=6.67)");
+        // 既有行有成本 → unitCost 已知非 null 时才发事件; 此处 null → 不发事件
+        verify(eventPublisher, never()).publishEvent(any(ProductionCostUpdatedEvent.class));
+    }
+
+    @Test
+    @DisplayName("修2 回归: FINISHED 既有行有成本 + 本次产出也有成本 → 正确加权 (字节一致, 不引入回归)")
+    void postApprovedOutput_finishedPath_bothKnownCost_correctWeightedNoRegression() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7302L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9302L)
+                .productTypeId("PROD-031")
+                .processOrder(2)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(732L)
+                .batchId(9302L)
+                .workProcessTaskId(7302L)
+                .outputQuantity(new BigDecimal("50"))
+                .outputUnit("kg")
+                .laborCost(new BigDecimal("100.00"))
+                .materialCost(new BigDecimal("150.00"))
+                .build();
+        String wipNo = "PROD-031-B9302-S2-7302";
+        SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                .id(5302L)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(wipNo)
+                .producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal("100"))
+                .accumulatedCost(new BigDecimal("800.00"))
+                .unitCost(new BigDecimal("8.0000"))
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenReturn(Optional.of(existing));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 13L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("150"), saved.getProducedQuantity(), "produced = 100 + 50");
+        // 两侧都已知 → accumulated = 800 + 250 = 1050, unitCost = 1050/150 = 7.0000 (与既有行回归保护一致)
+        assertEquals(new BigDecimal("7.0000"), saved.getUnitCost(),
+                "[修2 回归] 两侧都已知 → unitCost = (800+250)/150 = 7.0000 字节一致");
+    }
+
+    @Test
+    @DisplayName("修2: FINISHED 首次产出无成本 → unitCost null (诚实 null 基础未回归)")
+    void postApprovedOutput_finishedPath_firstUnknownCost_unitCostNull() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7303L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9303L)
+                .productTypeId("PROD-032")
+                .processOrder(1)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(733L)
+                .batchId(9303L)
+                .workProcessTaskId(7303L)
+                .outputQuantity(new BigDecimal("40"))
+                .outputUnit("kg")
+                .build();
+        stubFinishedFirstIn("PROD-032-B9303-S1-7303");
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 11L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("40"), saved.getProducedQuantity());
+        assertNull(saved.getUnitCost(), "[修2] 首次无成本 → unitCost 诚实 null");
+    }
+
+    @Test
+    @DisplayName("修2 回归: FINISHED 首次有成本 → unitCost = accumulated/produced (字节一致)")
+    void postApprovedOutput_finishedPath_firstKnownCost_correctUnitCost() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7304L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9304L)
+                .productTypeId("PROD-033")
+                .processOrder(1)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(734L)
+                .batchId(9304L)
+                .workProcessTaskId(7304L)
+                .outputQuantity(new BigDecimal("50"))
+                .outputUnit("kg")
+                .laborCost(new BigDecimal("80.00"))
+                .materialCost(new BigDecimal("120.00"))
+                .build();
+        stubFinishedFirstIn("PROD-033-B9304-S1-7304");
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 11L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        // 首次有成本: accumulated = 200, unitCost = 200/50 = 4.0000
+        assertEquals(new BigDecimal("4.0000"), saved.getUnitCost(),
+                "[修2 回归] 首次有成本 unitCost = 200/50 = 4.0000 字节一致");
+    }
+
+    // ==================== 修1 (🔴): reverseSecondaryDeduct — 还回 SECONDARY 开工扣的 WIP ====================
+
+    @Test
+    @DisplayName("修1: reverseSecondaryDeduct 把扣掉的半成品余量加回 + consumed 减回 + 写 REVERSE 流水")
+    void reverseSecondaryDeduct_restoresAvailableAndConsumed_writesReverseTxn() {
+        Long wipId = 88L;
+        // 当前: 已扣 30 (available=20, consumed=30, produced 隐含 50)
+        SemiFinishedInventory wip = SemiFinishedInventory.builder()
+                .id(wipId)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo("SEMI-REV-001")
+                .producedQuantity(new BigDecimal("50"))
+                .consumedQuantity(new BigDecimal("30"))
+                .availableQuantity(new BigDecimal("20"))
+                .unitCost(new BigDecimal("5.0000"))
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("50"), saved.getAvailableQuantity(), "available = 20 + 30 还回");
+        assertEquals(new BigDecimal("0"), saved.getConsumedQuantity().stripTrailingZeros(),
+                "consumed = 30 - 30 = 0");
+        // 反向流水
+        verify(txnRepo).save(txnCaptor.capture());
+        SemiFinishedInventoryTransaction txn = txnCaptor.getValue();
+        assertEquals(SemiFinishedInventoryTransaction.TxnType.REVERSE, txn.getTxnType());
+        assertEquals(SemiFinishedInventoryTransaction.SourceType.REVERSAL, txn.getSourceType());
+        assertEquals(new BigDecimal("30"), txn.getQuantity(), "REVERSE 数量 = +30 (还回为正)");
+    }
+
+    @Test
+    @DisplayName("修1: reverseSecondaryDeduct 把 DEPLETED WIP 还量后状态恢复 AVAILABLE")
+    void reverseSecondaryDeduct_depletedWip_restoresAvailableStatus() {
+        Long wipId = 89L;
+        // 已耗尽: available=0, consumed=50, status=DEPLETED
+        SemiFinishedInventory wip = SemiFinishedInventory.builder()
+                .id(wipId)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo("SEMI-REV-002")
+                .producedQuantity(new BigDecimal("50"))
+                .consumedQuantity(new BigDecimal("50"))
+                .availableQuantity(BigDecimal.ZERO)
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.DEPLETED)
+                .build();
+        when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("30"), saved.getAvailableQuantity(), "available = 0 + 30");
+        assertEquals(SemiFinishedInventory.Status.AVAILABLE, saved.getStatus(),
+                "DEPLETED → 还量后恢复 AVAILABLE");
+    }
+
+    @Test
+    @DisplayName("修1: reverseSecondaryDeduct 工厂 ID 不匹配 → 403")
+    void reverseSecondaryDeduct_factoryMismatch_throws403() {
+        Long wipId = 90L;
+        SemiFinishedInventory wip = SemiFinishedInventory.builder()
+                .id(wipId)
+                .factoryId("OTHER-FACTORY")
+                .availableQuantity(new BigDecimal("20"))
+                .consumedQuantity(new BigDecimal("30"))
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
+
+        assertThrows(BusinessException.class,
+                () -> service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L));
+        verify(wipRepo, never()).save(any());
+        verify(txnRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("修1: reverseSecondaryDeduct WIP 不存在 → 404")
+    void reverseSecondaryDeduct_wipNotFound_throws404() {
+        when(wipRepo.findByIdForUpdate(91L)).thenReturn(Optional.empty());
+
+        assertThrows(BusinessException.class,
+                () -> service.reverseSecondaryDeduct(91L, new BigDecimal("30"), FACTORY_ID, 7L));
+        verify(txnRepo, never()).save(any());
+    }
 }

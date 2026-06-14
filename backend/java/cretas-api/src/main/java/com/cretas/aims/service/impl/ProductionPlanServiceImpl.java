@@ -2071,7 +2071,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //          ② 报工软删后本计划 hasProductionData 返 false → 再调本接口直接取消空计划。
         // 防呆 4 位一体: message 具体 (说明已开工有报工 + 列出批次号) + 含 next action (报工撤回, 指明路径)
         //    + sticky (前端按 4xx 处理) + hintTarget (报工撤回 button)。
-        if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS && hasProductionData(factoryId, plan)) {
+        // 修1 (🔴): 区分 SECONDARY 二次加工"只开工扣了 WIP 无报工" vs "已有报工"。
+        //   - 只开工扣 WIP (无 YIELD 报工): 报工撤回流是 no-op (无报工可冲), 旧逻辑让用户去报工撤回 = 死路
+        //     (撤回不还 startProduction 扣的那笔 WIP → 计划永卡 IN_PROGRESS, WIP 孤儿)。
+        //     → 此处在同一事务内先反冲还回开工扣的 WIP, 再直接取消, 不导向报工撤回。
+        //   - 已有报工: 仍走报工撤回流 (ReportReversalService 冲报工产生的 WIP)。
+        boolean hasYields = hasYieldReports(factoryId, plan);
+        boolean isSecondaryInProgress = plan.getStatus() == ProductionPlanStatus.IN_PROGRESS
+                && "SECONDARY".equals(plan.getPlanSourceType())
+                && plan.getSecondarySourceWipId() != null;
+
+        if (isSecondaryInProgress && !hasYields) {
+            // 反冲开工扣的半成品 WIP (还回 plannedQuantity), 然后直接取消 (不卡 IN_PROGRESS, 不导向报工撤回)。
+            if (wipInventoryService == null) {
+                throw new BusinessException(500, "二次加工服务未初始化, 无法反冲半成品库存");
+            }
+            BigDecimal reverseQty = plan.getPlannedQuantity() != null
+                    ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO;
+            if (reverseQty.compareTo(java.math.BigDecimal.ZERO) > 0) {
+                wipInventoryService.reverseSecondaryDeduct(
+                        plan.getSecondarySourceWipId(), reverseQty, factoryId,
+                        null /* operatorId — cancelProductionPlan 不接收 userId */);
+                log.info("修1 SECONDARY 取消反冲 WIP: planId={}, wipId={}, qty={}",
+                        planId, plan.getSecondarySourceWipId(), reverseQty);
+            }
+            // 落入下方直接取消逻辑 (置 CANCELLED + 级联空批次/任务)。
+        } else if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS
+                && (hasYields || isSecondaryInProgress)) {
+            // 有报工 (任意计划) 或 SECONDARY 已有报工 → 导向报工撤回流, 拒绝直接取消。
             String batchHint = buildReversalBatchHint(planBatches);
             throw new BusinessException(409, "该计划已开工并有报工/WIP 消耗, 不能直接取消"
                     + (batchHint.isEmpty() ? "" : " (涉及批次: " + batchHint + ")"))
@@ -2109,14 +2136,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * </ul>
      */
     private boolean hasProductionData(String factoryId, ProductionPlan plan) {
-        // SECONDARY 计划开工即扣 WIP — 已 IN_PROGRESS 视为有数据。
+        // SECONDARY 计划开工即扣 WIP — 已 IN_PROGRESS 视为有数据 (供 requestCancelWithApproval 判定撤回资格)。
+        // 注: cancelProductionPlan 不再用本方法做"导向报工撤回 vs 反冲"的二分, 改用 hasYieldReports 细分 (修1)。
         if ("SECONDARY".equals(plan.getPlanSourceType())
                 && plan.getSecondarySourceWipId() != null
                 && plan.getStatus() == ProductionPlanStatus.IN_PROGRESS) {
             return true;
         }
+        return hasYieldReports(factoryId, plan);
+    }
+
+    /**
+     * 修1 (🔴): 纯报工检测 — 本计划任一非取消批次是否已有 YIELD 报工。
+     *
+     * <p>不含 {@link #hasProductionData} 的 "SECONDARY 开工即扣 WIP 视为有数据" 短路, 用于 cancel 区分
+     * "SECONDARY 只开工扣 WIP 无报工" (→ 反冲 WIP 直接取消) vs "已有报工" (→ 导向报工撤回流)。
+     */
+    private boolean hasYieldReports(String factoryId, ProductionPlan plan) {
         if (productionReportRepository == null) {
-            return false; // 单测无注入 → 无法证明有报工, 走安全直接取消 (该路径由有注入的测试覆盖)
+            return false; // 单测无注入 → 无法证明有报工, 走安全路径 (该路径由有注入的测试覆盖)
         }
         List<ProductionBatch> batches = productionBatchRepository
                 .findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
