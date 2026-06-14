@@ -1,6 +1,8 @@
 module.exports = ({ config }) => {
   // 从环境变量读取环境配置，默认为 test
   const env = process.env.EXPO_PUBLIC_ENV || 'test';
+  const existingExtra = config.extra || {};
+  const existingEas = existingExtra.eas || {};
 
   return {
     ...config,
@@ -48,8 +50,16 @@ module.exports = ({ config }) => {
       ],
     ],
     extra: {
+      ...existingExtra,
       // 将环境变量传递给应用
       env: env,
+      eas: {
+        ...existingEas,
+        projectId:
+          process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
+          existingEas.projectId ||
+          'com.cretas.foodtrace',
+      },
     },
   };
 };
