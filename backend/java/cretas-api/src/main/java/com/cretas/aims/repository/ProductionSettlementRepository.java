@@ -8,12 +8,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface ProductionSettlementRepository extends JpaRepository<ProductionSettlement, String> {
     Optional<ProductionSettlement> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
             String factoryId, String productionPlanId);
+
+    List<ProductionSettlement> findByFactoryIdAndPostingStatusAndDeletedAtIsNull(
+            String factoryId, String postingStatus);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM ProductionSettlement s " +
