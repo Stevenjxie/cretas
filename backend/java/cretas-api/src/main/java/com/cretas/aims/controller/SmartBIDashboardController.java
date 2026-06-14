@@ -550,14 +550,12 @@ public class SmartBIDashboardController {
                 try { response.setInventory(inventoryHealthAnalysisService.getInventoryHealth(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get inventory data failed: {}", ErrorSanitizer.sanitize(e)); }
             }),
-            java.util.concurrent.CompletableFuture.runAsync(() -> {
-                try { response.setProduction(productionAnalysisService.getOEEOverview(factoryId, startDate, endDate)); }
-                catch (Exception e) { log.warn("Get production data failed: {}", ErrorSanitizer.sanitize(e)); }
-            }),
-            java.util.concurrent.CompletableFuture.runAsync(() -> {
-                try { response.setQuality(qualityAnalysisService.getQualitySummary(factoryId, startDate, endDate)); }
-                catch (Exception e) { log.warn("Get quality data failed: {}", ErrorSanitizer.sanitize(e)); }
-            }),
+            // production / quality intentionally omitted here. The Java
+            // Production/QualityAnalysisService were random-mock placeholders
+            // (new Random(factoryId.hashCode())) that fabricated fake numbers on
+            // the customer dashboard. Removed so these fields stay honestly empty
+            // (null) until enrich is migrated to read the Python analysis endpoints
+            // backed by real gold (agg_factory_batch_daily). See SmartBI consolidation plan.
             java.util.concurrent.CompletableFuture.runAsync(() -> {
                 try { response.setProcurement(procurementAnalysisService.getProcurementOverview(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get procurement data failed: {}", ErrorSanitizer.sanitize(e)); }
