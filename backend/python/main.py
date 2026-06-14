@@ -1321,6 +1321,8 @@ try:
     app.include_router(analysis_quality.router, tags=["SmartBI Compat: Analysis Quality"])
     app.include_router(analysis_restaurant_ops.router, tags=["SmartBI Compat: Analysis Restaurant Ops (Phase IIb)"])
     app.include_router(dashboard_composite.router, tags=["SmartBI Compat: Dashboard Composite (Tier 2 Pilot)"])
+    from smartbi_compat.api import mapping_review as smartbi_compat_mapping_review
+    app.include_router(smartbi_compat_mapping_review.router, tags=["SmartBI Compat: Mapping Review (Phase 0)"])
     from smartbi_compat.api import datasource as smartbi_compat_datasource
     app.include_router(smartbi_compat_datasource.router, tags=["SmartBI Compat: Datasource"])
     from smartbi_compat.api import incentive_plan as smartbi_compat_incentive_plan

@@ -501,8 +501,10 @@ async def _async_worker_impl(
             if real_cols_idx else None
         )
         mapping_result = await mapper.map_fields(
-            columns=real_headers, sample_data=sample_slice, factory_id=factory_id
+            columns=real_headers, sample_data=sample_slice, factory_id=factory_id,
+            table_context=(upload.file_name or ""),  # bug fix: was unset -> table_type always None
         )
+        _template_key = SemanticMapper._compute_template_key(real_headers)
 
         # Wipe any stale field_defs for this upload, then bulk-insert new ones.
         db.query(SmartBiPgFieldDefinition).filter_by(upload_id=upload_id).delete()
@@ -539,6 +541,40 @@ async def _async_worker_impl(
             ))
         db.bulk_save_objects(field_def_rows)
         db.commit()
+
+        # Phase 0: route columns the controlled-vocab mapper could not map
+        # (method='review_needed') to the human review queue. Best-effort; never
+        # blocks the upload. Table is FORCE RLS -> set app.factory_id in-txn.
+        _review_rows = [
+            (upload_id, factory_id, _template_key, m.original.strip().lower(),
+             m.standard, float(m.confidence), m.method)
+            for m in mapping_result.field_mappings
+            if m.method == "review_needed"
+        ]
+        if _review_rows:
+            try:
+                from smartbi.config import get_pg_pool
+                _rq_pool = await get_pg_pool()
+                if _rq_pool is not None:
+                    async with _rq_pool.acquire() as conn:
+                        async with conn.transaction():
+                            await conn.execute(
+                                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                            )
+                            await conn.executemany(
+                                """INSERT INTO smart_bi_mapping_review_queue
+                                     (upload_id, factory_id, template_key, column_name,
+                                      detected_standard, detected_confidence, detected_method)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                   ON CONFLICT (upload_id, column_name) DO NOTHING""",
+                                _review_rows,
+                            )
+                    logger.info(
+                        "[review-queue] queued %d columns for review (upload=%s)",
+                        len(_review_rows), upload_id,
+                    )
+            except Exception as e:
+                logger.warning("[review-queue] insert failed (ignored): %s", e)
 
         # Find the canonical time + category columns for denormalized row writes
         time_col = find_time_column(classifications)
@@ -654,7 +690,12 @@ async def _async_worker_impl(
             m.original: (m.standard or m.original)
             for m in mapping_result.field_mappings
         }
-        upload.detected_table_type = mapping_result.table_type
+        # Phase 0: domain from mapped canonical fields (detected_table_type was
+        # 94% 'general' in prod); fall back to the legacy classifier result.
+        from smartbi.services.domain_inference import infer_domain
+        upload.detected_table_type = (
+            infer_domain(mapping_result.field_mappings) or mapping_result.table_type
+        )
         upload.context_info = {
             "streamPersist": True,
             "parsedInMs": int((time.time() - start) * 1000),
