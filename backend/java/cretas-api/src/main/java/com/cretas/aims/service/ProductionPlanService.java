@@ -139,30 +139,21 @@ public interface ProductionPlanService {
     void cancelProductionPlan(String factoryId, String planId, String reason);
 
     /**
-     * SP12 T3: 申请撤回/取消已完成的生产计划（触发审批流）.
-     *
-     * <p>六扇门红线：已完成计划不可被操作员直接取消，必须主管审批。
-     * <p>流程：COMPLETED → PENDING_APPROVAL，启动 PRODUCTION_REVERSAL 审批流。
-     *
-     * @param factoryId 工厂 ID
-     * @param planId    计划 ID
-     * @param reason    撤回原因
-     * @param userId    申请人 user ID (来自 RequestContextHolder "userId")
-     * @return 创建的 workflow 实例 ID
-     * @throws BusinessException 409 若计划不是 COMPLETED 状态
-     * @throws BusinessException 409 若无 active PRODUCTION_REVERSAL workflow 配置
+     * @deprecated 计划级 PRODUCTION_REVERSAL 审批流已废弃（结构性死路：workflow 引擎从不回调
+     * {@link #executeCancelApproved}，即使回调也只改状态、不恢复库存）。客户需求（六扇门 6.09
+     * requirements-catalog §C「工单撤回」）是<b>整单撤回</b>（工单/批次级，非工序级），由
+     * {@link com.cretas.aims.service.reversal.ReportReversalService} 实现（批次级整单撤回 +
+     * 审批 + 无数据直撤 + 角色权限 + G1 下游消费/G2 成品出货/G3 幂等 fail-closed 守卫 + 库存恢复）。
+     * <p>本方法现抛 409 引导用户改走批次级整单撤回，无前端调用方。
      */
+    @Deprecated
     String requestCancelWithApproval(String factoryId, String planId, String reason, Long userId);
 
     /**
-     * SP12 T3: 审批通过后执行撤回（仅供 workflow 回调调用）.
-     *
-     * <p>将 PENDING_APPROVAL 计划设为 CANCELLED，并级联关闭关联工序任务。
-     * 直接从业务 API 调用此方法将返回 403（需先通过 requestCancelWithApproval）。
-     *
-     * @param planId 计划 ID
-     * @throws BusinessException 409 若计划状态不是 PENDING_APPROVAL
+     * @deprecated 配套 {@link #requestCancelWithApproval} 一并废弃（workflow 回调零调用方）。
+     * canonical 撤回是 {@link com.cretas.aims.service.reversal.ReportReversalService} 的批次级整单撤回。
      */
+    @Deprecated
     void executeCancelApproved(String planId);
      /**
      * 锁定生产计划 (Issue #759, 2026-05-17). 锁定后不可编辑数量/日期/取消.
