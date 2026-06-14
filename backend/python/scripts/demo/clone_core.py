@@ -10,6 +10,13 @@ async def fetch_columns(conn, table: str) -> list[str]:
     return [r["column_name"] for r in rows]
 
 
+async def fetch_not_null_cols(conn, table: str) -> set:
+    rows = await conn.fetch(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name=$1 AND is_nullable='NO'", table)
+    return {r["column_name"] for r in rows}
+
+
 def _transform_row(row: dict, entry: dict, remapper, masker, target_factory: str, columns: list[str],
                    default_user_id=None) -> dict:
     out = dict(row)
@@ -68,6 +75,18 @@ async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factor
         return 0
     transformed = [_transform_row(dict(r), entry, remapper, masker, target_factory, columns, default_user_id)
                    for r in src_rows]
+    # Drop orphan rows: a NOT-NULL FK to a cloned parent that didn't resolve means the row points to
+    # a parent outside this tenant (legacy/dangling data) — keeping it would violate NOT NULL. User-FKs
+    # already fell back to the demo admin in _transform_row; this catches non-user required FKs.
+    not_null = await fetch_not_null_cols(src_conn, table)
+    required_fk = [c for c in entry.get("fk", {}) if c in not_null]
+    if required_fk:
+        kept = [r for r in transformed if all(r.get(c) is not None for c in required_fk)]
+        if len(kept) != len(transformed):
+            print(f"    [drop] {table}: {len(transformed) - len(kept)} orphan rows (unresolved required FK {required_fk})")
+        transformed = kept
+    if not transformed:
+        return 0
     # Bulk insert via executemany on explicit column list
     cols = list(transformed[0].keys())
     placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))

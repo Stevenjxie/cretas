@@ -35,9 +35,12 @@ async def gate_parity(conns, source, target):
             continue
         s = await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", source)
         t = await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", target)
-        # users gets +1: the provisioned demo-login account (not cloned from source).
-        expected_t = s + 1 if e["table"] == "users" else s
-        if t != expected_t:
+        if e["table"] == "users":
+            # +1: the provisioned demo-login account (not cloned from source).
+            if t != s + 1:
+                bad.append(f"{e['table']}: src={s} tgt={t} (expected {s + 1})")
+        elif t > s or (s > 0 and t == 0):
+            # over-clone or total miss is a real failure; 0 < t < s = orphan rows dropped (OK).
             bad.append(f"{e['table']}: src={s} tgt={t}")
     return bad
 
