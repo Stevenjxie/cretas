@@ -11,8 +11,8 @@ SMARTBI_SUPER_DSN = os.environ.get("CLONE_SMARTBI_SUPER_DSN")  # required for sm
 
 # --- Source -> Target tenants ---
 TENANTS = {
-    "rest":    {"source": "RES_3101_009", "target": "DEMO_REST",    "name": "白垩纪示范餐厅", "type": "RESTAURANT"},
-    "factory": {"source": "F001",         "target": "DEMO_FACTORY", "name": "白垩纪示范食品厂", "type": "FACTORY"},
+    "rest":    {"source": "RES_3101_009", "target": "DEMO_REST",    "name": "白垩纪AI示范餐厅", "type": "RESTAURANT"},
+    "factory": {"source": "F001",         "target": "DEMO_FACTORY", "name": "白垩纪AI示范食品厂", "type": "FACTORY"},
 }
 
 # --- Bigint-serial ID offsets (collision-safe: >> any plausible future growth) ---
@@ -44,6 +44,8 @@ TABLE_REGISTRY = [
      "fk":{"recipe_id":"bom_recipes","material_type_id":"raw_material_types"}},
   {"db":"cretas","table":"bom_versions","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"bom_recipe_id":"bom_recipes"}},
+  {"db":"cretas","table":"recipes","pk":"id","pk_type":"varchar","factory_col":"factory_id",
+     "fk":{"product_type_id":"product_types","raw_material_type_id":"raw_material_types","created_by":"users"}},  # restaurant recipe lines (qhj 383)
   {"db":"cretas","table":"material_batches","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"supplier_id":"suppliers","warehouse_id":"factory_warehouses","created_by":"users",
            "material_type_id":"raw_material_types"}},
@@ -101,6 +103,7 @@ MASK_REGISTRY = {
                 "shipping_address":"address","tax_number":"idnum","bank_name":"company","bank_account":"idnum",
                 "notes":"freetext","rating_notes":"freetext"},
   "raw_material_types": {"notes":"freetext"},
+  "recipes": {"notes":"freetext"},
   "product_types": {"related_customer":"company","notes":"freetext","brand":"company"},
   "bom_recipes": {"notes":"freetext"}, "bom_recipe_items": {"remark":"freetext"}, "bom_versions": {"rejection_reason":"freetext"},
   "material_batches": {"notes":"freetext","origin_place":"freetext","factory_number":"freetext"},
