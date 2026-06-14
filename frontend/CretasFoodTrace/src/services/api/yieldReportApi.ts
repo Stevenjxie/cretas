@@ -283,6 +283,12 @@ export interface YieldReportResult {
   taskCompleted?: boolean;
   /** 同单未完结续报: Σ该任务全部 OUTPUT 累计产出 (含本次, 仅 OUTPUT/legacy 报工返回)。 */
   cumulativeOutput?: number | null;
+  /**
+   * 守恒软校验告警 (适配单元3 Part C): 仅 legacy 整合报工偏差 >15% 且单位可比时出现。
+   * 示例: "物料平衡偏差 30% (投入 100, 产出 70, ...) — 请核对, 系统不阻塞"
+   * 三阶段 INPUT/SEGMENT/OUTPUT 各只带单边量, 此字段不会出现 (由后端注释明确)。
+   */
+  balanceWarning?: string;
 }
 
 // recordMaterialInput: 只 put reportId — :160-162
