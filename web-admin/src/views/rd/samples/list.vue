@@ -22,7 +22,9 @@ const currentUser = computed(() => {
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
-const pagination = ref({ page: 1, size: 20, total: 0 });
+// page 是 0-based (后端 Spring Pageable; 同文件 reset 用 0, el-pagination current-page 用 page+1).
+// 初值之前误写成 1 → 首屏发 page=1 给后端 = 取第 2 页 → 样品全在第 0 页时首屏空白 (所有工厂都中).
+const pagination = ref({ page: 0, size: 20, total: 0 });
 const activeTab = ref('samples');
 
 // 搜索筛选
