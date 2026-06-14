@@ -1,0 +1,19 @@
+package com.cretas.aims.repository.bom;
+
+import com.cretas.aims.entity.bom.BomYieldSuggestion;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface BomYieldSuggestionRepository extends JpaRepository<BomYieldSuggestion, Long> {
+
+    boolean existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
+            String factoryId, String productTypeId, String sourceEventType, String sourceEventId);
+
+    List<BomYieldSuggestion> findByFactoryIdAndStatusAndDeletedAtIsNullOrderByGeneratedAtDesc(
+            String factoryId, BomYieldSuggestion.Status status);
+
+    List<BomYieldSuggestion> findByFactoryIdAndDeletedAtIsNullOrderByGeneratedAtDesc(String factoryId);
+}
