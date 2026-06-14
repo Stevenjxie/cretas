@@ -28,6 +28,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -120,6 +121,57 @@ class BomPriceAdjustmentServiceImplTest {
     }
 
     @Test
+    @DisplayName("same recipe item receive updates existing pending suggestion instead of creating queue noise")
+    void duplicatePendingSuggestion_updatesExistingPendingInsteadOfCreatingNewOne() {
+        BomRecipeItem beefInMealA = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
+        BomRecipe recipeA = recipe("R-1", "PT-A", "Meal A");
+        BomPriceAdjustmentProposal pending = new BomPriceAdjustmentProposal();
+        pending.setId(77L);
+        pending.setFactoryId("F006");
+        pending.setRecipeId("R-1");
+        pending.setRecipeItemId(101L);
+        pending.setMaterialTypeId("RM-BEEF");
+        pending.setMaterialName("beef");
+        pending.setCurrentUnitPrice(new BigDecimal("10.0000"));
+        pending.setProposedUnitPrice(new BigDecimal("12.0000"));
+        pending.setDeltaAmount(new BigDecimal("2.0000"));
+        pending.setDeltaPercent(new BigDecimal("20.00"));
+        pending.setAffectedProductCount(1);
+        pending.setStatus(Status.PENDING);
+        pending.setSourceType(SourceType.PURCHASE_RECEIVE);
+        pending.setSourceReceiveRecordId("RCV-OLD");
+        pending.setSourceReceiveItemId(500L);
+
+        when(itemRepository.findByFactoryIdAndMaterialTypeId("F006", "RM-BEEF"))
+                .thenReturn(List.of(beefInMealA));
+        when(recipeRepository.findAllById(List.of("R-1")))
+                .thenReturn(List.of(recipeA));
+        when(proposalRepository.findByFactoryIdAndRecipeItemIdAndStatusAndDeletedAtIsNull(
+                "F006", 101L, Status.PENDING))
+                .thenReturn(java.util.Optional.of(pending));
+
+        PurchaseReceiveRecord receive = new PurchaseReceiveRecord();
+        receive.setId("RCV-NEW");
+        receive.setFactoryId("F006");
+        PurchaseReceiveItem item = new PurchaseReceiveItem();
+        item.setId(501L);
+        item.setMaterialTypeId("RM-BEEF");
+        item.setMaterialName("fresh beef");
+        item.setUnitPrice(new BigDecimal("13.5000"));
+        receive.setItems(List.of(item));
+
+        List<BomPriceAdjustmentProposal> proposals = service.generateFromReceive("F006", receive);
+
+        assertThat(proposals).containsExactly(pending);
+        assertThat(pending.getProposedUnitPrice()).isEqualByComparingTo("13.5000");
+        assertThat(pending.getDeltaAmount()).isEqualByComparingTo("3.5000");
+        assertThat(pending.getDeltaPercent()).isEqualByComparingTo("35.00");
+        assertThat(pending.getSourceReceiveRecordId()).isEqualTo("RCV-NEW");
+        assertThat(pending.getSourceReceiveItemId()).isEqualTo(501L);
+        verify(proposalRepository).save(pending);
+    }
+
+    @Test
     @DisplayName("approval applies proposed pre-tax price to BOM item and writes before/after audit")
     void approveSuggestion_updatesBomItemAndWritesAudit() {
         BomRecipeItem bomItem = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
@@ -132,7 +184,7 @@ class BomPriceAdjustmentServiceImplTest {
         proposal.setStatus(Status.PENDING);
 
         when(proposalRepository.findByIdAndFactoryId(77L, "F006")).thenReturn(java.util.Optional.of(proposal));
-        when(itemRepository.findById(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
         BomPriceAdjustmentProposal approved = service.approve("F006", 77L, 9L, "price checked");
@@ -153,6 +205,39 @@ class BomPriceAdjustmentServiceImplTest {
             assertThat(audit.getAfterUnitPrice()).isEqualByComparingTo("12.5000");
             assertThat(audit.getApprovedBy()).isEqualTo(9L);
         });
+        verify(itemRepository).findByIdForUpdate(101L);
+        verify(itemRepository, never()).findById(101L);
+    }
+
+    @Test
+    @DisplayName("approval locks recipe item so concurrent approvals for different suggestions serialize")
+    void approveSuggestion_usesPessimisticRecipeItemLock() {
+        BomRecipeItem bomItem = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
+        BomPriceAdjustmentProposal first = pendingProposal(88L, 101L, "11.0000");
+        BomPriceAdjustmentProposal second = pendingProposal(89L, 101L, "12.0000");
+
+        when(proposalRepository.findByIdAndFactoryId(88L, "F006")).thenReturn(java.util.Optional.of(first));
+        when(proposalRepository.findByIdAndFactoryId(89L, "F006")).thenReturn(java.util.Optional.of(second));
+        when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.approve("F006", 88L, 9L, "first");
+        service.approve("F006", 89L, 10L, "second");
+
+        assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("12.0000");
+        verify(itemRepository, times(2)).findByIdForUpdate(101L);
+        verify(itemRepository, never()).findById(101L);
+    }
+
+    private BomPriceAdjustmentProposal pendingProposal(Long id, Long recipeItemId, String proposedUnitPrice) {
+        BomPriceAdjustmentProposal proposal = new BomPriceAdjustmentProposal();
+        proposal.setId(id);
+        proposal.setFactoryId("F006");
+        proposal.setRecipeItemId(recipeItemId);
+        proposal.setCurrentUnitPrice(new BigDecimal("10.0000"));
+        proposal.setProposedUnitPrice(new BigDecimal(proposedUnitPrice));
+        proposal.setStatus(Status.PENDING);
+        return proposal;
     }
 
     private BomRecipeItem recipeItem(Long id, String recipeId, String materialTypeId,

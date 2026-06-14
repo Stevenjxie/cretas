@@ -16,6 +16,7 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomPriceAdjustmentService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -33,6 +34,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService {
 
     private final BomRecipeItemRepository itemRepository;
@@ -107,6 +109,32 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
                 continue;
             }
             BomRecipe recipe = recipesById.get(item.getRecipeId());
+            BigDecimal deltaAmount = proposedPrice.subtract(currentPrice).setScale(4, RoundingMode.HALF_UP);
+            BigDecimal deltaPercent = calculateDeltaPercent(currentPrice, proposedPrice);
+            BomPriceAdjustmentProposal pending = proposalRepository
+                    .findByFactoryIdAndRecipeItemIdAndStatusAndDeletedAtIsNull(
+                            factoryId, item.getId(), Status.PENDING)
+                    .orElse(null);
+            if (pending != null) {
+                if (scaleMoney(pending.getProposedUnitPrice()).compareTo(proposedPrice) == 0) {
+                    continue;
+                }
+                log.info("Updating existing pending BOM price adjustment proposal: proposalId={}, factoryId={}, recipeItemId={}",
+                        pending.getId(), factoryId, item.getId());
+                pending.setCurrentUnitPrice(currentPrice);
+                pending.setProposedUnitPrice(proposedPrice);
+                pending.setDeltaAmount(deltaAmount);
+                pending.setDeltaPercent(deltaPercent);
+                pending.setAffectedProductCount(affectedProductCount);
+                pending.setSourceType(sourceType != null ? sourceType : SourceType.MANUAL_CHECK);
+                pending.setSourceReceiveRecordId(sourceReceiveRecordId);
+                pending.setSourceReceiveItemId(sourceReceiveItemId);
+                if (materialName != null) {
+                    pending.setMaterialName(materialName);
+                }
+                proposals.add(proposalRepository.save(pending));
+                continue;
+            }
             BomPriceAdjustmentProposal proposal = new BomPriceAdjustmentProposal();
             proposal.setFactoryId(factoryId);
             proposal.setRecipeId(item.getRecipeId());
@@ -118,8 +146,8 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             proposal.setMaterialName(materialName != null ? materialName : item.getMaterialName());
             proposal.setCurrentUnitPrice(currentPrice);
             proposal.setProposedUnitPrice(proposedPrice);
-            proposal.setDeltaAmount(proposedPrice.subtract(currentPrice).setScale(4, RoundingMode.HALF_UP));
-            proposal.setDeltaPercent(calculateDeltaPercent(currentPrice, proposedPrice));
+            proposal.setDeltaAmount(deltaAmount);
+            proposal.setDeltaPercent(deltaPercent);
             proposal.setAffectedProductCount(affectedProductCount);
             proposal.setStatus(Status.PENDING);
             proposal.setSourceType(sourceType != null ? sourceType : SourceType.MANUAL_CHECK);
@@ -142,7 +170,7 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             throw new BusinessException(409, "只有待审批的BOM调价建议可以批准");
         }
 
-        BomRecipeItem item = itemRepository.findById(proposal.getRecipeItemId())
+        BomRecipeItem item = itemRepository.findByIdForUpdate(proposal.getRecipeItemId())
                 .orElseThrow(() -> new ResourceNotFoundException("BOM行不存在: " + proposal.getRecipeItemId()));
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权审批该BOM调价建议");
