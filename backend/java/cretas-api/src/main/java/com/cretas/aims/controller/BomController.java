@@ -14,9 +14,11 @@ import com.cretas.aims.dto.bom.UpdateBomItemRequest;
 import com.cretas.aims.dto.bom.UpdateLaborCostRequest;
 import com.cretas.aims.entity.bom.BomChangeLog;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.repository.bom.BomChangeLogRepository;
+import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.dto.orchestration.BomTreeResult;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.bom.BomYieldEstimateService;
@@ -59,6 +61,9 @@ public class BomController {
     /** P1-9 BOM 变更痕迹查询 Repository (可选注入, 老环境未部署 migration 时不阻塞) */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomChangeLogRepository bomChangeLogRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BomYieldSuggestionRepository bomYieldSuggestionRepository;
 
     // ========== BOM Items (原辅料配方) ==========
 
@@ -345,6 +350,25 @@ public class BomController {
         BomYieldApplyResultDTO result = bomYieldEstimateService.recalculateApply(factoryId, requests);
         return ApiResponse.success(
                 "已更新 " + result.getApplied() + " 条出成率配置", result);
+    }
+
+    @GetMapping("/yield-suggestions")
+    @Operation(summary = "BOM 出成率自学习建议列表",
+            description = "只读展示 PENDING/APPLIED/REJECTED 建议. 自动生成不会覆盖 BOM.")
+    public ApiResponse<List<BomYieldSuggestion>> listYieldSuggestions(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestParam(required = false) @Parameter(description = "状态: PENDING/APPLIED/REJECTED; 空返回全部") String status) {
+        if (bomYieldSuggestionRepository == null) {
+            return ApiResponse.success(Collections.emptyList());
+        }
+        if (status == null || status.isBlank()) {
+            return ApiResponse.success(
+                    bomYieldSuggestionRepository.findByFactoryIdAndDeletedAtIsNullOrderByGeneratedAtDesc(factoryId));
+        }
+        BomYieldSuggestion.Status parsed = BomYieldSuggestion.Status.valueOf(status.trim().toUpperCase());
+        return ApiResponse.success(
+                bomYieldSuggestionRepository.findByFactoryIdAndStatusAndDeletedAtIsNullOrderByGeneratedAtDesc(
+                        factoryId, parsed));
     }
 
     // ========== Request DTO → Entity mappers (Rule 17.1 cleanup, PR #370) ==========

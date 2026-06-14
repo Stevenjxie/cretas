@@ -1404,6 +1404,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setActualQuantity(settlement.getActualFinishedQuantity());
         productionPlanRepository.save(plan);
 
+        if (applicationEventPublisher != null) {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.ProductionSettledEvent(
+                    this, factoryId, plan.getId(), plan.getPlanNumber(), plan.getProductTypeId(),
+                    settlement.getId(), settlement.getActualFinishedQuantity()));
+        }
+
         List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
         log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
                 factoryId, planId, settlement.getId(),
