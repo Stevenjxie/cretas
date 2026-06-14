@@ -2,13 +2,19 @@ package com.cretas.aims.service.finance.impl;
 
 import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
+import com.cretas.aims.entity.enums.AccountBalanceType;
+import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
+import com.cretas.aims.entity.finance.Account;
+import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.finance.VoucherExportConfig;
 import com.cretas.aims.entity.finance.VoucherExportRecord;
+import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
+import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.finance.VoucherExportConfigRepository;
 import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,10 +26,15 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -40,6 +51,8 @@ class VoucherExportServiceTest {
 
     @Mock private VoucherRepository voucherRepo;
     @Mock private VoucherEntryRepository entryRepo;
+    @Mock private AccountRepository accountRepo;
+    @Mock private AccountingPeriodRepository accountingPeriodRepo;
     @Mock private VoucherExportConfigRepository exportConfigRepo;
     @Mock private VoucherExportRecordRepository exportRecordRepo;
 
@@ -52,7 +65,8 @@ class VoucherExportServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VoucherExportServiceImpl(voucherRepo, entryRepo, exportConfigRepo, exportRecordRepo);
+        service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
+                accountingPeriodRepo, exportConfigRepo, exportRecordRepo);
     }
 
     private VoucherExportRequestDTO buildReq() {
@@ -68,6 +82,71 @@ class VoucherExportServiceTest {
                 .factoryId(FACTORY_ID)
                 .targetSystem(VoucherTargetSystem.KINGDEE)
                 .build();
+    }
+
+    private Account account(String code, String name, AccountBalanceType balanceType) {
+        return Account.builder()
+                .id("ACC-" + code)
+                .factoryId(FACTORY_ID)
+                .code(code)
+                .name(name)
+                .category(balanceType == AccountBalanceType.DEBIT_NORMAL
+                        ? AccountCategory.ASSET : AccountCategory.LIABILITY)
+                .balanceType(balanceType)
+                .build();
+    }
+
+    private AccountingPeriod closedPeriod(int year, int month) {
+        return AccountingPeriod.builder()
+                .id("PERIOD-" + year + "-" + month)
+                .factoryId(FACTORY_ID)
+                .year(year)
+                .month(month)
+                .status(AccountingPeriod.Status.CLOSED)
+                .build();
+    }
+
+    private SubjectAggregateRow aggregate(String code, String name, String debit, String credit) {
+        return SubjectAggregateRow.builder()
+                .subjectCode(code)
+                .subjectName(name)
+                .totalDebit(new BigDecimal(debit))
+                .totalCredit(new BigDecimal(credit))
+                .entryCount(1L)
+                .build();
+    }
+
+    private List<List<String>> readXlsx(byte[] bytes) {
+        List<List<String>> all = new ArrayList<>();
+        com.alibaba.excel.EasyExcel.read(new ByteArrayInputStream(bytes),
+                new com.alibaba.excel.event.AnalysisEventListener<Map<Integer, String>>() {
+                    @Override
+                    public void invokeHeadMap(Map<Integer, String> headMap,
+                                              com.alibaba.excel.context.AnalysisContext context) {
+                        all.add(orderedValues(headMap));
+                    }
+
+                    @Override
+                    public void invoke(Map<Integer, String> data,
+                                       com.alibaba.excel.context.AnalysisContext context) {
+                        all.add(orderedValues(data));
+                    }
+
+                    @Override
+                    public void doAfterAllAnalysed(com.alibaba.excel.context.AnalysisContext context) {
+                    }
+
+                    private List<String> orderedValues(Map<Integer, String> map) {
+                        return new TreeMap<>(map).values().stream()
+                                .map(v -> v == null ? "" : v)
+                                .collect(Collectors.toList());
+                    }
+                }).sheet().doRead();
+        return all;
+    }
+
+    private BigDecimal decimalAt(List<String> row, int index) {
+        return new BigDecimal(row.get(index));
     }
 
     @Test
@@ -192,6 +271,89 @@ class VoucherExportServiceTest {
         // Should not throw
         assertDoesNotThrow(() ->
                 service.exportSubjectBalance(FACTORY_ID, buildReq(), USER_ID, out));
+    }
+
+    @Test
+    @DisplayName("F006: subject balance uses previous CLOSED period ending as opening")
+    void exportSubjectBalance_closedPreviousPeriod_usesPriorEndingAsOpening() throws Exception {
+        when(exportRecordRepo.findRecentExport(any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Optional.of(defaultConfig()));
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.of(closedPeriod(2026, 4)));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+                .thenReturn(List.of(aggregate("1002", "Bank", "1000.00", "200.00")));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+                .thenReturn(List.of(aggregate("1002", "Bank", "200.00", "50.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "Bank", AccountBalanceType.DEBIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportSubjectBalance(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(2, rows.size(), "header + one subject row");
+        List<String> data = rows.get(1);
+        assertEquals("1002", data.get(0));
+        assertEquals(0, new BigDecimal("800.00").compareTo(decimalAt(data, 2)), "opening = 1000 - 200");
+        assertEquals(0, new BigDecimal("200.00").compareTo(decimalAt(data, 3)), "period debit");
+        assertEquals(0, new BigDecimal("50.00").compareTo(decimalAt(data, 4)), "period credit");
+        assertEquals(0, new BigDecimal("950.00").compareTo(decimalAt(data, 5)), "closing = 800 + 200 - 50");
+        assertEquals("待财务确认", data.get(6), "voucher source caliber must be explicitly marked");
+    }
+
+    @Test
+    @DisplayName("F006: subject balance has honest zero opening when previous period is not CLOSED")
+    void exportSubjectBalance_withoutClosedPreviousPeriod_openingIsZero() throws Exception {
+        when(exportRecordRepo.findRecentExport(any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Optional.of(defaultConfig()));
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.empty());
+        when(entryRepo.aggregateBySubject(FACTORY_ID, START, END))
+                .thenReturn(List.of(aggregate("1002", "Bank", "100.00", "25.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "Bank", AccountBalanceType.DEBIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportSubjectBalance(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<String> data = readXlsx(out.toByteArray()).get(1);
+        assertEquals(0, BigDecimal.ZERO.compareTo(decimalAt(data, 2)), "opening stays 0 without previous close");
+        assertEquals(0, new BigDecimal("75.00").compareTo(decimalAt(data, 5)), "closing = 0 + 100 - 25");
+        verify(entryRepo, never()).aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), any());
+    }
+
+    @Test
+    @DisplayName("F006: subject balance four columns reconcile for credit-normal accounts")
+    void exportSubjectBalance_creditNormalAccount_reconcilesFourColumns() throws Exception {
+        when(exportRecordRepo.findRecentExport(any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Optional.of(defaultConfig()));
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.of(closedPeriod(2026, 4)));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+                .thenReturn(List.of(aggregate("2202", "AP", "100.00", "500.00")));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+                .thenReturn(List.of(aggregate("2202", "AP", "50.00", "300.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "2202"))
+                .thenReturn(List.of(account("2202", "AP", AccountBalanceType.CREDIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportSubjectBalance(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<String> data = readXlsx(out.toByteArray()).get(1);
+        assertEquals("2202", data.get(0));
+        assertEquals(0, new BigDecimal("400.00").compareTo(decimalAt(data, 2)), "credit-normal opening = 500 - 100");
+        assertEquals(0, new BigDecimal("50.00").compareTo(decimalAt(data, 3)), "period debit remains raw debit");
+        assertEquals(0, new BigDecimal("300.00").compareTo(decimalAt(data, 4)), "period credit remains raw credit");
+        assertEquals(0, new BigDecimal("650.00").compareTo(decimalAt(data, 5)), "closing = 400 + 300 - 50");
     }
 
     @Test
