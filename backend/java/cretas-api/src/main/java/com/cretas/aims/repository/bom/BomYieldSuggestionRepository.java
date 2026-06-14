@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface BomYieldSuggestionRepository extends JpaRepository<BomYieldSuggestion, Long> {
@@ -16,4 +17,7 @@ public interface BomYieldSuggestionRepository extends JpaRepository<BomYieldSugg
             String factoryId, BomYieldSuggestion.Status status);
 
     List<BomYieldSuggestion> findByFactoryIdAndDeletedAtIsNullOrderByGeneratedAtDesc(String factoryId);
+
+    Optional<BomYieldSuggestion> findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
+            String factoryId, String productTypeId, BomYieldSuggestion.Status status);
 }
