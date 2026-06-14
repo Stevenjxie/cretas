@@ -81,7 +81,13 @@ async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factor
     not_null = await fetch_not_null_cols(src_conn, table)
     required_fk = [c for c in entry.get("fk", {}) if c in not_null]
     if required_fk:
-        kept = [r for r in transformed if all(r.get(c) is not None for c in required_fk)]
+        pk = entry["pk"]
+        kept = []
+        for src, tr in zip(src_rows, transformed):
+            if all(tr.get(c) is not None for c in required_fk):
+                kept.append(tr)
+            else:
+                remapper.drop(table, src[pk])  # drop mapping so this row's children also drop (cascade)
         if len(kept) != len(transformed):
             print(f"    [drop] {table}: {len(transformed) - len(kept)} orphan rows (unresolved required FK {required_fk})")
         transformed = kept

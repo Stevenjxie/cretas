@@ -38,3 +38,8 @@ class IdRemapper:
         """Old (source) PK values already cloned for `table` — used to filter child tables
         that lack a factory_id column (clone only children of cloned parents)."""
         return list(self._map(table).keys())
+
+    def drop(self, table: str, old_id):
+        """Remove a mapping when an orphan row is dropped, so child rows referencing it resolve
+        to None and get dropped too (cascade)."""
+        self._map(table).pop(old_id, None)
