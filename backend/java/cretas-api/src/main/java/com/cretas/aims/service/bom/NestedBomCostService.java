@@ -94,8 +94,9 @@ public class NestedBomCostService {
         Set<String> visited = new HashSet<>();
         BigDecimal subUnitCost = resolveSubBomUnitCost(factoryId, item.getSubProductTypeId(), visited, 0);
         if (subUnitCost == null) {
-            log.debug("SP1 嵌套成本: subProductTypeId={} totalCost 为 null (子 BOM 未配置或未定价)",
-                    item.getSubProductTypeId());
+            // Q3: 附 itemId 便于定位是哪一 BOM 行的嵌套成本无法解析 (深度/环/未定价已在子方法 warn).
+            log.warn("SP1 嵌套成本返 null: factoryId={}, itemId={}, subProductTypeId={} (子 BOM 未配置/未定价/超深/成环)",
+                    factoryId, item.getId(), item.getSubProductTypeId());
             return null;
         }
         return CostRollupUtil.calcItemCost(actualQty, subUnitCost);
@@ -115,14 +116,16 @@ public class NestedBomCostService {
                                               Set<String> visited,
                                               int depth) {
         if (depth >= MAX_DEPTH) {
-            log.warn("SP1 嵌套 BOM 深度超限 (≥{}): productTypeId={}, visited={}",
-                    MAX_DEPTH, productTypeId, visited);
+            // Q3: 诚实告警 — 深度超限返 null 不静默, 附 factoryId/depth/路径 便于排查.
+            log.warn("SP1 嵌套 BOM 深度超限 (≥{}), 成本返 null: factoryId={}, productTypeId={}, depth={}, visited={}",
+                    MAX_DEPTH, factoryId, productTypeId, depth, visited);
             return null;
         }
 
         if (visited.contains(productTypeId)) {
-            log.warn("SP1 嵌套 BOM 循环检测: productTypeId={} 已在路径 {} 中, 切断递归",
-                    productTypeId, visited);
+            // Q3: 诚实告警 — 检测到环返 null 不静默, 附 factoryId/depth/环路径 便于排查.
+            log.warn("SP1 嵌套 BOM 循环检测, 成本返 null: factoryId={}, productTypeId={} 已在路径 {} 中 (depth={}), 切断递归",
+                    factoryId, productTypeId, visited, depth);
             return null;
         }
         visited.add(productTypeId);

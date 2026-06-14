@@ -143,6 +143,41 @@ class BomRecipeServiceImplAddItemTest {
         assertThat(recipe.getItems()).contains(existingItem, newItem);
     }
 
+    // ── F6: taxRate 未传 → 保持 null (不默认 0%), 成本侧诚实标缺 ──────────────
+    @Test
+    @DisplayName("F6: addItem 未传 taxRate → 保持 null (不默认 0%)")
+    void addItem_taxRateNotProvided_staysNull() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        // buildDto 不设 taxRate → dto.getTaxRate() == null
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getTaxRate())
+                .as("未传 taxRate 必须保持 null, 不默认 0% (诚实标缺)")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("F6: addItem 显式传 taxRate → 保留传入值")
+    void addItem_taxRateProvided_preserved() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        ReflectionTestUtils.setField(dto, "taxRate", new BigDecimal("13.00"));
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("13.00");
+    }
+
     @Test
     @DisplayName("addItem: AUXILIARY item accepted — B-41 AUXILIARY category supported")
     void addItem_auxiliaryCategory_accepted() {

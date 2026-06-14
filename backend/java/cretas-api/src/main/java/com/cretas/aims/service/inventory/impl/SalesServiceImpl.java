@@ -112,6 +112,16 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.CostVarianceService costVarianceService;
 
+    /**
+     * 六扇门 D1: 同口径标准成本解析 (料 + 研发预估标准人工). Optional.
+     *
+     * <p>修复假阳性超支报警: BOM 标准 (纯料) vs 实际 (含人工) 口径不一致 → 系统性虚高方差。
+     * 此服务返回含人工的标准成本, 与含人工的实际成本同口径可比。未注册时回退到纯料 BOM 标准
+     * (保留旧行为, 但下方逻辑会优先用 StandardCostService 的同口径值)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.bom.StandardCostService standardCostService;
+
     /** SP12 实际成本拆分: 订单 → 生产计划. Optional — 未注册时 actualCostSplit 返 null. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
@@ -1107,6 +1117,8 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal actualCostSum = BigDecimal.ZERO;
         boolean anyBomAvailable = false;
         boolean anyActualMissing = false;
+        // D1: 订单级标准成本是否全口径含人工 — 任一行标准缺人工 → 不做订单级超支报警 (避免假阳性).
+        boolean allStdLaborIncluded = true;
 
         java.util.List<com.cretas.aims.dto.inventory.FinanceCostBreakdown.LineCostBreakdown> lines =
                 new java.util.ArrayList<>();
@@ -1119,28 +1131,43 @@ public class SalesServiceImpl implements SalesService {
                     ? qty.multiply(sellUnit).setScale(2, java.math.RoundingMode.HALF_UP)
                     : null;
 
+            // D1: 同口径标准单位成本 — 含研发预估标准人工, 与含人工的实际成本可比.
+            //   StandardCostService 返回 totalUnitCost = 料 + 标准人工 (口径不全时诚实 null).
+            //   未注册 standardCostService 时回退到纯料 BOM 标准 (旧行为, 但口径偏低 → 下方报警会被
+            //   laborIncluded 守卫拦住, 见订单级 + 行级判定)。
             BigDecimal bomUnit = null;
             BigDecimal bomLine = null;
-            if (bomRecipeService != null && item.getProductTypeId() != null) {
+            boolean lineStdLaborIncluded = false;
+            if (item.getProductTypeId() != null) {
                 try {
-                    java.util.Optional<com.cretas.aims.entity.bom.BomRecipe> recipeOpt =
-                            bomRecipeService.getCurrentRecipe(factoryId, item.getProductTypeId());
-                    if (recipeOpt.isPresent()) {
-                        BigDecimal tc = recipeOpt.get().getTotalCost();
-                        // B2 fix: treat null or <= 0 totalCost as "BOM items have no unit price configured".
-                        // A BOM that exists but has totalCost=null (hasNullPrice path) or =0 (empty-items
-                        // path) must not be reported as 0 — that would mislead finance into thinking
-                        // production truly costs nothing.  null → front-end shows "-" (honest).
-                        if (tc != null && tc.compareTo(BigDecimal.ZERO) > 0) {
-                            bomUnit = tc;
-                            bomLine = qty.multiply(bomUnit).setScale(2, java.math.RoundingMode.HALF_UP);
-                            bomStandardCostSum = bomStandardCostSum.add(bomLine);
-                            anyBomAvailable = true;
+                    if (standardCostService != null) {
+                        com.cretas.aims.service.bom.StandardCostService.StandardUnitCost std =
+                                standardCostService.resolveStandardUnitCost(factoryId, item.getProductTypeId());
+                        // 同口径标准 (含人工) 优先; null → 口径不全 (无 BOM/料未定价/缺研发人工) → 诚实留空
+                        if (std.getTotalUnitCost() != null
+                                && std.getTotalUnitCost().compareTo(BigDecimal.ZERO) > 0) {
+                            bomUnit = std.getTotalUnitCost();
+                            lineStdLaborIncluded = std.isLaborIncluded();
                         }
-                        // else: BOM exists but prices not configured → bomUnit stays null (honest gap)
+                    } else if (bomRecipeService != null) {
+                        // 回退: 纯料 BOM 标准 (口径偏低, 不含人工). laborIncluded 留 false → 不误报。
+                        java.util.Optional<com.cretas.aims.entity.bom.BomRecipe> recipeOpt =
+                                bomRecipeService.getCurrentRecipe(factoryId, item.getProductTypeId());
+                        if (recipeOpt.isPresent()) {
+                            BigDecimal tc = recipeOpt.get().getTotalCost();
+                            // B2 fix: null/<=0 totalCost 表示 BOM 料未定价, 不当 0 (避免误导财务).
+                            if (tc != null && tc.compareTo(BigDecimal.ZERO) > 0) {
+                                bomUnit = tc;
+                            }
+                        }
+                    }
+                    if (bomUnit != null) {
+                        bomLine = qty.multiply(bomUnit).setScale(2, java.math.RoundingMode.HALF_UP);
+                        bomStandardCostSum = bomStandardCostSum.add(bomLine);
+                        anyBomAvailable = true;
                     }
                 } catch (Exception e) {
-                    log.warn("BOM 标准成本查询失败 (productTypeId={}): {}", item.getProductTypeId(), e.getMessage());
+                    log.warn("标准成本查询失败 (productTypeId={}): {}", item.getProductTypeId(), e.getMessage());
                 }
             }
 
@@ -1154,11 +1181,18 @@ public class SalesServiceImpl implements SalesService {
                 anyActualMissing = true;
             }
 
-            // SP3: 行级超支百分比
+            // SP3: 行级超支百分比.
+            // D1 守卫: 仅当标准侧含人工 (lineStdLaborIncluded) 才算行级超支 — 否则标准 (纯料) 比
+            //   实际 (含人工) 必然虚高超支 = 假阳性, 跳过不报 (variancePct 留 null, 财务看 caliberHint)。
             BigDecimal lineVariancePct = null;
             Boolean lineBelowThreshold = null;
             BigDecimal actualCostPerUnit = (costUnit != null && costUnit.compareTo(BigDecimal.ZERO) > 0) ? costUnit : null;
-            if (costVarianceService != null && actualCostPerUnit != null && bomUnit != null) {
+            // 实际成本存在但标准侧缺人工口径 → 标记订单级口径不全 (用于拦订单级报警)
+            if (actualCostPerUnit != null && !lineStdLaborIncluded) {
+                allStdLaborIncluded = false;
+            }
+            if (costVarianceService != null && actualCostPerUnit != null && bomUnit != null
+                    && lineStdLaborIncluded) {
                 lineVariancePct = costVarianceService.computeVariancePct(actualCostPerUnit, bomUnit);
                 if (lineVariancePct != null) {
                     BigDecimal thresh = costVarianceService.resolveThreshold(factoryId, item.getProductTypeId());
@@ -1216,14 +1250,22 @@ public class SalesServiceImpl implements SalesService {
         if (actualCost == null) {
             hint.append("实际成本暂不可用: 订单行成本单价未录入 (生产批次完工后系统自动回填). ");
         }
+        // D1: 标准成本口径不全 (缺研发预估人工) → 提示财务标准成本未含人工, 超支对比已跳过.
+        if (bomStandardCost != null && actualCost != null && !allStdLaborIncluded) {
+            hint.append("标准成本未含研发预估人工 (部分产品缺 人工成本 元/kg), 已跳过超支对比以避免误报. " +
+                    "请在「研发报价」补填人工成本后重新查看同口径超支. ");
+        }
         String hintStr = hint.length() > 0 ? hint.toString().trim() : null;
 
-        // SP3: 订单级超支计算
+        // SP3: 订单级超支计算.
+        // D1 守卫: 仅当全部行标准侧含人工 (allStdLaborIncluded) 才做订单级超支报警 — 否则纯料标准
+        //   vs 含人工实际 = 系统性虚高 = 假阳性, 跳过 (variancePct/alarmMessage 留 null)。
         java.math.BigDecimal orderVariancePct = null;
         java.math.BigDecimal orderVarianceAbsolute = null;
         Boolean orderBelowThreshold = null;
         String orderAlarmMessage = null;
-        if (costVarianceService != null && actualCost != null && bomStandardCost != null) {
+        if (costVarianceService != null && actualCost != null && bomStandardCost != null
+                && allStdLaborIncluded) {
             orderVariancePct = costVarianceService.computeVariancePct(actualCost, bomStandardCost);
             if (orderVariancePct != null) {
                 orderVarianceAbsolute = actualCost.subtract(bomStandardCost);

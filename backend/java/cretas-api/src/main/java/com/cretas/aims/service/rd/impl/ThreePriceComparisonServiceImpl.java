@@ -52,16 +52,20 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
         BigDecimal preQuotePerKg = null;
 
         if (task != null && task.getTotalCost() != null) {
-            // 预报价 per-kg = totalCost(整批预估) / 试制实际产出(kg)
-            // 若试制批次产出尚无, fallback 为 totalCost 原值 (整批价格展示)
+            // 预报价 per-kg = totalCost(整批预估) / 试制实际产出(kg).
+            // D2 修复: 无 trialOutputKg 时**不能**拿整批 totalCost (元/批) 冒充 per-kg —— 单位混淆
+            //   (元/批 vs 元/kg) 会让 PRE_TO_MID / 三价对比方差完全无意义。诚实留 null (待折算),
+            //   等试制批次产出录入后再计算 per-kg。
             if (latestMidOpt.isPresent()
                     && latestMidOpt.get().getTrialOutputKg() != null
                     && latestMidOpt.get().getTrialOutputKg().compareTo(BigDecimal.ZERO) > 0) {
                 preQuotePerKg = task.getTotalCost()
                         .divide(latestMidOpt.get().getTrialOutputKg(), 4, RoundingMode.HALF_UP);
             } else {
-                // fallback: totalCost as-is (整批成本，前端展示时需注明)
-                preQuotePerKg = task.getTotalCost();
+                // 诚实 null: 试制产出未知, 无法把整批成本折算到 per-kg → 不冒充单价.
+                log.debug("[SP10] 预报价 per-kg 待折算: sampleId={} task.totalCost={} 但 trialOutputKg 缺失, 留 null",
+                        sampleId, task.getTotalCost());
+                preQuotePerKg = null;
             }
         }
 

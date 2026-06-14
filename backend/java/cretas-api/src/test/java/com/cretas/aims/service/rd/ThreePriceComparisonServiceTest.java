@@ -75,7 +75,7 @@ class ThreePriceComparisonServiceTest {
     }
 
     @Test
-    @DisplayName("仅预报价: midQuote=null → midQuote字段为null, actualCost=null")
+    @DisplayName("D2: 无 trialOutputKg → preQuote 诚实 null (不拿整批 totalCost 冒充 per-kg)")
     void threePrice_onlyPreQuote() {
         when(quotationTaskRepository.findBySampleIdAndDeletedAtIsNull("sample-001"))
                 .thenReturn(buildTask("sample-001", new BigDecimal("2000.00")));
@@ -84,11 +84,12 @@ class ThreePriceComparisonServiceTest {
 
         ThreePriceComparisonDTO dto = service.getThreePriceComparison("F006", "sample-001");
 
-        // preQuote = totalCost as-is (no batch qty to divide by)
-        assertNotNull(dto.getPreQuote(), "预报价不应为 null (fallback=totalCost)");
+        // D2 修复: totalCost(元/批) 无 trialOutputKg 折算 → 不冒充 per-kg, 诚实 null.
+        //   旧 bug 把整批 2000 当 per-kg → 三价方差完全无意义.
+        assertNull(dto.getPreQuote(), "无 trialOutputKg 时预报价应诚实 null (待折算), 不冒充整批值");
         assertNull(dto.getMidQuote(), "中报价未汇算时应为 null");
         assertNull(dto.getActualCost(), "实际成本未计算时应为 null");
-        assertTrue(dto.getVarianceAlerts().isEmpty(), "无中报价时不应有偏差告警");
+        assertTrue(dto.getVarianceAlerts().isEmpty(), "无 per-kg 可比价时不应有偏差告警");
     }
 
     @Test

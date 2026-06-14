@@ -5,8 +5,8 @@ import com.cretas.aims.entity.enums.NotificationType;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.NotificationService;
-import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.CostVarianceService;
+import com.cretas.aims.service.bom.StandardCostService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -39,7 +39,13 @@ public class OrderCostAlarmListener {
 
     private static final String SOURCE = "SP3_COST_ALARM";
 
-    private final BomRecipeService bomRecipeService;
+    /**
+     * D1: 同口径标准成本 (料 + 研发预估标准人工) — 取代旧的纯料 BomRecipe.totalCost.
+     *
+     * <p>修复假阳性超支推送: 旧实现拿纯料标准 (BomRecipe.totalCost) 比含人工的实际成本
+     * (actualUnitCost = 报工料+人工+制费 rollup) → 系统性虚高 → 误推超支通知给销售主管/工厂总监。
+     */
+    private final StandardCostService standardCostService;
     private final CostVarianceService costVarianceService;
     private final NotificationService notificationService;
     private final ProductTypeRepository productTypeRepo;
@@ -56,10 +62,18 @@ public class OrderCostAlarmListener {
             BigDecimal actualUnitCost = event.getActualUnitCost();
             if (factoryId == null || productTypeId == null || actualUnitCost == null) return;
 
-            var recipeOpt = bomRecipeService.getCurrentRecipe(factoryId, productTypeId);
-            if (recipeOpt.isEmpty()) return;
-            BigDecimal standardCost = recipeOpt.get().getTotalCost();
-            if (standardCost == null || standardCost.compareTo(BigDecimal.ZERO) <= 0) return;
+            // D1: 同口径标准成本 (料 + 研发预估人工). 口径不全 (totalUnitCost null / 缺人工) → 跳过,
+            //   不拿纯料标准比含人工实际 (假阳性), 诚实不报警。
+            StandardCostService.StandardUnitCost std =
+                    standardCostService.resolveStandardUnitCost(factoryId, productTypeId);
+            if (!std.isLaborIncluded() || std.getTotalUnitCost() == null) {
+                log.info("[SP3-Alarm] 标准成本口径不全 (缺研发预估人工), 跳过超支报警避免误报: " +
+                                "factoryId={}, productTypeId={}, hint={}",
+                        factoryId, productTypeId, std.getCaliberHint());
+                return;
+            }
+            BigDecimal standardCost = std.getTotalUnitCost();
+            if (standardCost.compareTo(BigDecimal.ZERO) <= 0) return;
 
             BigDecimal variancePct = costVarianceService.computeVariancePct(actualUnitCost, standardCost);
             if (variancePct == null) return;
