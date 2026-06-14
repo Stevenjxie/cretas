@@ -1,17 +1,19 @@
 package com.cretas.aims.entity.enums;
 
 /**
- * 入库类型
+ * Inbound batch source type.
  */
 public enum InboundType {
-    /** 采购入库 */
+    /** Purchase receiving inbound. */
     PURCHASE_ORDER,
-    /** 盘点入库 */
+    /** Inventory count gain inbound. */
     INVENTORY_COUNT,
-    /** 供应商退货入库 */
+    /** Supplier return inbound. */
     SUPPLIER_RETURN,
-    /** 工厂退料入库 */
+    /** Factory return inbound. */
     FACTORY_RETURN,
-    /** 其他 */
+    /** Historical or migration import. Requires inventory:legacy_import. */
+    LEGACY_IMPORT,
+    /** Other inbound type. */
     OTHER
 }
