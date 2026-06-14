@@ -100,6 +100,7 @@ class ProductionPlanCancelConcurrencyTest {
     // Field-injected (@Autowired(required=false)) — reflection-set per existing pattern.
     @Mock private WorkProcessTaskRepository workProcessTaskRepository;
     @Mock private ProductionReportRepository productionReportRepository;
+    @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
 
     private ProductionPlanServiceImpl service;
 
@@ -113,6 +114,7 @@ class ProductionPlanCancelConcurrencyTest {
                 salesOrderRepository, salesOrderItemRepository, bomService);
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
+        ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
 
         lenient().when(productionPlanRepository.save(any(ProductionPlan.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -272,20 +274,48 @@ class ProductionPlanCancelConcurrencyTest {
     }
 
     @Test
-    @DisplayName("R2: SECONDARY 计划 IN_PROGRESS (已扣 WIP) → 拒绝直接取消, 导向撤回审批")
-    void cancel_secondaryInProgressConsumedWip_rejected() {
+    @DisplayName("修1: SECONDARY 计划 IN_PROGRESS 已扣 WIP 但无报工 → 反冲 WIP + 直接取消 (修正旧死路)")
+    void cancel_secondaryInProgressConsumedWipNoYield_reversesAndCancels() {
+        // 旧行为 (已被修正): 拒绝 + 导向报工撤回 → 死路 (撤回 no-op, WIP 永不还, 计划卡 IN_PROGRESS)。
+        // 修1 新行为: 只开工扣 WIP 无报工 → 反冲还回 WIP + 直接置 CANCELLED, 不导向报工撤回。
+        ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS); // plannedQuantity=100
+        target.setPlanSourceType("SECONDARY");
+        target.setSecondarySourceWipId(555L);
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
+        // 无批次 / 无 YIELD 报工 (只开工扣了 WIP)
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(Collections.emptyList());
+
+        service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消");
+
+        // 反冲还回开工扣的 WIP (plannedQuantity=100)
+        verify(wipInventoryService).reverseSecondaryDeduct(
+                eq(555L), eq(new BigDecimal("100")), eq(FACTORY_ID), any());
+        // 计划置 CANCELLED, 不卡 IN_PROGRESS
+        assertEquals(ProductionPlanStatus.CANCELLED, target.getStatus());
+    }
+
+    @Test
+    @DisplayName("修1: SECONDARY 计划 IN_PROGRESS 已有 YIELD 报工 → 仍拒绝直接取消, 导向报工撤回 (不反冲)")
+    void cancel_secondaryInProgressWithYield_rejectedNoReverse() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
         target.setPlanSourceType("SECONDARY");
         target.setSecondarySourceWipId(555L);
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
-        // 即便没有批次 / 没有 YIELD, SECONDARY 已扣 WIP → 仍须拒绝
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
-                .thenReturn(Collections.emptyList());
+                .thenReturn(List.of(batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS)));
+        ProductionReport yield = new ProductionReport();
+        yield.setId(901L);
+        yield.setBatchId(10L);
+        when(productionReportRepository.findYieldReportsByBatch(FACTORY_ID, 10L))
+                .thenReturn(List.of(yield));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消"));
         assertEquals(409, ex.getCode());
         assertEquals(ProductionPlanStatus.IN_PROGRESS, target.getStatus());
+        // 有报工 → 走报工撤回流, 不反冲
+        verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
     }
 
     @Test

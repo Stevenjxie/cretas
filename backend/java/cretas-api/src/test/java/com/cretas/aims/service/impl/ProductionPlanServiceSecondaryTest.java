@@ -73,6 +73,9 @@ class ProductionPlanServiceSecondaryTest {
     // --- Optional SP2 dependency ---
     @Mock private WipInventoryService wipInventoryService;
 
+    // --- Optional R2/修1 dependency: 检测 YIELD 报工 ---
+    @Mock private ProductionReportRepository productionReportRepo;
+
     /** Build a service instance wiring the optional wipInventoryService via reflection. */
     private ProductionPlanServiceImpl buildService(WipInventoryService wipSvc) throws Exception {
         Constructor<?> ctor = ProductionPlanServiceImpl.class.getDeclaredConstructors()[0];
@@ -226,6 +229,99 @@ class ProductionPlanServiceSecondaryTest {
                     new BigDecimal("10"), PRODUCT_TYPE_ID, null, null))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("二次加工服务未初始化");
+        }
+    }
+
+    // ==================== 修1 (🔴): 取消 SECONDARY 计划 — 还 WIP / 不卡 IN_PROGRESS ====================
+
+    @Nested
+    @DisplayName("修1: cancelProductionPlan — SECONDARY 计划取消")
+    class CancelSecondaryPlan {
+
+        private static final String PLAN_ID = "SEC-PLAN-001";
+
+        private ProductionPlan buildSecondaryInProgressPlan() {
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId(PLAN_ID);
+            plan.setFactoryId(FACTORY_ID);
+            plan.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
+            plan.setPlanSourceType("SECONDARY");
+            plan.setSecondarySourceWipId(WIP_ID);
+            plan.setPlannedQuantity(new BigDecimal("30"));
+            plan.setProductTypeId(PRODUCT_TYPE_ID);
+            return plan;
+        }
+
+        @Test
+        @DisplayName("SECONDARY 开工扣 WIP 但无报工 → 取消时反冲 WIP + 计划 CANCELLED (不卡, 不导向报工撤回)")
+        void secondaryNoYield_reversesWipAndCancels() throws Exception {
+            ProductionPlanServiceImpl svc = buildService(wipInventoryService);
+            ProductionPlan plan = buildSecondaryInProgressPlan();
+            when(productionPlanRepo.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+            // 本计划无活跃批次 (开工扣 WIP, 还没建报工批次), 也无 YIELD 报工
+            when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                    .thenReturn(List.of());
+            when(productionPlanRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            svc.cancelProductionPlan(FACTORY_ID, PLAN_ID, "不做了");
+
+            // 反冲 WIP 被调用 (还回开工扣的 30)
+            verify(wipInventoryService).reverseSecondaryDeduct(
+                    eq(WIP_ID), eq(new BigDecimal("30")), eq(FACTORY_ID), any());
+            // 计划置 CANCELLED, 不卡 IN_PROGRESS
+            assertThat(plan.getStatus())
+                    .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+        }
+
+        @Test
+        @DisplayName("SECONDARY 已有 YIELD 报工 → 仍导向报工撤回 (拒绝直接取消, 不反冲)")
+        void secondaryWithYield_routesToReversal() throws Exception {
+            ProductionPlanServiceImpl svc = buildService(wipInventoryService);
+            // 注入 productionReportRepository 让 hasYieldReports 能查到报工
+            injectField(svc, "productionReportRepository", productionReportRepo);
+            ProductionPlan plan = buildSecondaryInProgressPlan();
+            when(productionPlanRepo.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+            com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+            batch.setId(9001L);
+            batch.setBatchNumber("B-9001");
+            batch.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS);
+            when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                    .thenReturn(List.of(batch));
+            com.cretas.aims.entity.ProductionReport yield = new com.cretas.aims.entity.ProductionReport();
+            yield.setId(1L);
+            when(productionReportRepo.findYieldReportsByBatch(FACTORY_ID, 9001L))
+                    .thenReturn(List.of(yield));
+
+            assertThatThrownBy(() -> svc.cancelProductionPlan(FACTORY_ID, PLAN_ID, "撤回"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("报工");
+
+            // 有报工 → 不走反冲 (走报工撤回), 计划不被置 CANCELLED
+            verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
+            assertThat(plan.getStatus())
+                    .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
+        }
+
+        @Test
+        @DisplayName("非 SECONDARY 计划无报工无批次 → 直接取消 (现有逻辑不动, 不触发反冲)")
+        void normalPlanNoData_directCancel_noReverse() throws Exception {
+            ProductionPlanServiceImpl svc = buildService(wipInventoryService);
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId("NORMAL-PLAN-001");
+            plan.setFactoryId(FACTORY_ID);
+            plan.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
+            plan.setPlanSourceType("NORMAL");
+            when(productionPlanRepo.findById("NORMAL-PLAN-001")).thenReturn(Optional.of(plan));
+            when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, "NORMAL-PLAN-001"))
+                    .thenReturn(List.of());
+            when(productionPlanRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            svc.cancelProductionPlan(FACTORY_ID, "NORMAL-PLAN-001", "空计划取消");
+
+            verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
+            assertThat(plan.getStatus())
+                    .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
         }
     }
 }

@@ -53,6 +53,23 @@ public interface WipInventoryService {
     void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId);
 
     /**
+     * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆操作。
+     *
+     * <p>用于取消"已开工扣了 WIP 但还没任何报工"的 SECONDARY 二次加工计划: 把开工时扣减的
+     * secondarySourceWipId 半成品余量加回 (availableQuantity += qty, consumedQuantity -= qty),
+     * 若该 WIP 此前被扣至 DEPLETED 则恢复 AVAILABLE, 并写一条 REVERSE/REVERSAL 反向流水。
+     *
+     * <p>此方法必须在调用方的 {@code @Transactional} 内执行, 不自行开事务。findByIdForUpdate 悲观行锁防并发。
+     *
+     * @param wipId      SemiFinishedInventory.id (= plan.secondarySourceWipId)
+     * @param qty        反冲数量 (必须 > 0, 通常 = 开工时扣减的 plannedQuantity)
+     * @param factoryId  工厂 ID (越权守卫 + 流水账写入)
+     * @param operatorId 操作人 ID (可为 null)
+     * @throws com.cretas.aims.exception.BusinessException 404 WIP 不存在 / 403 工厂不匹配 / 400 qty 非法
+     */
+    void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId);
+
+    /**
      * SP2 二次加工 — 列出工厂所有 AVAILABLE 且 availableQuantity > 0 的 WIP 行。
      *
      * <p>用于 RN/web-admin "选择源 WIP" 下拉列表。
