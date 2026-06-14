@@ -1,5 +1,31 @@
 import { defineConfig } from '@playwright/test';
 
+const productionBomProject = {
+  name: 'production-bom-flow',
+  testMatch: 'tests/e2e/production-bom-flow.spec.ts',
+  fullyParallel: false,
+  workers: 1,
+  use: {
+    headless: false,
+    viewport: { width: 1920, height: 1080 },
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    launchOptions: {
+      args: [
+        `--remote-debugging-port=${process.env.PLAYWRIGHT_PORT || 9222}`,
+        '--lang=zh-CN',
+        '--font-render-hinting=none',
+        '--disable-blink-features=AutomationControlled',
+        '--window-position=0,0',
+        '--window-size=1920,1080',
+      ],
+      slowMo: 100,
+    },
+    screenshot: { mode: 'on' as const, fullPage: true },
+    video: { mode: 'on' as const, size: { width: 1920, height: 1080 } },
+  },
+};
+
 export default defineConfig({
   testDir: '.',
   testMatch: '*.spec.ts',
@@ -10,16 +36,29 @@ export default defineConfig({
     timeout: 10000,
   },
   use: {
-    headless: true,
-    viewport: { width: 1440, height: 900 },
-    screenshot: 'only-on-failure',
+    headless: false,
+    viewport: { width: 1920, height: 1080 },
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    launchOptions: {
+      args: [
+        `--remote-debugging-port=${process.env.PLAYWRIGHT_PORT || 9222}`,
+        '--lang=zh-CN',
+        '--font-render-hinting=none',
+        '--disable-blink-features=AutomationControlled',
+      ],
+      slowMo: 100,
+    },
+    screenshot: { mode: 'on', fullPage: true },
+    video: { mode: 'on' },
     trace: 'retain-on-failure',
     actionTimeout: 15000,
     navigationTimeout: 30000,
   },
   reporter: [['list'], ['html', { open: 'never' }]],
   outputDir: 'test-results',
-  projects: [
+  projects: process.env.PLAYWRIGHT_CHAT_ID === 'prod-bom' ? [productionBomProject] : [
+    productionBomProject,
     // Step 1: 登录一次，保存 storageState
     {
       name: 'vue-auth',
