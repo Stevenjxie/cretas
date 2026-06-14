@@ -24,12 +24,14 @@ import com.cretas.aims.util.ErrorSanitizer;
 /**
  * SmartBI Analysis Controller
  *
- * Hosts the SmartBI endpoints that remain on Java after the Phase 2A
- * Java→Python migration: production / quality analysis (NOT_SAFE_FALLTHROUGH),
- * natural-language query, and drill-down. The remaining migrated endpoints
- * (sales, department, region, finance, inventory, procurement, alerts,
- * recommendations, incentive plans, schema management, query templates) are
- * routed to Python by the nginx gateway and were removed in T6.5 Phase C.
+ * Hosts the SmartBI endpoints that remain on Java after the Phase 2A/2D
+ * Java→Python migration: natural-language query and drill-down. Production /
+ * quality analysis were random-mock placeholders and have been removed —
+ * /analysis/production and /analysis/quality are served by Python (real gold
+ * from agg_factory_batch_daily). The other migrated endpoints (sales,
+ * department, region, finance, inventory, procurement, alerts, recommendations,
+ * incentive plans, schema management, query templates) are routed to Python by
+ * the nginx gateway and were removed in T6.5 Phase C.
  *
  * @author Cretas Team
  * @since 2026-02-11
@@ -45,8 +47,6 @@ public class SmartBIAnalysisController {
     private final RegionAnalysisService regionAnalysisService;
     private final FinanceAnalysisService financeAnalysisService;
     private final SmartBIIntentService intentService;
-    private final ProductionAnalysisService productionAnalysisService;
-    private final QualityAnalysisService qualityAnalysisService;
     private final InventoryHealthAnalysisService inventoryHealthAnalysisService;
     private final ProcurementAnalysisService procurementAnalysisService;
     private final SmartBIService smartBIService;
@@ -58,8 +58,6 @@ public class SmartBIAnalysisController {
             RegionAnalysisService regionAnalysisService,
             FinanceAnalysisService financeAnalysisService,
             SmartBIIntentService intentService,
-            ProductionAnalysisService productionAnalysisService,
-            QualityAnalysisService qualityAnalysisService,
             InventoryHealthAnalysisService inventoryHealthAnalysisService,
             ProcurementAnalysisService procurementAnalysisService,
             @Autowired(required = false) SmartBIService smartBIService) {
@@ -68,91 +66,15 @@ public class SmartBIAnalysisController {
         this.regionAnalysisService = regionAnalysisService;
         this.financeAnalysisService = financeAnalysisService;
         this.intentService = intentService;
-        this.productionAnalysisService = productionAnalysisService;
-        this.qualityAnalysisService = qualityAnalysisService;
         this.inventoryHealthAnalysisService = inventoryHealthAnalysisService;
         this.procurementAnalysisService = procurementAnalysisService;
         this.smartBIService = smartBIService;
     }
 
-    // ==================== Production Analysis ====================
-
-    @RequirePermission({"analytics:read"})
-    @GetMapping("/analysis/production")
-    @Operation(summary = "Get production analysis", description = "Get production OEE analysis data")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getProductionAnalysis(
-            @Parameter(description = "Factory ID") @PathVariable String factoryId,
-            @Parameter(description = "Start date") @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @Parameter(description = "End date") @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
-            @Parameter(description = "Analysis type: oee/efficiency/equipment") @RequestParam(required = false) String analysisType) {
-
-        log.info("Get production analysis: factoryId={}, type={}", factoryId, analysisType);
-
-        try {
-            Map<String, Object> result = new HashMap<>();
-            result.put("startDate", startDate);
-            result.put("endDate", endDate);
-
-            if ("oee".equals(analysisType)) {
-                result.put("metrics", productionAnalysisService.getOEEMetrics(factoryId, startDate, endDate));
-                result.put("trendChart", productionAnalysisService.getOEETrendChart(factoryId, startDate, endDate, "DAY"));
-            } else if ("efficiency".equals(analysisType)) {
-                result.put("metrics", productionAnalysisService.getProductionEfficiency(factoryId, startDate, endDate));
-                result.put("ranking", productionAnalysisService.getProductionLineRanking(factoryId, startDate, endDate));
-            } else if ("equipment".equals(analysisType)) {
-                result.put("metrics", productionAnalysisService.getEquipmentUtilization(factoryId, startDate, endDate));
-                result.put("ranking", productionAnalysisService.getEquipmentRanking(factoryId, startDate, endDate));
-                result.put("downtimeChart", productionAnalysisService.getDowntimeDistributionChart(factoryId, startDate, endDate));
-            } else {
-                DashboardResponse overview = productionAnalysisService.getOEEOverview(factoryId, startDate, endDate);
-                result.put("overview", overview);
-            }
-
-            return ResponseEntity.ok(ApiResponse.success(result));
-        } catch (Exception e) {
-            log.error("Get production analysis failed: {}", e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("Get production analysis failed: " + ErrorSanitizer.sanitize(e)));
-        }
-    }
-
-    // ==================== Quality Analysis ====================
-
-    @RequirePermission({"analytics:read"})
-    @GetMapping("/analysis/quality")
-    @Operation(summary = "Get quality analysis", description = "Get quality management analysis data")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getQualityAnalysis(
-            @Parameter(description = "Factory ID") @PathVariable String factoryId,
-            @Parameter(description = "Start date") @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @Parameter(description = "End date") @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
-            @Parameter(description = "Analysis type: fpy/defect/rework") @RequestParam(required = false) String analysisType) {
-
-        log.info("Get quality analysis: factoryId={}, type={}", factoryId, analysisType);
-
-        try {
-            Map<String, Object> result = new HashMap<>();
-            result.put("startDate", startDate);
-            result.put("endDate", endDate);
-
-            if ("fpy".equals(analysisType)) {
-                result.put("metrics", qualityAnalysisService.getDefectAnalysis(factoryId, startDate, endDate));
-                result.put("trendChart", qualityAnalysisService.getQualityTrendChart(factoryId, startDate, endDate, "DAY"));
-            } else if ("defect".equals(analysisType)) {
-                result.put("ranking", qualityAnalysisService.getDefectTypeRanking(factoryId, startDate, endDate));
-                result.put("paretoChart", qualityAnalysisService.getDefectParetoChart(factoryId, startDate, endDate));
-            } else if ("rework".equals(analysisType)) {
-                result.put("metrics", qualityAnalysisService.getReworkCost(factoryId, startDate, endDate));
-                result.put("costChart", qualityAnalysisService.getQualityCostDistributionChart(factoryId, startDate, endDate));
-            } else {
-                DashboardResponse overview = qualityAnalysisService.getQualitySummary(factoryId, startDate, endDate);
-                result.put("overview", overview);
-            }
-
-            return ResponseEntity.ok(ApiResponse.success(result));
-        } catch (Exception e) {
-            log.error("Get quality analysis failed: {}", e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("Get quality analysis failed: " + ErrorSanitizer.sanitize(e)));
-        }
-    }
+    // Production / Quality analysis endpoints removed: nginx routes
+    // /analysis/production and /analysis/quality to Python (real gold from
+    // agg_factory_batch_daily); the former Java random-mock implementations
+    // were deleted in the SmartBI Python consolidation.
 
     // ==================== Natural Language Query ====================
 
@@ -376,28 +298,16 @@ public class SmartBIAnalysisController {
     }
 
     private String generateProductionQueryResponse(String factoryId, LocalDate startDate, LocalDate endDate) {
-        DashboardResponse dashboard = productionAnalysisService.getOEEOverview(factoryId, startDate, endDate);
-        if (dashboard != null && dashboard.getKpiCards() != null && !dashboard.getKpiCards().isEmpty()) {
-            KPICard oeeKpi = dashboard.getKpiCards().stream()
-                    .filter(k -> "OEE".equals(k.getKey())).findFirst().orElse(null);
-            if (oeeKpi != null && oeeKpi.getRawValue() != null) {
-                return String.format("During %s to %s, OEE was %.1f%%.",
-                        startDate, endDate, oeeKpi.getRawValue().doubleValue());
-            }
-        }
+        // Production OEE is now served by Python (analysis/production, real gold). The
+        // former Java OEE summary used a random-mock service (deleted); this NL helper
+        // returns a generic pointer until the path is migrated to call Python.
         return "Production data retrieved, please check details.";
     }
 
     private String generateQualityQueryResponse(String factoryId, LocalDate startDate, LocalDate endDate) {
-        DashboardResponse dashboard = qualityAnalysisService.getQualitySummary(factoryId, startDate, endDate);
-        if (dashboard != null && dashboard.getKpiCards() != null && !dashboard.getKpiCards().isEmpty()) {
-            KPICard fpyKpi = dashboard.getKpiCards().stream()
-                    .filter(k -> "FPY".equals(k.getKey())).findFirst().orElse(null);
-            if (fpyKpi != null && fpyKpi.getRawValue() != null) {
-                return String.format("During %s to %s, FPY was %.2f%%.",
-                        startDate, endDate, fpyKpi.getRawValue().doubleValue());
-            }
-        }
+        // Quality FPY is now served by Python (analysis/quality, real gold). The former
+        // Java FPY summary used a random-mock service (deleted); this NL helper returns a
+        // generic pointer until the path is migrated to call Python.
         return "Quality data retrieved, please check details.";
     }
 
