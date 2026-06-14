@@ -53,6 +53,9 @@ public class UpdateDisposalRecordRequest {
     @PositiveOrZero(message = "回收价值不能为负数")
     private BigDecimal recoveryValue;
 
+    @Schema(description = "证据图片 URL 列表（逗号分隔）")
+    private String evidenceImages;
+
     @Schema(description = "备注")
     private String notes;
 }

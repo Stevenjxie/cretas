@@ -66,6 +66,7 @@ class DisposalControllerUpdateTest {
         assertNull(mapped.getDisposalMethod());
         assertNull(mapped.getEstimatedLoss());
         assertNull(mapped.getRecoveryValue());
+        assertNull(mapped.getEvidenceImages(), "evidenceImages null when not provided — service if(!=null) guard preserves existing");
         assertNull(mapped.getNotes());
         // Critical: approval-state / audit fields NOT touched by mapper.
         // (isApproved gets entity-level field default `= false` from `new DisposalRecord()`,
@@ -90,6 +91,7 @@ class DisposalControllerUpdateTest {
         req.setDisposalMethod("退回供应商");
         req.setEstimatedLoss(new BigDecimal("3000.00"));
         req.setRecoveryValue(new BigDecimal("2000.00"));
+        req.setEvidenceImages("https://cdn.example.com/c.jpg");
         req.setNotes("供应商已确认接收");
 
         when(disposalRecordService.updateDisposalRecord(eq(7L), any(DisposalRecord.class)))
@@ -108,6 +110,7 @@ class DisposalControllerUpdateTest {
         assertEquals("退回供应商", mapped.getDisposalMethod());
         assertEquals(new BigDecimal("3000.00"), mapped.getEstimatedLoss());
         assertEquals(new BigDecimal("2000.00"), mapped.getRecoveryValue());
+        assertEquals("https://cdn.example.com/c.jpg", mapped.getEvidenceImages());
         assertEquals("供应商已确认接收", mapped.getNotes());
     }
 }

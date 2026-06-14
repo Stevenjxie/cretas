@@ -156,6 +156,15 @@ public class DisposalRecord extends BaseEntity {
     private BigDecimal recoveryValue;
 
     /**
+     * 证据图片 URL 列表（逗号分隔）
+     *
+     * <p>用于存储废弃现场照片的 OSS/CDN URL，多张以逗号分隔。
+     * V20261024_15 新增，替换此前将证据 URL 塞入 notes 字段的 hack。
+     */
+    @Column(name = "evidence_images", columnDefinition = "TEXT")
+    private String evidenceImages;
+
+    /**
      * 备注
      */
     @Column(name = "notes", columnDefinition = "TEXT")

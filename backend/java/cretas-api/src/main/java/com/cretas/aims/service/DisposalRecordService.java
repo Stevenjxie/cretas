@@ -193,6 +193,9 @@ public class DisposalRecordService implements IDisposalRecordService {
         if (updateData.getRecoveryValue() != null) {
             existing.setRecoveryValue(updateData.getRecoveryValue());
         }
+        if (updateData.getEvidenceImages() != null) {
+            existing.setEvidenceImages(updateData.getEvidenceImages());
+        }
         if (updateData.getNotes() != null) {
             existing.setNotes(updateData.getNotes());
         }

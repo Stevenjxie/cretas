@@ -368,6 +368,7 @@ public class DisposalController {
         rec.setMaterialBatchId(r.getMaterialBatchId());
         rec.setEstimatedLoss(r.getEstimatedLoss());
         rec.setRecoveryValue(r.getRecoveryValue());
+        rec.setEvidenceImages(r.getEvidenceImages());
         rec.setNotes(r.getNotes());
         return rec;
     }
@@ -387,6 +388,7 @@ public class DisposalController {
         rec.setDisposalMethod(r.getDisposalMethod());
         rec.setEstimatedLoss(r.getEstimatedLoss());
         rec.setRecoveryValue(r.getRecoveryValue());
+        rec.setEvidenceImages(r.getEvidenceImages());
         rec.setNotes(r.getNotes());
         return rec;
     }

@@ -137,6 +137,36 @@ function formatDate(dateStr: string | null) {
   return dateStr.substring(0, 10);
 }
 
+/**
+ * Gap 2 补录时效防呆: 计算报工日期距今天数 (负数 = 过去).
+ * 后端 BackdateWindowValidator 默认 T-2 极限, T-3+ 锁死.
+ */
+function backdateDays(reportDate: string | null): number | null {
+  if (!reportDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(reportDate.substring(0, 10));
+  d.setHours(0, 0, 0, 0);
+  const diff = Math.round((d.getTime() - today.getTime()) / 86400000);
+  return diff;
+}
+
+/** T-2 极限: diff === -1 or -2 = 补录窗口内; diff <= -3 = 锁死; diff >= 0 = 当日/未来 */
+function backdateTagType(reportDate: string | null): 'warning' | 'danger' | '' {
+  const diff = backdateDays(reportDate);
+  if (diff === null || diff >= 0) return '';
+  if (diff >= -2) return 'warning'; // T-1 ~ T-2: 允许补录
+  return 'danger'; // T-3+: 后端会拒绝
+}
+
+function backdateTagText(reportDate: string | null): string {
+  const diff = backdateDays(reportDate);
+  if (diff === null || diff >= 0) return '';
+  if (diff === -1) return '补录 T-1';
+  if (diff === -2) return '补录 T-2 极限';
+  return `补录 T${diff} 已锁`;
+}
+
 function formatQty(value: number | null | undefined) {
   if (value === null || value === undefined) return '-';
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
@@ -376,8 +406,25 @@ function evidenceImageIndex(urls: string[], url: string): number {
           </template>
         </el-table-column>
         <el-table-column prop="reporterName" label="报工人" width="100" />
-        <el-table-column prop="reportDate" label="报工日期" width="110">
-          <template #default="{ row }">{{ formatDate(row.reportDate) }}</template>
+        <el-table-column prop="reportDate" label="报工日期" width="160">
+          <template #default="{ row }">
+            <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+              <span>{{ formatDate(row.reportDate) }}</span>
+              <el-tooltip
+                v-if="backdateTagType(row.reportDate)"
+                :content="backdateTagType(row.reportDate) === 'danger'
+                  ? 'T-3 及更早已锁死，后端将拒绝此报工。请联系主管通过 ERP 后台处理。'
+                  : 'T-1 ~ T-2 补录窗口内，可正常审批。'"
+                placement="top"
+              >
+                <el-tag
+                  :type="backdateTagType(row.reportDate)"
+                  size="small"
+                  style="cursor:default"
+                >{{ backdateTagText(row.reportDate) }}</el-tag>
+              </el-tooltip>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="productName" label="产品" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.productName || '-' }}</template>

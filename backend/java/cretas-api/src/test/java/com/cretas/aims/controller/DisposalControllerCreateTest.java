@@ -89,6 +89,7 @@ class DisposalControllerCreateTest {
         assertNull(mapped.getMaterialBatchId());
         assertNull(mapped.getEstimatedLoss());
         assertNull(mapped.getRecoveryValue());
+        assertNull(mapped.getEvidenceImages(), "evidenceImages null when not provided — no silent default");
         assertNull(mapped.getNotes());
     }
 
@@ -108,6 +109,7 @@ class DisposalControllerCreateTest {
         req.setMaterialBatchId("MB-F001-001");
         req.setEstimatedLoss(new BigDecimal("5000.00"));
         req.setRecoveryValue(new BigDecimal("1500.00"));
+        req.setEvidenceImages("https://cdn.example.com/a.jpg,https://cdn.example.com/b.jpg");
         req.setNotes("可回收为有机肥");
 
         when(disposalRecordService.createDisposalRecord(any(DisposalRecord.class)))
@@ -132,6 +134,7 @@ class DisposalControllerCreateTest {
         assertEquals("MB-F001-001", mapped.getMaterialBatchId());
         assertEquals(new BigDecimal("5000.00"), mapped.getEstimatedLoss());
         assertEquals(new BigDecimal("1500.00"), mapped.getRecoveryValue());
+        assertEquals("https://cdn.example.com/a.jpg,https://cdn.example.com/b.jpg", mapped.getEvidenceImages());
         assertEquals("可回收为有机肥", mapped.getNotes());
     }
 
