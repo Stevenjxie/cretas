@@ -275,11 +275,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 s.getTotalInput() != null && s.getTotalInput().compareTo(BigDecimal.ZERO) > 0
                         && s.getTotalOutput() != null && s.getTotalOutput().compareTo(BigDecimal.ZERO) > 0);
 
-        // P1-3 (G4): 整批工时/人数 = Σ steps (全 null → null, 任一非 null 则求和)
+        // P1-3 (G4): 整批工时 = Σ steps (全 null → null, 任一非 null 则求和)
+        // Q1: 整批人数 = MAX steps (同班工人参与多道工序, SUM 虚高 N 倍; 取峰值与 step 级 MAX headcount 同语义)
         Integer batchMinutes = steps.stream().map(StepYieldDTO::getTotalWorkMinutes)
                 .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
         Integer batchWorkers = steps.stream().map(StepYieldDTO::getTotalWorkers)
-                .filter(Objects::nonNull).reduce(Integer::sum).orElse(null);
+                .filter(Objects::nonNull).reduce(Integer::max).orElse(null);
 
         // A.4/A.5: 整批成本 = Σ steps (全 null → null, 任一非 null 则求和; 绝不默认 0)
         BigDecimal batchLaborCost = steps.stream().map(StepYieldDTO::getLaborCost)

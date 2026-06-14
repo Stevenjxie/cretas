@@ -36,12 +36,15 @@ import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.YieldCalculationServiceImpl;
 import com.cretas.aims.service.yield.impl.YieldReportServiceImpl;
+import com.cretas.aims.util.BackdateWindowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -3416,5 +3419,118 @@ class YieldReportServiceImplTest {
         ArgumentCaptor<ProductionBatch> pbCap = ArgumentCaptor.forClass(ProductionBatch.class);
         verify(productionBatchRepo).save(pbCap.capture());
         assertThat(pbCap.getValue().getLaborCost()).isEqualByComparingTo(new BigDecimal("100.00"));
+    }
+
+    // ── F2: OUTPUT 阶段触发守恒校验 ──────────────────────────────────────────────
+
+    /**
+     * F2: OUTPUT 报工 (reportKind=OUTPUT), 该 task 历史有 INPUT 报工 (投入 100kg),
+     * 本次产出 70kg (偏差 30% > 15%) → 应触发 balanceWarning (修前: OUTPUT 路径不调用守恒, 不告警)。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("F2: OUTPUT 阶段应跨阶段运行守恒校验 (输入100/产出70 → 30%偏差告警)")
+    void f2_outputPhase_triggersConservationWarning_whenDeviation30pct() {
+        WorkProcess wp = WorkProcess.builder().id("WP-F2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 1, "WP-F2");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-F2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), any())).thenReturn(List.of());
+        // 历史 INPUT 报工: 投入 100kg
+        ProductionReport inputReport = ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD").reportKind("INPUT")
+                .workProcessTaskId(71L).processOrder(1)
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .build();
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of(inputReport));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(711L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setReportKind("OUTPUT");
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+        // 无副产物/损耗 → balance = 100 - 70 = 30, deviation 30% > 15%
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning"))
+                .as("OUTPUT 阶段守恒偏差 30% 应触发 balanceWarning")
+                .isNotNull()
+                .asString().contains("物料平衡偏差");
+    }
+
+    // ── F3: 守恒校验须减留样 ────────────────────────────────────────────────────
+
+    /**
+     * F3: legacy 报工, 投入 100kg, 产出 95kg, 留样 5kg → 守恒平衡 (偏差 0%)。
+     * 修前: balance = 100 - 95 = 5, 偏差 5% 在阈值内但实际守恒; sampleRetain 未减 → 偶尔误报消除。
+     * 精确测试: 投入 100, 产出 80, 留样 20 → balance 为 0, 无告警 (修前: 误报 20%偏差)。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("F3: 留样计入守恒分母 (投入100/产出80/留样20 → 守恒平, 无告警)")
+    void f3_sampleRetainCountsInBalance_noSpuriousWarning() {
+        WorkProcess wp = WorkProcess.builder().id("WP-F3").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(72L, 1, "WP-F3");
+        when(taskRepo.findByFactoryIdAndId("F006", 72L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-F3")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 72L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(722L); return r;
+        });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(72L);
+        // legacy (reportKind=null), 投入 100kg, 产出 80kg, 留样 20kg → 守恒平 (balance=0)
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("80")); req.setOutputUnit("kg");
+        req.setSampleRetainQuantity(20);  // 20kg 留样
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("balanceWarning"))
+                .as("留样减去后守恒平 (0%) 不应触发 balanceWarning")
+                .isNull();
+    }
+
+    // ── F4: recordMaterialInput 补录时效锁 ──────────────────────────────────────
+
+    /**
+     * F4: recordMaterialInput 传入 businessDate = T-30 → 应抛 409 BACKDATE_WINDOW_EXCEEDED
+     * (修前: backdateWindowValidator 未接 recordMaterialInput, 放行超窗口补录)。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("F4: recordMaterialInput 领料日期 T-30 应抛 BACKDATE_WINDOW_EXCEEDED 409")
+    void f4_recordMaterialInput_backdateT30_throwsWindowExceeded() {
+        BackdateWindowValidator validator = new BackdateWindowValidator();
+        // 通过 ReflectionTestUtils 注入 maxDays=2 (默认值)
+        ReflectionTestUtils.setField(validator, "maxDays", 2);
+
+        // 创建 svc 实例并注入 backdateWindowValidator
+        YieldReportServiceImpl svcWithValidator = new YieldReportServiceImpl(
+                reportRepo, taskRepo, processRepo, calcSvc, processingService,
+                factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
+                productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo,
+                wipInventoryService, pwpAssigneeRepository);
+        ReflectionTestUtils.setField(svcWithValidator, "backdateWindowValidator", validator);
+
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setFeedInQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setBusinessDate(LocalDate.now().minusDays(30));  // T-30, 远超 T-2 窗口
+
+        assertThatThrownBy(() -> svcWithValidator.recordMaterialInput("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getErrorCode()).isEqualTo("BACKDATE_WINDOW_EXCEEDED");
+                    assertThat(be.getMessage()).contains("领料");
+                });
     }
 }
