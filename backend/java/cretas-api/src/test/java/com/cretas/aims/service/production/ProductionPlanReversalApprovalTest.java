@@ -47,9 +47,9 @@ import static org.mockito.Mockito.*;
  * SP12 T3: 生产计划撤回审批流单测.
  *
  * <ul>
- *   <li>UT-PP-RCA-01: requestCancelWithApproval → 设置 PENDING_APPROVAL + 返回 instanceId</li>
- *   <li>UT-PP-RCA-02: requestCancelWithApproval 计划非 COMPLETED → 409</li>
- *   <li>UT-PP-RCA-03: requestCancelWithApproval workflow 未配置 → 409</li>
+ *   <li>UT-PP-RCA-01: requestCancelWithApproval (@Deprecated) → 409 USE_BATCH_REVERSAL 导向批次整单撤回 (不进 PENDING_APPROVAL)</li>
+ *   <li>UT-PP-RCA-02: requestCancelWithApproval 计划非 COMPLETED → 409 (不启动 workflow)</li>
+ *   <li>UT-PP-RCA-03: requestCancelWithApproval → 409, 不启动 PRODUCTION_REVERSAL workflow</li>
  *   <li>UT-PP-RCA-04: executeCancelApproved → 设置 CANCELLED + 级联关闭工序任务</li>
  *   <li>UT-PP-RCA-05: executeCancelApproved 计划非 PENDING_APPROVAL → 409</li>
  *   <li>UT-PP-RCA-06: requestCancelWithApproval workflowEngine null → 409</li>
@@ -133,25 +133,23 @@ class ProductionPlanReversalApprovalTest {
     // UT-PP-RCA-01
 
     @Test
-    @DisplayName("UT-PP-RCA-01: requestCancelWithApproval — 正常路径: COMPLETED → PENDING_APPROVAL + 返回 instanceId")
-    void requestCancelWithApproval_happyPath_returnInstanceId() {
+    @DisplayName("UT-PP-RCA-01: requestCancelWithApproval — @Deprecated 计划级撤回已停用 → 409 USE_BATCH_REVERSAL 导向批次整单撤回, 不进 PENDING_APPROVAL 不启动 workflow")
+    void requestCancelWithApproval_deprecated_throwsRedirectToBatchReversal() {
+        // 方案 B (2026-06-14): 计划级 PRODUCTION_REVERSAL 死路已废弃, 现抛 409 引导改走批次级整单撤回
+        // (ReportReversalService)。无前端调用方; 客户需求的整单撤回是工单/批次级。
         ProductionPlan plan = completedPlan();
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
-        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "PRODUCTION_REVERSAL")).thenReturn(true);
-        when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq("PRODUCTION_REVERSAL"),
-                eq(PLAN_ID), anyMap(), eq(USER_ID))).thenReturn(stubInstance());
-        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        String result = service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, REASON, USER_ID);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, REASON, USER_ID));
 
-        assertEquals(INSTANCE_ID, result);
-        // 计划状态应被设为 PENDING_APPROVAL
-        ArgumentCaptor<ProductionPlan> savedPlan = ArgumentCaptor.forClass(ProductionPlan.class);
-        verify(productionPlanRepository).save(savedPlan.capture());
-        assertEquals(ProductionPlanStatus.PENDING_APPROVAL, savedPlan.getValue().getStatus());
-        // notes 中应包含撤回原因
-        assertTrue(savedPlan.getValue().getNotes() != null
-                && savedPlan.getValue().getNotes().contains(REASON));
+        assertEquals(409, ex.getCode());
+        assertEquals("USE_BATCH_REVERSAL", ex.getErrorCode());
+        assertEquals("报工撤回", ex.getHintTarget());
+        // 计划状态不变 (不再进 PENDING_APPROVAL), 不持久化, 不启动死路 workflow
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        verify(productionPlanRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), anyLong());
     }
 
     // -----------------------------------------------------------------------
