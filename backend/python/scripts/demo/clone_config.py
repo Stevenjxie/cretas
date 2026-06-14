@@ -81,7 +81,8 @@ TABLE_REGISTRY = [
   {"db":"smartbi","table":"dim_product","pk":"product_id","pk_type":"bigint","factory_col":"factory_id","fk":{}},
   {"db":"smartbi","table":"dim_payment_channel","pk":"channel_id","pk_type":"bigint","factory_col":"factory_id","fk":{}},
   {"db":"smartbi","table":"dim_discount","pk":"discount_id","pk_type":"bigint","factory_col":"factory_id","fk":{}},
-  {"db":"smartbi","table":"dim_ingredient","pk":"ingredient_id","pk_type":"bigint","factory_col":"factory_id","fk":{}},
+  # NOTE: dim_ingredient is NOT cloned — restaurant_ops_etl regenerates it from raw_material_types
+  # (cloning it collides with the ETL's upsert on uq_dim_ingredient_factory_normname).
   {"db":"smartbi","table":"fact_pos_transaction","pk":"id","pk_type":"bigint","factory_col":"factory_id",
      "fk":{"store_id":"dim_store"}},  # staff_id -> dim_staff: see Step 3 (dim_staff not in clone set -> null it)
   {"db":"smartbi","table":"fact_pos_item","pk":"id","pk_type":"bigint","factory_col":"factory_id",
