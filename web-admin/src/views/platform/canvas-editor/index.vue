@@ -48,6 +48,7 @@
           </template>
           <PermissionMatrix v-else-if="activeTab === 'permissions' && selectedModule" :factory-id="factoryId" :module-code="selectedModule" />
           <ModulePermissionMatrix v-else-if="activeTab === 'module-permissions'" :factory-id="factoryId" />
+          <UserModuleAccessMatrix v-else-if="activeTab === 'user-module-access'" :factory-id="factoryId" />
           <ToolSkillMatrix v-else-if="activeTab === 'tools'" :factory-id="factoryId" />
           <!-- Round 4 Fix P1-10: Scheduler Panel (legacy v2 config) -->
           <SchedulerPanel v-else-if="activeTab === 'scheduler'" :factory-id="factoryId" />
@@ -142,6 +143,7 @@ import FieldConfigPanel from './components/FieldConfigPanel.vue'
 import PageEditor from './PageEditor.vue'
 import PermissionMatrix from './components/PermissionMatrix.vue'
 import ModulePermissionMatrix from './components/ModulePermissionMatrix.vue'
+import UserModuleAccessMatrix from './components/UserModuleAccessMatrix.vue'
 import ToolSkillMatrix from './components/ToolSkillMatrix.vue'
 import SchedulerPanel from './components/SchedulerPanel.vue'
 import AlertRulesEditor from '@/views/platform/alert-rules-editor/index.vue'

@@ -13,15 +13,19 @@ import { ref, computed } from 'vue';
 import {
   getPlatformPermissions,
   getFactoryOverride,
+  getUserModuleAccess,
   type PlatformPermission,
   type RoleModuleOverride,
+  type UserModuleAccessView,
   type PermissionLevel as ApiPermissionLevel,
 } from '@/api/permissionApi';
+import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
 
 // 权限矩阵 - 定义每个角色对每个模块的权限
 type PermissionLevel = 'rw' | 'r' | 'w' | '-';
 
 interface ModulePermissions {
+  [key: string]: PermissionLevel;
   dashboard: PermissionLevel;
   production: PermissionLevel;
   warehouse: PermissionLevel;
@@ -204,7 +208,7 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   }
 };
 
-export type ModuleName = keyof ModulePermissions;
+export type ModuleName = Extract<keyof ModulePermissions, string>;
 
 /**
  * 工厂类型模块过滤
@@ -252,25 +256,32 @@ export const usePermissionStore = defineStore('permission', () => {
   const currentRole = ref<string>('unactivated');
   const currentFactoryId = ref<string>('');
   const currentFactoryType = ref<string>('');
+  const currentUserId = ref<string>('');
 
   // DB-driven state (Phase 3 Task 3.2)
   const dbPermissions = ref<ModulePermissions | null>(null);
   const isDbLoaded = ref(false);
   const dbLoadError = ref<string | null>(null);
+  const userModuleAccess = ref<Record<string, UserModuleAccessView>>({});
+  const isUserModuleAccessLoaded = ref(false);
   const lastLoadTs = ref<number>(0);
   const LOAD_DEBOUNCE_MS = 30_000;  // Avoid redundant fetches within 30s
 
-  function setRole(role: string, factoryId?: string, factoryType?: string) {
+  function setRole(role: string, factoryId?: string, factoryType?: string, userId?: string | number) {
     const roleChanged = currentRole.value !== (role || 'unactivated')
-      || currentFactoryId.value !== (factoryId || '');
+      || currentFactoryId.value !== (factoryId || '')
+      || currentUserId.value !== (userId == null ? '' : String(userId));
     currentRole.value = role || 'unactivated';
     currentFactoryId.value = factoryId || '';
     currentFactoryType.value = factoryType || '';
+    currentUserId.value = userId == null ? '' : String(userId);
     if (roleChanged) {
       // Invalidate DB cache when identity changes
       dbPermissions.value = null;
       isDbLoaded.value = false;
       dbLoadError.value = null;
+      userModuleAccess.value = {};
+      isUserModuleAccessLoaded.value = false;
       lastLoadTs.value = 0;
     }
     // Fire-and-forget async load (non-blocking)
@@ -296,12 +307,27 @@ export const usePermissionStore = defineStore('permission', () => {
           : Promise.resolve({} as RoleModuleOverride),
       ]);
       dbPermissions.value = mergeLayers(l1Rows, l2Map, currentRole.value);
+      if (currentFactoryId.value && currentUserId.value) {
+        const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value);
+        applyUserModuleAccess(l4Rows);
+      }
       isDbLoaded.value = true;
     } catch (e) {
       dbLoadError.value = (e as Error)?.message || 'Failed to load permissions';
       isDbLoaded.value = false;
       dbPermissions.value = null;
+      userModuleAccess.value = {};
+      isUserModuleAccessLoaded.value = false;
     }
+  }
+
+  function applyUserModuleAccess(rows: UserModuleAccessView[]): void {
+    const next: Record<string, UserModuleAccessView> = {};
+    for (const row of rows || []) {
+      next[row.moduleCode] = row;
+    }
+    userModuleAccess.value = next;
+    isUserModuleAccessLoaded.value = true;
   }
 
   /**
@@ -350,23 +376,47 @@ export const usePermissionStore = defineStore('permission', () => {
   });
 
   // Actions
+  function moduleDefinition(module: string) {
+    return resolveModuleRegistryItem(module);
+  }
+
+  function userAccessFor(module: string): UserModuleAccessView | undefined {
+    const definition = moduleDefinition(module);
+    if (definition) {
+      return userModuleAccess.value[definition.moduleCode];
+    }
+    return userModuleAccess.value[module];
+  }
+
+  function permissionModuleFor(module: string): string {
+    return moduleDefinition(module)?.permissionModule || module;
+  }
+
+  function permissionLevelFor(module: string): PermissionLevel {
+    const permissionModule = permissionModuleFor(module);
+    return currentPermissions.value[permissionModule] || '-';
+  }
+
   function canAccess(module: ModuleName): boolean {
-    const permission = currentPermissions.value[module];
+    const userAccess = userAccessFor(String(module));
+    if (userAccess?.override === 'DENY') return false;
+    if (userAccess?.override === 'GRANT') return true;
+    const permission = permissionLevelFor(String(module));
     return permission !== '-';
   }
 
   function canWrite(module: ModuleName): boolean {
-    const permission = currentPermissions.value[module];
+    const permission = permissionLevelFor(String(module));
     return permission === 'rw' || permission === 'w';
   }
 
   function hasFullAccess(module: ModuleName): boolean {
-    const permission = currentPermissions.value[module];
+    const permission = permissionLevelFor(String(module));
     return permission === 'rw';
   }
 
   function getPermissionLevel(module: ModuleName): PermissionLevel {
-    return currentPermissions.value[module];
+    return permissionLevelFor(String(module));
   }
 
   function getAccessibleModules(): ModuleName[] {
@@ -413,11 +463,16 @@ export const usePermissionStore = defineStore('permission', () => {
     loadedRoutes,
     currentRole,
     currentPermissions,
+    currentUserId,
     // DB-driven state (Phase 3)
     dbPermissions,
     isDbLoaded,
     dbLoadError,
+    userModuleAccess,
+    isUserModuleAccessLoaded,
+    productionModuleRegistry: PRODUCTION_MODULE_REGISTRY,
     loadFromDb,
+    applyUserModuleAccess,
     setRole,
     canAccess,
     canWrite,
