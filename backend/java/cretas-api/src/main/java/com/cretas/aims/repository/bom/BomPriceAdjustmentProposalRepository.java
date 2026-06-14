@@ -13,6 +13,9 @@ public interface BomPriceAdjustmentProposalRepository extends JpaRepository<BomP
 
     Optional<BomPriceAdjustmentProposal> findByIdAndFactoryId(Long id, String factoryId);
 
+    Optional<BomPriceAdjustmentProposal> findByFactoryIdAndRecipeItemIdAndStatusAndDeletedAtIsNull(
+            String factoryId, Long recipeItemId, BomPriceAdjustmentProposal.Status status);
+
     Page<BomPriceAdjustmentProposal> findByFactoryIdAndStatusOrderByCreatedAtDesc(
             String factoryId, BomPriceAdjustmentProposal.Status status, Pageable pageable);
 
