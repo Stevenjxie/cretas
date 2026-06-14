@@ -50,6 +50,11 @@ public class BomServiceImpl implements BomService {
 
     private static final Logger log = LoggerFactory.getLogger(BomServiceImpl.class);
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final String COST_CALIBER_PRE_TAX = "PRE_TAX";
+    private static final String PRE_TAX_CALIBER_HINT =
+            "BOM成本按未税价核算；BOM unitPrice 为未税价，含税采购价需先按税率换算税前。";
+    private static final String MISSING_TAX_RATE_HINT =
+            "部分物料缺税率，请补齐税率用于含税/未税来源追踪；成本仍按已存未税 unitPrice 计算。";
 
     private final BomItemRepository bomItemRepository;
     private final LaborCostConfigRepository laborCostConfigRepository;
@@ -400,10 +405,14 @@ public class BomServiceImpl implements BomService {
         // 4. 计算原辅料成本
         List<BomCostSummaryDTO.MaterialCostItem> materialCostItems = new ArrayList<>();
         BigDecimal materialCostTotal = BigDecimal.ZERO;
+        boolean hasMissingTaxRate = false;
 
         for (BomItem item : bomItems) {
             BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
             BigDecimal subtotal = calculateMaterialCost(factoryId, actualQuantity, item.getUnitPrice());
+            if (item.getTaxRate() == null) {
+                hasMissingTaxRate = true;
+            }
 
             BomCostSummaryDTO.MaterialCostItem costItem = BomCostSummaryDTO.MaterialCostItem.builder()
                 .materialName(item.getMaterialName())
@@ -413,6 +422,8 @@ public class BomServiceImpl implements BomService {
                 .actualQuantity(actualQuantity)
                 .unit(item.getUnit())
                 .unitPrice(item.getUnitPrice())
+                .unitPriceCaliber(COST_CALIBER_PRE_TAX)
+                .caliberHint(materialCaliberHint(item.getTaxRate()))
                 .taxRate(item.getTaxRate())
                 .subtotal(subtotal)
                 .build();
@@ -481,6 +492,8 @@ public class BomServiceImpl implements BomService {
             .overheadCosts(overheadCostItems)
             .overheadCostTotal(overheadCostTotal.setScale(4, RoundingMode.HALF_UP))
             .totalCost(totalCost)
+            .costCaliber(COST_CALIBER_PRE_TAX)
+            .caliberHint(summaryCaliberHint(hasMissingTaxRate))
             .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
             .build();
 
@@ -505,6 +518,20 @@ public class BomServiceImpl implements BomService {
     }
 
     // ============ Private Helper Methods ============
+
+    private String summaryCaliberHint(boolean hasMissingTaxRate) {
+        if (hasMissingTaxRate) {
+            return PRE_TAX_CALIBER_HINT + MISSING_TAX_RATE_HINT;
+        }
+        return PRE_TAX_CALIBER_HINT;
+    }
+
+    private String materialCaliberHint(BigDecimal taxRate) {
+        if (taxRate == null) {
+            return "BOM unitPrice 为未税价；缺税率，无法展示含税/未税换算来源。";
+        }
+        return "BOM unitPrice 为未税价；税率仅用于发票口径追踪，成本不二次除税。";
+    }
 
     /**
      * Canvas Config: 从配置中获取字段默认值。

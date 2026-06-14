@@ -124,6 +124,21 @@ class RawMaterialTypeServiceTaxRateTest {
         assertThat(v.scale()).isEqualTo(4);
     }
 
+    @Test
+    @DisplayName("B8: purchase tax-included 65 @ 13% becomes pre-tax 57.5221 before BOM cost uses it")
+    void tax13_taxIncluded65_convertsToPreTaxForBomCost() {
+        stubForCreate();
+        RawMaterialTypeDTO dto = buildCreateDto(TaxRate.TAX_13, new BigDecimal("65.00"));
+
+        service.createMaterialType(FACTORY_ID, dto);
+
+        BigDecimal preTax = TaxRate.TAX_13.preTaxPrice(new BigDecimal("65.00"));
+        assertThat(preTax).isEqualByComparingTo("57.5221");
+        assertThat(preTax.multiply(BigDecimal.ONE).setScale(4, RoundingMode.HALF_UP))
+                .as("BOM cost consumes the stored pre-tax unitPrice without another tax division")
+                .isEqualByComparingTo("57.5221");
+    }
+
     // =========================================================================
     // T2-S2: create TAX_13 → unitPrice = taxIncluded / 1.13, scale=4 HALF_UP
     // =========================================================================
