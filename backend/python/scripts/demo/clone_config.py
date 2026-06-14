@@ -10,9 +10,14 @@ CRETAS_DSN = os.environ.get(
 SMARTBI_SUPER_DSN = os.environ.get("CLONE_SMARTBI_SUPER_DSN")  # required for smartbi clone
 
 # --- Source -> Target tenants ---
+# factory source switched F001 -> F006 (2026-06-14): F001 was a mixed test factory whose gold/POS
+# layer carried restaurant-flavored data (门店/美团/dishes) and whose finance + production-reporting
+# tables were empty. F006 (六扇门 卤味加工厂) is a genuine manufacturing tenant with 365 production
+# reports / 143 work-process tasks / 104 batches / 133 plans / 30 finished goods → the 报工/工序/人效
+# modules light up. Cockpit agg_daily is generated post-clone from sales_orders (F006 has no POS).
 TENANTS = {
-    "rest":    {"source": "RES_3101_009", "target": "DEMO_REST",    "name": "白垩纪AI示范餐厅", "type": "RESTAURANT"},
-    "factory": {"source": "F001",         "target": "DEMO_FACTORY", "name": "白垩纪AI示范食品厂", "type": "FACTORY"},
+    "rest":    {"source": "RES_3101_009", "target": "DEMO_REST",     "name": "白垩纪AI示范餐厅",   "type": "RESTAURANT"},
+    "factory": {"source": "F006",         "target": "DEMO_FACTORY2",  "name": "白垩纪AI示范食品厂", "type": "FACTORY"},
 }
 
 # --- Bigint-serial ID offsets (collision-safe: >> any plausible future growth) ---
@@ -21,7 +26,7 @@ OFFSET_CRETAS = 500_000_000
 OFFSET_SMARTBI = 1_000_000_000
 
 # Short codes for generated varchar PKs (kept within varchar(64) limit).
-TARGET_SHORTCODE = {"DEMO_REST": "DR", "DEMO_FACTORY": "DF", "DEMO_REST_SCRATCH": "DRS"}
+TARGET_SHORTCODE = {"DEMO_REST": "DR", "DEMO_FACTORY": "DF", "DEMO_FACTORY2": "DF2", "DEMO_REST_SCRATCH": "DRS"}
 
 # pk_type: "varchar" -> new short id via map; "bigint" -> offset.
 # fk: column -> parent table (rewrite via that parent's map).
@@ -63,6 +68,21 @@ TABLE_REGISTRY = [
      "fk":{"product_type_id":"product_types","created_by":"users"}},
   {"db":"cretas","table":"production_batches","pk":"id","pk_type":"bigint","factory_col":"factory_id",
      "fk":{"product_type_id":"product_types"}},  # production_plan_id NOT FK-constrained; remap if present (see Step 3)
+  # --- F006 manufacturing: work-process catalog + per-product process + tasks + reports (报工/工序/人效) ---
+  {"db":"cretas","table":"work_processes","pk":"id","pk_type":"varchar","factory_col":"factory_id","fk":{}},
+  {"db":"cretas","table":"product_work_processes","pk":"id","pk_type":"bigint","factory_col":"factory_id",
+     "fk":{"product_type_id":"product_types","work_process_id":"work_processes","responsible_worker_id":"users"}},
+  {"db":"cretas","table":"work_process_tasks","pk":"id","pk_type":"bigint","factory_col":"factory_id",
+     "fk":{"production_batch_id":"production_batches","product_work_process_id":"product_work_processes",
+           "work_process_id":"work_processes","product_type_id":"product_types",
+           "assigned_to":"users","completed_by":"users"}},
+  {"db":"cretas","table":"production_reports","pk":"id","pk_type":"bigint","factory_col":"factory_id",
+     "fk":{"batch_id":"production_batches","work_process_task_id":"work_process_tasks",
+           "product_type_id":"product_types","worker_id":"users","approved_by":"users",
+           "reversal_of_id":"production_reports"}},  # self-ref: resolves to cloned report or nulls (safe)
+  {"db":"cretas","table":"product_work_process_assignees","pk":"id","pk_type":"bigint","factory_col":None,
+     "fk":{"product_work_process_id":"product_work_processes","worker_id":"users"},
+     "parent_filter":("product_work_process_id","product_work_processes")},  # no factory_id
   {"db":"cretas","table":"finished_goods_batches","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"warehouse_id":"factory_warehouses","product_type_id":"product_types"}},
   {"db":"cretas","table":"shipment_records","pk":"id","pk_type":"varchar","factory_col":"factory_id",
@@ -120,6 +140,10 @@ MASK_REGISTRY = {
   "purchase_order_items": {"material_name":"cuisine","remark":"freetext"},
   "production_plans": {"notes":"cuisine","source_customer_name":"company","approval_comment":"freetext","process_name":"freetext"},
   "production_batches": {"product_name":"cuisine","notes":"cuisine","supervisor_name":"person","equipment_name":"freetext"},
+  # F006 manufacturing tables: process_name (油炸/焯水) is generic, keep; mask identity + product-name copies.
+  "work_processes": {"description":"freetext"},
+  "work_process_tasks": {"notes":"freetext"},
+  "production_reports": {"product_name":"cuisine","reporter_name":"person","notes":"freetext","rejection_reason":"freetext","rejected_reason":"freetext"},
   "finished_goods_batches": {"product_name":"cuisine","remark":"cuisine","inbound_remark":"cuisine","storage_location":"freetext"},
   "shipment_records": {"product_name":"cuisine","delivery_address":"address","notes":"cuisine","driver_name":"person",
                        "driver_phone":"phone","vehicle_number":"freetext","logistics_company":"company"},

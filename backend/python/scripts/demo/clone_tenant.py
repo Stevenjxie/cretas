@@ -46,9 +46,12 @@ async def run(tenant_key, target_override, reset, dry_run):
                 n = (await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", source)) if fcol else 0
                 print(f"  {e['table']}: {n} rows")
             return
-        # 1. provision target factory + settings + demo-login user (its id = fallback owner)
+        # 1. provision target factory + settings + demo-login user (its id = fallback owner).
+        #    username derived from target (not tenant_key) so a scratch target like DEMO_FACTORY2
+        #    gets its own demo_factory2 login instead of colliding with DEMO_FACTORY's demo_factory.
         await provision.provision_factory(conns["cretas"], target, t["name"], t["type"])
-        demo_user_id = await provision.provision_demo_user(conns["cretas"], target, f"demo_{tenant_key}")
+        demo_username = "demo_" + target.replace("DEMO_", "").lower()
+        demo_user_id = await provision.provision_demo_user(conns["cretas"], target, demo_username)
         # 2. clone tables in order
         remapper = IdRemapper(offset=0, shortcode=shortcode)  # offset set per-db below
         masker = Masker()

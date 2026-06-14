@@ -6,7 +6,7 @@ from scripts.demo import clone_config as cfg
 # Real client/brand tokens that MUST be 0 everywhere in a demo tenant. Mirror masker.BRAND_TOKENS:
 # restaurant brand (青花椒, substituted to 藤椒) + factory F001 B2B customer brands (it makes products
 # for named clients, so brands leak into product names / codes / remarks + denormalized copies).
-FORBIDDEN_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户"]
+FORBIDDEN_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户", "六扇门"]
 
 # (table, column) pairs exempt from the brand-token check. Empty now: dish/ingredient/menu names
 # are scrubbed by SUBSTITUTION (青花椒 -> 藤椒) in the masker, so the brand token must be 0 EVERYWHERE.

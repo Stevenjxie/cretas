@@ -9,7 +9,7 @@ from faker import Faker
 # restaurant brand (青花椒, also a Sichuan spice) and factory F001's B2B customer brands
 # (it makes products FOR named clients, so brands leak into product names / codes / remarks).
 # The verify gate (FORBIDDEN_TOKENS) mirrors this list — keep them in sync.
-BRAND_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户"]
+BRAND_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户", "六扇门"]
 
 # Brand/cruft token -> replacement, applied in order (longer/more-specific first). 青花椒 is a
 # Sichuan spice so it stays a neutral pepper (藤椒); client brands are removed or turned into a
@@ -26,11 +26,16 @@ BRAND_SUBSTITUTE = {
     "永辉": "客户",
     "盒马": "客户",
     "海底捞": "客户",
+    "六扇门": "示范",
     "_updated": "",
 }
 
 # 去掉含客户/公司标识的括号 (e.g. "墨鱼圈 (永辉超市)" 的整段, "...(上海海壹佰米网络科技有限公司)").
 _CUSTOMER_PAREN = re.compile(r"\s*[（(][^（）()]*(超市|有限公司|客户|科技|测试)[^（）()]*[）)]")
+
+# E2E/test cruft prefixes that leak from a source tenant's automated-test runs (e.g. F006 六扇门 had
+# "DEMO-FE-20260612035935-卤牛腱" / "123牛腱"). Strip the cruft, keep the real product name behind it.
+_TEST_CRUFT = re.compile(r"(?:DEMO[-_]?FE[-_]?\d+[-_]?|^123(?=\D)|^test[-_]?)", re.IGNORECASE)
 
 
 def _seed(value: str) -> int:
@@ -82,6 +87,7 @@ class Masker:
         for tok, sub in BRAND_SUBSTITUTE.items():
             s = s.replace(tok, sub)
         s = _CUSTOMER_PAREN.sub("", s)
+        s = _TEST_CRUFT.sub("", s)  # strip E2E/test cruft prefixes, keep the real product name
         return s.strip()
 
     def freetext(self, v):
