@@ -269,7 +269,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     );
     await expect(productLineOption).toBeVisible({ timeout: 8_000 });
     await productLineOption.click();
-    await expect(planDialog.locator('.el-form-item:has-text("产品类型")')).toContainText(PRODUCT_NAME, {
+    await expect(planDialog.locator('.el-form-item.is-required:has-text("产品类型")')).toContainText(PRODUCT_NAME, {
       timeout: 8_000,
     });
 
