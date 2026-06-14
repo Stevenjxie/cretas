@@ -321,6 +321,61 @@ class ReplayMovingAverageTest {
             assertEquals(new BigDecimal("100"), finalSfi.getAvailableQuantity());
         }
 
+        @Test
+        @DisplayName("RP-4: 全已知 0 成本 IN (unitCostAtTxn=0) → unitCost=0.0000, accumulatedCost=0.00 (非 null)")
+        void allKnownZeroCost_keepsZeroNotNull() {
+            /*
+             * 回归 (#840 引入): replayMovingAverage line 829 守卫 `weightedCost > 0`
+             * 把"全部已知成本但恰好为 0"(weightedCost==0, !hasUnknownCost) 误推进 else
+             * 清成 null, 混淆了"未知成本→null (对)"与"已知 0 成本→应是 0"。
+             *
+             * 反例: IN 10kg @ unitCostAtTxn=0 (合法 0 成本, 已知非未知), 无 REVERSE/未知行。
+             *   producedQty   = 10
+             *   weightedCost  = 10 × 0 = 0
+             *   hasUnknownCost = false
+             *   → 应得 unitCost=0.0000 / accumulatedCost=0.00 (不是 null)。
+             */
+            Long logId = 4L, batchId = 103L, sfiId = 203L;
+
+            ProductionReport r = ProductionReport.builder()
+                    .id(504L).factoryId(FACTORY_ID).batchId(batchId).build();
+
+            SemiFinishedInventoryTransaction inTxn = SemiFinishedInventoryTransaction.builder()
+                    .id(15L).semiFinishedId(sfiId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("10"))
+                    .unitCostAtTxn(new BigDecimal("0.0000"))  // 已知 0 成本 (合法), 非未知
+                    .build();
+
+            // 撤回的是另一份 (不存在的) 报工, 留下这份 0 成本 IN 在账上。
+            // 直接用单 IN 账本回放, 验证 0 成本不被误清。
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(r), List.of(inTxn));
+            stubSfi(sfiId, new BigDecimal("10"), BigDecimal.ZERO, new BigDecimal("10"),
+                    new BigDecimal("0.0000"), "SEMI-RP004");
+
+            // 回放账本: 仅一份已知 0 成本 IN (无 REVERSE 减项, producedQty=10>0)
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId))
+                    .thenReturn(List.of(inTxn));
+
+            service.executeReversal(logId, FACTORY_ID);
+
+            verify(wipRepo, atLeastOnce()).save(sfiCaptor.capture());
+            SemiFinishedInventory finalSfi = sfiCaptor.getAllValues().stream()
+                    .filter(s -> s.getId() != null && s.getId().equals(sfiId))
+                    .findFirst().orElseThrow();
+
+            assertEquals(new BigDecimal("10"), finalSfi.getProducedQuantity(),
+                    "0 成本 IN 仍是正净产出, producedQuantity=10");
+            assertNotNull(finalSfi.getUnitCost(),
+                    "全已知 0 成本: unitCost 不应被误清为 null");
+            assertEquals(0, new BigDecimal("0.0000").compareTo(finalSfi.getUnitCost()),
+                    "全已知 0 成本: unitCost=0.0000 (scale-4)");
+            assertEquals(0, BigDecimal.ZERO.compareTo(finalSfi.getAccumulatedCost()),
+                    "全已知 0 成本: accumulatedCost=0.00 (非 null)");
+            assertNotNull(finalSfi.getAccumulatedCost(),
+                    "全已知 0 成本: accumulatedCost 不应为 null");
+        }
+
         // ─── BUG-R1 / BUG-R2 回归守卫 (#662 已修; 断言 CORRECT math 对修复后代码 PASS) ───
 
         @Test
