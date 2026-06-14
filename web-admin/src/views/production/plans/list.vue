@@ -736,6 +736,8 @@ const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
 ];
 const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
+// 幂等 key 在打开弹框时一次性生成，重试提交复用同一 key (防呆 Rule 4)
+const settlementIdempotencyKey = ref('');
 const materialBatchListLoading = ref(false);
 const materialBatchOptions = ref<MaterialBatchOption[]>([]);
 const rawWarehouseId = ref('');
@@ -855,8 +857,11 @@ const completeSubmitDisabledReason = computed(() => {
 const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
 
 function buildSettlementIdempotencyKey(row: TableRow): string {
+  // 生成并保存到 settlementIdempotencyKey，确保重试时复用同一 key (防呆 Rule 4)
   const planId = String(row.id || row.planNumber || 'unknown');
-  return `web-settle-${planId}-${Date.now()}`;
+  const key = `web-settle-${planId}-${Date.now()}`;
+  settlementIdempotencyKey.value = key;
+  return key;
 }
 
 function addRawConsumptionLine() {
@@ -976,6 +981,8 @@ function buildWipConsumptionPayload() {
 async function handleComplete(row: TableRow) {
   if (actionLoading.value) return;
   completeRow.value = row;
+  // 幂等 key 在打开弹框时生成一次，submitComplete 直接复用，重试不会产生新 key (防呆 Rule 4)
+  buildSettlementIdempotencyKey(row);
   // 默认填充计划数量, 便于一键提交; 用户可改
   completeForm.value = {
     actualQuantity: Number(row.plannedQuantity || 0),
@@ -1005,7 +1012,7 @@ async function submitComplete() {
   actionLoading.value = true;
   try {
     const response = await post(`/${factoryId.value}/production-plans/${completeRow.value.id}/settle`, {
-      idempotencyKey: buildSettlementIdempotencyKey(completeRow.value),
+      idempotencyKey: settlementIdempotencyKey.value,
       actualFinishedQuantity: completeActualQuantity.value,
       actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
       quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
@@ -1061,6 +1068,8 @@ const CLEARING_REASON_OPTIONS = [
 const receiptDialogVisible = ref(false);
 const receiptLoading = ref(false);
 const receiptRow = ref<TableRow | null>(null);
+// 幂等 key 在打开弹框时一次性生成，重试提交复用同一 key (防呆 Rule 4)
+const receiptIdempotencyKey = ref('');
 const receiptSettlement = ref<ProductionSettlementStatus | null>(null);
 const receiptForm = ref({
   receivedQuantity: 0,
@@ -1186,13 +1195,18 @@ const clearingDisabledReason = computed(() => {
 const clearingCanSubmit = computed(() => clearingDisabledReason.value === '');
 
 function buildReceiptIdempotencyKey(row: TableRow): string {
+  // 生成并保存到 receiptIdempotencyKey，确保重试时复用同一 key (防呆 Rule 4)
   const planId = String(row.id || row.planNumber || 'unknown');
-  return `web-receipt-${planId}-${Date.now()}`;
+  const key = `web-receipt-${planId}-${Date.now()}`;
+  receiptIdempotencyKey.value = key;
+  return key;
 }
 
 async function handleWarehouseReceipt(row: TableRow) {
   if (!factoryId.value || actionLoading.value) return;
   receiptRow.value = row;
+  // 幂等 key 在打开弹框时生成一次，submitWarehouseReceipt 直接复用，重试不会产生新 key (防呆 Rule 4)
+  buildReceiptIdempotencyKey(row);
   receiptLoading.value = true;
   receiptDialogVisible.value = true;
   try {
@@ -1231,7 +1245,7 @@ async function submitWarehouseReceipt() {
       ? receiptForm.value.otherVarianceReason.trim()
       : receiptForm.value.varianceReason;
     const res = await confirmProductionWarehouseReceipt(factoryId.value, String(receiptRow.value.id), {
-      idempotencyKey: buildReceiptIdempotencyKey(receiptRow.value),
+      idempotencyKey: receiptIdempotencyKey.value,
       receivedQuantity: receiptReceivedQuantity.value,
       quantityUnit: receiptUnit.value,
       varianceReason: varianceReason || null,
