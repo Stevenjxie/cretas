@@ -159,4 +159,19 @@ class PriceViewPermissionTest {
         assertFalse(permissionService.hasPermission(
                 userWithRole(FactoryUserRole.warehouse_manager.name()), "finance:write"));
     }
+
+    @Test
+    @DisplayName("warehouse_manager: LACKS inventory:legacy_import despite inventory:read_write")
+    void warehouseManager_lacksLegacyImportPermission() {
+        assertFalse(permissionService.hasPermission(
+                userWithRole(FactoryUserRole.warehouse_manager.name()), "inventory:legacy_import"),
+                "inventory:legacy_import must be a dedicated import/migration permission, not implied by inventory:read_write");
+    }
+
+    @Test
+    @DisplayName("factory_super_admin: HAS inventory:legacy_import")
+    void factorySuperAdmin_hasLegacyImportPermission() {
+        assertTrue(permissionService.hasPermission(
+                userWithRole(FactoryUserRole.factory_super_admin.name()), "inventory:legacy_import"));
+    }
 }

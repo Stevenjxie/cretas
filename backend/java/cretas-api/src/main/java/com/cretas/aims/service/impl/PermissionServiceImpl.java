@@ -40,6 +40,7 @@ public class PermissionServiceImpl implements PermissionService {
     private final Map<String, long[]> resolveCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> resolveResult = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 5 * 60 * 1000;
+    private static final String LEGACY_IMPORT_PERMISSION = "inventory:legacy_import";
 
     /**
      * 清除权限解析缓存. L1/L2 PUT API 调用时触发.
@@ -362,6 +363,10 @@ public class PermissionServiceImpl implements PermissionService {
         // 超级管理员拥有所有权限
         if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
             return true;
+        }
+
+        if (LEGACY_IMPORT_PERMISSION.equals(permissionCode)) {
+            return false;
         }
 
         // procurement:price:view — 价格字段查看权限 (PR #415 Option B)
