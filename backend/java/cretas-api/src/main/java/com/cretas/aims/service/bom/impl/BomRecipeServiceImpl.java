@@ -469,7 +469,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setYieldRate(dto.getYieldRate() != null ? dto.getYieldRate() : new BigDecimal("100.00"));
         item.setUnit(dto.getUnit());
         item.setUnitPrice(dto.getUnitPrice());
-        item.setTaxRate(dto.getTaxRate() != null ? dto.getTaxRate() : BigDecimal.ZERO);
+        // F6 诚实 null: taxRate 未传 → 保持 null (不默认 0%). 默认 0% 会把"未配置税率"静默当
+        //   "未税/含税无差", 成本侧失真. null → 上层成本计算诚实标缺, 让用户补填.
+        item.setTaxRate(dto.getTaxRate());
         item.setMaterialCategory(dto.getMaterialCategory() != null ? dto.getMaterialCategory() : "RAW");
         item.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         item.setIsOptional(dto.getIsOptional() != null ? dto.getIsOptional() : false);

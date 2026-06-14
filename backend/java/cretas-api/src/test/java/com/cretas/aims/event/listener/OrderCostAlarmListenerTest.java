@@ -6,8 +6,8 @@ import com.cretas.aims.entity.enums.NotificationType;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.NotificationService;
-import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.CostVarianceService;
+import com.cretas.aims.service.bom.StandardCostService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -39,7 +39,7 @@ import static org.mockito.Mockito.*;
 class OrderCostAlarmListenerTest {
 
     @Mock
-    private BomRecipeService bomRecipeService;
+    private StandardCostService standardCostService;
     @Mock
     private CostVarianceService costVarianceService;
     @Mock
@@ -63,7 +63,7 @@ class OrderCostAlarmListenerTest {
         pt.setName("猪舌 200g");
 
         ProductionCostUpdatedEvent event = mockEvent(1L, new BigDecimal("13.00"), new BigDecimal("8.00"));
-        mockRecipe(new BigDecimal("10.00")); // standard cost
+        mockStandard(new BigDecimal("10.00"), true); // standard cost
         when(costVarianceService.computeVariancePct(any(), any())).thenReturn(new BigDecimal("30.00"));
         when(costVarianceService.resolveThreshold(FACTORY_ID, PT_ID)).thenReturn(new BigDecimal("10.00"));
         when(productTypeRepo.findById(PT_ID)).thenReturn(Optional.of(pt));
@@ -92,7 +92,7 @@ class OrderCostAlarmListenerTest {
         pt.setName("猪舌 200g");
 
         ProductionCostUpdatedEvent event = mockEvent(2L, new BigDecimal("12.00"), new BigDecimal("8.00"));
-        mockRecipe(new BigDecimal("10.00"));
+        mockStandard(new BigDecimal("10.00"), true);
         when(costVarianceService.computeVariancePct(any(), any())).thenReturn(new BigDecimal("20.00"));
         when(costVarianceService.resolveThreshold(FACTORY_ID, PT_ID)).thenReturn(new BigDecimal("10.00"));
         when(productTypeRepo.findById(PT_ID)).thenReturn(Optional.of(pt));
@@ -119,7 +119,7 @@ class OrderCostAlarmListenerTest {
     @Test
     void withinThreshold_noNotificationPushed() {
         ProductionCostUpdatedEvent event = mockEvent(3L, new BigDecimal("10.50"), new BigDecimal("8.00"));
-        mockRecipe(new BigDecimal("10.00"));
+        mockStandard(new BigDecimal("10.00"), true);
         when(costVarianceService.computeVariancePct(any(), any())).thenReturn(new BigDecimal("5.00"));
         when(costVarianceService.resolveThreshold(FACTORY_ID, PT_ID)).thenReturn(new BigDecimal("10.00"));
 
@@ -137,7 +137,7 @@ class OrderCostAlarmListenerTest {
 
         listener.onProductionCostUpdated(event);
 
-        verifyNoInteractions(bomRecipeService, notificationService);
+        verifyNoInteractions(standardCostService, notificationService);
     }
 
     // ─── Test 5: actualUnitCost null → early return ───────────────────────────
@@ -149,19 +149,46 @@ class OrderCostAlarmListenerTest {
 
         listener.onProductionCostUpdated(event);
 
-        verifyNoInteractions(bomRecipeService, notificationService);
+        verifyNoInteractions(standardCostService, notificationService);
     }
 
-    // ─── Test 6: no BOM recipe → early return ─────────────────────────────────
+    // ─── Test 6: 标准成本不可用 (totalUnitCost null) → 不推送 ───────────────────
 
     @Test
-    void noRecipe_earlyReturn_noNotification() {
+    void noStandardCost_earlyReturn_noNotification() {
         ProductionCostUpdatedEvent event = mockEvent(6L, new BigDecimal("10.00"), null);
-        when(bomRecipeService.getCurrentRecipe(FACTORY_ID, PT_ID)).thenReturn(Optional.empty());
+        // 同口径标准: 无 BOM/口径不全 → totalUnitCost null, laborIncluded false
+        when(standardCostService.resolveStandardUnitCost(FACTORY_ID, PT_ID))
+                .thenReturn(StandardCostService.StandardUnitCost.builder()
+                        .laborIncluded(false)
+                        .caliberHint("无 ACTIVE BOM")
+                        .build());
 
         listener.onProductionCostUpdated(event);
 
         verifyNoInteractions(notificationService);
+    }
+
+    // ─── Test 6b: D1 假阳性守卫 — 标准侧缺人工 (laborIncluded=false) → 不推送 ────
+    //   即便有料标准, 拿纯料标准比含人工实际必然虚高超支 = 假阳性, 必须跳过.
+
+    @Test
+    void standardCaliberMissingLabor_noFalsePositiveAlarm() {
+        ProductionCostUpdatedEvent event = mockEvent(8L, new BigDecimal("13.00"), null);
+        // 有料标准 8.00 但缺研发预估人工 → totalUnitCost null + laborIncluded false
+        when(standardCostService.resolveStandardUnitCost(FACTORY_ID, PT_ID))
+                .thenReturn(StandardCostService.StandardUnitCost.builder()
+                        .materialUnitCost(new BigDecimal("8.00"))
+                        .laborUnitCost(null)
+                        .totalUnitCost(null)
+                        .laborIncluded(false)
+                        .caliberHint("缺研发预估人工")
+                        .build());
+
+        listener.onProductionCostUpdated(event);
+
+        // 不调用方差计算, 不推送通知 (假阳性被守卫拦住)
+        verifyNoInteractions(costVarianceService, notificationService);
     }
 
     // ─── Test 7: notification service throws → fail-soft, no rethrow ─────────
@@ -172,7 +199,7 @@ class OrderCostAlarmListenerTest {
         pt.setName("猪舌 200g");
 
         ProductionCostUpdatedEvent event = mockEvent(7L, new BigDecimal("15.00"), new BigDecimal("8.00"));
-        mockRecipe(new BigDecimal("10.00"));
+        mockStandard(new BigDecimal("10.00"), true);
         when(costVarianceService.computeVariancePct(any(), any())).thenReturn(new BigDecimal("50.00"));
         when(costVarianceService.resolveThreshold(FACTORY_ID, PT_ID)).thenReturn(new BigDecimal("10.00"));
         when(productTypeRepo.findById(PT_ID)).thenReturn(Optional.of(pt));
@@ -189,10 +216,13 @@ class OrderCostAlarmListenerTest {
         return new ProductionCostUpdatedEvent(this, FACTORY_ID, batchId, PT_ID, actual, total);
     }
 
-    /** Helper: mock BomRecipeService to return a recipe with given totalCost. */
-    private void mockRecipe(BigDecimal totalCost) {
-        var recipe = mock(com.cretas.aims.entity.bom.BomRecipe.class);
-        when(recipe.getTotalCost()).thenReturn(totalCost);
-        when(bomRecipeService.getCurrentRecipe(FACTORY_ID, PT_ID)).thenReturn(Optional.of(recipe));
+    /** Helper: mock StandardCostService to return a same-caliber standard cost. */
+    private void mockStandard(BigDecimal totalUnitCost, boolean laborIncluded) {
+        when(standardCostService.resolveStandardUnitCost(FACTORY_ID, PT_ID))
+                .thenReturn(StandardCostService.StandardUnitCost.builder()
+                        .totalUnitCost(totalUnitCost)
+                        .laborIncluded(laborIncluded)
+                        .caliberHint(laborIncluded ? "标准成本含人工" : "口径不全")
+                        .build());
     }
 }
