@@ -132,8 +132,8 @@ class YieldCalculationServiceImplTest {
     }
 
     @Test
-    void calculateBatchYield_sumsWorkAcrossSteps() {
-        // 3 道 minutes [120,90,60]=270, workers [2,3,1]=6
+    void calculateBatchYield_sumsMinutesAcrossSteps_takesMaxWorkers() {
+        // 3 道 minutes [120,90,60]=270 (Σ); workers [2,3,1]: Q1 批次级取 MAX=3 (同班工人跨道不 SUM)
         List<ProductionReport> reports = List.of(
                 rptWork(1, 1, "998", "935.5", 120, 2),
                 rptWork(2, 2, "935.5", "900", 90, 3),
@@ -141,7 +141,24 @@ class YieldCalculationServiceImplTest {
         );
         BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
         assertThat(dto.getTotalWorkMinutes()).isEqualTo(270);
-        assertThat(dto.getTotalWorkers()).isEqualTo(6);
+        assertThat(dto.getTotalWorkers()).isEqualTo(3);  // Q1: MAX(2,3,1)=3, 非 SUM(6)
+    }
+
+    /**
+     * Q1: 两 step workers=10+10 (同班) → 批次级应 MAX=10, 修前 SUM=20 (夸大一倍)。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("Q1: 批次级 totalWorkers 取 MAX 非 SUM (同班跨道不重复计)")
+    void q1_batchWorkers_isMaxNotSum_sameCrewAcrossSteps() {
+        // 两道各报 10 人 (同一班组分两道工序); 批次人数应是 10, 不是 20
+        List<ProductionReport> reports = List.of(
+                rptWork(1, 1, "100", "90", 60, 10),
+                rptWork(2, 2, "90",  "80", 60, 10)
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getTotalWorkers())
+                .as("同班工人跨道批次人数应取 MAX=10, 修前 SUM=20")
+                .isEqualTo(10);
     }
 
     @Test

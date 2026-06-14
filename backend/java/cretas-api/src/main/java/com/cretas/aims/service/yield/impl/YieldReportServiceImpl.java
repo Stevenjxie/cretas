@@ -367,9 +367,27 @@ public class YieldReportServiceImpl implements YieldReportService {
         String alert = yieldAlert(t.getWorkProcessId(), yieldRate);
         if (alert != null) out.put("alert", alert);
         // 适配单元3 (Part C): 守恒软校验 (非阻塞), 仅偏差 > 15% 且单位可比时附 balanceWarning。
-        // 三阶段 (单元1): 单报工只带单边量, 守恒须跨报工算 (不在此处); 仅 legacy 整合报工同报工带 input+output 才校验。
+        // legacy: 同一报工带 input+output, 直接校验。
+        // F2 OUTPUT 阶段: 聚合该 task 所有 INPUT 报工的 Σ inputQuantity 对比本次产出 (跨阶段守恒)。
         if (isLegacy) {
             String balanceWarning = computeBalanceWarning(req);
+            if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
+        } else if (isOutput) {
+            // F2: Σ 该 task 历史 INPUT 报工的 inputQuantity (含本次 save 前的存量)
+            BigDecimal sumInput = existingTaskReports.stream()
+                    .filter(x -> "INPUT".equals(x.getReportKind()))
+                    .map(ProductionReport::getInputQuantity)
+                    .filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            // 取历史 INPUT 报工的 inputUnit (首个非 null)
+            String sumInputUnit = existingTaskReports.stream()
+                    .filter(x -> "INPUT".equals(x.getReportKind()))
+                    .map(ProductionReport::getInputUnit)
+                    .filter(Objects::nonNull)
+                    .findFirst().orElse(null);
+            String balanceWarning = computeBalanceWarningForOutput(
+                    sumInput, effOutput, sumInputUnit, effOutputUnit,
+                    effByproducts, effWaste, effSampleRetain);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
         }
         return out;
@@ -928,18 +946,68 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
         BigDecimal waste = req.getWasteQuantity() == null ? BigDecimal.ZERO : req.getWasteQuantity();
-        BigDecimal balance = input.subtract(nz(output)).subtract(byproductSum).subtract(waste);
+        // F3: 留样也消耗投入物料, 必须减去 (Integer → kg 同单位处理, null 视 0)
+        BigDecimal sample = req.getSampleRetainQuantity() == null
+                ? BigDecimal.ZERO : new BigDecimal(req.getSampleRetainQuantity());
+        BigDecimal balance = input.subtract(nz(output)).subtract(byproductSum).subtract(waste)
+                .subtract(sample);
 
         BigDecimal deviation = balance.abs().divide(input, 6, RoundingMode.HALF_UP);
         if (deviation.compareTo(BALANCE_WARN_THRESHOLD) <= 0) return null;
 
         return String.format(
-                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s) — 请核对, 系统不阻塞",
+                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s, 留样 %s) — 请核对, 系统不阻塞",
                 deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP),
                 input.stripTrailingZeros().toPlainString(),
                 nz(output).stripTrailingZeros().toPlainString(),
                 byproductSum.stripTrailingZeros().toPlainString(),
-                waste.stripTrailingZeros().toPlainString());
+                waste.stripTrailingZeros().toPlainString(),
+                sample.stripTrailingZeros().toPlainString());
+    }
+
+    /**
+     * F2 三阶段 OUTPUT 守恒软校验: 使用跨报工汇聚的投入量 (Σ INPUT 报工) 与本次 OUTPUT 产出比对。
+     *
+     * <p>参数语义与 {@link #computeBalanceWarning(YieldReportRequest)} 相同, 但 input/output/unit
+     * 均为调用方计算后的聚合值 (不来自单一 req 对象)。</p>
+     *
+     * @param totalInput   该 task 历史所有 INPUT 报工 Σ inputQuantity (跨阶段汇聚)
+     * @param totalOutput  本次 OUTPUT 报工 outputQuantity
+     * @param inUnit       投入单位 (取历史 INPUT 报工的 inputUnit)
+     * @param outUnit      产出单位 (本次 OUTPUT 报工的 outputUnit)
+     * @param byproducts   副产物列表 (来自 OUTPUT 报工)
+     * @param wasteQty     损耗 (来自 OUTPUT 报工)
+     * @param sampleRetain 留样件数 (来自 OUTPUT 报工)
+     */
+    private String computeBalanceWarningForOutput(BigDecimal totalInput, BigDecimal totalOutput,
+                                                  String inUnit, String outUnit,
+                                                  List<YieldReportRequest.Byproduct> byproducts,
+                                                  BigDecimal wasteQty, Integer sampleRetain) {
+        if (totalInput == null || totalInput.compareTo(BigDecimal.ZERO) <= 0) return null;
+        if (inUnit == null || !inUnit.equals(outUnit)) return null;  // 跨单位不可比
+
+        BigDecimal byproductSum = BigDecimal.ZERO;
+        if (byproducts != null) {
+            for (YieldReportRequest.Byproduct b : byproducts) {
+                if (b != null && b.getQuantity() != null) byproductSum = byproductSum.add(b.getQuantity());
+            }
+        }
+        BigDecimal waste = wasteQty == null ? BigDecimal.ZERO : wasteQty;
+        BigDecimal sample = sampleRetain == null ? BigDecimal.ZERO : new BigDecimal(sampleRetain);
+        BigDecimal balance = totalInput.subtract(nz(totalOutput)).subtract(byproductSum)
+                .subtract(waste).subtract(sample);
+
+        BigDecimal deviation = balance.abs().divide(totalInput, 6, RoundingMode.HALF_UP);
+        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) <= 0) return null;
+
+        return String.format(
+                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s, 留样 %s) — 请核对, 系统不阻塞",
+                deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP),
+                totalInput.stripTrailingZeros().toPlainString(),
+                nz(totalOutput).stripTrailingZeros().toPlainString(),
+                byproductSum.stripTrailingZeros().toPlainString(),
+                waste.stripTrailingZeros().toPlainString(),
+                sample.stripTrailingZeros().toPlainString());
     }
 
     /**
@@ -1019,6 +1087,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Override
     @Transactional
     public Map<String, Object> recordMaterialInput(String factoryId, Long batchId, Long workerId, MaterialInputRequest req) {
+        // F4 补录时效锁 — 领料业务日期不得早于 T-maxDays (对称 submitReport 的同一校验)
+        if (backdateWindowValidator != null) {
+            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "领料");
+        }
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择首道工序任务").withHintTarget("workProcessTaskId");
