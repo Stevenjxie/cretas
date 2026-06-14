@@ -283,6 +283,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '物料需求单', module: 'production' }
           },
           {
+            path: 'material-returns',
+            name: 'ProductionMaterialReturns',
+            component: () => import('@/views/factory/material-returns/list.vue'),
+            meta: { requiresAuth: true, title: '退料记录', module: 'production' }
+          },
+          {
             path: 'labor-efficiency',
             name: 'LaborEfficiency',
             component: () => import('@/views/production/labor-efficiency/index.vue'),

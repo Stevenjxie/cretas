@@ -1,26 +1,45 @@
 <script setup lang="ts">
-/**
- * 工厂物料需求单管理 — V3 P0-5 (Round 2 Agent B 9/10 设计落地)
- *
- * 客户原话 (会议 3124-3252s):
- * "提交过后如果生产一个物料需求单, 根据 BOM 会生产一个物料需求单;
- *  给到仓库备料, 然后仓库把他的库存调过到工厂; 生产跑完以后...进行一个生产退料."
- *
- * 状态机:
- *   PENDING → 开始备料 → PICKING → 补填批次 → PICKING
- *     → 调拨到工厂 → TRANSFERRED → 工厂签收 → ISSUED → IN_USE
- *     → 关单 (自动算退料 = issued - consumed) → CLOSED
- *     或 → CANCELLED
- */
-import { ref, computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
+import { Plus, Refresh, View, Tickets } from '@element-plus/icons-vue';
+import { get, post, put } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, View } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
-import type { TableRow } from '@/types/api';
 
+interface RequisitionItem {
+  id: string;
+  materialTypeId?: string | null;
+  materialName?: string | null;
+  materialCategory?: string | null;
+  requiredQty?: number | string | null;
+  pickedQty?: number | string | null;
+  issuedQty?: number | string | null;
+  consumedQty?: number | string | null;
+  wastageQty?: number | string | null;
+  returnedQty?: number | string | null;
+  unit?: string | null;
+}
+
+interface Requisition {
+  id: string;
+  requisitionNo: string;
+  status: string;
+  productionPlanId?: string | null;
+  requiredDate?: string | null;
+  requestedByName?: string | null;
+  createdAt?: string | null;
+  remarks?: string | null;
+  items?: RequisitionItem[];
+}
+
+interface ClosePreviewRow extends RequisitionItem {
+  wastageInput: number;
+  previewReturnQty: number;
+}
+
+const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -28,9 +47,19 @@ const canWrite = computed(() => permissionStore.canWrite('production'));
 
 const loading = ref(false);
 const submitting = ref(false);
-const tableData = ref<TableRow[]>([]);
+const tableData = ref<Requisition[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
-const statusFilter = ref<string>('');
+const statusFilter = ref('');
+
+const createDialogVisible = ref(false);
+const createForm = ref({ productionPlanId: '' });
+
+const detailDialogVisible = ref(false);
+const detailData = ref<Requisition | null>(null);
+
+const closeDialogVisible = ref(false);
+const closeTarget = ref<Requisition | null>(null);
+const closeRows = ref<ClosePreviewRow[]>([]);
 
 const statusMap: Record<string, { text: string; type: 'info' | 'warning' | 'success' | 'danger' | '' }> = {
   PENDING: { text: '待备料', type: 'warning' },
@@ -42,19 +71,35 @@ const statusMap: Record<string, { text: string; type: 'info' | 'warning' | 'succ
   CANCELLED: { text: '已取消', type: 'danger' },
 };
 
-const createDialogVisible = ref(false);
-const createForm = ref({ productionPlanId: '' });
+onMounted(loadData);
 
-const detailDialogVisible = ref(false);
-const detailData = ref<TableRow | null>(null);
+function toNumber(value: number | string | null | undefined): number {
+  if (value === null || value === undefined || value === '') return 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
 
-onMounted(() => { loadData(); });
+function qty(value: number | string | null | undefined): string {
+  return toNumber(value).toFixed(3).replace(/\.?0+$/, '');
+}
+
+function calcReturn(row: ClosePreviewRow): number {
+  return toNumber(row.issuedQty) - toNumber(row.consumedQty) - toNumber(row.wastageInput);
+}
+
+function recalcRow(row: ClosePreviewRow) {
+  row.previewReturnQty = calcReturn(row);
+}
+
+function formatDateTime(value?: string | null): string {
+  return value ? String(value).replace('T', ' ').slice(0, 16) : '-';
+}
 
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const params: TableRow = {
+    const params: Record<string, unknown> = {
       page: pagination.value.page - 1,
       size: pagination.value.size,
     };
@@ -66,16 +111,21 @@ async function loadData() {
       pagination.value.total = data.totalElements || 0;
     }
   } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '加载物料需求单列表失败,请检查网络');
+    handleCatchError(e, '加载物料需求单失败');
   } finally {
     loading.value = false;
   }
 }
 
-function handleStatusChange() { pagination.value.page = 1; loadData(); }
-function handlePageChange(page: number) { pagination.value.page = page; loadData(); }
+function handleStatusChange() {
+  pagination.value.page = 1;
+  loadData();
+}
+
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+  loadData();
+}
 
 function openCreateDialog() {
   createForm.value = { productionPlanId: '' };
@@ -84,39 +134,41 @@ function openCreateDialog() {
 
 async function handleCreate() {
   if (submitting.value) return;
-  if (!createForm.value.productionPlanId) return ElMessage.warning('生产计划 ID 必填');
+  if (!createForm.value.productionPlanId.trim()) {
+    ElMessage.warning('生产计划 ID 必填');
+    return;
+  }
   submitting.value = true;
   try {
     const res = await post(`/${factoryId.value}/material-requisitions/generate`, createForm.value);
     if (res.success) {
-      const itemCount = (res.data?.items || []).length;
-      ElMessage.success(`物料需求单已生成: ${res.data?.requisitionNo} (${itemCount} 行 BOM 展开)`);
       createDialogVisible.value = false;
+      ElMessage.success('物料需求单已生成');
       loadData();
-    } else {
-      ElMessage.error(res.message || '生成失败');
     }
-  } catch {
-    ElMessage.error('生成失败, 请检查生产计划 ID 或 BOM');
   } finally {
     submitting.value = false;
   }
 }
 
-async function openDetail(row: TableRow) {
+async function fetchDetail(row: Requisition): Promise<Requisition | null> {
+  const res = await get(`/${factoryId.value}/material-requisitions/${row.id}`);
+  return res.success ? res.data as Requisition : null;
+}
+
+async function openDetail(row: Requisition) {
   try {
-    const res = await get(`/${factoryId.value}/material-requisitions/${row.id}`);
-    if (res.success) {
-      detailData.value = res.data;
+    const data = await fetchDetail(row);
+    if (data) {
+      detailData.value = data;
       detailDialogVisible.value = true;
     }
   } catch (e) {
-    // Interceptor shows specific toast; dedupe fallback
-    console.error('[失败]', e);
+    handleCatchError(e, '加载物料需求单详情失败');
   }
 }
 
-async function handleAction(row: TableRow, action: string, confirmMsg: string, successMsg: string) {
+async function handleAction(row: Requisition, action: string, confirmMsg: string, successMsg: string) {
   if (submitting.value) return;
   try {
     await ElMessageBox.confirm(confirmMsg, '确认', { type: 'warning' });
@@ -125,23 +177,72 @@ async function handleAction(row: TableRow, action: string, confirmMsg: string, s
     if (res.success) {
       ElMessage.success(successMsg);
       loadData();
-    } else {
-      ElMessage.error(res.message || '操作失败');
     }
-  } catch { /* cancelled */ }
-  finally { submitting.value = false; }
+  } catch {
+    // user cancelled or interceptor displayed backend error
+  } finally {
+    submitting.value = false;
+  }
 }
 
-const handleStartPicking = (row: TableRow) =>
+const handleStartPicking = (row: Requisition) =>
   handleAction(row, 'start-picking', `开始备料 ${row.requisitionNo}?`, '已进入备料状态');
-const handleTransfer = (row: TableRow) =>
-  handleAction(row, 'transfer', `将 ${row.requisitionNo} 从物流仓调拨到工厂?`, '已调拨');
-const handleReceive = (row: TableRow) =>
-  handleAction(row, 'receive', `工厂签收 ${row.requisitionNo}?`, '已签收');
-const handleClose = (row: TableRow) =>
-  handleAction(row, 'close', `关单 ${row.requisitionNo}? 退料将按 issued - consumed 自动计算`, '已关单');
+const handleTransfer = (row: Requisition) =>
+  handleAction(row, 'transfer', `调拨 ${row.requisitionNo}?`, '已调拨');
+const handleReceive = (row: Requisition) =>
+  handleAction(row, 'receive', `签收 ${row.requisitionNo}?`, '已签收');
 
-async function handleCancel(row: TableRow) {
+async function openCloseDialog(row: Requisition) {
+  try {
+    const data = await fetchDetail(row);
+    if (!data) return;
+    closeTarget.value = data;
+    closeRows.value = (data.items || []).map((item) => {
+      const wastageInput = toNumber(item.wastageQty);
+      return {
+        ...item,
+        wastageInput,
+        previewReturnQty: toNumber(item.issuedQty) - toNumber(item.consumedQty) - wastageInput,
+      };
+    });
+    closeDialogVisible.value = true;
+  } catch (e) {
+    handleCatchError(e, '加载退料预览失败');
+  }
+}
+
+async function submitClose() {
+  if (!closeTarget.value || submitting.value) return;
+  const invalidRows = closeRows.value.filter((row) => row.previewReturnQty < 0);
+  if (invalidRows.length > 0) {
+    ElNotification({
+      title: '退料数据异常',
+      message: `${invalidRows.map((r) => r.materialName || r.materialTypeId || r.id).join('、')} 的实用量+损耗大于发出量。请修正损耗后再关单。`,
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(`确认关单 ${closeTarget.value.requisitionNo} 并执行退料回库?`, '确认关单', { type: 'warning' });
+    submitting.value = true;
+    const res = await put(`/${factoryId.value}/material-requisitions/${closeTarget.value.id}/close`, {
+      items: closeRows.value.map((row) => ({ itemId: row.id, wastageQty: row.wastageInput || '0' })),
+    });
+    if (res.success) {
+      ElMessage.success('已关单并执行退料回库');
+      closeDialogVisible.value = false;
+      loadData();
+    }
+  } catch {
+    // user cancelled or interceptor displayed backend error
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function handleCancel(row: Requisition) {
   if (submitting.value) return;
   try {
     const { value: reason } = await ElMessageBox.prompt('填写取消原因', '取消物料需求单', {
@@ -154,50 +255,39 @@ async function handleCancel(row: TableRow) {
     if (res.success) {
       ElMessage.success('已取消');
       loadData();
-    } else {
-      ElMessage.error(res.message || '取消失败');
     }
-  } catch { /* cancelled */ }
-  finally { submitting.value = false; }
+  } catch {
+    // user cancelled
+  } finally {
+    submitting.value = false;
+  }
 }
 </script>
 
 <template>
-  <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">工厂物料需求单</span>
-            <el-tag type="info" size="small">共 {{ pagination.total }} 条</el-tag>
-          </div>
-          <div class="header-right">
-            <el-select v-model="statusFilter" placeholder="按状态筛选" clearable style="width: 140px"
-                       @change="handleStatusChange">
-              <el-option label="待备料" value="PENDING" />
-              <el-option label="备料中" value="PICKING" />
-              <el-option label="已调拨" value="TRANSFERRED" />
-              <el-option label="已签收" value="ISSUED" />
-              <el-option label="生产中" value="IN_USE" />
-              <el-option label="已关单" value="CLOSED" />
-              <el-option label="已取消" value="CANCELLED" />
-            </el-select>
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
-              按生产计划生成
-            </el-button>
-          </div>
-        </div>
-      </template>
+  <div class="page-container">
+    <div class="page-header">
+      <div>
+        <h2>物料需求单</h2>
+        <span class="page-subtitle">领料、调拨、签收、关单退料</span>
+      </div>
+      <div class="header-actions">
+        <el-select v-model="statusFilter" placeholder="状态" clearable class="status-filter" @change="handleStatusChange">
+          <el-option label="待备料" value="PENDING" />
+          <el-option label="备料中" value="PICKING" />
+          <el-option label="已调拨" value="TRANSFERRED" />
+          <el-option label="已签收" value="ISSUED" />
+          <el-option label="生产中" value="IN_USE" />
+          <el-option label="已关单" value="CLOSED" />
+          <el-option label="已取消" value="CANCELLED" />
+        </el-select>
+        <el-button :icon="Tickets" @click="router.push('/production/material-returns')">退料记录</el-button>
+        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">按计划生成</el-button>
+      </div>
+    </div>
 
-      <el-alert
-        type="info"
-        :closable="false"
-        title="客户原话: 根据生产计划 → BOM 自动生成备料单 → 总仓备料 → 调拨到工厂线边仓 → 生产 → 退料"
-        description="双仓制: 原料在总仓 (WH-LOG, 持久库存), 生产时调拨到工厂线边仓 (WH-WKS, 当日清零), 关单自动算退料 = issued - consumed"
-        style="margin-bottom: 16px"
-      />
-
+    <el-card shadow="never" class="content-card">
       <el-table v-loading="loading" :data="tableData" border stripe>
         <el-table-column prop="requisitionNo" label="单号" min-width="150" />
         <el-table-column label="状态" width="100" align="center">
@@ -208,29 +298,24 @@ async function handleCancel(row: TableRow) {
           </template>
         </el-table-column>
         <el-table-column prop="productionPlanId" label="生产计划" min-width="150" show-overflow-tooltip />
-        <el-table-column label="物料行数" width="90" align="center">
+        <el-table-column label="物料行" width="90" align="center">
           <template #default="{ row }">{{ (row.items || []).length }}</template>
         </el-table-column>
-        <el-table-column prop="requiredDate" label="需料日期" width="110" />
-        <el-table-column prop="requestedByName" label="申请人" width="100">
+        <el-table-column prop="requiredDate" label="需料日期" width="120" />
+        <el-table-column prop="requestedByName" label="申请人" width="110">
           <template #default="{ row }">{{ row.requestedByName || '-' }}</template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="160">
-          <template #default="{ row }">{{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '-' }}</template>
+          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="280" align="center" fixed="right">
+        <el-table-column label="操作" width="300" align="center" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
-            <el-button v-if="row.status === 'PENDING' && canWrite" type="primary" link size="small"
-                       @click="handleStartPicking(row)">开始备料</el-button>
-            <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small"
-                       @click="handleTransfer(row)">调拨</el-button>
-            <el-button v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small"
-                       @click="handleReceive(row)">签收</el-button>
-            <el-button v-if="['ISSUED','IN_USE'].includes(row.status) && canWrite" type="warning" link size="small"
-                       @click="handleClose(row)">关单</el-button>
-            <el-button v-if="['PENDING','PICKING'].includes(row.status) && canWrite" type="danger" link size="small"
-                       @click="handleCancel(row)">取消</el-button>
+            <el-button v-if="row.status === 'PENDING' && canWrite" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
+            <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
+            <el-button v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small" @click="handleReceive(row)">签收</el-button>
+            <el-button v-if="['ISSUED','IN_USE'].includes(row.status) && canWrite" type="warning" link size="small" @click="openCloseDialog(row)">关单</el-button>
+            <el-button v-if="['PENDING','PICKING'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleCancel(row)">取消</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -246,15 +331,11 @@ async function handleCancel(row: TableRow) {
       </div>
     </el-card>
 
-    <!-- ─── 生成对话框 ─── -->
     <el-dialog v-model="createDialogVisible" title="按生产计划生成物料需求单" width="520px" destroy-on-close>
       <el-form label-width="120px">
         <el-form-item label="生产计划 ID" required>
-          <el-input v-model="createForm.productionPlanId" placeholder="如 PP20260407-0001 或 UUID" />
+          <el-input v-model="createForm.productionPlanId" placeholder="生产计划 ID" />
         </el-form-item>
-        <el-alert type="info" :closable="false"
-                  title="系统将按该计划对应产品的 BOM 自动展开"
-                  description="required_qty = plannedQuantity × bomItem.actualQuantity (考虑 yieldRate)" />
       </el-form>
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
@@ -262,9 +343,7 @@ async function handleCancel(row: TableRow) {
       </template>
     </el-dialog>
 
-    <!-- ─── 详情对话框 ─── -->
-    <el-dialog v-model="detailDialogVisible" :title="`物料需求单详情 — ${detailData?.requisitionNo || ''}`"
-               width="900px" destroy-on-close>
+    <el-dialog v-model="detailDialogVisible" :title="`物料需求单 ${detailData?.requisitionNo || ''}`" width="900px" destroy-on-close>
       <template v-if="detailData">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="单号">{{ detailData.requisitionNo }}</el-descriptions-item>
@@ -273,27 +352,19 @@ async function handleCancel(row: TableRow) {
               {{ statusMap[String(detailData.status)]?.text || detailData.status }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="生产计划">{{ detailData.productionPlanId }}</el-descriptions-item>
+          <el-descriptions-item label="生产计划">{{ detailData.productionPlanId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="需料日期">{{ detailData.requiredDate || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="申请人">{{ detailData.requestedByName || '-' }}</el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ detailData.remarks || '-' }}</el-descriptions-item>
         </el-descriptions>
 
-        <h4 style="margin: 16px 0 8px">物料明细 (BOM 展开)</h4>
-        <el-table :data="(detailData.items as TableRow[]) || []" border size="small" max-height="360">
-          <el-table-column prop="materialName" label="物料" min-width="140" show-overflow-tooltip />
-          <el-table-column prop="materialCategory" label="类别" width="90" align="center">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.materialCategory === 'RAW' ? 'success' : row.materialCategory === 'PACKAGING' ? 'warning' : ''">
-                {{ row.materialCategory === 'RAW' ? '原料' : row.materialCategory === 'AUXILIARY' ? '辅料' : row.materialCategory === 'PACKAGING' ? '包材' : row.materialCategory }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="requiredQty" label="需求量" width="90" align="right" />
-          <el-table-column prop="pickedQty" label="已备" width="80" align="right" />
-          <el-table-column prop="issuedQty" label="已发" width="80" align="right" />
-          <el-table-column prop="consumedQty" label="已耗" width="80" align="right" />
-          <el-table-column prop="returnedQty" label="已退" width="80" align="right" />
+        <el-table :data="detailData.items || []" border size="small" class="detail-table" max-height="360">
+          <el-table-column prop="materialName" label="物料" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="materialCategory" label="类别" width="90" align="center" />
+          <el-table-column prop="requiredQty" label="需求" width="90" align="right" />
+          <el-table-column prop="issuedQty" label="发出" width="90" align="right" />
+          <el-table-column prop="consumedQty" label="实用" width="90" align="right" />
+          <el-table-column prop="wastageQty" label="损耗" width="90" align="right" />
+          <el-table-column prop="returnedQty" label="退回" width="90" align="right" />
           <el-table-column prop="unit" label="单位" width="70" align="center" />
         </el-table>
       </template>
@@ -301,20 +372,101 @@ async function handleCancel(row: TableRow) {
         <el-button @click="detailDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="closeDialogVisible" :title="`关单退料 ${closeTarget?.requisitionNo || ''}`" width="980px" destroy-on-close>
+      <el-table :data="closeRows" border size="small">
+        <el-table-column prop="materialName" label="物料" min-width="170" show-overflow-tooltip />
+        <el-table-column label="发出" width="100" align="right">
+          <template #default="{ row }">{{ qty(row.issuedQty) }}</template>
+        </el-table-column>
+        <el-table-column label="实用" width="100" align="right">
+          <template #default="{ row }">{{ qty(row.consumedQty) }}</template>
+        </el-table-column>
+        <el-table-column label="损耗" width="160" align="right">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.wastageInput"
+              :min="0"
+              :precision="3"
+              :step="0.001"
+              controls-position="right"
+              class="qty-input"
+              @change="recalcRow(row)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="退回" width="110" align="right">
+          <template #default="{ row }">
+            <span :class="{ danger: row.previewReturnQty < 0 }">{{ qty(row.previewReturnQty) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="unit" label="单位" width="80" align="center" />
+      </el-table>
+      <template #footer>
+        <el-button @click="closeDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitClose">确认关单</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; padding: 20px; overflow-y: auto; }
+.page-container {
+  padding: 20px;
 }
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: center; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+
+  h2 {
+    margin: 0;
+    color: #1a2332;
+    font-size: 20px;
+    font-weight: 600;
   }
-  .header-right { display: flex; gap: 8px; align-items: center; }
 }
-.pagination-wrapper { margin-top: 16px; display: flex; justify-content: flex-end; }
+
+.page-subtitle {
+  display: block;
+  margin-top: 4px;
+  color: #7a8599;
+  font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-filter {
+  width: 140px;
+}
+
+.content-card {
+  border-radius: 10px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.detail-table {
+  margin-top: 16px;
+}
+
+.qty-input {
+  width: 132px;
+}
+
+.danger {
+  color: #f56c6c;
+  font-weight: 600;
+}
 </style>

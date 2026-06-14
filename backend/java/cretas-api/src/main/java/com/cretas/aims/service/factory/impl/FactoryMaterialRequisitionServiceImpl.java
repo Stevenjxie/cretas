@@ -1,8 +1,11 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
@@ -10,12 +13,16 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem.MaterialCat
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.production.ProductionMaterialReturn;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.repository.production.ProductionMaterialReturnRepository;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.inventory.TransferService;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +52,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final BomItemRepository bomItemRepository;
     private final TransferService transferService;
     private final FactoryWarehouseRepository warehouseRepository;
+    private final MaterialBatchRepository materialBatchRepository;
+    private final MaterialConsumptionRepository materialConsumptionRepository;
+    private final ProductionMaterialReturnRepository productionMaterialReturnRepository;
 
     /**
      * T143: 物料单位换算器 (箱↔kg). required=false 兼容单测. 物料需求单的需求量应以
@@ -56,10 +66,6 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     /** T144: 读库存单位 (回退用 RawMaterialType.unit). required=false. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
-
-    /** T144: 物料实际库存单位以 MaterialBatch.quantityUnit (称重口径 kg) 为准. required=false 兼容单测. */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.repository.MaterialBatchRepository materialBatchRepository;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -368,18 +374,39 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @Override
     @Transactional
     public FactoryMaterialRequisition close(String factoryId, String id, Long operatorId) {
+        return close(factoryId, id, operatorId, List.of());
+    }
+
+    @Override
+    @Transactional
+    public FactoryMaterialRequisition close(String factoryId, String id, Long operatorId, List<Map<String, Object>> closeItems) {
         FactoryMaterialRequisition mr = getById(factoryId, id);
         if (mr.getStatus() != Status.ISSUED && mr.getStatus() != Status.IN_USE) {
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许关单")
                     .withHint("请刷新物料需求单列表查看最新状态");
         }
         // 自动计算退料 returned = issued - consumed
+        Map<String, BigDecimal> wastageByItemId = parseWastageByItemId(closeItems);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty() != null ? it.getIssuedQty() : BigDecimal.ZERO;
             BigDecimal consumed = it.getConsumedQty() != null ? it.getConsumedQty() : BigDecimal.ZERO;
-            BigDecimal returned = issued.subtract(consumed);
-            if (returned.compareTo(BigDecimal.ZERO) < 0) returned = BigDecimal.ZERO;
+            BigDecimal wastage = wastageByItemId.getOrDefault(it.getId(),
+                    it.getWastageQty() != null ? it.getWastageQty() : BigDecimal.ZERO);
+            if (wastage.compareTo(BigDecimal.ZERO) < 0) {
+                throw invalidReturnQuantity(it, issued, consumed, wastage);
+            }
+            BigDecimal returned = issued.subtract(consumed).subtract(wastage);
+            if (returned.compareTo(BigDecimal.ZERO) < 0) {
+                throw invalidReturnQuantity(it, issued, consumed, wastage);
+            }
+            it.setWastageQty(wastage);
             it.setReturnedQty(returned);
+        }
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            BigDecimal returned = it.getReturnedQty();
+            if (returned != null && returned.compareTo(BigDecimal.ZERO) > 0) {
+                executeMaterialReturn(factoryId, mr, it, returned, operatorId);
+            }
         }
         mr.setStatus(Status.CLOSED);
         mr.setClosedBy(operatorId);
@@ -434,6 +461,199 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     // ---------- helpers ----------
+
+    private Map<String, BigDecimal> parseWastageByItemId(List<Map<String, Object>> closeItems) {
+        Map<String, BigDecimal> result = new HashMap<>();
+        if (closeItems == null) {
+            return result;
+        }
+        for (Map<String, Object> item : closeItems) {
+            if (item == null || item.get("itemId") == null) {
+                continue;
+            }
+            Object wastage = item.get("wastageQty");
+            result.put(item.get("itemId").toString(), wastage == null ? BigDecimal.ZERO : new BigDecimal(wastage.toString()));
+        }
+        return result;
+    }
+
+    private BusinessException invalidReturnQuantity(FactoryMaterialRequisitionItem item,
+                                                    BigDecimal issued,
+                                                    BigDecimal consumed,
+                                                    BigDecimal wastage) {
+        return new BusinessException(400, String.format(
+                "退料数据异常: 物料 %s 发出 %s, 实用 %s, 损耗 %s, 用量+损耗不能大于发出量",
+                materialLabel(item), issued.toPlainString(), consumed.toPlainString(), wastage.toPlainString()))
+                .withCode("PRODUCTION_MATERIAL_RETURN_INVALID_QUANTITY")
+                .withHint("请核对实用量和损耗后重新关单")
+                .withHintTarget(item.getId())
+                .withSeverity("BLOCKING");
+    }
+
+    private void executeMaterialReturn(String factoryId,
+                                       FactoryMaterialRequisition requisition,
+                                       FactoryMaterialRequisitionItem item,
+                                       BigDecimal returned,
+                                       Long operatorId) {
+        if (materialBatchRepository == null) {
+            throw new BusinessException(500, "退料回库失败: MaterialBatchRepository 未注入")
+                    .withCode("PRODUCTION_MATERIAL_RETURN_STOCK_RESTORE_UNAVAILABLE")
+                    .withHint("请联系管理员检查后端库存服务配置")
+                    .withSeverity("BLOCKING");
+        }
+        List<Map<String, Object>> batchRows = item.getBatchNumbers();
+        if (batchRows == null || batchRows.isEmpty()) {
+            throw new BusinessException(400, String.format(
+                    "退料回库失败: 物料 %s 退回 %s 但缺少领料批次",
+                    materialLabel(item), returned.toPlainString()))
+                    .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_REQUIRED")
+                    .withHint("请先补录该物料领料批次后再关单")
+                    .withHintTarget(item.getId())
+                    .withSeverity("BLOCKING");
+        }
+
+        BigDecimal remaining = returned;
+        for (Map<String, Object> batchRow : batchRows) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                break;
+            }
+            BigDecimal issuedFromBatch = batchQuantity(batchRow);
+            if (issuedFromBatch.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            BigDecimal returnQty = remaining.min(issuedFromBatch);
+            String batchId = resolveBatchId(factoryId, batchRow);
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
+                    .orElseThrow(() -> new BusinessException(400, String.format(
+                            "退料回库失败: 物料 %s 批次 %s 不存在, 退回量 %s",
+                            materialLabel(item), batchId, returnQty.toPlainString()))
+                            .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_NOT_FOUND")
+                            .withHint("请核对领料批次后重新关单")
+                            .withHintTarget(item.getId())
+                            .withSeverity("BLOCKING"));
+            restoreBatchUsedQuantity(factoryId, batch, item, returnQty);
+            writeMaterialReturnTrace(factoryId, requisition, item, batch, returnQty, operatorId);
+            writeProductionMaterialReturn(factoryId, requisition, item, batch.getId(), returnQty);
+            remaining = remaining.subtract(returnQty);
+        }
+
+        if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+            throw new BusinessException(400, String.format(
+                    "退料回库失败: 物料 %s 退回 %s, 领料批次可退数量不足, 剩余 %s 未匹配",
+                    materialLabel(item), returned.toPlainString(), remaining.toPlainString()))
+                    .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_QTY_MISMATCH")
+                    .withHint("请核对领料批次数量和退回量后重新关单")
+                    .withHintTarget(item.getId())
+                    .withSeverity("BLOCKING");
+        }
+    }
+
+    private void restoreBatchUsedQuantity(String factoryId,
+                                          MaterialBatch batch,
+                                          FactoryMaterialRequisitionItem item,
+                                          BigDecimal returnQty) {
+        if (!factoryId.equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "退料回库失败: 批次不属于当前工厂 " + batch.getId())
+                    .withHint("请切换到正确工厂或核对批次")
+                    .withSeverity("BLOCKING");
+        }
+        BigDecimal used = batch.getUsedQuantity() != null ? batch.getUsedQuantity() : BigDecimal.ZERO;
+        if (used.compareTo(returnQty) < 0) {
+            throw new BusinessException(400, String.format(
+                    "退料回库失败: 物料 %s 批次 %s 已用量 %s 小于退回量 %s",
+                    materialLabel(item), batch.getId(), used.toPlainString(), returnQty.toPlainString()))
+                    .withCode("PRODUCTION_MATERIAL_RETURN_USED_QTY_UNDERFLOW")
+                    .withHint("请核对报工消耗和退料数量后重新关单")
+                    .withHintTarget(item.getId())
+                    .withSeverity("BLOCKING");
+        }
+        batch.setUsedQuantity(used.subtract(returnQty));
+        if (batch.getStatus() == MaterialBatchStatus.USED_UP && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        }
+        materialBatchRepository.save(batch);
+    }
+
+    private void writeMaterialReturnTrace(String factoryId,
+                                          FactoryMaterialRequisition requisition,
+                                          FactoryMaterialRequisitionItem item,
+                                          MaterialBatch batch,
+                                          BigDecimal returnQty,
+                                          Long operatorId) {
+        BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+        MaterialConsumption trace = new MaterialConsumption();
+        trace.setFactoryId(factoryId);
+        trace.setProductionPlanId(requisition.getProductionPlanId());
+        trace.setBatchId(batch.getId());
+        trace.setQuantity(returnQty.negate());
+        trace.setUnitPrice(unitPrice);
+        trace.setTotalCost(returnQty.negate().multiply(unitPrice));
+        trace.setConsumptionTime(LocalDateTime.now());
+        trace.setConsumedAt(LocalDateTime.now());
+        trace.setRecordedBy(operatorId != null ? operatorId : 0L);
+        trace.setMaterialTypeId(item.getMaterialTypeId());
+        trace.setSourceType("MATERIAL_RETURN");
+        trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId());
+        materialConsumptionRepository.save(trace);
+    }
+
+    private void writeProductionMaterialReturn(String factoryId,
+                                               FactoryMaterialRequisition requisition,
+                                               FactoryMaterialRequisitionItem item,
+                                               String batchId,
+                                               BigDecimal returnQty) {
+        ProductionMaterialReturn materialReturn = new ProductionMaterialReturn();
+        materialReturn.setFactoryId(factoryId);
+        materialReturn.setRequisitionId(requisition.getId());
+        materialReturn.setRequisitionItemId(item.getId());
+        materialReturn.setMaterialTypeId(item.getMaterialTypeId());
+        materialReturn.setMaterialBatchId(batchId);
+        materialReturn.setReturnQuantity(returnQty);
+        materialReturn.setReturnStatus(ProductionMaterialReturn.ReturnStatus.EXECUTED);
+        productionMaterialReturnRepository.save(materialReturn);
+    }
+
+    private String resolveBatchId(String factoryId, Map<String, Object> batchRow) {
+        Object explicitId = firstNonNull(batchRow, "batchId", "materialBatchId", "id");
+        if (explicitId != null && !explicitId.toString().isBlank()) {
+            return explicitId.toString();
+        }
+        Object batchNo = firstNonNull(batchRow, "batchNo", "batchNumber");
+        if (batchNo != null && !batchNo.toString().isBlank()) {
+            return materialBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNo.toString())
+                    .map(MaterialBatch::getId)
+                    .orElseThrow(() -> new BusinessException(400, "退料回库失败: 批次号不存在 " + batchNo)
+                            .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_NOT_FOUND")
+                            .withHint("请核对领料批次后重新关单")
+                            .withSeverity("BLOCKING"));
+        }
+        throw new BusinessException(400, "退料回库失败: 领料批次缺少 batchId/materialBatchId/batchNo")
+                .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_REQUIRED")
+                .withHint("请补录领料批次后重新关单")
+                .withSeverity("BLOCKING");
+    }
+
+    private Object firstNonNull(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object value = map.get(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private BigDecimal batchQuantity(Map<String, Object> batchRow) {
+        Object value = firstNonNull(batchRow, "qty", "quantity", "pickedQty", "issuedQty");
+        return value == null ? BigDecimal.ZERO : new BigDecimal(value.toString());
+    }
+
+    private String materialLabel(FactoryMaterialRequisitionItem item) {
+        if (item.getMaterialName() != null && !item.getMaterialName().isBlank()) {
+            return item.getMaterialName();
+        }
+        return item.getMaterialTypeId() != null ? item.getMaterialTypeId() : item.getId();
+    }
 
     private String generateRequisitionNo(String factoryId) {
         String datePart = LocalDateTime.now().format(DATE_FMT);

@@ -1,8 +1,8 @@
 package com.cretas.aims.controller.factory;
 
 import com.cretas.aims.annotation.RequireModule;
-import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import lombok.RequiredArgsConstructor;
@@ -10,29 +10,19 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
 
-/**
- * 工厂物料需求单 Controller — P0-5 (W2-3).
- *
- * <h3>客户原话锚点</h3>
- * 会议 3124-3252s: "提交过后如果生产一个物料需求单, 根据 BOM 会生产一个物料需求单;
- * 给到仓库备料, 然后仓库把他的库存调过到工厂; 生产跑完以后...进行一个生产退料."
- *
- * <h3>状态机</h3>
- * <pre>
- *   POST /material-requisitions/generate    PENDING
- *   PUT  /{id}/start-picking                 PICKING
- *   PUT  /{id}/confirm-picking               PICKING (补填数量/批次)
- *   PUT  /{id}/transfer                      TRANSFERRED
- *   PUT  /{id}/receive                       ISSUED
- *   PUT  /{id}/close                         CLOSED (自动退料)
- *   PUT  /{id}/cancel                        CANCELLED
- * </pre>
- */
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/material-requisitions")
 @RequiredArgsConstructor
@@ -49,7 +39,7 @@ public class FactoryMaterialRequisitionController {
             @RequestAttribute(value = "userId", required = false) Long userId) {
         String planId = (String) body.get("productionPlanId");
         FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId);
-        return ResponseEntity.ok(Map.of("success", true, "data", mr, "message", "物料需求单已按 BOM 自动生成"));
+        return ResponseEntity.ok(Map.of("success", true, "data", mr, "message", "material requisition generated"));
     }
 
     @GetMapping
@@ -77,7 +67,8 @@ public class FactoryMaterialRequisitionController {
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/start-picking")
     public ResponseEntity<?> startPicking(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         return ResponseEntity.ok(Map.of("success", true, "data", service.startPicking(factoryId, id, userId)));
     }
@@ -86,7 +77,8 @@ public class FactoryMaterialRequisitionController {
     @PutMapping("/{id}/confirm-picking")
     @SuppressWarnings("unchecked")
     public ResponseEntity<?> confirmPicking(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         List<Map<String, Object>> items = (List<Map<String, Object>>) body.getOrDefault("items", List.of());
@@ -96,7 +88,8 @@ public class FactoryMaterialRequisitionController {
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/transfer")
     public ResponseEntity<?> transfer(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         return ResponseEntity.ok(Map.of("success", true, "data", service.transferToFactory(factoryId, id, userId)));
     }
@@ -104,23 +97,34 @@ public class FactoryMaterialRequisitionController {
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/receive")
     public ResponseEntity<?> receive(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         return ResponseEntity.ok(Map.of("success", true, "data", service.receive(factoryId, id, userId)));
     }
 
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/close")
+    @SuppressWarnings("unchecked")
     public ResponseEntity<?> close(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        return ResponseEntity.ok(Map.of("success", true, "data", service.close(factoryId, id, userId), "message", "已关单, 退料已按 issued-consumed 自动计算"));
+        List<Map<String, Object>> items = body == null
+                ? List.of()
+                : (List<Map<String, Object>>) body.getOrDefault("items", List.of());
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", service.close(factoryId, id, userId, items),
+                "message", "production material return executed"));
     }
 
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/cancel")
     public ResponseEntity<?> cancel(
-            @PathVariable String factoryId, @PathVariable String id,
+            @PathVariable String factoryId,
+            @PathVariable String id,
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         String reason = (String) body.getOrDefault("reason", "");
