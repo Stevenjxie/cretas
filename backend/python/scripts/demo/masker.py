@@ -15,6 +15,19 @@ def _seed(value: str) -> int:
 class Masker:
     def __init__(self):
         self._cache: dict[tuple[str, str], str] = {}
+        self._counters: dict[str, int] = {}
+
+    def _unique(self, kind, value, fmt):
+        """Like _det but guarantees DISTINCT outputs for distinct inputs (for UNIQUE-constrained
+        columns like dim_store.name): assign a sequential counter per new source value."""
+        if value is None:
+            return None
+        key = (kind, str(value))
+        if key not in self._cache:
+            n = self._counters.get(kind, 0) + 1
+            self._counters[kind] = n
+            self._cache[key] = fmt(n)
+        return self._cache[key]
 
     def _det(self, kind: str, value, fn) -> str:
         if value is None:
@@ -28,7 +41,7 @@ class Masker:
 
     def person(self, v):   return self._det("person", v, lambda f: f.name())
     def company(self, v):  return self._det("company", v, lambda f: f.company())
-    def store(self, v):    return self._det("store", v, lambda f: f"示范门店{_seed(str(v)) % 90 + 10}")
+    def store(self, v):    return self._unique("store", v, lambda n: f"示范门店{n:02d}")
     def phone(self, v):    return self._det("phone", v, lambda f: f.phone_number().replace("-", "")[:11].ljust(11, "0"))
     def address(self, v):  return self._det("address", v, lambda f: f.address().replace("\n", " "))
     def email(self, v):    return self._det("email", v, lambda f: f.email())

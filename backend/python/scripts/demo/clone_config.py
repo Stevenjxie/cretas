@@ -127,7 +127,8 @@ MASK_REGISTRY = {
   "smart_bi_finance_data": {"customer_name":"company","supplier_name":"company"},
   "smart_bi_department_data": {"manager_name":"person"},
   "dim_store": {"name":"store","brand":"company"},
-  "dim_product": {"name":"freetext"},      # dish names: scrub only if brand token present
+  # dim_product.name NOT masked: dish names (e.g. 青花椒鱼) are generic Sichuan cuisine vocabulary,
+  # not client identity. Brand identity is removed from store/company/contact fields instead.
   "dim_discount": {"name":"freetext"},
   "fact_pos_item": {"source_item_raw":"freetext"},
 }
