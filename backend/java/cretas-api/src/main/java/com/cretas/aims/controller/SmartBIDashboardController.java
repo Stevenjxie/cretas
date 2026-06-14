@@ -41,8 +41,6 @@ public class SmartBIDashboardController {
     private final DepartmentAnalysisService departmentAnalysisService;
     private final RegionAnalysisService regionAnalysisService;
     private final FinanceAnalysisService financeAnalysisService;
-    private final ProductionAnalysisService productionAnalysisService;
-    private final QualityAnalysisService qualityAnalysisService;
     private final InventoryHealthAnalysisService inventoryHealthAnalysisService;
     private final ProcurementAnalysisService procurementAnalysisService;
     private final RecommendationService recommendationService;
@@ -65,8 +63,6 @@ public class SmartBIDashboardController {
             DepartmentAnalysisService departmentAnalysisService,
             RegionAnalysisService regionAnalysisService,
             FinanceAnalysisService financeAnalysisService,
-            ProductionAnalysisService productionAnalysisService,
-            QualityAnalysisService qualityAnalysisService,
             InventoryHealthAnalysisService inventoryHealthAnalysisService,
             ProcurementAnalysisService procurementAnalysisService,
             RecommendationService recommendationService,
@@ -77,8 +73,6 @@ public class SmartBIDashboardController {
         this.departmentAnalysisService = departmentAnalysisService;
         this.regionAnalysisService = regionAnalysisService;
         this.financeAnalysisService = financeAnalysisService;
-        this.productionAnalysisService = productionAnalysisService;
-        this.qualityAnalysisService = qualityAnalysisService;
         this.inventoryHealthAnalysisService = inventoryHealthAnalysisService;
         this.procurementAnalysisService = procurementAnalysisService;
         this.recommendationService = recommendationService;
