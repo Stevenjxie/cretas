@@ -226,6 +226,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private ProductionReportRepository productionReportRepository;
 
     /**
+     * R2 (2026-06-14 v2): 报工整单撤回服务 (恢复 WIP/原料/FGB/工序任务 + 反冲成本)。
+     *
+     * <p><b>为何用它而非 executeCancelApproved</b>: PRODUCTION_REVERSAL 审批流的"审批通过回调"
+     * ({@code executeCancelApproved}) 在主代码中<b>无任何调用方</b> —— 工作流引擎
+     * ({@code WorkflowEngineServiceImpl.terminateAtEnd}) 是纯状态机, 到达 APPROVED 终态只设置
+     * instance.status, <b>从不回调业务层</b> (无 moduleCode→handler 派发器)。即便 executeCancelApproved
+     * 被触发, 它本身也只置 CANCELLED + 级联关任务, <b>不恢复任何库存</b>。
+     *
+     * <p>而 {@link ReportReversalService} 是<b>自包含且已验证可恢复库存</b>的撤回流:
+     * {@code submitReversal} (G1/G2/G3 守卫 + 自身 PENDING 审批) → {@code approveReversal}
+     * → {@code executeReversal} (软删报工 + 写 REVERSE SIT 行 + 回放移动均价 + 复位工序任务 +
+     * 标 FGB REVERSED + 清回填 costUnitPrice)。
+     *
+     * <p>故 R2 把"有报工/WIP 的计划取消"导向报工撤回流 (文员先撤报工恢复库存, 报工软删后
+     * {@link #hasProductionData} 返 false → 再直接取消空计划)。required=false 兼容单测。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.reversal.ReportReversalService reportReversalService;
+
+    /**
      * 解析某工厂的"免工序报工默认值" (Fable 审计修复 — 多租户安全).
      *
      * <p>仅当 createProductionPlan 的 request.skipProcessReporting 为 null (调用方未显式指定,
@@ -2037,20 +2057,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("先解锁该计划再尝试取消");
         }
 
-        // R2 (2026-06-14): IN_PROGRESS 且已有报工 / 已消耗 WIP 的计划禁止直接取消。
-        // 直接置 CANCELLED 会留下孤儿批次 + 未冲销的 WIP 消耗 (后续同产品领料被 G7 防呆拦)。
-        // 必须走「撤回审批」流 (requestCancelWithApproval → 主管审批 → executeCancelApproved 统一冲销)。
-        // 防呆 4 位一体: message 具体 (说明已开工有报工) + 含 next action (撤回审批) + sticky (前端按 4xx 处理)。
-        if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS && hasProductionData(factoryId, plan)) {
-            throw new BusinessException(409, "该计划已开工并有报工数据, 不能直接取消")
-                    .withCode("PLAN_HAS_PRODUCTION_DATA")
-                    .withHint("请在「撤回审批」中提交撤回申请, 经主管审批后统一冲销报工与 WIP 库存")
-                    .withHintTarget("撤回审批");
-        }
-
         // 找到本计划关联的活跃批次 (R1: 仅本计划的批次, 不波及同产品其它计划)。
         List<ProductionBatch> planBatches = productionBatchRepository
                 .findByFactoryIdAndProductionPlanId(factoryId, planId);
+
+        // R2 (2026-06-14 v2): IN_PROGRESS 且已有报工 / 已消耗 WIP 的计划禁止直接取消。
+        // 直接置 CANCELLED 会留下孤儿批次 + 未冲销的 WIP 消耗 (后续同产品领料被 G7 防呆拦)。
+        //
+        // ⚠️ 不再导向 PRODUCTION_REVERSAL 审批流: 该流的"审批通过回调" executeCancelApproved 在主代码
+        //    中无调用方 (工作流引擎是纯状态机, 不回调业务层), 且即便触发也不恢复库存 —— 是死路。
+        //    改导向「报工撤回」流 (ReportReversalService): 它自带审批 + 真正恢复 WIP/原料/FGB/任务。
+        //    两步: ① 对每个有报工的批次提交报工撤回 (有数据 → 主管审批 → 自动 executeReversal 恢复库存);
+        //          ② 报工软删后本计划 hasProductionData 返 false → 再调本接口直接取消空计划。
+        // 防呆 4 位一体: message 具体 (说明已开工有报工 + 列出批次号) + 含 next action (报工撤回, 指明路径)
+        //    + sticky (前端按 4xx 处理) + hintTarget (报工撤回 button)。
+        if (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS && hasProductionData(factoryId, plan)) {
+            String batchHint = buildReversalBatchHint(planBatches);
+            throw new BusinessException(409, "该计划已开工并有报工/WIP 消耗, 不能直接取消"
+                    + (batchHint.isEmpty() ? "" : " (涉及批次: " + batchHint + ")"))
+                    .withCode("PLAN_HAS_PRODUCTION_DATA")
+                    .withHint("请先在「报工撤回」中对相关批次提交整单撤回 (经主管审批后自动冲销报工与 WIP 库存恢复原料), "
+                            + "撤回完成后即可取消此空计划")
+                    .withHintTarget("报工撤回");
+        }
 
         // R2: IN_PROGRESS 但无报工无 WIP (空批次) — 安全直接取消, 顺手把空批次置 CANCELLED。
         // PENDING — 通常无批次, 即便有 (异常态) 也按 R1 仅级联本批次任务。
@@ -2105,6 +2134,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
         }
         return false;
+    }
+
+    /**
+     * R2 (2026-06-14 v2): 拼出本计划"需先撤报工"的批次号提示 (防呆 Rule 2 — context 必带身份信息)。
+     * 仅列出非取消批次的 batchNumber (无则退回 id), 用于 cancel 拒绝消息引导用户去报工撤回。
+     */
+    private String buildReversalBatchHint(List<ProductionBatch> planBatches) {
+        if (planBatches == null || planBatches.isEmpty()) {
+            return "";
+        }
+        java.util.List<String> refs = new java.util.ArrayList<>();
+        for (ProductionBatch b : planBatches) {
+            if (b == null || b.getId() == null || b.getStatus() == ProductionBatchStatus.CANCELLED) {
+                continue;
+            }
+            String ref = b.getBatchNumber() != null && !b.getBatchNumber().isBlank()
+                    ? b.getBatchNumber()
+                    : String.valueOf(b.getId());
+            refs.add(ref);
+        }
+        return String.join(", ", refs);
     }
 
     /**
@@ -2191,8 +2241,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * SP12 T3: 审批通过后执行撤回（仅供 workflow 回调调用）.
-     * PENDING_APPROVAL → CANCELLED，级联关闭关联工序任务。
+     * SP12 T3 / R2 (2026-06-14 v2): 审批通过后执行撤回（仅供 PRODUCTION_REVERSAL workflow 回调调用）.
+     * PENDING_APPROVAL → CANCELLED，先冲销报工 + 恢复 WIP/原料/FGB 库存，再级联关闭关联工序任务。
+     *
+     * <p><b>⚠️ 接通现状 (R2 v2 查清)</b>: 本方法在主代码中<b>无任何调用方</b> —— 工作流引擎
+     * ({@code WorkflowEngineServiceImpl.terminateAtEnd}) 是纯状态机, PRODUCTION_REVERSAL 审批到达
+     * APPROVED 终态后只设置 instance.status, <b>从不回调业务层</b> (无 moduleCode→handler 派发器)。
+     * 因此<b>用户面的"有报工计划取消"已改为导向报工撤回流</b> ({@link ReportReversalService},
+     * 见 {@link #cancelProductionPlan} R2)。
+     *
+     * <p>本方法保留并<b>加固</b>为: 若未来有人把 PRODUCTION_REVERSAL 审批回调接到此方法,
+     * 它会<b>真正恢复库存</b> (调 {@code reportReversalService.submitReversal} 对每个有报工的批次执行
+     * 整单撤回, 自包含 G1/G2/G3 守卫 + 软删报工 + 写 REVERSE SIT + 回放均价 + 复位任务 + 标 FGB REVERSED),
+     * 而非像旧版只置 CANCELLED 留下未冲销 WIP。
      */
     @Override
     @org.springframework.transaction.annotation.Transactional
@@ -2205,19 +2266,65 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        List<ProductionBatch> planBatches = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(plan.getFactoryId(), planId);
+
+        // R2 (2026-06-14 v2): 审批已通过 → 对每个有报工的批次真正冲销库存 (恢复 WIP/原料/FGB)。
+        // 用报工撤回服务 (自包含恢复逻辑), 审批已在 PRODUCTION_REVERSAL 流完成, 故直接 submit→execute。
+        // reportReversalService 未注入 (单测/旧 context) → 跳过, 仅做状态收尾 (旧行为, 由有注入路径覆盖)。
+        reverseBatchReportsForApprovedCancel(plan.getFactoryId(), planId, planBatches);
+
         plan.setStatus(ProductionPlanStatus.CANCELLED);
         productionPlanRepository.save(plan);
 
         // R1 (2026-06-14): 审批通过后也按批次定向级联 (取代旧的"按产品类型全关 ProcessTask")。
         // 与 cancelProductionPlan 一致, 仅关本计划批次的活跃 WorkProcessTask, 不波及同产品其它计划。
-        // 注: 报工 / WIP 库存的实际冲销由撤回审批主流程 (ReportReversalService.executeReversal) 负责;
-        // 此处只负责把计划/批次/任务状态收尾到 CANCELLED。
-        List<ProductionBatch> planBatches = productionBatchRepository
-                .findByFactoryIdAndProductionPlanId(plan.getFactoryId(), planId);
         cancelPlanBatchesAndTasks(plan.getFactoryId(), planId, planBatches);
 
         log.info("SP12 T3 生产撤回审批通过，计划已取消: planId={}, batches={}", planId,
                 planBatches != null ? planBatches.size() : 0);
+    }
+
+    /**
+     * R2 (2026-06-14 v2): PRODUCTION_REVERSAL 审批通过后, 对本计划每个有报工的批次执行整单撤回,
+     * 恢复 WIP/原料/FGB 库存 + 复位工序任务 + 反冲成本。复用 {@link ReportReversalService} 自包含逻辑。
+     *
+     * <p>审批已在 PRODUCTION_REVERSAL 流完成 → 直接 submit (有报工时通常返 PENDING) 再显式
+     * executeReversal 落地恢复。守卫 (下游消费 G1 / 成品出货 G2) 失败会抛出 → 整体事务回滚,
+     * 计划不会被错误置 CANCELLED (诚实失败, 禁止静默)。
+     *
+     * <p>reportReversalService / productionReportRepository 未注入时跳过 (单测/旧 context)。
+     */
+    private void reverseBatchReportsForApprovedCancel(String factoryId, String planId,
+            List<ProductionBatch> planBatches) {
+        if (reportReversalService == null || planBatches == null || planBatches.isEmpty()) {
+            return;
+        }
+        for (ProductionBatch batch : planBatches) {
+            if (batch == null || batch.getId() == null
+                    || batch.getStatus() == ProductionBatchStatus.CANCELLED) {
+                continue;
+            }
+            // 仅对有 YIELD 报工的批次撤回 (无报工批次 submitReversal 是 no-op DONE, 跳过省调用)。
+            if (productionReportRepository != null) {
+                List<ProductionReport> yields = productionReportRepository
+                        .findYieldReportsByBatch(factoryId, batch.getId());
+                if (yields == null || yields.isEmpty()) {
+                    continue;
+                }
+            }
+            // submitReversal: 有报工 → 创建 PENDING (或快速撤回 APPROVED 自动 execute); 再显式 execute 兜底恢复。
+            var reversalLog = reportReversalService.submitReversal(
+                    factoryId, batch.getId(), null,
+                    "PRODUCTION_REVERSAL 审批通过自动撤回 (planId=" + planId + ")");
+            if (reversalLog != null && reversalLog.getId() != null
+                    && reversalLog.getStatus() != com.cretas.aims.entity.ReportReversalLog.ReversalStatus.DONE) {
+                reportReversalService.executeReversal(reversalLog.getId(), factoryId);
+            }
+            log.info("R2 审批撤回: planId={}, batchId={}, reversalLogId={}, status={}", planId,
+                    batch.getId(), reversalLog != null ? reversalLog.getId() : null,
+                    reversalLog != null ? reversalLog.getStatus() : null);
+        }
     }
 
     /**
