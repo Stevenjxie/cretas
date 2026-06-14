@@ -190,6 +190,9 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.notification.NotificationService notificationService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.bom.BomPriceAdjustmentService bomPriceAdjustmentService;
+
     /**
      * Phase 1 Canvas-Workflow B.6 — workflow engine 替换 evaluateApprovalTrigger.
      *
@@ -1214,6 +1217,14 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         record = receiveRecordRepository.save(record);
+        if (bomPriceAdjustmentService != null) {
+            try {
+                bomPriceAdjustmentService.generateFromReceive(factoryId, record);
+            } catch (Exception e) {
+                log.warn("BOM price adjustment proposal generation failed: receiveId={}, error={}",
+                        receiveId, e.getMessage());
+            }
+        }
         log.info("确认入库: receiveId={}, receiveNumber={}, batchesCreated={}", receiveId, record.getReceiveNumber(), record.getItems().size());
 
         // 自动创建应付账款（采购入库 → AP_INVOICE）
