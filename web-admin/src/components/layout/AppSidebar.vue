@@ -32,14 +32,18 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
 };
 
 // 路演 demo 租户 (DEMO_*) 侧边栏策展: 隐藏内部/无数据模块, 让可见模块都有充足数据。
-// 餐饮 demo 无销售订单/客户 → 藏 sales; 工厂 demo 无质检/设备/HR/调度数据 → 藏。
+// 餐饮 demo 无销售订单/客户 → 藏 sales; 工厂 demo 无质检/设备/调度数据 → 藏 (hr 保留, 员工管理有 75 人)。
 // system 是内部管理 (用户/权限/日志/平台配置), 两业态都藏。
 const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: ['sales', 'system'],
-  FACTORY: ['quality', 'equipment', 'hr', 'scheduling', 'system'],
+  FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
 };
-// 路径前缀级隐藏 (跨业态): 工作台 (AI 工作台, 非核心) + 成品库存 (工厂克隆后为空)。
-const DEMO_HIDE_PATHS = ['/workdesk', '/sales/finished-goods'];
+// 路径前缀级隐藏 (按业态). 工厂工作台有数据 (生产/销售/财务排产, AI 起产建议) → 不藏;
+// 工厂 HR 仅员工管理有数据 → 藏空的考勤/部门/工种/白名单. 餐饮工作台薄 → 整组藏.
+const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
+  RESTAURANT: ['/workdesk', '/sales/finished-goods'],
+  FACTORY: ['/sales/finished-goods', '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist'],
+};
 function isDemoTenant(factoryId: string | undefined): boolean {
   return /^DEMO_/.test(factoryId || '');
 }
@@ -115,9 +119,10 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
 
-  // 路演 demo 租户策展: 隐藏内部/无数据模块
+  // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {
-    if (DEMO_HIDE_PATHS.some(p => item.path === p || item.path.startsWith(p + '/'))) {
+    const hidePaths = DEMO_HIDE_PATHS_BY_TYPE[factoryType] || [];
+    if (hidePaths.some(p => item.path === p || item.path.startsWith(p + '/'))) {
       return false;
     }
     if ((DEMO_HIDE_MODULES_BY_TYPE[factoryType] || []).includes(item.module)) {
