@@ -66,10 +66,10 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
     // Phase2/3/4 已补数据 → 不再隐藏: 报损/调整审批/财务报表/备货看板/异常预警/车间报表
     // + Excel上传(smart_bi_pg_excel_uploads 4文件)/数据完整度(计算综合20.7%/生产批次82/物料73)/
     // 分析概览/知识库反馈(5反馈)/AI追问日志(smart_bi_llm_fallback_log 5条 卤味问答)。
-    // 仍隐藏 (3 项, 各有客观原因):
-    '/smart-bi/analysis-hub',             // 经营分析hub: 财务tab 需完整 Excel 上传数据源选择交互; 且与经营驾驶舱功能重复 (旗舰已覆盖, 冗余)
-    '/smart-bi/query-templates',          // 查询模板: 后端 GET /smart-bi/query-templates 端点 404 (预存前后端不匹配 bug, 非数据问题; 数据已在 smart_bi_query_templates)
-    '/smart-bi/calibration',              // 行为校准监控: roles=['platform_admin'], demo 账号本就被角色门控隐藏
+    // 查询模板: 后端缺失的 CRUD 端点已补 (PR #860 SmartBiQueryTemplateController, 修了对所有
+    // 工厂的预存 404 bug), 6 个卤味分析模板 → un-hide。仅剩 2 项隐藏:
+    '/smart-bi/analysis-hub',             // 经营分析hub: 与经营驾驶舱功能重复 (旗舰已覆盖, 冗余); 财务tab 另需完整 Excel 上传数据源选择交互
+    '/smart-bi/calibration',              // 行为校准监控: roles=['platform_admin'], demo 账号本就被角色门控隐藏 (非数据问题)
   ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
