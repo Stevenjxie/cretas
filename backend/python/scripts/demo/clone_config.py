@@ -52,11 +52,13 @@ TABLE_REGISTRY = [
   {"db":"cretas","table":"sales_orders","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"customer_id":"customers","created_by":"users","salesperson_id":"users"}},
   {"db":"cretas","table":"sales_order_items","pk":"id","pk_type":"bigint","factory_col":None,
-     "fk":{"sales_order_id":"sales_orders","product_type_id":"product_types"}},  # factory_col None -> inherit via parent
+     "fk":{"sales_order_id":"sales_orders","product_type_id":"product_types"},
+     "parent_filter":("sales_order_id","sales_orders")},  # no factory_id -> filter by cloned parent (Gap 2)
   {"db":"cretas","table":"purchase_orders","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"supplier_id":"suppliers","created_by":"users"}},
   {"db":"cretas","table":"purchase_order_items","pk":"id","pk_type":"bigint","factory_col":None,
-     "fk":{"purchase_order_id":"purchase_orders","material_type_id":"raw_material_types"}},
+     "fk":{"purchase_order_id":"purchase_orders","material_type_id":"raw_material_types"},
+     "parent_filter":("purchase_order_id","purchase_orders")},  # no factory_id -> filter by cloned parent (Gap 2)
   {"db":"cretas","table":"production_plans","pk":"id","pk_type":"varchar","factory_col":"factory_id",
      "fk":{"product_type_id":"product_types","created_by":"users"}},
   {"db":"cretas","table":"production_batches","pk":"id","pk_type":"bigint","factory_col":"factory_id",

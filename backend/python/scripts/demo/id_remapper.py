@@ -33,3 +33,8 @@ class IdRemapper:
 
     def lookup(self, table: str, old_id):
         return self._map(table).get(old_id)
+
+    def cloned_old_ids(self, table: str) -> list:
+        """Old (source) PK values already cloned for `table` — used to filter child tables
+        that lack a factory_id column (clone only children of cloned parents)."""
+        return list(self._map(table).keys())

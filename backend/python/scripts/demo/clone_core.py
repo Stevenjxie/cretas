@@ -47,8 +47,19 @@ async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factor
     table = entry["table"]
     columns = await fetch_columns(src_conn, table)
     fcol = entry.get("factory_col") or "factory_id"
-    src_rows = await src_conn.fetch(f"SELECT * FROM {table} WHERE {fcol} = $1", source_factory) \
-        if fcol in columns else await src_conn.fetch(f"SELECT * FROM {table}")
+    if fcol in columns:
+        # table is tenant-scoped -> filter by factory_id
+        src_rows = await src_conn.fetch(f"SELECT * FROM {table} WHERE {fcol} = $1", source_factory)
+    elif entry.get("parent_filter"):
+        # child table with no factory_id (e.g. sales_order_items) -> only clone children of
+        # already-cloned parents, else we'd grab every tenant's rows (Gap 2).
+        fk_col, parent = entry["parent_filter"]
+        parent_old_ids = remapper.cloned_old_ids(parent)
+        if not parent_old_ids:
+            return 0
+        src_rows = await src_conn.fetch(f"SELECT * FROM {table} WHERE {fk_col} = ANY($1)", parent_old_ids)
+    else:
+        src_rows = await src_conn.fetch(f"SELECT * FROM {table}")
     if not src_rows:
         return 0
     transformed = [_transform_row(dict(r), entry, remapper, masker, target_factory, columns) for r in src_rows]
