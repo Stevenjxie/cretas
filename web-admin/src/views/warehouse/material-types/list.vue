@@ -289,6 +289,7 @@ const codePreviewLoading = ref(false);
 
 async function fetchCodePreview(category: string) {
   if (!factoryId.value || !category.trim()) { codePreview.value = ''; return; }
+  if (segmentTree.value.length > 0) { codePreview.value = ''; return; }
   codePreviewLoading.value = true;
   try {
     const res = await get<{ code: string }>(
@@ -544,6 +545,9 @@ async function handleSave() {
   if (!form.value.category) return ElMessage.warning('请选择类别');
   if (!form.value.unit) return ElMessage.warning('请选择单位');
   if (!form.value.storageType) return ElMessage.warning('请选择储存类型');
+  if (!editingId.value && segmentTree.value.length > 0 && !segmentL3.value) {
+    return ElMessage.error('本工厂启用 16 位编码，请先选择 L1类型、L2部位、L3品类后保存');
+  }
 
   // 包装层级前端校验 (后端 service + DB CHECK 双重兜底)
   const hasL2Unit = !!packaging.value.level2Unit?.trim();
@@ -564,7 +568,10 @@ async function handleSave() {
       ElMessage.success('更新成功');
     } else {
       // 创建: 不传 code 让后端自动生成
-      const { code, ...payload } = form.value;
+      const { code, ...payload } = {
+        ...form.value,
+        segmentCode: segmentL3.value || undefined,
+      };
       const res = await post<{ id: string }>(`/${factoryId.value}/raw-material-types`, payload);
       if (!res.success) throw new Error(res.message || '创建失败');
       materialId = res.data?.id || '';

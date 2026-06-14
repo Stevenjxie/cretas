@@ -38,6 +38,7 @@ import request from '@/api/request';
 type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM';
 // SP6 SettlementType enum values (PREPAID/CREDIT_FIRST/NO_INVOICE/MONTHLY/CREDIT_PERIOD/IMMEDIATE)
 type SettlementType = 'PREPAID' | 'CREDIT_FIRST' | 'NO_INVOICE' | 'MONTHLY' | 'CREDIT_PERIOD' | 'IMMEDIATE';
+type LedgerReportType = 'chronological' | 'general' | 'subsidiary' | 'trialBalance';
 
 interface VoucherExportConfigDTO {
   id?: string;
@@ -67,12 +68,21 @@ interface VoucherSubjectMappingDTO {
   remark: string | null;
 }
 
+interface LedgerReportDefinition {
+  type: LedgerReportType;
+  label: string;
+  endpoint: string;
+  fallbackPrefix: string;
+  headers: string[];
+}
+
 // ============================================================
 // Stores
 // ============================================================
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId ?? '');
+const canRead = computed(() => permissionStore.canAccess('finance'));
 const canWrite = computed(() => permissionStore.canWrite('finance'));
 
 // ============================================================
@@ -80,6 +90,12 @@ const canWrite = computed(() => permissionStore.canWrite('finance'));
 // ============================================================
 const exportLoading = ref(false);
 const balanceExportLoading = ref(false);
+const ledgerExportLoading = ref<Record<LedgerReportType, boolean>>({
+  chronological: false,
+  general: false,
+  subsidiary: false,
+  trialBalance: false,
+});
 const exportDateRange = ref<[string, string] | null>(null);
 const exportTargetSystem = ref<VoucherTargetSystem>('KINGDEE');
 const selectedConfigId = ref('');
@@ -87,6 +103,37 @@ const selectedConfigId = ref('');
 const canExport = computed(() =>
   !!exportDateRange.value && !!exportDateRange.value[0] && !!exportDateRange.value[1]
 );
+
+const ledgerReports: LedgerReportDefinition[] = [
+  {
+    type: 'chronological',
+    label: '序时账 / 日记账',
+    endpoint: 'chronological-ledger/export',
+    fallbackPrefix: 'chronological_ledger',
+    headers: ['日期', '凭证字号', '摘要', '科目编码', '科目名称', '借方金额', '贷方金额', '方向', '余额'],
+  },
+  {
+    type: 'general',
+    label: '总账',
+    endpoint: 'general-ledger/export',
+    fallbackPrefix: 'general_ledger',
+    headers: ['科目编码', '科目名称', '期初(借/贷)', '本期借方', '本期贷方', '本年累计', '期末(借/贷)'],
+  },
+  {
+    type: 'subsidiary',
+    label: '明细账',
+    endpoint: 'subsidiary-ledger/export',
+    fallbackPrefix: 'subsidiary_ledger',
+    headers: ['科目编码/名称分段', '日期', '凭证字号', '摘要', '借方', '贷方', '方向', '余额'],
+  },
+  {
+    type: 'trialBalance',
+    label: '试算平衡表',
+    endpoint: 'trial-balance/export',
+    fallbackPrefix: 'trial_balance',
+    headers: ['科目编码', '科目名称', '期初借方', '期初贷方', '本期借方', '本期贷方', '期末借方', '期末贷方'],
+  },
+];
 
 // ============================================================
 // Export Config state
@@ -175,6 +222,22 @@ async function loadMappings() {
   }
 }
 
+function downloadBlob(response: unknown, fallbackName: string) {
+  const res = response as { headers?: Record<string, unknown>; data?: BlobPart };
+  const rawDisposition = res.headers?.['content-disposition'];
+  const contentDisposition = typeof rawDisposition === 'string' ? rawDisposition : String(rawDisposition ?? '');
+  let filename = fallbackName;
+  const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+  if (match) filename = decodeURIComponent(match[1].trim());
+
+  const url = URL.createObjectURL(new Blob([res.data ?? '']));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ============================================================
 // 凭证序时账导出
 // ============================================================
@@ -201,17 +264,7 @@ async function handleVoucherExport() {
       { responseType: 'blob' }
     );
 
-    const contentDisposition = response.headers['content-disposition'] ?? '';
-    let filename = `voucher_${startDate}_${endDate}.xlsx`;
-    const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
-    if (match) filename = decodeURIComponent(match[1].trim());
-
-    const url = URL.createObjectURL(new Blob([response.data]));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(response, `voucher_${startDate}_${endDate}.xlsx`);
 
     ElMessage({ message: '凭证序时账已导出', type: 'success', duration: 3000 });
   } catch {
@@ -242,23 +295,40 @@ async function handleBalanceExport() {
       }
     );
 
-    const contentDisposition = response.headers['content-disposition'] ?? '';
-    let filename = `subject_balance_${startDate}_${endDate}.xlsx`;
-    const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
-    if (match) filename = decodeURIComponent(match[1].trim());
-
-    const url = URL.createObjectURL(new Blob([response.data]));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(response, `subject_balance_${startDate}_${endDate}.xlsx`);
 
     ElMessage({ message: '科目余额表已导出', type: 'success', duration: 3000 });
   } catch {
     // 拦截器已 toast
   } finally {
     balanceExportLoading.value = false;
+  }
+}
+
+async function handleLedgerExport(report: LedgerReportDefinition) {
+  if (!canExport.value) {
+    ElMessage({ message: '请先选择日期范围', type: 'warning', duration: 3000 });
+    return;
+  }
+  if (!factoryId.value) return;
+
+  ledgerExportLoading.value[report.type] = true;
+  try {
+    const [startDate, endDate] = exportDateRange.value!;
+    const response = await request.get(
+      `/${factoryId.value}/finance/${report.endpoint}`,
+      {
+        params: { startDate, endDate, targetSystem: exportTargetSystem.value },
+        responseType: 'blob',
+      }
+    );
+
+    downloadBlob(response, `${report.fallbackPrefix}_${startDate}_${endDate}.xlsx`);
+    ElMessage({ message: `${report.label}已导出`, type: 'success', duration: 3000 });
+  } catch {
+    // 拦截器已 toast；试算平衡不平会透出后端 409 message
+  } finally {
+    ledgerExportLoading.value[report.type] = false;
   }
 }
 
@@ -472,15 +542,53 @@ onMounted(async () => {
         </el-form-item>
       </el-form>
 
+      <div class="ledger-report-grid">
+        <div
+          v-for="report in ledgerReports"
+          :key="report.type"
+          class="ledger-report-panel"
+        >
+          <div class="ledger-report-top">
+            <span class="ledger-report-title">{{ report.label }}</span>
+            <el-button
+              size="small"
+              :icon="Download"
+              :loading="ledgerExportLoading[report.type]"
+              :disabled="!canExport || !canRead"
+              @click="handleLedgerExport(report)"
+            >
+              导出
+            </el-button>
+          </div>
+          <div class="ledger-header-preview">
+            <el-tag
+              v-for="header in report.headers"
+              :key="`${report.type}-${header}`"
+              size="small"
+              effect="plain"
+            >
+              {{ header }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+
       <el-alert
-        v-if="!canWrite"
-        title="导出需要财务读写权限，当前账号无权操作"
+        v-if="!canRead"
+        title="导出需要财务读取权限，当前账号无权操作"
         type="warning"
         :closable="false"
         show-icon
       />
       <el-alert
-        v-if="!canExport && canWrite"
+        v-else-if="!canWrite"
+        title="凭证序时账 / 科目余额表导出需要财务读写权限；常用账簿导出使用财务读取权限"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <el-alert
+        v-if="!canExport && canRead"
         title="请先选择期间日期范围再导出"
         type="info"
         :closable="false"
@@ -761,6 +869,35 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+.ledger-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.ledger-report-panel {
+  border: 1px solid #DCDFE6;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+.ledger-report-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ledger-report-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+.ledger-header-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .dialog-form {
   padding: 0 8px;

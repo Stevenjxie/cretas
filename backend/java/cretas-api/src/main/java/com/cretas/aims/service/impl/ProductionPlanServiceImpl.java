@@ -2060,10 +2060,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
 
-        // 已完成的计划不能取消
+        // 已完成的计划不能直接取消 — 引导走批次级「整单撤回」(canonical 撤回, 会恢复库存 + 走审批).
+        // 计划级 PRODUCTION_REVERSAL 已废弃 (死路, 不恢复库存); 客户需求的整单撤回是工单/批次级.
         if (plan.getStatus() == ProductionPlanStatus.COMPLETED) {
-            throw new BusinessException(409, "已完成的生产计划不能取消")
-                    .withHint("请刷新生产计划列表查看最新状态");
+            throw new BusinessException(409, "已完成的生产计划不能直接取消")
+                    .withHint("请在「生产批次详情」用「整单撤回」逐批次撤回 — 会自动恢复原料/半成品库存并走审批");
         }
 
         // 六扇门红线 (审计 Tier0 #01): 待审批 (PENDING_APPROVAL) 的计划已进入
@@ -2258,47 +2259,28 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * SP12 T3: 申请撤回/取消已完成的生产计划（触发审批流）.
-     * COMPLETED → PENDING_APPROVAL，启动 PRODUCTION_REVERSAL 审批流。
+     * @deprecated 计划级 PRODUCTION_REVERSAL 审批流已废弃。结构性死路: workflow 引擎是纯状态机, 从不
+     * 回调 {@link #executeCancelApproved}/{@code executeReversal} (二者在主代码零调用方), 即便回调也只
+     * 改状态、不恢复库存。且无前端调用方 (web-admin 批次详情用的是批次级「整单撤回」)。
+     * <p>canonical 撤回 = 批次级整单撤回 {@link com.cretas.aims.service.reversal.ReportReversalService}
+     * (符合客户 6.09 需求「工单整单撤回 + 审批 + 无数据直撤 + 角色」, 含 G1 下游/G2 出货/G3 幂等守卫 +
+     * 真正恢复原料/WIP/FGB)。IN_PROGRESS+数据的计划取消已由 {@link #cancelProductionPlan} 导向报工撤回流。
+     * <p>本方法保留签名但现抛 409 引导改走批次整单撤回 (防呆 Rule 5: dead-end → 导航)。
      */
     @Override
-    @org.springframework.transaction.annotation.Transactional
+    @Deprecated
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public String requestCancelWithApproval(String factoryId, String planId, String reason, Long userId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-
         if (!plan.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂");
         }
-        // R2 (2026-06-14): 放宽撤回审批入口 — 不再仅限 COMPLETED。
-        // IN_PROGRESS 且已有报工 / 已消耗 WIP 的计划 (cancelProductionPlan 已拒绝其直接取消) 也走此审批流;
-        // 审批通过后 executeReversal 统一冲销报工与 WIP, executeCancelApproved 收尾状态。
-        // IN_PROGRESS 无报工无 WIP → 走直接取消即可, 此处拒绝 (无东西可撤回, 避免空审批流)。
-        boolean eligible = plan.getStatus() == ProductionPlanStatus.COMPLETED
-                || (plan.getStatus() == ProductionPlanStatus.IN_PROGRESS && hasProductionData(factoryId, plan));
-        if (!eligible) {
-            throw new BusinessException(409, "只有已完成、或已开工且有报工/WIP 消耗的计划才能申请撤回")
-                    .withHint("未开工或无报工数据的计划请直接取消, 无需走撤回审批");
-        }
-        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "PRODUCTION_REVERSAL")) {
-            throw new BusinessException(409, "该工厂未配置生产撤回审批流程，请联系管理员配置")
-                    .withHint("前往工作流设计器配置 PRODUCTION_REVERSAL 审批流");
-        }
-
-        plan.setStatus(ProductionPlanStatus.PENDING_APPROVAL);
-        plan.setNotes(plan.getNotes() != null
-                ? plan.getNotes() + "\n撤回申请原因：" + reason
-                : "撤回申请原因：" + reason);
-        productionPlanRepository.save(plan);
-
-        java.util.Map<String, Object> context = java.util.Map.of(
-                "planId", planId,
-                "reason", reason,
-                "factoryId", factoryId);
-        var instance = workflowEngine.startWorkflow(factoryId, "PRODUCTION_REVERSAL", planId, context, userId);
-        log.info("生产撤回审批已发起: planId={}, instanceId={}", planId, instance.getId());
-        return instance.getId();
+        throw new BusinessException(409, "计划级撤回审批流已停用")
+                .withCode("USE_BATCH_REVERSAL")
+                .withHint("请在「生产批次详情」用「整单撤回」逐批次撤回 — 会经主管审批并自动恢复原料/半成品库存 (无报工数据则直接撤回)")
+                .withHintTarget("报工撤回");
     }
 
     /**
@@ -2317,8 +2299,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 而非像旧版只置 CANCELLED 留下未冲销 WIP。
      */
     @Override
+    @Deprecated
     @org.springframework.transaction.annotation.Transactional
     public void executeCancelApproved(String planId) {
+        // @Deprecated: 计划级 PRODUCTION_REVERSAL 已废弃 (见 requestCancelWithApproval)。本回调零调用方。
+        // body 保留 #834 加固版 (调 ReportReversalService 真恢复库存) 作为安全网 —— 万一有遗留
+        // PENDING_APPROVAL 计划被接上, 它会正确冲销而非旧版只置 CANCELLED。新撤回一律走批次级整单撤回。
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
 

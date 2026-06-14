@@ -4,7 +4,9 @@ import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
 import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.finance.Voucher;
@@ -113,6 +115,34 @@ class VoucherExportServiceTest {
                 .totalDebit(new BigDecimal(debit))
                 .totalCredit(new BigDecimal(credit))
                 .entryCount(1L)
+                .build();
+    }
+
+    private Voucher voucher(String id, String number, LocalDate date) {
+        return Voucher.builder()
+                .id(id)
+                .factoryId(FACTORY_ID)
+                .voucherNumber(number)
+                .voucherDate(date)
+                .voucherType(VoucherType.PURCHASE_PAYMENT)
+                .sourceBusinessType("TEST")
+                .sourceBusinessId(id)
+                .totalDebit(BigDecimal.ZERO)
+                .totalCredit(BigDecimal.ZERO)
+                .status(VoucherStatus.POSTED)
+                .build();
+    }
+
+    private VoucherEntry entry(String id, int lineNo, String code, String name,
+                               String summary, String debit, String credit) {
+        return VoucherEntry.builder()
+                .id(id)
+                .lineNo(lineNo)
+                .subjectCode(code)
+                .subjectName(name)
+                .description(summary)
+                .debit(new BigDecimal(debit))
+                .credit(new BigDecimal(credit))
                 .build();
     }
 
@@ -374,5 +404,158 @@ class VoucherExportServiceTest {
         ArgumentCaptor<VoucherExportRecord> cap = ArgumentCaptor.forClass(VoucherExportRecord.class);
         verify(exportRecordRepo).save(cap.capture());
         assertEquals(0, cap.getValue().getRowCount(), "无分录时 rowCount = 0");
+    }
+
+    @Test
+    @DisplayName("Ledger: 序时账按日期凭证号逐笔输出标准表头和科目余额")
+    void exportChronologicalLedger_writesStandardHeadersAndRunningBalance() throws Exception {
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END))
+                .thenReturn(List.of(
+                        voucher("V-002", "记-002", LocalDate.of(2026, 5, 2)),
+                        voucher("V-001", "记-001", LocalDate.of(2026, 5, 1))
+                ));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-001"))
+                .thenReturn(List.of(entry("E-001", 1, "1002", "银行存款", "收款", "100.00", "0.00")));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-002"))
+                .thenReturn(List.of(entry("E-002", 1, "1002", "银行存款", "付款", "0.00", "25.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportChronologicalLedger(FACTORY_ID, buildReq(), USER_ID, out);
+
+        assertTrue(fileName.startsWith("chronological-ledger_"));
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("日期", "凭证字号", "摘要", "科目编码", "科目名称", "借方金额", "贷方金额", "方向", "余额"), rows.get(0));
+        assertEquals("2026-05-01", rows.get(1).get(0), "按日期排序");
+        assertEquals("记-001", rows.get(1).get(1));
+        assertEquals("借", rows.get(1).get(7));
+        assertEquals(0, new BigDecimal("100.00").compareTo(decimalAt(rows.get(1), 8)));
+        assertEquals("记-002", rows.get(2).get(1));
+        assertEquals(0, new BigDecimal("75.00").compareTo(decimalAt(rows.get(2), 8)));
+    }
+
+    @Test
+    @DisplayName("Ledger: 总账覆盖借方/贷方余额方向和本年累计")
+    void exportGeneralLedger_usesDebitAndCreditNormalDirections() throws Exception {
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.of(closedPeriod(2026, 4)));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+                .thenReturn(List.of(
+                        aggregate("1002", "银行存款", "1000.00", "200.00"),
+                        aggregate("2202", "应付账款", "100.00", "500.00")
+                ));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+                .thenReturn(List.of(
+                        aggregate("1002", "银行存款", "200.00", "50.00"),
+                        aggregate("2202", "应付账款", "50.00", "300.00")
+                ));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
+                .thenReturn(List.of(
+                        aggregate("1002", "银行存款", "1200.00", "250.00"),
+                        aggregate("2202", "应付账款", "150.00", "800.00")
+                ));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "2202"))
+                .thenReturn(List.of(account("2202", "应付账款", AccountBalanceType.CREDIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportGeneralLedger(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("科目编码", "科目名称", "期初(借/贷)", "本期借方", "本期贷方", "本年累计", "期末(借/贷)"), rows.get(0));
+        assertEquals(List.of("1002", "银行存款", "借 800.00", "200.00", "50.00", "借 950.00", "借 950.00"), rows.get(1));
+        assertEquals(List.of("2202", "应付账款", "贷 400.00", "50.00", "300.00", "贷 650.00", "贷 650.00"), rows.get(2));
+    }
+
+    @Test
+    @DisplayName("Ledger: 明细账按科目分段并带期初/本期合计/期末")
+    void exportSubsidiaryLedger_writesSubjectSectionsAndTotals() throws Exception {
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.of(closedPeriod(2026, 4)));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+                .thenReturn(List.of(aggregate("1002", "银行存款", "1000.00", "200.00")));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END))
+                .thenReturn(List.of(voucher("V-001", "记-001", LocalDate.of(2026, 5, 1))));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-001"))
+                .thenReturn(List.of(entry("E-001", 1, "1002", "银行存款", "收款", "200.00", "0.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportSubsidiaryLedger(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("科目编码/名称分段", "日期", "凭证字号", "摘要", "借方", "贷方", "方向", "余额"), rows.get(0));
+        assertEquals("1002 银行存款", rows.get(1).get(0));
+        assertEquals("期初", rows.get(2).get(3));
+        assertEquals("借", rows.get(2).get(6));
+        assertEquals(0, new BigDecimal("800.00").compareTo(decimalAt(rows.get(2), 7)));
+        assertEquals("本期合计", rows.get(4).get(3));
+        assertEquals(0, new BigDecimal("200.00").compareTo(decimalAt(rows.get(4), 4)));
+        assertEquals("期末", rows.get(5).get(3));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(decimalAt(rows.get(5), 7)));
+    }
+
+    @Test
+    @DisplayName("Ledger: 试算平衡表三组都平后才写合计")
+    void exportTrialBalance_balancedWritesOpeningPeriodAndClosingTotals() throws Exception {
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.of(closedPeriod(2026, 4)));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+                .thenReturn(List.of(
+                        aggregate("1002", "银行存款", "1000.00", "0.00"),
+                        aggregate("2202", "应付账款", "0.00", "1000.00")
+                ));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+                .thenReturn(List.of(
+                        aggregate("1002", "银行存款", "0.00", "100.00"),
+                        aggregate("2202", "应付账款", "100.00", "0.00")
+                ));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "2202"))
+                .thenReturn(List.of(account("2202", "应付账款", AccountBalanceType.CREDIT_NORMAL)));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportTrialBalance(FACTORY_ID, buildReq(), USER_ID, out);
+
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("科目编码", "科目名称", "期初借方", "期初贷方", "本期借方", "本期贷方", "期末借方", "期末贷方"), rows.get(0));
+        List<String> total = rows.stream()
+                .filter(row -> !row.isEmpty() && "合计".equals(row.get(0)))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0, new BigDecimal("1000.00").compareTo(decimalAt(total, 2)), "期初借方合计");
+        assertEquals(0, new BigDecimal("1000.00").compareTo(decimalAt(total, 3)), "期初贷方合计");
+        assertEquals(0, new BigDecimal("100.00").compareTo(decimalAt(total, 4)), "本期借方合计");
+        assertEquals(0, new BigDecimal("100.00").compareTo(decimalAt(total, 5)), "本期贷方合计");
+        assertEquals(0, new BigDecimal("900.00").compareTo(decimalAt(total, 6)), "期末借方合计");
+        assertEquals(0, new BigDecimal("900.00").compareTo(decimalAt(total, 7)), "期末贷方合计");
+    }
+
+    @Test
+    @DisplayName("Ledger: 试算平衡任一组不平时抛错且列出科目和差额")
+    void exportTrialBalance_unbalancedThrowsWithSubjectsAndDifference() {
+        when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
+                .thenReturn(Optional.empty());
+        when(entryRepo.aggregateBySubject(FACTORY_ID, START, END))
+                .thenReturn(List.of(aggregate("1002", "银行存款", "100.00", "0.00")));
+        when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
+                .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                service.exportTrialBalance(FACTORY_ID, buildReq(), USER_ID, new ByteArrayOutputStream()));
+
+        assertTrue(ex.getMessage().contains("试算平衡不平"));
+        assertTrue(ex.getMessage().contains("本期"));
+        assertTrue(ex.getMessage().contains("期末"));
+        assertTrue(ex.getMessage().contains("1002 银行存款"));
+        assertTrue(ex.getMessage().contains("差额=100.00"));
     }
 }

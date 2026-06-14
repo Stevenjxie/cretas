@@ -30,7 +30,8 @@ import java.math.RoundingMode;
 @Entity
 @Table(name = "bom_recipe_items", indexes = {
     @Index(name = "idx_bri_recipe",   columnList = "recipe_id, sort_order"),
-    @Index(name = "idx_bri_material", columnList = "factory_id, material_type_id")
+    @Index(name = "idx_bri_material", columnList = "factory_id, material_type_id"),
+    @Index(name = "idx_bri_primary_code_v2", columnList = "factory_id, primary_code")
 })
 @Data
 @SuperBuilder
@@ -152,6 +153,9 @@ public class BomRecipeItem extends BaseEntity {
      * 创建时优先用 DTO 传入, 次选从关联 RawMaterialType.primaryCode 自动回填.
      * DB: primary_code_ref VARCHAR(3) NULL
      */
+    @Column(name = "primary_code", length = 3)
+    private String primaryCode;
+
     @Column(name = "primary_code_ref", length = 3)
     private String primaryCodeRef;
 

@@ -319,33 +319,21 @@ class ProductionPlanCancelConcurrencyTest {
     }
 
     @Test
-    @DisplayName("R2: requestCancelWithApproval 放宽 — IN_PROGRESS 有报工也能起审批流")
-    void requestCancel_inProgressWithData_startsWorkflow() {
+    @DisplayName("requestCancelWithApproval 已废弃 — IN_PROGRESS 有数据也抛 409 USE_BATCH_REVERSAL 导向批次整单撤回")
+    void requestCancel_inProgressWithData_deprecatedThrows() {
+        // 方案 B (2026-06-14): 计划级 PRODUCTION_REVERSAL 死路已废弃, requestCancelWithApproval
+        // 一律抛 409 USE_BATCH_REVERSAL 引导改走批次级整单撤回 (ReportReversalService)。
+        // IN_PROGRESS+数据的取消已由 cancelProductionPlan 导向报工撤回流。
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.IN_PROGRESS);
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(target));
-        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
-                .thenReturn(List.of(batch(10L, PLAN_ID, ProductionBatchStatus.IN_PROGRESS)));
-        ProductionReport yield = new ProductionReport();
-        yield.setId(900L);
-        yield.setBatchId(10L);
-        when(productionReportRepository.findYieldReportsByBatch(FACTORY_ID, 10L))
-                .thenReturn(List.of(yield));
 
-        // workflow engine stub
-        com.cretas.aims.service.workflow.WorkflowEngineService engine =
-                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowEngineService.class);
-        when(engine.hasActiveWorkflow(FACTORY_ID, "PRODUCTION_REVERSAL")).thenReturn(true);
-        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance instance =
-                org.mockito.Mockito.mock(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.class);
-        when(instance.getId()).thenReturn("WF-1");
-        when(engine.startWorkflow(eq(FACTORY_ID), eq("PRODUCTION_REVERSAL"), eq(PLAN_ID), any(), any()))
-                .thenReturn(instance);
-        ReflectionTestUtils.setField(service, "workflowEngine", engine);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, "撤回", 7L));
 
-        String instanceId = service.requestCancelWithApproval(FACTORY_ID, PLAN_ID, "撤回", 7L);
-
-        assertEquals("WF-1", instanceId);
-        assertEquals(ProductionPlanStatus.PENDING_APPROVAL, target.getStatus());
+        assertEquals(409, ex.getCode());
+        assertEquals("USE_BATCH_REVERSAL", ex.getErrorCode());
+        // 状态不变 — 不再进 PENDING_APPROVAL, 不启动死路 workflow
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, target.getStatus());
     }
 
     @Test

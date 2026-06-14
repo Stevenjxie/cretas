@@ -140,6 +140,10 @@ public class CreateBomRecipeRequest {
 
         @Schema(description = "SP8: 物料前三位主编码 (如 001/002/003); 可选, 不传则从关联物料自动回填")
         @Size(max = 3, message = "主编码长度不超过3个字符")
+        private String primaryCode;
+
+        @Schema(description = "SP8 legacy alias: 物料前三位主编码")
+        @Size(max = 3, message = "主编码长度不超过3个字符")
         private String primaryCodeRef;
     }
 }

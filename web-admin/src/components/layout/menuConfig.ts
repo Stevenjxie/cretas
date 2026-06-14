@@ -78,6 +78,7 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/warehouse/material-types', title: '原料类型字典 (新建原料)', icon: '', module: 'warehouse' },
+      { path: '/warehouse/material-segments', title: '物料分段字典', icon: '', module: 'warehouse' },
       { path: '/warehouse/materials', title: '原料入库登记 (具体批次)', icon: '', module: 'warehouse' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },

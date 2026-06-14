@@ -13,6 +13,7 @@ import request from './request';
 import type { ApiResponse } from '@/types/api';
 
 export type PermissionLevel = 'rw' | 'r' | 'w' | '-';
+export type UserModuleAccessType = 'GRANT' | 'DENY';
 
 export interface PlatformPermission {
   id: number;
@@ -26,6 +27,16 @@ export interface PlatformPermission {
 
 /** Layer 2 factory override map shape: { role: { module: level } } */
 export type RoleModuleOverride = Record<string, Record<string, PermissionLevel>>;
+
+export interface UserModuleAccessView {
+  moduleCode: string;
+  displayName: string;
+  category: string;
+  permissionModule: string;
+  roleDefaultAllowed: boolean;
+  override: UserModuleAccessType | null;
+  effectiveAllowed: boolean;
+}
 
 /** L1: Read full platform-level matrix (374 rows = 22 roles × 17 modules). */
 export async function getPlatformPermissions(): Promise<PlatformPermission[]> {
@@ -71,5 +82,37 @@ export async function updateFactoryOverride(
   await request.put<ApiResponse<void>>(
     `/${factoryId}/canvas/role-module-override/${encodeURIComponent(role)}/${encodeURIComponent(module)}${qs}`,
     {},
+  );
+}
+
+export async function getUserModuleAccess(
+  factoryId: string,
+  userId: string | number,
+): Promise<UserModuleAccessView[]> {
+  const res = await request.get<ApiResponse<UserModuleAccessView[]>>(
+    `/${factoryId}/canvas/user-module-access/${encodeURIComponent(String(userId))}`,
+  );
+  return ((res as unknown as ApiResponse<UserModuleAccessView[]>).data) || [];
+}
+
+export async function updateUserModuleAccess(
+  factoryId: string,
+  userId: string | number,
+  module: string,
+  action: UserModuleAccessType,
+): Promise<void> {
+  await request.put<ApiResponse<void>>(
+    `/${factoryId}/canvas/user-module-access/${encodeURIComponent(String(userId))}/${encodeURIComponent(module)}?action=${encodeURIComponent(action)}`,
+    {},
+  );
+}
+
+export async function clearUserModuleAccess(
+  factoryId: string,
+  userId: string | number,
+  module: string,
+): Promise<void> {
+  await request.delete<ApiResponse<void>>(
+    `/${factoryId}/canvas/user-module-access/${encodeURIComponent(String(userId))}/${encodeURIComponent(module)}`,
   );
 }
