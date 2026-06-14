@@ -47,16 +47,26 @@ public interface PurchaseInvoiceRepository extends JpaRepository<PurchaseInvoice
     /**
      * 查询某工厂超期未到票的采购订单 ID 列表。
      *
-     * <p>条件：po.orderDate + COALESCE(po.invoice_reminder_days, 30) <= today，
-     * 且该 PO 在 purchase_invoices 中无记录（COUNT=0）。
+     * <p>条件：po.orderDate + po.invoice_reminder_days < today，
+     * 且该 PO 在 purchase_invoices 中无记录（COUNT=0）。缺配置时不使用硬编码默认值。
      */
     @Query(value = """
             SELECT po.id
             FROM purchase_orders po
             WHERE po.factory_id = :factoryId
-              AND po.status IN ('RECEIVED', 'COMPLETED')
+              AND (
+                  po.status IN ('COMPLETED', 'CLOSED')
+                  OR EXISTS (
+                      SELECT 1 FROM payment_requests pr
+                      WHERE pr.purchase_order_id = po.id
+                        AND pr.status = 'PAID'
+                        AND pr.deleted_at IS NULL
+                  )
+              )
               AND po.deleted_at IS NULL
-              AND (po.order_date + COALESCE(po.invoice_reminder_days, 30) * INTERVAL '1 day') <= :today
+              AND po.invoice_reminder_days IS NOT NULL
+              AND po.invoice_reminder_days > 0
+              AND (po.order_date + po.invoice_reminder_days * INTERVAL '1 day') < :today
               AND NOT EXISTS (
                   SELECT 1 FROM purchase_invoices pi
                   WHERE pi.purchase_order_id = po.id
