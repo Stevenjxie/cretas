@@ -30,6 +30,19 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
   finance_ar: 'finance', finance_ap: 'finance', warehouse: 'warehouse',
   scheduling: 'scheduling', restaurant: 'restaurant',
 };
+
+// 路演 demo 租户 (DEMO_*) 侧边栏策展: 隐藏内部/无数据模块, 让可见模块都有充足数据。
+// 餐饮 demo 无销售订单/客户 → 藏 sales; 工厂 demo 无质检/设备/HR/调度数据 → 藏。
+// system 是内部管理 (用户/权限/日志/平台配置), 两业态都藏。
+const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
+  RESTAURANT: ['sales', 'system'],
+  FACTORY: ['quality', 'equipment', 'hr', 'scheduling', 'system'],
+};
+// 路径前缀级隐藏 (跨业态): 工作台 (AI 工作台, 非核心) + 成品库存 (工厂克隆后为空)。
+const DEMO_HIDE_PATHS = ['/workdesk', '/sales/finished-goods'];
+function isDemoTenant(factoryId: string | undefined): boolean {
+  return /^DEMO_/.test(factoryId || '');
+}
 // WS6 reactivity fix: previously this ran in onMounted and bailed out with
 // `if (!authStore.factoryId) return;`. If the sidebar mounted before `user`
 // hydrated (factoryId still ''), the fetch never ran AND never retried →
@@ -101,6 +114,16 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
+
+  // 路演 demo 租户策展: 隐藏内部/无数据模块
+  if (isDemoTenant(authStore.factoryId)) {
+    if (DEMO_HIDE_PATHS.some(p => item.path === p || item.path.startsWith(p + '/'))) {
+      return false;
+    }
+    if ((DEMO_HIDE_MODULES_BY_TYPE[factoryType] || []).includes(item.module)) {
+      return false;
+    }
+  }
 
   if (item.hideForFactoryTypes?.includes(factoryType)) {
     return false;
