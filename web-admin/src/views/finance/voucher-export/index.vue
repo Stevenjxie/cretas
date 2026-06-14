@@ -38,7 +38,7 @@ import request from '@/api/request';
 type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM';
 // SP6 SettlementType enum values (PREPAID/CREDIT_FIRST/NO_INVOICE/MONTHLY/CREDIT_PERIOD/IMMEDIATE)
 type SettlementType = 'PREPAID' | 'CREDIT_FIRST' | 'NO_INVOICE' | 'MONTHLY' | 'CREDIT_PERIOD' | 'IMMEDIATE';
-type LedgerReportType = 'chronological' | 'general' | 'subsidiary' | 'trialBalance';
+type LedgerReportType = 'chronological' | 'general' | 'subsidiary' | 'trialBalance' | 'incomeStatement' | 'quantityAmount';
 
 interface VoucherExportConfigDTO {
   id?: string;
@@ -95,6 +95,8 @@ const ledgerExportLoading = ref<Record<LedgerReportType, boolean>>({
   general: false,
   subsidiary: false,
   trialBalance: false,
+  incomeStatement: false,
+  quantityAmount: false,
 });
 const exportDateRange = ref<[string, string] | null>(null);
 const exportTargetSystem = ref<VoucherTargetSystem>('KINGDEE');
@@ -132,6 +134,20 @@ const ledgerReports: LedgerReportDefinition[] = [
     endpoint: 'trial-balance/export',
     fallbackPrefix: 'trial_balance',
     headers: ['科目编码', '科目名称', '期初借方', '期初贷方', '本期借方', '本期贷方', '期末借方', '期末贷方'],
+  },
+  {
+    type: 'incomeStatement',
+    label: '利润表',
+    endpoint: 'income-statement/export',
+    fallbackPrefix: 'income_statement',
+    headers: ['项目', '本期金额', '本年累计金额'],
+  },
+  {
+    type: 'quantityAmount',
+    label: '数量金额明细账',
+    endpoint: 'quantity-amount-ledger/export',
+    fallbackPrefix: 'quantity_amount_ledger',
+    headers: ['日期', '凭证字号', '摘要', '收入数量', '收入单价', '收入金额', '发出数量', '发出单价', '发出金额', '结存数量', '结存单价', '结存金额'],
   },
 ];
 

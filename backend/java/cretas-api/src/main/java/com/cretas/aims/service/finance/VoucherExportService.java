@@ -49,4 +49,10 @@ public interface VoucherExportService {
 
     String exportTrialBalance(String factoryId, VoucherExportRequestDTO req,
                               Long userId, OutputStream out) throws Exception;
+
+    String exportIncomeStatement(String factoryId, VoucherExportRequestDTO req,
+                                 Long userId, OutputStream out) throws Exception;
+
+    String exportQuantityAmountLedger(String factoryId, VoucherExportRequestDTO req,
+                                      Long userId, OutputStream out) throws Exception;
 }
