@@ -44,6 +44,9 @@ public interface FactoryMaterialRequisitionService {
     /** 关单 + 自动退料 (returned = issued - consumed). */
     FactoryMaterialRequisition close(String factoryId, String id, Long operatorId);
 
+    /** 关单 + 人工损耗确认: closeItems: [{itemId, wastageQty}]. */
+    FactoryMaterialRequisition close(String factoryId, String id, Long operatorId, List<Map<String, Object>> closeItems);
+
     /** 取消. */
     FactoryMaterialRequisition cancel(String factoryId, String id, Long operatorId, String reason);
 }

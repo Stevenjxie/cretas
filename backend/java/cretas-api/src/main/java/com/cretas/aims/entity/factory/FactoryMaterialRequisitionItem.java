@@ -72,6 +72,9 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     @Column(name = "consumed_qty", precision = 15, scale = 3)
     private BigDecimal consumedQty;
 
+    @Column(name = "wastage_qty", precision = 15, scale = 3)
+    private BigDecimal wastageQty;
+
     @Column(name = "returned_qty", precision = 15, scale = 3)
     private BigDecimal returnedQty;
 
