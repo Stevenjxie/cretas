@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.event.BatchCompletedEvent;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -62,6 +63,7 @@ class SupplyChainOrchestratorRdTrialWarehouseTest {
     @Mock private BatchConsumptionService batchConsumptionService;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private FactorySettingsRepository factorySettingsRepository;
 
     @InjectMocks
     private SupplyChainOrchestrator orchestrator;
@@ -69,6 +71,7 @@ class SupplyChainOrchestratorRdTrialWarehouseTest {
     @BeforeEach
     void injectFieldDependencies() {
         ReflectionTestUtils.setField(orchestrator, "warehouseResolver", warehouseResolver);
+        ReflectionTestUtils.setField(orchestrator, "factorySettingsRepository", factorySettingsRepository);
     }
 
     // ---------- helpers ----------
@@ -87,6 +90,8 @@ class SupplyChainOrchestratorRdTrialWarehouseTest {
     }
 
     private void stubCommon(ProductionBatch batch) {
+        when(factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(batch.getFactoryId()))
+                .thenReturn(false);
         when(finishedGoodsBatchRepository
                 .findByFactoryIdAndBatchNumber(anyString(), anyString()))
                 .thenReturn(Optional.empty());
