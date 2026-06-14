@@ -1,7 +1,10 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.inventory.PurchaseInvoiceChaseLogRepository;
 import com.cretas.aims.repository.inventory.PurchaseInvoiceRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.impl.PurchaseInvoiceServiceImpl;
@@ -51,6 +54,9 @@ class PurchaseInvoiceServiceTest {
     @Mock
     private PurchaseOrderRepository purchaseOrderRepository;
 
+    @Mock
+    private PurchaseInvoiceChaseLogRepository chaseLogRepository;
+
     @InjectMocks
     private PurchaseInvoiceServiceImpl purchaseInvoiceService;
 
@@ -66,6 +72,13 @@ class PurchaseInvoiceServiceTest {
                     if (invoice.getId() == null) invoice.setId(java.util.UUID.randomUUID().toString());
                     return invoice;
                 });
+        PurchaseOrder po = new PurchaseOrder();
+        po.setId(PO_ID);
+        po.setFactoryId(FACTORY_ID);
+        po.setTotalAmount(BigDecimal.valueOf(9999));
+        po.setInvoiceStatus(PurchaseInvoiceStatus.NOT_RECEIVED);
+        when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID))
+                .thenReturn(Optional.of(po));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -161,6 +174,32 @@ class PurchaseInvoiceServiceTest {
                     BigDecimal.valueOf(3000), ocrRaw, 1L);
 
             assertEquals(ocrRaw, result.getOcrRawResult());
+        }
+
+        @Test
+        @DisplayName("upload amount matches PO: invoice auto reconciles and PO closes loop")
+        void upload_amountMatchesPo_autoReconcilesAndClosesLoop() {
+            PurchaseOrder po = new PurchaseOrder();
+            po.setId(PO_ID);
+            po.setFactoryId(FACTORY_ID);
+            po.setTotalAmount(BigDecimal.valueOf(3000));
+            po.setInvoiceStatus(PurchaseInvoiceStatus.NOT_RECEIVED);
+            when(invoiceRepository.findByFactoryIdAndInvoiceNumber(FACTORY_ID, "FP-2026-009"))
+                    .thenReturn(Optional.empty());
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID))
+                    .thenReturn(Optional.of(po));
+
+            PurchaseInvoice result = purchaseInvoiceService.upload(
+                    FACTORY_ID, PO_ID, "SUP-001", "FP-2026-009",
+                    BigDecimal.valueOf(3000), null, 9L);
+
+            assertEquals("MATCHED", result.getReconcileStatus());
+            assertEquals(9L, result.getReconciledBy());
+            assertNotNull(result.getReconciledAt());
+            assertEquals(PurchaseInvoiceStatus.RECONCILED, po.getInvoiceStatus());
+            verify(purchaseOrderRepository).save(po);
+            verify(chaseLogRepository).closeOpenChases(
+                    eq(FACTORY_ID), eq(PO_ID), any(java.time.LocalDateTime.class));
         }
     }
 

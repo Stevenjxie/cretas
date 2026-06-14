@@ -1,8 +1,12 @@
 package com.cretas.aims.service.inventory.impl;
 
+import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.inventory.PurchaseInvoiceChaseLogRepository;
 import com.cretas.aims.repository.inventory.PurchaseInvoiceRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.PurchaseInvoiceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +29,8 @@ import java.util.List;
 public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
 
     private final PurchaseInvoiceRepository invoiceRepository;
+    private final PurchaseOrderRepository purchaseOrderRepository;
+    private final PurchaseInvoiceChaseLogRepository chaseLogRepository;
 
     // ─── upload ───────────────────────────────────────────────────────────────
 
@@ -44,6 +50,10 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
                     });
         }
 
+        PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId)
+                .orElseThrow(() -> new BusinessException(404,
+                        "采购订单不存在或不属于工厂: " + poId));
+
         PurchaseInvoice invoice = new PurchaseInvoice();
         invoice.setFactoryId(factoryId);
         invoice.setPurchaseOrderId(poId);
@@ -52,9 +62,20 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         invoice.setAmount(amount);
         invoice.setOcrRawResult(ocrRawResult);
         invoice.setUploadedBy(uploadedBy);
-        invoice.setReconcileStatus("PENDING");
+        if (canAutoReconcile(po, amount)) {
+            invoice.setReconcileStatus("MATCHED");
+            invoice.setReconcileNote("AUTO_MATCHED_ON_UPLOAD");
+            invoice.setReconciledBy(uploadedBy);
+            invoice.setReconciledAt(LocalDateTime.now());
+            po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
+        } else {
+            invoice.setReconcileStatus("PENDING");
+            po.setInvoiceStatus(PurchaseInvoiceStatus.RECEIVED);
+        }
 
         PurchaseInvoice saved = invoiceRepository.save(invoice);
+        purchaseOrderRepository.save(po);
+        chaseLogRepository.closeOpenChases(factoryId, poId, LocalDateTime.now());
         log.info("[SP6] 上传采购发票 invoiceNumber={} poId={} amount={} by userId={}",
                 invoiceNumber, poId, amount, uploadedBy);
         return saved;
@@ -88,7 +109,25 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         invoice.setReconciledAt(LocalDateTime.now());
         invoiceRepository.save(invoice);
 
+        purchaseOrderRepository.findByIdAndFactoryId(invoice.getPurchaseOrderId(), factoryId)
+                .ifPresent(po -> {
+                    if ("MATCHED".equals(reconcileStatus)) {
+                        po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
+                        purchaseOrderRepository.save(po);
+                        chaseLogRepository.closeOpenChases(factoryId, po.getId(), LocalDateTime.now());
+                    } else if (po.getInvoiceStatus() == PurchaseInvoiceStatus.NOT_RECEIVED) {
+                        po.setInvoiceStatus(PurchaseInvoiceStatus.RECEIVED);
+                        purchaseOrderRepository.save(po);
+                    }
+                });
+
         log.info("[SP6] 发票 {} 对账完成 status={} by userId={}", invoiceId, reconcileStatus, reconciledBy);
+    }
+
+    private boolean canAutoReconcile(PurchaseOrder po, BigDecimal invoiceAmount) {
+        return po.getTotalAmount() != null
+                && invoiceAmount != null
+                && po.getTotalAmount().compareTo(invoiceAmount) == 0;
     }
 
     // ─── listPendingReminder ──────────────────────────────────────────────────
