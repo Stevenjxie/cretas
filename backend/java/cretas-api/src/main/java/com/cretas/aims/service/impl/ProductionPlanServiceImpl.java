@@ -1263,7 +1263,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
-        if (isLiushanmenFactory(factoryId)) {
+        if (requiresProductionSettlement(factoryId)) {
             throw new BusinessException(409, "六扇门生产完成必须先核对结单")
                     .withCode("PRODUCTION_SETTLEMENT_REQUIRED")
                     .withHint("请使用“核对结单”录入实际产量、实际领用明细和人效后再完成")
@@ -2000,6 +2000,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .message(message)
                 .warnings(warnings != null ? warnings : Collections.emptyList())
                 .build();
+    }
+
+    private boolean requiresProductionSettlement(String factoryId) {
+        if (factorySettingsRepository != null) {
+            Boolean skipProcessReportingDefault =
+                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
+            if (skipProcessReportingDefault != null) {
+                return Boolean.TRUE.equals(skipProcessReportingDefault);
+            }
+        }
+        return isLiushanmenFactory(factoryId);
     }
 
     private boolean isLiushanmenFactory(String factoryId) {

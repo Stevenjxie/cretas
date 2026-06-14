@@ -660,7 +660,17 @@ public class GlobalExceptionHandler {
                 pve.getEntityName(), pve.getPropertyName());
             return ApiResponse.error(400, "必填字段缺失: " + pve.getPropertyName());
         }
-        log.warn("[{}] 数据访问参数非法: {}", traceId, e.getMessage());
+        // `root` 现在是异常链最深层 (非 PropertyValueException). 记最深层 cause 而非顶层 wrapper,
+        // 否则真因被掩盖 —— 2026-06-14 报损 list 400 排查踩过: 顶层 e.getMessage() 只是泛化 wrapper,
+        // 真因 "No enum constant WastageReason.加工损耗" (枚举列存了中文) 藏在最深层, log 看不到很难定位.
+        Throwable deepest = (root != null) ? root : e;
+        String rootMsg = (deepest.getMessage() != null) ? deepest.getMessage() : "";
+        log.warn("[{}] 数据访问异常: rootCause={}: {}", traceId, deepest.getClass().getSimpleName(), rootMsg);
+        // 枚举/格式转换失败 = 存储数据值越出允许范围, 不是"用户请求参数"问题 → 给更准确的提示 + traceId
+        // (泛化的 "请求参数不符合要求" 对这种数据层问题极具误导性).
+        if (rootMsg.contains("No enum constant") || rootMsg.contains("Unknown name value")) {
+            return ApiResponse.error(400, "数据字段值不在允许范围 (枚举/格式越界)，请联系管理员排查 [" + traceId + "]");
+        }
         return ApiResponse.error(400, "请求参数不符合要求");
     }
 

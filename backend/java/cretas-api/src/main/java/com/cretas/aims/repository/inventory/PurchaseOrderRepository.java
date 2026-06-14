@@ -1,5 +1,7 @@
 package com.cretas.aims.repository.inventory;
 
+import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
+import com.cretas.aims.entity.enums.PaymentRequestStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import org.springframework.data.domain.Page;
@@ -67,4 +69,44 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
     /** 生成订单号：查找当天最大订单号（避免并发冲突） */
     @Query("SELECT MAX(po.orderNumber) FROM PurchaseOrder po WHERE po.factoryId = :factoryId AND po.orderNumber LIKE :prefix")
     Optional<String> findMaxOrderNumberByPrefix(@Param("factoryId") String factoryId, @Param("prefix") String prefix);
+    @Query("SELECT DISTINCT po.factoryId FROM PurchaseOrder po WHERE po.deletedAt IS NULL")
+    List<String> findDistinctFactoryIds();
+
+    @Query("""
+            SELECT po
+              FROM PurchaseOrder po
+             WHERE po.factoryId = :factoryId
+               AND (
+                    po.status IN :statuses
+                    OR EXISTS (
+                        SELECT pr.id
+                          FROM PaymentRequest pr
+                         WHERE pr.purchaseOrderId = po.id
+                           AND pr.status = :paidStatus
+                           AND pr.deletedAt IS NULL
+                    )
+               )
+               AND (po.invoiceStatus IS NULL OR po.invoiceStatus = :invoiceStatus)
+               AND po.deletedAt IS NULL
+               AND NOT EXISTS (
+                    SELECT pi.id
+                      FROM PurchaseInvoice pi
+                     WHERE pi.purchaseOrderId = po.id
+                       AND pi.deletedAt IS NULL
+               )
+             ORDER BY po.orderDate ASC
+            """)
+    List<PurchaseOrder> findInvoiceChaseCandidates(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") List<PurchaseOrderStatus> statuses,
+            @Param("paidStatus") PaymentRequestStatus paidStatus,
+            @Param("invoiceStatus") PurchaseInvoiceStatus invoiceStatus);
+
+    default List<PurchaseOrder> findInvoiceChaseCandidates(String factoryId) {
+        return findInvoiceChaseCandidates(
+                factoryId,
+                List.of(PurchaseOrderStatus.COMPLETED, PurchaseOrderStatus.CLOSED),
+                PaymentRequestStatus.PAID,
+                PurchaseInvoiceStatus.NOT_RECEIVED);
+    }
 }
