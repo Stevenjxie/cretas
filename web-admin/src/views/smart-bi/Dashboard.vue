@@ -184,13 +184,14 @@ const kpiData = computed(() => {
       revenueLabel: goldRev.title ?? '营业额',
       totalProfit: goldAvg.rawValue ?? null,
       profitGrowth: null as number | null,
-      profitLabel: '客单价',
+      // 非餐饮 (食品厂等) 走 POS gold 时用中性标签, 避免"客单价/门店数"语义错位。
+      profitLabel: authStore.factoryType === 'RESTAURANT' ? '客单价' : '笔均金额',
       profitUnit: '元',
       orderCount: goldBills.rawValue ?? null,
       orderGrowth: null as number | null,
       customerCount: goldStores.rawValue ?? null,
       customerGrowth: null as number | null,
-      customerLabel: '门店数',
+      customerLabel: authStore.factoryType === 'RESTAURANT' ? '门店数' : '网点数',
       customerUnit: '家',
     };
   }
@@ -448,6 +449,8 @@ function goToUpload() {
 // 快捷问答 — 按 factoryType 切换 (餐饮 vs 制造业)
 // 餐饮 8 问 keep in sync with web-admin/src/views/smart-bi/AIQuery.vue quickQuestions (Apr 24 RAG polish)
 const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT');
+// 路演 demo 租户: 隐藏空的模板分析区块 (无 xlsx 上传时为占位空卡)。
+const isDemoTenant = computed(() => /^DEMO_/.test(authStore.factoryId || ''));
 const restaurantQuickQuestions = [
   { text: '畅销品 Top 5', icon: Goods },
   { text: '哪家店业绩最好', icon: Location },
@@ -2068,7 +2071,8 @@ onUnmounted(() => {
       :date-range="dateRange"
     />
     <!-- Week 6 Template Surfacing: show analysis results for this page -->
-    <TemplateGrid v-else page-key="dashboard" :factory-id="factoryId || ''" />
+    <!-- demo 租户隐藏: 无 xlsx 上传时模板分析是空占位卡, 路演不展示 -->
+    <TemplateGrid v-else-if="!isDemoTenant" page-key="dashboard" :factory-id="factoryId || ''" />
 
     <!-- Day 8 数据织网 Sub-Project A: bottom CTA prompting users to unlock
          capability-gated cards by uploading more comprehensive data -->
