@@ -200,7 +200,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
 
     if (soStatus === 'CONFIRMED') {
       const submitFinanceResp = await salesCtx.request.post(
-        `http://localhost:10010/api/mobile/${FACTORY_ID}/sales/orders/${soId}/submit-for-finance-review`,
+        `http://localhost:10010/api/mobile/${FACTORY_ID}/sales/orders/${soId}/submit-for-review`,
         { headers: authHeaders }
       );
       const submitFinanceBody = await submitFinanceResp.json();
