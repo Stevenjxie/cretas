@@ -164,4 +164,71 @@ class StandardCostServiceImplTest {
         assertThat(std.getTotalUnitCost()).isNull();
         assertThat(std.isLaborIncluded()).isFalse();
     }
+
+    // ── 修1-A: BOM 查询抛异常 → 不当"缺配置"吞成 null, 而是抛出让调用方可见 ────
+    //   用例: 临时 DB 异常不应伪装成"无 ACTIVE BOM 或料未定价"导致静默漏报
+    @Test
+    void bomQueryThrows_propagatesException_notSilentNull() {
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenThrow(new RuntimeException("DB connection lost"));
+
+        // resolveStandardUnitCost 应把 BOM 查询失败的异常向上抛,
+        // 不能返回 materialUnitCost=null 装作"没有BOM"静默跳过报警
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class,
+                () -> service.resolveStandardUnitCost(FACTORY, PT),
+                "BOM 查询异常必须向上抛, 不能静默为 null 导致漏报超支报警");
+    }
+
+    // ── 修1-B: 研发报价任务查询抛异常 → 不当"无研发任务"吞成 null, 而是抛出 ──
+    //   用例: DB 临时故障不应静默伪装成"产品没有研发任务"导致漏报
+    @Test
+    void rdTaskQueryThrows_propagatesException_notSilentNull() {
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(recipe(new BigDecimal("8.00"), new BigDecimal("200"), "g")));
+        when(quotationTaskRepository.findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PT))
+                .thenThrow(new RuntimeException("RD repo unavailable"));
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class,
+                () -> service.resolveStandardUnitCost(FACTORY, PT),
+                "研发报价任务查询异常必须向上抛, 不能静默为 null 导致漏报超支报警");
+    }
+
+    // ── 修2: outputUnit = 盒/件 → caliberHint 明确说明"单位无法折算→超支报警禁用" ──
+    //   用例: F006 某产品 outputUnit="盒", 超支报警对它永久禁用, 必须在 caliberHint 中可见
+    @Test
+    void outputUnitBox_caliberHintMentionsUnsupportedUnit_notMisleadingNolabor() {
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(recipe(new BigDecimal("8.00"), new BigDecimal("1"), "盒")));
+        when(quotationTaskRepository.findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PT))
+                .thenReturn(Optional.of(quote(new BigDecimal("10.00"))));
+
+        StandardCostService.StandardUnitCost std = service.resolveStandardUnitCost(FACTORY, PT);
+
+        assertThat(std.getLaborUnitCost()).isNull();
+        assertThat(std.getTotalUnitCost()).isNull();
+        assertThat(std.isLaborIncluded()).isFalse();
+        // caliberHint MUST mention the unsupported unit "盒" and that alarm is disabled,
+        // NOT just "缺研发预估人工" (which is misleading — the task exists with laborPerKg set)
+        assertThat(std.getCaliberHint())
+                .as("caliberHint should explain the unit '盒' cannot be converted, not just '缺研发预估人工'")
+                .containsAnyOf("盒", "单位", "折算");
+    }
+
+    // ── 修2-B: outputUnit = 件 → 同样可见 ───────────────────────────────────────
+    @Test
+    void outputUnitPiece_caliberHintMentionsUnsupportedUnit() {
+        when(bomRecipeService.getCurrentRecipe(FACTORY, PT))
+                .thenReturn(Optional.of(recipe(new BigDecimal("8.00"), new BigDecimal("1"), "件")));
+        when(quotationTaskRepository.findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(FACTORY, PT))
+                .thenReturn(Optional.of(quote(new BigDecimal("10.00"))));
+
+        StandardCostService.StandardUnitCost std = service.resolveStandardUnitCost(FACTORY, PT);
+
+        assertThat(std.isLaborIncluded()).isFalse();
+        assertThat(std.getCaliberHint())
+                .as("caliberHint should mention unsupported unit or conversion inability")
+                .containsAnyOf("件", "单位", "折算");
+    }
 }

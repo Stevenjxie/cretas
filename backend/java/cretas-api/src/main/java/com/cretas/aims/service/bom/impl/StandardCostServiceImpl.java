@@ -31,6 +31,20 @@ public class StandardCostServiceImpl implements StandardCostService {
     private static final int COST_SCALE = 4;
     private static final BigDecimal GRAMS_PER_KG = new BigDecimal("1000");
 
+    /**
+     * 修2: 标准人工解析结果, 区分三种"为何 null"的语义:
+     * <ul>
+     *   <li>{@code value != null} — 成功算出标准人工单位成本</li>
+     *   <li>{@code value == null, skipReason contains "单位"} — 产品 outputUnit 非 g/kg,
+     *       无法折算到 kg; 超支报警对此产品永久禁用 → caliberHint 必须说明单位</li>
+     *   <li>{@code value == null, skipReason 其他} — 正常缺配置 (无研发任务/laborPerKg 空等)</li>
+     * </ul>
+     */
+    private record LaborResult(BigDecimal value, String skipReason) {
+        static LaborResult of(BigDecimal value) { return new LaborResult(value, null); }
+        static LaborResult skip(String reason) { return new LaborResult(null, reason); }
+    }
+
     private final BomRecipeService bomRecipeService;
     private final QuotationTaskRepository quotationTaskRepository;
 
@@ -45,25 +59,25 @@ public class StandardCostServiceImpl implements StandardCostService {
         }
 
         // ── 1. 料标准成本 (BomRecipe.totalMaterialCost, 配方料 only) ──────────
+        // 修1: 查询异常直接向上抛 — 不吞成 null 当"无 BOM 配置"处理。
+        //   "无 BOM" = Optional.empty() (正常业务态, 诚实跳过)。
+        //   "查询失败" = 抛异常 (临时故障, 不能伪装成"缺配置"导致静默漏报超支报警)。
         BigDecimal materialUnitCost = null;
         BomRecipe recipe = null;
-        try {
-            Optional<BomRecipe> recipeOpt = bomRecipeService.getCurrentRecipe(factoryId, productTypeId);
-            if (recipeOpt.isPresent()) {
-                recipe = recipeOpt.get();
-                BigDecimal mat = recipe.getTotalMaterialCost();
-                // 诚实: null (含未定价料) 或 <=0 (空配方) 视为料标准不可用, 不当 0
-                if (mat != null && mat.compareTo(BigDecimal.ZERO) > 0) {
-                    materialUnitCost = mat;
-                }
+        Optional<BomRecipe> recipeOpt = bomRecipeService.getCurrentRecipe(factoryId, productTypeId);
+        if (recipeOpt.isPresent()) {
+            recipe = recipeOpt.get();
+            BigDecimal mat = recipe.getTotalMaterialCost();
+            // 诚实: null (含未定价料) 或 <=0 (空配方) 视为料标准不可用, 不当 0
+            if (mat != null && mat.compareTo(BigDecimal.ZERO) > 0) {
+                materialUnitCost = mat;
             }
-        } catch (Exception e) {
-            log.warn("[D1-StdCost] BOM 料标准查询失败: factoryId={}, productTypeId={}: {}",
-                    factoryId, productTypeId, e.getMessage());
         }
 
         // ── 2. 标准人工 (研发预估 laborPerKg → 折算到每单位成品) ──────────────
-        BigDecimal laborUnitCost = resolveStandardLaborUnitCost(factoryId, productTypeId, recipe);
+        // 修1+修2: 异常向上抛 (不吞成 null); LaborResult 区分"无配置"/"单位不支持"两种跳过语义
+        LaborResult laborResult = resolveStandardLaborUnitCost(factoryId, productTypeId, recipe);
+        BigDecimal laborUnitCost = laborResult.value();
 
         // ── 3. 标准制费: 当前无规范数据源 → 诚实 null ──────────────────────────
         BigDecimal overheadUnitCost = null;
@@ -90,7 +104,12 @@ public class StandardCostServiceImpl implements StandardCostService {
                 hint.append("BOM 料标准成本不可用 (无 ACTIVE BOM 或料未定价); ");
             }
             if (!laborReady) {
-                hint.append("缺研发预估人工 (请在研发报价任务填写 人工成本 元/kg); ");
+                // 修2: 区分"单位无法折算"(产品决策)与"正常缺配置", 两者 caliberHint 不同
+                if (laborResult.skipReason() != null) {
+                    hint.append(laborResult.skipReason()).append("; ");
+                } else {
+                    hint.append("缺研发预估人工 (请在研发报价任务填写 人工成本 元/kg); ");
+                }
             }
             caliberHint = hint.toString().trim();
         }
@@ -112,53 +131,56 @@ public class StandardCostServiceImpl implements StandardCostService {
      * <ul>
      *   <li>outputUnit = "g"  → kg = outputQuantityPerUnit / 1000</li>
      *   <li>outputUnit = "kg" → kg = outputQuantityPerUnit</li>
-     *   <li>其他单位 (个/件/...) → 无法折算到 kg, 诚实 null</li>
+     *   <li>其他单位 (个/件/盒/...) → 无法折算到 kg → LaborResult.skip 含"单位"说明</li>
      * </ul>
      *
-     * <p>诚实 null: 无研发报价任务 / laborPerKg 为 null/<=0 / 无 BOM 或 outputQuantityPerUnit
-     * 缺失 / 单位非 g·kg → 返 null (不伪造标准人工)。
+     * <p><b>修1</b>: 不再 catch 查询异常 — 临时 DB 故障必须向上抛, 不能被当"正常缺配置"处理。
+     * "正常缺配置" = Optional.empty() (无研发任务) 或 laborPerKg null/<=0 (任务存在但未填)。
+     *
+     * <p><b>修2</b>: 当 outputUnit 不可折算时返回 {@code LaborResult.skip} 含单位说明,
+     * 而非"缺研发预估人工" — 让 caliberHint 可见"此产品单位 X 无法折算到 kg → 超支报警禁用"。
+     * net-content 折算 (盒×净重/克重) 标为待 Steve 决策: BomRecipe 有 gramsPerUnit 字段时可顺手支持;
+     * 当前 gramsPerUnit 尚未普遍填写, 不擅自造, 只做可见化。
      */
-    private BigDecimal resolveStandardLaborUnitCost(String factoryId, String productTypeId, BomRecipe recipe) {
-        // 研发预估人工 (元/kg成品)
-        BigDecimal laborPerKg;
-        try {
-            Optional<QuotationTask> taskOpt = quotationTaskRepository
-                    .findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(factoryId, productTypeId);
-            if (taskOpt.isEmpty()) {
-                log.debug("[D1-StdCost] 产品 {} 无研发报价任务 → 无标准人工", productTypeId);
-                return null;
-            }
-            laborPerKg = taskOpt.get().getLaborPerKg();
-        } catch (Exception e) {
-            log.warn("[D1-StdCost] 研发报价任务查询失败: factoryId={}, productTypeId={}: {}",
-                    factoryId, productTypeId, e.getMessage());
-            return null;
+    private LaborResult resolveStandardLaborUnitCost(String factoryId, String productTypeId, BomRecipe recipe) {
+        // 修1: 研发报价任务查询异常直接向上抛 (不 catch 吞成 null)
+        Optional<QuotationTask> taskOpt = quotationTaskRepository
+                .findFirstByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(factoryId, productTypeId);
+        if (taskOpt.isEmpty()) {
+            log.debug("[D1-StdCost] 产品 {} 无研发报价任务 → 无标准人工", productTypeId);
+            return LaborResult.skip(null);
         }
+        BigDecimal laborPerKg = taskOpt.get().getLaborPerKg();
         if (laborPerKg == null || laborPerKg.compareTo(BigDecimal.ZERO) <= 0) {
             log.debug("[D1-StdCost] 产品 {} 研发报价任务无 laborPerKg → 无标准人工", productTypeId);
-            return null;
+            return LaborResult.skip(null);
         }
 
         // 单位成品 kg (BOM 的 outputQuantityPerUnit + outputUnit)
         if (recipe == null) {
             log.debug("[D1-StdCost] 产品 {} 无 BOM, 无法折算单位成品 kg → 无标准人工", productTypeId);
-            return null;
+            return LaborResult.skip(null);
         }
         BigDecimal outputQtyPerUnit = recipe.getOutputQuantityPerUnit();
         if (outputQtyPerUnit == null || outputQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) {
             log.debug("[D1-StdCost] 产品 {} BOM outputQuantityPerUnit={} 非正 → 无标准人工",
                     productTypeId, outputQtyPerUnit);
-            return null;
+            return LaborResult.skip(null);
         }
         BigDecimal unitKg = toKilograms(outputQtyPerUnit, recipe.getOutputUnit());
         if (unitKg == null) {
-            log.debug("[D1-StdCost] 产品 {} BOM outputUnit={} 非 g/kg, 无法折算 → 无标准人工",
-                    productTypeId, recipe.getOutputUnit());
-            return null;
+            // 修2: 单位无法折算 → warn 级别 (可见) + 明确说明"超支报警对本品禁用"
+            String outputUnit = recipe.getOutputUnit();
+            log.warn("[D1-StdCost] 产品 {} BOM outputUnit={} 无法折算到 kg → 标准人工缺失, 超支报警对本品禁用。" +
+                            "如需支持, 请在 BOM 配置 gramsPerUnit (净含量/克) 后联系开发团队启用 net-content 折算。",
+                    productTypeId, outputUnit);
+            return LaborResult.skip(
+                    "产品单位 \"" + outputUnit + "\" 无法折算到 kg, 标准人工缺失 → 超支报警对本品禁用" +
+                    " (待 Steve 决策: 配置 gramsPerUnit 可支持 net-content 折算)");
         }
 
         // 标准人工单位成本 = laborPerKg × unitKg
-        return laborPerKg.multiply(unitKg).setScale(COST_SCALE, RoundingMode.HALF_UP);
+        return LaborResult.of(laborPerKg.multiply(unitKg).setScale(COST_SCALE, RoundingMode.HALF_UP));
     }
 
     /**
