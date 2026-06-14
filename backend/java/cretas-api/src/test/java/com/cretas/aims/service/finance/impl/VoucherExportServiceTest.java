@@ -13,12 +13,20 @@ import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.finance.VoucherExportConfig;
 import com.cretas.aims.entity.finance.VoucherExportRecord;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.finance.VoucherExportConfigRepository;
 import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,11 +34,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
 
 import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +67,10 @@ class VoucherExportServiceTest {
     @Mock private AccountingPeriodRepository accountingPeriodRepo;
     @Mock private VoucherExportConfigRepository exportConfigRepo;
     @Mock private VoucherExportRecordRepository exportRecordRepo;
+    @Mock private MaterialBatchRepository materialBatchRepo;
+    @Mock private MaterialConsumptionRepository materialConsumptionRepo;
+    @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepo;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
 
     private VoucherExportServiceImpl service;
 
@@ -68,7 +82,8 @@ class VoucherExportServiceTest {
     @BeforeEach
     void setUp() {
         service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
-                accountingPeriodRepo, exportConfigRepo, exportRecordRepo);
+                accountingPeriodRepo, exportConfigRepo, exportRecordRepo,
+                materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo);
     }
 
     private VoucherExportRequestDTO buildReq() {
@@ -94,6 +109,17 @@ class VoucherExportServiceTest {
                 .name(name)
                 .category(balanceType == AccountBalanceType.DEBIT_NORMAL
                         ? AccountCategory.ASSET : AccountCategory.LIABILITY)
+                .balanceType(balanceType)
+                .build();
+    }
+
+    private Account account(String code, String name, AccountCategory category, AccountBalanceType balanceType) {
+        return Account.builder()
+                .id("ACC-" + code)
+                .factoryId(FACTORY_ID)
+                .code(code)
+                .name(name)
+                .category(category)
                 .balanceType(balanceType)
                 .build();
     }
@@ -144,6 +170,72 @@ class VoucherExportServiceTest {
                 .debit(new BigDecimal(debit))
                 .credit(new BigDecimal(credit))
                 .build();
+    }
+
+    private MaterialBatch materialBatch(String id, String typeId, String batchNo,
+                                        String receiptDate, String quantity, String unitPrice) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setMaterialTypeId(typeId);
+        batch.setBatchNumber(batchNo);
+        batch.setReceiptDate(LocalDate.parse(receiptDate));
+        batch.setReceiptQuantity(new BigDecimal(quantity));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit("kg");
+        batch.setUnitPrice(new BigDecimal(unitPrice));
+        batch.setCreatedBy(USER_ID);
+        return batch;
+    }
+
+    private MaterialConsumption consumption(String batchId, String typeId, String time,
+                                            String quantity, String unitPrice, String totalCost) {
+        MaterialConsumption consumption = new MaterialConsumption();
+        consumption.setFactoryId(FACTORY_ID);
+        consumption.setBatchId(batchId);
+        consumption.setMaterialTypeId(typeId);
+        consumption.setConsumptionTime(LocalDateTime.parse(time));
+        consumption.setQuantity(new BigDecimal(quantity));
+        consumption.setUnitPrice(new BigDecimal(unitPrice));
+        consumption.setTotalCost(new BigDecimal(totalCost));
+        consumption.setNotes("生产领用");
+        consumption.setRecordedBy(USER_ID);
+        return consumption;
+    }
+
+    private SemiFinishedInventory semiFinished(String batchNo, String productTypeId,
+                                               String createdAt, String produced, String consumed, String unitCost) {
+        return SemiFinishedInventory.builder()
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(batchNo)
+                .productTypeId(productTypeId)
+                .producedQuantity(new BigDecimal(produced))
+                .consumedQuantity(new BigDecimal(consumed))
+                .availableQuantity(new BigDecimal(produced).subtract(new BigDecimal(consumed)))
+                .unit("kg")
+                .unitCost(new BigDecimal(unitCost))
+                .createdAt(LocalDateTime.parse(createdAt))
+                .build();
+    }
+
+    private FinishedGoodsBatch finishedGoods(String id, String batchNo, String productTypeId,
+                                             String productionDate, String produced, String shipped, String unitPrice) {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setBatchNumber(batchNo);
+        batch.setProductTypeId(productTypeId);
+        batch.setProductName("成品-" + productTypeId);
+        batch.setProductionDate(LocalDate.parse(productionDate));
+        batch.setProducedQuantity(new BigDecimal(produced));
+        batch.setShippedQuantity(new BigDecimal(shipped));
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit("kg");
+        batch.setUnitPrice(new BigDecimal(unitPrice));
+        batch.setWarehouseId("WH-LOG");
+        batch.setCreatedBy(USER_ID);
+        return batch;
     }
 
     private List<List<String>> readXlsx(byte[] bytes) {
@@ -557,5 +649,86 @@ class VoucherExportServiceTest {
         assertTrue(ex.getMessage().contains("期末"));
         assertTrue(ex.getMessage().contains("1002 银行存款"));
         assertTrue(ex.getMessage().contains("差额=100.00"));
+    }
+
+    @Test
+    @DisplayName("Income statement export writes period formulas and year-to-date totals")
+    void exportIncomeStatement_writesPeriodAndYearToDateFormulaRows() throws Exception {
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+                .thenReturn(List.of(
+                        aggregate("6001", "主营业务收入", "0.00", "1000.00"),
+                        aggregate("6401", "主营业务成本", "400.00", "0.00"),
+                        aggregate("6601", "销售费用", "50.00", "0.00")
+                ));
+        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
+                .thenReturn(List.of(
+                        aggregate("6001", "主营业务收入", "0.00", "3000.00"),
+                        aggregate("6401", "主营业务成本", "1200.00", "0.00"),
+                        aggregate("6601", "销售费用", "150.00", "0.00")
+                ));
+        when(accountRepo.findVisibleToFactory(FACTORY_ID)).thenReturn(List.of(
+                account("6001", "主营业务收入", AccountCategory.REVENUE, AccountBalanceType.CREDIT_NORMAL),
+                account("6401", "主营业务成本", AccountCategory.COST, AccountBalanceType.DEBIT_NORMAL),
+                account("6601", "销售费用", AccountCategory.EXPENSE, AccountBalanceType.DEBIT_NORMAL)
+        ));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportIncomeStatement(FACTORY_ID, buildReq(), USER_ID, out);
+
+        assertTrue(fileName.startsWith("income-statement_"));
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("项目", "本期金额", "本年累计金额"), rows.get(0));
+        Map<String, List<String>> byItem = rows.stream()
+                .skip(1)
+                .filter(row -> row.size() >= 3)
+                .collect(Collectors.toMap(row -> row.get(0), row -> row, (a, b) -> a));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(decimalAt(byItem.get("一、营业收入"), 1)));
+        assertEquals(0, new BigDecimal("400.00").compareTo(decimalAt(byItem.get("减：营业成本"), 1)));
+        assertEquals(0, new BigDecimal("600.00").compareTo(decimalAt(byItem.get("二、毛利"), 1)));
+        assertEquals(0, new BigDecimal("1800.00").compareTo(decimalAt(byItem.get("二、毛利"), 2)));
+        assertEquals(0, new BigDecimal("550.00").compareTo(decimalAt(byItem.get("三、营业利润"), 1)));
+        assertEquals(0, new BigDecimal("1650.00").compareTo(decimalAt(byItem.get("三、营业利润"), 2)));
+    }
+
+    @Test
+    @DisplayName("Quantity amount ledger export balances inbound outbound and running stock")
+    void exportQuantityAmountLedger_writesInboundOutboundAndRunningBalance() throws Exception {
+        MaterialBatch rawBatch = materialBatch("MB-001", "RAW-PEPPER", "MB20260501001",
+                "2026-05-01", "100.000", "8.00");
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(rawBatch)));
+        when(materialConsumptionRepo.findByTimeRange(eq(FACTORY_ID), any(), any()))
+                .thenReturn(List.of(consumption("MB-001", "RAW-PEPPER", "2026-05-03T10:00:00",
+                        "30.000", "8.00", "240.00")));
+        when(semiFinishedInventoryRepo.findByFactoryIdForWeightView(FACTORY_ID))
+                .thenReturn(List.of(semiFinished("WIP-001", "SEMI-PASTE", "2026-05-04T09:00:00",
+                        "20.000", "5.000", "12.00")));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(finishedGoods("FG-001", "FG20260505001", "FG-SAUCE",
+                        "2026-05-05", "10.000", "2.000", "30.00"))));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+
+        assertTrue(fileName.startsWith("quantity-amount-ledger_"));
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        assertEquals(List.of("日期", "凭证字号", "摘要", "收入数量", "收入单价", "收入金额",
+                "发出数量", "发出单价", "发出金额", "结存数量", "结存单价", "结存金额"), rows.get(0));
+        List<String> rawInbound = rows.get(1);
+        assertEquals("2026-05-01", rawInbound.get(0));
+        assertEquals(0, new BigDecimal("100.000").compareTo(decimalAt(rawInbound, 3)));
+        assertEquals(0, new BigDecimal("100.000").compareTo(decimalAt(rawInbound, 9)));
+        assertEquals(0, new BigDecimal("800.00").compareTo(decimalAt(rawInbound, 11)));
+
+        List<String> rawOutbound = rows.get(2);
+        assertEquals("2026-05-03", rawOutbound.get(0));
+        assertEquals(0, new BigDecimal("30.000").compareTo(decimalAt(rawOutbound, 6)));
+        assertEquals(0, new BigDecimal("70.000").compareTo(decimalAt(rawOutbound, 9)));
+        assertEquals(0, new BigDecimal("560.00").compareTo(decimalAt(rawOutbound, 11)));
+
+        List<String> footer = rows.get(rows.size() - 1);
+        assertEquals("凭证来源口径=待财务确认", footer.get(0));
     }
 }

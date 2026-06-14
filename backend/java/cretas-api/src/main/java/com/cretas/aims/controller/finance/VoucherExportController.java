@@ -175,6 +175,48 @@ public class VoucherExportController {
         log.info("[Ledger] trial balance export: factoryId={} file={}", factoryId, fileName);
     }
 
+    @GetMapping("/income-statement/export")
+    @RequireModule("finance")
+    @RequirePermission({"finance:read"})
+    public void exportIncomeStatement(
+            @PathVariable String factoryId,
+            @RequestParam String startDate,
+            @RequestParam String endDate,
+            @RequestParam(defaultValue = "KINGDEE") VoucherTargetSystem targetSystem,
+            HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+
+        Long userId = currentUserId(request);
+        VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = voucherExportService.exportIncomeStatement(
+                factoryId, req, userId, response.getOutputStream());
+        setAttachmentHeader(response, fileName);
+        response.flushBuffer();
+        log.info("[FinanceReport] income statement export: factoryId={} file={}", factoryId, fileName);
+    }
+
+    @GetMapping("/quantity-amount-ledger/export")
+    @RequireModule("finance")
+    @RequirePermission({"finance:read"})
+    public void exportQuantityAmountLedger(
+            @PathVariable String factoryId,
+            @RequestParam String startDate,
+            @RequestParam String endDate,
+            @RequestParam(defaultValue = "KINGDEE") VoucherTargetSystem targetSystem,
+            HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+
+        Long userId = currentUserId(request);
+        VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = voucherExportService.exportQuantityAmountLedger(
+                factoryId, req, userId, response.getOutputStream());
+        setAttachmentHeader(response, fileName);
+        response.flushBuffer();
+        log.info("[FinanceReport] quantity amount ledger export: factoryId={} file={}", factoryId, fileName);
+    }
+
     private Long currentUserId(HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
         return userId == null ? 0L : userId;

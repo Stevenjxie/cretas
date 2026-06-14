@@ -6,23 +6,33 @@ import com.alibaba.excel.write.metadata.WriteSheet;
 import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
 import com.cretas.aims.entity.enums.AccountBalanceType;
+import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.finance.VoucherExportConfig;
 import com.cretas.aims.entity.finance.VoucherExportRecord;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.finance.VoucherExportConfigRepository;
 import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.finance.VoucherExportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,7 +69,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private static final String TYPE_GENERAL_LEDGER = "GENERAL_LEDGER";
     private static final String TYPE_SUBSIDIARY_LEDGER = "SUBSIDIARY_LEDGER";
     private static final String TYPE_TRIAL_BALANCE = "TRIAL_BALANCE";
+    private static final String TYPE_INCOME_STATEMENT = "INCOME_STATEMENT";
+    private static final String TYPE_QUANTITY_AMOUNT_LEDGER = "QUANTITY_AMOUNT_LEDGER";
     private static final LocalDate EPOCH_START = LocalDate.of(1970, 1, 1);
+    private static final int INVENTORY_EXPORT_PAGE_SIZE = 10_000;
+    private static final String SOURCE_FOOTER_TEXT = "凭证来源口径=待财务确认";
     private static final String VOUCHER_SOURCE_CALIBER_PENDING = "待财务确认";
 
     private final VoucherRepository voucherRepo;
@@ -68,6 +82,10 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private final AccountingPeriodRepository accountingPeriodRepo;
     private final VoucherExportConfigRepository exportConfigRepo;
     private final VoucherExportRecordRepository exportRecordRepo;
+    private final MaterialBatchRepository materialBatchRepo;
+    private final MaterialConsumptionRepository materialConsumptionRepo;
+    private final SemiFinishedInventoryRepository semiFinishedInventoryRepo;
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepo;
 
     @Override
     @Transactional
@@ -380,6 +398,307 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         String fileName = buildFileName("trial-balance", factoryId, req.getStartDate(), req.getEndDate());
         saveExportRecord(factoryId, TYPE_TRIAL_BALANCE, req, userId, fileName, lines.size());
         return fileName;
+    }
+
+    @Override
+    @Transactional
+    public String exportIncomeStatement(String factoryId, VoucherExportRequestDTO req,
+                                        Long userId, OutputStream out) throws Exception {
+        IncomeAmounts period = buildIncomeAmounts(factoryId,
+                entryRepo.aggregateBySubject(factoryId, req.getStartDate(), req.getEndDate()));
+        IncomeAmounts yearToDate = buildIncomeAmounts(factoryId,
+                entryRepo.aggregateBySubject(factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
+
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("项目", "本期金额", "本年累计金额"));
+        addIncomeRow(rows, "一、营业收入", period.revenue, yearToDate.revenue);
+        addIncomeRow(rows, "减：营业成本", period.cost, yearToDate.cost);
+        addIncomeRow(rows, "税金及附加", period.taxAndSurcharge, yearToDate.taxAndSurcharge);
+        addIncomeRow(rows, "二、毛利", period.grossProfit(), yearToDate.grossProfit());
+        addIncomeRow(rows, "减：销售费用", period.sellingExpense, yearToDate.sellingExpense);
+        addIncomeRow(rows, "减：管理费用", period.adminExpense, yearToDate.adminExpense);
+        addIncomeRow(rows, "减：财务费用", period.financeExpense, yearToDate.financeExpense);
+        addIncomeRow(rows, "三、营业利润", period.operatingProfit(), yearToDate.operatingProfit());
+        addIncomeRow(rows, "加：营业外收入", period.nonOperatingIncome, yearToDate.nonOperatingIncome);
+        addIncomeRow(rows, "减：营业外支出", period.nonOperatingExpense, yearToDate.nonOperatingExpense);
+        addIncomeRow(rows, "四、利润总额", period.totalProfit(), yearToDate.totalProfit());
+        addIncomeRow(rows, "减：所得税", period.incomeTax, yearToDate.incomeTax);
+        addIncomeRow(rows, "五、净利润", period.netProfit(), yearToDate.netProfit());
+        rows.add(List.of(SOURCE_FOOTER_TEXT));
+
+        writeRawRows(out, rows);
+        String fileName = buildFileName("income-statement", factoryId, req.getStartDate(), req.getEndDate());
+        saveExportRecord(factoryId, TYPE_INCOME_STATEMENT, req, userId, fileName, rows.size() - 2);
+        return fileName;
+    }
+
+    @Override
+    @Transactional
+    public String exportQuantityAmountLedger(String factoryId, VoucherExportRequestDTO req,
+                                             Long userId, OutputStream out) throws Exception {
+        List<InventoryMovement> movements = buildInventoryMovements(factoryId, req);
+        movements.sort(Comparator
+                .comparing(InventoryMovement::date, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(InventoryMovement::voucherNo, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(InventoryMovement::summary, Comparator.nullsLast(Comparator.naturalOrder())));
+
+        Map<String, RunningInventoryBalance> runningByItem = new HashMap<>();
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("日期", "凭证字号", "摘要", "收入数量", "收入单价", "收入金额",
+                "发出数量", "发出单价", "发出金额", "结存数量", "结存单价", "结存金额"));
+
+        for (InventoryMovement movement : movements) {
+            RunningInventoryBalance running = runningByItem.computeIfAbsent(movement.itemKey(),
+                    ignored -> new RunningInventoryBalance());
+            running.quantity = running.quantity.add(nvl(movement.inQuantity())).subtract(nvl(movement.outQuantity()));
+            running.amount = running.amount.add(nvl(movement.inAmount())).subtract(nvl(movement.outAmount()));
+            rows.add(List.of(
+                    movement.date() == null ? "" : movement.date().toString(),
+                    nvlStr(movement.voucherNo()),
+                    nvlStr(movement.summary()),
+                    quantityText(movement.inQuantity()),
+                    amountText(movement.inUnitPrice()),
+                    amountText(movement.inAmount()),
+                    quantityText(movement.outQuantity()),
+                    amountText(movement.outUnitPrice()),
+                    amountText(movement.outAmount()),
+                    quantityText(running.quantity),
+                    amountText(running.unitPrice()),
+                    amountText(running.amount)
+            ));
+        }
+
+        appendEmptyStateIfNeeded(rows, "暂无符合条件的库存数量金额流水");
+        rows.add(List.of(SOURCE_FOOTER_TEXT));
+        writeRawRows(out, rows);
+        String fileName = buildFileName("quantity-amount-ledger", factoryId, req.getStartDate(), req.getEndDate());
+        saveExportRecord(factoryId, TYPE_QUANTITY_AMOUNT_LEDGER, req, userId, fileName, movements.size());
+        return fileName;
+    }
+
+    private IncomeAmounts buildIncomeAmounts(String factoryId, List<SubjectAggregateRow> aggregates) {
+        Map<String, Account> accountByCode = new HashMap<>();
+        for (Account account : accountRepo.findVisibleToFactory(factoryId)) {
+            if (account.getCode() == null) {
+                continue;
+            }
+            accountByCode.merge(account.getCode(), account, (existing, incoming) ->
+                    existing.getFactoryId() != null ? existing : incoming);
+        }
+
+        IncomeAmounts amounts = new IncomeAmounts();
+        for (SubjectAggregateRow row : aggregates) {
+            String code = row.getSubjectCode();
+            Account account = accountByCode.get(code);
+            String name = account != null && account.getName() != null ? account.getName() : row.getSubjectName();
+            AccountCategory category = account != null ? account.getCategory() : inferAccountCategory(code);
+
+            if (isNonOperatingIncome(code, name)) {
+                amounts.nonOperatingIncome = amounts.nonOperatingIncome.add(safeSubtract(row.getTotalCredit(), row.getTotalDebit()));
+            } else if (isNonOperatingExpense(code, name)) {
+                amounts.nonOperatingExpense = amounts.nonOperatingExpense.add(safeSubtract(row.getTotalDebit(), row.getTotalCredit()));
+            } else if (isIncomeTax(code, name)) {
+                amounts.incomeTax = amounts.incomeTax.add(safeSubtract(row.getTotalDebit(), row.getTotalCredit()));
+            } else if (isTaxAndSurcharge(code, name)) {
+                amounts.taxAndSurcharge = amounts.taxAndSurcharge.add(safeSubtract(row.getTotalDebit(), row.getTotalCredit()));
+            } else if (category == AccountCategory.REVENUE) {
+                amounts.revenue = amounts.revenue.add(safeSubtract(row.getTotalCredit(), row.getTotalDebit()));
+            } else if (category == AccountCategory.COST || isOperatingCost(code, name)) {
+                amounts.cost = amounts.cost.add(safeSubtract(row.getTotalDebit(), row.getTotalCredit()));
+            } else if (category == AccountCategory.EXPENSE) {
+                BigDecimal expense = safeSubtract(row.getTotalDebit(), row.getTotalCredit());
+                if (isSellingExpense(code, name)) {
+                    amounts.sellingExpense = amounts.sellingExpense.add(expense);
+                } else if (isFinanceExpense(code, name)) {
+                    amounts.financeExpense = amounts.financeExpense.add(expense);
+                } else {
+                    amounts.adminExpense = amounts.adminExpense.add(expense);
+                }
+            }
+        }
+        amounts.scale();
+        return amounts;
+    }
+
+    private void addIncomeRow(List<List<Object>> rows, String item, BigDecimal period, BigDecimal yearToDate) {
+        rows.add(List.of(item, amountText(period), amountText(yearToDate)));
+    }
+
+    private List<InventoryMovement> buildInventoryMovements(String factoryId, VoucherExportRequestDTO req) {
+        List<InventoryMovement> movements = new ArrayList<>();
+        LocalDateTime startTime = req.getStartDate().atStartOfDay();
+        LocalDateTime endTime = req.getEndDate().plusDays(1).atStartOfDay().minusNanos(1);
+
+        for (MaterialBatch batch : materialBatchRepo.findByFactoryId(factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()) {
+            if (batch.getReceiptDate() == null || batch.getReceiptDate().isBefore(req.getStartDate())
+                    || batch.getReceiptDate().isAfter(req.getEndDate())) {
+                continue;
+            }
+            BigDecimal quantity = nvl(batch.getReceiptQuantity());
+            BigDecimal unitPrice = nvl(batch.getUnitPrice());
+            movements.add(InventoryMovement.inbound(
+                    batch.getReceiptDate(),
+                    firstNonBlank(batch.getSourceDocId(), batch.getBatchNumber()),
+                    "原料入库 " + nvlStr(batch.getMaterialTypeId()) + " " + nvlStr(batch.getBatchNumber()),
+                    "RAW:" + nvlStr(batch.getMaterialTypeId()),
+                    quantity,
+                    unitPrice,
+                    quantity.multiply(unitPrice)
+            ));
+        }
+
+        for (MaterialConsumption consumption : materialConsumptionRepo.findByTimeRange(factoryId, startTime, endTime)) {
+            LocalDate date = consumption.getConsumptionTime() == null ? null : consumption.getConsumptionTime().toLocalDate();
+            BigDecimal quantity = nvl(consumption.getQuantity());
+            BigDecimal amount = nvl(consumption.getTotalCost());
+            BigDecimal unitPrice = resolveUnitPrice(quantity, consumption.getUnitPrice(), amount);
+            movements.add(InventoryMovement.outbound(
+                    date,
+                    firstNonBlank(consumption.getProductionPlanId(), consumption.getBatchId()),
+                    "原料发出 " + nvlStr(consumption.getMaterialTypeId()) + " " + nvlStr(consumption.getNotes()),
+                    "RAW:" + firstNonBlank(consumption.getMaterialTypeId(), consumption.getBatchId()),
+                    quantity,
+                    unitPrice,
+                    amount
+            ));
+        }
+
+        for (SemiFinishedInventory wip : semiFinishedInventoryRepo.findByFactoryIdForWeightView(factoryId)) {
+            LocalDate date = wip.getCreatedAt() == null ? null : wip.getCreatedAt().toLocalDate();
+            if (!within(date, req.getStartDate(), req.getEndDate())) {
+                continue;
+            }
+            String itemKey = "WIP:" + firstNonBlank(wip.getProductTypeId(), wip.getIntermediateBatchNo());
+            BigDecimal unitCost = nvl(wip.getUnitCost());
+            BigDecimal produced = nvl(wip.getProducedQuantity());
+            if (produced.compareTo(BigDecimal.ZERO) > 0) {
+                movements.add(InventoryMovement.inbound(date, wip.getIntermediateBatchNo(),
+                        "半成品入库 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
+                        itemKey, produced, unitCost, produced.multiply(unitCost)));
+            }
+            BigDecimal consumed = nvl(wip.getConsumedQuantity());
+            if (consumed.compareTo(BigDecimal.ZERO) > 0) {
+                movements.add(InventoryMovement.outbound(date, wip.getIntermediateBatchNo(),
+                        "半成品发出 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
+                        itemKey, consumed, unitCost, consumed.multiply(unitCost)));
+            }
+        }
+
+        for (FinishedGoodsBatch batch : finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(
+                factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()) {
+            LocalDate date = batch.getProductionDate();
+            if (!within(date, req.getStartDate(), req.getEndDate())) {
+                continue;
+            }
+            String itemKey = "FG:" + firstNonBlank(batch.getProductTypeId(), batch.getBatchNumber());
+            BigDecimal unitPrice = nvl(batch.getUnitPrice());
+            BigDecimal produced = nvl(batch.getProducedQuantity());
+            if (produced.compareTo(BigDecimal.ZERO) > 0) {
+                movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
+                        "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()),
+                        itemKey, produced, unitPrice, produced.multiply(unitPrice)));
+            }
+            BigDecimal shipped = nvl(batch.getShippedQuantity());
+            if (shipped.compareTo(BigDecimal.ZERO) > 0) {
+                movements.add(InventoryMovement.outbound(date, batch.getBatchNumber(),
+                        "成品发出 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()),
+                        itemKey, shipped, unitPrice, shipped.multiply(unitPrice)));
+            }
+        }
+        return movements;
+    }
+
+    private boolean within(LocalDate date, LocalDate start, LocalDate end) {
+        return date != null && !date.isBefore(start) && !date.isAfter(end);
+    }
+
+    private BigDecimal resolveUnitPrice(BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
+        if (unitPrice != null) {
+            return unitPrice;
+        }
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+        return nvl(amount).divide(quantity, 6, RoundingMode.HALF_UP);
+    }
+
+    private AccountCategory inferAccountCategory(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        if (code.startsWith("60") || code.startsWith("5")) {
+            return AccountCategory.REVENUE;
+        }
+        if (code.startsWith("64")) {
+            return AccountCategory.COST;
+        }
+        if (code.startsWith("66") || code.startsWith("67") || code.startsWith("68")) {
+            return AccountCategory.EXPENSE;
+        }
+        return null;
+    }
+
+    private boolean isOperatingCost(String code, String name) {
+        return startsWithAny(code, "6401", "6402") || containsAny(name, "营业成本", "主营业务成本");
+    }
+
+    private boolean isTaxAndSurcharge(String code, String name) {
+        return startsWithAny(code, "6403") || containsAny(name, "税金及附加");
+    }
+
+    private boolean isSellingExpense(String code, String name) {
+        return startsWithAny(code, "6601") || containsAny(name, "销售费用");
+    }
+
+    private boolean isFinanceExpense(String code, String name) {
+        return startsWithAny(code, "6603") || containsAny(name, "财务费用");
+    }
+
+    private boolean isNonOperatingIncome(String code, String name) {
+        return startsWithAny(code, "6301") || containsAny(name, "营业外收入");
+    }
+
+    private boolean isNonOperatingExpense(String code, String name) {
+        return startsWithAny(code, "6711") || containsAny(name, "营业外支出");
+    }
+
+    private boolean isIncomeTax(String code, String name) {
+        return startsWithAny(code, "6801") || containsAny(name, "所得税");
+    }
+
+    private boolean startsWithAny(String value, String... prefixes) {
+        if (value == null) {
+            return false;
+        }
+        for (String prefix : prefixes) {
+            if (value.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsAny(String value, String... parts) {
+        if (value == null) {
+            return false;
+        }
+        for (String part : parts) {
+            if (value.contains(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private BigDecimal safeSubtract(BigDecimal a, BigDecimal b) {
+        return nvl(a).subtract(nvl(b));
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second == null ? "" : second;
     }
 
     private List<SubjectAggregateRow> loadOpeningAggregates(String factoryId, LocalDate startDate) {
@@ -710,6 +1029,15 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return scale2(v).toPlainString();
     }
 
+    private BigDecimal scale3(BigDecimal v) {
+        if (v == null) return BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP);
+        return v.setScale(3, RoundingMode.HALF_UP);
+    }
+
+    private String quantityText(BigDecimal v) {
+        return scale3(v).toPlainString();
+    }
+
     private BigDecimal nvl(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
     }
@@ -797,5 +1125,86 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             BigDecimal periodDebit,
             BigDecimal periodCredit,
             BigDecimal closingBalance) {
+    }
+
+    private static class IncomeAmounts {
+        private BigDecimal revenue = BigDecimal.ZERO;
+        private BigDecimal cost = BigDecimal.ZERO;
+        private BigDecimal taxAndSurcharge = BigDecimal.ZERO;
+        private BigDecimal sellingExpense = BigDecimal.ZERO;
+        private BigDecimal adminExpense = BigDecimal.ZERO;
+        private BigDecimal financeExpense = BigDecimal.ZERO;
+        private BigDecimal nonOperatingIncome = BigDecimal.ZERO;
+        private BigDecimal nonOperatingExpense = BigDecimal.ZERO;
+        private BigDecimal incomeTax = BigDecimal.ZERO;
+
+        private BigDecimal grossProfit() {
+            return revenue.subtract(cost);
+        }
+
+        private BigDecimal operatingProfit() {
+            return grossProfit()
+                    .subtract(taxAndSurcharge)
+                    .subtract(sellingExpense)
+                    .subtract(adminExpense)
+                    .subtract(financeExpense);
+        }
+
+        private BigDecimal totalProfit() {
+            return operatingProfit().add(nonOperatingIncome).subtract(nonOperatingExpense);
+        }
+
+        private BigDecimal netProfit() {
+            return totalProfit().subtract(incomeTax);
+        }
+
+        private void scale() {
+            revenue = revenue.setScale(2, RoundingMode.HALF_UP);
+            cost = cost.setScale(2, RoundingMode.HALF_UP);
+            taxAndSurcharge = taxAndSurcharge.setScale(2, RoundingMode.HALF_UP);
+            sellingExpense = sellingExpense.setScale(2, RoundingMode.HALF_UP);
+            adminExpense = adminExpense.setScale(2, RoundingMode.HALF_UP);
+            financeExpense = financeExpense.setScale(2, RoundingMode.HALF_UP);
+            nonOperatingIncome = nonOperatingIncome.setScale(2, RoundingMode.HALF_UP);
+            nonOperatingExpense = nonOperatingExpense.setScale(2, RoundingMode.HALF_UP);
+            incomeTax = incomeTax.setScale(2, RoundingMode.HALF_UP);
+        }
+    }
+
+    private static class RunningInventoryBalance {
+        private BigDecimal quantity = BigDecimal.ZERO;
+        private BigDecimal amount = BigDecimal.ZERO;
+
+        private BigDecimal unitPrice() {
+            if (quantity.compareTo(BigDecimal.ZERO) == 0) {
+                return BigDecimal.ZERO;
+            }
+            return amount.divide(quantity, 6, RoundingMode.HALF_UP);
+        }
+    }
+
+    private record InventoryMovement(
+            LocalDate date,
+            String voucherNo,
+            String summary,
+            String itemKey,
+            BigDecimal inQuantity,
+            BigDecimal inUnitPrice,
+            BigDecimal inAmount,
+            BigDecimal outQuantity,
+            BigDecimal outUnitPrice,
+            BigDecimal outAmount) {
+
+        private static InventoryMovement inbound(LocalDate date, String voucherNo, String summary, String itemKey,
+                                                 BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
+            return new InventoryMovement(date, voucherNo, summary, itemKey,
+                    quantity, unitPrice, amount, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+
+        private static InventoryMovement outbound(LocalDate date, String voucherNo, String summary, String itemKey,
+                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
+            return new InventoryMovement(date, voucherNo, summary, itemKey,
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, quantity, unitPrice, amount);
+        }
     }
 }
