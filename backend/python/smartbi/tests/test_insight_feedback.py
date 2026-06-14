@@ -9,13 +9,17 @@ Tests for:
 6. Serve-skip: _read_corpus_cache returns None when feedback_down >= threshold
 """
 from __future__ import annotations
+from smartbi.services.insights.chart_insight_service import (
+    ChartInsightService,
+    ChartInsightContext,
+    _FEEDBACK_DOWN_SERVE_THRESHOLD,
+)
 
-import asyncio
 import json
 import os
 import sys
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,15 +31,6 @@ SMARTBI_ROOT = os.path.normpath(
 )
 if SMARTBI_ROOT not in sys.path:
     sys.path.insert(0, SMARTBI_ROOT)
-
-from smartbi.services.insights.chart_insight_service import (
-    ChartInsightService,
-    ChartInsightContext,
-    InsightResult,
-    _FEEDBACK_DOWN_SERVE_THRESHOLD,
-    compute_input_hash,
-    _corpus_input_text,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +106,8 @@ class TestServeSkip:
         conn = MagicMock()
         conn.fetchrow = _mock_fetchrow(row)
         pool = MagicMock()
-        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=conn), __aexit__=AsyncMock(return_value=False)))
+        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(
+            return_value=conn), __aexit__=AsyncMock(return_value=False)))
 
         svc = self._make_service(pool)
         result = await svc._read_corpus_cache(input_hash)
@@ -134,7 +130,8 @@ class TestServeSkip:
         conn = MagicMock()
         conn.fetchrow = _mock_fetchrow(row)
         pool = MagicMock()
-        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=conn), __aexit__=AsyncMock(return_value=False)))
+        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(
+            return_value=conn), __aexit__=AsyncMock(return_value=False)))
 
         svc = self._make_service(pool)
         result = await svc._read_corpus_cache(input_hash)
@@ -153,7 +150,8 @@ class TestServeSkip:
         conn = MagicMock()
         conn.fetchrow = _mock_fetchrow(row)
         pool = MagicMock()
-        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=conn), __aexit__=AsyncMock(return_value=False)))
+        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(
+            return_value=conn), __aexit__=AsyncMock(return_value=False)))
 
         svc = self._make_service(pool)
         result = await svc._read_corpus_cache(input_hash)
@@ -165,7 +163,8 @@ class TestServeSkip:
         conn = MagicMock()
         conn.fetchrow = _mock_fetchrow(None)
         pool = MagicMock()
-        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=conn), __aexit__=AsyncMock(return_value=False)))
+        pool.acquire = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(
+            return_value=conn), __aexit__=AsyncMock(return_value=False)))
 
         svc = self._make_service(pool)
         result = await svc._read_corpus_cache("notfound")
@@ -403,7 +402,7 @@ class TestFeedbackEndpoint:
         body = InsightFeedbackRequest(input_hash=input_hash, vote="up", factory_id="F001")
 
         with patch("smartbi.api.chart_insight._get_service", new=AsyncMock(return_value=mock_svc)):
-            result = await insight_feedback(request, body)
+            await insight_feedback(request, body)
 
         _sql, update_args = executed_updates[0]
         new_meta = json.loads(update_args[0])

@@ -23,15 +23,15 @@ Coverage:
     - run_record: end-to-end with mock pool
 """
 from __future__ import annotations
+import enum
 
 import json
 import os
 import sys
 import tempfile
 import types
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from typing import Dict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -45,7 +45,6 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
         sys.path.insert(0, _p)
 
 # Stub out common.llm_router so corpus_judge can be imported without real creds
-import enum
 
 
 def _ensure_stub(module_name: str) -> None:
@@ -79,7 +78,7 @@ sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
 sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
 
 # Now import the modules under test
-from scripts.corpus_judge import (  # noqa: E402
+from scripts.corpus_judge import (  # noqa: E402,F401
     resolve_judge_chain,
     fetch_crossfamily_rows,
     apply_crossfamily_result,
@@ -92,7 +91,7 @@ from scripts.corpus_judge import (  # noqa: E402
     parse_judge_scores,
     decide_quality,
 )
-from scripts.corpus_g3_sample import (  # noqa: E402
+from scripts.corpus_g3_sample import (  # noqa: E402,F401
     fetch_sample_rows,
     group_rows_by_bucket,
     write_markdown_review_file,
@@ -355,7 +354,6 @@ class TestCrossFamilyJudgeLogic:
     @pytest.mark.asyncio
     async def test_quota_exhausted_graceful_no_crash(self, caplog):
         """When the family's quota is exhausted (RuntimeError), the run continues."""
-        import logging
         fake_rows = [
             {
                 "id": 2001,
@@ -959,7 +957,7 @@ class TestG3Sampler:
         mock_conn.fetchrow = AsyncMock(return_value={"id": 3, "reviewed_at": "2026-06-11"})
 
         with caplog.at_level(logging.WARNING, logger="corpus_g3_sample"):
-            result = await record_g3_result(mock_pool, "chat_qa_all", pass_count=27, total=30)
+            result = await record_g3_result(mock_pool, "chat_qa_all", pass_count=27, total=30)  # noqa: F841
 
         # Exactly 90% — no below-threshold warning expected
         warnings_below = [

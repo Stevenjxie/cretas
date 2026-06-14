@@ -318,7 +318,6 @@ class InsightGenerator:
 
     async def close(self):
         """No-op: shared client lifecycle managed by main.py lifespan."""
-        pass
 
     # ------------------------------------------------------------------
     # Internal orchestration

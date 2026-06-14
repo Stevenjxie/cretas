@@ -14,11 +14,9 @@ Tests (dry-run only — no LLM, no DB):
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import sys
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Path bootstrap so the test works whether run from repo root, backend/python,
@@ -33,7 +31,7 @@ if _SMARTBI_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 # Import the generator under test
 # ---------------------------------------------------------------------------
-from scripts.seed_chart_insight_corpus import (  # noqa: E402
+from scripts.seed_chart_insight_corpus import (  # noqa: E402,F401
     generate_scenarios,
     RANDOM_SEED,
     _SENTINEL_RESTAURANT,
@@ -45,7 +43,7 @@ from smartbi.services.distillation_capture import compute_input_hash  # noqa: E4
 from smartbi.services.insights.chart_insight_service import _corpus_input_text  # noqa: E402
 
 _KNOWN_TIERS = {"finance_visible", "price_hidden", "finance_hidden"}
-_SENTINELS   = {_SENTINEL_RESTAURANT, _SENTINEL_FACTORY}
+_SENTINELS = {_SENTINEL_RESTAURANT, _SENTINEL_FACTORY}
 
 
 class TestGenerateScenarios:
@@ -119,7 +117,7 @@ class TestGenerateScenarios:
     def test_known_permission_tiers(self):
         """All permission_tier values are from the known set."""
         scenarios = generate_scenarios(50)
-        bad = {s.permission_tier for s in scenarios} - _KNOWN_TIERS
+        {s.permission_tier for s in scenarios} - _KNOWN_TIERS
         # price_hidden is valid; the generator uses finance_visible + finance_hidden
         # plus any valid tier from _TIERS. Accept the full set.
         # Actually check that none are completely unknown strings.
@@ -134,7 +132,7 @@ class TestGenerateScenarios:
         s2 = generate_scenarios(5, seed=RANDOM_SEED)
         assert s1[0].series_values == s2[0].series_values
         assert s1[0].series_labels == s2[0].series_labels
-        assert s1[0].data_pattern  == s2[0].data_pattern
+        assert s1[0].data_pattern == s2[0].data_pattern
 
     def test_different_seeds_differ(self):
         """Different seed → different first scenario values."""

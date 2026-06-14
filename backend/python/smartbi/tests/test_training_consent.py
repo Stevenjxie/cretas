@@ -12,6 +12,13 @@ Covers:
 🔒 Default-deny + synthetic-always + analytical-meaning-preserved are asserted.
 """
 from __future__ import annotations
+import importlib.util
+from smartbi.services.corpus_anonymize import (
+    anonymize_for_shared,
+    _bucket_amount,
+    _bucket_amounts_in_text,
+)
+import pytest
 
 import ast
 import os
@@ -23,16 +30,8 @@ PYTHON_ROOT = os.path.normpath(os.path.join(TESTS_DIR, "..", ".."))  # backend/p
 if PYTHON_ROOT not in sys.path:
     sys.path.insert(0, PYTHON_ROOT)
 
-import pytest
-
-from smartbi.services.corpus_anonymize import (
-    anonymize_for_shared,
-    _bucket_amount,
-    _bucket_amounts_in_text,
-)
 
 # Import the export script as a module (path: backend/python/scripts).
-import importlib.util
 
 _EXPORT_PATH = os.path.join(PYTHON_ROOT, "scripts", "export_distillation_dataset.py")
 _spec = importlib.util.spec_from_file_location("export_distillation_dataset", _EXPORT_PATH)

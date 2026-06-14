@@ -65,7 +65,6 @@ def _make_admin_request(factory_id: str = _TENANT, *,
     class _S:
         role = "factory_super_admin"
         auth_method = "jwt"
-        pass
 
     s = _S()
     s.factory_id = factory_id  # type: ignore[attr-defined]

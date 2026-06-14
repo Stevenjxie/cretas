@@ -21,6 +21,8 @@ export interface QuickAction {
   params?: Record<string, unknown>;
 }
 
+export const WORKSHOP_SUP_DEFAULT_HIDDEN = ['process-tasks', 'yield-report', 'checkin', 'team-report', 'equipment'];
+
 interface QuickActionsState {
   // Per-role hidden action IDs
   hiddenActions: Record<string, string[]>; // { 'workshop_supervisor': ['drafts', ...] }
@@ -83,7 +85,7 @@ export const useQuickActionsStore = create<QuickActionsState>()(
         // First time: apply default hidden actions
         if (hidden === undefined) {
           const defaults: Record<string, string[]> = {
-            'workshop_supervisor': ['team-report', 'output-report', 'hours-report', 'equipment'],
+            'workshop_supervisor': WORKSHOP_SUP_DEFAULT_HIDDEN,
           };
           hidden = defaults[role] || [];
           // Persist the defaults
@@ -131,9 +133,6 @@ export const WORKSHOP_SUP_ACTIONS: QuickAction[] = [
   { id: 'team-report', label: '班组报工', icon: 'account-group', iconColor: '#059669', iconBg: '#ECFDF5', screen: 'TeamBatchReport' },
   { id: 'equipment', label: '设备监控', icon: 'tools', iconColor: '#0891B2', iconBg: '#ECFEFF', screen: 'EquipmentMonitoring' },
 ];
-
-// 默认隐藏的操作ID
-export const WORKSHOP_SUP_DEFAULT_HIDDEN = ['process-tasks', 'yield-report', 'checkin', 'team-report', 'equipment'];
 
 export const DISPATCHER_ACTIONS: QuickAction[] = [
   { id: 'create-plan', label: '创建计划', icon: 'plus-circle', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'PlanCreate' },

@@ -28,7 +28,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -187,7 +186,8 @@ def _render(buckets: Dict[Tuple[str, str, str], BucketStats]) -> None:
         q3 = s.quality_dist.get(3, 0)
         qn = s.quality_null
         status = s.status()
-        status_icon = {"GREEN": "✅ GREEN", "YELLOW": "⚠️ YELLOW", "RED": "❌ RED", "EMPTY": "— EMPTY"}.get(status, status)
+        status_icon = {"GREEN": "✅ GREEN", "YELLOW": "⚠️ YELLOW",
+                       "RED": "❌ RED", "EMPTY": "— EMPTY"}.get(status, status)
         print(
             f"{src:<{w_src}} {bt:<{w_bt}} {tt:<{w_tt}}"
             f"  {s.total:>6}  {s.organic:>7}  {s.synthetic:>5}"

@@ -9,6 +9,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.finance.InvoiceRecord;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
@@ -573,7 +574,32 @@ class PriceFieldResponseAdviceTest {
     }
 
     @Test
-    @DisplayName("P0: PriceSensitiveContext lifecycle — hide/clear works correctly")
+    @DisplayName("sales role: finance-upload masking must not hide @PriceSensitive invoice fields")
+    void salesManager_priceVisible_financeMasked_threadLocalNotSet() {
+        asUser(2L, true, false);
+
+        InvoiceRecord record = new InvoiceRecord();
+        record.setAmount(new BigDecimal("2500.00"));
+        record.setTaxAmount(new BigDecimal("225.00"));
+        record.setTotalAmount(new BigDecimal("2725.00"));
+        record.setTaxBreakdown(List.of(
+                new InvoiceRecord.TaxBreakdownEntry(
+                        new BigDecimal("9.00"),
+                        new BigDecimal("2500.00"),
+                        new BigDecimal("225.00"),
+                        1)
+        ));
+
+        run(record);
+
+        assertEquals(new BigDecimal("2500.00"), record.getAmount());
+        assertEquals(new BigDecimal("225.00"), record.getTaxBreakdown().get(0).getTaxAmount());
+        assertFalse(PriceSensitiveContext.shouldHide("procurement:price:view"),
+                "ThreadLocal must not hide price fields when only finance-upload masking applies");
+    }
+
+    @Test
+    @DisplayName("P0: PriceSensitiveContext lifecycle - hide/clear works correctly")
     void p0_threadLocal_lifecycle() {
         // Initially clean
         assertFalse(PriceSensitiveContext.shouldHide("procurement:price:view"));

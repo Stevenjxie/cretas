@@ -112,6 +112,7 @@ class _NoBudgetBucket:
 
 class _NoBudgetTracker:
     """Never blocks; never counts. Safe for offline sweeps only."""
+
     async def check_budget(self, factory_id: str) -> _NoBudgetBucket:
         return _NoBudgetBucket()
 
@@ -125,6 +126,7 @@ class _NoBudgetTracker:
 
 class _NoopNarrativeCache:
     """Always misses; never stores.  Forces LLM re-call every run."""
+
     async def get(self, factory_id: str, q_hash: str) -> None:
         return None
 

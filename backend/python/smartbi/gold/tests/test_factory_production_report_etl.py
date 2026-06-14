@@ -162,15 +162,15 @@ def test_basic_single_row_mapping():
     #               process_categories, report_dates, report_kinds,
     #               input_qtys, output_qtys, good_qtys, yield_rates,
     #               total_work_minutes, total_workers, labor_costs, material_costs, cost_sources)
-    factory_id   = args[0]
-    source_pks   = args[1]
-    batch_ids    = args[2]
-    proc_orders  = args[3]
-    proc_cats    = args[4]
-    input_qtys   = args[7]
-    output_qtys  = args[8]
-    good_qtys    = args[9]
-    yield_rates  = args[10]
+    factory_id = args[0]
+    source_pks = args[1]
+    batch_ids = args[2]
+    proc_orders = args[3]
+    proc_cats = args[4]
+    input_qtys = args[7]
+    output_qtys = args[8]
+    good_qtys = args[9]
+    yield_rates = args[10]
 
     assert factory_id == "F006"
     assert source_pks == ["42"]
@@ -198,9 +198,9 @@ def test_null_costs_not_coerced_to_zero():
     asyncio.run(sync_fact_production_report(src_pool, dst_pool, "F006"))
 
     args = _get_insert_args(dst_pool)
-    labor_costs   = args[13]
+    labor_costs = args[13]
     material_costs = args[14]
-    cost_sources  = args[15]
+    cost_sources = args[15]
 
     assert labor_costs == [None], "labor_cost must stay NULL — not coerced to 0"
     assert material_costs == [None], "material_cost must stay NULL — not coerced to 0"

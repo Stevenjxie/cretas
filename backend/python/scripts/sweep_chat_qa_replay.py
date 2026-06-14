@@ -469,7 +469,6 @@ async def _process_one(
         )
         return True
 
-
     except Exception as e:
         logger.warning(
             f"[replay] FAILED factory={factory_id} q={question[:40]!r}: {e}"

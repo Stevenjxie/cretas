@@ -14,15 +14,23 @@ Hash function MUST NOT be changed:
   sha256(input_text) — verified in test_hash_unchanged.
 """
 from __future__ import annotations
+from smartbi.api.chat import (
+    _build_qa_input_text,
+    _build_qa_data_context,
+    _derive_business_type,
+    _qa_lint_has_data_context,
+)
+from smartbi.services.distillation_capture import (
+    compute_input_hash,
+    persist_distillation_sample,
+)
+import pytest
 
 import ast
-import asyncio
 import hashlib
-import json
 import os
 import sys
-from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock
 
 # ---------------------------------------------------------------------------
 # Path setup
@@ -35,21 +43,10 @@ SMARTBI_ROOT = os.path.normpath(os.path.join(TESTS_DIR, "..", "..", ".."))
 if PYTHON_ROOT not in sys.path:
     sys.path.insert(0, PYTHON_ROOT)
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Imports under test
 # ---------------------------------------------------------------------------
-from smartbi.services.distillation_capture import (
-    compute_input_hash,
-    persist_distillation_sample,
-)
-from smartbi.api.chat import (
-    _build_qa_input_text,
-    _build_qa_data_context,
-    _derive_business_type,
-    _qa_lint_has_data_context,
-)
 
 
 # ===========================================================================
@@ -62,7 +59,7 @@ class TestHashUnchanged:
     hash function would silently break the cache for every existing row."""
 
     def test_hash_is_sha256(self):
-        text = "chart_insight|BAR|month|revenue|SUM|restaurant|NORMAL|manager|factory:F001|labels:[1月,2月]|values:[100,200]"
+        text = "chart_insight|BAR|month|revenue|SUM|restaurant|NORMAL|manager|factory:F001|labels:[1月,2月]|values:[100,200]"  # noqa: E501
         expected = hashlib.sha256(text.encode("utf-8")).hexdigest()
         assert compute_input_hash(text) == expected
 
@@ -96,7 +93,7 @@ class TestPersistQuality:
             mock_pool,
             source="chart_insight",
             task_type="insights",
-            input_text="chart_insight|BAR|month|revenue|SUM|restaurant|NORMAL|manager|factory:F001|labels:[1月]|values:[100]",
+            input_text="chart_insight|BAR|month|revenue|SUM|restaurant|NORMAL|manager|factory:F001|labels:[1月]|values:[100]",  # noqa: E501
             teacher_output='{"finding":"test","implication":null,"suggestion":null}',
             quality=5,
         )
@@ -250,7 +247,7 @@ class TestBuildQaDataContext:
 
     def test_never_raises(self):
         # Garbage input — must not raise
-        result = _build_qa_data_context(object(), {"bad": object()})  # type: ignore
+        result = _build_qa_data_context(object(), {"bad": object()})  # type: ignore  # noqa: F841
         # May return None or a partial string; must not raise
 
 
@@ -349,10 +346,12 @@ class TestBucketStats:
         assert s.status() != "GREEN"
 
     def test_aggregate(self):
-        from scripts.corpus_census import _aggregate, _is_synthetic
+        from scripts.corpus_census import _aggregate
         rows = [
-            {"source": "chart_insight", "business_type": "restaurant", "task_type": "insights", "quality": 5, "metadata": None},
-            {"source": "chart_insight", "business_type": "restaurant", "task_type": "insights", "quality": 5, "metadata": None},
+            {"source": "chart_insight", "business_type": "restaurant",
+                "task_type": "insights", "quality": 5, "metadata": None},
+            {"source": "chart_insight", "business_type": "restaurant",
+                "task_type": "insights", "quality": 5, "metadata": None},
             {"source": "chat_qa", "business_type": "unknown", "task_type": "qa", "quality": None, "metadata": None},
         ]
         buckets = _aggregate(rows)
@@ -410,7 +409,7 @@ class TestExportDefaultMinQuality:
 
     def test_default_min_quality_is_4(self):
         """argparse default for --min-quality must be 4 (not None)."""
-        import importlib.util, pathlib, sys, types
+        import pathlib
 
         script_path = pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py"
         src = script_path.read_text(encoding="utf-8")
@@ -428,7 +427,8 @@ class TestExportDefaultMinQuality:
 
     def test_default_min_quality_help_says_4(self):
         """Help text must NOT say '(NULL kept)' — that was the old misleading text."""
-        import pathlib, re
+        import pathlib
+        import re
         script_path = pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py"
         src = script_path.read_text(encoding="utf-8")
         # Find the help string for --min-quality
@@ -520,7 +520,7 @@ class TestExportFilter:
     unscored rows cannot leak into training data."""
 
     def test_null_not_in_filter(self):
-        import pathlib, re
+        import pathlib
         script_path = pathlib.Path(PYTHON_ROOT) / "scripts" / "export_distillation_dataset.py"
         src = script_path.read_text(encoding="utf-8")
         # Strip comments to check only actual code lines

@@ -153,9 +153,12 @@ class RevenueManagementReport(AnalysisTemplate):
         customer_col = find_customer_col(cols)
 
         use_cols = [table_col, revenue_col]
-        if _SHIFT_COL in cols: use_cols.append(_SHIFT_COL)  # noqa: E701
-        if open_time_col: use_cols.append(open_time_col)  # noqa: E701
-        if customer_col: use_cols.append(customer_col)  # noqa: E701
+        if _SHIFT_COL in cols:
+            use_cols.append(_SHIFT_COL)  # noqa: E701
+        if open_time_col:
+            use_cols.append(open_time_col)  # noqa: E701
+        if customer_col:
+            use_cols.append(customer_col)  # noqa: E701
 
         sample = df.head(_SAMPLE_CAP) if df.height > _SAMPLE_CAP else df
         rows = sample.select(use_cols).to_dicts()

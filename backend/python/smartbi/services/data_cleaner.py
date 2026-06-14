@@ -1320,7 +1320,6 @@ def rule_function(data: List[Dict], columns: List[str]) -> int:
 
     async def close(self):
         """No-op: shared client lifecycle managed by main.py lifespan"""
-        pass
 
 
 # 便捷函数

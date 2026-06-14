@@ -346,7 +346,6 @@ class ReceivableAgingRequest(BaseAnalysisRequest):
 
 class ReceivableMetricsRequest(BaseAnalysisRequest):
     """Request model for receivable metrics"""
-    pass
 
 
 class OverdueCustomerRankingRequest(BaseAnalysisRequest):

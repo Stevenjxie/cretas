@@ -258,14 +258,16 @@ def write_markdown_review_file(
             try:
                 meta_obj = row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"])
                 # Only show a small subset of metadata fields
-                interesting = {k: v for k, v in meta_obj.items() if k in ("source", "business_type", "factory_id", "intent_code")}
+                interesting = {k: v for k, v in meta_obj.items() if k in (
+                    "source", "business_type", "factory_id", "intent_code")}
                 if interesting:
                     meta_display = f"\n**Metadata**: {json.dumps(interesting, ensure_ascii=False)}"
             except Exception:
                 pass
 
         lines.append(f"## Item {i}  (id={row['id']})\n")
-        lines.append(f"**Source**: `{row['source']}`  |  **Business type**: `{row.get('business_type', 'all')}`{meta_display}\n")
+        lines.append(
+            f"**Source**: `{row['source']}`  |  **Business type**: `{row.get('business_type', 'all')}`{meta_display}\n")
         lines.append("\n### Input Context\n")
         lines.append("```\n")
         lines.append(input_text)

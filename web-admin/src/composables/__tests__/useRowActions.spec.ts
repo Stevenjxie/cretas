@@ -28,7 +28,7 @@ const STATUS_PAIRS: Array<{ entityType: EntityType; status: string; expectIds: r
   {
     entityType: 'salesOrder',
     status: 'DRAFT',
-    expectIds: ['edit', 'submit', 'copy', 'delete', 'view-detail', 'edit-price'],
+    expectIds: ['submit-for-review', 'copy', 'delete', 'edit-price'],
   },
   {
     entityType: 'salesOrder',
@@ -39,7 +39,6 @@ const STATUS_PAIRS: Array<{ entityType: EntityType; status: string; expectIds: r
       'print-pdf',
       'undo-approval',
       'cancel',
-      'view-detail',
     ],
   },
   {
@@ -60,7 +59,7 @@ const STATUS_PAIRS: Array<{ entityType: EntityType; status: string; expectIds: r
   {
     entityType: 'inventory',
     status: 'IN_STOCK',
-    expectIds: ['transfer', 'view-detail', 'view-price-history'],
+    expectIds: ['transfer', 'adjust-inventory', 'view-detail', 'view-price-history', 'void-batch'],
   },
   {
     entityType: 'whInbound',
@@ -127,7 +126,7 @@ describe('computeRowActions (web-admin)', () => {
   describe('canEdit gate', () => {
     it('canEdit=false disables write actions but keeps them rendered', () => {
       const actions = computeRowActions(
-        'salesOrder',
+        'purchaseOrder',
         { status: 'DRAFT', id: '1', canEdit: false },
         { canViewPrice: true }
       );

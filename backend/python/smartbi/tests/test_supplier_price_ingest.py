@@ -13,14 +13,20 @@ Coverage:
 All DB interactions mocked — no real DB needed.
 """
 from __future__ import annotations
+from smartbi.gold.supplier_price_ingest_etl import (
+    _source_note_id,
+    _to_float_safe,
+    _to_upsert_row,
+    run_supplier_price_ingest,
+)
 
 import asyncio
 import sys
 import os
 from datetime import date
 from decimal import Decimal
-from typing import Any, List, Optional, Set
-from unittest.mock import AsyncMock, patch
+from typing import List
+from unittest.mock import patch
 
 import pytest
 
@@ -35,6 +41,7 @@ if _root not in sys.path:
 
 class _FakeRow(dict):
     """Dict subclass with attribute-style access + .get() for asyncpg record compat."""
+
     def __getattr__(self, item):
         try:
             return self[item]
@@ -53,6 +60,7 @@ class _FakeConn:
     smartbi_conn: fetch always returns fetch_rows (existing source_note_ids result).
     Keep them as separate instances so each pool returns the right data.
     """
+
     def __init__(self, fetch_rows=None, execute_return="SELECT 1"):
         self._fetch_rows = fetch_rows if fetch_rows is not None else []
         self._execute_return = execute_return
@@ -114,13 +122,6 @@ def _run(coro):
 
 # ── Import module under test ──────────────────────────────────────────────────
 
-from smartbi.gold.supplier_price_ingest_etl import (
-    _source_note_id,
-    _to_float_safe,
-    _to_upsert_row,
-    run_supplier_price_ingest,
-)
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Tests: helpers
@@ -172,16 +173,16 @@ class TestToUpsertRow:
         raw = self._make_raw()
         row = _to_upsert_row(raw, existing_ids=set())
         assert row is not None
-        assert row["source_note_id"]      == "mb:batch-uuid-001"
+        assert row["source_note_id"] == "mb:batch-uuid-001"
         assert row["raw_material_type_id"] == "rmt-uuid-pork"
-        assert row["supplier_id"]          == "sup-uuid-abc"
-        assert row["supplier_name"]        == "鑫源肉制品"
-        assert row["ingredient_name"]      == "猪前腿"
-        assert row["delivery_date"]        == date(2026, 6, 1)  # purchase_date preferred
-        assert row["unit_price"]           == pytest.approx(25.80)
-        assert row["quantity"]             == pytest.approx(100.0)
-        assert row["unit"]                 == "kg"
-        assert row["line_amount"]          is None
+        assert row["supplier_id"] == "sup-uuid-abc"
+        assert row["supplier_name"] == "鑫源肉制品"
+        assert row["ingredient_name"] == "猪前腿"
+        assert row["delivery_date"] == date(2026, 6, 1)  # purchase_date preferred
+        assert row["unit_price"] == pytest.approx(25.80)
+        assert row["quantity"] == pytest.approx(100.0)
+        assert row["unit"] == "kg"
+        assert row["line_amount"] is None
 
     def test_purchase_date_preferred_over_inbound(self):
         raw = self._make_raw(purchase_date=date(2026, 5, 10), inbound_date=date(2026, 5, 15))
@@ -472,13 +473,13 @@ class TestRunSupplierPriceIngest:
 
         assert len(captured_rows) == 1
         r = captured_rows[0]
-        assert r["source_note_id"]       == "mb:x99"
+        assert r["source_note_id"] == "mb:x99"
         assert r["raw_material_type_id"] == "rmt-xyz"
-        assert r["supplier_id"]          == "sup-xyz"
-        assert r["supplier_name"]        == "德兴肉业"
-        assert r["ingredient_name"]      == "猪后腿"
-        assert r["delivery_date"]        == date(2026, 3, 15)
-        assert r["unit_price"]           == pytest.approx(18.50)
-        assert r["quantity"]             == pytest.approx(200.0)
-        assert r["unit"]                 == "kg"
-        assert r["line_amount"]          is None
+        assert r["supplier_id"] == "sup-xyz"
+        assert r["supplier_name"] == "德兴肉业"
+        assert r["ingredient_name"] == "猪后腿"
+        assert r["delivery_date"] == date(2026, 3, 15)
+        assert r["unit_price"] == pytest.approx(18.50)
+        assert r["quantity"] == pytest.approx(200.0)
+        assert r["unit"] == "kg"
+        assert r["line_amount"] is None

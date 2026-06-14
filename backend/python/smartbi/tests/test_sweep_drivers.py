@@ -20,7 +20,7 @@ import asyncio
 import os
 import sys
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -133,7 +133,7 @@ class TestMaterializationBackfill:
             reset_calls.append(token)
 
         with patch("smartbi.tenant_ctx.set_factory_id", fake_set), \
-             patch("smartbi.tenant_ctx.reset_factory_id", fake_reset):
+                patch("smartbi.tenant_ctx.reset_factory_id", fake_reset):
             async def _test():
                 return await mod._list_uploads(failing_pool, ["F001"], limit=10)
             result = _run(_test())
@@ -155,12 +155,11 @@ class TestMaterializationBackfill:
         mod = self._import()
 
         tenant_context_at_query: List[Optional[str]] = []
-        fid_contextvar = None
 
         # Capture which factory_id ContextVar was set when fetch() was called
         from smartbi import tenant_ctx
 
-        fake_rows = [
+        fake_rows = [  # noqa: F841
             asyncio.coroutine(lambda *a, **k: [])() if False else None  # unused
         ]
 
@@ -601,6 +600,7 @@ class TestChatQaReplay:
             async def __aenter__(self_inner):
                 acquire_count[0] += 1
                 return mock_conn
+
             async def __aexit__(self_inner, *args):
                 return False
 
@@ -837,8 +837,8 @@ class TestChatQaReplayProbeMode:
         data = [{"col_a": 5000.0, "col_b": "A"} for _ in range(50)]
 
         with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
-             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
-                   new=AsyncMock(side_effect=fake_generate_insights)):
+            patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                  new=AsyncMock(side_effect=fake_generate_insights)):
 
             async def _test():
                 return await mod._process_one(
@@ -886,8 +886,8 @@ class TestChatQaReplayProbeMode:
         data = [{"col_a": 5000.0, "col_b": "A"} for _ in range(50)]
 
         with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
-             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
-                   new=AsyncMock(side_effect=fake_generate_insights)):
+            patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                  new=AsyncMock(side_effect=fake_generate_insights)):
 
             async def _test():
                 return await mod._process_one(
@@ -944,10 +944,10 @@ class TestChatQaReplayNoDataPath:
             persist_calls.append(kwargs.get("teacher_output", ""))
 
         with patch("smartbi.services.distillation_capture.persist_distillation_sample", fake_persist), \
-             patch("smartbi.services.insights.generator.InsightGenerator.generate_text_analysis",
-                   new=AsyncMock(side_effect=fake_text_analysis)), \
-             patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
-                   new=AsyncMock(side_effect=fake_generate_insights)):
+            patch("smartbi.services.insights.generator.InsightGenerator.generate_text_analysis",
+                  new=AsyncMock(side_effect=fake_text_analysis)), \
+            patch("smartbi.services.insights.generator.InsightGenerator.generate_insights",
+                  new=AsyncMock(side_effect=fake_generate_insights)):
 
             async def _test():
                 return await mod._process_one(
@@ -960,7 +960,7 @@ class TestChatQaReplayNoDataPath:
                     probe=False,
                 )
 
-            result = _run(_test())
+            _run(_test())
 
         # generate_text_analysis must have been called
         assert len(text_analysis_calls) == 1

@@ -18,15 +18,22 @@ Removed (C3 — dead template machinery):
  - Tests that exercised _lookup_template / _capture_template / _maybe_promote paths
 """
 from __future__ import annotations
+from smartbi.services.insights.chart_insight_service import (
+    ChartInsightService,
+    ChartInsightContext,
+    compute_signature,
+    DEFAULT_PROMOTE_THRESHOLD,
+    _POISON_VERB_RE,
+    _extract_json_object,
+)
 
-import asyncio
 import hashlib
 import json
 import re
 import sys
 import os
 import pytest
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -41,16 +48,6 @@ if SMARTBI_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 # Import the service under test (fails until implemented → RED phase)
 # ---------------------------------------------------------------------------
-from smartbi.services.insights.chart_insight_service import (
-    ChartInsightService,
-    ChartInsightContext,
-    InsightResult,
-    compute_signature,
-    DEFAULT_PROMOTE_THRESHOLD,
-    _POISON_VERB_RE,
-    _extract_json_object,
-    FINANCE_METRICS,
-)
 
 
 class TestExtractJsonObject:
@@ -357,7 +354,6 @@ class TestEndpointRBAC:
 
     async def test_endpoint_permission_tier_from_role_ignores_body(self):
         """U1.4: endpoint derives permission_tier from caller_role, ignores body.permission_tier."""
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
         from smartbi.api.chart_insight import router as ci_router, FINANCE_ROLES
 
@@ -465,9 +461,9 @@ class TestU1Hardening:
     def test_cross_factory_same_signature(self):
         """U1.8: two factories with same chart params → same signature_hash (factoryId excluded)."""
         ctx_f001 = _make_context(factory_id="F001", chart_type="BAR", x_dim="store",
-                                  y_metric="revenue", data_pattern="ranking:top-share:65-80:n4-8")
+                                 y_metric="revenue", data_pattern="ranking:top-share:65-80:n4-8")
         ctx_f002 = _make_context(factory_id="F002", chart_type="BAR", x_dim="store",
-                                  y_metric="revenue", data_pattern="ranking:top-share:65-80:n4-8")
+                                 y_metric="revenue", data_pattern="ranking:top-share:65-80:n4-8")
         sig_f001 = compute_signature(ctx_f001)
         sig_f002 = compute_signature(ctx_f002)
         assert sig_f001 == sig_f002, (
@@ -560,10 +556,10 @@ class TestValidateClaims:
     # Test 3: derived stat (top2_share) not false-rejected
     # -----------------------------------------------------------------------
     def test_relational_prose_not_false_rejected(self):  # "堂食占62%,是外卖的1.6倍" must PASS
-        obj = {"claims":[{"entity":"堂食","stat_type":"share","value":62.0},
-                          {"entity":"堂食","stat_type":"ratio","value":1.6}],
-               "finding":"堂食占比62.0%，是外卖的1.6倍","implication":None,"suggestion":None}
-        assert _validate_claims(obj, _ctx([62000.0,38000.0],["堂食","外卖"])) is not None
+        obj = {"claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0},
+                          {"entity": "堂食", "stat_type": "ratio", "value": 1.6}],
+               "finding": "堂食占比62.0%，是外卖的1.6倍", "implication": None, "suggestion": None}
+        assert _validate_claims(obj, _ctx([62000.0, 38000.0], ["堂食", "外卖"])) is not None
 
     def test_derived_stat_not_false_rejected(self):
         """top2_share = (62+38)/100 * 100 = 100% but with [62,38,0] total=100 top2=(62+38)=100 → 100%.
@@ -966,7 +962,7 @@ class TestCorpus:
 
         # Must succeed (return an InsightResult)
         assert result is not None, (
-            f"Valid gate-passing response should produce InsightResult, got None"
+            f"Valid gate-passing response should produce InsightResult, got None"  # noqa: F541
         )
 
         # persist must be called exactly once
@@ -1211,6 +1207,8 @@ import enum as _enum  # noqa: E402
 
 # Minimal SLOT stub — mirrors what common.llm_router.SLOT exposes.
 # Kept local to these tests so they don't depend on the real router.
+
+
 class _FakeSLOT(_enum.Enum):
     CHAT = "chat"
     INSIGHTS = "insights"

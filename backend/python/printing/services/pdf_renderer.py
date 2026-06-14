@@ -629,7 +629,7 @@ def render_production_work_order(data: dict) -> bytes:
             ("销售订单号", data.get("salesOrderNumbers") or data.get("sourceOrderId", "-")),
             ("生产订单号", data.get("productionOrderNumber") or data.get("planNumber") or data.get("planId", "-")),
             ("产品名称", data.get("productName", "-")),
-            ("预计产量", f'{_fmt_qty(data.get("expectedOutput") or data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),
+            ("预计产量", f'{_fmt_qty(data.get("expectedOutput") or data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),  # noqa: E501
             ("状态", data.get("status", "-")),
             ("生产日期", data.get("productionDate") or data.get("plannedDate", "-")),
             ("打印日期", data.get("printDate", "-")),

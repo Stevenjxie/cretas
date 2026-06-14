@@ -145,7 +145,6 @@ class AbstractFinancialChartBuilder(ABC):
                 "metadata": {"period", "dataQuality"}
             }
         """
-        pass
 
     def get_analysis_context(self, result: Dict) -> str:
         """Generate analysis context string from build result for AI analysis."""

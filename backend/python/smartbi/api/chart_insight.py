@@ -208,7 +208,6 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
     # ------------------------------------------------------------------
     from smartbi.services.insights.chart_insight_service import (
         ChartInsightContext,
-        ChartInsightService,
     )
 
     # U1.4: derive permission_tier server-side from JWT role — NEVER trust body.permission_tier

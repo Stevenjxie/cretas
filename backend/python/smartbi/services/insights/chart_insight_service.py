@@ -34,7 +34,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from .claim_recompute import recompute_claim, infer_sign_from_prose
 from ..distillation_capture import persist_distillation_sample, compute_input_hash

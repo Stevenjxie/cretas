@@ -260,7 +260,7 @@ async def _export_private(args, pool) -> None:
         for r in rows:
             # RAW — private model uses the tenant's own exact data, no anonymization.
             f.write(json.dumps(_to_sft_line(r, consent_class="private"),
-                                ensure_ascii=False) + "\n")
+                               ensure_ascii=False) + "\n")
     logger.info(
         "PRIVATE export: %d RAW samples (factory %s, consent=private) -> %s",
         len(rows), args.factory, path,

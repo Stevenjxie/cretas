@@ -8,12 +8,14 @@ Tests:
   - End-to-end ETL functions with mocked asyncpg connections / pools
 """
 from __future__ import annotations
+import importlib.util
+import importlib
 
 import asyncio
 import json
 import sys
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,8 +31,6 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 # Import module under test
-import importlib
-import importlib.util
 
 _spec = importlib.util.spec_from_file_location(
     "etl_intent_corpus",

@@ -12,14 +12,20 @@ Coverage:
 All DB interactions are mocked with asyncpg-compatible fakes — no real DB needed.
 """
 from __future__ import annotations
+from smartbi.gold.factory_production_etl import (
+    _to_float_or_none,
+    sync_fact_production_batch,
+    materialize_factory_gold,
+    run_factory_etl,
+    FactoryEtlStats,
+)
 
 import asyncio
 import sys
 import os
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import List
 
 import pytest
 
@@ -34,6 +40,7 @@ if _root not in sys.path:
 
 class _FakeRow(dict):
     """Dict subclass that also supports attribute access + asyncpg subscript."""
+
     def __getattr__(self, item):
         try:
             return self[item]
@@ -121,14 +128,6 @@ def _run(coro):
 
 
 # ── Import ETL module ─────────────────────────────────────────────────────────
-
-from smartbi.gold.factory_production_etl import (
-    _to_float_or_none,
-    sync_fact_production_batch,
-    materialize_factory_gold,
-    run_factory_etl,
-    FactoryEtlStats,
-)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -255,6 +254,7 @@ class TestSyncFactProductionBatch:
         dst_conn = _FakeConn(fetch_return=[_row(id=1)])
 
         captured_args = []
+
         async def fake_fetch(sql, *args):
             captured_args.extend(args)
             return [_row(id=1)]
@@ -278,6 +278,7 @@ class TestSyncFactProductionBatch:
         dst_conn = _FakeConn(fetch_return=[_row(id=1)])
 
         captured_args = []
+
         async def fake_fetch(sql, *args):
             captured_args.extend(args)
             return [_row(id=1)]
@@ -298,6 +299,7 @@ class TestSyncFactProductionBatch:
         dst_conn = _FakeConn(fetch_return=[_row(id=1)])
 
         captured_args = []
+
         async def fake_fetch(sql, *args):
             captured_args.extend(args)
             return [_row(id=1)]
@@ -318,6 +320,7 @@ class TestSyncFactProductionBatch:
         dst_conn = _FakeConn(fetch_return=[_row(id=1)])
 
         captured_args = []
+
         async def fake_fetch(sql, *args):
             captured_args.extend(args)
             return [_row(id=1)]
@@ -392,11 +395,13 @@ class TestRunFactoryEtl:
         ])
         # smartbi pool: first call = Silver RETURNING 1 row, then Gold = INSERT 0 2 each
         dst_call_count = [0]
+
         class _CountingConn(_FakeConn):
             async def fetch(self, sql, *args):
                 self.executed_sqls.append(sql.strip()[:80])
                 dst_call_count[0] += 1
                 return [_FakeRow({"id": 1})]
+
             async def execute(self, sql, *args):
                 self.executed_sqls.append(sql.strip()[:80])
                 return "INSERT 0 3"
@@ -411,7 +416,7 @@ class TestRunFactoryEtl:
 
     def test_silver_failure_skips_gold(self):
         """If Silver raises, Gold should not run."""
-        src_conn = _FakeConn(fetch_return=[])
+        src_conn = _FakeConn(fetch_return=[])  # noqa: F841
         gold_called = [False]
 
         class _ExplodeSilverPool(_FakePool):
@@ -420,11 +425,10 @@ class TestRunFactoryEtl:
                 class _ExplodeCtx:
                     async def __aenter__(self_):
                         raise RuntimeError("DB explode")
+
                     async def __aexit__(self_, *a):
                         pass
                 return _ExplodeCtx()
-
-        original_gold = None
 
         async def _fake_gold(pool, factory_id):
             gold_called[0] = True

@@ -101,6 +101,7 @@ _FACTUAL_QA_SOURCES: frozenset = frozenset({"chat_qa", "intent_llm"})
 # This is an offline batch job; we never touch per-factory request quotas.
 # ---------------------------------------------------------------------------
 
+
 class _NoBudgetBucket:
     blocked: bool = False
 

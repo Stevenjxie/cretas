@@ -101,7 +101,7 @@ class ExcelAdapter(BronzeAdapter):
         self._detected_columns = probe_result["columns"]
 
         # Stream in chunks
-        reader_factory = lambda: pd.read_csv(  # noqa: E731
+        def reader_factory(): return pd.read_csv(  # noqa: E731
             self.file_path,
             encoding=self._detected_encoding,
             skiprows=self._detected_skiprows,

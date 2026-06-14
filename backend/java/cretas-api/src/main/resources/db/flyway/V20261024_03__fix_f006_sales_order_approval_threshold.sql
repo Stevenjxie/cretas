@@ -1,6 +1,13 @@
 -- N9: correct F006 sales order approval threshold seed.
 -- The threshold remains configurable in approval_chain_configs.trigger_condition.
-INSERT INTO approval_chain_configs (
+DO $$
+BEGIN
+    IF to_regclass('public.approval_chain_configs') IS NULL THEN
+        RAISE NOTICE 'V20261024_03 skipped: approval_chain_configs not present before Hibernate DDL';
+        RETURN;
+    END IF;
+
+    INSERT INTO approval_chain_configs (
     id,
     factory_id,
     decision_type,
@@ -57,3 +64,4 @@ SET
     priority = EXCLUDED.priority,
     enabled = TRUE,
     updated_at = NOW();
+END $$;

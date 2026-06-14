@@ -41,7 +41,6 @@ class FinanceAnalysisService:
 
     def __init__(self):
         """Initialize the finance analysis service"""
-        pass
 
     def get_profit_trend(
         self,

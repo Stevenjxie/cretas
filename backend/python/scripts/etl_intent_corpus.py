@@ -63,7 +63,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Path bootstrap — main.py adds backend/python AND backend/python/smartbi to sys.path so
 # bare `from services.X import ...` (used transitively by distillation_capture) resolves to
