@@ -514,7 +514,7 @@ async function loadBomProcesses(productTypeId: string) {
       // T135 ITEM #4 (BLOCKING): wire all process names into planForm.processName so the
       // CUSTOMER_ORDER backend validation (processName required) passes.
       // Backend checks: request.getProcessName() != null && !isBlank().
-      planForm.value.processName = names.join('、');
+      planForm.value.processName = names.length > 0 ? names.join('、') : '两点报工';
       // Wave2 防呆: 0 工序产品 → 后端强制两点, 前端锁定开关为 true (Rule 5 no dead-end)
       if (res.data.length === 0) {
         planForm.value.skipProcessReporting = true;

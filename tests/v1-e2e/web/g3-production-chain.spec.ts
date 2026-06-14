@@ -268,7 +268,13 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
       `.el-select-dropdown:visible .el-select-dropdown__item:has-text("${PRODUCT_NAME}")`
     );
     await expect(productLineOption).toBeVisible({ timeout: 8_000 });
+    const processLoadPromise = adminPage.waitForResponse(
+      (r) => r.url().includes('/product-work-processes') && r.request().method() === 'GET',
+      { timeout: 10_000 }
+    ).catch(() => null);
     await productLineOption.click();
+    await processLoadPromise;
+    await adminPage.waitForTimeout(300);
     await expect(planDialog.locator('.el-form-item.is-required:has-text("产品类型")')).toContainText(PRODUCT_NAME, {
       timeout: 8_000,
     });
