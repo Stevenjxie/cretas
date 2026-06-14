@@ -23,6 +23,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -79,6 +80,31 @@ class WipInventoryServiceImplTest {
 
     @Captor
     private ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor;
+
+    /**
+     * F1 修复后 FINISHED 路径 first-IN 桩: findForUpdate(empty) → ensureRowExists saveAndFlush 占位行
+     * → 再 findForUpdate 拿占位行 → upsertProducedWip 累加 → save。FINISHED 不写 ledger / 不查幂等。
+     */
+    private void stubFinishedFirstIn(String wipNo) {
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory s = inv.getArgument(0);
+            if (s.getId() == null) {
+                s.setId(6666L);
+            }
+            holder[0] = s;
+            return s;
+        });
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory s = inv.getArgument(0);
+            if (s.getId() == null) {
+                s.setId(6666L);
+            }
+            return s;
+        });
+    }
 
     @Test
     @DisplayName("validateSourceWip rejects input quantity above available WIP")
@@ -253,9 +279,8 @@ class WipInventoryServiceImplTest {
                 .laborCost(new BigDecimal("30"))
                 .materialCost(new BigDecimal("45"))
                 .build();
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-001-B9001-S2-7001"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // F1: FINISHED 新行走 ensure-row-then-lock (findForUpdate + saveAndFlush 占位)
+        stubFinishedFirstIn("PROD-001-B9001-S2-7001");
 
         service.postApprovedOutput(FACTORY_ID, report, task, 10L);
 
@@ -321,9 +346,10 @@ class WipInventoryServiceImplTest {
                 ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("100.00")).build(),
                 ProductionReport.builder().reportKind("SEGMENT").laborCost(new BigDecimal("20.00")).build()
         ));
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-001-B9001-S2-7001"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // OUTPUT report 还会聚合同批次 INPUT 料 (findYieldReportsByBatch); 此处自身 task rollup 已含 INPUT 100
+        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 9001L)).thenReturn(List.of());
+        // F1: FINISHED 新行走 ensure-row-then-lock
+        stubFinishedFirstIn("PROD-001-B9001-S2-7001");
 
         service.postApprovedOutput(FACTORY_ID, output, task, 10L);
 
@@ -353,9 +379,8 @@ class WipInventoryServiceImplTest {
                 ProductionReport.builder().reportKind("INPUT").materialCost(new BigDecimal("0.50")).build(),
                 output  // OUTPUT-kind, 料 null → 不计入 INPUT 聚合
         ));
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-X-B8000-S9999-8002"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // F1: FINISHED 新行走 ensure-row-then-lock
+        stubFinishedFirstIn("PROD-X-B8000-S9999-8002");
 
         service.postApprovedOutput(FACTORY_ID, output, outputTask, 10L);
 
@@ -435,9 +460,8 @@ class WipInventoryServiceImplTest {
                 .laborCost(new BigDecimal("80.00"))
                 .materialCost(new BigDecimal("120.00"))
                 .build();
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-010-B9101-S2-7101"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // F1: FINISHED 新行走 ensure-row-then-lock
+        stubFinishedFirstIn("PROD-010-B9101-S2-7101");
 
         service.postApprovedOutput(FACTORY_ID, output, task, 11L);
 
@@ -473,13 +497,130 @@ class WipInventoryServiceImplTest {
                 .outputQuantity(new BigDecimal("40"))
                 .outputUnit("kg")
                 .build();
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-011-B9102-S1-7102"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // F1: FINISHED 新行走 ensure-row-then-lock; reportKind=null (非 OUTPUT) → 直接用 report 自身成本 (全 null)
+        stubFinishedFirstIn("PROD-011-B9102-S1-7102");
 
         service.postApprovedOutput(FACTORY_ID, output, task, 11L);
 
         verify(eventPublisher, never()).publishEvent(any(ProductionCostUpdatedEvent.class));
+    }
+
+    // ==================== F1: FINISHED-path ensure-row-then-lock 并发安全 ====================
+
+    @Test
+    @DisplayName("F1: FINISHED 新行竞争 — 输掉 insert race (DataIntegrityViolation) → catch → 重拿锁累加, 不丢入账")
+    void postApprovedOutput_finishedPath_lostInsertRace_retriesIntoExistingRow() {
+        // 模拟并发: 本线程 findForUpdate(empty) → ensureRowExists 子事务 insert 撞 unique 约束
+        //   (对方先建好行) → catch DataIntegrityViolationException → 重 findForUpdate 拿到对方建好的占位行
+        //   → 在该行上累加本次产出 (不丢入账, 不抛错)。
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7201L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9201L)
+                .productTypeId("PROD-020")
+                .processOrder(2)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(720L)
+                .batchId(9201L)
+                .workProcessTaskId(7201L)
+                .outputQuantity(new BigDecimal("30"))
+                .outputUnit("kg")
+                .laborCost(new BigDecimal("60.00"))
+                .materialCost(new BigDecimal("30.00"))
+                .build();
+        String wipNo = "PROD-020-B9201-S2-7201";
+
+        // 对方并发线程已建好的占位行 (0 量), 第二次 findForUpdate 才出现
+        SemiFinishedInventory winnerPlaceholder = SemiFinishedInventory.builder()
+                .id(5201L)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(wipNo)
+                .batchId(9201L)
+                .sourceWorkProcessTaskId(7201L)
+                .processOrder(2)
+                .productTypeId("PROD-020")
+                .producedQuantity(BigDecimal.ZERO)
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(BigDecimal.ZERO)
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        // 1st findForUpdate: empty (行不存在 → 触发 insert) ; 2nd: 对方已建好的占位行 (我撞约束后重拿锁)
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winnerPlaceholder));
+        // 我的 insert 输掉 race → saveAndFlush 撞 unique 约束 (self==null 时直调 commitEmptySemiRow → saveAndFlush)
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_sfi_factory_intermediate_batch_no"));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 12L);
+
+        // 断言: 在对方建好的占位行上累加, 入账不丢 (produced=30, unitCost=(60+30)/30=3.0000), 不抛错
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(wipNo, saved.getIntermediateBatchNo());
+        assertEquals(new BigDecimal("30"), saved.getProducedQuantity(),
+                "[F1] 输掉 race 后在对方占位行上累加, produced=30 (入账不丢)");
+        assertEquals(new BigDecimal("3.0000"), saved.getUnitCost(),
+                "[F1] unitCost = (60+30)/30 = 3.0000");
+        // 事件发出 (有 unitCost → 回填 costUnitPrice)
+        verify(eventPublisher).publishEvent(any(ProductionCostUpdatedEvent.class));
+    }
+
+    @Test
+    @DisplayName("F1: FINISHED 既有行 (跨天/二次报工同 wipNo) — findForUpdate 悲观锁累加, 产出滚动不丢")
+    void postApprovedOutput_finishedPath_existingRow_accumulatesUnderLock() {
+        // task 级稳定 wipNo: 同 task 第二次报工命中既有行 → findForUpdate 悲观锁直接累加 (无乐观锁冲突)。
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(7202L)
+                .factoryId(FACTORY_ID)
+                .productionBatchId(9202L)
+                .productTypeId("PROD-021")
+                .processOrder(3)
+                .plannedUnit("kg")
+                .build();
+        ProductionReport output = ProductionReport.builder()
+                .factoryId(FACTORY_ID)
+                .id(721L)
+                .batchId(9202L)
+                .workProcessTaskId(7202L)
+                .outputQuantity(new BigDecimal("50"))
+                .outputUnit("kg")
+                .laborCost(new BigDecimal("100"))
+                .materialCost(new BigDecimal("150"))
+                .build();
+        String wipNo = "PROD-021-B9202-S3-7202";
+        SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                .id(5202L)
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(wipNo)
+                .producedQuantity(new BigDecimal("100"))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal("100"))
+                .accumulatedCost(new BigDecimal("800.00"))
+                .unitCost(new BigDecimal("8.0000"))
+                .unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        // 既有行: findForUpdate 直接命中 (不走 ensureRowExists / saveAndFlush)
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenReturn(Optional.of(existing));
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.postApprovedOutput(FACTORY_ID, output, task, 12L);
+
+        verify(wipRepo).save(wipCaptor.capture());
+        SemiFinishedInventory saved = wipCaptor.getValue();
+        assertEquals(new BigDecimal("150"), saved.getProducedQuantity(), "produced = 100 + 50");
+        // accumulated = 800 + 250 = 1050, unitCost = 1050/150 = 7.0000 (与 SC-11 一致)
+        assertEquals(new BigDecimal("7.0000"), saved.getUnitCost(),
+                "[F1] 既有行累加 unitCost = (800+250)/150 = 7.0000");
+        // 既有行路径不建占位行
+        verify(wipRepo, never()).saveAndFlush(any(SemiFinishedInventory.class));
     }
 
     // ==================== SP1 tests (T3) ====================
@@ -706,18 +847,17 @@ class WipInventoryServiceImplTest {
 
         when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 604L))
                 .thenReturn(Collections.emptyList());
-        // W8 BUG-SP1-NEW-ROW: SEMI first-IN 走占位行 (saveAndFlush) → 再 findForUpdate 拿占位行 → save 累加
-        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
-        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-BATCH-004"))
-                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        // W8 + F1: 两条路径 (SEMI semiCode + FINISHED wipNo) 各自走 ensure-row-then-lock 占位行 (saveAndFlush)。
+        // 按 intermediateBatchNo 分别维护占位 holder (key 区分两条路径)。
+        final java.util.Map<String, SemiFinishedInventory> holders = new java.util.HashMap<>();
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(eq(FACTORY_ID), anyString()))
+                .thenAnswer(inv -> Optional.ofNullable(holders.get(inv.<String>getArgument(1))));
         when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
             SemiFinishedInventory sfi = inv.getArgument(0);
             if (sfi.getId() == null) sfi.setId(8887L);
-            holder[0] = sfi;
+            holders.put(sfi.getIntermediateBatchNo(), sfi);
             return sfi;
         });
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-006-B9104-S4-8005"))
-                .thenReturn(Optional.empty());
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
             SemiFinishedInventory sfi = inv.getArgument(0);
             if (sfi.getId() == null) sfi.setId(8888L);
@@ -727,10 +867,10 @@ class WipInventoryServiceImplTest {
 
         service.postApprovedOutput(FACTORY_ID, report, task, 30L);
 
-        // wipRepo.save called TWICE: 一次 SEMI SFI 累加, 一次 FINISHED WIP (占位行另走 saveAndFlush, 不计入 save)
+        // wipRepo.save called TWICE: 一次 SEMI SFI 累加, 一次 FINISHED WIP 累加 (占位行另走 saveAndFlush, 不计入 save)
         verify(wipRepo, times(2)).save(any(SemiFinishedInventory.class));
-        // SEMI 占位行经 saveAndFlush 建一次
-        verify(wipRepo, times(1)).saveAndFlush(any(SemiFinishedInventory.class));
+        // F1: SEMI + FINISHED 两条路径各建一次 0 量占位行 → saveAndFlush 共 2 次
+        verify(wipRepo, times(2)).saveAndFlush(any(SemiFinishedInventory.class));
         // txnRepo.save called ONCE: for SEMI IN ledger
         verify(txnRepo, times(1)).save(any(SemiFinishedInventoryTransaction.class));
     }
@@ -757,16 +897,15 @@ class WipInventoryServiceImplTest {
                 .laborCost(new BigDecimal("30"))
                 .materialCost(new BigDecimal("45"))
                 .build();
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PROD-001-B9001-S2-7001"))
-                .thenReturn(Optional.empty());
-        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        // F1: FINISHED/legacy 新行走 ensure-row-then-lock
+        stubFinishedFirstIn("PROD-001-B9001-S2-7001");
 
         service.postApprovedOutput(FACTORY_ID, report, task, 10L);
 
         // No txnRepo interaction for legacy path
         verify(txnRepo, never()).findByFactoryIdAndReportId(anyString(), anyLong());
         verify(txnRepo, never()).save(any());
-        // Regular WIP path runs
+        // Regular WIP path runs (累加后 save)
         verify(wipRepo).save(any(SemiFinishedInventory.class));
     }
 
