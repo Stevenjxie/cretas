@@ -54,6 +54,7 @@ const phaseB = [
   { key: 'fields', icon: '', label: '字段配置' },
   { key: 'permissions', icon: '', label: '权限矩阵' },
   { key: 'module-permissions', icon: '', label: '模块权限' },
+  { key: 'user-module-access', icon: '', label: '账号模块权限' },
   { key: 'tools', icon: '', label: '工具/技能' },
   { key: 'scheduler', icon: '', label: '定时任务 (v2)' },
   { key: 'alerts', icon: '', label: '预警规则' },

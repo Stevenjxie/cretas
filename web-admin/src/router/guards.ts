@@ -83,7 +83,8 @@ export function setupRouterGuards(router: Router) {
 
     // 同步角色、工厂ID、工厂类型到权限 store
     const permissionStore = usePermissionStore();
-    permissionStore.setRole(authStore.currentRole, authStore.factoryId, authStore.factoryType);
+    permissionStore.setRole(authStore.currentRole, authStore.factoryId, authStore.factoryType, authStore.user?.id);
+    await permissionStore.loadFromDb();
 
     // 检查是否是 Mobile 专属角色 (一线员工: 操作员、质检员、仓库工人)
     // 这些角色只能使用移动端 App，不能登录 Web 管理后台
