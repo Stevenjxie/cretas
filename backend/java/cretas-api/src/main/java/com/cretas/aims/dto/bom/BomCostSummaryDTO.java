@@ -76,6 +76,10 @@ public class BomCostSummaryDTO {
     @PriceSensitive
     private BigDecimal totalCost;
 
+    private String costCaliber;
+
+    private String caliberHint;
+
     /**
      * 计算时间戳
      */
@@ -124,6 +128,10 @@ public class BomCostSummaryDTO {
          */
         @PriceSensitive
         private BigDecimal unitPrice;
+
+        private String unitPriceCaliber;
+
+        private String caliberHint;
 
         /**
          * 税率 (%)

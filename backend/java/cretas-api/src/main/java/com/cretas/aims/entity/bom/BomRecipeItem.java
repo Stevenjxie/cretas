@@ -74,6 +74,7 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
+    /** Unit price for BOM cost, stored pre-tax; do not divide by tax rate in rollup. */
     @PriceSensitive
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;

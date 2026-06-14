@@ -85,7 +85,8 @@ public class BomItem extends BaseEntity {
     private String unit;
 
     /**
-     * 单价 (含税/不含税取决于tax_rate)
+     * Unit price for BOM cost, stored pre-tax. Tax-included purchase prices must be
+     * converted before being copied here.
      *
      * <p>Stripped to {@code null} for roles lacking {@code procurement:price:view}
      * (warehouse_manager, operator, quality_inspector). See PR #455 BUG-2 follow-up.
