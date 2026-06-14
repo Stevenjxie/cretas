@@ -22,6 +22,10 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
 import { WHInboundStackParamList } from "../../../types/navigation";
 import { purchaseApiClient } from "../../../services/api/purchaseApiClient";
+import {
+  materialLabelApiClient,
+  MaterialBatchLabelScanResponse,
+} from "../../../services/api/materialLabelApiClient";
 import { handleError } from "../../../utils/errorHandler";
 
 type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList>;
@@ -55,6 +59,17 @@ type AlertWithPrompt = typeof Alert & { prompt?: AlertPrompt };
 
 const SCAN_COOLDOWN_MS = 2000; // 同一扫码冷却, 防 onBarcodeScanned 高频重复触发
 
+function formatMaterialLabel(label: MaterialBatchLabelScanResponse): string {
+  return [
+    `物料: ${label.materialName}`,
+    `批次: ${label.batchNumber}`,
+    label.factoryNumber ? `厂号: ${label.factoryNumber}` : null,
+    label.originPlace ? `产地: ${label.originPlace}` : null,
+    label.specification ? `规格: ${label.specification}` : null,
+    `标签状态: ${label.labelStatus}`,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
 export function WHScanOperationScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute();
@@ -87,16 +102,28 @@ export function WHScanOperationScreen() {
     setLastScan(code);
     setScannedCount((prev) => prev + 1);
 
-    if (mode === "outbound") {
-      // Phase 2: 出库流程接入. 当前仅展示扫描结果.
-      Alert.alert("扫码成功", `批次号: ${code}\n(出库流程 Phase 2 接入)`);
-      return;
-    }
-
-    // 入库: code = orderNumber, 反查 PO + 跳收货页
     setResolving(true);
     setCameraActive(false);
     try {
+      try {
+        const labelRes = await materialLabelApiClient.scanMaterialBatchLabel(code);
+        if (labelRes.success && labelRes.data) {
+          Alert.alert("物料标签已识别", formatMaterialLabel(labelRes.data));
+          return;
+        }
+      } catch (labelErr) {
+        if (mode === "outbound") {
+          handleError(labelErr, { title: "物料标签识别失败" });
+          return;
+        }
+      }
+
+      if (mode === "outbound") {
+        Alert.alert("未识别到物料标签", `扫码内容: ${code}\n请确认扫描的是一物一码标签。`);
+        return;
+      }
+
+      // 入库: 非物料标签时沿用采购单 QR/Code128 识别.
       const res = await purchaseApiClient.getOrderByNumber(code);
       const order = res?.data as PurchaseOrderLookup | undefined;
       if (!order || !order.id) {
