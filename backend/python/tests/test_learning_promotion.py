@@ -3,7 +3,42 @@ from smartbi.services.learning_promotion import (
     is_branch_promotable,
     is_trunk_promotable,
     consult_in,
+    consult_promoted_db,
 )
+
+
+class _AcquireContext:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakePool:
+    def __init__(self, rows=None, exc=None):
+        self.conn = _FakeConn(rows or [], exc)
+
+    def acquire(self):
+        return _AcquireContext(self.conn)
+
+
+class _FakeConn:
+    def __init__(self, rows, exc):
+        self.rows = list(rows)
+        self.exc = exc
+        self.calls = []
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        if self.exc:
+            raise self.exc
+        if self.rows:
+            return self.rows.pop(0)
+        return None
 
 
 def _g(**kw):
@@ -114,3 +149,57 @@ def test_consult_learning_type_isolated():
     trunk = {"field_mapping": {"营业进账": "revenue"}, "classification": {}}
     assert consult_in({}, trunk, "classification", "营业进账", None) == (None, None)
     assert consult_in({}, trunk, "field_mapping", "营业进账", None) == ("revenue", "promoted")
+
+
+async def test_consult_promoted_db_prefers_industry_branch():
+    pool = _FakePool(rows=[{"target_value": "traffic_branch"}])
+
+    result = await consult_promoted_db(pool, "field_mapping", " 客流 ", "restaurant")
+
+    assert result == ("traffic_branch", "promoted_industry")
+    assert len(pool.conn.calls) == 1
+    query, args = pool.conn.calls[0]
+    assert "business_type = $3" in query
+    assert "occurrences >= 3" in query
+    assert "confidence >= 0.9" in query
+    assert args == ("field_mapping", "客流", "restaurant")
+
+
+async def test_consult_promoted_db_uses_global_trunk_after_industry_miss():
+    pool = _FakePool(rows=[None, {"target_value": "traffic_trunk"}])
+
+    result = await consult_promoted_db(pool, "field_mapping", "客流", "restaurant")
+
+    assert result == ("traffic_trunk", "promoted")
+    assert len(pool.conn.calls) == 2
+    query, args = pool.conn.calls[1]
+    assert "business_type = 'unknown'" in query
+    assert "occurrences >= 5" in query
+    assert "confidence >= 0.92" in query
+    assert args == ("field_mapping", "客流")
+
+
+async def test_consult_promoted_db_none_pool_falls_back_to_json(monkeypatch):
+    monkeypatch.setattr(
+        "smartbi.services.learning_promotion.consult_promoted",
+        lambda learning_type, source_key, business_type=None: (
+            f"{learning_type}:{source_key}:{business_type}",
+            "promoted",
+        ),
+    )
+
+    result = await consult_promoted_db(None, "classification", "神秘菜", "restaurant")
+
+    assert result == ("classification:神秘菜:restaurant", "promoted")
+
+
+async def test_consult_promoted_db_exception_falls_back_to_json(monkeypatch):
+    monkeypatch.setattr(
+        "smartbi.services.learning_promotion.consult_promoted",
+        lambda learning_type, source_key, business_type=None: ("json_value", "promoted"),
+    )
+    pool = _FakePool(exc=RuntimeError("db unavailable"))
+
+    result = await consult_promoted_db(pool, "field_mapping", "客流", "restaurant")
+
+    assert result == ("json_value", "promoted")

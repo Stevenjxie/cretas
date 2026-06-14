@@ -112,6 +112,59 @@ def consult_promoted(
     return consult_in(_BRANCH, _TRUNK, learning_type, source_key, business_type)
 
 
+async def consult_promoted_db(
+    pool,
+    learning_type: str,
+    source_key: Optional[str],
+    business_type: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """DB 实时 consult: 行业分支优先, 全局主干兜底; 异常时回退 JSON promoted。"""
+    if pool is None or not source_key:
+        return consult_promoted(learning_type, source_key, business_type)
+    k = source_key.strip()
+    try:
+        async with pool.acquire() as conn:
+            if business_type:
+                row = await conn.fetchrow(
+                    """SELECT target_value
+                         FROM smart_bi_learning_candidates
+                        WHERE learning_type = $1
+                          AND source_key = $2
+                          AND business_type = $3
+                          AND factory_id IS NULL
+                          AND occurrences >= 3
+                          AND confidence >= 0.9
+                        ORDER BY confidence DESC, occurrences DESC, last_seen DESC
+                        LIMIT 1""",
+                    learning_type,
+                    k,
+                    business_type,
+                )
+                if row:
+                    return row["target_value"], "promoted_industry"
+
+            row = await conn.fetchrow(
+                """SELECT target_value
+                     FROM smart_bi_learning_candidates
+                    WHERE learning_type = $1
+                      AND source_key = $2
+                      AND factory_id IS NULL
+                      AND business_type = 'unknown'
+                      AND occurrences >= 5
+                      AND confidence >= 0.92
+                    ORDER BY confidence DESC, occurrences DESC, last_seen DESC
+                    LIMIT 1""",
+                learning_type,
+                k,
+            )
+            if row:
+                return row["target_value"], "promoted"
+    except Exception as e:
+        logger.warning("consult_promoted_db failed (fallback to JSON): %s", e)
+        return consult_promoted(learning_type, source_key, business_type)
+    return None, None
+
+
 async def capture_candidate(
     pool, learning_type: str, source_key: str, target_value: str,
     factory_id: Optional[str], method: str, confidence: float,
