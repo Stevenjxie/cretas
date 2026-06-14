@@ -15,6 +15,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -60,6 +62,7 @@ class TransferShipBatchSelectionTest {
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     private TransferServiceImpl service;
 
@@ -73,6 +76,7 @@ class TransferShipBatchSelectionTest {
                 applicationEventPublisher,
                 materialBatchService,
                 rawMaterialTypeRepository);
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
     }
 
     // ===== helpers =====
@@ -146,6 +150,7 @@ class TransferShipBatchSelectionTest {
         assertThat(item.getSourceBatchId()).isEqualTo("B_OLD");
         assertThat(oldest.getUsedQuantity()).isEqualByComparingTo("50");
         assertThat(newest.getUsedQuantity()).isEqualByComparingTo("0");
+        verify(inventoryLowStockEventPublisher).publishIfLowStock("F001", oldest, "TRANSFER_OUT");
     }
 
     // ===== T2: sourceBatchId=X → specific X consumed first =====
@@ -173,6 +178,7 @@ class TransferShipBatchSelectionTest {
         assertThat(item.getSourceBatchId()).isEqualTo("B_NEW");
         assertThat(newest.getUsedQuantity()).isEqualByComparingTo("50");
         assertThat(oldest.getUsedQuantity()).isEqualByComparingTo("0");
+        verify(inventoryLowStockEventPublisher).publishIfLowStock("F001", newest, "TRANSFER_OUT");
     }
 
     // ===== T3: Invalid preselected → BusinessException =====

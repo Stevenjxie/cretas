@@ -9,9 +9,11 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.WastageReportRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.inventory.WastageReportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -51,6 +53,9 @@ public class WastageReportServiceImpl implements WastageReportService {
     private final WastageReportRepository wastageReportRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     // -------------------------------------------------------
     // W2 角色码修复 (2026-06-10): 真实 FactoryUserRole 码（小写）
@@ -310,6 +315,7 @@ public class WastageReportServiceImpl implements WastageReportService {
         // 扣减库存（null 安全）
         batch.setReceiptQuantity(quantityAfter.setScale(2, RoundingMode.HALF_UP));
         materialBatchRepo.save(batch);
+        inventoryLowStockEventPublisher.publishIfLowStock(report.getFactoryId(), batch, "WASTAGE");
     }
 
     /**

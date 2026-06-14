@@ -9,6 +9,8 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.WastageReportRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +23,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -65,12 +68,18 @@ class WastageReportServiceImplTest {
     @Mock private WastageReportRepository wastageReportRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     @InjectMocks private WastageReportServiceImpl service;
 
     private static final String FACTORY_ID = "F006";
     private static final Long USER_ID = 42L;
     private static final String BATCH_ID = "BATCH-123";
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+    }
 
     // -------------------------------------------------------
     // 1. 照片强制: null → 422
@@ -191,6 +200,7 @@ class WastageReportServiceImplTest {
         ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(batchRepo()).save(batchCaptor.capture());
         assertThat(batchCaptor.getValue().getReceiptQuantity().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
+        verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "WASTAGE");
 
         // Verify status → APPLIED (entity enum, not DTO string)
         ArgumentCaptor<WastageReport> rptCaptor = ArgumentCaptor.forClass(WastageReport.class);

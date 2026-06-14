@@ -36,6 +36,7 @@ import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
@@ -201,6 +202,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /** C-074/C-075/X-10: 补录时效锁 — T-3 及更早拒绝 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
     private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public MaterialBatchServiceImpl(
@@ -564,8 +568,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
 
         // 更新批次信息
+        BigDecimal previousCurrentQuantity = batch.getCurrentQuantity();
         materialBatchMapper.updateEntity(batch, request);
         batch = materialBatchRepository.save(batch);
+        if (batch.getCurrentQuantity().compareTo(previousCurrentQuantity) < 0) {
+            publishStockChangedEventIfApplicable(factoryId, batch, "ADJUST");
+        }
         log.info("更新原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
         return materialBatchMapper.toDTO(batch);
     }
@@ -602,6 +610,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
 
         materialBatchRepository.delete(batch);
+        publishStockChangedEventIfApplicable(factoryId, batch, "DELETE");
         log.info("删除原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
     }
 
@@ -907,6 +916,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 标记为用完：设置 usedQuantity = receiptQuantity - reservedQuantity
         batch.setUsedQuantity(batch.getReceiptQuantity().subtract(batch.getReservedQuantity()));
         materialBatchRepository.save(batch);
+        publishStockChangedEventIfApplicable(factoryId, batch, "OUT");
         log.info("标记批次用完: batchId={}", batchId);
     }
 
@@ -933,6 +943,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.setReservedQuantity(currentReserved.add(quantity));
 
         materialBatchRepository.save(batch);
+        publishStockChangedEventIfApplicable(factoryId, batch, "RESERVE");
         log.info("预留批次数量: batchId={}, quantity={}, reservedTotal={}", batchId, quantity, batch.getReservedQuantity());
     }
 
@@ -1087,44 +1098,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     /**
-     * F-034: 领料/消耗后发布 InventoryStockChangedEvent, 触发低库存双向报警流水线.
-     *
-     * <p>fail-open: applicationEventPublisher 为 optional bean; 查 minStock 失败时
-     * 不阻断主流程 (catch-all).
+     * F-034: after stock decreases, delegate minStock checks and deduped event publishing.
      */
     private void publishStockChangedEventIfApplicable(String factoryId, MaterialBatch batch, String changeType) {
-        if (applicationEventPublisher == null || batch == null) return;
-        try {
-            // 取当前原料类型的 minStock (安全库存)
-            BigDecimal minStock = materialTypeRepository.findById(batch.getMaterialTypeId())
-                    .map(com.cretas.aims.entity.RawMaterialType::getMinStock)
-                    .orElse(null);
-
-            // 取变更后最新全量库存 (跨批次聚合)
-            BigDecimal currentStock = materialBatchRepository
-                    .sumAvailableQuantityByMaterialType(factoryId, batch.getMaterialTypeId());
-            if (currentStock == null) currentStock = BigDecimal.ZERO;
-
-            String materialName = materialTypeRepository.findById(batch.getMaterialTypeId())
-                    .map(com.cretas.aims.entity.RawMaterialType::getName)
-                    .orElse(batch.getMaterialTypeId());
-
-            String unit = materialTypeRepository.findById(batch.getMaterialTypeId())
-                    .map(com.cretas.aims.entity.RawMaterialType::getUnit)
-                    .orElse("kg");
-
-            applicationEventPublisher.publishEvent(
-                    new com.cretas.aims.event.InventoryStockChangedEvent(
-                            this, factoryId, batch.getMaterialTypeId(),
-                            materialName, currentStock, minStock, unit, changeType));
-
-            log.debug("F-034: 发布 InventoryStockChangedEvent factoryId={} materialTypeId={} "
-                    + "current={} minStock={} changeType={}",
-                    factoryId, batch.getMaterialTypeId(), currentStock, minStock, changeType);
-        } catch (Exception e) {
-            log.warn("F-034: publishStockChangedEvent 失败 (非阻断): factoryId={} batchId={} — {}",
-                    factoryId, batch.getId(), e.getMessage());
+        if (batch == null) {
+            return;
         }
+        inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, changeType);
     }
 
     @Override
@@ -1387,6 +1367,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         materialBatchAdjustmentRepository.save(adjustmentRecord);
 
         batch = materialBatchRepository.save(batch);
+        if (adjustment.compareTo(BigDecimal.ZERO) < 0) {
+            publishStockChangedEventIfApplicable(factoryId, batch, "ADJUST");
+        }
         return materialBatchMapper.toDTO(batch);
     }
 
@@ -1434,6 +1417,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
 
         materialBatchRepository.save(batch);
+        publishStockChangedEventIfApplicable(factoryId, batch, "RESERVE");
         log.info("预留批次材料成功: batchId={}, quantity={}, remainingAfter={}, reservedTotal={}",
                 batchId, quantity, batch.getRemainingQuantity(), batch.getReservedQuantity());
 
@@ -1550,6 +1534,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         this, factoryId, batchId, quantity, productionPlanId));
             } catch (Exception e) { log.warn("Publish BatchMaterialConsumedEvent failed: {}", e.getMessage()); }
         }
+        publishStockChangedEventIfApplicable(factoryId, batch, "OUT");
     }
 
     @Override

@@ -42,11 +42,13 @@ import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.SchedulingService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.utils.ExcelUtil;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -165,6 +167,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     /**
      * 完工链 GAP 3/4 (F006 — 2026-06-02): 转批次时从 product_work_processes 模板 spawn 工序任务.
@@ -1787,6 +1792,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batch.setStatus(MaterialBatchStatus.USED_UP);
         }
         materialBatchRepository.save(batch);
+        inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
     }
 
     private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line) {
@@ -2587,6 +2593,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batch.setStatus(MaterialBatchStatus.USED_UP);
         }
         materialBatchRepository.save(batch);
+        inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
 
         log.info("记录材料消耗: planId={}, batchId={}, quantity={}", planId, batchId, quantity);
     }

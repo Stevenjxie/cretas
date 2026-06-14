@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,12 +64,18 @@ class FactoryStocktakeServiceImplTest {
     @Mock private FactoryStocktakeItemRepository stocktakeItemRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     @InjectMocks private FactoryStocktakeServiceImpl service;
 
     private static final String FACTORY_ID = "F006";
     private static final Long USER_ID = 42L;
     private static final String WAREHOUSE_ID = "WH-001";
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+    }
 
     // -------------------------------------------------------
     // 1. 月底约束 threshold=29: 6-10 (day=10) → 409 含下次可发起日期
@@ -312,6 +319,7 @@ class FactoryStocktakeServiceImplTest {
         ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(materialBatchRepo).save(batchCaptor.capture());
         assertThat(batchCaptor.getValue().getReceiptQuantity().compareTo(new BigDecimal("80.00"))).isEqualTo(0);
+        verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "ADJUST");
 
         // Verify stocktake saved with APPLIED status
         ArgumentCaptor<FactoryStocktake> stCaptor = ArgumentCaptor.forClass(FactoryStocktake.class);

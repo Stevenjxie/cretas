@@ -10,6 +10,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.factory.SaltedWarehouseDeductionRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -53,6 +55,7 @@ class SaltedWarehouseServiceImplTest {
     @Mock private SaltedWarehouseDeductionRepository deductionRepo;
     @Mock private FactoryWarehouseRepository warehouseRepo;
     @Mock private MaterialBatchRepository batchRepo;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     @InjectMocks private SaltedWarehouseServiceImpl service;
 
@@ -67,6 +70,8 @@ class SaltedWarehouseServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+
         saltedWarehouse = new FactoryWarehouse();
         saltedWarehouse.setId(WH_SALTED_ID);
         saltedWarehouse.setFactoryId(FACTORY_ID);
@@ -116,6 +121,7 @@ class SaltedWarehouseServiceImplTest {
         ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(batchRepo).save(batchCaptor.capture());
         assertThat(batchCaptor.getValue().getUsedQuantity()).isEqualByComparingTo("30");
+        verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, availableBatch, "OUT");
     }
 
     // ── T2: 非 SALTED 仓 ──────────────────────────────────────────────────────

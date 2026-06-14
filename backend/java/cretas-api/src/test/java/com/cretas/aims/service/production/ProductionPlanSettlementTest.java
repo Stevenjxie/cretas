@@ -39,6 +39,7 @@ import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
@@ -102,6 +103,7 @@ class ProductionPlanSettlementTest {
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
 
     private ProductionPlanServiceImpl service;
@@ -123,6 +125,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "bomRecipeRepository", bomRecipeRepository);
         ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
@@ -197,6 +200,7 @@ class ProductionPlanSettlementTest {
         verify(productionSettlementLaborRepository).saveAll(anyList());
         verify(materialBatchRepository).save(batch);
         verify(semiFinishedInventoryRepository).save(wip);
+        verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "OUT");
         verify(applicationEventPublisher).publishEvent(argThat(event ->
                 event instanceof com.cretas.aims.event.ProductionSettledEvent settled
                         && FACTORY_ID.equals(settled.getFactoryId())

@@ -14,6 +14,7 @@ import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
@@ -61,6 +62,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     // -------------------------------------------------------
     // 月底约束：>=threshold 日才允许发起盘点
@@ -295,6 +299,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             // 更新批次数量（null 安全，通过 receiptQuantity 字段）
             batch.setReceiptQuantity(quantityAfter);
             materialBatchRepo.save(batch);
+            if (item.getDifferenceQty().compareTo(BigDecimal.ZERO) < 0) {
+                inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "ADJUST");
+            }
         }
 
         stocktake.setStatus(FactoryStocktake.Status.APPLIED);
