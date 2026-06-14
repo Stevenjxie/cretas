@@ -4,8 +4,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.smartbi.QueryTemplateDTO;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiQueryTemplate;
 import com.cretas.aims.repository.smartbi.postgres.SmartBiQueryTemplateRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,14 +21,29 @@ import java.util.List;
 @Slf4j
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/smart-bi/query-templates")
-@RequiredArgsConstructor
 public class SmartBiQueryTemplateController {
 
+    // required = false: the smartbi.postgres datasource is @ConditionalOnProperty
+    // (smartbi.postgres.enabled). In the test profile it is disabled, so this repository
+    // bean is absent — mirror the established pattern in SmartBIUploadController /
+    // SmartBIDashboardController so the context still loads. In prod smartbi is enabled.
     private final SmartBiQueryTemplateRepository repository;
+
+    public SmartBiQueryTemplateController(
+            @Autowired(required = false) SmartBiQueryTemplateRepository repository) {
+        this.repository = repository;
+    }
+
+    private SmartBiQueryTemplateRepository requireSmartbi() {
+        if (repository == null) {
+            throw new IllegalStateException("SmartBI 数据源未启用 (smartbi.postgres.enabled=false)，查询模板不可用");
+        }
+        return repository;
+    }
 
     @GetMapping
     public ApiResponse<List<QueryTemplateDTO>> list(@PathVariable String factoryId) {
-        List<QueryTemplateDTO> result = repository
+        List<QueryTemplateDTO> result = requireSmartbi()
                 .findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId)
                 .stream().map(SmartBiQueryTemplateController::toDTO).toList();
         return ApiResponse.success(result);
@@ -49,7 +64,7 @@ public class SmartBiQueryTemplateController {
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
-        return ApiResponse.success(toDTO(repository.save(entity)));
+        return ApiResponse.success(toDTO(requireSmartbi().save(entity)));
     }
 
     @PutMapping("/{id}")
@@ -57,7 +72,7 @@ public class SmartBiQueryTemplateController {
     public ApiResponse<QueryTemplateDTO> update(@PathVariable String factoryId,
                                                 @PathVariable Long id,
                                                 @RequestBody QueryTemplateDTO body) {
-        SmartBiQueryTemplate entity = repository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
+        SmartBiQueryTemplate entity = requireSmartbi().findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new IllegalArgumentException("查询模板不存在: " + id));
         entity.setName(body.getName());
         entity.setCategory(body.getCategory());
@@ -71,7 +86,7 @@ public class SmartBiQueryTemplateController {
     @DeleteMapping("/{id}")
     @Transactional("smartbiPostgresTransactionManager")
     public ApiResponse<Void> delete(@PathVariable String factoryId, @PathVariable Long id) {
-        repository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId).ifPresent(entity -> {
+        requireSmartbi().findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId).ifPresent(entity -> {
             entity.setDeletedAt(LocalDateTime.now());
             repository.save(entity);
         });
