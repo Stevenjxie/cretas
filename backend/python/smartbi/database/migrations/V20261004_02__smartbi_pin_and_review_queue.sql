@@ -34,3 +34,19 @@ CREATE INDEX IF NOT EXISTS idx_pin_factory_template
 
 CREATE INDEX IF NOT EXISTS idx_review_queue_factory_pending
     ON smart_bi_mapping_review_queue (factory_id, review_status);
+
+-- ── 多租户隔离: FORCE RLS(对照 smart_bi_pg_excel_uploads / agg_* / tenant_rls_smoke 惯例)──
+-- 这两张表按 factory_id 隔离。所有运行时查询必须在事务内
+--   set_config('app.factory_id', <factory_id>, true)
+-- 否则 FORCE RLS 下返回 0 行(current_setting(name, true) 未设时返 NULL,不报错)。
+ALTER TABLE smart_bi_pin_mappings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smart_bi_pin_mappings FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON smart_bi_pin_mappings
+    USING (factory_id = current_setting('app.factory_id', true))
+    WITH CHECK (factory_id = current_setting('app.factory_id', true));
+
+ALTER TABLE smart_bi_mapping_review_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smart_bi_mapping_review_queue FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON smart_bi_mapping_review_queue
+    USING (factory_id = current_setting('app.factory_id', true))
+    WITH CHECK (factory_id = current_setting('app.factory_id', true));
