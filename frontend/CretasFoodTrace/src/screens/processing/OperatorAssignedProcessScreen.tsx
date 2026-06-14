@@ -7,6 +7,7 @@ import { NeoButton, ScreenWrapper } from '../../components/ui';
 import { yieldReportApi, WorkProcessTask, WorkProcessTaskStatus } from '../../services/api/yieldReportApi';
 import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
+import { isTaskReportComplete } from '../../utils/operatorAssignedProcess';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -53,9 +54,6 @@ function statusRank(status: WorkProcessTaskStatus): number {
   return 2;
 }
 
-function isTerminalStatus(status: WorkProcessTaskStatus): boolean {
-  return status === 'COMPLETED' || status === 'SKIPPED' || status === 'CANCELLED';
-}
 
 function compareAssignedTasks(a: WorkProcessTask, b: WorkProcessTask): number {
   return (
@@ -128,12 +126,14 @@ export default function OperatorAssignedProcessScreen() {
         const batchTasks = [...(batchRes.data ?? [])].sort(
           (a, b) => a.processOrder - b.processOrder || a.id - b.id,
         );
+        const yieldRes = await yieldReportApi.getYield(batchRep.productionBatchId);
+        const yieldData = yieldRes.success ? yieldRes.data : null;
         const myOpen = batchTasks.filter(
-          (t) => t.assignedTo === assignedTo && !isTerminalStatus(t.status),
+          (t) => t.assignedTo === assignedTo && !isTaskReportComplete(t, yieldData),
         );
         const myNext = myOpen[0];
         if (!myNext) continue; // 我在这批次已无待报工序
-        const firstOpenTask = batchTasks.find((task) => !isTerminalStatus(task.status)) ?? null;
+        const firstOpenTask = batchTasks.find((task) => !isTaskReportComplete(task, yieldData)) ?? null;
         const reportable = !!firstOpenTask && firstOpenTask.assignedTo === assignedTo;
         out.push({
           batchId: batchRep.productionBatchId,
