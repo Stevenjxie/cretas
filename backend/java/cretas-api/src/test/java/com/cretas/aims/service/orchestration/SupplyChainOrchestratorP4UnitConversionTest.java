@@ -5,6 +5,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.event.BatchCompletedEvent;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -61,6 +62,7 @@ class SupplyChainOrchestratorP4UnitConversionTest {
     @Mock private BatchConsumptionService batchConsumptionService;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private FactorySettingsRepository factorySettingsRepository;
 
     @InjectMocks
     private SupplyChainOrchestrator orchestrator;
@@ -70,6 +72,7 @@ class SupplyChainOrchestratorP4UnitConversionTest {
         // warehouseResolver is @Autowired field injection (not in constructor),
         // @InjectMocks won't inject it — use ReflectionTestUtils
         ReflectionTestUtils.setField(orchestrator, "warehouseResolver", warehouseResolver);
+        ReflectionTestUtils.setField(orchestrator, "factorySettingsRepository", factorySettingsRepository);
     }
 
     // ---------- helpers ----------
@@ -95,6 +98,8 @@ class SupplyChainOrchestratorP4UnitConversionTest {
 
     private void stubCommon(ProductionBatch batch, ProductType productType) {
         // FG 幂等检查: 不存在同编号 → 允许创建
+        when(factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(batch.getFactoryId()))
+                .thenReturn(false);
         when(finishedGoodsBatchRepository
                 .findByFactoryIdAndBatchNumber(anyString(), anyString()))
                 .thenReturn(Optional.empty());
