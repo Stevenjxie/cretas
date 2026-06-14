@@ -30,6 +30,8 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 查找工厂的激活原材料类型
       */
     List<RawMaterialType> findByFactoryIdAndIsActive(String factoryId, Boolean isActive);
+
+    List<RawMaterialType> findByFactoryIdAndPrimaryCodeOrderByCodeAsc(String factoryId, String primaryCode);
      /**
      * 分页查找工厂的原材料类型
       */
