@@ -36,9 +36,9 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
 // 藏 finance; 餐饮 demo (DEMO_REST) 无工厂销售订单 → 藏 sales。system 内部管理两业态都藏。
 const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: ['sales', 'system'],
-  // F006 无财务凭证/开票/收款 (invoice=0 payment=0 fact_finance_voucher=0) → 财务概览/应收应付/
-  // 报表全 ¥0 → 整组藏。quality/equipment/scheduling 无数据。
-  FACTORY: ['quality', 'equipment', 'scheduling', 'system', 'finance'],
+  // 财务模块已补数据 (ar_ap_transactions 204 / invoice 97 / payment 97 → 财务概览/应收应付/
+  // 开票/收款 有数据) → 不再整组藏 finance, 只藏空的 reports/adjustments 子页 (见 PATHS)。
+  FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
 };
 // 路径前缀级隐藏 (按业态). 2026-06-14 DB ground-truth (每表 count) + headed 逐页核实:
 //   工厂 (DEMO_FACTORY2, F006): 报工链是亮点 — 生产批次(104)/计划(133)/报工审批·工序投入产出·
@@ -63,10 +63,14 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   FACTORY: [
     '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
     '/sales/payment-requests', '/sales/returns',
-    '/production/material-requisitions', '/production/restock-board', '/rd/samples',
-    '/warehouse/wastage-reports', '/warehouse/stocktaking',
-    '/smart-bi/analysis-hub', '/analytics/alert-dashboard', '/analytics/production-report',
-    '/production-analytics/efficiency', '/production-analytics/cost',
+    // 已补数据 → 不再隐藏: 物料需求(factory_material_requisitions 40)/研发样品(rd_requests 6)/
+    // 成本分析(production_reports cost)/人效分析(efficiency 3 workers)/盘点(/warehouse/inventory)。
+    '/production/restock-board',          // 备货看板: 当日 realtime 无未来订单 → 空
+    '/warehouse/wastage-reports',         // 报损: 列表 API 对此租户数据 400 (页面 bug) → 暂藏
+    '/finance/reports', '/finance/adjustments',  // 财务报表(无凭证)/调整审批(无调整单) → 空
+    '/smart-bi/analysis-hub',             // 经营分析hub: smart_bi_finance_data=0 (需 Excel 财务上传)
+    '/analytics/alert-dashboard',         // 异常预警: 无预警记录
+    '/analytics/production-report',       // 车间报表: 当日 realtime 空
     '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
     '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
     '/smart-bi/calibration',
