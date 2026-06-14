@@ -191,10 +191,19 @@ class SemanticMapper:
 
         # Layer 1 (promoted): consult graduated aliases before early-return.
         # Hierarchical: industry-branch first, then global trunk (0-token determinism).
-        from smartbi.services.learning_promotion import consult_promoted
+        from smartbi.services.learning_promotion import consult_promoted_db
+        try:
+            from smartbi.config import get_pg_pool
+            _promo_pool = await get_pg_pool()
+        except Exception:
+            _promo_pool = None
         _still_unmapped = []
         for col in rule_unmapped:
-            std, hit_method = consult_promoted("field_mapping", col, business_type)
+            # DB-realtime promoted consult (graduated mappings take effect without
+            # a restart); falls back to JSON consult_promoted when pool is None.
+            std, hit_method = await consult_promoted_db(
+                _promo_pool, "field_mapping", col, business_type
+            )
             if std and std in STANDARD_FIELDS:
                 fi = STANDARD_FIELDS.get(std, {})
                 mappings.append(FieldMapping(
