@@ -47,6 +47,11 @@ interface WipBatchPickerProps {
   disabled?: boolean;
   /** 是否必须选择 WIP; false 时再次点击已选行会清空选择 */
   required?: boolean;
+  /**
+   * 加载完成且确认无可领半成品时触发 (防呆 Rule 5: dead-end → 导航/出路)。
+   * 父组件可据此解除 submitBlockedNoWip，让操作员能走主管流程而不是死锁在界面上。
+   */
+  onEmpty?: () => void;
 }
 
 export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
@@ -56,6 +61,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   onChange,
   disabled = false,
   required = true,
+  onEmpty,
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -73,6 +79,10 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
             w.status === 'AVAILABLE' && (w.availableQuantity ?? 0) > 0,
         );
         setRows(available);
+        // 防呆 Rule 5: 确认为空时通知父组件，避免死胡同 (submitBlockedNoWip 无法解除)
+        if (available.length === 0) {
+          onEmpty?.();
+        }
       } else {
         setLoadError(res.message || '无法加载半成品批次');
       }
@@ -82,7 +92,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [batchId, factoryId]);
+  }, [batchId, factoryId, onEmpty]);
 
   useEffect(() => {
     loadWip();
@@ -127,7 +137,14 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
             </TouchableOpacity>
           </View>
         ) : rows.length === 0 ? (
-          <Text style={styles.emptyText}>暂无可领半成品批次</Text>
+          /* 防呆 Rule 5: 空状态给出路，不让操作员死锁 */
+          <View style={styles.center}>
+            <Text style={styles.emptyText}>暂无可领半成品批次</Text>
+            <Text style={styles.emptyGuide}>如确认无半成品可领，请联系主管确认是否可跳过本道</Text>
+            <TouchableOpacity onPress={loadWip} style={styles.retryBtn}>
+              <Text style={styles.retryText}>重新加载</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           <ScrollView style={styles.listScroll} nestedScrollEnabled>
             {rows.map((row: WipRowDTO) => {
@@ -183,7 +200,8 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 13, color: '#F56C6C', textAlign: 'center' },
   retryBtn: { marginTop: 8, paddingHorizontal: 16, paddingVertical: 6, backgroundColor: '#FFEFD5', borderRadius: 6 },
   retryText: { fontSize: 13, color: '#E8732E', fontWeight: '600' },
-  emptyText: { fontSize: 13, color: '#909399', textAlign: 'center', paddingVertical: 12 },
+  emptyText: { fontSize: 13, color: '#909399', textAlign: 'center', paddingVertical: 4 },
+  emptyGuide: { fontSize: 12, color: '#E6A23C', textAlign: 'center', paddingHorizontal: 12, paddingBottom: 8 },
   listScroll: { maxHeight: 320 },
   row: {
     flexDirection: 'row', alignItems: 'center',

@@ -458,6 +458,8 @@ const YieldStepReportScreen: React.FC = () => {
   });
   // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
   const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
+  // 防呆 Rule 5: WipBatchPicker 加载后确认无可领半成品时置 true，解除 submitBlockedNoWip 死锁
+  const [wipPickerConfirmedEmpty, setWipPickerConfirmedEmpty] = useState(false);
 
   // 生产阶段 — 完工出成块输入
   const [outputQty, setOutputQty] = useState('');
@@ -616,6 +618,7 @@ const YieldStepReportScreen: React.FC = () => {
     setMaterialBatchRefs([]);
     setMaterialBatchValidation({ hasOverLimit: false });
     setSelectedWip(null);
+    setWipPickerConfirmedEmpty(false);
     setEvidencePhotos([]);
     setByproducts([]);
     setWasteQty('');
@@ -768,7 +771,9 @@ const YieldStepReportScreen: React.FC = () => {
   }, [outputQty, outputHardCap]);
 
   // 单元D: 上道多笔 WIP 但未选领用批次 → 阻塞投入提交.
-  const submitBlockedNoWip = needsWipPicker && selectedWip == null && materialBatchRefs.length === 0;
+  // wipPickerConfirmedEmpty: WipBatchPicker 确认服务端无可领批次后 onEmpty 回调置 true，
+  // 此时解除阻塞（防呆 Rule 5: 操作员不能被锁死在死胡同，应能联系主管走流程）。
+  const submitBlockedNoWip = needsWipPicker && selectedWip == null && materialBatchRefs.length === 0 && !wipPickerConfirmedEmpty;
   // 上传中 (任一证据) → 阻塞提交, 避免 evidenceImages 丢 URL
   const evidenceUploading = evidencePhotos.some((p) => p.uploading);
 
@@ -2191,6 +2196,7 @@ const YieldStepReportScreen: React.FC = () => {
                   batchId={batchId}
                   selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
                   onChange={setSelectedWip}
+                  onEmpty={() => setWipPickerConfirmedEmpty(true)}
                   disabled={submitting}
                   required={materialBatchRefs.length === 0}
                 />
