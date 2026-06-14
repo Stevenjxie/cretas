@@ -825,12 +825,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             sfi.setAvailableQuantity(available);
             // 修1 (honest-null 成本传导): 只要存在未知成本的产出量 → 成本不可信, 诚实置 null
             //   (不把未知量当 ¥0 稀释加权均价)。否则按已知成本算加权均价。
-            //   else 兜底清空, 防回放前旧值脏残留 (旧 bug: weightedCost=0 时无 else 残留旧 unitCost)。
-            if (!hasUnknownCost && weightedCost.compareTo(BigDecimal.ZERO) > 0) {
+            //   #844 回归修复: 只用 hasUnknownCost 区分, 不再加 `weightedCost > 0` 守卫。
+            //   旧守卫把"全已知但恰好 0 成本"(weightedCost==0, !hasUnknownCost) 误推进 else
+            //   清成 null, 混淆了"未知成本→null (对)"与"已知 0 成本→应是 0"。
+            //   producedQty>0 在此分支已由上面保证, divide 分母安全; weightedCost=0 → 0.0000 合法。
+            if (!hasUnknownCost) {
                 BigDecimal newUnitCost = weightedCost.divide(producedQty, 4, RoundingMode.HALF_UP);
                 sfi.setUnitCost(newUnitCost);
                 sfi.setAccumulatedCost(weightedCost.setScale(2, RoundingMode.HALF_UP));
             } else {
+                // 仅未知成本才诚实置 null (成本不可信)。
                 sfi.setUnitCost(null);
                 sfi.setAccumulatedCost(null);
             }

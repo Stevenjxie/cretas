@@ -72,6 +72,9 @@ public class SupplyChainOrchestrator {
     @Autowired(required = false)
     private FactoryTriggerChainRepository triggerChainRepository;
 
+    @Autowired(required = false)
+    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for auto-cascade path. */
     @Autowired(required = false)
     private LinkArrayService linkArrayService;
@@ -258,9 +261,14 @@ public class SupplyChainOrchestrator {
 
             // ⑦a 自动创建成品批次
             if (batch.getGoodQuantity() != null && batch.getGoodQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                FinishedGoodsBatch fg = createFinishedGoodsFromBatch(batch);
-                if (fg != null) {
-                    log.info("自动创建成品: batchNumber={}, qty={}", fg.getBatchNumber(), fg.getProducedQuantity());
+                if (requiresProductionSettlement(batch.getFactoryId())) {
+                    log.info("Settlement-mode factory skips automatic FG on batch completion; use warehouse receipt path: factoryId={}, batchId={}, goodQty={}",
+                            batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
+                } else {
+                    FinishedGoodsBatch fg = createFinishedGoodsFromBatch(batch);
+                    if (fg != null) {
+                        log.info("自动创建成品: batchNumber={}, qty={}", fg.getBatchNumber(), fg.getProducedQuantity());
+                    }
                 }
             }
 
@@ -540,6 +548,21 @@ public class SupplyChainOrchestrator {
     private String generateFGBatchNumber(ProductionBatch batch) {
         String dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         return String.format("FG-AUTO-%s-%s", dateStr, batch.getId());
+    }
+
+    private boolean requiresProductionSettlement(String factoryId) {
+        if (factorySettingsRepository != null) {
+            Boolean skipProcessReportingDefault =
+                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
+            if (skipProcessReportingDefault != null) {
+                return Boolean.TRUE.equals(skipProcessReportingDefault);
+            }
+        }
+        return isLiushanmenFactory(factoryId);
+    }
+
+    private boolean isLiushanmenFactory(String factoryId) {
+        return "F006".equalsIgnoreCase(factoryId);
     }
 
     /**

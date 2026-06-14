@@ -14,6 +14,8 @@ import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlanBatchUsage;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -23,6 +25,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -34,6 +37,7 @@ import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.annotation.DataScope;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
@@ -125,6 +129,12 @@ import java.util.stream.Collectors;
 @Service
 public class MaterialBatchServiceImpl implements MaterialBatchService {
     private static final Logger log = LoggerFactory.getLogger(MaterialBatchServiceImpl.class);
+    private static final String SOURCE_DOC_REQUIRED_MESSAGE =
+            "创建批次必须指定来源单据(采购入库/退货/盘点),仓库无单不可建库存";
+    private static final String SOURCE_DOC_REQUIRED_HINT =
+            "请从采购入库、退货入库或盘点单发起；历史数据或批量迁移请走 LEGACY_IMPORT 并申请 inventory:legacy_import 授权";
+    private static final String LEGACY_IMPORT_SOURCE_DOC_TYPE = "LEGACY_IMPORT";
+    private static final String LEGACY_IMPORT_PERMISSION = "inventory:legacy_import";
 
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
@@ -139,6 +149,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
     @Autowired(required = false)
     private FactoryMaterialRequisitionRepository factoryMaterialRequisitionRepository;
+    @Autowired(required = false)
+    private PermissionService permissionService;
+    @Autowired(required = false)
+    private UserRepository userRepository;
     /** Canvas V2: DB-driven validation rules */
     @Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -236,7 +250,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             "materialTypeId", request.getMaterialTypeId() != null ? request.getMaterialTypeId() : "",
             "productionDate", request.getReceiptDate() != null ? request.getReceiptDate().toString() : ""));
         // P0-17: 入库必须有发起单校验
-        validateSourceDoc(request);
+        validateSourceDoc(request, factoryId, userId);
         // 验证并获取原材料类型
         var materialType = materialTypeRepository.findById(request.getMaterialTypeId())
             .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在"));
@@ -248,6 +262,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
         // 生成UUID作为ID
         batch.setId(java.util.UUID.randomUUID().toString());
+        if (LEGACY_IMPORT_SOURCE_DOC_TYPE.equals(request.getSourceDocType())) {
+            batch.setInboundType(InboundType.LEGACY_IMPORT);
+        }
 
         // D1 双仓流转 (PR #310 §5.5): 入库默认 WH-LOG (物流仓). DTO 显式传则用 DTO 值.
         if (batch.getWarehouseId() == null) {
@@ -348,13 +365,15 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
     }
 
-    private void validateSourceDoc(CreateMaterialBatchRequest request) {
+    private void validateSourceDoc(CreateMaterialBatchRequest request, String factoryId, Long userId) {
         String type = request.getSourceDocType();
         String id = request.getSourceDocId();
 
         if (type == null || type.isBlank()) {
-            log.warn("⚠️ P0-17: 创建原材料批次未提供 sourceDocType (向后兼容允许, 但应补全发起单)");
-            return;
+            throw new BusinessException(400, SOURCE_DOC_REQUIRED_MESSAGE)
+                    .withHint(SOURCE_DOC_REQUIRED_HINT)
+                    .withHintTarget("sourceDocType")
+                    .withSeverity("BLOCKING");
         }
 
         switch (type) {
@@ -411,9 +430,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             // TODO 出库类型 (客户原话 4947s): INVENTORY_LOSS 盘亏出库 / INTERNAL_USE 领用出库
             //   出库链路不走 MaterialBatchService.createMaterialBatch (这里只管入库),
             //   需在 sales shipment / warehouse outbound service 另开分支, 本轮范围外.
+            case LEGACY_IMPORT_SOURCE_DOC_TYPE:
+                requireLegacyImportPermission(factoryId, userId);
+                break;
             default:
                 throw new BusinessException(400, "不支持的 sourceDocType: " + type)
-                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/INVENTORY_GAIN/FREE_GIFT)");
+                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/INVENTORY_GAIN/FREE_GIFT/LEGACY_IMPORT)");
         }
     }
 
@@ -432,6 +454,22 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /** 平台级管理员角色, 始终放行 (与 JwtAuthInterceptor / RequireRoleInterceptor 一致)。 */
     private static final java.util.Set<String> PLATFORM_ADMIN_ROLES = java.util.Set.of(
             "platform_admin", "super_admin", "developer", "platform_super_admin");
+
+    private void requireLegacyImportPermission(String factoryId, Long userId) {
+        User user = userRepository != null && userId != null
+                ? userRepository.findById(userId).orElse(null)
+                : null;
+        boolean allowed = user != null
+                && Objects.equals(factoryId, user.getFactoryId())
+                && permissionService != null
+                && permissionService.hasPermission(user, LEGACY_IMPORT_PERMISSION);
+        if (!allowed) {
+            throw new BusinessException(403, "LEGACY_IMPORT 创建批次需要专门权限 " + LEGACY_IMPORT_PERMISSION)
+                    .withHint("请联系管理员授权 inventory:legacy_import，或改从采购入库、退货入库、盘点单发起")
+                    .withHintTarget("sourceDocType")
+                    .withSeverity("BLOCKING");
+        }
+    }
 
     /**
      * 判断角色是否有库存自主权 (可改入库量 / 删批次)。

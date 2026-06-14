@@ -1268,7 +1268,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权操作该生产计划")
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
-        if (isLiushanmenFactory(factoryId)) {
+        if (requiresProductionSettlement(factoryId)) {
             throw new BusinessException(409, "六扇门生产完成必须先核对结单")
                     .withCode("PRODUCTION_SETTLEMENT_REQUIRED")
                     .withHint("请使用“核对结单”录入实际产量、实际领用明细和人效后再完成")
@@ -1408,6 +1408,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setEndTime(LocalDateTime.now());
         plan.setActualQuantity(settlement.getActualFinishedQuantity());
         productionPlanRepository.save(plan);
+
+        if (applicationEventPublisher != null) {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.ProductionSettledEvent(
+                    this, factoryId, plan.getId(), plan.getPlanNumber(), plan.getProductTypeId(),
+                    settlement.getId(), settlement.getActualFinishedQuantity()));
+        }
 
         List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
         log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
@@ -2000,6 +2006,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .message(message)
                 .warnings(warnings != null ? warnings : Collections.emptyList())
                 .build();
+    }
+
+    private boolean requiresProductionSettlement(String factoryId) {
+        if (factorySettingsRepository != null) {
+            Boolean skipProcessReportingDefault =
+                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
+            if (skipProcessReportingDefault != null) {
+                return Boolean.TRUE.equals(skipProcessReportingDefault);
+            }
+        }
+        return isLiushanmenFactory(factoryId);
     }
 
     private boolean isLiushanmenFactory(String factoryId) {

@@ -51,6 +51,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -67,6 +68,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.argThat;
 
 @DisplayName("ProductionPlan 六扇门结构化结单")
 @ExtendWith(MockitoExtension.class)
@@ -102,6 +104,7 @@ class ProductionPlanSettlementTest {
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+    @Mock private ApplicationEventPublisher applicationEventPublisher;
 
     private ProductionPlanServiceImpl service;
 
@@ -123,6 +126,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "bomRecipeRepository", bomRecipeRepository);
         ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+        ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -197,6 +201,12 @@ class ProductionPlanSettlementTest {
         verify(materialBatchRepository).save(batch);
         verify(semiFinishedInventoryRepository).save(wip);
         verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "OUT");
+        verify(applicationEventPublisher).publishEvent(argThat(event ->
+                event instanceof com.cretas.aims.event.ProductionSettledEvent settled
+                        && FACTORY_ID.equals(settled.getFactoryId())
+                        && PLAN_ID.equals(settled.getPlanId())
+                        && "PT-1".equals(settled.getProductTypeId())
+                        && settled.getSettlementId() != null));
     }
 
     @Test

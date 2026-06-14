@@ -36,9 +36,9 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
 // 藏 finance; 餐饮 demo (DEMO_REST) 无工厂销售订单 → 藏 sales。system 内部管理两业态都藏。
 const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: ['sales', 'system'],
-  // F006 无财务凭证/开票/收款 (invoice=0 payment=0 fact_finance_voucher=0) → 财务概览/应收应付/
-  // 报表全 ¥0 → 整组藏。quality/equipment/scheduling 无数据。
-  FACTORY: ['quality', 'equipment', 'scheduling', 'system', 'finance'],
+  // 财务模块已补数据 (ar_ap_transactions 204 / invoice 97 / payment 97 → 财务概览/应收应付/
+  // 开票/收款 有数据) → 不再整组藏 finance, 只藏空的 reports/adjustments 子页 (见 PATHS)。
+  FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
 };
 // 路径前缀级隐藏 (按业态). 2026-06-14 DB ground-truth (每表 count) + headed 逐页核实:
 //   工厂 (DEMO_FACTORY2, F006): 报工链是亮点 — 生产批次(104)/计划(133)/报工审批·工序投入产出·
@@ -63,13 +63,13 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   FACTORY: [
     '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
     '/sales/payment-requests', '/sales/returns',
-    '/production/material-requisitions', '/production/restock-board', '/rd/samples',
-    '/warehouse/wastage-reports', '/warehouse/stocktaking',
-    '/smart-bi/analysis-hub', '/analytics/alert-dashboard', '/analytics/production-report',
-    '/production-analytics/efficiency', '/production-analytics/cost',
-    '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
-    '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
-    '/smart-bi/calibration',
+    // Phase2/3/4 已补数据 → 不再隐藏: 报损/调整审批/财务报表/备货看板/异常预警/车间报表
+    // + Excel上传(smart_bi_pg_excel_uploads 4文件)/数据完整度(计算综合20.7%/生产批次82/物料73)/
+    // 分析概览/知识库反馈(5反馈)/AI追问日志(smart_bi_llm_fallback_log 5条 卤味问答)。
+    // 查询模板: 后端缺失的 CRUD 端点已补 (PR #860 SmartBiQueryTemplateController, 修了对所有
+    // 工厂的预存 404 bug), 6 个卤味分析模板 → un-hide。仅剩 2 项隐藏:
+    '/smart-bi/analysis-hub',             // 经营分析hub: 与经营驾驶舱功能重复 (旗舰已覆盖, 冗余); 财务tab 另需完整 Excel 上传数据源选择交互
+    '/smart-bi/calibration',              // 行为校准监控: roles=['platform_admin'], demo 账号本就被角色门控隐藏 (非数据问题)
   ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {

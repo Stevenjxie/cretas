@@ -89,11 +89,11 @@ public class CreateBomRecipeRequest {
                  message = "单位必须是 g/kg/mg/ml/L/个/袋/箱/瓶/盒 之一")
         private String unit;
 
-        @Schema(description = "单价 (可选, 仅有 procurement:price:view 权限的角色可见)")
+        @Schema(description = "未税单价 (可选, 含税采购价需先在物料主数据入口按税率换算税前; 仅有 procurement:price:view 权限的角色可见)")
         @PositiveOrZero(message = "单价必须 >= 0")
         private BigDecimal unitPrice;
 
-        @Schema(description = "税率 (百分比), 默认 0")
+        @Schema(description = "税率 (百分比); 未配置保持 null, 不默认 0")
         @PositiveOrZero
         private BigDecimal taxRate;
 

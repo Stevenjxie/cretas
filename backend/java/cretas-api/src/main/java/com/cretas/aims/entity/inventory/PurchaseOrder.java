@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseType;
 import com.cretas.aims.entity.enums.SettlementType;
@@ -198,6 +199,10 @@ public class PurchaseOrder extends BaseEntity {
      */
     @Column(name = "invoice_reminder_days")
     private Integer invoiceReminderDays;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "purchase_invoice_status", nullable = false, length = 32)
+    private PurchaseInvoiceStatus invoiceStatus = PurchaseInvoiceStatus.NOT_RECEIVED;
 
     // ==================== 关联 ====================
 
