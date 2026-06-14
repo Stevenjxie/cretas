@@ -134,16 +134,21 @@ async def run(factory_id: str):
                 _sid("FMR", factory_id, i + 1), factory_id, _sid("LL", factory_id, i + 1), pl["id"],
                 wh_src, wh_tgt, fmr_status[i % len(fmr_status)], now.date(), uid, now)
 
-        # ---- wastage_reports: a dozen FACTORY-track 报损 (报损管理 page) ----
-        wreasons = ["加工损耗", "保质期临近", "包装破损", "质检不合格", "运输破损"]
+        # ---- wastage_reports: a dozen FACTORY-track 报损 (报损管理 page).
+        # wastage_reason is an ENUM column (WastageReason: EXPIRED/DAMAGED/CONTAMINATED/THEFT/
+        # PRODUCTION_WASTE/OTHER) — inserting Chinese free-text here makes the JPA enum-convert
+        # throw on read → list API 400. Use the enum value; put the human reason in reason_detail.
+        wreasons = [("PRODUCTION_WASTE", "加工损耗"), ("EXPIRED", "保质期临近"), ("DAMAGED", "包装破损"),
+                    ("CONTAMINATED", "质检不合格"), ("DAMAGED", "运输破损")]
         for i, mb in enumerate(mbatches[:12]):
+            reason, detail = wreasons[i % len(wreasons)]
             await c.execute(
                 "INSERT INTO wastage_reports (id, factory_id, report_no, track_type, warehouse_id, material_batch_id, "
                 "raw_material_type_id, wastage_qty, wastage_reason, reason_detail, photo_urls, status, submitted_by, "
                 "submitted_at, approved_by, approved_at, applied_at, created_at, updated_at) "
                 "VALUES ($1,$2,$3,'FACTORY',$4,$5,$6,$7,$8,$9,$10,'APPLIED',$11,$12,$11,$12,$12,$12,$12)",
                 _sid("WR", factory_id, i + 1), factory_id, _sid("BS", factory_id, i + 1), wh_src, mb["id"],
-                mb["material_type_id"], Decimal("2") + Decimal(i % 8), wreasons[i % len(wreasons)], "示例报损说明",
+                mb["material_type_id"], Decimal("2") + Decimal(i % 8), reason, detail,
                 f'["https://demo.cretas/wastage_{i + 1}.jpg"]', uid, now)
 
         # ---- rd_requests: 研发请求 (研发样品 page 主列表) ----
