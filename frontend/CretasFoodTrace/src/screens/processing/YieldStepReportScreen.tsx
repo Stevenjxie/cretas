@@ -27,6 +27,10 @@ import {
   SemiFinishedInventoryItem,
 } from '../../services/api/yieldReportApi';
 import { processingApiClient } from '../../services/api/processingApiClient';
+import {
+  productionPlanApiClient,
+  ProductionPlanMaterialAdvisory,
+} from '../../services/api/productionPlanApiClient';
 import { handleError } from '../../utils/errorHandler';
 import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
@@ -414,6 +418,12 @@ function evidenceFileName(mimeType: string): string {
   return `yield_evidence_${Date.now()}.${ext}`;
 }
 
+function readProductionPlanId(batch: object): string | null {
+  if (!('productionPlanId' in batch)) return null;
+  const value = batch.productionPlanId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 function validateEvidenceVideo(asset: ImagePicker.ImagePickerAsset): boolean {
   if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_EVIDENCE_VIDEO_BYTES) {
     appAlert('视频太大', '单个视频不能超过 50MB。请截短后再上传，或改拍关键照片。');
@@ -452,6 +462,7 @@ const YieldStepReportScreen: React.FC = () => {
   const [productType, setProductType] = useState<string>('');
   /** 产品类型 ID (用于 BOM 过滤, 来自 ProductionBatch.productTypeId) */
   const [productTypeId, setProductTypeId] = useState<string | undefined>(undefined);
+  const [productionPlanId, setProductionPlanId] = useState<string | null>(null);
   const [batchNumber, setBatchNumber] = useState<string>(route.params.batchNumber ?? '');
   const [batchPlannedQuantity, setBatchPlannedQuantity] = useState<number | null>(null);
   const [batchStatus, setBatchStatus] = useState<string>('');  // P1-1: 完工幂等判断
@@ -469,6 +480,9 @@ const YieldStepReportScreen: React.FC = () => {
   const [materialBatchValidation, setMaterialBatchValidation] = useState<MaterialBatchPickerValidation>({
     hasOverLimit: false,
   });
+  const [materialAdvisory, setMaterialAdvisory] = useState<ProductionPlanMaterialAdvisory | null>(null);
+  const [materialAdvisoryError, setMaterialAdvisoryError] = useState<string | null>(null);
+  const [materialAdvisoryLoading, setMaterialAdvisoryLoading] = useState(false);
   // 单元D (F006 #5): 上道多笔 WIP 时操作工选中的领用批次 (单选; null = 未选或不适用)
   const [selectedWip, setSelectedWip] = useState<WipSelection | null>(null);
   // 防呆 Rule 5: WipBatchPicker 加载后确认无可领半成品时置 true，解除 submitBlockedNoWip 死锁
@@ -571,6 +585,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       if (batchRes.success && batchRes.data) {
         setProductType(batchRes.data.productType ?? '');
+        setProductionPlanId(readProductionPlanId(batchRes.data));
         // BOM 过滤: 存下 productTypeId 供 MaterialBatchPicker 防呆用
         if (batchRes.data.productTypeId) setProductTypeId(batchRes.data.productTypeId);
         if (batchRes.data.batchNumber) setBatchNumber(batchRes.data.batchNumber);
@@ -621,6 +636,36 @@ const YieldStepReportScreen: React.FC = () => {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  const loadMaterialAdvisory = useCallback(async () => {
+    if (!productionPlanId) {
+      setMaterialAdvisory(null);
+      setMaterialAdvisoryError(null);
+      return;
+    }
+    setMaterialAdvisoryLoading(true);
+    setMaterialAdvisoryError(null);
+    try {
+      const res = await productionPlanApiClient.getMaterialAdvisory(productionPlanId);
+      if (res.success && res.data) {
+        setMaterialAdvisory(res.data);
+      } else {
+        setMaterialAdvisory(null);
+        setMaterialAdvisoryError(res.message || '缺料预警暂时不可用');
+      }
+    } catch (error) {
+      handleError(error, { showAlert: false, logError: true });
+      const msg = error instanceof Error ? error.message : '缺料预警加载失败';
+      setMaterialAdvisory(null);
+      setMaterialAdvisoryError(msg);
+    } finally {
+      setMaterialAdvisoryLoading(false);
+    }
+  }, [productionPlanId]);
+
+  useEffect(() => {
+    loadMaterialAdvisory();
+  }, [loadMaterialAdvisory]);
 
   // 切道时重置所有阶段输入态 (每道独立). 投入预填上道产出.
   const resetStepInputs = useCallback(() => {
@@ -1644,6 +1689,51 @@ const YieldStepReportScreen: React.FC = () => {
   );
 
   // ========================= 两点报工: 哨兵屏渲染 =========================
+  const renderMaterialAdvisoryCard = () => {
+    if (!productionPlanId) return null;
+    if (materialAdvisoryLoading && !materialAdvisory && !materialAdvisoryError) {
+      return (
+        <View style={styles.materialAdvisoryCard} testID="yield-material-advisory-loading">
+          <ActivityIndicator size="small" color="#E6A23C" />
+          <Text style={styles.materialAdvisoryText}>缺料预警加载中...</Text>
+        </View>
+      );
+    }
+    if (materialAdvisoryError) {
+      return (
+        <View style={styles.materialAdvisoryCard} testID="yield-material-advisory-error">
+          <Text style={styles.materialAdvisoryTitle}>缺料预警加载失败</Text>
+          <Text style={styles.materialAdvisoryText}>{materialAdvisoryError}</Text>
+          <TouchableOpacity
+            style={styles.materialAdvisoryRetry}
+            onPress={loadMaterialAdvisory}
+            disabled={materialAdvisoryLoading}
+          >
+            <Text style={styles.materialAdvisoryRetryText}>
+              {materialAdvisoryLoading ? '重试中...' : '重新检查库存'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    if (!materialAdvisory?.hasWarning) return null;
+    const warnings = materialAdvisory.warnings ?? [];
+    return (
+      <View style={styles.materialAdvisoryCard} testID="yield-material-advisory-warning">
+        <Text style={styles.materialAdvisoryTitle}>缺料预警</Text>
+        <Text style={styles.materialAdvisoryText}>{materialAdvisory.message}</Text>
+        {warnings.slice(0, 4).map((item) => (
+          <Text key={item.materialTypeId} style={styles.materialAdvisoryItem}>
+            {item.materialName}: 需要 {item.requiredQuantity ?? '-'} {item.unit ?? ''}, 可用 {item.availableQuantity ?? '-'} {item.unit ?? ''}, 缺 {item.shortageQuantity ?? '-'} {item.unit ?? ''}
+          </Text>
+        ))}
+        {warnings.length > 4 ? (
+          <Text style={styles.materialAdvisoryMore}>另有 {warnings.length - 4} 项缺料, 请到生产计划查看完整明细</Text>
+        ) : null}
+      </View>
+    );
+  };
+
   const renderSentinelMaterialInputScreen = () => {
     const alreadySubmitted = currentPhase === 'IN_PRODUCTION' || currentPhase === 'COMPLETED';
     const totalQty = materialBatchRefs.reduce((s, r) => s + r.quantity, 0);
@@ -1688,6 +1778,7 @@ const YieldStepReportScreen: React.FC = () => {
               ) : null}
 
               {/* 领料批次选择器 */}
+              {renderMaterialAdvisoryCard()}
               <MaterialBatchPicker
                 unit={unit}
                 productTypeId={productTypeId}
@@ -2196,6 +2287,8 @@ const YieldStepReportScreen: React.FC = () => {
                * picker 不显示独立用量输入框, 该批次 quantity = inputQty (投入量 IS 用量).
                * 多批次模式下 picker 显示各批独立输入, inputQty 由 Σ 自动算只读展示. */}
               {isFirstStep || (!isFirstStep && !isSecondaryProcessing) ? (
+                <>
+                {renderMaterialAdvisoryCard()}
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
@@ -2207,6 +2300,7 @@ const YieldStepReportScreen: React.FC = () => {
                   disabled={submitting}
                   required={isFirstStep && !isSecondaryProcessing}
                 />
+                </>
               ) : null}
 
               {/* 单元D: 上道多笔 WIP → 显式单选; 单笔 → banner 显余额 */}
@@ -2874,6 +2968,21 @@ const styles = StyleSheet.create({
   // 告警 / 提示条
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
+  materialAdvisoryCard: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    gap: 6,
+  },
+  materialAdvisoryTitle: { fontSize: 15, color: '#C2410C', fontWeight: '700' },
+  materialAdvisoryText: { fontSize: 13, color: '#9A3412', lineHeight: 18 },
+  materialAdvisoryItem: { fontSize: 13, color: '#7C2D12', lineHeight: 20 },
+  materialAdvisoryMore: { fontSize: 12, color: '#9A3412', marginTop: 2 },
+  materialAdvisoryRetry: { alignSelf: 'flex-start', paddingVertical: 6, paddingRight: 8 },
+  materialAdvisoryRetryText: { fontSize: 13, color: '#C2410C', fontWeight: '700' },
   limitsHint: { backgroundColor: '#F0F9EB', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
   limitsHintText: { fontSize: 13, color: '#67C23A' },
   limitsHintMuted: { backgroundColor: '#F4F4F5', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4 },
