@@ -12,7 +12,12 @@ FORBIDDEN_TOKENS = ["青花椒"]
 DEIDENT_EXEMPT = {
     ("product_types", "name"),
     ("dim_product", "name"),
+    ("dim_product", "normalized_name"),
     ("dim_ingredient", "name"),
+    ("dim_ingredient", "normalized_name"),
+    ("raw_material_types", "name"),         # 青花椒 = a raw spice ingredient
+    ("suppliers", "supplied_materials"),    # list of supplied ingredients
+    ("purchase_order_items", "material_name"),
     ("fact_pos_item", "source_item_raw"),
 }
 
@@ -39,7 +44,9 @@ async def gate_parity(conns, source, target):
             continue
         s = await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", source)
         t = await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", target)
-        if s != t:
+        # users gets +1: the provisioned demo-login account (not cloned from source).
+        expected_t = s + 1 if e["table"] == "users" else s
+        if t != expected_t:
             bad.append(f"{e['table']}: src={s} tgt={t}")
     return bad
 
