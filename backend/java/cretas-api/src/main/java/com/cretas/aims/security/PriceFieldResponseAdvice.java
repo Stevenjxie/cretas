@@ -370,15 +370,14 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     currentUser.getRoleEnum() != null ? currentUser.getRoleEnum().name() : "null",
                     e.getMessage());
         }
-        // Signal to Jackson serialization layer (PriceSensitiveSerializerModifier)
-        // that @PriceSensitive methods/getters should also be short-circuited.
-        // This catches computed @Transient getters (e.g. SalesOrder.getPayableAmount())
-        // that would otherwise dereference already-nulled price fields → NPE.
-        //
-        // The ThreadLocal is cleared at the end of serialization via a Servlet
-        // filter ({@link com.cretas.aims.config.PriceSensitiveContextFilter}) to
-        // guarantee no leakage across requests on pooled threads.
-        PriceSensitiveContext.hide();
+        // Signal to Jackson only when price fields were actually stripped.
+        // canViewPrices=true + canViewFinance=false is the sales_manager path:
+        // finance-upload map keys are masked, but @PriceSensitive invoice/order
+        // amounts must remain visible. Setting the ThreadLocal there would make
+        // Jackson null them during serialization even though the field walk did not.
+        if (!canViewPrices) {
+            PriceSensitiveContext.hide();
+        }
         return body;
     }
 

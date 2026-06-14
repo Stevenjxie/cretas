@@ -3,7 +3,7 @@
  *
  * Full production chain (inventory closed-loop):
  *   Phase 1 (sales_mgr)   → Create SO for SKU_SCY500 × 30 via UI
- *   Phase 2 (super_admin) → Create production plan (MANUAL, SKU_SCY500, qty 30) via UI
+ *   Phase 2 (super_admin) → Create production plan (CUSTOMER_ORDER, SKU_SCY500, qty 30) via UI
  *   Phase 3 (super_admin) → Generate FMR from plan via UI (/production/material-requisitions)
  *   Phase 4 (super_admin) → Execute FMR: start-picking → transfer → receive (物流仓→鲜棉仓)
  *   Phase 5 (super_admin) → Start + complete production plan (报工 equivalent via plan UI)
@@ -28,8 +28,8 @@
  *   - "报工" (work report) is a mobile-first workflow. The web-admin only exposes plan start/complete
  *     which is functionally equivalent for the closed-loop assertion.
  *   - FMR generate endpoint requires a valid planId — we capture it from the create response.
- *   - Global validation rules (tank_id 发酵缸号) block MANUAL plan creation unless factory-specific
- *     rules exist. A placeholder rule (enabled=false condition) must be in the DB for F_E2E_TEST.
+ *   - Legacy MANUAL plan creation is intentionally not used here; customer-order planning keeps
+ *     the finance gate and selected SO product line in the same tested path.
  */
 
 import { test, expect } from '@playwright/test';
@@ -64,6 +64,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
 
     const runTag = `G3-${Date.now()}`;
     let soNumber = '';
+    let soStatus = '';
     let planId = '';
     let planNumber = '';
     let fmrId = '';
@@ -153,6 +154,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     expect(createBody.success, `SO 创建失败: ${JSON.stringify(createBody)}`).toBe(true);
     soNumber = String(createBody.data?.orderNumber || '');
     const soId = String(createBody.data?.id || '');
+    soStatus = String(createBody.data?.status || createBody.data?.orderStatus || '');
     expect(soId, 'SO id 不能为空').toBeTruthy();
     expect(soNumber, 'SO orderNumber 不能为空').toBeTruthy();
 
@@ -174,16 +176,66 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
       ]);
       const confirmBody = await confirmResp.json();
       expect(confirmBody.success, `SO 确认失败: ${JSON.stringify(confirmBody)}`).toBe(true);
+      soStatus = String(confirmBody.data?.status || confirmBody.data?.orderStatus || soStatus);
     }
+
+    const authToken = await salesPage.evaluate(() => window.localStorage.getItem('cretas_access_token') || '');
+    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) {
+      authHeaders.Authorization = `Bearer ${authToken}`;
+    }
+
+    if (soStatus === 'DRAFT') {
+      const confirmApiResp = await salesCtx.request.post(
+        `http://localhost:10010/api/mobile/${FACTORY_ID}/sales/orders/${soId}/confirm`,
+        { headers: authHeaders }
+      );
+      const confirmApiBody = await confirmApiResp.json();
+      expect(
+        confirmApiBody.success,
+        `SO API confirm failed: ${JSON.stringify(confirmApiBody)}`
+      ).toBe(true);
+      soStatus = String(confirmApiBody.data?.status || confirmApiBody.data?.orderStatus || soStatus);
+    }
+
+    if (soStatus === 'CONFIRMED') {
+      const submitFinanceResp = await salesCtx.request.post(
+        `http://localhost:10010/api/mobile/${FACTORY_ID}/sales/orders/${soId}/submit-for-finance-review`,
+        { headers: authHeaders }
+      );
+      const submitFinanceBody = await submitFinanceResp.json();
+      expect(
+        submitFinanceBody.success,
+        `SO submit finance review failed: ${JSON.stringify(submitFinanceBody)}`
+      ).toBe(true);
+      soStatus = String(submitFinanceBody.data?.status || submitFinanceBody.data?.orderStatus || soStatus);
+    }
+
+    if (soStatus === 'PENDING_FINANCE_REVIEW') {
+      const financeApproveResp = await salesCtx.request.post(
+        `http://localhost:10010/api/mobile/${FACTORY_ID}/sales/orders/${soId}/finance-approve`,
+        {
+          data: { notes: `[E2E ${runTag}] approve before production planning` },
+          headers: authHeaders,
+        }
+      );
+      const financeApproveBody = await financeApproveResp.json();
+      expect(
+        financeApproveBody.success,
+        `SO finance approve failed: ${JSON.stringify(financeApproveBody)}`
+      ).toBe(true);
+      soStatus = String(financeApproveBody.data?.status || financeApproveBody.data?.orderStatus || soStatus);
+    }
+    expect(soStatus, `SO must be finance-approved before production planning, got ${soStatus}`).toBe('FINANCE_APPROVED');
 
     await salesCtx.close();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Phase 2: super_admin — Create production plan (MANUAL, SKU_SCY500, qty 30)
+    // Phase 2: super_admin — Create production plan from the finance-approved customer order
     //
     // Using super_admin for all remaining phases.
-    // Production plan uses MANUAL sourceType to avoid CUSTOMER_ORDER validation
-    // (processName + batchDate required for CUSTOMER_ORDER source).
+    // Production plan defaults to CUSTOMER_ORDER. Select the SO and product line;
+    // productType is locked and auto-filled by the selected order item.
     // ═══════════════════════════════════════════════════════════════════════════
     const adminCtx = await browser.newContext();
     const adminPage = await adminCtx.newPage();
@@ -198,15 +250,28 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     const planDialog = adminPage.locator('.el-dialog:visible');
     await expect(planDialog).toBeVisible({ timeout: 10_000 });
 
-    // Select product type
-    const productTypeSelect = planDialog.locator(S.form.select('产品类型'));
-    await productTypeSelect.click();
+    // Select source sales order
+    const sourceOrderSelect = planDialog.locator('.el-form-item:has-text("销售订单") .el-select').first();
+    await sourceOrderSelect.click();
     await adminPage.waitForTimeout(500);
-    const planProductOption = adminPage.locator(
+    const sourceOrderOption = adminPage.locator(
+      `.el-select-dropdown:visible .el-select-dropdown__item:has-text("${soNumber}")`
+    );
+    await expect(sourceOrderOption).toBeVisible({ timeout: 10_000 });
+    await sourceOrderOption.click();
+
+    // Select product line; product type is auto-filled and intentionally disabled.
+    const productLineSelect = planDialog.locator('.el-form-item:has-text("产品行") .el-select').first();
+    await productLineSelect.click();
+    await adminPage.waitForTimeout(500);
+    const productLineOption = adminPage.locator(
       `.el-select-dropdown:visible .el-select-dropdown__item:has-text("${PRODUCT_NAME}")`
     );
-    await expect(planProductOption).toBeVisible({ timeout: 8_000 });
-    await planProductOption.click();
+    await expect(productLineOption).toBeVisible({ timeout: 8_000 });
+    await productLineOption.click();
+    await expect(planDialog.locator('.el-form-item:has-text("产品类型")')).toContainText(PRODUCT_NAME, {
+      timeout: 8_000,
+    });
 
     // Fill planned quantity
     const planQtyInput = planDialog.locator(S.form.input('计划数量')).or(
@@ -229,7 +294,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     const notesArea = planDialog.locator('textarea').first();
     await notesArea.fill(`[E2E ${runTag}] G3 production plan`).catch(() => {});
 
-    // Source type: keep as MANUAL (default radio)
+    // Source type remains CUSTOMER_ORDER; product type stays locked by design.
 
     // Submit plan — button text is "确定" per template footer
     const [planCreateResp] = await Promise.all([
