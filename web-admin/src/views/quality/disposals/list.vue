@@ -29,7 +29,7 @@ const disposalForm = ref({
   disposalType: '',
   quantity: 0,
   reason: '',
-  evidenceUrls: '',   // Gap-3: 证据照片 URL (逗号分隔); 随 notes 一起提交
+  evidenceImages: '',  // Gap-3: 证据照片 URL (逗号分隔), 独立列 evidence_images (V20261024_15)
   notes: ''
 });
 const actionLoading = ref(false);
@@ -110,7 +110,7 @@ function handleCreate() {
     disposalType: '',
     quantity: 0,
     reason: '',
-    evidenceUrls: '',
+    evidenceImages: '',
     notes: ''
   };
   dialogVisible.value = true;
@@ -125,23 +125,14 @@ async function submitDisposal() {
   // Issue #811 fix — rename FE form fields to match backend wire contract
   // (CreateDisposalRecordRequest DTO). FE form uses {batchId, quantity, reason}
   // but backend expects {materialBatchId, disposalQuantity, disposalReason}.
-  // The batches dropdown is populated from /material-batches, so batchId is a
-  // materialBatchId on the wire.
-  //
-  // Gap-3 防呆: evidenceUrls 和 notes 合并进 notes 字段 (DisposalRecord.notes = TEXT,
-  // 无独立 evidenceImages 列; Flyway V20261024_15 预留但此处不需要 schema 变更).
-  const evidencePart = disposalForm.value.evidenceUrls.trim();
-  const notesPart = disposalForm.value.notes.trim();
-  const mergedNotes = [
-    evidencePart ? `[证据] ${evidencePart}` : '',
-    notesPart
-  ].filter(Boolean).join('\n');
+  // evidenceImages goes to dedicated evidence_images column (V20261024_15).
   const payload = {
     materialBatchId: disposalForm.value.batchId,
     disposalType: disposalForm.value.disposalType,
     disposalQuantity: disposalForm.value.quantity,
     disposalReason: disposalForm.value.reason,
-    notes: mergedNotes || undefined
+    evidenceImages: disposalForm.value.evidenceImages.trim() || undefined,
+    notes: disposalForm.value.notes.trim() || undefined
   };
 
   dialogLoading.value = true;
@@ -361,7 +352,13 @@ function getTypeText(type: string) {
         <el-descriptions-item label="状态">
           <el-tag :type="getStatusType(viewRecord.status)" size="small">{{ getStatusText(viewRecord.status) }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="证据/备注">
+        <el-descriptions-item label="证据图片">
+          <template v-if="viewRecord.evidenceImages">
+            <div style="word-break:break-all">{{ viewRecord.evidenceImages }}</div>
+          </template>
+          <span v-else>-</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="备注">
           <template v-if="viewRecord.notes">
             <div style="white-space:pre-wrap;word-break:break-all">{{ viewRecord.notes }}</div>
           </template>
@@ -397,10 +394,11 @@ function getTypeText(type: string) {
         <el-form-item label="废弃原因" required>
           <el-input v-model="disposalForm.reason" type="textarea" :rows="2" placeholder="请输入废弃原因" />
         </el-form-item>
-        <!-- Gap-3 防呆: 证据留存入口 (照片 URL 逗号分隔). 防呆 Rule 2 — 写操作必留证据. -->
+        <!-- Gap-3 防呆: 证据留存入口 (照片 URL 逗号分隔). 防呆 Rule 2 — 写操作必留证据.
+             存入独立列 evidence_images (V20261024_15), 不再塞 notes 字段. -->
         <el-form-item label="证据留存">
           <el-input
-            v-model="disposalForm.evidenceUrls"
+            v-model="disposalForm.evidenceImages"
             type="textarea"
             :rows="3"
             placeholder="粘贴照片 URL（多张用逗号分隔）&#10;例: https://cdn.example.com/photo1.jpg, https://cdn.example.com/photo2.jpg"
