@@ -18,6 +18,8 @@
 
 **本 spec 的定位 = 北极星的 Phase 1**: Python 端到端独占 **smartbi 数据层 + 分析 + AI问答读取**。不在本 spec 里 spec 全量 337-tool 迁移(多季度、自有 roadmap)。
 
+**承接 Phase 2A**: 这不是从零起——Phase 2A 已把 ~50 个 SmartBI **分析端点** Java→Python port(`analysis_*.py`),seam 已宽(`PythonSmartBIClient` 40+ 委托)。本 spec = **收尾 Phase 2A 那条弧线**:补它没做的摄取核心 + 运营同步 + Java AI 取数器,并清理它留下的 6 个"THIN 僵尸"分析服务(HTTP 已切 Python、内部 `enrichUnifiedDashboard` 仍在调,未删净)。
+
 **硬护栏(立即生效)**: 从今往后**新的分析/AI/数据能力一律落 Python,不再新增 Java AI/直读 smartbi 表**——停止把 split-brain 挖深。
 
 ---
