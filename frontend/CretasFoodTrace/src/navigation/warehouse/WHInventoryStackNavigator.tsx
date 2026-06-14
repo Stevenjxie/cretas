@@ -22,6 +22,7 @@ import WHBatchTraceScreen from "../../screens/warehouse/shared/WHBatchTraceScree
 import InventoryAlertScreen from "../../screens/warehouse/alerts/InventoryAlertScreen";
 import AlertDetailScreen from "../../screens/warehouse/alerts/AlertDetailScreen";
 import InventoryWarningsScreen from "../../screens/warehouse/inventory/InventoryWarningsScreen";
+import WHTransitLedgerScreen from "../../screens/warehouse/inventory/WHTransitLedgerScreen";
 // SP7: 盘点录入 / 报损提交 / 调拨接收 (R-C)
 import StocktakeEntryScreen from "../../screens/warehouse/inventory/StocktakeEntryScreen";
 import WastageReportScreen from "../../screens/warehouse/inventory/WastageReportScreen";
@@ -124,6 +125,12 @@ export function WHInventoryStackNavigator() {
       />
 
       {/* SP7: 盘点录入（每屏一品，F4 防呆）*/}
+      <Stack.Screen
+        name="WHTransitLedger"
+        component={WHTransitLedgerScreen}
+        options={{ title: "\u4e2d\u8f6c\u5b9e\u6536\u786e\u8ba4" }}
+      />
+
       <Stack.Screen
         name="StocktakeEntry"
         component={StocktakeEntryScreen}

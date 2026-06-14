@@ -171,6 +171,7 @@ export function WHInventoryListScreen() {
     { key: "transfer", label: t('inventory.quickActions.transfer'), icon: "swap-horizontal", color: "#2196F3", screen: "WHInventoryTransfer" },
     { key: "location", label: t('inventory.quickActions.location'), icon: "map-marker", color: "#9C27B0", screen: "WHLocationManage" },
     { key: "expire", label: t('inventory.quickActions.expire'), icon: "clock-alert-outline", color: "#FF5722", screen: "WHExpireHandle" },
+    { key: "transit", label: "\u4e2d\u8f6c\u786e\u8ba4", icon: "truck-check-outline", color: "#00695C", screen: "WHTransitLedger" },
     { key: "warnings", label: "库存预警", icon: "bell-alert-outline", color: "#E91E63", screen: "WHInventoryWarnings" },
   ];
 
