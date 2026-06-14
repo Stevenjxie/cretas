@@ -37,4 +37,16 @@ public interface VoucherExportService {
      */
     String exportSubjectBalance(String factoryId, VoucherExportRequestDTO req,
                                  Long userId, OutputStream out) throws Exception;
+
+    String exportChronologicalLedger(String factoryId, VoucherExportRequestDTO req,
+                                     Long userId, OutputStream out) throws Exception;
+
+    String exportGeneralLedger(String factoryId, VoucherExportRequestDTO req,
+                               Long userId, OutputStream out) throws Exception;
+
+    String exportSubsidiaryLedger(String factoryId, VoucherExportRequestDTO req,
+                                  Long userId, OutputStream out) throws Exception;
+
+    String exportTrialBalance(String factoryId, VoucherExportRequestDTO req,
+                              Long userId, OutputStream out) throws Exception;
 }
