@@ -37,11 +37,20 @@ public interface StandardCostService {
     /**
      * 解析产品的同口径标准单位成本 (料 + 标准人工 + 标准制费).
      *
-     * <p>永不抛异常 (各数据源缺失 → 对应字段诚实 null)。返回对象本身永不 null。
+     * <p><b>缺配置 vs 查询失败</b>:
+     * <ul>
+     *   <li>正常缺配置 (无 ACTIVE BOM / 无研发报价任务 / laborPerKg 未填) → 对应字段诚实 null,
+     *       返回结果对象, 永不返回 null 对象</li>
+     *   <li>查询失败 (数据库异常) → <b>向上抛运行时异常</b> (fail-closed).
+     *       临时故障不能伪装成"产品没有配置"导致超支报警静默漏报。</li>
+     * </ul>
+     *
+     * <p>返回对象本身永不 null (有结果时)。
      *
      * @param factoryId     工厂 ID
      * @param productTypeId 产品类型 ID
      * @return 标准单位成本拆分 (各组分诚实 null), 永不返回 null 对象本身
+     * @throws RuntimeException 底层仓储查询失败时 (DB 异常等) — 由 caller 的外层 catch 记录 ERROR
      */
     StandardUnitCost resolveStandardUnitCost(String factoryId, String productTypeId);
 

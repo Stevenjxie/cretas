@@ -191,6 +191,26 @@ class OrderCostAlarmListenerTest {
         verifyNoInteractions(costVarianceService, notificationService);
     }
 
+    // ─── Test 修1: resolveStandardUnitCost 抛 DB 异常 → 不当"缺配置"静默跳过 ─────
+    //   修1 核心验证: 查询故障 → listener 外层 catch 记录 ERROR (不是 INFO "口径不全,跳过"),
+    //   且不推送通知 (没有假通知, 但也没有假跳过 — 失败本身被记录为 ERROR).
+
+    @Test
+    void standardCostServiceThrowsDbError_doesNotSilentlySkip_doesNotPropagate() {
+        ProductionCostUpdatedEvent event = mockEvent(9L, new BigDecimal("13.00"), null);
+        // DB 异常 — 不应被当作"无 BOM 缺配置"静默跳过 (修1 关键: 失败必须可见)
+        when(standardCostService.resolveStandardUnitCost(FACTORY_ID, PT_ID))
+                .thenThrow(new RuntimeException("DB connection lost during standard cost lookup"));
+
+        // listener fail-soft (外层 catch) 不向上传播, 但 ERROR 级别日志会记录
+        listener.onProductionCostUpdated(event);
+
+        // 通知不推送 (失败≠超支, 但也≠"口径不全 → info 跳过")
+        verifyNoInteractions(notificationService);
+        // variance 计算也不触发 (因为异常在此之前)
+        verifyNoInteractions(costVarianceService);
+    }
+
     // ─── Test 7: notification service throws → fail-soft, no rethrow ─────────
 
     @Test
