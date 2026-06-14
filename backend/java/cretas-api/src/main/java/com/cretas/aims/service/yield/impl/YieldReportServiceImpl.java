@@ -1045,20 +1045,29 @@ public class YieldReportServiceImpl implements YieldReportService {
                                            BigDecimal recipeInputQuantity,
                                            String factoryId, String workProcessId, BigDecimal outputQuantity) {
         BigDecimal cost = null;  // null = 至今无任何有价项
+        boolean unknownCost = false;
         // 1) 原料领用: 每个 ref 的 quantity × 批次 unitPrice (unitPrice 可能被脱敏为 null)
         if (refs != null) {
             for (MaterialBatchRef ref : refs) {
                 if (ref == null || ref.getMaterialBatchId() == null || ref.getQuantity() == null) continue;
+                if (ref.getQuantity().compareTo(BigDecimal.ZERO) <= 0) continue;
                 MaterialBatch mb = materialBatchRepository.findById(ref.getMaterialBatchId()).orElse(null);
-                if (mb == null || mb.getUnitPrice() == null) continue;  // 无价项跳过 (诚实: 不臆造)
+                if (mb == null || mb.getUnitPrice() == null) {
+                    unknownCost = true;
+                    continue;
+                }
                 BigDecimal line = ref.getQuantity().multiply(mb.getUnitPrice());
                 cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
             }
         }
         // 2) 半成品领用: consumedQty (= 本道 inputQuantity) × sourceWip.unitCost
-        if (sourceWip != null && sourceWip.getUnitCost() != null && sourceWipQuantity != null) {
-            BigDecimal line = sourceWipQuantity.multiply(sourceWip.getUnitCost());
-            cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
+        if (sourceWip != null && sourceWipQuantity != null) {
+            if (sourceWip.getUnitCost() == null) {
+                unknownCost = true;
+            } else {
+                BigDecimal line = sourceWipQuantity.multiply(sourceWip.getUnitCost());
+                cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
+            }
         }
         // 3) P5: 调料/包材配方成本 (叠加, 不与原料/WIP 重复)
         if (factoryId != null && workProcessId != null) {
@@ -1080,6 +1089,9 @@ public class YieldReportServiceImpl implements YieldReportService {
                     cost = (cost == null ? BigDecimal.ZERO : cost).add(line);
                 }
             }
+        }
+        if (unknownCost) {
+            return null;
         }
         return cost == null ? null : cost.setScale(2, RoundingMode.HALF_UP);
     }

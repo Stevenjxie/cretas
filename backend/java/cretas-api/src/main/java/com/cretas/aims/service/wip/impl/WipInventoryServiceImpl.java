@@ -529,10 +529,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return null;
         }
         BigDecimal material = null;
+        boolean unknownInputMaterial = false;
         for (ProductionReport r : reportRepo.findYieldReportsByBatch(factoryId, productionBatchId)) {
-            if ("INPUT".equals(r.getReportKind()) && r.getMaterialCost() != null) {
-                material = (material == null ? BigDecimal.ZERO : material).add(r.getMaterialCost());
+            if ("INPUT".equals(r.getReportKind())) {
+                if (r.getMaterialCost() == null) {
+                    unknownInputMaterial = true;
+                } else {
+                    material = (material == null ? BigDecimal.ZERO : material).add(r.getMaterialCost());
+                }
             }
+        }
+        if (unknownInputMaterial) {
+            return null;
         }
         return material;
     }
