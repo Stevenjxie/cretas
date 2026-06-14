@@ -40,9 +40,30 @@ const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
 };
 // 路径前缀级隐藏 (按业态). 工厂工作台有数据 (生产/销售/财务排产, AI 起产建议) → 不藏;
 // 工厂 HR 仅员工管理有数据 → 藏空的考勤/部门/工种/白名单. 餐饮工作台薄 → 整组藏.
+//
+// 数据与分析子页策展 (2026-06-14, DB ground-truth 逐表核实 + headed 验证):
+//   工厂 (DEMO_FACTORY): 经营驾驶舱/进销存/AI问答 有数据 → 留; 经营分析(hub)/异常预警/
+//     车间报表/生产分析/人效/成本 因 fact_production_report=0·fact_cost_line=0·
+//     smart_bi_finance_data=0 全空 → 藏.
+//   餐饮 (DEMO_REST): 经营驾驶舱/经营分析(hub)/收入报表/AI问答 有数据 → 留;
+//     AI体检默认当月+ops聚合稀疏降级·异常预警空 → 藏.
+//   两业态共藏: 数据管理工具组(Excel上传/查询模板/数据完整度/分析概览) + AI运维组
+//     (知识库反馈/AI追问日志/行为校准) — 内部工具, 非演示数据.
 const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
-  RESTAURANT: ['/workdesk', '/sales/finished-goods'],
-  FACTORY: ['/sales/finished-goods', '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist'],
+  RESTAURANT: [
+    '/workdesk', '/sales/finished-goods',
+    '/smart-bi/health-report', '/analytics/alert-dashboard',
+    '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
+    '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
+    '/smart-bi/calibration',
+  ],
+  FACTORY: [
+    '/sales/finished-goods', '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
+    '/smart-bi/analysis-hub', '/analytics/alert-dashboard', '/analytics/production-report',
+    '/production-analytics', '/smart-bi/upload', '/smart-bi/query-templates',
+    '/smart-bi/data-completeness', '/analytics/overview', '/smart-bi/food-kb-feedback',
+    '/smart-bi/fallback-log', '/smart-bi/calibration',
+  ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
   return /^DEMO_/.test(factoryId || '');

@@ -17,7 +17,7 @@
         <button class="demo-choice demo-choice--factory" @click="enter('factory')">
           <div class="demo-choice-icon">🏭</div>
           <div class="demo-choice-name">工厂演示</div>
-          <div class="demo-choice-desc">食品加工厂 · 生产 / 成本 / 质量 / 经营驾驶舱 / AI 分析</div>
+          <div class="demo-choice-desc">食品加工厂 · 生产 / 采购 / 进销存 / 经营驾驶舱 / AI 分析</div>
         </button>
         <button class="demo-choice demo-choice--rest" @click="enter('rest')">
           <div class="demo-choice-icon">🍽️</div>
