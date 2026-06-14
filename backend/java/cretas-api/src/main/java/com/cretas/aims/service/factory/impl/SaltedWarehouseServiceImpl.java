@@ -10,9 +10,11 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.factory.SaltedWarehouseDeductionRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.SaltedWarehouseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +39,9 @@ public class SaltedWarehouseServiceImpl implements SaltedWarehouseService {
     private final SaltedWarehouseDeductionRepository deductionRepo;
     private final FactoryWarehouseRepository warehouseRepo;
     private final MaterialBatchRepository batchRepo;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     // ── CREATE ──────────────────────────────────────────────────────────────
 
@@ -101,6 +106,7 @@ public class SaltedWarehouseServiceImpl implements SaltedWarehouseService {
             batch.setStatus(MaterialBatchStatus.USED_UP);
         }
         batchRepo.save(batch);
+        inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
 
         // 5. 创建盐化扣量记录
         SaltedWarehouseDeduction deduction = SaltedWarehouseDeduction.builder()

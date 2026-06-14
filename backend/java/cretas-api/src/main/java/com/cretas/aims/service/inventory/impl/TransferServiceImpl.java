@@ -15,11 +15,13 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.TransferDiffService;
 import com.cretas.aims.service.inventory.TransferService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -68,6 +70,9 @@ public class TransferServiceImpl implements TransferService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DefaultValueResolver defaultValueResolver;
+
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     public TransferServiceImpl(InternalTransferRepository transferRepository,
                                InternalTransferItemRepository transferItemRepository,
@@ -499,6 +504,7 @@ public class TransferServiceImpl implements TransferService {
                 }
                 materialBatchRepository.saveAndFlush(batch); // flush 立即写入，减少并发窗口
                 if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
+                inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "TRANSFER_OUT");
                 remaining = remaining.subtract(deduct);
                 log.info("扣减原料批次: batchId={}, deduct={}, remaining={}, preselected={}",
                         batch.getId(), deduct, remaining, preselectedBatchId != null);

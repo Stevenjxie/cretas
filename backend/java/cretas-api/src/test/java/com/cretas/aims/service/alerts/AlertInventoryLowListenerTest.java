@@ -10,7 +10,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.Map;
 
@@ -85,5 +88,17 @@ class AlertInventoryLowListenerTest {
         verify(lowStockDualAlertService).checkAndNotify(
                 eq("F006"), eq("mat-2"),
                 eq(new BigDecimal("15")), eq(new BigDecimal("40")), eq("kg"));
+    }
+
+    @Test
+    @DisplayName("F-034: listener side effects run only AFTER_COMMIT")
+    void listenerRunsAfterCommit() throws Exception {
+        Method method = AlertInventoryLowListener.class
+                .getDeclaredMethod("onInventoryStockChanged", InventoryStockChangedEvent.class);
+
+        TransactionalEventListener annotation = method.getAnnotation(TransactionalEventListener.class);
+
+        assertNotNull(annotation);
+        assertEquals(TransactionPhase.AFTER_COMMIT, annotation.phase());
     }
 }

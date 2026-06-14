@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.FuturePlanMatchingService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -62,6 +64,7 @@ class MaterialBatchServiceImplApiRoleGateTest {
     @Mock private ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     @Mock private ExcelUtil excelUtil;
     @Mock private FuturePlanMatchingService futurePlanMatchingService;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
     private MaterialBatchServiceImpl service;
 
@@ -79,6 +82,7 @@ class MaterialBatchServiceImplApiRoleGateTest {
                 productionPlanBatchUsageRepository,
                 excelUtil,
                 futurePlanMatchingService);
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         when(materialBatchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 

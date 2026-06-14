@@ -15,11 +15,13 @@ import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.WageRecordTriggerService;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.dto.processing.ProcessingStageRecordDTO;
 import com.cretas.aims.event.BatchCompletedEvent;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,6 +71,8 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final QualityInspectionService qualityInspectionService;
     private final ProductionAlertRepository productionAlertRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
+    @Autowired
+    private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
     private final WageRecordTriggerService wageRecordTriggerService;
 
@@ -683,6 +687,7 @@ public class ProcessingServiceImpl implements ProcessingService {
                  productionBatch.getCreatedBy());
             consumptionRecord.setRecordedBy(recordedBy);
             materialBatchRepository.save(materialBatch);
+            inventoryLowStockEventPublisher.publishIfLowStock(factoryId, materialBatch, "OUT");
             materialConsumptionRepository.save(consumptionRecord);
 
             // 同时计算成本（合并原第二个循环的逻辑）
