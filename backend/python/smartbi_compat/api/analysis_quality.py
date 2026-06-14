@@ -52,6 +52,7 @@ from fastapi import APIRouter, Depends, Query
 
 from smartbi_compat._rbac_role import require_analytics_read
 from smartbi_compat._rbac_strip import strip_price_for_role
+from smartbi_compat.api import analysis_production as factory_gold
 from smartbi_compat.api.analysis_finance import _decimal_to_number
 from smartbi_compat.auth import AuthContext
 from smartbi_compat.schema_compat import _java_isoformat, wrap_response
@@ -119,6 +120,208 @@ _RESTAURANT_DATA_AVAILABILITY_VOCAB = (
     _AVAILABILITY_NO_POS_DATA,
     _AVAILABILITY_WASTAGE_NOT_TRACKED,
 )
+
+
+def _factory_quality_placeholder(
+    start_date: date,
+    end_date: date,
+    analysis_type: Optional[str],
+) -> dict:
+    now_iso = _java_isoformat(datetime.now())
+    base: dict[str, Any] = {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
+    }
+
+    if analysis_type == "fpy":
+        return {**base, "metrics": [], "trendChart": {}}
+
+    if analysis_type == "defect":
+        return {**base, "ranking": [], "paretoChart": {}}
+
+    if analysis_type == "rework":
+        return {**base, "metrics": [], "costChart": {}}
+
+    return {
+        "period": "CUSTOM",
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "kpiCards": [],
+        "rankings": {},
+        "charts": {},
+        "aiInsights": [],
+        "recommendations": [],
+        "suggestions": [],
+        "generatedAt": now_iso,
+        "lastUpdated": now_iso,
+        "fromCache": False,
+        "cacheExpireAt": None,
+        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
+    }
+
+
+def _calculate_factory_quality_summary(rows: list) -> dict:
+    production_summary = factory_gold._calculate_factory_production_rates(rows)
+    total_actual = production_summary["totalActualQty"]
+    total_good = production_summary["totalGoodQty"]
+    defect_count = total_actual - total_good
+    if defect_count < 0:
+        defect_count = Decimal("0")
+    return {
+        **production_summary,
+        "fpy": factory_gold._rate_pct(total_good, total_actual),
+        "defectCount": defect_count,
+        "defectRate": factory_gold._rate_pct(defect_count, total_actual),
+        "qualityCost": production_summary["totalCost"],
+    }
+
+
+def _build_factory_quality_fpy_metrics(summary: dict) -> list:
+    return [
+        factory_gold._factory_metric(
+            "FPY",
+            "首次通过率 (FPY)",
+            summary["fpy"],
+            "%",
+            factory_gold._alert_low(summary["fpy"], Decimal("95"), Decimal("98")),
+        ),
+        factory_gold._factory_metric(
+            "TOTAL_INSPECTIONS",
+            "总检验数",
+            summary["totalActualQty"],
+            "件",
+            "GREEN",
+        ),
+        factory_gold._factory_metric(
+            "DEFECT_COUNT",
+            "不良品数",
+            summary["defectCount"],
+            "件",
+            "GREEN",
+        ),
+        factory_gold._factory_metric(
+            "DEFECT_RATE",
+            "不良率",
+            summary["defectRate"],
+            "%",
+            factory_gold._alert_high(summary["defectRate"], Decimal("5"), Decimal("2")),
+        ),
+    ]
+
+
+def _build_factory_quality_rework_metrics(summary: dict) -> list:
+    return [
+        factory_gold._factory_metric("REWORK_COUNT", "返工数", None, "件"),
+        factory_gold._factory_metric("REWORK_COST", "返工成本", None, "元"),
+        factory_gold._factory_metric("SCRAP_COUNT", "报废数", None, "件"),
+        factory_gold._factory_metric("SCRAP_COST", "报废成本", None, "元"),
+        factory_gold._factory_metric(
+            "TOTAL_QUALITY_COST",
+            "质量成本总计",
+            summary["qualityCost"],
+            "元",
+            "GREEN",
+            "Gold only exposes total production cost; rework/scrap split is unavailable.",
+        ),
+        factory_gold._factory_metric("REWORK_RATE", "返工率", None, "%"),
+        factory_gold._factory_metric("SCRAP_RATE", "报废率", None, "%"),
+    ]
+
+
+def _build_factory_quality_trend_chart(rows: list) -> dict:
+    data = []
+    for day_rows in factory_gold._group_rows_by_date(rows):
+        summary = _calculate_factory_quality_summary(day_rows)
+        stat_date = day_rows[0]["stat_date"]
+        data.append({
+            "date": stat_date.isoformat() if stat_date is not None else None,
+            "fpy": factory_gold._decimal_metric_value(summary["fpy"]),
+            "defectRate": factory_gold._decimal_metric_value(summary["defectRate"]),
+            "totalInspections": factory_gold._decimal_metric_value(
+                summary["totalActualQty"]
+            ),
+        })
+    return {
+        "chartType": "LINE",
+        "title": "质量趋势",
+        "xAxisField": "date",
+        "yAxisField": "fpy",
+        "seriesField": "metric",
+        "data": data,
+        "options": {"showLegend": True, "multiLine": True, "yAxisMax": 100},
+    }
+
+
+def _build_factory_quality_defect_ranking(rows: list) -> list:
+    grouped: dict[Any, list] = {}
+    for row in rows:
+        grouped.setdefault(row["product_type_id"], []).append(row)
+
+    ranking = []
+    for product_type_id, product_rows in grouped.items():
+        if product_type_id is None:
+            continue
+        summary = _calculate_factory_quality_summary(product_rows)
+        ranking.append({
+            "name": product_type_id,
+            "value": factory_gold._decimal_metric_value(summary["defectCount"]),
+            "target": None,
+            "completionRate": factory_gold._decimal_metric_value(summary["defectRate"]),
+            "alertLevel": factory_gold._alert_high(
+                summary["defectRate"], Decimal("5"), Decimal("2")
+            ),
+        })
+    ranking.sort(key=lambda item: item["value"] if item["value"] is not None else -1, reverse=True)
+    for idx, item in enumerate(ranking, start=1):
+        item["rank"] = idx
+    return ranking
+
+
+def _build_factory_quality_pareto_chart(rows: list) -> dict:
+    ranking = _build_factory_quality_defect_ranking(rows)
+    total_defects = sum(
+        Decimal(str(item["value"])) for item in ranking if item["value"] is not None
+    )
+    cumulative = Decimal("0")
+    data = []
+    for item in ranking:
+        count = Decimal(str(item["value"] or 0))
+        pct = factory_gold._rate_pct(count, total_defects)
+        cumulative += pct if pct is not None else Decimal("0")
+        data.append({
+            "defectType": item["name"],
+            "count": item["value"],
+            "percentage": factory_gold._decimal_metric_value(pct),
+            "cumulative": factory_gold._decimal_metric_value(cumulative),
+        })
+    return {
+        "chartType": "BAR",
+        "title": "不良产品帕累托分析",
+        "xAxisField": "defectType",
+        "yAxisField": "count",
+        "seriesField": "metric",
+        "data": data,
+        "options": {"showCumulativeLine": True, "showPercentage": True},
+    }
+
+
+def _build_factory_quality_cost_chart(summary: dict) -> dict:
+    return {
+        "chartType": "PIE",
+        "title": "质量成本分布",
+        "xAxisField": "category",
+        "yAxisField": "cost",
+        "data": [
+            {"category": "返工成本", "cost": None},
+            {"category": "报废成本", "cost": None},
+            {
+                "category": "生产总成本",
+                "cost": factory_gold._decimal_metric_value(summary["qualityCost"]),
+            },
+        ],
+        "options": {"showPercentage": True, "showLegend": True},
+    }
 
 
 # ============================================================
@@ -565,33 +768,59 @@ async def _factory_quality_dispatch(
     warning); the ``dataAvailability`` marker is the unambiguous signal
     here.
     """
+    rows = await factory_gold._query_factory_batch_daily_gold(
+        factory_id, start_date, end_date
+    )
+    if not rows:
+        return _factory_quality_placeholder(start_date, end_date, analysis_type)
+
     now_iso = _java_isoformat(datetime.now())
+    summary = _calculate_factory_quality_summary(rows)
+    fpy_metrics = _build_factory_quality_fpy_metrics(summary)
+    trend_chart = _build_factory_quality_trend_chart(rows)
+    defect_ranking = _build_factory_quality_defect_ranking(rows)
+    pareto_chart = _build_factory_quality_pareto_chart(rows)
+    cost_chart = _build_factory_quality_cost_chart(summary)
+
     base: dict[str, Any] = {
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
-        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
     }
 
     if analysis_type == "fpy":
-        return {**base, "metrics": [], "trendChart": {}}
+        return {**base, "metrics": fpy_metrics, "trendChart": trend_chart}
 
     if analysis_type == "defect":
-        return {**base, "ranking": [], "paretoChart": {}}
+        return {**base, "ranking": defect_ranking, "paretoChart": pareto_chart}
 
     if analysis_type == "rework":
-        return {**base, "metrics": [], "costChart": {}}
+        return {
+            **base,
+            "metrics": _build_factory_quality_rework_metrics(summary),
+            "costChart": cost_chart,
+        }
 
-    # overview (analysis_type == "overview" OR None OR any unknown value):
-    # mirror Java buildEmptyDashboard() shape sans aiInsights/suggestions
-    # warning copy (the FACTORY_SILVER_PHASE_2D_PENDING marker is the
-    # unambiguous Phase 2D placeholder signal).
+    kpi_cards = [
+        factory_gold._factory_kpi_card(
+            m["metricCode"],
+            m["metricName"],
+            factory_gold._to_decimal_or_none(m["value"]),
+            m["unit"],
+        )
+        for m in fpy_metrics
+    ]
     return {
         "period": "CUSTOM",
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
-        "kpiCards": [],
-        "rankings": {},
-        "charts": {},
+        "kpiCards": kpi_cards,
+        "rankings": {"defect_type": defect_ranking, "product_line": []},
+        "charts": {
+            "quality_trend": trend_chart,
+            "defect_pareto": pareto_chart,
+            "quality_cost_distribution": cost_chart,
+            "product_line_quality": {},
+        },
         "aiInsights": [],
         "recommendations": [],
         "suggestions": [],
@@ -599,7 +828,6 @@ async def _factory_quality_dispatch(
         "lastUpdated": now_iso,
         "fromCache": False,
         "cacheExpireAt": None,
-        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
     }
 
 

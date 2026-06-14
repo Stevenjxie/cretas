@@ -97,6 +97,17 @@ QUAL_REWORK_KEYS = {"startDate", "endDate", "dataAvailability", "metrics", "cost
 QUAL_OVERVIEW_KEYS = PROD_OVERVIEW_KEYS  # Same DashboardResponse shape.
 
 
+@pytest.fixture(autouse=True)
+def no_factory_gold_pool(monkeypatch):
+    """Keep legacy placeholder assertions in the explicit no-Gold path."""
+    import smartbi.config
+
+    async def fake_get_pg_pool():
+        return None
+
+    monkeypatch.setattr(smartbi.config, "get_pg_pool", fake_get_pg_pool)
+
+
 # ============================================================
 # 1. Marker constant exported from both modules
 # ============================================================
