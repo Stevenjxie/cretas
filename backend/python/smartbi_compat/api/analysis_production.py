@@ -101,6 +101,375 @@ _FACTORY_BRANCH_DEFERRED_MSG = (
 FACTORY_PHASE_2D_PENDING_MARKER = "FACTORY_SILVER_PHASE_2D_PENDING"
 
 
+_DECIMAL_SCALE_4 = Decimal("0.0001")
+_DECIMAL_SCALE_2 = Decimal("0.01")
+
+
+def _to_decimal_or_zero(value: Any) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _to_decimal_or_none(value: Any) -> Optional[Decimal]:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _rate_pct(numerator: Decimal, denominator: Decimal) -> Optional[Decimal]:
+    if denominator is None or denominator == 0:
+        return None
+    intermediate = (numerator / denominator).quantize(
+        _DECIMAL_SCALE_4, rounding=ROUND_HALF_UP
+    )
+    return (intermediate * Decimal("100")).quantize(
+        _DECIMAL_SCALE_2, rounding=ROUND_HALF_UP
+    )
+
+
+def _weighted_avg_pct(rows: list, value_key: str, weight_key: str) -> Optional[Decimal]:
+    weighted_sum = Decimal("0")
+    total_weight = Decimal("0")
+    for row in rows:
+        value = _to_decimal_or_none(row[value_key])
+        if value is None:
+            continue
+        weight = _to_decimal_or_zero(row[weight_key])
+        if weight == 0:
+            continue
+        weighted_sum += value * weight
+        total_weight += weight
+    if total_weight == 0:
+        return None
+    return (weighted_sum / total_weight).quantize(
+        _DECIMAL_SCALE_2, rounding=ROUND_HALF_UP
+    )
+
+
+def _decimal_metric_value(value: Optional[Decimal]) -> Any:
+    if value is None:
+        return None
+    return _decimal_to_number(value.quantize(_DECIMAL_SCALE_2, rounding=ROUND_HALF_UP))
+
+
+def _format_metric_value(value: Optional[Decimal], unit: str) -> Optional[str]:
+    if value is None:
+        return None
+    value = value.quantize(_DECIMAL_SCALE_2, rounding=ROUND_HALF_UP)
+    if unit == "%":
+        return f"{value}%"
+    if unit == "元":
+        return f"{value}"
+    return str(value)
+
+
+def _factory_metric(
+    code: str,
+    name: str,
+    value: Optional[Decimal],
+    unit: str,
+    alert_level: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict:
+    return {
+        "metricCode": code,
+        "metricName": name,
+        "value": _decimal_metric_value(value),
+        "formattedValue": _format_metric_value(value, unit),
+        "unit": unit,
+        "alertLevel": alert_level,
+        "description": description,
+    }
+
+
+def _factory_kpi_card(
+    key: str,
+    title: str,
+    value: Optional[Decimal],
+    unit: str,
+    status: str = "green",
+) -> dict:
+    return {
+        "key": key,
+        "title": title,
+        "value": _format_metric_value(value, unit),
+        "rawValue": _decimal_metric_value(value),
+        "unit": unit,
+        "status": status,
+    }
+
+
+def _alert_low(value: Optional[Decimal], red: Decimal, yellow: Decimal) -> Optional[str]:
+    if value is None:
+        return None
+    if value < red:
+        return "RED"
+    if value < yellow:
+        return "YELLOW"
+    return "GREEN"
+
+
+def _alert_high(value: Optional[Decimal], red: Decimal, yellow: Decimal) -> Optional[str]:
+    if value is None:
+        return None
+    if value > red:
+        return "RED"
+    if value > yellow:
+        return "YELLOW"
+    return "GREEN"
+
+
+def _calculate_factory_production_rates(rows: list) -> dict:
+    total_planned = sum(_to_decimal_or_zero(r["total_planned_qty"]) for r in rows)
+    total_actual = sum(_to_decimal_or_zero(r["total_actual_qty"]) for r in rows)
+    total_good = sum(_to_decimal_or_zero(r["total_good_qty"]) for r in rows)
+    total_cost = sum(_to_decimal_or_zero(r["total_cost"]) for r in rows)
+    batch_count = sum(_to_decimal_or_zero(r["batch_count"]) for r in rows)
+
+    availability = _rate_pct(total_actual, total_planned)
+    performance = _weighted_avg_pct(rows, "avg_yield_rate", "batch_count")
+    quality_rate = _rate_pct(total_good, total_actual)
+    if availability is not None and performance is not None and quality_rate is not None:
+        oee = ((availability * performance * quality_rate) / Decimal("10000")).quantize(
+            _DECIMAL_SCALE_2, rounding=ROUND_HALF_UP
+        )
+    else:
+        oee = None
+
+    return {
+        "rowCount": len(rows),
+        "productTypeCount": len({r["product_type_id"] for r in rows if r["product_type_id"] is not None}),
+        "dayCount": len({r["stat_date"] for r in rows if r["stat_date"] is not None}),
+        "batchCount": batch_count,
+        "totalPlannedQty": total_planned,
+        "totalActualQty": total_actual,
+        "totalGoodQty": total_good,
+        "totalCost": total_cost,
+        "availability": availability,
+        "performance": performance,
+        "qualityRate": quality_rate,
+        "oee": oee,
+    }
+
+
+def _build_factory_oee_metrics(summary: dict) -> list:
+    return [
+        _factory_metric(
+            "OEE",
+            "综合设备效率 (OEE)",
+            summary["oee"],
+            "%",
+            _alert_low(summary["oee"], Decimal("65"), Decimal("85")),
+            "OEE = 可用性 x 性能 x 质量",
+        ),
+        _factory_metric(
+            "AVAILABILITY",
+            "可用性",
+            summary["availability"],
+            "%",
+            _alert_low(summary["availability"], Decimal("80"), Decimal("90")),
+        ),
+        _factory_metric(
+            "PERFORMANCE",
+            "性能",
+            summary["performance"],
+            "%",
+            _alert_low(summary["performance"], Decimal("75"), Decimal("90")),
+        ),
+        _factory_metric(
+            "QUALITY_RATE",
+            "质量率",
+            summary["qualityRate"],
+            "%",
+            _alert_low(summary["qualityRate"], Decimal("95"), Decimal("98")),
+        ),
+    ]
+
+
+def _group_rows_by_date(rows: list) -> list:
+    grouped: dict[Any, list] = {}
+    for row in rows:
+        grouped.setdefault(row["stat_date"], []).append(row)
+    return [grouped[k] for k in sorted(grouped.keys())]
+
+
+def _build_factory_oee_trend_chart(rows: list) -> dict:
+    data = []
+    for day_rows in _group_rows_by_date(rows):
+        summary = _calculate_factory_production_rates(day_rows)
+        stat_date = day_rows[0]["stat_date"]
+        data.append({
+            "date": stat_date.isoformat() if stat_date is not None else None,
+            "oee": _decimal_metric_value(summary["oee"]),
+            "availability": _decimal_metric_value(summary["availability"]),
+            "performance": _decimal_metric_value(summary["performance"]),
+            "quality": _decimal_metric_value(summary["qualityRate"]),
+        })
+    return {
+        "chartType": "LINE",
+        "title": "OEE 趋势",
+        "xAxisField": "date",
+        "yAxisField": "oee",
+        "seriesField": "metric",
+        "data": data,
+        "options": {"showLegend": True, "multiLine": True, "yAxisMax": 100},
+    }
+
+
+def _build_factory_product_ranking(rows: list) -> list:
+    grouped: dict[Any, list] = {}
+    for row in rows:
+        grouped.setdefault(row["product_type_id"], []).append(row)
+    ranking = []
+    for product_type_id, product_rows in grouped.items():
+        if product_type_id is None:
+            continue
+        summary = _calculate_factory_production_rates(product_rows)
+        value = summary["availability"]
+        ranking.append({
+            "name": product_type_id,
+            "value": _decimal_metric_value(value),
+            "target": 100,
+            "completionRate": _decimal_metric_value(value),
+            "alertLevel": _alert_low(value, Decimal("80"), Decimal("90")),
+        })
+    ranking.sort(key=lambda item: item["value"] if item["value"] is not None else -1, reverse=True)
+    for idx, item in enumerate(ranking, start=1):
+        item["rank"] = idx
+    return ranking
+
+
+def _build_factory_production_line_comparison(rows: list) -> dict:
+    data = []
+    for item in _build_factory_product_ranking(rows):
+        data.append({
+            "productionLine": item["name"],
+            "oee": item["value"],
+            "availability": item["value"],
+            "performance": None,
+            "quality": None,
+        })
+    return {
+        "chartType": "BAR",
+        "title": "产品 OEE 对比",
+        "xAxisField": "productionLine",
+        "yAxisField": "oee",
+        "seriesField": "metric",
+        "data": data,
+        "options": {"showLegend": True, "grouped": True},
+    }
+
+
+async def _query_factory_batch_daily_gold(
+    factory_id: str,
+    start_date: date,
+    end_date: date,
+) -> Optional[list]:
+    if start_date is None or end_date is None:
+        raise ValueError(
+            "_query_factory_batch_daily_gold: start_date/end_date required "
+            f"(got start_date={start_date}, end_date={end_date})"
+        )
+    try:
+        from smartbi.config import get_pg_pool  # type: ignore
+
+        pool = await get_pg_pool()
+    except Exception as e:
+        logger.warning(
+            "[analysis_production] smartbi pool acquisition failed factory=%s: %s",
+            factory_id,
+            e,
+        )
+        return None
+
+    if pool is None:
+        return None
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                )
+                return await conn.fetch(
+                    """
+                    SELECT
+                        stat_date,
+                        product_type_id,
+                        batch_count,
+                        total_planned_qty,
+                        total_actual_qty,
+                        total_good_qty,
+                        avg_yield_rate,
+                        total_cost
+                    FROM agg_factory_batch_daily
+                    WHERE factory_id = $1
+                      AND stat_date BETWEEN $2 AND $3
+                      AND product_type_id IS NOT NULL
+                    ORDER BY stat_date, product_type_id
+                    """,
+                    factory_id,
+                    start_date,
+                    end_date,
+                )
+    except Exception as e:
+        logger.warning(
+            "[analysis_production] factory gold query failed factory=%s: %s",
+            factory_id,
+            e,
+        )
+        return None
+
+
+def _factory_production_placeholder(
+    start_date: date,
+    end_date: date,
+    analysis_type: Optional[str],
+) -> dict:
+    now_iso = _java_isoformat(datetime.now())
+    base: dict[str, Any] = {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
+    }
+
+    if analysis_type == "oee":
+        return {**base, "metrics": [], "trendChart": {}}
+
+    if analysis_type == "efficiency":
+        return {**base, "metrics": [], "ranking": []}
+
+    if analysis_type == "equipment":
+        return {
+            **base,
+            "metrics": [],
+            "ranking": [],
+            "downtimeChart": {},
+        }
+
+    return {
+        "period": "CUSTOM",
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "kpiCards": [],
+        "rankings": {},
+        "charts": {},
+        "aiInsights": [],
+        "recommendations": [],
+        "suggestions": [],
+        "generatedAt": now_iso,
+        "lastUpdated": now_iso,
+        "fromCache": False,
+        "cacheExpireAt": None,
+        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
+    }
+
+
 # ============================================================
 # Restaurant metric builders
 # ============================================================
@@ -318,38 +687,73 @@ async def _factory_production_dispatch(
     warning); the ``dataAvailability`` marker is the unambiguous signal
     here.
     """
+    rows = await _query_factory_batch_daily_gold(factory_id, start_date, end_date)
+    if not rows:
+        return _factory_production_placeholder(start_date, end_date, analysis_type)
+
     now_iso = _java_isoformat(datetime.now())
+    summary = _calculate_factory_production_rates(rows)
+    oee_metrics = _build_factory_oee_metrics(summary)
+    trend_chart = _build_factory_oee_trend_chart(rows)
+    ranking = _build_factory_product_ranking(rows)
+
     base: dict[str, Any] = {
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
-        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
     }
 
     if analysis_type == "oee":
-        return {**base, "metrics": [], "trendChart": {}}
+        return {**base, "metrics": oee_metrics, "trendChart": trend_chart}
 
     if analysis_type == "efficiency":
-        return {**base, "metrics": [], "ranking": []}
+        efficiency_metrics = [
+            _factory_metric(
+                "CAPACITY_UTILIZATION",
+                "产能利用率",
+                summary["availability"],
+                "%",
+                _alert_low(summary["availability"], Decimal("80"), Decimal("90")),
+            ),
+            _factory_metric("CYCLE_TIME", "平均节拍时间", None, "分钟/件"),
+            _factory_metric(
+                "ACHIEVEMENT_RATE",
+                "计划达成率",
+                summary["availability"],
+                "%",
+                _alert_low(summary["availability"], Decimal("65"), Decimal("85")),
+            ),
+        ]
+        return {**base, "metrics": efficiency_metrics, "ranking": ranking}
 
     if analysis_type == "equipment":
         return {
             **base,
-            "metrics": [],
+            "metrics": [
+                _factory_metric("EQUIPMENT_UTILIZATION", "设备利用率", None, "%"),
+                _factory_metric("DOWNTIME", "总停机时间", None, "小时"),
+                _factory_metric("FAILURE_COUNT", "故障次数", None, "次"),
+                _factory_metric("MTBF", "平均故障间隔 (MTBF)", None, "小时"),
+                _factory_metric("MTTR", "平均修复时间 (MTTR)", None, "小时"),
+            ],
             "ranking": [],
             "downtimeChart": {},
         }
 
-    # overview (analysis_type == "overview" OR None OR any unknown value):
-    # mirror Java buildEmptyDashboard() shape sans aiInsights/suggestions
-    # warning copy (the FACTORY_SILVER_PHASE_2D_PENDING marker is the
-    # unambiguous Phase 2D placeholder signal).
+    kpi_cards = [
+        _factory_kpi_card(m["metricCode"], m["metricName"], _to_decimal_or_none(m["value"]), m["unit"])
+        for m in oee_metrics
+    ]
     return {
         "period": "CUSTOM",
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
-        "kpiCards": [],
-        "rankings": {},
-        "charts": {},
+        "kpiCards": kpi_cards,
+        "rankings": {"production_line": ranking, "equipment": []},
+        "charts": {
+            "oee_trend": trend_chart,
+            "production_line_comparison": _build_factory_production_line_comparison(rows),
+            "downtime_distribution": {},
+        },
         "aiInsights": [],
         "recommendations": [],
         "suggestions": [],
@@ -357,7 +761,6 @@ async def _factory_production_dispatch(
         "lastUpdated": now_iso,
         "fromCache": False,
         "cacheExpireAt": None,
-        "dataAvailability": FACTORY_PHASE_2D_PENDING_MARKER,
     }
 
 

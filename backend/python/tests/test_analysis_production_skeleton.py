@@ -29,6 +29,8 @@ Spec: docs/superpowers/specs/2026-05-12-t6-6-sub-a-production-impl-spec.md
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from smartbi_compat.tenant import TenantType, get_tenant_type
@@ -307,6 +309,135 @@ class _RouterFakePool:
         return _Ctx()
 
 
+class _FactoryGoldConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.executed = []
+        self.fetch_sql = None
+        self.fetch_args = None
+
+    def transaction(self):
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self_inner):
+                return conn
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Tx()
+
+    async def execute(self, sql, *args):
+        self.executed.append((sql, args))
+
+    async def fetch(self, sql, *args):
+        self.fetch_sql = sql
+        self.fetch_args = args
+        return self.rows
+
+
+class _FactoryGoldPool:
+    def __init__(self, rows):
+        self.conn = _FactoryGoldConn(rows)
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self_inner):
+                return pool.conn
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Ctx()
+
+
+@pytest.fixture
+def factory_gold_pool(monkeypatch):
+    def _factory(rows):
+        pool = _FactoryGoldPool(rows)
+
+        async def fake_get_pg_pool():
+            return pool
+
+        import smartbi.config
+
+        monkeypatch.setattr(smartbi.config, "get_pg_pool", fake_get_pg_pool)
+        return pool
+
+    return _factory
+
+
+@pytest.mark.asyncio
+async def test_factory_dispatch_reads_gold_with_rls_and_returns_oee_metrics(
+    factory_gold_pool,
+):
+    rows = [
+        {
+            "stat_date": date(2026, 5, 1),
+            "product_type_id": "P001",
+            "batch_count": 2,
+            "total_planned_qty": 100,
+            "total_actual_qty": 90,
+            "total_good_qty": 81,
+            "avg_yield_rate": 90,
+            "total_cost": 1000,
+        },
+        {
+            "stat_date": date(2026, 5, 1),
+            "product_type_id": "P002",
+            "batch_count": 1,
+            "total_planned_qty": 100,
+            "total_actual_qty": 80,
+            "total_good_qty": 72,
+            "avg_yield_rate": 90,
+            "total_cost": 900,
+        },
+    ]
+    pool = factory_gold_pool(rows)
+
+    result = await _factory_production_dispatch(
+        "F001", date(2026, 5, 1), date(2026, 5, 10), "oee"
+    )
+
+    assert "dataAvailability" not in result
+    assert [m["metricCode"] for m in result["metrics"]] == [
+        "OEE",
+        "AVAILABILITY",
+        "PERFORMANCE",
+        "QUALITY_RATE",
+    ]
+    assert result["metrics"][1]["value"] == 85
+    assert result["metrics"][2]["value"] == 90
+    assert result["metrics"][3]["value"] == 90
+    assert result["metrics"][0]["value"] == 68.85
+    assert result["trendChart"]["data"][0]["date"] == "2026-05-01"
+    assert "agg_factory_batch_daily" in pool.conn.fetch_sql
+    assert "product_type_id IS NOT NULL" in pool.conn.fetch_sql
+    assert pool.conn.fetch_args == (
+        "F001",
+        date(2026, 5, 1),
+        date(2026, 5, 10),
+    )
+    assert pool.conn.executed == [
+        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_factory_dispatch_no_gold_keeps_phase_2d_placeholder(factory_gold_pool):
+    factory_gold_pool([])
+    result = await _factory_production_dispatch(
+        "F001", date(2026, 5, 1), date(2026, 5, 10), "oee"
+    )
+
+    assert result["dataAvailability"] == FACTORY_PHASE_2D_PENDING_MARKER
+    assert result["metrics"] == []
+    assert result["trendChart"] == {}
+
+
 @pytest.fixture
 def endpoint_client(monkeypatch):
     """FastAPI TestClient with cretas_db + smartbi_db pools patched.
@@ -412,7 +543,11 @@ def factory_endpoint_client(monkeypatch):
     async def fake_get_cretas_pool():
         return cretas_pool
 
+    async def fake_get_pg_pool():
+        return None
+
     monkeypatch.setattr(smartbi.config, "get_cretas_pool", fake_get_cretas_pool)
+    monkeypatch.setattr(smartbi.config, "get_pg_pool", fake_get_pg_pool)
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
