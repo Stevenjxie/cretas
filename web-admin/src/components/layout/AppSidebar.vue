@@ -63,15 +63,14 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   FACTORY: [
     '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
     '/sales/payment-requests', '/sales/returns',
-    // Phase2 已补数据 → 不再隐藏: 报损(wastage_reports 12, 修了 wastage_reason 枚举值 400 bug)/
-    // 调整审批(ar_ap AR/AP_ADJUSTMENT PENDING)/财务报表(ar_ap 派生)/备货看板(销售单未来交货)。
-    // 仍隐藏 (需专用管道/引擎, 非简单数据行):
-    '/smart-bi/analysis-hub',             // 经营分析hub: 财务tab "请选择数据源" 需 Excel 上传管道 (smart_bi_pg_excel_uploads), 非 smart_bi_finance_data 行即可
-    '/analytics/alert-dashboard',         // 异常预警: 页面餐饮导向 (调 restaurant-ops/summary) + /alerts 对 alert_events 过滤不匹配
-    '/analytics/production-report',       // 车间实时报表: 读 gold fact_production_report 按当日, gold 日期语义不随 operational shift
+    // Phase2/3 已补数据 → 不再隐藏: 报损/调整审批/财务报表/备货看板 + 异常预警(production_alerts
+    // 8 条卤味生产异常: 猪舌出成率/掌中宝成本/卤猪蹄合格率/OEE — 才是 dashboard 真实源, 非 alert_events)
+    // + 车间实时报表(shift 完工批次 created_at 到当日 → 4 产品今日产量)。
+    // 仍隐藏 (2 项, 真需专用管道 / 本就是内部工具):
+    '/smart-bi/analysis-hub',             // 经营分析hub: 财务tab "请选择数据源" 需完整 Excel 上传管道 (smart_bi_pg_excel_uploads 数据源选择); 且与经营驾驶舱功能重复 (旗舰分析页已覆盖)
     '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
     '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
-    '/smart-bi/calibration',              // 以上 7 项 = 内部上传/查询模板/AI运维工具, 非客户数据页
+    '/smart-bi/calibration',              // 以上 7 项 = 内部上传/查询模板/数据质量/AI运维工具, 非客户数据页 (评委看到反而困惑, 隐藏是对的 UX)
   ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
