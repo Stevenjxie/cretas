@@ -53,6 +53,19 @@ const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 const SENTINEL_MATERIAL_INPUT = '__MATERIAL_INPUT__';
 const SENTINEL_FINAL_OUTPUT = '__FINAL_OUTPUT__';
 
+/**
+ * 守恒软校验告警展示 (适配单元3 Part C).
+ * 后端仅在 legacy 整合报工偏差 >15% 且单位可比时附 balanceWarning 字段.
+ * 非阻断: 弹告警后流程继续正常.
+ */
+function maybeShowBalanceWarning(warning: string | undefined): void {
+  if (!warning) return;
+  appAlert(
+    '⚠️ 物料平衡偏差',
+    `${warning}\n\n请核对投入量、产出量、副产物及损耗是否填错 (本次报工已保存, 此为提示)`,
+  );
+}
+
 // 三阶段报工 (单元2): 该道当前所处阶段 (从 getYield 的 step.phase 推断)
 type StepPhase = 'AWAITING_INPUT' | 'IN_PRODUCTION' | 'COMPLETED';
 type ProductionStepMode = 'SEGMENT' | 'OUTPUT';
@@ -1013,6 +1026,7 @@ const YieldStepReportScreen: React.FC = () => {
         }
         await refetchYield();
         setEvidencePhotos([]);
+        maybeShowBalanceWarning(res.data.balanceWarning);
         appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
       } catch (error) {
         handleError(error, { showAlert: false, logError: true });
@@ -1095,6 +1109,7 @@ const YieldStepReportScreen: React.FC = () => {
       await refetchYield();
       // 投入提交成功 → 该道转 IN_PRODUCTION; 清生产阶段输入残留
       setEvidencePhotos([]);
+      maybeShowBalanceWarning(res.data.balanceWarning);
       appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
@@ -1204,6 +1219,7 @@ const YieldStepReportScreen: React.FC = () => {
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
       setEvidencePhotos([]);
+      maybeShowBalanceWarning(res.data.balanceWarning);
     } catch (forceError) {
       handleError(forceError, { showAlert: false, logError: true });
       const fe = forceError as { response?: { data?: { message?: string } } };
@@ -1273,6 +1289,7 @@ const YieldStepReportScreen: React.FC = () => {
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
       setEvidencePhotos([]);
+      maybeShowBalanceWarning(res.data.balanceWarning);
       // 同单未完结续报: 留单继续 (markComplete=false) → 清空产出输入, 提示累计已产出 + 可继续。
       const cumulative = res.data.cumulativeOutput ?? null;
       if (!markComplete) {
@@ -1466,6 +1483,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       await refetchYield();
       setEvidencePhotos([]);
+      maybeShowBalanceWarning(res.data.balanceWarning);
       appAlert('领料已记录', '可继续报工，完成后请提交产出', [
         { text: '好的', style: 'default' },
       ]);
@@ -1530,6 +1548,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       await refetchYield();
       setEvidencePhotos([]);
+      maybeShowBalanceWarning(res.data.balanceWarning);
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const { title, msg } = friendlySubmitError(error);
