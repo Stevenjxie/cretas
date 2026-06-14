@@ -55,49 +55,58 @@ public class InventoryLowStockEventPublisher {
     }
 
     public void publishIfLowStock(String factoryId, String materialTypeId, String changeType) {
+        // fail-open: 低库存报警是库存扣减的副作用, 任何失败 (缺参 / 查询异常) 都绝不能回滚扣减主事务.
+        // 恢复重构前 publishStockChangedEventIfApplicable 的防护 (注释原文: "查 minStock 失败时不阻断主流程").
         if (factoryId == null || materialTypeId == null) {
-            throw new IllegalArgumentException("factoryId and materialTypeId are required for low-stock event");
-        }
-
-        Optional<RawMaterialType> materialTypeOpt = materialTypeRepository.findById(materialTypeId);
-        if (materialTypeOpt.isEmpty()) {
-            log.warn("F-034 low-stock event skipped: materialTypeId={} not found", materialTypeId);
+            log.warn("F-034 low-stock event skipped: factoryId/materialTypeId missing (factoryId={}, materialTypeId={})",
+                    factoryId, materialTypeId);
             return;
         }
+        try {
+            Optional<RawMaterialType> materialTypeOpt = materialTypeRepository.findById(materialTypeId);
+            if (materialTypeOpt.isEmpty()) {
+                log.warn("F-034 low-stock event skipped: materialTypeId={} not found", materialTypeId);
+                return;
+            }
 
-        RawMaterialType materialType = materialTypeOpt.get();
-        BigDecimal minStock = materialType.getMinStock();
-        if (minStock == null || minStock.compareTo(BigDecimal.ZERO) <= 0) {
-            log.debug("F-034 low-stock event skipped: no minStock configured for {}", materialTypeId);
-            return;
-        }
+            RawMaterialType materialType = materialTypeOpt.get();
+            BigDecimal minStock = materialType.getMinStock();
+            if (minStock == null || minStock.compareTo(BigDecimal.ZERO) <= 0) {
+                log.debug("F-034 low-stock event skipped: no minStock configured for {}", materialTypeId);
+                return;
+            }
 
-        BigDecimal currentStock = materialBatchRepository
-                .sumAvailableQuantityByMaterialType(factoryId, materialTypeId);
-        if (currentStock == null) {
-            currentStock = BigDecimal.ZERO;
-        }
-        if (currentStock.compareTo(minStock) >= 0) {
-            return;
-        }
+            BigDecimal currentStock = materialBatchRepository
+                    .sumAvailableQuantityByMaterialType(factoryId, materialTypeId);
+            if (currentStock == null) {
+                currentStock = BigDecimal.ZERO;
+            }
+            if (currentStock.compareTo(minStock) >= 0) {
+                return;
+            }
 
-        String dedupKey = factoryId + ":" + materialTypeId;
-        Instant now = Instant.now(clock);
-        Instant previous = lastPublishedAt.get(dedupKey);
-        if (previous != null && previous.plus(DEDUP_WINDOW).isAfter(now)) {
-            log.debug("F-034 low-stock event deduped: factoryId={} materialTypeId={}", factoryId, materialTypeId);
-            return;
-        }
-        lastPublishedAt.put(dedupKey, now);
+            String dedupKey = factoryId + ":" + materialTypeId;
+            Instant now = Instant.now(clock);
+            Instant previous = lastPublishedAt.get(dedupKey);
+            if (previous != null && previous.plus(DEDUP_WINDOW).isAfter(now)) {
+                log.debug("F-034 low-stock event deduped: factoryId={} materialTypeId={}", factoryId, materialTypeId);
+                return;
+            }
+            lastPublishedAt.put(dedupKey, now);
 
-        applicationEventPublisher.publishEvent(new InventoryStockChangedEvent(
-                this,
-                factoryId,
-                materialTypeId,
-                materialType.getName() != null ? materialType.getName() : materialTypeId,
-                currentStock,
-                minStock,
-                materialType.getUnit() != null ? materialType.getUnit() : "kg",
-                changeType));
+            applicationEventPublisher.publishEvent(new InventoryStockChangedEvent(
+                    this,
+                    factoryId,
+                    materialTypeId,
+                    materialType.getName() != null ? materialType.getName() : materialTypeId,
+                    currentStock,
+                    minStock,
+                    materialType.getUnit() != null ? materialType.getUnit() : "kg",
+                    changeType));
+        } catch (Exception e) {
+            // fail-open: 报警副作用失败不影响库存扣减主流程
+            log.warn("F-034 low-stock event publish failed (fail-open, deduction unaffected): factoryId={}, materialTypeId={}, error={}",
+                    factoryId, materialTypeId, e.getMessage());
+        }
     }
 }
