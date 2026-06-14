@@ -22,6 +22,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { materialBatchApiClient, MaterialBatch } from '../../services/api/materialBatchApiClient';
+import BarcodeScannerModal from './BarcodeScannerModal';
+import {
+  materialLabelApiClient,
+  MaterialBatchLabelScanResponse,
+} from '../../services/api/materialLabelApiClient';
 
 export interface MaterialBatchRef {
   materialBatchId: string;
@@ -95,6 +100,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   // Q2: picker 已通过「确定选择」按钮确认收起 → 显示 summary + 确认反馈
   const [confirmed, setConfirmed] = useState(false);
   const [confirmFeedback, setConfirmFeedback] = useState(false);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scannedLabel, setScannedLabel] = useState<MaterialBatchLabelScanResponse | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryKeyRef = useRef<string>('');
   const validationRef = useRef(onValidationChange);
@@ -286,6 +294,55 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     [],
   );
 
+  const handleLabelScan = useCallback(async (code: string) => {
+    setScannerVisible(false);
+    const cleanCode = code.trim();
+    if (!cleanCode) return;
+    setScanLoading(true);
+    setLoadError(null);
+    try {
+      const labelRes = await materialLabelApiClient.scanMaterialBatchLabel(cleanCode, factoryId);
+      if (!labelRes.success || !labelRes.data?.batchId) {
+        setLoadError(labelRes.message || '未识别到有效物料标签');
+        return;
+      }
+      const label = labelRes.data;
+      setScannedLabel(label);
+
+      const batchRes = await materialBatchApiClient.getBatchById(String(label.batchId), factoryId);
+      if (!batchRes.success || !batchRes.data) {
+        setLoadError(batchRes.message || '标签对应的批次不存在');
+        return;
+      }
+      const batch = batchRes.data;
+      const status = String(batch.status ?? '').toUpperCase();
+      if (status && status !== 'AVAILABLE') {
+        setLoadError(`标签批次 ${batch.batchNumber} 当前状态为 ${batch.status}, 不能领料`);
+        return;
+      }
+
+      setExpanded(true);
+      setConfirmed(false);
+      setConfirmFeedback(false);
+      setRows((prev) => {
+        const existing = prev.find((row) => row.batch.id === batch.id);
+        if (existing) {
+          return prev.map((row) =>
+            row.batch.id === batch.id
+              ? { ...row, selected: true, qtyStr: row.qtyStr }
+              : row,
+          );
+        }
+        return [{ batch, selected: true, qtyStr: '' }, ...prev];
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '扫码识别物料标签失败';
+      setLoadError(msg);
+    } finally {
+      setScanLoading(false);
+    }
+  }, [factoryId]);
+
   // Q2: 「确定选择」按钮点击: 校验 → 折叠 + 显示确认反馈
   const handleConfirm = useCallback(() => {
     const selected = rows.filter((r) => r.selected);
@@ -403,6 +460,34 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           <Text style={styles.feedbackText}>已确认 ✓</Text>
         </View>
       ) : null}
+
+      <View style={styles.scanRow}>
+        <TouchableOpacity
+          style={[styles.scanBtn, (disabled || scanLoading) && styles.scanBtnDisabled]}
+          onPress={() => setScannerVisible(true)}
+          disabled={disabled || scanLoading}
+          accessibilityLabel="扫码选择领料批次"
+          testID="material-batch-label-scan-btn"
+        >
+          <Text style={styles.scanBtnText}>{scanLoading ? '识别中...' : '扫码选批次'}</Text>
+        </TouchableOpacity>
+        {scannedLabel ? (
+          <Text style={styles.scanInfo} numberOfLines={2}>
+            {scannedLabel.materialName} / {scannedLabel.batchNumber}
+            {scannedLabel.factoryNumber ? ` / 厂号 ${scannedLabel.factoryNumber}` : ''}
+            {scannedLabel.originPlace ? ` / ${scannedLabel.originPlace}` : ''}
+          </Text>
+        ) : (
+          <Text style={styles.scanInfo}>扫一物一码标签后自动选中对应批次</Text>
+        )}
+      </View>
+
+      <BarcodeScannerModal
+        visible={scannerVisible}
+        onClose={() => setScannerVisible(false)}
+        onScan={handleLabelScan}
+        title="扫码选择领料批次"
+      />
 
       {expanded ? (
         <View style={styles.body}>
@@ -570,6 +655,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F9EB',
   },
   feedbackText: { fontSize: 13, color: '#67C23A', fontWeight: '600', textAlign: 'center' },
+
+  scanRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EBEEF5',
+    backgroundColor: '#FAFAFA',
+  },
+  scanBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#ECF5FF',
+    borderColor: '#409EFF',
+    borderWidth: 1,
+    borderRadius: 8,
+  },
+  scanBtnDisabled: { opacity: 0.55 },
+  scanBtnText: { fontSize: 13, color: '#1D4ED8', fontWeight: '700' },
+  scanInfo: { flex: 1, fontSize: 12, color: '#606266', lineHeight: 17 },
 
   body: { borderTopWidth: 1, borderTopColor: '#EBEEF5', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
   center: { alignItems: 'center', paddingVertical: 16 },
