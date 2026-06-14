@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import random
 import sys
-from typing import Dict, List, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,7 +25,7 @@ if _SMARTBI_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 # Imports under test
 # ---------------------------------------------------------------------------
-from scripts.seed_chart_insight_corpus import (  # noqa: E402
+from scripts.seed_chart_insight_corpus import (  # noqa: E402,F401
     # shape helpers
     _apply_shape_jitter,
     _sample_shapes_from_library,
@@ -480,6 +479,7 @@ class TestDryRunStillWorks:
 
 class _AsyncContextManager:
     """Minimal async context manager wrapping a mock connection."""
+
     def __init__(self, conn):
         self._conn = conn
 

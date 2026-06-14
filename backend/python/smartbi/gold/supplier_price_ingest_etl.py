@@ -237,8 +237,8 @@ def _to_upsert_row(raw_row, existing_ids: Set[str]) -> Optional[dict]:
     Returns None if the row should be skipped (existing, no date, etc.).
     The caller should log skip reasons separately via stats.
     """
-    batch_id   = raw_row["id"]
-    source_id  = _source_note_id(batch_id)
+    batch_id = raw_row["id"]
+    source_id = _source_note_id(batch_id)
 
     if source_id in existing_ids:
         return None  # already ingested; idempotent skip
@@ -335,7 +335,7 @@ async def run_supplier_price_ingest(
     for raw in raw_rows:
         row = _to_upsert_row(raw, existing_ids)
         if row is None:
-            batch_id  = raw["id"]
+            batch_id = raw["id"]
             source_id = _source_note_id(batch_id)
             if source_id in existing_ids:
                 stats["skipped_existing"] += 1

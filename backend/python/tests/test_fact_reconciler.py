@@ -234,5 +234,5 @@ def test_factory_facts_ambiguous_row_skips_that_metric():
 
 
 if __name__ == "__main__":
-    import pytest
+    import pytest  # noqa: F811
     raise SystemExit(pytest.main([__file__, "-v"]))

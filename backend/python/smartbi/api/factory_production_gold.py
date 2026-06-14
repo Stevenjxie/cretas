@@ -158,14 +158,14 @@ def _row_to_dict(row) -> dict:
         "productTypeId":       row["product_type_id"],
         "batchCount":          row["batch_count"],
         "totalPlannedQty":     float(row["total_planned_qty"]) if row["total_planned_qty"] is not None else None,
-        "totalActualQty":      float(row["total_actual_qty"])  if row["total_actual_qty"]  is not None else None,
-        "totalGoodQty":        float(row["total_good_qty"])    if row["total_good_qty"]    is not None else None,
-        "avgYieldRate":        float(row["avg_yield_rate"])    if row["avg_yield_rate"]    is not None else None,
-        "totalMaterialCost":   float(row["total_material_cost"])  if row["total_material_cost"]  is not None else None,
-        "totalLaborCost":      float(row["total_labor_cost"])     if row["total_labor_cost"]     is not None else None,
+        "totalActualQty":      float(row["total_actual_qty"]) if row["total_actual_qty"] is not None else None,
+        "totalGoodQty":        float(row["total_good_qty"]) if row["total_good_qty"] is not None else None,
+        "avgYieldRate":        float(row["avg_yield_rate"]) if row["avg_yield_rate"] is not None else None,
+        "totalMaterialCost":   float(row["total_material_cost"]) if row["total_material_cost"] is not None else None,
+        "totalLaborCost":      float(row["total_labor_cost"]) if row["total_labor_cost"] is not None else None,
         "totalEquipmentCost":  float(row["total_equipment_cost"]) if row["total_equipment_cost"] is not None else None,
-        "totalOtherCost":      float(row["total_other_cost"])     if row["total_other_cost"]     is not None else None,
-        "totalCost":           float(row["total_cost"])           if row["total_cost"]           is not None else None,
+        "totalOtherCost":      float(row["total_other_cost"]) if row["total_other_cost"] is not None else None,
+        "totalCost":           float(row["total_cost"]) if row["total_cost"] is not None else None,
         "version":             row["version"],
         "updatedAt":           row["updated_at"].isoformat() if row["updated_at"] else None,
     }
@@ -235,8 +235,8 @@ async def cost_structure(
 @router.get("/yield-trend")
 async def yield_trend(
     request: Request,
-    startDate:    Optional[date]  = Query(None, description="起始日期 (默认: 全部历史)"),
-    endDate:      Optional[date]  = Query(None, description="截止日期 (默认: 全部历史)"),
+    startDate:    Optional[date] = Query(None, description="起始日期 (默认: 全部历史)"),
+    endDate:      Optional[date] = Query(None, description="截止日期 (默认: 全部历史)"),
     productTypeId: Optional[str] = Query(None, description="产品类型 ID (不传=全产品汇总)"),
 ):
     """Daily yield-rate trend for the factory (or a specific product type).
@@ -267,8 +267,8 @@ async def yield_trend(
             "avgYieldRate":  float(r["avg_yield_rate"]) if r["avg_yield_rate"] is not None else None,
             "batchCount":    r["batch_count"],
             "totalActualQty": float(r["total_actual_qty"]) if r["total_actual_qty"] is not None else None,
-            "totalGoodQty":   float(r["total_good_qty"])  if r["total_good_qty"]   is not None else None,
-            "totalCost":      float(r["total_cost"])      if r["total_cost"]       is not None else None,
+            "totalGoodQty":   float(r["total_good_qty"]) if r["total_good_qty"] is not None else None,
+            "totalCost":      float(r["total_cost"]) if r["total_cost"] is not None else None,
         }
         for r in rows
     ]
@@ -338,17 +338,25 @@ async def product_cost_compare(
             continue  # skip all-products rollup rows
         bucket = agg[pid]
         bucket["batchCount"] += row["batch_count"]
-        bucket["totalPlannedQty"]    = _null_add(bucket["totalPlannedQty"],    float(row["total_planned_qty"])    if row["total_planned_qty"]    is not None else None)
-        bucket["totalActualQty"]     = _null_add(bucket["totalActualQty"],     float(row["total_actual_qty"])     if row["total_actual_qty"]     is not None else None)
-        bucket["totalGoodQty"]       = _null_add(bucket["totalGoodQty"],       float(row["total_good_qty"])       if row["total_good_qty"]       is not None else None)
-        bucket["totalMaterialCost"]  = _null_add(bucket["totalMaterialCost"],  float(row["total_material_cost"])  if row["total_material_cost"]  is not None else None)
-        bucket["totalLaborCost"]     = _null_add(bucket["totalLaborCost"],     float(row["total_labor_cost"])     if row["total_labor_cost"]     is not None else None)
-        bucket["totalEquipmentCost"] = _null_add(bucket["totalEquipmentCost"], float(row["total_equipment_cost"]) if row["total_equipment_cost"] is not None else None)
-        bucket["totalOtherCost"]     = _null_add(bucket["totalOtherCost"],     float(row["total_other_cost"])     if row["total_other_cost"]     is not None else None)
-        bucket["totalCost"]          = _null_add(bucket["totalCost"],          float(row["total_cost"])           if row["total_cost"]           is not None else None)
+        bucket["totalPlannedQty"] = _null_add(bucket["totalPlannedQty"],    float(
+            row["total_planned_qty"]) if row["total_planned_qty"] is not None else None)
+        bucket["totalActualQty"] = _null_add(bucket["totalActualQty"],     float(
+            row["total_actual_qty"]) if row["total_actual_qty"] is not None else None)
+        bucket["totalGoodQty"] = _null_add(bucket["totalGoodQty"],       float(
+            row["total_good_qty"]) if row["total_good_qty"] is not None else None)
+        bucket["totalMaterialCost"] = _null_add(bucket["totalMaterialCost"],  float(
+            row["total_material_cost"]) if row["total_material_cost"] is not None else None)
+        bucket["totalLaborCost"] = _null_add(bucket["totalLaborCost"],     float(
+            row["total_labor_cost"]) if row["total_labor_cost"] is not None else None)
+        bucket["totalEquipmentCost"] = _null_add(bucket["totalEquipmentCost"], float(
+            row["total_equipment_cost"]) if row["total_equipment_cost"] is not None else None)
+        bucket["totalOtherCost"] = _null_add(bucket["totalOtherCost"],     float(
+            row["total_other_cost"]) if row["total_other_cost"] is not None else None)
+        bucket["totalCost"] = _null_add(bucket["totalCost"],          float(
+            row["total_cost"]) if row["total_cost"] is not None else None)
         # Weighted yield: weight by batch_count
         if row["avg_yield_rate"] is not None:
-            bucket["yieldRateNumerator"]   += float(row["avg_yield_rate"]) * row["batch_count"]
+            bucket["yieldRateNumerator"] += float(row["avg_yield_rate"]) * row["batch_count"]
             bucket["yieldRateDenominator"] += row["batch_count"]
 
     products: List[dict] = []
@@ -364,14 +372,14 @@ async def product_cost_compare(
         products.append({
             "productTypeId":     pid,
             "batchCount":        bucket["batchCount"],
-            "totalActualQty":    round(bucket["totalActualQty"],  2) if bucket["totalActualQty"]  is not None else None,
-            "totalGoodQty":      round(bucket["totalGoodQty"],    2) if bucket["totalGoodQty"]    is not None else None,
+            "totalActualQty":    round(bucket["totalActualQty"],  2) if bucket["totalActualQty"] is not None else None,
+            "totalGoodQty":      round(bucket["totalGoodQty"],    2) if bucket["totalGoodQty"] is not None else None,
             "avgYieldRate":      avg_yield,
-            "totalMaterialCost": round(bucket["totalMaterialCost"],  2) if bucket["totalMaterialCost"]  is not None else None,
-            "totalLaborCost":    round(bucket["totalLaborCost"],     2) if bucket["totalLaborCost"]     is not None else None,
-            "totalEquipmentCost": round(bucket["totalEquipmentCost"], 2) if bucket["totalEquipmentCost"] is not None else None,
-            "totalOtherCost":    round(bucket["totalOtherCost"],     2) if bucket["totalOtherCost"]     is not None else None,
-            "totalCost":         round(bucket["totalCost"],          2) if bucket["totalCost"]          is not None else None,
+            "totalMaterialCost": round(bucket["totalMaterialCost"],  2) if bucket["totalMaterialCost"] is not None else None,  # noqa: E501
+            "totalLaborCost":    round(bucket["totalLaborCost"],     2) if bucket["totalLaborCost"] is not None else None,  # noqa: E501
+            "totalEquipmentCost": round(bucket["totalEquipmentCost"], 2) if bucket["totalEquipmentCost"] is not None else None,  # noqa: E501
+            "totalOtherCost":    round(bucket["totalOtherCost"],     2) if bucket["totalOtherCost"] is not None else None,  # noqa: E501
+            "totalCost":         round(bucket["totalCost"],          2) if bucket["totalCost"] is not None else None,
             "costPerUnit":       cost_per_unit,
         })
 
@@ -386,10 +394,10 @@ async def product_cost_compare(
 @router.get("/process-cost")
 async def process_cost(
     request: Request,
-    batchId:   Optional[str]  = Query(None, description="生产批次 ID (不传=全厂所有批次)"),
+    batchId:   Optional[str] = Query(None, description="生产批次 ID (不传=全厂所有批次)"),
     startDate: Optional[date] = Query(None, description="起始日期 (默认: 全部历史)"),
     endDate:   Optional[date] = Query(None, description="截止日期 (默认: 全部历史)"),
-    costOnly:  bool           = Query(False, description="仅返回有成本数据的工序 (cost_source='reported')"),
+    costOnly:  bool = Query(False, description="仅返回有成本数据的工序 (cost_source='reported')"),
 ):
     """Process-level cost and yield for factory production reports.
 
@@ -497,13 +505,13 @@ async def process_cost(
             "processCategory":   r["process_category"],
             "reportDate":        r["report_date"].isoformat() if r["report_date"] else None,
             "reportKind":        r["report_kind"],
-            "inputQty":          float(r["input_qty"])    if r["input_qty"]    is not None else None,
-            "outputQty":         float(r["output_qty"])   if r["output_qty"]   is not None else None,
-            "goodQty":           float(r["good_qty"])     if r["good_qty"]     is not None else None,
-            "yieldRate":         float(r["yield_rate"])   if r["yield_rate"]   is not None else None,
+            "inputQty":          float(r["input_qty"]) if r["input_qty"] is not None else None,
+            "outputQty":         float(r["output_qty"]) if r["output_qty"] is not None else None,
+            "goodQty":           float(r["good_qty"]) if r["good_qty"] is not None else None,
+            "yieldRate":         float(r["yield_rate"]) if r["yield_rate"] is not None else None,
             "totalWorkMinutes":  r["total_work_minutes"],
             "totalWorkers":      r["total_workers"],
-            "laborCost":         float(r["labor_cost"])    if r["labor_cost"]    is not None else None,
+            "laborCost":         float(r["labor_cost"]) if r["labor_cost"] is not None else None,
             "materialCost":      float(r["material_cost"]) if r["material_cost"] is not None else None,
             "costSource":        r["cost_source"],
         })

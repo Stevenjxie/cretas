@@ -234,10 +234,14 @@ class OutlierService:
 
     @staticmethod
     def _bucket_n(n: int) -> str:
-        if n < 10: return '<10'  # noqa: E701
-        if n < 50: return '10-49'  # noqa: E701
-        if n < 100: return '50-99'  # noqa: E701
-        if n < 500: return '100-499'  # noqa: E701
+        if n < 10:
+            return '<10'  # noqa: E701
+        if n < 50:
+            return '10-49'  # noqa: E701
+        if n < 100:
+            return '50-99'  # noqa: E701
+        if n < 500:
+            return '100-499'  # noqa: E701
         return '500+'
 
     async def detect_per_dim(self, *args, **kwargs):

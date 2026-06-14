@@ -157,12 +157,12 @@ def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
     for kind, pat in _ENTITY_PATTERNS:
         def _repl(m: "re.Match[str]") -> str:
             name = m.group("name")
-            kind_word = m.group("kind")
+            m.group("kind")
             # 名字为空 / 纯类别词 → 不动。
             if not name:
                 return m.group(0)
             # 已知通用占位符前缀本身 (避免二次伪名化) → 不动。
-            full = m.group(0)
+            m.group(0)
             key = f"{kind}:{name}"
             if key not in mapping:
                 mapping[key] = _next_placeholder(kind)

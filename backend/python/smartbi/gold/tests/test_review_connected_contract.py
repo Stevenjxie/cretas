@@ -37,7 +37,6 @@ from smartbi.gold.review_queries import (
 
 class _FakeRecord(dict):
     """Mimics asyncpg Record with attribute-style access."""
-    pass
 
 
 class _FakeConn:

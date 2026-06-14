@@ -12,13 +12,25 @@ Run:
     python -m pytest smartbi/tests/test_gold_etl_refresh.py -p no:cacheprovider -v
 """
 from __future__ import annotations
+from scripts.gold_etl_daily_refresh import (
+    EtlRunResult,
+    RefreshSummary,
+    _DISCOVERY_SQL,
+    _HAS_PRODUCTION_SQL,
+    _HAS_MATERIAL_BATCHES_SQL,
+    discover_factories,
+    _factory_subsets,
+    _run_restaurant_ops,
+    _run_factory_production,
+    _run_supplier_price,
+    run_refresh,
+)
 
-import asyncio
 import sys
 import os
 import pytest
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -34,19 +46,6 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # ---------------------------------------------------------------------------
 # Import the module under test
 # ---------------------------------------------------------------------------
-from scripts.gold_etl_daily_refresh import (
-    EtlRunResult,
-    RefreshSummary,
-    _DISCOVERY_SQL,
-    _HAS_PRODUCTION_SQL,
-    _HAS_MATERIAL_BATCHES_SQL,
-    discover_factories,
-    _factory_subsets,
-    _run_restaurant_ops,
-    _run_factory_production,
-    _run_supplier_price,
-    run_refresh,
-)
 
 
 # ---------------------------------------------------------------------------

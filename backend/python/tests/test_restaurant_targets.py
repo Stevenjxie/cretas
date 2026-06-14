@@ -471,7 +471,7 @@ def test_get_alerts_no_config_returns_empty():
     })
 
     with patch("smartbi.api.restaurant_targets._get_pool", new=AsyncMock(return_value=pool)), \
-         patch("smartbi.gold.queries.alert_preview", new=fake_alert):
+            patch("smartbi.gold.queries.alert_preview", new=fake_alert):
         resp = client.get("/api/smartbi/restaurant-targets/alerts?kpi_kind=revenue&lookback_days=7")
     assert resp.status_code == 200, resp.text
     body = resp.json()

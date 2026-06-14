@@ -92,7 +92,8 @@ class KitchenDispatchHeatmap(AnalysisTemplate):
         store_col = find_store_col(cols)
 
         def _sum(col):
-            if col is None: return 0.0  # noqa: E701
+            if col is None:
+                return 0.0  # noqa: E701
             try:
                 return float(df.select(
                     pl.col(col).cast(pl.Float64, strict=False).fill_null(0.0).sum()

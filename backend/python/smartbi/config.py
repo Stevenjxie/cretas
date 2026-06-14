@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     llm_chart_model: str = "qwen3.5-27b"  # Medium model for chart type recommendation
 
     # LLM Configuration - Mapper Model (field mapping, data cleaning, structure analysis)
-    llm_mapper_model: str = "qwen3.7-max-2026-06-08"  # free quota ⚠️ (qwen3.5-122b-a10b is PAID — billing incident 2026-06-11)
+    # free quota ⚠️ (qwen3.5-122b-a10b is PAID — billing incident 2026-06-11)
+    llm_mapper_model: str = "qwen3.7-max-2026-06-08"
 
     # KB Chat Configuration (G4 — DeepSeek for cost optimization, audit round 5)
     # KB chat (manual_chat) uses DeepSeek by default for 30-60x cost saving:

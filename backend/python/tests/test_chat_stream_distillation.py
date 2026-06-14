@@ -45,12 +45,14 @@ class _FakeState:
 
 class _FakeRequest:
     """Minimal stand-in for fastapi.Request — only .state is read by the helper."""
+
     def __init__(self, factory_id=None):
         self.state = _FakeState(factory_id)
 
 
 class _RecordingPersist:
     """Captures the kwargs passed to persist_distillation_sample."""
+
     def __init__(self):
         self.calls = []
 

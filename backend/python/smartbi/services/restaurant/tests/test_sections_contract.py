@@ -37,7 +37,6 @@ def test_abstract_handler_enforces_compute_method():
     class BrokenHandler(AbstractSectionHandler):
         section_name = "broken"
         # Missing compute() implementation
-        pass
 
     with pytest.raises(TypeError):
         BrokenHandler()

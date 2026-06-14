@@ -143,7 +143,6 @@ def _expiry_aware_sort(chain: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return sorted(chain, key=lambda am: _account_rank(am[0]))
 
 
-
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
     """Parse usage from a successful response: log cache-hit ratio. Mirrors
     the streaming path's [cache] log line so observability is uniform across

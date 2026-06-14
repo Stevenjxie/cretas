@@ -40,16 +40,16 @@ async def test_dual_write_calls_aggregator_after_backfill():
     settings = MagicMock(postgres_url="postgresql://x")
 
     with patch("smartbi.gold.dual_write.silver_dual_write_enabled", return_value=True), \
-         patch.object(__import__("asyncpg"), "create_pool", new=fake_create_pool), \
-         patch("smartbi.gold.dual_write._ensure_scripts_on_path"), \
-         patch("smartbi.tenant_ctx.set_pg_connection_tenant", return_value=None), \
-         patch("smartbi.tenant_ctx.set_factory_id", return_value="token"), \
-         patch("smartbi.tenant_ctx.reset_factory_id", return_value=None), \
-         patch("smartbi.config.get_settings", return_value=settings), \
-         patch("scripts.backfill_silver.backfill_upload", new=fake_backfill), \
-         patch(
-             "smartbi.services.materialized_analytics.daily_order_type_meal."
-             "materialize_daily_order_type_meal", new=fake_aggregator):
+        patch.object(__import__("asyncpg"), "create_pool", new=fake_create_pool), \
+        patch("smartbi.gold.dual_write._ensure_scripts_on_path"), \
+        patch("smartbi.tenant_ctx.set_pg_connection_tenant", return_value=None), \
+        patch("smartbi.tenant_ctx.set_factory_id", return_value="token"), \
+        patch("smartbi.tenant_ctx.reset_factory_id", return_value=None), \
+        patch("smartbi.config.get_settings", return_value=settings), \
+        patch("scripts.backfill_silver.backfill_upload", new=fake_backfill), \
+        patch(
+        "smartbi.services.materialized_analytics.daily_order_type_meal."
+            "materialize_daily_order_type_meal", new=fake_aggregator):
         # Ensure `import backfill_silver` (the bare name used inside the source)
         # resolves to the same patched module.
         import sys
@@ -98,16 +98,16 @@ async def test_aggregator_skipped_when_no_rows_to_materialize():
     settings = MagicMock(postgres_url="postgresql://x")
 
     with patch("smartbi.gold.dual_write.silver_dual_write_enabled", return_value=True), \
-         patch.object(__import__("asyncpg"), "create_pool", new=fake_create_pool), \
-         patch("smartbi.gold.dual_write._ensure_scripts_on_path"), \
-         patch("smartbi.tenant_ctx.set_pg_connection_tenant", return_value=None), \
-         patch("smartbi.tenant_ctx.set_factory_id", return_value="token"), \
-         patch("smartbi.tenant_ctx.reset_factory_id", return_value=None), \
-         patch("smartbi.config.get_settings", return_value=settings), \
-         patch("scripts.backfill_silver.backfill_upload", new=fake_backfill), \
-         patch(
-             "smartbi.services.materialized_analytics.daily_order_type_meal."
-             "materialize_daily_order_type_meal", new=fake_aggregator):
+        patch.object(__import__("asyncpg"), "create_pool", new=fake_create_pool), \
+        patch("smartbi.gold.dual_write._ensure_scripts_on_path"), \
+        patch("smartbi.tenant_ctx.set_pg_connection_tenant", return_value=None), \
+        patch("smartbi.tenant_ctx.set_factory_id", return_value="token"), \
+        patch("smartbi.tenant_ctx.reset_factory_id", return_value=None), \
+        patch("smartbi.config.get_settings", return_value=settings), \
+        patch("scripts.backfill_silver.backfill_upload", new=fake_backfill), \
+        patch(
+        "smartbi.services.materialized_analytics.daily_order_type_meal."
+            "materialize_daily_order_type_meal", new=fake_aggregator):
         import sys
         sys.modules.setdefault(
             "backfill_silver",

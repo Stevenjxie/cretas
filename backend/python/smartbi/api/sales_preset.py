@@ -109,7 +109,7 @@ async def daily_report(factory_id: str, request: Request, date_: str | None = Qu
                    COALESCE(SUM(total_amount), 0) AS total_amount,
                    COALESCE(SUM(tax_amount), 0) AS tax_amount,
                    COALESCE(SUM(paid_amount), 0) AS paid,
-                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) - COALESCE(SUM(paid_amount), 0) AS unpaid
+                   COALESCE(SUM(total_amount), 0) + COALESCE(SUM(tax_amount), 0) - COALESCE(SUM(paid_amount), 0) AS unpaid  # noqa: E501
             FROM sales_orders
             WHERE factory_id = $1 AND order_date = $2
               AND status NOT IN ('DRAFT', 'CANCELLED')
@@ -341,8 +341,8 @@ async def product_rank(
                    SUM(soi.quantity) AS total_qty,
                    MAX(soi.unit) AS unit,
                    SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0)) AS total_amount,
-                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * COALESCE(soi.tax_rate, 0) / 100) AS tax_amount,
-                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * (1 + COALESCE(soi.tax_rate, 0) / 100)) AS total_amount_with_tax,
+                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * COALESCE(soi.tax_rate, 0) / 100) AS tax_amount,  # noqa: E501
+                   SUM(COALESCE(soi.quantity, 0) * COALESCE(soi.unit_price, 0) * (1 + COALESCE(soi.tax_rate, 0) / 100)) AS total_amount_with_tax,  # noqa: E501
                    COUNT(DISTINCT soi.sales_order_id) AS order_count
             FROM sales_order_items soi
             JOIN sales_orders so ON so.id = soi.sales_order_id

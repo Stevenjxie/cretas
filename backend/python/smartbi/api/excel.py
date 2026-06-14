@@ -996,7 +996,8 @@ async def auto_parse_excel(
                 # Title-row auto-skip loop — now on probe (nrows=100), not full file
                 if effective_header_override is None:
                     def looks_like_title_row(hdrs):
-                        if not hdrs: return False  # noqa: E701
+                        if not hdrs:
+                            return False  # noqa: E701
                         unnamed_count = sum(1 for h in hdrs if _unnamed_pat.match(h))
                         if unnamed_count >= 0.8 * len(hdrs):
                             return True

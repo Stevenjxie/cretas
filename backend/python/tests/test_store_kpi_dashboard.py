@@ -56,6 +56,7 @@ def test_partial_data_legacy():
 
 class _FakeOpsAnswer:
     """Minimal stand-in for restaurant_ops_router.OpsAnswer."""
+
     def __init__(self, kpis, meta):
         self.kpis = kpis
         self.meta = meta

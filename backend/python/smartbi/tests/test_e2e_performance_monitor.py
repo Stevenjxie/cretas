@@ -136,7 +136,6 @@ class PerformanceMonitor:
     def _wrap_services(self):
         """Wrap service methods with timing instrumentation"""
         # We'll inject timing collection into analyze method
-        pass
 
     async def clear_cache(self):
         """Clear all cache"""

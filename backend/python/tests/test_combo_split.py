@@ -28,7 +28,7 @@ def test_multi_combo():
         _req({"combos": [
             {"combo_name": "A", "combo_sales": 50, "dishes": [{"dish": "鱼头", "qty_per_combo": 1}]},
             {"combo_name": "B", "combo_sales": 30, "dishes": [{"dish": "鱼头", "qty_per_combo": 2}]}],
-              "single_sales": {"鱼头": 100}}), {})
+            "single_sales": {"鱼头": 100}}), {})
     fish = next(d for d in resp.data["dish_breakdown"] if d["dish"] == "鱼头")
     assert fish["combo_sales"] == 110
     assert fish["total_sales"] == 210

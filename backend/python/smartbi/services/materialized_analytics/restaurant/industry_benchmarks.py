@@ -284,9 +284,14 @@ def category_chain_rate(category_hint: str) -> float | None:
 
 def survival_tier(years_of_operation: float) -> str:
     """Map years-of-operation to survival tier label."""
-    if years_of_operation < 1: return "开店≤1年"  # noqa: E701
-    if years_of_operation < 2: return "1-2年"  # noqa: E701
-    if years_of_operation < 3: return "2-3年"  # noqa: E701
-    if years_of_operation < 4: return "3-4年"  # noqa: E701
-    if years_of_operation < 5: return "4-5年"  # noqa: E701
+    if years_of_operation < 1:
+        return "开店≤1年"  # noqa: E701
+    if years_of_operation < 2:
+        return "1-2年"  # noqa: E701
+    if years_of_operation < 3:
+        return "2-3年"  # noqa: E701
+    if years_of_operation < 4:
+        return "3-4年"  # noqa: E701
+    if years_of_operation < 5:
+        return "4-5年"  # noqa: E701
     return "5年+"

@@ -62,7 +62,7 @@ async def _run_job(job_id: str, factory_id: str) -> None:
     Acquires pools lazily to avoid circular imports from main.py at module
     load time (same technique as restaurant_etl_admin._run_job).
     """
-    _running_jobs[job_id]["status"]     = "running"
+    _running_jobs[job_id]["status"] = "running"
     _running_jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -82,7 +82,7 @@ async def _run_job(job_id: str, factory_id: str) -> None:
         etl_stats = await run_factory_etl_with_retry(cretas_pool, smartbi_pool, factory_id)
 
         _running_jobs[job_id]["status"] = "success"
-        _running_jobs[job_id]["stats"]  = {
+        _running_jobs[job_id]["stats"] = {
             "silverUpserted":       etl_stats.silver_upserted,
             "goldProductRows":      etl_stats.gold_product_rows,
             "goldDailyRollupRows":  etl_stats.gold_daily_rollup_rows,
@@ -92,7 +92,7 @@ async def _run_job(job_id: str, factory_id: str) -> None:
                     job_id, factory_id, etl_stats)
     except Exception as exc:
         _running_jobs[job_id]["status"] = "error"
-        _running_jobs[job_id]["error"]  = str(exc)
+        _running_jobs[job_id]["error"] = str(exc)
         logger.warning("[factory-etl-admin] job %s factory=%s failed: %s",
                        job_id, factory_id, exc)
     finally:

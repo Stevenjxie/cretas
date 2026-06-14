@@ -11,11 +11,11 @@ def _req(params):
 def test_weekday_vs_weekend():
     resp = ProcurementForecastHandler().compute(
         _req({"historical_daily": [
-                {"day": "周一", "avg_revenue": 25000, "avg_covers": 80},
-                {"day": "周五", "avg_revenue": 40000, "avg_covers": 130},
-                {"day": "周六", "avg_revenue": 50000, "avg_covers": 160},
-                {"day": "周日", "avg_revenue": 45000, "avg_covers": 145}],
-              "next_days": 3, "next_day_names": ["周五", "周六", "周日"]}), {})
+            {"day": "周一", "avg_revenue": 25000, "avg_covers": 80},
+            {"day": "周五", "avg_revenue": 40000, "avg_covers": 130},
+            {"day": "周六", "avg_revenue": 50000, "avg_covers": 160},
+            {"day": "周日", "avg_revenue": 45000, "avg_covers": 145}],
+            "next_days": 3, "next_day_names": ["周五", "周六", "周日"]}), {})
     assert resp.status.value == "ok"
     plan = resp.data["daily_plan"]
     assert len(plan) == 3

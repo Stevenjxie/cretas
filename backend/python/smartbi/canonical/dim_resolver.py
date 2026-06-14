@@ -305,4 +305,3 @@ def clear_cache(factory_id: str) -> None:
     completes. Called by concurrency.with_factory_serialization for protocol parity
     with future module-level caches (e.g., embedding cache shared across resolvers).
     """
-    pass

@@ -12,12 +12,13 @@ Covers:
 All DB interactions mocked — no real DB needed.
 """
 from __future__ import annotations
+from smartbi.gold.restaurant_ops_etl import _get_latest_real_purchase_prices
 
 import asyncio
 import os
 import sys
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import pytest
 
@@ -38,6 +39,7 @@ class _FakeRow(dict):
 
 class _FakeTx:
     """Records whether work happened inside a transaction context."""
+
     def __init__(self, conn):
         self.conn = conn
 
@@ -93,9 +95,6 @@ class _FakePool:
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
-
-
-from smartbi.gold.restaurant_ops_etl import _get_latest_real_purchase_prices
 
 
 class TestGetLatestRealPurchasePrices:

@@ -8,12 +8,14 @@ Test coverage:
   - dry_run: no DB writes happen in dry-run mode
 """
 from __future__ import annotations
+import enum
+import types
 
 import json
 import sys
 import os
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from typing import Dict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -32,7 +34,7 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 
 # Stub out the modules that corpus_judge imports at module level so we can
 # import corpus_judge without needing real DB or LLM API keys.
-import types
+
 
 def _ensure_stub(module_name: str) -> None:
     """Register an empty module stub if not already present."""
@@ -43,12 +45,13 @@ def _ensure_stub(module_name: str) -> None:
             if name not in sys.modules:
                 sys.modules[name] = types.ModuleType(name)
 
+
 # Stubs needed before importing the script
 _ensure_stub("common")
 _ensure_stub("common.llm_router")
 
 # Provide a minimal SLOT enum + call_chain stub so corpus_judge can import them
-import enum
+
 
 class _SLOT(enum.Enum):
     CHAT = "chat"
@@ -59,6 +62,7 @@ class _SLOT(enum.Enum):
     VL = "vl"
     REVIEW = "review"
 
+
 async def _stub_call_chain(slot, payload, timeout=30.0):
     return {}
 
@@ -66,7 +70,7 @@ sys.modules["common.llm_router"].SLOT = _SLOT  # type: ignore[attr-defined]
 sys.modules["common.llm_router"].call_chain = _stub_call_chain  # type: ignore[attr-defined]
 
 # Now safe to import the module under test
-from scripts.corpus_judge import (  # noqa: E402
+from scripts.corpus_judge import (  # noqa: E402,F401
     build_judge_prompt,
     parse_judge_scores,
     decide_quality,
@@ -447,7 +451,7 @@ class TestIdempotency:
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        rows = await fetch_unjudged_rows(mock_pool, limit=42)
+        rows = await fetch_unjudged_rows(mock_pool, limit=42)  # noqa: F841
 
         mock_conn.fetch.assert_called_once()
         call_args = mock_conn.fetch.call_args

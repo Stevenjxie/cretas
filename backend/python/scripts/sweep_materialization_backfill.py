@@ -47,7 +47,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 # ---------------------------------------------------------------------------
 # Path bootstrap: works as ``python -m scripts.sweep_*`` (cwd = backend/python)
@@ -265,7 +265,7 @@ async def run_sweep(
         # --probe: run ONE upload (first factory, first upload) for real;
         # print whether distillation rows were written.  Does NOT persist nothing
         # extra — the pipeline writes its own ON CONFLICT idempotent rows.
-        logger.info(f"[probe] mode enabled — running ONE upload from first factory")
+        logger.info(f"[probe] mode enabled — running ONE upload from first factory")  # noqa: F541
         from smartbi.config import get_pg_pool
         pool = await get_pg_pool()
         if pool is None:
@@ -313,7 +313,7 @@ async def run_sweep(
                 f"[dry-run] would enumerate uploads for factory={fid} limit={limit or 'all'}"
             )
             logger.info(
-                f"[dry-run] would rematerialize each upload: set_factory_id → "
+                f"[dry-run] would rematerialize each upload: set_factory_id → "  # noqa: F541
                 f"materialize_upload → generate_llm_insights → save_materialization_results"
             )
         logger.info(

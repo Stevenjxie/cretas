@@ -10,15 +10,14 @@ Coverage:
   6. Parse smoke: all three scripts parse as valid Python (ast.parse)
 """
 from __future__ import annotations
+import enum
 
 import ast
-import asyncio
-import json
 import os
 import sys
 import types
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -39,6 +38,7 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # Stub modules needed by corpus_judge (imported by corpus_refresh_loop step 2)
 # ---------------------------------------------------------------------------
 
+
 def _ensure_stub(module_name: str) -> None:
     if module_name not in sys.modules:
         parts = module_name.split(".")
@@ -50,8 +50,6 @@ def _ensure_stub(module_name: str) -> None:
 
 _ensure_stub("common")
 _ensure_stub("common.llm_router")
-
-import enum
 
 
 class _SLOT(enum.Enum):
@@ -85,7 +83,7 @@ sys.modules["smartbi.config"].get_pg_pool = AsyncMock(return_value=None)  # type
 # ---------------------------------------------------------------------------
 # Now import modules under test
 # ---------------------------------------------------------------------------
-from scripts.corpus_eval_freeze import (  # noqa: E402
+from scripts.corpus_eval_freeze import (  # noqa: E402,F401
     _group_by_bucket,
     run_freeze,
     run_rebalance,
@@ -347,8 +345,6 @@ class TestExportExcludesEvalFrozen:
     @pytest.mark.asyncio
     async def test_eval_frozen_filter_in_where(self):
         """The SQL built by _fetch_rows must contain the eval_frozen exclusion."""
-        import importlib
-        import scripts.export_distillation_dataset as export_mod
 
         # We can't call _fetch_rows (needs DB), but we can read the source to
         # verify the filter is present in the WHERE clause construction.
@@ -607,7 +603,7 @@ class TestRebalance:
     @pytest.mark.asyncio
     async def test_rebalance_unfreeze_overcapped_bucket(self):
         """Bucket with 26 total and 26 frozen → cap=7 → unfreeze 19 (newest first)."""
-        from scripts.corpus_eval_freeze import run_rebalance
+        from scripts.corpus_eval_freeze import run_rebalance  # noqa: F811
 
         # All 26 frozen, ordered newest-first (id 26 down to 1)
         frozen_rows = [
@@ -644,7 +640,7 @@ class TestRebalance:
     @pytest.mark.asyncio
     async def test_rebalance_within_cap_no_action(self):
         """Bucket at 7/26 frozen (26.9%) is within 30% cap — no unfreezing."""
-        from scripts.corpus_eval_freeze import run_rebalance
+        from scripts.corpus_eval_freeze import run_rebalance  # noqa: F811
 
         frozen_rows = [
             {"id": i, "source": "chart_insight", "business_type": "restaurant"}
@@ -672,7 +668,7 @@ class TestRebalance:
     @pytest.mark.asyncio
     async def test_rebalance_dry_run_no_db_write(self):
         """Dry-run must not write to DB."""
-        from scripts.corpus_eval_freeze import run_rebalance
+        from scripts.corpus_eval_freeze import run_rebalance  # noqa: F811
 
         frozen_rows = [
             {"id": i, "source": "chat_qa", "business_type": "factory"}

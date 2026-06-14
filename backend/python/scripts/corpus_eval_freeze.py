@@ -29,10 +29,10 @@ Usage:
     python -m scripts.corpus_eval_freeze --dsn postgresql://user:pass@host/db --n 30
 """
 from __future__ import annotations
+import math as _math
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -156,9 +156,6 @@ def _group_by_bucket(
     return dict(buckets)
 
 
-import math as _math
-
-
 async def run_freeze(
     n: int = 30,
     dry_run: bool = False,
@@ -278,7 +275,7 @@ async def run_freeze(
     elif not all_ids:
         logger.info("Nothing to freeze — all buckets already at proportional cap.")
 
-    print(f"\nEVAL FREEZE COMPLETE")
+    print(f"\nEVAL FREEZE COMPLETE")  # noqa: F541
     print(f"  target N per bucket : {n}  (max_frac={max_frac:.0%})")
     print(f"  already frozen      : {total_already}")
     print(f"  newly frozen        : {total_new}")

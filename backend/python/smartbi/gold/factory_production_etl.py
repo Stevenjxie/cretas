@@ -141,34 +141,34 @@ async def sync_fact_production_batch(
         return 0
 
     # Build parallel arrays for UNNEST bulk upsert
-    source_pks     = [str(r["id"])             for r in rows]
-    batch_numbers  = [r["batch_number"]         for r in rows]
-    product_ids    = [r["product_type_id"]      for r in rows]
-    product_names  = [r["product_name"]         for r in rows]
-    planned_qtys   = [_to_float_or_none(r["planned_quantity"])  for r in rows]
-    actual_qtys    = [_to_float_or_none(r["actual_quantity"])   for r in rows]
-    good_qtys      = [_to_float_or_none(r["good_quantity"])     for r in rows]
-    defect_qtys    = [_to_float_or_none(r["defect_quantity"])   for r in rows]
-    units          = [r["unit"]                 for r in rows]
-    statuses       = [r["status"]               for r in rows]
-    start_times    = [r["start_time"]           for r in rows]
-    end_times      = [r["end_time"]             for r in rows]
+    source_pks = [str(r["id"]) for r in rows]
+    batch_numbers = [r["batch_number"] for r in rows]
+    product_ids = [r["product_type_id"] for r in rows]
+    product_names = [r["product_name"] for r in rows]
+    planned_qtys = [_to_float_or_none(r["planned_quantity"]) for r in rows]
+    actual_qtys = [_to_float_or_none(r["actual_quantity"]) for r in rows]
+    good_qtys = [_to_float_or_none(r["good_quantity"]) for r in rows]
+    defect_qtys = [_to_float_or_none(r["defect_quantity"]) for r in rows]
+    units = [r["unit"] for r in rows]
+    statuses = [r["status"] for r in rows]
+    start_times = [r["start_time"] for r in rows]
+    end_times = [r["end_time"] for r in rows]
     # stat_date = DATE(end_time) preferred; fall back to DATE(start_time); else NULL
-    stat_dates     = [
+    stat_dates = [
         r["end_time"].date() if r["end_time"] is not None
         else (r["start_time"].date() if r["start_time"] is not None else None)
         for r in rows
     ]
-    worker_counts  = [r["worker_count"]              for r in rows]
-    work_minutes   = [r["work_duration_minutes"]     for r in rows]
+    worker_counts = [r["worker_count"] for r in rows]
+    work_minutes = [r["work_duration_minutes"] for r in rows]
     # Cost fields: honest null preservation — do NOT coerce None to 0
-    material_costs  = [_to_float_or_none(r["material_cost"])   for r in rows]
-    labor_costs     = [_to_float_or_none(r["labor_cost"])      for r in rows]
-    equipment_costs = [_to_float_or_none(r["equipment_cost"])  for r in rows]
-    other_costs     = [_to_float_or_none(r["other_cost"])      for r in rows]
-    total_costs     = [_to_float_or_none(r["total_cost"])      for r in rows]
-    unit_costs      = [_to_float_or_none(r["unit_cost"])       for r in rows]
-    yield_rates     = [_to_float_or_none(r["yield_rate"])      for r in rows]
+    material_costs = [_to_float_or_none(r["material_cost"]) for r in rows]
+    labor_costs = [_to_float_or_none(r["labor_cost"]) for r in rows]
+    equipment_costs = [_to_float_or_none(r["equipment_cost"]) for r in rows]
+    other_costs = [_to_float_or_none(r["other_cost"]) for r in rows]
+    total_costs = [_to_float_or_none(r["total_cost"]) for r in rows]
+    unit_costs = [_to_float_or_none(r["unit_cost"]) for r in rows]
+    yield_rates = [_to_float_or_none(r["yield_rate"]) for r in rows]
 
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
@@ -320,16 +320,16 @@ async def sync_fact_production_report(
         return 0
 
     # Build parallel arrays for UNNEST bulk upsert
-    source_pks         = [str(r["id"])                  for r in rows]
-    batch_ids          = [str(r["batch_id"]) if r["batch_id"] is not None else None for r in rows]
-    process_orders     = [r["process_order"]             for r in rows]
-    process_categories = [r["process_category"]          for r in rows]
-    report_dates       = [r["report_date"]               for r in rows]
-    report_kinds       = [r["report_kind"]               for r in rows]
+    source_pks = [str(r["id"]) for r in rows]
+    batch_ids = [str(r["batch_id"]) if r["batch_id"] is not None else None for r in rows]
+    process_orders = [r["process_order"] for r in rows]
+    process_categories = [r["process_category"] for r in rows]
+    report_dates = [r["report_date"] for r in rows]
+    report_kinds = [r["report_kind"] for r in rows]
 
-    input_qtys   = [_to_float_or_none(r["input_quantity"])  for r in rows]
-    output_qtys  = [_to_float_or_none(r["output_quantity"]) for r in rows]
-    good_qtys    = [_to_float_or_none(r["good_quantity"])   for r in rows]
+    input_qtys = [_to_float_or_none(r["input_quantity"]) for r in rows]
+    output_qtys = [_to_float_or_none(r["output_quantity"]) for r in rows]
+    good_qtys = [_to_float_or_none(r["good_quantity"]) for r in rows]
 
     # Compute yield_rate = output / input * 100 (null-safe)
     yield_rates: List[Optional[float]] = []
@@ -341,11 +341,11 @@ async def sync_fact_production_report(
         else:
             yield_rates.append(None)
 
-    total_work_minutes = [r["total_work_minutes"]       for r in rows]
-    total_workers      = [r["total_workers"]            for r in rows]
+    total_work_minutes = [r["total_work_minutes"] for r in rows]
+    total_workers = [r["total_workers"] for r in rows]
 
     # Cost fields: honest null preservation — do NOT coerce None to 0
-    labor_costs    = [_to_float_or_none(r["labor_cost"])    for r in rows]
+    labor_costs = [_to_float_or_none(r["labor_cost"]) for r in rows]
     material_costs = [_to_float_or_none(r["material_cost"]) for r in rows]
 
     # cost_source: 'reported' if EITHER cost non-null; else NULL
@@ -544,7 +544,7 @@ async def materialize_factory_gold(
             r2 = await conn.execute(_AGG_ALL_DAILY_SQL, factory_id)
             # asyncpg returns "INSERT 0 N" or "UPDATE N" — parse last token
             stats["product_daily"] = int(r1.split()[-1]) if r1 else 0
-            stats["all_daily"]     = int(r2.split()[-1]) if r2 else 0
+            stats["all_daily"] = int(r2.split()[-1]) if r2 else 0
 
     logger.info("[factory-etl] Gold materialized for %s: %s", factory_id, stats)
     return stats
@@ -585,7 +585,7 @@ async def run_factory_etl(
 
     try:
         gold = await materialize_factory_gold(smartbi_pool, factory_id)
-        stats.gold_product_rows    = gold.get("product_daily", 0)
+        stats.gold_product_rows = gold.get("product_daily", 0)
         stats.gold_daily_rollup_rows = gold.get("all_daily", 0)
     except Exception as exc:
         stats.errors.append(f"gold: {exc}")
@@ -624,7 +624,7 @@ async def run_factory_etl_with_retry(
             last_exc = exc
             duration_ms = int((time.monotonic() - start) * 1000)
             is_final = attempt == _MAX_ATTEMPTS
-            status   = "failed_final" if is_final else "retrying"
+            status = "failed_final" if is_final else "retrying"
 
             # Persist failure (best-effort; do not mask original exception)
             try:

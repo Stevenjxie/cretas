@@ -59,6 +59,7 @@ Design notes:
     filling vs skipping.
 """
 from __future__ import annotations
+import types as _types
 
 import argparse
 import asyncio
@@ -67,7 +68,7 @@ import logging
 import os
 import random
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ if _PYTHON_ROOT not in sys.path:
 # We do the same for `smartbi.services.insights` whose __init__.py is safe
 # (empty or minimal), but the stub is there for symmetry.
 # ---------------------------------------------------------------------------
-import types as _types
+
 
 def _ensure_stub(name: str) -> None:
     """Insert an empty module stub for `name` if not already in sys.modules."""
@@ -114,6 +115,7 @@ def _ensure_stub(name: str) -> None:
             if parent is not None:
                 setattr(parent, parts[-1], stub)
 
+
 # Ensure the chain smartbi → smartbi.services → smartbi.services.insights
 # is pre-registered as stubs so Python won't run their __init__.py files.
 # Only pre-register if not already loaded (real server context has them loaded).
@@ -123,20 +125,22 @@ for _pkg in ("smartbi", "smartbi.services", "smartbi.services.insights"):
 # Now the actual imports — these load only the targeted submodules.
 import importlib as _importlib  # noqa: E402
 
+
 def _import_from(module_path: str):
     """Import a module by dotted path, honouring the sys.modules stubs above."""
     return _importlib.import_module(module_path)
 
-_chart_svc_mod   = _import_from("smartbi.services.insights.chart_insight_service")
-_distill_mod     = _import_from("smartbi.services.distillation_capture")
 
-ChartInsightContext    = _chart_svc_mod.ChartInsightContext
-_validate_claims       = _chart_svc_mod._validate_claims
-_corpus_input_text     = _chart_svc_mod._corpus_input_text
-_map_domain            = _chart_svc_mod._map_domain
-_ABSOLUTE_AMOUNT_RE    = _chart_svc_mod._ABSOLUTE_AMOUNT_RE
-_SYSTEM_PROMPT         = _chart_svc_mod._SYSTEM_PROMPT
-ChartInsightService    = _chart_svc_mod.ChartInsightService
+_chart_svc_mod = _import_from("smartbi.services.insights.chart_insight_service")
+_distill_mod = _import_from("smartbi.services.distillation_capture")
+
+ChartInsightContext = _chart_svc_mod.ChartInsightContext
+_validate_claims = _chart_svc_mod._validate_claims
+_corpus_input_text = _chart_svc_mod._corpus_input_text
+_map_domain = _chart_svc_mod._map_domain
+_ABSOLUTE_AMOUNT_RE = _chart_svc_mod._ABSOLUTE_AMOUNT_RE
+_SYSTEM_PROMPT = _chart_svc_mod._SYSTEM_PROMPT
+ChartInsightService = _chart_svc_mod.ChartInsightService
 persist_distillation_sample = _distill_mod.persist_distillation_sample
 
 logger = logging.getLogger("seed_chart_insight_corpus")
@@ -166,11 +170,11 @@ _FACTORY_POOLS: Dict[str, List[str]] = {
 }
 
 _MONTH_LABELS: List[str] = ["1月", "2月", "3月", "4月", "5月", "6月",
-                             "7月", "8月", "9月", "10月", "11月", "12月"]
+                            "7月", "8月", "9月", "10月", "11月", "12月"]
 
 # Sentinel factory IDs — distinguishes synthetic rows from organic rows.
 _SENTINEL_RESTAURANT = "SEED_R"
-_SENTINEL_FACTORY    = "SEED_F"
+_SENTINEL_FACTORY = "SEED_F"
 
 # ---------------------------------------------------------------------------
 # Curated shape library — realistic distributions derived from business data.
@@ -505,12 +509,14 @@ def _build_gap_fill_plan(
 
     return gaps, skipped
 
+
 class _NoBudgetBucket:
     blocked: bool = False
 
 
 class _NoBudgetTracker:
     """Never blocks; never counts. Safe to use only for offline seeding."""
+
     async def check_budget(self, factory_id: str) -> _NoBudgetBucket:
         return _NoBudgetBucket()
 
@@ -576,8 +582,8 @@ _ALL_BUCKETS: List[_BucketSpec] = (
     + _TREND_BUCKETS
 )
 
-_DOMAINS    = ["restaurant", "factory"]
-_TIERS      = ["finance_visible", "finance_visible", "finance_hidden"]  # weight toward visible
+_DOMAINS = ["restaurant", "factory"]
+_TIERS = ["finance_visible", "finance_visible", "finance_hidden"]  # weight toward visible
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +591,7 @@ _TIERS      = ["finance_visible", "finance_visible", "finance_hidden"]  # weight
 # ---------------------------------------------------------------------------
 
 def _gen_proportion_values(rng: random.Random, top_share_range: Tuple[float, float],
-                            n: int) -> List[float]:
+                           n: int) -> List[float]:
     """Generate n values where top item has share in [lo, hi] %."""
     lo, hi = top_share_range
     top_share = rng.uniform(lo, hi) / 100.0
@@ -610,7 +616,7 @@ def _gen_proportion_values(rng: random.Random, top_share_range: Tuple[float, flo
 
 
 def _gen_ranking_values(rng: random.Random, top_share_range: Tuple[float, float],
-                         n: int) -> List[float]:
+                        n: int) -> List[float]:
     """Ranking: sorted descending, top item has given share."""
     values = _gen_proportion_values(rng, top_share_range, n)
     return sorted(values, reverse=True)
@@ -779,7 +785,7 @@ def _build_scenario_sync(
         ChartInsightContext ready for LLM call.
     """
     n_items = local_rng.randint(*bucket.n_items_range)
-    labels  = _pick_labels(local_rng, domain, bucket.x_dim, n_items, bucket.family)
+    labels = _pick_labels(local_rng, domain, bucket.x_dim, n_items, bucket.family)
 
     if shape_values is not None:
         # Real-shape or library path: values were generated externally.
@@ -817,22 +823,22 @@ def _build_scenario_sync(
 
     # Ensure labels and values are the same length (safety)
     min_len = min(len(labels), len(values))
-    labels  = labels[:min_len]
-    values  = values[:min_len]
+    labels = labels[:min_len]
+    values = values[:min_len]
 
     sentinel = _SENTINEL_RESTAURANT if domain == "restaurant" else _SENTINEL_FACTORY
 
     return ChartInsightContext(
-        chart_type      = bucket.chart_type,
-        x_dim           = bucket.x_dim,
-        y_metric        = bucket.y_metric,
-        aggregation     = bucket.aggregation,
-        domain          = domain,
-        data_pattern    = bucket.data_pattern,
-        permission_tier = tier,
-        factory_id      = sentinel,
-        series_values   = [float(v) for v in values],
-        series_labels   = labels,
+        chart_type=bucket.chart_type,
+        x_dim=bucket.x_dim,
+        y_metric=bucket.y_metric,
+        aggregation=bucket.aggregation,
+        domain=domain,
+        data_pattern=bucket.data_pattern,
+        permission_tier=tier,
+        factory_id=sentinel,
+        series_values=[float(v) for v in values],
+        series_labels=labels,
         # shape_source is carried as an attribute for metadata tagging at persist time
     ), shape_source
 
@@ -856,7 +862,7 @@ def generate_scenarios(n: int, seed: int = RANDOM_SEED) -> List[ChartInsightCont
     Returns:
         List of ChartInsightContext objects.
     """
-    rng = random.Random(seed)
+    random.Random(seed)
     combos: List[Tuple[_BucketSpec, str, str]] = []
     for bucket in _ALL_BUCKETS:
         for domain in _DOMAINS:
@@ -868,7 +874,7 @@ def generate_scenarios(n: int, seed: int = RANDOM_SEED) -> List[ChartInsightCont
     for i in range(n):
         # Cycle through combos; within each repetition of the cycle, vary values
         combo_idx = i % total_combos
-        cycle     = i // total_combos
+        cycle = i // total_combos
         bucket, domain, tier = combos[combo_idx]
 
         # Per-scenario seed derived from global seed + position so reruns are deterministic
@@ -900,7 +906,7 @@ async def generate_scenarios_async(
         List of (ChartInsightContext, shape_source) tuples where shape_source is
         one of 'real', 'library', 'uniform'.
     """
-    rng = random.Random(seed)
+    random.Random(seed)
     combos: List[Tuple[_BucketSpec, str, str]] = []
     for bucket in _ALL_BUCKETS:
         for domain in _DOMAINS:
@@ -912,7 +918,7 @@ async def generate_scenarios_async(
 
     for i in range(n):
         combo_idx = i % total_combos
-        cycle     = i // total_combos
+        cycle = i // total_combos
         bucket, domain, tier = combos[combo_idx]
         local_rng = random.Random(seed + i * 1_000_003 + cycle * 97)
 
@@ -953,7 +959,7 @@ async def generate_scenarios_gap_fill(
     gaps, skipped = _build_gap_fill_plan(corpus_counts, floor)
 
     # Log what we're filling vs skipping
-    _BT_MAP_DISPLAY = {"restaurant": "RESTAURANT", "factory": "FACTORY"}
+    _BT_MAP_DISPLAY = {"restaurant": "RESTAURANT", "factory": "FACTORY"}  # noqa: F841
     for bt, fam in sorted(skipped):
         current = corpus_counts.get((bt, fam), 0)
         logger.info("gap-fill SKIP  %-12s %-12s  current=%d >= floor=%d",
@@ -1201,7 +1207,7 @@ async def seed(
     # ----------------------------------------------------------------
     rej = _RejectionCounters()
     family_counters: Dict[str, Dict[str, int]] = {}
-    total_accepted  = 0
+    total_accepted = 0
     total_generated = 0
 
     for idx, (ctx, shape_source) in enumerate(scenario_pairs):
@@ -1263,20 +1269,20 @@ async def seed(
                 continue
 
         # --- Persist accepted sample ---
-        input_text    = _corpus_input_text(ctx)
+        input_text = _corpus_input_text(ctx)
         teacher_model = svc._get_teacher_model()
         await persist_distillation_sample(
             pool,
-            source       = "chart_insight",
-            task_type    = "insights",
-            input_text   = input_text,
-            teacher_output = json.dumps(validated, ensure_ascii=False),
-            business_type  = _map_domain(ctx.domain),
-            factory_id     = ctx.factory_id,
-            quality        = 5,  # accepted = claims-pinning validated = highest tier (P0-1 G1)
-            system_prompt  = _SYSTEM_PROMPT,
-            teacher_model  = teacher_model,
-            metadata       = {
+            source="chart_insight",
+            task_type="insights",
+            input_text=input_text,
+            teacher_output=json.dumps(validated, ensure_ascii=False),
+            business_type=_map_domain(ctx.domain),
+            factory_id=ctx.factory_id,
+            quality=5,  # accepted = claims-pinning validated = highest tier (P0-1 G1)
+            system_prompt=_SYSTEM_PROMPT,
+            teacher_model=teacher_model,
+            metadata={
                 "seeded":       True,
                 "permission_tier": ctx.permission_tier,
                 "gate":         "passed",
@@ -1343,8 +1349,8 @@ def _print_dry_run_summary(scenarios: List[ChartInsightContext]) -> None:
     from collections import Counter
     family_counts = Counter(ctx.data_pattern.split(":")[0] for ctx in scenarios)
     domain_counts = Counter(ctx.domain for ctx in scenarios)
-    tier_counts   = Counter(ctx.permission_tier for ctx in scenarios)
-    chart_counts  = Counter(ctx.chart_type for ctx in scenarios)
+    tier_counts = Counter(ctx.permission_tier for ctx in scenarios)
+    chart_counts = Counter(ctx.chart_type for ctx in scenarios)
 
     print("Distribution summary:")
     print(f"  Families:  {dict(sorted(family_counts.items()))}")
@@ -1354,10 +1360,10 @@ def _print_dry_run_summary(scenarios: List[ChartInsightContext]) -> None:
     print()
 
     # Combo space
-    families   = set(ctx.data_pattern.split(":")[0] for ctx in scenarios)
-    domains    = set(ctx.domain for ctx in scenarios)
-    tiers      = set(ctx.permission_tier for ctx in scenarios)
-    patterns   = set(ctx.data_pattern for ctx in scenarios)
+    families = set(ctx.data_pattern.split(":")[0] for ctx in scenarios)
+    domains = set(ctx.domain for ctx in scenarios)
+    tiers = set(ctx.permission_tier for ctx in scenarios)
+    patterns = set(ctx.data_pattern for ctx in scenarios)
     print(f"  Distinct families:     {len(families)}")
     print(f"  Distinct domains:      {len(domains)}")
     print(f"  Distinct tiers:        {len(tiers)}")
@@ -1417,13 +1423,13 @@ def main() -> None:
     )
 
     asyncio.run(seed(
-        n           = args.n,
-        dry_run     = args.dry_run,
-        dsn         = args.dsn or None,
-        seed_val    = args.seed,
-        real_shapes = args.real_shapes,
-        gap_fill    = args.gap_fill,
-        floor       = args.floor,
+        n=args.n,
+        dry_run=args.dry_run,
+        dsn=args.dsn or None,
+        seed_val=args.seed,
+        real_shapes=args.real_shapes,
+        gap_fill=args.gap_fill,
+        floor=args.floor,
     ))
 
 

@@ -33,7 +33,8 @@ class ProcurementForecastHandler(AbstractSectionHandler):
             cov = round(base["avg_covers"] * holiday_mult * yoy)
             daily_plan.append({"day": day, "forecast_revenue": rev, "forecast_covers": cov,
                                "holiday_multiplier": holiday_mult, "yoy_adjustment": yoy, "base_revenue": base["avg_revenue"]})  # noqa: E501
-            total_rev += rev; total_cov += cov  # noqa: E702
+            total_rev += rev
+            total_cov += cov  # noqa: E702
 
         return self.ok(request, data={"daily_plan": daily_plan, "total_forecast_revenue": total_rev,
                                       "total_forecast_covers": total_cov, "days_planned": len(daily_plan),

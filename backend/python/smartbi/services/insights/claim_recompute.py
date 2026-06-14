@@ -29,7 +29,6 @@ Direction-word checking (A6):
 
 No external imports beyond typing and re — pure function, no I/O, no LLM, no DB.
 """
-import re
 from typing import Optional
 
 # ---------------------------------------------------------------------------

@@ -83,10 +83,10 @@ async def test_stores_endpoint_returns_list_excluding_closed(fake_pool, monkeypa
     ])
 
     with patch("smartbi.api.revenue_report._get_pool", new=AsyncMock(return_value=pool)), \
-         patch(
-             "smartbi.api.revenue_report._enforce_factory_match",
-             return_value="R_QINGHUAJIAO_REAL",
-         ):
+        patch(
+        "smartbi.api.revenue_report._enforce_factory_match",
+        return_value="R_QINGHUAJIAO_REAL",
+    ):
         from httpx import ASGITransport, AsyncClient
         app = _mk_app_with_router()
         async with AsyncClient(
@@ -119,10 +119,10 @@ async def test_audit_log_returns_recent_rows(fake_pool):
     ])
 
     with patch("smartbi.api.revenue_report._get_pool", new=AsyncMock(return_value=pool)), \
-         patch(
-             "smartbi.api.revenue_report._enforce_factory_match",
-             return_value="R_QINGHUAJIAO_REAL",
-         ):
+        patch(
+        "smartbi.api.revenue_report._enforce_factory_match",
+        return_value="R_QINGHUAJIAO_REAL",
+    ):
         from httpx import ASGITransport, AsyncClient
         app = _mk_app_with_router()
         async with AsyncClient(
@@ -155,7 +155,7 @@ async def test_prepare_returns_download_url_and_summary(fake_pool):
             patch(
                 "smartbi.api.revenue_report._enforce_factory_match",
                 return_value="R_QINGHUAJIAO_REAL",
-            ), \
+    ), \
             patch("smartbi.api.revenue_report._resolve_store_ids", new=fake_resolve), \
             patch("smartbi.api.revenue_report._generate_with_cache", new=fake_helper):
         from httpx import ASGITransport, AsyncClient
@@ -195,7 +195,7 @@ async def test_generate_streams_xlsx_with_response_headers(fake_pool):
             patch(
                 "smartbi.api.revenue_report._enforce_factory_match",
                 return_value="R_QINGHUAJIAO_REAL",
-            ), \
+    ), \
             patch("smartbi.api.revenue_report._resolve_store_ids", new=fake_resolve), \
             patch("smartbi.api.revenue_report._generate_with_cache", new=fake_helper):
         from httpx import ASGITransport, AsyncClient
@@ -243,10 +243,10 @@ async def test_sales_manager_is_forbidden_from_revenue_report_upload(fake_pool):
     pool, _ = fake_pool
 
     with patch("smartbi.api.revenue_report._get_pool", new=AsyncMock(return_value=pool)), \
-         patch(
-             "smartbi.api.revenue_report._enforce_factory_match",
-             return_value="R_QINGHUAJIAO_REAL",
-         ):
+        patch(
+        "smartbi.api.revenue_report._enforce_factory_match",
+        return_value="R_QINGHUAJIAO_REAL",
+    ):
         from httpx import ASGITransport, AsyncClient
         app = _mk_app_with_router()
         async with AsyncClient(
