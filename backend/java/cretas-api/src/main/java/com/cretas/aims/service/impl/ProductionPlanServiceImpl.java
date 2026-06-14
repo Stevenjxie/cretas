@@ -17,6 +17,7 @@ import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -31,6 +32,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -57,6 +59,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -209,6 +212,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private BomRecipeItemRepository bomRecipeItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BomYieldSuggestionRepository bomYieldSuggestionRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
@@ -423,13 +429,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity();
+        BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId(), bomItems);
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
         for (BomItem item : bomItems) {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
                 continue;
             }
             String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
-            BigDecimal perUnitRequired = item.getActualQuantity();
+            BigDecimal perUnitRequired = calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate);
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
             BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
@@ -507,6 +514,65 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * @param snapshotName   BOM 快照名称 (fallback)
      * @return 优先返回主数据真名; 快照名次选; 兜底 "原料 {id}"
      */
+    private BigDecimal resolveEffectiveProductYieldRate(String factoryId, String productTypeId, List<BomItem> bomItems) {
+        if (productTypeId == null || bomItems == null) {
+            return null;
+        }
+        long mainMaterialCount = bomItems.stream()
+                .filter(this::isMainMaterialCandidate)
+                .count();
+        if (mainMaterialCount != 1) {
+            if (mainMaterialCount > 1) {
+                log.warn("Material advisory yield self-learning skipped: multiple main materials factoryId={}, productTypeId={}, count={}",
+                        factoryId, productTypeId, mainMaterialCount);
+            }
+            return null;
+        }
+        if (bomYieldSuggestionRepository != null) {
+            Optional<BomYieldSuggestion> latestApplied =
+                    bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
+                            factoryId, productTypeId, BomYieldSuggestion.Status.APPLIED);
+            if (latestApplied.isPresent() && isPositive(latestApplied.get().getSuggestedYieldRate())) {
+                return latestApplied.get().getSuggestedYieldRate();
+            }
+        }
+        if (bomRecipeRepository != null) {
+            Optional<BomRecipe> recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                    factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+            if (recipe.isEmpty()) {
+                recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+            }
+            if (recipe.isPresent()
+                    && isPositive(recipe.get().getOverallYieldRate())
+                    && recipe.get().getOverallYieldRate().compareTo(new BigDecimal("100.00")) != 0) {
+                return recipe.get().getOverallYieldRate();
+            }
+        }
+        return null;
+    }
+
+    private BigDecimal calculateRuntimeRequiredQuantity(BomItem item, BigDecimal effectiveProductYieldRate) {
+        if (item == null || item.getStandardQuantity() == null) {
+            return BigDecimal.ZERO;
+        }
+        if (effectiveProductYieldRate != null && isMainMaterialCandidate(item)) {
+            return item.getStandardQuantity().divide(
+                    effectiveProductYieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP),
+                    6, RoundingMode.HALF_UP);
+        }
+        return item.getActualQuantity();
+    }
+
+    private boolean isMainMaterialCandidate(BomItem item) {
+        return item != null
+                && item.getYieldRate() != null
+                && item.getYieldRate().compareTo(new BigDecimal("100.00")) != 0;
+    }
+
+    private boolean isPositive(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0;
+    }
+
     private String resolveLiveMaterialName(String materialTypeId, String snapshotName) {
         if (rawMaterialTypeRepository != null && materialTypeId != null) {
             try {

@@ -2,6 +2,7 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
@@ -14,6 +15,7 @@ import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
@@ -32,6 +34,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Collections;
@@ -90,6 +93,7 @@ class ProductionPlanStartValidationTest {
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
+    @Mock private BomYieldSuggestionRepository bomYieldSuggestionRepository;
 
     private ProductionPlanServiceImpl service;
 
@@ -101,6 +105,7 @@ class ProductionPlanStartValidationTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository, bomService);
+        setField(service, "bomYieldSuggestionRepository", bomYieldSuggestionRepository);
 
         // toDTOWithConversionInfo 的依赖默认 stub — 成功 path 才会用上
         ProductionPlanDTO emptyDto = new ProductionPlanDTO();
@@ -123,15 +128,30 @@ class ProductionPlanStartValidationTest {
     /** 构造一个 BOM item (yieldRate=100% → actualQuantity == standardQuantity). */
     private BomItem bomItem(String materialTypeId, String materialName,
                             BigDecimal standardQuantity, String unit) {
+        return bomItem(materialTypeId, materialName, standardQuantity, new BigDecimal("100.00"), unit);
+    }
+
+    private BomItem bomItem(String materialTypeId, String materialName,
+                            BigDecimal standardQuantity, BigDecimal yieldRate, String unit) {
         return BomItem.builder()
                 .factoryId(FACTORY_ID)
                 .productTypeId(PRODUCT_TYPE_ID)
                 .materialTypeId(materialTypeId)
                 .materialName(materialName)
                 .standardQuantity(standardQuantity)
-                .yieldRate(new BigDecimal("100.00"))
+                .yieldRate(yieldRate)
                 .unit(unit)
                 .build();
+    }
+
+    private void setField(Object target, String fieldName, Object value) {
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     @Test
@@ -309,5 +329,52 @@ class ProductionPlanStartValidationTest {
         assertTrue(new BigDecimal("150").compareTo(warning.getShortageQuantity()) == 0);
         assertTrue(advisory.getMessage().contains("flour"));
         assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+    }
+
+    @Test
+    @DisplayName("yield self-learning: material advisory uses latest APPLIED suggestion for the main material")
+    void materialAdvisory_appliedSuggestion_scalesMainMaterialAtRuntime() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("2"));
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        BomItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
+        BomYieldSuggestion applied = new BomYieldSuggestion();
+        applied.setSuggestedYieldRate(new BigDecimal("50.00"));
+        applied.setStatus(BomYieldSuggestion.Status.APPLIED);
+        when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
+                .thenReturn(Optional.of(applied));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+                .thenReturn(new BigDecimal("300"));
+
+        ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
+
+        assertTrue(advisory.isHasWarning());
+        ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
+        assertTrue(new BigDecimal("400.000000").compareTo(warning.getRequiredQuantity()) == 0);
+        assertTrue(new BigDecimal("100.000000").compareTo(warning.getShortageQuantity()) == 0);
+        assertTrue(new BigDecimal("80.00").compareTo(main.getYieldRate()) == 0);
+    }
+
+    @Test
+    @DisplayName("yield self-learning: material advisory falls back to item yieldRate when no APPLIED suggestion exists")
+    void materialAdvisory_noAppliedSuggestion_fallsBackToItemYieldRate() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("2"));
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        BomItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
+        when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
+                .thenReturn(Optional.empty());
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+                .thenReturn(new BigDecimal("200"));
+
+        ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
+
+        assertTrue(advisory.isHasWarning());
+        ProductionPlanMaterialAdvisoryDTO.Item warning = advisory.getWarnings().get(0);
+        assertTrue(new BigDecimal("250.000000").compareTo(warning.getRequiredQuantity()) == 0);
+        assertTrue(new BigDecimal("50.000000").compareTo(warning.getShortageQuantity()) == 0);
+        assertTrue(new BigDecimal("80.00").compareTo(main.getYieldRate()) == 0);
     }
 }

@@ -3,9 +3,13 @@ package com.cretas.aims.service.bom.impl;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.service.yield.YieldReportService;
 import org.junit.jupiter.api.DisplayName;
@@ -39,6 +43,10 @@ class BomYieldSuggestionServiceImplTest {
     @Mock
     private BomItemRepository bomItemRepository;
     @Mock
+    private BomRecipeRepository bomRecipeRepository;
+    @Mock
+    private BomRecipeItemRepository bomRecipeItemRepository;
+    @Mock
     private BomYieldSuggestionRepository bomYieldSuggestionRepository;
     @Mock
     private YieldReportService yieldReportService;
@@ -47,12 +55,18 @@ class BomYieldSuggestionServiceImplTest {
     private BomYieldSuggestionServiceImpl service;
 
     @Test
-    @DisplayName("reporting completed batch with 3 valid samples creates PENDING P50 suggestion and does not overwrite BOM")
-    void reportingCompletedBatch_threeSamples_createsPendingP50Suggestion() {
+    @DisplayName("guarded suggestion auto applies to product yield and does not overwrite BOM item yield")
+    void reportingCompletedBatch_guardedSuggestion_autoAppliesProductYieldOnly() {
         when(bomYieldSuggestionRepository.existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
                 FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3")).thenReturn(false);
+        BomItem legacyRaw = rawBomItem(new BigDecimal("80.00"));
         when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, PRODUCT))
-                .thenReturn(List.of(rawBomItem(new BigDecimal("80.00"))));
+                .thenReturn(List.of(legacyRaw));
+        BomRecipe recipe = recipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("recipe-1"))
+                .thenReturn(List.of(recipeItem("60.00")));
         when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(batch(1L), batch(2L), batch(3L)));
         when(yieldReportService.getYield(FACTORY, 1L)).thenReturn(yieldDto("0.58"));
@@ -65,18 +79,81 @@ class BomYieldSuggestionServiceImplTest {
                 service.generateForProduct(FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3");
 
         assertThat(suggestion).isPresent();
-        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.PENDING);
+        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.APPLIED);
         assertThat(suggestion.get().getPreviousYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
         assertThat(suggestion.get().getSuggestedYieldRate()).isEqualByComparingTo(new BigDecimal("60.00"));
         assertThat(suggestion.get().getSampleCount()).isEqualTo(3);
         assertThat(suggestion.get().getGeneratedBy()).isEqualTo("SYSTEM_AUTO_YIELD_SELF_LEARN");
         assertThat(suggestion.get().getSourceEventType()).isEqualTo("BATCH_COMPLETED");
         assertThat(suggestion.get().getSourceEventId()).isEqualTo("batch-3");
+        assertThat(suggestion.get().getAppliedBy()).isEqualTo("SYSTEM");
+        assertThat(suggestion.get().getAppliedAt()).isNotNull();
+        assertThat(recipe.getOverallYieldRate()).isEqualByComparingTo(new BigDecimal("60.00"));
+        assertThat(legacyRaw.getYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
 
         verify(bomItemRepository, never()).save(any());
+        verify(bomRecipeRepository).save(recipe);
         ArgumentCaptor<BomYieldSuggestion> captor = ArgumentCaptor.forClass(BomYieldSuggestion.class);
-        verify(bomYieldSuggestionRepository).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(BomYieldSuggestion.Status.PENDING);
+        verify(bomYieldSuggestionRepository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues().get(captor.getAllValues().size() - 1).getStatus())
+                .isEqualTo(BomYieldSuggestion.Status.APPLIED);
+    }
+
+    @Test
+    @DisplayName("suggestion over relative guard remains pending and does not change product yield")
+    void reportingCompletedBatch_overRelativeGuard_staysPending() {
+        when(bomYieldSuggestionRepository.existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
+                FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3")).thenReturn(false);
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, PRODUCT))
+                .thenReturn(List.of(rawBomItem(new BigDecimal("80.00"))));
+        BomRecipe recipe = recipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(eq(FACTORY), eq(PRODUCT), any()))
+                .thenReturn(List.of(batch(1L), batch(2L), batch(3L)));
+        when(yieldReportService.getYield(FACTORY, 1L)).thenReturn(yieldDto("0.40"));
+        when(yieldReportService.getYield(FACTORY, 2L)).thenReturn(yieldDto("0.42"));
+        when(yieldReportService.getYield(FACTORY, 3L)).thenReturn(yieldDto("0.44"));
+        when(bomYieldSuggestionRepository.save(any(BomYieldSuggestion.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<BomYieldSuggestion> suggestion =
+                service.generateForProduct(FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3");
+
+        assertThat(suggestion).isPresent();
+        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.PENDING);
+        assertThat(suggestion.get().getAppliedAt()).isNull();
+        assertThat(recipe.getOverallYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
+        verify(bomRecipeRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("multiple non-100 main materials keep suggestion pending for human review")
+    void reportingCompletedBatch_multipleMainMaterials_staysPending() {
+        when(bomYieldSuggestionRepository.existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
+                FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3")).thenReturn(false);
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, PRODUCT))
+                .thenReturn(List.of(rawBomItem(new BigDecimal("80.00"))));
+        BomRecipe recipe = recipe(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("recipe-1"))
+                .thenReturn(List.of(recipeItem("80.00"), recipeItem("90.00")));
+        when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(eq(FACTORY), eq(PRODUCT), any()))
+                .thenReturn(List.of(batch(1L), batch(2L), batch(3L)));
+        when(yieldReportService.getYield(FACTORY, 1L)).thenReturn(yieldDto("0.78"));
+        when(yieldReportService.getYield(FACTORY, 2L)).thenReturn(yieldDto("0.80"));
+        when(yieldReportService.getYield(FACTORY, 3L)).thenReturn(yieldDto("0.82"));
+        when(bomYieldSuggestionRepository.save(any(BomYieldSuggestion.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<BomYieldSuggestion> suggestion =
+                service.generateForProduct(FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3");
+
+        assertThat(suggestion).isPresent();
+        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.PENDING);
+        assertThat(recipe.getOverallYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
+        verify(bomRecipeRepository, never()).save(any());
     }
 
     @Test
@@ -151,6 +228,30 @@ class BomYieldSuggestionServiceImplTest {
         item.setYieldRate(currentYieldRate);
         item.setStandardQuantity(BigDecimal.ONE);
         item.setSortOrder(0);
+        return item;
+    }
+
+    private BomRecipe recipe(BigDecimal overallYieldRate) {
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("recipe-1");
+        recipe.setFactoryId(FACTORY);
+        recipe.setProductTypeId(PRODUCT);
+        recipe.setProductName("Pork tongue");
+        recipe.setRecipeCode("BOM-001");
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        recipe.setOverallYieldRate(overallYieldRate);
+        return recipe;
+    }
+
+    private BomRecipeItem recipeItem(String yieldRate) {
+        BomRecipeItem item = new BomRecipeItem();
+        item.setRecipeId("recipe-1");
+        item.setFactoryId(FACTORY);
+        item.setMaterialTypeId("RM-" + yieldRate);
+        item.setMaterialCategory("RAW");
+        item.setStandardQuantity(BigDecimal.ONE);
+        item.setYieldRate(new BigDecimal(yieldRate));
         return item;
     }
 }

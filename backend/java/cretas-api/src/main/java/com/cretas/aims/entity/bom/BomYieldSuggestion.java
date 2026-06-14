@@ -90,8 +90,8 @@ public class BomYieldSuggestion extends BaseEntity {
     @Column(name = "generated_at", nullable = false)
     private LocalDateTime generatedAt;
 
-    @Column(name = "applied_by")
-    private Long appliedBy;
+    @Column(name = "applied_by", length = 64)
+    private String appliedBy;
 
     @Column(name = "applied_at")
     private LocalDateTime appliedAt;
