@@ -1,4 +1,5 @@
 """Core: clone one table's rows source->target with id remap, fk rewrite, factory rewrite, masking."""
+from __future__ import annotations  # Python 3.8 (server venv38): defer `list[str]` etc. annotations
 from scripts.demo.clone_config import MASK_REGISTRY
 
 
