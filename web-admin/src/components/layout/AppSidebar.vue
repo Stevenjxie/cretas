@@ -63,17 +63,15 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   FACTORY: [
     '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
     '/sales/payment-requests', '/sales/returns',
-    // 已补数据 → 不再隐藏: 物料需求(factory_material_requisitions 40)/研发样品(rd_requests 6)/
-    // 成本分析(production_reports cost)/人效分析(efficiency 3 workers)/盘点(/warehouse/inventory)。
-    '/production/restock-board',          // 备货看板: 当日 realtime 无未来订单 → 空
-    '/warehouse/wastage-reports',         // 报损: 列表 API 对此租户数据 400 (页面 bug) → 暂藏
-    '/finance/reports', '/finance/adjustments',  // 财务报表(无凭证)/调整审批(无调整单) → 空
-    '/smart-bi/analysis-hub',             // 经营分析hub: smart_bi_finance_data=0 (需 Excel 财务上传)
-    '/analytics/alert-dashboard',         // 异常预警: 无预警记录
-    '/analytics/production-report',       // 车间报表: 当日 realtime 空
+    // Phase2 已补数据 → 不再隐藏: 报损(wastage_reports 12, 修了 wastage_reason 枚举值 400 bug)/
+    // 调整审批(ar_ap AR/AP_ADJUSTMENT PENDING)/财务报表(ar_ap 派生)/备货看板(销售单未来交货)。
+    // 仍隐藏 (需专用管道/引擎, 非简单数据行):
+    '/smart-bi/analysis-hub',             // 经营分析hub: 财务tab "请选择数据源" 需 Excel 上传管道 (smart_bi_pg_excel_uploads), 非 smart_bi_finance_data 行即可
+    '/analytics/alert-dashboard',         // 异常预警: 页面餐饮导向 (调 restaurant-ops/summary) + /alerts 对 alert_events 过滤不匹配
+    '/analytics/production-report',       // 车间实时报表: 读 gold fact_production_report 按当日, gold 日期语义不随 operational shift
     '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
     '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
-    '/smart-bi/calibration',
+    '/smart-bi/calibration',              // 以上 7 项 = 内部上传/查询模板/AI运维工具, 非客户数据页
   ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
