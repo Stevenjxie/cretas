@@ -46,15 +46,15 @@ async def run(tenant_key, target_override, reset, dry_run):
                 n = (await cn.fetchval(f"SELECT count(*) FROM {e['table']} WHERE {fcol}=$1", source)) if fcol else 0
                 print(f"  {e['table']}: {n} rows")
             return
-        # 1. provision target factory + settings + demo-login user
+        # 1. provision target factory + settings + demo-login user (its id = fallback owner)
         await provision.provision_factory(conns["cretas"], target, t["name"], t["type"])
-        await provision.provision_demo_user(conns["cretas"], target, f"demo_{tenant_key}")
+        demo_user_id = await provision.provision_demo_user(conns["cretas"], target, f"demo_{tenant_key}")
         # 2. clone tables in order
         remapper = IdRemapper(offset=0, shortcode=shortcode)  # offset set per-db below
         masker = Masker()
         for e in cfg.TABLE_REGISTRY:
             remapper.offset = cfg.OFFSET_SMARTBI if e["db"] == "smartbi" else cfg.OFFSET_CRETAS
-            n = await clone_table(conns[e["db"]], conns[e["db"]], e, remapper, masker, source, target)
+            n = await clone_table(conns[e["db"]], conns[e["db"]], e, remapper, masker, source, target, demo_user_id)
             print(f"  cloned {e['table']}: {n}")
         print(f"[done] {source} -> {target}. Now run gold ETL (Task 8) + verify (Task 9).")
     finally:

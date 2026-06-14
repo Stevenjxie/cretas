@@ -8,18 +8,9 @@ from scripts.demo import clone_config as cfg
 # in cuisine-vocabulary columns (dish/ingredient/menu names), exempted below.
 FORBIDDEN_TOKENS = ["青花椒"]
 
-# (table, column) pairs where a brand token == generic cuisine vocabulary, not client identity.
-DEIDENT_EXEMPT = {
-    ("product_types", "name"),
-    ("dim_product", "name"),
-    ("dim_product", "normalized_name"),
-    ("dim_ingredient", "name"),
-    ("dim_ingredient", "normalized_name"),
-    ("raw_material_types", "name"),         # 青花椒 = a raw spice ingredient
-    ("suppliers", "supplied_materials"),    # list of supplied ingredients
-    ("purchase_order_items", "material_name"),
-    ("fact_pos_item", "source_item_raw"),
-}
+# (table, column) pairs exempt from the brand-token check. Empty now: dish/ingredient/menu names
+# are scrubbed by SUBSTITUTION (青花椒 -> 藤椒) in the masker, so the brand token must be 0 EVERYWHERE.
+DEIDENT_EXEMPT = set()
 
 
 def _target_scope(entry, ref):

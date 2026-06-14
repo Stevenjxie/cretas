@@ -7,6 +7,11 @@ from faker import Faker
 # Tokens that identify the real source brand/clients — scrubbed from free text.
 BRAND_TOKENS = ["青花椒"]  # extend with any real client/brand strings found during rehearsal
 
+# Brand token -> neutral cuisine substitute. For dish/ingredient/menu names we replace the brand
+# word (which is also a Sichuan spice) with a neutral pepper, keeping the dish authentic-looking
+# (青花椒鱼 -> 藤椒鱼) while removing the brand from menus everywhere.
+BRAND_SUBSTITUTE = {"青花椒": "藤椒"}
+
 
 def _seed(value: str) -> int:
     return int(hashlib.sha256(value.encode("utf-8")).hexdigest()[:12], 16)
@@ -46,6 +51,16 @@ class Masker:
     def address(self, v):  return self._det("address", v, lambda f: f.address().replace("\n", " "))
     def email(self, v):    return self._det("email", v, lambda f: f.email())
     def idnum(self, v):    return self._det("idnum", v, lambda f: f.numerify("##############"))
+
+    def cuisine(self, v):
+        """Dish/ingredient/menu names: substitute brand tokens with a neutral cuisine word
+        (青花椒 -> 藤椒). Keeps the dish authentic while removing the brand from menus."""
+        if v is None:
+            return None
+        s = str(v)
+        for tok, sub in BRAND_SUBSTITUTE.items():
+            s = s.replace(tok, sub)
+        return s
 
     def freetext(self, v):
         """Scrub free-text remark/notes: if it contains any brand/real token, replace whole field."""

@@ -10,7 +10,8 @@ async def fetch_columns(conn, table: str) -> list[str]:
     return [r["column_name"] for r in rows]
 
 
-def _transform_row(row: dict, entry: dict, remapper, masker, target_factory: str, columns: list[str]) -> dict:
+def _transform_row(row: dict, entry: dict, remapper, masker, target_factory: str, columns: list[str],
+                   default_user_id=None) -> dict:
     out = dict(row)
     table = entry["table"]
     pk, pk_type = entry["pk"], entry["pk_type"]
@@ -23,7 +24,9 @@ def _transform_row(row: dict, entry: dict, remapper, masker, target_factory: str
     for col, parent in entry.get("fk", {}).items():
         if col in out and out[col] is not None:
             mapped = remapper.lookup(parent, out[col])
-            out[col] = mapped  # None if parent row not cloned -> see caveats; engine nulls FK-optional
+            if mapped is None and parent == "users" and default_user_id is not None:
+                mapped = default_user_id  # cross-factory/platform user not cloned -> demo admin (Gap 1)
+            out[col] = mapped  # None if parent not cloned (FK-optional columns)
     # 3. factory_id rewrite (if column exists)
     fcol = entry.get("factory_col")
     if fcol and fcol in out:
@@ -43,7 +46,8 @@ def _transform_row(row: dict, entry: dict, remapper, masker, target_factory: str
     return out
 
 
-async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factory, target_factory):
+async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factory, target_factory,
+                      default_user_id=None):
     table = entry["table"]
     columns = await fetch_columns(src_conn, table)
     fcol = entry.get("factory_col") or "factory_id"
@@ -62,7 +66,8 @@ async def clone_table(src_conn, dst_conn, entry, remapper, masker, source_factor
         src_rows = await src_conn.fetch(f"SELECT * FROM {table}")
     if not src_rows:
         return 0
-    transformed = [_transform_row(dict(r), entry, remapper, masker, target_factory, columns) for r in src_rows]
+    transformed = [_transform_row(dict(r), entry, remapper, masker, target_factory, columns, default_user_id)
+                   for r in src_rows]
     # Bulk insert via executemany on explicit column list
     cols = list(transformed[0].keys())
     placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))

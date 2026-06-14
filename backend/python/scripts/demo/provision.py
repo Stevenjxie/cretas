@@ -20,10 +20,13 @@ async def provision_factory(conn, target_id: str, name: str, ftype: str):
     """, target_id)
 
 
-async def provision_demo_user(conn, target_id: str, username: str):
+async def provision_demo_user(conn, target_id: str, username: str) -> int:
+    """Create (or update) the demo-login super_admin user; returns its id (used as the fallback
+    owner for cloned rows whose created_by/salesperson points to a non-cloned cross-factory user)."""
     pw = bcrypt.hashpw(DEMO_PASSWORD.encode(), bcrypt.gensalt()).decode()
-    await conn.execute("""
+    return await conn.fetchval("""
         INSERT INTO users (factory_id, username, password_hash, role_code, full_name, is_active, created_at, updated_at)
         VALUES ($1,$2,$3,'factory_super_admin','演示账号',true,now(),now())
         ON CONFLICT (username) DO UPDATE SET password_hash=EXCLUDED.password_hash, is_active=true
+        RETURNING id
     """, target_id, username, pw)
