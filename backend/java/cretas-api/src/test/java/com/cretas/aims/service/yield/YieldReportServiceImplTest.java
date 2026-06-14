@@ -2346,8 +2346,8 @@ class YieldReportServiceImplTest {
     }
 
     @Test
-    void submitReport_materialCost_someBatchesPricedSomeNot_sumsPriced() {
-        // mb-a priced (50×¥10=500), mb-b unpriced → materialCost = 500.00 (non-null, missing treated as 0)
+    void submitReport_materialCost_someBatchesPricedSomeNot_nullWhenAnyParticipantMissingCost() {
+        // Any consumed participant with missing cost poisons the whole material cost; never dilute as zero.
         WorkProcess wp = WorkProcess.builder().id("WP-COST").factoryId("F006").unit("kg").build();
         ArgumentCaptor<ProductionReport> cap = setupCostTask(wp);
         MaterialBatch mbA = new MaterialBatch();
@@ -2367,7 +2367,7 @@ class YieldReportServiceImplTest {
 
         svc.submitReport("F006", 1L, 5L, req);
 
-        assertThat(cap.getValue().getMaterialCost()).isEqualByComparingTo("500.00");
+        assertThat(cap.getValue().getMaterialCost()).isNull();
     }
 
     // ── 材料成本 — 半成品领用 (test 4) ─────────────────────────────────────────────
@@ -2462,6 +2462,146 @@ class YieldReportServiceImplTest {
         assertThat(saved.getCustomFields()).containsEntry("sourceWipQuantity", new BigDecimal("80"));
         assertThat(saved.getMaterialCost()).isEqualByComparingTo("1348.00");
         verify(wipInventoryService).validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null);
+    }
+
+    @Test
+    void submitReport_materialCost_rawAndWip_weightedPretaxInputsNoTaxDivision() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 2, "WP-COST2");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0);
+            r.setId(712L);
+            return r;
+        });
+
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId("mb-raw-pretax");
+        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        raw.setUnitPrice(new BigDecimal("20.0000"));
+        when(materialBatchRepo.findById("mb-raw-pretax")).thenReturn(Optional.of(raw));
+
+        SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-SRC-PRETAX").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
+                .unitCost(new BigDecimal("10.0000")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-PRETAX", new BigDecimal("500"), "kg", null))
+                .thenReturn(sourceWip);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setReportKind("INPUT");
+        req.setInputQuantity(new BigDecimal("1000"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-PRETAX");
+        req.setSourceWipQuantity(new BigDecimal("500"));
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-raw-pretax", new BigDecimal("500"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getMaterialCost()).isEqualByComparingTo("15000.00");
+        assertThat(saved.getMaterialCost()).isNotEqualByComparingTo("13849.56");
+    }
+
+    @Test
+    void submitReport_materialCost_rawAndWip_nullWhenRawCostMissing() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 2, "WP-COST2");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0);
+            r.setId(713L);
+            return r;
+        });
+
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId("mb-raw-null-cost");
+        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        raw.setUnitPrice(null);
+        when(materialBatchRepo.findById("mb-raw-null-cost")).thenReturn(Optional.of(raw));
+
+        SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-SRC-KNOWN").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
+                .unitCost(new BigDecimal("10.0000")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-KNOWN", new BigDecimal("500"), "kg", null))
+                .thenReturn(sourceWip);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setReportKind("INPUT");
+        req.setInputQuantity(new BigDecimal("1000"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-KNOWN");
+        req.setSourceWipQuantity(new BigDecimal("500"));
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-raw-null-cost", new BigDecimal("500"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isNull();
+    }
+
+    @Test
+    void submitReport_materialCost_rawAndWip_nullWhenWipCostMissing() {
+        WorkProcess wp = WorkProcess.builder().id("WP-COST2").factoryId("F006").unit("kg").build();
+        WorkProcessTask t = task(71L, 2, "WP-COST2");
+        t.setProductTypeId("PT-C");
+        when(taskRepo.findByFactoryIdAndId("F006", 71L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-COST2")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 71L)).thenReturn(List.of());
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        when(reportRepo.save(cap.capture())).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0);
+            r.setId(714L);
+            return r;
+        });
+
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId("mb-raw-known");
+        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        raw.setUnitPrice(new BigDecimal("20.0000"));
+        when(materialBatchRepo.findById("mb-raw-known")).thenReturn(Optional.of(raw));
+
+        SemiFinishedInventory sourceWip = SemiFinishedInventory.builder()
+                .intermediateBatchNo("WIP-SRC-NULL").batchId(1L).factoryId("F006")
+                .processOrder(1).producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
+                .unitCost(null).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-NULL", new BigDecimal("500"), "kg", null))
+                .thenReturn(sourceWip);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(71L);
+        req.setReportKind("INPUT");
+        req.setInputQuantity(new BigDecimal("1000"));
+        req.setInputUnit("kg");
+        req.setSourceWipNo("WIP-SRC-NULL");
+        req.setSourceWipQuantity(new BigDecimal("500"));
+        req.setMaterialBatchRefs(List.of(new MaterialBatchRef("mb-raw-known", new BigDecimal("500"), "kg")));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(cap.getValue().getMaterialCost()).isNull();
     }
 
     @Test

@@ -206,6 +206,84 @@ class WipMovingAverageCostingTest {
 
         @Test
         @DisplayName("SC-2: 双批次混合加权 — 100 kg@¥10 + 50 kg@¥16 → avg ¥12.0000")
+        void outputRollup_weightedInputMaterialProducesUnitCost() {
+            WorkProcessTask t = task(1011L, 2011L, 2);
+            ProductionReport input = ProductionReport.builder()
+                    .id(3010L)
+                    .factoryId(FACTORY_ID)
+                    .batchId(2011L)
+                    .workProcessTaskId(1010L)
+                    .reportKind("INPUT")
+                    .materialCost(new BigDecimal("15000.00"))
+                    .build();
+            ProductionReport output = ProductionReport.builder()
+                    .id(3011L)
+                    .factoryId(FACTORY_ID)
+                    .batchId(2011L)
+                    .workProcessTaskId(1011L)
+                    .reportKind("OUTPUT")
+                    .outputKind("SEMI")
+                    .semiCode("SEMI-B6-WEIGHTED")
+                    .semiOutputQuantity(new BigDecimal("1000"))
+                    .semiOutputUnit("kg")
+                    .build();
+            when(reportRepo.findYieldReportsByTask(FACTORY_ID, 1011L)).thenReturn(List.of(output));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 2011L)).thenReturn(List.of(input, output));
+            stubFirstIn("SEMI-B6-WEIGHTED");
+
+            service.postApprovedOutput(FACTORY_ID, output, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertEquals(new BigDecimal("15000.00"), saved.getAccumulatedCost());
+            assertEquals(new BigDecimal("15.0000"), saved.getUnitCost());
+        }
+
+        @Test
+        @DisplayName("B6: OUTPUT rollup keeps unitCost null when any INPUT material cost is unknown")
+        void outputRollup_nullWhenAnyInputMaterialCostUnknown() {
+            WorkProcessTask t = task(1013L, 2013L, 2);
+            ProductionReport pricedInput = ProductionReport.builder()
+                    .id(3012L)
+                    .factoryId(FACTORY_ID)
+                    .batchId(2013L)
+                    .workProcessTaskId(1012L)
+                    .reportKind("INPUT")
+                    .materialCost(new BigDecimal("15000.00"))
+                    .build();
+            ProductionReport unknownInput = ProductionReport.builder()
+                    .id(3013L)
+                    .factoryId(FACTORY_ID)
+                    .batchId(2013L)
+                    .workProcessTaskId(1012L)
+                    .reportKind("INPUT")
+                    .materialCost(null)
+                    .build();
+            ProductionReport output = ProductionReport.builder()
+                    .id(3014L)
+                    .factoryId(FACTORY_ID)
+                    .batchId(2013L)
+                    .workProcessTaskId(1013L)
+                    .reportKind("OUTPUT")
+                    .outputKind("SEMI")
+                    .semiCode("SEMI-B6-UNKNOWN")
+                    .semiOutputQuantity(new BigDecimal("1000"))
+                    .semiOutputUnit("kg")
+                    .build();
+            when(reportRepo.findYieldReportsByTask(FACTORY_ID, 1013L)).thenReturn(List.of(output));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, 2013L)).thenReturn(List.of(pricedInput, unknownInput, output));
+            stubFirstIn("SEMI-B6-UNKNOWN");
+
+            service.postApprovedOutput(FACTORY_ID, output, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertNull(saved.getAccumulatedCost());
+            assertNull(saved.getUnitCost());
+        }
+
+        @Test
+        @DisplayName("SC-2: 双批次混合加权 — 100 kg@¥10 + 50 kg@¥16 → avg ¥12.0000")
         void doubleBatch_movingAverageExact() {
             /*
              * Hand-calc:
