@@ -68,6 +68,7 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
     // 分析概览/知识库反馈(5反馈)/AI追问日志(smart_bi_llm_fallback_log 5条 卤味问答)。
     // 查询模板: 后端缺失的 CRUD 端点已补 (PR #860 SmartBiQueryTemplateController, 修了对所有
     // 工厂的预存 404 bug), 6 个卤味分析模板 → un-hide。仅剩 2 项隐藏:
+    '/transfer/list',                     // 调拨单: internal_transfers 是工厂↔工厂调拨 (source/target_factory_id), 单租户 demo 无此类数据; 且空数据时 list API 返 400 (预存 service 问题)
     '/smart-bi/analysis-hub',             // 经营分析hub: 与经营驾驶舱功能重复 (旗舰已覆盖, 冗余); 财务tab 另需完整 Excel 上传数据源选择交互
     '/smart-bi/calibration',              // 行为校准监控: roles=['platform_admin'], demo 账号本就被角色门控隐藏 (非数据问题)
   ],
