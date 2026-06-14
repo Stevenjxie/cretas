@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
@@ -227,24 +228,29 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("segmentCode null → fallback SP4 扁平方案")
-        void nullSegmentCode_fallbackToFlat() {
-            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
-                    .thenReturn(Collections.emptyList());
+        @DisplayName("工厂启用分段字典 + segmentCode 缺失 -> 400 拒绝")
+        void dictionaryEnabled_nullSegmentCode_rejects() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
 
-            String code = service.generateNextCode(FACTORY_ID, "肉类", null);
-            assertEquals("RL001", code);
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.generateNextCode(FACTORY_ID, "肉类", null));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("本工厂启用 16 位编码"));
+            assertTrue(ex.getMessage().contains("请用分段选择器生成"));
         }
 
         @Test
-        @DisplayName("segmentCode 非10位 → fallback SP4")
-        void shortSegmentCode_fallbackToFlat() {
-            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
-                    .thenReturn(Collections.emptyList());
+        @DisplayName("工厂启用分段字典 + segmentCode 非10位 -> 400 拒绝")
+        void dictionaryEnabled_shortSegmentCode_rejects() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
 
-            // 6-digit — should fallback
-            String code = service.generateNextCode(FACTORY_ID, "肉类", "001001");
-            assertEquals("RL001", code);
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.generateNextCode(FACTORY_ID, "肉类", "001001"));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("本工厂启用 16 位编码"));
+            assertTrue(ex.getMessage().contains("请用分段选择器生成"));
         }
 
         @Test
@@ -274,6 +280,27 @@ class RawMaterialTypeSp8Test {
             assertEquals("0010010001000001", entity.getCode(),
                     "传入 segmentCode 时应走16位生成路径");
         }
+
+        @Test
+        @DisplayName("工厂启用分段字典 + 手工传入非16位 code -> 400 拒绝")
+        void createMaterialType_dictionaryEnabled_manualFlatCodeRejected() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
+
+            RawMaterialTypeDTO dto = RawMaterialTypeDTO.builder()
+                    .code("RL001")
+                    .name("猪舌")
+                    .unit("kg")
+                    .category("肉类")
+                    .build();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.createMaterialType(FACTORY_ID, dto));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("本工厂启用 16 位编码"));
+            assertTrue(ex.getMessage().contains("请用分段选择器生成"));
+            verify(materialTypeRepository, never()).save(any(RawMaterialType.class));
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -297,23 +324,25 @@ class RawMaterialTypeSp8Test {
         }
 
         @Test
-        @DisplayName("segmentCode null → fallback SP4 扁平")
-        void nullSegmentCode_fallbackFlat() {
-            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "RL"))
-                    .thenReturn(java.util.Collections.emptyList());
+        @DisplayName("segmentCode null + 工厂启用字典 -> 400 拒绝")
+        void nullSegmentCode_dictionaryEnabledRejects() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
 
-            String code = service.previewMaterialCode(FACTORY_ID, "肉类", null);
-            assertEquals("RL001", code);
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.previewMaterialCode(FACTORY_ID, "肉类", null));
+            assertEquals(400, ex.getCode());
         }
 
         @Test
-        @DisplayName("segmentCode 非10位 → fallback SP4 扁平")
-        void shortSegmentCode_fallbackFlat() {
-            when(materialTypeRepository.findCodesByFactoryIdAndCodePrefix(FACTORY_ID, "BC"))
-                    .thenReturn(java.util.Collections.emptyList());
+        @DisplayName("segmentCode 非10位 + 工厂启用字典 -> 400 拒绝")
+        void shortSegmentCode_dictionaryEnabledRejects() {
+            when(materialCodeSegmentRepository.countByFactoryIdAndLevel(FACTORY_ID, (short) 1))
+                    .thenReturn(3L);
 
-            String code = service.previewMaterialCode(FACTORY_ID, "包材", "001001");
-            assertEquals("BC001", code);
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.previewMaterialCode(FACTORY_ID, "包材", "001001"));
+            assertEquals(400, ex.getCode());
         }
     }
 
@@ -365,6 +394,35 @@ class RawMaterialTypeSp8Test {
             List<RawMaterialTypeDTO> results = service.searchByCodePrefix(FACTORY_ID, null);
             assertNotNull(results);
             assertTrue(results.isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("按主编码查询")
+    class SearchByPrimaryCode {
+
+        @Test
+        @DisplayName("primaryCode=001 -> 返回同主编码物料")
+        void byPrimaryCode_returnsMappedDtos() {
+            RawMaterialType m1 = savedMaterial("M9", "0010010001000001", "001");
+            RawMaterialType m2 = savedMaterial("M10", "0010020001000001", "001");
+            when(materialTypeRepository.findByFactoryIdAndPrimaryCodeOrderByCodeAsc(FACTORY_ID, "001"))
+                    .thenReturn(List.of(m1, m2));
+
+            List<RawMaterialTypeDTO> results = service.getMaterialTypesByPrimaryCode(FACTORY_ID, "001");
+
+            assertEquals(2, results.size());
+            assertEquals("001", results.get(0).getPrimaryCode());
+            assertEquals("001", results.get(1).getPrimaryCode());
+        }
+
+        @Test
+        @DisplayName("primaryCode 非3位 -> 400 拒绝")
+        void invalidPrimaryCode_rejects() {
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.getMaterialTypesByPrimaryCode(FACTORY_ID, "01"));
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("主编码"));
         }
     }
 }

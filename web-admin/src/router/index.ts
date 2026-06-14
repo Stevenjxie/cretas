@@ -319,6 +319,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '原料类型字典', module: 'warehouse' }
           },
           {
+            path: 'material-segments',
+            name: 'WarehouseMaterialSegments',
+            component: () => import('@/views/warehouse/material-segments/index.vue'),
+            meta: { requiresAuth: true, title: '物料分段字典', module: 'warehouse' }
+          },
+          {
             path: 'materials',
             name: 'WarehouseMaterials',
             component: () => import('@/views/warehouse/materials/list.vue'),

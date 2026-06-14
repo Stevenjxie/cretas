@@ -97,6 +97,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             String generated = generateNextCode(factoryId, dto.getCategory(), dto.getSegmentCode());
             dto.setCode(generated);
             log.info("自动生成原材料编码: factoryId={}, segmentCode={}, code={}", factoryId, dto.getSegmentCode(), generated);
+        } else if (isSegmentDictionaryEnabled(factoryId) && !dto.getCode().trim().matches("[0-9]{16}")) {
+            throw strict16CodeException(dto.getCode());
         }
 
         log.info("创建原材料类型: factoryId={}, code={}", factoryId, dto.getCode());
@@ -388,6 +390,20 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         List<RawMaterialType> materialTypes = materialTypeRepository.findByFactoryIdAndIsActive(factoryId, true);
         return materialTypes.stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<RawMaterialTypeDTO> getMaterialTypesByPrimaryCode(String factoryId, String primaryCode) {
+        String normalized = primaryCode == null ? null : primaryCode.trim();
+        if (normalized == null || !normalized.matches("[0-9]{3}")) {
+            throw new BusinessException(400, "主编码必须是3位数字: primaryCode=" + primaryCode)
+                    .withHint("请在BOM选料器中选择001/002/003等3位主编码分组")
+                    .withHintTarget("primaryCode")
+                    .withSeverity("BLOCKING");
+        }
+        return materialTypeRepository.findByFactoryIdAndPrimaryCodeOrderByCodeAsc(factoryId, normalized).stream()
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
     }
@@ -779,9 +795,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
      * @return 生成的物料编码
      */
     String generateNextCode(String factoryId, String category, String segmentCode) {
-        // 16位路径: segmentCode 非空且为10位数字, 且工厂已配置分段字典
-        if (segmentCode != null && segmentCode.matches("[0-9]{10}")
-                && materialCodeSegmentRepository.countByFactoryIdAndLevel(factoryId, (short) 1) > 0) {
+        boolean dictionaryEnabled = isSegmentDictionaryEnabled(factoryId);
+        if (dictionaryEnabled) {
+            if (segmentCode == null || !segmentCode.matches("[0-9]{10}")) {
+                throw strict16CodeException(segmentCode);
+            }
             List<String> existing = materialTypeRepository
                     .findCodesByFactoryIdAndSegmentPrefix(factoryId, segmentCode);
             int maxSeq = 0;
@@ -800,6 +818,18 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         // Fallback: SP4 扁平方案
         return generateNextCode(factoryId, category);
+    }
+
+    private boolean isSegmentDictionaryEnabled(String factoryId) {
+        return materialCodeSegmentRepository.countByFactoryIdAndLevel(factoryId, (short) 1) > 0;
+    }
+
+    private BusinessException strict16CodeException(String codeOrSegment) {
+        return new BusinessException(400,
+                "本工厂启用 16 位编码，请用分段选择器生成。当前编码/分段值无效: " + codeOrSegment)
+                .withHint("请先选择L1类型、L2部位、L3品类，再点击生成16位编码")
+                .withHintTarget("segmentCode")
+                .withSeverity("BLOCKING");
     }
 
     @Override

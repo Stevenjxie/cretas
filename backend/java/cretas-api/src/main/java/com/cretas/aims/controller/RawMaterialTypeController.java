@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -154,6 +155,19 @@ public class RawMaterialTypeController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.info("获取激活的原材料类型: factoryId={}", factoryId);
         List<RawMaterialTypeDTO> result = materialTypeService.getActiveMaterialTypes(factoryId);
+        return ApiResponse.success(result);
+    }
+
+    @RequireModule("bom")
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @GetMapping("/by-primary-code/{primaryCode}")
+    @Operation(summary = "按主编码查询原材料类型",
+            description = "BOM选料器按001/002/003等主编码分组查询可选物料列表。")
+    public ApiResponse<List<RawMaterialTypeDTO>> getMaterialTypesByPrimaryCode(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006") String factoryId,
+            @PathVariable @Parameter(description = "3位主编码", example = "001") String primaryCode) {
+        log.info("按主编码查询原材料类型: factoryId={}, primaryCode={}", factoryId, ErrorSanitizer.sanitize(primaryCode));
+        List<RawMaterialTypeDTO> result = materialTypeService.getMaterialTypesByPrimaryCode(factoryId, primaryCode);
         return ApiResponse.success(result);
     }
 

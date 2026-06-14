@@ -4,6 +4,7 @@ import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -105,8 +106,9 @@ class BomRecipeServiceImplAddItemTest {
         mt.setName("猪舌原料");
         mt.setUnit("kg");
         mt.setFactoryId("F006");
+        mt.setPrimaryCode("001");
         when(materialTypeRepo.findById("MT-001")).thenReturn(Optional.of(mt));
-        when(materialTypeRepo.findById("MT-002")).thenReturn(Optional.of(newMt("MT-002", "包材A", "g")));
+        when(materialTypeRepo.findById("MT-002")).thenReturn(Optional.of(newMt("MT-002", "包材A", "g", "002")));
 
         // uom converter: allow write unit (service calls isWriteUnitCompatible)
         when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
@@ -179,6 +181,35 @@ class BomRecipeServiceImplAddItemTest {
     }
 
     @Test
+    @DisplayName("SP8: addItem 未传 primaryCode 时从物料主数据回填")
+    void addItem_primaryCodeBackfilledFromMaterial() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getPrimaryCode()).isEqualTo("002");
+    }
+
+    @Test
+    @DisplayName("SP8: addItem 传入 primaryCode 与物料主编码不一致 -> 400")
+    void addItem_primaryCodeMismatchRejected() {
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        ReflectionTestUtils.setField(dto, "primaryCode", "001");
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto));
+
+        assertThat(ex.getCode()).isEqualTo(400);
+        assertThat(ex.getMessage()).contains("MT-002").contains("001").contains("002");
+        verify(itemRepo, never()).save(any(BomRecipeItem.class));
+    }
+
+    @Test
     @DisplayName("addItem: AUXILIARY item accepted — B-41 AUXILIARY category supported")
     void addItem_auxiliaryCategory_accepted() {
         BomRecipeItem auxItem = new BomRecipeItem();
@@ -226,12 +257,13 @@ class BomRecipeServiceImplAddItemTest {
         return dto;
     }
 
-    private RawMaterialType newMt(String id, String name, String unit) {
+    private RawMaterialType newMt(String id, String name, String unit, String primaryCode) {
         RawMaterialType mt = new RawMaterialType();
         mt.setId(id);
         mt.setName(name);
         mt.setUnit(unit);
         mt.setFactoryId("F006");
+        mt.setPrimaryCode(primaryCode);
         return mt;
     }
 }

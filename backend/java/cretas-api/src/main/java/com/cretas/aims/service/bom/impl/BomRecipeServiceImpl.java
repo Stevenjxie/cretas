@@ -204,6 +204,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             // SP4-T3: propagate per_portion + semi_finished_ref_code on clone
             item.setPerPortion(src.getPerPortion() != null ? src.getPerPortion() : false);
             item.setSemiFinishedRefCode(src.getSemiFinishedRefCode());
+            item.setPrimaryCode(src.getPrimaryCode());
+            item.setPrimaryCodeRef(src.getPrimaryCodeRef());
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
@@ -314,11 +316,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         // T159-B R3: UoM dimension guard on update path.
         // Look up the live material name (for 防呆 message) + canonical unit via item's materialTypeId.
+        RawMaterialType mt = materialTypeRepo.findById(item.getMaterialTypeId()).orElse(null);
         if (dto.getUnit() != null && !dto.getUnit().isBlank()) {
-            RawMaterialType mt = materialTypeRepo.findById(item.getMaterialTypeId()).orElse(null);
             if (mt != null) {
                 checkBomUnitCompatible(mt, dto.getUnit());
             }
+        }
+        if (mt != null) {
+            applyPrimaryCode(dto, item, mt);
         }
         applyDtoToItem(dto, item);
         item = itemRepo.save(item);
@@ -399,12 +404,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // T159-B R3: UoM dimension guard at BOM write time.
         checkBomUnitCompatible(mt.get(), dto.getUnit());
 
-        // SP8: primaryCodeRef — auto-backfill from RawMaterialType.primaryCode when DTO doesn't supply it
-        if (dto.getPrimaryCodeRef() != null) {
-            item.setPrimaryCodeRef(dto.getPrimaryCodeRef());
-        } else if (mt.get().getPrimaryCode() != null) {
-            item.setPrimaryCodeRef(mt.get().getPrimaryCode());
-        }
+        applyPrimaryCode(dto, item, mt.get());
 
         // 包材规格自动推算: PACKAGING 行若 DTO 未手填 standardQuantity 且物料有 packQtyPerProduct,
         // 则自动写入 standardQuantity = packQtyPerProduct (每成品单位用量).
@@ -482,9 +482,16 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setSemiFinishedRefCode(dto.getSemiFinishedRefCode());
         // SP1: 嵌套 BOM 子产品引用 (组合装/先做后用)
         item.setSubProductTypeId(dto.getSubProductTypeId());
-        // SP8: primaryCodeRef null-guard update (only update if DTO supplies it; auto-backfill done in buildItem)
+        // SP8: primaryCode null-guard update. primaryCodeRef is a legacy alias.
+        if (dto.getPrimaryCode() != null) {
+            item.setPrimaryCode(dto.getPrimaryCode());
+            item.setPrimaryCodeRef(dto.getPrimaryCode());
+        }
         if (dto.getPrimaryCodeRef() != null) {
             item.setPrimaryCodeRef(dto.getPrimaryCodeRef());
+            if (dto.getPrimaryCode() == null) {
+                item.setPrimaryCode(dto.getPrimaryCodeRef());
+            }
         }
         // Cache actual_quantity (also computable @Transient, but cached for query speed).
         // Note: item_cost for nested-component rows is resolved via NestedBomCostService at recipe-level;
@@ -563,6 +570,46 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                             materialName, canonicalUnit))
                     .withSeverity("BLOCKING");
         }
+    }
+
+    private void applyPrimaryCode(BomRecipeItemDTO dto, BomRecipeItem item, RawMaterialType material) {
+        String materialPrimary = normalizePrimaryCode(material.getPrimaryCode());
+        String requestedPrimary = normalizePrimaryCode(dto.getPrimaryCode());
+        String requestedPrimaryRef = normalizePrimaryCode(dto.getPrimaryCodeRef());
+        if (requestedPrimary != null && requestedPrimaryRef != null && !requestedPrimary.equals(requestedPrimaryRef)) {
+            throw new BusinessException(400, String.format(
+                    "BOM物料主编码不一致: 传入primaryCode=%s, primaryCodeRef=%s。请统一主编码后重试。",
+                    requestedPrimary, requestedPrimaryRef))
+                    .withHint("请只传primaryCode，或确保primaryCodeRef与primaryCode一致")
+                    .withHintTarget("primaryCode")
+                    .withSeverity("BLOCKING");
+        }
+        if (requestedPrimary == null) {
+            requestedPrimary = requestedPrimaryRef;
+        }
+
+        if (materialPrimary != null && requestedPrimary != null && !materialPrimary.equals(requestedPrimary)) {
+            String materialName = material.getName() != null ? material.getName() : material.getId();
+            throw new BusinessException(400, String.format(
+                    "BOM物料主编码不一致: 物料%s(materialTypeId=%s)主编码为%s, 传入primaryCode=%s。请在BOM选料器中按主编码分组重新选择物料。",
+                    materialName, material.getId(), materialPrimary, requestedPrimary))
+                    .withHint("请重新选择同一主编码分组下的物料，或清空primaryCode让系统从物料主数据回填")
+                    .withHintTarget("primaryCode")
+                    .withSeverity("BLOCKING");
+        }
+
+        String toStore = requestedPrimary != null ? requestedPrimary : materialPrimary;
+        if (toStore != null) {
+            item.setPrimaryCode(toStore);
+            item.setPrimaryCodeRef(toStore);
+        }
+    }
+
+    private String normalizePrimaryCode(String primaryCode) {
+        if (primaryCode == null || primaryCode.isBlank()) {
+            return null;
+        }
+        return primaryCode.trim();
     }
 
     /** Generate {@code BOM-YYYYMMDD-NNN} where NNN = today's recipe count + 1 (factory-scoped). */

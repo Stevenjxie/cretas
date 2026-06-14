@@ -46,6 +46,8 @@ public interface RawMaterialTypeService {
      * 获取所有激活的原材料类型
       */
     List<RawMaterialTypeDTO> getActiveMaterialTypes(String factoryId);
+
+    List<RawMaterialTypeDTO> getMaterialTypesByPrimaryCode(String factoryId, String primaryCode);
      /**
      * 根据类别获取原材料类型
       */
