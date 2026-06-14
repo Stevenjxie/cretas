@@ -105,9 +105,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [scannedLabel, setScannedLabel] = useState<MaterialBatchLabelScanResponse | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryKeyRef = useRef<string>('');
+  const rowsRef = useRef<RowState[]>([]);   // mirrors `rows` for use inside async callbacks
   const validationRef = useRef(onValidationChange);
   validationRef.current = onValidationChange;
 
+  rowsRef.current = rows;
   const selectedRows = rows.filter((r) => r.selected);
   const isMultiBatch = selectedRows.length > 1;
   const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}`;
@@ -182,17 +184,31 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   }, [rows, rowOverLimit, rowQuantity, unit]);
 
   // 从 value prop 初始化/同步 rows (仅在 batches 加载完成后)
+  // Bug fix: preserve selections that are already in `rows` but not yet propagated
+  // to the `value` prop (e.g. a just-scanned batch: handleLabelScan sets rows before
+  // the parent's onChange round-trip completes). Without this, loadBatches() calling
+  // syncRowsFromValue() wipes the scan selection.
   const syncRowsFromValue = useCallback(
-    (batches: MaterialBatch[]) => {
+    (batches: MaterialBatch[], pendingRows?: RowState[]) => {
       const refMap = new Map(value.map((r: MaterialBatchRef) => [r.materialBatchId, r]));
+      // Build a map of batches already selected in the current rows (covers the scan-lag window)
+      const pendingSelectedIds = new Set(
+        (pendingRows ?? []).filter((r) => r.selected).map((r) => r.batch.id),
+      );
+      const pendingQtyMap = new Map(
+        (pendingRows ?? []).filter((r) => r.selected).map((r) => [r.batch.id, r.qtyStr]),
+      );
       setRows(
         batches.map((b) => {
           const existing = refMap.get(b.id);
-          return {
-            batch: b,
-            selected: existing != null,
-            qtyStr: existing != null ? String(existing.quantity) : '',
-          };
+          if (existing != null) {
+            return { batch: b, selected: true, qtyStr: String(existing.quantity) };
+          }
+          // Preserve selections that exist in current rows but haven't propagated to value yet
+          if (pendingSelectedIds.has(b.id)) {
+            return { batch: b, selected: true, qtyStr: pendingQtyMap.get(b.id) ?? '' };
+          }
+          return { batch: b, selected: false, qtyStr: '' };
         }),
       );
     },
@@ -208,7 +224,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const res = await materialBatchApiClient.getBatchesByStatus('AVAILABLE', factoryId, productTypeId);
       if (queryKeyRef.current !== requestQueryKey) return;
       if (res.success && Array.isArray(res.data)) {
-        syncRowsFromValue(res.data);
+        // Pass current rows snapshot so pending scan selections survive the sync
+        syncRowsFromValue(res.data, rowsRef.current);
         setLoadedQueryKey(requestQueryKey);
         // F6: 单批次自动选中 — 不让操作工还要多点一次复选框
         // 仅在 value 尚未选中（首次加载）且只有一批次时触发
