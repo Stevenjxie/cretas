@@ -16,16 +16,19 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final JwtAuthInterceptor jwtAuthInterceptor;
+    private final DemoReadOnlyInterceptor demoReadOnlyInterceptor;
     private final PermissionInterceptor permissionInterceptor;
     private final RequireRoleInterceptor requireRoleInterceptor;
     private final ModuleEnabledInterceptor moduleEnabledInterceptor;
 
     // 构造器注入 - Spring 确保依赖已就绪
     public WebMvcConfig(JwtAuthInterceptor jwtAuthInterceptor,
+                        DemoReadOnlyInterceptor demoReadOnlyInterceptor,
                         PermissionInterceptor permissionInterceptor,
                         RequireRoleInterceptor requireRoleInterceptor,
                         ModuleEnabledInterceptor moduleEnabledInterceptor) {
         this.jwtAuthInterceptor = jwtAuthInterceptor;
+        this.demoReadOnlyInterceptor = demoReadOnlyInterceptor;
         this.permissionInterceptor = permissionInterceptor;
         this.requireRoleInterceptor = requireRoleInterceptor;
         this.moduleEnabledInterceptor = moduleEnabledInterceptor;
@@ -62,31 +65,39 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(publicWhitelist)   // 排除公开分享端点 (#872)
                 .order(1);  // 最高优先级
 
-        // 2. 权限检查拦截器 - 检查 @RequirePermission 注解
+        // 2. 演示租户只读锁 - 对 demo 工厂拦截写操作 (放行查询/AI POST). 在 JWT 之后 (factoryId 已知).
+        registry.addInterceptor(demoReadOnlyInterceptor)
+                .addPathPatterns("/api/mobile/**", "/api/platform/**", "/api/admin/**",
+                                 "/api/camera/**", "/api/ai/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(2);  // 在JWT之后, 权限检查之前
+
+        // 3. 权限检查拦截器 - 检查 @RequirePermission 注解
         registry.addInterceptor(permissionInterceptor)
                 .addPathPatterns("/api/mobile/**", "/api/platform/**", "/api/admin/**",
                                  "/api/camera/**", "/api/ai/**")
                 .excludePathPatterns(swaggerWhitelist)  // 排除Swagger
                 .excludePathPatterns(publicWhitelist)   // 排除公开分享端点 (#872)
-                .order(2);  // 在JWT之后执行
+                .order(3);  // 在JWT之后执行
 
-        // 3. Round 5 Fix SEC-1: @RequireRole 拦截器 - 检查方法级角色限制
+        // 4. Round 5 Fix SEC-1: @RequireRole 拦截器 - 检查方法级角色限制
         // Spring Security 在 application.properties 中被禁用，@PreAuthorize 失效，改用自定义注解。
         registry.addInterceptor(requireRoleInterceptor)
                 .addPathPatterns("/api/mobile/**", "/api/platform/**", "/api/admin/**",
                                  "/api/camera/**", "/api/ai/**")
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)   // 排除公开分享端点 (#872)
-                .order(3);
+                .order(4);
 
-        // 4. Apr 24 Phase 8: @RequireModule 拦截器 - 检查 Canvas 工厂模块是否启用
+        // 5. Apr 24 Phase 8: @RequireModule 拦截器 - 检查 Canvas 工厂模块是否启用
         // 必须在 Spring @Valid 验证之前运行 (aspect 顺序太晚),确保餐饮租户等
         // disable 了某模块后, URL 直访被 400 "模块 xxx 未启用" 而非 "字段不能为空".
         registry.addInterceptor(moduleEnabledInterceptor)
                 .addPathPatterns("/api/mobile/**")
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)   // 排除公开分享端点 (#872)
-                .order(4);
+                .order(5);
 
         WebMvcConfigurer.super.addInterceptors(registry);
     }

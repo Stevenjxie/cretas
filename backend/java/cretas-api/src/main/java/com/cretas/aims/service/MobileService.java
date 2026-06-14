@@ -23,6 +23,14 @@ public interface MobileService {
     MobileDTO.LoginResponse unifiedLogin(MobileDTO.LoginRequest request);
 
     /**
+     * 演示账号免密登录 (路演扫码演示)
+     *
+     * @param tenant 演示业态 ("rest" | "factory")
+     * @return 登录响应
+     */
+    MobileDTO.LoginResponse demoLogin(String tenant);
+
+    /**
      * 移动端设备激活
      *
      * @param request 激活请求

@@ -217,6 +217,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     private boolean isPublicEndpoint(String uri) {
         return uri.equals("/api/mobile/auth/login") ||  // 登录（精确匹配）
                uri.equals("/api/mobile/auth/unified-login") ||  // 统一登录
+               uri.equals("/api/mobile/auth/demo-login") ||  // 演示账号免密登录 (路演)
                uri.equals("/api/mobile/auth/register") ||  // 注册
                uri.equals("/api/mobile/auth/refresh") ||  // 刷新token
                uri.equals("/api/mobile/auth/refresh-token") ||  // 刷新token（别名）

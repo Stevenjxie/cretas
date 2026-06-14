@@ -22,6 +22,7 @@ import com.cretas.aims.service.mobile.MobileDeviceService;
 import com.cretas.aims.utils.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +52,18 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     private final TempTokenService tempTokenService;
     private final TokenBlacklistService tokenBlacklistService;
     private final MobileDeviceService mobileDeviceService;
+
+    // 演示账号配置 (路演免密登录). cretas.demo.enabled=true 开启.
+    @Value("${cretas.demo.enabled:false}")
+    private boolean demoEnabled;
+    @Value("${cretas.demo.rest.factory-id:DEMO_REST}")
+    private String demoRestFactoryId;
+    @Value("${cretas.demo.rest.username:demo_rest}")
+    private String demoRestUsername;
+    @Value("${cretas.demo.factory.factory-id:DEMO_FACTORY}")
+    private String demoFactoryFactoryId;
+    @Value("${cretas.demo.factory.username:demo_factory}")
+    private String demoFactoryUsername;
 
     @Override
     @Transactional
@@ -117,6 +130,43 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             mobileDeviceService.recordDeviceLogin(user.getId(), request.getDeviceInfo());
         }
 
+        return buildLoginResponse(user);
+    }
+
+    /**
+     * 演示账号免密登录 (路演扫码演示用). 不验证密码 — 只能登录配置死的两个 demo 账号
+     * (DEMO_REST / DEMO_FACTORY), 由 cretas.demo.enabled 开关控制. 写操作由 DemoReadOnlyInterceptor 拦截.
+     */
+    @Override
+    @Transactional
+    public MobileDTO.LoginResponse demoLogin(String tenant) {
+        if (!demoEnabled) {
+            throw new BusinessException(403, "演示模式未开启");
+        }
+        String factoryId;
+        String username;
+        if ("rest".equalsIgnoreCase(tenant)) {
+            factoryId = demoRestFactoryId;
+            username = demoRestUsername;
+        } else if ("factory".equalsIgnoreCase(tenant)) {
+            factoryId = demoFactoryFactoryId;
+            username = demoFactoryUsername;
+        } else {
+            throw new BusinessException(400, "无效的演示类型 (应为 rest 或 factory)");
+        }
+        log.info("演示登录: tenant={}, factoryId={}, username={}", tenant, factoryId, username);
+        User user = userRepository.findByFactoryIdAndUsername(factoryId, username)
+                .orElseThrow(() -> new BusinessException(404, "演示账号不存在"));
+        if (!user.getIsActive()) {
+            throw new BusinessException(403, "演示账号已被禁用");
+        }
+        return buildLoginResponse(user);
+    }
+
+    /**
+     * 构建登录响应 (生成令牌 + 更新最后登录时间). unifiedLogin 与 demoLogin 共用.
+     */
+    private MobileDTO.LoginResponse buildLoginResponse(User user) {
         // 生成令牌（包含角色和工厂信息）
         String role = user.getRoleCode() != null ? user.getRoleCode() : "viewer";
         String token = jwtUtil.generateToken(user.getId(), user.getFactoryId(), user.getUsername(), role);

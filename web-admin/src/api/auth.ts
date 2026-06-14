@@ -30,6 +30,13 @@ export function login(data: LoginRequest): Promise<ApiResponse<LoginData>> {
 }
 
 /**
+ * 演示账号免密登录 (路演扫码演示). tenant = 'rest' | 'factory'
+ */
+export function demoLogin(tenant: 'rest' | 'factory'): Promise<ApiResponse<LoginData>> {
+  return request.post('/auth/demo-login', null, { params: { tenant } });
+}
+
+/**
  * 刷新令牌
  * For web clients the refresh token is in an HttpOnly cookie (sent automatically).
  * The optional parameter is kept for backward compatibility with mobile/other callers.

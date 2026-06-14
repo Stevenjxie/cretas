@@ -45,6 +45,11 @@ public class MobileServiceImpl implements MobileService {
     }
 
     @Override
+    public MobileDTO.LoginResponse demoLogin(String tenant) {
+        return mobileAuthService.demoLogin(tenant);
+    }
+
+    @Override
     public MobileDTO.LoginResponse refreshToken(String refreshToken) {
         return mobileAuthService.refreshToken(refreshToken);
     }

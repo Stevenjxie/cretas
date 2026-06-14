@@ -15,6 +15,9 @@ public interface MobileAuthService {
 
     MobileDTO.LoginResponse unifiedLogin(MobileDTO.LoginRequest request);
 
+    /** 演示账号免密登录 (tenant = "rest" | "factory"). 路演扫码演示用. */
+    MobileDTO.LoginResponse demoLogin(String tenant);
+
     MobileDTO.LoginResponse refreshToken(String refreshToken);
 
     void logout(Long userId, String deviceId, String token);

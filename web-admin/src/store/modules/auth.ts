@@ -98,36 +98,56 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await loginApi({ username, password });
 
       if (response.success && response.data) {
-        const data = response.data;
-        // Store token in localStorage as fallback for when HttpOnly cookies
-        // don't work (e.g. certain browser policies, cross-origin scenarios).
-        // The request interceptor reads this and sets the Authorization header.
-        if (data.token || data.accessToken) {
-          localStorage.setItem('cretas_access_token', data.token || data.accessToken);
-        }
-
-        // 构建用户对象 - 后端返回的是工厂用户
-        const userData: User = {
-          id: data.userId,
-          username: data.username,
-          email: '',
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          userType: 'factory',
-          factoryUser: {
-            role: data.role,
-            factoryId: data.factoryId,
-            factoryType: data.factoryType || 'FACTORY',
-            permissions: data.permissions || [],
-          }
-        } as User;
-        setUser(userData);
+        applyLoginData(response.data);
         return true;
       }
       return false;
     } catch (error) {
       console.error('Login failed:', error);
+      return false;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  // 把后端登录响应 (扁平字段) 落地为 token + user. login 与 demoLogin 共用.
+  function applyLoginData(data: any) {
+    // Store token in localStorage as fallback for when HttpOnly cookies
+    // don't work (e.g. certain browser policies, cross-origin scenarios).
+    if (data.token || data.accessToken) {
+      localStorage.setItem('cretas_access_token', data.token || data.accessToken);
+    }
+    const userData: User = {
+      id: data.userId,
+      username: data.username,
+      email: '',
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      userType: 'factory',
+      factoryUser: {
+        role: data.role,
+        factoryId: data.factoryId,
+        factoryType: data.factoryType || 'FACTORY',
+        permissions: data.permissions || [],
+      }
+    } as User;
+    setUser(userData);
+  }
+
+  // 演示账号免密登录 (路演扫码). tenant = 'rest' | 'factory'
+  async function demoLogin(tenant: 'rest' | 'factory'): Promise<boolean> {
+    loading.value = true;
+    try {
+      const { demoLogin: demoApi } = await import('@/api/auth');
+      const response = await demoApi(tenant);
+      if (response.success && response.data) {
+        applyLoginData(response.data);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Demo login failed:', error);
       return false;
     } finally {
       loading.value = false;
@@ -196,6 +216,7 @@ export const useAuthStore = defineStore('auth', () => {
     setUser,
     clearAuth,
     login,
+    demoLogin,
     logout,
     fetchCurrentUser,
     hasRole,

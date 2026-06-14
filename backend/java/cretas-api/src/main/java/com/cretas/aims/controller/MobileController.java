@@ -85,6 +85,24 @@ public class MobileController {
         return ApiResponse.success(response);
     }
 
+    @PostMapping("/auth/demo-login")
+    @Operation(summary = "演示账号免密登录", description = "路演扫码演示用. tenant=rest|factory, 登录配置死的 demo 账号, 写操作被只读锁拦截.")
+    public ApiResponse<MobileDTO.LoginResponse> demoLogin(
+            @RequestParam String tenant,
+            HttpServletRequest httpRequest,
+            HttpServletResponse httpResponse) {
+        log.info("演示登录: tenant={}, clientType={}", tenant,
+                httpRequest.getHeader(CookieAuthHelper.CLIENT_TYPE_HEADER));
+        MobileDTO.LoginResponse response = mobileService.demoLogin(tenant);
+
+        // For web clients, set HttpOnly cookies in addition to the JSON response
+        if (cookieAuthHelper.isWebClient(httpRequest) && response.getToken() != null) {
+            cookieAuthHelper.setAuthCookies(httpResponse, response.getToken(), response.getRefreshToken());
+        }
+
+        return ApiResponse.success(response);
+    }
+
     @PostMapping("/auth/refresh")
     @Operation(summary = "刷新访问令牌", description = "使用刷新令牌获取新的访问令牌。令牌可通过 JSON body {\"refreshToken\":\"...\"} 或 query param ?refreshToken=... 或 cookie 传入。")
     @RateLimit(count = 10, period = 60, limitType = LimitType.USER, message = "令牌刷新过于频繁，请稍后再试")
