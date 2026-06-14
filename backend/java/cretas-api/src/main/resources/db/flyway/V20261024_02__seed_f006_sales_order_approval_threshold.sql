@@ -1,6 +1,13 @@
 -- N9: F006 sales order approval threshold.
 -- Configurable through approval_chain_configs.trigger_condition; default amount > 5000 requires review.
-INSERT INTO approval_chain_configs (
+DO $$
+BEGIN
+    IF to_regclass('public.approval_chain_configs') IS NULL THEN
+        RAISE NOTICE 'V20261024_02 skipped: approval_chain_configs not present before Hibernate DDL';
+        RETURN;
+    END IF;
+
+    INSERT INTO approval_chain_configs (
     id,
     factory_id,
     decision_type,
@@ -56,3 +63,4 @@ SET
     priority = EXCLUDED.priority,
     enabled = TRUE,
     updated_at = NOW();
+END $$;
