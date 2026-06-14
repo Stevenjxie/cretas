@@ -138,7 +138,8 @@ class ProductionPlanBatchCompletionChainTest {
     @DisplayName("转批次: 批次置 IN_PROGRESS + 设 startTime + spawnTasks(factoryId, batchId, productTypeId)")
     void createBatchFromPlan_spawnsTasks_andBatchInProgress() {
         ProductionPlan plan = pendingPlan();
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        // R6 (2026-06-14): createBatchFromPlan 改用悲观锁 findByIdForUpdate 取计划。
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         ProductType pt = new ProductType();
@@ -170,7 +171,8 @@ class ProductionPlanBatchCompletionChainTest {
     @DisplayName("转批次: spawnTasks 抛异常 → fail-soft, 批次仍创建成功 (无异常上抛)")
     void createBatchFromPlan_spawnTasksThrows_failSoft_batchStillCreated() {
         ProductionPlan plan = pendingPlan();
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        // R6 (2026-06-14): createBatchFromPlan 改用悲观锁 findByIdForUpdate 取计划。
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         ProductType pt = new ProductType();

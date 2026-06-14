@@ -4,9 +4,11 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -42,6 +44,16 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      * 根据ID和工厂ID查找（工厂隔离）
      */
     Optional<ProductionPlan> findByIdAndFactoryId(String id, String factoryId);
+
+    /**
+     * R6 (2026-06-14): 悲观写锁取计划, 用于 createBatchFromPlan / startProduction 串行化状态推进.
+     *
+     * <p>并发双击/重试时, 第二个请求拿锁后看到计划已 IN_PROGRESS → 状态校验抛 409, 不再双建批次。
+     * 不引入 @Version (避免改表 = Flyway 红线), 用行级悲观锁达到同样的"PENDING→IN_PROGRESS"原子性。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM ProductionPlan p WHERE p.id = :id")
+    Optional<ProductionPlan> findByIdForUpdate(@Param("id") String id);
 
     /**
      * 查找工厂的所有生产计划

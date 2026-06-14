@@ -138,7 +138,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("库存充足 → 开始成功")
     void startProduction_stockSufficient_succeeds() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 1 个原料: 单位用量 2, 计划数量 100 → 需求 200; 可用 500 → 充足
@@ -157,7 +157,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("库存恰好等于需求 → 开始成功 (边界)")
     void startProduction_stockExactlyEqual_succeeds() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 需求 200, 可用 200 → 边界恰好 (不阻断)
@@ -174,7 +174,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("N1: 单原料库存不足 → 仅预警, 仍允许开始生产")
     void startProduction_oneMaterialShort_stillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 需求 200, 可用 50 → 缺口 150
@@ -192,7 +192,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("N1: 多原料缺口 → 仅预警, 仍允许开始生产")
     void startProduction_multipleShortages_stillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
@@ -217,7 +217,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("N1: 可用库存 null → 视为 0 且仅预警, 仍允许开始生产")
     void startProduction_nullAvailable_treatedAsZeroAndStillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
@@ -233,7 +233,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("无 BOM 配置 → skip 校验, 允许开始")
     void startProduction_noBom_skipsValidation() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Collections.emptyList());
@@ -246,7 +246,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("plan.plannedQuantity 为空 → skip 校验, 允许开始")
     void startProduction_nullPlannedQuantity_skipsValidation() {
         ProductionPlan plan = pendingPlan(null);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
@@ -258,7 +258,7 @@ class ProductionPlanStartValidationTest {
     void startProduction_alreadyInProgress_statusCheckThrowsFirst() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.startProduction(FACTORY_ID, PLAN_ID));
@@ -270,7 +270,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("N1: yieldRate 放大需求后库存不足 → 仅预警, 仍允许开始生产")
     void startProduction_yieldRateScalesRequirementStillStarts() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 出成率 50% → actualQuantity = standardQuantity / 0.5 = 4
@@ -290,6 +290,7 @@ class ProductionPlanStartValidationTest {
     @DisplayName("N1c: material advisory reports shortage without changing plan status")
     void materialAdvisory_shortage_returnsWarningWithoutBlocking() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        // getMaterialAdvisory 是只读建议查询, 仍用 findById (不加悲观锁)。
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
 
         when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))

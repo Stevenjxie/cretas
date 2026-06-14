@@ -133,7 +133,7 @@ class ProductionPlanCreateBatchValidationTest {
     @DisplayName("N1: 库存不足 → 仅预警, 仍创建批次并推进计划")
     void createBatch_stockShort_stillCreatesBatch() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionBatchRepository.save(any(ProductionBatch.class)))
                 .thenAnswer(inv -> {
@@ -161,7 +161,7 @@ class ProductionPlanCreateBatchValidationTest {
     @DisplayName("库存充足 → 批次创建, 计划→IN_PROGRESS")
     void createBatch_stockSufficient_createsBatch() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionBatchRepository.save(any(ProductionBatch.class)))
                 .thenAnswer(inv -> {
@@ -189,7 +189,7 @@ class ProductionPlanCreateBatchValidationTest {
     @DisplayName("无 BOM 配置 → skip 校验, 仍可建批次")
     void createBatch_noBom_skipsValidationStillCreates() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionBatchRepository.save(any(ProductionBatch.class)))
                 .thenAnswer(inv -> {
@@ -213,7 +213,7 @@ class ProductionPlanCreateBatchValidationTest {
     void createBatch_alreadyInProgress_statusCheckThrowsFirst() {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
-        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));

@@ -87,6 +87,11 @@ class ProductionPlanReversalApprovalTest {
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
     @Mock private WorkflowEngineService workflowEngine;
+    // R1/R2 (2026-06-14): 级联改批次定向 (WorkProcessTask) + IN_PROGRESS 有数据检测 (ProductionReport)。
+    @Mock private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
+    @Mock private com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
+    // R2 v2 (2026-06-14): 审批通过后真正恢复库存 — 报工撤回服务 (executeReversal)。
+    @Mock private com.cretas.aims.service.reversal.ReportReversalService reportReversalService;
 
     private ProductionPlanServiceImpl service;
 
@@ -101,6 +106,9 @@ class ProductionPlanReversalApprovalTest {
 
         // 注入可选依赖 (required = false)
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
+        ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
+        ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
+        ReflectionTestUtils.setField(service, "reportReversalService", reportReversalService);
     }
 
     // -----------------------------------------------------------------------
@@ -183,23 +191,37 @@ class ProductionPlanReversalApprovalTest {
     // UT-PP-RCA-04
 
     @Test
-    @DisplayName("UT-PP-RCA-04: executeCancelApproved — PENDING_APPROVAL → CANCELLED + 级联关闭工序任务")
+    @DisplayName("UT-PP-RCA-04: executeCancelApproved — PENDING_APPROVAL → CANCELLED + 按批次级联关闭 WorkProcessTask (R1)")
     void executeCancelApproved_happyPath_cascadeClosesTasks() {
         ProductionPlan plan = completedPlan();
         plan.setStatus(ProductionPlanStatus.PENDING_APPROVAL);
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        // 两个 IN_PROGRESS 工序任务
-        ProcessTask t1 = new ProcessTask();
-        t1.setStatus(ProcessTaskStatus.IN_PROGRESS);
-        ProcessTask t2 = new ProcessTask();
-        t2.setStatus(ProcessTaskStatus.IN_PROGRESS);
-        // 一个已完成任务（不应被关闭）
-        ProcessTask t3 = new ProcessTask();
-        t3.setStatus(ProcessTaskStatus.COMPLETED);
-        when(processTaskRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_TYPE_ID))
-                .thenReturn(List.of(t1, t2, t3));
+        // R1: 本计划的批次
+        com.cretas.aims.entity.ProductionBatch batch =
+                com.cretas.aims.entity.ProductionBatch.builder()
+                        .factoryId(FACTORY_ID)
+                        .productionPlanId(PLAN_ID)
+                        .productTypeId(PRODUCT_TYPE_ID)
+                        .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                        .build();
+        batch.setId(70L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        when(productionBatchRepository.save(any(com.cretas.aims.entity.ProductionBatch.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // 两个活跃 WorkProcessTask + 一个 COMPLETED (终态不动)
+        com.cretas.aims.entity.workprocess.WorkProcessTask t1 = new com.cretas.aims.entity.workprocess.WorkProcessTask();
+        t1.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.IN_PROGRESS);
+        com.cretas.aims.entity.workprocess.WorkProcessTask t2 = new com.cretas.aims.entity.workprocess.WorkProcessTask();
+        t2.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.PENDING);
+        com.cretas.aims.entity.workprocess.WorkProcessTask t3 = new com.cretas.aims.entity.workprocess.WorkProcessTask();
+        t3.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED);
+        when(workProcessTaskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 70L))
+                .thenReturn(new java.util.ArrayList<>(List.of(t1, t2, t3)));
+        when(workProcessTaskRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
 
         assertDoesNotThrow(() -> service.executeCancelApproved(PLAN_ID));
 
@@ -207,11 +229,14 @@ class ProductionPlanReversalApprovalTest {
         verify(productionPlanRepository).save(planCaptor.capture());
         assertEquals(ProductionPlanStatus.CANCELLED, planCaptor.getValue().getStatus());
 
-        // t1, t2 should be CLOSED; t3 should remain COMPLETED
-        assertEquals(ProcessTaskStatus.CLOSED, t1.getStatus());
-        assertEquals(ProcessTaskStatus.CLOSED, t2.getStatus());
-        assertEquals(ProcessTaskStatus.COMPLETED, t3.getStatus());
-        verify(processTaskRepository, times(2)).save(any(ProcessTask.class));
+        // t1, t2 → CANCELLED; t3 保持 COMPLETED
+        assertEquals(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.CANCELLED, t1.getStatus());
+        assertEquals(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.CANCELLED, t2.getStatus());
+        assertEquals(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED, t3.getStatus());
+        // R1: 仅查询本批次任务, 绝不走旧的"按产品类型全关 ProcessTask"
+        verify(workProcessTaskRepository, times(1))
+                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 70L);
+        verify(processTaskRepository, never()).findByFactoryIdAndProductTypeId(any(), any());
     }
 
     // -----------------------------------------------------------------------
@@ -269,18 +294,108 @@ class ProductionPlanReversalApprovalTest {
     // UT-PP-RCA-08: 合法直接取消 (非 COMPLETED / 非 PENDING_APPROVAL / 未锁定) 仍可走旧接口
 
     @Test
-    @DisplayName("UT-PP-RCA-08: cancelProductionPlan — IN_PROGRESS 计划仍可直接取消 (合法操作员路径不被破坏)")
+    @DisplayName("UT-PP-RCA-08: cancelProductionPlan — IN_PROGRESS 无报工无 WIP 仍可直接取消 (合法操作员路径不被破坏)")
     void cancelProductionPlan_inProgress_allowedDirectCancel() {
         ProductionPlan plan = completedPlan();
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         plan.setIsLocked(false);
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(processTaskRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_TYPE_ID))
+        // R2: 无批次 → 无报工无 WIP → 安全直接取消
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
 
         assertDoesNotThrow(() -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, REASON));
         assertEquals(ProductionPlanStatus.CANCELLED, plan.getStatus());
         verify(productionPlanRepository).save(any(ProductionPlan.class));
+    }
+
+    // -----------------------------------------------------------------------
+    // UT-PP-RCA-09: R2 v2 — IN_PROGRESS 有报工 → 拒绝直接取消, 导向「报工撤回」流 (非 PRODUCTION_REVERSAL 死路)
+
+    @Test
+    @DisplayName("UT-PP-RCA-09: cancelProductionPlan — IN_PROGRESS 有报工 → 409 导向报工撤回 (含批次号 + 不置 CANCELLED)")
+    void cancelProductionPlan_inProgressWithReports_redirectsToReportReversal() {
+        ProductionPlan plan = completedPlan();
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        plan.setIsLocked(false);
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        com.cretas.aims.entity.ProductionBatch batch =
+                com.cretas.aims.entity.ProductionBatch.builder()
+                        .factoryId(FACTORY_ID)
+                        .productionPlanId(PLAN_ID)
+                        .batchNumber("B-F006-0612-01")
+                        .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                        .build();
+        batch.setId(88L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        // 该批次有 YIELD 报工 → hasProductionData = true
+        com.cretas.aims.entity.ProductionReport yield = new com.cretas.aims.entity.ProductionReport();
+        when(productionReportRepository.findYieldReportsByBatch(FACTORY_ID, 88L))
+                .thenReturn(List.of(yield));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.cancelProductionPlan(FACTORY_ID, PLAN_ID, REASON));
+        assertEquals(409, ex.getCode());
+        assertEquals("PLAN_HAS_PRODUCTION_DATA", ex.getErrorCode());
+        // 防呆: message 含批次号 (Rule 2 context), hint 指向报工撤回 (Rule 5 next action)
+        assertTrue(ex.getMessage().contains("B-F006-0612-01"),
+                "message 应列出涉及批次号, 实际: " + ex.getMessage());
+        assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("报工撤回"),
+                "hint 应导向报工撤回, 实际: " + ex.getActionHint());
+        assertEquals("报工撤回", ex.getHintTarget());
+        // 计划不被错误 CANCELLED, 也不启动 PRODUCTION_REVERSAL 死路工作流
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        verify(productionPlanRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), anyLong());
+    }
+
+    // -----------------------------------------------------------------------
+    // UT-PP-RCA-10: R2 v2 — executeCancelApproved 审批通过后真正调 executeReversal 恢复库存 (有报工批次)
+
+    @Test
+    @DisplayName("UT-PP-RCA-10: executeCancelApproved — 审批通过 → 对有报工批次调 submitReversal+executeReversal 恢复库存 → CANCELLED")
+    void executeCancelApproved_invokesReportReversalToRestoreInventory() {
+        ProductionPlan plan = completedPlan();
+        plan.setStatus(ProductionPlanStatus.PENDING_APPROVAL);
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        com.cretas.aims.entity.ProductionBatch batch =
+                com.cretas.aims.entity.ProductionBatch.builder()
+                        .factoryId(FACTORY_ID)
+                        .productionPlanId(PLAN_ID)
+                        .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                        .build();
+        batch.setId(91L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        when(productionBatchRepository.save(any(com.cretas.aims.entity.ProductionBatch.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        // 批次有 YIELD 报工 → 触发撤回
+        com.cretas.aims.entity.ProductionReport yield = new com.cretas.aims.entity.ProductionReport();
+        when(productionReportRepository.findYieldReportsByBatch(FACTORY_ID, 91L))
+                .thenReturn(List.of(yield));
+        // submitReversal 返回 PENDING log (有报工无快速撤回) → 显式 executeReversal 落地恢复
+        com.cretas.aims.entity.ReportReversalLog rlog = com.cretas.aims.entity.ReportReversalLog.builder()
+                .factoryId(FACTORY_ID)
+                .batchId(91L)
+                .status(com.cretas.aims.entity.ReportReversalLog.ReversalStatus.PENDING)
+                .build();
+        rlog.setId(555L);
+        when(reportReversalService.submitReversal(eq(FACTORY_ID), eq(91L), any(), anyString()))
+                .thenReturn(rlog);
+        // 任务级联 mock
+        when(workProcessTaskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 91L))
+                .thenReturn(new java.util.ArrayList<>());
+
+        assertDoesNotThrow(() -> service.executeCancelApproved(PLAN_ID));
+
+        // 验证真正调了恢复库存 (submitReversal + executeReversal), 不是只置 CANCELLED
+        verify(reportReversalService).submitReversal(eq(FACTORY_ID), eq(91L), any(), anyString());
+        verify(reportReversalService).executeReversal(555L, FACTORY_ID);
+        assertEquals(ProductionPlanStatus.CANCELLED, plan.getStatus());
     }
 }
