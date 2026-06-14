@@ -72,123 +72,16 @@ class SemanticMappingResult:
         return result
 
 
-# Standard field dictionary for financial/business data
-STANDARD_FIELDS = {
-    # Amount fields
-    "budget_amount": {
-        "synonyms": ["预算数", "预算金额", "预算", "Budget", "budget_amount", "预算值"],
-        "category": "amount",
-        "description": "Budget amount"
-    },
-    "actual_amount": {
-        "synonyms": ["本月实际", "实际数", "实际金额", "实际", "Actual", "actual_amount", "实际值", "当月实际"],
-        "category": "amount",
-        "description": "Actual amount"
-    },
-    "variance": {
-        "synonyms": ["预实差异", "差异", "Variance", "variance", "差额", "预算差异"],
-        "category": "amount",
-        "description": "Variance between budget and actual"
-    },
-    "last_year_actual": {
-        "synonyms": ["去年同期", "同期实际", "Last Year", "YoY", "去年实际", "上年同期"],
-        "category": "amount",
-        "description": "Last year's actual amount"
-    },
-    "ytd_actual": {
-        "synonyms": ["累计实际", "YTD Actual", "累计", "本年累计", "年度累计"],
-        "category": "amount",
-        "description": "Year-to-date actual"
-    },
-    "ytd_budget": {
-        "synonyms": ["累计预算", "YTD Budget", "本年累计预算", "年度累计预算"],
-        "category": "amount",
-        "description": "Year-to-date budget"
-    },
-
-    # Rate fields
-    "achievement_rate": {
-        "synonyms": ["达成率", "完成率", "Achievement Rate", "达成比例", "完成比例", "预算达成率"],
-        "category": "rate",
-        "description": "Achievement/completion rate"
-    },
-    "yoy_rate": {
-        "synonyms": ["同比增长", "YoY Rate", "同比", "同比变化", "同比增幅"],
-        "category": "rate",
-        "description": "Year-over-year growth rate"
-    },
-    "mom_rate": {
-        "synonyms": ["环比增长", "MoM Rate", "环比", "环比变化", "月环比"],
-        "category": "rate",
-        "description": "Month-over-month growth rate"
-    },
-    "gross_margin_rate": {
-        "synonyms": ["毛利率", "Gross Margin", "销售毛利率"],
-        "category": "rate",
-        "description": "Gross margin rate"
-    },
-    "net_margin_rate": {
-        "synonyms": ["净利率", "Net Margin", "销售净利率", "净利润率"],
-        "category": "rate",
-        "description": "Net margin rate"
-    },
-
-    # Category fields
-    "category": {
-        "synonyms": ["项目", "科目", "Category", "类别", "分类", "项目名称"],
-        "category": "category",
-        "description": "Category or line item name"
-    },
-    "department": {
-        "synonyms": ["部门", "Department", "组织", "事业部", "中心"],
-        "category": "category",
-        "description": "Department or organization unit"
-    },
-    "product": {
-        "synonyms": ["产品", "Product", "商品", "产品名称", "品类"],
-        "category": "category",
-        "description": "Product name"
-    },
-    "region": {
-        "synonyms": ["区域", "Region", "地区", "区域名称", "销售区域"],
-        "category": "category",
-        "description": "Region name"
-    },
-
-    # Financial line items
-    "revenue": {
-        "synonyms": ["销售收入", "收入", "Revenue", "营业收入", "主营业务收入"],
-        "category": "amount",
-        "description": "Revenue/Sales income"
-    },
-    "cost": {
-        "synonyms": ["成本", "Cost", "销售成本", "营业成本", "主营业务成本"],
-        "category": "amount",
-        "description": "Cost"
-    },
-    "gross_profit": {
-        "synonyms": ["毛利", "毛利润", "Gross Profit", "销售毛利"],
-        "category": "amount",
-        "description": "Gross profit"
-    },
-    "expense": {
-        "synonyms": ["费用", "Expense", "营业费用", "销售费用", "管理费用"],
-        "category": "amount",
-        "description": "Expense"
-    },
-    "net_profit": {
-        "synonyms": ["净利润", "Net Profit", "利润", "净利", "本期利润"],
-        "category": "amount",
-        "description": "Net profit"
-    },
-
-    # Time fields
-    "period": {
-        "synonyms": ["期间", "Period", "月份", "日期", "时间"],
-        "category": "time",
-        "description": "Time period"
-    }
-}
+# Standard field dictionary — single source of truth lives in
+# domain_standard_fields.py (per-domain controlled vocab; finance migrated
+# faithfully with synonyms + production/sales/purchase/inventory).
+# ALL_CANONICAL_FIELDS is the LLM-output whitelist (unmapped -> review queue).
+from smartbi.services.domain_standard_fields import (  # noqa: E402
+    STANDARD_FIELDS,
+    ALL_CANONICAL_FIELDS,
+    DOMAIN_FIELDS,
+    get_standard_fields,
+)
 
 # Table type patterns
 TABLE_TYPE_PATTERNS = {
@@ -275,8 +168,25 @@ class SemanticMapper:
                 "columns": time_columns["columns"]
             }
 
-        # Layer 1: Rule-based mapping
-        rule_mappings, rule_unmapped = self._map_with_rules(columns, factory_id)
+        # Layer 0: deterministic pin (per factory + template + column). 0-token;
+        # on hit skips rule/embedding/LLM entirely → kills the cross-upload drift
+        # the prod audit found (same column → different standard_name per upload).
+        # Pin tables are FORCE RLS, so the lookup sets app.factory_id in-txn.
+        pin_mappings, cols_to_map = await self._map_with_pin(columns, factory_id)
+        mappings.extend(pin_mappings)
+        if not cols_to_map:
+            self._dedupe_standard_names(mappings)
+            self._enrich_data_types(mappings, columns, sample_data)
+            result.field_mappings = mappings
+            result.unmapped_fields = []
+            result.confidence = (
+                sum(m.confidence for m in mappings) / len(mappings) if mappings else 0.5
+            )
+            result.method = "pin"
+            return result
+
+        # Layer 1: Rule-based mapping (only on pin-missed columns)
+        rule_mappings, rule_unmapped = self._map_with_rules(cols_to_map, factory_id)
         mappings.extend(rule_mappings)
 
         # Layer 1 (promoted): consult graduated aliases before early-return.
@@ -422,6 +332,81 @@ class SemanticMapper:
             logger.warning("field-mapping capture skipped (ignored): %s", e)
 
         return result
+
+    @staticmethod
+    def _compute_template_key(columns: List[str]) -> str:
+        """Stable fingerprint of the column SET (order-independent). Same file
+        shape → same key → pin scoped per (factory, template). Lets one factory
+        carry different mappings for different upload formats (audit C1: same
+        column name legitimately means different things across templates)."""
+        import hashlib
+        normalized = "|".join(sorted(c.strip().lower()[:40] for c in columns if c))
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+    async def _map_with_pin(
+        self, columns: List[str], factory_id: Optional[str] = None
+    ) -> Tuple[List[FieldMapping], List[str]]:
+        """Layer 0: deterministic pin lookup → (pin_mappings, unmapped_columns).
+
+        Reads smart_bi_pin_mappings keyed by (factory_id, template_key, column).
+        Tenant-isolated: the table is FORCE RLS, so app.factory_id is set inside
+        the transaction (else 0 rows —
+        feedback_asyncpg_rls_guc_must_be_in_transaction). One batched query, not
+        per-column. Fail-open: no factory_id / no pool / error → all unmapped so
+        downstream rule/embedding/LLM still run.
+        """
+        if not factory_id or not columns:
+            return [], list(columns)
+        try:
+            from smartbi.config import get_pg_pool
+            pool = await get_pg_pool()
+        except Exception:
+            pool = None
+        if pool is None:
+            return [], list(columns)
+
+        template_key = self._compute_template_key(columns)
+        norm = {c: c.strip().lower() for c in columns}
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    )
+                    rows = await conn.fetch(
+                        """SELECT column_name, standard_name, confidence
+                             FROM smart_bi_pin_mappings
+                            WHERE factory_id = $1 AND template_key = $2
+                              AND column_name = ANY($3::text[])""",
+                        factory_id, template_key, list(set(norm.values())),
+                    )
+        except Exception as e:
+            logger.warning("[pin] lookup failed, falling through to rules: %s", e)
+            return [], list(columns)
+
+        pinned = {r["column_name"]: r for r in rows}
+        pin_mappings: List[FieldMapping] = []
+        unmapped: List[str] = []
+        for col in columns:
+            r = pinned.get(norm[col])
+            if r and r["standard_name"] in STANDARD_FIELDS:
+                fi = STANDARD_FIELDS.get(r["standard_name"], {})
+                pin_mappings.append(FieldMapping(
+                    original=col,
+                    standard=r["standard_name"],
+                    confidence=float(r["confidence"]),
+                    method="pin",
+                    category=fi.get("category"),
+                    description="pinned (deterministic)",
+                ))
+            else:
+                unmapped.append(col)
+        if pin_mappings:
+            logger.info(
+                "[pin] %d/%d columns hit pin (factory=%s template=%s)",
+                len(pin_mappings), len(columns), factory_id, template_key,
+            )
+        return pin_mappings, unmapped
 
     def _map_with_rules(
         self, columns: List[str], factory_id: Optional[str] = None
@@ -793,12 +778,20 @@ Return JSON only:
                                 description=m.get("reasoning")
                             ))
                         else:
+                            # Reject routing: LLM gave no valid canonical field
+                            # (null or off-whitelist free text). Don't write garbage
+                            # (the old 数量金额_N problem) — flag for the review queue.
                             result.append(FieldMapping(
                                 original=m["original"],
                                 standard=None,
                                 confidence=m.get("confidence", 0.5),
-                                method="llm",
-                                description="No matching standard field"
+                                method="review_needed",
+                                description=(
+                                    f"LLM suggested {std!r} (not in controlled vocab); "
+                                    "queued for human review"
+                                    if std and std != "null"
+                                    else "no canonical match; queued for human review"
+                                ),
                             ))
                     # Bug #13: cache structural result (columns-only key)
                     cache_put(mapper_key, parsed["mappings"])
