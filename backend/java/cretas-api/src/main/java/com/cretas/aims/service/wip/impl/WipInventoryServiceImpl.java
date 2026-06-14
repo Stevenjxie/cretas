@@ -219,11 +219,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
                 .orElse(null);
         if (sfi == null) {
-            ensureSemiRowExists(factoryId, semiCode, task, outputUnit);
+            ensureRowExists(factoryId, semiCode, task, outputUnit);
             sfi = wipRepo
                     .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
                     .orElseThrow(() -> new IllegalStateException(
-                            "[SP1-semi] row missing after ensureSemiRowExists, semiCode=" + semiCode));
+                            "[SP1-semi] row missing after ensureRowExists, semiCode=" + semiCode));
         }
         // 统一 moving-average 累加路径 (新建占位行 oldQty=0 → 累加结果与原全量新行字节一致; 既有行直接累加)
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, outputUnit, report.getMaterialBatchRefs());
@@ -279,7 +279,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                                       BigDecimal totalCost, String outputUnit,
                                       java.util.List<java.util.Map<String, Object>> materialBatchRefs) {
         BigDecimal oldQty = nz(sfi.getProducedQuantity());
-        BigDecimal oldUnitCost = sfi.getUnitCost() == null ? BigDecimal.ZERO : sfi.getUnitCost();
+        BigDecimal oldUnitCost = sfi.getUnitCost();        // 累加前旧单价 (可能 null), 不在此处强制 ZERO
         BigDecimal newProduced = oldQty.add(inQty);
         sfi.setProducedQuantity(newProduced);
         BigDecimal consumed = nz(sfi.getConsumedQuantity());
@@ -294,13 +294,20 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (sfi.getMaterialBatchRefs() == null && materialBatchRefs != null) {
             sfi.setMaterialBatchRefs(materialBatchRefs);
         }
-        // 诚实 null: 老行无成本 (unitCost==null) 且本次也无成本 (inUnitCost==null) → newUnitCost 保持 null,
-        //   不退化成 0.0000 (与历史新行路径 unitCost=inUnitCost / existing-row 行为字节一致)。
+        // R4 (🔴红线) 诚实 null: 移动均价缺成本不得当 ¥0 摊薄。
+        //   只有"两侧成本对各自正数量都已知"才算混合单价; 任一侧"有量但成本未知" → 整体 newUnitCost 诚实 null,
+        //   不退化成假摊薄值 (历史 bug: 老 100kg@¥10 + 新 50kg@null → 假 6.6667; 反向 → 假 5.3333)。
+        //
+        //   oldKnown / inKnown 判据: 该侧 qty 为 0 (无成本贡献, 视为已知) 或其 unitCost 非 null。
+        //   - 占位行 first-IN (oldQty=0, oldUnitCost=null) → oldKnown=true → newUnitCost=inUnitCost (字节一致)。
+        //   - 两侧都已知 → 正常加权 (oldQty=0 时 oldUnitCost coerce ZERO 不影响, 0×0=0)。
+        boolean oldKnown = oldQty.signum() == 0 || oldUnitCost != null;
+        boolean inKnown = inQty.signum() == 0 || inUnitCost != null;
+        boolean anyPositiveQtyWithCost =
+                (oldQty.signum() > 0 && oldUnitCost != null) || (inQty.signum() > 0 && inUnitCost != null);
         BigDecimal newUnitCost = null;
-        boolean hasOldCost = sfi.getUnitCost() != null;   // 注意: 此时尚未 setUnitCost, 读到的是累加前的旧值
-        boolean hasInCost = inUnitCost != null;
-        if (newProduced.signum() > 0 && (hasOldCost || hasInCost)) {
-            BigDecimal oldComponent = oldQty.multiply(oldUnitCost);
+        if (newProduced.signum() > 0 && oldKnown && inKnown && anyPositiveQtyWithCost) {
+            BigDecimal oldComponent = oldQty.multiply(oldUnitCost == null ? BigDecimal.ZERO : oldUnitCost);
             BigDecimal inComponent = inUnitCost == null ? BigDecimal.ZERO : inQty.multiply(inUnitCost);
             newUnitCost = oldComponent.add(inComponent).divide(newProduced, 4, RoundingMode.HALF_UP);
         }
@@ -324,12 +331,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      *
      * <p>经 Spring 代理 ({@code self}) 调用使 REQUIRES_NEW 生效 (同类 this 调用绕过 AOP 代理)。
      * 单测无 Spring 代理 (self == null) → fallback 直调 {@link #commitEmptySemiRow} (无真实事务, repo 已 mock)。
+     *
+     * <p>F1 修复 (2026-06-14): {@code intermediateBatchNo} 参数化 — 同一 ensure-row-then-lock 同时服务
+     * SEMI ledger ({@code semiCode}) 与 FINISHED 产出 ({@code wipNo}) 两条路径, 占位行键由调用方传入,
+     * 保持与后续 {@code findForUpdate} 的键一致。
      */
-    private void ensureSemiRowExists(String factoryId, String semiCode, WorkProcessTask task, String outputUnit) {
+    private void ensureRowExists(String factoryId, String intermediateBatchNo, WorkProcessTask task, String outputUnit) {
         SemiFinishedInventory placeholder = SemiFinishedInventory.builder()
                 .factoryId(factoryId)
                 .batchId(task.getProductionBatchId())
-                .intermediateBatchNo(semiCode)
+                .intermediateBatchNo(intermediateBatchNo)
                 .sourceWorkProcessTaskId(task.getId())
                 .processOrder(task.getProcessOrder())
                 .productTypeId(task.getProductTypeId())
@@ -349,8 +360,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             }
         } catch (DataIntegrityViolationException dup) {
             // 并发竞争输掉 insert race → 对方已建好同行, 目标 (行存在) 已达成 → 安全继续
-            log.info("[SP1-semi] new-row race for semiCode={}: lost insert race (constraint hit), "
-                    + "row already created by concurrent tx", semiCode);
+            log.info("[wip] new-row race for intermediateBatchNo={}: lost insert race (constraint hit), "
+                    + "row already created by concurrent tx", intermediateBatchNo);
         }
     }
 
@@ -378,47 +389,61 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         report.setCustomFields(fields);
     }
 
+    /**
+     * F1 修复 (2026-06-14) — FINISHED/legacy 产出 WIP upsert, ensure-row-then-lock 并发安全。
+     *
+     * <p><b>历史 bug</b>: 此前用 {@code findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(...).orElse(null)}
+     * 无悲观锁。{@code wipNo = generateBatchNo(task)} 是 task 级稳定键 (同 task 跨天/多次报工命中同行)。
+     * 并发审批同一 wipNo → 两事务各读旧行 → save 时 {@code @Version} 乐观锁冲突 → 审批事务回滚 →
+     * WIP 入账静默丢失 (#713 只修了半成品 SEMI 路径, FINISHED 路径漏修)。
+     *
+     * <p><b>修复</b>: 复用 SEMI 路径同款 ensure-row-then-lock (W8 BUG-SP1-NEW-ROW):
+     * <ol>
+     *   <li>{@code findForUpdate(wipNo)} 拿悲观写锁; 不存在 → {@link #ensureRowExists} 在 REQUIRES_NEW
+     *       子事务建 0 量占位行 (撞 unique 约束 catch 幂等) → 重 {@code findForUpdate} 拿锁。</li>
+     *   <li>单一累加路径 (existing-row 直接拿锁 / 新建占位行重拿锁), 累加在悲观锁保护下串行化, 无乐观锁冲突。</li>
+     * </ol>
+     *
+     * <p>成本语义不变 (FINISHED 用 {@code accumulatedCost / producedQuantity}, 非 SEMI 的 moving-average
+     * inUnitCost 加权): 0 量占位行 accumulatedCost=null → 首次累加后 = 本次 rollup, unitCost = accumulated/produced,
+     * 与历史 new-row / existing-row 行为字节一致。诚实 null: accumulatedCost 为 null (无工价无料价) → unitCost null。
+     */
     private SemiFinishedInventory upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
                                    BigDecimal rollLaborCost, BigDecimal rollMaterialCost) {
         String wipNo = generateBatchNo(task);
         BigDecimal out = nz(report.getOutputQuantity());
-        SemiFinishedInventory wip = wipRepo
-                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
-                .orElse(null);
         String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
 
+        // ensure-row-then-lock: 拿悲观写锁, 不存在则先建 0 量占位行 (REQUIRES_NEW 子事务) 再重拿锁。
+        SemiFinishedInventory wip = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
+                .orElse(null);
         if (wip == null) {
-            wip = SemiFinishedInventory.builder()
-                    .factoryId(factoryId)
-                    .batchId(task.getProductionBatchId())
-                    .intermediateBatchNo(wipNo)
-                    .sourceWorkProcessTaskId(task.getId())
-                    .processOrder(task.getProcessOrder())
-                    .productTypeId(task.getProductTypeId())
-                    .producedQuantity(out)
-                    .consumedQuantity(BigDecimal.ZERO)
-                    .availableQuantity(out)
-                    .unit(outputUnit)
-                    .status(SemiFinishedInventory.Status.AVAILABLE)
-                    .materialBatchRefs(report.getMaterialBatchRefs())
-                    .build();
-        } else {
-            BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
-            BigDecimal consumed = nz(wip.getConsumedQuantity());
-            wip.setProducedQuantity(produced);
-            wip.setAvailableQuantity(produced.subtract(consumed));
-            if (wip.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
-                    && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
-                wip.setStatus(SemiFinishedInventory.Status.AVAILABLE);
-            }
-            if (wip.getUnit() == null) {
-                wip.setUnit(outputUnit);
-            }
+            ensureRowExists(factoryId, wipNo, task, outputUnit);
+            wip = wipRepo
+                    .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "[wip] row missing after ensureRowExists, wipNo=" + wipNo));
+        }
+
+        // 统一累加路径 (占位行 producedQuantity=0 → 累加结果与历史全量新行字节一致; 既有行直接累加)。
+        BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
+        BigDecimal consumed = nz(wip.getConsumedQuantity());
+        wip.setProducedQuantity(produced);
+        wip.setAvailableQuantity(produced.subtract(consumed));
+        if (wip.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
+            wip.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        if (wip.getUnit() == null) {
+            wip.setUnit(outputUnit);
+        }
+        if (wip.getMaterialBatchRefs() == null && report.getMaterialBatchRefs() != null) {
+            wip.setMaterialBatchRefs(report.getMaterialBatchRefs());
         }
 
         wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), rollLaborCost, rollMaterialCost));
-        BigDecimal produced = wip.getProducedQuantity();
-        if (wip.getAccumulatedCost() != null && produced != null && produced.signum() > 0) {
+        if (wip.getAccumulatedCost() != null && produced.signum() > 0) {
             wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
         } else {
             wip.setUnitCost(null);

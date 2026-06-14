@@ -145,6 +145,31 @@ class WipMovingAverageCostingTest {
         when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
+    /**
+     * F1 修复后 FINISHED 路径 first-IN 流程: findForUpdate(empty) → ensureRowExists 建 0 量占位行 (saveAndFlush)
+     * → 再 findForUpdate 拿占位行 → upsertProducedWip 累加 (accumulatedCost / produced) → save。
+     *
+     * <p>FINISHED 路径不写 ledger txn / 不查 idempotency, 故无 txnRepo 桩 (与 SEMI 的 {@link #stubFirstIn} 区别)。
+     */
+    private void stubFinishedFirstIn(String wipNo) {
+        final SemiFinishedInventory[] holder = new SemiFinishedInventory[1];
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, wipNo))
+                .thenAnswer(inv -> Optional.ofNullable(holder[0]));
+        when(wipRepo.saveAndFlush(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory s = inv.getArgument(0);
+            s.setId(9998L);
+            holder[0] = s;
+            return s;
+        });
+        when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> {
+            SemiFinishedInventory s = inv.getArgument(0);
+            if (s.getId() == null) {
+                s.setId(9998L);
+            }
+            return s;
+        });
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Nested: postSemiOutputLedger path
     // ─────────────────────────────────────────────────────────────────────────
@@ -473,9 +498,8 @@ class WipMovingAverageCostingTest {
                     .laborCost(new BigDecimal("30")).materialCost(new BigDecimal("45"))
                     .build();
 
-            when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PT-3001-B3001-S2-2001"))
-                    .thenReturn(Optional.empty());
-            when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            // F1 修复后 FINISHED 新行也走 ensure-row-then-lock: findForUpdate(empty) → saveAndFlush 占位 → 再 findForUpdate 拿占位 → 累加
+            stubFinishedFirstIn("PT-3001-B3001-S2-2001");
 
             service.postApprovedOutput(FACTORY_ID, r, t, 10L);
 
@@ -514,7 +538,8 @@ class WipMovingAverageCostingTest {
                     .unitCost(new BigDecimal("8.0000"))
                     .unit("kg")
                     .status(SemiFinishedInventory.Status.AVAILABLE).build();
-            when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PT-3002-B3002-S3-2002"))
+            // F1 修复后 FINISHED 既有行走 findForUpdate 悲观锁 (非 findBy)
+            when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "PT-3002-B3002-S3-2002"))
                     .thenReturn(Optional.of(existing));
             when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -529,6 +554,144 @@ class WipMovingAverageCostingTest {
             // hand-calc: 1050/150 = 7.0000
             assertEquals(new BigDecimal("7.0000"), saved.getUnitCost(),
                     "upsertProducedWip rolling: 1050/150 = 7.0000");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Nested: R4 honest-null moving-average — 一侧"有量但成本未知"不得稀释
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * R4 (🔴红线) — 半成品移动均价缺成本 honest-null 守卫。
+     *
+     * <p><b>历史 bug</b>: {@code applyMovingAverageIn} 把缺失 unitCost (null) 当 ¥0 参与加权平均,
+     * 一侧"有量但成本未知"时 newUnitCost 被稀释 (e.g. 老 100kg@¥10 + 新 50kg@null → 假 ¥6.67),
+     * 违反"缺成本→null 不退化 0"红线。
+     *
+     * <p><b>修复</b>: 只有两侧成本对各自正数量都已知 (oldKnown && inKnown) 才算混合单价, 否则诚实 null。
+     * 占位行 oldQty=0 视为 oldKnown (0 量无成本贡献), 保证 first-IN 字节一致。
+     *
+     * <p>这些场景走 SEMI ledger 路径触发 {@code applyMovingAverageIn} (通过 existing-row 悲观锁分支)。
+     */
+    @Nested
+    @DisplayName("R4: 移动均价缺成本 honest-null 守卫 (一侧有量无成本不得稀释)")
+    class HonestNullMovingAverage {
+
+        @Test
+        @DisplayName("R4-1: 老行有成本 (100kg@¥10) + 新 IN 有量无成本 (50kg@null) → unitCost 诚实 null (非 6.67)")
+        void existingCostKnown_inHasQtyNoCost_yieldsNull() {
+            // 老 100kg@¥10 (accumulated 1000), 新 IN 50kg 无 labor/material → inUnitCost=null
+            // BUG: (100×10 + 50×0)/150 = 1000/150 = 6.6667 (假摊薄)
+            // FIX: 新侧有量(50>0)但成本未知 → 整体 newUnitCost = null
+            WorkProcessTask t = task(4101L, 4001L, 1);
+            ProductionReport r = semiReport(4501L, 4101L, 4001L, "SEMI-R4-1",
+                    new BigDecimal("50"), null, null); // 无成本 → inUnitCost=null
+
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 4501L))
+                    .thenReturn(java.util.Collections.emptyList());
+            SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                    .id(7001L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-R4-1")
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(new BigDecimal("100")).unitCost(new BigDecimal("10.0000"))
+                    .accumulatedCost(new BigDecimal("1000.00")).unit("kg")
+                    .status(SemiFinishedInventory.Status.AVAILABLE).build();
+            when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-R4-1"))
+                    .thenReturn(Optional.of(existing));
+            when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            service.postApprovedOutput(FACTORY_ID, r, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertEquals(new BigDecimal("150"), saved.getProducedQuantity(), "produced 仍累加 100+50");
+            assertNull(saved.getUnitCost(),
+                    "[R4 红线] 新侧有量(50kg)但成本未知 → unitCost 诚实 null, 不得稀释成 6.6667");
+            // accumulatedCost 保持 null-safe 累加: 老 1000 + 本次 totalCost(null) = 1000 (不变)
+            assertEquals(new BigDecimal("1000.00"), saved.getAccumulatedCost(),
+                    "accumulatedCost null-safe 累加: 1000 + null = 1000");
+        }
+
+        @Test
+        @DisplayName("R4-2: 老行有量无成本 (100kg@null) + 新 IN 有成本 (50kg@¥16) → unitCost 诚实 null (非 5.33)")
+        void existingHasQtyNoCost_inCostKnown_yieldsNull() {
+            // 老 100kg 无成本 (unitCost=null, accumulated=null), 新 IN 50kg totalCost=800 → inUnitCost=16
+            // BUG: (100×0 + 50×16)/150 = 800/150 = 5.3333 (假摊薄, 把老 100kg 当 ¥0)
+            // FIX: 老侧有量(100>0)但成本未知 → 整体 newUnitCost = null
+            WorkProcessTask t = task(4102L, 4002L, 1);
+            ProductionReport r = semiReport(4502L, 4102L, 4002L, "SEMI-R4-2",
+                    new BigDecimal("50"), new BigDecimal("600"), new BigDecimal("200")); // totalCost=800, inUnitCost=16
+
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 4502L))
+                    .thenReturn(java.util.Collections.emptyList());
+            SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                    .id(7002L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-R4-2")
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(new BigDecimal("100")).unitCost(null)   // 有量无成本
+                    .accumulatedCost(null).unit("kg")
+                    .status(SemiFinishedInventory.Status.AVAILABLE).build();
+            when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-R4-2"))
+                    .thenReturn(Optional.of(existing));
+            when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            service.postApprovedOutput(FACTORY_ID, r, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertEquals(new BigDecimal("150"), saved.getProducedQuantity(), "produced 仍累加 100+50");
+            assertNull(saved.getUnitCost(),
+                    "[R4 红线] 老侧有量(100kg)但成本未知 → unitCost 诚实 null, 不得把老量当 ¥0 稀释成 5.3333");
+            // accumulatedCost null-safe 累加: 老 null + 本次 totalCost(600+200=800) = 800 (无 scale, compareTo 比值)
+            assertEquals(0, new BigDecimal("800").compareTo(saved.getAccumulatedCost()),
+                    "accumulatedCost null-safe 累加: null + 800 = 800");
+        }
+
+        @Test
+        @DisplayName("R4-3 (回归): 两侧成本都已知 (100kg@¥10 + 50kg@¥16) → 正确加权 12.0000 (修复不破坏正常路径)")
+        void bothCostKnown_correctWeightedAverage() {
+            // 回归保护: 两侧都已知 → 仍 (100×10 + 50×16)/150 = 12.0000 (与 SC-2 同, 字节一致)
+            WorkProcessTask t = task(4103L, 4003L, 1);
+            ProductionReport r = semiReport(4503L, 4103L, 4003L, "SEMI-R4-3",
+                    new BigDecimal("50"), new BigDecimal("600"), new BigDecimal("200")); // totalCost=800, inUnitCost=16
+
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 4503L))
+                    .thenReturn(java.util.Collections.emptyList());
+            SemiFinishedInventory existing = SemiFinishedInventory.builder()
+                    .id(7003L).factoryId(FACTORY_ID).intermediateBatchNo("SEMI-R4-3")
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(new BigDecimal("100")).unitCost(new BigDecimal("10.0000"))
+                    .accumulatedCost(new BigDecimal("1000.00")).unit("kg")
+                    .status(SemiFinishedInventory.Status.AVAILABLE).build();
+            when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, "SEMI-R4-3"))
+                    .thenReturn(Optional.of(existing));
+            when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            service.postApprovedOutput(FACTORY_ID, r, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertEquals(new BigDecimal("12.0000"), saved.getUnitCost(),
+                    "[R4 回归] 两侧成本都已知 → 正确加权 (100×10 + 50×16)/150 = 12.0000");
+        }
+
+        @Test
+        @DisplayName("R4-4 (回归): 占位行 first-IN (oldQty=0) + 新 IN 有成本 → unitCost = inUnitCost (字节一致, 0量不算未知)")
+        void placeholderZeroQty_inCostKnown_yieldsInUnitCost() {
+            // 占位行 oldQty=0/oldUnitCost=null 视为 oldKnown (0 量无成本贡献) → first-IN 仍 = inUnitCost。
+            // labor=500 material=1000 qty=100 → inUnitCost=15.0000; oldQty=0 → newUnitCost=15.0000。
+            WorkProcessTask t = task(4104L, 4004L, 1);
+            ProductionReport r = semiReport(4504L, 4104L, 4004L, "SEMI-R4-4",
+                    new BigDecimal("100"), new BigDecimal("500"), new BigDecimal("1000"));
+            stubFirstIn("SEMI-R4-4");
+
+            service.postApprovedOutput(FACTORY_ID, r, t, 10L);
+
+            verify(wipRepo).save(sfiCaptor.capture());
+            SemiFinishedInventory saved = sfiCaptor.getValue();
+            assertEquals(new BigDecimal("15.0000"), saved.getUnitCost(),
+                    "[R4 回归] 占位行 oldQty=0 不算未知成本 → first-IN newUnitCost = inUnitCost = 15.0000");
         }
     }
 }
