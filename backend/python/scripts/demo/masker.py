@@ -2,15 +2,35 @@
 so relationships stay consistent across rows. Numbers/dates are NOT handled here
 (the clone engine only routes identity columns through the masker)."""
 import hashlib
+import re
 from faker import Faker
 
-# Tokens that identify the real source brand/clients — scrubbed from free text.
-BRAND_TOKENS = ["青花椒"]  # extend with any real client/brand strings found during rehearsal
+# Real client/brand tokens that must NOT appear anywhere in a demo tenant. Includes both the
+# restaurant brand (青花椒, also a Sichuan spice) and factory F001's B2B customer brands
+# (it makes products FOR named clients, so brands leak into product names / codes / remarks).
+# The verify gate (FORBIDDEN_TOKENS) mirrors this list — keep them in sync.
+BRAND_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户"]
 
-# Brand token -> neutral cuisine substitute. For dish/ingredient/menu names we replace the brand
-# word (which is also a Sichuan spice) with a neutral pepper, keeping the dish authentic-looking
-# (青花椒鱼 -> 藤椒鱼) while removing the brand from menus everywhere.
-BRAND_SUBSTITUTE = {"青花椒": "藤椒"}
+# Brand/cruft token -> replacement, applied in order (longer/more-specific first). 青花椒 is a
+# Sichuan spice so it stays a neutral pepper (藤椒); client brands are removed or turned into a
+# generic "客户"; test-data cruft is cleaned. The clone engine routes every name/code/remark
+# column that can carry these through cuisine() below.
+BRAND_SUBSTITUTE = {
+    "集成测试产品": "什锦海鲜拼盘",
+    "测试产品B4新版": "黄鱼片精装",
+    "青花椒": "藤椒",
+    "叮咚好食光": "",
+    "上海海壹佰米": "",
+    "级联测试客户": "客户",
+    "永辉超市": "客户",
+    "永辉": "客户",
+    "盒马": "客户",
+    "海底捞": "客户",
+    "_updated": "",
+}
+
+# 去掉含客户/公司标识的括号 (e.g. "墨鱼圈 (永辉超市)" 的整段, "...(上海海壹佰米网络科技有限公司)").
+_CUSTOMER_PAREN = re.compile(r"\s*[（(][^（）()]*(超市|有限公司|客户|科技|测试)[^（）()]*[）)]")
 
 
 def _seed(value: str) -> int:
@@ -53,14 +73,16 @@ class Masker:
     def idnum(self, v):    return self._det("idnum", v, lambda f: f.numerify("##############"))
 
     def cuisine(self, v):
-        """Dish/ingredient/menu names: substitute brand tokens with a neutral cuisine word
-        (青花椒 -> 藤椒). Keeps the dish authentic while removing the brand from menus."""
+        """Name/code/remark columns that can carry brands: substitute every brand/cruft token
+        (青花椒->藤椒, client brands removed/->客户, test cruft cleaned) and strip customer
+        parentheticals. Keeps the dish/remark readable while removing all client identity."""
         if v is None:
             return None
         s = str(v)
         for tok, sub in BRAND_SUBSTITUTE.items():
             s = s.replace(tok, sub)
-        return s
+        s = _CUSTOMER_PAREN.sub("", s)
+        return s.strip()
 
     def freetext(self, v):
         """Scrub free-text remark/notes: if it contains any brand/real token, replace whole field."""

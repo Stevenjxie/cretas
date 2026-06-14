@@ -3,10 +3,10 @@ import argparse, asyncio, sys
 import asyncpg
 from scripts.demo import clone_config as cfg
 
-# Real tokens that MUST NOT appear in the demo tenant's IDENTITY fields (extend with sampled real
-# names/phones). NOTE: 青花椒 is both the client brand AND a common Sichuan spice — so it is allowed
-# in cuisine-vocabulary columns (dish/ingredient/menu names), exempted below.
-FORBIDDEN_TOKENS = ["青花椒"]
+# Real client/brand tokens that MUST be 0 everywhere in a demo tenant. Mirror masker.BRAND_TOKENS:
+# restaurant brand (青花椒, substituted to 藤椒) + factory F001 B2B customer brands (it makes products
+# for named clients, so brands leak into product names / codes / remarks + denormalized copies).
+FORBIDDEN_TOKENS = ["青花椒", "叮咚好食光", "永辉超市", "永辉", "盒马", "海底捞", "上海海壹佰米", "级联测试客户"]
 
 # (table, column) pairs exempt from the brand-token check. Empty now: dish/ingredient/menu names
 # are scrubbed by SUBSTITUTION (青花椒 -> 藤椒) in the masker, so the brand token must be 0 EVERYWHERE.
