@@ -300,11 +300,17 @@ public class LabelServiceImpl implements LabelService {
             String materialName = (batch.getMaterialType() != null)
                     ? batch.getMaterialType().getName() : null;
             String specification = batch.getQuantityUnit();   // e.g. "kg" / "箱"
+            // A5 补缺: 填入重量/数量字段 — 缺值传 null，不补 0
+            java.math.BigDecimal receiptQty = batch.getReceiptQuantity();
+            java.math.BigDecimal remainingQty = (receiptQty != null) ? batch.getRemainingQuantity() : null;
             builder.batchNumber(batch.getBatchNumber())
                     .materialName(materialName)
                     .specification(specification)
                     .factoryNumber(batch.getFactoryNumber())
                     .originPlace(batch.getOriginPlace())
+                    .receiptQuantity(receiptQty)
+                    .remainingQuantity(remainingQty)
+                    .quantityUnit(batch.getQuantityUnit())
                     .batchCreatedAt(batch.getCreatedAt());
         }
 
