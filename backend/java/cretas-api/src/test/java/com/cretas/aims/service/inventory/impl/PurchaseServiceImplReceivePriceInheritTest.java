@@ -138,6 +138,19 @@ class PurchaseServiceImplReceivePriceInheritTest {
         assertEquals(0, BigDecimal.ZERO.compareTo(rec.getTotalAmount()));
     }
 
+    @Test
+    @DisplayName("createReceiveRecord maps factoryNumber and originPlace to receive item")
+    void createReceive_withFactoryNumber_mapsToReceiveItem() {
+        CreateReceiveRecordRequest req = receiveReq(MAT_A, new BigDecimal("10"), null);
+        req.getItems().get(0).setFactoryNumber("SC-321");
+        req.getItems().get(0).setOriginPlace("四川成都");
+
+        PurchaseReceiveRecord rec = service.createReceiveRecord(FACTORY, req, USER_ID);
+
+        assertEquals("SC-321", rec.getItems().get(0).getFactoryNumber());
+        assertEquals("四川成都", rec.getItems().get(0).getOriginPlace());
+    }
+
     private PurchaseOrderItem poItem(String materialTypeId, BigDecimal unitPrice) {
         PurchaseOrderItem it = new PurchaseOrderItem();
         it.setMaterialTypeId(materialTypeId);

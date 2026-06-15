@@ -337,6 +337,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '原材料批次', module: 'warehouse' }
           },
           {
+            path: 'manufacturers',
+            name: 'WarehouseManufacturers',
+            component: () => import('@/views/warehouse/manufacturers/index.vue'),
+            meta: { requiresAuth: true, title: '厂商登记表', module: 'warehouse' }
+          },
+          {
             path: 'wip-batches',
             name: 'WarehouseWipBatches',
             component: () => import('@/views/warehouse/materials/wip-list.vue'),

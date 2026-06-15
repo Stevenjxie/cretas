@@ -71,6 +71,12 @@ public class CreateReceiveRecordRequest {
         @Size(max = 50, message = "质检结果长度不能超过50个字符")
         private String qcResult;
 
+        @Size(max = 100, message = "厂号长度不能超过100个字符")
+        private String factoryNumber;
+
+        @Size(max = 200, message = "产地长度不能超过200个字符")
+        private String originPlace;
+
         @Size(max = 5000, message = "备注长度不能超过5000个字符")
         private String remark;
     }
