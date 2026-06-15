@@ -1195,6 +1195,18 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHint("请刷新入库单列表查看最新状态");
         }
 
+        // 🔒 doomed-tx 修复 (六扇门 2026-06-15, #774 族复发): 超收上限 fail-fast.
+        // 旧链路: createMaterialBatch (DB 写) → updateOrderReceiveStatus 内才校验超收 → 抛
+        // BusinessException → @Transactional 已有 pending 写 + 内层 @Transactional (event
+        // listener / recalculateMovingAvgPrice / recordPayable) 一旦 join 当前 tx 并被标
+        // rollback-only → commit 阶段 UnexpectedRollbackException (500) 而非干净 409.
+        // 新链路: 在任何 DB mutation 之前先校验超收, 事务未被 doom, 异常干净 propagate → 409.
+        // (createReceiveRecord 已有早返校验, 但 DRAFT → PENDING_QC 期间并发入库 commit 可使
+        //  原合法草稿在 confirm 时变非法; confirm 时再校验一次保证 fail-fast 不依赖创建期。)
+        if (record.getPurchaseOrderId() != null) {
+            validateOverReceiveCapForConfirm(record);
+        }
+
         // 确认入库：为每个行项目创建 MaterialBatch
         // 注意: createMaterialBatchFromReceiveItem 直接 new MaterialBatch + repo.save,
         // 绕开了 MaterialBatchService.createMaterialBatch 路径上的 updateMovingAvgPrice。
@@ -1944,30 +1956,73 @@ public class PurchaseServiceImpl implements PurchaseService {
         for (CreateReceiveRecordRequest.ReceiveItemDTO receiveItem : items) {
             for (PurchaseOrderItem orderItem : orderItems) {
                 if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
-                    BigDecimal alreadyReceived = orderItem.getReceivedQuantity() != null
-                            ? orderItem.getReceivedQuantity() : BigDecimal.ZERO;
-                    BigDecimal thisReceive = receiveItem.getReceivedQuantity() != null
-                            ? receiveItem.getReceivedQuantity() : BigDecimal.ZERO;
-                    BigDecimal newReceived = alreadyReceived.add(thisReceive);
-
-                    if (orderItem.getQuantity() != null) {
-                        BigDecimal maxAllowed = orderItem.getQuantity()
-                                .multiply(BigDecimal.ONE.add(overReceiveRate));
-                        if (newReceived.compareTo(maxAllowed) > 0) {
-                            throw new BusinessException(409, String.format(
-                                    "超出可入库上限: 物料「%s」已收 %s, 本次 %s, 累计 %s, 下单 %s, 最大可收 %s (含 %s%% 抄收)",
-                                    receiveItem.getMaterialName(),
-                                    alreadyReceived.stripTrailingZeros().toPlainString(),
-                                    thisReceive.stripTrailingZeros().toPlainString(),
-                                    newReceived.stripTrailingZeros().toPlainString(),
-                                    orderItem.getQuantity().stripTrailingZeros().toPlainString(),
-                                    maxAllowed.stripTrailingZeros().toPlainString(),
-                                    overReceiveRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()))
-                                    .withHint("如需更多入库, 请采购另下新订单或联系采购员调整下单量");
-                        }
-                    }
+                    checkOverReceiveCap(
+                            receiveItem.getMaterialName(),
+                            orderItem.getReceivedQuantity(),
+                            receiveItem.getReceivedQuantity(),
+                            orderItem.getQuantity());
                 }
             }
+        }
+    }
+
+    /**
+     * 🔒 doomed-tx 修复 (六扇门 2026-06-15): confirmReceive 阶段的超收 fail-fast 校验.
+     *
+     * <p>用 {@link PurchaseReceiveItem} (DRAFT 入库行) 累加到 PO 行 receivedQuantity, 在
+     * confirmReceive 创建任何 MaterialBatch <b>之前</b> 校验超收上限. 超限直接抛干净
+     * {@link BusinessException}(409), 事务不被 doom → HTTP 409 而非 UnexpectedRollbackException(500).
+     *
+     * <p>与 {@link #validateOverReceiveCap} 共享 {@link #checkOverReceiveCap} 核心, 二者唯一
+     * 区别是 item 类型 (创建期用 DTO, 确认期用持久化 PurchaseReceiveItem).
+     *
+     * @param record 已加载的 DRAFT/PENDING_QC 入库单 (其 purchaseOrderId 非 null, caller 责任)
+     */
+    private void validateOverReceiveCapForConfirm(PurchaseReceiveRecord record) {
+        List<PurchaseOrderItem> orderItems =
+                purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
+        for (PurchaseReceiveItem receiveItem : record.getItems()) {
+            for (PurchaseOrderItem orderItem : orderItems) {
+                if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
+                    checkOverReceiveCap(
+                            receiveItem.getMaterialName(),
+                            orderItem.getReceivedQuantity(),
+                            receiveItem.getReceivedQuantity(),
+                            orderItem.getQuantity());
+                }
+            }
+        }
+    }
+
+    /**
+     * 超收上限校验核心 (单行). 超过 {@code orderedQty × (1 + overReceiveRate)} 抛 409.
+     *
+     * <p>所有调用站点 (createReceiveRecord 早返 / confirmReceive fail-fast / updateOrderReceiveStatus
+     * 二次防御) 共享此核心, 保证 message 与边界语义一致. 不做任何 DB 写, 调用方负责在 DB mutation 前调用.
+     *
+     * @param materialName    物料名 (用于 message)
+     * @param alreadyReceived PO 行已累计收货量 (null 视为 0)
+     * @param thisReceive     本次收货量 (null 视为 0)
+     * @param orderedQty      PO 行下单量 (null → 无上限, 跳过)
+     */
+    private void checkOverReceiveCap(String materialName,
+            BigDecimal alreadyReceived, BigDecimal thisReceive, BigDecimal orderedQty) {
+        if (orderedQty == null) return;
+        BigDecimal already = alreadyReceived != null ? alreadyReceived : BigDecimal.ZERO;
+        BigDecimal thisQty = thisReceive != null ? thisReceive : BigDecimal.ZERO;
+        BigDecimal newReceived = already.add(thisQty);
+        BigDecimal maxAllowed = orderedQty.multiply(BigDecimal.ONE.add(overReceiveRate));
+        if (newReceived.compareTo(maxAllowed) > 0) {
+            throw new BusinessException(409, String.format(
+                    "超出可入库上限: 物料「%s」已收 %s, 本次 %s, 累计 %s, 下单 %s, 最大可收 %s (含 %s%% 抄收)",
+                    materialName,
+                    already.stripTrailingZeros().toPlainString(),
+                    thisQty.stripTrailingZeros().toPlainString(),
+                    newReceived.stripTrailingZeros().toPlainString(),
+                    orderedQty.stripTrailingZeros().toPlainString(),
+                    maxAllowed.stripTrailingZeros().toPlainString(),
+                    overReceiveRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()))
+                    .withHint("如需更多入库, 请采购另下新订单或联系采购员调整下单量");
         }
     }
 
@@ -1981,31 +2036,21 @@ public class PurchaseServiceImpl implements PurchaseService {
         for (PurchaseReceiveItem receiveItem : record.getItems()) {
             for (PurchaseOrderItem orderItem : orderItems) {
                 if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
-                    BigDecimal newReceived = orderItem.getReceivedQuantity().add(receiveItem.getReceivedQuantity());
-
-                    // May 9 fix (audio P1-7): 抄收上限校验 (二次防御 — 主校验已在 createReceiveRecord 早返).
+                    // May 9 fix (audio P1-7): 抄收上限校验 (二次防御).
                     // 旧逻辑无上限 → 分批入库时累计可任意超出下单量.
                     // 客户原话: "正常抄收应该是30%以内, 如果有特殊情况, 那采购另外再下个单子".
-                    // PR #173 follow-up I-2: 早返已加在 createReceiveRecord, 此处保留作为
-                    // DRAFT → CONFIRMED 期间并发入库已 commit 致原合法草稿变非法时的兜底.
-                    if (orderItem.getQuantity() != null) {
-                        BigDecimal maxAllowed = orderItem.getQuantity()
-                                .multiply(BigDecimal.ONE.add(overReceiveRate));
-                        if (newReceived.compareTo(maxAllowed) > 0) {
-                            throw new BusinessException(409, String.format(
-                                    "超出可入库上限: 物料「%s」已收 %s, 本次 %s, 累计 %s, 下单 %s, 最大可收 %s (含 %s%% 抄收)",
-                                    receiveItem.getMaterialName(),
-                                    orderItem.getReceivedQuantity().stripTrailingZeros().toPlainString(),
-                                    receiveItem.getReceivedQuantity().stripTrailingZeros().toPlainString(),
-                                    newReceived.stripTrailingZeros().toPlainString(),
-                                    orderItem.getQuantity().stripTrailingZeros().toPlainString(),
-                                    maxAllowed.stripTrailingZeros().toPlainString(),
-                                    overReceiveRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()))
-                                    .withHint("如需更多入库, 请采购另下新订单或联系采购员调整下单量");
-                        }
-                    }
+                    // doomed-tx 修复 (六扇门 2026-06-15): 主校验已前移到 confirmReceive 入口
+                    // (validateOverReceiveCapForConfirm) — 在任何 MaterialBatch 创建前 fail-fast,
+                    // 事务不被 doom. 此处保留共享 helper 校验作为兜底 (理论上前移后不会触发,
+                    // 但保留保证即便有路径绕过入口校验, 累加 setReceivedQuantity 前仍守住上限).
+                    checkOverReceiveCap(
+                            receiveItem.getMaterialName(),
+                            orderItem.getReceivedQuantity(),
+                            receiveItem.getReceivedQuantity(),
+                            orderItem.getQuantity());
 
-                    orderItem.setReceivedQuantity(newReceived);
+                    orderItem.setReceivedQuantity(
+                            orderItem.getReceivedQuantity().add(receiveItem.getReceivedQuantity()));
                 }
             }
         }
