@@ -1145,6 +1145,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                     : poLinePrices.get(itemDTO.getMaterialTypeId());
             item.setUnitPrice(resolvedPrice);
             item.setQcResult(itemDTO.getQcResult());
+            item.setFactoryNumber(itemDTO.getFactoryNumber());
+            item.setOriginPlace(itemDTO.getOriginPlace());
             item.setRemark(itemDTO.getRemark());
             record.getItems().add(item);
 
@@ -1816,6 +1818,8 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setUnitPrice(item.getUnitPrice());
         batch.setReceiptDate(record.getReceiveDate());
         batch.setPurchaseDate(record.getReceiveDate());
+        batch.setFactoryNumber(item.getFactoryNumber());
+        batch.setOriginPlace(item.getOriginPlace());
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         batch.setCreatedBy(userId);
         // D1: 采购入库默认 WH-LOG (物流仓). per PR #310 spec — raw material persistent in logistics warehouse.

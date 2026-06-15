@@ -30,6 +30,7 @@ import java.time.LocalDate;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -105,6 +106,50 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
         verify(materialBatchService).recalculateMovingAvgPrice(
                 MATERIAL_ID, new BigDecimal("12.5000"), new BigDecimal("8.20"), "BATCH-QHJ-001");
         verify(warehouseResolver, never()).resolveLogisticsId(FACTORY);
+    }
+
+    @Test
+    @DisplayName("confirmReceive copies receive item factoryNumber and originPlace onto MaterialBatch")
+    void confirmReceive_withFactoryNumber_setsOnBatch() {
+        PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
+        record.getItems().get(0).setFactoryNumber("SC-321");
+        record.getItems().get(0).setOriginPlace("四川成都");
+        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
+            MaterialBatch batch = inv.getArgument(0);
+            batch.setId("BATCH-QHJ-FACTORY");
+            return batch;
+        });
+        when(receiveRecordRepository.save(any(PurchaseReceiveRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmReceive(FACTORY, RECEIVE_ID, USER_ID);
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository).save(batchCaptor.capture());
+        MaterialBatch savedBatch = batchCaptor.getValue();
+        assertEquals("SC-321", savedBatch.getFactoryNumber());
+        assertEquals("四川成都", savedBatch.getOriginPlace());
+    }
+
+    @Test
+    @DisplayName("confirmReceive without factoryNumber keeps MaterialBatch factoryNumber null")
+    void confirmReceive_noFactoryNumber_batchNull() {
+        PurchaseReceiveRecord record = draftRecord("WH-COLD-01");
+        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(materialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial()));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
+            MaterialBatch batch = inv.getArgument(0);
+            batch.setId("BATCH-QHJ-NULL");
+            return batch;
+        });
+        when(receiveRecordRepository.save(any(PurchaseReceiveRecord.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmReceive(FACTORY, RECEIVE_ID, USER_ID);
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository).save(batchCaptor.capture());
+        assertNull(batchCaptor.getValue().getFactoryNumber());
     }
 
     @Test

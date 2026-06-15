@@ -13,9 +13,11 @@
  *   POST /api/mobile/{factoryId}/purchase/receives/{receiveId}/confirm  (DRAFT → CONFIRMED, 生成物料批次)
  */
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
+import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 // 单元 G (F006 R-B3): 跨页累计 + 分次收货时序明细 (后端权威值, 替代 page-local 聚合)
 import {
   getCumulativeReceived,
@@ -61,6 +63,8 @@ interface ReceiveItem {
   unit: string;
   unitPrice?: number;
   qcResult?: string;
+  factoryNumber?: string;
+  originPlace?: string;
   remark?: string;
 }
 
@@ -69,6 +73,7 @@ interface MaterialTypeOption { id: string; name: string; code: string; unit: str
 interface PurchaseOrderOption { id: string; orderNumber: string; supplierName?: string; supplierId?: string; status?: string }
 
 const authStore = useAuthStore();
+const router = useRouter();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
@@ -134,6 +139,8 @@ function handleAiFill(params: Record<string, unknown>) {
         unit: String(it.unit || matched?.unit || 'kg'),
         unitPrice: matched?.unitPrice,
         qcResult: '',
+        factoryNumber: '',
+        originPlace: '',
         remark: '',
       };
     });
@@ -175,6 +182,7 @@ const formRules = {
 const supplierOptions = ref<SupplierOption[]>([]);
 const materialOptions = ref<MaterialTypeOption[]>([]);
 const purchaseOrderOptions = ref<PurchaseOrderOption[]>([]);
+const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -195,7 +203,7 @@ async function loadData() {
 async function loadOptions() {
   if (!factoryId.value) return;
   try {
-    const [sup, mat, po] = await Promise.all([
+    const [sup, mat, po, manufacturers] = await Promise.all([
       get<{ content: SupplierOption[] } | SupplierOption[]>(
         `/${factoryId.value}/reference-data/suppliers?usage=active`
       ),
@@ -205,11 +213,13 @@ async function loadOptions() {
       get<{ content: PurchaseOrderOption[] } | PurchaseOrderOption[]>(
         `/${factoryId.value}/reference-data/purchase-orders?usage=receivable`
       ),
+      listManufacturers(factoryId.value, true),
     ]);
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);
     materialOptions.value = ext<MaterialTypeOption>(mat);
     purchaseOrderOptions.value = ext<PurchaseOrderOption>(po);
+    manufacturerOptions.value = ext<ManufacturerRegistry>(manufacturers);
   } catch { /* interceptor */ }
 }
 
@@ -241,6 +251,8 @@ function addItem() {
     unit: 'kg',
     unitPrice: undefined,
     qcResult: '',
+    factoryNumber: '',
+    originPlace: '',
     remark: '',
   });
 }
@@ -255,6 +267,13 @@ function handleMaterialChange(idx: number, materialId: string) {
     form.value.items[idx].materialName = m.name;
     if (m.unit) form.value.items[idx].unit = m.unit;
     if (m.unitPrice && !form.value.items[idx].unitPrice) form.value.items[idx].unitPrice = m.unitPrice;
+  }
+}
+
+function handleManufacturerChange(idx: number, code: string) {
+  const manufacturer = manufacturerOptions.value.find((item) => item.code === code);
+  if (manufacturer?.originPlace) {
+    form.value.items[idx].originPlace = manufacturer.originPlace;
   }
 }
 
@@ -612,7 +631,10 @@ onMounted(() => { loadData(); loadOptions(); });
         </el-form-item>
 
         <el-divider content-position="left">入库物料</el-divider>
-        <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
+        <div class="line-toolbar">
+          <el-button size="small" :icon="Plus" @click="addItem">添加物料</el-button>
+          <el-button size="small" @click="router.push('/warehouse/manufacturers')">厂商登记表</el-button>
+        </div>
         <el-table :data="form.items" border>
           <el-table-column label="物料类型" min-width="200">
             <template #default="{ row, $index }">
@@ -647,6 +669,31 @@ onMounted(() => { loadData(); loadOptions(); });
                 <el-option label="不合格" value="FAIL" />
                 <el-option label="待复检" value="RECHECK" />
               </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="厂号" width="190">
+            <template #default="{ row, $index }">
+              <el-select
+                v-model="row.factoryNumber"
+                placeholder="选择厂号"
+                filterable
+                clearable
+                size="small"
+                style="width:100%"
+                @change="(val: string) => handleManufacturerChange($index, val)"
+              >
+                <el-option
+                  v-for="manufacturer in manufacturerOptions"
+                  :key="manufacturer.id"
+                  :label="`${manufacturer.code} · ${manufacturer.name}`"
+                  :value="manufacturer.code"
+                />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="产地" width="150">
+            <template #default="{ row }">
+              <el-input v-model="row.originPlace" size="small" placeholder="可选" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
@@ -693,6 +740,12 @@ onMounted(() => { loadData(); loadOptions(); });
           </template>
         </el-table-column>
         <el-table-column prop="qcResult" label="质检" width="100" align="center" />
+        <el-table-column prop="factoryNumber" label="厂号" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.factoryNumber || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="originPlace" label="产地" width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.originPlace || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
       </el-table>
       <el-empty v-else description="无物料明细" />
@@ -795,5 +848,12 @@ onMounted(() => { loadData(); loadOptions(); });
 <style scoped>
 .page-wrapper {
   padding: 16px;
+}
+
+.line-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
 }
 </style>

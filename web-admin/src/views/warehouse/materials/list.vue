@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
+import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -26,11 +27,13 @@ const searchKeyword = ref('');
 
 const materialTypes = ref<TableRow[]>([]);
 const suppliers = ref<TableRow[]>([]);
+const manufacturers = ref<ManufacturerRegistry[]>([]);
 
 onMounted(() => {
   loadData();
   loadMaterialTypes();
   loadSuppliers();
+  loadManufacturers();
 });
 
 async function loadMaterialTypes() {
@@ -47,6 +50,14 @@ async function loadSuppliers() {
   try {
     const res = await get(`/${factoryId.value}/suppliers`, { params: { size: 200 } });
     if (res.success && res.data) suppliers.value = res.data.content || res.data || [];
+  } catch { /* silent */ }
+}
+
+async function loadManufacturers() {
+  if (!factoryId.value) return;
+  try {
+    const res = await listManufacturers(factoryId.value, true);
+    if (res.success && Array.isArray(res.data)) manufacturers.value = res.data;
   } catch { /* silent */ }
 }
 
@@ -90,6 +101,13 @@ function handleRefresh() {
 function handlePageChange(page: number) {
   pagination.value.page = page;
   loadData();
+}
+
+function handleManufacturerChange(code: string) {
+  const manufacturer = manufacturers.value.find((item) => item.code === code);
+  if (manufacturer?.originPlace) {
+    formData.originPlace = manufacturer.originPlace;
+  }
 }
 
 function handleSizeChange(size: number) {
@@ -359,6 +377,9 @@ async function handleGenerateLabel(row: TableRow) {
             <el-button v-if="canWrite" @click="router.push('/warehouse/material-types')">
               管理原料类型字典
             </el-button>
+            <el-button v-if="canWrite" @click="router.push('/warehouse/manufacturers')">
+              厂商登记表
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">入库登记</el-button>
           </div>
         </div>
@@ -536,7 +557,21 @@ async function handleGenerateLabel(row: TableRow) {
           <el-input v-model="formData.notes" type="textarea" :rows="2" />
         </el-form-item>
         <el-form-item label="厂号">
-          <el-input v-model="formData.factoryNumber" placeholder="生产厂家编号（可选）" />
+          <el-select
+            v-model="formData.factoryNumber"
+            placeholder="选择厂号"
+            filterable
+            clearable
+            style="width: 100%"
+            @change="handleManufacturerChange"
+          >
+            <el-option
+              v-for="manufacturer in manufacturers"
+              :key="manufacturer.id"
+              :label="`${manufacturer.code} · ${manufacturer.name}`"
+              :value="manufacturer.code"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="产地">
           <el-input v-model="formData.originPlace" placeholder="原料产地（如：山东寿光，可选）" />

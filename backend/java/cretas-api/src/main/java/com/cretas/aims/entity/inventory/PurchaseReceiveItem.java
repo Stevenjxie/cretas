@@ -68,6 +68,12 @@ public class PurchaseReceiveItem extends BaseEntity {
     @Column(name = "qc_result", length = 32)
     private String qcResult;
 
+    @Column(name = "factory_number", length = 100)
+    private String factoryNumber;
+
+    @Column(name = "origin_place", length = 200)
+    private String originPlace;
+
     @Column(name = "remark", length = 500)
     private String remark;
 
