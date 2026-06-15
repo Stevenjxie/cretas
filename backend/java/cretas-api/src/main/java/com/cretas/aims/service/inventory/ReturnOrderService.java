@@ -30,6 +30,8 @@ public interface ReturnOrderService {
      */
     ReturnOrder financeApproveReturnOrder(String factoryId, String returnOrderId, Long financeUserId);
 
+    ReturnOrder financeRejectReturnOrder(String factoryId, String returnOrderId, Long financeUserId);
+
     ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId);
 
     ReturnOrder completeReturnOrder(String factoryId, String returnOrderId);

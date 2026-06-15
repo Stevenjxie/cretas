@@ -3,13 +3,16 @@ package com.cretas.aims.service.oa;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -54,6 +57,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private final SalesService salesService;
     private final SupplierDeliveryNoteService supplierDeliveryNoteService;
     private final FactoryStocktakeRepository stocktakeRepository;
+    private final ReturnOrderRepository returnOrderRepository;
     private final PaymentRequestService paymentRequestService;
 
     // ─── Config ────────────────────────────────────────────────────────────
@@ -79,11 +83,13 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SalesService salesService,
             SupplierDeliveryNoteService supplierDeliveryNoteService,
             FactoryStocktakeRepository stocktakeRepository,
+            ReturnOrderRepository returnOrderRepository,
             PaymentRequestService paymentRequestService) {
         this.purchaseService = purchaseService;
         this.salesService = salesService;
         this.supplierDeliveryNoteService = supplierDeliveryNoteService;
         this.stocktakeRepository = stocktakeRepository;
+        this.returnOrderRepository = returnOrderRepository;
         this.paymentRequestService = paymentRequestService;
     }
 
@@ -95,10 +101,11 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SalesService salesService,
             SupplierDeliveryNoteService supplierDeliveryNoteService,
             FactoryStocktakeRepository stocktakeRepository,
+            ReturnOrderRepository returnOrderRepository,
             PaymentRequestService paymentRequestService,
             BigDecimal detailThreshold) {
         this(purchaseService, salesService, supplierDeliveryNoteService,
-                stocktakeRepository, paymentRequestService);
+                stocktakeRepository, returnOrderRepository, paymentRequestService);
         this.detailThreshold = detailThreshold;
     }
 
@@ -113,7 +120,8 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                         TodoType.PURCHASE_FINANCE_REVIEW,
                         TodoType.SALES_FINANCE_REVIEW,
                         TodoType.PRICE_ANOMALY,
-                        TodoType.STOCKTAKE_APPROVAL))));
+                        TodoType.STOCKTAKE_APPROVAL,
+                        TodoType.RETURN_FINANCE_REVIEW))));
         m.put("cashier", Collections.unmodifiableSet(
                 new LinkedHashSet<>(Arrays.asList(
                         TodoType.PAYMENT_DISBURSE))));
@@ -161,6 +169,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             case SALES_FINANCE_REVIEW    -> fetchSalesFinanceReview(factoryId);
             case PRICE_ANOMALY           -> fetchPriceAnomaly(factoryId);
             case STOCKTAKE_APPROVAL      -> fetchStocktakeApproval(factoryId);
+            case RETURN_FINANCE_REVIEW   -> fetchReturnFinanceReview(factoryId);
             case PAYMENT_DISBURSE        -> fetchPaymentDisburse(factoryId);
         };
     }
@@ -304,6 +313,40 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     }
 
     // ── 付款（出纳） ──────────────────────────────────────────────────────
+
+    private List<TodoItemDTO> fetchReturnFinanceReview(String factoryId) {
+        Page<ReturnOrder> page = returnOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                factoryId, ReturnOrderStatus.APPROVED,
+                PageRequest.of(0, Integer.MAX_VALUE / 2));
+        if (page == null) return Collections.emptyList();
+
+        return page.getContent().stream()
+                .map(this::mapReturnOrder)
+                .collect(Collectors.toList());
+    }
+
+    private TodoItemDTO mapReturnOrder(ReturnOrder order) {
+        BigDecimal amount = order.getTotalAmount();
+        LocalDateTime submittedAt = order.getApprovedAt();
+        if (submittedAt == null) {
+            submittedAt = order.getUpdatedAt();
+        }
+        if (submittedAt == null) {
+            submittedAt = order.getCreatedAt();
+        }
+
+        return TodoItemDTO.builder()
+                .type(TodoType.RETURN_FINANCE_REVIEW)
+                .refId(order.getId())
+                .refNumber(order.getReturnNumber())
+                .title("退货财审 — " + order.getReturnNumber())
+                .amount(amount)
+                .counterparty(order.getCounterpartyId())
+                .submittedAt(submittedAt)
+                .needDetail(needsDetail(amount))
+                .detailPath("TodoDetail/return/" + order.getId())
+                .build();
+    }
 
     private List<TodoItemDTO> fetchPaymentDisburse(String factoryId) {
         List<PaymentRequest> prs = paymentRequestService.listApprovedForPayment(factoryId);

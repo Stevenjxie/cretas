@@ -146,6 +146,33 @@ class ReturnOrderFinanceApprovalGateTest {
     }
 
     @Test
+    @DisplayName("APPROVED -> financeReject -> REJECTED + 记录财务处理人/时间")
+    void financeReject_flipsToRejected() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, ReturnOrderStatus.APPROVED);
+        stub(order);
+
+        ReturnOrder result = service.financeRejectReturnOrder(FACTORY, order.getId(), FINANCE_USER);
+
+        assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.REJECTED);
+        assertThat(result.getFinanceApprovedBy()).isEqualTo(FINANCE_USER);
+        assertThat(result.getFinanceApprovedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("非 APPROVED 状态调 financeReject -> 409 拒绝")
+    void nonApproved_financeRejectRejected() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, ReturnOrderStatus.SUBMITTED);
+        stub(order);
+
+        assertThatThrownBy(() -> service.financeRejectReturnOrder(FACTORY, order.getId(), FINANCE_USER))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("财务驳回");
+
+        assertThat(order.getStatus()).isEqualTo(ReturnOrderStatus.SUBMITTED);
+        verify(returnOrderRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("SALES_RETURN 同样受财务门约束 (未财务审批 complete 拒绝)")
     void salesReturn_alsoGatedByFinance() {
         ReturnOrder order = buildOrder(ReturnType.SALES_RETURN, ReturnOrderStatus.APPROVED);
