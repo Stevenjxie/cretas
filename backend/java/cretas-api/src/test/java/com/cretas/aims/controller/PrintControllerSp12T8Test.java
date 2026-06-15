@@ -77,7 +77,7 @@ class PrintControllerSp12T8Test {
     // ==================== buildProductionWorkOrderPayload ====================
 
     @Test
-    @DisplayName("T8-PWO-1: service 可用时 payload 包含计划真实数据")
+    @DisplayName("T8-PWO-1: service 可用时 payload 包含计划真实数据 (含 N5 抬头字段)")
     void buildProductionWorkOrderPayload_withService_returnsRealData() throws Exception {
         ProductionPlanDTO plan = new ProductionPlanDTO();
         plan.setPlanNumber("PLAN-2026-001");
@@ -88,6 +88,10 @@ class PrintControllerSp12T8Test {
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         plan.setPlannedDate(LocalDate.of(2026, 6, 10));
         plan.setExpectedCompletionDate(LocalDate.of(2026, 6, 12));
+        // N5: 制单人 + 客户名称
+        plan.setCreatedBy(2001L);
+        plan.setCreatedByName("计划文员");
+        plan.setSourceCustomerName("六扇门餐饮");
 
         when(productionPlanService.getProductionPlanById("F006", "plan-abc-001")).thenReturn(plan);
 
@@ -106,6 +110,12 @@ class PrintControllerSp12T8Test {
         assertThat(payload.get("printedAccount")).isEqualTo("-");
         assertThat(payload.get("plannedDate").toString()).isEqualTo("2026-06-10");
         assertThat(payload.get("expectedCompletionDate").toString()).isEqualTo("2026-06-12");
+        // N5 新字段断言
+        assertThat(payload.get("deliveryDate").toString()).isEqualTo("2026-06-12");
+        assertThat(payload.get("customerName")).isEqualTo("六扇门餐饮");
+        assertThat(payload.get("createdBy")).isEqualTo("2001");
+        assertThat(payload.get("createdByName")).isEqualTo("计划文员");
+        assertThat(payload.get("preparedBy")).isEqualTo("计划文员");
         assertThat(payload).containsKey("processes");
         assertThat(payload).containsKey("materialItems");
         assertThat(payload.get("factoryName").toString()).contains("F006");
@@ -287,15 +297,23 @@ class PrintControllerSp12T8Test {
         aux.setConsumedQty(new BigDecimal("4"));
         aux.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
 
+        // N5: 半成品行
+        FactoryMaterialRequisitionItem semi = new FactoryMaterialRequisitionItem();
+        semi.setMaterialTypeId("mat-wip-soup");
+        semi.setMaterialName("老卤汤");
+        semi.setUnit("kg");
+        semi.setRequiredQty(new BigDecimal("12.5"));
+        semi.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.SEMI_FINISHED);
+
         FactoryMaterialRequisition req = mock(FactoryMaterialRequisition.class);
-        when(req.getItems()).thenReturn(List.of(raw, aux));
+        when(req.getItems()).thenReturn(List.of(raw, aux, semi));
         when(factoryMaterialRequisitionService.listByPlan("F006", "plan-mat")).thenReturn(List.of(req));
 
         Map<String, Object> payload = invokeBuildProductionWorkOrderPayload("F006", "plan-mat", null);
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> materialItems = (List<Map<String, Object>>) payload.get("materialItems");
-        assertThat(materialItems).hasSize(2);
+        assertThat(materialItems).hasSize(3);
 
         Map<String, Object> rawRow = materialItems.stream()
                 .filter(r -> "牛腱".equals(r.get("materialName")))
@@ -315,6 +333,17 @@ class PrintControllerSp12T8Test {
         assertThat(auxRow.get("plannedRawQty")).isEqualTo("");
         assertThat(auxRow.get("plannedAuxiliaryQty")).isEqualTo("5");
         assertThat(auxRow.get("actualUsedQty")).isEqualTo("4");
+
+        // N5: 半成品行断言
+        Map<String, Object> semiRow = materialItems.stream()
+                .filter(r -> "老卤汤".equals(r.get("materialName")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("老卤汤 row not found"));
+        assertThat(semiRow.get("category")).isEqualTo("半成品");
+        assertThat(semiRow.get("plannedRawQty")).isEqualTo("");
+        assertThat(semiRow.get("plannedAuxiliaryQty")).isEqualTo("");
+        assertThat(semiRow.get("plannedSemiFinishedQty")).isEqualTo("12.5");
+        assertThat(semiRow.get("actualUsedQty")).isEqualTo("________");
     }
 
     // ==================== buildConsolidatedMaterialRequisitionPayload ====================

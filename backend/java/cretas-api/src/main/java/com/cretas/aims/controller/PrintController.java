@@ -752,6 +752,17 @@ public class PrintController {
             p.put("productionDate", p.get("plannedDate"));
             p.put("expectedCompletionDate", plan.getExpectedCompletionDate() != null
                     ? plan.getExpectedCompletionDate().toString() : "-");
+            // N5 抬头: 交货日期 = 预计完成日, 客户名称, 制单人
+            p.put("deliveryDate", plan.getExpectedCompletionDate() != null
+                    ? plan.getExpectedCompletionDate().toString() : "-");
+            p.put("customerName", plan.getSourceCustomerName() != null
+                    && !plan.getSourceCustomerName().isBlank()
+                    ? plan.getSourceCustomerName() : "-");
+            p.put("createdBy", plan.getCreatedBy() != null ? plan.getCreatedBy().toString() : "-");
+            p.put("createdByName", plan.getCreatedByName() != null
+                    && !plan.getCreatedByName().isBlank()
+                    ? plan.getCreatedByName() : "-");
+            p.put("preparedBy", p.get("createdByName"));
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {

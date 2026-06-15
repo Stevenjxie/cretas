@@ -602,15 +602,26 @@ def render_packing_list(data: dict) -> bytes:
 
 
 def render_production_work_order(data: dict) -> bytes:
-    """生产工单 (公单) PDF — SP12 T8.
+    """生产工单 (公单) PDF — SP12 T8 / N5 完整字段.
+
+    N5 新增抬头字段: customerName, deliveryDate, createdByName/createdBy (制单人).
+    N5 新增投料列: unitCost (单位成本, 无数据时留空).
+    N5 扩展签字栏: 制单人 / 审核人 / 领料人 / 生产负责人 四联.
+    N5 半成品分类: materialItems.category="半成品" 列入 plannedSemiFinishedQty 列.
 
     expected data: {
       factoryName, planId, planNumber, productionOrderNumber, salesOrderNumbers,
+      customerName,          # N5: 客户名称 (from SO)
       productName, productUnit, plannedQuantity, expectedOutput, status,
-      plannedDate, productionDate, expectedCompletionDate, printDate,
+      plannedDate, productionDate,
+      expectedCompletionDate, deliveryDate,  # N5: deliveryDate = expectedCompletionDate alias
+      printDate,
+      createdByName, createdBy,  # N5: 制单人
       printedBy, printedAccount,
       materialItems: [{materialName, category, unit, plannedRawQty,
-                      plannedAuxiliaryQty, plannedSemiFinishedQty, actualUsedQty}],
+                      plannedAuxiliaryQty, plannedSemiFinishedQty,
+                      unitCost,           # N5: 单位成本 (str or None → blank)
+                      actualUsedQty, batchRefs}],
       processes: [{seq, name, standardHours, operator}],
       remark
     }
@@ -622,33 +633,49 @@ def render_production_work_order(data: dict) -> bytes:
     buffer = io.BytesIO()
     doc = _make_doc(buffer)
 
+    delivery_date = (
+        data.get("deliveryDate")
+        or data.get("expectedCompletionDate")
+        or "-"
+    )
+
     story: list[Any] = [
         Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
         Paragraph("生产工单 · Production Work Order", s["title"]),
         _kv_table([
             ("销售订单号", data.get("salesOrderNumbers") or data.get("sourceOrderId", "-")),
             ("生产订单号", data.get("productionOrderNumber") or data.get("planNumber") or data.get("planId", "-")),
+            ("客户名称", data.get("customerName", "-")),       # N5
             ("产品名称", data.get("productName", "-")),
             ("预计产量", f'{_fmt_qty(data.get("expectedOutput") or data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),  # noqa: E501
             ("状态", data.get("status", "-")),
             ("生产日期", data.get("productionDate") or data.get("plannedDate", "-")),
+            ("交货日期", delivery_date),                        # N5
             ("打印日期", data.get("printDate", "-")),
+            ("制单人", data.get("createdByName") or data.get("preparedBy", "-")),   # N5
             ("打印人", data.get("printedBy", "-")),
-            ("打印账号", data.get("printedAccount", "-")),
             ("预计完成", data.get("expectedCompletionDate", "-")),
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("投料 / 领用明细", s["h2"]),
         _render_items_table(
             data.get("materialItems") or [],
-            [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
-             ("单位", "unit", "CENTER"), ("原料报名值", "plannedRawQty", "RIGHT"),
-             ("辅料报名值", "plannedAuxiliaryQty", "RIGHT"),
-             ("半成品报名值", "plannedSemiFinishedQty", "RIGHT"),
+            [("物料名称", "materialName", "LEFT"),
+             ("分类", "category", "CENTER"),
+             ("单位", "unit", "CENTER"),
+             ("原料计划量", "plannedRawQty", "RIGHT"),
+             ("辅料计划量", "plannedAuxiliaryQty", "RIGHT"),
+             ("半成品计划量", "plannedSemiFinishedQty", "RIGHT"),
+             ("单位成本", "unitCost", "RIGHT"),               # N5
              ("实际领用(结单填)", "actualUsedQty", "RIGHT"),
              ("批次", "batchRefs", "LEFT")],
             s["font"],
         ),
+    ]
+    if not data.get("materialItems"):
+        story.extend([Spacer(1, 0.2 * cm),
+                      Paragraph("暂无真实物料需求数据，待领料单生成后显示。", s["body"])])
+    story.extend([
         Spacer(1, 0.5 * cm),
         Paragraph("工序列表", s["h2"]),
         _render_items_table(
@@ -657,15 +684,21 @@ def render_production_work_order(data: dict) -> bytes:
              ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
             s["font"],
         ),
-    ]
+    ])
+    if not data.get("processes"):
+        story.extend([Spacer(1, 0.2 * cm),
+                      Paragraph("暂无真实工序任务数据，待生产批次排产后显示。", s["body"])])
     if data.get("remark"):
         story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
                       Paragraph(str(data["remark"]), s["body"])])
+    # N5 签字栏 — 四联
     story.extend([
         Spacer(1, 1.0 * cm),
-        Paragraph("生产主管签名: ____________________________", s["body"]),
-        Paragraph("领料经手人签名: __________________________", s["body"]),
-        Paragraph("领班签名: ________________________________", s["body"]),
+        Paragraph("制单人: ________________________  "
+                  "审核人: ________________________", s["body"]),
+        Spacer(1, 0.4 * cm),
+        Paragraph("领料人: ________________________  "
+                  "生产负责人: ____________________", s["body"]),
     ])
     doc.build(story)
     return buffer.getvalue()
