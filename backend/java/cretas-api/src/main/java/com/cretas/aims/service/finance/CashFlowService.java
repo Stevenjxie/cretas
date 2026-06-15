@@ -11,11 +11,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.write.metadata.WriteSheet;
+
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -209,6 +215,105 @@ public class CashFlowService {
                 .generatedAt(LocalDateTime.now().toString())
                 .build();
     }
+
+    // -------------------------------------------------------------------------
+    // Excel 导出
+    // -------------------------------------------------------------------------
+
+    /**
+     * 导出现金流量表为 xlsx, 写入 {@code out}.
+     *
+     * @return 文件名 (含时间戳, 用于 Content-Disposition)
+     */
+    public String exportCashFlow(String factoryId,
+                                 Integer startYear, Integer startMonth,
+                                 Integer endYear, Integer endMonth,
+                                 OutputStream out) {
+        CashFlowDTO dto = generate(factoryId, startYear, startMonth, endYear, endMonth);
+        List<List<Object>> rows = buildCashFlowRows(dto);
+        writeRawRows(out, rows, "现金流量表");
+        String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        return String.format("现金流量表_%s_%d%02d_%d%02d_%s.xlsx",
+                factoryId, startYear, startMonth, endYear, endMonth, ts);
+    }
+
+    /** 构建 xlsx 行: header = row[0], 三大活动分段列出. */
+    private List<List<Object>> buildCashFlowRows(CashFlowDTO dto) {
+        List<List<Object>> rows = new ArrayList<>();
+        // header
+        rows.add(List.of("活动类别", "科目编码", "科目名称", "流入(元)", "流出(元)", "净额(元)"));
+
+        addActivitySection(rows, "经营活动", dto.getOperatingActivities(), dto.getOperatingNetCashFlow());
+        addActivitySection(rows, "投资活动", dto.getInvestingActivities(), dto.getInvestingNetCashFlow());
+        addActivitySection(rows, "筹资活动", dto.getFinancingActivities(), dto.getFinancingNetCashFlow());
+
+        // 汇总行
+        rows.add(List.of("", "", "现金净增加额",
+                amountText(dto.getNetIncreaseInCash().max(BigDecimal.ZERO)),
+                amountText(dto.getNetIncreaseInCash().min(BigDecimal.ZERO).abs()),
+                amountText(dto.getNetIncreaseInCash())));
+        rows.add(List.of("", "", "期初现金余额", "", "", amountText(dto.getBeginningCash())));
+        rows.add(List.of("", "", "期末现金余额", "", "", amountText(dto.getEndingCash())));
+
+        return rows;
+    }
+
+    private void addActivitySection(List<List<Object>> rows,
+                                    String sectionName,
+                                    List<CashFlowDTO.Activity> activities,
+                                    BigDecimal sectionNet) {
+        if (activities == null || activities.isEmpty()) {
+            rows.add(List.of(sectionName, "", "（无相关活动）", "0.00", "0.00", "0.00"));
+        } else {
+            for (CashFlowDTO.Activity a : activities) {
+                rows.add(List.of(
+                        sectionName,
+                        nvlStr(a.getCounterpartCode()),
+                        nvlStr(a.getCounterpartName()),
+                        amountText(a.getInflow()),
+                        amountText(a.getOutflow()),
+                        amountText(a.getNetAmount())));
+            }
+        }
+        // section subtotal
+        rows.add(List.of("", "", sectionName + " 合计", "", "", amountText(sectionNet)));
+    }
+
+    // -------------------------------------------------------------------------
+    // EasyExcel 工具方法
+    // -------------------------------------------------------------------------
+
+    private void writeRawRows(OutputStream out, List<List<Object>> rows, String sheetName) {
+        List<Object> header = rows.get(0);
+        List<List<Object>> dataRows = rows.size() > 1 ? rows.subList(1, rows.size()) : List.of();
+
+        List<List<String>> head = new ArrayList<>();
+        for (Object h : header) {
+            head.add(List.of(h.toString()));
+        }
+
+        ExcelWriter writer = EasyExcel.write(out).head(head).build();
+        WriteSheet sheet = EasyExcel.writerSheet(sheetName).build();
+        writer.write(dataRows, sheet);
+        writer.finish();
+    }
+
+    private BigDecimal scale2(BigDecimal v) {
+        if (v == null) return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        return v.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private String amountText(BigDecimal v) {
+        return scale2(v).toPlainString();
+    }
+
+    private String nvlStr(Object v) {
+        return v == null ? "" : v.toString();
+    }
+
+    // -------------------------------------------------------------------------
+    // 原有私有方法
+    // -------------------------------------------------------------------------
 
     /**
      * 按 code 前缀决定活动分类:

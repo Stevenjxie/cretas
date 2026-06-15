@@ -23,6 +23,13 @@
               style="margin-right: 12px;"
             />
             <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
+            <el-button
+              type="success"
+              :loading="exporting"
+              :disabled="!data"
+              @click="doExport"
+              style="margin-left: 8px;"
+            >导出 Excel</el-button>
           </div>
         </div>
       </template>
@@ -103,7 +110,7 @@
 import { ref, computed, onMounted, defineComponent, h } from 'vue';
 import { ElMessage, ElTable, ElTableColumn } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
-import { getCashFlow, type CashFlowDTO, type CashFlowActivity } from '@/api/financeReport';
+import { getCashFlow, exportCashFlow, type CashFlowDTO, type CashFlowActivity } from '@/api/financeReport';
 
 const ActivityTable = defineComponent({
   name: 'CashFlowActivityTable',
@@ -169,6 +176,7 @@ const defaultEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padSta
 const dateRange = ref<[string, string]>([defaultStart, defaultEnd]);
 const data = ref<CashFlowDTO | null>(null);
 const loading = ref(false);
+const exporting = ref(false);
 const activeSection = ref<string[]>(['operating']);
 
 const startYear = computed(() => parseInt(dateRange.value[0].split('-')[0], 10));
@@ -216,6 +224,25 @@ async function load() {
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
+  }
+}
+
+async function doExport() {
+  if (!factoryId.value) return;
+  exporting.value = true;
+  try {
+    await exportCashFlow(
+      factoryId.value,
+      startYear.value,
+      startMonth.value,
+      endYear.value,
+      endMonth.value,
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: '导出失败: ' + msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    exporting.value = false;
   }
 }
 
