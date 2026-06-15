@@ -1,6 +1,8 @@
 """Phase 0: mapping_review router import + route registration smoke."""
+
+
 def test_router_imports_and_registers_routes():
-    from smartbi_compat.api.mapping_review import router, ConfirmRequest, ConfirmItem
+    from smartbi_compat.api.mapping_review import router
     paths = [r.path for r in router.routes]
     assert any(p.endswith("/mapping-review/pending") for p in paths), paths
     assert any(p.endswith("/confirm") for p in paths), paths
