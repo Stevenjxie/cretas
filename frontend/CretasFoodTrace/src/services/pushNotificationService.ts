@@ -6,6 +6,14 @@ import { logger } from '../utils/logger';
 
 const pushLogger = logger.createContextLogger('PushNotification');
 
+function isPushInfrastructureSetupError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('Default FirebaseApp is not initialized') ||
+    message.includes('fcm-credentials')
+  );
+}
+
 // 设置通知处理器 - 在前台时显示通知
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -153,6 +161,10 @@ class PushNotificationServiceImpl implements PushNotificationService {
       pushLogger.info('获取 Push Token 成功', { token: token.data });
       return token.data;
     } catch (error) {
+      if (isPushInfrastructureSetupError(error)) {
+        pushLogger.warn('Push Token 未配置或当前包未启用 FCM，跳过设备推送注册', error);
+        return null;
+      }
       pushLogger.error('获取 Push Token 失败', error);
       return null;
     }
