@@ -1,7 +1,12 @@
 """
 Tests for TimeseriesExtractor (Phase 2 Task 2).
 
-TDD: these tests are written first. They define the contract for extract_timeseries().
+Contract: extract_timeseries() uses field_kind(standard_name) -> 'measure'|'dimension'|'time'|'skip'
+to classify columns.  This replaces the old category_of(canonical) -> category-string approach which
+relied on STANDARD_FIELDS and would silently drop identity-mapped columns like "产出数量" that have
+no STANDARD_FIELDS entry but carry is_measure=True in smart_bi_pg_field_definitions.
+
+Key regression: an identity-mapped is_measure column MUST produce value rows, never be dropped.
 """
 import hashlib
 import json
@@ -11,14 +16,15 @@ from smartbi.services.timeseries_extractor import extract_timeseries
 
 
 # ---------------------------------------------------------------------------
-# Helper: build category_of from an explicit mapping dict
+# Helper: build field_kind callable from an explicit {standard_name -> kind} map
 # ---------------------------------------------------------------------------
-def make_cat(mapping: dict):
-    return lambda canonical: mapping[canonical]
+def make_kind(mapping: dict):
+    """Return field_kind(standard_name) -> kind, defaulting to 'skip'."""
+    return lambda standard_name: mapping.get(standard_name, "skip")
 
 
 # ---------------------------------------------------------------------------
-# Plan-specified Test 1: measure and dimension split
+# Test 1: measure and dimension split (field_kind-based)
 # ---------------------------------------------------------------------------
 def test_measure_and_dim_split():
     rows = [{"期间": "2026-01", "产品": "A", "产出数量": 100, "出成率": 0.9, "批次号": "B1"}]
@@ -29,12 +35,12 @@ def test_measure_and_dim_split():
         "出成率": "yield_rate",
         "批次号": "batch_number",
     }
-    cat = {
+    kind = {
         "period": "time",
-        "product": "category",
-        "output_quantity": "quantity",
-        "yield_rate": "rate",
-        "batch_number": "id",
+        "product": "dimension",
+        "output_quantity": "measure",
+        "yield_rate": "measure",
+        "batch_number": "skip",
     }
     out = extract_timeseries(
         rows,
@@ -44,11 +50,11 @@ def test_measure_and_dim_split():
         domain="production",
         source_upload_id=7,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
-    # Only measure canonicals (quantity + rate) should produce rows; id is discarded
+    # Only measure fields produce rows; skip (batch_number) is discarded
     assert {r.canonical_field for r in out} == {"output_quantity", "yield_rate"}
-    # product=category → goes into dims; period=time → axis not in dims; batch_number=id → discarded
+    # product=dimension → goes into dims; period=time → axis, not in dims; batch_number=skip → gone
     assert all(r.dims == {"product": "A"} for r in out)
     assert all(r.period == "2026-01" and r.source_upload_id == 7 for r in out)
     # Both rows share the same dims_hash (same dims dict)
@@ -57,12 +63,12 @@ def test_measure_and_dim_split():
 
 
 # ---------------------------------------------------------------------------
-# Plan-specified Test 2: non-numeric measure value → row skipped
+# Test 2: non-numeric measure value → row skipped
 # ---------------------------------------------------------------------------
 def test_non_numeric_measure_skipped():
     rows = [{"期间": "2026-01", "产出数量": ""}]
     fm = {"期间": "period", "产出数量": "output_quantity"}
-    cat = {"period": "time", "output_quantity": "quantity"}
+    kind = {"period": "time", "output_quantity": "measure"}
     out = extract_timeseries(
         rows,
         fm,
@@ -71,19 +77,19 @@ def test_non_numeric_measure_skipped():
         domain=None,
         source_upload_id=1,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     # Empty string is non-numeric → the measure row is not emitted
     assert out == []
 
 
 # ---------------------------------------------------------------------------
-# Plan-specified Test 3: row with no period → entire row skipped
+# Test 3: row with no period → entire row skipped
 # ---------------------------------------------------------------------------
 def test_no_period_row_skipped():
     rows = [{"期间": None, "产出数量": 50}]
     fm = {"期间": "period", "产出数量": "output_quantity"}
-    cat = {"period": "time", "output_quantity": "quantity"}
+    kind = {"period": "time", "output_quantity": "measure"}
     out = extract_timeseries(
         rows,
         fm,
@@ -92,13 +98,13 @@ def test_no_period_row_skipped():
         domain=None,
         source_upload_id=2,
         period_of=lambda r: r["期间"],  # returns None → skip
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     assert out == []
 
 
 # ---------------------------------------------------------------------------
-# Extra Test 4: dims_hash is deterministic (same dims → same hash every call)
+# Test 4: dims_hash is deterministic (same dims → same hash every call)
 # ---------------------------------------------------------------------------
 def test_dims_hash_deterministic():
     dims = {"product": "猪蹄", "department": "生产部"}
@@ -113,11 +119,11 @@ def test_dims_hash_deterministic():
         "部门": "department",
         "产出数量": "output_quantity",
     }
-    cat = {
+    kind = {
         "period": "time",
-        "product": "category",
-        "department": "category",
-        "output_quantity": "quantity",
+        "product": "dimension",
+        "department": "dimension",
+        "output_quantity": "measure",
     }
     out = extract_timeseries(
         rows,
@@ -127,7 +133,7 @@ def test_dims_hash_deterministic():
         domain="production",
         source_upload_id=3,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     assert len(out) == 1
     assert out[0].dims_hash == expected_hash
@@ -141,13 +147,13 @@ def test_dims_hash_deterministic():
         domain="production",
         source_upload_id=3,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     assert out2[0].dims_hash == expected_hash
 
 
 # ---------------------------------------------------------------------------
-# Extra Test 5: list[FieldMapping] form normalises to same result as dict form
+# Test 5: list[FieldMapping] form normalises to same result as dict form
 # ---------------------------------------------------------------------------
 def test_field_mappings_list_form():
     """field_mappings as list[FieldMapping] must produce same output as dict form."""
@@ -159,7 +165,7 @@ def test_field_mappings_list_form():
         FieldMapping(original_col="期间", canonical="period"),
         FieldMapping(original_col="产出数量", canonical="output_quantity"),
     ]
-    cat = {"period": "time", "output_quantity": "quantity"}
+    kind = {"period": "time", "output_quantity": "measure"}
 
     common_kwargs = dict(
         factory_id="F2",
@@ -167,7 +173,7 @@ def test_field_mappings_list_form():
         domain="production",
         source_upload_id=4,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
 
     out_dict = extract_timeseries(rows, fm_dict, **common_kwargs)
@@ -182,12 +188,12 @@ def test_field_mappings_list_form():
 
 
 # ---------------------------------------------------------------------------
-# Extra Test 6: amount category also produces measure rows
+# Test 6: 'measure' kind for amount-like field produces value rows
 # ---------------------------------------------------------------------------
-def test_amount_category_is_measure():
+def test_amount_kind_is_measure():
     rows = [{"期间": "2026-01", "收入": 1000.5}]
     fm = {"期间": "period", "收入": "revenue"}
-    cat = {"period": "time", "revenue": "amount"}
+    kind = {"period": "time", "revenue": "measure"}
     out = extract_timeseries(
         rows,
         fm,
@@ -196,7 +202,7 @@ def test_amount_category_is_measure():
         domain="finance",
         source_upload_id=5,
         period_of=lambda r: r["期间"],
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     assert len(out) == 1
     assert out[0].canonical_field == "revenue"
@@ -204,13 +210,13 @@ def test_amount_category_is_measure():
 
 
 # ---------------------------------------------------------------------------
-# Extra Test 7: unknown/None period string from period_of → skip row
+# Test 7: falsy period string from period_of → skip row
 # ---------------------------------------------------------------------------
 def test_period_of_returning_falsy_string_skips_row():
     """period_of returning empty string (falsy) should skip the row."""
     rows = [{"期间": "", "产出数量": 99}]
     fm = {"期间": "period", "产出数量": "output_quantity"}
-    cat = {"period": "time", "output_quantity": "quantity"}
+    kind = {"period": "time", "output_quantity": "measure"}
     out = extract_timeseries(
         rows,
         fm,
@@ -219,6 +225,129 @@ def test_period_of_returning_falsy_string_skips_row():
         domain=None,
         source_upload_id=6,
         period_of=lambda r: r["期间"],  # returns "" → falsy
-        category_of=make_cat(cat),
+        field_kind=make_kind(kind),
     )
     assert out == []
+
+
+# ---------------------------------------------------------------------------
+# Test 8 (KEY REGRESSION): identity-mapped is_measure column must NOT be dropped
+#
+# Root cause of bug: mapper preserves original name as standard_name for
+# amount/quantity columns to avoid canonical-name collisions (e.g. "产出数量"
+# identity-maps to standard_name="产出数量").  STANDARD_FIELDS has no entry for
+# "产出数量" → old category_of returned None → was not in _MEASURE_CATEGORIES →
+# silently dropped.  field_kind reads is_measure=True from field_def_rows →
+# returns 'measure' → correctly emits value row.
+# ---------------------------------------------------------------------------
+def test_identity_measure_column_not_dropped():
+    """
+    Column where standard_name == original_name (identity mapping) with field_kind='measure'
+    MUST produce a value row, never be silently dropped.
+
+    This is the primary regression this fix addresses: "产出数量" (output quantity)
+    was the main production measure but was being discarded by the old STANDARD_FIELDS
+    category lookup because STANDARD_FIELDS has no entry for the identity name.
+    """
+    # Simulate: mapper kept original name "产出数量" as standard_name (identity)
+    # because renaming would collide.  field_def has is_measure=True for it.
+    rows = [{"月份": "2026-05", "工序": "卤制", "产出数量": 150.0}]
+    fm = {
+        "月份": "time_period",   # is_time=True in field_def (non-"period" time axis)
+        "工序": "process_name",  # is_dimension=True
+        "产出数量": "产出数量",   # identity mapping — standard_name == original_name
+    }
+    kind = {
+        "time_period": "time",
+        "process_name": "dimension",
+        "产出数量": "measure",   # built from is_measure=True in field_def_rows
+    }
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F006",
+        template_key="liushanmen_production",
+        domain="production",
+        source_upload_id=99,
+        period_of=lambda r: r["月份"],
+        field_kind=make_kind(kind),
+    )
+    # Must emit exactly one value row for the identity-named measure
+    assert len(out) == 1, (
+        f"Expected 1 value row for identity-mapped measure '产出数量', got {len(out)}. "
+        "If 0: field_kind('产出数量') is not returning 'measure' — check _kind_map construction."
+    )
+    row = out[0]
+    assert row.canonical_field == "产出数量"
+    assert row.value_num == 150.0
+    assert row.period == "2026-05"
+    assert row.factory_id == "F006"
+    assert row.source_upload_id == 99
+    # "工序" is dimension → in dims; "月份" is time → NOT in dims
+    assert row.dims == {"process_name": "卤制"}
+
+
+# ---------------------------------------------------------------------------
+# Test 9: field_kind='skip' (id-like column) → discarded, not in dims or measures
+# ---------------------------------------------------------------------------
+def test_skip_kind_discarded():
+    """field_kind='skip' columns (e.g. IDs) must not appear in dims or produce value rows."""
+    rows = [{"期间": "2026-01", "批次号": "B001", "产出数量": 80}]
+    fm = {
+        "期间": "period",
+        "批次号": "batch_number",
+        "产出数量": "output_quantity",
+    }
+    kind = {
+        "period": "time",
+        "batch_number": "skip",
+        "output_quantity": "measure",
+    }
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F1",
+        template_key="tk",
+        domain="production",
+        source_upload_id=10,
+        period_of=lambda r: r["期间"],
+        field_kind=make_kind(kind),
+    )
+    assert len(out) == 1
+    assert out[0].canonical_field == "output_quantity"
+    assert out[0].value_num == 80.0
+    # batch_number must NOT appear in dims
+    assert "batch_number" not in out[0].dims
+    assert out[0].dims == {}
+
+
+# ---------------------------------------------------------------------------
+# Test 10: unknown standard_name defaults to 'skip' (field_kind returns 'skip')
+# ---------------------------------------------------------------------------
+def test_unknown_standard_name_defaults_to_skip():
+    """field_kind for an unknown standard_name should default to 'skip' (not crash)."""
+    rows = [{"期间": "2026-01", "未知字段": "some_value", "产出数量": 50}]
+    fm = {
+        "期间": "period",
+        "未知字段": "unknown_col",
+        "产出数量": "output_quantity",
+    }
+    # "unknown_col" not in kind map → make_kind returns 'skip' by default
+    kind = {
+        "period": "time",
+        "output_quantity": "measure",
+    }
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F1",
+        template_key="tk",
+        domain=None,
+        source_upload_id=11,
+        period_of=lambda r: r["期间"],
+        field_kind=make_kind(kind),
+    )
+    assert len(out) == 1
+    assert out[0].canonical_field == "output_quantity"
+    # unknown_col must not appear in dims
+    assert "unknown_col" not in out[0].dims
