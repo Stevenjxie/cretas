@@ -212,7 +212,11 @@ def parse_chapter_section_html_to_sections(html_content: str) -> List[Dict[str, 
         for el in body.find_all(["p", "li", "td", "th", "div"]):
             # Skip decorative/nav elements
             el_classes = el.get("class", [])
-            if any(c in el_classes for c in ["screenshot-caption", "screenshot-wrap", "back-top", "chapter-num", "chapter-title", "chapter-subtitle", "chapter-header"]):
+            _skip_classes = [
+                "screenshot-caption", "screenshot-wrap", "back-top",
+                "chapter-num", "chapter-title", "chapter-subtitle", "chapter-header",
+            ]
+            if any(c in el_classes for c in _skip_classes):
                 continue
             # Skip nested elements whose parent is already a text container (avoid duplicates)
             if el.name in ("p", "li") and el.find_parent(["td", "li"]):
