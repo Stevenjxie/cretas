@@ -71,10 +71,15 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private static final String TYPE_TRIAL_BALANCE = "TRIAL_BALANCE";
     private static final String TYPE_INCOME_STATEMENT = "INCOME_STATEMENT";
     private static final String TYPE_QUANTITY_AMOUNT_LEDGER = "QUANTITY_AMOUNT_LEDGER";
+    private static final String TYPE_KINGDEE_IMPORT_TEMPLATE = "KINGDEE_IMPORT_TEMPLATE";
     private static final LocalDate EPOCH_START = LocalDate.of(1970, 1, 1);
     private static final int INVENTORY_EXPORT_PAGE_SIZE = 10_000;
     private static final String SOURCE_FOOTER_TEXT = "凭证来源口径=待财务确认";
     private static final String VOUCHER_SOURCE_CALIBER_PENDING = "待财务确认";
+    private static final String KINGDEE_CLOUD_VOUCHER_WORD = "记";
+    private static final String KINGDEE_CLOUD_CURRENCY = "人民币";
+    private static final String KINGDEE_CLOUD_EXCHANGE_RATE = "1";
+    private static final String KINGDEE_CLOUD_SHEET_NAME = "凭证导入";
 
     private final VoucherRepository voucherRepo;
     private final VoucherEntryRepository entryRepo;
@@ -149,6 +154,55 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 .build();
         exportRecordRepo.save(record);
         log.info("[SP11] exportSequentialLedger: factoryId={} rows={} file={}", factoryId, rowCount, fileName);
+        return fileName;
+    }
+
+    @Override
+    @Transactional
+    public String exportKingdeeImportTemplate(String factoryId, VoucherExportRequestDTO req,
+                                              Long userId, OutputStream out) throws Exception {
+        VoucherExportRequestDTO kingdeeReq = VoucherExportRequestDTO.builder()
+                .startDate(req.getStartDate())
+                .endDate(req.getEndDate())
+                .targetSystem(VoucherTargetSystem.KINGDEE_YXSKY)
+                .build();
+        VoucherExportConfig config = resolveConfig(factoryId, VoucherTargetSystem.KINGDEE_YXSKY);
+        List<VoucherImportLine> lines = loadVoucherImportLines(factoryId, req);
+
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of(
+                "凭证字",
+                config.getColVoucherNo(),
+                config.getColDate(),
+                config.getColSummary(),
+                config.getColSubjectCode(),
+                config.getColSubjectName(),
+                config.getColDebit(),
+                config.getColCredit(),
+                config.getColCurrency(),
+                "汇率",
+                config.getColAuxiliary()
+        ));
+
+        for (VoucherImportLine line : lines) {
+            rows.add(List.of(
+                    KINGDEE_CLOUD_VOUCHER_WORD,
+                    nvlStr(line.voucherNumber()),
+                    line.date() == null ? "" : line.date().toString(),
+                    nvlStr(line.summary()),
+                    nvlStr(line.subjectCode()),
+                    nvlStr(line.subjectName()),
+                    blankIfZero(line.debit()),
+                    blankIfZero(line.credit()),
+                    KINGDEE_CLOUD_CURRENCY,
+                    KINGDEE_CLOUD_EXCHANGE_RATE,
+                    nvlStr(line.auxiliary())
+            ));
+        }
+
+        writeRawRows(out, rows, KINGDEE_CLOUD_SHEET_NAME);
+        String fileName = buildFileName("kingdee-yxsky-import-template", factoryId, req.getStartDate(), req.getEndDate());
+        saveExportRecord(factoryId, TYPE_KINGDEE_IMPORT_TEMPLATE, kingdeeReq, userId, fileName, lines.size());
         return fileName;
     }
 
@@ -854,6 +908,36 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return lines;
     }
 
+    private List<VoucherImportLine> loadVoucherImportLines(String factoryId, VoucherExportRequestDTO req) {
+        List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
+                factoryId, req.getStartDate(), req.getEndDate());
+
+        List<VoucherImportLine> lines = new ArrayList<>();
+        for (Voucher voucher : vouchers) {
+            List<VoucherEntry> entries = entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc(voucher.getId());
+            entries.stream()
+                    .sorted(Comparator.comparing(VoucherEntry::getLineNo, Comparator.nullsLast(Comparator.naturalOrder())))
+                    .forEach(entry -> lines.add(new VoucherImportLine(
+                            voucher.getVoucherDate(),
+                            voucher.getVoucherNumber(),
+                            entry.getDescription(),
+                            entry.getSubjectCode(),
+                            entry.getSubjectName(),
+                            entry.getDebit(),
+                            entry.getCredit(),
+                            entry.getAuxiliaryEntityId()
+                    )));
+        }
+        return lines;
+    }
+
+    private String blankIfZero(BigDecimal v) {
+        if (v == null || v.compareTo(BigDecimal.ZERO) == 0) {
+            return "";
+        }
+        return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
     private void validateTrialBalance(List<SubjectLedgerLine> lines) {
         TrialTotals totals = new TrialTotals();
         for (SubjectLedgerLine line : lines) {
@@ -964,13 +1048,33 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
     private VoucherExportConfig resolveConfig(String factoryId, VoucherTargetSystem targetSystem) {
         return exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(factoryId, targetSystem)
-                .orElseGet(() -> VoucherExportConfig.builder()
-                        .factoryId(factoryId)
-                        .targetSystem(targetSystem != null ? targetSystem : VoucherTargetSystem.KINGDEE)
-                        .build());
+                .orElseGet(() -> defaultExportConfig(factoryId, targetSystem));
+    }
+
+    private VoucherExportConfig defaultExportConfig(String factoryId, VoucherTargetSystem targetSystem) {
+        VoucherTargetSystem resolvedTarget = targetSystem != null ? targetSystem : VoucherTargetSystem.KINGDEE;
+        VoucherExportConfig.VoucherExportConfigBuilder builder = VoucherExportConfig.builder()
+                .factoryId(factoryId)
+                .targetSystem(resolvedTarget);
+        if (resolvedTarget == VoucherTargetSystem.KINGDEE_YXSKY) {
+            builder.colVoucherNo("凭证号")
+                    .colDate("日期")
+                    .colSummary("摘要")
+                    .colSubjectCode("科目编码")
+                    .colSubjectName("科目名称")
+                    .colDebit("借方金额")
+                    .colCredit("贷方金额")
+                    .colCurrency("币别")
+                    .colAuxiliary("辅助核算");
+        }
+        return builder.build();
     }
 
     private void writeRawRows(OutputStream out, List<List<Object>> rows) {
+        writeRawRows(out, rows, "Sheet1");
+    }
+
+    private void writeRawRows(OutputStream out, List<List<Object>> rows, String sheetName) {
         if (rows.isEmpty()) {
             return;
         }
@@ -983,7 +1087,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         }
 
         ExcelWriter writer = EasyExcel.write(out).head(head).build();
-        WriteSheet sheet = EasyExcel.writerSheet("Sheet1").build();
+        WriteSheet sheet = EasyExcel.writerSheet(sheetName).build();
         writer.write(dataRows, sheet);
         writer.finish();
     }
@@ -1081,6 +1185,17 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             String subjectName,
             BigDecimal debit,
             BigDecimal credit) {
+    }
+
+    private record VoucherImportLine(
+            LocalDate date,
+            String voucherNumber,
+            String summary,
+            String subjectCode,
+            String subjectName,
+            BigDecimal debit,
+            BigDecimal credit,
+            String auxiliary) {
     }
 
     private record SubjectLedgerLine(

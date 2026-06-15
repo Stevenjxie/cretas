@@ -7,7 +7,8 @@ package com.cretas.aims.entity.enums;
 public enum VoucherTargetSystem {
     KINGDEE("金蝶"),
     YONYOU("用友"),
-    CUSTOM("自定义");
+    CUSTOM("自定义"),
+    KINGDEE_YXSKY("金蝶云星空");
 
     private final String displayName;
 

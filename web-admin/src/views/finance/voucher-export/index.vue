@@ -16,6 +16,7 @@
  * Endpoints:
  *   POST /api/mobile/{factoryId}/finance/voucher-export          — 序时账 xlsx
  *   GET  /api/mobile/{factoryId}/finance/subject-balance/export  — 科目余额 xlsx
+ *   GET  /api/mobile/{factoryId}/finance/voucher-import-template — 金蝶云星空导入模板 xlsx
  *   GET    /api/mobile/{factoryId}/finance/export-config          — 查列表
  *   POST   /api/mobile/{factoryId}/finance/export-config          — 新建
  *   PUT    /api/mobile/{factoryId}/finance/export-config/{id}     — 更新
@@ -35,7 +36,7 @@ import request from '@/api/request';
 // ============================================================
 // Types — mirror backend DTOs (camelCase, backend truth)
 // ============================================================
-type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM';
+type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM' | 'KINGDEE_YXSKY';
 // SP6 SettlementType enum values (PREPAID/CREDIT_FIRST/NO_INVOICE/MONTHLY/CREDIT_PERIOD/IMMEDIATE)
 type SettlementType = 'PREPAID' | 'CREDIT_FIRST' | 'NO_INVOICE' | 'MONTHLY' | 'CREDIT_PERIOD' | 'IMMEDIATE';
 type LedgerReportType = 'chronological' | 'general' | 'subsidiary' | 'trialBalance' | 'incomeStatement' | 'quantityAmount';
@@ -90,6 +91,7 @@ const canWrite = computed(() => permissionStore.canWrite('finance'));
 // ============================================================
 const exportLoading = ref(false);
 const balanceExportLoading = ref(false);
+const kingdeeTemplateLoading = ref(false);
 const ledgerExportLoading = ref<Record<LedgerReportType, boolean>>({
   chronological: false,
   general: false,
@@ -321,6 +323,33 @@ async function handleBalanceExport() {
   }
 }
 
+async function handleKingdeeImportTemplate() {
+  if (!canExport.value) {
+    ElMessage({ message: '请先选择日期范围', type: 'warning', duration: 3000 });
+    return;
+  }
+  if (!factoryId.value) return;
+
+  kingdeeTemplateLoading.value = true;
+  try {
+    const [startDate, endDate] = exportDateRange.value!;
+    const response = await request.get(
+      `/${factoryId.value}/finance/voucher-import-template`,
+      {
+        params: { startDate, endDate },
+        responseType: 'blob',
+      }
+    );
+
+    downloadBlob(response, `kingdee_import_template_${startDate}_${endDate}.xlsx`);
+    ElMessage({ message: '金蝶导入模板已导出', type: 'success', duration: 3000 });
+  } catch {
+    // 拦截器已 toast
+  } finally {
+    kingdeeTemplateLoading.value = false;
+  }
+}
+
 async function handleLedgerExport(report: LedgerReportDefinition) {
   if (!canExport.value) {
     ElMessage({ message: '请先选择日期范围', type: 'warning', duration: 3000 });
@@ -475,6 +504,7 @@ function getTargetSystemLabel(ts: VoucherTargetSystem): string {
     KINGDEE: '金蝶',
     YONYOU: '用友',
     CUSTOM: '通用',
+    KINGDEE_YXSKY: '金蝶云星空',
   };
   return map[ts] ?? ts;
 }
@@ -554,6 +584,15 @@ onMounted(async () => {
             @click="handleBalanceExport"
           >
             导出科目余额表
+          </el-button>
+          <el-button
+            type="success"
+            :icon="Download"
+            :loading="kingdeeTemplateLoading"
+            :disabled="!canExport || !canWrite"
+            @click="handleKingdeeImportTemplate"
+          >
+            金蝶导入模板
           </el-button>
         </el-form-item>
       </el-form>
@@ -750,6 +789,7 @@ onMounted(async () => {
         <el-form-item label="目标系统" required>
           <el-select v-model="configForm.targetSystem" :disabled="configDialogMode === 'edit'">
             <el-option label="金蝶" value="KINGDEE" />
+            <el-option label="金蝶云星空" value="KINGDEE_YXSKY" />
             <el-option label="用友" value="YONYOU" />
             <el-option label="通用" value="CUSTOM" />
           </el-select>
