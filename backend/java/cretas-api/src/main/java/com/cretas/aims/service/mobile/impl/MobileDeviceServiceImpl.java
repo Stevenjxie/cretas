@@ -88,7 +88,7 @@ public class MobileDeviceServiceImpl implements MobileDeviceService {
         List<MobileDTO.DeviceInfo> devices = userDevices.get(userId);
 
         // 移除旧的相同设备记录
-        devices.removeIf(d -> d.getDeviceId().equals(deviceInfo.getDeviceId()));
+        devices.removeIf(d -> Objects.equals(d.getDeviceId(), deviceInfo.getDeviceId()));
 
         // 添加新记录
         devices.add(deviceInfo);
@@ -110,7 +110,7 @@ public class MobileDeviceServiceImpl implements MobileDeviceService {
         log.info("移除设备: userId={}, deviceId={}", userId, deviceId);
         List<MobileDTO.DeviceInfo> devices = userDevices.get(userId);
         if (devices != null) {
-            devices.removeIf(d -> d.getDeviceId().equals(deviceId));
+            devices.removeIf(d -> Objects.equals(d.getDeviceId(), deviceId));
         }
     }
 
