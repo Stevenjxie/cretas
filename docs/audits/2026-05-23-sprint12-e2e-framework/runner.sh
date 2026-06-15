@@ -47,6 +47,9 @@ run_test() {
     -d @/tmp/payload.json --max-time 180 \
     -o "$RUN_DIR/raw-${name}-${pathId}.json" \
     -w "  HTTP %{http_code} | %{time_total}s\n"
+  # Sprint 12: 12s sleep keeps us under Aliyun LLM rate limit (~30 req/min).
+  # Without this, burst mode (60 paths in <60s) trips rate limit for ~20 paths.
+  sleep 12
 }
 
 # ==================== 6 Workdesks × 10 paths each = 60 paths ====================
