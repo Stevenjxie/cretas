@@ -1318,7 +1318,82 @@ public class PurchaseServiceImpl implements PurchaseService {
             }
         }
 
+        // 收货差异通知采购人（超收/少收自动通知 PO 创建人）
+        // fail-soft: 通知失败不阻塞入库确认主流程
+        if (notificationService != null && record.getPurchaseOrderId() != null) {
+            try {
+                notifyPurchaserOnReceiveVariance(factoryId, record);
+            } catch (Exception e) {
+                log.warn("[VARIANCE-NOTIFY] 收货差异通知失败（不影响入库主流程）: receiveId={}, error={}",
+                        record.getId(), e.getMessage());
+            }
+        }
+
         return record;
+    }
+
+    /**
+     * 收货数量差异通知采购人.
+     *
+     * <p>逐行比较入库单实收数量 vs 采购单计划数量，有差异（超收/少收）则通过
+     * {@link com.cretas.aims.service.notification.NotificationService#notifyUser} 通知
+     * PO 创建人（即采购经手人）.
+     *
+     * <p>仅在关联了采购订单的入库单上生效；独立入库单（无 PO）不触发.
+     * 完全 fail-soft — 任何内部异常均记录 WARN 并静默跳过，不影响主流程.
+     */
+    private void notifyPurchaserOnReceiveVariance(String factoryId, PurchaseReceiveRecord record) {
+        PurchaseOrder po = purchaseOrderRepository.findById(record.getPurchaseOrderId()).orElse(null);
+        if (po == null || po.getCreatedBy() == null) {
+            log.debug("[VARIANCE-NOTIFY] PO 未找到或无创建人: poId={}", record.getPurchaseOrderId());
+            return;
+        }
+
+        List<PurchaseOrderItem> poItems =
+                purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
+        Map<String, PurchaseOrderItem> poItemMap = new HashMap<>();
+        for (PurchaseOrderItem pi : poItems) {
+            if (pi.getMaterialTypeId() != null) {
+                poItemMap.put(pi.getMaterialTypeId(), pi);
+            }
+        }
+
+        for (PurchaseReceiveItem item : record.getItems()) {
+            PurchaseOrderItem poItem =
+                    item.getMaterialTypeId() != null ? poItemMap.get(item.getMaterialTypeId()) : null;
+            if (poItem == null || poItem.getQuantity() == null) {
+                continue; // 未关联 PO 行，跳过差异检查
+            }
+
+            BigDecimal ordered = poItem.getQuantity();
+            BigDecimal received = item.getReceivedQuantity() != null
+                    ? item.getReceivedQuantity() : BigDecimal.ZERO;
+            int cmp = received.compareTo(ordered);
+            if (cmp == 0) {
+                continue; // 数量一致，无差异
+            }
+
+            String materialName = item.getMaterialName() != null ? item.getMaterialName() : item.getMaterialTypeId();
+            String unit = item.getUnit() != null ? item.getUnit() : "";
+            BigDecimal variance = received.subtract(ordered);
+            String varianceSign = cmp > 0 ? "+" : "";
+            String type = cmp > 0 ? "超收" : "少收";
+
+            String title = String.format("入库%s提醒 — %s", type, materialName);
+            String body = String.format(
+                    "采购单 %s 入库单 %s 存在%s差异。\n品名: %s\n采购量: %s %s\n实收量: %s %s\n差异: %s%s %s",
+                    po.getOrderNumber(),
+                    record.getReceiveNumber(),
+                    type,
+                    materialName,
+                    ordered.stripTrailingZeros().toPlainString(), unit,
+                    received.stripTrailingZeros().toPlainString(), unit,
+                    varianceSign, variance.stripTrailingZeros().toPlainString(), unit);
+
+            notificationService.notifyUser(factoryId, po.getCreatedBy(), title, body);
+            log.info("[VARIANCE-NOTIFY] {}通知已发送: poId={}, material={}, ordered={}, received={}, userId={}",
+                    type, po.getId(), materialName, ordered, received, po.getCreatedBy());
+        }
     }
 
     @Override
