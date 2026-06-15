@@ -14,14 +14,20 @@ describe('procurement order PDF buttons', () => {
 
     expect(source).toContain('handleDownloadPdf(true)');
     expect(source).toContain('handleDownloadPdf(false)');
+    expect(source).toContain('外发供应商PDF');
+    expect(source).toContain('内部打印');
     expect(source).toContain('v-if="canViewPrice"');
-    expect(source).toContain('params: { external: externalVersion }');
+    expect(source).toContain('downloadPurchaseOrderPdf');
+    expect(source).toContain('external: externalVersion');
+    expect(source).toContain('message,');
   });
 
   it('list shortcut always downloads the external supplier PDF', () => {
     const source = readView('list.vue');
 
-    expect(source).toContain('params: { external: true }');
-    expect(source).toContain('handleDownloadPdf(row)">对外供货单</el-button>');
+    expect(source).toContain('downloadPurchaseOrderPdf');
+    expect(source).toContain('external: true');
+    expect(source).toContain('handleDownloadPdf(row)">外发供应商PDF</el-button>');
+    expect(source).toContain('ElMessage.error(message)');
   });
 });
