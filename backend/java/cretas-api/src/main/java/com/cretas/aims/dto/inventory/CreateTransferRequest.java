@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -76,6 +77,7 @@ public class CreateTransferRequest {
         private String itemName;
 
         @NotNull(message = "数量不能为空")
+        @DecimalMin(value = "0.01", message = "调拨数量必须大于0")
         private BigDecimal quantity;
 
         @NotBlank(message = "单位不能为空")

@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -69,6 +70,7 @@ public class CreateDeliveryRequest {
         private String productName;
 
         @NotNull(message = "发货数量不能为空")
+        @DecimalMin(value = "0.01", message = "发货数量必须大于0")
         private BigDecimal deliveredQuantity;
 
         @NotBlank(message = "单位不能为空")
