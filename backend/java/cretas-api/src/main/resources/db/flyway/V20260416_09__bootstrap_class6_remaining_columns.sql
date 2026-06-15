@@ -75,9 +75,18 @@
 -- Source: entity/config/AIIntentConfig.java
 -- INSERTing migrations: V20260513_02, V20260516_02 / _04 / _05 / _07, V20260525_04,
 -- V20260526_03, V20260601_02 / _05, V20260603_09 / _13, V20260606_01 / _04 / _06 /
--- _08 / _09 / _10 / _11 / _12 / _13 / _27, V20260820_01 / _02 / _07 / _08 / _09 / _10
+-- _08 / _09 / _10 / _11 / _12 / _13 / _27, V20260820_01 / _02 / _07 / _08 / _09 / _10,
+-- V20260821_36 (cold chain, PR #136 — adds `examples` column).
 -- Bootstrap (V20260415_99:51-68) created 11 cols + factory_id + audit. Entity has 30+.
 -- Already covered: embedding (V20260505_01 vector(768)).
+--
+-- 2026-05-21 R8 (Class 11): added `examples` col. Class 6 audit (R3) missed it
+-- because V20260821_36 was merged to main AFTER R3's audit ran. Entity has
+-- `negative_examples` field but NOT `examples` (positive example utterances) —
+-- Hibernate ddl-auto never creates it. Sister chats (cold chain / SSOP additive
+-- v2 / etc.) treat `examples` as a JSON-string column for intent matching
+-- training data, parallel to `negative_examples`. Bootstrapped as TEXT to mirror
+-- the JSON-as-string Hibernate pattern.
 ALTER TABLE ai_intent_configs
     ADD COLUMN IF NOT EXISTS description       TEXT,
     ADD COLUMN IF NOT EXISTS priority          INTEGER,
