@@ -251,3 +251,153 @@ export function isBalanced(entries: VoucherEntry[]): boolean {
   const credit = sumCredit(entries);
   return Math.abs(debit - credit) < 0.001;
 }
+
+// ==================== Voucher List API ====================
+
+export interface VoucherListParams {
+  status?: VoucherStatus;
+  type?: VoucherType;
+  page?: number;
+  size?: number;
+}
+
+export interface PagedResult<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  number: number;
+  size: number;
+}
+
+export async function listVouchers(
+  factoryId: string,
+  params: VoucherListParams = {},
+): Promise<PagedResult<Voucher>> {
+  const query = new URLSearchParams();
+  if (params.status) query.set('status', params.status);
+  if (params.type) query.set('type', params.type);
+  query.set('page', String(params.page ?? 1));
+  query.set('size', String(params.size ?? 20));
+  const res = await get<PagedResult<Voucher>>(
+    `/${factoryId}/finance/vouchers?${query.toString()}`,
+  );
+  if (!res.success) {
+    throw new ApiError(res.message || '凭证列表加载失败', res.code);
+  }
+  return res.data ?? { content: [], totalElements: 0, totalPages: 0, number: 0, size: 20 };
+}
+
+export async function generateVoucher(
+  factoryId: string,
+  businessType: string,
+  businessId: string,
+): Promise<Voucher> {
+  const res = await post<Voucher>(`/${factoryId}/finance/vouchers/generate`, {
+    businessType,
+    businessId,
+  });
+  if (!res.success || !res.data) {
+    throw new ApiError(res.message || '生成凭证失败', res.code);
+  }
+  return res.data;
+}
+
+// ==================== VoucherTemplate 类型 ====================
+
+export type TemplateEntryDirection = 'DEBIT' | 'CREDIT';
+
+export interface TemplateEntry {
+  sortOrder?: number | null;
+  subjectCode: string;
+  subjectName: string;
+  direction: TemplateEntryDirection;
+  amountExpression?: string | null;
+  description?: string | null;
+  omitWhenZero?: boolean | null;
+}
+
+export interface VoucherTemplate {
+  id: string;
+  factoryId: string;
+  voucherType: VoucherType;
+  name: string;
+  description?: string | null;
+  entries: TemplateEntry[];
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ==================== VoucherTemplate API ====================
+
+export async function listVoucherTemplates(factoryId: string): Promise<VoucherTemplate[]> {
+  const res = await get<VoucherTemplate[]>(`/${factoryId}/voucher-templates`);
+  if (!res.success) {
+    throw new ApiError(res.message || '凭证模板加载失败', res.code);
+  }
+  return res.data ?? [];
+}
+
+export async function listVoucherTemplatesByType(
+  factoryId: string,
+  voucherType: VoucherType,
+): Promise<VoucherTemplate[]> {
+  const res = await get<VoucherTemplate[]>(
+    `/${factoryId}/voucher-templates/by-type/${voucherType}`,
+  );
+  if (!res.success) {
+    throw new ApiError(res.message || '凭证模板加载失败', res.code);
+  }
+  return res.data ?? [];
+}
+
+export async function createVoucherTemplate(
+  factoryId: string,
+  body: Partial<VoucherTemplate>,
+): Promise<VoucherTemplate> {
+  const res = await post<VoucherTemplate>(`/${factoryId}/voucher-templates`, body);
+  if (!res.success || !res.data) {
+    throw new ApiError(res.message || '创建凭证模板失败', res.code);
+  }
+  return res.data;
+}
+
+export async function updateVoucherTemplate(
+  factoryId: string,
+  id: string,
+  body: Partial<VoucherTemplate>,
+): Promise<VoucherTemplate> {
+  const res = await put<VoucherTemplate>(`/${factoryId}/voucher-templates/${id}`, body);
+  if (!res.success || !res.data) {
+    throw new ApiError(res.message || '更新凭证模板失败', res.code);
+  }
+  return res.data;
+}
+
+export async function deleteVoucherTemplate(factoryId: string, id: string): Promise<void> {
+  const res = await del(`/${factoryId}/voucher-templates/${id}`);
+  if (!res.success) {
+    throw new ApiError(res.message || '删除凭证模板失败', res.code);
+  }
+}
+
+export async function setVoucherTemplateDefault(
+  factoryId: string,
+  id: string,
+): Promise<VoucherTemplate> {
+  const res = await post<VoucherTemplate>(
+    `/${factoryId}/voucher-templates/${id}/set-default`,
+    {},
+  );
+  if (!res.success || !res.data) {
+    throw new ApiError(res.message || '设置默认模板失败', res.code);
+  }
+  return res.data;
+}
+
+/** 中文 label — TemplateEntry direction */
+export const DIRECTION_LABEL: Record<TemplateEntryDirection, string> = {
+  DEBIT: '借方',
+  CREDIT: '贷方',
+};

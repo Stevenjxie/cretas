@@ -1,0 +1,318 @@
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import {
+  listVouchers,
+  postVoucher,
+  voidVoucher,
+  VOUCHER_STATUS_LABEL,
+  VOUCHER_TYPE_LABEL,
+  type Voucher,
+  type VoucherStatus,
+  type VoucherType,
+} from '@/api/voucher';
+import { formatAmount } from '@/utils/tableFormatters';
+
+const router = useRouter();
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const factoryId = computed(() => authStore.factoryId ?? '');
+const canWrite = computed(() => permissionStore.canWrite('finance'));
+
+// ==================== State ====================
+
+const loading = ref(false);
+const tableData = ref<Voucher[]>([]);
+const pagination = ref({ page: 1, size: 20, total: 0 });
+
+const filterStatus = ref<VoucherStatus | ''>('');
+const filterType = ref<VoucherType | ''>('');
+const filterVoucherNumber = ref('');
+
+const voidDialogVisible = ref(false);
+const voidTargetId = ref('');
+const voidReason = ref('');
+const voiding = ref(false);
+
+// ==================== Load ====================
+
+async function loadData() {
+  if (!factoryId.value) return;
+  loading.value = true;
+  try {
+    const result = await listVouchers(factoryId.value, {
+      status: filterStatus.value || undefined,
+      type: filterType.value || undefined,
+      page: pagination.value.page,
+      size: pagination.value.size,
+    });
+    let rows = result.content ?? [];
+    // 凭证字号前端过滤 (后端 list 端点暂无 keyword 参数)
+    const kw = filterVoucherNumber.value.trim();
+    if (kw) {
+      const lower = kw.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          String(r.voucherNumber || '').toLowerCase().includes(lower) ||
+          String(r.sourceBusinessId || '').toLowerCase().includes(lower),
+      );
+    }
+    tableData.value = rows;
+    pagination.value.total = result.totalElements ?? 0;
+  } catch (e: unknown) {
+    ElMessage({
+      message: e instanceof Error ? e.message : '凭证列表加载失败，请检查网络',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    loading.value = false;
+  }
+}
+
+function handleSearch() {
+  pagination.value.page = 1;
+  loadData();
+}
+
+function handleReset() {
+  filterStatus.value = '';
+  filterType.value = '';
+  filterVoucherNumber.value = '';
+  handleSearch();
+}
+
+function handlePageChange(p: number) {
+  pagination.value.page = p;
+  loadData();
+}
+
+// ==================== Actions ====================
+
+function handleViewDetail(id: string) {
+  router.push(`/finance/voucher/${id}`);
+}
+
+async function handlePost(id: string) {
+  try {
+    await ElMessageBox.confirm('确认将该凭证过账？过账后不可直接编辑。', '确认过账', {
+      confirmButtonText: '确认过账',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+    await postVoucher(factoryId.value, id);
+    ElMessage.success('凭证已过账');
+    loadData();
+  } catch (e) {
+    if (e === 'cancel') return;
+    ElMessage({
+      message: e instanceof Error ? e.message : '过账失败，请检查网络',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  }
+}
+
+function openVoidDialog(id: string) {
+  voidTargetId.value = id;
+  voidReason.value = '';
+  voidDialogVisible.value = true;
+}
+
+async function submitVoid() {
+  if (!voidReason.value.trim()) {
+    ElMessage.warning('请填写作废原因');
+    return;
+  }
+  voiding.value = true;
+  try {
+    await voidVoucher(factoryId.value, voidTargetId.value, voidReason.value.trim());
+    ElMessage.success('凭证已作废');
+    voidDialogVisible.value = false;
+    loadData();
+  } catch (e: unknown) {
+    ElMessage({
+      message: e instanceof Error ? e.message : '作废失败，请检查网络',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    voiding.value = false;
+  }
+}
+
+onMounted(() => loadData());
+</script>
+
+<template>
+  <div class="page-wrapper" v-loading="loading">
+    <el-card shadow="never">
+      <template #header>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span style="font-size:16px;font-weight:600">凭证列表</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <el-input
+              v-model="filterVoucherNumber"
+              placeholder="搜索凭证字号 / 来源单号"
+              clearable
+              style="width:200px"
+              @keyup.enter="handleSearch"
+            />
+            <el-select
+              v-model="filterStatus"
+              placeholder="全部状态"
+              clearable
+              style="width:130px"
+              @change="handleSearch"
+            >
+              <el-option
+                v-for="(v, k) in VOUCHER_STATUS_LABEL"
+                :key="k"
+                :label="v.text"
+                :value="k"
+              />
+            </el-select>
+            <el-select
+              v-model="filterType"
+              placeholder="全部类型"
+              clearable
+              style="width:140px"
+              @change="handleSearch"
+            >
+              <el-option
+                v-for="(label, k) in VOUCHER_TYPE_LABEL"
+                :key="k"
+                :label="label"
+                :value="k"
+              />
+            </el-select>
+            <el-button type="primary" @click="handleSearch">搜索</el-button>
+            <el-button @click="handleReset">重置</el-button>
+          </div>
+        </div>
+      </template>
+
+      <!-- 空状态 -->
+      <el-empty
+        v-if="!loading && tableData.length === 0"
+        description="暂无凭证数据。可通过业务单据（销售/采购/报销等）自动生成凭证，或检查搜索条件。"
+        style="padding:40px 0"
+      />
+
+      <el-table v-else :data="tableData" border stripe>
+        <el-table-column prop="voucherNumber" label="凭证字号" width="160" />
+        <el-table-column prop="voucherType" label="类型" width="120" align="center">
+          <template #default="{ row }">
+            {{ VOUCHER_TYPE_LABEL[row.voucherType as VoucherType] || row.voucherType }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="voucherDate" label="凭证日期" width="120" align="center" />
+        <el-table-column prop="totalDebit" label="借方合计" width="130" align="right">
+          <template #default="{ row }">{{ formatAmount(row.totalDebit) }}</template>
+        </el-table-column>
+        <el-table-column prop="totalCredit" label="贷方合计" width="130" align="right">
+          <template #default="{ row }">{{ formatAmount(row.totalCredit) }}</template>
+        </el-table-column>
+        <el-table-column prop="sourceBusinessType" label="来源业务" width="130" align="center">
+          <template #default="{ row }">
+            <span style="font-size:12px;color:#606266">{{ row.sourceBusinessType }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="VOUCHER_STATUS_LABEL[row.status as VoucherStatus]?.type || 'info'"
+              size="small"
+            >
+              {{ VOUCHER_STATUS_LABEL[row.status as VoucherStatus]?.text || row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" width="170" />
+        <el-table-column label="操作" width="180" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="handleViewDetail(row.id)">
+              查看
+            </el-button>
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              link
+              type="success"
+              size="small"
+              @click="handlePost(row.id)"
+            >
+              过账
+            </el-button>
+            <el-button
+              v-if="canWrite && (row.status === 'DRAFT' || row.status === 'POSTED')"
+              link
+              type="danger"
+              size="small"
+              @click="openVoidDialog(row.id)"
+            >
+              作废
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-pagination
+        v-if="pagination.total > pagination.size"
+        style="margin-top:16px;justify-content:flex-end"
+        :current-page="pagination.page"
+        :page-size="pagination.size"
+        :total="pagination.total"
+        layout="total, prev, pager, next"
+        @current-change="handlePageChange"
+      />
+    </el-card>
+
+    <!-- 作废凭证 dialog (防呆: Rule3 原因选项+补充, Rule2 凭证号 context) -->
+    <el-dialog
+      v-model="voidDialogVisible"
+      title="作废凭证"
+      width="480px"
+      destroy-on-close
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:16px"
+      >
+        <template #title>
+          凭证作废后状态变为「已作废」，不可恢复。请确认作废原因后提交。
+        </template>
+      </el-alert>
+      <el-form label-width="90px">
+        <el-form-item label="作废原因" required>
+          <el-input
+            v-model="voidReason"
+            type="textarea"
+            :rows="3"
+            placeholder="请说明作废原因，如：录入有误、业务撤销等"
+            maxlength="200"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="voidDialogVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="voiding"
+          :disabled="!voidReason.trim()"
+          @click="submitVoid"
+        >
+          确认作废
+        </el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
