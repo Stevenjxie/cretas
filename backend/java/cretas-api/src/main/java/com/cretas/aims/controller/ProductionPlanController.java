@@ -12,6 +12,9 @@ import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
+import com.cretas.aims.dto.production.ProductionTransitLedgerDTO;
+import com.cretas.aims.entity.ProductionTransitLedger;
+import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.ProductionPlan;
@@ -70,6 +73,7 @@ public class ProductionPlanController {
     private final ProductionWorkflowOrchestrator workflowOrchestrator;
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
+    private final ProductionTransitLedgerRepository transitLedgerRepository;
 
     /**
      * 创建生产计划
@@ -345,6 +349,49 @@ public class ProductionPlanController {
         log.info("完成生产: factoryId={}, planId={}, actualQuantity={}", factoryId, planId, actualQuantity);
         ProductionPlanDTO plan = productionPlanService.completeProduction(factoryId, planId, actualQuantity);
         return ApiResponse.success("生产已完成", plan);
+    }
+
+    /**
+     * 中转挂账对账列表 (web-admin 用, 只读)
+     */
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/transit-ledgers")
+    @Operation(summary = "查询生产中转挂账列表", description = "六扇门: 仓库对账页 — 按工厂查询全部或按状态过滤的中转挂账记录")
+    public ApiResponse<List<ProductionTransitLedgerDTO>> listTransitLedgers(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "状态过滤: OPEN / RESOLVED / VOIDED, 不传返回全部")
+            @RequestParam(required = false) String status) {
+
+        List<ProductionTransitLedger> ledgers = (status != null && !status.isBlank())
+                ? transitLedgerRepository.findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, status.toUpperCase())
+                : transitLedgerRepository.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+
+        List<ProductionTransitLedgerDTO> dtos = ledgers.stream()
+                .map(l -> ProductionTransitLedgerDTO.builder()
+                        .id(l.getId())
+                        .factoryId(l.getFactoryId())
+                        .settlementId(l.getSettlementId())
+                        .productionPlanId(l.getProductionPlanId())
+                        .planNumber(l.getPlanNumber())
+                        .ledgerType(l.getLedgerType())
+                        .reportedQuantity(l.getReportedQuantity())
+                        .confirmedQuantity(l.getConfirmedQuantity())
+                        .varianceQuantity(l.getVarianceQuantity())
+                        .toleranceQuantity(l.getToleranceQuantity())
+                        .quantityUnit(l.getQuantityUnit())
+                        .varianceReason(l.getVarianceReason())
+                        .responsibilitySide(l.getResponsibilitySide())
+                        .status(l.getStatus())
+                        .note(l.getNote())
+                        .createdBy(l.getCreatedBy())
+                        .createdAt(l.getCreatedAt())
+                        .updatedAt(l.getUpdatedAt())
+                        .build())
+                .toList();
+
+        return ApiResponse.success(dtos);
     }
 
     /**

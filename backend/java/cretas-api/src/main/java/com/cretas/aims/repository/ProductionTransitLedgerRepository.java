@@ -29,4 +29,11 @@ public interface ProductionTransitLedgerRepository extends JpaRepository<Product
 
     List<ProductionTransitLedger> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderByCreatedAtDesc(
             String factoryId, String productionPlanId);
+
+    /** Factory-wide list for web-admin reconciliation page, ordered newest first. */
+    List<ProductionTransitLedger> findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(String factoryId);
+
+    /** Filtered by status for web-admin reconciliation page. */
+    List<ProductionTransitLedger> findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String status);
 }
