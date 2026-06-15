@@ -406,6 +406,13 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'WarehouseSaltedDeductions',
             component: () => import('@/views/warehouse/salted-deductions/index.vue'),
             meta: { requiresAuth: true, title: '盐化仓管理', module: 'warehouse' }
+          },
+          // 六扇门 N10 — 中转挂账对账 (web-admin 仓库主管/财务用)
+          {
+            path: 'transit-ledger',
+            name: 'WarehouseTransitLedger',
+            component: () => import('@/views/warehouse/transit-ledger/list.vue'),
+            meta: { requiresAuth: true, title: '中转挂账对账', module: 'warehouse' }
           }
         ]
       },

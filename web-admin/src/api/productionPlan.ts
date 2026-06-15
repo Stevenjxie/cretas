@@ -173,3 +173,36 @@ export interface CreateSecondaryPlanRequest {
 export function createSecondaryPlan(factoryId: string, data: CreateSecondaryPlanRequest) {
   return post<Record<string, unknown>>(`/${factoryId}/processing/secondary-plan`, data)
 }
+
+/** 中转挂账对账 DTO */
+export interface ProductionTransitLedgerItem {
+  id: string
+  factoryId: string
+  settlementId: string
+  productionPlanId: string
+  planNumber: string
+  ledgerType: string
+  reportedQuantity: number
+  confirmedQuantity: number
+  varianceQuantity: number
+  toleranceQuantity: number
+  quantityUnit: string | null
+  varianceReason: string
+  responsibilitySide: string
+  status: string
+  note: string | null
+  createdBy: number | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+/**
+ * 查询工厂全部中转挂账记录 (web-admin 对账页)
+ * GET /api/mobile/{factoryId}/production-plans/transit-ledgers
+ */
+export function listTransitLedgers(factoryId: string, status?: string) {
+  return get<ProductionTransitLedgerItem[]>(
+    `/${factoryId}/production-plans/transit-ledgers`,
+    status ? { params: { status } } : undefined,
+  )
+}
