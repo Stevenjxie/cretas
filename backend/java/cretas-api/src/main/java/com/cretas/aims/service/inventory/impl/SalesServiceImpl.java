@@ -1044,6 +1044,14 @@ public class SalesServiceImpl implements SalesService {
     private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
                                               java.math.BigDecimal estimatedCost, Long reviewerId) {
         org.hibernate.Hibernate.initialize(order.getItems());
+        // N9 fix (六扇门财审阈值): 免审/阈值未触发的自动通过路径在 CONFIRMED 状态直接调用本方法,
+        // 但 sales_order 状态机只有合法边 CONFIRMED → PENDING_FINANCE_REVIEW → FINANCE_APPROVED,
+        // 缺少 CONFIRMED → FINANCE_APPROVED 直通边 → checkTransitionAllowed 会 409, 低额订单全卡死 DRAFT.
+        // 修法: 自动通过时先走合法中间态 (复用既有边), 不新增状态机 schema 边.
+        if (order.getStatus() == SalesOrderStatus.CONFIRMED) {
+            checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
+            order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        }
         checkTransitionAllowed(factoryId, order.getStatus().name(), "FINANCE_APPROVED");
         order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
         order.setFinanceReviewedBy(reviewerId);
