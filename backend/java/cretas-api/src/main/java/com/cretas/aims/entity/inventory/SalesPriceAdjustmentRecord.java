@@ -8,13 +8,13 @@ import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 
 /**
- * 销售订单行价格调整记录
+ * 销售订单行价格调整记录 — warn-not-block 模式
  *
  * <p>每次对销售订单行单价的改动都写一条记录，支持:
  * <ul>
  *   <li>历史留痕 (改前/改后价格、操作人、原因)</li>
  *   <li>fool-proof Rule 3: reasonType 用 enum dropdown, OTHER 时才填 reasonDetail</li>
- *   <li>阈值触发审批: 降价 > 10% 或 涨价 > 20% 时 approvalRequired=true</li>
+ *   <li>warn-not-block: 改价立即生效; 超阈值 (降价>10%/涨价>20%) 设 flagged=true 供审计</li>
  * </ul>
  */
 @Data
@@ -67,33 +67,12 @@ public class SalesPriceAdjustmentRecord extends BaseEntity {
     @Column(name = "adjusted_by_name", length = 200)
     private String adjustedByName;
 
-    /** 是否需要审批 (降价>10% 或 涨价>20%) */
-    @Column(name = "approval_required", nullable = false)
-    private boolean approvalRequired = false;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "approval_status", nullable = false, length = 32)
-    private ApprovalStatus approvalStatus = ApprovalStatus.NOT_REQUIRED;
-
-    /** 关联审批链 ID (当 approvalRequired=true 时写入) */
-    @Column(name = "approval_chain_id", length = 191)
-    private String approvalChainId;
-
-    /** 审批人 ID (approve/reject 时写入) */
-    @Column(name = "approved_by")
-    private Long approvedBy;
-
-    /** 审批人姓名 (approve/reject 时写入, 展示用) */
-    @Column(name = "approved_by_name", length = 200)
-    private String approvedByName;
-
-    /** 审批时间 (approve/reject 时写入) */
-    @Column(name = "approved_at")
-    private java.time.LocalDateTime approvedAt;
-
-    /** 驳回原因 (reject 时填写, fool-proof: 驳回必须有原因) */
-    @Column(name = "reject_reason", columnDefinition = "TEXT")
-    private String rejectReason;
+    /**
+     * 超阈值审计标记: 降价 > 10% 或 涨价 > 20% 时为 true.
+     * 改价仍立即生效 (warn-not-block), 此字段仅供审计/复核用途.
+     */
+    @Column(name = "flagged", nullable = false)
+    private boolean flagged = false;
 
     @PrePersist
     void assignUUID() {
@@ -112,13 +91,5 @@ public class SalesPriceAdjustmentRecord extends BaseEntity {
         PROMOTION,          // 促销活动
         ERROR_CORRECTION,   // 录入错误修正
         OTHER               // 其他 (需填 reasonDetail)
-    }
-
-    /** 审批状态 */
-    public enum ApprovalStatus {
-        NOT_REQUIRED,  // 未达到审批阈值，无需审批
-        PENDING,       // 等待审批
-        APPROVED,      // 审批通过
-        REJECTED       // 审批拒绝
     }
 }

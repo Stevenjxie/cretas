@@ -20,9 +20,8 @@ public record SalesPriceAdjustmentRecordDTO(
         String adjustmentReasonDetail,
         Long adjustedBy,
         String adjustedByName,
-        boolean approvalRequired,
-        SalesPriceAdjustmentRecord.ApprovalStatus approvalStatus,
-        String approvalChainId,
+        /** 超阈值审计标记 */
+        boolean flagged,
         LocalDateTime createdAt
 ) {
     public static SalesPriceAdjustmentRecordDTO from(SalesPriceAdjustmentRecord r) {
@@ -46,9 +45,7 @@ public record SalesPriceAdjustmentRecordDTO(
                 r.getAdjustmentReasonDetail(),
                 r.getAdjustedBy(),
                 r.getAdjustedByName(),
-                r.isApprovalRequired(),
-                r.getApprovalStatus(),
-                r.getApprovalChainId(),
+                r.isFlagged(),
                 r.getCreatedAt()
         );
     }
