@@ -379,6 +379,105 @@ def expand_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# MONTHLY AGGREGATION  (detail rows → one row per period [+ low-cardinality dim])
+# ---------------------------------------------------------------------------
+
+# High-cardinality columns that should be dropped before groupby.
+# These are item/SKU-level columns that explode row count and have no
+# analytical value after aggregation.
+_HIGH_CARD_KEYWORDS = [
+    "商品名称", "菜品", "商品编码", "原料名称", "原料条形码",
+    "规格", "单号", "账单号", "售后单号", "开单时间", "结单时间",
+    "点单时间", "最后一次催菜时间", "外部单号", "关联单号",
+    "单据操作日期", "原料条形码",
+]
+
+# Low-cardinality dimension columns kept as secondary groupby keys
+# (store / supplier – max 12 unique values enforced below).
+_LOW_CARD_DIM_KEYWORDS = ["门店名称", "店铺名称", "供应商"]
+
+
+def _is_high_card(col: str) -> bool:
+    return any(kw in col for kw in _HIGH_CARD_KEYWORDS)
+
+
+def _find_low_card_dim(df: pd.DataFrame, period_col: str) -> Optional[str]:
+    """Return the first low-cardinality dimension column (≤12 unique values)."""
+    for kw in _LOW_CARD_DIM_KEYWORDS:
+        for col in df.columns:
+            if kw in col and col != period_col and df[col].nunique() <= 12:
+                return col
+    return None
+
+
+def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
+    """
+    Collapse detail rows into monthly aggregates.
+
+    Steps:
+    1. Normalise the period_col to YYYY-MM (month string).
+    2. Identify a low-cardinality secondary dimension (≤12 unique, e.g. 门店/供应商).
+    3. Drop high-cardinality columns (item names, codes, timestamps, order IDs).
+    4. Sum all remaining numeric columns grouped by period [+ optional dim].
+    5. Return the aggregated DataFrame (typically few rows per month).
+    """
+    df = df.copy()
+
+    # --- Step 1: normalise period column to YYYY-MM ---
+    def _to_month(v: Any) -> Optional[str]:
+        s = str(v).strip()
+        # Already month-only string like '2024年1月' or '2024-01'
+        parsed = _parse_month_str(s)
+        if parsed:
+            return f"{parsed[0]}-{parsed[1]:02d}"
+        # Full date like '2024-01-15' or pd.Timestamp
+        try:
+            t = pd.to_datetime(s, errors="raise")
+            return t.strftime("%Y-%m")
+        except Exception:
+            return None
+
+    df["_agg_period"] = df[period_col].map(_to_month)
+
+    # --- Step 2: find low-cardinality secondary dim ---
+    dim_col = _find_low_card_dim(df, period_col)
+
+    # --- Step 3: build groupby keys ---
+    groupby_cols = ["_agg_period"]
+    if dim_col is not None:
+        groupby_cols.append(dim_col)
+
+    # --- Step 4: drop high-cardinality columns ---
+    drop_cols = set()
+    for col in df.columns:
+        if col in groupby_cols or col == "_agg_period":
+            continue
+        if _is_high_card(col):
+            drop_cols.add(col)
+        # Also drop the original period column (replaced by _agg_period)
+        if col == period_col:
+            drop_cols.add(col)
+
+    df_clean = df.drop(columns=list(drop_cols), errors="ignore")
+
+    # --- Step 5: sum numeric columns ---
+    numeric_cols = [c for c in df_clean.columns
+                    if c not in groupby_cols and pd.api.types.is_numeric_dtype(df_clean[c])]
+
+    if not numeric_cols:
+        # Nothing to aggregate – just deduplicate by period
+        return df_clean[groupby_cols].drop_duplicates().rename(
+            columns={"_agg_period": period_col}
+        )
+
+    agg_df = df_clean.groupby(groupby_cols, as_index=False)[numeric_cols].sum()
+
+    # Rename _agg_period back to original period_col name
+    agg_df = agg_df.rename(columns={"_agg_period": period_col})
+    return agg_df
+
+
+# ---------------------------------------------------------------------------
 # SEED PLAN
 # ---------------------------------------------------------------------------
 
@@ -395,6 +494,7 @@ class SeedEntry:
     is_snapshot: bool = False         # single-month snapshot → expand
     snapshot_n_months: int = 2        # how many months to expand to
     trend_cols: Optional[List[str]] = None
+    aggregate: bool = False           # True = detail rows → monthly aggregation after redate
     notes: str = ""
 
 
@@ -428,7 +528,8 @@ def build_seed_plan() -> List[SeedEntry]:
             is_snapshot=True,
             snapshot_n_months=2,
             trend_cols=["销售金额", "实收", "折后金额", "单卖数量(不含套餐子商品)"],
-            notes=f"品牌商品销量 snapshot → 2个月",
+            aggregate=True,   # SKU-level detail (500-1000 rows) → monthly sum
+            notes=f"品牌商品销量 snapshot → 2个月 → aggregate",
         ))
 
     # ===== RESTAURANT PURCHASE: 东门口 =====
@@ -443,7 +544,8 @@ def build_seed_plan() -> List[SeedEntry]:
         domain="purchase",
         sheet_name=None,
         n_months=2,
-        notes="东门口采购入库 2026-02 → redate",
+        aggregate=True,   # 11094-row SKU-level detail → monthly sum by supplier
+        notes="东门口采购入库 2026-02 → redate → aggregate",
     ))
 
     # ===== RESTAURANT FINANCE: 张记餐饮 =====
@@ -460,12 +562,14 @@ def build_seed_plan() -> List[SeedEntry]:
         ))
 
     # ===== QHJ 2025: continuous time series =====
+    # aggregate=True on detail files: 商品销售明细 and 详细日报表 each have 200k rows.
+    # 营业概况月报 has 6237 daily rows across stores — also aggregate to avoid timeseries bloat.
     qhj_files = [
-        ("qhj_25_营业概况月报.csv", "sales"),
-        ("qhj_25_商品销售明细.csv", "sales"),
-        ("qhj_25_详细日报表.csv",   "sales"),
+        ("qhj_25_营业概况月报.csv", "sales",  True),   # daily multi-store → monthly
+        ("qhj_25_商品销售明细.csv", "sales",  True),   # 200k SKU-level → monthly
+        ("qhj_25_详细日报表.csv",   "sales",  True),   # 200k order-level → monthly
     ]
-    for fname, domain in qhj_files:
+    for fname, domain, agg in qhj_files:
         fp = QHJ_E2E / fname
         plan.append(SeedEntry(
             label=f"rest_qhj25_{fname.replace('qhj_25_', '').replace('.csv', '')}",
@@ -475,7 +579,8 @@ def build_seed_plan() -> List[SeedEntry]:
             sheet_name="CSV",
             n_months=12,
             skip_rows=3,
-            notes="QHJ 2025 continuous",
+            aggregate=agg,
+            notes=f"QHJ 2025 continuous {'→ aggregate' if agg else ''}",
         ))
 
     # ===== FACTORY PRODUCTION: 绿源食品 =====
@@ -655,7 +760,7 @@ def generate_gap_fill() -> List[Tuple[str, str, str, pd.DataFrame]]:
 # ---------------------------------------------------------------------------
 
 def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
-    """Load → desensitise → redate.  Returns processed df or None on error."""
+    """Load → desensitise → redate → [aggregate].  Returns processed df or None on error."""
     src = entry.src_path
     if not src.exists():
         print(f"  [SKIP] Not found: {src.name}")
@@ -685,6 +790,9 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
         print(f"  [SKIP] Empty: {src.name}")
         return None
 
+    # Detect date/period column before transformation (needed for aggregate step)
+    date_cols = _find_date_cols(df)
+
     # Handle snapshot expansion
     if entry.is_snapshot:
         df = expand_snapshot(
@@ -693,10 +801,27 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
             n_months=min(entry.snapshot_n_months, len(window.months())),
             trend_cols=entry.trend_cols,
         )
+        # Snapshot expansion adds '月份' column; use that as the period column
+        if "月份" not in date_cols:
+            date_cols = ["月份"] + date_cols
     else:
         df = redate(df, window)
 
     df = desensitize(df)
+
+    # Optional: aggregate detail rows into monthly summary
+    if entry.aggregate:
+        # Re-detect date cols after expansion/redate (column may have been added)
+        agg_date_cols = _find_date_cols(df)
+        if agg_date_cols:
+            period_col = agg_date_cols[0]
+            rows_before = len(df)
+            df = aggregate_monthly(df, period_col)
+            rows_after = len(df)
+            print(f"    [AGG] {rows_before} rows → {rows_after} rows  (period_col='{period_col}')")
+        else:
+            print(f"    [AGG SKIP] No date/period column found — skipping aggregation")
+
     return df
 
 
@@ -895,6 +1020,88 @@ def verify_local() -> None:
             print(f"  Sample (first 3 rows):")
             print(df.head(3).to_string(index=False))
             break
+
+    # --- TEST 6: aggregate_monthly – detail → monthly rows ---
+    print("\n[TEST 6] aggregate_monthly – detail sources row-count reduction")
+    print("-" * 55)
+
+    # 6a: IL TEATRO brand sales (snapshot → expand → aggregate)
+    il_fp = XLSX_CONV / "IL TEATRO（西餐厅）2月_商品销量报表.xlsx"
+    if not il_fp.exists():
+        candidates = sorted(XLSX_CONV.glob("*销量*.xlsx")) if XLSX_CONV.exists() else []
+        il_fp = candidates[0] if candidates else None
+    if il_fp and il_fp.exists():
+        df_il = pd.read_excel(il_fp, sheet_name=0)
+        orig_rows = len(df_il)
+        win_il = assign_window(DEMO_REST, "sales_agg_test", 2)
+        df_expanded = expand_snapshot(df_il, win_il, n_months=2,
+                                      trend_cols=["销售金额", "实收", "折后金额"])
+        df_desens = desensitize(df_expanded)
+        rows_before = len(df_desens)
+
+        period_col = _find_date_cols(df_desens)[0] if _find_date_cols(df_desens) else "月份"
+        orig_total = pd.to_numeric(df_desens["销售金额"], errors="coerce").sum() if "销售金额" in df_desens.columns else None
+
+        df_agg = aggregate_monthly(df_desens, period_col)
+        rows_after = len(df_agg)
+
+        agg_total = pd.to_numeric(df_agg["销售金额"], errors="coerce").sum() if "销售金额" in df_agg.columns else None
+
+        print(f"  [6a] IL TEATRO 商品销量 snapshot (2 months):")
+        print(f"       Source rows: {orig_rows}  → expanded: {rows_before}  → aggregated: {rows_after}")
+        print(f"       Aggregated cols: {list(df_agg.columns)}")
+        print(f"       Unique periods: {sorted(df_agg[period_col].unique())}")
+        if orig_total is not None and agg_total is not None:
+            print(f"       销售金额 sum BEFORE: {orig_total:.0f}  AFTER: {agg_total:.0f}  "
+                  f"(should match → {'✓' if abs(orig_total - agg_total) < 1 else '✗ MISMATCH'})")
+        print(f"       Sample rows:")
+        print(df_agg.head(3).to_string(index=False))
+    else:
+        print("  [6a] SKIP – no brand sales file found")
+
+    # 6b: 东门口 purchase (11094 rows → monthly by supplier)
+    purchase_fp_v = XLSX_DIR / "东门口2月采购入库明细报表.xlsx"
+    if purchase_fp_v.exists():
+        df_pur = pd.read_excel(purchase_fp_v, sheet_name=0)
+        orig_rows_pur = len(df_pur)
+        win_pur = assign_window(DEMO_REST, "purchase_agg_test", 2)
+        df_pur_r = redate(df_pur, win_pur)
+        df_pur_d = desensitize(df_pur_r)
+        date_cols_pur = _find_date_cols(df_pur_d)
+        period_col_pur = date_cols_pur[0] if date_cols_pur else None
+
+        if period_col_pur:
+            # Exclude footer summary rows (rows with null date) when computing baseline
+            # The Excel file contains a grand-total footer row with no date.
+            has_date = df_pur_d[period_col_pur].notna()
+            data_rows_only = df_pur_d[has_date]
+            baseline_amount = pd.to_numeric(data_rows_only["金额(元)"], errors="coerce").sum() if "金额(元)" in df_pur_d.columns else None
+
+            df_pur_agg = aggregate_monthly(df_pur_d, period_col_pur)
+            rows_after_pur = len(df_pur_agg)
+            agg_amount = pd.to_numeric(df_pur_agg["金额(元)"], errors="coerce").sum() if "金额(元)" in df_pur_agg.columns else None
+
+            print(f"\n  [6b] 东门口 采购入库明细:")
+            print(f"       Source rows: {orig_rows_pur} (incl. footer)  data rows: {has_date.sum()}  → aggregated: {rows_after_pur}")
+            print(f"       Aggregated cols: {list(df_pur_agg.columns)}")
+            print(f"       Unique periods: {sorted(df_pur_agg[period_col_pur].unique())}")
+            if baseline_amount is not None and agg_amount is not None:
+                match = abs(baseline_amount - agg_amount) < 1
+                print(f"       金额(元) sum (data rows only): {baseline_amount:.0f}  AFTER agg: {agg_amount:.0f}  "
+                      f"({'✓ match' if match else '✗ MISMATCH'})")
+            print(f"       Sample rows:")
+            print(df_pur_agg.head(3).to_string(index=False))
+        else:
+            print(f"\n  [6b] SKIP – no period column detected in purchase file")
+    else:
+        print(f"\n  [6b] SKIP – purchase file not found")
+
+    # 6c: Summary source (绿源食品) should NOT aggregate (aggregate=False)
+    print(f"\n  [6c] Summary source (绿源食品 生产产量) – no aggregation (aggregate=False):")
+    f_luyuan = TEST_DATA / "绿源食品-2025生产报表.xlsx"
+    if f_luyuan.exists():
+        df_ly = pd.read_excel(f_luyuan, sheet_name="生产产量", header=1)
+        print(f"       Rows: {len(df_ly)} (already monthly-level, aggregate=False → unchanged)")
 
     # --- TEST 5: window non-overlap check ---
     print("\n[TEST 5] Window assignment – non-overlapping")
