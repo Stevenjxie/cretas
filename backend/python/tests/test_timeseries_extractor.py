@@ -351,3 +351,217 @@ def test_unknown_standard_name_defaults_to_skip():
     assert out[0].canonical_field == "output_quantity"
     # unknown_col must not appear in dims
     assert "unknown_col" not in out[0].dims
+
+
+# ===========================================================================
+# Phase 2 real-data robustness tests (live production report findings)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _to_float coercion tests (unit-level, imported directly)
+# ---------------------------------------------------------------------------
+from smartbi.services.timeseries_extractor import _to_float, normalize_period
+
+
+class TestToFloatCoercion:
+    """Unit tests for _to_float measure-value coercion."""
+
+    def test_plain_int(self):
+        assert _to_float(100) == 100.0
+
+    def test_plain_float(self):
+        assert _to_float(3.14) == 3.14
+
+    def test_plain_numeric_string(self):
+        assert _to_float("19466") == 19466.0
+
+    def test_percentage_string(self):
+        """'97.85%' → 97.85 (value preserved, % stripped, not divided by 100)."""
+        assert _to_float("97.85%") == 97.85
+
+    def test_percentage_waste_rate(self):
+        assert _to_float("2.15%") == 2.15
+
+    def test_thousands_comma(self):
+        assert _to_float("1,234.5") == 1234.5
+
+    def test_thousands_comma_large(self):
+        assert _to_float("1,000,000") == 1_000_000.0
+
+    def test_currency_yen_prefix(self):
+        assert _to_float("¥500") == 500.0
+
+    def test_currency_dollar_prefix(self):
+        assert _to_float("$1,200") == 1200.0
+
+    def test_yuan_suffix(self):
+        assert _to_float("500元") == 500.0
+
+    def test_non_numeric_after_cleaning(self):
+        """'abc' remains non-numeric after cleaning → None (measure skipped)."""
+        assert _to_float("abc") is None
+
+    def test_empty_string(self):
+        assert _to_float("") is None
+
+    def test_none_input(self):
+        assert _to_float(None) is None
+
+    def test_whitespace_only(self):
+        assert _to_float("   ") is None
+
+    def test_percentage_with_whitespace(self):
+        assert _to_float("  97.85%  ") == 97.85
+
+
+# ---------------------------------------------------------------------------
+# normalize_period tests (unit-level)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizePeriod:
+    """Unit tests for normalize_period helper."""
+
+    # Chinese year-month formats
+    def test_chinese_single_digit_month(self):
+        assert normalize_period("2025年1月") == "2025-01"
+
+    def test_chinese_double_digit_month(self):
+        assert normalize_period("2025年12月") == "2025-12"
+
+    def test_chinese_zero_padded_month(self):
+        assert normalize_period("2025年01月") == "2025-01"
+
+    def test_chinese_with_day_truncated_to_month(self):
+        assert normalize_period("2025年1月15日") == "2025-01"
+
+    # Non-zero-padded separator formats
+    def test_slash_single_digit_month(self):
+        assert normalize_period("2025/1") == "2025-01"
+
+    def test_dot_single_digit_month(self):
+        assert normalize_period("2025.1") == "2025-01"
+
+    def test_dash_single_digit_month(self):
+        assert normalize_period("2025-1") == "2025-01"
+
+    # Already canonical — must pass through unchanged
+    def test_already_iso_month(self):
+        assert normalize_period("2025-01") == "2025-01"
+
+    def test_already_iso_date(self):
+        assert normalize_period("2025-01-15") == "2025-01-15"
+
+    def test_already_iso_week(self):
+        assert normalize_period("2025-W03") == "2025-W03"
+
+    # Unparseable — safe no-op
+    def test_unparseable_passthrough(self):
+        assert normalize_period("Q1-2025") == "Q1-2025"
+
+    def test_empty_string_passthrough(self):
+        assert normalize_period("") == ""
+
+    # Sort order regression: Jan through Dec should sort 01..12 after normalisation
+    def test_sort_order_jan_to_dec(self):
+        raw = [f"2025年{m}月" for m in range(1, 13)]
+        normalised = [normalize_period(p) for p in raw]
+        assert normalised == sorted(normalised), (
+            f"Normalised periods should sort correctly: {normalised}"
+        )
+        assert normalised[0] == "2025-01"
+        assert normalised[-1] == "2025-12"
+
+
+# ---------------------------------------------------------------------------
+# Integration: extract_timeseries with Chinese period + percent measure
+# (mirrors 绿源食品 12月 production report structure)
+# ---------------------------------------------------------------------------
+
+
+def test_chinese_period_normalised_in_output():
+    """'月份=2025年1月' via period_of → TimeseriesRow.period == '2025-01'."""
+    rows = [{"月份": "2025年1月", "合格率": "97.85%", "产出数量": 19466}]
+    fm = {
+        "月份": "time_period",
+        "合格率": "pass_rate",
+        "产出数量": "output_quantity",
+    }
+    kind = {
+        "time_period": "time",
+        "pass_rate": "measure",
+        "output_quantity": "measure",
+    }
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F999",
+        template_key="production_quality",
+        domain="production",
+        source_upload_id=42,
+        period_of=lambda r: r["月份"],
+        field_kind=make_kind(kind),
+    )
+    assert len(out) == 2, f"Expected 2 measure rows (pass_rate + output_quantity), got {len(out)}"
+    by_field = {r.canonical_field: r for r in out}
+
+    # Period must be normalised
+    assert by_field["pass_rate"].period == "2025-01"
+    assert by_field["output_quantity"].period == "2025-01"
+
+    # pass_rate: "97.85%" → 97.85 (not dropped, not 0.9785)
+    assert by_field["pass_rate"].value_num == 97.85
+
+    # output_quantity: plain int
+    assert by_field["output_quantity"].value_num == 19466.0
+
+
+def test_percent_measure_emitted_not_dropped():
+    """
+    Regression: 合格率/废品率 with '%' suffix must be emitted as numeric measures,
+    not silently dropped.  Before this fix they were non-numeric → skipped.
+    """
+    rows = [{"期间": "2025-12", "合格率": "97.85%", "废品率": "2.15%"}]
+    fm = {"期间": "period", "合格率": "pass_rate", "废品率": "waste_rate"}
+    kind = {"period": "time", "pass_rate": "measure", "waste_rate": "measure"}
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F1",
+        template_key="tk",
+        domain="quality",
+        source_upload_id=1,
+        period_of=lambda r: r["期间"],
+        field_kind=make_kind(kind),
+    )
+    assert len(out) == 2, f"Expected 2 rows, got {len(out)} — percent measures being dropped?"
+    by_field = {r.canonical_field: r for r in out}
+    assert by_field["pass_rate"].value_num == 97.85
+    assert by_field["waste_rate"].value_num == 2.15
+
+
+def test_period_deduplication_after_normalise():
+    """
+    Two rows with '2025年1月' and '2025-01' are the same period after normalisation.
+    Both should produce rows with period == '2025-01', enabling downstream dedup.
+    """
+    rows = [
+        {"月份": "2025年1月", "产出数量": 100},
+        {"月份": "2025-01", "产出数量": 200},
+    ]
+    fm = {"月份": "time_period", "产出数量": "output_quantity"}
+    kind = {"time_period": "time", "output_quantity": "measure"}
+    out = extract_timeseries(
+        rows,
+        fm,
+        factory_id="F1",
+        template_key="tk",
+        domain="production",
+        source_upload_id=1,
+        period_of=lambda r: r["月份"],
+        field_kind=make_kind(kind),
+    )
+    assert len(out) == 2
+    assert all(r.period == "2025-01" for r in out), (
+        f"All rows should have period '2025-01', got: {[r.period for r in out]}"
+    )

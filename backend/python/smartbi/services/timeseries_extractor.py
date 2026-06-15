@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -84,15 +85,87 @@ def _compute_dims_hash(dims: Dict[str, Any]) -> str:
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """Try to convert value to float; return None if not numeric."""
+    """Try to convert value to float; return None if not numeric.
+
+    Handles real-data robustness cases found in live production reports:
+    - Trailing % suffix: "97.85%" → 97.85 (value is the rate itself, not divided by 100)
+    - Thousands comma: "1,234.5" → 1234.5
+    - Currency/unit wrappers: "¥500", "$500" (prefix), "500元" (suffix) → 500
+    - Leading/trailing whitespace stripped.
+    - Already int/float → returned as-is.
+    - After cleaning, still non-numeric → return None (measure row silently skipped).
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
+    s = str(value).strip()
+    # Strip common currency prefixes
+    s = s.lstrip("¥$€£")
+    # Strip trailing % (percentage stored as the number itself, e.g. 97.85 not 0.9785)
+    s = s.rstrip("%")
+    # Strip trailing unit suffixes common in Chinese reports
+    for suffix in ("元", "万元", "亿元", "kg", "KG", "g", "个", "件", "次", "吨", "t"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    # Remove thousands separators
+    s = s.replace(",", "")
+    s = s.strip()
+    if not s:
+        return None
     try:
-        return float(str(value))
+        return float(s)
     except (ValueError, TypeError):
         return None
+
+
+# _CHINESE_YEAR_MONTH matches "2025年1月" / "2025年01月" / "2025年1月15日"
+_CHINESE_YEAR_MONTH_RE = re.compile(r"^(\d{4})年(\d{1,2})月")
+
+# _SLASH_DOT_PERIOD matches "2025/1", "2025.1", "2025-1" (single-digit month without zero-pad)
+_SLASH_DOT_PERIOD_RE = re.compile(r"^(\d{4})[/.\-](\d{1,2})$")
+
+
+def normalize_period(raw: str) -> str:
+    """Normalise a raw period string to a canonical form for timeseries storage.
+
+    Designed for real production reports where period cells may carry Chinese
+    year-month text or non-zero-padded formats that prevent correct string sort
+    and cross-upload deduplication.
+
+    Transformations (in priority order):
+    1. Chinese  ``"2025年1月"`` / ``"2025年01月"`` → ``"2025-01"``
+       Chinese  ``"2025年1月15日"``                → ``"2025-01"``  (month granularity)
+    2. Slash/dot/dash: ``"2025/1"`` / ``"2025.1"`` / ``"2025-1"`` → ``"2025-01"``
+       Note: ``"2025-01"`` (already zero-padded) passes through step 2 unchanged
+       because the regex requires a single-digit month (``\\d{1,2}$``), but
+       ``"2025-01"`` ends with two digits, so it does NOT match — it falls through
+       to the passthrough rule and is returned as-is.
+    3. ``"2025-01"`` / ``"2025-01-15"`` / ``"2025-W03"`` → returned as-is.
+    4. Anything else that cannot be parsed → returned as-is (safe no-op).
+
+    This helper is intentionally scoped to the timeseries extractor only.
+    It does NOT modify ``_fmt_period`` in excel_async, which handles dynamic_data
+    period storage (different scope, different constraints).
+    """
+    if not raw:
+        return raw
+
+    # 1. Chinese year-month (most specific — try first)
+    m = _CHINESE_YEAR_MONTH_RE.match(raw)
+    if m:
+        year, month = m.group(1), m.group(2)
+        return f"{year}-{int(month):02d}"
+
+    # 2. Non-zero-padded month with separator (only matches if month < 10, single digit)
+    m = _SLASH_DOT_PERIOD_RE.match(raw)
+    if m:
+        year, month = m.group(1), int(m.group(2))
+        return f"{year}-{month:02d}"
+
+    # 3 & 4. Already canonical or unparseable — return as-is
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -140,15 +213,24 @@ def extract_timeseries(
     list[TimeseriesRow]
         One row per (input_row × measure_field).  Rows with no valid period
         are skipped.  Non-numeric measure values are skipped.
+
+    Real-data robustness (Phase 2, live report fixes):
+    - Measure values with trailing ``%`` (e.g. ``"97.85%"``) are coerced to
+      their numeric equivalent (97.85); thousands commas and common currency
+      prefixes/unit suffixes are also stripped before float conversion.
+    - Period strings from ``period_of`` are normalised via ``normalize_period``
+      before storage, converting Chinese year-month text (``"2025年1月"``) and
+      non-zero-padded formats (``"2025/1"``) to ``"2025-01"``.
     """
     fm_dict = _normalise_field_mappings(field_mappings)
     result: List[TimeseriesRow] = []
 
     for row in rows:
         # ── 1. Period check: skip entire row if no period ────────────────────
-        period = period_of(row)
-        if not period:
+        period_raw = period_of(row)
+        if not period_raw:
             continue
+        period = normalize_period(period_raw)
 
         # ── 2. Classify each mapped column ───────────────────────────────────
         dims: Dict[str, Any] = {}
