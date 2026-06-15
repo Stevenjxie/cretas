@@ -101,14 +101,14 @@ describe('todoApprovalApiClient', () => {
       'price anomaly approve',
       () => todoApprovalApiClient.priceAnomalyApprove('DN-1', 'F123'),
       'post',
-      '/api/mobile/F123/supplier-delivery-notes/DN-1/price-anomaly/approve',
+      '/api/mobile/F123/warehouse/supplier-delivery-notes/DN-1/price-anomaly/approve',
       undefined,
     ],
     [
       'price anomaly reject',
       () => todoApprovalApiClient.priceAnomalyReject('DN-1', 'price mismatch', 'F123'),
       'post',
-      '/api/mobile/F123/supplier-delivery-notes/DN-1/price-anomaly/reject',
+      '/api/mobile/F123/warehouse/supplier-delivery-notes/DN-1/price-anomaly/reject',
       { notes: 'price mismatch' },
     ],
     [

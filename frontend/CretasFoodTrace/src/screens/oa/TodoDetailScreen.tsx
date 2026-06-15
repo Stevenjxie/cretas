@@ -117,7 +117,7 @@ function getDetailPath(type: TodoType, refId: string, factoryId: string): string
     case 'SALES_FINANCE_REVIEW':
       return `/api/mobile/${factoryId}/sales/orders/${refId}`;
     case 'PRICE_ANOMALY':
-      return `/api/mobile/${factoryId}/supplier-delivery-notes/${refId}`;
+      return `/api/mobile/${factoryId}/warehouse/supplier-delivery-notes/${refId}`;
     case 'STOCKTAKE_APPROVAL':
       return `/api/mobile/${factoryId}/stocktakes/${refId}`;
     case 'RETURN_FINANCE_REVIEW':

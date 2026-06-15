@@ -166,7 +166,7 @@ export default function WHTransitLedgerScreen() {
     const confirming = confirmingId === item.id;
 
     return (
-      <NeoCard style={styles.card} padding="l" variant="elevated">
+      <NeoCard style={styles.card} padding="l" variant="elevated" testID={`transit-card-${item.id}`}>
         <View style={styles.cardHeader}>
           <View style={styles.titleBlock}>
             <Text style={styles.itemTitle} numberOfLines={2}>{name}</Text>
@@ -259,6 +259,7 @@ export default function WHTransitLedgerScreen() {
         </View>
       ) : (
         <FlatList
+          testID="transit-ledger-list"
           data={items}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
@@ -268,7 +269,7 @@ export default function WHTransitLedgerScreen() {
           ListEmptyComponent={
             <View style={styles.center}>
               <MaterialCommunityIcons name="check-circle-outline" size={42} color={theme.colors.success} />
-              <Text style={styles.emptyTitle}>{COPY.noData}</Text>
+              <Text style={styles.emptyTitle} testID="transit-empty-title">{COPY.noData}</Text>
               <Text style={styles.emptyHint}>{COPY.noDataHint}</Text>
             </View>
           }

@@ -3,6 +3,7 @@ package com.cretas.aims.service.restaurant;
 import com.cretas.aims.ai.client.DashScopeVisionClient;
 import com.cretas.aims.client.SupplierPriceGoldClient;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
@@ -356,7 +357,7 @@ class SupplierDeliveryNoteServiceTest {
     }
 
     @Test
-    @DisplayName("submitPriceAnomalyApproval 设置 PENDING 并通知老板")
+    @DisplayName("submitPriceAnomalyApproval 设置 PENDING 并通知老板/财务/店长")
     void submitPriceAnomalyApproval_setsPending() {
         SupplierDeliveryNote draft = draftWithAnomalyLine();
         when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(draft));
@@ -369,7 +370,9 @@ class SupplierDeliveryNoteServiceTest {
 
         assertEquals(PriceAnomalyApprovalStatus.PENDING, result.getPriceAnomalyApprovalStatus());
         assertEquals(9L, result.getPriceAnomalySubmittedBy());
-        verify(notificationService, times(2)).notifyRole(eq(FACTORY), anyString(), anyString(), anyString());
+        verify(notificationService).notifyRole(eq(FACTORY), eq(FactoryUserRole.factory_super_admin.name()), anyString(), anyString());
+        verify(notificationService).notifyRole(eq(FACTORY), eq(FactoryUserRole.finance_manager.name()), anyString(), anyString());
+        verify(notificationService).notifyRole(eq(FACTORY), eq(FactoryUserRole.restaurant_manager.name()), anyString(), anyString());
     }
 
     @Test
