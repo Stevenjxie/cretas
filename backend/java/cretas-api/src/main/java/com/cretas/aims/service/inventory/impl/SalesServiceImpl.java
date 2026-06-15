@@ -185,7 +185,7 @@ public class SalesServiceImpl implements SalesService {
      *
      * <p>Optional injection — 未部署时跳过毛利红线检查 (不影响现有逻辑).
      * 注入存在时, createSalesOrder 在 resolve unitPrice 后对每行逐一检查,
-     * belowRedline=true → 409 BusinessException (fool-proof Rule 1: 预先拦截).
+     * belowRedline=true → 返回 200 + marginWarnings 列表 (warn 非阻断, per PR #693 / DECISIONS-5).
      * belowRedline=null (成本未配置) → WARN log + 放行 (不假装拦截, 不静默放行).
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
