@@ -94,9 +94,23 @@
       <div v-if="isFusedMode && !uploading" class="fused-timeseries-section" style="padding: 16px 0;">
         <el-card>
           <template #header>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
               <el-tag type="primary">时间融合</el-tag>
-              <span>生产域 · 全部批次时序合并视图</span>
+              <span>全部批次时序合并视图</span>
+              <!-- Domain selector: switch between production / sales / purchase / inventory -->
+              <el-select
+                v-model="fusedDomain"
+                size="small"
+                style="width: 100px;"
+                title="选择时序域"
+              >
+                <el-option
+                  v-for="opt in FUSED_DOMAIN_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
             </div>
           </template>
           <div v-if="fusedLoading" v-loading="true" style="min-height: 120px;" element-loading-text="正在加载融合时序数据..." />
@@ -106,8 +120,8 @@
           <div v-else-if="fusedRows.length === 0" style="padding: 32px; text-align: center; color: #909399;">
             <el-empty description="暂无融合时序数据">
               <template #description>
-                <p>该工厂的生产域尚无跨批次融合时序数据。</p>
-                <p style="font-size: 12px;">请先上传生产数据文件，系统将自动提取时序信息。</p>
+                <p>该工厂的 {{ FUSED_DOMAIN_OPTIONS.find(o => o.value === fusedDomain)?.label ?? fusedDomain }} 域尚无跨批次融合时序数据。</p>
+                <p style="font-size: 12px;">请先上传对应域的数据文件，系统将自动提取时序信息。</p>
               </template>
             </el-empty>
           </div>
@@ -130,7 +144,7 @@
               </el-table-column>
             </el-table>
             <div style="margin-top: 8px; color: #909399; font-size: 12px;">
-              共 {{ fusedRows.length }} 条时序记录（自动按时间合并所有上传批次）
+              共 {{ fusedRows.length }} 条时序记录（{{ FUSED_DOMAIN_OPTIONS.find(o => o.value === fusedDomain)?.label ?? fusedDomain }} 域 · 自动按时间合并所有上传批次）
             </div>
           </div>
         </el-card>
@@ -560,7 +574,7 @@ import { useSmartBIDashboardLayout } from './composables/useSmartBIDashboardLayo
 import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { getFactoryProductionFused } from '@/api/smartbi/factoryGold';
-import type { FusedTimeseriesRow } from '@/api/smartbi/factoryGold';
+import type { FusedTimeseriesRow, FusedDomain } from '@/api/smartbi/factoryGold';
 import { resolveAllHistoryRange } from './analysisDefaults';
 import { shouldDefaultToGold, pickDefaultBatchIndex } from './analysisGoldMode';
 // U2 — Chart Auto-Insight Tier 1 (replaces getChartMiniInsight)
@@ -680,9 +694,20 @@ const fusedRows = ref<FusedTimeseriesRow[]>([]);
 const fusedLoading = ref(false);
 const fusedError = ref<string | null>(null);
 
+/** Currently selected domain for the fused timeseries view. Defaults to production. */
+const fusedDomain = ref<FusedDomain>('production');
+
+/** Domain options shown in the fused view domain selector. */
+const FUSED_DOMAIN_OPTIONS: { label: string; value: FusedDomain }[] = [
+  { label: '生产', value: 'production' },
+  { label: '销售', value: 'sales' },
+  { label: '采购', value: 'purchase' },
+  { label: '库存', value: 'inventory' },
+];
+
 /**
- * Load fused timeseries rows for production domain via resolver.
- * Uses getFactoryProductionFused → GET /api/smartbi/factory/production-fused
+ * Load fused timeseries rows for the selected domain via resolver.
+ * Uses getFactoryProductionFused → GET /api/smartbi/factory/production-fused?domain=...
  * Fail-open: sets fusedRows=[] + fusedError message on any error.
  */
 const loadFusedTimeseries = async () => {
@@ -695,7 +720,12 @@ const loadFusedTimeseries = async () => {
     const start = new Date();
     start.setFullYear(start.getFullYear() - 1);
     const fmt = (d: Date) => d.toISOString().slice(0, 10);
-    const res = await getFactoryProductionFused({ factoryId: fid, start: fmt(start), end: fmt(end) });
+    const res = await getFactoryProductionFused({
+      factoryId: fid,
+      start: fmt(start),
+      end: fmt(end),
+      domain: fusedDomain.value,
+    });
     if (res.success === false) throw new Error(res.message ?? '后端返回失败');
     fusedRows.value = Array.isArray(res.data) ? res.data : [];
   } catch (err: unknown) {
@@ -711,6 +741,11 @@ const loadFusedTimeseries = async () => {
 // T6: auto-load fused data whenever fused mode becomes active (e.g., user switches dropdown)
 watch(isFusedMode, (active) => {
   if (active && factoryId.value) loadFusedTimeseries();
+});
+
+// Reload when domain selection changes while fused mode is active
+watch(fusedDomain, () => {
+  if (isFusedMode.value && factoryId.value) loadFusedTimeseries();
 });
 
 // Python 服务健康状态

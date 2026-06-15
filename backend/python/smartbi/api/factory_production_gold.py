@@ -535,17 +535,27 @@ async def process_cost(
 # ── T6 Phase-2: Fused timeseries (production domain) ─────────────────────────
 
 
+_VALID_FUSED_DOMAINS: frozenset[str] = frozenset({"production", "sales", "purchase", "inventory"})
+
+
 @router.get("/production-fused")
 async def production_fused(
     request: Request,
-    start: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD (默认: 一年前)"),
-    end:   Optional[str] = Query(None, description="截止日期 YYYY-MM-DD (默认: 今天)"),
+    start:  Optional[str] = Query(None, description="起始日期 YYYY-MM-DD (默认: 一年前)"),
+    end:    Optional[str] = Query(None, description="截止日期 YYYY-MM-DD (默认: 今天)"),
+    domain: str           = Query("production", description="时序域: production / sales / purchase / inventory"),
 ) -> Any:
-    """Fused production timeseries via resolver (T6 Phase-2).
+    """Fused timeseries via resolver (T6 Phase-2), extended to all domains.
 
-    Calls ``query_timeseries(factory_id, domain='production', start, end)``
-    and returns the raw resolver rows.  Fail-open: empty list when resolver
+    Calls ``query_timeseries(factory_id, domain=domain, start, end)`` and
+    returns the raw resolver rows.  Fail-open: empty list when resolver
     returns no data or on any internal error.
+
+    ``domain`` defaults to ``"production"`` so existing callers that omit
+    the parameter continue to work unchanged (backward-compatible).
+
+    Valid values: ``production``, ``sales``, ``purchase``, ``inventory``.
+    Any other value returns HTTP 400.
 
     Response shape::
 
@@ -569,6 +579,17 @@ async def production_fused(
     if not factory_id:
         return {"success": False, "data": None, "message": "missing factory context"}
 
+    if domain not in _VALID_FUSED_DOMAINS:
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "data": None,
+                "message": f"invalid domain '{domain}'; valid values: {sorted(_VALID_FUSED_DOMAINS)}",
+            },
+        )
+
     # Default date window: [today-1year, today]
     from datetime import datetime  # noqa: PLC0415
     today = datetime.utcnow().date()
@@ -581,13 +602,14 @@ async def production_fused(
         from smartbi.services.timeseries_resolver import query_timeseries  # noqa: PLC0415
         rows = await query_timeseries(
             factory_id,
-            domain="production",
+            domain=domain,
             start=start_str,
             end=end_str,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "[production-fused] resolver failed factory=%s: %s", factory_id, exc
+            "[production-fused] resolver failed factory=%s domain=%s: %s",
+            factory_id, domain, exc,
         )
         rows = []
 

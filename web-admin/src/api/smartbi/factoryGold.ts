@@ -179,20 +179,28 @@ export interface FusedTimeseriesResponse {
   message: string;
 }
 
+/** Valid domain values for the fused timeseries endpoint. */
+export type FusedDomain = 'production' | 'sales' | 'purchase' | 'inventory';
+
 /**
  * GET /api/smartbi/factory/production-fused
  *
- * Returns timeseries rows from the resolver for the production domain.
+ * Returns timeseries rows from the resolver for the specified domain.
+ * ``domain`` defaults to ``'production'`` — callers that omit it get the
+ * same behaviour as before (backward-compatible).
  * Fail-open: server returns [] when no data is available.
  */
 export async function getFactoryProductionFused(args: {
   factoryId: string;
   start?: string;
   end?: string;
+  /** Timeseries domain. Defaults to 'production' when omitted. */
+  domain?: FusedDomain;
 }): Promise<FusedTimeseriesResponse> {
   const p = new URLSearchParams({ factory_id: args.factoryId });
   if (args.start) p.set('start', args.start);
   if (args.end) p.set('end', args.end);
+  if (args.domain) p.set('domain', args.domain);
   return pythonFetch<FusedTimeseriesResponse>(
     `/api/smartbi/factory/production-fused?${p.toString()}`,
     { timeoutMs: PYTHON_LLM_TIMEOUT_MS },
