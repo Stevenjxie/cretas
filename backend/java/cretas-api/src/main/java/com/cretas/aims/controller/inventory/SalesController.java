@@ -10,7 +10,11 @@ import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.sales.AdjustPriceRequest;
+import com.cretas.aims.dto.sales.AdjustPriceResponse;
+import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
 import com.cretas.aims.dto.sales.SalesOrderLinkCountsDTO;
+import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -68,6 +72,8 @@ public class SalesController {
     private final GrossMarginRedlineService grossMarginRedlineService;
     // P1 #33: 销售价 ≥ 研发预估价 跨流校验
     private final EstimatePriceCheckService estimatePriceCheckService;
+    // 改价留痕 + 审批
+    private final SalesPriceAdjustmentService priceAdjustmentService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -725,6 +731,46 @@ public class SalesController {
     public record CheckEstimatePriceRequest(
             @NotBlank String productTypeId,
             @NotNull @Positive BigDecimal sellingPrice) {
+    }
+
+    // ==================== 改价留痕 + 阈值审批 ====================
+
+    /**
+     * POST /orders/{orderId}/lines/{lineId}/adjust-price — 调整销售订单行单价.
+     *
+     * <p>已发货/已开票行拒绝改价 (409).
+     * <p>降价 >10% 或 涨价 >20% 时触发审批流 (approvalRequired=true).
+     * <p>fool-proof Rule 3: reasonType 为 enum dropdown, OTHER 时 reasonDetail 必填.
+     */
+    @PostMapping("/orders/{orderId}/lines/{lineId}/adjust-price")
+    @Operation(summary = "调整销售订单行单价 (改价留痕 + 阈值审批)")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<AdjustPriceResponse> adjustLinePrice(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @PathVariable @NotNull Long lineId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody AdjustPriceRequest request) {
+        Long userId = extractUserId(authorization);
+        log.info("改价请求: factoryId={}, orderId={}, lineId={}, newPrice={}",
+                factoryId, orderId, lineId, request.newUnitPrice());
+        AdjustPriceResponse response = priceAdjustmentService.adjustLinePrice(
+                factoryId, orderId, lineId, request, userId);
+        return ApiResponse.success("改价操作已提交", response);
+    }
+
+    /**
+     * GET /orders/{orderId}/price-adjustments — 查询销售订单改价历史.
+     */
+    @GetMapping("/orders/{orderId}/price-adjustments")
+    @Operation(summary = "销售订单改价历史")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<java.util.List<SalesPriceAdjustmentRecordDTO>> getPriceAdjustmentHistory(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        java.util.List<SalesPriceAdjustmentRecordDTO> records =
+                priceAdjustmentService.getPriceAdjustmentHistory(factoryId, orderId);
+        return ApiResponse.success("查询成功", records);
     }
 
     // ==================== 内部方法 ====================
