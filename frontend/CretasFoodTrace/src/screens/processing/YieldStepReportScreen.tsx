@@ -1099,6 +1099,11 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('原料领用数量超限', materialBatchValidation.message || '请调整原料批次领用数量后再提交');
       return;
     }
+    // B1: first-step (投入) requires at least one material batch to be selected.
+    if (isFirstStep && materialBatchRefs.length === 0) {
+      appAlert('请先选择领料批次', '首道投入需要指定领用的原料批次，请展开"领料批次 *"并选择至少一批');
+      return;
+    }
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
