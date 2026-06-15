@@ -180,6 +180,7 @@ export function MainNavigator() {
         component={HomeScreen}
         options={{
           title: '首页',
+          tabBarButtonTestID: 'main-tab-home',
           tabBarIcon: ({ color, size }) => (
             <Icon source="home" size={size} color={color} />
           ),
@@ -193,6 +194,7 @@ export function MainNavigator() {
           component={AttendanceStackNavigator}
           options={{
             title: '考勤',
+            tabBarButtonTestID: 'main-tab-attendance',
             tabBarIcon: ({ color, size }) => (
               <Icon source="clock-outline" size={size} color={color} />
             ),
@@ -207,6 +209,7 @@ export function MainNavigator() {
           component={ProcessingStackNavigator}
           options={{
             title: '生产',
+            tabBarButtonTestID: 'main-tab-processing',
             tabBarIcon: ({ color, size }) => (
               <Icon source="cube-outline" size={size} color={color} />
             ),
@@ -221,6 +224,7 @@ export function MainNavigator() {
           component={LogisticsStackNavigator}
           options={{
             title: '物流',
+            tabBarButtonTestID: 'main-tab-logistics',
             tabBarIcon: ({ color, size }) => (
               <Icon source="truck-delivery" size={size} color={color} />
             ),
@@ -238,6 +242,7 @@ export function MainNavigator() {
             component={ManagementStackNavigator}
             options={{
               title: '管理',
+              tabBarButtonTestID: 'main-tab-management',
               tabBarIcon: ({ color, size }) => (
                 <Icon source="cog" size={size} color={color} />
               ),
@@ -252,6 +257,7 @@ export function MainNavigator() {
           component={PlatformStackNavigator}
           options={{
             title: '平台',
+            tabBarButtonTestID: 'main-tab-platform',
             tabBarIcon: ({ color, size }) => (
               <Icon source="shield-crown" size={size} color={color} />
             ),
@@ -266,6 +272,7 @@ export function MainNavigator() {
           component={OATodoStackNavigator}
           options={{
             title: '待办',
+            tabBarButtonTestID: 'main-tab-oa-todo',
             tabBarIcon: ({ color, size }) => (
               <Icon source="clipboard-check-outline" size={size} color={color} />
             ),
@@ -280,6 +287,7 @@ export function MainNavigator() {
         component={ProfileStackNavigator}
         options={{
           title: '我的',
+          tabBarButtonTestID: 'main-tab-profile',
           tabBarIcon: ({ color, size }) => (
             <Icon source="account" size={size} color={color} />
           ),

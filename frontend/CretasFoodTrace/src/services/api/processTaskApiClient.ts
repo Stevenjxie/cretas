@@ -291,7 +291,14 @@ class ProcessTaskApiClient {
   }
 
   /** 根据产品关联的工序，一键生成工序任务 */
-  async generateTasksFromProduct(data: { productTypeId: string; sourceCustomerName?: string }, factoryId?: string) {
+  async generateTasksFromProduct(
+    data: {
+      productTypeId: string;
+      sourceCustomerName?: string;
+      plannedQuantities?: Record<string, number>;
+    },
+    factoryId?: string,
+  ) {
     const base = this.getBase(factoryId);
     return apiClient.post(`${base}/process-tasks/generate-from-product`, data);
   }

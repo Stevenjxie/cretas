@@ -31,6 +31,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { isAxiosError } from 'axios';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { processingApiClient } from '../../../services/api/processingApiClient';
+import { useAuthStore } from '../../../store/authStore';
 
 // 调度员主题色
 const DISPATCHER_THEME = {
@@ -93,7 +94,7 @@ const transformWorkers = (apiWorkers: Record<string, unknown>[]): Worker[] => {
     let group: Worker['group'] = 'workshop_idle';
     const status = String(w.status || 'idle').toLowerCase();
 
-    const name = String(w.name || w.workerName || w.userName || '');
+    const name = String(w.name || w.workerName || w.userName || w.fullName || w.username || '');
 
     if (w.isTransferable || w.workshop !== w.currentWorkshop) {
       group = 'transferable';
@@ -107,7 +108,7 @@ const transformWorkers = (apiWorkers: Record<string, unknown>[]): Worker[] => {
       id: String(w.id || w.userId || index + 1),
       name,
       avatar: name.charAt(0),
-      employeeCode: String(w.employeeCode || w.employeeNumber || ''),
+      employeeCode: String(w.employeeCode || w.employeeNumber || w.username || ''),
       status: status === 'working' || status === 'busy' ? 'working' :
               status === 'available' ? 'available' : 'idle',
       efficiency: Number(w.efficiency || w.efficiencyRate || 85),
@@ -129,8 +130,11 @@ export default function BatchWorkersScreen() {
   const route = useRoute();
   const params = route.params as { batchId?: string; scheduleId?: string } | undefined;
   const batchId = params?.batchId || params?.scheduleId || '';
+  const scheduleId = params?.scheduleId;
+  const assignedBy = useAuthStore((state) => state.getUserId());
 
   const [loading, setLoading] = useState(true);
+  const [assigning, setAssigning] = useState(false);
   const [batchInfo, setBatchInfo] = useState<BatchInfo | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([]);
@@ -146,9 +150,10 @@ export default function BatchWorkersScreen() {
 
     try {
       // Fetch batch details and workers in parallel
-      const [batchResponse, workersResponse] = await Promise.all([
+      const [batchResponse, availableWorkersResponse, batchWorkersResponse] = await Promise.all([
         processingApiClient.getBatchById(batchId).catch(() => null),
-        schedulingApiClient.getBatchWorkers(batchId),
+        schedulingApiClient.getAvailableWorkers().catch(() => null),
+        schedulingApiClient.getBatchWorkers(batchId).catch(() => ({ content: [], totalElements: 0 })),
       ]);
 
       // Set batch info from processing API
@@ -175,9 +180,14 @@ export default function BatchWorkersScreen() {
         });
       }
 
-      // Set workers from getBatchWorkers response
-      if (workersResponse.content && workersResponse.content.length > 0) {
-        const workersList = workersResponse.content.map((w: {
+      const availableWorkers = availableWorkersResponse?.success && Array.isArray(availableWorkersResponse.data)
+        ? availableWorkersResponse.data
+        : [];
+
+      if (availableWorkers.length > 0) {
+        setWorkers(transformWorkers(availableWorkers as unknown as Record<string, unknown>[]));
+      } else if (batchWorkersResponse.content && batchWorkersResponse.content.length > 0) {
+        const workersList = batchWorkersResponse.content.map((w: {
           id: number;
           userId: number;
           userName: string;
@@ -249,8 +259,12 @@ export default function BatchWorkersScreen() {
   };
 
   const handleConfirm = () => {
-    if (!batchInfo) return;
+    if (!batchInfo || assigning) return;
     const selectedCount = selectedWorkerIds.length;
+    if (selectedCount === 0) {
+      Alert.alert('请选择员工', '至少选择 1 名员工后才能确认派工。');
+      return;
+    }
     const parts = batchInfo.suggestedWorkers.split('-').map(Number);
     const min = parts[0] ?? 0;
 
@@ -268,13 +282,53 @@ export default function BatchWorkersScreen() {
     }
   };
 
-  const confirmAssignment = () => {
-    if (!batchInfo) return;
-    Alert.alert(
-      '分配成功',
-      `已为批次 ${batchInfo.batchNumber} 分配 ${selectedWorkerIds.length} 名员工`,
-      [{ text: '确定', onPress: () => navigation.goBack() }]
-    );
+  const confirmAssignment = async () => {
+    if (!batchInfo || assigning) return;
+
+    const workerIds = selectedWorkerIds
+      .map(id => Number(id))
+      .filter(Number.isFinite);
+
+    if (workerIds.length !== selectedWorkerIds.length) {
+      Alert.alert('无法提交', '存在无效员工编号，请刷新后重新选择。');
+      return;
+    }
+
+    setAssigning(true);
+    try {
+      if (params?.batchId) {
+        await processingApiClient.assignWorkersToBatch(params.batchId, {
+          workerIds,
+          assignedBy: assignedBy ?? undefined,
+          notes: 'RN移动端派工确认',
+        });
+      } else if (scheduleId) {
+        await schedulingApiClient.assignWorkers({
+          scheduleId,
+          workerIds,
+          notes: 'RN移动端排程派工确认',
+        });
+      } else {
+        throw new Error('缺少批次或排程编号，无法提交派工。');
+      }
+
+      await loadBatchWorkers();
+      Alert.alert(
+        '分配成功',
+        `已为批次 ${batchInfo.batchNumber} 分配 ${workerIds.length} 名员工`,
+        [{ text: '确定', onPress: () => navigation.goBack() }]
+      );
+    } catch (error) {
+      if (isAxiosError(error)) {
+        Alert.alert('分配失败', error.response?.data?.message || '后端未接受本次派工，请检查权限、员工状态或批次状态。');
+      } else if (error instanceof Error) {
+        Alert.alert('分配失败', error.message);
+      } else {
+        Alert.alert('分配失败', '未知错误，请稍后重试。');
+      }
+    } finally {
+      setAssigning(false);
+    }
   };
 
   // 过滤员工
@@ -512,8 +566,8 @@ export default function BatchWorkersScreen() {
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>人员分配</Text>
-        <TouchableOpacity onPress={handleConfirm}>
-          <Text style={styles.confirmText}>确认</Text>
+        <TouchableOpacity onPress={handleConfirm} disabled={assigning}>
+          <Text style={styles.confirmText}>{assigning ? '提交中' : '确认'}</Text>
         </TouchableOpacity>
       </LinearGradient>
 
@@ -692,7 +746,7 @@ export default function BatchWorkersScreen() {
         <TouchableOpacity style={styles.cancelButton} onPress={handleGoBack}>
           <Text style={styles.cancelButtonText}>取消</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.confirmButton} onPress={handleConfirm}>
+        <TouchableOpacity style={styles.confirmButton} onPress={handleConfirm} disabled={assigning}>
           <LinearGradient
             colors={[DISPATCHER_THEME.secondary, DISPATCHER_THEME.accent]}
             start={{ x: 0, y: 0 }}
@@ -700,7 +754,7 @@ export default function BatchWorkersScreen() {
             style={styles.confirmButtonGradient}
           >
             <Text style={styles.confirmButtonText}>
-              确认分配 (已选{selectedWorkerIds.length}人)
+              {assigning ? '提交中...' : `确认分配 (已选${selectedWorkerIds.length}人)`}
             </Text>
           </LinearGradient>
         </TouchableOpacity>

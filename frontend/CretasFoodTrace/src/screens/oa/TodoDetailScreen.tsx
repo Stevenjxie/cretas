@@ -91,6 +91,10 @@ const FIELD_LABELS: Record<string, string> = {
   stocktakeNo: '盘点单号',
   warehouseId: '仓库ID',
   counterparty: '对方',
+  counterpartyId: '对方ID',
+  returnNumber: '退货单号',
+  returnType: '退货类型',
+  reason: '退货原因',
   deliveryNoteNumber: '送货单号',
   anomalyType: '异常类型',
   expectedPrice: '期望价格',
@@ -116,6 +120,8 @@ function getDetailPath(type: TodoType, refId: string, factoryId: string): string
       return `/api/mobile/${factoryId}/supplier-delivery-notes/${refId}`;
     case 'STOCKTAKE_APPROVAL':
       return `/api/mobile/${factoryId}/stocktakes/${refId}`;
+    case 'RETURN_FINANCE_REVIEW':
+      return `/api/mobile/${factoryId}/return-orders/${refId}`;
     case 'PAYMENT_DISBURSE':
       return `/api/mobile/${factoryId}/payment-requests/${refId}`;
     default:
@@ -129,6 +135,7 @@ const TOP_KEYS_BY_TYPE: Record<TodoType, string[]> = {
   SALES_FINANCE_REVIEW: ['orderNumber', 'customerName', 'totalAmount', 'submittedBy', 'notes'],
   PRICE_ANOMALY: ['deliveryNoteNumber', 'supplierName', 'anomalyType', 'expectedPrice', 'actualPrice'],
   STOCKTAKE_APPROVAL: ['stocktakeNo', 'periodMonth', 'submittedBy', 'notes'],
+  RETURN_FINANCE_REVIEW: ['returnNumber', 'returnType', 'counterpartyId', 'totalAmount', 'reason'],
   PAYMENT_DISBURSE: ['requestNumber', 'purchaseOrderNumber', 'supplierName', 'amount', 'settlementTypeDisplayName'],
 };
 
@@ -177,9 +184,10 @@ function RejectModal({ visible, onCancel, onConfirm }: RejectModalProps) {
           <Text style={modalStyles.sheetTitle}>选择驳回原因</Text>
           <Divider style={{ marginBottom: 12 }} />
           <ScrollView style={modalStyles.reasonList}>
-            {REJECT_REASON_OPTIONS.map((opt) => (
+            {REJECT_REASON_OPTIONS.map((opt, index) => (
               <TouchableOpacity
                 key={opt}
+                testID={`oa-detail-reject-reason-${index}`}
                 style={[
                   modalStyles.reasonItem,
                   selected === opt && modalStyles.reasonItemSelected,
@@ -195,6 +203,7 @@ function RejectModal({ visible, onCancel, onConfirm }: RejectModalProps) {
           </ScrollView>
           {selected === '其他' && (
             <TextInput
+              testID="oa-detail-reject-custom-reason"
               mode="outlined"
               label="请详细说明原因"
               value={custom}
@@ -205,7 +214,7 @@ function RejectModal({ visible, onCancel, onConfirm }: RejectModalProps) {
             />
           )}
           <View style={modalStyles.buttonRow}>
-            <Button mode="outlined" onPress={handleCancel} style={modalStyles.btnHalf}>
+            <Button mode="outlined" onPress={handleCancel} style={modalStyles.btnHalf} testID="oa-detail-reject-cancel">
               取消
             </Button>
             <Button
@@ -213,6 +222,7 @@ function RejectModal({ visible, onCancel, onConfirm }: RejectModalProps) {
               onPress={handleConfirm}
               buttonColor="#C62828"
               style={modalStyles.btnHalf}
+              testID="oa-detail-reject-confirm"
             >
               确认驳回
             </Button>
@@ -234,6 +244,16 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <Text variant="bodyMedium" style={styles.detailValue}>{value}</Text>
     </View>
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatQty(value: unknown): string {
+  if (value == null || value === '') return '-';
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? String(n) : String(value);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -313,6 +333,9 @@ export default function TodoDetailScreen() {
         case 'STOCKTAKE_APPROVAL':
           resp = await todoApprovalApiClient.stocktakeApprove(refId);
           break;
+        case 'RETURN_FINANCE_REVIEW':
+          resp = await todoApprovalApiClient.returnFinanceApprove(refId);
+          break;
         case 'PAYMENT_DISBURSE':
           resp = await todoApprovalApiClient.paymentMarkPaid(refId);
           break;
@@ -365,6 +388,9 @@ export default function TodoDetailScreen() {
           break;
         case 'STOCKTAKE_APPROVAL':
           resp = await todoApprovalApiClient.stocktakeReject(refId, reason);
+          break;
+        case 'RETURN_FINANCE_REVIEW':
+          resp = await todoApprovalApiClient.returnFinanceReject(refId, reason);
           break;
         case 'PAYMENT_DISBURSE':
           appAlert('不支持驳回', '付款确认操作不支持驳回');
@@ -438,6 +464,50 @@ export default function TodoDetailScreen() {
     );
   }
 
+  function renderStocktakeItems() {
+    if ((type as TodoType) !== 'STOCKTAKE_APPROVAL' || !detail) return null;
+    const items = Array.isArray(detail.items) ? detail.items.filter(isRecord) : [];
+    if (items.length === 0) return null;
+
+    return (
+      <>
+        <Divider style={styles.sectionDivider} />
+        <Text variant="labelSmall" style={styles.sectionLabel}>盘点明细差异</Text>
+        {items.map((item, index) => {
+          const systemQty = Number(item.systemQty ?? 0);
+          const actualRaw = item.actualQty;
+          const actualQty = actualRaw == null ? null : Number(actualRaw);
+          const diffRaw = item.differenceQty;
+          const diffQty = diffRaw == null && actualQty != null
+            ? actualQty - systemQty
+            : Number(diffRaw ?? 0);
+          const hasDiff = Number.isFinite(diffQty) && diffQty !== 0;
+          const batch = item.materialBatchId ?? item.rawMaterialTypeId ?? `#${index + 1}`;
+
+          return (
+            <View key={String(item.id ?? batch ?? index)} style={styles.stocktakeItem} testID={`oa-detail-stocktake-item-${index}`}>
+              <Text variant="labelLarge" style={styles.stocktakeBatch}>批次 {String(batch)}</Text>
+              <View style={styles.stocktakeGrid}>
+                <DetailRow label="账面" value={formatQty(item.systemQty)} />
+                <DetailRow label="实盘" value={formatQty(item.actualQty)} />
+                <DetailRow
+                  label="差异"
+                  value={hasDiff ? formatQty(diffQty) : '0'}
+                />
+                {item.differenceType != null && (
+                  <DetailRow label="类型" value={String(item.differenceType)} />
+                )}
+                {item.notes != null && item.notes !== '' && (
+                  <DetailRow label="备注" value={String(item.notes)} />
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </>
+    );
+  }
+
   // ─── Loading state ────────────────────────────────────────────────────────
 
   if (loading) {
@@ -464,11 +534,11 @@ export default function TodoDetailScreen() {
         <Appbar.Header>
           <Appbar.BackAction onPress={() => navigation.goBack()} />
           <Appbar.Content title={title} />
-          <Appbar.Action icon="refresh" onPress={fetchDetail} />
+          <Appbar.Action icon="refresh" onPress={fetchDetail} testID="oa-detail-error-refresh" />
         </Appbar.Header>
         <View style={styles.center}>
           <Text style={styles.errorText}>{loadError}</Text>
-          <Button mode="contained" onPress={fetchDetail} style={{ marginTop: 16 }}>
+          <Button mode="contained" onPress={fetchDetail} style={{ marginTop: 16 }} testID="oa-detail-error-retry">
             重试
           </Button>
         </View>
@@ -489,11 +559,13 @@ export default function TodoDetailScreen() {
       </Appbar.Header>
 
       <ScrollView
+        testID="oa-detail-scroll"
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
         {renderDetailFields()}
+        {renderStocktakeItems()}
       </ScrollView>
 
       {/* 固定底部操作栏 */}
@@ -505,6 +577,7 @@ export default function TodoDetailScreen() {
             textColor="#C62828"
             style={[styles.bottomBtn, styles.rejectBtn]}
             disabled={actioning}
+            testID="oa-detail-reject"
           >
             驳回
           </Button>
@@ -515,6 +588,7 @@ export default function TodoDetailScreen() {
           loading={actioning}
           disabled={actioning}
           style={[styles.bottomBtn, styles.approveBtn, isPAYMENT && styles.fullWidthBtn]}
+          testID="oa-detail-approve"
         >
           {isPAYMENT ? '确认付款' : '通过'}
         </Button>
@@ -556,6 +630,16 @@ const styles = StyleSheet.create({
 
   sectionDivider: { marginVertical: 12 },
   sectionLabel: { color: '#888', marginBottom: 6 },
+  stocktakeItem: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D7DEE8',
+    padding: 12,
+    marginBottom: 10,
+  },
+  stocktakeBatch: { color: '#212121', marginBottom: 6 },
+  stocktakeGrid: { gap: 0 },
 
   bottomBar: {
     flexDirection: 'row',

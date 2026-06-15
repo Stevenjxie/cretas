@@ -366,4 +366,34 @@ describe('processTaskApiClient', () => {
       expect(result.data[0].workerName).toBe('张三');
     });
   });
+
+  describe('generateTasksFromProduct', () => {
+    it('POSTs plannedQuantities so generated tasks use the plan quantity', async () => {
+      mock.onPost(`${BASE}/process-tasks/generate-from-product`).reply((config) => {
+        const body = JSON.parse(config.data);
+        expect(body.productTypeId).toBe('PT-1');
+        expect(body.sourceCustomerName).toBe('Customer A');
+        expect(body.plannedQuantities).toEqual({
+          'WP-CUT': 380,
+          'WP-PACK': 380,
+        });
+        return [200, {
+          success: true,
+          data: [{ id: 'TASK-1', productionRunId: 'RUN-1' }],
+        }];
+      });
+
+      const result = await processTaskApiClient.generateTasksFromProduct({
+        productTypeId: 'PT-1',
+        sourceCustomerName: 'Customer A',
+        plannedQuantities: {
+          'WP-CUT': 380,
+          'WP-PACK': 380,
+        },
+      }) as MockApiResponse;
+
+      expect(result.success).toBe(true);
+      expect(result.data[0].productionRunId).toBe('RUN-1');
+    });
+  });
 });

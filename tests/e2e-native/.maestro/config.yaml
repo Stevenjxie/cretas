@@ -1,4 +1,6 @@
 flows:
   - flows/factory-admin/**
+  - flows/finance/**
+  - flows/cashier/**
   - flows/restaurant-admin/**
   # common/ 不列入（仅被 runFlow 引用）

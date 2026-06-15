@@ -72,6 +72,7 @@ const TODO_TYPE_LABEL: Record<TodoType, string> = {
   SALES_FINANCE_REVIEW: '销售财审',
   PRICE_ANOMALY: '价格异常',
   STOCKTAKE_APPROVAL: '盘点审批',
+  RETURN_FINANCE_REVIEW: '退货财审',
   PAYMENT_DISBURSE: '付款确认',
 };
 
@@ -80,6 +81,7 @@ const TODO_TYPE_COLOR: Record<TodoType, string> = {
   SALES_FINANCE_REVIEW: '#2E7D32',
   PRICE_ANOMALY: '#E65100',
   STOCKTAKE_APPROVAL: '#6A1B9A',
+  RETURN_FINANCE_REVIEW: '#AD1457',
   PAYMENT_DISBURSE: '#C62828',
 };
 
@@ -145,9 +147,10 @@ function RejectReasonModal({
 
           <Text style={modalStyles.sectionLabel}>选择驳回原因</Text>
           <ScrollView style={modalStyles.reasonList}>
-            {REJECT_REASON_OPTIONS.map((opt) => (
+            {REJECT_REASON_OPTIONS.map((opt, index) => (
               <TouchableOpacity
                 key={opt}
+                testID={`oa-todo-reject-reason-${index}`}
                 style={[
                   modalStyles.reasonItem,
                   selected === opt && modalStyles.reasonItemSelected,
@@ -165,6 +168,7 @@ function RejectReasonModal({
           {/* 其他 → textarea（防呆 Rule 3） */}
           {selected === '其他' && (
             <TextInput
+              testID="oa-todo-reject-custom-reason"
               mode="outlined"
               label="请详细说明原因"
               value={customReason}
@@ -176,7 +180,7 @@ function RejectReasonModal({
           )}
 
           <View style={modalStyles.buttonRow}>
-            <Button mode="outlined" onPress={handleCancel} style={modalStyles.btnCancel}>
+            <Button mode="outlined" onPress={handleCancel} style={modalStyles.btnCancel} testID="oa-todo-reject-cancel">
               取消
             </Button>
             <Button
@@ -184,6 +188,7 @@ function RejectReasonModal({
               onPress={handleConfirm}
               buttonColor="#C62828"
               style={modalStyles.btnConfirm}
+              testID="oa-todo-reject-confirm"
             >
               确认驳回
             </Button>
@@ -244,6 +249,9 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
         case 'STOCKTAKE_APPROVAL':
           resp = await todoApprovalApiClient.stocktakeApprove(item.refId);
           break;
+        case 'RETURN_FINANCE_REVIEW':
+          resp = await todoApprovalApiClient.returnFinanceApprove(item.refId);
+          break;
         case 'PAYMENT_DISBURSE':
           resp = await todoApprovalApiClient.paymentMarkPaid(item.refId);
           break;
@@ -296,6 +304,9 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
         case 'STOCKTAKE_APPROVAL':
           resp = await todoApprovalApiClient.stocktakeReject(item.refId, reason);
           break;
+        case 'RETURN_FINANCE_REVIEW':
+          resp = await todoApprovalApiClient.returnFinanceReject(item.refId, reason);
+          break;
         case 'PAYMENT_DISBURSE':
           // 付款不支持驳回（出纳只能付款）
           appAlert('不支持驳回', '付款确认操作不支持驳回，请联系财务经理');
@@ -330,7 +341,7 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
 
   return (
     <>
-      <Card style={styles.card} elevation={1}>
+      <Card style={styles.card} elevation={1} testID={`oa-todo-card-${item.type}-${item.refId}`}>
         <Card.Content>
           {/* 类型标签 + 单号（防呆 Rule 2: 上下文展示） */}
           <View style={styles.cardHeader}>
@@ -387,6 +398,8 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
               onPress={() => onNavigateDetail(item)}
               icon="eye"
               style={styles.detailBtn}
+              testID="oa-todo-detail-action"
+              accessibilityLabel={`oa-todo-detail-${item.type}-${item.refId}`}
             >
               查看详情后审批
             </Button>
@@ -400,6 +413,8 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
                   textColor="#C62828"
                   style={[styles.actionBtn, styles.rejectBtn]}
                   disabled={approving}
+                  testID="oa-todo-reject-action"
+                  accessibilityLabel={`oa-todo-reject-${item.type}-${item.refId}`}
                 >
                   驳回
                 </Button>
@@ -410,6 +425,8 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
                 loading={approving}
                 disabled={approving}
                 style={[styles.actionBtn, styles.approveBtn]}
+                testID="oa-todo-approve-action"
+                accessibilityLabel={`oa-todo-approve-${item.type}-${item.refId}`}
               >
                 {item.type === 'PAYMENT_DISBURSE' ? '确认付款' : '通过'}
               </Button>
@@ -477,11 +494,11 @@ export default function MyTodoListScreen() {
         <Appbar.Header>
           <Appbar.BackAction onPress={() => navigation.goBack()} />
           <Appbar.Content title="我的待办" />
-          <Appbar.Action icon="refresh" onPress={refetch} />
+          <Appbar.Action icon="refresh" onPress={refetch} testID="oa-todo-error-refresh" />
         </Appbar.Header>
         <View style={styles.center}>
           <Text style={styles.errorText}>{error}</Text>
-          <Button mode="contained" onPress={refetch} style={{ marginTop: 16 }}>
+          <Button mode="contained" onPress={refetch} style={{ marginTop: 16 }} testID="oa-todo-error-retry">
             重试
           </Button>
         </View>
@@ -500,10 +517,11 @@ export default function MyTodoListScreen() {
           title="我的待办"
           subtitle={todos.length > 0 ? `${todos.length} 项待处理` : undefined}
         />
-        <Appbar.Action icon="refresh" onPress={refetch} />
+        <Appbar.Action icon="refresh" onPress={refetch} testID="oa-todo-refresh" />
       </Appbar.Header>
 
       <FlatList
+        testID="oa-todo-list"
         data={todos}
         keyExtractor={(item) => `${item.type}-${item.refId}`}
         renderItem={({ item }) => (
@@ -521,7 +539,7 @@ export default function MyTodoListScreen() {
         }
         ListEmptyComponent={
           // 防呆 Rule 5: 空状态
-          <View style={styles.emptyCenter}>
+          <View style={styles.emptyCenter} testID="oa-todo-empty">
             <Text variant="headlineSmall" style={styles.emptyIcon}>✓</Text>
             <Text variant="bodyLarge" style={styles.emptyTitle}>
               暂无待办

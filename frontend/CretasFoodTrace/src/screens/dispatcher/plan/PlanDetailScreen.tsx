@@ -37,7 +37,9 @@ import { isAxiosError } from 'axios';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { processTaskApiClient } from '../../../services/api/processTaskApiClient';
+import { workProcessApiClient } from '../../../services/api/workProcessApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
+import { buildPlannedQuantitiesForProcesses } from '../../../utils/processTaskGeneration';
 import type { DispatcherStackParamList } from '../../../types/dispatcher';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
@@ -161,6 +163,24 @@ const transformMaterials = (apiMaterials: unknown[]): MaterialMatch[] => {
   });
 };
 
+const transformMaterialAdvisory = (warnings: unknown[]): MaterialMatch[] => {
+  return (warnings || []).map((item, index) => {
+    const warning = item as Record<string, unknown>;
+    const required = Number(warning.requiredQuantity || 0);
+    const available = Number(warning.availableQuantity || 0);
+    const shortage = Number(warning.shortageQuantity || 0);
+    const unit = String(warning.unit || 'kg');
+    return {
+      id: String(warning.materialTypeId || index + 1),
+      name: String(warning.materialName || ''),
+      batchNumber: '',
+      required: `${required}${unit}`,
+      available: `${available}${unit}`,
+      matched: shortage <= 0 && available >= required,
+    };
+  });
+};
+
 const transformWorkers = (apiWorkers: unknown[]): AssignedWorker[] => {
   return (apiWorkers || []).map((item, index) => {
     const w = item as Record<string, unknown>;
@@ -219,7 +239,10 @@ export default function PlanDetailScreen() {
 
     try {
       // Fetch plan details from production-plans
-      const planResponse = await productionPlanApiClient.getProductionPlanById(planId);
+      const [planResponse, materialAdvisoryResponse] = await Promise.all([
+        productionPlanApiClient.getProductionPlanById(planId),
+        productionPlanApiClient.getMaterialAdvisory(planId).catch(() => null),
+      ]);
       if (planResponse.success && planResponse.data) {
         // Cast to extended type that may include additional fields from API
         const planData = planResponse.data as typeof planResponse.data & {
@@ -234,6 +257,8 @@ export default function PlanDetailScreen() {
         // Extract materials from plan if available
         if (planData.materials) {
           setMaterials(transformMaterials(planData.materials));
+        } else if (materialAdvisoryResponse?.success && materialAdvisoryResponse.data?.warnings) {
+          setMaterials(transformMaterialAdvisory(materialAdvisoryResponse.data.warnings));
         }
 
         // Extract workers from plan if available
@@ -339,9 +364,17 @@ export default function PlanDetailScreen() {
           text: '确定生成',
           onPress: async () => {
             try {
+              const productProcesses = await workProcessApiClient
+                .listProductWorkProcesses(plan.productTypeId)
+                .catch(() => []);
+              const plannedQuantities = buildPlannedQuantitiesForProcesses(
+                productProcesses,
+                plan.quantity,
+              );
               const res = await processTaskApiClient.generateTasksFromProduct({
                 productTypeId: plan.productTypeId,
                 sourceCustomerName: plan.sourceCustomerName || plan.product,
+                plannedQuantities,
               });
               const data = res as { success?: boolean; data?: Array<{ productionRunId?: string }>; message?: string };
               if (data?.success && Array.isArray(data.data) && data.data.length > 0) {

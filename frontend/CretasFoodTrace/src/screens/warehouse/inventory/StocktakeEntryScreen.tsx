@@ -96,13 +96,17 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       const res = await stocktakeApiClient.getDetail(stocktakeId);
       if (!res.success || !res.data) throw new Error('加载失败');
       setStocktake(res.data);
-      const initialEntries: ItemEntry[] = (res.data.items ?? []).map((item) => ({
-        item,
-        inputText: '',
-        actualQty: null,
-        saved: false,
-        saving: false,
-      }));
+      const initialEntries: ItemEntry[] = (res.data.items ?? []).map((item) => {
+        const hasActual = item.actualQty !== undefined && item.actualQty !== null;
+        const actualQty = hasActual ? Number(item.actualQty) : null;
+        return {
+          item,
+          inputText: actualQty !== null && Number.isFinite(actualQty) ? String(actualQty) : '',
+          actualQty: actualQty !== null && Number.isFinite(actualQty) ? actualQty : null,
+          saved: actualQty !== null && Number.isFinite(actualQty),
+          saving: false,
+        };
+      });
       setEntries(initialEntries);
     } catch (err) {
       const e = err as { response?: { data?: { message?: string } } };
@@ -139,7 +143,13 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       const copy = [...prev];
       const cur = copy[currentIndex];
       if (!cur) return prev;
-      copy[currentIndex] = { ...cur, inputText: text, actualQty: text ? parseFloat(text) || null : null };
+      const trimmed = text.trim();
+      const parsed = trimmed ? Number(trimmed) : null;
+      copy[currentIndex] = {
+        ...cur,
+        inputText: text,
+        actualQty: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+      };
       return copy;
     });
   }, [currentIndex]);
@@ -279,7 +289,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
         <View style={styles.centered}>
           <MaterialCommunityIcons name="package-variant" size={64} color="#ccc" />
           <Text style={styles.emptyText}>该盘点任务暂无品项</Text>
-          <NeoButton variant="outline" onPress={() => navigation.goBack()} style={{ marginTop: 16 }}>
+          <NeoButton variant="outline" onPress={() => navigation.goBack()} style={{ marginTop: 16 }} testID="stocktake-entry-empty-back">
             返回
           </NeoButton>
         </View>
@@ -303,7 +313,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
           <Text style={styles.headerTitle}>差异汇总</Text>
           <View style={styles.headerRight} />
         </View>
-        <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }} testID="stocktake-entry-diff-scroll">
           <NeoCard style={styles.summaryCard}>
             <Text style={styles.summaryTitle}>盘点结果：{stocktake.stocktakeNo}</Text>
             <Text style={styles.summaryPeriod}>盘点月份：{stocktake.periodMonth}</Text>
@@ -340,7 +350,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
                 const diff = (e.actualQty ?? 0) - (e.item.systemQty ?? 0);
                 const isShort = diff < 0;
                 return (
-                  <View key={e.item.id} style={styles.diffRow}>
+                  <View key={e.item.id} style={styles.diffRow} testID={`stocktake-entry-diff-row-${e.item.id}`}>
                     <View style={styles.diffLeft}>
                       <Text style={styles.diffName}>{e.item.materialBatchId ?? '—'}</Text>
                       <Text style={styles.diffBatch}>账面 {e.item.systemQty} → 实盘 {e.actualQty}</Text>
@@ -369,6 +379,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
             variant="outline"
             onPress={() => setDiffVisible(false)}
             style={{ flex: 1 }}
+            testID="stocktake-entry-diff-back"
           >
             返回修改
           </NeoButton>
@@ -378,6 +389,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
             loading={submitting}
             disabled={submitting}
             style={{ flex: 2 }}
+            testID="stocktake-entry-submit"
           >
             {submitting ? '提交中...' : '提交待财务审批'}
           </NeoButton>
@@ -400,7 +412,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       <AppDialogHost />
       {/* Header */}
       <View style={styles.header}>
-        <TouchableRipple onPress={() => navigation.goBack()} style={styles.backBtn} borderless>
+        <TouchableRipple onPress={() => navigation.goBack()} style={styles.backBtn} borderless testID="stocktake-entry-back">
           <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
         </TouchableRipple>
         <View style={styles.headerCenter}>
@@ -416,7 +428,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }} testID="stocktake-entry-scroll">
 
           {/* 品名 + 编码大字 */}
           <NeoCard style={styles.nameCard}>
@@ -438,6 +450,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
           <NeoCard style={styles.inputCard}>
             <Text style={styles.inputLabel}>实盘数量（填写实际在库数量）</Text>
             <RNTextInput
+              testID="stocktake-entry-actual-qty-input"
               ref={inputRef}
               style={[
                 styles.bigInput,
@@ -472,6 +485,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       {/* 底部导航 */}
       <View style={styles.bottomBar}>
         <TouchableRipple
+          testID="stocktake-entry-prev"
           onPress={handlePrev}
           disabled={currentIndex === 0}
           style={[styles.navBtn, currentIndex === 0 && styles.navBtnDisabled]}
@@ -489,6 +503,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
           disabled={!canGoNext || entry.saving}
           style={styles.nextBtn}
           size="large"
+          testID="stocktake-entry-next"
         >
           {currentIndex < totalCount - 1 ? '下一品' : '完成录入'}
         </NeoButton>

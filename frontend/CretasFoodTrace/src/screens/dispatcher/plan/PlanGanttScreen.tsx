@@ -101,12 +101,13 @@ export default function PlanGanttScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentDate, setCurrentDate] = useState<string>(() => {
     const isoDate = new Date().toISOString();
     return isoDate.substring(0, 10); // YYYY-MM-DD format
   });
-  const [productionLines, setProductionLines] = useState<GanttProductionLine[]>(fallbackProductionLines);
-  const [tasks, setTasks] = useState<GanttTask[]>(fallbackTasks);
+  const [productionLines, setProductionLines] = useState<GanttProductionLine[]>([]);
+  const [tasks, setTasks] = useState<GanttTask[]>([]);
   const [viewMode, setViewMode] = useState<'hour' | 'day'>('hour');
 
   // P2 Fix: Memoize tasks grouped by line to avoid repeated filtering
@@ -144,6 +145,7 @@ export default function PlanGanttScreen() {
 
   const loadData = useCallback(async () => {
     try {
+      setErrorMessage(null);
       // 获取产线数据
       const linesRes = await schedulingApiClient.getProductionLines();
       if (linesRes.success && linesRes.data && linesRes.data.length > 0) {
@@ -151,7 +153,7 @@ export default function PlanGanttScreen() {
         setProductionLines(ganttLines);
       } else {
         // Fallback when API returns no data
-        setProductionLines(fallbackProductionLines);
+        setProductionLines([]);
       }
 
       // 获取调度计划数据
@@ -209,22 +211,23 @@ export default function PlanGanttScreen() {
           setTasks(ganttTasks);
         } else {
           // Fallback when API returns no task data
-          setTasks(fallbackTasks);
+          setTasks([]);
         }
       } else {
         // Fallback when API returns no data
-        setTasks(fallbackTasks);
+        setTasks([]);
       }
     } catch (error) {
       console.error('Failed to load Gantt data:', error);
+      setErrorMessage('排产数据加载失败，请下拉刷新或稍后重试。');
       if (isAxiosError(error)) {
         if (error.response?.status === 401) {
           console.error('认证过期，请重新登录');
         }
       }
       // Fallback when API call fails
-      setProductionLines(fallbackProductionLines);
-      setTasks(fallbackTasks);
+      setProductionLines([]);
+      setTasks([]);
     } finally {
       setLoading(false);
     }
@@ -414,6 +417,22 @@ export default function PlanGanttScreen() {
         </View>
       </View>
 
+      {errorMessage && (
+        <View style={styles.emptyState} testID="plan-gantt-error">
+          <MaterialCommunityIcons name="alert-circle-outline" size={28} color="#ff4d4f" />
+          <Text style={styles.emptyStateTitle}>加载失败</Text>
+          <Text style={styles.emptyStateText}>{errorMessage}</Text>
+        </View>
+      )}
+
+      {!loading && !errorMessage && productionLines.length === 0 && (
+        <View style={styles.emptyState} testID="plan-gantt-empty">
+          <MaterialCommunityIcons name="calendar-blank-outline" size={28} color={DISPATCHER_THEME.primary} />
+          <Text style={styles.emptyStateTitle}>暂无真实排产</Text>
+          <Text style={styles.emptyStateText}>当前日期没有产线排程数据，请确认排产计划后刷新。</Text>
+        </View>
+      )}
+
       {/* Gantt Chart */}
       <View style={styles.ganttContainer}>
         {/* Fixed Line Names Column */}
@@ -596,6 +615,27 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     backgroundColor: '#fff',
+  },
+  emptyState: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderBottomColor: '#e8e8e8',
+    borderBottomWidth: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+  },
+  emptyStateTitle: {
+    color: '#333',
+    fontSize: 15,
+    fontWeight: '600',
+    marginTop: 8,
+  },
+  emptyStateText: {
+    color: '#666',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    textAlign: 'center',
   },
   lineNamesColumn: {
     width: 100,
