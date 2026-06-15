@@ -39,10 +39,15 @@
 
 > 🔄 **SmartBI 统一源工作线 (2026-06-15 organizer intake)** — handoff `docs/dispatch/2026-06-15-handoff-smartbi-unified-source.md`(自包含)。前序 2 刀已 SHIPPED prod(#877 收口/#873 真gold/#879 Phase0表RLS/#885 Phase0 mapper/V20261004_03 GRANT)。本 session:
 > 1. ✅ **Phase 0 upload e2e live 验 DONE**(test 8084): pin/review/域反推/RLS/GRANT 全 functional。audit `docs/audits/smartbi/2026-06-15-phase0-upload-e2e-verification.md`。**发现 = rate_percent shadow → 已修 SHIPPED**(下 #892)。
-> 2. ✅ **复核队列 web-admin UI SHIPPED (#889)**: canonical-fields 端点 + MappingReviewQueue.vue + 路由/菜单。Python test 8084 + prod 8083 部署。web-admin **test 8097 已部**;prod 8086 promote 待 headed 验(队列空无紧迫,`echo YES-PROD | deploy-web-admin.sh --env prod`)。
+> 2. ✅ **复核队列 web-admin UI SHIPPED prod (#889)**: canonical-fields 端点 + MappingReviewQueue.vue + 路由/菜单。Python test 8084 + prod 8083;**web-admin prod 8086 已 promote**(bundle 含 MappingReviewQueue,HTTP 200;headed render-verify 待首次有队列时)。
 > 3. ✅ **rate_percent 修复 SHIPPED (#892)**: 率-后缀列有精确同义词→specific canonical(达成率→achievement_rate),D1 子串保护保留(exact-only)。23/23 测试。Python test+prod 部署。**live 验**: 达成率→achievement_rate(原 rate_percent)。零下游消费者(scan 确认)。
-> 4. 🟢 **Phase 2 统一源融合 — spec+plan SHIPPED, 已分发**: 决策 = 统一长 typed 表 `smart_bi_timeseries` + per-period replace(最新按期覆盖)+ resolver + **pilot=production** + backfill。spec `…/specs/2026-06-15-smartbi-phase2-unified-source-fusion-design.md` + plan `…/plans/2026-06-15-smartbi-phase2-fusion-v1-production.md`(7 task)。**dispatch**: T2 extractor = in-harness Sonnet(跑中);**T1/T3/T4/T5/T6 = Codex 卡** `docs/dispatch/2026-06-15-codex-cards-smartbi-phase2.md`(Steve courier;自包含含内联规则)。波次 1{T1,T2}→2{T3,T4}→3{T5,T6}→4{T7 e2e=organizer}。🔒 T1/T3 执行者只到 PR→Opus 终审+test→prod。范围 v1 一 plan,其它域/chat.py 全站点/finance 后续 plan。
-> - 📌 Phase 0 lint baseline debt(非阻断,java-build-test 是真闸): `domain_standard_fields.py` E501×~32 + `semantic_mapper.py:79` F401×3 + `test_semantic_mapper_pin.py` F401 — 来自 #885,可小 cleanup commit 令 smartbi lint 转绿(后续)。
+> 4. 🟢 **Phase 2 统一源融合 — 地基 LIVE,执行中**: 决策 = 统一长 typed 表 `smart_bi_timeseries` + per-period replace(最新按期覆盖)+ resolver + **pilot=production** + backfill。spec `…/specs/2026-06-15-smartbi-phase2-unified-source-fusion-design.md` + plan `…/plans/2026-06-15-smartbi-phase2-fusion-v1-production.md`。卡 `docs/dispatch/2026-06-15-codex-cards-smartbi-phase2.md`。
+>    - ✅ **T1 migration (#894)**: `smart_bi_timeseries` 建表 **test+prod LIVE**(V20261004_04,rowsecurity=t/force=t,GRANT smartbi_user=arwd,tenant_isolation policy)。
+>    - ✅ **T2 extractor (#893)** + ✅ **T4 resolver (#895)** merged+部署(resolver 随 Python deploy 上)。
+>    - 🟡 **T3 writer+excel_async hook (🔒)**: Codex 卡已 courier,**待 PR**。表已 live → 来了可 gate+部署+live 验。
+>    - ⬜ **T5 backfill**(待 T3)、**T6 production读+UploadSwitcher**(可 courier,T4 resolver 接口已 merged)、**T7 live e2e**(=organizer,待 T3 部署)。
+>    - 波次 1{T1✅,T2✅}→2{T3🟡,T4✅}→3{T5,T6}→4{T7}。
+> - ✅ Phase 0 lint baseline 已清(#896 Phase0 文件 36→0,domain_standard_fields 内容字节不变 + #897 T2 extractor 3 F401)→ **smartbi python-lint-test 现绿**(未来 Phase 2 PR 真 lint 回归可见)。
 
 > 🆕 **2026-06-12 六扇门下一迭代 intake (新录音3走查, 全权交 GPT/Codex 执行)** — 客户 live 系统走查(48min转录)框定 **10 项需求**, 4 read-only agent 核实 current main。**自包含 brief**: `docs/meetings/2026-06-12-xinluyin3/handoff-gpt.md` (+ transcript.txt + 需求分析-organizer.md)。**做**: N1开工无条件化🔒 / N2半成品双领 / N3采购PDF对外隐价🔒 / N4税率UI / N5生产工单PDF / N6销售报表含税列 / N7计划状态色 / N9可配置审批阈值 / N10中转仓完整挂账🔒。**不做**: N8叮咚导入(缺样本)/D1折旧分摊/D2进销存报表/D3物联网工时。**红线 N1/N3脱敏/N10 只到 PR→Opus gate+从 main 部署; N10 先 spec 不写码**。**DoD 铁律(N1 教训)**: 每项全栈闭环(后端+UI/列表+防呆预警 surfacing), 别只做后端半成品报"完成"。下面 3 行跟踪。
 >
