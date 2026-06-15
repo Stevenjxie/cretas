@@ -1149,6 +1149,39 @@ public class GlobalExceptionHandler {
         return false;
     }
 
+    // ==================== 事务异常 (doomed-tx 防御网) ====================
+
+    /**
+     * doomed-tx 防御网 (#929 族 backlog #3, 2026-06-16).
+     *
+     * <p>当某个 {@code @Transactional} 方法在 DB 写之后才抛业务校验异常时, 异常本身被
+     * 调用方/监听器吞掉, 但 Spring 已把事务标记为 rollback-only. proxy commit 阶段检测到
+     * rollback-only → 抛 {@link org.springframework.transaction.UnexpectedRollbackException}
+     * (或同步事务失败时的 {@link org.springframework.transaction.TransactionSystemException})。
+     * 这两个都是 {@code RuntimeException}, 没有专用 handler 时落到 {@link #handleRuntimeException}
+     * → 裸 500 "系统处理异常", 客户端无从判断是并发还是脏数据, 排查也困难。
+     *
+     * <p>正确的根治是消除 doom 源 (校验前移到任何 DB 写之前, 见 #929 confirmReceive fail-fast)。
+     * 本 handler 是 defense-in-depth: 即使有漏网的 doom, 也返回干净的 409 + 提示重试,
+     * 而不是误导性的 500。fool-proof Rule 5 (dead-end → next action): 提示用户刷新重试。
+     */
+    @ExceptionHandler({
+            org.springframework.transaction.UnexpectedRollbackException.class,
+            org.springframework.transaction.TransactionSystemException.class})
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiResponse<?> handleTransactionRollbackException(RuntimeException e) {
+        String traceId = generateTraceId();
+        // WARN not ERROR: 这通常是业务校验在错误时机抛出导致的事务回滚, 不是服务端崩溃。
+        // 完整异常链记日志供排查 doom 源 (哪个方法 throw-after-write)。
+        log.warn("[{}] 事务回滚 (rollback-only / 事务系统异常): {}", traceId, e.getMessage(), e);
+        return ApiResponse.errorWithHint(
+                409,
+                "操作未能完成，请刷新后重试",
+                "若问题持续，请联系管理员排查 (追踪码: " + traceId + ")",
+                "warning",
+                null);
+    }
+
     // ==================== 兜底异常处理 ====================
 
     /**
