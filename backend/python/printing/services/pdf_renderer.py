@@ -648,13 +648,16 @@ def render_production_work_order(data: dict) -> bytes:
             ("客户名称", data.get("customerName", "-")),       # N5
             ("产品名称", data.get("productName", "-")),
             ("预计产量", f'{_fmt_qty(data.get("expectedOutput") or data.get("plannedQuantity"))} {data.get("productUnit", "kg")}'),  # noqa: E501
-            ("状态", data.get("status", "-")),
+            # 状态行已删 — 打印工单不需要显示内部状态 (PENDING 等对操作员无意义)
             ("生产日期", data.get("productionDate") or data.get("plannedDate", "-")),
             ("交货日期", delivery_date),                        # N5
             ("打印日期", data.get("printDate", "-")),
             ("制单人", data.get("createdByName") or data.get("preparedBy", "-")),   # N5
             ("打印人", data.get("printedBy", "-")),
-            ("预计完成", data.get("expectedCompletionDate", "-")),
+            # 预计完成: 空/"-"时不渲染此行
+            *([("预计完成", data.get("expectedCompletionDate"))]
+              if data.get("expectedCompletionDate") and data.get("expectedCompletionDate") != "-"
+              else []),
         ], s["font"]),
         Spacer(1, 0.5 * cm),
         Paragraph("投料 / 领用明细", s["h2"]),
@@ -675,19 +678,18 @@ def render_production_work_order(data: dict) -> bytes:
     if not data.get("materialItems"):
         story.extend([Spacer(1, 0.2 * cm),
                       Paragraph("暂无真实物料需求数据，待领料单生成后显示。", s["body"])])
-    story.extend([
-        Spacer(1, 0.5 * cm),
-        Paragraph("工序列表", s["h2"]),
-        _render_items_table(
-            data.get("processes") or [],
-            [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
-             ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
-            s["font"],
-        ),
-    ])
-    if not data.get("processes"):
-        story.extend([Spacer(1, 0.2 * cm),
-                      Paragraph("暂无真实工序任务数据，待生产批次排产后显示。", s["body"])])
+    # 工序列表: 有数据才显示，空则隐藏整段 (PENDING 计划无批次时空列表不渲染)
+    if data.get("processes"):
+        story.extend([
+            Spacer(1, 0.5 * cm),
+            Paragraph("工序列表", s["h2"]),
+            _render_items_table(
+                data.get("processes"),
+                [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
+                 ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
+                s["font"],
+            ),
+        ])
     if data.get("remark"):
         story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
                       Paragraph(str(data["remark"]), s["body"])])
