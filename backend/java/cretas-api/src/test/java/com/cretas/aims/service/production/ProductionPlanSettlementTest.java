@@ -254,6 +254,50 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("结单原料批次不在原料仓时拒绝扣料")
+    void settleProduction_rawBatchOutsideLogisticsWarehouse_rejected() {
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setWarehouseId("WH-WKS-ID");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
+
+        assertEquals("PRODUCTION_RAW_WAREHOUSE_REQUIRED", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("结单原料批次不属于当前 BOM 时拒绝扣料")
+    void settleProduction_rawBatchNotInCurrentBom_rejected() {
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setMaterialTypeId("RM-NOT-IN-BOM");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
+
+        assertEquals("PRODUCTION_CONSUMPTION_NOT_IN_BOM", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("同一幂等键重复提交返回原结单")
     void settleProduction_sameIdempotency_returnsExistingSettlement() {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
