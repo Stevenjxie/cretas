@@ -497,7 +497,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           if (!expanded) setConfirmed(false);
         }}
         disabled={disabled}
+        testID="material-batch-picker-trigger"
         accessibilityLabel="展开/折叠领料批次选择"
+        accessibilityHint="展开或折叠领料批次选项"
       >
         <Text style={styles.headerTitle}>
           {/* B1: asterisk when required and nothing selected yet; badge when batches chosen */}
@@ -645,6 +647,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                   style={[styles.row, row.selected && styles.rowSelected]}
                   onPress={() => !disabled && toggleRow(idx)}
                   activeOpacity={0.7}
+                  testID={`material-batch-option-${row.batch.batchNumber || row.batch.id}`}
                   accessibilityLabel={`${row.selected ? '取消选择' : '选择'}批次 ${row.batch.batchNumber}`}
                   accessibilityRole="checkbox"
                   accessibilityState={{ checked: row.selected, disabled }}
@@ -734,7 +737,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               style={[styles.confirmBtn, !canConfirm() && styles.confirmBtnDisabled]}
               onPress={handleConfirm}
               disabled={disabled || !canConfirm()}
+              testID="material-batch-confirm"
               accessibilityLabel="确定选择领料批次"
+              accessibilityHint="确认当前领料批次选择"
             >
               <Text style={[styles.confirmBtnText, !canConfirm() && styles.confirmBtnTextDisabled]}>
                 {isMultiBatch
