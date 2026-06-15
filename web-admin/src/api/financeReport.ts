@@ -5,6 +5,7 @@
  */
 
 import { get } from '@/api/request';
+import axios from 'axios';
 
 export interface LineItem {
   accountCode: string;
@@ -115,4 +116,59 @@ export function getCashFlow(
     `/api/mobile/${factoryId}/finance/report/cash-flow`,
     { params: { startYear, startMonth, endYear, endMonth } }
   );
+}
+
+/**
+ * 导出资产负债表 xlsx.
+ * 使用 blob 下载, 调用方负责触发浏览器保存.
+ */
+export async function exportBalanceSheet(
+  factoryId: string,
+  year: number,
+  month: number,
+): Promise<void> {
+  const response = await axios.get(
+    `/api/mobile/${factoryId}/finance/report/balance-sheet/export`,
+    { params: { year, month }, responseType: 'blob' },
+  );
+  const blob = new Blob([response.data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const cd = response.headers['content-disposition'] ?? '';
+  const match = cd.match(/filename\*=UTF-8''(.+)/i);
+  a.download = match ? decodeURIComponent(match[1]) : `资产负债表_${year}${String(month).padStart(2, '0')}.xlsx`;
+  a.href = url;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 导出现金流量表 xlsx.
+ */
+export async function exportCashFlow(
+  factoryId: string,
+  startYear: number,
+  startMonth: number,
+  endYear: number,
+  endMonth: number,
+): Promise<void> {
+  const response = await axios.get(
+    `/api/mobile/${factoryId}/finance/report/cash-flow/export`,
+    { params: { startYear, startMonth, endYear, endMonth }, responseType: 'blob' },
+  );
+  const blob = new Blob([response.data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const cd = response.headers['content-disposition'] ?? '';
+  const match = cd.match(/filename\*=UTF-8''(.+)/i);
+  a.download = match
+    ? decodeURIComponent(match[1])
+    : `现金流量表_${startYear}${String(startMonth).padStart(2, '0')}_${endYear}${String(endMonth).padStart(2, '0')}.xlsx`;
+  a.href = url;
+  a.click();
+  URL.revokeObjectURL(url);
 }

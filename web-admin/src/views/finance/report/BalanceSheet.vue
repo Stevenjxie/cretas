@@ -18,6 +18,13 @@
               style="margin-right: 12px;"
             />
             <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
+            <el-button
+              type="success"
+              :loading="exporting"
+              :disabled="!data"
+              @click="doExport"
+              style="margin-left: 8px;"
+            >导出 Excel</el-button>
           </div>
         </div>
       </template>
@@ -128,7 +135,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
-import { getBalanceSheet, type BalanceSheetDTO } from '@/api/financeReport';
+import { getBalanceSheet, exportBalanceSheet, type BalanceSheetDTO } from '@/api/financeReport';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -140,6 +147,7 @@ const selectedMonth = ref<string>(
 );
 const data = ref<BalanceSheetDTO | null>(null);
 const loading = ref(false);
+const exporting = ref(false);
 
 const year = computed(() => parseInt(selectedMonth.value.split('-')[0], 10));
 const month = computed(() => parseInt(selectedMonth.value.split('-')[1], 10));
@@ -186,6 +194,19 @@ async function load() {
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
+  }
+}
+
+async function doExport() {
+  if (!factoryId.value) return;
+  exporting.value = true;
+  try {
+    await exportBalanceSheet(factoryId.value, year.value, month.value);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage({ message: '导出失败: ' + msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    exporting.value = false;
   }
 }
 

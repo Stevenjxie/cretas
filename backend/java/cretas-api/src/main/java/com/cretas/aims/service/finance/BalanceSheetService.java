@@ -12,11 +12,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.write.metadata.WriteSheet;
+
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -165,6 +171,105 @@ public class BalanceSheetService {
                 .generatedAt(LocalDateTime.now().toString())
                 .build();
     }
+
+    // -------------------------------------------------------------------------
+    // Excel 导出
+    // -------------------------------------------------------------------------
+
+    /**
+     * 导出资产负债表为 xlsx, 写入 {@code out}.
+     *
+     * @return 文件名 (含时间戳, 用于 Content-Disposition)
+     */
+    public String exportBalanceSheet(String factoryId, Integer year, Integer month, OutputStream out) {
+        BalanceSheetDTO dto = generate(factoryId, year, month);
+        List<List<Object>> rows = buildBalanceSheetRows(dto);
+        writeRawRows(out, rows, "资产负债表");
+        String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        return String.format("资产负债表_%s_%d%02d_%s.xlsx", factoryId, year, month, ts);
+    }
+
+    /** 构建 xlsx 行: header = row[0], 资产/负债/权益 按段落分组. */
+    private List<List<Object>> buildBalanceSheetRows(BalanceSheetDTO dto) {
+        List<List<Object>> rows = new ArrayList<>();
+        // header
+        rows.add(List.of("科目编码", "科目名称", "期末余额(元)", "类别"));
+
+        for (BalanceSheetDTO.LineItem item : nvlList(dto.getAssets())) {
+            rows.add(List.of(
+                    nvlStr(item.getAccountCode()),
+                    nvlStr(item.getAccountName()),
+                    amountText(item.getAmount()),
+                    "资产"));
+        }
+        // 资产合计
+        rows.add(List.of("", "资产合计", amountText(dto.getTotalAssets()), ""));
+
+        for (BalanceSheetDTO.LineItem item : nvlList(dto.getLiabilities())) {
+            rows.add(List.of(
+                    nvlStr(item.getAccountCode()),
+                    nvlStr(item.getAccountName()),
+                    amountText(item.getAmount()),
+                    "负债"));
+        }
+        // 负债合计
+        rows.add(List.of("", "负债合计", amountText(dto.getTotalLiabilities()), ""));
+
+        for (BalanceSheetDTO.LineItem item : nvlList(dto.getEquity())) {
+            rows.add(List.of(
+                    nvlStr(item.getAccountCode()),
+                    nvlStr(item.getAccountName()),
+                    amountText(item.getAmount()),
+                    "所有者权益"));
+        }
+        // 权益合计 + 总计
+        rows.add(List.of("", "所有者权益合计", amountText(dto.getTotalEquity()), ""));
+        rows.add(List.of("", "负债+所有者权益合计", amountText(dto.getTotalLiabilitiesAndEquity()), ""));
+        rows.add(List.of("", "资产总计", amountText(dto.getTotalAssets()), ""));
+
+        return rows;
+    }
+
+    // -------------------------------------------------------------------------
+    // EasyExcel 工具方法
+    // -------------------------------------------------------------------------
+
+    private void writeRawRows(OutputStream out, List<List<Object>> rows, String sheetName) {
+        // Even with no data rows, we still write the header
+        List<Object> header = rows.get(0);
+        List<List<Object>> dataRows = rows.size() > 1 ? rows.subList(1, rows.size()) : List.of();
+
+        List<List<String>> head = new ArrayList<>();
+        for (Object h : header) {
+            head.add(List.of(h.toString()));
+        }
+
+        ExcelWriter writer = EasyExcel.write(out).head(head).build();
+        WriteSheet sheet = EasyExcel.writerSheet(sheetName).build();
+        writer.write(dataRows, sheet);
+        writer.finish();
+    }
+
+    private BigDecimal scale2(BigDecimal v) {
+        if (v == null) return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        return v.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private String amountText(BigDecimal v) {
+        return scale2(v).toPlainString();
+    }
+
+    private String nvlStr(Object v) {
+        return v == null ? "" : v.toString();
+    }
+
+    private <T> List<T> nvlList(List<T> list) {
+        return list == null ? List.of() : list;
+    }
+
+    // -------------------------------------------------------------------------
+    // 原有私有方法
+    // -------------------------------------------------------------------------
 
     private BalanceSheetDTO.LineItem buildLineItem(SubjectAggregateRow row, boolean useDebitMinusCredit) {
         BigDecimal amount = useDebitMinusCredit

@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.finance;
 
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.finance.report.BalanceSheetDTO;
@@ -8,14 +9,19 @@ import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
 import com.cretas.aims.service.finance.BalanceSheetService;
 import com.cretas.aims.service.finance.CashFlowService;
 import com.cretas.aims.service.finance.IncomeStatementService;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Sprint 7 T3 报表三表 (Balance Sheet / Income Statement / Cash Flow) REST API.
@@ -87,5 +93,57 @@ public class FinanceReportController {
         CashFlowDTO dto = cashFlowService.generate(
                 factoryId, startYear, startMonth, endYear, endMonth);
         return ResponseEntity.ok(ApiResponse.success(dto));
+    }
+
+    // -------------------------------------------------------------------------
+    // Excel 导出端点
+    // -------------------------------------------------------------------------
+
+    /**
+     * 导出资产负债表 xlsx.
+     *
+     * <p>GET /api/mobile/{factoryId}/finance/report/balance-sheet/export?year=2026&month=5
+     */
+    @GetMapping("/balance-sheet/export")
+    @RequireModule("finance")
+    public void exportBalanceSheet(
+            @PathVariable String factoryId,
+            @RequestParam Integer year,
+            @RequestParam Integer month,
+            HttpServletResponse response) throws Exception {
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = balanceSheetService.exportBalanceSheet(factoryId, year, month, response.getOutputStream());
+        setAttachmentHeader(response, fileName);
+        response.flushBuffer();
+        log.info("[FinanceReport] balance-sheet export: factoryId={} year={} month={} file={}",
+                factoryId, year, month, fileName);
+    }
+
+    /**
+     * 导出现金流量表 xlsx.
+     *
+     * <p>GET /api/mobile/{factoryId}/finance/report/cash-flow/export?startYear=2026&startMonth=1&endYear=2026&endMonth=5
+     */
+    @GetMapping("/cash-flow/export")
+    @RequireModule("finance")
+    public void exportCashFlow(
+            @PathVariable String factoryId,
+            @RequestParam Integer startYear,
+            @RequestParam Integer startMonth,
+            @RequestParam Integer endYear,
+            @RequestParam Integer endMonth,
+            HttpServletResponse response) throws Exception {
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = cashFlowService.exportCashFlow(
+                factoryId, startYear, startMonth, endYear, endMonth, response.getOutputStream());
+        setAttachmentHeader(response, fileName);
+        response.flushBuffer();
+        log.info("[FinanceReport] cash-flow export: factoryId={} range={}-{} to {}-{} file={}",
+                factoryId, startYear, startMonth, endYear, endMonth, fileName);
+    }
+
+    private void setAttachmentHeader(HttpServletResponse response, String fileName) {
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename*=UTF-8''" + URLEncoder.encode(fileName, StandardCharsets.UTF_8));
     }
 }
