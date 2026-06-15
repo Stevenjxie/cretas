@@ -13,7 +13,8 @@
   },
   "01b-sku-create-form": {
     "status": "PASS",
-    "description": "新建产品弹窗打开 — 红框圈整个表单; 注: 此系统产品表单无「税率」字段(含目标毛利率/标准成本等定价字段)"
+    "description": "新建产品弹窗打开 — 红框精确框住表单字段主体区域(产品名称/产品大类/规格型号等输入行), 弹窗标题「新建产品」在红框上方; 二次审计重拍(v4)",
+    "self_check": "红框在表单输入字段上而非标题栏 — PASS"
   },
   "02-product-coding-config": {
     "status": "PASS",
@@ -33,7 +34,8 @@
   },
   "05-bom-list": {
     "status": "PASS",
-    "description": "BOM配方管理页 /production/bom — 红框圈「创建配方」按钮"
+    "description": "BOM配方管理页 /production/bom — 红框精确圈住「创建配方」按钮(BOM配方管理区块右上角蓝色按钮); 二次审计重拍(v4)",
+    "self_check": "红框在「+创建配方」按钮上而非BOM成本数值区 — PASS"
   },
   "05b-bom-yield-rate": {
     "status": "PASS",
@@ -61,8 +63,10 @@
   },
   "10-production-complete": {
     "status": "NEED_HELP",
-    "description": "批次详情 — 未找到含「完工入库」按钮的批次; 截图为批次2026详情(生产中状态)",
-    "note": "「完工入库」需所有工序报工完成后才出现; 需找一个完成报工的批次"
+    "description": "批次详情 — 遍历prod全部10个批次均无「完工入库」按钮; 截图为批次DEMO-FE3-20260612071524(生产中)详情页; 「已完成」批次(PB-PP-AUTO-20260612-0123)已完成入库无按钮; 六扇门两点模型下领料+产出均完成后才出现「完工入库」",
+    "note": "prod目前所有批次: 1个已完成(按钮消失) + 9个生产中(工序未全部完成); 需在test环境造一个完成工序报工的批次",
+    "batches_checked": 10,
+    "retry_date": "2026-06-16"
   },
   "10b-inventory-confirm": {
     "status": "PASS",
