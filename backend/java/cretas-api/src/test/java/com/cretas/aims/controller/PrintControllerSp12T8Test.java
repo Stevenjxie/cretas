@@ -107,6 +107,9 @@ class PrintControllerSp12T8Test {
         assertThat(payload.get("productionOrderNumber")).isEqualTo("PLAN-2026-001");
         assertThat(payload.get("productionDate").toString()).isEqualTo("2026-06-10");
         assertThat(payload.get("printDate")).isNotNull();
+        assertThat(payload.get("createdBy")).isEqualTo("2001");
+        assertThat(payload.get("createdByName")).isEqualTo("计划文员");
+        assertThat(payload.get("preparedBy")).isEqualTo("计划文员");
         assertThat(payload.get("printedBy")).isEqualTo("-");
         assertThat(payload.get("printedAccount")).isEqualTo("-");
         assertThat(payload.get("plannedDate").toString()).isEqualTo("2026-06-10");
