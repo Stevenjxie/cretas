@@ -1,12 +1,15 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { ActivityIndicator, Appbar, Card, Chip, IconButton, Text, TouchableRipple } from 'react-native-paper';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { NeoButton, ScreenWrapper } from '../../components/ui';
+import { AppDialogHost } from '../../components/ui/AppDialog';
 import { yieldReportApi, WorkProcessTask, WorkProcessTaskStatus } from '../../services/api/yieldReportApi';
+import { shortageAlertApiClient } from '../../services/api/shortageAlertApiClient';
 import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
+import type { ShortageAlertDetailParams } from './ShortageAlertDetailScreen';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -17,6 +20,7 @@ type OperatorAssignedProcessStackParamList = {
     assignedProcessOrder?: number;
     autoAssigned?: boolean;
   };
+  ShortageAlertDetail: ShortageAlertDetailParams;
 };
 
 type NavigationProp = NativeStackNavigationProp<
@@ -35,6 +39,7 @@ const ACTIVE_STATUSES: WorkProcessTaskStatus[] = ['IN_PROGRESS', 'PENDING'];
 interface BatchEntry {
   batchId: number;
   productTypeName: string | null;
+  productTypeId: string | null;                   // N1b: BOM缺料查询用
   batchNumber: string | null;
   reportable: boolean;
   currentReportableTask: WorkProcessTask | null;  // reportable 时 = 当前可报的那道(我的)
@@ -84,6 +89,8 @@ export default function OperatorAssignedProcessScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [entries, setEntries] = useState<BatchEntry[]>([]);
+  // N1b: batchId → shortfallLeafCount (populated asynchronously after entries load; 0 = no shortage)
+  const [shortfallMap, setShortfallMap] = useState<Record<number, number>>({});
 
   const loadExactAssignedTasks = useCallback(async (assignedTo: number): Promise<WorkProcessTask[]> => {
     const chunks = await Promise.all(
@@ -139,6 +146,8 @@ export default function OperatorAssignedProcessScreen() {
           batchId: batchRep.productionBatchId,
           productTypeName:
             firstOpenTask?.productTypeName ?? batchRep.productTypeName ?? myNext.productTypeName ?? null,
+          productTypeId:
+            firstOpenTask?.productTypeId ?? batchRep.productTypeId ?? myNext.productTypeId ?? null,
           batchNumber: firstOpenTask?.batchNumber ?? batchRep.batchNumber ?? myNext.batchNumber ?? null,
           reportable,
           currentReportableTask: reportable ? firstOpenTask : null,
@@ -195,6 +204,63 @@ export default function OperatorAssignedProcessScreen() {
     }, [loadAssignedTask]),
   );
 
+  // N1b: 异步加载每个批次的 BOM 缺料情况 (不阻断主加载流程)
+  const { getFactoryId } = useAuthStore();
+  useEffect(() => {
+    if (entries.length === 0) {
+      setShortfallMap({});
+      return;
+    }
+    let cancelled = false;
+    const fetchAll = async () => {
+      const updates: Record<number, number> = {};
+      await Promise.all(
+        entries.map(async (entry) => {
+          const ptid = entry.productTypeId;
+          if (!ptid) return;
+          try {
+            const qty =
+              (entry.currentReportableTask?.plannedQuantity) ?? 1;
+            const { result } = await shortageAlertApiClient.fetchBomShortage(
+              ptid,
+              qty,
+              getFactoryId() ?? undefined,
+            );
+            if (!cancelled) {
+              updates[entry.batchId] = result.shortfallLeafCount;
+            }
+          } catch {
+            // 缺料查询失败时不影响主界面；badge 静默不显示
+          }
+        }),
+      );
+      if (!cancelled) {
+        setShortfallMap((prev) => ({ ...prev, ...updates }));
+      }
+    };
+    void fetchAll();
+    return () => { cancelled = true; };
+  }, [entries, getFactoryId]);
+
+  // N1b: 查看缺料明细
+  const onViewShortage = useCallback(
+    (entry: BatchEntry) => {
+      if (!entry.productTypeId) return;
+      const params: ShortageAlertDetailParams = {
+        batchId: entry.batchId,
+        batchNumber: entry.batchNumber ?? undefined,
+        productTypeName: entry.productTypeName ?? undefined,
+        productTypeId: entry.productTypeId,
+        plannedQuantity:
+          entry.currentReportableTask?.plannedQuantity ?? undefined,
+        plannedUnit:
+          entry.currentReportableTask?.plannedUnit ?? undefined,
+      };
+      navigation.navigate('ShortageAlertDetail', params);
+    },
+    [navigation],
+  );
+
   // 选可报批次 → 用 navigate (非 replace), 这样报工完返回时回到列表可切换其他工序.
   const onSelectBatch = useCallback(
     (entry: BatchEntry) => {
@@ -220,6 +286,7 @@ export default function OperatorAssignedProcessScreen() {
 
   return (
     <ScreenWrapper testID="operator-assigned-process" edges={['top']} backgroundColor={theme.colors.background}>
+      <AppDialogHost />
       <Appbar.Header elevated style={{ backgroundColor: theme.colors.surface }}>
         <Appbar.Content
           title={hasEntries ? '我的工序任务' : '当前工序'}
@@ -242,21 +309,43 @@ export default function OperatorAssignedProcessScreen() {
           </Text>
           {entries.map((entry) => {
             const tappable = entry.reportable && !!entry.currentReportableTask;
+            const shortfallCount = shortfallMap[entry.batchId] ?? 0;
+            const hasShortage = shortfallCount > 0;
             const card = (
               <Card.Content style={styles.cardContent}>
                 <View style={styles.cardHeaderRow}>
                   <Text style={styles.productName} numberOfLines={1}>
                     {entry.productTypeName ?? '未命名产品'}
                   </Text>
-                  {tappable ? (
-                    <Chip compact style={styles.okChip} textStyle={styles.okChipText}>
-                      可报工 ▶
-                    </Chip>
-                  ) : (
-                    <Chip compact style={styles.waitChip} textStyle={styles.waitChipText}>
-                      等待中
-                    </Chip>
-                  )}
+                  <View style={styles.chipRow}>
+                    {tappable ? (
+                      <Chip compact style={styles.okChip} textStyle={styles.okChipText}>
+                        可报工 ▶
+                      </Chip>
+                    ) : (
+                      <Chip compact style={styles.waitChip} textStyle={styles.waitChipText}>
+                        等待中
+                      </Chip>
+                    )}
+                    {/* N1b: 缺料 badge — 仅显示，不阻断开工 (fool-proof Rule 5) */}
+                    {hasShortage && entry.productTypeId ? (
+                      <TouchableRipple
+                        testID={`shortage-badge-${entry.batchId}`}
+                        onPress={() => onViewShortage(entry)}
+                        style={styles.shortageBadgeRipple}
+                        borderless
+                      >
+                        <Chip
+                          compact
+                          icon="alert-circle-outline"
+                          style={styles.shortageChip}
+                          textStyle={styles.shortageChipText}
+                        >
+                          ⚠ 缺料
+                        </Chip>
+                      </TouchableRipple>
+                    ) : null}
+                  </View>
                 </View>
                 <Text style={styles.batchNo} numberOfLines={1}>
                   批次号：{entry.batchNumber ?? `#${entry.batchId}`}
@@ -278,12 +367,28 @@ export default function OperatorAssignedProcessScreen() {
                       : ''}
                   </Text>
                 )}
+                {/* N1b: 缺料提示行 (点击跳查看明细) */}
+                {hasShortage && entry.productTypeId ? (
+                  <TouchableRipple
+                    testID={`shortage-row-${entry.batchId}`}
+                    onPress={() => onViewShortage(entry)}
+                    style={styles.shortageRow}
+                  >
+                    <Text style={styles.shortageRowText}>
+                      ⚠ {shortfallCount} 种原料库存不足，点击查看缺口明细 →
+                    </Text>
+                  </TouchableRipple>
+                ) : null}
               </Card.Content>
             );
             return (
               <Card
                 key={entry.batchId}
-                style={[styles.batchCard, !tappable && styles.batchCardWaiting]}
+                style={[
+                  styles.batchCard,
+                  !tappable && styles.batchCardWaiting,
+                  hasShortage && styles.batchCardShortage,
+                ]}
                 mode="outlined"
               >
                 {tappable ? (
@@ -361,6 +466,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
   productName: {
     flex: 1,
     minWidth: 0,
@@ -399,5 +510,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: theme.colors.onSurfaceVariant,
+  },
+  // N1b: 缺料相关样式
+  batchCardShortage: {
+    borderColor: theme.colors.error,
+    borderWidth: 1.5,
+  },
+  shortageBadgeRipple: {
+    borderRadius: 16,
+  },
+  shortageChip: {
+    backgroundColor: '#FFEBEE',
+  },
+  shortageChipText: {
+    fontSize: 12,
+    color: theme.colors.error,
+    fontWeight: '600',
+  },
+  shortageRow: {
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#FFF3F3',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  shortageRowText: {
+    fontSize: 14,
+    color: theme.colors.error,
+    fontWeight: '500',
+    lineHeight: 20,
   },
 });

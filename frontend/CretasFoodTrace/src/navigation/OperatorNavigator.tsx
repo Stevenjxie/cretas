@@ -7,6 +7,7 @@ import ProfileStackNavigator from './ProfileStackNavigator';
 
 import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssignedProcessScreen';
 import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
+import ShortageAlertDetailScreen from '../screens/processing/ShortageAlertDetailScreen';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -14,12 +15,15 @@ const ReportStack = createNativeStackNavigator<any>();
 /**
  * Operator 报工 Stack 导航器
  * 小组长只处理系统分配好的当前工序，不暴露任务列表/三步报工/选批次入口。
+ * N1b: ShortageAlertDetail 屏注册在此 Stack，从任务列表缺料 badge 跳入。
  */
 function OperatorReportStackNavigator() {
   return (
     <ReportStack.Navigator initialRouteName="OperatorAssignedProcess" screenOptions={{ headerShown: false }}>
       <ReportStack.Screen name="OperatorAssignedProcess" component={OperatorAssignedProcessScreen} />
       <ReportStack.Screen name="YieldStepReport" component={YieldStepReportScreen} />
+      {/* N1b: 缺料预警明细屏 (从任务列表的 ⚠缺料 badge 跳入) */}
+      <ReportStack.Screen name="ShortageAlertDetail" component={ShortageAlertDetailScreen} />
     </ReportStack.Navigator>
   );
 }
