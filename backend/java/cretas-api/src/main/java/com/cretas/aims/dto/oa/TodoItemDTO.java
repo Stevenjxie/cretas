@@ -46,6 +46,8 @@ public class TodoItemDTO {
         PRICE_ANOMALY,
         /** 盘点任务待财务审批 */
         STOCKTAKE_APPROVAL,
+        /** 退货单待财务审批 */
+        RETURN_FINANCE_REVIEW,
         /** 已审批付款请求（出纳执行付款） */
         PAYMENT_DISBURSE
     }

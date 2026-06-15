@@ -362,6 +362,23 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
     @Override
     @Transactional
+    public ReturnOrder financeRejectReturnOrder(String factoryId, String returnOrderId, Long financeUserId) {
+        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        if (order.getStatus() != ReturnOrderStatus.APPROVED) {
+            throw new BusinessException(409, "只有已通过业务审批的退货单可以由财务驳回")
+                    .withHint("当前状态: " + order.getStatus().getDisplayName()
+                            + "。请刷新退货单列表查看最新状态，避免重复审批或越级处理。");
+        }
+        order.setStatus(ReturnOrderStatus.REJECTED);
+        order.setFinanceApprovedBy(financeUserId);
+        order.setFinanceApprovedAt(LocalDateTime.now());
+        log.info("财务驳回退货单: returnOrderId={}, returnNumber={}, financeUserId={}",
+                returnOrderId, order.getReturnNumber(), financeUserId);
+        return returnOrderRepository.save(order);
+    }
+
+    @Override
+    @Transactional
     public ReturnOrder rejectReturnOrder(String factoryId, String returnOrderId) {
         ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
         if (order.getStatus() != ReturnOrderStatus.SUBMITTED) {

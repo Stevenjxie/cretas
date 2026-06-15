@@ -60,7 +60,7 @@ public class ReturnOrderController {
 
     @GetMapping("/{returnOrderId}")
     @Operation(summary = "退货单详情")
-    @RequirePermission({"sales:read_write", "sales:read", "procurement:read_write", "procurement:read"})
+    @RequirePermission({"sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read"})
     public ApiResponse<ReturnOrder> getReturnOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String returnOrderId) {
@@ -103,6 +103,18 @@ public class ReturnOrderController {
         Long userId = extractUserId(authorization);
         ReturnOrder order = returnOrderService.financeApproveReturnOrder(factoryId, returnOrderId, userId);
         return ApiResponse.success("退货单财务审批通过", order);
+    }
+
+    @PostMapping("/{returnOrderId}/finance-reject")
+    @Operation(summary = "退货财务驳回")
+    @RequirePermission({"finance:read_write"})
+    public ApiResponse<ReturnOrder> financeRejectReturnOrder(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String returnOrderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        ReturnOrder order = returnOrderService.financeRejectReturnOrder(factoryId, returnOrderId, userId);
+        return ApiResponse.success("退货单财务已驳回", order);
     }
 
     @PostMapping("/{returnOrderId}/reject")

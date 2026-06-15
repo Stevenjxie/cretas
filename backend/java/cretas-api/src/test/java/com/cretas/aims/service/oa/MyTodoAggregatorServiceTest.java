@@ -3,13 +3,16 @@ package com.cretas.aims.service.oa;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -58,6 +61,9 @@ class MyTodoAggregatorServiceTest {
 
     @Mock
     private FactoryStocktakeRepository stocktakeRepository;
+
+    @Mock
+    private ReturnOrderRepository returnOrderRepository;
 
     @Mock
     private PaymentRequestService paymentRequestService;
@@ -117,6 +123,20 @@ class MyTodoAggregatorServiceTest {
         return s;
     }
 
+    private ReturnOrder fakeReturnOrder(String id, String returnNumber, BigDecimal amount, String counterpartyId) {
+        ReturnOrder order = new ReturnOrder();
+        order.setId(id);
+        order.setReturnNumber(returnNumber);
+        order.setTotalAmount(amount);
+        order.setCounterpartyId(counterpartyId);
+        order.setFactoryId(FACTORY_ID);
+        order.setStatus(ReturnOrderStatus.APPROVED);
+        order.setApprovedAt(NOW.minusMinutes(20));
+        order.setCreatedAt(NOW.minusHours(4));
+        order.setUpdatedAt(NOW.minusMinutes(20));
+        return order;
+    }
+
     private PaymentRequest fakePaymentRequest(String id, String requestNumber, BigDecimal amount, String supplierId) {
         PaymentRequest pr = new PaymentRequest();
         pr.setId(id);
@@ -135,6 +155,7 @@ class MyTodoAggregatorServiceTest {
                 salesService,
                 supplierDeliveryNoteService,
                 stocktakeRepository,
+                returnOrderRepository,
                 paymentRequestService
         );
     }
@@ -147,7 +168,7 @@ class MyTodoAggregatorServiceTest {
 
         @Test
         @DisplayName("finance_manager: 4 类来源各 1 条 → listTodos 返 4 条")
-        void listTodos_financeManager_returns4Types() {
+        void listTodos_financeManager_returns5Types() {
             // arrange
             when(purchaseService.getPurchaseOrdersByStatus(eq(FACTORY_ID),
                     eq(PurchaseOrderStatus.PENDING_FINANCE_REVIEW), eq(1), eq(Integer.MAX_VALUE)))
@@ -168,11 +189,16 @@ class MyTodoAggregatorServiceTest {
                     eq(FACTORY_ID), eq(FactoryStocktake.Status.PENDING_APPROVAL), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(fakeStocktake("st-1", "ST-202606-001"))));
 
+            when(returnOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                    eq(FACTORY_ID), eq(ReturnOrderStatus.APPROVED), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(
+                            fakeReturnOrder("ro-1", "RO-001", new BigDecimal("900"), "CP-001"))));
+
             // act
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
 
             // assert
-            assertThat(result).hasSize(4);
+            assertThat(result).hasSize(5);
             // cashier endpoint should NOT be called for finance_manager
             verifyNoInteractions(paymentRequestService);
             assertThat(result.stream().map(TodoItemDTO::getType))
@@ -180,7 +206,8 @@ class MyTodoAggregatorServiceTest {
                             TodoType.PURCHASE_FINANCE_REVIEW,
                             TodoType.SALES_FINANCE_REVIEW,
                             TodoType.PRICE_ANOMALY,
-                            TodoType.STOCKTAKE_APPROVAL);
+                            TodoType.STOCKTAKE_APPROVAL,
+                            TodoType.RETURN_FINANCE_REVIEW);
             // payment NOT in result
             assertThat(result.stream().map(TodoItemDTO::getType))
                     .doesNotContain(TodoType.PAYMENT_DISBURSE);
@@ -212,6 +239,7 @@ class MyTodoAggregatorServiceTest {
             verifyNoInteractions(salesService);
             verifyNoInteractions(supplierDeliveryNoteService);
             verifyNoInteractions(stocktakeRepository);
+            verifyNoInteractions(returnOrderRepository);
         }
 
         private com.cretas.aims.entity.inventory.PaymentRequest buildPaymentEntity(
@@ -240,7 +268,7 @@ class MyTodoAggregatorServiceTest {
 
             // No domain queries fired
             verifyNoInteractions(purchaseService, salesService,
-                    supplierDeliveryNoteService, stocktakeRepository, paymentRequestService);
+                    supplierDeliveryNoteService, stocktakeRepository, returnOrderRepository, paymentRequestService);
         }
 
         @Test
