@@ -21,6 +21,9 @@ import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { handleError } from "../../../utils/errorHandler";
 import { formatNumberWithCommas } from "../../../utils/formatters";
+import { appAlert, AppDialogHost } from "../../../components/ui/AppDialog";
+import { labelApiClient } from "../../../services/api/labelApiClient";
+import { printBatchLabel } from "../../../services/BatchLabelPrintService";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 type RouteType = RouteProp<WHInventoryStackParamList, "WHBatchDetail">;
@@ -197,6 +200,60 @@ export function WHBatchDetailScreen() {
     loadData();
   }, [loadData]);
 
+  // ── 标签打印 ──────────────────────────────────────────────────────────────
+  const [printing, setPrinting] = useState(false);
+
+  const handlePrintLabel = useCallback(async () => {
+    if (!batchId || !batchDetail) return;
+    if (printing) return;
+    setPrinting(true);
+    try {
+      // 1. 生成标签 (防呆: 已有活跃标签时返回 400, 让用户重用旧标签也 OK)
+      let labelId: string | null = null;
+      let qrContent: string | null = null;
+      try {
+        const genRes = await labelApiClient.generateMaterialBatchLabel(batchId);
+        labelId = genRes.data?.id ?? null;
+        qrContent = genRes.data?.traceCode ?? genRes.data?.labelCode ?? null;
+      } catch {
+        // 已有活跃标签 → 查已有标签复用
+        const listRes = await labelApiClient.getLabelsByBatchId(batchId);
+        const active = (listRes.data ?? []).find(
+          (l) => l.status === 'ACTIVE' || l.status === 'PRINTED',
+        );
+        if (active) {
+          labelId = active.id;
+          qrContent = active.traceCode ?? active.labelCode ?? null;
+        }
+      }
+
+      // 2. 调用系统打印对话框
+      await printBatchLabel({
+        materialName: batchDetail.materialName,
+        batchNumber: batchDetail.batchNumber,
+        factoryNumber: batchDetail.factoryNumber,
+        originPlace: batchDetail.originPlace,
+        quantity: batchDetail.currentQty,
+        quantityUnit: 'kg',
+        qrContent,
+        labelCreatedAt: batchDetail.inboundTime,
+      });
+
+      // 3. 记录打印操作 (非阻塞, 失败不影响流程)
+      if (labelId) {
+        labelApiClient.recordPrint(labelId).catch(() => {});
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '打印失败，请重试';
+      appAlert('打印机没连上', `${msg}\n\n请检查打印机连接后重试`, [
+        { text: '重试', onPress: () => handlePrintLabel() },
+        { text: '取消', style: 'cancel' },
+      ]);
+    } finally {
+      setPrinting(false);
+    }
+  }, [batchId, batchDetail, printing]);
+
   // 加载中显示
   if (loading) {
     return (
@@ -253,6 +310,7 @@ export function WHBatchDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
+      <AppDialogHost />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -504,6 +562,24 @@ export function WHBatchDetailScreen() {
 
         {/* 底部操作 */}
         <View style={styles.bottomActions}>
+          {/* 打印标签 — 大按钮，仓管主入口 (min 44pt 防呆) */}
+          <TouchableOpacity
+            style={[styles.printBtn, printing && styles.printBtnDisabled]}
+            onPress={handlePrintLabel}
+            disabled={printing}
+            accessibilityLabel="打印批次标签"
+            accessibilityRole="button"
+          >
+            {printing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <MaterialCommunityIcons name="printer" size={22} color="#fff" />
+            )}
+            <Text style={styles.printBtnText}>
+              {printing ? '生成中...' : '打印标签'}
+            </Text>
+          </TouchableOpacity>
+
           <Button
             mode="outlined"
             onPress={() => navigation.navigate("WHBatchTrace", { batchId: batchId })}
@@ -809,13 +885,31 @@ const styles = StyleSheet.create({
     color: "#333",
   },
   bottomActions: {
-    flexDirection: "row",
-    gap: 12,
+    flexDirection: "column",
+    gap: 10,
     paddingHorizontal: 16,
     paddingVertical: 16,
   },
+  printBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#4CAF50",
+    borderRadius: 10,
+    paddingVertical: 14,   // 防呆: ≥44pt 触摸目标
+    paddingHorizontal: 20,
+    minHeight: 52,
+  },
+  printBtnDisabled: {
+    backgroundColor: "#9E9E9E",
+  },
+  printBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
   actionBtn: {
-    flex: 1,
     borderRadius: 8,
     borderColor: "#ddd",
   },
