@@ -10,6 +10,7 @@ import { shortageAlertApiClient } from '../../services/api/shortageAlertApiClien
 import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
 import type { ShortageAlertDetailParams } from './ShortageAlertDetailScreen';
+import { isTaskReportComplete } from '../../utils/operatorAssignedProcess';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -135,12 +136,15 @@ export default function OperatorAssignedProcessScreen() {
         const batchTasks = [...(batchRes.data ?? [])].sort(
           (a, b) => a.processOrder - b.processOrder || a.id - b.id,
         );
+        // 获取 yield 数据用于判断哨兵工序是否已报工 (fail-open: 失败时 yieldData=null 退回纯 status 判断)
+        const yieldRes = await yieldReportApi.getYield(batchRep.productionBatchId).catch(() => null);
+        const yieldData = yieldRes?.success ? yieldRes.data : null;
         const myOpen = batchTasks.filter(
-          (t) => t.assignedTo === assignedTo && !isTerminalStatus(t.status),
+          (t) => t.assignedTo === assignedTo && !isTaskReportComplete(t, yieldData),
         );
         const myNext = myOpen[0];
         if (!myNext) continue; // 我在这批次已无待报工序
-        const firstOpenTask = batchTasks.find((task) => !isTerminalStatus(task.status)) ?? null;
+        const firstOpenTask = batchTasks.find((task) => !isTaskReportComplete(task, yieldData)) ?? null;
         const reportable = !!firstOpenTask && firstOpenTask.assignedTo === assignedTo;
         out.push({
           batchId: batchRep.productionBatchId,
