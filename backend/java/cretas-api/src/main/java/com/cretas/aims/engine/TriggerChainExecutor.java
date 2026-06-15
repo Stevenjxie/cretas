@@ -11,11 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.lang.reflect.Method;
 import java.util.*;
@@ -28,7 +29,7 @@ import java.util.*;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@Order(1) // Execute BEFORE other listeners
+@Order(1) // Execute BEFORE other AFTER_COMMIT listeners
 public class TriggerChainExecutor {
 
     private final FactoryTriggerChainRepository triggerChainRepository;
@@ -103,7 +104,26 @@ public class TriggerChainExecutor {
     private final java.util.concurrent.ConcurrentHashMap<String, Boolean> unhandledWarnedOnce =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    @EventListener
+    /**
+     * doomed-tx 修复 (#929 族 backlog #2, 2026-06-16): 改 AFTER_COMMIT + REQUIRES_NEW。
+     *
+     * <p>旧 {@code @EventListener} 在发布者 (e.g. {@code PurchaseServiceImpl.createReceiveRecord})
+     * 的同一物理事务内同步执行。虽然本方法把每条 chain 的执行异常都 try-catch 吞掉 (见
+     * {@link #onApplicationEvent} 的 catch + {@link #executeChain} STOP 分支), 异常不会
+     * propagate 回发布者, 但 chain step 里的工具若做了**内层** DB 写并把事务标记 rollback-only,
+     * 吞异常无法清除该标记 → 发布者 commit 阶段抛 {@code UnexpectedRollbackException} → doom。
+     *
+     * <p>AFTER_COMMIT: 等发布者事务真正提交后才跑 (chain 看到已落库的数据, 且不可能再 doom
+     * 发布者事务)。REQUIRES_NEW: chain 执行在独立事务里, 任何失败只回滚自身。
+     *
+     * <p>{@code fallbackExecution = true}: 本监听器处理 {@link #HANDLED_EVENTS} 里的多种事件,
+     * 其中部分 (e.g. {@code SalesOrderCreatedEvent} / {@code ProductionAlertEvent}) 可能在
+     * **无事务**上下文中发布。默认 {@code @TransactionalEventListener} 在无事务时**静默丢弃**事件,
+     * 会导致这些 chain 永不触发。fallbackExecution=true 让无事务时仍同步执行 (此时无 doom 风险,
+     * 因为没有外层事务可被回滚)。
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onApplicationEvent(ApplicationEvent event) {
         String eventType = event.getClass().getSimpleName();
         if (!HANDLED_EVENTS.contains(eventType)) {
