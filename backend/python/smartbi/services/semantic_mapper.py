@@ -620,7 +620,31 @@ class SemanticMapper:
 
         # Measure — rate patterns (率/占比/系数)
         if re.search(r'(率|比例|占比|系数|百分比|比率)(\(|（|\s|$)', col):
-            # Standard name "rate_percent" matches Java `.*rate.*` → isMeasure=true
+            # Before returning the generic fallback 'rate_percent', check if the
+            # column has an *exact* synonym match against a specific rate-category
+            # canonical in the controlled dictionary.  Exact-only (not substring)
+            # so D1's protection against substring false-positives is preserved:
+            # e.g. "单卖数量(不含套餐子商品)" containing "商品" still can't reach
+            # the product canonical through this branch because it never reaches
+            # this rate block (it was already caught by the amount regex above).
+            col_lower = col.lower()
+            for std_name, field_info in STANDARD_FIELDS.items():
+                if field_info.get("category") != "rate":
+                    continue
+                for syn in field_info["synonyms"]:
+                    # Exact match only — no substring — on lowercase forms.
+                    # Normalise spacing/dashes the same way _match_synonym does
+                    # for its "partial match after cleaning" path, but we require
+                    # the whole cleaned string to be equal (not a containment).
+                    syn_lower = syn.lower()
+                    if col_lower == syn_lower:
+                        return ('rate', std_name, 0.92)
+                    # Also try after stripping underscores/hyphens/spaces
+                    col_norm = re.sub(r'[_\-\s]+', '', col_lower)
+                    syn_norm = re.sub(r'[_\-\s]+', '', syn_lower)
+                    if col_norm == syn_norm:
+                        return ('rate', std_name, 0.92)
+            # No precise synonym found → generic fallback (isMeasure=true via Java .*rate.*)
             return ('rate', 'rate_percent', 0.92)
 
         # Measure — rating patterns (评分相关, sample val 0-5 or 0-100)
