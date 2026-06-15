@@ -11,12 +11,10 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
-import com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
-import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,9 +67,6 @@ class MyTodoAggregatorServiceTest {
 
     @Mock
     private PaymentRequestService paymentRequestService;
-
-    @Mock
-    private SalesPriceAdjustmentService salesPriceAdjustmentService;
 
     private MyTodoAggregatorService service;
 
@@ -161,8 +156,7 @@ class MyTodoAggregatorServiceTest {
                 supplierDeliveryNoteService,
                 stocktakeRepository,
                 returnOrderRepository,
-                paymentRequestService,
-                salesPriceAdjustmentService
+                paymentRequestService
         );
     }
 
@@ -463,62 +457,4 @@ class MyTodoAggregatorServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("B2-T8: 销售改价 PENDING 露出待办 (#917 审批闭环)")
-    class SalesPriceAdjustmentSource {
-
-        @Test
-        @DisplayName("finance_manager: PENDING 改价记录 → 露出 SALES_PRICE_ADJUSTMENT 待办")
-        void listTodos_financeManager_exposesPendingPriceAdjustment() {
-            // arrange: only the price-adjustment domain returns a PENDING record;
-            // 其他域返空 (null/empty) — fail-soft 处理.
-            when(salesPriceAdjustmentService.listPendingApprovals(FACTORY_ID))
-                    .thenReturn(List.of(fakePendingAdjustment(
-                            "spa-1", "SO-001", new BigDecimal("100.0000"), new BigDecimal("80.0000"), "张三")));
-
-            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
-
-            // assert: the price-adjustment item is present
-            List<TodoItemDTO> priceItems = result.stream()
-                    .filter(t -> t.getType() == TodoType.SALES_PRICE_ADJUSTMENT)
-                    .toList();
-            assertThat(priceItems).hasSize(1);
-            TodoItemDTO item = priceItems.get(0);
-            assertThat(item.getRefId()).isEqualTo("spa-1");
-            assertThat(item.getRefNumber()).isEqualTo("SO-001");
-            assertThat(item.getTitle()).contains("降价");
-            assertThat(item.isNeedDetail()).isTrue();  // 改价审批强制进详情
-            assertThat(item.getSubmittedBy()).isEqualTo("张三");
-            assertThat(item.getDetailPath()).isEqualTo("TodoDetail/salesPriceAdjustment/spa-1");
-        }
-
-        @Test
-        @DisplayName("cashier 角色不查改价域 (改价仅 finance_manager 可见)")
-        void listTodos_cashier_doesNotQueryPriceAdjustment() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
-                    .thenReturn(Collections.emptyList());
-
-            service.listTodos(FACTORY_ID, "cashier");
-
-            verifyNoInteractions(salesPriceAdjustmentService);
-        }
-
-        private SalesPriceAdjustmentRecord fakePendingAdjustment(
-                String id, String orderId, BigDecimal oldPrice, BigDecimal newPrice, String adjustedByName) {
-            SalesPriceAdjustmentRecord r = new SalesPriceAdjustmentRecord();
-            r.setId(id);
-            r.setSalesOrderId(orderId);
-            r.setSalesOrderLineId(42L);
-            r.setFactoryId(FACTORY_ID);
-            r.setOldUnitPrice(oldPrice);
-            r.setNewUnitPrice(newPrice);
-            r.setAdjustedBy(99L);
-            r.setAdjustedByName(adjustedByName);
-            r.setApprovalRequired(true);
-            r.setApprovalStatus(SalesPriceAdjustmentRecord.ApprovalStatus.PENDING);
-            r.setCreatedAt(NOW.minusMinutes(10));
-            r.setUpdatedAt(NOW.minusMinutes(10));
-            return r;
-        }
-    }
 }

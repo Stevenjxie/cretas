@@ -10,13 +10,11 @@ import com.cretas.aims.entity.inventory.PaymentRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
-import com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
-import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +34,8 @@ import java.util.stream.Collectors;
  *
  * <p>角色映射（常量，不可变）:
  * <ul>
- *   <li>finance_manager → {PURCHASE_FINANCE_REVIEW, SALES_FINANCE_REVIEW, PRICE_ANOMALY, STOCKTAKE_APPROVAL}</li>
+ *   <li>finance_manager → {PURCHASE_FINANCE_REVIEW, SALES_FINANCE_REVIEW, PRICE_ANOMALY,
+ *       STOCKTAKE_APPROVAL, RETURN_FINANCE_REVIEW}</li>
  *   <li>cashier → {PAYMENT_DISBURSE}</li>
  *   <li>其他 → 空集合</li>
  * </ul>
@@ -61,7 +60,6 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private final FactoryStocktakeRepository stocktakeRepository;
     private final ReturnOrderRepository returnOrderRepository;
     private final PaymentRequestService paymentRequestService;
-    private final SalesPriceAdjustmentService salesPriceAdjustmentService;
 
     // ─── Config ────────────────────────────────────────────────────────────
 
@@ -87,15 +85,13 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SupplierDeliveryNoteService supplierDeliveryNoteService,
             FactoryStocktakeRepository stocktakeRepository,
             ReturnOrderRepository returnOrderRepository,
-            PaymentRequestService paymentRequestService,
-            SalesPriceAdjustmentService salesPriceAdjustmentService) {
+            PaymentRequestService paymentRequestService) {
         this.purchaseService = purchaseService;
         this.salesService = salesService;
         this.supplierDeliveryNoteService = supplierDeliveryNoteService;
         this.stocktakeRepository = stocktakeRepository;
         this.returnOrderRepository = returnOrderRepository;
         this.paymentRequestService = paymentRequestService;
-        this.salesPriceAdjustmentService = salesPriceAdjustmentService;
     }
 
     /**
@@ -108,11 +104,9 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             FactoryStocktakeRepository stocktakeRepository,
             ReturnOrderRepository returnOrderRepository,
             PaymentRequestService paymentRequestService,
-            SalesPriceAdjustmentService salesPriceAdjustmentService,
             BigDecimal detailThreshold) {
         this(purchaseService, salesService, supplierDeliveryNoteService,
-                stocktakeRepository, returnOrderRepository, paymentRequestService,
-                salesPriceAdjustmentService);
+                stocktakeRepository, returnOrderRepository, paymentRequestService);
         this.detailThreshold = detailThreshold;
     }
 
@@ -128,8 +122,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                         TodoType.SALES_FINANCE_REVIEW,
                         TodoType.PRICE_ANOMALY,
                         TodoType.STOCKTAKE_APPROVAL,
-                        TodoType.RETURN_FINANCE_REVIEW,
-                        TodoType.SALES_PRICE_ADJUSTMENT))));
+                        TodoType.RETURN_FINANCE_REVIEW))));
         m.put("cashier", Collections.unmodifiableSet(
                 new LinkedHashSet<>(Arrays.asList(
                         TodoType.PAYMENT_DISBURSE))));
@@ -178,7 +171,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             case PRICE_ANOMALY           -> fetchPriceAnomaly(factoryId);
             case STOCKTAKE_APPROVAL      -> fetchStocktakeApproval(factoryId);
             case RETURN_FINANCE_REVIEW   -> fetchReturnFinanceReview(factoryId);
-            case SALES_PRICE_ADJUSTMENT  -> fetchSalesPriceAdjustment(factoryId);
+            case SALES_PRICE_ADJUSTMENT  -> Collections.emptyList(); // warn-not-block: no pending approvals
             case PAYMENT_DISBURSE        -> fetchPaymentDisburse(factoryId);
         };
     }
@@ -354,42 +347,6 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .submittedAt(submittedAt)
                 .needDetail(needsDetail(amount))
                 .detailPath("TodoDetail/return/" + order.getId())
-                .build();
-    }
-
-    // ── 销售改价待审批 ────────────────────────────────────────────────────
-
-    private List<TodoItemDTO> fetchSalesPriceAdjustment(String factoryId) {
-        List<SalesPriceAdjustmentRecord> records =
-                salesPriceAdjustmentService.listPendingApprovals(factoryId);
-        if (records == null) return Collections.emptyList();
-
-        return records.stream()
-                .map(this::mapSalesPriceAdjustment)
-                .collect(Collectors.toList());
-    }
-
-    private TodoItemDTO mapSalesPriceAdjustment(SalesPriceAdjustmentRecord r) {
-        // 改价无单笔"金额"语义 → 用新单价做展示金额 (Rule 2 上下文); needDetail 保守 true,
-        // 价格审批必须看改前/改后对比, 不允许一键通过.
-        BigDecimal newPrice = r.getNewUnitPrice();
-        String changeDir = (r.getOldUnitPrice() != null && r.getNewUnitPrice() != null
-                && r.getNewUnitPrice().compareTo(r.getOldUnitPrice()) < 0) ? "降价" : "涨价";
-        String title = "改价审批 — " + changeDir
-                + " " + (r.getOldUnitPrice() != null ? r.getOldUnitPrice().stripTrailingZeros().toPlainString() : "?")
-                + " → " + (newPrice != null ? newPrice.stripTrailingZeros().toPlainString() : "?");
-
-        return TodoItemDTO.builder()
-                .type(TodoType.SALES_PRICE_ADJUSTMENT)
-                .refId(r.getId())
-                .refNumber(r.getSalesOrderId())
-                .title(title)
-                .amount(newPrice)
-                .counterparty(r.getAdjustedByName())
-                .submittedBy(r.getAdjustedByName())
-                .submittedAt(r.getCreatedAt())
-                .needDetail(true)  // 改价审批必须看改前/改后对比 → 强制进详情
-                .detailPath("TodoDetail/salesPriceAdjustment/" + r.getId())
                 .build();
     }
 
