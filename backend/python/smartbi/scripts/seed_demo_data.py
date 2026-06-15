@@ -390,6 +390,19 @@ _HIGH_CARD_KEYWORDS = [
     "规格", "单号", "账单号", "售后单号", "开单时间", "结单时间",
     "点单时间", "最后一次催菜时间", "外部单号", "关联单号",
     "单据操作日期", "原料条形码",
+    # Additional high-card / non-aggregatable operational columns
+    "催菜次数",      # per-item waiter-prompt count (sum is meaningless as measure)
+    "Unnamed:",     # pandas unnamed trailing columns from CSV export artefacts
+    "门店编码",      # code column – keep 门店名称 as dim, drop code
+    "做法",         # dish preparation note (high-card text)
+    "点单方式",      # order channel per-item row (maps to 渠道 at order level)
+    "渠道",         # per-row order channel string
+    "订单来源",      # per-row order source string
+    "班次",         # shift code (operational, high-card)
+    "区域",         # table area string per-row
+    "桌位",         # table number per-row (high-card)
+    "点单人",        # waiter name per-row
+    "操作人",        # operator name per-row
 ]
 
 # Low-cardinality dimension columns kept as secondary groupby keys
@@ -495,6 +508,13 @@ class SeedEntry:
     snapshot_n_months: int = 2        # how many months to expand to
     trend_cols: Optional[List[str]] = None
     aggregate: bool = False           # True = detail rows → monthly aggregation after redate
+    # select_cols: keep only these columns before processing (for wide-table sources with
+    # hundreds of payment-name columns that would become messy canonical_field values).
+    # None = keep all columns.
+    select_cols: Optional[List[str]] = None
+    # rename_cols: {old_name: new_name} applied AFTER aggregate so canonical field names
+    # map cleanly to sales_amount / sales_quantity in the controlled dictionary.
+    rename_cols: Optional[Dict[str, str]] = None
     notes: str = ""
 
 
@@ -516,6 +536,21 @@ def build_seed_plan() -> List[SeedEntry]:
             if "销量" in fp.name or "销售" in fp.name:
                 brand_sales_files.append(fp)
 
+    # Brand xlsx files are long-tables (one row per SKU / 商品名称).
+    # After aggregate_monthly drops 商品名称 (high-card), the remaining numeric
+    # cols are: 单卖数量(不含套餐子商品), 销售金额, 实收, 折后金额, etc.
+    # Rename them to clean canonical names so SemanticMapper recognises them.
+    _brand_sales_rename = {
+        "单卖数量(不含套餐子商品)": "sales_quantity",
+        "退货数量(不含套餐子商品)": "return_quantity",
+        "销售金额": "sales_amount",
+        "折后金额": "discounted_amount",
+        "实收": "net_revenue",
+        "实退金额": "refund_amount",
+        # 大众点评 variant column names
+        "销售数量": "sales_quantity",
+        "实收金额": "net_revenue",
+    }
     for i, fp in enumerate(brand_sales_files[:8]):
         safe = re.sub(r"[^\w]", "_", fp.stem)[:30]
         plan.append(SeedEntry(
@@ -529,7 +564,8 @@ def build_seed_plan() -> List[SeedEntry]:
             snapshot_n_months=2,
             trend_cols=["销售金额", "实收", "折后金额", "单卖数量(不含套餐子商品)"],
             aggregate=True,   # SKU-level detail (500-1000 rows) → monthly sum
-            notes=f"品牌商品销量 snapshot → 2个月 → aggregate",
+            rename_cols=_brand_sales_rename,
+            notes="品牌商品销量 snapshot → 2个月 → aggregate → rename to sales_amount/sales_quantity",
         ))
 
     # ===== RESTAURANT PURCHASE: 东门口 =====
@@ -562,26 +598,129 @@ def build_seed_plan() -> List[SeedEntry]:
         ))
 
     # ===== QHJ 2025: continuous time series =====
-    # aggregate=True on detail files: 商品销售明细 and 详细日报表 each have 200k rows.
-    # 营业概况月报 has 6237 daily rows across stores — also aggregate to avoid timeseries bloat.
-    qhj_files = [
-        ("qhj_25_营业概况月报.csv", "sales",  True),   # daily multi-store → monthly
-        ("qhj_25_商品销售明细.csv", "sales",  True),   # 200k SKU-level → monthly
-        ("qhj_25_详细日报表.csv",   "sales",  True),   # 200k order-level → monthly
+    #
+    # 营业概况月报 is a WIDE-TABLE with 353 columns.  Columns 0-22 are core metrics
+    # (营业额, 实收额, 订单数, 客流量, etc.); columns 23+ are individual payment-method /
+    # voucher names like "168双人餐代金券", "88代100", "[云闪付]", etc.
+    # Without select_cols, aggregate_monthly would sum all 330 payment columns and
+    # their names become canonical_field values — messy non-standard names in the DB.
+    # Fix: select only core metric columns before aggregation.
+    _yybk_core_cols = [
+        "日期", "门店名称",
+        "营业额", "折扣额", "实收额", "代金券优惠",
+        "订单数", "单均消费", "客流量", "人均消费", "翻台率",
+        "会员充值金额",
     ]
-    for fname, domain, agg in qhj_files:
-        fp = QHJ_E2E / fname
-        plan.append(SeedEntry(
-            label=f"rest_qhj25_{fname.replace('qhj_25_', '').replace('.csv', '')}",
-            src_path=fp,
-            tenant=DEMO_REST,
-            domain=domain,
-            sheet_name="CSV",
-            n_months=12,
-            skip_rows=3,
-            aggregate=agg,
-            notes=f"QHJ 2025 continuous {'→ aggregate' if agg else ''}",
-        ))
+    # 营业概况月报: rename core metric cols to clean canonical names
+    _yybk_rename = {
+        "营业额": "sales_amount",
+        "实收额": "net_revenue",
+        "折扣额": "discount_amount",
+        "代金券优惠": "voucher_discount",
+        "订单数": "order_count",
+        "单均消费": "avg_order_value",
+        "客流量": "customer_count",
+        "人均消费": "avg_spend_per_person",
+        "翻台率": "table_turnover_rate",
+        "会员充值金额": "member_recharge_amount",
+    }
+
+    # 商品销售明细: long-table (商品名称 per row, daily).  After dropping high-card cols
+    # (商品名称, 商品编码, 账单号, 开单时间, 结单时间 etc.) the numeric cols are clean.
+    # Rename to canonical names.
+    _spxsmd_rename = {
+        "点单数量": "sales_quantity",
+        "结账数量": "checkout_quantity",
+        "折前金额": "pre_discount_amount",
+        "折后金额": "discounted_amount",
+        "折扣额": "discount_amount",
+        "分摊优惠": "allocated_discount",
+        "实收额": "net_revenue",
+        "单价": "unit_price",
+    }
+
+    # 订单付款方式: already a clean long-table (门店 + 付款方式 + metrics).
+    # NOT a wide-table; 付款方式 is a value column, not a column header.
+    # No select_cols needed.  Rename metric cols.
+    _zffs_rename = {
+        "付款金额": "sales_amount",
+        "订单营业额": "order_revenue",
+        "订单折后金额": "order_discounted_amount",
+        "订单实收额": "net_revenue",
+        "付款笔数": "payment_count",
+        "订单笔数": "order_count",
+        "代金券优惠": "voucher_discount",
+    }
+
+    plan.append(SeedEntry(
+        label="rest_qhj25_营业概况月报",
+        src_path=QHJ_E2E / "qhj_25_营业概况月报.csv",
+        tenant=DEMO_REST,
+        domain="sales",
+        sheet_name="CSV",
+        n_months=12,
+        skip_rows=3,
+        aggregate=True,   # daily multi-store → monthly per-store
+        select_cols=_yybk_core_cols,   # ← drop 330+ payment-name cols
+        rename_cols=_yybk_rename,
+        notes="QHJ 营业概况月报 wide-table: select core 12 cols → aggregate → rename to canonical",
+    ))
+
+    plan.append(SeedEntry(
+        label="rest_qhj25_商品销售明细",
+        src_path=QHJ_E2E / "qhj_25_商品销售明细.csv",
+        tenant=DEMO_REST,
+        domain="sales",
+        sheet_name="CSV",
+        n_months=12,
+        skip_rows=3,
+        aggregate=True,   # 200k SKU-level rows → monthly
+        rename_cols=_spxsmd_rename,
+        notes="QHJ 商品销售明细 long-table: drop SKU cols → monthly aggregate → rename",
+    ))
+
+    plan.append(SeedEntry(
+        label="rest_qhj25_订单付款方式",
+        src_path=QHJ_E2E / "qhj_25_订单付款方式.csv",
+        tenant=DEMO_REST,
+        domain="sales",
+        sheet_name="CSV",
+        n_months=12,
+        skip_rows=3,
+        aggregate=True,   # 门店×付款方式 per-period → aggregate by period + 门店
+        rename_cols=_zffs_rename,
+        notes="QHJ 订单付款方式 long-table: 付款方式 as dim value → aggregate per period → rename",
+    ))
+
+    # 详细日报表 (124 cols, order-level) — keep for sales coverage but constrain to core cols
+    # to avoid 60+ derived metric columns exploding canonical_field variety
+    _rbb_core_cols = [
+        "日期", "门店名称",
+        "营业额", "实收额", "折扣额",
+        "订单数", "客流量", "人均消费", "翻台率",
+    ]
+    _rbb_rename = {
+        "营业额": "sales_amount",
+        "实收额": "net_revenue",
+        "折扣额": "discount_amount",
+        "订单数": "order_count",
+        "客流量": "customer_count",
+        "人均消费": "avg_spend_per_person",
+        "翻台率": "table_turnover_rate",
+    }
+    plan.append(SeedEntry(
+        label="rest_qhj25_详细日报表",
+        src_path=QHJ_E2E / "qhj_25_详细日报表.csv",
+        tenant=DEMO_REST,
+        domain="sales",
+        sheet_name="CSV",
+        n_months=12,
+        skip_rows=3,
+        aggregate=True,   # order-level → monthly
+        select_cols=_rbb_core_cols,
+        rename_cols=_rbb_rename,
+        notes="QHJ 详细日报表 wide-table: select core cols → monthly aggregate → rename",
+    ))
 
     # ===== FACTORY PRODUCTION: 绿源食品 =====
     for sheet_name, domain in [("生产产量", "production"), ("原材料采购", "purchase"), ("利润表", "finance")]:
@@ -790,6 +929,18 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
         print(f"  [SKIP] Empty: {src.name}")
         return None
 
+    # Apply column selection BEFORE any other processing.
+    # Needed for wide-table sources (e.g. 营业概况月报 with 353 cols where cols 23+
+    # are all payment-method/voucher names that would become messy canonical_field values).
+    if entry.select_cols:
+        present = [c for c in entry.select_cols if c in df.columns]
+        missing = [c for c in entry.select_cols if c not in df.columns]
+        if missing:
+            print(f"    [SELECT] Warning: missing columns {missing}")
+        if present:
+            df = df[present]
+            print(f"    [SELECT] Kept {len(present)} of {len(present)+len(missing)} requested cols")
+
     # Detect date/period column before transformation (needed for aggregate step)
     date_cols = _find_date_cols(df)
 
@@ -821,6 +972,14 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
             print(f"    [AGG] {rows_before} rows → {rows_after} rows  (period_col='{period_col}')")
         else:
             print(f"    [AGG SKIP] No date/period column found — skipping aggregation")
+
+    # Apply column rename AFTER aggregate so clean names (sales_amount / sales_quantity)
+    # end up as canonical_field values in the controlled dictionary.
+    if entry.rename_cols:
+        df = df.rename(columns={k: v for k, v in entry.rename_cols.items() if k in df.columns})
+        renamed = {k: v for k, v in entry.rename_cols.items() if k in df.columns}
+        if renamed:
+            print(f"    [RENAME] {renamed}")
 
     return df
 
