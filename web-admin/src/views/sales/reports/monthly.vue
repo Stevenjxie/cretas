@@ -69,15 +69,15 @@ onMounted(load);
     <el-card v-if="dailyTable.length" class="daily-table">
       <h4>按日明细</h4>
       <el-table :data="dailyTable" stripe size="small">
-        <el-table-column prop="date" label="日期" />
-        <el-table-column prop="orderCount" label="订单数" />
-        <el-table-column label="含税销售额">
-          <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
-        </el-table-column>
-        <el-table-column label="未税金额">
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="orderCount" label="订单数" width="90" />
+        <el-table-column label="未税金额" width="140">
           <template #default="{ row }">{{ money(row.taxableAmount) }}</template>
         </el-table-column>
-        <el-table-column label="税额">
+        <el-table-column label="含税销售额" width="140">
+          <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
+        </el-table-column>
+        <el-table-column label="税额" width="120">
           <template #default="{ row }">{{ money(row.taxAmount) }}</template>
         </el-table-column>
       </el-table>

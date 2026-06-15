@@ -49,15 +49,15 @@ onMounted(load);
     <el-card v-if="monthlyTable.length" class="monthly-table">
       <h4>按月明细</h4>
       <el-table :data="monthlyTable" stripe size="small">
-        <el-table-column prop="month" label="月份" />
-        <el-table-column prop="orderCount" label="订单数" />
-        <el-table-column label="含税销售额">
-          <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
-        </el-table-column>
-        <el-table-column label="未税金额">
+        <el-table-column prop="month" label="月份" width="80" />
+        <el-table-column prop="orderCount" label="订单数" width="90" />
+        <el-table-column label="未税金额" width="140">
           <template #default="{ row }">{{ money(row.taxableAmount) }}</template>
         </el-table-column>
-        <el-table-column label="税额">
+        <el-table-column label="含税销售额" width="140">
+          <template #default="{ row }">{{ money(row.totalAmountWithTax) }}</template>
+        </el-table-column>
+        <el-table-column label="税额" width="120">
           <template #default="{ row }">{{ money(row.taxAmount) }}</template>
         </el-table-column>
       </el-table>
