@@ -50,7 +50,7 @@ public enum PermissionLevel {
             case "-", "hidden", "deny", "none" -> HIDDEN;
             case "r", "read", "readonly", "read_only" -> READ;
             case "rw", "w", "write", "editable", "grant", "read_write", "read-write" -> WRITE;
-            default -> throw new IllegalArgumentException("Unknown permission level: " + value);
+            default -> HIDDEN;
         };
     }
 }
