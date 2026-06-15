@@ -220,20 +220,16 @@ def _add_months(ym: Tuple[int, int], n: int) -> Tuple[int, int]:
     return ym
 
 
-def assign_window(tenant: str, n_months: int) -> Optional[Window]:
+def assign_window(tenant: str, domain: str, n_months: int) -> Optional[Window]:
     """Allocate the next non-overlapping n_months window for this tenant."""
-    cursor = _window_cursor.get(tenant, TIMELINE_START)
-    if cursor > TIMELINE_END:
-        return None
+    cursor = _window_cursor.get(f"{tenant}::{domain}", TIMELINE_START)
     start_ym = cursor
     end_ym = _add_months(start_ym, max(n_months - 1, 0))
-    if end_ym > TIMELINE_END:
-        end_ym = TIMELINE_END
     import calendar
     start = date(start_ym[0], start_ym[1], 1)
     last_day = calendar.monthrange(end_ym[0], end_ym[1])[1]
     end = date(end_ym[0], end_ym[1], last_day)
-    _window_cursor[tenant] = _next_month(end_ym)
+    _window_cursor[f"{tenant}::{domain}"] = _next_month(end_ym)
     return Window(start, end)
 
 
@@ -815,7 +811,7 @@ def verify_local() -> None:
         if store_col:
             print(f"  Original '{store_col}' samples: {df1[store_col].dropna().unique()[:3].tolist()}")
 
-        win1 = assign_window(DEMO_REST, 2)
+        win1 = assign_window(DEMO_REST, "sales", 2)
         df1_exp = expand_snapshot(df1, win1, n_months=2, trend_cols=["销售金额", "实收", "折后金额"])
         df1_proc = desensitize(df1_exp)
 
@@ -852,7 +848,7 @@ def verify_local() -> None:
         orig_months = df2["月份"].dropna().head(4).tolist()
         print(f"  Original 月份 (first 4): {orig_months}")
 
-        win2 = assign_window(DEMO_FACTORY, 12)
+        win2 = assign_window(DEMO_FACTORY, "production", 12)
         df2_r = redate(df2, win2)
         new_months = df2_r["月份"].dropna().head(4).tolist()
         print(f"  Window: {win2.start} → {win2.end}")
@@ -872,7 +868,7 @@ def verify_local() -> None:
         print(f"  Original 单据业务日期: {orig_dates}")
         print(f"  Original 供应商: {orig_suppliers}")
 
-        win3 = assign_window(DEMO_REST, 2)
+        win3 = assign_window(DEMO_REST, "sales", 2)
         df3_p = redate(df3, win3)
         df3_p = desensitize(df3_p)
         new_dates = df3_p["单据业务日期"].dropna().head(3).tolist()
@@ -906,7 +902,7 @@ def verify_local() -> None:
     reset_window_cursor()
     wins = []
     for _ in range(6):
-        w = assign_window(DEMO_REST, 2)
+        w = assign_window(DEMO_REST, "sales", 2)
         if w:
             wins.append(w)
     all_months: List[Tuple[int, int]] = []
@@ -961,7 +957,7 @@ def main() -> None:
 
     # --- Real data entries ---
     for entry in plan:
-        win = assign_window(entry.tenant, entry.n_months)
+        win = assign_window(entry.tenant, entry.domain, entry.n_months)
         if win is None:
             print(f"[SKIP] Timeline exhausted: {entry.label}")
             continue
