@@ -54,6 +54,13 @@ MANUAL_SOURCES = [
         "type": "markdown",
         "subcategory": "factory",
     },
+    {
+        "path": "docs/manual/liushanmen-production/index.html",
+        "title_prefix": "六扇门生产链操作手册",
+        "source": "liushanmen-production-manual.html",
+        "type": "chapter_section",
+        "subcategory": "factory",
+    },
 ]
 
 
@@ -144,6 +151,87 @@ def parse_html_to_sections(html_content: str) -> List[Dict[str, str]]:
     return sections
 
 
+def parse_chapter_section_html_to_sections(html_content: str) -> List[Dict[str, str]]:
+    """Parse HTML files that use <section class="chapter"> structure instead of h2/h3 headings.
+
+    Used for liushanmen-production-manual.html which organises chapters as:
+        <section class="chapter" id="chN">
+          <div class="chapter-header">
+            <div class="chapter-title">...</div>
+            <div class="chapter-subtitle">...</div>
+          </div>
+          <div class="chapter-body">...content...</div>
+        </section>
+
+    Each <section class="chapter"> becomes one RAG section.  The document h1
+    title is captured as a prefix so chunk titles have full context:
+        "六扇门 — 生产链操作手册 | 批次详情报工（领料 + 产出两点）"
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.error("beautifulsoup4 not installed. Run: pip install beautifulsoup4")
+        raise
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Remove script and style tags
+    for tag in soup.find_all(["script", "style"]):
+        tag.decompose()
+
+    # Extract document title from h1
+    h1 = soup.find("h1")
+    doc_title = h1.get_text(separator=" ", strip=True) if h1 else ""
+
+    sections = []
+
+    for section in soup.find_all("section", class_="chapter"):
+        # Extract chapter title and subtitle
+        title_el = section.find(class_="chapter-title")
+        subtitle_el = section.find(class_="chapter-subtitle")
+
+        chapter_title = title_el.get_text(separator=" ", strip=True) if title_el else ""
+        chapter_subtitle = subtitle_el.get_text(separator=" ", strip=True) if subtitle_el else ""
+
+        if not chapter_title:
+            continue
+
+        # Build a rich section title
+        section_title = chapter_title
+        if doc_title:
+            section_title = f"{doc_title} | {chapter_title}"
+
+        # Extract all body text, skipping screenshot captions (mostly visual context)
+        body = section.find(class_="chapter-body") or section
+        content_parts = []
+
+        # Add subtitle as first content line if present (contains menu path)
+        if chapter_subtitle:
+            content_parts.append(f"菜单路径: {chapter_subtitle}")
+
+        for el in body.find_all(["p", "li", "td", "th", "div"]):
+            # Skip decorative/nav elements
+            el_classes = el.get("class", [])
+            _skip_classes = [
+                "screenshot-caption", "screenshot-wrap", "back-top",
+                "chapter-num", "chapter-title", "chapter-subtitle", "chapter-header",
+            ]
+            if any(c in el_classes for c in _skip_classes):
+                continue
+            # Skip nested elements whose parent is already a text container (avoid duplicates)
+            if el.name in ("p", "li") and el.find_parent(["td", "li"]):
+                continue
+            text = el.get_text(separator=" ", strip=True)
+            if text and len(text) > 8:
+                content_parts.append(text)
+
+        content = "\n".join(content_parts).strip()
+        if content:
+            sections.append({"title": section_title, "content": content})
+
+    return sections
+
+
 def parse_markdown_to_sections(md_content: str) -> List[Dict[str, str]]:
     """Parse markdown into sections split by ## or ### headers."""
     sections = []
@@ -215,6 +303,8 @@ async def ingest_all():
 
         if source_info["type"] == "html":
             sections = parse_html_to_sections(content)
+        elif source_info["type"] == "chapter_section":
+            sections = parse_chapter_section_html_to_sections(content)
         else:
             sections = parse_markdown_to_sections(content)
 
