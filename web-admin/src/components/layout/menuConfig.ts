@@ -6,6 +6,7 @@ export interface MenuItem {
   title: string;
   icon: string;
   module: ModuleName;
+  moduleCode?: string;
   roles?: string[];
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
@@ -30,6 +31,45 @@ export const financeManagerMenu: MenuItem[] = [
   // Sprint4-H F-AR-1: 财务审核销售单 — finance_manager 复核成本/利润/BOM 标准
   { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' }
 ];
+
+const permissionSettingsMenu: MenuItem = {
+  path: '/permissions',
+  title: '权限设置',
+  icon: 'Lock',
+  module: 'system',
+  moduleCode: 'permission_settings',
+  roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+  children: [
+    {
+      path: '/permissions/employees',
+      title: '员工管理',
+      icon: '',
+      module: 'system',
+      moduleCode: 'permission_employee_management',
+    },
+    {
+      path: '/permissions/role-templates',
+      title: '角色权限模板',
+      icon: '',
+      module: 'system',
+      moduleCode: 'permission_role_templates',
+    },
+    {
+      path: '/permissions/employee-permissions',
+      title: '员工权限',
+      icon: '',
+      module: 'system',
+      moduleCode: 'permission_employee_overrides',
+    },
+    {
+      path: '/permissions/preview',
+      title: '权限预览',
+      icon: '',
+      module: 'system',
+      moduleCode: 'permission_preview',
+    },
+  ],
+};
 
 const rawMenuConfig: MenuItem[] = [
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard' },
@@ -338,6 +378,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/warehouse': 70,
   '/quality': 80,
   '/smart-bi': 90,
+  '/permissions': 95,
   '/system': 100,
   '/scheduling': 110,
   '/hr': 120,
@@ -353,4 +394,4 @@ function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {
   });
 }
 
-export const menuConfig: MenuItem[] = sortTopLevelMenu(rawMenuConfig);
+export const menuConfig: MenuItem[] = sortTopLevelMenu([...rawMenuConfig, permissionSettingsMenu]);

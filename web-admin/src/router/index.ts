@@ -1181,6 +1181,46 @@ const businessRoutes: RouteRecordRaw[] = [
 
       // 系统管理 (Web专属)
       {
+        path: 'permissions',
+        name: 'Permissions',
+        redirect: '/permissions/employees',
+        component: () => import('@/views/permissions/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '权限设置',
+          icon: 'Lock',
+          module: 'system',
+          moduleCode: 'permission_settings',
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+        children: [
+          {
+            path: 'employees',
+            name: 'PermissionEmployees',
+            component: () => import('@/views/permissions/employees/index.vue'),
+            meta: { requiresAuth: true, title: '员工管理', module: 'system', moduleCode: 'permission_employee_management' },
+          },
+          {
+            path: 'role-templates',
+            name: 'PermissionRoleTemplates',
+            component: () => import('@/views/permissions/role-templates/index.vue'),
+            meta: { requiresAuth: true, title: '角色权限模板', module: 'system', moduleCode: 'permission_role_templates' },
+          },
+          {
+            path: 'employee-permissions',
+            name: 'PermissionEmployeePermissions',
+            component: () => import('@/views/permissions/employee-permissions/index.vue'),
+            meta: { requiresAuth: true, title: '员工权限', module: 'system', moduleCode: 'permission_employee_overrides' },
+          },
+          {
+            path: 'preview',
+            name: 'PermissionPreview',
+            component: () => import('@/views/permissions/preview/index.vue'),
+            meta: { requiresAuth: true, title: '权限预览', module: 'system', moduleCode: 'permission_preview' },
+          },
+        ],
+      },
+      {
         path: 'system',
         name: 'System',
         redirect: '/system/users',

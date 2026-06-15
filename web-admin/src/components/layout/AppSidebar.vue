@@ -146,7 +146,9 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const factoryType = authStore.factoryType;
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
-  const canAccess = permissionStore.canAccess(item.module);
+  const canAccess = item.moduleCode
+    ? permissionStore.canAccessModuleCode(item.moduleCode)
+    : permissionStore.canAccess(item.module);
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {

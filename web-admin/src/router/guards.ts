@@ -106,6 +106,13 @@ export function setupRouterGuards(router: Router) {
       }
     }
 
+    // 检查二级模块权限
+    const moduleCode = to.meta.moduleCode as string | undefined;
+    if (moduleCode && !permissionStore.canAccessModuleCode(moduleCode)) {
+      next('/403');
+      return;
+    }
+
     // 检查模块权限
     const module = to.meta.module as ModuleName | undefined;
     if (module) {
