@@ -10,7 +10,11 @@ import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.sales.AdjustPriceRequest;
+import com.cretas.aims.dto.sales.AdjustPriceResponse;
+import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
 import com.cretas.aims.dto.sales.SalesOrderLinkCountsDTO;
+import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -68,6 +72,8 @@ public class SalesController {
     private final GrossMarginRedlineService grossMarginRedlineService;
     // P1 #33: 销售价 ≥ 研发预估价 跨流校验
     private final EstimatePriceCheckService estimatePriceCheckService;
+    // 改价留痕 + 审批
+    private final SalesPriceAdjustmentService priceAdjustmentService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -726,6 +732,94 @@ public class SalesController {
             @NotBlank String productTypeId,
             @NotNull @Positive BigDecimal sellingPrice) {
     }
+
+    // ==================== 改价留痕 + 阈值审批 ====================
+
+    /**
+     * POST /orders/{orderId}/lines/{lineId}/adjust-price — 调整销售订单行单价.
+     *
+     * <p>已发货/已开票行拒绝改价 (409).
+     * <p>降价 >10% 或 涨价 >20% 时触发审批流 (approvalRequired=true).
+     * <p>fool-proof Rule 3: reasonType 为 enum dropdown, OTHER 时 reasonDetail 必填.
+     */
+    @PostMapping("/orders/{orderId}/lines/{lineId}/adjust-price")
+    @Operation(summary = "调整销售订单行单价 (改价留痕 + 阈值审批)")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<AdjustPriceResponse> adjustLinePrice(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @PathVariable @NotNull Long lineId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody AdjustPriceRequest request) {
+        Long userId = extractUserId(authorization);
+        log.info("改价请求: factoryId={}, orderId={}, lineId={}, newPrice={}",
+                factoryId, orderId, lineId, request.newUnitPrice());
+        AdjustPriceResponse response = priceAdjustmentService.adjustLinePrice(
+                factoryId, orderId, lineId, request, userId);
+        return ApiResponse.success("改价操作已提交", response);
+    }
+
+    /**
+     * GET /orders/{orderId}/price-adjustments — 查询销售订单改价历史.
+     */
+    @GetMapping("/orders/{orderId}/price-adjustments")
+    @Operation(summary = "销售订单改价历史")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<java.util.List<SalesPriceAdjustmentRecordDTO>> getPriceAdjustmentHistory(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        java.util.List<SalesPriceAdjustmentRecordDTO> records =
+                priceAdjustmentService.getPriceAdjustmentHistory(factoryId, orderId);
+        return ApiResponse.success("查询成功", records);
+    }
+
+    /**
+     * POST /price-adjustments/{recordId}/approve — 审批通过改价.
+     *
+     * <p>PENDING → APPROVED, 应用被 hold 的改价到 SO 行并重算总额.
+     * <p>🔒 4 眼原则: 审批人不能与改价提交人相同 (403).
+     * <p>权限与财审同闸 {@code finance:read_write / sales:read_write}.
+     */
+    @PostMapping("/price-adjustments/{recordId}/approve")
+    @Operation(summary = "审批通过改价 (PENDING → APPROVED, 应用改价 + 重算总额)")
+    @RequirePermission({"finance:read_write", "sales:read_write"})
+    public ApiResponse<SalesPriceAdjustmentRecordDTO> approvePriceAdjustment(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String recordId,
+            @RequestHeader("Authorization") String authorization) {
+        Long approverId = extractUserId(authorization);
+        log.info("改价审批通过请求: factoryId={}, recordId={}, approverId={}",
+                factoryId, recordId, approverId);
+        SalesPriceAdjustmentRecordDTO result =
+                priceAdjustmentService.approvePriceAdjustment(factoryId, recordId, approverId);
+        return ApiResponse.success("改价审批通过", result);
+    }
+
+    /**
+     * POST /price-adjustments/{recordId}/reject — 驳回改价.
+     *
+     * <p>PENDING → REJECTED, 丢弃改价不应用.
+     * <p>🔒 4 眼原则: 审批人不能与改价提交人相同 (403).
+     * <p>fool-proof: 驳回必须填写原因.
+     */
+    @PostMapping("/price-adjustments/{recordId}/reject")
+    @Operation(summary = "驳回改价 (PENDING → REJECTED, 丢弃改价)")
+    @RequirePermission({"finance:read_write", "sales:read_write"})
+    public ApiResponse<SalesPriceAdjustmentRecordDTO> rejectPriceAdjustment(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String recordId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody @Valid RejectPriceAdjustmentRequest request) {
+        Long approverId = extractUserId(authorization);
+        log.info("改价驳回请求: factoryId={}, recordId={}, approverId={}",
+                factoryId, recordId, approverId);
+        SalesPriceAdjustmentRecordDTO result = priceAdjustmentService.rejectPriceAdjustment(
+                factoryId, recordId, approverId, request.reason());
+        return ApiResponse.success("改价已驳回", result);
+    }
+
+    /** 改价驳回请求体 (fool-proof: 驳回必须填原因). */
+    public record RejectPriceAdjustmentRequest(@NotBlank String reason) {}
 
     // ==================== 内部方法 ====================
 
