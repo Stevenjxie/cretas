@@ -215,6 +215,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '生产计划', module: 'production' }
           },
           {
+            // N1 开工无条件化：文员视角"未完成计划队列"——按交期升序展示 PENDING+IN_PROGRESS 计划
+            path: 'pending-queue',
+            name: 'ProductionPendingQueue',
+            component: () => import('@/views/production/plans/PendingQueue.vue'),
+            meta: { requiresAuth: true, title: '未完成计划队列', module: 'production' }
+          },
+          {
             path: 'restock-board',
             name: 'RestockBoard',
             component: () => import('@/views/production/restock-board/index.vue'),
