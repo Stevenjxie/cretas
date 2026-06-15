@@ -574,6 +574,51 @@ class SemanticMapper:
 
         return "TEXT"
 
+    @staticmethod
+    def _norm_for_exact(s: str) -> str:
+        """Normalise a column/synonym string for exact-match comparison.
+
+        Steps (in order):
+        1. Strip trailing parenthesised unit suffixes — both ASCII ``(...)``
+           and fullwidth ``（...）`` — e.g. ``(元)`` / ``（kg）`` / ``(元/kg)``.
+           This is done first so that ``营业收入(元)`` → ``营业收入`` before
+           the subsequent steps run.
+        2. Strip underscores, hyphens, and whitespace.
+        3. Lowercase.
+
+        Only *exact* equality is tested downstream; substring containment is
+        never used (preserves D1 protection).
+        """
+        # Remove trailing parenthesised unit annotation (greedy last match)
+        s = re.sub(r'[\(（][^\)）]*[\)）]\s*$', '', s)
+        # Strip separators and normalise case
+        s = re.sub(r'[_\-\s]+', '', s)
+        return s.lower()
+
+    def _exact_canonical_for(
+        self,
+        col: str,
+        categories: set,
+    ) -> Optional[Tuple[str, str]]:
+        """Return ``(category, canonical_std_name)`` when *col* is an exact
+        synonym of a canonical whose ``category`` ∈ *categories*; else None.
+
+        Exact matching is performed after ``_norm_for_exact`` normalisation on
+        both *col* and each synonym (strips trailing unit suffixes + separators +
+        lowercases).  No substring containment is ever tested — this preserves
+        the D1 protection (e.g. ``单卖数量(不含套餐子商品)`` → stripped to
+        ``单卖数量不含套餐子商品``, which is not equal to any synonym for
+        ``sales_quantity`` / ``output_quantity`` etc.).
+        """
+        col_norm = self._norm_for_exact(col)
+        for std_name, field_info in STANDARD_FIELDS.items():
+            if field_info.get("category") not in categories:
+                continue
+            for syn in field_info["synonyms"]:
+                if col_norm == self._norm_for_exact(syn):
+                    return (field_info["category"], std_name)
+        return None
+
     def _classify_by_priority_regex(self, col: str) -> Optional[Tuple[str, str, float]]:
         """
         D1 priority classifier based on Chinese semantic suffix patterns.
@@ -605,42 +650,37 @@ class SemanticMapper:
             r'实收|实退|实付|应收|应付|分摊|折扣|优惠)(\(|（|\s|$)',
             col
         ):
-            # Issue #291: preserve original col name — returning a single fixed
-            # '数量金额' standard caused [数量, 金额] adjacent columns to collide
-            # into [数量金额, 数量金额_2], conflating quantity with revenue in
-            # downstream analytics. Python field_classifier picks up isMeasure
-            # from NUMERIC dtype + the regex keywords here without needing a
-            # rename to a Java-Latin standard name (mirrors rating branch
-            # below, which uses the same `col` preservation pattern since
-            # Apr 24 2026).
+            # Before falling back to the identity (col-preservation) pattern,
+            # check for an exact synonym match in the amount/quantity canonical
+            # dictionary.  This promotes e.g. "营业收入(元)" → revenue and
+            # "采购量(kg)" → purchase_quantity with their specific canonical names,
+            # enabling infer_domain to recognise the domain ("finance", "purchase",
+            # etc.) instead of receiving an empty string.
+            #
+            # #291 protection is preserved: the exact-match helper returns the
+            # *specific* canonical for each column (not a single shared name), so
+            # adjacent [数量, 金额] columns remain distinct after mapping.
+            # D1 protection is preserved: unit-suffix stripping in _norm_for_exact
+            # + strict equality (no substring) means "单卖数量(不含套餐子商品)"
+            # normalises to "单卖数量不含套餐子商品" which equals no synonym →
+            # identity fallback is used, not product/sales_quantity.
+            m = self._exact_canonical_for(col, {"amount", "quantity"})
+            if m:
+                canon_cat, canon_std = m
+                return (canon_cat, canon_std, 0.92)
+            # Identity fallback — isMeasure comes from NUMERIC dtype + keywords.
             return ('amount', col, 0.92)
 
         # Measure — rate patterns (率/占比/系数)
         if re.search(r'(率|比例|占比|系数|百分比|比率)(\(|（|\s|$)', col):
-            # Before returning the generic fallback 'rate_percent', check if the
-            # column has an *exact* synonym match against a specific rate-category
-            # canonical in the controlled dictionary.  Exact-only (not substring)
-            # so D1's protection against substring false-positives is preserved:
-            # e.g. "单卖数量(不含套餐子商品)" containing "商品" still can't reach
-            # the product canonical through this branch because it never reaches
-            # this rate block (it was already caught by the amount regex above).
-            col_lower = col.lower()
-            for std_name, field_info in STANDARD_FIELDS.items():
-                if field_info.get("category") != "rate":
-                    continue
-                for syn in field_info["synonyms"]:
-                    # Exact match only — no substring — on lowercase forms.
-                    # Normalise spacing/dashes the same way _match_synonym does
-                    # for its "partial match after cleaning" path, but we require
-                    # the whole cleaned string to be equal (not a containment).
-                    syn_lower = syn.lower()
-                    if col_lower == syn_lower:
-                        return ('rate', std_name, 0.92)
-                    # Also try after stripping underscores/hyphens/spaces
-                    col_norm = re.sub(r'[_\-\s]+', '', col_lower)
-                    syn_norm = re.sub(r'[_\-\s]+', '', syn_lower)
-                    if col_norm == syn_norm:
-                        return ('rate', std_name, 0.92)
+            # Use the shared exact-canonical helper (same logic as amount branch)
+            # so rate canonicals with unit suffixes also normalise correctly.
+            # D1's substring-protection is preserved: helper uses _norm_for_exact
+            # + strict equality only (no containment).
+            m = self._exact_canonical_for(col, {"rate"})
+            if m:
+                canon_cat, canon_std = m
+                return (canon_cat, canon_std, 0.92)
             # No precise synonym found → generic fallback (isMeasure=true via Java .*rate.*)
             return ('rate', 'rate_percent', 0.92)
 
