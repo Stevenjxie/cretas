@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>六扇门 — 生产链操作手册（从产品设置到完工报工）</title>
+<style>
+  :root {
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --accent: #16a34a;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --danger: #dc2626;
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --muted: #64748b;
+    --code-bg: #f1f5f9;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  /* ── Layout ── */
+  .page-wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+  }
+
+  /* ── Header ── */
+  .page-header {
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
+    color: white;
+    padding: 2.5rem 0;
+    margin-bottom: 2rem;
+  }
+  .page-header h1 {
+    font-size: 1.65rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .page-header .subtitle {
+    margin-top: 0.5rem;
+    opacity: 0.85;
+    font-size: 0.9rem;
+  }
+  .header-meta {
+    margin-top: 1rem;
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    opacity: 0.75;
+  }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 2.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .toc h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--primary-light);
+  }
+  .toc ol {
+    list-style: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.3rem 2rem;
+  }
+  @media (max-width: 640px) {
+    .toc ol { grid-template-columns: 1fr; }
+  }
+  .toc ol li a {
+    color: var(--text);
+    text-decoration: none;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.88rem;
+    padding: 0.2rem 0;
+  }
+  .toc ol li a:hover { color: var(--primary); }
+  .toc ol li a .step-num {
+    display: inline-block;
+    min-width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1.6rem;
+    text-align: center;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ── Chapter ── */
+  .chapter {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 2.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  }
+  .chapter-header {
+    background: var(--primary);
+    color: white;
+    padding: 1.1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .chapter-num {
+    background: rgba(255,255,255,0.25);
+    width: 2.2rem;
+    height: 2.2rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .chapter-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .chapter-subtitle {
+    font-size: 0.8rem;
+    opacity: 0.8;
+    margin-top: 0.15rem;
+  }
+
+  .chapter-body {
+    padding: 1.5rem;
+  }
+
+  /* ── Screenshot ── */
+  .screenshot-wrap {
+    margin: 1.2rem 0;
+    text-align: center;
+  }
+  .screenshot-wrap img {
+    max-width: 100%;
+    width: 100%;
+    max-width: 860px;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.1);
+  }
+  .screenshot-caption {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ── Sections inside chapter ── */
+  .section-desc {
+    margin: 1rem 0;
+    font-size: 0.95rem;
+    color: var(--text);
+  }
+  .section-desc p { margin: 0.4rem 0; }
+
+  /* ── Steps list ── */
+  .steps {
+    margin: 1rem 0;
+    list-style: none;
+    counter-reset: step-ctr;
+  }
+  .steps li {
+    counter-increment: step-ctr;
+    display: flex;
+    gap: 0.75rem;
+    margin: 0.6rem 0;
+    align-items: flex-start;
+    font-size: 0.9rem;
+  }
+  .steps li::before {
+    content: counter(step-ctr);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  /* ── Field list ── */
+  .fields {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    margin: 0.8rem 0;
+  }
+  .fields table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .fields table th {
+    text-align: left;
+    padding: 0.3rem 0.6rem;
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  .fields table td {
+    padding: 0.3rem 0.6rem;
+    vertical-align: top;
+    border-bottom: 1px solid rgba(0,0,0,.04);
+  }
+  .fields table tr:last-child td { border-bottom: none; }
+  .req { color: var(--danger); font-weight: 700; font-size: 0.8rem; }
+  .opt { color: var(--muted); font-size: 0.8rem; }
+
+  /* ── Warning / Note boxes ── */
+  .warn-box, .note-box, .tip-box {
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin: 0.8rem 0;
+    font-size: 0.875rem;
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+  }
+  .warn-box {
+    background: var(--warn-bg);
+    border-left: 4px solid var(--warn);
+    color: #78350f;
+  }
+  .note-box {
+    background: #eff6ff;
+    border-left: 4px solid var(--primary);
+    color: #1e40af;
+  }
+  .tip-box {
+    background: #f0fdf4;
+    border-left: 4px solid var(--accent);
+    color: #14532d;
+  }
+  .box-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .box-content { flex: 1; }
+  .box-content strong { display: block; margin-bottom: 0.2rem; }
+  .box-content p, .box-content ul { margin: 0.25rem 0; }
+  .box-content ul { padding-left: 1.2rem; }
+
+  /* ── Divider ── */
+  .chapter-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.2rem 0;
+  }
+
+  /* ── Flow diagram text ── */
+  .flow-diagram {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin: 0.8rem 0;
+    font-family: "Courier New", monospace;
+    font-size: 0.82rem;
+    overflow-x: auto;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* ── Footer ── */
+  .page-footer {
+    margin: 3rem 0 2rem;
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  /* ── Back to top ── */
+  .back-top {
+    display: inline-block;
+    margin-top: 1rem;
+    font-size: 0.8rem;
+    color: var(--primary);
+    text-decoration: none;
+  }
+  .back-top:hover { text-decoration: underline; }
+
+  /* ── Highlight ── */
+  mark {
+    background: #fef08a;
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+
+  /* ── RN badge ── */
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    vertical-align: middle;
+    margin-left: 0.3rem;
+  }
+  .badge-app { background: #dbeafe; color: #1d4ed8; }
+  .badge-web { background: #dcfce7; color: #15803d; }
+</style>
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<div class="page-header">
+  <div class="page-wrap">
+    <h1>六扇门 — 生产链操作手册</h1>
+    <div class="subtitle">从产品设置到完工报工 · 全流程图文操作指引</div>
+    <div class="header-meta">
+      <span>📅 2026-06</span>
+      <span>🏭 六扇门食品工厂（F006）</span>
+      <span>🔖 包含 17 张标注截图</span>
+      <span>✅ 生产链 13 个步骤</span>
+    </div>
+  </div>
+</div>
+
+<div class="page-wrap">
+
+<!-- ===== 流程总览 ===== -->
+<div class="note-box" style="margin-bottom:1.5rem;">
+  <span class="box-icon">🔄</span>
+  <div class="box-content">
+    <strong>生产链总流程</strong>
+    <div class="flow-diagram" style="margin:0.5rem 0 0; background:transparent; padding:0;">
+销售订单 → 财务审核 → 生产计划 → 调拨备料 → 生产批次 → 报工（领料 + 产出）→ 完工入库 → 成品库存
+    </div>
+    <p style="margin-top:0.5rem; font-size:0.82rem;">前置设置（第 1–5 章）：产品/SKU → 编码规则 → 工序配置 → 原料字典 → BOM 配方，完成一次后无需重复操作。</p>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<nav class="toc" id="top">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#ch1"><span class="step-num">1</span>产品/SKU 创建</a></li>
+    <li><a href="#ch2"><span class="step-num">2</span>16 位编码规则配置</a></li>
+    <li><a href="#ch3"><span class="step-num">3</span>工序配置（生成草稿 & 保存）</a></li>
+    <li><a href="#ch4"><span class="step-num">4</span>原料字典 — 单位维护</a></li>
+    <li><a href="#ch5"><span class="step-num">5</span>BOM 配方（含出成率设定）</a></li>
+    <li><a href="#ch6"><span class="step-num">6</span>销售订单创建（含税率）</a></li>
+    <li><a href="#ch7"><span class="step-num">7</span>财务审核</a></li>
+    <li><a href="#ch8"><span class="step-num">8</span>生产计划 / 排产</a></li>
+    <li><a href="#ch9"><span class="step-num">9</span>调拨 — 从仓库备料到车间</a></li>
+    <li><a href="#ch10"><span class="step-num">10</span>生产批次列表 — 进入批次</a></li>
+    <li><a href="#ch11"><span class="step-num">11</span>批次详情报工（领料 + 产出两点）</a></li>
+    <li><a href="#ch12"><span class="step-num">12</span>完工入库 <span class="badge badge-app">手机 APP</span></a></li>
+    <li><a href="#ch13"><span class="step-num">13</span>成品库存确认</a></li>
+  </ol>
+</nav>
+
+<!-- ===================================================
+     第 1 章 — 产品/SKU 创建
+======================================================-->
+<section class="chapter" id="ch1">
+  <div class="chapter-header">
+    <div class="chapter-num">1</div>
+    <div>
+      <div class="chapter-title">产品 / SKU 创建</div>
+      <div class="chapter-subtitle">菜单路径：系统管理 → 产品管理 / /system/products</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>每个要生产销售的品，都需要先在系统中新建一条产品记录（SKU）。产品定义好后，后续的工序配置、BOM 配方、销售订单都将引用这条记录。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/01-sku-list.png" alt="产品列表页 — 红框圈出「新增产品」按钮">
+      <div class="screenshot-caption">图 1-1：产品列表页，右上角红框为「新增产品」按钮</div>
+    </div>
+
+    <p class="section-desc">点击红框处的<mark>新增产品</mark>按钮，弹出新建产品表单：</p>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/01b-sku-create-form.png" alt="新建产品表单 — 红框圈出主要输入字段区域">
+      <div class="screenshot-caption">图 1-2：新建产品表单，红框区域为需要填写的核心字段</div>
+    </div>
+
+    <div class="fields">
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>填写说明</th>
+            <th>必填</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>产品名称</td>
+            <td>与生产纸保持一致，如"掌中宝卤猪蹄 200g"</td>
+            <td><span class="req">必填</span></td>
+          </tr>
+          <tr>
+            <td>产品大类</td>
+            <td>下拉选择，如"熟食类"</td>
+            <td><span class="req">必填</span></td>
+          </tr>
+          <tr>
+            <td>规格型号</td>
+            <td>如"200g/袋"、"500g/箱×10"</td>
+            <td><span class="req">必填</span></td>
+          </tr>
+          <tr>
+            <td>单位（一级）</td>
+            <td>销售最小单位，如"袋"、"盒"</td>
+            <td><span class="req">必填</span></td>
+          </tr>
+          <tr>
+            <td>单位（二级）</td>
+            <td>装箱单位，如"框"；换算：1 框 = 10 盒</td>
+            <td><span class="opt">可选</span></td>
+          </tr>
+          <tr>
+            <td>税率</td>
+            <td>9% 或 13%（税由工厂承担，影响销售订单报价底线）</td>
+            <td><span class="req">必填</span></td>
+          </tr>
+          <tr>
+            <td>产品图片</td>
+            <td>可上传实物照片</td>
+            <td><span class="opt">可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>产品名称、规格、编码一旦确认后不得随意更改，否则会与已有 BOM 及历史订单对不上。</li>
+          <li>税率在<strong>产品层</strong>设定，不是在工序或 BOM 上设定——不要在销售订单行单独改税率（会以这里的配置为准）。</li>
+          <li>新建时不需要填成本价或销售价，价格在创建销售订单时才填写。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 2 章 — 16 位编码规则
+======================================================-->
+<section class="chapter" id="ch2">
+  <div class="chapter-header">
+    <div class="chapter-num">2</div>
+    <div>
+      <div class="chapter-title">16 位编码规则配置</div>
+      <div class="chapter-subtitle">菜单路径：系统管理 → 编码规则 / /system/encoding-rules</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>六扇门所有物料（原料、包材、辅料、成品）使用 <strong>16 位唯一编码</strong>。编码规则在此统一维护，系统据此自动生成流水号，防止仓库出错料。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/02-product-coding-config.png" alt="编码规则字典页 — 红框圈出「新建规则」按钮">
+      <div class="screenshot-caption">图 2-1：编码规则字典，红框为「新建规则」按钮；表格中已有生产计划、销售订单等编码规则</div>
+    </div>
+
+    <div class="note-box">
+      <span class="box-icon">📐</span>
+      <div class="box-content">
+        <strong>16 位编码结构</strong>
+        <div class="flow-diagram" style="margin:0.4rem 0 0; background:transparent; padding:0; font-size:0.8rem;">
+前 10 位（固定段，系统自动生成，不可手改）+ 后 6 位（流水号）
+─────────────────────────────────────────
+类别前缀 3 位  +  品类/部位编号  +  ... 流水号
+示例：001（原料）→ 牛腱部位 → 001-001-XXXXXX
+      BC（包材）→ BC 开头自动归类包材
+      002（辅料）
+        </div>
+      </div>
+    </div>
+
+    <ul class="steps">
+      <li>进入编码规则页，查看现有规则，确认原料、包材、成品各类已建规则。</li>
+      <li>若需新增规则，点击红框处<mark>新建规则</mark>，选择适用单据类型（生产计划/销售订单/原料入库等）。</li>
+      <li>设定前缀（如"SO-"表示销售订单）和流水号位数（6 位数字），保存。</li>
+    </ul>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>编码只能由英文字母 + 数字组成，<strong>不能用中文</strong>；数字比字母更不易识错。</li>
+          <li>编码一旦分配，不要再改，否则与历史批次、BOM 关联关系错乱。</li>
+          <li>BOM 关联只引用前 3 位主编码（品类/部位编号），不是全部 16 位。</li>
+          <li>产品流水号由系统自动生成，不需手动填写。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 3 章 — 工序配置
+======================================================-->
+<section class="chapter" id="ch3">
+  <div class="chapter-header">
+    <div class="chapter-num">3</div>
+    <div>
+      <div class="chapter-title">工序配置（生成草稿 & 保存）</div>
+      <div class="chapter-subtitle">菜单路径：生产管理 → 产品工序配置，或从产品详情进入</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>每个产品可绑定一套工序流程（如：领料 → 腌制 → 熟制 → 包装 → 成品）。工序像"积木"——全厂所有可用工序存在工序库里，配置时自由拼装，不用的工序不配置、不报工。</p>
+      <p>六扇门的约定：<strong>只报两个端点——领料（第一道）和成品/半成品产出（最后一道），中间工序暂时免报</strong>，减轻现场报工负担。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/03-workprocess-bom-page.png" alt="产品工序配置页 — 红框圈出「生成草稿」按钮">
+      <div class="screenshot-caption">图 3-1：产品工序配置页，红框为「生成草稿」按钮——完成 AI 辅助配工序后点此生成草稿</div>
+    </div>
+
+    <ul class="steps">
+      <li>在产品详情或工序配置菜单，找到对应产品，点击进入工序编辑界面。</li>
+      <li>从工序库中选择所需工序（如腌制、熟制、焯水、包装等）拖入工序流程；不需要的工序不选。</li>
+      <li>AI 辅助配工序后，点击红框处<mark>生成草稿</mark>按钮，系统根据已配工序生成可编辑草稿。</li>
+      <li>在草稿中确认每道工序的顺序、负责人（可选）、标准产出单位等信息。</li>
+    </ul>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/03b-production-main.png" alt="工序配置页 — 红框圈出「保存」按钮">
+      <div class="screenshot-caption">图 3-2：确认工序配置无误后，点击右上角红框处的「保存」按钮提交</div>
+    </div>
+
+    <ul class="steps">
+      <li value="5">检查工序列表：顺序是否正确、是否遗漏关键工序。</li>
+      <li>点击右上角红框处<mark>保存</mark>，工序配置完成。</li>
+    </ul>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li><strong>工序绑定后必须点"保存"才会生效</strong>，仅生成草稿不保存等于没有配置。</li>
+          <li>工序是按产品配置的，不同品可以有不同工序流程（如卤猪蹄有焯水、牛腱没有）。</li>
+          <li>后期工艺调整需要修改时，直接在此页重新编辑工序，再次保存即可。</li>
+          <li>中间工序（如腌制、熟制）六扇门当前暂不报工，但保留在配置中，将来可开启。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 4 章 — 原料字典 单位
+======================================================-->
+<section class="chapter" id="ch4">
+  <div class="chapter-header">
+    <div class="chapter-num">4</div>
+    <div>
+      <div class="chapter-title">原料字典 — 单位维护</div>
+      <div class="chapter-subtitle">菜单路径：仓库管理 → 原料类型 / /warehouse/material-types</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>原料字典是所有物料（原料、包材、辅料）的总清单。<strong>单位字段</strong>决定入库和报工时的计量方式——六扇门原料以<strong>千克（kg）</strong>称重入库，BOM 配方中用<strong>克（g）</strong>为单位计算，出成率也基于此。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/04-material-dictionary.png" alt="原料类型字典 — 红框圈出「单位」列头">
+      <div class="screenshot-caption">图 4-1：原料类型字典，红框指向「单位」列——确认每条原料的计量单位（kg/g/个等）</div>
+    </div>
+
+    <ul class="steps">
+      <li>进入原料类型页，检查现有原料列表，确认每种原料的单位是否正确（原料：kg；包材：个/箱；辅料：kg 或 g）。</li>
+      <li>如需新增原料，点击新增，填写原料名称、编码（英文+数字，16 位）、单位，以及厂号、产地字段（同一原料不同厂商批次，以厂号区分）。</li>
+      <li>原料名称必须与 BOM 配方中维护的原料名称<strong>完全一致</strong>——原料名称是下拉选择，不允许自由输入（防止与 BOM 对不上）。</li>
+    </ul>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>六扇门物料分类约定（5 大项）</strong>
+        <ul>
+          <li>原料（肉类、骨类等主料）</li>
+          <li>成品（成品包材？</li>
+          <li>辅料（酱料、调味料等）</li>
+          <li>蔬菜（生姜、大葱、香菜等）</li>
+          <li>包材（袋、箱等包装材料）</li>
+        </ul>
+        <p style="margin-top:0.3rem;">调料粉等配方固定的辅料按"份数"走，直接以成品份数折算用量，不需要复杂的配比管理。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>原料档案需要逐条录入（种类很多），<strong>建议一次性把所有在用原料录完</strong>再开始生产，避免后期临时添加乱序。</li>
+          <li>同一供应商可能供应多厂号/产地的同一原料（如牧原 A 厂、B 厂），需在厂号字段区分，<strong>编码只有一个</strong>。</li>
+          <li>入库时的计量单位是 kg（称重），BOM 配方里用 g，系统内部自动换算，操作时保持一致即可。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 5 章 — BOM 配方（含出成率）
+======================================================-->
+<section class="chapter" id="ch5">
+  <div class="chapter-header">
+    <div class="chapter-num">5</div>
+    <div>
+      <div class="chapter-title">BOM 配方（含出成率设定）</div>
+      <div class="chapter-subtitle">菜单路径：生产管理 → BOM 配方 / /production/bom</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>BOM（Bill of Materials，配方）定义了每个产品生产所需的原料、辅料、包材及用量。<strong>出成率</strong>是核心参数——决定了领多少原料才能出多少成品，也是系统自动推算备料量的依据。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/05-bom-list.png" alt="BOM 配方管理页 — 红框圈出「创建配方」按钮">
+      <div class="screenshot-caption">图 5-1：BOM 配方管理页，红框为右上角蓝色「创建配方」按钮</div>
+    </div>
+
+    <ul class="steps">
+      <li>在 BOM 配方页，找到对应产品，点击红框处<mark>+ 创建配方</mark>按钮，弹出配方头表单。</li>
+    </ul>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/05b-bom-yield-rate.png" alt="创建配方头弹窗 — 红框圈出「整体出成率%」输入框">
+      <div class="screenshot-caption">图 5-2：创建配方弹窗，红框为「整体出成率 %」输入框——这是影响成本核算最关键的参数</div>
+    </div>
+
+    <ul class="steps">
+      <li value="2">在弹窗中填写<strong>整体出成率 %</strong>（红框字段）：出成率 = 实际成品产出 ÷ 投入原料重量 × 100%。例：投入 100 kg 原料，产出 70 kg 成品，出成率 = 70%。</li>
+      <li>填写原料行：选择原料名称（下拉，与原料字典一致）、用量（g/kg）、是否为主原料。</li>
+      <li>填写辅料行、包材行（如需）。</li>
+      <li>确认后保存 BOM 配方。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>出成率如何影响后续流程</strong>
+        <ul>
+          <li>生产排产时，系统根据出成率自动计算需要备多少原料（调拨数量）。</li>
+          <li>完工入库时，系统对比实际产出与 BOM 预期产出，若偏差超出范围会预警。</li>
+          <li>成本核算：每批次实际领料 ÷ 实际产出 = 每公斤成品的实际成本；与 BOM 预计成本对比，给出达成率（目标 90%–110%）。</li>
+          <li>随着生产累积，系统会自动更新出成率的历史均值，下次备料更精准。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>出成率 = 产出 ÷ 投料，不是反过来；填错方向会导致备料计算完全错误。</li>
+          <li>半成品（如焯水后的掌中宝）也需要建 BOM，作为后续工序的"原料"使用——系统会单独记录半成品库存数量，但不做批次追踪。</li>
+          <li>BOM 中的原料名称必须与原料字典中的名称完全一致；BOM 只关联原料编码的<strong>前 3 位主编码</strong>（品类），不关联厂号。</li>
+          <li>辅料配比按<strong>份数</strong>走：系统根据成品份数自动折算辅料用量，操作时不需要手动计算。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 6 章 — 销售订单（含税率）
+======================================================-->
+<section class="chapter" id="ch6">
+  <div class="chapter-header">
+    <div class="chapter-num">6</div>
+    <div>
+      <div class="chapter-title">销售订单创建（含税率 & 毛利红线）</div>
+      <div class="chapter-subtitle">菜单路径：销售管理 → 销售订单 / /sales/orders</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>销售订单是整个生产链的起点。订单下达后，流转至财务审核，审核通过后才能排产。销售订单的单价和数量决定了本批次的<strong>毛利核算基础</strong>。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/06-sales-orders-list.png" alt="销售订单列表页">
+      <div class="screenshot-caption">图 6-1：销售订单列表，显示订单状态（草稿/待审/已审核/生产中/已完成）</div>
+    </div>
+
+    <ul class="steps">
+      <li>点击「新建订单」，填写客户名称、产品 SKU、数量、单价。</li>
+      <li>确认<strong>税率</strong>：税率已在产品配置中设定（9% 或 13%），订单行会自动带入——核实是否与客户约定一致（含税价 vs 不含税价）。</li>
+      <li>系统会根据产品的 BOM 成本自动计算<strong>毛利率</strong>，若低于公司设定的红线（如 10%），页面会弹出红色预警——销售价不得低于此底线。</li>
+      <li>确认无误后保存，订单进入「待审核」状态。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>价格体系说明（三个价）</strong>
+        <ul>
+          <li><strong>预报价（BOM 成本价）</strong>：研发根据 BOM 原料用量 + 人工评估，在产品库填入的理论成本价——销售报价不得低于此。</li>
+          <li><strong>销售价（订单价）</strong>：与客户谈定的实际成交价（含税），填入销售订单行。</li>
+          <li><strong>实际成本（事后核算）</strong>：生产完成后，系统根据实际领料、实际产出，自动计算每公斤/每盒的真实成本，与预报价对比，暴露差距。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li><strong>税率设在销售订单行，而非产品或工序上</strong>——系统从产品默认带入，确认后不要随意改，否则财务核算出差。</li>
+          <li>订单创建时成品还没生产，<strong>不需要</strong>填写实际成本或批次成本，这些数据在生产完成后系统自动计算。</li>
+          <li>若需报加工费模式（客户自供原料 + 工厂收加工费），单价填加工费单价即可，系统同样会核算成本达成。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 7 章 — 财务审核
+======================================================-->
+<section class="chapter" id="ch7">
+  <div class="chapter-header">
+    <div class="chapter-num">7</div>
+    <div>
+      <div class="chapter-title">财务审核</div>
+      <div class="chapter-subtitle">菜单路径：财务管理 → 审核 / 或从销售订单详情进入</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>销售订单提交后，需要经过财务审核确认价格、客户资质、收款条件等。审核通过后，订单流转至生产计划排产阶段。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/06b-finance-review.png" alt="财务审核页面">
+      <div class="screenshot-caption">图 7-1：财务审核页，显示待审订单列表及审核详情</div>
+    </div>
+
+    <ul class="steps">
+      <li>进入财务审核页，找到对应销售订单（状态：待审核）。</li>
+      <li>核对订单内容：客户名称、产品规格、数量、单价、税率、预计交货期。</li>
+      <li>确认毛利率满足公司红线要求。</li>
+      <li>点击「审核通过」，订单状态变为「已审核」，可进入排产。</li>
+      <li>若发现问题（如价格低于红线），点击「拒绝」并填写原因，退回销售重新报价。</li>
+    </ul>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>财务审核是生产闭环的关口</strong>
+        <p>只有财务审核通过的订单，才能生成生产计划、排产、领料——确保每笔生产都有可盈利的订单支撑，避免先生产后发现亏损。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>财务审核后，订单的<strong>数量和单价不允许直接修改</strong>——如需变更，需重新走审核流程。</li>
+          <li>批量生产前，建议财务每天查看前两天的订单成本数据，发现异常及时反馈；超过三天的历史数据不再追溯。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 8 章 — 生产计划 / 排产
+======================================================-->
+<section class="chapter" id="ch8">
+  <div class="chapter-header">
+    <div class="chapter-num">8</div>
+    <div>
+      <div class="chapter-title">生产计划 / 排产</div>
+      <div class="chapter-subtitle">菜单路径：生产管理 → 生产计划 / /production/plans</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>生产计划由生管（PMC）根据已审核的销售订单创建——规划哪天做哪个品、做多少数量。计划确认后，系统自动推算需要备多少原料（结合 BOM 出成率）。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/07-production-plans.png" alt="生产计划页 — 红框圈出「新建计划」按钮">
+      <div class="screenshot-caption">图 8-1：生产计划页，红框为右上角「新建计划」按钮；列表中显示各计划的计划日期、产品、排产数量及状态</div>
+    </div>
+
+    <ul class="steps">
+      <li>点击红框处<mark>新建计划</mark>，选择对应的销售订单（已审核）。</li>
+      <li>填写计划生产日期、目标产量（按订单数量或拆批次填写）。</li>
+      <li>系统据出成率自动推算所需原料量，确认是否与仓库现有库存匹配（不足则提示）。</li>
+      <li>计划保存后，状态变为「待执行」；生产主管审批排班后，状态变「已确认」。</li>
+      <li>确认计划后，系统自动发起调拨需求（仓库备料到车间）。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>谁负责排产？</strong>
+        <p>生产计划由<strong>厂长或生管（PMC）</strong>在系统中创建；车间操作员看到的只是分配到自己的批次任务，不需要关心计划层。</p>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 9 章 — 调拨
+======================================================-->
+<section class="chapter" id="ch9">
+  <div class="chapter-header">
+    <div class="chapter-num">9</div>
+    <div>
+      <div class="chapter-title">调拨 — 从主仓库备料到车间</div>
+      <div class="chapter-subtitle">菜单路径：仓库管理 → 调拨管理 / /transfer/list</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>原料从主仓库发往车间是通过<strong>调拨单</strong>实现的。调拨由系统根据生产计划自动推送，也可以手动新建。车间只负责确认收料数量，不需要关心具体仓位。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/08-transfer-list.png" alt="调拨管理页 — 红框圈出「手动新建调拨单」按钮">
+      <div class="screenshot-caption">图 9-1：调拨管理页，红框为「手动新建调拨单」按钮；列表中显示待执行、执行中、已完成的调拨单</div>
+    </div>
+
+    <ul class="steps">
+      <li>通常情况下，调拨单由系统根据生产计划自动生成，直接在列表中找到对应调拨单进行操作即可。</li>
+      <li>如需手动新建（临时备料），点击红框处<mark>手动新建调拨单</mark>按钮。</li>
+    </ul>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/08b-transfer-create-form.png" alt="新建调拨单表单 — 红框圈出「调出仓库」字段">
+      <div class="screenshot-caption">图 9-2：手动新建调拨单表单，红框处为「调出仓库」字段——必须填写原料从哪个仓库出发</div>
+    </div>
+
+    <ul class="steps">
+      <li value="3">填写调出仓库（红框，主仓 T0）、调入仓库（车间仓 T1）。</li>
+      <li>选择原料品类及数量（系统根据 BOM 推荐数量，可修改）。</li>
+      <li>提交后，仓库端收到出库任务，称重装车发往车间。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>领料方式约定</strong>
+        <p>六扇门约定：<strong>统一晚上集中领料一次</strong>（而非边生产边领），仓库备好全天用料，整批发往车间。仓库发出的数量和车间实收数量会在系统中核对差异（如：仓库发 100 kg，车间清点收到 98 kg，差额 2 kg 需找原因）。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>调拨确认后，系统自动扣减主仓库存、增加车间库存——<strong>不要重复建调拨单</strong>，否则库存会多扣。</li>
+          <li>调拨涉及两个仓库各自确认：调出仓库确认"发出"，调入仓库确认"收到"，双方各自在系统操作，有交接痕迹。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 10 章 — 生产批次列表
+======================================================-->
+<section class="chapter" id="ch10">
+  <div class="chapter-header">
+    <div class="chapter-num">10</div>
+    <div>
+      <div class="chapter-title">生产批次列表 — 进入批次</div>
+      <div class="chapter-subtitle">菜单路径：生产管理 → 生产批次 / /production/batches</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>生产计划确认后，系统自动生成对应的<strong>生产批次</strong>。每个批次对应一次完整的生产过程（从领料到成品入库）。车间操作员通过批次列表找到自己的任务，进入批次进行报工。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/09-production-batches.png" alt="生产批次列表 — 红框圈出操作按钮组">
+      <div class="screenshot-caption">图 10-1：生产批次列表，红框处为第一行批次的「查看 / 编辑 / 更多」操作按钮组</div>
+    </div>
+
+    <ul class="steps">
+      <li>进入生产批次列表，找到分配给自己的批次（按产品、计划日期筛选）。</li>
+      <li>点击红框处的<mark>查看/编辑</mark>按钮（或直接点批次行），进入批次详情页。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>批次状态说明</strong>
+        <ul>
+          <li>🟡 <strong>待开工</strong>：调拨到位，等待开始报工</li>
+          <li>🔵 <strong>生产中</strong>：已开始报工，尚未全部工序完成</li>
+          <li>🟢 <strong>报工完成</strong>：所有工序报工完成，可执行「完工入库」</li>
+          <li>✅ <strong>已入库</strong>：成品已入成品库，批次关闭</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 11 章 — 批次详情报工
+======================================================-->
+<section class="chapter" id="ch11">
+  <div class="chapter-header">
+    <div class="chapter-num">11</div>
+    <div>
+      <div class="chapter-title">批次详情报工（领料 + 产出两点）</div>
+      <div class="chapter-subtitle">批次详情页 → 工序报工区块 <span class="badge badge-app">手机 APP</span> <span class="badge badge-web">Web 也可</span></div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>六扇门约定<strong>只报两个端点</strong>，中间工序免报：</p>
+      <ul style="margin:0.5rem 0 0.5rem 1.2rem; font-size:0.92rem;">
+        <li>第一个端点：<strong>领料报工</strong>（从仓库领了什么原料、多少千克）</li>
+        <li>第二个端点：<strong>产出报工</strong>（产出了多少千克成品或半成品）</li>
+      </ul>
+      <p style="margin-top:0.5rem;">中间的腌制、熟制、焯水等工序暂不在系统中逐道报工，由操作员线下记录。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/09b-batch-detail.png" alt="批次详情工序明细 — 红框圈出「工序报工入口」区块">
+      <div class="screenshot-caption">图 11-1：批次详情工序明细，红框区块为工序报工入口，显示「领料报工」和「产出报工」两个待开工入口</div>
+    </div>
+
+    <hr class="chapter-divider">
+    <p><strong>领料报工（第一端点）步骤：</strong></p>
+
+    <ul class="steps">
+      <li>点击红框中的<mark>领料报工</mark>入口（或在手机 APP 中找到对应批次任务）。</li>
+      <li>系统根据 BOM 推荐本次应领的原料及数量，逐项核对；如实际用量与推荐不同，修改数量。</li>
+      <li>选择批次（从哪一批原料领料，如同一原料有多厂号，选对应厂号的批次）。</li>
+      <li>提交确认，系统扣减车间原料库存，记录领料时间戳。</li>
+    </ul>
+
+    <hr class="chapter-divider">
+    <p><strong>产出报工（第二端点）步骤：</strong></p>
+
+    <ul class="steps">
+      <li value="5">生产完成后，点击<mark>产出报工</mark>入口。</li>
+      <li>填写实际产出数量（千克或成品盒数）。</li>
+      <li>若有半成品留存（如今天只焯水了 500 kg，另 500 kg 转天继续），填写半成品产出数量；系统将其记入半成品库存，下次生产时作为原料领用。</li>
+      <li>提交确认，系统计算本批次实际出成率，与 BOM 预期比对，显示达成率。</li>
+    </ul>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>手机 APP 报工截图</strong>
+      </div>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/rn/rn-01-operator-task-list.png" alt="操作员任务列表 — 手机APP">
+      <div class="screenshot-caption">图 11-2：手机 APP 操作员任务列表，显示分配给当前操作员的待报工批次</div>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/rn/rn-02-material-batch-picker.png" alt="原料批次选择器 — 手机APP">
+      <div class="screenshot-caption">图 11-3：手机 APP 领料时选择原料批次，显示可用库存数量</div>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/rn/rn-03-yield-step-report.png" alt="产出报工界面 — 手机APP">
+      <div class="screenshot-caption">图 11-4：手机 APP 产出报工界面，填写实际产出数量</div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>领料后产出报工<strong>必须当天完成</strong>（或次日补报，超过两天系统会锁定）。</li>
+          <li>如果原料库存不足（显示红色预警），先检查是否仓库调拨还未确认；不要强行报工，联系仓管确认调拨单状态。</li>
+          <li>每道报工<strong>不可重复提交</strong>——如误报，联系生管撤回，重新报工；不要重复点提交按钮。</li>
+          <li>操作员只能看到分配给自己的工序任务，不能修改其他人的报工记录。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/rn/rn-04-no-shortage-state.png" alt="无缺料状态 — 手机APP">
+      <div class="screenshot-caption">图 11-5：手机 APP 显示当前批次无缺料预警的正常状态</div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 12 章 — 完工入库（手机APP）
+======================================================-->
+<section class="chapter" id="ch12">
+  <div class="chapter-header">
+    <div class="chapter-num">12</div>
+    <div>
+      <div class="chapter-title">完工入库 <span class="badge badge-app">手机 APP 主操作</span></div>
+      <div class="chapter-subtitle">所有工序报工完成后，在批次详情页执行「完工入库」</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>当批次的<strong>所有报工工序全部完成</strong>（2/2 道报完）后，页面会出现蓝色「完工入库」按钮。点击后，成品从车间仓转入成品库，生产闭环完成。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/10-production-complete.png" alt="批次完成状态 — 红框圈出「完工入库」按钮">
+      <div class="screenshot-caption">图 12-1：批次 2/2 道工序全部报完后，红框处蓝色「完工入库」按钮出现；红字标注"点击完工入库，填实际产出数量，成品入成品库"</div>
+    </div>
+
+    <ul class="steps">
+      <li>确认批次详情页显示「✓ X/X 道全部报完」（红框处蓝色按钮可点击）。</li>
+      <li>点击<mark>完工入库</mark>按钮，弹出确认表单。</li>
+      <li>填写<strong>实际入库数量</strong>（成品千克数或盒数；系统会预填 BOM 预计数量，按实际修改）。</li>
+      <li>确认入库仓库（成品库）及日期。</li>
+      <li>提交，系统：① 增加成品库库存；② 关闭此批次；③ 生成成本核算结果（实际成本 vs 预报价对比）。</li>
+    </ul>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>为什么要填"实际入库数量"？</strong>
+        <p>入库数量可能与产出报工数量有轻微差异（如称重精度、包装损耗等）。系统会以此计算最终出成率，并更新 BOM 历史均值，使下次备料预测更准确。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>必须<strong>所有工序全部报完</strong>才能点「完工入库」——若按钮为灰色，说明还有未完成的报工工序。</li>
+          <li>完工入库后，批次状态锁定为「已入库」，<strong>不可撤销</strong>（如需撤回，联系生管在系统走撤回流程，会触发库存回滚）。</li>
+          <li>入库完成后，相关的销售订单状态自动更新为「可发货」，仓库可以操作出库。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 13 章 — 成品库存确认
+======================================================-->
+<section class="chapter" id="ch13">
+  <div class="chapter-header">
+    <div class="chapter-num">13</div>
+    <div>
+      <div class="chapter-title">成品库存确认</div>
+      <div class="chapter-subtitle">菜单路径：销售管理 → 成品库存 / /sales/finished-goods</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>完工入库后，成品记录出现在成品库存页。仓管在此核对实物库存与系统数量，准备出库发货。</p>
+    </div>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/10b-inventory-confirm.png" alt="成品库存页 — 红框圈出第一条成品记录行">
+      <div class="screenshot-caption">图 13-1：成品库存页，红框处为刚入库的成品记录，显示品名、规格、批次号、库存数量及入库时间</div>
+    </div>
+
+    <ul class="steps">
+      <li>进入成品库存页，找到最新入库的产品（按入库日期倒序）。</li>
+      <li>核对系统数量与实物盘点数量是否一致；如有差异，联系生管填写差异说明。</li>
+      <li>对应销售订单进行出库操作（创建出库单 → 选择成品批次 → 确认出库数量 → 提交）。</li>
+    </ul>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>成本核算结果查看</strong>
+        <p>成品入库后，在批次详情页可查看本批次的<strong>实际成本核算结果</strong>：</p>
+        <ul>
+          <li>实际领料成本 = 领料数量 × 原料入库单价</li>
+          <li>实际成本/成品公斤 = 实际总成本 ÷ 实际入库量</li>
+          <li>与预报价对比，显示偏差率（目标在 ±10% 以内）</li>
+        </ul>
+        <p>如果某批次成本偏差超标，管理人员会当天审查原因（领料超量、出成率偏低等），<strong>当天发现当天处理，最多追溯到前天</strong>，超过三天不再追溯。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li>成品库存是所有人（管理层）都能查看的，但<strong>只有授权仓管</strong>可以操作出库——权限由系统管理员分配。</li>
+          <li>半成品库存（如焯水后的掌中宝）不在此页，在「车间库存」或「半成品库」查看；半成品只记数量，不追踪批次。</li>
+          <li>如发现库存数量异常，先检查是否有调拨单未确认或报工数量填错，<strong>不要直接手动修改库存数量</strong>。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     附录：快速参考
+======================================================-->
+<section class="chapter">
+  <div class="chapter-header" style="background: #475569;">
+    <div class="chapter-num" style="background:rgba(255,255,255,0.2);">附</div>
+    <div>
+      <div class="chapter-title">快速参考 — 常见问题 & 关键数字</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="note-box">
+      <span class="box-icon">📋</span>
+      <div class="box-content">
+        <strong>生产链关键角色分工</strong>
+        <div class="fields" style="margin-top:0.5rem; background:transparent; padding:0;">
+          <table>
+            <thead><tr><th>角色</th><th>主要操作</th></tr></thead>
+            <tbody>
+              <tr><td>销售</td><td>创建销售订单、填写单价</td></tr>
+              <tr><td>财务</td><td>审核销售订单、核实价格/税率/毛利</td></tr>
+              <tr><td>厂长/生管(PMC)</td><td>创建生产计划、排产、审批调拨</td></tr>
+              <tr><td>仓管</td><td>确认调拨（出库/入库）、成品出库</td></tr>
+              <tr><td>操作员</td><td>手机 APP 报工（领料 + 产出两点）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="note-box" style="margin-top:1rem;">
+      <span class="box-icon">🔑</span>
+      <div class="box-content">
+        <strong>常用关键数字</strong>
+        <ul>
+          <li>编码：<strong>16 位</strong>（前 10 位固定 + 后 6 位流水号）；BOM 关联前 3 位</li>
+          <li>税率：<strong>9%</strong> 或 <strong>13%</strong>，税由工厂承担</li>
+          <li>单位换算：<strong>1 框 = 10 盒</strong></li>
+          <li>报工端点：<strong>2 个</strong>（领料 + 产出），中间工序暂免报</li>
+          <li>成本偏差目标：<strong>±10%</strong> 以内</li>
+          <li>数据追溯时效：<strong>最多 2 天</strong>（超过 3 天不追溯）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="warn-box" style="margin-top:1rem;">
+      <span class="box-icon">❗</span>
+      <div class="box-content">
+        <strong>高频错误 TOP 5</strong>
+        <ul>
+          <li>工序配置后忘记点「保存」→ 工序未生效，批次无法报工</li>
+          <li>BOM 出成率填反（投料 ÷ 产出，应为产出 ÷ 投料）→ 备料计算完全错误</li>
+          <li>原料名称与 BOM 中的不完全一致 → 系统无法关联成本</li>
+          <li>税率在销售订单行随意改动 → 财务成本核算偏差</li>
+          <li>完工入库前未完成全部工序报工 → 「完工入库」按钮灰色无法点击</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<div class="page-footer">
+  <p>六扇门食品工厂 · 生产链操作手册 · 2026-06</p>
+  <p style="margin-top:0.3rem;">如有操作问题，联系系统管理员 / 技术支持</p>
+</div>
+
+</div><!-- /.page-wrap -->
+</body>
+</html>
