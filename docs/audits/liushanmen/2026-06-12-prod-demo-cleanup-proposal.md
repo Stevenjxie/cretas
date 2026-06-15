@@ -1,7 +1,7 @@
 # Prod DEMO Cleanup Proposal (read-only)
 
-Date: 2026-06-12  
-Target: `root@47.100.235.168`, PostgreSQL `cretas_prod_db`, factory `F006`  
+Date: 2026-06-12
+Target: `root@47.100.235.168`, PostgreSQL `cretas_prod_db`, factory `F006`
 Scope: proposal only. No `DELETE`, `UPDATE`, or `TRUNCATE` was executed in this session.
 
 ## Read-only Proof

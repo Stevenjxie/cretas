@@ -1,9 +1,9 @@
 # 六扇门生产结单闭环修正版实施 Plan
 
-**日期**: 2026-06-13  
-**依赖 spec**: `2026-06-13-liushanmen-production-settlement-revised-spec.md`  
-**目标**: 对齐 2026-06-09 蓝图与 2026-06-12 走查修正，形成可执行 PR 切片  
-**执行原则**: 每个切片独立 worktree off `origin/main`，scope-lock 提交，deep E2E 后再声称完成  
+**日期**: 2026-06-13
+**依赖 spec**: `2026-06-13-liushanmen-production-settlement-revised-spec.md`
+**目标**: 对齐 2026-06-09 蓝图与 2026-06-12 走查修正，形成可执行 PR 切片
+**执行原则**: 每个切片独立 worktree off `origin/main`，scope-lock 提交，deep E2E 后再声称完成
 
 ## 1. 最终审计结论
 
