@@ -68,6 +68,19 @@ test.describe('G1 税率分组开票 @pr-gate', () => {
 
   test.beforeEach(async ({ page, context }) => {
     await restoreAuth(context, page, 'sales_mgr');
+    // PR #149 R5: hide release-note toast that intercepts row button clicks
+    // across all G1 tests. addInitScript runs before each page navigation
+    // (covers page.goto in tests).
+    await context.addInitScript(() => {
+      const style = document.createElement('style');
+      style.textContent = '.release-note-stack { display: none !important; }';
+      // Wait for head to exist
+      if (document.head) {
+        document.head.appendChild(style);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+      }
+    });
   });
 
   // ─── Main test ──────────────────────────────────────────────────────────────

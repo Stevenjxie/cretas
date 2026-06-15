@@ -25,12 +25,18 @@ import java.util.*;
  *
  * @since 2026-05-18 (Phase 3 skeleton)
  */
+/*
+ * Bug #3 fix (matrix 2026-05-21): uniqueness is enforced at the DB level via a
+ * partial unique index `uq_notify_templates_factory_code_active` (see
+ * V20260521_51__notify_templates_partial_unique.sql) that filters
+ * `WHERE deleted_at IS NULL`. JPA's @UniqueConstraint can only declare full-column
+ * uniqueness, which would block DELETE+recreate of the same templateCode. The
+ * @UniqueConstraint was removed in favour of the DB-level partial index. Hibernate
+ * never relied on the annotation for runtime checks (it's only used by ddl-auto
+ * schema generation in dev), so removing it has no functional impact at runtime.
+ */
 @Entity
 @Table(name = "notify_templates",
-       uniqueConstraints = {
-           @UniqueConstraint(name = "uq_notify_templates_factory_code",
-                             columnNames = {"factory_id", "template_code"})
-       },
        indexes = {
            @Index(name = "idx_notify_templates_factory",
                   columnList = "factory_id")

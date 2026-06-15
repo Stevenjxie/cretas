@@ -116,7 +116,7 @@ public class ScheduledTaskController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "修改定时任务 (partial)")
+    @Operation(summary = "修改定时任务 (PATCH — null/absent = don't touch)")
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<ScheduledTask> update(@PathVariable UUID id,
                                              @RequestBody Map<String, Object> body) {

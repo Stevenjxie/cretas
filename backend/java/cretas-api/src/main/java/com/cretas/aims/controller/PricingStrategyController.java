@@ -213,15 +213,22 @@ public class PricingStrategyController {
                         .withHintTarget("strategyCode");
             }
         }
+        // Bug #1 fix (matrix 2026-05-21 P1): PATCH semantics — null body field = "don't touch".
+        // Previously unconditional setters on scopeFilterJson / rulesJson / validFrom / validTo
+        // wiped these values when the client sent a partial body (e.g. just toggling enabled or
+        // renaming the strategy). Real data-loss risk for any UI flow that doesn't round-trip the
+        // full entity. Aligned with the priority/enabled null-guards immediately below.
+        // strategyCode/strategyType are @NotBlank so Bean Validation rejects null bodies before
+        // reaching here; strategyName is nullable but the null-touch intent is consistent.
         s.setStrategyCode(req.getStrategyCode());
-        s.setStrategyName(req.getStrategyName());
+        if (req.getStrategyName() != null) s.setStrategyName(req.getStrategyName());
         s.setStrategyType(type);
-        s.setScopeFilterJson(req.getScopeFilterJson());
-        s.setRulesJson(req.getRulesJson());
+        if (req.getScopeFilterJson() != null) s.setScopeFilterJson(req.getScopeFilterJson());
+        if (req.getRulesJson() != null) s.setRulesJson(req.getRulesJson());
         if (req.getPriority() != null) s.setPriority(req.getPriority());
         if (req.getEnabled() != null) s.setEnabled(req.getEnabled());
-        s.setValidFrom(req.getValidFrom());
-        s.setValidTo(req.getValidTo());
+        if (req.getValidFrom() != null) s.setValidFrom(req.getValidFrom());
+        if (req.getValidTo() != null) s.setValidTo(req.getValidTo());
         PricingStrategy saved = strategyRepo.save(s);
         log.info("更新价格策略: id={}, code={}, enabled={}", id, saved.getStrategyCode(), saved.getEnabled());
         return ApiResponse.success("策略更新成功", saved);

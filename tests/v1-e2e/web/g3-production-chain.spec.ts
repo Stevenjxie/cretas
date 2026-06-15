@@ -244,9 +244,19 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     await adminPage.goto('/production/plans');
     await adminPage.waitForURL(/\/production\/plans/, { timeout: 20_000 });
     await adminPage.waitForSelector('.el-table', { timeout: 15_000 });
+    // PR #149 R6: production/plans page also has release-note overlay covering header buttons
+    await adminPage.addStyleTag({
+      content: '.release-note-stack { display: none !important; }'
+    }).catch(() => {});
+    await adminPage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Open create plan dialog
-    await adminPage.click('button:has-text("新建计划")');
+    // Open create plan dialog — scoped locator + actionability wait (PR #149 R6)
+    const planCreateBtn = adminPage.locator(
+      'button.el-button--primary:has-text("新建计划")'
+    ).first();
+    await expect(planCreateBtn).toBeVisible({ timeout: 15_000 });
+    await planCreateBtn.scrollIntoViewIfNeeded();
+    await planCreateBtn.click({ timeout: 30_000 });
     const planDialog = adminPage.locator('.el-dialog:visible');
     await expect(planDialog).toBeVisible({ timeout: 10_000 });
 
