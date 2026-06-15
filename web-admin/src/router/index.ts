@@ -1078,12 +1078,26 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/finance/adjustments/list.vue'),
             meta: { requiresAuth: true, title: '调整审批', module: 'finance' }
           },
+          // P2 凭证列表 — 浏览/搜索/过账/作废
+          {
+            path: 'voucher-list',
+            name: 'FinanceVoucherList',
+            component: () => import('@/views/finance/voucher/list.vue'),
+            meta: { requiresAuth: true, title: '凭证列表', module: 'finance' }
+          },
+          // P2 凭证模板编辑器 — 科目↔付款类型映射 CRUD
+          {
+            path: 'voucher-template',
+            name: 'FinanceVoucherTemplate',
+            component: () => import('@/views/finance/voucher-template/index.vue'),
+            meta: { requiresAuth: true, title: '凭证模板', module: 'finance' }
+          },
           // Sprint 7 T1 F-VOUCHER-2 Phase D — 凭证详情 借/贷 双栏 + 平衡 ✓ check
           {
             path: 'voucher/:id',
             name: 'FinanceVoucherDetail',
             component: () => import('@/views/finance/voucher/VoucherDetail.vue'),
-            meta: { requiresAuth: true, title: '凭证详情', module: 'finance' }
+            meta: { requiresAuth: true, title: '凭证详情', module: 'finance', hidden: true }
           },
           // Sprint 7 T2 F-PERIOD — 期间结账管理 (大企业财务月底锁账)
           {
