@@ -87,8 +87,9 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     private List<Map<String, Object>> batchNumbers;
 
     public enum MaterialCategory {
-        RAW,        // 原料
-        AUXILIARY,  // 辅料
-        PACKAGING   // 包装
+        RAW,          // 原料
+        AUXILIARY,    // 辅料
+        PACKAGING,    // 包装
+        SEMI_FINISHED // 半成品 (N5: 从 BOM semiFinishedRefCode / subProductTypeId 识别)
     }
 }

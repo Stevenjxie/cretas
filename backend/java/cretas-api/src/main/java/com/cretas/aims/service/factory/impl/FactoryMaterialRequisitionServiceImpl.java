@@ -187,9 +187,15 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setRequisition(mr);
             item.setMaterialTypeId(bom.getMaterialTypeId());
             item.setMaterialName(bom.getMaterialName());
-            // P0-14: 从 BOM 透传物料分类 (RAW/AUXILIARY/PACKAGING)
+            // P0-14/N5: 从 BOM 透传物料分类; 半成品 BOM 行优先按引用字段识别 (不依赖 materialCategory 字符串)
             MaterialCategory category = MaterialCategory.RAW;
-            if (bom.getMaterialCategory() != null) {
+            boolean isSemiFinished = (bom.getSemiFinishedRefCode() != null
+                    && !bom.getSemiFinishedRefCode().trim().isEmpty())
+                    || (bom.getSubProductTypeId() != null
+                    && !bom.getSubProductTypeId().trim().isEmpty());
+            if (isSemiFinished) {
+                category = MaterialCategory.SEMI_FINISHED;
+            } else if (bom.getMaterialCategory() != null) {
                 try {
                     category = MaterialCategory.valueOf(bom.getMaterialCategory());
                 } catch (IllegalArgumentException ex) {
