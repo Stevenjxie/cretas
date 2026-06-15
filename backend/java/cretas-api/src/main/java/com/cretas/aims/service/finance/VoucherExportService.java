@@ -30,6 +30,9 @@ public interface VoucherExportService {
     String exportSequentialLedger(String factoryId, VoucherExportRequestDTO req,
                                    Long userId, OutputStream out) throws Exception;
 
+    String exportKingdeeImportTemplate(String factoryId, VoucherExportRequestDTO req,
+                                       Long userId, OutputStream out) throws Exception;
+
     /**
      * 导出科目余额表 (写入 out 流).
      *

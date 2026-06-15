@@ -91,6 +91,26 @@ public class VoucherExportController {
         log.info("[SP11] VoucherExport subjectBalance: factoryId={} file={}", factoryId, fileName);
     }
 
+    @GetMapping("/voucher-import-template")
+    @RequireModule("finance")
+    @RequirePermission({"finance:read_write"})
+    public void exportKingdeeImportTemplate(
+            @PathVariable String factoryId,
+            @RequestParam String startDate,
+            @RequestParam String endDate,
+            HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+
+        Long userId = currentUserId(request);
+        VoucherExportRequestDTO req = buildRequest(startDate, endDate, VoucherTargetSystem.KINGDEE_YXSKY);
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        String fileName = voucherExportService.exportKingdeeImportTemplate(
+                factoryId, req, userId, response.getOutputStream());
+        setAttachmentHeader(response, fileName);
+        response.flushBuffer();
+        log.info("[Kingdee] import template export: factoryId={} file={}", factoryId, fileName);
+    }
+
     @GetMapping("/chronological-ledger/export")
     @RequireModule("finance")
     @RequirePermission({"finance:read"})
