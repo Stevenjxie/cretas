@@ -30,6 +30,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -344,6 +345,105 @@ class PrintControllerSp12T8Test {
         assertThat(semiRow.get("plannedAuxiliaryQty")).isEqualTo("");
         assertThat(semiRow.get("plannedSemiFinishedQty")).isEqualTo("12.5");
         assertThat(semiRow.get("actualUsedQty")).isEqualTo("________");
+    }
+
+    @Test
+    @DisplayName("T8-PWO-5: batch + task service 可用时 processes 包含真实工序行")
+    void buildProductionWorkOrderPayload_withTasks_processesPopulated() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-2026-002");
+        plan.setProductName("白卤猪蹄");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(new BigDecimal("200.00"));
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 11));
+        plan.setExpectedCompletionDate(LocalDate.of(2026, 6, 13));
+        when(productionPlanService.getProductionPlanById("F006", "plan-pork-001")).thenReturn(plan);
+
+        // Mock a batch associated with the plan
+        ProductionBatch batch = mock(ProductionBatch.class);
+        when(batch.getId()).thenReturn(1001L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "plan-pork-001"))
+                .thenReturn(List.of(batch));
+
+        // Mock two work process tasks
+        WorkProcessTaskDTO t1 = new WorkProcessTaskDTO();
+        t1.setProcessOrder(1);
+        t1.setProcessName("清洗分切");
+        t1.setEstimatedMinutes(60);
+        t1.setAssignedToName("张伟");
+
+        WorkProcessTaskDTO t2 = new WorkProcessTaskDTO();
+        t2.setProcessOrder(2);
+        t2.setProcessName("卤制");
+        t2.setEstimatedMinutes(90);
+        t2.setAssignedToName(null); // unassigned
+
+        when(workProcessTaskService.listByBatch("F006", 1001L)).thenReturn(List.of(t1, t2));
+
+        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
+                "F006", "plan-pork-001", null);
+
+        assertThat(payload.get("productName")).isEqualTo("白卤猪蹄");
+        assertThat(payload).containsKey("processes");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> processes = (List<Map<String, Object>>) payload.get("processes");
+        assertThat(processes).hasSize(2);
+
+        Map<String, Object> proc1 = processes.get(0);
+        assertThat(proc1.get("seq")).isEqualTo(1);
+        assertThat(proc1.get("name")).isEqualTo("清洗分切");
+        assertThat(proc1.get("standardHours")).isEqualTo("1.0");
+        assertThat(proc1.get("operator")).isEqualTo("张伟");
+
+        Map<String, Object> proc2 = processes.get(1);
+        assertThat(proc2.get("seq")).isEqualTo(2);
+        assertThat(proc2.get("name")).isEqualTo("卤制");
+        assertThat(proc2.get("standardHours")).isEqualTo("1.5");
+        assertThat(proc2.get("operator")).isNull(); // unassigned → null
+    }
+
+    @Test
+    @DisplayName("T8-PWO-6: batch 有但无工序任务时 processes 为空列表 (诚实空)")
+    void buildProductionWorkOrderPayload_batchWithNoTasks_emptyProcesses() throws Exception {
+        ProductionPlanDTO plan = new ProductionPlanDTO();
+        plan.setPlanNumber("PLAN-EMPTY");
+        plan.setProductName("测试产品");
+        plan.setProductUnit("kg");
+        plan.setPlannedQuantity(BigDecimal.TEN);
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setPlannedDate(LocalDate.of(2026, 6, 11));
+        plan.setExpectedCompletionDate(LocalDate.of(2026, 6, 12));
+        when(productionPlanService.getProductionPlanById("F006", "plan-empty")).thenReturn(plan);
+
+        ProductionBatch batch = mock(ProductionBatch.class);
+        when(batch.getId()).thenReturn(2001L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "plan-empty"))
+                .thenReturn(List.of(batch));
+        when(workProcessTaskService.listByBatch("F006", 2001L)).thenReturn(List.of());
+
+        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
+                "F006", "plan-empty", null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> processes = (List<Map<String, Object>>) payload.get("processes");
+        assertThat(processes).isEmpty();
+    }
+
+    @Test
+    @DisplayName("T8-PWO-7: workProcessTaskService null 时 processes 为空列表 (不崩溃)")
+    void buildProductionWorkOrderPayload_noTaskService_emptyProcesses() throws Exception {
+        ReflectionTestUtils.setField(controller, "workProcessTaskService", null);
+        ReflectionTestUtils.setField(controller, "productionBatchRepository", null);
+        ReflectionTestUtils.setField(controller, "productionPlanService", null);
+
+        Map<String, Object> payload = invokeBuildProductionWorkOrderPayload(
+                "F006", "plan-xyz", null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> processes = (List<Map<String, Object>>) payload.get("processes");
+        assertThat(processes).isEmpty();
     }
 
     // ==================== buildConsolidatedMaterialRequisitionPayload ====================
