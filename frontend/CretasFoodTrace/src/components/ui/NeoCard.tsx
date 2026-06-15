@@ -8,6 +8,7 @@ interface NeoCardProps {
   variant?: 'elevated' | 'outlined' | 'flat';
   padding?: keyof typeof theme.custom.spacing;
   onPress?: () => void;
+  testID?: string;
 }
 
 export const NeoCard: React.FC<NeoCardProps> = ({
@@ -16,6 +17,7 @@ export const NeoCard: React.FC<NeoCardProps> = ({
   variant = 'elevated',
   padding = 'l',
   onPress,
+  testID,
 }) => {
   const getShadowStyle = () => {
     if (variant === 'elevated') {
@@ -62,13 +64,14 @@ export const NeoCard: React.FC<NeoCardProps> = ({
           pressed && styles.pressed,
         ]}
         onPress={onPress}
+        testID={testID}
       >
         {children}
       </Pressable>
     );
   }
 
-  return <View style={cardStyle}>{children}</View>;
+  return <View style={cardStyle} testID={testID}>{children}</View>;
 };
 
 const styles = StyleSheet.create({
@@ -80,4 +83,3 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
 });
-

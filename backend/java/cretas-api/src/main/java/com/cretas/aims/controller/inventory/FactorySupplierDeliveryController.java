@@ -150,7 +150,6 @@ public class FactorySupplierDeliveryController {
     // ==================== 详情 ====================
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
-    @RequireModule("warehouse")
     @GetMapping("/{id}")
     @Operation(summary = "送货单详情 (含行项)")
     public ApiResponse<SupplierDeliveryNoteDto> detail(
@@ -176,7 +175,6 @@ public class FactorySupplierDeliveryController {
     }
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
-    @RequireModule("warehouse")
     @PostMapping("/{id}/price-anomaly/approve")
     @Operation(summary = "批准价格异常")
     public ApiResponse<SupplierDeliveryNoteDto> approvePriceAnomaly(
@@ -191,7 +189,6 @@ public class FactorySupplierDeliveryController {
     }
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
-    @RequireModule("warehouse")
     @PostMapping("/{id}/price-anomaly/reject")
     @Operation(summary = "驳回价格异常")
     public ApiResponse<SupplierDeliveryNoteDto> rejectPriceAnomaly(
@@ -206,7 +203,6 @@ public class FactorySupplierDeliveryController {
     }
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "finance:read", "finance:read_write"})
-    @RequireModule("warehouse")
     @GetMapping("/price-anomaly/pending")
     @Operation(summary = "价格异常待审批列表")
     public ApiResponse<Page<SupplierDeliveryNoteDto>> listPendingPriceAnomalyApprovals(

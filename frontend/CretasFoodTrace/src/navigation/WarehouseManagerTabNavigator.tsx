@@ -54,6 +54,7 @@ export function WarehouseManagerTabNavigator() {
         component={WHHomeStackNavigator}
         options={{
           title: "首页",
+          tabBarButtonTestID: "wh-tab-home",
           tabBarIcon: ({ color, size }) => (
             <Icon source="home" size={size} color={color} />
           ),
@@ -67,6 +68,7 @@ export function WarehouseManagerTabNavigator() {
         component={WHInboundStackNavigator}
         options={{
           title: "入库",
+          tabBarButtonTestID: "wh-tab-inbound",
           tabBarIcon: ({ color, size }) => (
             <Icon source="package-down" size={size} color={color} />
           ),
@@ -81,6 +83,7 @@ export function WarehouseManagerTabNavigator() {
         component={WHOutboundStackNavigator}
         options={{
           title: "出货",
+          tabBarButtonTestID: "wh-tab-outbound",
           tabBarIcon: ({ color, size }) => (
             <Icon source="package-up" size={size} color={color} />
           ),
@@ -94,6 +97,7 @@ export function WarehouseManagerTabNavigator() {
         component={WHInventoryStackNavigator}
         options={{
           title: "库存",
+          tabBarButtonTestID: "wh-tab-inventory",
           tabBarIcon: ({ color, size }) => (
             <Icon source="warehouse" size={size} color={color} />
           ),
@@ -106,6 +110,7 @@ export function WarehouseManagerTabNavigator() {
         component={WHProfileStackNavigator}
         options={{
           title: "我的",
+          tabBarButtonTestID: "wh-tab-profile",
           tabBarIcon: ({ color, size }) => (
             <Icon source="account" size={size} color={color} />
           ),

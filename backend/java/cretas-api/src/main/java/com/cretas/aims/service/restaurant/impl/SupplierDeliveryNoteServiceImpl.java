@@ -79,6 +79,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
 
     private static final Set<String> PRICE_ANOMALY_APPROVER_ROLES = Set.of(
             FactoryUserRole.factory_super_admin.name(),
+            FactoryUserRole.finance_manager.name(),
             FactoryUserRole.restaurant_manager.name(),
             FactoryUserRole.platform_admin.name()
     );
@@ -785,9 +786,9 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
 
     private void assertCanApprovePriceAnomaly(String userRole) {
         if (userRole == null || !PRICE_ANOMALY_APPROVER_ROLES.contains(userRole)) {
-            throw new BusinessException(403, "仅老板/店长可审批价格异常")
+            throw new BusinessException(403, "仅老板/财务/店长可审批价格异常")
                     .withCode("PRICE_ANOMALY_APPROVAL_FORBIDDEN")
-                    .withHint("请使用老板或店长账号登录后操作")
+                    .withHint("请使用老板、财务或店长账号登录后操作")
                     .withHintTarget("role");
         }
     }
@@ -797,6 +798,7 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
         String body = "送货单 " + displayNumber(note) + " 存在进价异常，请审批后再允许入库";
         try {
             notificationService.notifyRole(factoryId, FactoryUserRole.factory_super_admin.name(), title, body);
+            notificationService.notifyRole(factoryId, FactoryUserRole.finance_manager.name(), title, body);
             notificationService.notifyRole(factoryId, FactoryUserRole.restaurant_manager.name(), title, body);
         } catch (Exception e) {
             log.warn("价格异常审批通知发送失败 note={}: {}", note.getId(), e.getMessage());

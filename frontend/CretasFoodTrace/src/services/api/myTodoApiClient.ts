@@ -152,7 +152,7 @@ class TodoApprovalApiClient {
     factoryId?: string,
   ): Promise<{ success: boolean; data: unknown; message?: string }> {
     return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/supplier-delivery-notes/${noteId}/price-anomaly/approve`,
+      `/api/mobile/${this.fid(factoryId)}/warehouse/supplier-delivery-notes/${noteId}/price-anomaly/approve`,
     );
   }
 
@@ -163,7 +163,7 @@ class TodoApprovalApiClient {
     factoryId?: string,
   ): Promise<{ success: boolean; data: unknown; message?: string }> {
     return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/supplier-delivery-notes/${noteId}/price-anomaly/reject`,
+      `/api/mobile/${this.fid(factoryId)}/warehouse/supplier-delivery-notes/${noteId}/price-anomaly/reject`,
       { notes },
     );
   }

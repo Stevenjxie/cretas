@@ -316,6 +316,7 @@ export function WHInventoryListScreen() {
               style={styles.quickActionItem}
               onPress={() => handleQuickAction(action)}
               activeOpacity={0.7}
+              testID={`wh-quick-action-${action.key}`}
             >
               <View
                 style={[
