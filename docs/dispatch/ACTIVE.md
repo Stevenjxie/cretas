@@ -28,6 +28,11 @@
 
 ## In-flight 任务表
 
+> 🔄 **SmartBI 统一源工作线 (2026-06-15 organizer intake)** — handoff `docs/dispatch/2026-06-15-handoff-smartbi-unified-source.md`(自包含)。前序 2 刀已 SHIPPED prod(#877 收口/#873 真gold/#879 Phase0表RLS/#885 Phase0 mapper/V20261004_03 GRANT)。本 session:
+> 1. ✅ **Phase 0 upload e2e live 验 DONE**(test 8084): pin/review/域反推/RLS/GRANT 全 functional。audit `docs/audits/smartbi/2026-06-15-phase0-upload-e2e-verification.md`。**⚠️ 1 真发现**: `_classify_by_priority_regex` 把率-后缀列(达成率)映成非 canonical `rate_percent`,shadow 同义词层 + confidence 0.92 高→**review 队列不 surface**(pin 能覆盖但 operator 看不到)。预存 gap 非 Phase0 回归。修向待 Steve 定(🔒 mapper 影响所有上传)。
+> 2. 🟡 **复核队列 web-admin UI**(P0-REVIEW-UI 行): Sonnet in-harness 派发中。需补 `GET .../mapping-review/canonical-fields`(dropdown 防呆,confirm 已校验 ALL_CANONICAL_FIELDS 但无 GET 暴露)。
+> 3. ⬜ **Phase 2 统一源融合**: 战略岔口(read-time fusion vs typed 时序表)→ **必先 superpowers brainstorm**(待 Steve)。审计已纠: 真痛在 general upload `smart_bi_dynamic_data` per-upload + UploadSwitcher,非 finance。
+
 > 🆕 **2026-06-12 六扇门下一迭代 intake (新录音3走查, 全权交 GPT/Codex 执行)** — 客户 live 系统走查(48min转录)框定 **10 项需求**, 4 read-only agent 核实 current main。**自包含 brief**: `docs/meetings/2026-06-12-xinluyin3/handoff-gpt.md` (+ transcript.txt + 需求分析-organizer.md)。**做**: N1开工无条件化🔒 / N2半成品双领 / N3采购PDF对外隐价🔒 / N4税率UI / N5生产工单PDF / N6销售报表含税列 / N7计划状态色 / N9可配置审批阈值 / N10中转仓完整挂账🔒。**不做**: N8叮咚导入(缺样本)/D1折旧分摊/D2进销存报表/D3物联网工时。**红线 N1/N3脱敏/N10 只到 PR→Opus gate+从 main 部署; N10 先 spec 不写码**。**DoD 铁律(N1 教训)**: 每项全栈闭环(后端+UI/列表+防呆预警 surfacing), 别只做后端半成品报"完成"。下面 3 行跟踪。
 >
 > | ID | 任务 | model | 分支 | scope 锁 | 状态 | PR | 阻塞 |
