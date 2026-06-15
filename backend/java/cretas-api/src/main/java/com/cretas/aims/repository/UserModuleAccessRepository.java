@@ -25,6 +25,13 @@ public interface UserModuleAccessRepository extends JpaRepository<UserModuleAcce
             @Param("userId") String userId,
             @Param("moduleCode") String moduleCode);
 
+    default Optional<UserModuleAccess> findByFactoryIdAndUserIdAndModuleCode(
+            String factoryId,
+            String userId,
+            String moduleCode) {
+        return findActive(factoryId, userId, moduleCode);
+    }
+
     @Query(value = """
             SELECT *
             FROM user_module_access
@@ -36,6 +43,10 @@ public interface UserModuleAccessRepository extends JpaRepository<UserModuleAcce
     List<UserModuleAccess> findActiveByFactoryAndUser(
             @Param("factoryId") String factoryId,
             @Param("userId") String userId);
+
+    default List<UserModuleAccess> findByFactoryIdAndUserId(String factoryId, String userId) {
+        return findActiveByFactoryAndUser(factoryId, userId);
+    }
 
     @Query(value = """
             SELECT *

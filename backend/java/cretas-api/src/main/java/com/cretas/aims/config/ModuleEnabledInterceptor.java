@@ -58,7 +58,7 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         String factoryId = extractFactoryId(path);
         if (factoryId == null) {
             log.warn("@RequireModule({}) on {} but no factoryId extractable; blocking", moduleCode, path);
-            sendCanvasError(response, "请求路径缺少 factoryId，无法校验模块状态");
+            sendCanvasError(response, "Request path is missing factoryId; cannot validate module state.");
             return false;
         }
 
@@ -70,20 +70,46 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
 
         User user = getCurrentUser(request);
         if (user == null) {
-            sendUnauthorized(response, "用户未登录，无法校验账号模块访问权限");
+            sendUnauthorized(response, "User is not authenticated; cannot validate module permission.");
             return false;
         }
         if (!factoryId.equals(user.getFactoryId())) {
-            sendUserModuleDenied(response, user, moduleCode,
-                    "账号 " + userLabel(user) + " 不属于工厂 " + factoryId + "，无法访问模块 " + moduleCode);
+            sendUserModuleDenied(
+                    response,
+                    user,
+                    moduleCode,
+                    "Account " + userLabel(user) + " does not belong to factory " + factoryId,
+                    "read");
             return false;
         }
-        if (!userModuleAccessService.canAccessModule(user, moduleCode)) {
-            sendUserModuleDenied(response, user, moduleCode,
-                    "账号 " + userLabel(user) + " 缺少模块 " + moduleCode + " 的访问权限");
+
+        String requiredLevel = isWriteMethod(request) ? "write" : "read";
+        boolean allowed = isWriteMethod(request)
+                ? userModuleAccessService.canWriteModule(
+                        factoryId,
+                        String.valueOf(user.getId()),
+                        user.getRoleCode(),
+                        moduleCode)
+                : userModuleAccessService.canAccessModule(user, moduleCode);
+        if (!allowed) {
+            sendUserModuleDenied(
+                    response,
+                    user,
+                    moduleCode,
+                    "Account " + userLabel(user) + " lacks " + requiredLevel
+                            + " permission for module " + moduleCode,
+                    requiredLevel);
             return false;
         }
         return true;
+    }
+
+    private boolean isWriteMethod(HttpServletRequest request) {
+        String method = request.getMethod();
+        return "POST".equals(method)
+                || "PUT".equals(method)
+                || "PATCH".equals(method)
+                || "DELETE".equals(method);
     }
 
     private String extractFactoryId(String path) {
@@ -118,10 +144,10 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 400);
         body.put("success", false);
-        body.put("message", "模块 " + moduleCode + " 未启用");
+        body.put("message", "Module " + moduleCode + " is disabled.");
         body.put("data", null);
         body.put("timestamp", LocalDateTime.now().toString());
-        body.put("actionHint", "请先在 Canvas 配置中启用 " + moduleCode + " 模块");
+        body.put("actionHint", "Enable module " + moduleCode + " in Canvas configuration first.");
         body.put("severity", "warning");
         response.getWriter().write(objectMapper.writeValueAsString(body));
         response.getWriter().flush();
@@ -149,7 +175,7 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         body.put("success", false);
         body.put("message", message);
         body.put("severity", "error");
-        body.put("actionHint", "请重新登录后再访问该模块");
+        body.put("actionHint", "Login again and retry.");
         response.getWriter().write(objectMapper.writeValueAsString(body));
         response.getWriter().flush();
     }
@@ -158,22 +184,26 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
             HttpServletResponse response,
             User user,
             String moduleCode,
-            String message) throws Exception {
+            String message,
+            String requiredLevel) throws Exception {
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setContentType("application/json;charset=UTF-8");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 403);
         body.put("success", false);
-        body.put("message", message + "。请联系管理员开通后重试。");
+        body.put("message", message);
         body.put("severity", "error");
-        body.put("actionHint", "请联系管理员在 Canvas -> 账号模块权限 中为账号 "
-                + userLabel(user) + " 开通 " + moduleCode + " 模块。");
-        body.put("hintTarget", "账号模块权限");
+        body.put("actionHint", "Ask an administrator to grant module permission.");
+        body.put("hintTarget", "module_permissions");
+        body.put("moduleCode", moduleCode);
+        body.put("requiredLevel", requiredLevel);
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("userId", user.getId());
         meta.put("username", user.getUsername());
         meta.put("factoryId", user.getFactoryId());
         meta.put("module", moduleCode);
+        meta.put("moduleCode", moduleCode);
+        meta.put("requiredLevel", requiredLevel);
         body.put("meta", meta);
         response.getWriter().write(objectMapper.writeValueAsString(body));
         response.getWriter().flush();
