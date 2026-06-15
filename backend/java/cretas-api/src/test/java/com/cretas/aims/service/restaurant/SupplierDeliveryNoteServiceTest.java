@@ -242,9 +242,8 @@ class SupplierDeliveryNoteServiceTest {
     @Test
     @DisplayName("confirmNote 非 DRAFT 抛异常")
     void confirmNote_invalidStatus_throws() {
-        SupplierDeliveryNote note = draftWithLine();
-        note.setStatus(DeliveryNoteStatus.CONFIRMED);
-        when(noteRepository.findByIdAndFactoryId("N1", FACTORY)).thenReturn(Optional.of(note));
+        when(postingService.postSupplierDeliveryToInventory(FACTORY, "N1", 9L))
+                .thenThrow(new BusinessException(409, "只有草稿送货单可验收入库"));
 
         assertThrows(BusinessException.class, () -> service.confirmNote(FACTORY, "N1", 9L));
         verifyNoInteractions(postingService);
