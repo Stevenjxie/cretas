@@ -693,9 +693,8 @@ async def _async_worker_impl(
         # Phase 0: domain from mapped canonical fields (detected_table_type was
         # 94% 'general' in prod); fall back to the legacy classifier result.
         from smartbi.services.domain_inference import infer_domain
-        upload.detected_table_type = (
-            infer_domain(mapping_result.field_mappings) or mapping_result.table_type
-        )
+        _domain = infer_domain(mapping_result.field_mappings) or mapping_result.table_type
+        upload.detected_table_type = _domain
         upload.context_info = {
             "streamPersist": True,
             "parsedInMs": int((time.time() - start) * 1000),
@@ -704,6 +703,72 @@ async def _async_worker_impl(
             "headers": real_headers,  # so status endpoint can return them
         }
         db.commit()
+        try:
+            from smartbi.database.models import SmartBiDynamicData
+            from smartbi.services.domain_standard_fields import STANDARD_FIELDS
+            from smartbi.services.timeseries_extractor import extract_timeseries
+            from smartbi.services.timeseries_writer import write_timeseries
+
+            parsed_rows = [
+                row[0]
+                for row in (
+                    db.query(SmartBiDynamicData.row_data)
+                    .filter_by(upload_id=upload_id)
+                    .order_by(SmartBiDynamicData.row_index.asc())
+                    .all()
+                )
+            ]
+            field_mappings = {
+                m.original: (m.standard or m.original)
+                for m in mapping_result.field_mappings
+            }
+            period_mapping_col = next(
+                (
+                    m.original
+                    for m in mapping_result.field_mappings
+                    if m.standard == "period"
+                ),
+                None,
+            )
+
+            def _period_of(row):
+                if time_col and time_col in row:
+                    return _fmt_period(row.get(time_col))
+                if period_mapping_col and period_mapping_col in row:
+                    return _fmt_period(row.get(period_mapping_col))
+                return None
+
+            category_of = lambda c: STANDARD_FIELDS.get(c, {}).get("category")
+            ts_rows = extract_timeseries(
+                parsed_rows,
+                field_mappings,
+                factory_id=factory_id,
+                template_key=_template_key,
+                domain=_domain,
+                source_upload_id=upload_id,
+                period_of=_period_of,
+                category_of=category_of,
+            )
+            written = await write_timeseries(
+                factory_id,
+                _template_key,
+                ts_rows,
+                upload_id,
+            )
+            logger.info(
+                "[timeseries] upload=%d factory=%s extracted=%d written=%d",
+                upload_id,
+                factory_id,
+                len(ts_rows),
+                written,
+            )
+        except Exception:
+            logger.warning(
+                "[timeseries] extract/write failed for upload=%d factory=%s",
+                upload_id,
+                factory_id,
+                exc_info=True,
+            )
         # 数据织网 B Phase 3 — Sheet Merger.
         # Inference + merge decision must run AFTER field_definitions are
         # committed (priority 1 row_date_column needs the canonical 'date'
