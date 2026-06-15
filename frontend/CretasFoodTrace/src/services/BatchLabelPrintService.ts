@@ -6,10 +6,20 @@
  * 热敏标签规格: 57mm / 80mm 宽纸 (两种常见仓库标签)
  * 系统打印对话框支持: 蓝牙热敏打印机 / WiFi 打印机 / AirPrint — 无需 App 层 BLE 协议
  *
+ * QR 生成: 使用 qrcode npm 包 (纯 JS, 无 native, OTA 安全)
+ *   toString(text, { type: 'svg' }) → 返回 SVG 字符串, 直接内嵌 HTML
+ *
  * 使用方:
- *   const ok = await BatchLabelPrintService.print({ materialName, batchNumber, ... });
+ *   const ok = await printBatchLabel({ materialName, batchNumber, ... });
  */
 import * as Print from 'expo-print';
+
+// qrcode 无官方 TS 类型, 用 require + 局部类型声明绕过
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const QRCode = require('qrcode') as {
+  toString(text: string, options: { type: 'svg'; width?: number; margin?: number }): Promise<string>;
+  toDataURL(text: string, options?: { type?: string; width?: number }): Promise<string>;
+};
 
 export interface BatchLabelData {
   materialName: string;
@@ -25,12 +35,11 @@ export interface BatchLabelData {
 }
 
 /**
- * 生成热敏标签 HTML
+ * 生成热敏标签 HTML (async — 需要先生成 QR SVG)
  * 适配 57mm / 80mm 宽打印纸: 高 60mm 简洁布局
- * QR 码: 由浏览器/WebView SVG 渲染 (CSS qr-placeholder) — 受 expo-print 实现限制,
- * 真实 QR 需前端先生成 SVG data-url 注入, 当前显示文字占位供仓管识别.
+ * QR 码: qrcode.toString(type:'svg') 返回内联 SVG, 可直接嵌入 HTML img/div
  */
-function buildLabelHtml(data: BatchLabelData): string {
+async function buildLabelHtml(data: BatchLabelData): Promise<string> {
   const {
     materialName,
     batchNumber,
@@ -53,9 +62,18 @@ function buildLabelHtml(data: BatchLabelData): string {
     ? labelCreatedAt.replace('T', ' ').slice(0, 16)
     : new Date().toISOString().replace('T', ' ').slice(0, 16);
 
-  // QR 文字编码: 把内容分 4 行展示在 QR 占位框内 (expo-print HTML 不支持运行时 JS SVG)
   const qrText = qrContent ?? batchNumber;
-  const qrDisplay = qrText.length > 20 ? qrText.slice(0, 20) + '…' : qrText;
+
+  // 生成真实 QR 码 SVG (纯 JS, 无 native 依赖, OTA 安全)
+  // width=68 对应约 18mm@96dpi, margin=1 留最小静区
+  let qrSvg: string;
+  try {
+    qrSvg = await QRCode.toString(qrText, { type: 'svg', width: 68, margin: 1 });
+  } catch {
+    // QR 生成失败: 降级为文字占位 (不阻断打印)
+    const qrDisplay = qrText.length > 20 ? qrText.slice(0, 20) + '…' : qrText;
+    qrSvg = `<div class="qr-fallback">${escapeHtml(qrDisplay)}</div>`;
+  }
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -96,7 +114,19 @@ function buildLabelHtml(data: BatchLabelData): string {
     gap: 3mm;
     margin-top: 2mm;
   }
-  .qr-box {
+  .qr-svg-wrap {
+    width: 18mm;
+    height: 18mm;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .qr-svg-wrap svg {
+    width: 100%;
+    height: 100%;
+  }
+  .qr-fallback {
     width: 18mm;
     height: 18mm;
     border: 1.5px solid #000;
@@ -140,7 +170,7 @@ function buildLabelHtml(data: BatchLabelData): string {
   ${originPlace ? `<div class="row"><span class="label">产地</span><span class="value">${escapeHtml(originPlace)}</span></div>` : ''}
   <div class="divider"></div>
   <div class="qr-block">
-    <div class="qr-box">${escapeHtml(qrDisplay)}</div>
+    <div class="qr-svg-wrap">${qrSvg}</div>
     <div class="qr-caption">扫码追溯<br/>${escapeHtml(qrText)}</div>
   </div>
   <div class="footer">白垩纪食品溯源 · ${escapeHtml(dateStr)}</div>
@@ -163,7 +193,7 @@ function escapeHtml(s: string | null | undefined): string {
  * @throws 非取消原因的错误会 rethrow
  */
 export async function printBatchLabel(data: BatchLabelData): Promise<boolean> {
-  const html = buildLabelHtml(data);
+  const html = await buildLabelHtml(data);
   await Print.printAsync({ html });
   return true;
 }
