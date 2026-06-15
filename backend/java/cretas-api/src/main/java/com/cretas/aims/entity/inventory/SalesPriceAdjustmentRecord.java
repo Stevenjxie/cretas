@@ -79,6 +79,22 @@ public class SalesPriceAdjustmentRecord extends BaseEntity {
     @Column(name = "approval_chain_id", length = 191)
     private String approvalChainId;
 
+    /** 审批人 ID (approve/reject 时写入) */
+    @Column(name = "approved_by")
+    private Long approvedBy;
+
+    /** 审批人姓名 (approve/reject 时写入, 展示用) */
+    @Column(name = "approved_by_name", length = 200)
+    private String approvedByName;
+
+    /** 审批时间 (approve/reject 时写入) */
+    @Column(name = "approved_at")
+    private java.time.LocalDateTime approvedAt;
+
+    /** 驳回原因 (reject 时填写, fool-proof: 驳回必须有原因) */
+    @Column(name = "reject_reason", columnDefinition = "TEXT")
+    private String rejectReason;
+
     @PrePersist
     void assignUUID() {
         if (id == null) {

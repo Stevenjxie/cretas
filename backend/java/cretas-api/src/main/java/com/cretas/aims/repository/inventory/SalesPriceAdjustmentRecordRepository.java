@@ -20,4 +20,8 @@ public interface SalesPriceAdjustmentRecordRepository extends JpaRepository<Sale
     /** 幂等校验: 同一行是否已有 PENDING 审批记录 (fool-proof Rule 4) */
     Optional<SalesPriceAdjustmentRecord> findFirstBySalesOrderLineIdAndApprovalStatusOrderByCreatedAtDesc(
             Long salesOrderLineId, ApprovalStatus approvalStatus);
+
+    /** OA 待办聚合: 工厂内全部 PENDING 改价待审批记录, 按提交时间倒序 */
+    List<SalesPriceAdjustmentRecord> findByFactoryIdAndApprovalStatusOrderByCreatedAtDesc(
+            String factoryId, ApprovalStatus approvalStatus);
 }

@@ -16,6 +16,10 @@ CREATE TABLE sales_price_adjustment_records (
     approval_required        BOOLEAN      NOT NULL DEFAULT FALSE,
     approval_status          VARCHAR(32)  NOT NULL DEFAULT 'NOT_REQUIRED',
     approval_chain_id        VARCHAR(191),
+    approved_by              BIGINT,
+    approved_by_name         VARCHAR(200),
+    approved_at              TIMESTAMP,
+    reject_reason            TEXT,
     created_at               TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMP    NOT NULL DEFAULT NOW(),
     deleted_at               TIMESTAMP    NULL

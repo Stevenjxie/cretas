@@ -388,8 +388,180 @@ class SalesPriceAdjustmentServiceTest {
     }
 
     // =================================================================
+    // Test 7: approve — applies held price change + recalc total
+    // =================================================================
+
+    @Test
+    @DisplayName("PA-07: approve → PENDING 改价应用到行 + 重算总额, 状态 APPROVED")
+    void approve_appliesHeldPriceChange_andRecalcTotal() {
+        // given: a PENDING record holding newPrice=80, submitted by USER_ID (99)
+        SalesOrderItem line = buildLine(LINE_ID, ORDER_ID, new BigDecimal("100.0000"), BigDecimal.ZERO);
+        line.setQuantity(new BigDecimal("10.0000"));
+        SalesOrder order = buildOrder(ORDER_ID, FACTORY_ID, new BigDecimal("1000.00"));
+
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-1", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+
+        Long approverId = 7L;
+        when(adjustmentRecordRepository.findById("rec-1")).thenReturn(Optional.of(pending));
+        when(salesOrderItemRepository.findById(LINE_ID)).thenReturn(Optional.of(line));
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(userRepository.findById(approverId)).thenReturn(Optional.of(buildUser(approverId, "审批员")));
+        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(line));
+        when(adjustmentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // when
+        var dto = service.approvePriceAdjustment(FACTORY_ID, "rec-1", approverId);
+
+        // then: price applied to line
+        ArgumentCaptor<SalesOrderItem> lineCaptor = ArgumentCaptor.forClass(SalesOrderItem.class);
+        verify(salesOrderItemRepository).save(lineCaptor.capture());
+        assertThat(lineCaptor.getValue().getUnitPrice()).isEqualByComparingTo("80.0000");
+
+        // total recalculated: 10 × 80 = 800.00
+        ArgumentCaptor<SalesOrder> orderCaptor = ArgumentCaptor.forClass(SalesOrder.class);
+        verify(salesOrderRepository).save(orderCaptor.capture());
+        assertThat(orderCaptor.getValue().getTotalAmount()).isEqualByComparingTo("800.00");
+
+        // record marked APPROVED + approver tracked
+        assertThat(dto.approvalStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(pending.getApprovedBy()).isEqualTo(approverId);
+        assertThat(pending.getApprovedByName()).isEqualTo("审批员");
+        assertThat(pending.getApprovedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PA-07b: approve 非 PENDING 记录 → 409")
+    void approve_rejectsNonPendingRecord() {
+        SalesPriceAdjustmentRecord approved = buildPendingRecord(
+                "rec-x", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        approved.setApprovalStatus(ApprovalStatus.APPROVED);
+        when(adjustmentRecordRepository.findById("rec-x")).thenReturn(Optional.of(approved));
+
+        assertThatThrownBy(() -> service.approvePriceAdjustment(FACTORY_ID, "rec-x", 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("PENDING");
+        verify(salesOrderItemRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("PA-07c: approve 其他工厂的记录 → 404 (租户隔离)")
+    void approve_rejectsCrossFactoryRecord() {
+        SalesPriceAdjustmentRecord other = buildPendingRecord(
+                "rec-of", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        other.setFactoryId("F999");
+        when(adjustmentRecordRepository.findById("rec-of")).thenReturn(Optional.of(other));
+
+        assertThatThrownBy(() -> service.approvePriceAdjustment(FACTORY_ID, "rec-of", 7L))
+                .isInstanceOf(Exception.class)
+                .hasMessageContaining("不存在");
+    }
+
+    // =================================================================
+    // Test 8: 4-eyes — approver cannot equal submitter
+    // =================================================================
+
+    @Test
+    @DisplayName("PA-08: approve 审批人 == 提交人 → 403 (4 眼原则)")
+    void approve_rejectsSameUserAsSubmitter() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-2", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-2")).thenReturn(Optional.of(pending));
+
+        // approver == submitter (USER_ID)
+        assertThatThrownBy(() -> service.approvePriceAdjustment(FACTORY_ID, "rec-2", USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("4 眼原则");
+        verify(salesOrderItemRepository, never()).save(any());
+        verify(adjustmentRecordRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("PA-08b: reject 审批人 == 提交人 → 403 (4 眼原则)")
+    void reject_rejectsSameUserAsSubmitter() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-3", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-3")).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.rejectPriceAdjustment(FACTORY_ID, "rec-3", USER_ID, "价格太低"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("4 眼原则");
+        verify(adjustmentRecordRepository, never()).save(any());
+    }
+
+    // =================================================================
+    // Test 9: reject — discards price change, no line update
+    // =================================================================
+
+    @Test
+    @DisplayName("PA-09: reject → 状态 REJECTED, 改价不应用, 行价格不变")
+    void reject_discardsPriceChange() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-4", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        Long approverId = 7L;
+        when(adjustmentRecordRepository.findById("rec-4")).thenReturn(Optional.of(pending));
+        when(userRepository.findById(approverId)).thenReturn(Optional.of(buildUser(approverId, "审批员")));
+        when(adjustmentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        var dto = service.rejectPriceAdjustment(FACTORY_ID, "rec-4", approverId, "价格低于成本");
+
+        // line price NOT applied (no line/order save)
+        verify(salesOrderItemRepository, never()).save(any());
+        verify(salesOrderRepository, never()).save(any());
+
+        assertThat(dto.approvalStatus()).isEqualTo(ApprovalStatus.REJECTED);
+        assertThat(pending.getRejectReason()).isEqualTo("价格低于成本");
+        assertThat(pending.getApprovedBy()).isEqualTo(approverId);
+        assertThat(pending.getApprovedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PA-09b: reject 原因为空 → 400")
+    void reject_rejectsBlankReason() {
+        // reason blank check happens before record load (fail fast)
+        assertThatThrownBy(() -> service.rejectPriceAdjustment(FACTORY_ID, "rec-5", 7L, "  "))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("原因");
+        verify(adjustmentRecordRepository, never()).save(any());
+    }
+
+    // =================================================================
+    // Test 10: listPendingApprovals — OA aggregator source
+    // =================================================================
+
+    @Test
+    @DisplayName("PA-10: listPendingApprovals → 返回工厂内 PENDING 记录")
+    void listPendingApprovals_returnsPendingRecords() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-6", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findByFactoryIdAndApprovalStatusOrderByCreatedAtDesc(
+                FACTORY_ID, ApprovalStatus.PENDING)).thenReturn(List.of(pending));
+
+        var result = service.listPendingApprovals(FACTORY_ID);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getId()).isEqualTo("rec-6");
+    }
+
+    // =================================================================
     // Helpers
     // =================================================================
+
+    private SalesPriceAdjustmentRecord buildPendingRecord(
+            String id, BigDecimal oldPrice, BigDecimal newPrice, Long adjustedBy) {
+        SalesPriceAdjustmentRecord r = new SalesPriceAdjustmentRecord();
+        r.setId(id);
+        r.setSalesOrderLineId(LINE_ID);
+        r.setSalesOrderId(ORDER_ID);
+        r.setFactoryId(FACTORY_ID);
+        r.setOldUnitPrice(oldPrice);
+        r.setNewUnitPrice(newPrice);
+        r.setAdjustmentReasonType(ReasonType.CUSTOMER_REQUEST);
+        r.setAdjustedBy(adjustedBy);
+        r.setApprovalRequired(true);
+        r.setApprovalStatus(ApprovalStatus.PENDING);
+        return r;
+    }
 
     private SalesOrderItem buildLine(Long id, String orderId, BigDecimal unitPrice, BigDecimal deliveredQty) {
         SalesOrderItem item = new SalesOrderItem();

@@ -152,17 +152,16 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
         boolean effectiveImmediately;
 
         if (requiresApproval) {
-            // 8a. Trigger approval chain
-            approvalChainId = triggerApprovalChain(factoryId, orderId, lineId, oldPrice, newPrice, order, userId);
+            // 8a. Resolve approval chain config (reference only — approval is实体自管状态,
+            //     无中央 approval 实例; 实际审批走 approve/reject 端点 + OA 待办露出).
+            approvalChainId = resolveApprovalChainId(factoryId);
             record.setApprovalChainId(approvalChainId);
             effectiveImmediately = false;
-            log.info("改价触发审批: orderId={}, lineId={}, oldPrice={}, newPrice={}, chainId={}",
+            log.info("改价触发审批 (PENDING, 待 approve/reject): orderId={}, lineId={}, oldPrice={}, newPrice={}, chainId={}",
                     orderId, lineId, oldPrice, newPrice, approvalChainId);
         } else {
             // 8b. Apply price change immediately
-            line.setUnitPrice(newPrice);
-            salesOrderItemRepository.save(line);
-            recalculateOrderTotal(order);
+            applyPriceChange(line, newPrice, order);
             effectiveImmediately = true;
             log.info("改价立即生效: orderId={}, lineId={}, oldPrice={} → newPrice={}",
                     orderId, lineId, oldPrice, newPrice);
@@ -193,7 +192,98 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
                 .collect(Collectors.toList());
     }
 
+    @Override
+    @Transactional
+    public SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId) {
+        SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
+        ensureFourEyes(record, approverId);
+
+        // Load the line + order to apply the held price change.
+        SalesOrderItem line = salesOrderItemRepository.findById(record.getSalesOrderLineId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "销售订单行不存在: " + record.getSalesOrderLineId()));
+        SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "销售订单不存在: " + record.getSalesOrderId()));
+
+        // Re-guard tenant isolation (defense in depth — line/order must belong to factory).
+        if (!factoryId.equals(order.getFactoryId())) {
+            throw new BusinessException(403, "订单 " + order.getId() + " 不属于工厂 " + factoryId);
+        }
+
+        // Apply the held new price + recalc total (reuse ≤阈值 immediate-apply logic).
+        applyPriceChange(line, record.getNewUnitPrice(), order);
+
+        record.setApprovalStatus(ApprovalStatus.APPROVED);
+        record.setApprovedBy(approverId);
+        record.setApprovedByName(resolveUserName(approverId));
+        record.setApprovedAt(java.time.LocalDateTime.now());
+        SalesPriceAdjustmentRecord saved = adjustmentRecordRepository.save(record);
+
+        log.info("改价审批通过: recordId={}, factoryId={}, lineId={}, approverId={}, newPrice={}",
+                recordId, factoryId, record.getSalesOrderLineId(), approverId, record.getNewUnitPrice());
+        return SalesPriceAdjustmentRecordDTO.from(saved);
+    }
+
+    @Override
+    @Transactional
+    public SalesPriceAdjustmentRecordDTO rejectPriceAdjustment(String factoryId, String recordId,
+                                                               Long approverId, String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw new BusinessException(400, "驳回必须填写原因 (reason 不能为空)")
+                    .withHintTarget("reason");
+        }
+        SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
+        ensureFourEyes(record, approverId);
+
+        // Reject: discard the price change (line price untouched), only mark record.
+        record.setApprovalStatus(ApprovalStatus.REJECTED);
+        record.setApprovedBy(approverId);
+        record.setApprovedByName(resolveUserName(approverId));
+        record.setApprovedAt(java.time.LocalDateTime.now());
+        record.setRejectReason(reason.trim());
+        SalesPriceAdjustmentRecord saved = adjustmentRecordRepository.save(record);
+
+        log.info("改价驳回: recordId={}, factoryId={}, lineId={}, approverId={}, reason={}",
+                recordId, factoryId, record.getSalesOrderLineId(), approverId, reason.trim());
+        return SalesPriceAdjustmentRecordDTO.from(saved);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SalesPriceAdjustmentRecord> listPendingApprovals(String factoryId) {
+        return adjustmentRecordRepository
+                .findByFactoryIdAndApprovalStatusOrderByCreatedAtDesc(factoryId, ApprovalStatus.PENDING);
+    }
+
     // ==================== private helpers ====================
+
+    /**
+     * 加载 PENDING 状态的改价记录, 校验租户隔离 + 状态.
+     */
+    private SalesPriceAdjustmentRecord loadPendingRecord(String factoryId, String recordId) {
+        SalesPriceAdjustmentRecord record = adjustmentRecordRepository.findById(recordId)
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("改价记录不存在: " + recordId));
+        if (record.getApprovalStatus() != ApprovalStatus.PENDING) {
+            throw new BusinessException(409,
+                    "只能审批 PENDING 状态的改价, 当前: " + record.getApprovalStatus())
+                    .withHint("请刷新改价历史查看最新状态")
+                    .withHintTarget("改价记录");
+        }
+        return record;
+    }
+
+    /**
+     * 🔒 4 眼原则: 审批人不能与改价提交人 (adjustedBy) 相同.
+     */
+    private void ensureFourEyes(SalesPriceAdjustmentRecord record, Long approverId) {
+        if (record.getAdjustedBy() != null && record.getAdjustedBy().equals(approverId)) {
+            throw new BusinessException(403, "审批人不能与改价提交人相同 (4 眼原则)")
+                    .withHint("请使用其他账号审批")
+                    .withHintTarget("审批人");
+        }
+    }
 
     /**
      * 判断是否需要审批.
@@ -246,38 +336,34 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
     }
 
     /**
-     * 触发审批链, 返回审批链 ID (如工厂无审批配置则返回 null).
+     * 解析工厂的 SALES_ORDER_APPROVAL 审批链 config ID (仅作引用留痕).
+     *
+     * <p>注意: 本仓审批模式 = 实体自管状态 + approve/reject 端点 + OA 待办露出,
+     * {@link ApprovalChainService} 是纯 config 服务无中央 approval 实例, 故此处仅取
+     * config ID 留痕, 不"发起"审批。无配置时返回 null (不影响 PENDING 流程)。
      */
-    private String triggerApprovalChain(String factoryId, String orderId, Long lineId,
-                                        BigDecimal oldPrice, BigDecimal newPrice,
-                                        SalesOrder order, Long userId) {
+    private String resolveApprovalChainId(String factoryId) {
         if (approvalChainService == null) {
-            log.warn("改价触发审批但 ApprovalChainService 不可用: orderId={}, lineId={}", orderId, lineId);
             return null;
         }
         try {
-            Map<String, Object> context = Map.of(
-                    "entityType", "SALES_ORDER_PRICE_ADJUSTMENT",
-                    "orderId", orderId,
-                    "orderNumber", order.getOrderNumber() != null ? order.getOrderNumber() : "",
-                    "lineId", lineId,
-                    "oldPrice", oldPrice,
-                    "newPrice", newPrice,
-                    "amount", order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO,
-                    "submittedBy", userId
-            );
             List<com.cretas.aims.entity.config.ApprovalChainConfig> configs =
                     approvalChainService.getConfigsByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL);
-            if (configs.isEmpty()) {
-                return null;
-            }
-            // Use first matching config ID as chain reference
-            return configs.get(0).getId();
+            return configs.isEmpty() ? null : configs.get(0).getId();
         } catch (Exception e) {
-            log.warn("启动改价审批链失败, 将以 PENDING 状态记录: orderId={}, lineId={}, error={}",
-                    orderId, lineId, e.getMessage());
+            log.warn("解析改价审批链 config 失败 (不影响 PENDING 记录): factoryId={}, error={}",
+                    factoryId, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 应用改价到 SO 行并重算总额 (≤阈值立即生效 + approve 通过后共用此逻辑).
+     */
+    private void applyPriceChange(SalesOrderItem line, BigDecimal newPrice, SalesOrder order) {
+        line.setUnitPrice(newPrice);
+        salesOrderItemRepository.save(line);
+        recalculateOrderTotal(order);
     }
 
     /**

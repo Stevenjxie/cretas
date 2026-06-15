@@ -41,4 +41,39 @@ public interface SalesPriceAdjustmentService {
      * @return 改价记录列表 (按时间倒序)
      */
     List<SalesPriceAdjustmentRecordDTO> getPriceAdjustmentHistory(String factoryId, String orderId);
+
+    /**
+     * 审批通过改价 — PENDING → APPROVED, 应用被 hold 的改价到 SO 行并重算总额.
+     *
+     * <p>🔒 4 眼原则: 审批人不能与改价提交人相同 (403).
+     *
+     * @param factoryId  工厂 ID (租户隔离)
+     * @param recordId   改价记录 ID
+     * @param approverId 审批人 ID
+     * @return 审批后的改价记录 DTO
+     */
+    SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId);
+
+    /**
+     * 驳回改价 — PENDING → REJECTED, 丢弃改价不应用.
+     *
+     * <p>🔒 4 眼原则: 审批人不能与改价提交人相同 (403).
+     * <p>fool-proof: 驳回必须填写原因.
+     *
+     * @param factoryId  工厂 ID (租户隔离)
+     * @param recordId   改价记录 ID
+     * @param approverId 审批人 ID
+     * @param reason     驳回原因 (必填)
+     * @return 驳回后的改价记录 DTO
+     */
+    SalesPriceAdjustmentRecordDTO rejectPriceAdjustment(String factoryId, String recordId,
+                                                        Long approverId, String reason);
+
+    /**
+     * OA 待办聚合: 查询工厂内全部 PENDING 改价待审批记录 (供 MyTodoAggregator 调用).
+     *
+     * @param factoryId 工厂 ID
+     * @return PENDING 改价记录列表 (按提交时间倒序)
+     */
+    List<com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord> listPendingApprovals(String factoryId);
 }
