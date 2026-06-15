@@ -10,15 +10,18 @@
             <!-- Upload batch switcher — extracted to analysis/UploadSwitcher.vue (Item 1 phase 3f).
                  Phase 6 dropdown switch async race guards live in selectBatch + enrichSheet/
                  idleEnrichNext callbacks (script side, untouched). The child only forwards
-                 @change → selectBatch so race-guard semantics are preserved. -->
+                 @change → selectBatch so race-guard semantics are preserved.
+                 T6 Phase-2: model-value now accepts '__FUSED__' sentinel in addition to
+                 numeric batch index; alwaysShow so fusion option is visible even with 0 uploads. -->
             <UploadSwitcher
               v-if="!goldMode"
               :batches="uploadBatches"
-              :selected-index="selectedBatchIndex"
+              :model-value="selectedBatchIndex"
               :format-batch-label="formatBatchLabel"
               :is-auto-sync-batch="isAutoSyncBatch"
               :safe-batch-name="safeBatchName"
-              @update:selected-index="selectedBatchIndex = $event"
+              :always-show="true"
+              @update:model-value="selectedBatchIndex = $event"
               @change="selectBatch"
             />
             <el-button v-if="uploadedSheets.length > 1" @click="openCrossSheetAnalysis" type="primary" size="small">
@@ -85,8 +88,56 @@
       <!-- Python 服务降级警告 — extracted to analysis/PythonUnavailableAlert.vue (Item 1 phase 5) -->
       <PythonUnavailableAlert :visible="pythonUnavailable" />
 
-      <!-- 上传/空数据区域 -->
-      <div v-if="uploadedSheets.length === 0 && !uploading" class="upload-section">
+      <!-- T6 Phase-2: 融合时序视图 (fused mode)
+           当用户选择「全部(按时间融合)」时，替代单上传分析，展示跨批次时序数据。
+           Fail-open: resolver 返空时显示空状态提示而非报错。 -->
+      <div v-if="isFusedMode && !uploading" class="fused-timeseries-section" style="padding: 16px 0;">
+        <el-card>
+          <template #header>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <el-tag type="primary">时间融合</el-tag>
+              <span>生产域 · 全部批次时序合并视图</span>
+            </div>
+          </template>
+          <div v-if="fusedLoading" v-loading="true" style="min-height: 120px;" element-loading-text="正在加载融合时序数据..." />
+          <div v-else-if="fusedError" style="padding: 16px;">
+            <el-alert type="warning" :title="fusedError" :closable="false" show-icon />
+          </div>
+          <div v-else-if="fusedRows.length === 0" style="padding: 32px; text-align: center; color: #909399;">
+            <el-empty description="暂无融合时序数据">
+              <template #description>
+                <p>该工厂的生产域尚无跨批次融合时序数据。</p>
+                <p style="font-size: 12px;">请先上传生产数据文件，系统将自动提取时序信息。</p>
+              </template>
+            </el-empty>
+          </div>
+          <div v-else>
+            <el-table :data="fusedRows" size="small" max-height="400" style="width: 100%;">
+              <el-table-column prop="period" label="时间周期" width="120" />
+              <el-table-column prop="canonicalField" label="指标" width="180" />
+              <el-table-column prop="valueNum" label="数值" width="120">
+                <template #default="{ row }">
+                  {{ row.valueNum != null ? Number(row.valueNum).toLocaleString() : '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="dims" label="维度" min-width="200">
+                <template #default="{ row }">
+                  <span v-if="row.dims && Object.keys(row.dims).length">
+                    {{ Object.entries(row.dims).map(([k, v]) => `${k}: ${v}`).join(' / ') }}
+                  </span>
+                  <span v-else style="color: #c0c4cc;">—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top: 8px; color: #909399; font-size: 12px;">
+              共 {{ fusedRows.length }} 条时序记录（自动按时间合并所有上传批次）
+            </div>
+          </div>
+        </el-card>
+      </div>
+
+      <!-- 上传/空数据区域 (隐藏当 fused 模式激活时) -->
+      <div v-if="uploadedSheets.length === 0 && !uploading && !isFusedMode" class="upload-section">
         <!-- 上传区域 — extracted to analysis/UploadArea.vue (Item 1 phase 6) -->
         <UploadArea
           :history-loading="historyLoading"
@@ -508,6 +559,8 @@ import { useSmartBICrossSheet } from './composables/useSmartBICrossSheet';
 import { useSmartBIDashboardLayout } from './composables/useSmartBIDashboardLayout';
 import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { getFactoryProductionFused } from '@/api/smartbi/factoryGold';
+import type { FusedTimeseriesRow } from '@/api/smartbi/factoryGold';
 import { resolveAllHistoryRange } from './analysisDefaults';
 import { shouldDefaultToGold, pickDefaultBatchIndex } from './analysisGoldMode';
 // U2 — Chart Auto-Insight Tier 1 (replaces getChartMiniInsight)
@@ -610,9 +663,55 @@ interface UploadBatch {
 const rootRef = ref<HTMLDivElement>();
 let resizeObserver: ResizeObserver | null = null; // container resize for sidebar toggle etc.
 const uploadBatches = ref<UploadBatch[]>([]);
-const selectedBatchIndex = ref<number>(0);
+/** T6 Phase-2: '__FUSED__' sentinel or numeric batch index */
+const selectedBatchIndex = ref<number | '__FUSED__'>('__FUSED__');
 const historyLoading = ref(false);
 const batchSwitching = ref(false);  // U6: loading feedback when switching data source
+
+// ============================================================
+// T6 Phase-2: 融合时序 (fused timeseries) state
+// ============================================================
+
+/** True when '__FUSED__' is selected in UploadSwitcher */
+const isFusedMode = computed(() => selectedBatchIndex.value === '__FUSED__');
+
+/** Rows returned by timeseries resolver for fused view */
+const fusedRows = ref<FusedTimeseriesRow[]>([]);
+const fusedLoading = ref(false);
+const fusedError = ref<string | null>(null);
+
+/**
+ * Load fused timeseries rows for production domain via resolver.
+ * Uses getFactoryProductionFused → GET /api/smartbi/factory/production-fused
+ * Fail-open: sets fusedRows=[] + fusedError message on any error.
+ */
+const loadFusedTimeseries = async () => {
+  const fid = factoryId.value;
+  if (!fid) return;
+  fusedLoading.value = true;
+  fusedError.value = null;
+  try {
+    const end = new Date();
+    const start = new Date();
+    start.setFullYear(start.getFullYear() - 1);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const res = await getFactoryProductionFused({ factoryId: fid, start: fmt(start), end: fmt(end) });
+    if (res.success === false) throw new Error(res.message ?? '后端返回失败');
+    fusedRows.value = Array.isArray(res.data) ? res.data : [];
+  } catch (err: unknown) {
+    fusedRows.value = [];
+    const msg = err instanceof Error ? err.message : String(err);
+    fusedError.value = `融合时序加载失败: ${msg}`;
+    console.warn('[T6-fused] loadFusedTimeseries error:', err);
+  } finally {
+    fusedLoading.value = false;
+  }
+};
+
+// T6: auto-load fused data whenever fused mode becomes active (e.g., user switches dropdown)
+watch(isFusedMode, (active) => {
+  if (active && factoryId.value) loadFusedTimeseries();
+});
 
 // Python 服务健康状态
 const pythonHealthStatus = ref<PythonHealthStatus | null>(null);
@@ -798,7 +897,9 @@ let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const shareDialogRef = ref<InstanceType<typeof ShareDialog> | null>(null);
 
 const openShareDialog = () => {
-  const batch = uploadBatches.value[selectedBatchIndex.value];
+  // T6: guard against '__FUSED__' sentinel (no single batch in fused mode)
+  const idx = selectedBatchIndex.value;
+  const batch = idx !== '__FUSED__' ? uploadBatches.value[idx] : undefined;
   shareDialogRef.value?.open(batch);
 };
 
@@ -848,7 +949,9 @@ const tourDataReady = ref(false);
 /** 构建 DemoCacheData 用于保存 */
 const buildDemoCacheData = (): DemoCacheData | null => {
   if (uploadedSheets.value.length === 0 || !uploadResult.value) return null;
-  const batch = uploadBatches.value[selectedBatchIndex.value];
+  // T6: guard against '__FUSED__' sentinel
+  const idx = selectedBatchIndex.value;
+  const batch = idx !== '__FUSED__' ? uploadBatches.value[idx] : undefined;
   return {
     uploadBatch: {
       fileName: batch ? safeBatchName(batch) : 'unknown',
@@ -4090,8 +4193,28 @@ const makeBatch = (uploads: UploadHistoryItem[]): UploadBatch => {
 };
 
 // 选择某个批次，填充 uploadedSheets
-const selectBatch = (index: number) => {
+// T6 Phase-2: accepts '__FUSED__' sentinel → switches to fused timeseries mode
+const selectBatch = (index: number | '__FUSED__') => {
   selectedBatchIndex.value = index;
+
+  // Fused mode: clear per-upload sheets, load timeseries resolver data
+  if (index === '__FUSED__') {
+    uploadedSheets.value = [];
+    uploadResult.value = null;
+    usingDemoCache.value = false;
+    demoCacheFileName.value = '';
+    enrichedSheets.value = new Set();
+    enrichingSheets.value = new Set();
+    enrichPhases.value = new Map();
+    kpiCache.clear();
+    loadFusedTimeseries();
+    return;
+  }
+
+  // Normal batch mode: clear fused state
+  fusedRows.value = [];
+  fusedError.value = null;
+
   const batch = uploadBatches.value[index];
   if (!batch) return;
 
