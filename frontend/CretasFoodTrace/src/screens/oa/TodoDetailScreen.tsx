@@ -41,6 +41,7 @@ import {
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { apiClient } from '../../services/api/apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import { formatDateTime } from '../../utils/formatters';
 import type { OATodoStackParamList } from '../../types/navigation';
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -74,6 +75,38 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  PENDING: '待处理',
+  PENDING_APPROVAL: '待审批',
+  PENDING_FINANCE_REVIEW: '待财务审核',
+  APPROVED: '已通过',
+  FINANCE_APPROVED: '财务已审',
+  REJECTED: '已驳回',
+  COMPLETED: '已完成',
+  CANCELLED: '已取消',
+  POSTED: '已过账',
+  POSTED_TO_FINISHED_GOODS: '已入成品库',
+};
+
+function isDateTimeKey(key: string): boolean {
+  return key.endsWith('At') || key.endsWith('Time');
+}
+
+function formatDisplayValue(key: string, value: unknown): string {
+  if (key.toLowerCase().includes('amount') || key.toLowerCase().includes('price')) {
+    return formatAmount(value);
+  }
+  if (key === 'status' && typeof value === 'string') {
+    return STATUS_LABELS[value] ?? value;
+  }
+  if (isDateTimeKey(key) && (typeof value === 'string' || typeof value === 'number')) {
+    const formatted = formatDateTime(value);
+    return formatted || formatValue(value);
+  }
+  return formatValue(value);
+}
+
 /** 字段标签中文化 */
 const FIELD_LABELS: Record<string, string> = {
   orderNumber: '订单号',
@@ -90,6 +123,10 @@ const FIELD_LABELS: Record<string, string> = {
   periodMonth: '盘点周期',
   stocktakeNo: '盘点单号',
   warehouseId: '仓库ID',
+  initiatedBy: '发起人',
+  initiatedAt: '发起时间',
+  rejectReason: '驳回原因',
+  appliedAt: '生效时间',
   counterparty: '对方',
   counterpartyId: '对方ID',
   returnNumber: '退货单号',
@@ -140,7 +177,7 @@ const TOP_KEYS_BY_TYPE: Record<TodoType, string[]> = {
 };
 
 // Fields to skip (too verbose or shown elsewhere)
-const SKIP_KEYS = new Set(['id', 'factoryId', 'items', 'createdBy', 'approvedBy', 'updatedAt']);
+const SKIP_KEYS = new Set(['id', 'factoryId', 'items', 'createdBy', 'approvedBy', 'updatedAt', 'workflowInstanceId']);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // RejectModal (same pattern as list screen)
@@ -439,8 +476,7 @@ export default function TodoDetailScreen() {
         {/* Highlighted top fields (防呆 Rule 2) */}
         {topKeys.filter((k) => k in detail).map((key) => {
           const val = detail[key];
-          const isAmount = key.toLowerCase().includes('amount') || key.toLowerCase().includes('price');
-          const display = isAmount ? formatAmount(val) : formatValue(val);
+          const display = formatDisplayValue(key, val);
           return (
             <DetailRow key={key} label={labelFor(key)} value={display} />
           );
@@ -452,8 +488,7 @@ export default function TodoDetailScreen() {
             <Text variant="labelSmall" style={styles.sectionLabel}>更多信息</Text>
             {remainingKeys.map((key) => {
               const val = detail[key];
-              const isAmount = key.toLowerCase().includes('amount') || key.toLowerCase().includes('price');
-              const display = isAmount ? formatAmount(val) : formatValue(val);
+              const display = formatDisplayValue(key, val);
               return (
                 <DetailRow key={key} label={labelFor(key)} value={display} />
               );
