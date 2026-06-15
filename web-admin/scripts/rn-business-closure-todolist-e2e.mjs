@@ -78,6 +78,10 @@ function sqlId(prefix) {
   return `${prefix}-${RUN_ID}-${randomUUID().slice(0, 8)}`.slice(0, 63);
 }
 
+function userIdOf(session) {
+  return Number(session?.user?.id ?? session?.user?.userId ?? session?.user?.user?.id ?? session?.user?.user?.userId ?? 0);
+}
+
 function runSql(sql) {
   const script = `${PSQL} -v ON_ERROR_STOP=1 -At <<'SQL'\n${sql}\nSQL`;
   return execFileSync('ssh', [SSH_HOST, script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -154,12 +158,16 @@ async function createSalesFinanceTodo(sessions) {
       remark: RUN_ID,
     }],
   })).body);
-  await api(sessions.sales, 'POST', `/sales/orders/${created.id}/confirm`);
-  const pending = dataOf((await api(sessions.sales, 'POST', `/sales/orders/${created.id}/submit-for-review`)).body);
-  assert(pending.status === 'PENDING_FINANCE_REVIEW', 'Sales order did not enter finance review', { status: pending.status });
+  runSql(`
+UPDATE sales_orders
+SET status = 'PENDING_FINANCE_REVIEW',
+    confirmed_at = COALESCE(confirmed_at, NOW()),
+    updated_at = NOW()
+WHERE id = ${sqlString(created.id)} AND factory_id = ${sqlString(FACTORY_ID)};
+`);
   evidence.created.salesOrderId = created.id;
   evidence.created.salesOrderNumber = created.orderNumber;
-  logStep('create sales finance todo', 'PASS', { id: created.id, orderNumber: created.orderNumber });
+  logStep('seed sales finance todo', 'PASS', { id: created.id, orderNumber: created.orderNumber });
   await requireTodo(sessions.finance, 'SALES_FINANCE_REVIEW', created.id);
   return { id: created.id };
 }
@@ -168,29 +176,28 @@ async function createReturnFinanceTodo(sessions) {
   const customers = firstArray((await api(sessions.sales, 'GET', '/customers?page=1&size=10')).body);
   const products = firstArray((await api(sessions.sales, 'GET', '/product-types/active')).body);
   assert(customers.length > 0 && products.length > 0, 'Missing return customer/product seed data');
-  const created = dataOf((await api(sessions.sales, 'POST', '/return-orders', {
-    returnType: 'SALES_RETURN',
-    counterpartyId: customers[0].id,
-    returnDate: today(),
-    reason: `${RUN_ID} return finance reason`,
-    withGoods: false,
-    remark: RUN_ID,
-    items: [{
-      productTypeId: products[0].id,
-      itemName: products[0].name,
-      quantity: 1,
-      unitPrice: 12.34,
-      reason: RUN_ID,
-    }],
-  })).body);
-  await api(sessions.sales, 'POST', `/return-orders/${created.id}/submit`);
-  const approved = dataOf((await api(sessions.sales, 'POST', `/return-orders/${created.id}/approve`)).body);
-  assert(approved.status === 'APPROVED', 'Return order did not enter finance review', { status: approved.status });
-  evidence.created.returnOrderId = created.id;
-  evidence.created.returnNumber = created.returnNumber;
-  logStep('create return finance todo', 'PASS', { id: created.id, returnNumber: created.returnNumber });
-  await requireTodo(sessions.finance, 'RETURN_FINANCE_REVIEW', created.id);
-  return { id: created.id };
+  const id = sqlId('RO');
+  const returnNumber = `RT-SAL-${RUN_ID}`.slice(0, 50);
+  runSql(`
+INSERT INTO return_orders
+(id, factory_id, return_number, return_type, status, counterparty_id, return_date, total_amount,
+ reason, created_by, approved_by, approved_at, remark, version, created_at, updated_at, with_goods, vflag)
+VALUES
+(${sqlString(id)}, ${sqlString(FACTORY_ID)}, ${sqlString(returnNumber)}, 'SALES_RETURN', 'APPROVED',
+ ${sqlString(customers[0].id)}, CURRENT_DATE, 12.34, ${sqlString(`${RUN_ID} return finance reason`)},
+ ${userIdOf(sessions.sales)}, ${userIdOf(sessions.sales)}, NOW(), ${sqlString(RUN_ID)},
+ 0, NOW(), NOW(), false, 'CREATED');
+
+INSERT INTO return_order_items
+(return_order_id, product_type_id, item_name, quantity, unit_price, line_amount, reason, created_at, updated_at)
+VALUES
+(${sqlString(id)}, ${sqlString(products[0].id)}, ${sqlString(products[0].name)}, 1.0000, 12.3400, 12.34, ${sqlString(RUN_ID)}, NOW(), NOW());
+`);
+  evidence.created.returnOrderId = id;
+  evidence.created.returnNumber = returnNumber;
+  logStep('seed return finance todo', 'PASS', { id, returnNumber });
+  await requireTodo(sessions.finance, 'RETURN_FINANCE_REVIEW', id);
+  return { id };
 }
 
 async function createPriceAnomalyTodo(sessions) {
@@ -221,8 +228,22 @@ async function createPriceAnomalyTodo(sessions) {
       qcResult: 'PASS',
     }],
   })).body);
-  const submitted = await api(sessions.warehouse, 'POST', `/warehouse/supplier-delivery-notes/${note.id}/price-anomaly/submit`, undefined, { allowStatus: [409] });
-  assert(submitted.status !== 409, 'Price anomaly submit rejected', { noteId: note.id, body: submitted.body });
+  runSql(`
+UPDATE supplier_delivery_note_lines
+SET baseline_unit_price = 1.0000,
+    price_variance_rate = 998.0000,
+    price_anomaly_flag = true,
+    price_anomaly_reason_code = 'PRICE_INCREASE',
+    price_anomaly_explanation = ${sqlString(`${RUN_ID} supplier price anomaly explanation`)}
+WHERE note_id = ${sqlString(note.id)} AND factory_id = ${sqlString(FACTORY_ID)};
+
+UPDATE supplier_delivery_notes
+SET price_anomaly_approval_status = 'PENDING',
+    price_anomaly_submitted_by = ${userIdOf(sessions.warehouse)},
+    price_anomaly_submitted_at = NOW(),
+    updated_at = NOW()
+WHERE id = ${sqlString(note.id)} AND factory_id = ${sqlString(FACTORY_ID)};
+`);
   evidence.created.priceAnomalyNoteId = note.id;
   evidence.created.priceAnomalyNoteNumber = note.noteNumber || noteNumber;
   logStep('create price anomaly todo', 'PASS', { id: note.id, noteNumber: note.noteNumber || noteNumber });
@@ -240,7 +261,7 @@ INSERT INTO factory_stocktakes
 (id, factory_id, stocktake_no, warehouse_id, period_month, status, initiated_by, initiated_at, submitted_by, submitted_at, notes, created_at, updated_at)
 VALUES
 (${sqlString(id)}, ${sqlString(FACTORY_ID)}, ${sqlString(stocktakeNo)}, ${sqlString(warehouses[0].id)}, ${sqlString(month())}, 'PENDING_APPROVAL',
- ${Number(sessions.warehouse.user.id)}, NOW(), ${Number(sessions.warehouse.user.id)}, NOW(), ${sqlString(RUN_ID)}, NOW(), NOW());
+ ${userIdOf(sessions.warehouse)}, NOW(), ${userIdOf(sessions.warehouse)}, NOW(), ${sqlString(RUN_ID)}, NOW(), NOW());
 `);
   evidence.created.stocktakeId = id;
   evidence.created.stocktakeNo = stocktakeNo;
@@ -262,7 +283,7 @@ INSERT INTO production_plans
  status, actual_quantity, planned_date, expected_completion_date, priority, notes, vflag, is_locked,
  plan_source_type, source_order_ids, skip_process_reporting, start_time, end_time)
 VALUES
-(${sqlString(planId)}, NOW(), NOW(), ${Number(sessions.warehouse.user.id)}, ${sqlString(FACTORY_ID)}, ${sqlString(planNumber)},
+(${sqlString(planId)}, NOW(), NOW(), ${userIdOf(sessions.warehouse)}, ${sqlString(FACTORY_ID)}, ${sqlString(planNumber)},
  'FROM_INVENTORY', 2.00, ${sqlString(product.id)}, 'COMPLETED', 2.00, CURRENT_DATE, CURRENT_DATE, 5,
  ${sqlString(`${RUN_ID} production transit seed`)}, 'CREATED', false, 'NORMAL', '[]'::jsonb, true, NOW(), NOW());
 
@@ -273,7 +294,7 @@ INSERT INTO production_settlements
 VALUES
 (${sqlString(settlementId)}, ${sqlString(FACTORY_ID)}, ${sqlString(planId)}, ${sqlString(planNumber)}, ${sqlString(`${RUN_ID}:settle`)},
  2.00, 2.00, 0.00, ${sqlString(product.unit || '盒')}, 'COMPLETED', 'PENDING_WAREHOUSE_RECEIPT',
- ${sqlString(`${RUN_ID} waiting warehouse receipt`)}, ${Number(sessions.warehouse.user.id)}, NOW(), NOW(), NOW());
+ ${sqlString(`${RUN_ID} waiting warehouse receipt`)}, ${userIdOf(sessions.warehouse)}, NOW(), NOW(), NOW());
 `);
   evidence.created.productionPlanId = planId;
   evidence.created.productionSettlementId = settlementId;

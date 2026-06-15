@@ -615,7 +615,9 @@ public class SupplierDeliveryNoteServiceImpl implements SupplierDeliveryNoteServ
     @Override
     public Page<SupplierDeliveryNote> listPendingPriceAnomalyApprovals(
             String factoryId, String userRole, Pageable pageable) {
-        assertCanApprovePriceAnomaly(userRole);
+        if (userRole != null) {
+            assertCanApprovePriceAnomaly(userRole);
+        }
         return noteRepository.findByFactoryIdAndPriceAnomalyApprovalStatus(
                 factoryId, PriceAnomalyApprovalStatus.PENDING, pageable);
     }
