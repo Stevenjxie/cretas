@@ -34,6 +34,43 @@ export interface MaterialBatchRef {
   unit?: string;
 }
 
+// F2: 厂号筛选哨兵 — 批次无厂号时归入此分组 chip
+export const NO_FACTORY_NUMBER = '__NO_FACTORY_NUMBER__';
+
+/**
+ * F2 厂号筛选纯逻辑 (抽出供单测). 返回:
+ *  - keys: 列表里出现的去重厂号顺序 (无厂号 → NO_FACTORY_NUMBER 哨兵)
+ *  - showFilter: 是否展示筛选 (≥2 个不同厂号才展示)
+ */
+export function deriveFactoryNumberKeys(
+  factoryNumbers: ReadonlyArray<string | null | undefined>,
+): { keys: string[]; showFilter: boolean } {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const fn of factoryNumbers) {
+    const key = fn != null && fn !== '' ? fn : NO_FACTORY_NUMBER;
+    if (!seen.has(key)) {
+      seen.add(key);
+      ordered.push(key);
+    }
+  }
+  return { keys: ordered, showFilter: ordered.length > 1 };
+}
+
+/**
+ * F2 一行是否在当前厂号筛选下可见. 已选中行始终可见 (防止操作工"丢失"已选批次).
+ */
+export function isRowVisibleUnderFactoryFilter(
+  factoryNumber: string | null | undefined,
+  selected: boolean,
+  filter: string | null,
+  showFilter: boolean,
+): boolean {
+  if (!showFilter || filter == null) return true;
+  const key = factoryNumber != null && factoryNumber !== '' ? factoryNumber : NO_FACTORY_NUMBER;
+  return key === filter || selected;
+}
+
 export interface MaterialBatchPickerValidation {
   hasOverLimit: boolean;
   message?: string;
@@ -103,6 +140,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [scannedLabel, setScannedLabel] = useState<MaterialBatchLabelScanResponse | null>(null);
+  // F2 防呆: 同品多厂号时按厂号筛选 (不同厂号 = 不同批次, 易选错). null = 显示全部.
+  const [factoryNumberFilter, setFactoryNumberFilter] = useState<string | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryKeyRef = useRef<string>('');
   const rowsRef = useRef<RowState[]>([]);   // mirrors `rows` for use inside async callbacks
@@ -265,6 +304,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     setConfirmed(false);
     setConfirmFeedback(false);
     setLoadedQueryKey(null);
+    setFactoryNumberFilter(null);  // F2: 切换工厂/产品时重置厂号筛选
   }, [queryKey]);
 
   // 展开时加载
@@ -411,6 +451,26 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   const selectedCount = value.length;
 
+  // F2 厂号筛选: 收集本批次列表里出现的不同厂号 (含 "未标厂号" 哨兵).
+  // 同一品名出现 ≥2 个厂号时才展示筛选 chips —— 不同厂号 = 不同批次, 仓管易选错.
+  const { keys: factoryNumberKeys, showFilter: showFactoryNumberFilter } =
+    deriveFactoryNumberKeys(rows.map((r) => r.batch.factoryNumber));
+
+  // 当前筛选下可见的行索引 (保留原 idx 以驱动 toggleRow/setQty); 未选 chip 时显示全部.
+  // 已选中的批次始终可见 (即使被筛选掉) —— 防止操作工"丢失"已选批次看不到.
+  const visibleRowIndices: number[] = rows
+    .map((_, idx) => idx)
+    .filter((idx) => {
+      const row = rows[idx];
+      if (row == null) return false;
+      return isRowVisibleUnderFactoryFilter(
+        row.batch.factoryNumber,
+        row.selected,
+        factoryNumberFilter,
+        showFactoryNumberFilter,
+      );
+    });
+
   // Q3: 折叠摘要文案 (已确认后显示)
   const collapsedSummary = (() => {
     if (selectedCount === 0) return null;
@@ -441,7 +501,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       >
         <Text style={styles.headerTitle}>
           {/* B1: asterisk when required and nothing selected yet; badge when batches chosen */}
-          {'领料批次'}
+          {/* F1 双领: 标明"原料"区, 与屏幕上方"领用半成品库存"卡片配对成 原料/半成品 两区 */}
+          {'领料批次 (原料)'}
           {selectedCount > 0 ? (
             <Text style={styles.badge}> · 已选 {selectedCount} 批</Text>
           ) : required ? (
@@ -523,12 +584,62 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           ) : rows.length === 0 ? (
             <Text style={styles.emptyText}>暂无可用原料批次</Text>
           ) : (
-            // B2: removed scrollEnabled={false} — the 320dp clip was preventing scroll to lower batches
-            // BUG-3 fix: wrap each row in TouchableOpacity so the full row is tappable (≥44pt).
-            // The inner checkbox View is now visual-only (pointerEvents="none") — row press handles toggle.
-            // When multi-batch qty TextInput is rendered, it stops propagation naturally (TextInput handles its own touches).
+            <>
+            {/* F2 防呆: 同品多厂号 → 厂号筛选 chips (不同厂号=不同批次, 先选厂号锁定正确批次) */}
+            {showFactoryNumberFilter ? (
+              <View style={styles.factoryFilterWrap}>
+                <Text style={styles.factoryFilterLabel}>按厂号筛选 (不同厂号是不同批次)</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.factoryChips}
+                >
+                  <TouchableOpacity
+                    style={[styles.factoryChip, factoryNumberFilter == null && styles.factoryChipActive]}
+                    onPress={() => setFactoryNumberFilter(null)}
+                    disabled={disabled}
+                    accessibilityLabel="显示全部厂号"
+                    testID="factory-filter-all"
+                  >
+                    <Text style={[styles.factoryChipText, factoryNumberFilter == null && styles.factoryChipTextActive]}>
+                      全部
+                    </Text>
+                  </TouchableOpacity>
+                  {factoryNumberKeys.map((key) => {
+                    const active = factoryNumberFilter === key;
+                    const display = key === NO_FACTORY_NUMBER ? '未标厂号' : key;
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        style={[styles.factoryChip, active && styles.factoryChipActive]}
+                        onPress={() => setFactoryNumberFilter(active ? null : key)}
+                        disabled={disabled}
+                        accessibilityLabel={`筛选厂号 ${display}`}
+                        accessibilityState={{ selected: active }}
+                        testID={`factory-filter-${key}`}
+                      >
+                        <Text style={[styles.factoryChipText, active && styles.factoryChipTextActive]}>
+                          {display}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+
+            {/* B2: removed scrollEnabled={false} — the 320dp clip was preventing scroll to lower batches
+              * BUG-3 fix: wrap each row in TouchableOpacity so the full row is tappable (≥44pt).
+              * The inner checkbox View is now visual-only (pointerEvents="none") — row press handles toggle.
+              * When multi-batch qty TextInput is rendered, it stops propagation naturally (TextInput handles its own touches). */}
             <ScrollView style={styles.listScroll} nestedScrollEnabled>
-              {rows.map((row: RowState, idx: number) => (
+              {visibleRowIndices.length === 0 ? (
+                <Text style={styles.emptyText}>该厂号下暂无可领批次</Text>
+              ) : null}
+              {visibleRowIndices.map((idx: number) => {
+                const row = rows[idx];
+                if (row == null) return null;
+                return (
                 <TouchableOpacity
                   key={row.batch.id}
                   style={[styles.row, row.selected && styles.rowSelected]}
@@ -592,8 +703,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     </View>
                   ) : null}
                 </TouchableOpacity>
-              ))}
+                );
+              })}
             </ScrollView>
+            </>
           )}
 
           {/* 多批次合计 */}
@@ -696,6 +809,20 @@ const styles = StyleSheet.create({
   scanInfo: { flex: 1, fontSize: 12, color: '#606266', lineHeight: 17 },
 
   body: { borderTopWidth: 1, borderTopColor: '#EBEEF5', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
+
+  // F2: 厂号筛选 chips
+  factoryFilterWrap: { marginBottom: 8 },
+  factoryFilterLabel: { fontSize: 12, color: '#909399', marginBottom: 6 },
+  factoryChips: { flexDirection: 'row', alignItems: 'center', paddingRight: 8, gap: 8 },
+  factoryChip: {
+    minHeight: 36, paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 18, borderWidth: 1, borderColor: '#DCDFE6',
+    backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginRight: 8,
+  },
+  factoryChipActive: { borderColor: '#E8732E', backgroundColor: '#FFF1E8' },
+  factoryChipText: { fontSize: 14, color: '#606266', fontWeight: '600' },
+  factoryChipTextActive: { color: '#E8732E', fontWeight: '700' },
+
   center: { alignItems: 'center', paddingVertical: 16 },
   loadingText: { marginTop: 8, fontSize: 13, color: '#909399' },
   errorText: { fontSize: 13, color: '#F56C6C', textAlign: 'center' },
@@ -722,8 +849,9 @@ const styles = StyleSheet.create({
   remaining: { fontSize: 12, color: '#909399', marginTop: 2 },
   qtyBox: { flexDirection: 'row', alignItems: 'center' },
   qtyInput: {
-    width: 72, height: 38, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 6,
-    paddingHorizontal: 8, fontSize: 16, fontWeight: '600', color: '#1A1A1A',
+    // F7 防呆: 数字 ≥24px 大字号 — 仓管员年纪偏大, 怕看错数字
+    width: 92, height: 48, borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 6,
+    paddingHorizontal: 8, fontSize: 24, fontWeight: '700', color: '#1A1A1A',
     backgroundColor: '#FFFFFF', textAlign: 'center',
   },
   qtyInputDisabled: { opacity: 0.5 },
