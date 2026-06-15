@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Type-check/build artifacts must never be emitted beside Vue/TS sources.
+# origin/main tracks no handwritten JS under web-admin/src; force-add if that changes.
+src/**/*.js
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
