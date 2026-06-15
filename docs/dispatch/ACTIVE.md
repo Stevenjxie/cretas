@@ -28,6 +28,15 @@
 
 ## In-flight 任务表
 
+> 🆕 **2026-06-15 六扇门「主动建版本」剩余项 intake (organizer, brainstorm→spec→plan→Codex 卡)** — handoff `docs/dispatch/2026-06-15-handoff-liushanmen-remaining-proactive-build.md`。**verify-first 改写 scope**: ② 多SO合并 **已全量 shipped(#726/#762/#771)→移除不建**; ① 厂号 free-text 已存在(REFUTED handoff "缺")→真缺=结构化+收货录入+picker选; ③ 金蝶导出已全建→真缺=云星空 import 模板。**Steve 拍板**: ① 结构化登记表(厂号=独立属性非编码段)+只做后端/web(**RN picker 待协调,禁碰**); ③ 主动建云星空默认版。spec+plan 已 merge main(PR #890)。**分发卡(自包含)**: `docs/dispatch/2026-06-15-codex-cards-factory-number-and-kingdee.md`(courier Codex)。下 2 行跟踪。
+> 1. ⚠️ **撞车防御**: 卡 A 禁碰 `frontend/CretasFoodTrace/**`(RN 领料屏 picker 已派别 chat, 疑 N2 半成品双领) + 禁碰 16 位编码段 + 禁碰 finance(卡 B)。卡 B 禁碰 material/RN(卡 A)。两卡不同子系统零文件重叠。
+> 2. 🔒 红线: 卡 A Flyway V20261024_16(查号防撞) / 卡 B 财务脱敏 → 只到 PR → Opus organizer 终审(`gh pr diff` 验远端) + 从 main 部署(蓝绿)+ deploy-web-admin。
+>
+> | ID | 任务 | model | effort | orchestration | 分支 | scope 锁 | 状态 | PR | 阻塞 |
+> |---|---|---|---|---|---|---|---|---|---|
+> | LSM-FACTORYNUM | 🔒 原料厂号结构化(ManufacturerRegistry 登记表+收货原子录入+web下拉; 厂号=独立属性; RN不碰) | Codex+Opus gate | out-of-harness | Steve courier | feat/liushanmen-factory-number | 后端 material(新)+CreateReceiveRecordRequest+PurchaseServiceImpl; web-admin manufacturers/+materials/list.vue; ⛔禁 RN/MaterialCodeSegment/finance | ⬜ 卡已出待 courier | - | spec+plan #890 已 merge |
+> | LSM-KINGDEE-TPL | 🔒 金蝶云星空凭证导入模板(新导出端点+KINGDEE_YXSKY 枚举; 借贷分列留空; config-driven 无迁移) | Codex+Opus gate | out-of-harness | Steve courier | feat/liushanmen-kingdee-template | VoucherTargetSystem+VoucherExportService(Impl)+凭证导出 Controller; web 财务导出页按钮; ⛔禁 material/RN | ⬜ 卡已出待 courier | - | spec+plan #890 已 merge |
+
 > 🔄 **SmartBI 统一源工作线 (2026-06-15 organizer intake)** — handoff `docs/dispatch/2026-06-15-handoff-smartbi-unified-source.md`(自包含)。前序 2 刀已 SHIPPED prod(#877 收口/#873 真gold/#879 Phase0表RLS/#885 Phase0 mapper/V20261004_03 GRANT)。本 session:
 > 1. ✅ **Phase 0 upload e2e live 验 DONE**(test 8084): pin/review/域反推/RLS/GRANT 全 functional。audit `docs/audits/smartbi/2026-06-15-phase0-upload-e2e-verification.md`。**⚠️ 1 真发现**: `_classify_by_priority_regex` 把率-后缀列(达成率)映成非 canonical `rate_percent`,shadow 同义词层 + confidence 0.92 高→**review 队列不 surface**(pin 能覆盖但 operator 看不到)。预存 gap 非 Phase0 回归。修向待 Steve 定(🔒 mapper 影响所有上传)。
 > 2. 🟡 **复核队列 web-admin UI**(P0-REVIEW-UI 行): Sonnet in-harness 派发中。需补 `GET .../mapping-review/canonical-fields`(dropdown 防呆,confirm 已校验 ALL_CANONICAL_FIELDS 但无 GET 暴露)。
