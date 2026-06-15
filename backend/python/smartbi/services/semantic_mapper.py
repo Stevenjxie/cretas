@@ -78,9 +78,6 @@ class SemanticMappingResult:
 # ALL_CANONICAL_FIELDS is the LLM-output whitelist (unmapped -> review queue).
 from smartbi.services.domain_standard_fields import (  # noqa: E402
     STANDARD_FIELDS,
-    ALL_CANONICAL_FIELDS,
-    DOMAIN_FIELDS,
-    get_standard_fields,
 )
 
 # Table type patterns

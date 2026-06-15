@@ -1,5 +1,5 @@
 """Phase 0: Layer-0 deterministic pin + controlled-vocab reject routing tests."""
-from smartbi.services.semantic_mapper import SemanticMapper, FieldMapping
+from smartbi.services.semantic_mapper import SemanticMapper
 from smartbi.services.domain_standard_fields import (
     ALL_CANONICAL_FIELDS,
     STANDARD_FIELDS,
