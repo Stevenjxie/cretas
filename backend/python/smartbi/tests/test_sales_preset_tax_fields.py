@@ -23,7 +23,7 @@ def test_money_fields_defaults_missing_tax_amount_to_zero():
 
 
 def test_money_fields_treats_null_as_zero():
-    fields = _money_fields(None)
+    fields = _money_fields(None, None)
 
     assert fields["taxableAmount"] == pytest.approx(0.0)
     assert fields["taxAmount"] == pytest.approx(0.0)
