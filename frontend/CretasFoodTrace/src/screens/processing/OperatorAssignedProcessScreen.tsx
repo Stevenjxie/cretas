@@ -59,9 +59,6 @@ function statusRank(status: WorkProcessTaskStatus): number {
   return 2;
 }
 
-function isTerminalStatus(status: WorkProcessTaskStatus): boolean {
-  return status === 'COMPLETED' || status === 'SKIPPED' || status === 'CANCELLED';
-}
 
 function compareAssignedTasks(a: WorkProcessTask, b: WorkProcessTask): number {
   return (
