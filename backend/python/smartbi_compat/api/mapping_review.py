@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from smartbi.config import get_pg_pool
-from smartbi.services.domain_standard_fields import ALL_CANONICAL_FIELDS
+from smartbi.services.domain_standard_fields import ALL_CANONICAL_FIELDS, DOMAIN_FIELDS
 from smartbi_compat._rbac_role import require_analytics_read
 from smartbi_compat.auth import AuthContext
 
@@ -35,6 +35,29 @@ class ConfirmItem(BaseModel):
 
 class ConfirmRequest(BaseModel):
     items: List[ConfirmItem]
+
+
+@router.get(_BASE + "/canonical-fields")
+async def list_canonical_fields(
+    factory_id: str,
+    auth: AuthContext = Depends(require_analytics_read),
+):
+    """Return canonical field list grouped by domain (for dropdown in review UI).
+
+    Pure static read from ``DOMAIN_FIELDS`` — no DB, no RLS needed.
+    Each entry: ``{standard_name, description, category}``.
+    """
+    data: dict[str, list[dict]] = {}
+    for domain, fields in DOMAIN_FIELDS.items():
+        data[domain] = [
+            {
+                "standard_name": standard_name,
+                "description": meta.get("description", ""),
+                "category": meta.get("category", ""),
+            }
+            for standard_name, meta in fields.items()
+        ]
+    return {"success": True, "data": data, "message": "ok"}
 
 
 @router.get(_BASE + "/pending")

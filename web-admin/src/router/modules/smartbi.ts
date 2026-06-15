@@ -130,6 +130,13 @@ const smartBIRoutes: RouteRecordRaw[] = [
           hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
         },
       },
+      // Phase 0: 字段映射复核队列 (2026-06-15) — 闭合自改进环
+      {
+        path: 'mapping-review',
+        name: 'SmartBIMappingReview',
+        component: () => import('@/views/smart-bi/MappingReviewQueue.vue'),
+        meta: { requiresAuth: true, title: '字段映射复核', icon: 'EditPen', module: 'analytics' },
+      },
     ],
   },
 ];

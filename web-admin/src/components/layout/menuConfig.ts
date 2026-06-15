@@ -314,6 +314,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
       { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
       { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
+      // Phase 0: 字段映射复核 — Excel 列无法自动映射时由人工确认并写入 pin (2026-06-15)
+      { path: '/smart-bi/mapping-review', title: '字段映射复核', icon: 'EditPen', module: 'analytics' },
       // D-6 保守保留: 分析概览 (与驾驶舱/hub 重叠但数据源不同, P5 凭埋点再决定真删)
       { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics' },
       // -- AI 运维 (admin) — WS4: 收 admin 门控 (普通经营用户不需要) --
