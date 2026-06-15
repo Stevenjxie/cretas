@@ -190,7 +190,7 @@ export default function WHTransitLedgerScreen() {
 
         <TextInput
           mode="outlined"
-          label={COPY.receivedQty}
+          placeholder={COPY.receivedQty}
           keyboardType="decimal-pad"
           value={receivedById[item.id] ?? ''}
           onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [item.id]: text }))}
