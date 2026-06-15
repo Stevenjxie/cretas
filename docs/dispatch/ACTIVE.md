@@ -44,9 +44,11 @@
 > 4. 🟢 **Phase 2 统一源融合 — 地基 LIVE,执行中**: 决策 = 统一长 typed 表 `smart_bi_timeseries` + per-period replace(最新按期覆盖)+ resolver + **pilot=production** + backfill。spec `…/specs/2026-06-15-smartbi-phase2-unified-source-fusion-design.md` + plan `…/plans/2026-06-15-smartbi-phase2-fusion-v1-production.md`。卡 `docs/dispatch/2026-06-15-codex-cards-smartbi-phase2.md`。
 >    - ✅ **T1 migration (#894)**: `smart_bi_timeseries` 建表 **test+prod LIVE**(V20261004_04,rowsecurity=t/force=t,GRANT smartbi_user=arwd,tenant_isolation policy)。
 >    - ✅ **T2 extractor (#893)** + ✅ **T4 resolver (#895)** merged+部署(resolver 随 Python deploy 上)。
->    - 🟡 **T3 writer+excel_async hook (🔒)**: Codex 卡已 courier,**待 PR**。表已 live → 来了可 gate+部署+live 验。
->    - ⬜ **T5 backfill**(待 T3)、**T6 production读+UploadSwitcher**(可 courier,T4 resolver 接口已 merged)、**T7 live e2e**(=organizer,待 T3 部署)。
->    - 波次 1{T1✅,T2✅}→2{T3🟡,T4✅}→3{T5,T6}→4{T7}。
+>    - ✅ **T3 writer+excel_async hook (#898,🔒)** + ✅ **extractor 分类修复 (#899)**: e2e 发现 extractor 用 STANDARD_FIELDS 分类丢非 canonical measure(产出数量 identity 名 is_measure=t)→ 改按 field_def `is_measure/is_dimension/is_time` 标志分类。merged + **test 部署**。
+>    - 🎯 **T7 live e2e 通过 (test 8084)**: 两份重叠期 production Excel → `smart_bi_timeseries` 写链(per-period replace + 最新按期覆盖: 03 被 u2 覆盖 9999/0.99 + 双 measure yield_rate+产出数量 + domain=production)+ **resolver 读链返融合连续序列 Jan-May**(GUC 租户隔离)。**整条 v1 链路端到端验证**。
+>    - ⬜ **T5 backfill**(deps T2+T3 已 merged,**可 courier**)、**T6 production读+UploadSwitcher**(T4 已 merged,**可 courier**)。
+>    - ⚠️ **prod 写路径(#898/#899)暂未部署 prod** —— 故意 hold,与 T6(读)一起作为 user-complete 单元部署 prod + 跑 backfill + prod e2e(prod 现仅表+extractor+resolver,无 hook=无写入,安全空表)。
+>    - 波次 1{T1✅,T2✅}→2{T3✅,T4✅}→**e2e✅(test)**→3{T5,T6}→4{prod 部署 v1 整体+backfill+prod e2e}。
 > - ✅ Phase 0 lint baseline 已清(#896 Phase0 文件 36→0,domain_standard_fields 内容字节不变 + #897 T2 extractor 3 F401)→ **smartbi python-lint-test 现绿**(未来 Phase 2 PR 真 lint 回归可见)。
 
 > 🆕 **2026-06-12 六扇门下一迭代 intake (新录音3走查, 全权交 GPT/Codex 执行)** — 客户 live 系统走查(48min转录)框定 **10 项需求**, 4 read-only agent 核实 current main。**自包含 brief**: `docs/meetings/2026-06-12-xinluyin3/handoff-gpt.md` (+ transcript.txt + 需求分析-organizer.md)。**做**: N1开工无条件化🔒 / N2半成品双领 / N3采购PDF对外隐价🔒 / N4税率UI / N5生产工单PDF / N6销售报表含税列 / N7计划状态色 / N9可配置审批阈值 / N10中转仓完整挂账🔒。**不做**: N8叮咚导入(缺样本)/D1折旧分摊/D2进销存报表/D3物联网工时。**红线 N1/N3脱敏/N10 只到 PR→Opus gate+从 main 部署; N10 先 spec 不写码**。**DoD 铁律(N1 教训)**: 每项全栈闭环(后端+UI/列表+防呆预警 surfacing), 别只做后端半成品报"完成"。下面 3 行跟踪。
