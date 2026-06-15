@@ -73,7 +73,7 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
             sendUnauthorized(response, "User is not authenticated; cannot validate module permission.");
             return false;
         }
-        if (!factoryId.equals(user.getFactoryId())) {
+        if (!"platform_admin".equals(user.getRoleCode()) && !factoryId.equals(user.getFactoryId())) {
             sendUserModuleDenied(
                     response,
                     user,

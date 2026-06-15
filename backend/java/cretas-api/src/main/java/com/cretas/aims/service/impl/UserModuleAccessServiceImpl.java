@@ -24,6 +24,8 @@ import java.util.stream.Collectors;
 @Service
 public class UserModuleAccessServiceImpl implements UserModuleAccessService {
 
+    private static final String SETTINGS_MODULE_CODE = "permission_settings";
+
     private final UserModuleAccessRepository repository;
     private final PermissionService permissionService;
     private final UserRepository userRepository;
@@ -93,13 +95,15 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
         }
 
         if (platformRolePermissionRepository != null) {
-            return platformRolePermissionRepository
+            var platformLevel = platformRolePermissionRepository
                     .findByRoleCodeAndModuleCodeAndDeletedAtIsNull(roleCode, moduleCode)
-                    .map(permission -> PermissionLevel.fromAny(permission.getPermissionLevel()))
-                    .orElse(PermissionLevel.HIDDEN);
+                    .map(permission -> PermissionLevel.fromAny(permission.getPermissionLevel()));
+            if (platformLevel.isPresent()) {
+                return platformLevel.get();
+            }
         }
 
-        return PermissionLevel.HIDDEN;
+        return fallbackPermissionServiceLevel(factoryId, userId, moduleCode);
     }
 
     @Override
@@ -199,25 +203,31 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
             return factoryRoleLevel;
         }
         if (platformRolePermissionRepository != null) {
-            return platformRolePermissionRepository
+            var platformLevel = platformRolePermissionRepository
                     .findByRoleCodeAndModuleCodeAndDeletedAtIsNull(roleCode, moduleCode)
-                    .map(permission -> PermissionLevel.fromAny(permission.getPermissionLevel()))
-                    .orElse(PermissionLevel.HIDDEN);
+                    .map(permission -> PermissionLevel.fromAny(permission.getPermissionLevel()));
+            if (platformLevel.isPresent()) {
+                return platformLevel.get();
+            }
         }
-        String permissionModule = ProductionModuleRegistry.permissionModule(moduleCode);
-        boolean allowed = permissionService.hasAnyPermission(
-                user,
-                permissionModule + ":read",
-                permissionModule + ":write",
-                permissionModule + ":read_write");
-        return allowed ? PermissionLevel.WRITE : PermissionLevel.HIDDEN;
+        return fallbackPermissionServiceLevel(user.getFactoryId(), String.valueOf(user.getId()), moduleCode);
     }
 
     private PermissionLevel resolveFactoryRoleLevel(String factoryId, String roleCode, String moduleCode) {
         if (factoryId == null || roleCode == null || factoryModuleConfigRepository == null) {
             return null;
         }
+        var settingsLevel = factoryModuleConfigRepository
+                .findByFactoryIdAndModuleCodeAndConfigVersion(factoryId, SETTINGS_MODULE_CODE, 1)
+                .map(config -> config.getRoleModuleOverride().get(roleCode))
+                .map(roleModules -> roleModules.get(moduleCode))
+                .filter(Objects::nonNull)
+                .map(PermissionLevel::fromAny);
+        if (settingsLevel.isPresent()) {
+            return settingsLevel.get();
+        }
         return factoryModuleConfigRepository.findByFactoryIdAndConfigVersion(factoryId, 1).stream()
+                .filter(config -> !SETTINGS_MODULE_CODE.equals(config.getModuleCode()))
                 .map(config -> config.getRoleModuleOverride().get(roleCode))
                 .filter(Objects::nonNull)
                 .map(roleModules -> roleModules.get(moduleCode))
@@ -225,6 +235,24 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
                 .map(PermissionLevel::fromAny)
                 .findFirst()
                 .orElse(null);
+    }
+
+    private PermissionLevel fallbackPermissionServiceLevel(String factoryId, String userId, String moduleCode) {
+        if (permissionService == null || userRepository == null || factoryId == null || userId == null) {
+            return PermissionLevel.HIDDEN;
+        }
+        User user = loadUser(factoryId, userId);
+        String permissionModule = ProductionModuleRegistry.permissionModule(moduleCode);
+        if (permissionService.hasAnyPermission(
+                user,
+                permissionModule + ":write",
+                permissionModule + ":read_write")) {
+            return PermissionLevel.WRITE;
+        }
+        if (permissionService.hasPermission(user, permissionModule + ":read")) {
+            return PermissionLevel.READ;
+        }
+        return PermissionLevel.HIDDEN;
     }
 
     private User loadUser(String factoryId, String userId) {
