@@ -530,3 +530,65 @@ async def process_cost(
     }
     _apply_rbac(data, role)
     return {"success": True, "data": data, "message": ""}
+
+
+# ── T6 Phase-2: Fused timeseries (production domain) ─────────────────────────
+
+
+@router.get("/production-fused")
+async def production_fused(
+    request: Request,
+    start: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD (默认: 一年前)"),
+    end:   Optional[str] = Query(None, description="截止日期 YYYY-MM-DD (默认: 今天)"),
+) -> Any:
+    """Fused production timeseries via resolver (T6 Phase-2).
+
+    Calls ``query_timeseries(factory_id, domain='production', start, end)``
+    and returns the raw resolver rows.  Fail-open: empty list when resolver
+    returns no data or on any internal error.
+
+    Response shape::
+
+        {
+            "success": true,
+            "data": [
+                {
+                    "period":          "2026-01",
+                    "canonical_field": "total_actual_qty",
+                    "value_num":       1234.5,
+                    "dims":            {}
+                },
+                ...
+            ],
+            "message": ""
+        }
+
+    Auth: JWT required (factory_id from JWT claims via auth middleware).
+    """
+    factory_id = _get_factory_id(request)
+    if not factory_id:
+        return {"success": False, "data": None, "message": "missing factory context"}
+
+    # Default date window: [today-1year, today]
+    from datetime import datetime  # noqa: PLC0415
+    today = datetime.utcnow().date()
+    default_start = today.replace(year=today.year - 1)
+
+    start_str = start or default_start.isoformat()
+    end_str = end or today.isoformat()
+
+    try:
+        from smartbi.services.timeseries_resolver import query_timeseries  # noqa: PLC0415
+        rows = await query_timeseries(
+            factory_id,
+            domain="production",
+            start=start_str,
+            end=end_str,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[production-fused] resolver failed factory=%s: %s", factory_id, exc
+        )
+        rows = []
+
+    return {"success": True, "data": rows, "message": ""}

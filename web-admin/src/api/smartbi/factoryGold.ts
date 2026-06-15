@@ -162,3 +162,39 @@ export async function getFactoryProductCostCompare(
     { timeoutMs: PYTHON_LLM_TIMEOUT_MS },
   );
 }
+
+// ── T6 Phase-2: Fused timeseries (production domain) ─────────────────────────
+
+/** One fused timeseries row as returned by the resolver. */
+export interface FusedTimeseriesRow {
+  period: string;
+  canonicalField: string;
+  valueNum: number | null;
+  dims: Record<string, unknown>;
+}
+
+export interface FusedTimeseriesResponse {
+  success: boolean;
+  data: FusedTimeseriesRow[] | null;
+  message: string;
+}
+
+/**
+ * GET /api/smartbi/factory/production-fused
+ *
+ * Returns timeseries rows from the resolver for the production domain.
+ * Fail-open: server returns [] when no data is available.
+ */
+export async function getFactoryProductionFused(args: {
+  factoryId: string;
+  start?: string;
+  end?: string;
+}): Promise<FusedTimeseriesResponse> {
+  const p = new URLSearchParams({ factory_id: args.factoryId });
+  if (args.start) p.set('start', args.start);
+  if (args.end) p.set('end', args.end);
+  return pythonFetch<FusedTimeseriesResponse>(
+    `/api/smartbi/factory/production-fused?${p.toString()}`,
+    { timeoutMs: PYTHON_LLM_TIMEOUT_MS },
+  );
+}
