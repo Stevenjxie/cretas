@@ -14,6 +14,7 @@ const PRICE_VIEW_ROLES: ReadonlySet<string> = new Set([
   'platform_admin',
   'procurement_manager',
   'finance_manager',
+  'cashier',
   'sales_manager',
   'dispatcher',
   'production_manager',

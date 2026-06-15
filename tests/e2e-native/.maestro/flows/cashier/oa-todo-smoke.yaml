@@ -1,0 +1,37 @@
+# flows/cashier/oa-todo-smoke.yaml
+# Cashier mobile OA smoke test: verify payment todo tab access and load state.
+appId: com.cretas.foodtrace
+env:
+  USERNAME: cashier1
+  PASSWORD: "123456"
+  HOME_ROOT_ID: main-tab-oa-todo
+---
+- launchApp:
+    clearState: true
+
+- runFlow:
+    when:
+      visible: "Wait"
+    file: ../common/_dismiss_anr.yaml
+
+- runFlow: ../common/_wait_for_app.yaml
+
+- runFlow:
+    file: ../common/_login.yaml
+    env:
+      USERNAME: ${USERNAME}
+      PASSWORD: ${PASSWORD}
+      HOME_ROOT_ID: ${HOME_ROOT_ID}
+
+- tapOn:
+    id: "main-tab-oa-todo"
+
+- extendedWaitUntil:
+    visible:
+      id: "oa-todo-list"
+    timeout: 30000
+
+- assertVisible:
+    id: "oa-todo-refresh"
+
+- takeScreenshot: cashier-oa-todo-list

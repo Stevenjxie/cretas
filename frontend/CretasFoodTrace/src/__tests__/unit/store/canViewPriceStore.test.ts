@@ -10,6 +10,7 @@ describe('canViewPriceForRole', () => {
     'platform_admin',
     'procurement_manager',
     'finance_manager',
+    'cashier',
     'sales_manager',
     'dispatcher',
     'production_manager',
@@ -36,7 +37,7 @@ describe('canViewPriceForRole', () => {
     expect(canViewPriceForRole(undefined)).toBe(false);
   });
 
-  it('PRICE_VIEW_ROLES contains exactly 10 roles (matches web-admin)', () => {
-    expect(PRICE_VIEW_ROLES.size).toBe(10);
+  it('PRICE_VIEW_ROLES contains exactly 11 roles (includes cashier payment flow)', () => {
+    expect(PRICE_VIEW_ROLES.size).toBe(11);
   });
 });

@@ -740,6 +740,7 @@ export type WHInventoryStackParamList = {
   WHInventoryAlert: undefined;  // 库存预警列表
   WHAlertDetail: { alertId: string; alertType: 'low_stock' | 'expiring' | 'expired' | 'quality'; batchNumber: string };  // 预警详情处理
   WHInventoryWarnings: undefined;  // 库存预警/过期综合管理（3 Tab）
+  WHTransitLedger: undefined;
   // SP7: 盘点 / 报损 / 调拨接收 (R-C)
   StocktakeEntry: { stocktakeId: string };
   WastageReport: { batchId?: string };

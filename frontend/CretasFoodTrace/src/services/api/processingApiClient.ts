@@ -192,6 +192,14 @@ class ProcessingApiClient {
   }
 
   // 5. 完成生产
+  async assignWorkersToBatch(
+    batchId: string,
+    data: { workerIds: number[]; assignedBy?: number; notes?: string },
+    factoryId?: string
+  ): Promise<ApiResponse<Array<Record<string, unknown>>>> {
+    return await apiClient.post(`${this.getPath(factoryId)}/batches/${batchId}/assign-workers`, data);
+  }
+
   async completeProduction(batchId: string, actualQuantity: number, factoryId?: string): Promise<ApiResponse<ProcessingBatch>> {
     return await apiClient.post(`${this.getPath(factoryId)}/batches/${batchId}/complete`, {
       actualQuantity

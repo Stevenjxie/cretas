@@ -1174,7 +1174,8 @@ const YieldStepReportScreen: React.FC = () => {
   }, [currentTask, submitBlockedNoWip, evidenceUploading, inputQty, unit, isFirstStep,
       isSecondaryProcessing, selectedWipItem, wipPickQty, wipPickOverLimit,
       materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, hasSourceWipInput,
-      inputOverLimit, inputMaxHint, inputMax, materialInputTotal, uploadedEvidenceUrls, batchId, refetchYield]);
+      inputOverLimit, inputMaxHint, inputMax, materialInputTotal, uploadedEvidenceUrls, batchId, refetchYield,
+      buildPhotoAnnotations]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
   const handleSubmitSegment = useCallback(async () => {
@@ -1249,7 +1250,7 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, evidenceUploading, segStart, segEnd, segHeadcount, segNote,
-      segByproducts, unit, uploadedEvidenceUrls, batchId, refetchYield]);
+      segByproducts, unit, uploadedEvidenceUrls, batchId, refetchYield, buildPhotoAnnotations]);
 
   // ========================= 阶段 2b: 完工出成 (reportKind=OUTPUT) =========================
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
@@ -1374,7 +1375,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      outputOptions, semiOutputQty]);
+      outputOptions, semiOutputQty, buildPhotoAnnotations]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {

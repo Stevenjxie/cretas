@@ -26,6 +26,7 @@ export type TodoType =
   | 'SALES_FINANCE_REVIEW'     // 销售单待财务审核
   | 'PRICE_ANOMALY'            // 送货单价格异常待审批
   | 'STOCKTAKE_APPROVAL'       // 盘点任务待财务审批
+  | 'RETURN_FINANCE_REVIEW'    // 退货单待财务审批
   | 'PAYMENT_DISBURSE';        // 已审批付款请求（出纳执行）
 
 export interface TodoItemDTO {
@@ -187,6 +188,30 @@ class TodoApprovalApiClient {
   ): Promise<{ success: boolean; data: unknown; message?: string }> {
     return apiClient.post(
       `/api/mobile/${this.fid(factoryId)}/stocktakes/${stocktakeId}/reject`,
+      { notes },
+    );
+  }
+
+  // ─── 退货财务审核 ─────────────────────────────────────────────────────────
+
+  /** 退货单财务审核通过 */
+  async returnFinanceApprove(
+    returnOrderId: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: unknown; message?: string }> {
+    return apiClient.post(
+      `/api/mobile/${this.fid(factoryId)}/return-orders/${returnOrderId}/finance-approve`,
+    );
+  }
+
+  /** 退货单财务驳回 */
+  async returnFinanceReject(
+    returnOrderId: string,
+    notes: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: unknown; message?: string }> {
+    return apiClient.post(
+      `/api/mobile/${this.fid(factoryId)}/return-orders/${returnOrderId}/finance-reject`,
       { notes },
     );
   }

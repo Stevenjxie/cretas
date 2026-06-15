@@ -107,9 +107,11 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    // NOTE: For APK build on Windows, temporarily add:
-    // externalNativeBuild { cmake { buildStagingDirectory = file("C:/b/app") } }
-    // Then remove after build (CMake path workaround for MAX_PATH 260 limit)
+    externalNativeBuild {
+        cmake {
+            buildStagingDirectory = file("C:/b/app")
+        }
+    }
 
     namespace 'com.cretas.foodtrace'
     defaultConfig {

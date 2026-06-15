@@ -246,6 +246,10 @@ const PERMISSION_MATRIX: Record<string, Record<string, string>> = {
     dashboard: 'read', finance: 'read_write',
     production: 'read', procurement: 'read', sales: 'read'
   },
+  cashier: {
+    dashboard: 'read', finance: 'read_write',
+    procurement: 'read', sales: 'read'
+  },
   viewer: {
     dashboard: 'read', production: 'read', warehouse: 'read', quality: 'read',
     procurement: 'read', sales: 'read', hr: 'read', equipment: 'read'

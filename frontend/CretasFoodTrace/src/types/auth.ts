@@ -18,6 +18,7 @@ export const FACTORY_ROLES = {
   EQUIPMENT_ADMIN: 'equipment_admin',
   QUALITY_MANAGER: 'quality_manager',
   FINANCE_MANAGER: 'finance_manager',
+  CASHIER: 'cashier',
 
   // Level 15 - 调度管理
   DISPATCHER: 'dispatcher',
@@ -63,6 +64,7 @@ export const ROLE_METADATA: Record<string, RoleMetadata> = {
   equipment_admin: { displayName: '设备管理员', description: '设备维护、保养、告警', level: 10, department: 'equipment' },
   quality_manager: { displayName: '质量经理', description: '质量体系、质检审核', level: 10, department: 'quality' },
   finance_manager: { displayName: '财务主管', description: '成本核算、费用、报表', level: 10, department: 'finance' },
+  cashier: { displayName: '出纳', description: '付款确认、收付款执行', level: 10, department: 'finance' },
 
   // Level 15 - 调度管理
   dispatcher: { displayName: '调度员', description: 'AI智能调度、人员分配、生产排程', level: 15, department: 'scheduling' },
@@ -103,6 +105,7 @@ export const USER_ROLES = {
   EQUIPMENT_ADMIN: 'equipment_admin',
   QUALITY_MANAGER: 'quality_manager',
   FINANCE_MANAGER: 'finance_manager',
+  CASHIER: 'cashier',
   DISPATCHER: 'dispatcher',
   WORKSHOP_SUPERVISOR: 'workshop_supervisor',
   QUALITY_INSPECTOR: 'quality_inspector',
@@ -501,6 +504,11 @@ function getDefaultPermissionsForRole(role: string): string[] {
     finance_manager: [
       'finance:read', 'finance:write',
       'production:read', 'procurement:read', 'sales:read',
+      'dashboard:read'
+    ],
+    cashier: [
+      'finance:read', 'finance:write',
+      'procurement:read', 'sales:read',
       'dashboard:read'
     ],
 
