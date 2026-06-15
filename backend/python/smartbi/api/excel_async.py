@@ -443,7 +443,12 @@ async def _async_worker_impl(
         def _probe(skip):
             if _file_kind == 'excel':
                 # pd.read_excel auto-detects xlsx vs xls via openpyxl/xlrd; no encoding arg.
-                return pd.read_excel(tmp_path, nrows=100, skiprows=skip), None
+                # sheet_name=0 when sheet_index is None preserves existing behaviour
+                # (reads first sheet); non-None sheet_index reads the requested sheet.
+                return pd.read_excel(
+                    tmp_path, nrows=100, skiprows=skip,
+                    sheet_name=(sheet_index if sheet_index is not None else 0),
+                ), None
             # First try utf-8-sig + engine=python — handles 二维火 POS exports
             # (UTF-8 BOM + \r-only line endings); see spec §5 / Task B3 +
             # test_revenue_report_csv_encoding.py
@@ -627,6 +632,9 @@ async def _async_worker_impl(
                 tmp_path,
                 skiprows=csv_skiprows,
                 usecols=real_cols_idx,
+                # Mirror _probe: same sheet_name so probe headers match full-read headers.
+                # sheet_name=0 when sheet_index is None preserves existing behaviour.
+                sheet_name=(sheet_index if sheet_index is not None else 0),
             )
 
             def _excel_chunks():
