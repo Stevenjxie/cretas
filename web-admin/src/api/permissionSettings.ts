@@ -1,0 +1,97 @@
+import request from './request';
+import type { ApiResponse } from '@/types/api';
+import type { ModuleDefinition, PermissionLevel } from '@/config/moduleRegistry';
+
+export interface ModulePermissionDto {
+  moduleCode: string;
+  permissionLevel: PermissionLevel;
+  source?: 'super_admin' | 'user_override' | 'role_template' | 'hidden_default';
+}
+
+export interface RoleTemplateDto {
+  roleCode: string;
+  roleName: string;
+  modules: ModulePermissionDto[];
+}
+
+export interface EffectiveUserPermissionDto {
+  userId: string;
+  roleCode: string;
+  modules: ModulePermissionDto[];
+}
+
+export interface PermissionPreviewDto {
+  userId: string;
+  visibleModules: ModulePermissionDto[];
+  deniedModules: ModulePermissionDto[];
+  editableModules: ModulePermissionDto[];
+}
+
+export async function listPermissionModules(factoryId: string): Promise<ModuleDefinition[]> {
+  const res = await request.get<ApiResponse<ModuleDefinition[]>>(
+    `/${factoryId}/permissions/modules`,
+  );
+  return ((res as unknown as ApiResponse<ModuleDefinition[]>).data) || [];
+}
+
+export async function listRoleTemplates(factoryId: string): Promise<RoleTemplateDto[]> {
+  const res = await request.get<ApiResponse<RoleTemplateDto[]>>(
+    `/${factoryId}/permissions/role-templates`,
+  );
+  return ((res as unknown as ApiResponse<RoleTemplateDto[]>).data) || [];
+}
+
+export async function updateRoleTemplate(
+  factoryId: string,
+  roleCode: string,
+  modules: ModulePermissionDto[],
+): Promise<RoleTemplateDto> {
+  const res = await request.put<ApiResponse<RoleTemplateDto>>(
+    `/${factoryId}/permissions/role-templates`,
+    { roleCode, modules },
+  );
+  return (res as unknown as ApiResponse<RoleTemplateDto>).data as RoleTemplateDto;
+}
+
+export async function getUserEffectivePermissions(
+  factoryId: string,
+  userId: string,
+): Promise<EffectiveUserPermissionDto> {
+  const res = await request.get<ApiResponse<EffectiveUserPermissionDto>>(
+    `/${factoryId}/permissions/users/${encodeURIComponent(userId)}/effective`,
+  );
+  return (res as unknown as ApiResponse<EffectiveUserPermissionDto>).data as EffectiveUserPermissionDto;
+}
+
+export async function updateUserOverrides(
+  factoryId: string,
+  userId: string,
+  modules: ModulePermissionDto[],
+): Promise<EffectiveUserPermissionDto> {
+  const res = await request.put<ApiResponse<EffectiveUserPermissionDto>>(
+    `/${factoryId}/permissions/users/${encodeURIComponent(userId)}/overrides`,
+    { userId, modules },
+  );
+  return (res as unknown as ApiResponse<EffectiveUserPermissionDto>).data as EffectiveUserPermissionDto;
+}
+
+export async function clearUserOverride(
+  factoryId: string,
+  userId: string,
+  moduleCode: string,
+): Promise<EffectiveUserPermissionDto> {
+  const res = await request.delete<ApiResponse<EffectiveUserPermissionDto>>(
+    `/${factoryId}/permissions/users/${encodeURIComponent(userId)}/overrides/${encodeURIComponent(moduleCode)}`,
+  );
+  return (res as unknown as ApiResponse<EffectiveUserPermissionDto>).data as EffectiveUserPermissionDto;
+}
+
+export async function previewUserPermissions(
+  factoryId: string,
+  userId: string,
+): Promise<PermissionPreviewDto> {
+  const res = await request.get<ApiResponse<PermissionPreviewDto>>(
+    `/${factoryId}/permissions/users/${encodeURIComponent(userId)}/preview`,
+  );
+  return (res as unknown as ApiResponse<PermissionPreviewDto>).data as PermissionPreviewDto;
+}

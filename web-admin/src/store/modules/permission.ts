@@ -19,7 +19,12 @@ import {
   type UserModuleAccessView,
   type PermissionLevel as ApiPermissionLevel,
 } from '@/api/permissionApi';
-import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
+import { getUserEffectivePermissions } from '@/api/permissionSettings';
+import {
+  PRODUCTION_MODULE_REGISTRY,
+  resolveModuleRegistryItem,
+  type PermissionLevel as EffectivePermissionLevel,
+} from '@/config/moduleRegistry';
 
 // 权限矩阵 - 定义每个角色对每个模块的权限
 type PermissionLevel = 'rw' | 'r' | 'w' | '-';
@@ -263,6 +268,7 @@ export const usePermissionStore = defineStore('permission', () => {
   const isDbLoaded = ref(false);
   const dbLoadError = ref<string | null>(null);
   const userModuleAccess = ref<Record<string, UserModuleAccessView>>({});
+  const moduleLevels = ref<Record<string, EffectivePermissionLevel>>({});
   const isUserModuleAccessLoaded = ref(false);
   const lastLoadTs = ref<number>(0);
   const LOAD_DEBOUNCE_MS = 30_000;  // Avoid redundant fetches within 30s
@@ -281,6 +287,7 @@ export const usePermissionStore = defineStore('permission', () => {
       isDbLoaded.value = false;
       dbLoadError.value = null;
       userModuleAccess.value = {};
+      moduleLevels.value = {};
       isUserModuleAccessLoaded.value = false;
       lastLoadTs.value = 0;
     }
@@ -310,6 +317,8 @@ export const usePermissionStore = defineStore('permission', () => {
       if (currentFactoryId.value && currentUserId.value) {
         const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value);
         applyUserModuleAccess(l4Rows);
+        const effective = await getUserEffectivePermissions(currentFactoryId.value, currentUserId.value);
+        applyEffectiveModules(effective.modules || []);
       }
       isDbLoaded.value = true;
     } catch (e) {
@@ -317,6 +326,7 @@ export const usePermissionStore = defineStore('permission', () => {
       isDbLoaded.value = false;
       dbPermissions.value = null;
       userModuleAccess.value = {};
+      moduleLevels.value = {};
       isUserModuleAccessLoaded.value = false;
     }
   }
@@ -328,6 +338,24 @@ export const usePermissionStore = defineStore('permission', () => {
     }
     userModuleAccess.value = next;
     isUserModuleAccessLoaded.value = true;
+  }
+
+  function normalizeEffectiveLevel(level: unknown): EffectivePermissionLevel {
+    if (level === 'rw' || level === 'w' || level === 'write' || level === 'editable' || level === 'GRANT') {
+      return 'write';
+    }
+    if (level === 'r' || level === 'read' || level === 'readonly' || level === 'read_only') {
+      return 'read';
+    }
+    return 'hidden';
+  }
+
+  function applyEffectiveModules(rows: Array<{ moduleCode: string; permissionLevel: unknown }>): void {
+    const next: Record<string, EffectivePermissionLevel> = {};
+    for (const row of rows || []) {
+      next[row.moduleCode] = normalizeEffectiveLevel(row.permissionLevel);
+    }
+    moduleLevels.value = next;
   }
 
   /**
@@ -410,6 +438,27 @@ export const usePermissionStore = defineStore('permission', () => {
     return permission === 'rw' || permission === 'w';
   }
 
+  function effectiveLevelFor(moduleCode?: string): EffectivePermissionLevel {
+    if (!moduleCode) return 'write';
+    if (currentRole.value === 'factory_super_admin' || currentRole.value === 'platform_admin') {
+      return 'write';
+    }
+    const definition = resolveModuleRegistryItem(moduleCode);
+    const normalizedCode = definition?.moduleCode || moduleCode;
+    const explicit = moduleLevels.value[normalizedCode];
+    if (explicit) return explicit;
+    const legacyModule = definition?.permissionModule || moduleCode;
+    return normalizeEffectiveLevel(permissionLevelFor(legacyModule));
+  }
+
+  function canAccessModuleCode(moduleCode?: string): boolean {
+    return effectiveLevelFor(moduleCode) !== 'hidden';
+  }
+
+  function canWriteModuleCode(moduleCode?: string): boolean {
+    return effectiveLevelFor(moduleCode) === 'write';
+  }
+
   function hasFullAccess(module: ModuleName): boolean {
     const permission = permissionLevelFor(String(module));
     return permission === 'rw';
@@ -469,13 +518,18 @@ export const usePermissionStore = defineStore('permission', () => {
     isDbLoaded,
     dbLoadError,
     userModuleAccess,
+    moduleLevels,
     isUserModuleAccessLoaded,
     productionModuleRegistry: PRODUCTION_MODULE_REGISTRY,
     loadFromDb,
     applyUserModuleAccess,
+    applyEffectiveModules,
     setRole,
     canAccess,
     canWrite,
+    effectiveLevelFor,
+    canAccessModuleCode,
+    canWriteModuleCode,
     hasFullAccess,
     getPermissionLevel,
     getAccessibleModules,
