@@ -705,7 +705,6 @@ async def _async_worker_impl(
         db.commit()
         try:
             from smartbi.database.models import SmartBiDynamicData
-            from smartbi.services.domain_standard_fields import STANDARD_FIELDS
             from smartbi.services.timeseries_extractor import extract_timeseries
             from smartbi.services.timeseries_writer import write_timeseries
 
@@ -738,7 +737,26 @@ async def _async_worker_impl(
                     return _fmt_period(row.get(period_mapping_col))
                 return None
 
-            category_of = lambda c: STANDARD_FIELDS.get(c, {}).get("category")
+            # Build field_kind from field_def_rows (is_measure/is_dimension/is_time flags).
+            # Key: standard_name (the value side of field_mappings).
+            # This correctly handles identity-mapped columns (standard_name == original_name,
+            # e.g. "产出数量") that have no STANDARD_FIELDS entry but carry is_measure=True
+            # in smart_bi_pg_field_definitions — previously they were silently dropped.
+            _kind_map: dict = {}
+            for fdr in field_def_rows:
+                sname = fdr.standard_name
+                if fdr.is_measure:
+                    _kind_map[sname] = "measure"
+                elif fdr.is_dimension:
+                    _kind_map[sname] = "dimension"
+                elif fdr.is_time:
+                    _kind_map[sname] = "time"
+                else:
+                    _kind_map[sname] = "skip"
+
+            def _field_kind(standard_name: str) -> str:
+                return _kind_map.get(standard_name, "skip")
+
             ts_rows = extract_timeseries(
                 parsed_rows,
                 field_mappings,
@@ -747,7 +765,7 @@ async def _async_worker_impl(
                 domain=_domain,
                 source_upload_id=upload_id,
                 period_of=_period_of,
-                category_of=category_of,
+                field_kind=_field_kind,
             )
             written = await write_timeseries(
                 factory_id,

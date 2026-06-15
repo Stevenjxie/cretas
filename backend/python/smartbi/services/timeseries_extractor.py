@@ -5,17 +5,23 @@ Converts raw dynamic_data rows + field_mappings into typed TimeseriesRow objects
 that are ready for upsert into smart_bi_timeseries.
 
 Key rules (from spec §3):
-  measure   = category ∈ {amount, rate, quantity}  → emits value row with value_num
-  dimension = category == 'category' OR canonical is a named dimension
-              → goes into dims dict
-  period    = canonical == 'period'                 → axis; NOT added to dims
-  id        = category == 'id'                      → discarded entirely
+  measure   = field_kind == 'measure'  → emits value row with value_num
+  dimension = field_kind == 'dimension' → goes into dims dict
+  time      = field_kind == 'time'      → axis or non-axis time; NOT added to dims
+  skip      = field_kind == 'skip'      → discarded entirely
+
+Classification is driven by ``field_kind(standard_name)`` which reads the
+is_measure / is_dimension / is_time flags from smart_bi_pg_field_definitions —
+NOT from STANDARD_FIELDS category strings.  This is essential because the mapper
+may preserve identity names (e.g. "产出数量") for amount/quantity columns to
+avoid canonical-name collisions, meaning STANDARD_FIELDS would return None for
+those names and they would be silently dropped.
 
 Non-numeric measure values are skipped (not emitted).
 Rows where period_of() returns falsy are skipped entirely.
 
 field_mappings supports two forms:
-  dict[str, str]       {original_col -> canonical}
+  dict[str, str]       {original_col -> standard_name}
   list[FieldMapping]   normalised internally to dict before processing
 """
 
@@ -25,22 +31,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
-
-# ---------------------------------------------------------------------------
-# Named dimension canonicals that always go into dims regardless of category
-# (spec §3: "明确维度 canonical")
-# ---------------------------------------------------------------------------
-_DIM_CANONICALS = frozenset(
-    {
-        "department",
-        "product",
-        "region",
-        "customer_name",
-        "supplier_name",
-        "material_name",
-        "warehouse",
-    }
-)
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -78,7 +68,7 @@ class TimeseriesRow:
 def _normalise_field_mappings(
     field_mappings: Union[Dict[str, str], List[FieldMapping]]
 ) -> Dict[str, str]:
-    """Normalise list[FieldMapping] or dict to a plain dict {orig → canonical}."""
+    """Normalise list[FieldMapping] or dict to a plain dict {orig → standard_name}."""
     if isinstance(field_mappings, dict):
         return field_mappings
     result: Dict[str, str] = {}
@@ -109,8 +99,6 @@ def _to_float(value: Any) -> Optional[float]:
 # Public API
 # ---------------------------------------------------------------------------
 
-_MEASURE_CATEGORIES = frozenset({"amount", "rate", "quantity"})
-
 
 def extract_timeseries(
     rows: List[Dict[str, Any]],
@@ -121,8 +109,8 @@ def extract_timeseries(
     domain: Optional[str],
     source_upload_id: int,
     period_of: Callable[[Dict[str, Any]], Optional[str]],
-    category_of: Callable[[str], str],
-) -> List[TimeseriesRow]:
+    field_kind: Callable[[str], str],
+) -> List["TimeseriesRow"]:
     """Convert raw rows + field_mappings into typed TimeseriesRow objects.
 
     Parameters
@@ -130,16 +118,22 @@ def extract_timeseries(
     rows:
         Raw data rows from dynamic_data (list of dicts, original column names).
     field_mappings:
-        Mapping from original column names to canonical field names.
-        Accepts either a plain dict or a list of FieldMapping dataclasses.
+        Mapping from original column names to standard field names (standard_name
+        from smart_bi_pg_field_definitions).  Accepts either a plain dict or a
+        list of FieldMapping dataclasses.
     factory_id, template_key, domain, source_upload_id:
         Provenance fields written verbatim into each TimeseriesRow.
     period_of:
         Callable(row) -> period string (e.g. '2026-01').
         Return None or falsy to skip the entire row.
-    category_of:
-        Callable(canonical_field) -> category string.
-        Expected values: 'amount', 'rate', 'quantity', 'category', 'time', 'id'.
+    field_kind:
+        Callable(standard_name) -> kind string.
+        Expected values: 'measure', 'dimension', 'time', 'skip'.
+        Built from is_measure / is_dimension / is_time flags on
+        smart_bi_pg_field_definitions — NOT from STANDARD_FIELDS category.
+        This ensures identity-mapped columns (e.g. standard_name == original_name
+        like "产出数量") are correctly classified by their DB flags even when
+        STANDARD_FIELDS has no entry for them.
 
     Returns
     -------
@@ -158,35 +152,26 @@ def extract_timeseries(
 
         # ── 2. Classify each mapped column ───────────────────────────────────
         dims: Dict[str, Any] = {}
-        measures: List[tuple[str, Any]] = []  # (canonical, raw_value)
+        measures: List[tuple] = []  # (standard_name, raw_value)
 
-        for orig_col, canonical in fm_dict.items():
+        for orig_col, standard_name in fm_dict.items():
             raw_value = row.get(orig_col)
-            category = category_of(canonical)
+            kind = field_kind(standard_name)
 
-            if canonical == "period":
-                # Time axis — not added to dims, not a measure
+            if kind == "time":
+                # Time/period columns are the axis or ancillary time fields —
+                # not added to dims, not measures.
                 continue
 
-            if category in _MEASURE_CATEGORIES:
-                measures.append((canonical, raw_value))
+            elif kind == "measure":
+                measures.append((standard_name, raw_value))
 
-            elif category == "category" or canonical in _DIM_CANONICALS:
-                # Dimension: collect into dims
+            elif kind == "dimension":
+                # Collect into dims
                 if raw_value is not None:
-                    dims[canonical] = raw_value
+                    dims[standard_name] = raw_value
 
-            elif category == "id":
-                # Discard entirely
-                continue
-
-            # Other time-category canonicals (production_date, sales_date, …)
-            # are not axis and not measure → treat as dimension in dims
-            # (spec only says 'period' canonical is the axis)
-            elif category == "time":
-                # non-period time canonicals go into dims
-                if raw_value is not None:
-                    dims[canonical] = raw_value
+            # kind == 'skip' (id / unknown) → discard entirely
 
         # ── 3. Compute dims_hash once per row ────────────────────────────────
         dims_hash = _compute_dims_hash(dims)
