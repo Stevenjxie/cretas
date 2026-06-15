@@ -6,9 +6,8 @@ TDD: these tests are written first. They define the contract for extract_timeser
 import hashlib
 import json
 
-import pytest
 
-from smartbi.services.timeseries_extractor import TimeseriesRow, extract_timeseries
+from smartbi.services.timeseries_extractor import extract_timeseries
 
 
 # ---------------------------------------------------------------------------
