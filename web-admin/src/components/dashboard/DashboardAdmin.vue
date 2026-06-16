@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import type { DashboardOverview, ProductionStats, QualityStats, EquipmentStats } from '@/types/api';
+import type { KPICard } from '@/types/smartbi';
 import {
   TrendCharts, DataLine, Timer, Warning, Box, User, Money, Setting
 } from '@element-plus/icons-vue';
@@ -25,17 +26,28 @@ const equipmentStats = ref<EquipmentStats | null>(null);
 
 const factoryId = computed(() => authStore.factoryId);
 
-// UX Round 5: 新工厂 onboarding — 所有 KPI 都为 0 时显示快速开始引导
+// SmartBI Gold KPI 条 — 来自经营驾驶舱 executive 端点 (month 聚合), 展示真实经营数据。
+// 对 demo 工厂等无今日运营数据的租户提供有意义的首屏内容。
+const goldKpiCards = ref<KPICard[]>([]);
+const goldKpiLoading = ref(false);
+// 是否已有 gold KPI 真实数据 (rawValue > 0 视为有效)
+const hasGoldKpi = computed(() =>
+  goldKpiCards.value.some(c => (c.rawValue ?? 0) > 0)
+);
+
+// UX Round 5: 新工厂 onboarding — 所有 KPI 都为 0 且无 gold 数据时显示快速开始引导
 const isNewFactory = computed(() => {
   const todayOutput = overview.value?.todayOutput ?? 0;
   const completedBatches = overview.value?.completedBatches ?? 0;
   const running = equipmentStats.value?.running ?? 0;
   const activeAlerts = equipmentStats.value?.activeAlerts ?? 0;
   return !loading.value
+    && !goldKpiLoading.value
     && todayOutput === 0
     && completedBatches === 0
     && running === 0
-    && activeAlerts === 0;
+    && activeAlerts === 0
+    && !hasGoldKpi.value;
 });
 const shouldShowOnboarding = computed(() => isNewFactory.value && !authStore.isLiushanmenFactory);
 
@@ -99,8 +111,29 @@ const quickActions = [
 ];
 
 onMounted(async () => {
-  await loadDashboardData();
+  // 并行加载制造业运营数据 + SmartBI Gold KPI (互不依赖)
+  await Promise.all([loadDashboardData(), loadGoldKpi()]);
 });
+
+// SmartBI Gold KPI: 调 executive 端点拿 kpiCards, 与经营驾驶舱同源。
+// 静默失败 — gold 数据不可用时不影响制造业 KPI 展示。
+async function loadGoldKpi() {
+  if (!factoryId.value) return;
+  goldKpiLoading.value = true;
+  try {
+    const res = await get<{ kpiCards?: KPICard[] }>(
+      `/${factoryId.value}/smart-bi/dashboard/executive`,
+      { params: { period: 'month' } }
+    );
+    if (res.success && res.data?.kpiCards?.length) {
+      goldKpiCards.value = res.data.kpiCards;
+    }
+  } catch {
+    // Gold 数据不可用: 静默, 不展示 strip
+  } finally {
+    goldKpiLoading.value = false;
+  }
+}
 
 async function loadDashboardData() {
   if (!factoryId.value) return;
@@ -181,6 +214,45 @@ function navigateTo(route: string) {
         </el-button>
       </div>
     </div>
+
+    <!-- SmartBI Gold KPI 条 — 展示本月经营核心指标 (来自 executive 端点, 与经营驾驶舱同源) -->
+    <el-card
+      v-if="hasGoldKpi || goldKpiLoading"
+      class="gold-kpi-strip"
+      shadow="never"
+      v-loading="goldKpiLoading"
+    >
+      <template #header>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-weight: 600; color: #1B65A8;">本月经营概览</span>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            @click="navigateTo('/smart-bi/dashboard')"
+          >查看经营驾驶舱 →</el-button>
+        </div>
+      </template>
+      <div class="gold-kpi-items">
+        <div
+          v-for="card in goldKpiCards.slice(0, 4)"
+          :key="card.key"
+          class="gold-kpi-item"
+          @click="navigateTo('/smart-bi/dashboard')"
+        >
+          <span class="gold-kpi-label">{{ card.title }}</span>
+          <span class="gold-kpi-value">
+            {{ card.value || (card.rawValue != null ? card.rawValue.toLocaleString() : '-') }}
+            <small v-if="card.unit">{{ card.unit }}</small>
+          </span>
+          <span
+            v-if="card.trend && card.trend !== 'flat' && card.trend !== 'stable'"
+            class="gold-kpi-trend"
+            :class="card.trend === 'up' ? 'trend-up' : 'trend-down'"
+          >{{ card.trend === 'up' ? '↑' : '↓' }}</span>
+        </div>
+      </div>
+    </el-card>
 
     <!-- UX Round 5: 新工厂 onboarding 引导卡 (仅当所有 KPI=0 时显示) -->
     <el-card v-if="shouldShowOnboarding" class="onboarding-card" shadow="always">
@@ -308,6 +380,60 @@ function navigateTo(route: string) {
     .overview-item {
       border-bottom-style: solid;
     }
+  }
+}
+
+/* SmartBI Gold KPI 条 */
+.gold-kpi-strip {
+  margin-bottom: 20px;
+  border-color: #d0e8ff;
+
+  .gold-kpi-items {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+
+    @media (max-width: 900px) {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    @media (max-width: 480px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .gold-kpi-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    background: #f5f9ff;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover { background: #e8f4ff; }
+  }
+
+  .gold-kpi-label {
+    font-size: 12px;
+    color: #909399;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .gold-kpi-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1B65A8;
+    small { font-size: 12px; font-weight: 400; margin-left: 2px; color: #606266; }
+  }
+
+  .gold-kpi-trend {
+    font-size: 11px;
+    font-weight: 600;
+    &.trend-up { color: #36B37E; }
+    &.trend-down { color: #FF5630; }
   }
 }
 
