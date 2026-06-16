@@ -590,11 +590,13 @@ class AgentOrchestrator:
             # Distillation capture (training corpus). Fire-and-forget; only a
             # freshly-streamed LLM answer (cache-hit / degraded paths return
             # above and never reach here).
-            # corpus_input_text (stable key) keeps write and read-back hashes aligned.
+            # Persist input_text=user_prompt → sha256(user_prompt) == the key
+            # _read_corpus_cache hashes, so write and read-back agree (flywheel
+            # grows); data-bearing key → a future hit can only occur while data
+            # is unchanged (never serve stale — principle #1).
             await _capture_insight_distillation(
-                corpus_input_text, answer, factory_id, total_tokens,
+                user_prompt, answer, factory_id, total_tokens,
                 teacher_model="router:INSIGHTS",
-                user_prompt_for_metadata=user_prompt,
             )
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
