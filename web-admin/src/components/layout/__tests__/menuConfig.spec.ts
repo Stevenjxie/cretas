@@ -38,13 +38,30 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]));
   });
 
-  it('keeps department management and workflow setup reachable', () => {
-    expect(childPaths('/hr')).toContain('/hr/departments');
+  it('keeps account and department management under HR, with workflow setup in system', () => {
+    expect(childPaths('/hr')).toEqual(expect.arrayContaining([
+      '/system/users',
+      '/system/roles',
+      '/hr/departments',
+    ]));
+    expect(childPaths('/system')).not.toContain('/system/users');
+    expect(childPaths('/system')).not.toContain('/system/roles');
     expect(childPaths('/system')).toEqual(expect.arrayContaining([
       '/system/approval-chains',
       '/system/workflow-designer',
       '/canvas-editor',
     ]));
+  });
+
+  it('keeps production master data under production instead of system', () => {
+    expect(childPaths('/production')).toEqual(expect.arrayContaining([
+      '/system/products',
+      '/system/work-processes',
+      '/system/product-processes',
+    ]));
+    expect(childPaths('/system')).not.toContain('/system/products');
+    expect(childPaths('/system')).not.toContain('/system/work-processes');
+    expect(childPaths('/system')).not.toContain('/system/product-processes');
   });
 });
 

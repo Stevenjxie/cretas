@@ -58,6 +58,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
+      { path: '/system/products', title: '成品 / SKU (本厂生产)', icon: '', module: 'system' },
+      { path: '/system/work-processes', title: '工序管理', icon: '', module: 'system',
+        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'system',
+        hideForFactoryTypes: ['RESTAURANT'] },
       // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
       // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
       { path: '/production/bom', title: 'BOM成本管理', icon: '', module: 'production' },
@@ -150,6 +155,8 @@ const rawMenuConfig: MenuItem[] = [
     path: '/hr', title: '人事管理', icon: 'User', module: 'hr',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
+      { path: '/system/users', title: '用户管理', icon: '', module: 'system' },
+      { path: '/system/roles', title: '角色管理', icon: '', module: 'system' },
       { path: '/hr/employees', title: '员工管理', icon: '', module: 'hr' },
       { path: '/hr/attendance', title: '考勤管理', icon: '', module: 'hr' },
       { path: '/hr/whitelist', title: '白名单管理', icon: '', module: 'hr' },
@@ -190,8 +197,6 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/system', title: '系统管理', icon: 'Setting', module: 'system',
     children: [
-      { path: '/system/users', title: '用户管理', icon: '', module: 'system' },
-      { path: '/system/roles', title: '角色管理', icon: '', module: 'system' },
       { path: '/system/logs', title: '操作日志', icon: '', module: 'system' },
       { path: '/system/settings', title: '系统设置', icon: '', module: 'system' },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system' },
@@ -200,11 +205,6 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system' },
       { path: '/system/approval-chains', title: '审批链配置', icon: '', module: 'system' },
       { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system' },
-      { path: '/system/products', title: '成品 / SKU (本厂生产)', icon: '', module: 'system' },
-      { path: '/system/work-processes', title: '工序管理', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/system/workflow-designer', title: '工作流设计器', icon: '', module: 'system' },
       { path: '/system/features', title: '功能模块配置', icon: '', module: 'system' },
       // Apr 18 2026 bug #48: Canvas 编辑器 router 限制 roles, sidebar 跟上不让 dispatcher/

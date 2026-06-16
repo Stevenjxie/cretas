@@ -354,7 +354,7 @@ async function handleGenerateLabel(row: TableRow) {
     <ConceptDisambiguationAlert
       here-name="原料 / 物料"
       here="采购入库的原材料、包材、辅料（如「冻猪蹄」「吸塑盒」）"
-      other-name="系统管理 → 成品 / SKU (本厂生产)"
+      other-name="生产管理 → 成品 / SKU (本厂生产)"
       other="本厂生产的成品 / SKU（如「叮咚好食光卤猪蹄 200g」）"
       other-path="/system/products"
     />

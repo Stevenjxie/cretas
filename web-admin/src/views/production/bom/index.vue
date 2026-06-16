@@ -1806,7 +1806,7 @@ function refreshData() {
                   type="warning"
                   :closable="false"
                   show-icon
-                  :title="estimateResult.actionHint || '请先在系统管理→产品维护填写标准克重'"
+                  :title="estimateResult.actionHint || '请先在生产管理→成品 / SKU填写标准克重'"
                   style="margin-top: 8px;"
                 />
               </template>
