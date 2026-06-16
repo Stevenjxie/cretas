@@ -117,8 +117,21 @@ function handleCreate() {
 }
 
 async function submitDisposal() {
-  if (!disposalForm.value.batchId || !disposalForm.value.disposalType || !disposalForm.value.quantity || !disposalForm.value.reason) {
-    ElMessage.warning('请填写完整信息');
+  // 防呆: 字段级提示, 明确告诉用户缺哪个 (不再笼统 "请填写完整信息")
+  if (!disposalForm.value.batchId) {
+    ElMessage.warning('请选择批次');
+    return;
+  }
+  if (!disposalForm.value.disposalType) {
+    ElMessage.warning('请选择废弃类型');
+    return;
+  }
+  if (!disposalForm.value.quantity) {
+    ElMessage.warning('请输入废弃数量');
+    return;
+  }
+  if (!disposalForm.value.reason) {
+    ElMessage.warning('请输入废弃原因');
     return;
   }
 
