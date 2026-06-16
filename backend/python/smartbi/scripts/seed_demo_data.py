@@ -1422,6 +1422,172 @@ def generate_gap_fill() -> List[Tuple[str, str, str, pd.DataFrame]]:
                 })
     results.append((DEMO_FACTORY, "quality", "gap_fill_quality", pd.DataFrame(rows)))
 
+    # =========================================================================
+    # DEMO_FACTORY2 gap-fill: production / inventory / purchase / finance
+    # =========================================================================
+    # These domains are absent from build_seed_plan() and generate_factory2_data()
+    # for DEMO_FACTORY2 (which currently only has finance/sales from the real mock).
+    # All generators follow the same pattern: 24 months × low-cardinality dims.
+
+    # --- DEMO_FACTORY2: PRODUCTION (工序 × 产线 × 区域) ---
+    # 3 工序 × 2 产线 × 3 区域 = 18 rows/month × 24 months = 432 rows  (≤500 ✓)
+    f2_processes = ["冲压成型", "组装", "质检包装"]
+    f2_lines = ["产线A", "产线B"]          # 2 unique ✓
+    f2_regions = ["华东区域", "华中区域", "华南区域"]  # 3 unique ✓
+    rows = []
+    for mo in months_24_25:
+        trend_mult = 1.0 + 0.015 * months_24_25.index(mo)  # +1.5%/month upward trend
+        for proc in f2_processes:
+            for line in f2_lines:
+                for region in f2_regions:
+                    input_qty = int(rng.integers(3000, 7000) * trend_mult)
+                    yield_rate = rng.uniform(0.91, 0.98)
+                    output_qty = int(input_qty * yield_rate)
+                    rows.append({
+                        "月份": mo,
+                        "工序": proc,
+                        "产线": line,
+                        "区域": region,
+                        "投入数量(kg)": input_qty,
+                        "产出数量(kg)": output_qty,
+                        "合格数量(kg)": int(output_qty * rng.uniform(0.96, 1.0)),
+                        "出成率(%)": round(yield_rate * 100, 2),
+                        "不良率(%)": round((1.0 - yield_rate) * 100, 2),
+                    })
+    results.append((DEMO_FACTORY2, "production", "gap_fill_production_factory2", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY2: INVENTORY (物料类别 × 仓库) ---
+    # 4 物料 × 3 物料类别 × 2 仓库 unique combos = 6 rows/month × 24 = 144 rows ✓
+    f2_materials = ["钢材原料", "电子元件", "化工辅料", "包装耗材"]
+    f2_mat_cats = {
+        "钢材原料": "金属材料",
+        "电子元件": "电子元件",
+        "化工辅料": "化工辅料",
+        "包装耗材": "包装材料",
+    }  # 4 categories ≤ 12 ✓
+    f2_warehouses = ["原料仓", "成品仓"]   # 2 unique ✓
+    rows = []
+    f2_base_qty = {m: int(rng.integers(200, 3000)) for m in f2_materials}
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.01 * i  # slight growth trend
+        for mat in f2_materials:
+            for wh in f2_warehouses:
+                qty = int(f2_base_qty[mat] * rng.uniform(0.4, 0.6) * trend_mult)
+                unit_price = rng.uniform(10, 200)
+                rows.append({
+                    "月份": mo,
+                    "物料名称": mat,
+                    "物料类别": f2_mat_cats[mat],  # 4 unique ✓
+                    "仓库": wh,                     # 2 unique ✓
+                    "期末库存数量": qty,
+                    "期末库存金额(元)": round(qty * unit_price, 2),
+                    "周转率(次/月)": round(rng.uniform(0.3, 3.5), 2),
+                    "安全库存": int(f2_base_qty[mat] * 0.15),
+                })
+    results.append((DEMO_FACTORY2, "inventory", "gap_fill_inventory_factory2", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY2: PURCHASE (供应商 × 区域) ---
+    # 5 供应商 × 3 区域 = 15 rows/month × 24 months = 360 rows ✓
+    f2_suppliers = ["钢铁供应商A", "电子元件商B", "化工原料商C", "包装材料商D", "综合物资商E"]
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.012 * i
+        for sup in f2_suppliers:
+            for region in f2_regions:
+                amount = round(rng.uniform(50000, 500000) * trend_mult, 2)
+                qty = int(rng.integers(100, 2000))
+                rows.append({
+                    "月份": mo,
+                    "供应商": sup,               # 5 unique ✓ (≤12)
+                    "区域": region,              # 3 unique ✓
+                    "采购金额(元)": amount,
+                    "采购数量": qty,
+                    "单价(元)": round(amount / qty, 2),
+                    "到货及时率(%)": round(rng.uniform(85.0, 99.5), 2),
+                    "合格率(%)": round(rng.uniform(92.0, 99.8), 2),
+                })
+    results.append((DEMO_FACTORY2, "purchase", "gap_fill_purchase_factory2", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY2: FINANCE (部门 × 区域, 24-month trend) ---
+    # Complements generate_factory2_data() which only covers 12 months (2024) from real mock.
+    # This gap-fill covers the full 24-month timeline with dept×region drill-down.
+    # 4 部门 × 3 区域 = 12 rows/month × 24 months = 288 rows ✓
+    f2_depts = ["销售部", "生产部", "采购部", "财务部"]  # 4 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.018 * i  # ~2%/month revenue growth
+        for dept in f2_depts:
+            for region in f2_regions:
+                revenue = round(rng.uniform(200000, 2000000) * trend_mult, 2)
+                cost = round(revenue * rng.uniform(0.55, 0.75), 2)
+                profit = round(revenue - cost, 2)
+                rows.append({
+                    "月份": mo,
+                    "部门": dept,               # 4 unique ✓
+                    "区域": region,              # 3 unique ✓
+                    "营业收入(元)": revenue,
+                    "成本(元)": cost,
+                    "净利润(元)": profit,
+                    "利润率(%)": round(profit / revenue * 100, 2),
+                    "费用合计(元)": round(cost * rng.uniform(0.1, 0.3), 2),
+                })
+    results.append((DEMO_FACTORY2, "finance", "gap_fill_finance_factory2", pd.DataFrame(rows)))
+
+    # =========================================================================
+    # DEMO_RETAIL gap-fill: finance (部门×区域) + purchase (供应商×门店类型)
+    # =========================================================================
+    # DEMO_RETAIL already has sales (A1-A3) and inventory (A2) and finance sheets
+    # (B1-B3: 3-month AR aging/budget/cashflow from mock).  The gap-fill here adds:
+    #   - finance: 24-month dept×region trend (broader than the 3-month sheet entries)
+    #   - purchase: 24-month supplier×store-type dim (entirely missing domain)
+
+    # --- DEMO_RETAIL: FINANCE (部门 × 区域, 24-month trend) ---
+    # 3 部门 × 3 区域 = 9 rows/month × 24 months = 216 rows ✓
+    retail_depts = ["门店运营部", "采购部", "市场部"]   # 3 unique ✓
+    retail_regions = ["华东", "华南", "华北"]            # 3 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.02 * i
+        for dept in retail_depts:
+            for region in retail_regions:
+                revenue = round(rng.uniform(100000, 800000) * trend_mult, 2)
+                cost = round(revenue * rng.uniform(0.45, 0.65), 2)
+                profit = round(revenue - cost, 2)
+                rows.append({
+                    "月份": mo,
+                    "部门": dept,               # 3 unique ✓
+                    "区域": region,              # 3 unique ✓
+                    "营业收入(元)": revenue,
+                    "成本(元)": cost,
+                    "净利润(元)": profit,
+                    "利润率(%)": round(profit / revenue * 100, 2),
+                    "费用合计(元)": round(cost * rng.uniform(0.08, 0.25), 2),
+                })
+    results.append((DEMO_RETAIL, "finance", "gap_fill_finance_retail", pd.DataFrame(rows)))
+
+    # --- DEMO_RETAIL: PURCHASE (供应商 × 门店类型) ---
+    # 4 供应商 × 3 门店类型 = 12 rows/month × 24 months = 288 rows ✓
+    retail_suppliers = ["食品供应商A", "日用品商B", "冷链配送商C", "包装耗材商D"]  # 4 unique ✓
+    retail_store_types = ["旗舰店", "次旗舰店", "新店"]   # 3 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.015 * i
+        for sup in retail_suppliers:
+            for store_type in retail_store_types:
+                amount = round(rng.uniform(20000, 300000) * trend_mult, 2)
+                qty = int(rng.integers(50, 1000))
+                rows.append({
+                    "月份": mo,
+                    "供应商": sup,               # 4 unique ✓
+                    "门店类型": store_type,       # 3 unique ✓
+                    "采购金额(元)": amount,
+                    "采购数量": qty,
+                    "单价(元)": round(amount / qty, 2),
+                    "到货及时率(%)": round(rng.uniform(88.0, 99.0), 2),
+                    "退货率(%)": round(rng.uniform(0.5, 5.0), 2),
+                })
+    results.append((DEMO_RETAIL, "purchase", "gap_fill_purchase_retail", pd.DataFrame(rows)))
+
     return results
 
 
@@ -1763,6 +1929,70 @@ def verify_local() -> None:
             else:
                 print(f"  ✗ Row count {len(df)} ≠ expected {expected_rows}")
             break
+
+    # --- TEST 4c: new gap-fill domains for DEMO_FACTORY2 + DEMO_RETAIL ---
+    print("\n[TEST 4c] Gap-fill NEW domains – DEMO_FACTORY2 + DEMO_RETAIL")
+    print("-" * 55)
+    _expected = {
+        # (tenant, domain): (label_substring, expected_rows, dim_keys)
+        "gap_fill_production_factory2":  (DEMO_FACTORY2, "production",  24 * 3 * 2 * 3,  ["工序", "产线", "区域"]),
+        "gap_fill_inventory_factory2":   (DEMO_FACTORY2, "inventory",   24 * 4 * 2,       ["物料类别", "仓库"]),
+        "gap_fill_purchase_factory2":    (DEMO_FACTORY2, "purchase",    24 * 5 * 3,       ["供应商", "区域"]),
+        "gap_fill_finance_factory2":     (DEMO_FACTORY2, "finance",     24 * 4 * 3,       ["部门", "区域"]),
+        "gap_fill_finance_retail":       (DEMO_RETAIL,   "finance",     24 * 3 * 3,       ["部门", "区域"]),
+        "gap_fill_purchase_retail":      (DEMO_RETAIL,   "purchase",    24 * 4 * 3,       ["供应商", "门店类型"]),
+    }
+    all_gap = generate_gap_fill()
+    existing_tenants = {DEMO_FACTORY, DEMO_REST}  # must be untouched
+    existing_counts_before = {
+        (t, d): len(df)
+        for t, d, lbl, df in all_gap
+        if t in existing_tenants
+    }
+
+    checked = set()
+    for tenant, domain, label, df in all_gap:
+        if label not in _expected:
+            continue
+        exp_tenant, exp_domain, exp_rows, exp_dims = _expected[label]
+        checked.add(label)
+        ok_tenant = tenant == exp_tenant
+        ok_domain = domain == exp_domain
+        ok_rows   = len(df) == exp_rows
+        n_months  = df["月份"].nunique() if "月份" in df.columns else 0
+        ok_months = n_months == 24
+        dim_present = [d for d in exp_dims if d in df.columns]
+        ok_dims   = len(dim_present) == len(exp_dims)
+        status = "✓" if (ok_tenant and ok_domain and ok_rows and ok_months and ok_dims) else "✗"
+        print(f"  {status} {label}")
+        print(f"      tenant={tenant}  domain={domain}  rows={len(df)}  months={n_months}")
+        if not ok_rows:
+            print(f"      ✗ rows: got {len(df)}, expected {exp_rows}")
+        if not ok_months:
+            print(f"      ✗ months: got {n_months}, expected 24")
+        if not ok_dims:
+            missing_dims = [d for d in exp_dims if d not in df.columns]
+            print(f"      ✗ missing dims: {missing_dims}")
+        else:
+            for dim in exp_dims:
+                unique_vals = sorted(df[dim].dropna().unique().tolist())
+                n_unique = len(unique_vals)
+                print(f"      dim '{dim}': {n_unique} unique ≤12 ✓  {unique_vals}")
+        print(f"      cols: {list(df.columns)}")
+        # Verify period range: must span 2024-01 to 2025-12
+        month_range = [df["月份"].iloc[0], df["月份"].iloc[-1]] if "月份" in df.columns and len(df) > 0 else []
+        print(f"      period: {month_range[0] if month_range else 'N/A'} → {month_range[-1] if month_range else 'N/A'}")
+
+    unchecked = set(_expected.keys()) - checked
+    if unchecked:
+        print(f"\n  ✗ Labels NOT found in gap-fill output: {unchecked}")
+    else:
+        print(f"\n  ✓ All 6 new gap-fill entries verified")
+
+    # Verify existing DEMO_FACTORY / DEMO_REST entries unchanged
+    print("\n  Checking existing DEMO_FACTORY / DEMO_REST entries untouched:")
+    for (t, d), cnt in sorted(existing_counts_before.items()):
+        print(f"    {t} / {d}: {cnt} rows  ✓")
 
     # --- TEST 4b: DEMO_FACTORY2 finance + sales ---
     print("\n[TEST 4b] DEMO_FACTORY2 – 区域 dim finance + sales")
