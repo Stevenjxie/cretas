@@ -149,7 +149,10 @@ public class PurchaseController {
             description = "PDF 二维码内容 = orderNumber (纯文本, 如 PO-20260514-001). " +
                     "仓管员扫 QR → 调本接口拿订单 + 关联明细 → 跳入库收货页. " +
                     "六扇门 May 7 transcript 客户原话: \"扫一下上面的拳运码... 开始入库\".")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    // 仓管员(warehouse:read_write)扫 PO 二维码进入库流程是设计内的合法操作, 但仓管员通常
+    // 没有 procurement 权限 → 之前扫码报 403 (六扇门 F006 真客户 2026-06-16)。加入 warehouse
+    // 权限: 收货环节读取 PO + 明细是收货的必要前置, 不构成越权(只读单据, 不能改采购单)。
+    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read"})
     public ApiResponse<PurchaseOrder> getOrderByNumber(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderNumber) {
