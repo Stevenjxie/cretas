@@ -343,7 +343,7 @@
       <span>📅 2026-06</span>
       <span>🏭 六扇门食品工厂（F006）</span>
       <span>🔖 包含 17 张标注截图</span>
-      <span>✅ 生产链 13 个步骤</span>
+      <span>✅ 生产链 13 个步骤 + 3 个管理参考章节</span>
     </div>
   </div>
 </div>
@@ -379,6 +379,9 @@
     <li><a href="#ch11"><span class="step-num">11</span>批次详情报工（领料 + 产出两点）</a></li>
     <li><a href="#ch12"><span class="step-num">12</span>完工入库 <span class="badge badge-app">手机 APP</span></a></li>
     <li><a href="#ch13"><span class="step-num">13</span>成品库存确认</a></li>
+    <li><a href="#ch14"><span class="step-num">14</span>工单整单撤回 / 审批流程</a></li>
+    <li><a href="#ch15"><span class="step-num">15</span>工时统计与今日达成率</a></li>
+    <li><a href="#ch16"><span class="step-num">16</span>金蝶凭证导出操作步骤</a></li>
   </ol>
 </nav>
 
@@ -501,22 +504,41 @@
     <div class="note-box">
       <span class="box-icon">📐</span>
       <div class="box-content">
-        <strong>16 位编码结构</strong>
+        <strong>16 位编码三层分段结构</strong>
         <div class="flow-diagram" style="margin:0.4rem 0 0; background:transparent; padding:0; font-size:0.8rem;">
-前 10 位（固定段，系统自动生成，不可手改）+ 后 6 位（流水号）
-─────────────────────────────────────────
-类别前缀 3 位  +  品类/部位编号  +  ... 流水号
-示例：001（原料）→ 牛腱部位 → 001-001-XXXXXX
-      BC（包材）→ BC 开头自动归类包材
-      002（辅料）
+┌──────────────────────────────┬──────────────────┐
+│   前 10 位（主编码，固定不变）     │  后 6 位（流水号）  │
+├────────┬────────┬────────────┼──────────────────┤
+│ L1类型  │ L2部位  │  L3品名     │  系统自动生成      │
+│  3 位   │ 累积6位 │  累积10位   │  000001~999999   │
+└────────┴────────┴────────────┴──────────────────┘
+
+示例（牛腱 A 级原料）：
+  L1 类型段  → "001"（3位，表示"原料"）
+  L2 部位段  → "001001"（6位，表示"牛腱"，即 L1+L2）
+  L3 品名段  → "0010010001"（10位，表示"牛腱 A 级"，即 L1+L2+L3）
+  最终编码   → "0010010001" + "000023" = "0010010001000023"（16位）
         </div>
+        <p style="margin-top:0.4rem; font-size:0.82rem;">各层含义：L1=物料大类（原料/包材/辅料等），L2=部位/品类，L3=具体品名/规格。BOM 配方只关联 L1 的前 3 位主编码，<strong>不与流水号或 L3 绑定</strong>。</p>
       </div>
     </div>
 
+    <hr class="chapter-divider">
+    <p><strong>如何配置编码字典（一次性初始化）：</strong></p>
+
     <ul class="steps">
-      <li>进入编码规则页，查看现有规则，确认原料、包材、成品各类已建规则。</li>
-      <li>若需新增规则，点击红框处<mark>新建规则</mark>，选择适用单据类型（生产计划/销售订单/原料入库等）。</li>
-      <li>设定前缀（如"SO-"表示销售订单）和流水号位数（6 位数字），保存。</li>
+      <li>进入<mark>系统管理 → 物料编码字典</mark>，分三层逐级新建分段。</li>
+      <li><strong>新建 L1 类型段</strong>（3位）：点击「新建」，选层级=类型，填写段编码（如 <code>001</code>）和展示标签（如"原料"）；保存。</li>
+      <li><strong>新建 L2 部位/品类段</strong>（6位累积）：选层级=部位，填写段编码（如 <code>001001</code>）、上级编码（<code>001</code>）和展示标签（如"牛腱"）；保存。</li>
+      <li><strong>新建 L3 品名段</strong>（10位累积）：选层级=品名，填写段编码（如 <code>0010010001</code>）、上级编码（<code>001001</code>）和展示标签（如"牛腱 A 级"）；保存。</li>
+      <li>三层字典配置完成后，新建物料时选择「类型 → 部位 → 品名」三级下拉，系统自动拼装前 10 位主编码并追加 6 位流水号，生成完整 16 位编码。</li>
+    </ul>
+
+    <hr class="chapter-divider">
+    <p><strong>查看已生成编码 / 预览编码：</strong></p>
+    <ul class="steps">
+      <li value="6">在物料类型页（仓库管理 → 原料类型），每条原料记录的「编码」列显示完整 16 位编码。</li>
+      <li>如需在录入前预览即将生成的编码，可调用系统预览接口（菜单：编码规则 → 生成预览）选择三级分类查看。</li>
     </ul>
 
     <div class="warn-box">
@@ -524,10 +546,11 @@
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
-          <li>编码只能由英文字母 + 数字组成，<strong>不能用中文</strong>；数字比字母更不易识错。</li>
-          <li>编码一旦分配，不要再改，否则与历史批次、BOM 关联关系错乱。</li>
-          <li>BOM 关联只引用前 3 位主编码（品类/部位编号），不是全部 16 位。</li>
-          <li>产品流水号由系统自动生成，不需手动填写。</li>
+          <li>编码只能由<strong>英文字母 + 数字</strong>组成，不能用中文（客户原话：「编码的话其实只能是英文跟数字」）；数字比字母更不易识错。</li>
+          <li><strong>前 10 位主编码一旦生成不可手改</strong>——选类型→部位→品名后系统自动生成，后续与 BOM、批次、历史单据关联，改了会断链。</li>
+          <li>BOM 配方关联只引用 <strong>L1 的前 3 位主编码</strong>（品类），不与 L3 品名或流水号绑定——同一部位下不同品名可共用同一 BOM 模板。</li>
+          <li>后 6 位流水号由系统自动追加，不需手动填写；同一 L3 品名下最多支持 999,999 个批次。</li>
+          <li>编码字典（三层字典表）是<strong>一次性初始化</strong>，由管理员在上线前统一录入，操作员不需要维护。</li>
         </ul>
       </div>
     </div>
@@ -1234,6 +1257,234 @@
           <li>原料名称与 BOM 中的不完全一致 → 系统无法关联成本</li>
           <li>税率在销售订单行随意改动 → 财务成本核算偏差</li>
           <li>完工入库前未完成全部工序报工 → 「完工入库」按钮灰色无法点击</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 14 章 — 工单整单撤回 / 审批流程
+======================================================-->
+<section class="chapter" id="ch14">
+  <div class="chapter-header">
+    <div class="chapter-num">14</div>
+    <div>
+      <div class="chapter-title">工单整单撤回 / 审批流程</div>
+      <div class="chapter-subtitle">菜单路径：生产管理 → 生产批次 → 批次详情 → 「申请撤回」</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>工单撤回是<strong>整批次级别</strong>的操作——即撤回整张生产单，而不是撤回某一道工序（客户原话：「应该是整单的意思」）。撤回后，系统回滚已领原料的库存占用、清除批次成本，可以重新建单生产。</p>
+    </div>
+
+    <div class="note-box">
+      <span class="box-icon">📋</span>
+      <div class="box-content">
+        <strong>撤回流程：两种情形</strong>
+        <div class="flow-diagram" style="margin:0.4rem 0 0; background:transparent; padding:0; font-size:0.8rem;">
+情形 A（无报工数据 / 5 分钟快速窗口）：
+  提交人点「申请撤回」→ 系统检测无下游消费 & 在 5 分钟内 → 直接执行，无需审批
+  批次状态 → 已撤回；库存立即回滚
+
+情形 B（有报工数据 / 超出 5 分钟窗口）：
+  提交人点「申请撤回」→ 创建 PENDING 申请 → 审批人审核
+      ↓ 审批通过         ↓ 审批拒绝
+  系统执行撤回        申请关闭，批次继续
+  库存回滚 + 成本清零
+        </div>
+      </div>
+    </div>
+
+    <hr class="chapter-divider">
+    <p><strong>操作步骤（情形 B：正常审批路径）：</strong></p>
+
+    <ul class="steps">
+      <li>进入<mark>生产批次</mark>页，找到需要撤回的批次，点击进入批次详情页。</li>
+      <li>点击右上角「<mark>申请撤回</mark>」按钮，填写撤回原因（如"原料配比出错需重做"），提交。</li>
+      <li>系统执行三层守卫：<br>
+        &nbsp;&nbsp;① 检查是否已有下游消费（如后工序已领料/成品已出货）——有则拒绝撤回；<br>
+        &nbsp;&nbsp;② 检查成品是否已出货——已出货则拒绝撤回；<br>
+        &nbsp;&nbsp;③ 检查是否已有 PENDING 申请（防重复提交）。</li>
+      <li>三层守卫通过后，创建撤回申请，状态 = <strong>PENDING（待审批）</strong>。审批人收到待办通知。</li>
+      <li>审批人（与提交人不同，遵循四眼原则）进入<mark>生产管理 → 撤回申请列表</mark>，查看申请详情。</li>
+      <li>审批人确认无误后，点击「<mark>审批通过</mark>」；如发现问题，点击「<mark>拒绝</mark>」并填写拒绝原因。</li>
+      <li>审批通过后，系统自动执行撤回：① 软删除该批次全部报工记录；② 回滚原料库存中已扣减的 usedQuantity；③ 清除批次成本（costUnitPrice 置 null）；④ 移动均价重新计算。</li>
+      <li>批次状态变为「已撤回」，可重新建单生产（新建生产计划引用同一销售订单）。</li>
+    </ul>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>快速撤回（5 分钟免审批窗口）</strong>
+        <p>若提交人是<strong>本人操作、无下游消费，且在提交报工后 5 分钟内</strong>申请撤回，系统自动走快速通道，跳过审批步骤，立即执行撤回。适用于填错数字后即时纠正的场景。</p>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li><strong>整单撤回，不支持只撤单道工序</strong>——如只需修改某一道工序的数量，联系生管手动补录差异，而非整单撤回。</li>
+          <li><strong>四眼原则</strong>：审批人必须与申请撤回的提交人不是同一人（「看是谁，谁提交的撤回」，需要另外一个有权限的人审批）。</li>
+          <li>已发货或下游工序已消费的批次<strong>不允许撤回</strong>——守卫会在第一步拒绝申请。</li>
+          <li>撤回后，成品库存（如已完工入库）会相应回滚，<strong>成本核算数据也会清零</strong>，下次报工重新生成成本。</li>
+          <li>撤回申请记录（包括拒绝记录）<strong>永久保留</strong>，可在「撤回申请列表」查阅历史，供审计追溯。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 15 章 — 工时统计与今日达成率
+======================================================-->
+<section class="chapter" id="ch15">
+  <div class="chapter-header">
+    <div class="chapter-num">15</div>
+    <div>
+      <div class="chapter-title">工时统计与今日达成率</div>
+      <div class="chapter-subtitle">SmartBI 数据驾驶舱 / 生产管理 → 批次详情（成本核算区块）</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>六扇门最关注的降本指标是<strong>人工成本</strong>（客户原话：「最大的就是人力成本……我一定要要当时报价的一盒对应的实际的人工，最后能实现报价人工和实际这两个天差大小」）。系统通过 BOM 工序工时折算人工成本，并与报价对比，暴露差距。</p>
+    </div>
+
+    <div class="note-box">
+      <span class="box-icon">ℹ️</span>
+      <div class="box-content">
+        <strong>当前版本工时数据查看路径</strong>
+        <p>当前版本（2026-06 上线）中，<strong>工时不在独立的"达成率看板"页单独展示</strong>，而是通过以下两个入口查阅：</p>
+        <ul>
+          <li><strong>批次详情 → 成本核算区块</strong>：批次完工入库后，可看到"实际人工成本 / 成品公斤"（由 BOM 工序工时 × 时薪 折算）与"BOM 预报价人工成本"的对比及偏差率。</li>
+          <li><strong>SmartBI 数据驾驶舱 → 生产模块</strong>：管理层可查看跨批次的工时汇总趋势、各 SKU 人工成本对比（需 SmartBI 账号权限）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <hr class="chapter-divider">
+    <p><strong>工时如何进入系统：</strong></p>
+
+    <div class="fields">
+      <table>
+        <thead>
+          <tr><th>数据来源</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>BOM 工序工时（计划值）</td>
+            <td>在 BOM 配方 → 工序行中填写每道工序的标准工时（小时/批次），系统据此计算预报价人工成本（工时 × 时薪）。六扇门目前每道工序填写标准工时，时薪由管理员配置（手工填入，非反推）。</td>
+          </tr>
+          <tr>
+            <td>报工打卡（实际值，当前版本）</td>
+            <td>当前版本仅记录「领料报工」和「产出报工」两个端点的时间戳，<strong>未单独记录每道工序的实际工时</strong>。实际人工成本通过「实际领料成本 + BOM 工序工时」综合推算。独立的工时打卡（每道工序进出打点）计划在后续版本上线。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>今日达成率查看（批次维度）：</strong></p>
+    <ul class="steps">
+      <li>进入<mark>生产管理 → 生产批次</mark>，筛选今日日期，查看各批次「状态」列——在制/已完工比例即为今日生产进度。</li>
+      <li>点击任一已完工批次，进入批次详情，滚动至「成本核算」区块，查看：<br>
+        &nbsp;&nbsp;• <strong>实际领料成本</strong> vs <strong>BOM 预报价成本</strong>，偏差率（目标 ±10%）<br>
+        &nbsp;&nbsp;• <strong>实际出成率</strong> vs <strong>BOM 目标出成率</strong></li>
+      <li>如需查看跨天/跨 SKU 的工时汇总对比，联系管理员开通 SmartBI 数据分析权限，登录驾驶舱查看生产效率模块。</li>
+    </ul>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>当前版本限制说明</strong>
+        <ul>
+          <li>当前版本<strong>没有独立的"今日达成率看板"页面</strong>——「达成率」数据嵌在批次详情的成本核算区块中，需逐批次点进去查看。</li>
+          <li>逐道工序打卡计时（每个工人每道工序进出打点、工时折薪）属于后续规划功能，<strong>本版本未实装</strong>。</li>
+          <li>如需日报汇总（今日各 SKU 实际人工成本 vs 报价），目前需从批次数据手动汇总，或通过 SmartBI 驾驶舱导出报表。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 16 章 — 金蝶凭证导出操作步骤
+======================================================-->
+<section class="chapter" id="ch16">
+  <div class="chapter-header">
+    <div class="chapter-num">16</div>
+    <div>
+      <div class="chapter-title">金蝶凭证导出操作步骤</div>
+      <div class="chapter-subtitle">菜单路径：财务管理 → 凭证导出 / /finance/voucher-export</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>六扇门财务使用金蝶进行总账管理（凭证录入、科目余额）。本系统按月为财务生成<strong>凭证汇总表</strong>，导出标准格式 Excel，财务将其导入金蝶，无需二次手工整理（客户原话：「你可以把表头的信息告诉我，我直接在系统里面建立一个，然后它就按照那个表头给它打印出来，你还是按照那个方式录入」）。</p>
+    </div>
+
+    <div class="note-box">
+      <span class="box-icon">📋</span>
+      <div class="box-content">
+        <strong>对接范围确认（周五客户确认单第 4 项）</strong>
+        <ul>
+          <li>本系统<strong>仅导出凭证汇总表</strong>（借贷分列，含科目/金额/摘要），<strong>不直接接入金蝶 API</strong>。</li>
+          <li>财务在金蝶总账模块<strong>手工导入</strong>或参照导出表<strong>手工录入</strong>凭证。</li>
+          <li>本期范围：仅凭证表；科目余额表、序时账不在当前导出范围（如需，请联系系统管理员评估排期）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <hr class="chapter-divider">
+    <p><strong>导出操作步骤：</strong></p>
+
+    <ul class="steps">
+      <li>进入<mark>财务管理 → 凭证导出</mark>菜单（路径：/finance/voucher-export）。</li>
+      <li>选择<strong>会计期间</strong>：下拉选择需要导出的年份和月份（如 2026 年 05 月）。系统按该期间内所有已审核的销售订单、采购入库、生产领料、成品入库等业务生成对应凭证行。</li>
+      <li>（可选）选择<strong>凭证类型</strong>：全部 / 采购类 / 销售类 / 生产成本类。默认导出全部类型。</li>
+      <li>点击<mark>导出 Excel</mark>按钮，浏览器自动下载 xlsx 文件，文件名格式为<code>凭证汇总_YYYY-MM.xlsx</code>。</li>
+      <li>打开导出文件，核查表头字段是否与金蝶模板一致（含：凭证日期、摘要、科目编码、科目名称、借方金额、贷方金额）；如有不一致，联系系统管理员调整导出模板。</li>
+      <li>在金蝶中，进入<strong>总账 → 凭证 → 导入凭证</strong>，选择下载好的 xlsx 文件，按金蝶向导完成导入。</li>
+    </ul>
+
+    <div class="screenshot-wrap">
+      <img src="screenshots/02-product-coding-config.png" alt="财务管理页面示意（当前使用编码配置截图作为参考）">
+      <div class="screenshot-caption">图 16-1：财务管理导航位置示意（后续将替换为凭证导出页实际截图）</div>
+    </div>
+
+    <div class="tip-box">
+      <span class="box-icon">💡</span>
+      <div class="box-content">
+        <strong>导出内容说明</strong>
+        <ul>
+          <li><strong>借贷分列模板</strong>：每行凭证含「借方金额」和「贷方金额」两列，符合金蝶标准导入格式（云星空 / KIS 通用）。</li>
+          <li><strong>价税分离</strong>：含税业务（销售、采购）导出时自动拆分含税价、税额、不含税价三行，与增值税申报口径一致。</li>
+          <li><strong>摘要自动生成</strong>：系统根据业务类型自动填写摘要（如"采购入库-牛腱 A 级 V240301001"），财务可直接用，也可在金蝶中二次编辑。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="warn-box">
+      <span class="box-icon">⚠️</span>
+      <div class="box-content">
+        <strong>注意事项</strong>
+        <ul>
+          <li><strong>仅导凭证表，不接金蝶 API</strong>——系统与金蝶之间无实时同步，所有数据均通过手工导入，两端数据以金蝶录入为财务正本。</li>
+          <li>导出前，请确认当月<strong>所有销售订单已完成财务审核、成品已完工入库</strong>——未完成审核的订单不计入当月凭证。</li>
+          <li>如果金蝶表头字段与导出表头有出入（如字段顺序、科目编码格式不同），请<strong>不要手动修改导出文件的列顺序</strong>，而是联系系统管理员调整模板，保持每次导出格式一致。</li>
+          <li>当前仅支持<strong>按自然月</strong>导出，不支持任意日期区间导出；如需月中对账，可分两次导出并手工合并。</li>
         </ul>
       </div>
     </div>
