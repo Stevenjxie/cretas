@@ -33,6 +33,8 @@ import java.time.temporal.WeekFields;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * 财务分析服务实现
@@ -232,7 +234,10 @@ public class FinanceAnalysisServiceImpl implements FinanceAnalysisService {
     private void fireGoldShadowRead(String factoryId, LocalDate startDate, LocalDate endDate) {
         if (!goldShadowReadEnabled) return;
         if (goldFinanceClient == null) return;  // defensive; Spring should always inject
+        // RBAC FIX (Jun 2026): capture request context before handing off to async thread.
+        final RequestAttributes capturedAttrs = RequestContextHolder.getRequestAttributes();
         CompletableFuture.runAsync(() -> {
+            if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
             try {
                 Map<String, Object> gold = goldFinanceClient.fetchFinanceSummary(
                         factoryId, startDate, endDate, 5);
@@ -242,6 +247,8 @@ public class FinanceAnalysisServiceImpl implements FinanceAnalysisService {
             } catch (Exception e) {
                 log.warn("[gold-shadow] factory={} range={}..{} failed: {}",
                         factoryId, startDate, endDate, e.getMessage());
+            } finally {
+                if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes();
             }
         });
     }

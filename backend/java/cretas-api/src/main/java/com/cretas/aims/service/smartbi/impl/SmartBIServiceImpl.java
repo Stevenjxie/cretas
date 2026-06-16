@@ -44,6 +44,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * SmartBI 核心调度服务实现
@@ -329,18 +331,56 @@ public class SmartBIServiceImpl implements SmartBIService {
         }
 
         // 3. 并行获取各维度数据 (每个 service 方法有自己的 @Transactional)
+        //
+        // RBAC FIX (Jun 2026): RequestContextHolder is thread-local. The child
+        // threads spawned by DASHBOARD_EXECUTOR cannot see the caller's request
+        // context, so GoldFinanceClient.currentUserRole() returns null in those
+        // threads → Python _apply_rbac_strip nulls all revenue → factory
+        // dashboards show ¥0. Fix: capture the RequestAttributes on the request
+        // thread and bind them into each child thread, then remove after the
+        // task completes (prevent context leaks between pooled-thread reuses).
+        final RequestAttributes capturedAttrs = RequestContextHolder.getRequestAttributes();
+
         final DateRange finalRange = range;
         CompletableFuture<DashboardResponse> salesFuture = CompletableFuture.supplyAsync(
-                () -> salesService.getSalesOverview(factoryId, finalRange.getStartDate(), finalRange.getEndDate()),
+                () -> {
+                    if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
+                    try {
+                        return salesService.getSalesOverview(factoryId, finalRange.getStartDate(), finalRange.getEndDate());
+                    } finally {
+                        if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes();
+                    }
+                },
                 DASHBOARD_EXECUTOR);
         CompletableFuture<List<RankingItem>> deptRankingFuture = CompletableFuture.supplyAsync(
-                () -> deptService.getDepartmentRanking(factoryId, finalRange.getStartDate(), finalRange.getEndDate()),
+                () -> {
+                    if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
+                    try {
+                        return deptService.getDepartmentRanking(factoryId, finalRange.getStartDate(), finalRange.getEndDate());
+                    } finally {
+                        if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes();
+                    }
+                },
                 DASHBOARD_EXECUTOR);
         CompletableFuture<List<RankingItem>> regionRankingFuture = CompletableFuture.supplyAsync(
-                () -> regionService.getRegionRanking(factoryId, finalRange.getStartDate(), finalRange.getEndDate()),
+                () -> {
+                    if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
+                    try {
+                        return regionService.getRegionRanking(factoryId, finalRange.getStartDate(), finalRange.getEndDate());
+                    } finally {
+                        if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes();
+                    }
+                },
                 DASHBOARD_EXECUTOR);
         CompletableFuture<ChartConfig> deptTrendFuture = CompletableFuture.supplyAsync(
-                () -> deptService.getDepartmentTrendComparison(factoryId, finalRange.getStartDate(), finalRange.getEndDate(), "WEEK"),
+                () -> {
+                    if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
+                    try {
+                        return deptService.getDepartmentTrendComparison(factoryId, finalRange.getStartDate(), finalRange.getEndDate(), "WEEK");
+                    } finally {
+                        if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes();
+                    }
+                },
                 DASHBOARD_EXECUTOR);
 
         // 等待所有查询完成 (join+get wrapped in try-catch for serial fallback)
