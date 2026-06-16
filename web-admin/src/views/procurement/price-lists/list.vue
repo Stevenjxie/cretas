@@ -64,6 +64,15 @@ function removeItem(idx: number) {
 
 async function handleCreate() {
   if (!form.value.name) return ElMessage.warning('请输入价格表名称');
+  if (!form.value.priceType) return ElMessage.warning('请选择价格类型');
+  if (!form.value.effectiveFrom) return ElMessage.warning('请选择生效日期');
+  if (!Array.isArray(form.value.items) || form.value.items.length === 0) {
+    return ElMessage.warning('请至少添加一行价格明细');
+  }
+  const badPriceIdx = form.value.items.findIndex(i => i.standardPrice == null);
+  if (badPriceIdx >= 0) {
+    return ElMessage.warning(`第 ${badPriceIdx + 1} 行请填写标准价`);
+  }
   try {
     const res = await post(`/${factoryId.value}/price-lists`, form.value);
     if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
@@ -175,6 +184,14 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
         <el-form-item label="生效日期" required><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="失效日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-divider>价格明细</el-divider>
+        <div class="item-row item-header">
+          <span style="width: 150px">名称</span>
+          <span style="width: 80px">单位</span>
+          <span style="width: 120px"><span class="req-star">*</span>标准价</span>
+          <span style="width: 110px">最低</span>
+          <span style="width: 110px">最高</span>
+          <span style="width: 50px"></span>
+        </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
           <el-input v-model="item.itemName" placeholder="名称" style="width: 150px" />
           <el-input v-model="item.unit" placeholder="单位" style="width: 80px" />
@@ -207,4 +224,6 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.item-header { font-size: 13px; color: #606266; font-weight: 500; margin-bottom: 4px; }
+.req-star { color: #f56c6c; margin-right: 2px; }
 </style>
