@@ -4,7 +4,7 @@ Fire-and-forget write of each user query that went through the LLM fallback
 path (i.e. no template matched). Feeds Phase 2 pattern clustering and
 Phase 3 RAG retrieval.
 
-Fail-safe: if DashScope embedding fails or DB is down, the logger logs a
+Fail-safe: if local embedding fails or DB is down, the logger logs a
 warning and swallows the exception. The user's chat answer must not be
 blocked by logging.
 
@@ -37,7 +37,7 @@ class LlmFallbackLogPayload:
 # Lazy-imported to keep food_kb/services/embedding optional at startup.
 # If food_kb isn't available, logging still works (embedding = None).
 async def get_embedding(text: str) -> Optional[List[float]]:
-    """Call DashScope text-embedding-v3 via food_kb's cached client.
+    """Call local gRPC embedding-service via food_kb's cached client.
 
     Returns 768-dim float list, or None on failure.
     """

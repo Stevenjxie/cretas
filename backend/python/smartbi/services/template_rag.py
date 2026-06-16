@@ -30,7 +30,9 @@ from .template_embedding_index import cosine_topk
 
 logger = logging.getLogger(__name__)
 
-# Similarity thresholds tuned for DashScope text-embedding-v3.
+# Similarity thresholds originally tuned for template-query embeddings.
+# Current vectors come from local gte-base-zh; keep conservative thresholds
+# until production feedback/logs justify a retune.
 # Tuning history:
 #   Apr 23 2026: 0.85 / 0.70 — too strict; lowered HIGH to 0.80 after prod
 #     showed "谁是销售冠军" (sim 0.824) / "我想看付款方式" (sim 0.839) wrongly

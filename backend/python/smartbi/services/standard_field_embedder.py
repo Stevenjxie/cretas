@@ -1,7 +1,7 @@
 """
 C1 MVP (Apr 20 2026): Embedding-first semantic mapping layer.
 
-Pre-computes DashScope text-embedding-v3 (768-dim) vectors for every
+Pre-computes local gte-base-zh (768-dim) vectors for every
 STANDARD_FIELDS entry at first use, caches in module-level dict, and
 provides cosine similarity lookup for rule-fail columns BEFORE falling
 through to LLM.
@@ -9,11 +9,10 @@ through to LLM.
 Why this layer (between rules and LLM):
 - Rules miss on synonyms we never added ("主营产品收入" / "门店名称" / "卖场编号").
 - LLM is slow (~1-3s/call) and expensive. Embedding lookup is ~50ms + cached.
-- DashScope embedding API is already configured by main.py startup (shared
+- Local embedding-service is already configured by main.py startup (shared
   module state in food_kb.services.embedding).
-- pgvector is not installed and gRPC embedding service is Java-only without
-  a Python client, so MVP uses in-memory numpy storage (~25 fields fits
-  easily; can upgrade to pgvector when we hit >1K fields).
+- MVP uses in-memory numpy storage (~25 fields fits easily; can upgrade to
+  pgvector when we hit >1K fields).
 
 Usage:
     from smartbi.services.standard_field_embedder import find_best_matches
@@ -79,9 +78,7 @@ async def build_index(force: bool = False) -> int:
         names = list(STANDARD_FIELDS.keys())
         texts = [_build_embedding_text(n, STANDARD_FIELDS[n]) for n in names]
 
-        # DashScope text-embedding-v3 has a 10 input/call limit; batches >10
-        # silently fail on everything except the last chunk. Use 10 to be safe.
-        vectors = await embedding_service.get_embeddings_batch(texts, batch_size=10)
+        vectors = await embedding_service.get_embeddings_batch(texts, batch_size=20)
 
         count = 0
         for name, vec in zip(names, vectors):
@@ -178,7 +175,7 @@ async def find_best_matches_batch(
             parts.append(f"samples: {joined}")
         query_texts.append(" · ".join(parts))
 
-    query_vecs = await embedding_service.get_embeddings_batch(query_texts, batch_size=10)
+    query_vecs = await embedding_service.get_embeddings_batch(query_texts, batch_size=20)
 
     results: Dict[str, List[Tuple[str, str, float]]] = {}
     for col, qvec_raw in zip(columns, query_vecs):

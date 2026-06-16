@@ -329,11 +329,12 @@ async def lifespan(app: FastAPI):
             retriever = get_knowledge_retriever()
             await retriever.initialize(db_url, embedding_fn=get_embedding)
 
-            # Configure DashScope Reranker (Phase 1 RAG optimization)
+            # Optional external reranker. Disabled by default so Food KB RAG
+            # stays on the local embedding-service cost path.
             import os
             from food_kb.services.reranker import get_reranker
             reranker = get_reranker()
-            reranker_enabled = os.environ.get("FOOD_KB_RERANKER_ENABLED", "true").lower() == "true"
+            reranker_enabled = os.environ.get("FOOD_KB_RERANKER_ENABLED", "false").lower() == "true"
             reranker.configure(
                 api_key=settings.llm_api_key,
                 model=os.environ.get("FOOD_KB_RERANKER_MODEL", "gte-rerank-v2"),

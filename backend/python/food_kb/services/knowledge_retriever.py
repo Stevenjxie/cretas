@@ -8,6 +8,7 @@ Phase 2: BM25+Vector hybrid search with RRF (Reciprocal Rank Fusion).
 """
 
 import logging
+import re
 import time
 from typing import Optional, List, Dict, Any
 
@@ -27,6 +28,8 @@ RRF_K = 60
 
 # BM25 hybrid search toggle
 BM25_ENABLED = True
+
+CHUNK_SUFFIX_RE = re.compile(r"\s*\(#\d+\)\s*$")
 
 
 class KnowledgeDocument:
@@ -231,7 +234,8 @@ class KnowledgeRetriever:
                     results.append(doc)
                 retrieval_method += "+rerank"
             else:
-                results = results[:top_k]
+                results = self._boost_title_matches(raw_primary, results)
+                results = self._diversify_by_section(results, top_k)
 
             # Normalize similarity to [0, 1] for consistent UI display.
             # Priority: rerank_score (cross-encoder, [0,1]) > clamped raw similarity.
@@ -381,6 +385,84 @@ class KnowledgeRetriever:
             results.append(doc)
 
         return results
+
+    @staticmethod
+    def _section_key(doc: 'KnowledgeDocument') -> str:
+        """Return a stable grouping key for chunk variants of the same section."""
+        title = (doc.title or "").strip()
+        if title:
+            return CHUNK_SUFFIX_RE.sub("", title)
+        parent = (doc.metadata or {}).get("parent_doc_id") if isinstance(doc.metadata, dict) else None
+        return str(parent or doc.id or "")
+
+    @classmethod
+    def _title_match_boost(cls, query: str, doc: 'KnowledgeDocument') -> float:
+        q = (query or "").strip().lower()
+        title = (doc.title or "").strip().lower()
+        if not q or not title:
+            return 0.0
+
+        base = cls._section_key(doc).lower()
+        if title == q:
+            return 1.0
+        if base == q:
+            return 0.9
+        if len(q) >= 6 and q in title:
+            return 0.5
+        if len(base) >= 6 and base in q:
+            return 0.4
+        return 0.0
+
+    @classmethod
+    def _boost_title_matches(
+        cls,
+        query: str,
+        results: List['KnowledgeDocument'],
+    ) -> List['KnowledgeDocument']:
+        """Lift exact or near-exact title matches above generic BM25 hits."""
+        boosted = []
+        for rank, doc in enumerate(results):
+            boost = cls._title_match_boost(query, doc)
+            if boost and isinstance(doc.metadata, dict):
+                doc.metadata["title_match_boost"] = boost
+            boosted.append((boost, -rank, doc))
+        boosted.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [doc for _, _, doc in boosted]
+
+    @classmethod
+    def _diversify_by_section(
+        cls,
+        results: List['KnowledgeDocument'],
+        top_k: int,
+    ) -> List['KnowledgeDocument']:
+        """Prefer distinct sections first, then fill remaining slots with extra chunks.
+
+        Operation manuals often contain adjacent chunks named "Title", "Title (#1)",
+        "Title (#2)". Returning all of them first wastes RAG context. This keeps the
+        highest-ranked chunk per section ahead of duplicate chunks while still allowing
+        duplicates to fill the tail when there are not enough distinct sections.
+        """
+        if top_k <= 0:
+            return results[:top_k]
+
+        selected: List['KnowledgeDocument'] = []
+        overflow: List['KnowledgeDocument'] = []
+        seen_sections = set()
+
+        for doc in results:
+            key = cls._section_key(doc)
+            if key in seen_sections:
+                overflow.append(doc)
+                continue
+            seen_sections.add(key)
+            selected.append(doc)
+            if len(selected) == top_k:
+                break
+
+        if len(selected) < top_k:
+            selected.extend(overflow[: top_k - len(selected)])
+
+        return selected[:top_k]
 
     async def retrieve_by_entity(
         self,

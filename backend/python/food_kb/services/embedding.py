@@ -1,167 +1,196 @@
+"""Local embedding client for Food KB and SmartBI RAG.
+
+This module keeps the historical public API used by Food KB, SmartBI template
+RAG, semantic field mapping, and fallback-log similarity:
+
+    configure(...)
+    get_embedding(text)
+    get_embeddings_batch(texts)
+    close()
+
+The implementation now calls the project's Java embedding-service over gRPC
+instead of paid third-party embedding APIs. Default endpoint:
+AI_EMBEDDING_GRPC_ENDPOINT or FOOD_KB_EMBEDDING_GRPC_ENDPOINT, falling back to
+localhost:9090.
 """
-食品知识库向量嵌入服务
-Embedding service for food knowledge base using DashScope text-embedding-v3.
+from __future__ import annotations
 
-Uses OpenAI-compatible API (DashScope) to generate 768-dim vectors.
-Reuses llm_api_key + llm_base_url from SmartBI config.
-
-⚠️ DOES NOT route through common.llm_router.call_chain — embedding is a
-SEPARATE DashScope API + billing pool from the chat-slot LLMs (CHAT/INSIGHTS/
-CHART/...). call_chain only injects chat models (qwen-flash, glm-5, ...), which
-cannot serve /embeddings. So the chat免费链 (c→b→a→zhipu fallback + circuit
-breaker) does NOT apply here; this stays a direct DashScope embeddings call.
-
-text-embedding-v3 免费额度确认 (2026-06-01 live probe, prod keys LLM_ALIYUN_C /
-LLM_ALIYUN_A):
-    POST /compatible-mode/v1/embeddings {"model":"text-embedding-v3", ...}
-    → HTTP 200 on both aliyun_C and aliyun_A (working, NOT exhausted).
-DashScope grants text-embedding-v3 its own free quota (independent of the
-chat-LLM 免费清单 in memory reference_dashscope_free_model_allowlist). When that
-free quota exhausts, DashScope returns 403 AllocationQuota.FreeTierOnly — which
-we now log at WARNING (see get_embedding error handler) so exhaustion is loud,
-not buried in a generic ERROR. Re-audit when food-KB ingest/search RAG starts
-emitting 403 quota WARNINGs.
-"""
-
+import asyncio
 import logging
+import os
 from typing import List, Optional
 
-import httpx
+import grpc
 
 logger = logging.getLogger(__name__)
 
-# Module-level config
-_api_key: str = ""
-_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-_model: str = "text-embedding-v3"
-_dims: int = 768
-_client: Optional[httpx.AsyncClient] = None
+DEFAULT_ENDPOINT = "localhost:9090"
+DEFAULT_MODEL = "gte-base-zh"
+DEFAULT_DIMS = 768
+
+_grpc_endpoint: str = os.environ.get(
+    "FOOD_KB_EMBEDDING_GRPC_ENDPOINT",
+    os.environ.get("AI_EMBEDDING_GRPC_ENDPOINT", DEFAULT_ENDPOINT),
+)
+_model: str = DEFAULT_MODEL
+_dims: int = DEFAULT_DIMS
+_retry_attempts: int = int(os.environ.get(
+    "FOOD_KB_EMBEDDING_RETRY_ATTEMPTS",
+    os.environ.get("AI_EMBEDDING_RETRY_ATTEMPTS", "3"),
+))
+_retry_delay_s: float = float(os.environ.get(
+    "FOOD_KB_EMBEDDING_RETRY_DELAY_S",
+    os.environ.get("AI_EMBEDDING_RETRY_DELAY_S", "1.0"),
+))
+
+_channel: Optional[grpc.aio.Channel] = None
+_stub: Optional[object] = None
 
 
-def configure(api_key: str, base_url: str, model: str = "text-embedding-v3", dims: int = 768):
-    """Configure the embedding service."""
-    global _api_key, _base_url, _model, _dims, _client
-    _api_key = api_key
-    _base_url = base_url.rstrip("/")
-    _model = model
-    _dims = dims
-    _client = httpx.AsyncClient(timeout=30.0)
-    logger.info(f"Embedding service configured: model={_model}, dims={_dims}")
+def configure(
+    api_key: str = "",
+    base_url: str = "",
+    model: str = DEFAULT_MODEL,
+    dims: int = DEFAULT_DIMS,
+    grpc_endpoint: Optional[str] = None,
+) -> None:
+    """Configure the embedding client.
+
+    api_key/base_url are accepted for backward compatibility with existing
+    startup code, but they are intentionally ignored. Embeddings are produced
+    by the local gRPC service.
+    """
+    del api_key, base_url
+    global _grpc_endpoint, _model, _dims, _channel, _stub
+    _grpc_endpoint = (
+        grpc_endpoint
+        or os.environ.get("FOOD_KB_EMBEDDING_GRPC_ENDPOINT")
+        or os.environ.get("AI_EMBEDDING_GRPC_ENDPOINT")
+        or _grpc_endpoint
+        or DEFAULT_ENDPOINT
+    )
+    _model = model or DEFAULT_MODEL
+    _dims = int(dims or DEFAULT_DIMS)
+    if _channel is not None:
+        # Endpoint or config may have changed; reconnect lazily on next call.
+        _channel = None
+        _stub = None
+    logger.info(
+        "Embedding client configured for local gRPC: endpoint=%s, model=%s, dims=%s",
+        _grpc_endpoint, _model, _dims,
+    )
+
+
+async def _get_stub():
+    global _channel, _stub
+    if _stub is None:
+        _channel = grpc.aio.insecure_channel(_grpc_endpoint)
+        from grpc_stubs.embedding import embedding_pb2_grpc
+        _stub = embedding_pb2_grpc.EmbeddingServiceStub(_channel)
+    return _stub
 
 
 async def get_embedding(text: str) -> Optional[List[float]]:
-    """
-    Generate embedding vector for a single text.
-
-    Uses DashScope text-embedding-v3 via OpenAI-compatible endpoint.
-    Returns 768-dim float list, or None on error.
-    """
-    global _client
-    if not _api_key:
-        logger.warning("Embedding service not configured (no API key)")
+    """Generate one embedding via local gRPC embedding-service."""
+    if text is None or not str(text).strip():
         return None
 
-    if _client is None:
-        _client = httpx.AsyncClient(timeout=30.0)
-
-    try:
-        resp = await _client.post(
-            f"{_base_url}/embeddings",
-            headers={
-                "Authorization": f"Bearer {_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": _model,
-                "input": text,
-                "dimensions": _dims,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        embedding = data["data"][0]["embedding"]
-        return embedding
-
-    except httpx.HTTPStatusError as e:
-        # Surface 403 AllocationQuota.FreeTierOnly distinctly so free-quota
-        # exhaustion is loud (not buried in a generic ERROR). Still degrade
-        # gracefully (return None) — caller (RAG retriever) handles a missing
-        # vector by falling back to BM25 / keyword search.
-        body = e.response.text[:200] if e.response is not None else ""
-        status = e.response.status_code if e.response is not None else "?"
-        if status == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
+    last_error: Optional[Exception] = None
+    for attempt in range(1, _retry_attempts + 1):
+        try:
+            stub = await _get_stub()
+            from grpc_stubs.embedding import embedding_pb2
+            response = await stub.Encode(embedding_pb2.EncodeRequest(text=text))
+            if not response.success:
+                last_error = RuntimeError(response.error_message or "unknown")
+                logger.warning(
+                    "Embedding gRPC Encode attempt %d/%d returned success=false: %s",
+                    attempt, _retry_attempts, response.error_message or "unknown",
+                )
+            else:
+                return list(response.embedding)
+        except grpc.RpcError as e:
+            last_error = e
             logger.warning(
-                f"Embedding text-embedding-v3 FREE-TIER EXHAUSTED "
-                f"(403 AllocationQuota.FreeTierOnly): {body} — "
-                f"re-audit DashScope embedding free quota"
+                "Embedding gRPC Encode attempt %d/%d failed: %s",
+                attempt, _retry_attempts, e,
             )
-        else:
-            logger.error(f"Embedding generation failed (HTTP {status}): {body}")
-        return None
-    except Exception as e:
-        logger.error(f"Embedding generation failed: {e}")
-        return None
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "Embedding gRPC Encode attempt %d/%d errored: %s",
+                attempt, _retry_attempts, e,
+            )
+
+        if attempt < _retry_attempts:
+            await asyncio.sleep(_retry_delay_s)
+
+    logger.error("Embedding gRPC Encode failed after %d attempts: %s", _retry_attempts, last_error)
+    return None
 
 
 async def get_embeddings_batch(texts: List[str], batch_size: int = 20) -> List[Optional[List[float]]]:
-    """
-    Generate embeddings for multiple texts in batches.
-
-    DashScope supports batch input. Returns list of embeddings (None for failures).
-    """
-    global _client
-    if not _api_key:
-        return [None] * len(texts)
-
-    if _client is None:
-        _client = httpx.AsyncClient(timeout=60.0)
+    """Generate embeddings for multiple texts via local gRPC EncodeBatch."""
+    if not texts:
+        return []
 
     results: List[Optional[List[float]]] = [None] * len(texts)
 
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        try:
-            resp = await _client.post(
-                f"{_base_url}/embeddings",
-                headers={
-                    "Authorization": f"Bearer {_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": _model,
-                    "input": batch,
-                    "dimensions": _dims,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            for item in data["data"]:
-                idx = i + item["index"]
-                results[idx] = item["embedding"]
-        except httpx.HTTPStatusError as e:
-            # Distinct WARNING on 403 free-tier exhaustion (see get_embedding).
-            body = e.response.text[:200] if e.response is not None else ""
-            status = e.response.status_code if e.response is not None else "?"
-            if status == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
+    for start in range(0, len(texts), max(1, batch_size)):
+        batch = texts[start:start + max(1, batch_size)]
+        clean_batch = [text or "" for text in batch]
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, _retry_attempts + 1):
+            try:
+                stub = await _get_stub()
+                from grpc_stubs.embedding import embedding_pb2
+                request = embedding_pb2.EncodeBatchRequest(texts=clean_batch)
+                response = await stub.EncodeBatch(request)
+                if not response.success:
+                    last_error = RuntimeError(response.error_message or "unknown")
+                    logger.warning(
+                        "Embedding gRPC EncodeBatch attempt %d/%d returned success=false: %s",
+                        attempt, _retry_attempts, response.error_message or "unknown",
+                    )
+                else:
+                    vectors = list(response.embeddings)
+                    if len(vectors) != len(batch):
+                        logger.warning(
+                            "Embedding gRPC EncodeBatch returned %d vectors for %d texts",
+                            len(vectors), len(batch),
+                        )
+                    for offset, vector in enumerate(vectors[:len(batch)]):
+                        results[start + offset] = list(vector.values)
+                    break
+            except grpc.RpcError as e:
+                last_error = e
                 logger.warning(
-                    f"Batch embedding text-embedding-v3 FREE-TIER EXHAUSTED "
-                    f"(403 AllocationQuota.FreeTierOnly) at batch {i}: {body} — "
-                    f"re-audit DashScope embedding free quota"
+                    "Embedding gRPC EncodeBatch attempt %d/%d failed: %s",
+                    attempt, _retry_attempts, e,
                 )
-            else:
-                logger.error(
-                    f"Batch embedding failed for batch starting at {i} "
-                    f"(HTTP {status}): {body}"
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Embedding gRPC EncodeBatch attempt %d/%d errored: %s",
+                    attempt, _retry_attempts, e,
                 )
-        except Exception as e:
-            logger.error(f"Batch embedding failed for batch starting at {i}: {e}")
+
+            if attempt < _retry_attempts:
+                await asyncio.sleep(_retry_delay_s)
+        else:
+            logger.error(
+                "Embedding gRPC EncodeBatch failed after %d attempts at batch %d: %s",
+                _retry_attempts, start, last_error,
+            )
 
     return results
 
 
-async def close():
-    """Close the HTTP client."""
-    global _client
-    if _client:
-        await _client.aclose()
-        _client = None
+async def close() -> None:
+    """Close the gRPC channel."""
+    global _channel, _stub
+    if _channel is not None:
+        await _channel.close()
+    _channel = None
+    _stub = None
