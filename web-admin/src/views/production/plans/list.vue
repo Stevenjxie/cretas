@@ -605,8 +605,17 @@ function handleCreate() {
 }
 
 async function submitPlan() {
-  if (!planForm.value.productTypeId || !planForm.value.plannedQuantity || !planForm.value.plannedDate) {
-    ElMessage.warning('请填写完整信息');
+  // 防呆 Rule 2: 逐字段提示缺什么, 不再用 generic "请填写完整信息" 让用户摸不着头脑
+  if (!planForm.value.productTypeId) {
+    ElMessage.warning('请选择产品类型');
+    return;
+  }
+  if (!planForm.value.plannedQuantity) {
+    ElMessage.warning('请输入计划数量');
+    return;
+  }
+  if (!planForm.value.plannedDate) {
+    ElMessage.warning('请选择计划生产日');
     return;
   }
   if (planForm.value.sourceType === 'CUSTOMER_ORDER' && !planForm.value.sourceOrderItemId) {
