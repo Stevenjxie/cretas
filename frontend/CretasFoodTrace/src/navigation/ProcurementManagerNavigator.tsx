@@ -23,8 +23,6 @@ import ArApOverviewScreen from "../screens/factory-admin/inventory/ArApOverviewS
 import ProcurementDeliveryConfirmScreen from "../screens/restaurant/procurement/ProcurementDeliveryConfirmScreen";
 import SupplierDeliveryDetailScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
 import SupplierDeliveryListScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
-// SP6 Tier1 #36 — 出纳付款 + 异常决策
-import CashierPaymentListScreen from "../screens/factory-admin/finance/CashierPaymentListScreen";
 import PurchaseExceptionListScreen from "../screens/factory-admin/inventory/PurchaseExceptionListScreen";
 
 // 供应商管理
@@ -55,8 +53,6 @@ function PurchaseStackNavigator() {
       <PurchaseStack.Screen name="ProcurementDeliveryConfirm" component={ProcurementDeliveryConfirmScreen} />
       <PurchaseStack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} />
       <PurchaseStack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} />
-      {/* SP6 Tier1 #36 */}
-      <PurchaseStack.Screen name="CashierPaymentList" component={CashierPaymentListScreen} />
       <PurchaseStack.Screen name="PurchaseExceptionList" component={PurchaseExceptionListScreen} />
     </PurchaseStack.Navigator>
   );

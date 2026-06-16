@@ -337,6 +337,7 @@ export function WastageReportScreen(): React.JSX.Element {
               onPress={() => setBatchSelectorVisible(true)}
               disabled={submitting}
               accessibilityLabel="选择报损批次"
+              testID="wastage-batch-selector-open"
             >
               {selectedBatch ? (
                 <View style={styles.batchSelectorContent}>
@@ -530,6 +531,7 @@ export function WastageReportScreen(): React.JSX.Element {
           loading={submitting}
           style={styles.submitBtn}
           size="large"
+          testID="wastage-report-submit"
         >
           {submitting ? '提交中...' : '提交报损单'}
         </NeoButton>

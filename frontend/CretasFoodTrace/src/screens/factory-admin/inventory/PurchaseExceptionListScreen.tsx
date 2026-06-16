@@ -247,6 +247,7 @@ export default function PurchaseExceptionListScreen() {
               onPress={closeDecisionDialog}
               disabled={deciding}
               style={styles.dialogBtn}
+              testID="purchase-exception-decision-cancel"
             >
               取消
             </Button>
@@ -256,6 +257,7 @@ export default function PurchaseExceptionListScreen() {
               loading={deciding}
               disabled={!decision || deciding}
               style={[styles.dialogBtn, { backgroundColor: '#1B65A8' }]}
+              testID="purchase-exception-decision-confirm"
             >
               确认决策
             </Button>
@@ -318,6 +320,7 @@ export default function PurchaseExceptionListScreen() {
                 onPress={() => openDecisionDialog(item)}
                 style={styles.decideButton}
                 labelStyle={styles.decideButtonLabel}
+                testID={`purchase-exception-open-decision-${item.id}`}
               >
                 处理异常
               </Button>

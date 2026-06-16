@@ -166,18 +166,6 @@ export default function PurchaseOrderListScreen() {
       >
         <TouchableOpacity
           style={styles.quickCard}
-          onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('CashierPaymentList')}
-          activeOpacity={0.75}
-        >
-          <View style={[styles.quickIcon, { backgroundColor: '#1B65A820' }]}>
-            <Icon source="bank-transfer-out" size={22} color="#1B65A8" />
-          </View>
-          <Text style={styles.quickCardTitle}>出纳付款</Text>
-          <Text style={styles.quickCardDesc}>确认已审批付款</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.quickCard}
           onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('PurchaseExceptionList')}
           activeOpacity={0.75}
         >

@@ -187,7 +187,7 @@ export function WHInventoryCheckScreen() {
               return (
                 <View key={wh.id}>
                   {idx > 0 && <Divider />}
-                  <TouchableRipple onPress={() => setSelectedWarehouseId(wh.id)}>
+                  <TouchableRipple onPress={() => setSelectedWarehouseId(wh.id)} testID={`stocktake-warehouse-select-${wh.id}`}>
                     <View style={styles.whRow}>
                       <View style={styles.whInfo}>
                         <Text style={styles.whName}>{wh.name}</Text>
@@ -219,6 +219,7 @@ export function WHInventoryCheckScreen() {
           loading={initiating}
           disabled={initiating || !selectedWarehouseId}
           style={{ flex: 1 }}
+          testID="stocktake-initiate-submit"
         >
           {initiating ? "发起中..." : "发起盘点"}
         </NeoButton>

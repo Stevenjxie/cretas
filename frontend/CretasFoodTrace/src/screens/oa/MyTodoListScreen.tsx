@@ -88,6 +88,8 @@ function counterpartyFallback(item: TodoItemDTO): string {
       return '客户/供应商需核对';
     case 'STOCKTAKE_APPROVAL':
       return '盘点仓库需核对';
+    case 'WASTAGE_APPROVAL':
+      return '报损位置需核对';
     default:
       return '对方需核对';
   }
@@ -99,6 +101,7 @@ function counterpartyDisplay(item: TodoItemDTO): string {
       item.type === 'PAYMENT_DISBURSE'
       || item.type === 'RETURN_FINANCE_REVIEW'
       || item.type === 'STOCKTAKE_APPROVAL'
+      || item.type === 'WASTAGE_APPROVAL'
     ) {
       return counterpartyFallback(item);
     }
@@ -129,6 +132,7 @@ const TODO_TYPE_LABEL: Record<TodoType, string> = {
   PRICE_ANOMALY: '价格异常',
   STOCKTAKE_APPROVAL: '盘点审批',
   RETURN_FINANCE_REVIEW: '退货财审',
+  WASTAGE_APPROVAL: '报损审批',
   PAYMENT_DISBURSE: '付款确认',
 };
 
@@ -138,6 +142,7 @@ const TODO_TYPE_COLOR: Record<TodoType, string> = {
   PRICE_ANOMALY: '#E65100',
   STOCKTAKE_APPROVAL: '#6A1B9A',
   RETURN_FINANCE_REVIEW: '#AD1457',
+  WASTAGE_APPROVAL: '#7A4A00',
   PAYMENT_DISBURSE: '#C62828',
 };
 
@@ -308,6 +313,9 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceApprove(item.refId);
           break;
+        case 'WASTAGE_APPROVAL':
+          resp = await todoApprovalApiClient.wastageApprove(item.refId);
+          break;
         case 'PAYMENT_DISBURSE':
           resp = await todoApprovalApiClient.paymentMarkPaid(item.refId);
           break;
@@ -362,6 +370,9 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceReject(item.refId, reason);
+          break;
+        case 'WASTAGE_APPROVAL':
+          resp = await todoApprovalApiClient.wastageReject(item.refId, reason);
           break;
         case 'PAYMENT_DISBURSE':
           // 付款不支持驳回（出纳只能付款）

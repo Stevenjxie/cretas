@@ -12,6 +12,7 @@ const RUN_ID = process.env.E2E_RUN_ID || `RN-TODOLIST-${Date.now()}`;
 const OUT_DIR = path.resolve('.playwright-mcp', `codex-${RUN_ID}`);
 const SSH_HOST = process.env.E2E_DB_SSH_HOST || 'root@47.100.235.168';
 const PSQL = process.env.E2E_DB_PSQL || 'PGPASSWORD=cretas123 psql -U cretas_user -h 127.0.0.1 -d cretas_prod_db';
+const INCLUDE_WASTAGE = process.env.E2E_INCLUDE_WASTAGE === '1';
 
 const accounts = {
   admin: 'f006_admin',
@@ -32,6 +33,8 @@ const evidence = {
   screenshots: [],
   audit: [],
 };
+
+const OA_TAB_SELECTOR = '[data-testid="finance-tab-oa-todo"], [data-testid="main-tab-oa-todo"]';
 
 function logStep(name, status, detail = {}) {
   const step = { name, status, detail, at: new Date().toISOString() };
@@ -270,6 +273,43 @@ VALUES
   return { id };
 }
 
+async function seedWastageTodo(sessions) {
+  const row = runSql(`
+SELECT mb.id || '|' || mb.material_type_id || '|' || mb.warehouse_id || '|' || mb.receipt_quantity
+FROM material_batches mb
+WHERE mb.factory_id = ${sqlString(FACTORY_ID)}
+  AND mb.deleted_at IS NULL
+  AND COALESCE(mb.receipt_quantity, 0) > 1
+  AND mb.warehouse_id IS NOT NULL
+ORDER BY mb.updated_at DESC
+LIMIT 1;
+`);
+  assert(row, 'Missing material batch seed data for wastage approval');
+  const [batchId, materialTypeId, warehouseId, beforeQtyRaw] = row.split('|');
+  const id = sqlId('WR');
+  const reportNo = `WR-${RUN_ID}`.slice(0, 50);
+  const wastageQty = 0.50;
+  runSql(`
+INSERT INTO wastage_reports
+(id, factory_id, report_no, track_type, warehouse_id, material_batch_id, raw_material_type_id,
+ wastage_qty, wastage_reason, reason_detail, photo_urls, status, submitted_by, submitted_at,
+ approver_role, notes, created_at, updated_at)
+VALUES
+(${sqlString(id)}, ${sqlString(FACTORY_ID)}, ${sqlString(reportNo)}, 'WAREHOUSE', ${sqlString(warehouseId)},
+ ${sqlString(batchId)}, ${sqlString(materialTypeId)}, ${wastageQty}, 'DAMAGED',
+ ${sqlString(`${RUN_ID} wastage approval e2e`)}, '["https://example.com/e2e-wastage.jpg"]',
+ 'PENDING_APPROVAL', ${userIdOf(sessions.warehouse)}, NOW(), 'finance_manager', ${sqlString(RUN_ID)}, NOW(), NOW());
+`);
+  evidence.created.wastageReportId = id;
+  evidence.created.wastageReportNo = reportNo;
+  evidence.created.wastageBatchId = batchId;
+  evidence.created.wastageBeforeQty = Number(beforeQtyRaw);
+  evidence.created.wastageQty = wastageQty;
+  logStep('seed warehouse wastage pending approval by SQL', 'PASS', { id, reportNo, batchId, beforeQty: beforeQtyRaw });
+  await requireTodo(sessions.finance, 'WASTAGE_APPROVAL', id);
+  return { id, batchId, wastageQty, beforeQty: Number(beforeQtyRaw) };
+}
+
 async function seedTransitReceipt(sessions) {
   const products = firstArray((await api(sessions.sales, 'GET', '/product-types/active')).body);
   assert(products.length > 0, 'Missing product seed data for production settlement');
@@ -335,8 +375,8 @@ async function confirmDialog(page) {
 }
 
 async function approveTodo(page, type, refId, prefix, useDetail = false) {
-  await page.locator('[data-testid="main-tab-oa-todo"]').waitFor({ timeout: 60000 });
-  await page.locator('[data-testid="main-tab-oa-todo"]').click();
+  await page.locator(OA_TAB_SELECTOR).waitFor({ timeout: 60000 });
+  await page.locator(OA_TAB_SELECTOR).click();
   await page.locator('[data-testid="oa-todo-list"]').waitFor({ timeout: 60000 });
   const card = page.locator(`[data-testid="oa-todo-card-${type}-${refId}"]`);
   await card.waitFor({ timeout: 60000 });
@@ -382,6 +422,37 @@ async function rnApproveFinanceTodos(sessions, targets) {
     const stocktake = dataOf((await api(sessions.finance, 'GET', `/stocktakes/${targets.stocktake.id}`)).body);
     assert(stocktake.status === 'APPROVED', 'Stocktake approval did not persist', { status: stocktake.status });
     logStep('RN approve stocktake todo via detail and readback', 'PASS', { id: targets.stocktake.id, status: stocktake.status });
+
+    if (targets.wastage) {
+      await approveTodo(page, 'WASTAGE_APPROVAL', targets.wastage.id, 'finance-wastage', true);
+      const wastage = dataOf((await api(sessions.finance, 'GET', `/wastage-reports/${targets.wastage.id}`)).body);
+      assert(wastage.status === 'APPLIED', 'Wastage approval did not apply inventory deduction', { status: wastage.status });
+      const afterQtyRaw = runSql(`
+SELECT receipt_quantity::text
+FROM material_batches
+WHERE id = ${sqlString(targets.wastage.batchId)}
+  AND factory_id = ${sqlString(FACTORY_ID)};
+`);
+      const adjustmentCount = Number(runSql(`
+SELECT COUNT(*)::int
+FROM material_batch_adjustments
+WHERE material_batch_id = ${sqlString(targets.wastage.batchId)}
+  AND adjustment_type = 'WASTAGE'
+  AND notes LIKE ${sqlString(`%wastageReportId=${targets.wastage.id}%`)};
+`));
+      const afterQty = Number(afterQtyRaw);
+      assert(Number.isFinite(afterQty) && Math.abs(afterQty - (targets.wastage.beforeQty - targets.wastage.wastageQty)) < 0.001,
+        'Wastage approval did not deduct expected material batch quantity',
+        { beforeQty: targets.wastage.beforeQty, afterQty, wastageQty: targets.wastage.wastageQty });
+      assert(adjustmentCount > 0, 'Wastage approval did not write material batch adjustment', { adjustmentCount });
+      logStep('RN approve wastage todo and readback inventory deduction', 'PASS', {
+        id: targets.wastage.id,
+        status: wastage.status,
+        beforeQty: targets.wastage.beforeQty,
+        afterQty,
+        adjustmentCount,
+      });
+    }
   } finally {
     await context.close();
     await browser.close();
@@ -451,6 +522,11 @@ async function main() {
     priceAnomaly: await createPriceAnomalyTodo(sessions),
     stocktake: await seedStocktakeTodo(sessions),
   };
+  if (INCLUDE_WASTAGE) {
+    targets.wastage = await seedWastageTodo(sessions);
+  } else {
+    logStep('skip wastage approval strict e2e', 'WARN', { reason: 'set E2E_INCLUDE_WASTAGE=1 after backend deploy' });
+  }
   const transit = await seedTransitReceipt(sessions);
 
   await rnApproveFinanceTodos(sessions, targets);
