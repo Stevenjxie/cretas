@@ -155,13 +155,13 @@ const rawMenuConfig: MenuItem[] = [
     path: '/hr', title: '人事管理', icon: 'User', module: 'hr',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/system/users', title: '用户管理', icon: '', module: 'system' },
-      { path: '/system/roles', title: '角色管理', icon: '', module: 'system' },
-      { path: '/hr/employees', title: '员工管理', icon: '', module: 'hr' },
-      { path: '/hr/attendance', title: '考勤管理', icon: '', module: 'hr' },
-      { path: '/hr/whitelist', title: '白名单管理', icon: '', module: 'hr' },
+      { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
+      { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
+      { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },
       { path: '/hr/departments', title: '部门管理', icon: '', module: 'hr' },
-      { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' }
+      { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' },
+      { path: '/hr/attendance', title: '考勤管理', icon: '', module: 'hr', groupLabel: '入职考勤' },
+      { path: '/hr/whitelist', title: '入职白名单', icon: '', module: 'hr' }
     ]
   },
   // UX P2-5 merged into 仓储管理: /transfer 原独立顶级组 (1 项), 合并节省 1 顶级项

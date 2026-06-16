@@ -86,9 +86,9 @@ const statCards = computed<Array<{
 
 // 快捷操作
 const quickActions = [
-  { title: '员工管理', icon: User, route: '/hr/employees', color: '#409eff' },
+  { title: '员工档案', icon: User, route: '/hr/employees', color: '#409eff' },
   { title: '考勤统计', icon: Clock, route: '/hr/attendance', color: '#67c23a' },
-  { title: '白名单管理', icon: Files, route: '/hr/whitelist', color: '#e6a23c' },
+  { title: '入职白名单', icon: Files, route: '/hr/whitelist', color: '#e6a23c' },
   { title: '部门管理', icon: UserFilled, route: '/hr/departments', color: '#909399' }
 ];
 

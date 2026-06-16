@@ -40,7 +40,7 @@ const moduleDescriptions: Record<string, string> = {
   quality: '质检记录、废弃处理',
   procurement: '供应商管理、采购订单',
   sales: '客户管理、销售分析',
-  hr: '员工管理、考勤、部门',
+  hr: '员工档案、考勤、部门',
   equipment: '设备列表、维护记录、告警',
   finance: '成本分析、财务报表',
   scheduling: '调度中心、计划管理、人员分配',
@@ -72,7 +72,7 @@ const moduleScreens: Record<string, Array<{ id: string; label: string }>> = {
   sales: [],
   hr: [
     { id: 'AttendanceManagement', label: '考勤管理 (HR Tab)' },
-    { id: 'WhitelistManagement', label: '白名单管理 (HR Tab)' },
+    { id: 'WhitelistManagement', label: '入职白名单 (HR Tab)' },
     { id: 'NewHireTracking', label: '新员工追踪 (HR首页)' }
   ],
   equipment: [
@@ -103,7 +103,7 @@ const moduleScreens: Record<string, Array<{ id: string; label: string }>> = {
 // Available quick actions per module — IDs must match RN getEnabledQuickActions() checks
 const moduleQuickActions: Record<string, Array<{ id: string; label: string }>> = {
   hr: [
-    { id: 'new-hires', label: '新员工管理' }
+    { id: 'new-hires', label: '新员工入职' }
   ]
 };
 

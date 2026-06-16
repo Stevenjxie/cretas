@@ -878,7 +878,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'employees',
             name: 'HREmployees',
             component: () => import('@/views/hr/employees/list.vue'),
-            meta: { requiresAuth: true, title: '员工管理', module: 'hr' }
+            meta: { requiresAuth: true, title: '员工档案', module: 'hr' }
           },
           {
             path: 'attendance',
@@ -896,7 +896,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'whitelist',
             name: 'HRWhitelist',
             component: () => import('@/views/hr/whitelist/index.vue'),
-            meta: { requiresAuth: true, title: '白名单管理', module: 'hr' }
+            meta: { requiresAuth: true, title: '入职白名单', module: 'hr' }
           },
           {
             path: 'departments',
@@ -1190,13 +1190,13 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'users',
             name: 'SystemUsers',
             component: () => import('@/views/system/users/list.vue'),
-            meta: { requiresAuth: true, title: '用户管理', module: 'system' }
+            meta: { requiresAuth: true, title: '账号管理', module: 'system' }
           },
           {
             path: 'roles',
             name: 'SystemRoles',
             component: () => import('@/views/system/roles/list.vue'),
-            meta: { requiresAuth: true, title: '角色管理', module: 'system' }
+            meta: { requiresAuth: true, title: '角色权限', module: 'system' }
           },
           {
             path: 'logs',

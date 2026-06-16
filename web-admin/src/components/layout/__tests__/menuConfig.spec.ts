@@ -29,6 +29,10 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     return findGroup(groupPath)?.children?.map((c) => c.path) ?? [];
   }
 
+  function childTitles(groupPath: string): string[] {
+    return findGroup(groupPath)?.children?.map((c) => c.title) ?? [];
+  }
+
   it('keeps finance review queues discoverable under business modules and finance', () => {
     expect(childPaths('/procurement')).toContain('/procurement/finance-review');
     expect(childPaths('/sales')).toContain('/sales/finance-review');
@@ -51,6 +55,24 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/system/workflow-designer',
       '/canvas-editor',
     ]));
+  });
+
+  it('uses clear HR menu groups to avoid account/profile/onboarding duplication', () => {
+    const hr = findGroup('/hr')!;
+    expect(hr.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel)).toEqual([
+      '账号权限',
+      '员工组织',
+      '入职考勤',
+    ]);
+    expect(childTitles('/hr')).toEqual([
+      '账号管理',
+      '角色权限',
+      '员工档案',
+      '部门管理',
+      '工种字典',
+      '考勤管理',
+      '入职白名单',
+    ]);
   });
 
   it('keeps production master data under production instead of system', () => {

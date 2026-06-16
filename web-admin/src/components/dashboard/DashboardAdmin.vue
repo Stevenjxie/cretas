@@ -42,7 +42,7 @@ const shouldShowOnboarding = computed(() => isNewFactory.value && !authStore.isL
 const onboardingSteps = [
  { title: '上传 Excel 数据', desc: '财务/销售/采购报表导入 AI 分析', route: '/smart-bi/analysis', icon: '' },
  { title: '配置工厂模块', desc: '按业务启用/禁用功能模块', route: '/system/features', icon: '️' },
- { title: '添加员工账号', desc: '邀请团队成员登录协作', route: '/system/users', icon: '' },
+ { title: '添加登录账号', desc: '邀请团队成员登录协作', route: '/system/users', icon: '' },
 ];
 
 // 统计卡片 - 管理员看全部

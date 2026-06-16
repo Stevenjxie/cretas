@@ -276,7 +276,7 @@ function getRoleText(role: string) {
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>员工管理</span>
+          <span>员工档案</span>
           <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">添加员工</el-button>
         </div>
       </template>

@@ -257,7 +257,7 @@ function getRoleText(role: string) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">白名单管理</span>
+            <span class="page-title">入职白名单</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">

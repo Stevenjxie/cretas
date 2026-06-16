@@ -323,7 +323,7 @@ onMounted(loadRoleUserCounts);
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>角色管理</span>
+          <span>角色权限</span>
           <el-tag type="info">共 14 种工厂角色</el-tag>
         </div>
       </template>

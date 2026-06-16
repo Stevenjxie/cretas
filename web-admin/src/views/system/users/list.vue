@@ -312,8 +312,8 @@ async function handleToggleActive(row: TableRow) {
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>用户管理</span>
-          <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">添加用户</el-button>
+          <span>账号管理</span>
+          <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">添加账号</el-button>
         </div>
       </template>
 
@@ -368,7 +368,7 @@ async function handleToggleActive(row: TableRow) {
     <!-- Create User Dialog -->
     <el-dialog
       v-model="createDialogVisible"
-      title="添加用户"
+      title="添加账号"
       width="500px"
       :close-on-click-modal="false"
     >
@@ -410,7 +410,7 @@ async function handleToggleActive(row: TableRow) {
       </template>
     </el-dialog>
     <!-- View User Dialog -->
-    <el-dialog v-model="viewDialogVisible" title="用户详情" width="480px">
+    <el-dialog v-model="viewDialogVisible" title="账号详情" width="480px">
       <el-descriptions :column="1" border>
         <el-descriptions-item label="用户名">{{ viewUser.username || '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ viewUser.fullName || '-' }}</el-descriptions-item>
@@ -432,7 +432,7 @@ async function handleToggleActive(row: TableRow) {
     </el-dialog>
 
     <!-- Edit User Dialog -->
-    <el-dialog v-model="editDialogVisible" title="编辑用户" width="500px" :close-on-click-modal="false">
+    <el-dialog v-model="editDialogVisible" title="编辑账号" width="500px" :close-on-click-modal="false">
       <el-form ref="editFormRef" :model="editForm" label-width="80px">
         <el-form-item label="用户名">
           <el-input :model-value="editForm.username" disabled />

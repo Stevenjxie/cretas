@@ -132,7 +132,7 @@ function quickLogin(username: string) {
             <div style="padding: 4px 0">
               <p style="margin: 0 0 8px; font-weight: 500">请联系您的工厂管理员</p>
               <p style="margin: 0; color: #909399; font-size: 12px; line-height: 1.6">
-                由于账号权限与工厂绑定, 密码重置需通过管理员在"人事管理 → 用户管理"中操作.
+                由于账号权限与工厂绑定, 密码重置需通过管理员在"人事管理 → 账号管理"中操作.
                 如您就是管理员, 请联系平台 superadmin.
               </p>
             </div>
