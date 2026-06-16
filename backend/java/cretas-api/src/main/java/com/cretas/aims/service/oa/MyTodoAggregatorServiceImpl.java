@@ -2,17 +2,24 @@ package com.cretas.aims.service.oa;
 
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
+import com.cretas.aims.entity.Customer;
+import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
+import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
-import com.cretas.aims.entity.inventory.PaymentRequest;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -59,7 +66,10 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private final SalesService salesService;
     private final SupplierDeliveryNoteService supplierDeliveryNoteService;
     private final FactoryStocktakeRepository stocktakeRepository;
+    private final FactoryWarehouseRepository warehouseRepository;
     private final ReturnOrderRepository returnOrderRepository;
+    private final CustomerRepository customerRepository;
+    private final SupplierRepository supplierRepository;
     private final PaymentRequestService paymentRequestService;
     private final SalesPriceAdjustmentService salesPriceAdjustmentService;
 
@@ -70,9 +80,11 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private BigDecimal detailThreshold = new BigDecimal("5000");
 
     /**
-     * Spring 注入构造器（5 个必要依赖，{@code detailThreshold} 通过 {@code @Value} 注入）。
+     * Spring 注入构造器（必要依赖，{@code detailThreshold} 通过 {@code @Value} 注入）。
      * 测试中通过 {@link #MyTodoAggregatorServiceImpl(PurchaseService, SalesService,
-     * SupplierDeliveryNoteService, FactoryStocktakeRepository, PaymentRequestService, BigDecimal)}
+     * SupplierDeliveryNoteService, FactoryStocktakeRepository, FactoryWarehouseRepository,
+     * ReturnOrderRepository, CustomerRepository, SupplierRepository, PaymentRequestService,
+     * SalesPriceAdjustmentService, BigDecimal)}
      * 直接传入阈值，无需 Spring 上下文。
      *
      * <p>⚠️ 本类有两个构造器，Spring 隐式构造器注入只在「恰好一个构造器」时生效；
@@ -86,14 +98,20 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SalesService salesService,
             SupplierDeliveryNoteService supplierDeliveryNoteService,
             FactoryStocktakeRepository stocktakeRepository,
+            FactoryWarehouseRepository warehouseRepository,
             ReturnOrderRepository returnOrderRepository,
+            CustomerRepository customerRepository,
+            SupplierRepository supplierRepository,
             PaymentRequestService paymentRequestService,
             SalesPriceAdjustmentService salesPriceAdjustmentService) {
         this.purchaseService = purchaseService;
         this.salesService = salesService;
         this.supplierDeliveryNoteService = supplierDeliveryNoteService;
         this.stocktakeRepository = stocktakeRepository;
+        this.warehouseRepository = warehouseRepository;
         this.returnOrderRepository = returnOrderRepository;
+        this.customerRepository = customerRepository;
+        this.supplierRepository = supplierRepository;
         this.paymentRequestService = paymentRequestService;
         this.salesPriceAdjustmentService = salesPriceAdjustmentService;
     }
@@ -106,12 +124,16 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SalesService salesService,
             SupplierDeliveryNoteService supplierDeliveryNoteService,
             FactoryStocktakeRepository stocktakeRepository,
+            FactoryWarehouseRepository warehouseRepository,
             ReturnOrderRepository returnOrderRepository,
+            CustomerRepository customerRepository,
+            SupplierRepository supplierRepository,
             PaymentRequestService paymentRequestService,
             SalesPriceAdjustmentService salesPriceAdjustmentService,
             BigDecimal detailThreshold) {
         this(purchaseService, salesService, supplierDeliveryNoteService,
-                stocktakeRepository, returnOrderRepository, paymentRequestService,
+                stocktakeRepository, warehouseRepository, returnOrderRepository,
+                customerRepository, supplierRepository, paymentRequestService,
                 salesPriceAdjustmentService);
         this.detailThreshold = detailThreshold;
     }
@@ -300,6 +322,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     private TodoItemDTO mapStocktake(FactoryStocktake stocktake) {
         // 盘点无金额字段 → needDetail=true（保守，强制看详情）
+        String warehouseName = resolveWarehouseName(stocktake);
         String title = "盘点审批 — " + stocktake.getStocktakeNo()
                 + "（" + stocktake.getPeriodMonth() + "）";
 
@@ -314,7 +337,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .refNumber(stocktake.getStocktakeNo())
                 .title(title)
                 .amount(null)  // 盘点任务无金额
-                .counterparty(stocktake.getWarehouseId())
+                .counterparty(warehouseName)
                 .submittedAt(submittedAt)
                 .needDetail(true)  // 盘点无金额 → 保守 true
                 .detailPath("TodoDetail/stocktake/" + stocktake.getId())
@@ -336,6 +359,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     private TodoItemDTO mapReturnOrder(ReturnOrder order) {
         BigDecimal amount = order.getTotalAmount();
+        String counterparty = resolveReturnCounterparty(order);
         LocalDateTime submittedAt = order.getApprovedAt();
         if (submittedAt == null) {
             submittedAt = order.getUpdatedAt();
@@ -350,7 +374,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .refNumber(order.getReturnNumber())
                 .title("退货财审 — " + order.getReturnNumber())
                 .amount(amount)
-                .counterparty(order.getCounterpartyId())
+                .counterparty(counterparty)
                 .submittedAt(submittedAt)
                 .needDetail(needsDetail(amount))
                 .detailPath("TodoDetail/return/" + order.getId())
@@ -396,7 +420,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     // ── 付款（出纳） ──────────────────────────────────────────────────────
 
     private List<TodoItemDTO> fetchPaymentDisburse(String factoryId) {
-        List<PaymentRequest> prs = paymentRequestService.listApprovedForPayment(factoryId);
+        List<PaymentRequestApprovedDTO> prs = paymentRequestService.listApprovedForPaymentWithDetails(factoryId);
         if (prs == null) return Collections.emptyList();
 
         return prs.stream()
@@ -404,13 +428,15 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .collect(Collectors.toList());
     }
 
-    private TodoItemDTO mapPaymentRequest(PaymentRequest pr) {
+    private TodoItemDTO mapPaymentRequest(PaymentRequestApprovedDTO pr) {
         BigDecimal amount = pr.getAmount();
-        // supplierId is a UUID — counterparty is best effort; detail screen shows supplier name
-        String counterparty = pr.getSupplierId();
+        String counterparty = hasText(pr.getSupplierName()) ? pr.getSupplierName() : "付款对象需核对";
         String title = "付款 — " + pr.getRequestNumber();
 
         LocalDateTime submittedAt = pr.getCreatedAt();
+        if (submittedAt == null) {
+            submittedAt = pr.getApprovedAt();
+        }
 
         return TodoItemDTO.builder()
                 .type(TodoType.PAYMENT_DISBURSE)
@@ -435,5 +461,41 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private boolean needsDetail(BigDecimal amount) {
         if (amount == null) return true;
         return amount.compareTo(detailThreshold) > 0;
+    }
+
+    private String resolveWarehouseName(FactoryStocktake stocktake) {
+        if (stocktake == null || !hasText(stocktake.getWarehouseId())) {
+            return "盘点仓库需核对";
+        }
+        return warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(
+                        stocktake.getWarehouseId(), stocktake.getFactoryId())
+                .map(FactoryWarehouse::getName)
+                .filter(this::hasText)
+                .orElse("盘点仓库需核对");
+    }
+
+    private String resolveReturnCounterparty(ReturnOrder order) {
+        if (order == null || !hasText(order.getCounterpartyId())) {
+            return "退货对象需核对";
+        }
+        String counterpartyId = order.getCounterpartyId();
+        String factoryId = order.getFactoryId();
+        if (order.getReturnType() == ReturnType.SALES_RETURN) {
+            return customerRepository.findByIdAndFactoryId(counterpartyId, factoryId)
+                    .map(Customer::getName)
+                    .filter(this::hasText)
+                    .orElse("客户需核对");
+        }
+        if (order.getReturnType() == ReturnType.PURCHASE_RETURN) {
+            return supplierRepository.findByIdAndFactoryId(counterpartyId, factoryId)
+                    .map(Supplier::getName)
+                    .filter(this::hasText)
+                    .orElse("供应商需核对");
+        }
+        return "退货对象需核对";
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

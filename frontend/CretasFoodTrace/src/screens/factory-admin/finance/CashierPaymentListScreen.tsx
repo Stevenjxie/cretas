@@ -85,7 +85,12 @@ interface ApiResponse<T> {
 
 function formatAmount(v: number | null | undefined): string {
   if (v == null) return '—';
-  return `¥${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fixed = v.toFixed(2);
+  const [rawInt = '0', decimals = '00'] = fixed.split('.');
+  const signed = rawInt.startsWith('-');
+  const digits = signed ? rawInt.slice(1) : rawInt;
+  const intPart = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `\u00a5${signed ? '-' : ''}${intPart}.${decimals}`;
 }
 
 function formatDate(s: string | null | undefined): string {

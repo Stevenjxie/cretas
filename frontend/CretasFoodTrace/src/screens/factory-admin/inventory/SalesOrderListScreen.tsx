@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, StyleSheet, FlatList, Alert, RefreshControl } from 'react-native';
 import { Text, Appbar, Card, Chip, Button, ActivityIndicator, SegmentedButtons } from 'react-native-paper';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation, CommonActions, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, SalesOrder } from '../../../services/api/salesApiClient';
@@ -13,6 +13,23 @@ import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
+
+type ApiActionError = {
+  message?: string;
+  response?: {
+    data?: {
+      message?: string;
+      actionHint?: string;
+    };
+  };
+};
+
+const getActionErrorMessage = (error: unknown) => {
+  const apiError = error as ApiActionError;
+  const message = apiError.response?.data?.message || apiError.message || '操作失败';
+  const actionHint = apiError.response?.data?.actionHint;
+  return actionHint ? `${message}\n${actionHint}` : message;
+};
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   DRAFT: { label: '草稿', color: '#909399' },
@@ -48,6 +65,7 @@ export default function SalesOrderListScreen() {
   }, [statusFilter]);
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
+  useFocusEffect(useCallback(() => { loadOrders(); }, [loadOrders]));
   const onRefresh = () => { setRefreshing(true); loadOrders(); };
 
   // U-FOOTER-1 (Track I): sticky footer summary, filter mirrors list filter
@@ -73,7 +91,10 @@ export default function SalesOrderListScreen() {
         Alert.alert('成功', message);
         loadOrders();
       }
-    } catch { Alert.alert('错误', '操作失败'); }
+    } catch (error) {
+      Alert.alert('错误', getActionErrorMessage(error));
+      loadOrders();
+    }
   };
 
   // UX-A2 (Track H): row-action bottom sheet
@@ -101,6 +122,7 @@ export default function SalesOrderListScreen() {
     const hasShortage = shortageQty > 0;
     return (
       <Card style={styles.card}
+        testID={`sales-order-card-${item.id}`}
         onPress={() => navigation.navigate('SalesOrderDetail', { orderId: item.id })}
         onLongPress={() => openSheet(item)}>
         <Card.Content>
@@ -133,8 +155,8 @@ export default function SalesOrderListScreen() {
           </View>
           {item.status === 'DRAFT' && (
             <View style={styles.actions}>
-              <Button mode="contained" compact onPress={() => handleAction(item.id, 'confirm')} style={styles.actionBtn}>确认</Button>
-              <Button mode="outlined" compact onPress={() => handleAction(item.id, 'cancel')} style={styles.actionBtn}>取消</Button>
+              <Button mode="contained" compact testID={`sales-order-confirm-${item.id}`} onPress={() => handleAction(item.id, 'confirm')} style={styles.actionBtn}>确认</Button>
+              <Button mode="outlined" compact testID={`sales-order-cancel-${item.id}`} onPress={() => handleAction(item.id, 'cancel')} style={styles.actionBtn}>取消</Button>
             </View>
           )}
         </Card.Content>
@@ -143,10 +165,11 @@ export default function SalesOrderListScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="sales-order-list-screen">
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="销售订单" />
+        <Appbar.Action icon="plus" testID="sales-order-create-action" onPress={() => navigation.navigate('SalesOrderCreate')} />
         <Appbar.Action icon="refresh" onPress={onRefresh} />
       </Appbar.Header>
 
@@ -168,6 +191,7 @@ export default function SalesOrderListScreen() {
           <ActivityIndicator style={styles.loader} size="large" />
         ) : (
           <FlatList
+            testID="sales-order-list"
             data={orders}
             keyExtractor={item => item.id}
             renderItem={renderOrder}

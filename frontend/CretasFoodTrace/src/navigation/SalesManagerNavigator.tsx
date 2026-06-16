@@ -14,6 +14,7 @@ import HomeScreen from "../screens/main/HomeScreen";
 
 // 销售相关页面 - 复用 factory-admin 已有页面
 import SalesOrderListScreen from "../screens/factory-admin/inventory/SalesOrderListScreen";
+import SalesOrderCreateScreen from "../screens/factory-admin/inventory/SalesOrderCreateScreen";
 import SalesOrderDetailScreen from "../screens/factory-admin/inventory/SalesOrderDetailScreen";
 import SalesOrderShortageReviewScreen from "../screens/factory-admin/inventory/SalesOrderShortageReviewScreen";
 import ReturnOrderListScreen from "../screens/factory-admin/inventory/ReturnOrderListScreen";
@@ -40,6 +41,7 @@ function SalesStackNavigator() {
   return (
     <SalesStack.Navigator screenOptions={{ headerShown: false }}>
       <SalesStack.Screen name="SalesOrderList" component={SalesOrderListScreen} />
+      <SalesStack.Screen name="SalesOrderCreate" component={SalesOrderCreateScreen} />
       <SalesStack.Screen name="SalesOrderDetail" component={SalesOrderDetailScreen} />
       <SalesStack.Screen name="SalesOrderShortageReview" component={SalesOrderShortageReviewScreen} />
       <SalesStack.Screen name="ReturnOrderList" component={ReturnOrderListScreen} />
@@ -83,6 +85,7 @@ export function SalesManagerNavigator() {
         name="SMHomeTab"
         component={HomeScreen}
         options={{
+          tabBarButtonTestID: "sm-tab-home",
           title: "首页",
           tabBarIcon: ({ color, size }) => (
             <Icon source="home" size={size} color={color} />
@@ -94,6 +97,7 @@ export function SalesManagerNavigator() {
         name="SMSalesTab"
         component={SalesStackNavigator}
         options={{
+          tabBarButtonTestID: "sm-tab-sales",
           title: "销售",
           tabBarIcon: ({ color, size }) => (
             <Icon source="cart-outline" size={size} color={color} />
@@ -105,6 +109,7 @@ export function SalesManagerNavigator() {
         name="SMCustomerTab"
         component={CustomerStackNavigator}
         options={{
+          tabBarButtonTestID: "sm-tab-customer",
           title: "客户",
           tabBarIcon: ({ color, size }) => (
             <Icon source="account-group-outline" size={size} color={color} />
@@ -116,6 +121,7 @@ export function SalesManagerNavigator() {
         name="SMProfileTab"
         component={ProfileStackNavigator}
         options={{
+          tabBarButtonTestID: "sm-tab-profile",
           title: "我的",
           tabBarIcon: ({ color, size }) => (
             <Icon source="account" size={size} color={color} />

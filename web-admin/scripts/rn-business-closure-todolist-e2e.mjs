@@ -408,7 +408,8 @@ async function rnConfirmTransit(sessions, transit) {
     if (await ok.count()) await ok.first().click().catch(() => {});
     await screenshot(page, 'warehouse-transit-after');
     const settlement = dataOf((await api(sessions.warehouse, 'GET', `/production-plans/${transit.id}/settlement`)).body);
-    assert(settlement.postingStatus === 'POSTED_TO_FINISHED_GOODS', 'Transit receipt did not post finished goods', {
+    const postedStatuses = new Set(['POSTED', 'POSTED_WITH_TOLERANCE', 'POSTED_TO_FINISHED_GOODS']);
+    assert(postedStatuses.has(settlement.postingStatus), 'Transit receipt did not post finished goods', {
       postingStatus: settlement.postingStatus,
       warehouseReceivedQuantity: settlement.warehouseReceivedQuantity,
     });

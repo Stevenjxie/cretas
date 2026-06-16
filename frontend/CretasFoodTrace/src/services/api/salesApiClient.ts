@@ -94,13 +94,17 @@ export interface FinishedGoodsBatch {
 
 export interface CreateSalesOrderRequest {
   customerId: string;
+  orderDate?: string;
+  requiredDeliveryDate?: string;
   expectedDeliveryDate?: string;
   remark?: string;
   items: {
     productTypeId: string;
+    productName?: string;
     quantity: number;
     unitPrice: number;
     unit: string;
+    taxRate?: number;
   }[];
 }
 
