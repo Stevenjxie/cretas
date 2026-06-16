@@ -27,6 +27,14 @@
 > 🔄 **SESSION HANDOFF (2026-06-11 晚) — 六扇门 E2E gate 阶段**: 新 chat 接棒 organizer。上一 session 成果(台账未及记录, 详见自包含 handoff `docs/dispatch/2026-06-11-handoff-liushanmen-e2e-phase.md`): **18 PR #754-771 全 merged + 全栈部署 prod**(deferred 10 项 #754-763 / 长尾 6 项 #764-766 / 测试缺口 #767-768 / UI最后一公里 #769 / 多段成本 #770 / Fable揪的跨路径3断点 #771)。转录逐行扫(4路, 5360行) = **0 实质遗漏**。Flyway 最高 V20261024_01。**Friday = 演示日**(演示全部→没问题就上线)。⚠️ Fleet 注: **Codex 已恢复使用**(上方 2026-06-07 "Codex/GPT 暂停"注记过期)。**Steve 拍板(2026-06-11 晚): 自动化测试(尤其前端/headed E2E)执行 → Codex 主力**, Claude 做前端自动化偏慢且占额度; Claude 侧留 API/SQL 链验证、判断/gate/终审。
 
 ## In-flight 任务表
+> 🆕 **2026-06-16 六扇门 F006 收货/入库 P0 批次 (organizer intake, 大部分 SHIPPED)**:
+> - ✅ **扫码 403** (#961, prod v...233440): 扫码端点 GET /orders/by-number 加 warehouse:read_write/read (仓管员无 procurement 权限)。
+> - ✅ **厂号/产地无法录入** (#960, web-admin): RCV 收货 dialog 厂号 el-select 加 allow-create + 产地 maxlength。后端 ReceiveItemDTO 字段已存在(#901)。
+> - ✅ **LIUSHANMEN 缺仓库 seed** (手动 prod seed 7 仓): 根因=LIUSHANMEN 在 V20260411_03(一次性双仓 seed) 之后才建。注意: 六膳门有两条 factory 记录 F006(有数据)+LIUSHANMEN(客户实际运营, Steve 拍板用这个)。
+> - 🔄 **In-flight: feat/factory-warehouse-admin** (Sonnet bg ac34bb5cc6fea1f08): 超管仓库管理 UI+CRUD+模板(六扇门含盐化7仓 preset + 全仓型勾选), 基础四项属性, 无迁移。**🔒 RBAC/多租户 → Opus gate + 从 main 部署**。这是 seed-only 的根治预防。
+> - ⚠️ **follow-up**: (a) 工厂创建 hook seed 默认仓(或靠上面的 admin UI 套模板); (b) **Flyway 状态隐患**: prod flyway_schema_history 最高 20261024.21 但 origin/main 迁移文件只到 V20260429_01 → 新迁移必须 >20261024.21 否则被 out-of-order 跳过, 且 20261024.* 文件为何不在 main 待查。
+>
+
 
 > ✅ **2026-06-15 六扇门「主动建版本」剩余项 — 全栈 SHIPPED prod (#900 金蝶/#901 厂号; ② 多SO 已 shipped 移除)** (organizer, brainstorm→spec→plan→Codex 卡→Opus gate→test→prod blue-green→live验) — handoff `docs/dispatch/2026-06-15-handoff-liushanmen-remaining-proactive-build.md`。**verify-first 改写 scope**: ② 多SO合并 **已全量 shipped(#726/#762/#771)→移除不建**; ① 厂号 free-text 已存在(REFUTED handoff "缺")→真缺=结构化+收货录入+picker选; ③ 金蝶导出已全建→真缺=云星空 import 模板。**Steve 拍板**: ① 结构化登记表(厂号=独立属性非编码段)+只做后端/web(**RN picker 待协调,禁碰**); ③ 主动建云星空默认版。spec+plan 已 merge main(PR #890)。**分发卡(自包含)**: `docs/dispatch/2026-06-15-codex-cards-factory-number-and-kingdee.md`(courier Codex)。下 2 行跟踪。
 > 1. ⚠️ **撞车防御**: 卡 A 禁碰 `frontend/CretasFoodTrace/**`(RN 领料屏 picker 已派别 chat, 疑 N2 半成品双领) + 禁碰 16 位编码段 + 禁碰 finance(卡 B)。卡 B 禁碰 material/RN(卡 A)。两卡不同子系统零文件重叠。
