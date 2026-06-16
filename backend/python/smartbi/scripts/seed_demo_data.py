@@ -39,6 +39,7 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 DEMO_FACTORY = "DEMO_FACTORY"
 DEMO_REST = "DEMO_REST"
+DEMO_RETAIL = "DEMO_RETAIL"  # 第3业态: 零售连锁 (organizer 运行时映射真实工厂ID)
 
 # ---------------------------------------------------------------------------
 # REPO ROOT RESOLUTION
@@ -69,6 +70,7 @@ QHJ_E2E = (
     / "qhj-25"
 )
 TEST_MOCK = REPO / "tests" / "test-data"
+RETAIL_MOCK = TEST_MOCK / "Test-mock-retail-normal-s42.xlsx"
 
 # ---------------------------------------------------------------------------
 # DESENSITISATION
@@ -491,6 +493,101 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# RETAIL HELPERS
+# ---------------------------------------------------------------------------
+
+def melt_wide_sales(df: pd.DataFrame, period_col: str = "月份") -> pd.DataFrame:
+    """
+    Convert wide-format store-column table into long-format with canonical sales_amount.
+
+    Input:  月份 | 旗舰店(元) | 次旗舰店(元) | 新店(元) | 合计(元)
+    Output: 月份 | 门店类型 | sales_amount
+
+    Drops the aggregated 合计 column to avoid double-counting.
+    Only keeps the period column + low-cardinality store columns (nunique <= 12).
+    """
+    if period_col not in df.columns:
+        return df
+
+    # Identify value columns (numeric, not period col) — exclude 合计 variants
+    value_cols = [
+        c for c in df.columns
+        if c != period_col
+        and pd.api.types.is_numeric_dtype(df[c])
+        and not any(kw in str(c) for kw in ["合计", "总计", "total"])
+        and df[c].nunique() <= 12
+    ]
+    if not value_cols:
+        # Fallback: if only aggregated column available, rename it
+        agg_cols = [c for c in df.columns if c != period_col and pd.api.types.is_numeric_dtype(df[c])]
+        if agg_cols:
+            out = df[[period_col, agg_cols[0]]].copy()
+            out = out.rename(columns={agg_cols[0]: "sales_amount"})
+            return out
+        return df
+
+    melted = df[[period_col] + value_cols].melt(
+        id_vars=[period_col],
+        var_name="门店类型",
+        value_name="sales_amount",
+    )
+    # Clean up store type name (strip unit suffix like "(元)")
+    melted["门店类型"] = melted["门店类型"].str.replace(r"\(元\)$", "", regex=True).str.strip()
+    return melted.dropna(subset=["sales_amount"]).reset_index(drop=True)
+
+
+def aggregate_detail_to_monthly(
+    df: pd.DataFrame,
+    date_col: str,
+    amount_col: str,
+    qty_col: Optional[str] = None,
+    group_cols: Optional[List[str]] = None,
+    drop_high_cardinality: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """
+    Aggregate a detail-level DataFrame to monthly granularity.
+
+    - date_col: source date column (parsed to datetime, then truncated to month)
+    - amount_col: renamed to canonical 'sales_amount'
+    - qty_col: optional, renamed to 'sales_quantity'
+    - group_cols: low-cardinality dimension columns to preserve (nunique <= 12 filter applied)
+    - drop_high_cardinality: columns to drop before grouping (customer names, order IDs, etc.)
+
+    Returns monthly aggregated DataFrame with period '月份' as YYYY年M月 string.
+    """
+    df = df.copy()
+
+    # Drop explicitly high-cardinality columns
+    if drop_high_cardinality:
+        df = df.drop(columns=[c for c in drop_high_cardinality if c in df.columns], errors="ignore")
+
+    # Parse date → month string
+    parsed = pd.to_datetime(df[date_col], errors="coerce")
+    df["月份"] = parsed.dt.strftime("%Y年%-m月") if sys.platform != "win32" else parsed.apply(
+        lambda d: f"{d.year}年{d.month}月" if not pd.isna(d) else None
+    )
+    df = df.dropna(subset=["月份"])
+
+    # Validate group_cols cardinality
+    safe_group = []
+    if group_cols:
+        for c in group_cols:
+            if c in df.columns and df[c].nunique() <= 12:
+                safe_group.append(c)
+
+    agg_on = ["月份"] + safe_group
+    agg_dict: Dict[str, Any] = {amount_col: "sum"}
+    if qty_col and qty_col in df.columns:
+        agg_dict[qty_col] = "sum"
+
+    result = df.groupby(agg_on, as_index=False).agg(agg_dict)
+    result = result.rename(columns={amount_col: "sales_amount"})
+    if qty_col and qty_col in result.columns:
+        result = result.rename(columns={qty_col: "sales_quantity"})
+    return result
+
+
+# ---------------------------------------------------------------------------
 # SEED PLAN
 # ---------------------------------------------------------------------------
 
@@ -508,6 +605,7 @@ class SeedEntry:
     snapshot_n_months: int = 2        # how many months to expand to
     trend_cols: Optional[List[str]] = None
     aggregate: bool = False           # True = detail rows → monthly aggregation after redate
+    melt_wide: bool = False           # True = wide-table (stores-as-cols) → long via melt_wide_sales
     # select_cols: keep only these columns before processing (for wide-table sources with
     # hundreds of payment-name columns that would become messy canonical_field values).
     # None = keep all columns.
@@ -735,7 +833,7 @@ def build_seed_plan() -> List[SeedEntry]:
             notes="绿源食品合成",
         ))
 
-    # ===== RETAIL/INVENTORY: 鲜味零售 =====
+    # ===== RETAIL/INVENTORY: 鲜味零售 (kept for DEMO_REST supplemental) =====
     for sheet_name, domain in [("门店销售", "sales"), ("库存周转", "inventory")]:
         plan.append(SeedEntry(
             label=f"retail_xianwei_{sheet_name}",
@@ -767,6 +865,80 @@ def build_seed_plan() -> List[SeedEntry]:
                 n_months=3,
                 header_row=2,
                 notes=f"Test-mock coverage {sheet_name}",
+            ))
+
+    # ===== RETAIL TENANT (DEMO_RETAIL) — 第3业态: 零售连锁 =====
+
+    # A1. 鲜味零售 门店销售 — wide-format (store types as cols) → melt → canonical sales_amount
+    plan.append(SeedEntry(
+        label="retail_xianwei_门店销售_retail",
+        src_path=TEST_DATA / "鲜味零售-2025销售数据.xlsx",
+        tenant=DEMO_RETAIL,
+        domain="sales",
+        sheet_name="门店销售",
+        n_months=12,
+        header_row=1,
+        melt_wide=True,      # 旗舰店/次旗舰店/新店 → long rows, value col → sales_amount
+        notes="鲜味零售门店销售 wide→long melt, canonical sales_amount per 门店类型",
+    ))
+
+    # A2. 鲜味零售 库存周转 → rename 期末库存(元) → stock_amount
+    plan.append(SeedEntry(
+        label="retail_xianwei_库存周转_retail",
+        src_path=TEST_DATA / "鲜味零售-2025销售数据.xlsx",
+        tenant=DEMO_RETAIL,
+        domain="inventory",
+        sheet_name="库存周转",
+        n_months=12,
+        header_row=1,
+        rename_cols={"期末库存(元)": "stock_amount", "销售出库(元)": "sales_amount"},
+        notes="鲜味零售库存周转 canonical stock_amount + sales_amount",
+    ))
+
+    # A3. Test-mock-retail 销售明细 — detail rows → agg monthly by 区域, canonical measures
+    # aggregate_monthly auto-drops high-cardinality cols (客户名称/订单号/业务员 all >12 unique)
+    plan.append(SeedEntry(
+        label="retail_mock_销售明细_agg",
+        src_path=RETAIL_MOCK,
+        tenant=DEMO_RETAIL,
+        domain="sales",
+        sheet_name="销售明细",
+        n_months=12,
+        header_row=1,
+        aggregate=True,      # 329 detail rows → ~48 monthly×区域 rows
+        rename_cols={"金额(元)": "sales_amount", "数量": "sales_quantity"},
+        notes="Test-mock-retail 销售明细 agg by month+区域(4 unique), canonical sales_amount/quantity",
+    ))
+
+    # B1-B3. Finance depth — AR aging, budget exec, cashflow (for DEMO_RETAIL)
+    for sheet_name, hdr, notes_str in [
+        ("应收账款账龄", 2, "AR账龄分析 identity measures retained"),
+        ("费用预算执行", 2, "费用预算执行 identity measures retained"),
+        ("现金流量表",   1, "现金流量表 identity measures retained"),
+    ]:
+        plan.append(SeedEntry(
+            label=f"retail_mock_{sheet_name}_finance",
+            src_path=RETAIL_MOCK,
+            tenant=DEMO_RETAIL,
+            domain="finance",
+            sheet_name=sheet_name,
+            n_months=3,
+            header_row=hdr,
+            notes=f"Test-mock-retail {notes_str}",
+        ))
+
+    # B4-B5. Finance depth for existing tenants (DEMO_FACTORY + DEMO_REST)
+    for tenant, label_prefix in [(DEMO_FACTORY, "factory_retail_mock"), (DEMO_REST, "rest_retail_mock")]:
+        for sheet_name, hdr in [("应收账款账龄", 2), ("现金流量表", 1)]:
+            plan.append(SeedEntry(
+                label=f"{label_prefix}_{sheet_name}_finance",
+                src_path=RETAIL_MOCK,
+                tenant=tenant,
+                domain="finance",
+                sheet_name=sheet_name,
+                n_months=3,
+                header_row=hdr,
+                notes=f"Test-mock-retail finance depth for {tenant}",
             ))
 
     return plan
@@ -959,6 +1131,15 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
         df = redate(df, window)
 
     df = desensitize(df)
+
+    # Optional: melt wide-format (stores-as-cols) into long format with canonical sales_amount
+    if entry.melt_wide:
+        melt_date_cols = _find_date_cols(df)
+        period_col_melt = melt_date_cols[0] if melt_date_cols else "月份"
+        rows_before = len(df)
+        df = melt_wide_sales(df, period_col=period_col_melt)
+        rows_after = len(df)
+        print(f"    [MELT] {rows_before} rows × wide → {rows_after} rows long  (period_col='{period_col_melt}')")
 
     # Optional: aggregate detail rows into monthly summary
     if entry.aggregate:
