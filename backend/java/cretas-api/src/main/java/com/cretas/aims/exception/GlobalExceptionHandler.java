@@ -925,6 +925,30 @@ public class GlobalExceptionHandler {
             return ApiResponse.errorWithHint(400, userMsg.toString(), hint, "error",
                     fieldName.isEmpty() ? null : fieldName);
         }
+        // ===== Universal catch-all (六扇门 F006 soak 2026-06-16): 终结 whack-a-mole =====
+        // 上面只覆盖 date / "Cannot deserialize value of type"。还有一整族
+        // "Cannot coerce empty String" 消息 (Map / List 元素 / 嵌套 POJO 收空串等) 不含
+        // "Cannot deserialize value of type" → 之前直接落到下面的裸 fallback 报晦涩
+        // "请求格式不正确，请检查JSON格式"。enum/collection/array 已用 CoercionConfig 在源头修,
+        // 但 Map/POJO-element 等形状仍会到这里。与其逐类型加 coercion (打地鼠), 在这一层兜底:
+        // 从 Jackson reference chain 提取字段名 → 清晰字段级消息。任何当前/未来形状失配都不再吐晦涩 fallback。
+        {
+            java.util.regex.Matcher chainField = java.util.regex.Pattern
+                    .compile("\\[\"([^\"]+)\"\\](?!.*\\[\")").matcher(msg); // 引用链里最后一个 ["字段"]
+            String fieldName = chainField.find() ? chainField.group(1) : "";
+            boolean emptyStringCoerce = msg.contains("Cannot coerce empty String")
+                    || msg.contains("empty String (\"\")");
+            if (!fieldName.isEmpty()) {
+                String userMsg = "字段 '" + fieldName + "' 格式不正确"
+                        + (emptyStringCoerce ? "（空值；请填写有效内容，或不传该字段）" : "");
+                return ApiResponse.errorWithHint(400, userMsg,
+                        "请检查「" + fieldName + "」字段的值", "error", fieldName);
+            }
+            if (emptyStringCoerce) {
+                return ApiResponse.errorWithHint(400, "某字段提交了空值导致格式错误",
+                        "请检查留空的字段：必填项请填写，可选项请勿传空字符串", "error", null);
+            }
+        }
         return ApiResponse.error(400, "请求格式不正确，请检查JSON格式");
     }
 

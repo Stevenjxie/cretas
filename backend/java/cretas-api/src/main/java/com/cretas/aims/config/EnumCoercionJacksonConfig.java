@@ -60,6 +60,11 @@ public class EnumCoercionJacksonConfig {
                     .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
             mapper.coercionConfigFor(LogicalType.Array)
                     .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
+            // Map 同理 (如 customFields = Map<String,Object> 收 "")。
+            // 嵌套 POJO 对象的空串失配 (items:[""]) 不 coerce 成 null 对象 (那是真格式错误),
+            // 由 GlobalExceptionHandler 的 catch-all 给清晰字段级消息。
+            mapper.coercionConfigFor(LogicalType.Map)
+                    .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
         });
     }
 }

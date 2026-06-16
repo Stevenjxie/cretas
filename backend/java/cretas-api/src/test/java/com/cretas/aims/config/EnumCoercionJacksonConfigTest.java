@@ -71,6 +71,16 @@ class EnumCoercionJacksonConfigTest {
     }
 
     @Test
+    @DisplayName("Map 空字符串 → null: 销售订单 customFields (Map) 不报晦涩 400")
+    void emptyStringMap_coercesToNull() throws Exception {
+        // customFields:"" (Map<String,Object> 收空串) 曾落晦涩 fallback
+        // (Cannot coerce empty String to Map) — 补 Map 维度。
+        CreateSalesOrderRequest req = mapperWithCoercion()
+                .readValue("{\"customerId\":\"x\",\"customFields\":\"\"}", CreateSalesOrderRequest.class);
+        assertNull(req.getCustomFields(), "空字符串 customFields 应归一为 null");
+    }
+
+    @Test
     @DisplayName("跨 DTO: 销售订单 defaultInvoiceType 空字符串 → null（#941 不止 taxRate）")
     void emptyStringEnum_otherDto_coercesToNull() throws Exception {
         // CreateSalesOrderRequest.defaultInvoiceType 是 InvoiceType 枚举; 前端未配置时发 ""。
