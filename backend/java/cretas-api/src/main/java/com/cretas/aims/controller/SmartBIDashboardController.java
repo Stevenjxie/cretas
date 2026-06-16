@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -530,19 +532,32 @@ public class SmartBIDashboardController {
     // ==================== Helper Methods ====================
 
     /**
-     * Enrich unified dashboard with additional dimension data
+     * Enrich unified dashboard with additional dimension data.
+     *
+     * RBAC FIX (Jun 2026): Capture RequestAttributes on the request thread before
+     * handing off to background threads. GoldFinanceClient.currentUserRole() reads
+     * RequestContextHolder (thread-local); child threads spawned by the ForkJoinPool
+     * have no request context, so role resolves to null → Python strips revenue → ¥0.
+     * We bind the captured attributes into each child thread and remove them on exit
+     * to prevent context leaks between pooled-thread reuses.
      */
     private void enrichUnifiedDashboard(UnifiedDashboardResponse response, String factoryId,
                                          LocalDate startDate, LocalDate endDate, String period) {
+        final RequestAttributes capturedAttrs = RequestContextHolder.getRequestAttributes();
+
         // Parallel enrichment — all queries are independent, each with its own try-catch
         java.util.concurrent.CompletableFuture<?>[] futures = {
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setFinance(financeAnalysisService.getFinanceOverview(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get finance data failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setInventory(inventoryHealthAnalysisService.getInventoryHealth(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get inventory data failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             // production / quality intentionally omitted here. The Java
             // Production/QualityAnalysisService were random-mock placeholders
@@ -551,26 +566,36 @@ public class SmartBIDashboardController {
             // (null) until enrich is migrated to read the Python analysis endpoints
             // backed by real gold (agg_factory_batch_daily). See SmartBI consolidation plan.
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setProcurement(procurementAnalysisService.getProcurementOverview(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get procurement data failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setDepartmentRanking(departmentAnalysisService.getDepartmentRanking(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get department ranking failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setRegionRanking(regionAnalysisService.getRegionRanking(factoryId, startDate, endDate)); }
                 catch (Exception e) { log.warn("Get region ranking failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try {
                     DateRangeUtils.DateRange range = DateRangeUtils.rangeByPeriod(period);
                     response.setAlerts(recommendationService.generateAllAlerts(factoryId, range));
                 } catch (Exception e) { log.warn("Get alerts failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             }),
             java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (capturedAttrs != null) RequestContextHolder.setRequestAttributes(capturedAttrs, true);
                 try { response.setRecommendations(recommendationService.generateRecommendations(factoryId, "all")); }
                 catch (Exception e) { log.warn("Get recommendations failed: {}", ErrorSanitizer.sanitize(e)); }
+                finally { if (capturedAttrs != null) RequestContextHolder.resetRequestAttributes(); }
             })
         };
         try {
