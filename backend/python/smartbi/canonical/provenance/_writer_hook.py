@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def _read_provenance_env() -> bool:
     """Read SMARTBI_ENABLE_PROVENANCE once and cache the result.
 
