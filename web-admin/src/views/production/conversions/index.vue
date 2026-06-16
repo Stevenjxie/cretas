@@ -136,8 +136,17 @@ function handleEdit(row: TableRow) {
 }
 
 async function submitForm() {
-  if (!conversionForm.value.materialTypeId || !conversionForm.value.productTypeId || !conversionForm.value.conversionRate) {
-    ElMessage.warning('请填写完整信息');
+  // 防呆 Rule 2: 逐字段提示缺什么, 不再用 generic "请填写完整信息"
+  if (!conversionForm.value.materialTypeId) {
+    ElMessage.warning('请选择原料类型');
+    return;
+  }
+  if (!conversionForm.value.productTypeId) {
+    ElMessage.warning('请选择产品类型');
+    return;
+  }
+  if (!conversionForm.value.conversionRate) {
+    ElMessage.warning('请输入转换率（需大于 0）');
     return;
   }
 
