@@ -693,9 +693,11 @@ onMounted(() => { loadData(); loadOptions(); });
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.factoryNumber"
-                placeholder="选择厂号"
+                placeholder="选择或输入厂号(选填)"
                 filterable
                 clearable
+                allow-create
+                default-first-option
                 size="small"
                 style="width:100%"
                 @change="(val: string) => handleManufacturerChange($index, val)"
@@ -711,7 +713,7 @@ onMounted(() => { loadData(); loadOptions(); });
           </el-table-column>
           <el-table-column label="产地" width="150">
             <template #default="{ row }">
-              <el-input v-model="row.originPlace" size="small" placeholder="可选" />
+              <el-input v-model="row.originPlace" size="small" placeholder="产地(选填)" maxlength="200" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
