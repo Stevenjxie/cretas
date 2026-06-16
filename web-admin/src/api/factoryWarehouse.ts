@@ -1,0 +1,158 @@
+/**
+ * 工厂仓库管理 API client.
+ *
+ * Backend: FactoryWarehouseController @ /api/mobile/{factoryId}/factory/warehouses
+ * Role gate (写操作): factory_super_admin / permission_admin
+ *
+ * @since 2026-06-16 (超级管理员仓库管理 UI)
+ */
+import request from './request'
+
+// ==================== Types ====================
+
+export type WarehouseType =
+  | 'LOGISTICS'
+  | 'WORKSHOP'
+  | 'OTHER'
+  | 'RAW'
+  | 'WIP'
+  | 'FINISHED'
+  | 'LINESIDE'
+  | 'RETURNS'
+  | 'SCRAP'
+  | 'TEMP'
+  | 'QC'
+  | 'OUTSOURCE'
+  | 'TRANSFER'
+  | 'SALTED'
+  | 'RD'
+
+export const WAREHOUSE_TYPE_LABELS: Record<WarehouseType, string> = {
+  LOGISTICS: '物流仓',
+  WORKSHOP: '鲜棉仓/车间',
+  OTHER: '其他',
+  RAW: '原料仓',
+  WIP: '半成品仓',
+  FINISHED: '成品仓',
+  LINESIDE: '线边仓',
+  RETURNS: '退货仓',
+  SCRAP: '废料仓',
+  TEMP: '暂存仓',
+  QC: '质检仓',
+  OUTSOURCE: '委外仓',
+  TRANSFER: '调拨在途仓',
+  SALTED: '盐化仓',
+  RD: '研发/中试库',
+}
+
+export interface FactoryWarehouse {
+  id: string
+  factoryId: string
+  code: string
+  name: string
+  type: WarehouseType
+  isActive: boolean
+  remarks?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface CreateWarehouseBody {
+  code: string
+  name: string
+  type: WarehouseType
+  isActive?: boolean
+  remarks?: string
+}
+
+export interface UpdateWarehouseBody {
+  name?: string
+  type?: WarehouseType
+  isActive?: boolean
+  remarks?: string
+}
+
+export interface WarehouseSpec {
+  code: string
+  name: string
+  type: WarehouseType
+}
+
+export interface ApplyTemplateBody {
+  templateKey?: string | null
+  warehouses?: WarehouseSpec[]
+}
+
+export interface ApplyTemplateResult {
+  created: number
+  skipped: number
+  items: FactoryWarehouse[]
+}
+
+// ==================== API functions ====================
+
+export function listWarehouses(factoryId: string, type?: WarehouseType) {
+  return request.get<any, { success: boolean; data: FactoryWarehouse[] }>(
+    `/api/mobile/${factoryId}/factory/warehouses`,
+    { params: type ? { type } : {} },
+  )
+}
+
+export function createWarehouse(factoryId: string, body: CreateWarehouseBody) {
+  return request.post<any, { success: boolean; data: FactoryWarehouse; message?: string }>(
+    `/api/mobile/${factoryId}/factory/warehouses`,
+    body,
+  )
+}
+
+export function updateWarehouse(factoryId: string, id: string, body: UpdateWarehouseBody) {
+  return request.put<any, { success: boolean; data: FactoryWarehouse; message?: string }>(
+    `/api/mobile/${factoryId}/factory/warehouses/${id}`,
+    body,
+  )
+}
+
+export function deleteWarehouse(factoryId: string, id: string) {
+  return request.delete<any, { success: boolean; message?: string }>(
+    `/api/mobile/${factoryId}/factory/warehouses/${id}`,
+  )
+}
+
+export function applyWarehouseTemplate(factoryId: string, body: ApplyTemplateBody) {
+  return request.post<any, { success: boolean; data: ApplyTemplateResult; message?: string }>(
+    `/api/mobile/${factoryId}/factory/warehouses/apply-template`,
+    body,
+  )
+}
+
+// ==================== Template presets (frontend constants) ====================
+
+/** 六扇门含盐化代加工 7 仓预设（与后端 LIUSHANMEN_SALTED 对应） */
+export const LIUSHANMEN_SALTED_TEMPLATE: WarehouseSpec[] = [
+  { code: 'WH-LOG',    name: '物流仓',      type: 'LOGISTICS' },
+  { code: 'WH-RAW',    name: '原料仓',      type: 'RAW' },
+  { code: 'WH-WIP',    name: '半成品仓',    type: 'WIP' },
+  { code: 'WH-FG',     name: '成品仓',      type: 'FINISHED' },
+  { code: 'WH-WKS',    name: '鲜棉仓',      type: 'WORKSHOP' },
+  { code: 'WH-RD',     name: '研发中试库',  type: 'RD' },
+  { code: 'SALTED-01', name: '盐化仓代加工', type: 'SALTED' },
+]
+
+/** 标准仓型默认 code + name（自选仓型模板用） */
+export const WAREHOUSE_TYPE_DEFAULTS: Record<WarehouseType, { code: string; name: string }> = {
+  LOGISTICS: { code: 'WH-LOG',    name: '物流仓' },
+  WORKSHOP:  { code: 'WH-WKS',    name: '鲜棉仓/车间' },
+  RAW:       { code: 'WH-RAW',    name: '原料仓' },
+  WIP:       { code: 'WH-WIP',    name: '半成品仓' },
+  FINISHED:  { code: 'WH-FG',     name: '成品仓' },
+  LINESIDE:  { code: 'WH-LS',     name: '线边仓' },
+  RETURNS:   { code: 'WH-RET',    name: '退货仓' },
+  SCRAP:     { code: 'WH-SCR',    name: '废料仓' },
+  TEMP:      { code: 'WH-TEMP',   name: '暂存仓' },
+  QC:        { code: 'WH-QC',     name: '质检仓' },
+  OUTSOURCE: { code: 'WH-OUT',    name: '委外仓' },
+  TRANSFER:  { code: 'WH-TRF',    name: '调拨在途仓' },
+  SALTED:    { code: 'SALTED-01', name: '盐化仓' },
+  RD:        { code: 'WH-RD',     name: '研发/中试库' },
+  OTHER:     { code: 'WH-OTHER',  name: '其他仓' },
+}
