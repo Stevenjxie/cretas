@@ -1,13 +1,19 @@
 package com.cretas.aims.config;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
+import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
+import java.lang.reflect.Field;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -50,5 +56,40 @@ class EnumCoercionJacksonConfigTest {
     void invalidEnum_stillThrows() {
         assertThrows(Exception.class, () -> mapperWithCoercion()
                 .readValue("{\"taxRate\":\"NOT_A_RATE\"}", RawMaterialTypeDTO.class));
+    }
+
+    @Test
+    @DisplayName("跨 DTO: 销售订单 defaultInvoiceType 空字符串 → null（#941 不止 taxRate）")
+    void emptyStringEnum_otherDto_coercesToNull() throws Exception {
+        // CreateSalesOrderRequest.defaultInvoiceType 是 InvoiceType 枚举; 前端未配置时发 ""。
+        CreateSalesOrderRequest req = mapperWithCoercion()
+                .readValue("{\"customerId\":\"x\",\"defaultInvoiceType\":\"\"}", CreateSalesOrderRequest.class);
+        assertNull(req.getDefaultInvoiceType(), "空字符串开票类型应归一为 null");
+    }
+
+    // ========== #938 回归护栏: 自动生成的编码字段不得带 @NotBlank ==========
+    // 六扇门 F006 建档曾因 RawMaterialTypeDTO.code 上的 @NotBlank 在 @Valid 阶段
+    // 提前 400 ("原材料编码不能为空") — 而前端按设计不传 code, 由 service 自动生成。
+    // 这两个测试钉死回归: 谁再给自动编码字段加回 @NotBlank, CI 立刻红。
+    // service 自动生成 + 查重 + DB NOT NULL 才是真正的保证, 不是 @Valid 注解。
+
+    @Test
+    @DisplayName("#938 护栏: RawMaterialTypeDTO.code 不得带 @NotBlank（自动生成）")
+    void rawMaterialCode_hasNoNotBlank() throws Exception {
+        assertNoNotBlank(RawMaterialTypeDTO.class, "code");
+    }
+
+    @Test
+    @DisplayName("#938 护栏: ProductTypeDTO.code 不得带 @NotBlank（自动生成）")
+    void productTypeCode_hasNoNotBlank() throws Exception {
+        assertNoNotBlank(ProductTypeDTO.class, "code");
+    }
+
+    private void assertNoNotBlank(Class<?> dtoClass, String fieldName) throws NoSuchFieldException {
+        Field f = dtoClass.getDeclaredField(fieldName);
+        assertFalse(f.isAnnotationPresent(NotBlank.class),
+                dtoClass.getSimpleName() + "." + fieldName
+                        + " 不得带 @NotBlank — 该字段前端不传, 由 service 自动生成; "
+                        + "加 @NotBlank 会在 @Valid 阶段提前 400 阻断建档 (见 #938)。");
     }
 }
