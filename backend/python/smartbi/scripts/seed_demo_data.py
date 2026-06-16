@@ -880,6 +880,11 @@ class SeedEntry:
     # rename_cols: {old_name: new_name} applied AFTER aggregate so canonical field names
     # map cleanly to sales_amount / sales_quantity in the controlled dictionary.
     rename_cols: Optional[Dict[str, str]] = None
+    # window_override: when set, skip the sequential assign_window allocator and
+    # use this fixed window instead.  Use this for same-tenant same-domain sources
+    # that should share the same time range (distinguished by dims like 门店/品牌)
+    # rather than being placed in non-overlapping sequential slots.
+    window_override: Optional[Window] = None
     notes: str = ""
 
 
@@ -912,9 +917,12 @@ def build_seed_plan() -> List[SeedEntry]:
         "折后金额": "discounted_amount",
         "实收": "net_revenue",
         "实退金额": "refund_amount",
-        # 大众点评 variant column names
-        "销售数量": "sales_quantity",
-        "实收金额": "net_revenue",
+        # NOTE: 大众点评 variant names ("销售数量", "实收金额") are intentionally
+        # NOT mapped here to avoid _2 suffix collisions when a file contains both
+        # "单卖数量(不含套餐子商品)" and "销售数量" (both would map to sales_quantity).
+        # "销售数量" is already a synonym in STANDARD_FIELDS.sales_quantity, so
+        # SemanticMapper will classify it correctly without an explicit rename.
+        # "实收金额" is not in STANDARD_FIELDS, so it remains as a dimension column.
     }
     for i, fp in enumerate(brand_sales_files[:8]):
         safe = re.sub(r"[^\w]", "_", fp.stem)[:30]
@@ -950,6 +958,12 @@ def build_seed_plan() -> List[SeedEntry]:
     ))
 
     # ===== RESTAURANT FINANCE: 张记餐饮 =====
+    # 菜品销售排行 uses a fixed window so it shares the 2024 sales range with the
+    # brand files rather than being placed sequentially after them (which would push
+    # the sales timeline past 2025-12).
+    _zhangji_windows = {
+        "菜品销售排行": Window(date(2024, 1, 1), date(2024, 12, 31)),
+    }
     for sheet_name, domain in [("月度收入明细", "finance"), ("成本分析", "finance"), ("菜品销售排行", "sales")]:
         plan.append(SeedEntry(
             label=f"rest_zhangji_{sheet_name}",
@@ -959,6 +973,7 @@ def build_seed_plan() -> List[SeedEntry]:
             sheet_name=sheet_name,
             n_months=12,
             header_row=1,
+            window_override=_zhangji_windows.get(sheet_name),
             notes="张记餐饮合成",
         ))
 
@@ -1028,6 +1043,7 @@ def build_seed_plan() -> List[SeedEntry]:
         aggregate=True,   # daily multi-store → monthly per-store
         select_cols=_yybk_core_cols,   # ← drop 330+ payment-name cols
         rename_cols=_yybk_rename,
+        window_override=Window(date(2024, 1, 1), date(2024, 12, 31)),
         notes="QHJ 营业概况月报 wide-table: select core 12 cols → aggregate → rename to canonical",
     ))
 
@@ -1041,6 +1057,7 @@ def build_seed_plan() -> List[SeedEntry]:
         skip_rows=3,
         aggregate=True,   # 200k SKU-level rows → monthly
         rename_cols=_spxsmd_rename,
+        window_override=Window(date(2024, 1, 1), date(2024, 12, 31)),
         notes="QHJ 商品销售明细 long-table: drop SKU cols → monthly aggregate → rename",
     ))
 
@@ -1054,6 +1071,7 @@ def build_seed_plan() -> List[SeedEntry]:
         skip_rows=3,
         aggregate=True,   # 门店×付款方式 per-period → aggregate by period + 门店
         rename_cols=_zffs_rename,
+        window_override=Window(date(2025, 1, 1), date(2025, 12, 31)),
         notes="QHJ 订单付款方式 long-table: 付款方式 as dim value → aggregate per period → rename",
     ))
 
@@ -1084,6 +1102,7 @@ def build_seed_plan() -> List[SeedEntry]:
         aggregate=True,   # order-level → monthly
         select_cols=_rbb_core_cols,
         rename_cols=_rbb_rename,
+        window_override=Window(date(2025, 1, 1), date(2025, 12, 31)),
         notes="QHJ 详细日报表 wide-table: select core cols → monthly aggregate → rename",
     ))
 
@@ -1101,6 +1120,11 @@ def build_seed_plan() -> List[SeedEntry]:
         ))
 
     # ===== RETAIL/INVENTORY: 鲜味零售 (kept for DEMO_REST supplemental) =====
+    # 门店销售 (sales) uses a fixed 2025 window so it stays within TIMELINE_END
+    # after the other DEMO_REST/sales sources have consumed 2024.
+    _xianwei_windows = {
+        "门店销售": Window(date(2025, 1, 1), date(2025, 12, 31)),
+    }
     for sheet_name, domain in [("门店销售", "sales"), ("库存周转", "inventory")]:
         plan.append(SeedEntry(
             label=f"retail_xianwei_{sheet_name}",
@@ -1110,6 +1134,7 @@ def build_seed_plan() -> List[SeedEntry]:
             sheet_name=sheet_name,
             n_months=12,
             header_row=1,
+            window_override=_xianwei_windows.get(sheet_name),
             notes="鲜味零售合成",
         ))
 
@@ -2174,7 +2199,10 @@ def main() -> None:
 
     # --- Real data entries ---
     for entry in plan:
-        win = assign_window(entry.tenant, entry.domain, entry.n_months)
+        if entry.window_override is not None:
+            win = entry.window_override
+        else:
+            win = assign_window(entry.tenant, entry.domain, entry.n_months)
         if win is None:
             print(f"[SKIP] Timeline exhausted: {entry.label}")
             continue
