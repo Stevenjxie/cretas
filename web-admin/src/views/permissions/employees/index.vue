@@ -50,8 +50,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
-import request from '@/api/request';
-import { createUser } from '@/api/factory';
+import { createPermissionEmployee, listPermissionEmployees } from '@/api/permissionSettings';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 
@@ -103,7 +102,7 @@ async function loadUsers() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const res = await request.get(`/${factoryId.value}/users`);
+    const res = await listPermissionEmployees(factoryId.value, { page: 1, size: 500 });
     users.value = unwrapUsers(res);
   } finally {
     loading.value = false;
@@ -114,7 +113,7 @@ async function submitCreate() {
   if (!factoryId.value) return;
   saving.value = true;
   try {
-    await createUser(factoryId.value, form as any);
+    await createPermissionEmployee(factoryId.value, form as unknown as Record<string, unknown>);
     ElMessage.success('已创建员工');
     createDialogVisible.value = false;
     await loadUsers();

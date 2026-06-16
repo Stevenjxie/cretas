@@ -27,6 +27,17 @@ export interface PermissionPreviewDto {
   editableModules: ModulePermissionDto[];
 }
 
+export interface PermissionEmployeeDto {
+  id: string | number;
+  username?: string;
+  fullName?: string;
+  realName?: string;
+  phone?: string;
+  roleCode?: string;
+  isActive?: boolean;
+  [key: string]: unknown;
+}
+
 export async function listPermissionModules(factoryId: string): Promise<ModuleDefinition[]> {
   const res = await request.get<ApiResponse<ModuleDefinition[]>>(
     `/${factoryId}/permissions/modules`,
@@ -61,6 +72,37 @@ export async function getUserEffectivePermissions(
     `/${factoryId}/permissions/users/${encodeURIComponent(userId)}/effective`,
   );
   return (res as unknown as ApiResponse<EffectiveUserPermissionDto>).data as EffectiveUserPermissionDto;
+}
+
+export async function getMyEffectivePermissions(
+  factoryId: string,
+): Promise<EffectiveUserPermissionDto> {
+  const res = await request.get<ApiResponse<EffectiveUserPermissionDto>>(
+    `/${factoryId}/permissions/me/effective`,
+  );
+  return (res as unknown as ApiResponse<EffectiveUserPermissionDto>).data as EffectiveUserPermissionDto;
+}
+
+export async function listPermissionEmployees(
+  factoryId: string,
+  params: { page?: number; size?: number; keyword?: string } = {},
+): Promise<unknown> {
+  const res = await request.get<ApiResponse<unknown>>(
+    `/${factoryId}/permissions/employees`,
+    { params },
+  );
+  return (res as unknown as ApiResponse<unknown>).data;
+}
+
+export async function createPermissionEmployee(
+  factoryId: string,
+  userData: Record<string, unknown>,
+): Promise<PermissionEmployeeDto> {
+  const res = await request.post<ApiResponse<PermissionEmployeeDto>>(
+    `/${factoryId}/permissions/employees`,
+    userData,
+  );
+  return (res as unknown as ApiResponse<PermissionEmployeeDto>).data as PermissionEmployeeDto;
 }
 
 export async function updateUserOverrides(

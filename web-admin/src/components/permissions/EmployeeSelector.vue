@@ -20,7 +20,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import request from '@/api/request';
+import { listPermissionEmployees } from '@/api/permissionSettings';
 
 interface EmployeeOption {
   id: string | number;
@@ -71,7 +71,7 @@ async function loadEmployees() {
   if (!props.factoryId) return;
   loading.value = true;
   try {
-    const res = await request.get(`/${props.factoryId}/users`);
+    const res = await listPermissionEmployees(props.factoryId, { page: 1, size: 500 });
     employees.value = unwrapUsers(res);
   } finally {
     loading.value = false;

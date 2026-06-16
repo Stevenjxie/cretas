@@ -65,7 +65,7 @@ class ModuleEnabledInterceptorUserAccessTest {
         User user = user(1309L, "F006", "f006_admin", "factory_super_admin");
         when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
         when(userRepository.findById(1309L)).thenReturn(Optional.of(user));
-        when(userModuleAccessService.canAccessModule(user, "production_plan")).thenReturn(false);
+        when(userModuleAccessService.canAccessModule("F006", "1309", "factory_super_admin", "production_plan")).thenReturn(false);
 
         mockMvc.perform(asUser(get("/api/mobile/F006/test-protected/production-plan"), 1309L))
                 .andExpect(status().isForbidden())
@@ -73,7 +73,7 @@ class ModuleEnabledInterceptorUserAccessTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message", containsString("f006_admin")))
                 .andExpect(jsonPath("$.message", containsString("production_plan")))
-                .andExpect(jsonPath("$.actionHint", containsString("管理员")));
+                .andExpect(jsonPath("$.actionHint", containsString("administrator")));
     }
 
     @Test
@@ -82,9 +82,22 @@ class ModuleEnabledInterceptorUserAccessTest {
         User user = user(1310L, "F006", "planner", "dispatcher");
         when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
         when(userRepository.findById(1310L)).thenReturn(Optional.of(user));
-        when(userModuleAccessService.canAccessModule(user, "production_plan")).thenReturn(true);
+        when(userModuleAccessService.canAccessModule("F006", "1310", "dispatcher", "production_plan")).thenReturn(true);
 
         mockMvc.perform(asUser(get("/api/mobile/F006/test-protected/production-plan"), 1310L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+    }
+
+    @Test
+    @DisplayName("Platform admin read access uses request factory context")
+    void platformAdminReadUsesRequestFactoryContext() throws Exception {
+        User user = user(1L, null, "platform", "platform_admin");
+        when(factoryConfigService.isModuleEnabled("F006", "production_plan")).thenReturn(true);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(userModuleAccessService.canAccessModule("F006", "1", "platform_admin", "production_plan")).thenReturn(true);
+
+        mockMvc.perform(asUser(get("/api/mobile/F006/test-protected/production-plan"), 1L))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true));
     }
@@ -98,7 +111,11 @@ class ModuleEnabledInterceptorUserAccessTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false));
 
-        verify(userModuleAccessService, never()).canAccessModule(org.mockito.Mockito.any(), org.mockito.Mockito.anyString());
+        verify(userModuleAccessService, never()).canAccessModule(
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString());
     }
 
     private static MockHttpServletRequestBuilder asUser(MockHttpServletRequestBuilder builder, long userId) {

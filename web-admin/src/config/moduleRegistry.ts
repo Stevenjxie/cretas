@@ -208,3 +208,10 @@ export function resolveModuleRegistryItem(module: string): ModuleRegistryItem | 
     item.moduleCode === module || item.legacyModule === module,
   );
 }
+
+export function resolveModuleRegistryItemByRoute(path: string): ModuleRegistryItem | undefined {
+  if (!path) return undefined;
+  return [...PERMISSION_MODULE_REGISTRY]
+    .sort((a, b) => b.routePath.length - a.routePath.length)
+    .find(item => path === item.routePath || path.startsWith(`${item.routePath}/`));
+}

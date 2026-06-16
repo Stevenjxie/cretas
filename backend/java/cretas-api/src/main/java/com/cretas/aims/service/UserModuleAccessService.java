@@ -42,6 +42,8 @@ public interface UserModuleAccessService {
 
     boolean canAccessModule(User user, String moduleCode);
 
+    boolean canAccessModule(String factoryId, String userId, String roleCode, String moduleCode);
+
     PermissionLevel getEffectiveLevel(String factoryId, String userId, String roleCode, String moduleCode);
 
     boolean canWriteModule(String factoryId, String userId, String roleCode, String moduleCode);

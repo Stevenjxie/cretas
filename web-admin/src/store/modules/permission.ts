@@ -19,7 +19,7 @@ import {
   type UserModuleAccessView,
   type PermissionLevel as ApiPermissionLevel,
 } from '@/api/permissionApi';
-import { getUserEffectivePermissions } from '@/api/permissionSettings';
+import { getMyEffectivePermissions } from '@/api/permissionSettings';
 import {
   PRODUCTION_MODULE_REGISTRY,
   resolveModuleRegistryItem,
@@ -272,6 +272,7 @@ export const usePermissionStore = defineStore('permission', () => {
   const isUserModuleAccessLoaded = ref(false);
   const lastLoadTs = ref<number>(0);
   const LOAD_DEBOUNCE_MS = 30_000;  // Avoid redundant fetches within 30s
+  const LEGACY_USER_MODULE_ACCESS_ROLES = new Set(['factory_super_admin', 'platform_admin']);
 
   function setRole(role: string, factoryId?: string, factoryType?: string, userId?: string | number) {
     const roleChanged = currentRole.value !== (role || 'unactivated')
@@ -315,10 +316,21 @@ export const usePermissionStore = defineStore('permission', () => {
       ]);
       dbPermissions.value = mergeLayers(l1Rows, l2Map, currentRole.value);
       if (currentFactoryId.value && currentUserId.value) {
-        const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value);
-        applyUserModuleAccess(l4Rows);
-        const effective = await getUserEffectivePermissions(currentFactoryId.value, currentUserId.value);
-        applyEffectiveModules(effective.modules || []);
+        if (LEGACY_USER_MODULE_ACCESS_ROLES.has(currentRole.value)) {
+          try {
+            const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value);
+            applyUserModuleAccess(l4Rows);
+          } catch {
+            userModuleAccess.value = {};
+            isUserModuleAccessLoaded.value = false;
+          }
+        }
+        try {
+          const effective = await getMyEffectivePermissions(currentFactoryId.value);
+          applyEffectiveModules(effective.modules || []);
+        } catch {
+          moduleLevels.value = {};
+        }
       }
       isDbLoaded.value = true;
     } catch (e) {

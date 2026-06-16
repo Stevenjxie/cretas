@@ -90,7 +90,11 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
                         String.valueOf(user.getId()),
                         user.getRoleCode(),
                         moduleCode)
-                : userModuleAccessService.canAccessModule(user, moduleCode);
+                : userModuleAccessService.canAccessModule(
+                        factoryId,
+                        String.valueOf(user.getId()),
+                        user.getRoleCode(),
+                        moduleCode);
         if (!allowed) {
             sendUserModuleDenied(
                     response,

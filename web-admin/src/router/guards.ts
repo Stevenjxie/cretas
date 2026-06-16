@@ -4,6 +4,7 @@
  */
 import type { Router } from 'vue-router';
 import type { ModuleName } from '@/store/modules/permission';
+import { resolveModuleRegistryItemByRoute } from '@/config/moduleRegistry';
 
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
@@ -107,7 +108,8 @@ export function setupRouterGuards(router: Router) {
     }
 
     // 检查二级模块权限
-    const moduleCode = to.meta.moduleCode as string | undefined;
+    const moduleCode = (to.meta.moduleCode as string | undefined)
+      || resolveModuleRegistryItemByRoute(to.path)?.moduleCode;
     if (moduleCode && !permissionStore.canAccessModuleCode(moduleCode)) {
       next('/403');
       return;

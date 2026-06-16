@@ -12,6 +12,7 @@ import {
   Histogram, KnifeFork
 } from '@element-plus/icons-vue';
 import { menuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { resolveModuleRegistryItemByRoute } from '@/config/moduleRegistry';
 
 const router = useRouter();
 const route = useRoute();
@@ -146,8 +147,9 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const factoryType = authStore.factoryType;
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
-  const canAccess = item.moduleCode
-    ? permissionStore.canAccessModuleCode(item.moduleCode)
+  const moduleCode = item.moduleCode || resolveModuleRegistryItemByRoute(item.path)?.moduleCode;
+  const canAccess = moduleCode
+    ? permissionStore.canAccessModuleCode(moduleCode)
     : permissionStore.canAccess(item.module);
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)

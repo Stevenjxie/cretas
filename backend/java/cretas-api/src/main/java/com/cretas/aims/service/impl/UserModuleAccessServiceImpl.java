@@ -70,7 +70,12 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
             return false;
         }
 
-        return getEffectiveLevel(factoryId, userId, user.getRoleCode(), moduleCode).canRead();
+        return canAccessModule(factoryId, userId, user.getRoleCode(), moduleCode);
+    }
+
+    @Override
+    public boolean canAccessModule(String factoryId, String userId, String roleCode, String moduleCode) {
+        return getEffectiveLevel(factoryId, userId, roleCode, moduleCode).canRead();
     }
 
     @Override
