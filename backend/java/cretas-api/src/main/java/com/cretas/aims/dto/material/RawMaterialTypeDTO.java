@@ -26,7 +26,11 @@ public class RawMaterialTypeDTO {
     private String id;
     private String factoryId;
 
-    @NotBlank(message = "原材料编码不能为空")
+    // 不加 @NotBlank: 创建时前端故意不传 code, 由 service 自动生成
+    // (RawMaterialTypeServiceImpl.createMaterialType 在 code 为空时调 generateNextCode +
+    //  查重; 更新路径 code 始终带值且只在变化时 set). @NotBlank 会在 @Valid 阶段
+    // 提前 400 拒绝自动生成请求 → 报 "原材料编码不能为空", 阻断建档. DB NOT NULL +
+    // service 自动生成 + 查重 才是真正的保证.
     @JsonProperty("code")
     @JsonAlias("materialCode")  // 支持前端发送 materialCode
     private String code;
