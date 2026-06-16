@@ -176,6 +176,44 @@
     font-style: italic;
   }
 
+  /* ── 手机截图 横向滑动 ── */
+  .phone-carousel {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 4px 14px;
+    margin: 1.2rem 0 0.3rem;
+  }
+  .phone-shot {
+    flex: 0 0 auto;
+    width: 300px;
+    max-width: 78vw;
+    scroll-snap-align: center;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  }
+  .phone-shot img {
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    display: block;
+  }
+  .phone-shot .screenshot-caption {
+    margin-top: 0.5rem;
+    text-align: left;
+  }
+  .carousel-hint {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin: 0 0 1.2rem;
+  }
+
   /* ── Sections inside chapter ── */
   .section-desc {
     margin: 1rem 0;
@@ -340,10 +378,10 @@
     <h1>六膳门 — 生产链操作手册</h1>
     <div class="subtitle">从产品设置到完工报工 · 全流程图文操作指引</div>
     <div class="header-meta">
-      <span>📅 2026-06</span>
-      <span>🏭 六膳门食品工厂（F006）</span>
-      <span>🔖 包含 17 张标注截图</span>
-      <span>✅ 生产链 13 个步骤 + 3 个管理参考章节</span>
+      <span>2026-06</span>
+      <span>六膳门食品工厂（F006）</span>
+      <span>包含 17 张标注截图</span>
+      <span>生产链 13 个步骤 + 3 个管理参考章节</span>
     </div>
   </div>
 </div>
@@ -352,7 +390,7 @@
 
 <!-- ===== 流程总览 ===== -->
 <div class="note-box" style="margin-bottom:1.5rem;">
-  <span class="box-icon">🔄</span>
+  
   <div class="box-content">
     <strong>生产链总流程</strong>
     <div class="flow-diagram" style="margin:0.5rem 0 0; background:transparent; padding:0;">
@@ -464,7 +502,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -502,7 +540,7 @@
     </div>
 
     <div class="note-box">
-      <span class="box-icon">📐</span>
+      
       <div class="box-content">
         <strong>16 位编码三层分段结构</strong>
         <div class="flow-diagram" style="margin:0.4rem 0 0; background:transparent; padding:0; font-size:0.8rem;">
@@ -542,7 +580,7 @@
     </ul>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -600,7 +638,7 @@
     </ul>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -645,7 +683,7 @@
     </ul>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>六膳门物料分类约定（5 大项）</strong>
         <ul>
@@ -660,7 +698,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -714,7 +752,7 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>出成率如何影响后续流程</strong>
         <ul>
@@ -727,7 +765,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -773,7 +811,7 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>价格体系说明（三个价）</strong>
         <ul>
@@ -785,7 +823,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -831,7 +869,7 @@
     </ul>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>财务审核是生产闭环的关口</strong>
         <p>只有财务审核通过的订单，才能生成生产计划、排产、领料——确保每笔生产都有可盈利的订单支撑，避免先生产后发现亏损。</p>
@@ -839,7 +877,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -884,7 +922,7 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>谁负责排产？</strong>
         <p>生产计划由<strong>厂长或生管（PMC）</strong>在系统中创建；车间操作员看到的只是分配到自己的批次任务，不需要关心计划层。</p>
@@ -934,7 +972,7 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>领料方式约定</strong>
         <p>六膳门约定：<strong>统一晚上集中领料一次</strong>（而非边生产边领），仓库备好全天用料，整批发往车间。仓库发出的数量和车间实收数量会在系统中核对差异（如：仓库发 100 kg，车间清点收到 98 kg，差额 2 kg 需找原因）。</p>
@@ -942,7 +980,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -984,14 +1022,14 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>批次状态说明</strong>
         <ul>
-          <li>🟡 <strong>待开工</strong>：调拨到位，等待开始报工</li>
-          <li>🔵 <strong>生产中</strong>：已开始报工，尚未全部工序完成</li>
-          <li>🟢 <strong>报工完成</strong>：所有工序报工完成，可执行「完工入库」</li>
-          <li>✅ <strong>已入库</strong>：成品已入成品库，批次关闭</li>
+          <li><strong>待开工</strong>：调拨到位，等待开始报工</li>
+          <li><strong>生产中</strong>：已开始报工，尚未全部工序完成</li>
+          <li><strong>报工完成</strong>：所有工序报工完成，可执行「完工入库」</li>
+          <li><strong>已入库</strong>：成品已入成品库，批次关闭</li>
         </ul>
       </div>
     </div>
@@ -1051,29 +1089,30 @@
     </ul>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>手机 APP 报工截图</strong>
       </div>
     </div>
 
-    <div class="screenshot-wrap">
-      <img src="screenshots/rn/01-operator-task-list.png" alt="操作员任务列表 — 手机APP">
-      <div class="screenshot-caption">图 11-2：手机 APP 操作员任务列表，显示分配给当前操作员的待报工批次；若原料库存不足会显示 ⚠缺料 预警（可见但不阻断开工）</div>
+    <div class="phone-carousel">
+      <div class="phone-shot">
+        <img src="screenshots/rn/01-operator-task-list.png" alt="操作员任务列表 — 手机APP">
+        <div class="screenshot-caption">图 11-2：手机 APP 操作员任务列表，显示分配给当前操作员的待报工批次；若原料库存不足会显示 缺料 预警（可见但不阻断开工）</div>
+      </div>
+      <div class="phone-shot">
+        <img src="screenshots/rn/02-material-requisition.png" alt="原料批次选择器 — 手机APP">
+        <div class="screenshot-caption">图 11-3：手机 APP 领料报工，选择实际用的原料批次（可扫一物一码标签 / 按厂号），填写实领数量</div>
+      </div>
+      <div class="phone-shot">
+        <img src="screenshots/rn/03-yield-output-report.png" alt="产出报工界面 — 手机APP">
+        <div class="screenshot-caption">图 11-4：手机 APP 产出报工界面，填写本工序实际产出数量（可按托称重、加副产物、留样）</div>
+      </div>
     </div>
-
-    <div class="screenshot-wrap">
-      <img src="screenshots/rn/02-material-requisition.png" alt="原料批次选择器 — 手机APP">
-      <div class="screenshot-caption">图 11-3：手机 APP 领料报工，选择实际用的原料批次（可扫一物一码标签 / 按厂号），填写实领数量</div>
-    </div>
-
-    <div class="screenshot-wrap">
-      <img src="screenshots/rn/03-yield-output-report.png" alt="产出报工界面 — 手机APP">
-      <div class="screenshot-caption">图 11-4：手机 APP 产出报工界面，填写本工序实际产出数量（可按托称重、加副产物、留样）</div>
-    </div>
+    <div class="carousel-hint">← 左右滑动查看手机 APP 操作截图 →</div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -1112,7 +1151,7 @@
     </div>
 
     <ul class="steps">
-      <li>确认批次详情页显示「✓ X/X 道全部报完」（红框处蓝色按钮可点击）。</li>
+      <li>确认批次详情页显示「X/X 道全部报完」（红框处蓝色按钮可点击）。</li>
       <li>点击<mark>完工入库</mark>按钮，弹出确认表单。</li>
       <li>填写<strong>实际入库数量</strong>（成品千克数或盒数；系统会预填 BOM 预计数量，按实际修改）。</li>
       <li>确认入库仓库（成品库）及日期。</li>
@@ -1120,7 +1159,7 @@
     </ul>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>为什么要填"实际入库数量"？</strong>
         <p>入库数量可能与产出报工数量有轻微差异（如称重精度、包装损耗等）。系统会以此计算最终出成率，并更新 BOM 历史均值，使下次备料预测更准确。</p>
@@ -1128,7 +1167,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -1172,7 +1211,7 @@
     </ul>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>成本核算结果查看</strong>
         <p>成品入库后，在批次详情页可查看本批次的<strong>实际成本核算结果</strong>：</p>
@@ -1186,7 +1225,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -1214,7 +1253,7 @@
   <div class="chapter-body">
 
     <div class="note-box">
-      <span class="box-icon">📋</span>
+      
       <div class="box-content">
         <strong>生产链关键角色分工</strong>
         <div class="fields" style="margin-top:0.5rem; background:transparent; padding:0;">
@@ -1233,7 +1272,7 @@
     </div>
 
     <div class="note-box" style="margin-top:1rem;">
-      <span class="box-icon">🔑</span>
+      
       <div class="box-content">
         <strong>常用关键数字</strong>
         <ul>
@@ -1248,7 +1287,7 @@
     </div>
 
     <div class="warn-box" style="margin-top:1rem;">
-      <span class="box-icon">❗</span>
+      
       <div class="box-content">
         <strong>高频错误 TOP 5</strong>
         <ul>
@@ -1283,7 +1322,7 @@
     </div>
 
     <div class="note-box">
-      <span class="box-icon">📋</span>
+      
       <div class="box-content">
         <strong>撤回流程：两种情形</strong>
         <div class="flow-diagram" style="margin:0.4rem 0 0; background:transparent; padding:0; font-size:0.8rem;">
@@ -1318,7 +1357,7 @@
     </ul>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>快速撤回（5 分钟免审批窗口）</strong>
         <p>若提交人是<strong>本人操作、无下游消费，且在提交报工后 5 分钟内</strong>申请撤回，系统自动走快速通道，跳过审批步骤，立即执行撤回。适用于填错数字后即时纠正的场景。</p>
@@ -1326,7 +1365,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -1361,7 +1400,7 @@
     </div>
 
     <div class="note-box">
-      <span class="box-icon">ℹ️</span>
+      
       <div class="box-content">
         <strong>当前版本工时数据查看路径</strong>
         <p>当前版本（2026-06 上线）中，<strong>工时不在独立的"达成率看板"页单独展示</strong>，而是通过以下两个入口查阅：</p>
@@ -1403,7 +1442,7 @@
     </ul>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>当前版本限制说明</strong>
         <ul>
@@ -1436,7 +1475,7 @@
     </div>
 
     <div class="note-box">
-      <span class="box-icon">📋</span>
+      
       <div class="box-content">
         <strong>对接范围确认（周五客户确认单第 4 项）</strong>
         <ul>
@@ -1465,7 +1504,7 @@
     </div>
 
     <div class="tip-box">
-      <span class="box-icon">💡</span>
+      
       <div class="box-content">
         <strong>导出内容说明</strong>
         <ul>
@@ -1477,7 +1516,7 @@
     </div>
 
     <div class="warn-box">
-      <span class="box-icon">⚠️</span>
+      
       <div class="box-content">
         <strong>注意事项</strong>
         <ul>
@@ -1525,11 +1564,11 @@
   .ai-in button{background:#2563eb;color:#fff;border:none;border-radius:10px;padding:0 18px;font-weight:700;cursor:pointer;font-family:inherit}
   .ai-in button:disabled{opacity:.5}
 </style>
-<button id="aiFab" onclick="aiOpen()">🤖 问 AI 助手</button>
+<button id="aiFab" onclick="aiOpen()">问 AI 助手</button>
 <div id="aiPanel">
   <div class="ai-head"><div><b>六膳门生产助手</b><small>问任何生产链操作，AI 引用本手册回答</small></div><button class="ai-close" onclick="aiClose()" title="关闭">×</button></div>
   <div class="ai-msgs" id="aiMsgs">
-    <div class="ai-msg a"><span>你好！我是六膳门生产操作助手 🍲<br>问我任何生产链操作，比如：
+    <div class="ai-msg a"><span>你好！我是六膳门生产操作助手 <br>问我任何生产链操作，比如：
       <div class="ai-ex">
         <button onclick="aiAsk('操作员怎么领料报工')">领料报工</button>
         <button onclick="aiAsk('BOM配方怎么设置出成率')">BOM出成率</button>
@@ -1560,7 +1599,7 @@ async function aiSend(){
     var ans=d.answer||'（未获取到回答）';
     var srcs=(d.sources||[]).map(function(x){return x.source||''}).filter(function(x){return x.indexOf('liushanmen')>=0||x.indexOf('factory')>=0});
     var html='<span>'+aiFmt(ans);
-    if(srcs.length)html+='<div class="ai-src">📖 来源：六膳门生产操作手册</div>';
+    if(srcs.length)html+='<div class="ai-src">来源：六膳门生产操作手册</div>';
     html+='</span>';
     var el=document.getElementById(lid);el.className='ai-msg a';el.innerHTML=html;
   }catch(e){
