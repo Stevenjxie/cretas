@@ -27,6 +27,7 @@ from smartbi.agent.orchestrator import (
     AgentOrchestrator,
     InsightResponse,
     RESULT_SOURCE_CACHE,
+    RESULT_SOURCE_CORPUS,
     RESULT_SOURCE_DEGRADED,
     RESULT_SOURCE_LLM,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "InsightResponse",
     "NarrativeCacheService",
     "RESULT_SOURCE_CACHE",
+    "RESULT_SOURCE_CORPUS",
     "RESULT_SOURCE_DEGRADED",
     "RESULT_SOURCE_LLM",
     "compute_question_hash",

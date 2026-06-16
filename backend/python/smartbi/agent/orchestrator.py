@@ -2,6 +2,7 @@
 
 Composes:
     question → narrative_cache.get → (hit) return
+             → corpus_cache.get (serve-from-corpus flywheel) → (hit) return
              → budget_tracker.check_budget → (blocked) degraded response
              → Gold queries (finance/products/discount) for prompt data
              → call LLM with 餐饮数据分析师 system prompt (spec §4.3)
@@ -35,6 +36,7 @@ this module is never imported in the hot path.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -64,6 +66,7 @@ from smartbi.gold import (
     finance_summary,
     top_products,
 )
+from smartbi.services.distillation_capture import compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +81,25 @@ DEGRADED_MESSAGE_LLM_UNAVAILABLE = (
 
 # Response shape returned to caller (FastAPI serializes as JSON).
 RESULT_SOURCE_CACHE = "cache"
+RESULT_SOURCE_CORPUS = "corpus"   # serve-from-corpus flywheel (today's distillation row)
 RESULT_SOURCE_LLM = "llm"
 RESULT_SOURCE_DEGRADED = "degraded"
+
+# SQL for corpus read-back.  smart_bi_distillation_samples has NO RLS (internal ML sink).
+# input_hash = sha256(user_prompt); the prompt carries the tenant's Gold data + question
+# text, so the hash is tenant-specific AND data-fingerprinted — cross-tenant collision is
+# impossible even without a factory_id column filter, and a hit means data is unchanged.
+# CURRENT_DATE bounds freshness to at least daily.
+# G4 feedback_down: if the row accumulated >= threshold downvotes, skip it (fall to LLM).
+_CORPUS_READ_SQL = """
+    SELECT teacher_output, input_hash, metadata
+    FROM smart_bi_distillation_samples
+    WHERE input_hash = $1
+      AND created_at::date = CURRENT_DATE
+      AND source = 'agent_insight'
+    LIMIT 1
+"""
+_CORPUS_FEEDBACK_DOWN_THRESHOLD = 2
 
 # Insight answer token budget. Must be large enough for a reasoning model
 # (the INSIGHTS slot now routes to deepseek-v4-pro, which spends completion
@@ -199,7 +219,7 @@ class AgentOrchestrator:
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
 
-        # 1. Cache check
+        # 1. Narrative cache check (in-process, today's answer keyed by question+range+factory)
         q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
         hit = await self._cache.get(factory_id, q_hash)
         if hit is not None:
@@ -214,7 +234,43 @@ class AgentOrchestrator:
                 chart_config=hit.get("chart_config"),
             )
 
-        # 2. Budget check
+        # 2. Pull Gold summaries (concrete numbers for prompt).  Done BEFORE the
+        # corpus check so the corpus key can embed the *current data fingerprint*
+        # (Steve principle #1): the full user_prompt carries the question + range +
+        # every concrete KPI number, so identical data → identical input_hash →
+        # corpus hit (flywheel, 0 LLM); changed data → different input_hash → miss
+        # → regenerate with the LATEST data.  We NEVER serve a stale insight once
+        # the underlying data has moved.  _gather_data is 3 cheap agg queries via
+        # asyncio.gather — the only way to know "did the data change" is to read it.
+        data = await self._gather_data(factory_id, date_range)
+        user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
+
+        # 2b. Serve-from-corpus flywheel: look up today's distillation corpus by the
+        # SAME key the capture side persists (sha256(user_prompt)).  Read-back and
+        # persist keys MUST match or the flywheel never hits.  The CURRENT_DATE
+        # filter in _CORPUS_READ_SQL bounds freshness to "at least daily"; because
+        # the key is the data-bearing prompt, a hit *guarantees* the data is
+        # unchanged since that row was written — so serving it is never stale.
+        # factory_id is inside user_prompt (data + question text) so cross-tenant
+        # collision is impossible (table has no RLS by design).
+        corpus_hash = compute_input_hash(user_prompt)
+        corpus_hit = await self._read_corpus_cache(corpus_hash)
+        if corpus_hit is not None:
+            budget = await self._budget.check_budget(factory_id)
+            logger.debug(
+                "[corpus] hit: factory=%s input_hash=%s...", factory_id, corpus_hash[:12]
+            )
+            return InsightResponse(
+                answer=corpus_hit,
+                source=RESULT_SOURCE_CORPUS,
+                tokens=0,  # served from corpus — zero new LLM tokens (principle #2/#3)
+                tokens_used_today=budget.tokens_used,
+                tokens_cap=budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                data_summary=data,
+            )
+
+        # 3. Budget check — only reached on a corpus miss (data changed / first run).
         budget = await self._budget.check_budget(factory_id)
         if budget.blocked:
             logger.warning(
@@ -230,14 +286,10 @@ class AgentOrchestrator:
                 elapsed_ms=int((time.monotonic() - t0) * 1000),
             )
 
-        # 3. Pull Gold summaries (concrete numbers for prompt)
-        data = await self._gather_data(factory_id, date_range)
-
-        # 4. Build prompt + call LLM.
+        # 4. Call LLM (corpus miss → spend tokens on the LATEST data, principle #3).
         # P0 出境脱敏 (数据主权): 在请求级 RedactionScope 内注册门店/商品/折扣真名,
         # choke point (llm_router) 出境前换成占位 (门店A/商品B), LLM 只看占位+数字;
         # 输出再 restore 还原真名展示给用户 (真名不出境, 数字/分析 0 损失).
-        user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
         try:
             with redaction_scope():
                 register_values_for_egress(_collect_sensitive_names(data))
@@ -265,9 +317,14 @@ class AgentOrchestrator:
         )
 
         # 6. Distillation capture (training corpus). Fire-and-forget; only the
-        # freshly-generated LLM answer (cache-hit returns above never reach here).
+        # freshly-generated LLM answer reaches here (cache/corpus hits returned above).
+        # input_text = user_prompt → input_hash = sha256(user_prompt), the exact key
+        # _read_corpus_cache hashes (step 2b) so this row serves the next identical-data
+        # request (flywheel grows).  Because the key is data-bearing, the next hit can
+        # only occur while the data is unchanged → never stale (principle #1).
         await _capture_insight_distillation(
-            user_prompt, answer, factory_id, tokens, teacher_model=resolved_model,
+            user_prompt, answer, factory_id, tokens,
+            teacher_model=resolved_model,
         )
 
         return InsightResponse(
@@ -435,7 +492,7 @@ class AgentOrchestrator:
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
 
-        # 1. Cache check
+        # 1. Narrative cache check
         q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
         hit = await self._cache.get(factory_id, q_hash)
         if hit is not None:
@@ -447,7 +504,29 @@ class AgentOrchestrator:
                    "elapsed_ms": int((time.monotonic() - t0) * 1000)}
             return
 
-        # 2. Budget check
+        # 2. Gather data + prompt FIRST so the corpus key embeds the current data
+        # fingerprint (Steve principle #1 — mirrors answer_insight step 2/2b).
+        data = await self._gather_data(factory_id, date_range)
+        user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
+
+        # 2b. Serve-from-corpus flywheel: same data-bearing key as the capture side
+        # (sha256(user_prompt)).  Identical data → hit (0 LLM); changed data → miss
+        # → stream a fresh answer.  Hit guarantees data unchanged → never stale.
+        corpus_hash = compute_input_hash(user_prompt)
+        corpus_hit = await self._read_corpus_cache(corpus_hash)
+        if corpus_hit is not None:
+            budget = await self._budget.check_budget(factory_id)
+            logger.debug(
+                "[corpus] stream hit: factory=%s input_hash=%s...", factory_id, corpus_hash[:12]
+            )
+            yield {"type": "meta", "source": RESULT_SOURCE_CORPUS,
+                   "tokens_used_today": budget.tokens_used, "tokens_cap": budget.tokens_cap}
+            yield {"type": "delta", "text": corpus_hit}
+            yield {"type": "done", "tokens": 0,
+                   "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+            return
+
+        # 3. Budget check — only reached on a corpus miss (data changed / first run).
         budget = await self._budget.check_budget(factory_id)
         if budget.blocked:
             yield {"type": "meta", "source": RESULT_SOURCE_DEGRADED,
@@ -456,10 +535,6 @@ class AgentOrchestrator:
             yield {"type": "done", "tokens": 0,
                    "elapsed_ms": int((time.monotonic() - t0) * 1000)}
             return
-
-        # 3. Gather data + prompt
-        data = await self._gather_data(factory_id, date_range)
-        user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
 
         # P0 出境脱敏 (数据主权, 流式): set scope 不取 reset (镜像 generator 流式路径 —
         # 异步生成器跨 task 边界 reset 会报 'Token created in different Context';
@@ -515,9 +590,10 @@ class AgentOrchestrator:
             # Distillation capture (training corpus). Fire-and-forget; only a
             # freshly-streamed LLM answer (cache-hit / degraded paths return
             # above and never reach here).
-            # Streaming responses do not carry a top-level model field; record
-            # slot provenance so training data is not attributed to a hardcoded
-            # model name.
+            # Persist input_text=user_prompt → sha256(user_prompt) == the key
+            # _read_corpus_cache hashes, so write and read-back agree (flywheel
+            # grows); data-bearing key → a future hit can only occur while data
+            # is unchanged (never serve stale — principle #1).
             await _capture_insight_distillation(
                 user_prompt, answer, factory_id, total_tokens,
                 teacher_model="router:INSIGHTS",
@@ -566,6 +642,59 @@ class AgentOrchestrator:
                 tokens = event.get("tokens") or 0
                 if tokens:
                     yield {"tokens": int(tokens)}
+
+    # ---------- Corpus read-back (serve-from-corpus flywheel) ----------
+
+    async def _read_corpus_cache(self, input_hash: str) -> Optional[str]:
+        """Read back today's agent_insight corpus row by input_hash.
+
+        Returns the teacher_output string on hit, None on miss or serve-skip.
+
+        ``input_hash`` is ``sha256(user_prompt)`` — the SAME key the capture side
+        (_capture_insight_distillation → persist_distillation_sample) writes, so
+        read-back and persist always agree.  Because the prompt carries the
+        current Gold KPI numbers, an identical hash means the data is unchanged
+        since the row was written → serving it is never stale (Steve principle #1).
+
+        Serve-skip (G4): if metadata.feedback_down >= threshold, the row has been
+        demoted by user feedback — falls through to LLM for a fresh answer.
+
+        Never raises — any error is logged and treated as a cache miss so the
+        caller always falls through to LLM.
+
+        Note: smart_bi_distillation_samples has NO RLS (internal ML sink, per the
+        migration comment).  The data + question text inside user_prompt make the
+        hash tenant-specific, so cross-tenant collision is impossible.
+        """
+        if self._pool is None:
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(_CORPUS_READ_SQL, input_hash)
+                if row is None:
+                    return None
+                teacher_output = row["teacher_output"]
+                if not isinstance(teacher_output, str) or not teacher_output.strip():
+                    return None
+                # G4 serve-skip: check feedback_down in metadata
+                raw_meta = row["metadata"]
+                try:
+                    meta_dict = raw_meta if isinstance(raw_meta, dict) else (
+                        json.loads(raw_meta) if raw_meta else {}
+                    )
+                    feedback_down = int(meta_dict.get("feedback_down", 0))
+                    if feedback_down >= _CORPUS_FEEDBACK_DOWN_THRESHOLD:
+                        logger.info(
+                            "[corpus] serve-skip: input_hash=%s... feedback_down=%d >= threshold=%d",
+                            input_hash[:12], feedback_down, _CORPUS_FEEDBACK_DOWN_THRESHOLD,
+                        )
+                        return None
+                except Exception as meta_exc:
+                    logger.debug("[corpus] metadata parse failed (non-blocking): %s", meta_exc)
+                return teacher_output
+        except Exception as exc:
+            logger.warning("[corpus] cache read failed (non-blocking): %s", exc)
+            return None
 
 
 def _fmt_money(v: Any) -> str:
@@ -618,17 +747,25 @@ async def _capture_insight_distillation(
     """Capture a 经营驾驶舱 report-insight teacher pair into the distillation
     corpus. Fire-and-forget — wrapped so it NEVER raises and never affects the
     insight response / streaming. Only called on freshly-generated LLM answers
-    (cache-hit / degraded early-returns never reach the call sites).
+    (cache-hit / corpus-hit / degraded early-returns never reach the call sites).
+
+    The persisted ``input_text`` is the full ``user_prompt`` (question + range +
+    Gold KPI numbers), so ``input_hash = sha256(user_prompt)`` is exactly the key
+    ``_read_corpus_cache`` looks up — read-back and persist agree (the flywheel
+    hits next time), and because the key is data-bearing, a hit can only occur
+    when the underlying data is unchanged (never serve stale — Steve principle #1).
 
     Args:
-        user_prompt: The user-facing prompt sent to the LLM.
+        user_prompt: The full Gold-data-enriched prompt sent to the LLM. Persisted
+            as ``input_text`` → ``input_hash = sha256(user_prompt)``, the same key
+            the read-back side hashes.  When data changes the prompt changes →
+            new hash → a fresh corpus row (old one ages out via CURRENT_DATE).
         answer: The LLM-generated answer (restored to real entity names).
         factory_id: Tenant factory ID for corpus attribution.
         tokens: Total token count from the response's usage field.
         teacher_model: The actual model name resolved by the router (from the
             response's ``model`` field), or "router:INSIGHTS" when the response
-            does not carry a model field (e.g. streaming path).  This replaces
-            the former hardcoded "qwen3-max" to ensure correct provenance.
+            does not carry a model field (e.g. streaming path).
     """
     try:
         from smartbi.config import get_pg_pool
