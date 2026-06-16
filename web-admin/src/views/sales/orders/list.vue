@@ -2162,7 +2162,7 @@ function handleStartPurchase(row: TableRow) {
 
     <el-dialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
       <el-form :model="form" label-width="100px">
-        <el-form-item :label="label('customer')">
+        <el-form-item :label="label('customer')" required>
           <!-- T130 Feature B — 选客户后智能预填业务员 (归属业务员 → 当前用户). -->
           <el-select v-model="form.customerId" placeholder="请选择" filterable style="width: 100%" @change="onCustomerSelect">
             <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />

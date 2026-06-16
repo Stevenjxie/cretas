@@ -286,9 +286,9 @@ void _avoidUnusedWarning;
       <el-divider>{{ itemDividerText }}</el-divider>
 
       <div class="item-row item-header">
-        <span style="width: 240px">物料</span>
-        <span style="width: 130px">数量</span>
-        <span style="width: 110px">单位</span>
+        <span style="width: 240px"><span class="req-star">*</span>物料</span>
+        <span style="width: 130px"><span class="req-star">*</span>数量</span>
+        <span style="width: 110px"><span class="req-star">*</span>单位</span>
         <span style="flex: 1; min-width: 160px">行备注</span>
         <span style="width: 60px">操作</span>
       </div>
@@ -389,5 +389,9 @@ void _avoidUnusedWarning;
   font-size: 12px;
   color: #909399;
   margin-top: 4px;
+}
+.req-star {
+  color: var(--el-color-danger);
+  margin-right: 4px;
 }
 </style>

@@ -303,7 +303,7 @@ onMounted(async () => {
           <div class="form-hint">留空表示工厂级全局默认阈值，优先级低于产品级配置</div>
         </el-form-item>
 
-        <el-form-item label="方差阈值 (%)">
+        <el-form-item label="方差阈值 (%)" required>
           <el-input-number
             v-model="formData.varianceThreshold"
             :min="0.01"

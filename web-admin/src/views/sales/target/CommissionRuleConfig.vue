@@ -75,8 +75,12 @@ async function onSubmit(): Promise<void> {
     ElMessage.warning('未取得当前用户身份');
     return;
   }
-  if (form.value.percentage < 0 || form.value.percentage > 100) {
+  if (form.value.percentage == null || form.value.percentage < 0 || form.value.percentage > 100) {
     ElMessage.warning('百分比必须 0-100');
+    return;
+  }
+  if (!form.value.effectiveFrom) {
+    ElMessage.warning('请选择生效日');
     return;
   }
   try {
@@ -177,7 +181,7 @@ onMounted(load);
         <el-form-item label="客户类型">
           <el-input v-model="form.customerType" placeholder="留空 = 适用所有客户类型" />
         </el-form-item>
-        <el-form-item label="百分比">
+        <el-form-item label="百分比" required>
           <el-input-number
             v-model="form.percentage"
             :min="0"
@@ -188,7 +192,7 @@ onMounted(load);
           />
           <span style="color: #999; font-size: 12px; margin-left: 8px">0-100, R1 防呆</span>
         </el-form-item>
-        <el-form-item label="生效日">
+        <el-form-item label="生效日" required>
           <el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" />
         </el-form-item>
         <el-form-item label="结束日">

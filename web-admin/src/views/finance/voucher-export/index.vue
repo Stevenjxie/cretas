@@ -462,6 +462,19 @@ function openMappingEdit(row: VoucherSubjectMappingDTO) {
 
 async function handleMappingSave() {
   if (!factoryId.value) return;
+  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩错误.
+  if (!mappingForm.value.settlementType) {
+    ElMessage.warning('请选择结算方式');
+    return;
+  }
+  if (!mappingForm.value.debitSubjectCode) {
+    ElMessage.warning('请填写借方科目代码');
+    return;
+  }
+  if (!mappingForm.value.creditSubjectCode) {
+    ElMessage.warning('请填写贷方科目代码');
+    return;
+  }
   mappingSaveLoading.value = true;
   try {
     const res = await post<VoucherSubjectMappingDTO>(
