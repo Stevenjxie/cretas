@@ -777,13 +777,13 @@ async def finance_summary(
             f"""
             SELECT a.store_id,
                    s.name AS store_name,
-                   SUM(a.net_amount)::numeric(18,2) AS revenue,
-                   SUM(a.bill_count)                AS bill_count
+                   COALESCE(SUM(a.net_amount), 0)::numeric(18,2) AS revenue,
+                   COALESCE(SUM(a.bill_count), 0)                AS bill_count
               FROM agg_daily a
               JOIN dim_store s ON s.store_id = a.store_id
              WHERE {stores_where}
              GROUP BY a.store_id, s.name
-             ORDER BY SUM(a.net_amount) DESC
+             ORDER BY COALESCE(SUM(a.net_amount), 0) DESC
              LIMIT {limit_ph}
             """,
             *params,
