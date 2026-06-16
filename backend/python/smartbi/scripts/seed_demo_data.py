@@ -536,33 +536,41 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
 
 def collapse_duplicate_column_groups(df: pd.DataFrame, label: str = "") -> pd.DataFrame:
     """
-    Detect and collapse pandas auto-renamed duplicate column groups (X, X.1, X.2 ...).
+    Detect and collapse pandas auto-renamed duplicate column groups.
+
+    Handles TWO distinct suffix patterns:
+      1. X.N  (dot)  — pandas renames duplicate excel column headers as X, X.1, X.2 ...
+      2. X_N  (underscore) — pandas renames duplicate in-memory column names as X, X_1, X_2 ...
+         This occurs when rename_cols maps multiple source columns to the same canonical name,
+         or when DataFrame.rename() produces duplicate names in the result index.
 
     These arise when a wide-table source has repeating column headers — e.g.
     库存台账 with 5 warehouses × 4 metrics (期初/入库/出库/期末), or
-    费用预算执行 with 12 months × 3 metrics (预算/实际/差额).
-    pandas renames duplicates as X, X.1, X.2 ... which then map to
-    output_quantity_2 / actual_amount_2 / rate_percent_2 etc. in the DB.
+    费用预算执行 with 12 months × 3 metrics (预算/实际/差额),
+    or when canonical rename_cols produces collisions (e.g. sales_amount_1/sales_amount_2).
 
     Strategy:
-    - Identify base names that have .N siblings.
+    - Identify base names that have .N or _N siblings.
     - For each base group, SUM across all .N variants into the base column.
       This is semantically correct for these sheets:
         • 库存台账: summing warehouses gives total (a 合计 column already exists but
           this covers cases where it might be missing or named differently).
         • 费用预算执行: summing months gives annual budget/actual/variance totals.
         • Any other wide numeric group: aggregate to single canonical measure.
-    - Drop the .N variants, keeping only the base column with the summed value.
+    - Drop the .N / _N variants, keeping only the base column with the summed value.
 
-    Returns a new DataFrame with no X.N duplicate suffixes.
+    Returns a new DataFrame with no X.N or X_N duplicate suffixes.
     """
     df = df.copy()
 
-    # Find all base names that have at least one .N sibling
+    # Find all base names that have at least one .N or _N sibling
     import re as _re
     base_to_variants: Dict[str, List[str]] = {}
     for col in df.columns:
+        # Match both dot-N (X.1, X.2) and underscore-N (X_1, X_2) patterns
         m = _re.match(r'^(.+?)\.(\d+)$', str(col))
+        if not m:
+            m = _re.match(r'^(.+?)_(\d+)$', str(col))
         if m:
             base = m.group(1)
             base_to_variants.setdefault(base, []).append(str(col))
@@ -590,11 +598,11 @@ def collapse_duplicate_column_groups(df: pd.DataFrame, label: str = "") -> pd.Da
         df = df.drop(columns=[c for c in variants if c in df.columns and c != base], errors="ignore")
         print(f"    {prefix}[DEDUP] Summed {len(numeric_all_cols)} cols → '{base}'")
 
-    after_cols = [c for c in df.columns if _re.match(r'.+\.\d+$', str(c))]
+    after_cols = [c for c in df.columns if _re.match(r'.+\.\d+$', str(c)) or _re.match(r'.+_\d+$', str(c))]
     if after_cols:
-        print(f"    {prefix}[DEDUP] WARNING: residual .N cols after collapse: {after_cols}")
+        print(f"    {prefix}[DEDUP] WARNING: residual .N/_N cols after collapse: {after_cols}")
     else:
-        print(f"    {prefix}[DEDUP] OK — no .N suffix cols remain")
+        print(f"    {prefix}[DEDUP] OK — no .N/_N suffix cols remain")
     return df
 
 
@@ -1681,6 +1689,243 @@ def generate_gap_fill() -> List[Tuple[str, str, str, pd.DataFrame]]:
                 })
     results.append((DEMO_RETAIL, "purchase", "gap_fill_purchase_retail", pd.DataFrame(rows)))
 
+    # =========================================================================
+    # DEMO_FACTORY2: hr + quality (TASK 1 — previously missing)
+    # =========================================================================
+
+    # --- DEMO_FACTORY2: HR (部门 × 区域, 24 months) ---
+    # 4 部门 × 3 区域 = 12 rows/month × 24 months = 288 rows ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.008 * i  # slight headcount growth
+        for dept in f2_depts:
+            for region in f2_regions:
+                n = int(rng.integers(3, 15) * trend_mult)
+                rows.append({
+                    "月份": mo,
+                    "部门": dept,               # 4 unique ✓
+                    "区域": region,              # 3 unique ✓
+                    "人数": n,
+                    "工时(小时)": round(n * rng.uniform(150, 185), 1),
+                    "出勤率(%)": round(rng.uniform(90.0, 99.5), 2),
+                    "人效(元/人)": round(rng.uniform(25000, 90000), 2),
+                })
+    results.append((DEMO_FACTORY2, "hr", "gap_fill_hr_factory2", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY2: QUALITY (工序 × 产线, 24 months) ---
+    # 3 工序 × 2 产线 = 6 rows/month × 24 months = 144 rows ✓
+    rows = []
+    for mo in months_24_25:
+        for proc in f2_processes:
+            for line in f2_lines:
+                batches = int(rng.integers(5, 20))
+                pass_n = int(batches * rng.uniform(0.88, 0.99))
+                defect_n = batches - pass_n
+                rows.append({
+                    "月份": mo,
+                    "工序": proc,               # 3 unique ✓
+                    "产线": line,               # 2 unique ✓
+                    "检验批次": batches,
+                    "合格数": pass_n,
+                    "不合格数": defect_n,
+                    "合格率(%)": round(pass_n / batches * 100, 2),
+                    "不良率(%)": round(defect_n / batches * 100, 2),
+                })
+    results.append((DEMO_FACTORY2, "quality", "gap_fill_quality_factory2", pd.DataFrame(rows)))
+
+    # =========================================================================
+    # DEMO_REST: quality (TASK 1 — previously missing)
+    # =========================================================================
+
+    # --- DEMO_REST: QUALITY (检验环节 × 门店名称, 24 months) ---
+    # 3 检验环节 × 3 门店 = 9 rows/month × 24 months = 216 rows ✓
+    rest_inspection_stages = ["食材验收", "烹饪过程检查", "出餐检验"]  # 3 unique ✓
+    rows = []
+    for mo in months_24_25:
+        for stage in rest_inspection_stages:
+            for store in rest_stores:
+                batches = int(rng.integers(8, 30))
+                pass_n = int(batches * rng.uniform(0.91, 0.99))
+                defect_n = batches - pass_n
+                rows.append({
+                    "月份": mo,
+                    "检验环节": stage,           # 3 unique ✓
+                    "门店名称": store,            # 3 unique ✓
+                    "检验批次": batches,
+                    "合格数": pass_n,
+                    "不合格数": defect_n,
+                    "合格率(%)": round(pass_n / batches * 100, 2),
+                    "不良率(%)": round(defect_n / batches * 100, 2),
+                })
+    results.append((DEMO_REST, "quality", "gap_fill_quality_rest", pd.DataFrame(rows)))
+
+    # =========================================================================
+    # DEMO_RETAIL: hr + quality + inventory (with dims) (TASK 1+2 — previously missing)
+    # =========================================================================
+
+    # --- DEMO_RETAIL: HR (部门 × 门店类型, 24 months) ---
+    # 3 部门 × 3 门店类型 = 9 rows/month × 24 months = 216 rows ✓
+    retail_store_roles = ["门店店长", "收银员", "理货员", "客服", "仓储"]
+    retail_all_store_types = ["旗舰店", "次旗舰店", "新店"]   # 3 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        for dept in retail_depts:
+            for store_type in retail_all_store_types:
+                n = int(rng.integers(2, 10))
+                rows.append({
+                    "月份": mo,
+                    "部门": dept,               # 3 unique ✓
+                    "门店类型": store_type,       # 3 unique ✓
+                    "人数": n,
+                    "工时(小时)": round(n * rng.uniform(140, 180), 1),
+                    "出勤率(%)": round(rng.uniform(88.0, 99.0), 2),
+                    "人效(元/人)": round(rng.uniform(12000, 50000), 2),
+                })
+    results.append((DEMO_RETAIL, "hr", "gap_fill_hr_retail", pd.DataFrame(rows)))
+
+    # --- DEMO_RETAIL: QUALITY (检验环节 × 品类, 24 months) ---
+    # 3 检验环节 × 3 品类 = 9 rows/month × 24 months = 216 rows ✓
+    retail_quality_stages = ["进货验收", "上架前检查", "过期预警扫检"]  # 3 unique ✓
+    retail_categories = ["生鲜食品", "加工食品", "日用百货"]             # 3 unique ✓
+    rows = []
+    for mo in months_24_25:
+        for stage in retail_quality_stages:
+            for cat in retail_categories:
+                batches = int(rng.integers(10, 50))
+                pass_n = int(batches * rng.uniform(0.93, 0.995))
+                defect_n = batches - pass_n
+                rows.append({
+                    "月份": mo,
+                    "检验环节": stage,           # 3 unique ✓
+                    "品类": cat,                  # 3 unique ✓
+                    "检验批次": batches,
+                    "合格数": pass_n,
+                    "不合格数": defect_n,
+                    "合格率(%)": round(pass_n / batches * 100, 2),
+                    "不良率(%)": round(defect_n / batches * 100, 2),
+                })
+    results.append((DEMO_RETAIL, "quality", "gap_fill_quality_retail", pd.DataFrame(rows)))
+
+    # --- DEMO_RETAIL: INVENTORY with dims (仓库 × 品类, 24 months) ---
+    # Supplements A2 (库存周转, no dims). Provides warehouse/category drill-down.
+    # 5 品类 × 3 仓库 = 15 rows/month × 24 months = 360 rows ✓
+    retail_inv_cats = ["生鲜食品", "加工食品", "日用百货", "冷冻食品", "饮品"]  # 5 unique ✓
+    retail_inv_warehouses = ["总仓", "区域配送中心", "门店仓"]              # 3 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.012 * i
+        for cat in retail_inv_cats:
+            for wh in retail_inv_warehouses:
+                qty = int(rng.integers(100, 2000) * trend_mult)
+                unit_price = rng.uniform(3, 60)
+                rows.append({
+                    "月份": mo,
+                    "品类": cat,               # 5 unique ✓
+                    "仓库": wh,                # 3 unique ✓
+                    "期末库存数量": qty,
+                    "期末库存金额(元)": round(qty * unit_price, 2),
+                    "周转率(次/月)": round(rng.uniform(1.0, 6.0), 2),
+                    "安全库存": int(qty * 0.15),
+                })
+    results.append((DEMO_RETAIL, "inventory", "gap_fill_inventory_retail_dims", pd.DataFrame(rows)))
+
+    # =========================================================================
+    # TASK 2: Thin domains extended to 24 months
+    # =========================================================================
+
+    # --- DEMO_FACTORY: SALES (客户 × 区域, 24 months) — entirely missing domain ---
+    # 5 客户 × 4 区域 = 20 rows/month × 24 months = 480 rows ✓
+    factory_customers = ["客户A-华东", "客户B-华南", "客户C-华北", "客户D-西南", "客户E-华中"]
+    factory_sale_regions = ["华东", "华南", "华北", "华中"]  # 4 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.02 * i  # ~2%/month growth
+        for cust in factory_customers:
+            for region in factory_sale_regions:
+                amount = round(rng.uniform(50000, 800000) * trend_mult, 2)
+                qty = int(rng.integers(500, 8000))
+                rows.append({
+                    "月份": mo,
+                    "客户名称": cust,            # 5 unique ✓
+                    "区域": region,              # 4 unique ✓
+                    "销售额(元)": amount,
+                    "销售数量(kg)": qty,
+                    "单价(元/kg)": round(amount / qty, 2),
+                    "毛利率(%)": round(rng.uniform(15.0, 40.0), 2),
+                })
+    results.append((DEMO_FACTORY, "sales", "gap_fill_sales_factory", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY: PURCHASE supplement — extend from 12→24 months (add 2024 portion) ---
+    # The real data from 绿源食品-2025生产报表.xlsx covers 2025 (12 months).
+    # This gap-fill covers the 2024 portion (12 months) for the same dims.
+    # 5 供应商 × 4 区域 = 20 rows/month × 12 months = 240 rows ✓
+    factory_suppliers = ["原料供应商甲", "原料供应商乙", "辅料商丙", "包装材料商丁", "物流服务商戊"]
+    months_2024 = [f"{2024}年{m}月" for m in range(1, 13)]
+    rows = []
+    for i, mo in enumerate(months_2024):
+        trend_mult = 0.85 + 0.01 * i  # starts lower in 2024, grows to 2025 level
+        for sup in factory_suppliers:
+            for region in factory_regions:
+                amount = round(rng.uniform(30000, 400000) * trend_mult, 2)
+                qty = int(rng.integers(200, 3000))
+                rows.append({
+                    "月份": mo,
+                    "供应商名称": sup,           # 5 unique ✓
+                    "区域": region,              # 4 unique ✓
+                    "采购金额(元)": amount,
+                    "采购数量(kg)": qty,
+                    "单价(元/kg)": round(amount / qty, 2),
+                    "合格率(%)": round(rng.uniform(93.0, 99.5), 2),
+                })
+    results.append((DEMO_FACTORY, "purchase", "gap_fill_purchase_factory_2024", pd.DataFrame(rows)))
+
+    # --- DEMO_REST: PURCHASE supplement — extend from 2→24 months ---
+    # The real 东门口 file covers only 2 months.
+    # This gap-fill covers the full 24-month timeline with supplier×品类 dims.
+    # 5 供应商 × 4 品类 = 20 rows/month × 24 months = 480 rows ✓
+    rest_pur_suppliers = ["肉类供应商A", "蔬菜配送商B", "调料商C", "包装耗材商D", "综合食材商E"]
+    rest_pur_cats = ["肉禽水产", "蔬菜水果", "调辅料", "包装耗材"]  # 4 unique ✓
+    rows = []
+    for i, mo in enumerate(months_24_25):
+        trend_mult = 1.0 + 0.018 * i
+        for sup in rest_pur_suppliers:
+            for cat in rest_pur_cats:
+                amount = round(rng.uniform(5000, 80000) * trend_mult, 2)
+                qty = int(rng.integers(20, 500))
+                rows.append({
+                    "月份": mo,
+                    "供应商名称": sup,           # 5 unique ✓
+                    "品类": cat,                  # 4 unique ✓
+                    "采购金额(元)": amount,
+                    "采购数量(kg)": qty,
+                    "单价(元/kg)": round(amount / qty, 2),
+                    "合格率(%)": round(rng.uniform(90.0, 99.0), 2),
+                    "退货率(%)": round(rng.uniform(0.5, 4.0), 2),
+                })
+    results.append((DEMO_REST, "purchase", "gap_fill_purchase_rest_24m", pd.DataFrame(rows)))
+
+    # --- DEMO_FACTORY2: SALES supplement — extend from 12→24 months (add 2024 portion) ---
+    # generate_factory2_data() covers 2025 sales (12 months). This adds 2024 (12 months).
+    # 4 产品类别 × 3 区域 = 12 rows/month × 12 months = 144 rows ✓
+    f2_product_cats = ["食品A类", "食品B类", "食品C类", "食品D类"]  # 4 unique ✓
+    rows = []
+    for i, mo in enumerate(months_2024):
+        trend_mult = 0.80 + 0.015 * i  # 2024 lower baseline, building toward 2025
+        for prod_cat in f2_product_cats:
+            for region in f2_regions:
+                amount = round(rng.uniform(80000, 1200000) * trend_mult, 2)
+                qty = int(rng.integers(300, 5000))
+                rows.append({
+                    "月份": mo,
+                    "产品类别": prod_cat,        # 4 unique ✓
+                    "区域": region,              # 3 unique ✓
+                    "销售额(元)": amount,
+                    "销售数量": qty,
+                    "单价(元)": round(amount / qty, 2),
+                    "毛利率(%)": round(rng.uniform(18.0, 45.0), 2),
+                })
+    results.append((DEMO_FACTORY2, "sales", "gap_fill_sales_factory2_2024", pd.DataFrame(rows)))
+
     return results
 
 
@@ -1815,6 +2060,32 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
         renamed = {k: v for k, v in entry.rename_cols.items() if k in df.columns}
         if renamed:
             print(f"    [RENAME] {renamed}")
+
+    # Collapse again AFTER rename_cols — rename may produce _N duplicates when
+    # two source columns are both mapped to the same canonical name.
+    df = collapse_duplicate_column_groups(df, label=f"{entry.label}/post-rename")
+
+    # Unify dim key naming: map Chinese / non-canonical synonyms → English canonical form.
+    # This ensures dims stored in smart_bi_timeseries.dims are consistently named.
+    _DIM_KEY_NORMALIZE = {
+        "区域": "region", "地区": "region", "区域名称": "region", "销售区域": "region",
+        "部门": "department", "组织": "department", "事业部": "department", "中心": "department",
+        "物料名称": "material_name", "物料": "material_name", "原料": "material_name",
+        "原材料": "material_name", "材料名称": "material_name",
+        "仓库": "warehouse", "仓位": "warehouse", "库位": "warehouse", "仓库名称": "warehouse",
+        "工序": "process_name", "工序名称": "process_name", "工艺": "process_name",
+        "工艺名称": "process_name", "加工工序": "process_name",
+        "产线": "production_line", "生产线": "production_line",
+        "检验环节": "inspection_stage", "检验类型": "inspection_stage",
+        "品类": "product", "商品": "product", "产品名称": "product",
+        "门店名称": "store_name", "门店": "store_name",
+        "供应商名称": "supplier_name", "供方": "supplier_name", "供货商": "supplier_name",
+        "客户名称": "customer_name", "客户名": "customer_name", "购货方": "customer_name",
+    }
+    normalize_map = {k: v for k, v in _DIM_KEY_NORMALIZE.items() if k in df.columns and k != v}
+    if normalize_map:
+        df = df.rename(columns=normalize_map)
+        print(f"    [DIM-NORM] {normalize_map}")
 
     return df
 
@@ -2038,6 +2309,18 @@ def verify_local() -> None:
         "gap_fill_finance_factory2":     (DEMO_FACTORY2, "finance",     24 * 4 * 3,       ["部门", "区域"]),
         "gap_fill_finance_retail":       (DEMO_RETAIL,   "finance",     24 * 3 * 3,       ["部门", "区域"]),
         "gap_fill_purchase_retail":      (DEMO_RETAIL,   "purchase",    24 * 4 * 3,       ["供应商", "门店类型"]),
+        # Task 1: hr + quality for DEMO_FACTORY2, DEMO_REST, DEMO_RETAIL
+        "gap_fill_hr_factory2":          (DEMO_FACTORY2, "hr",          24 * 4 * 3,       ["部门", "区域"]),
+        "gap_fill_quality_factory2":     (DEMO_FACTORY2, "quality",     24 * 3 * 2,       ["工序", "产线"]),
+        "gap_fill_quality_rest":         (DEMO_REST,     "quality",     24 * 3 * 3,       ["检验环节", "门店名称"]),
+        "gap_fill_hr_retail":            (DEMO_RETAIL,   "hr",          24 * 3 * 3,       ["部门", "门店类型"]),
+        "gap_fill_quality_retail":       (DEMO_RETAIL,   "quality",     24 * 3 * 3,       ["检验环节", "品类"]),
+        "gap_fill_inventory_retail_dims":(DEMO_RETAIL,   "inventory",   24 * 5 * 3,       ["品类", "仓库"]),
+        # Task 2: thin domains extended
+        "gap_fill_sales_factory":           (DEMO_FACTORY,  "sales",   24 * 5 * 4,       ["客户名称", "区域"]),
+        "gap_fill_purchase_factory_2024":   (DEMO_FACTORY,  "purchase", 12 * 5 * 4,      ["供应商名称", "区域"]),
+        "gap_fill_purchase_rest_24m":       (DEMO_REST,     "purchase", 24 * 5 * 4,      ["供应商名称", "品类"]),
+        "gap_fill_sales_factory2_2024":     (DEMO_FACTORY2, "sales",   12 * 4 * 3,       ["产品类别", "区域"]),
     }
     all_gap = generate_gap_fill()
     existing_tenants = {DEMO_FACTORY, DEMO_REST}  # must be untouched
@@ -2084,7 +2367,7 @@ def verify_local() -> None:
     if unchecked:
         print(f"\n  ✗ Labels NOT found in gap-fill output: {unchecked}")
     else:
-        print(f"\n  ✓ All 6 new gap-fill entries verified")
+        print(f"\n  ✓ All {len(_expected)} gap-fill entries verified")
 
     # Verify existing DEMO_FACTORY / DEMO_REST entries unchanged
     print("\n  Checking existing DEMO_FACTORY / DEMO_REST entries untouched:")
@@ -2299,12 +2582,40 @@ def main() -> None:
         else:
             print(f"    [dry-run] {len(df)} rows → would write {entry.label}__{win}.xlsx")
 
+    # Shared dim key normalization map (same as process_entry)
+    _DIM_KEY_NORMALIZE_MAIN = {
+        "区域": "region", "地区": "region", "区域名称": "region", "销售区域": "region",
+        "部门": "department", "组织": "department", "事业部": "department", "中心": "department",
+        "物料名称": "material_name", "物料": "material_name", "原料": "material_name",
+        "原材料": "material_name", "材料名称": "material_name",
+        "仓库": "warehouse", "仓位": "warehouse", "库位": "warehouse", "仓库名称": "warehouse",
+        "工序": "process_name", "工序名称": "process_name", "工艺": "process_name",
+        "工艺名称": "process_name", "加工工序": "process_name",
+        "产线": "production_line", "生产线": "production_line",
+        "检验环节": "inspection_stage", "检验类型": "inspection_stage",
+        "品类": "product", "商品": "product", "产品名称": "product",
+        "门店名称": "store_name", "门店": "store_name",
+        "供应商名称": "supplier_name", "供方": "supplier_name", "供货商": "supplier_name",
+        "客户名称": "customer_name", "客户名": "customer_name", "购货方": "customer_name",
+    }
+
+    def _normalize_dim_keys(df: pd.DataFrame, label: str) -> pd.DataFrame:
+        """Rename Chinese dim key columns to canonical English names."""
+        norm = {k: v for k, v in _DIM_KEY_NORMALIZE_MAIN.items() if k in df.columns and k != v}
+        if norm:
+            df = df.rename(columns=norm)
+            print(f"    [DIM-NORM] {norm}")
+        return df
+
     # --- Gap-fill entries ---
     print(f"\n--- Gap-fill generators ---")
     for tenant, domain, label, df in generate_gap_fill():
         # Gap-fill uses a fixed 24-month window (doesn't consume from shared cursor)
         import calendar as _cal
         win_gf = Window(date(2024, 1, 1), date(2025, 12, 31))
+        df = _normalize_dim_keys(df, label)
+        # Collapse _N suffixes (safety net for any rename collisions)
+        df = collapse_duplicate_column_groups(df, label=f"{label}/gap-fill")
         effective_tenant = tenant_override.get(tenant, tenant)
         print(f"  {label}  tenant={tenant}  domain={domain}  rows={len(df)}")
         if not args.dry_run:
@@ -2329,6 +2640,8 @@ def main() -> None:
             win_f2 = Window(date(2024, 1, 1), date(2024, 12, 31))
         else:
             win_f2 = Window(date(2025, 1, 1), date(2025, 12, 31))
+        df = _normalize_dim_keys(df, label)
+        df = collapse_duplicate_column_groups(df, label=f"{label}/factory2")
         effective_tenant = tenant_override.get(tenant, tenant)
         print(f"  {label}  tenant={tenant}  domain={domain}  rows={len(df)}")
         if dim_cols := [c for c in df.columns if c == "区域" or c == "产品类别"]:
