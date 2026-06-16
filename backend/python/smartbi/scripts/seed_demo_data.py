@@ -2081,6 +2081,9 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
         "门店名称": "store_name", "门店": "store_name",
         "供应商名称": "supplier_name", "供方": "supplier_name", "供货商": "supplier_name",
         "客户名称": "customer_name", "客户名": "customer_name", "购货方": "customer_name",
+        "物料类别": "material_category", "物料分类": "material_category",
+        "门店类型": "store_type", "门店分类": "store_type",
+        "产品类别": "category", "商品类型": "category", "产品分类": "category", "商品分类": "category",
     }
     normalize_map = {k: v for k, v in _DIM_KEY_NORMALIZE.items() if k in df.columns and k != v}
     if normalize_map:
@@ -2597,6 +2600,9 @@ def main() -> None:
         "门店名称": "store_name", "门店": "store_name",
         "供应商名称": "supplier_name", "供方": "supplier_name", "供货商": "supplier_name",
         "客户名称": "customer_name", "客户名": "customer_name", "购货方": "customer_name",
+        "物料类别": "material_category", "物料分类": "material_category",
+        "门店类型": "store_type", "门店分类": "store_type",
+        "产品类别": "category", "商品类型": "category", "产品分类": "category", "商品分类": "category",
     }
 
     def _normalize_dim_keys(df: pd.DataFrame, label: str) -> pd.DataFrame:
