@@ -66,6 +66,9 @@
       <el-tab-pane label="工厂总设置" name="settings">
         <FactorySettingsPanel v-if="subTab === 'settings'" :factory-id="factoryId" />
       </el-tab-pane>
+      <el-tab-pane label="仓库管理" name="warehouses">
+        <WarehousePanel v-if="subTab === 'warehouses'" :factory-id="factoryId" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -83,6 +86,7 @@ import InsurancePanel from './components/InsurancePanel.vue'
 import WagePoliciesPanel from './components/WagePoliciesPanel.vue'
 import EncodingRulesPanel from './components/EncodingRulesPanel.vue'
 import FactorySettingsPanel from './components/FactorySettingsPanel.vue'
+import WarehousePanel from './components/WarehousePanel.vue'
 
 interface Props {
   factoryId?: string
@@ -98,6 +102,7 @@ type SubTabKey =
   | 'wage'
   | 'encoding'
   | 'settings'
+  | 'warehouses'
 const subTab = ref<SubTabKey>('scheduling')
 
 const overview = ref<FactoryConfigOverview>({
