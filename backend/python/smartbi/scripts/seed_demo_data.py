@@ -39,7 +39,8 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 DEMO_FACTORY = "DEMO_FACTORY"
 DEMO_REST = "DEMO_REST"
-DEMO_RETAIL = "DEMO_RETAIL"  # 第3业态: 零售连锁 (organizer 运行时映射真实工厂ID)
+DEMO_RETAIL = "DEMO_RETAIL"    # 第3业态: 零售连锁 (organizer 运行时映射真实工厂ID)
+DEMO_FACTORY2 = "DEMO_FACTORY2"  # 第4租户: 第2工厂 (跨区域利润表, 区域维度)
 
 # ---------------------------------------------------------------------------
 # REPO ROOT RESOLUTION
@@ -71,6 +72,7 @@ QHJ_E2E = (
 )
 TEST_MOCK = REPO / "tests" / "test-data"
 RETAIL_MOCK = TEST_MOCK / "Test-mock-retail-normal-s42.xlsx"
+MFG_MOCK = TEST_MOCK / "Test-mock-mfg-normal-s42.xlsx"  # DEMO_FACTORY2 source
 
 # ---------------------------------------------------------------------------
 # DESENSITISATION
@@ -408,33 +410,65 @@ _HIGH_CARD_KEYWORDS = [
 ]
 
 # Low-cardinality dimension columns kept as secondary groupby keys
-# (store / supplier – max 12 unique values enforced below).
-_LOW_CARD_DIM_KEYWORDS = ["门店名称", "店铺名称", "供应商"]
+# (store / supplier / region / dept – max 12 unique values enforced below).
+# #3: Expanded to support multi-dim drill-down (up to 3 dims).
+_LOW_CARD_DIM_KEYWORDS = [
+    "门店名称", "店铺名称",   # store-level dim (restaurants / retail)
+    "供应商",                  # supplier dim (purchase)
+    "区域",                    # region dim (factory2 / sales)
+    "部门",                    # department dim (hr / finance)
+    "品类",                    # category dim (sales drill-down)
+    "物料类别",                # material category dim (inventory)
+    "仓库",                    # warehouse dim (inventory)
+    "产线",                    # production line dim (production)
+]
+
+# Columns that are region-level label strings (not table-area / waiter names).
+# Used to distinguish "区域" as a regional dimension vs high-card per-row op field.
+_REGION_LABEL_KEYWORDS = ["区域", "大区", "事业部", "省区"]
 
 
 def _is_high_card(col: str) -> bool:
+    # "区域" is in _HIGH_CARD_KEYWORDS (per-row op field) but also used as a low-card
+    # regional dimension column in some sources.  Let aggregate_monthly handle it via
+    # cardinality check; _is_high_card just marks columns for potential drop.
     return any(kw in col for kw in _HIGH_CARD_KEYWORDS)
 
 
-def _find_low_card_dim(df: pd.DataFrame, period_col: str) -> Optional[str]:
-    """Return the first low-cardinality dimension column (≤12 unique values)."""
+def _find_low_card_dims(df: pd.DataFrame, period_col: str, max_dims: int = 3) -> List[str]:
+    """
+    Return up to `max_dims` low-cardinality dimension columns (≤12 unique values each).
+    Prioritises known dim keywords; skips pure-numeric and period columns.
+    #3: Returns multiple dims to enable timeseries drill-down.
+    """
+    found: List[str] = []
+    seen_cols: set = set()
     for kw in _LOW_CARD_DIM_KEYWORDS:
         for col in df.columns:
-            if kw in col and col != period_col and df[col].nunique() <= 12:
-                return col
-    return None
+            if col in seen_cols or col == period_col or col == "_agg_period":
+                continue
+            if kw in col:
+                n_unique = df[col].nunique()
+                if 1 < n_unique <= 12:
+                    found.append(col)
+                    seen_cols.add(col)
+                    if len(found) >= max_dims:
+                        return found
+    return found
 
 
 def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
     """
-    Collapse detail rows into monthly aggregates.
+    Collapse detail rows into monthly aggregates with up to 3 low-cardinality dims.
 
     Steps:
     1. Normalise the period_col to YYYY-MM (month string).
-    2. Identify a low-cardinality secondary dimension (≤12 unique, e.g. 门店/供应商).
+    2. Identify up to 3 low-cardinality dimension columns (≤12 unique each).
     3. Drop high-cardinality columns (item names, codes, timestamps, order IDs).
-    4. Sum all remaining numeric columns grouped by period [+ optional dim].
-    5. Return the aggregated DataFrame (typically few rows per month).
+    4. Sum all remaining numeric columns grouped by period + dims.
+    5. Return the aggregated DataFrame.
+
+    #3: Multi-dim support for timeseries drill-down (region / dept / store / category).
     """
     df = df.copy()
 
@@ -454,13 +488,11 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
 
     df["_agg_period"] = df[period_col].map(_to_month)
 
-    # --- Step 2: find low-cardinality secondary dim ---
-    dim_col = _find_low_card_dim(df, period_col)
+    # --- Step 2: find up to 3 low-cardinality dimension columns ---
+    dim_cols = _find_low_card_dims(df, period_col, max_dims=3)
 
     # --- Step 3: build groupby keys ---
-    groupby_cols = ["_agg_period"]
-    if dim_col is not None:
-        groupby_cols.append(dim_col)
+    groupby_cols = ["_agg_period"] + dim_cols
 
     # --- Step 4: drop high-cardinality columns ---
     drop_cols = set()
@@ -468,6 +500,10 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
         if col in groupby_cols or col == "_agg_period":
             continue
         if _is_high_card(col):
+            # Special case: "区域" may appear both as high-card (per-row table area)
+            # and low-card (regional label).  If it was picked as a dim_col, keep it.
+            if col in dim_cols:
+                continue
             drop_cols.add(col)
         # Also drop the original period column (replaced by _agg_period)
         if col == period_col:
@@ -489,6 +525,8 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
 
     # Rename _agg_period back to original period_col name
     agg_df = agg_df.rename(columns={"_agg_period": period_col})
+    if dim_cols:
+        print(f"    [AGG-DIMS] groupby dims: {dim_cols} → {len(agg_df)} rows")
     return agg_df
 
 
@@ -584,6 +622,235 @@ def aggregate_detail_to_monthly(
     result = result.rename(columns={amount_col: "sales_amount"})
     if qty_col and qty_col in result.columns:
         result = result.rename(columns={qty_col: "sales_quantity"})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# DEMO_FACTORY2 HELPERS — reshape mfg-normal wide tables to long format
+# ---------------------------------------------------------------------------
+
+# Region name bytes (from Test-mock-mfg-normal-s42.xlsx Sheet 1 row labels)
+# These are the UTF-8 decoded Chinese region names that appear in the source file.
+_MFG2_REGION_NAMES = [
+    "华中事业部",  # row idx 0 of data section (华中)
+    "江苏区域",    # row idx 1
+    "广东区域",    # row idx 2
+    "华中区域",    # row idx 3
+    "其他渠道及销售", # row idx 4  (kept for completeness, excluded from final)
+    "合计",        # row idx 5  (excluded – double-count)
+]
+
+# Cleaner region labels after filtering (drop 合计 and 其他)
+_MFG2_VALID_REGIONS = {"华中事业部", "江苏区域", "广东区域", "华中区域"}
+
+
+def reshape_factory2_finance(xl_path: Path) -> Optional[pd.DataFrame]:
+    """
+    Reshape Test-mock-mfg-normal-s42.xlsx Sheet 1 (收入及净利简表) from wide format
+    (regions × months × metrics) to long format with canonical measures.
+
+    Source layout (Sheet 1, header=0):
+      Row 0: [label_col, "1月", nan, nan, "2月", nan, nan, ..., "12月", nan, nan]
+      Row 1: [nan, "预算营收", "24年同期实际", "实际营收", ...]
+      Rows 2-6: [region_name, rev_budget, rev_yoy, rev_actual, ...(×12 months)]
+      Row 7: [合计, ...]
+      Row 8: blank
+      Row 9: [label_col, "1月", ...] (profit section)
+      Row 10: [nan, "预算净利", "24年同期实际", "实际净利", ...]
+      Rows 11-15: [region_name, profit_budget, profit_yoy, profit_actual, ...(×12 months)]
+
+    Output columns: 月份, 区域, revenue, net_profit (canonical measures)
+
+    Returns None if file not found or parse fails.
+    """
+    if not xl_path.exists():
+        return None
+    try:
+        df_raw = pd.read_excel(xl_path, sheet_name=1, header=None, dtype=object)
+    except Exception as e:
+        print(f"  [FACTORY2-FINANCE] read error: {e}")
+        return None
+
+    # --- Extract month labels from row 1 ---
+    # Actual layout (Sheet index 1, 0-indexed rows):
+    #   Row 0: title row (ignored)
+    #   Row 1: [section_label, "1月", nan, nan, "2月", nan, nan, ..., "12月", nan, nan]
+    #   Row 2: [nan, "预算营收", "24年同期实际", "实际营收", ...]  ← sub-headers
+    #   Rows 3-7: [region_name, budget, yoy, actual, ...(×12)]
+    #   Row 8: 合计 (skip)
+    #   Row 9: blank
+    #   Row 10: section_label again
+    #   Row 11: blank
+    #   Rows 12-16: profit rows  [region_name, ...]
+    #   Row 17: 合计 (skip)
+    row1 = df_raw.iloc[1].tolist()
+    months = []  # list of (col_offset_for_actual, month_num)
+    import re as _re
+    for ci, val in enumerate(row1):
+        if ci == 0:
+            continue
+        s = str(val).strip()
+        # Match "N月" patterns (1月-12月) - row1 has them at 3-col intervals
+        m = _re.match(r"^(\d+)月$", s)
+        if m:
+            month_num = int(m.group(1))
+            # actual-value column is at ci + 2 (budget=ci, yoy=ci+1, actual=ci+2)
+            actual_col = ci + 2
+            months.append((actual_col, month_num))
+
+    if not months:
+        print("  [FACTORY2-FINANCE] could not parse month headers from row 1")
+        return None
+
+    # --- Revenue section: rows 3-7 (skip 合计 at 8) ---
+    def _parse_section(row_start: int, row_end: int, measure_name: str) -> List[Dict]:
+        out = []
+        for ri in range(row_start, row_end + 1):
+            if ri >= len(df_raw):
+                break
+            region_raw = str(df_raw.iloc[ri, 0]).strip()
+            # Skip 合计, nan, header rows
+            if region_raw in ("nan", "", "合计", "汇总") or "合计" in region_raw:
+                continue
+            # Use actual-value columns
+            for actual_col, month_num in months:
+                if actual_col >= len(df_raw.columns):
+                    continue
+                val = df_raw.iloc[ri, actual_col]
+                try:
+                    numeric_val = float(val) if not pd.isna(val) else None
+                except (TypeError, ValueError):
+                    numeric_val = None
+                if numeric_val is None:
+                    continue
+                out.append({
+                    "月份": month_num,
+                    "区域": region_raw,
+                    measure_name: numeric_val,
+                })
+        return out
+
+    # Revenue: rows 3-7 (5 region rows; row 8 = 合计 which is skipped by _parse_section guard)
+    rev_rows = _parse_section(3, 8, "revenue")
+    # Profit: rows 12-16 (row 17 = 合计, skipped)
+    profit_rows = _parse_section(12, 17, "net_profit")
+
+    if not rev_rows:
+        print("  [FACTORY2-FINANCE] no revenue data parsed")
+        return None
+
+    # Merge revenue and profit on (月份, 区域)
+    df_rev = pd.DataFrame(rev_rows)
+    df_profit = pd.DataFrame(profit_rows) if profit_rows else pd.DataFrame(columns=["月份", "区域", "net_profit"])
+    df_merged = df_rev.merge(df_profit, on=["月份", "区域"], how="left")
+
+    # Convert month number to "YYYY年M月" format (assign to 2024 window)
+    df_merged["月份"] = df_merged["月份"].apply(lambda m: f"2024年{m}月")
+
+    # Ensure clean column types
+    for col in ["revenue", "net_profit"]:
+        if col in df_merged.columns:
+            df_merged[col] = pd.to_numeric(df_merged[col], errors="coerce")
+
+    # Sort for predictability
+    df_merged = df_merged.sort_values(["月份", "区域"]).reset_index(drop=True)
+
+    region_count = df_merged["区域"].nunique()
+    print(f"    [FACTORY2-FINANCE] reshaped: {len(df_merged)} rows, "
+          f"{region_count} regions, months={df_merged['月份'].nunique()}")
+    return df_merged
+
+
+def reshape_factory2_sales(xl_path: Path, window: Window) -> Optional[pd.DataFrame]:
+    """
+    Reshape Test-mock-mfg-normal-s42.xlsx Sheet 12 (销售明细, header=1) to
+    monthly aggregate with 区域 dim.
+
+    Source columns (by index after header=1):
+      [0]=日期, [1]=单号(高基数→drop), [2]=客户名(高基数→drop),
+      [3]=产品类别(<=12→dim), [4]=规格(高基数→drop),
+      [5]=数量(int), [6]=单价(元)(float), [7]=金额(元)(float),
+      [8]=区域(4-6 unique→dim), [9]=业务员(高基数→drop)
+
+    Output: 月份, 区域, 产品类别, sales_amount, sales_quantity
+    """
+    if not xl_path.exists():
+        return None
+    try:
+        df = pd.read_excel(xl_path, sheet_name=12, header=1)
+    except Exception as e:
+        print(f"  [FACTORY2-SALES] read error: {e}")
+        return None
+
+    cols = list(df.columns)
+    if len(cols) < 8:
+        print(f"  [FACTORY2-SALES] unexpected column count: {cols}")
+        return None
+
+    # Rename by position to stable canonical names
+    col_map = {
+        cols[0]: "日期",
+        cols[1]: "_order_no",      # high-card, drop
+        cols[2]: "_customer",      # high-card, drop
+        cols[3]: "产品类别",        # low-card dim
+        cols[4]: "_spec",          # high-card, drop
+        cols[5]: "sales_quantity",
+        cols[6]: "_unit_price",    # useful but not standard measure
+        cols[7]: "sales_amount",
+    }
+    if len(cols) >= 9:
+        col_map[cols[8]] = "区域"  # low-card regional dim
+    if len(cols) >= 10:
+        col_map[cols[9]] = "_salesperson"  # high-card, drop
+
+    df = df.rename(columns=col_map)
+
+    # Drop high-card and internal columns
+    drop = [c for c in df.columns if c.startswith("_")]
+    df = df.drop(columns=drop, errors="ignore")
+
+    # Parse date and create 月份
+    df["_date"] = pd.to_datetime(df["日期"], errors="coerce")
+    df = df.dropna(subset=["_date"])
+    df["月份"] = df["_date"].apply(lambda d: f"{d.year}年{d.month}月")
+    df = df.drop(columns=["日期", "_date"], errors="ignore")
+
+    # Redate to window
+    month_vals = df["月份"].dropna().unique()
+    target_months = window.months()
+    src_months_parsed = sorted(set(
+        (int(s.split("年")[0]), int(s.split("年")[1].replace("月", "")))
+        for s in month_vals
+        if "年" in s and "月" in s
+    ))
+    month_remap = {}
+    for i, src_ym in enumerate(src_months_parsed):
+        tgt_ym = target_months[min(i, len(target_months) - 1)]
+        month_remap[f"{src_ym[0]}年{src_ym[1]}月"] = f"{tgt_ym[0]}年{tgt_ym[1]}月"
+    df["月份"] = df["月份"].map(lambda v: month_remap.get(v, v))
+
+    # Validate cardinality of 区域 dim
+    dim_cols = ["月份"]
+    if "区域" in df.columns and 1 < df["区域"].nunique() <= 12:
+        dim_cols.append("区域")
+    if "产品类别" in df.columns and 1 < df["产品类别"].nunique() <= 12:
+        dim_cols.append("产品类别")
+
+    # Aggregate
+    agg_dict: Dict[str, str] = {}
+    if "sales_amount" in df.columns:
+        agg_dict["sales_amount"] = "sum"
+    if "sales_quantity" in df.columns:
+        agg_dict["sales_quantity"] = "sum"
+
+    if not agg_dict:
+        print("  [FACTORY2-SALES] no numeric cols to aggregate")
+        return None
+
+    result = df.groupby(dim_cols, as_index=False).agg(agg_dict)
+    region_count = result["区域"].nunique() if "区域" in result.columns else 0
+    print(f"    [FACTORY2-SALES] {len(df)} detail rows → {len(result)} monthly rows, "
+          f"dims={dim_cols[1:]}, regions={region_count}")
     return result
 
 
@@ -941,6 +1208,60 @@ def build_seed_plan() -> List[SeedEntry]:
                 notes=f"Test-mock-retail finance depth for {tenant}",
             ))
 
+    # ===== DEMO_FACTORY2 — 第4租户: 第2工厂, 跨区域 (Test-mock-mfg-normal-s42.xlsx) =====
+    # NOTE: Finance (Sheet 1) and Sales (Sheet 12) use custom reshape helpers called in
+    # generate_factory2_data() below because the source layout needs special wide→long
+    # transformation (regions as rows, months as columns).
+    # Here we add the simpler sheet-based entries that process_entry can handle directly.
+
+    # C1. 应收账款账龄 — standard aging sheet (header=2), identity measures
+    plan.append(SeedEntry(
+        label="factory2_应收账款账龄",
+        src_path=MFG_MOCK,
+        tenant=DEMO_FACTORY2,
+        domain="finance",
+        sheet_name=13,   # sheet index 13 = 应收账款账龄
+        n_months=3,
+        header_row=1,
+        notes="DEMO_FACTORY2 AR aging (sheet 13, index-based to avoid encoding issues)",
+    ))
+
+    # C2. 库存台账 — inventory snapshot
+    plan.append(SeedEntry(
+        label="factory2_库存台账",
+        src_path=MFG_MOCK,
+        tenant=DEMO_FACTORY2,
+        domain="inventory",
+        sheet_name=14,   # sheet index 14 = 库存台账
+        n_months=3,
+        header_row=1,
+        notes="DEMO_FACTORY2 inventory ledger (sheet 14, index-based)",
+    ))
+
+    # C3. 费用预算执行 — budget vs actual
+    plan.append(SeedEntry(
+        label="factory2_费用预算执行",
+        src_path=MFG_MOCK,
+        tenant=DEMO_FACTORY2,
+        domain="finance",
+        sheet_name=16,   # sheet index 16 = 费用预算执行
+        n_months=3,
+        header_row=1,
+        notes="DEMO_FACTORY2 budget execution (sheet 16, index-based)",
+    ))
+
+    # C4. 现金流量表 — cashflow
+    plan.append(SeedEntry(
+        label="factory2_现金流量表",
+        src_path=MFG_MOCK,
+        tenant=DEMO_FACTORY2,
+        domain="finance",
+        sheet_name=17,   # sheet index 17 = 现金流量表
+        n_months=3,
+        header_row=1,
+        notes="DEMO_FACTORY2 cashflow (sheet 17, index-based)",
+    ))
+
     return plan
 
 
@@ -963,105 +1284,175 @@ def generate_gap_fill() -> List[Tuple[str, str, str, pd.DataFrame]]:
     rng = np.random.default_rng(42)
 
     # --- PRODUCTION (factory) ---
+    # #3: Added 产线 dimension (2 lines) for drill-down alongside 工序
     processes = ["备料", "搅拌", "成型", "蒸煮", "包装"]
+    production_lines = ["产线A", "产线B"]  # low-cardinality: 2 unique values
     rows = []
     for mo in months_24_25:
         for proc in processes:
-            input_qty = int(rng.integers(8000, 15000))
-            yield_rate = rng.uniform(0.92, 0.99)
-            output_qty = int(input_qty * yield_rate)
-            rows.append({
-                "月份": mo,
-                "工序": proc,
-                "投入数量(kg)": input_qty,
-                "产出数量(kg)": output_qty,
-                "合格数量(kg)": int(output_qty * rng.uniform(0.97, 1.0)),
-                "出成率(%)": round(yield_rate * 100, 2),
-                "不良率(%)": round((1.0 - yield_rate) * 100, 2),
-            })
+            for line in production_lines:
+                input_qty = int(rng.integers(4000, 8000))  # per-line qty (total unchanged)
+                yield_rate = rng.uniform(0.92, 0.99)
+                output_qty = int(input_qty * yield_rate)
+                rows.append({
+                    "月份": mo,
+                    "工序": proc,
+                    "产线": line,              # #3: drill-down dimension
+                    "投入数量(kg)": input_qty,
+                    "产出数量(kg)": output_qty,
+                    "合格数量(kg)": int(output_qty * rng.uniform(0.97, 1.0)),
+                    "出成率(%)": round(yield_rate * 100, 2),
+                    "不良率(%)": round((1.0 - yield_rate) * 100, 2),
+                })
     results.append((DEMO_FACTORY, "production", "gap_fill_production", pd.DataFrame(rows)))
 
     # --- INVENTORY (factory) ---
+    # #3: Added 仓库 (2) + 物料类别 (3) dimensions for drill-down
     materials = ["猪肉原料", "豆腐", "调味料", "包装袋", "纸箱"]
+    warehouses = ["主仓库", "辅仓库"]          # 2 unique → low-cardinality
+    material_cats = {                          # 3 categories → low-cardinality
+        "猪肉原料": "肉类原料",
+        "豆腐": "豆制品",
+        "调味料": "调辅料",
+        "包装袋": "包装材料",
+        "纸箱": "包装材料",
+    }
     rows = []
     base = {m: rng.integers(500, 5000) for m in materials}
     for mo in months_24_25:
         for mat in materials:
-            qty = int(base[mat] * rng.uniform(0.8, 1.2))
-            rows.append({
-                "月份": mo,
-                "物料名称": mat,
-                "仓库": "主仓库",
-                "期末库存数量": qty,
-                "期末库存金额(元)": round(qty * rng.uniform(5, 80), 2),
-                "周转率(次/月)": round(rng.uniform(0.5, 4.0), 2),
-                "安全库存": int(base[mat] * 0.2),
-            })
+            for wh in warehouses:
+                qty = int(base[mat] * rng.uniform(0.4, 0.6))  # split between warehouses
+                rows.append({
+                    "月份": mo,
+                    "物料名称": mat,
+                    "物料类别": material_cats[mat],  # #3: drill-down dim (3 unique)
+                    "仓库": wh,                       # #3: drill-down dim (2 unique)
+                    "期末库存数量": qty,
+                    "期末库存金额(元)": round(qty * rng.uniform(5, 80), 2),
+                    "周转率(次/月)": round(rng.uniform(0.5, 4.0), 2),
+                    "安全库存": int(base[mat] * 0.1),
+                })
     results.append((DEMO_FACTORY, "inventory", "gap_fill_inventory_factory", pd.DataFrame(rows)))
 
     # --- INVENTORY (restaurant) ---
+    # #3: Added 仓库 (3 types) + 物料类别 (3) dims for drill-down
     items = ["食材-猪肉", "食材-蔬菜", "调料", "包装盒", "饮品原料"]
+    rest_warehouses = ["食材仓", "干货仓", "冷链仓"]   # 3 unique → low-cardinality
+    rest_mat_cats = {
+        "食材-猪肉": "肉类食材",
+        "食材-蔬菜": "蔬菜食材",
+        "调料": "调辅料",
+        "包装盒": "包装耗材",
+        "饮品原料": "饮品原料",
+    }
     rows = []
     for mo in months_24_25:
         for item in items:
-            qty = int(rng.integers(100, 800))
-            rows.append({
-                "月份": mo,
-                "物料名称": item,
-                "仓库": "餐厅仓库",
-                "期末库存数量": qty,
-                "期末库存金额(元)": round(qty * rng.uniform(2, 30), 2),
-                "周转率(次/月)": round(rng.uniform(2.0, 8.0), 2),
-            })
+            for wh in rest_warehouses:
+                qty = int(rng.integers(30, 270))  # split across 3 warehouses
+                rows.append({
+                    "月份": mo,
+                    "物料名称": item,
+                    "物料类别": rest_mat_cats[item],  # #3: dim (5 unique, ≤12 ✓)
+                    "仓库": wh,                        # #3: dim (3 unique ✓)
+                    "期末库存数量": qty,
+                    "期末库存金额(元)": round(qty * rng.uniform(2, 30), 2),
+                    "周转率(次/月)": round(rng.uniform(2.0, 8.0), 2),
+                })
     results.append((DEMO_REST, "inventory", "gap_fill_inventory_rest", pd.DataFrame(rows)))
 
     # --- HR (factory) ---
+    # #3: Added 区域 dimension (4 regions) for cross-region HR analysis
     departments = ["生产部", "品质部", "仓储部", "采购部", "管理部"]
+    factory_regions = ["华东", "华南", "华中", "华北"]   # 4 unique → low-cardinality
     rows = []
     for mo in months_24_25:
         for dept in departments:
-            n = int(rng.integers(5, 40))
-            rows.append({
-                "月份": mo,
-                "部门": dept,
-                "人数": n,
-                "工资总额(元)": round(n * rng.uniform(4500, 12000), 2),
-                "人均产值(元)": round(rng.uniform(8000, 30000), 2),
-                "提成合计(元)": round(rng.uniform(0, 20000), 2),
-            })
+            for region in factory_regions:
+                n = int(rng.integers(2, 12))   # per-region headcount (smaller unit)
+                rows.append({
+                    "月份": mo,
+                    "部门": dept,
+                    "区域": region,              # #3: drill-down dim (4 unique ✓)
+                    "人数": n,
+                    "工资总额(元)": round(n * rng.uniform(4500, 12000), 2),
+                    "人均产值(元)": round(rng.uniform(8000, 30000), 2),
+                    "提成合计(元)": round(rng.uniform(0, 20000), 2),
+                })
     results.append((DEMO_FACTORY, "hr", "gap_fill_hr_factory", pd.DataFrame(rows)))
 
     # --- HR (restaurant) ---
+    # #3: Added 门店名称 dimension (3 stores) for per-store HR analysis
     roles = ["厨师", "服务员", "收银", "外卖配送", "管理"]
+    rest_stores = ["门店01", "门店02", "门店03"]   # 3 unique → low-cardinality
     rows = []
     for mo in months_24_25:
         for role in roles:
-            n = int(rng.integers(2, 15))
-            rows.append({
-                "月份": mo,
-                "岗位": role,
-                "人数": n,
-                "工资总额(元)": round(n * rng.uniform(3500, 8000), 2),
-                "人效(元/人)": round(rng.uniform(15000, 60000), 2),
-            })
+            for store in rest_stores:
+                n = int(rng.integers(1, 6))   # per-store headcount
+                rows.append({
+                    "月份": mo,
+                    "岗位": role,
+                    "门店名称": store,           # #3: drill-down dim (3 unique ✓)
+                    "人数": n,
+                    "工资总额(元)": round(n * rng.uniform(3500, 8000), 2),
+                    "人效(元/人)": round(rng.uniform(15000, 60000), 2),
+                })
     results.append((DEMO_REST, "hr", "gap_fill_hr_rest", pd.DataFrame(rows)))
 
     # --- QUALITY (factory) ---
+    # #3: Added 部门 dimension (3 departments) for quality ownership drill-down
     stages = ["进料检验", "过程检验", "出货检验"]
+    quality_depts = ["品质部", "生产部", "仓储部"]   # 3 unique → low-cardinality
     rows = []
     for mo in months_24_25:
         for stage in stages:
-            batches = int(rng.integers(10, 50))
-            pass_n = int(batches * rng.uniform(0.90, 0.99))
-            rows.append({
-                "月份": mo,
-                "检验环节": stage,
-                "检验批次": batches,
-                "合格数": pass_n,
-                "不合格数": batches - pass_n,
-                "合格率(%)": round(pass_n / batches * 100, 2),
-            })
+            for dept in quality_depts:
+                batches = int(rng.integers(4, 18))   # per-dept batches
+                pass_n = int(batches * rng.uniform(0.90, 0.99))
+                rows.append({
+                    "月份": mo,
+                    "检验环节": stage,
+                    "部门": dept,               # #3: drill-down dim (3 unique ✓)
+                    "检验批次": batches,
+                    "合格数": pass_n,
+                    "不合格数": batches - pass_n,
+                    "合格率(%)": round(pass_n / batches * 100, 2),
+                })
     results.append((DEMO_FACTORY, "quality", "gap_fill_quality", pd.DataFrame(rows)))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# DEMO_FACTORY2 GENERATOR — wide-table reshaping for finance + sales
+# ---------------------------------------------------------------------------
+
+def generate_factory2_data() -> List[Tuple[str, str, str, pd.DataFrame]]:
+    """
+    Generate DEMO_FACTORY2 finance (收入及净利简表, wide→long with 区域 dim)
+    and sales (销售明细, detail→monthly with 区域+产品类别 dims).
+
+    Returns list of (tenant, domain, label, DataFrame) same as generate_gap_fill().
+    """
+    results: List[Tuple[str, str, str, pd.DataFrame]] = []
+    if not MFG_MOCK.exists():
+        print(f"  [FACTORY2] source file not found: {MFG_MOCK}")
+        return results
+
+    # --- Finance: 收入及净利简表 (Sheet 1) → long with 区域 dim ---
+    import calendar as _cal
+    win_finance = Window(date(2024, 1, 1), date(2024, 12, 31))
+    df_finance = reshape_factory2_finance(MFG_MOCK)
+    if df_finance is not None and not df_finance.empty:
+        results.append((DEMO_FACTORY2, "finance", "factory2_收入净利_by区域", df_finance))
+
+    # --- Sales: 销售明细 (Sheet 12) → monthly with 区域+产品类别 dims ---
+    win_sales = Window(date(2025, 1, 1), date(2025, 12, 31))
+    df_sales = reshape_factory2_sales(MFG_MOCK, win_sales)
+    if df_sales is not None and not df_sales.empty:
+        results.append((DEMO_FACTORY2, "sales", "factory2_销售明细_by区域", df_sales))
 
     return results
 
@@ -1346,8 +1737,8 @@ def verify_local() -> None:
     else:
         print(f"  [SKIP] Not found: {f3}")
 
-    # --- TEST 4: gap-fill production ---
-    print("\n[TEST 4] Gap-fill generator – production")
+    # --- TEST 4: gap-fill production – verify 工序 + 产线 dims ---
+    print("\n[TEST 4] Gap-fill generator – production (工序 + 产线 dims)")
     print("-" * 55)
     gap_results = generate_gap_fill()
     for tenant, domain, label, df in gap_results:
@@ -1357,9 +1748,58 @@ def verify_local() -> None:
             unique_months = df["月份"].nunique()
             print(f"  Unique months: {unique_months}  (expected 24)")
             print(f"  Month range: {df['月份'].iloc[0]} → {df['月份'].iloc[-1]}")
+            if "产线" in df.columns:
+                print(f"  ✓ '产线' dim present, unique values: {sorted(df['产线'].unique().tolist())}")
+            else:
+                print(f"  ✗ '产线' dim MISSING")
+            if "工序" in df.columns:
+                print(f"  ✓ '工序' dim present, unique values: {sorted(df['工序'].unique().tolist())}")
             print(f"  Sample (first 3 rows):")
             print(df.head(3).to_string(index=False))
+            # Row count check: 24 months × 5 processes × 2 lines = 240
+            expected_rows = 24 * 5 * 2
+            if len(df) == expected_rows:
+                print(f"  ✓ Row count {len(df)} = {expected_rows} (24m × 5proc × 2lines)")
+            else:
+                print(f"  ✗ Row count {len(df)} ≠ expected {expected_rows}")
             break
+
+    # --- TEST 4b: DEMO_FACTORY2 finance + sales ---
+    print("\n[TEST 4b] DEMO_FACTORY2 – 区域 dim finance + sales")
+    print("-" * 55)
+    f2_results = generate_factory2_data()
+    if not f2_results:
+        print("  [SKIP] MFG_MOCK not found or empty")
+    for tenant, domain, label, df in f2_results:
+        print(f"  Label: {label}  tenant: {tenant}  domain: {domain}  rows: {len(df)}")
+        print(f"  Columns: {list(df.columns)}")
+        if "区域" in df.columns:
+            regions = sorted(df["区域"].unique().tolist())
+            n_unique = len(regions)
+            print(f"  ✓ '区域' dim present ({n_unique} unique, ≤12 ✓): {regions}")
+        else:
+            print(f"  ✗ '区域' dim MISSING")
+        # Verify canonical measures
+        canonical_found = [c for c in df.columns if c in ("revenue", "net_profit", "sales_amount", "sales_quantity")]
+        if canonical_found:
+            print(f"  ✓ canonical measures: {canonical_found}")
+        else:
+            print(f"  ✗ no canonical measures found in {list(df.columns)}")
+        # Verify row count is reasonable (not exploding)
+        if domain == "finance":
+            # 12 months × ≤5 regions = ≤60 rows
+            if len(df) <= 60:
+                print(f"  ✓ row count {len(df)} ≤ 60 (controlled)")
+            else:
+                print(f"  ✗ row count {len(df)} > 60 (unexpectedly large)")
+        elif domain == "sales":
+            # ≤12 months × ≤6 regions × ≤6 categories = ≤432 rows
+            if len(df) <= 500:
+                print(f"  ✓ row count {len(df)} ≤ 500 (controlled)")
+            else:
+                print(f"  ✗ row count {len(df)} > 500 (unexpectedly large)")
+        print(f"  Sample (first 3 rows):")
+        print(df.head(3).to_string(index=False))
 
     # --- TEST 6: aggregate_monthly – detail → monthly rows ---
     print("\n[TEST 6] aggregate_monthly – detail sources row-count reduction")
@@ -1544,6 +1984,33 @@ def main() -> None:
                 "tenant": effective_tenant,
                 "domain": domain,
                 "window": str(win_gf),
+                "rows": len(df),
+                "path": str(out_path),
+            })
+            print(f"    → {out_path.name}")
+            if args.upload:
+                upload_file(out_path, effective_tenant, domain, args.base)
+
+    # --- DEMO_FACTORY2: reshaped wide-table finance + sales (区域 dim) ---
+    print(f"\n--- DEMO_FACTORY2 generators (cross-factory comparison, 区域 dim) ---")
+    for tenant, domain, label, df in generate_factory2_data():
+        # Finance uses 2024-01 to 2024-12; sales uses 2025-01 to 2025-12
+        if "finance" in label or domain == "finance":
+            win_f2 = Window(date(2024, 1, 1), date(2024, 12, 31))
+        else:
+            win_f2 = Window(date(2025, 1, 1), date(2025, 12, 31))
+        effective_tenant = tenant_override.get(tenant, tenant)
+        print(f"  {label}  tenant={tenant}  domain={domain}  rows={len(df)}")
+        if dim_cols := [c for c in df.columns if c == "区域" or c == "产品类别"]:
+            for dc in dim_cols:
+                print(f"    dim '{dc}': {sorted(df[dc].dropna().unique().tolist())}")
+        if not args.dry_run:
+            out_path = write_xlsx(df, effective_tenant, domain, label, win_f2, out_dir)
+            manifest.append({
+                "file": out_path.name,
+                "tenant": effective_tenant,
+                "domain": domain,
+                "window": str(win_f2),
                 "rows": len(df),
                 "path": str(out_path),
             })
