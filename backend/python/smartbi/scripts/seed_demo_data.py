@@ -531,6 +531,74 @@ def aggregate_monthly(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# DUPLICATE COLUMN GROUP COLLAPSE
+# ---------------------------------------------------------------------------
+
+def collapse_duplicate_column_groups(df: pd.DataFrame, label: str = "") -> pd.DataFrame:
+    """
+    Detect and collapse pandas auto-renamed duplicate column groups (X, X.1, X.2 ...).
+
+    These arise when a wide-table source has repeating column headers — e.g.
+    库存台账 with 5 warehouses × 4 metrics (期初/入库/出库/期末), or
+    费用预算执行 with 12 months × 3 metrics (预算/实际/差额).
+    pandas renames duplicates as X, X.1, X.2 ... which then map to
+    output_quantity_2 / actual_amount_2 / rate_percent_2 etc. in the DB.
+
+    Strategy:
+    - Identify base names that have .N siblings.
+    - For each base group, SUM across all .N variants into the base column.
+      This is semantically correct for these sheets:
+        • 库存台账: summing warehouses gives total (a 合计 column already exists but
+          this covers cases where it might be missing or named differently).
+        • 费用预算执行: summing months gives annual budget/actual/variance totals.
+        • Any other wide numeric group: aggregate to single canonical measure.
+    - Drop the .N variants, keeping only the base column with the summed value.
+
+    Returns a new DataFrame with no X.N duplicate suffixes.
+    """
+    df = df.copy()
+
+    # Find all base names that have at least one .N sibling
+    import re as _re
+    base_to_variants: Dict[str, List[str]] = {}
+    for col in df.columns:
+        m = _re.match(r'^(.+?)\.(\d+)$', str(col))
+        if m:
+            base = m.group(1)
+            base_to_variants.setdefault(base, []).append(str(col))
+
+    if not base_to_variants:
+        return df  # nothing to do
+
+    prefix = f"[{label}] " if label else ""
+    print(f"    {prefix}[DEDUP] Found {len(base_to_variants)} duplicate column group(s): "
+          f"{list(base_to_variants.keys())[:5]}{'...' if len(base_to_variants) > 5 else ''}")
+
+    for base, variants in base_to_variants.items():
+        all_cols = ([base] if base in df.columns else []) + variants
+        numeric_all_cols = [c for c in all_cols if c in df.columns
+                            and pd.api.types.is_numeric_dtype(df[c])]
+        if not numeric_all_cols:
+            # Non-numeric group — keep base, drop variants
+            df = df.drop(columns=[c for c in variants if c in df.columns], errors="ignore")
+            continue
+
+        # Sum across all numeric variants into the base column
+        summed = df[numeric_all_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        df[base] = summed
+        # Drop .N variants (already summed into base)
+        df = df.drop(columns=[c for c in variants if c in df.columns and c != base], errors="ignore")
+        print(f"    {prefix}[DEDUP] Summed {len(numeric_all_cols)} cols → '{base}'")
+
+    after_cols = [c for c in df.columns if _re.match(r'.+\.\d+$', str(c))]
+    if after_cols:
+        print(f"    {prefix}[DEDUP] WARNING: residual .N cols after collapse: {after_cols}")
+    else:
+        print(f"    {prefix}[DEDUP] OK — no .N suffix cols remain")
+    return df
+
+
+# ---------------------------------------------------------------------------
 # RETAIL HELPERS
 # ---------------------------------------------------------------------------
 
@@ -1682,6 +1750,10 @@ def process_entry(entry: SeedEntry, window: Window) -> Optional[pd.DataFrame]:
     if df.empty:
         print(f"  [SKIP] Empty: {src.name}")
         return None
+
+    # Collapse pandas auto-renamed duplicate column groups (X, X.1, X.2 ...).
+    # Must happen BEFORE select_cols and redate so downstream sees clean canonical names.
+    df = collapse_duplicate_column_groups(df, label=entry.label)
 
     # Apply column selection BEFORE any other processing.
     # Needed for wide-table sources (e.g. 营业概况月报 with 353 cols where cols 23+
