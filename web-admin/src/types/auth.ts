@@ -149,6 +149,8 @@ export interface FactoryUser extends BaseUser {
   factoryUser: {
     role: FactoryRole;
     factoryId: string;
+    factoryName?: string;
+    factoryLogoUrl?: string;
     factoryType?: FactoryType;
     department?: Department;
     position?: string;

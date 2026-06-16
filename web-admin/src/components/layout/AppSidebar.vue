@@ -243,8 +243,11 @@ function handleSelect(path: string) {
   >
     <!-- Logo -->
     <div class="sidebar-logo">
-      <img src="/logo.svg" alt="Logo" class="logo-icon" />
-      <span v-if="!appStore.sidebarCollapsed || appStore.isMobile" class="logo-text">白垩纪AI Agent</span>
+      <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="logo-icon" />
+      <span v-if="!appStore.sidebarCollapsed || appStore.isMobile" class="logo-copy">
+        <span class="logo-title">{{ authStore.brandTitle }}</span>
+        <span v-if="authStore.brandSubtitle" class="logo-subtitle">{{ authStore.brandSubtitle }}</span>
+      </span>
     </div>
 
     <!-- 菜单 -->
@@ -327,16 +330,37 @@ function handleSelect(path: string) {
   .logo-icon {
     width: 32px;
     height: 32px;
+    object-fit: contain;
+    border-radius: 6px;
+    background: #fff;
   }
 
-  .logo-text {
+  .logo-copy {
     margin-left: 12px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    line-height: 1.1;
+  }
+
+  .logo-title {
     color: #fff;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
-    letter-spacing: 0.5px;
+    text-overflow: ellipsis;
+  }
+
+  .logo-subtitle {
+    margin-top: 3px;
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
