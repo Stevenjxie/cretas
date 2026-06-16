@@ -31,7 +31,7 @@
 > - ✅ **扫码 403** (#961, prod v...233440): 扫码端点 GET /orders/by-number 加 warehouse:read_write/read (仓管员无 procurement 权限)。
 > - ✅ **厂号/产地无法录入** (#960, web-admin): RCV 收货 dialog 厂号 el-select 加 allow-create + 产地 maxlength。后端 ReceiveItemDTO 字段已存在(#901)。
 > - ✅ **LIUSHANMEN 缺仓库 seed** (手动 prod seed 7 仓): 根因=LIUSHANMEN 在 V20260411_03(一次性双仓 seed) 之后才建。注意: 六膳门有两条 factory 记录 F006(有数据)+LIUSHANMEN(客户实际运营, Steve 拍板用这个)。
-> - 🔄 **In-flight: feat/factory-warehouse-admin** (Sonnet bg ac34bb5cc6fea1f08): 超管仓库管理 UI+CRUD+模板(六扇门含盐化7仓 preset + 全仓型勾选), 基础四项属性, 无迁移。**🔒 RBAC/多租户 → Opus gate + 从 main 部署**。这是 seed-only 的根治预防。
+> - ✅ **SHIPPED #962** (prod v20260617_001144 + web-admin): 超管仓库管理 CRUD+模板(六扇门含盐化7仓/全仓型勾选)。Opus 终审(IDOR双键/权限照hub一致/路径匹配/幂等)+live验(GET7仓/套模板幂等skip7/创建/409查重/删除全PASS)。seed-only 根治预防 = 新工厂超管自助套模板。
 > - ⚠️ **follow-up**: (a) 工厂创建 hook seed 默认仓(或靠上面的 admin UI 套模板); (b) **Flyway 状态隐患**: prod flyway_schema_history 最高 20261024.21 但 origin/main 迁移文件只到 V20260429_01 → 新迁移必须 >20261024.21 否则被 out-of-order 跳过, 且 20261024.* 文件为何不在 main 待查。
 >
 
