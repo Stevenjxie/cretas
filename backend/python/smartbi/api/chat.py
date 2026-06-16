@@ -924,9 +924,15 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     """
     start_time = time.time()
 
-    # Cache lookup (include query text in key for general-analysis)
+    # Cache lookup (include query text in key for general-analysis).
+    # factory_id MUST be part of the key: when request.data is empty this
+    # endpoint falls back to loading the tenant's own upload from DB by
+    # factory_id, so two tenants sending empty data would otherwise collide
+    # on an identical cache key and leak each other's results (cross-tenant
+    # cache pollution).
     cache_key = _make_chat_cache_key(
         "general_analysis",
+        factory_id=getattr(http_request.state, "factory_id", None),
         sheet_id=request.sheet_id,
         query=request.effective_query,
         data=request.data,
