@@ -29,13 +29,6 @@ from smartbi.agent import (
     RESULT_SOURCE_LLM,
     compute_question_hash,
 )
-from smartbi.agent.orchestrator import (
-    _build_corpus_input_text,
-    RESULT_SOURCE_CORPUS as _RS_CORPUS,
-)
-from smartbi.services.distillation_capture import compute_input_hash
-
-
 _TENANT = "TEST_ORCH_A"
 _START = date(2025, 1, 1)
 _END = date(2025, 12, 31)
@@ -67,6 +60,16 @@ async def _reset_tenant(pool, tenant):
         await conn.execute("DELETE FROM narrative_cache WHERE factory_id=$1", tenant)
         await conn.execute("DELETE FROM agent_budget_daily WHERE factory_id=$1", tenant)
         await conn.execute("DELETE FROM agent_tenant_config WHERE factory_id=$1", tenant)
+
+
+async def _delete_corpus_rows_for_tenant(pool, tenant):
+    """Clean up any agent_insight corpus rows seeded by these tests."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM smart_bi_distillation_samples"
+            " WHERE factory_id=$1 AND source='agent_insight'",
+            tenant,
+        )
 
 
 def _make_mock_llm_client(fake_answer: str, total_tokens: int = 450):
@@ -276,76 +279,74 @@ async def test_llm_failure_returns_degraded(pool):
 
 # ---------------------------------------------------------------------------
 # Corpus read-back (serve-from-corpus flywheel) tests
+#
+# Design: the corpus key is sha256(user_prompt) where user_prompt is the
+# full Gold-data-enriched prompt built internally by the orchestrator.
+# Because we cannot predict user_prompt from outside, tests use a
+# ROUNDTRIP approach:
+#   call-1: LLM mock returns a known answer → orchestrator captures it
+#           into smart_bi_distillation_samples (await _capture_insight_distillation)
+#   call-2: same factory + same question → orchestrator rebuilds identical
+#           user_prompt (identical Gold data) → identical hash → corpus HIT
 # ---------------------------------------------------------------------------
-
-async def _seed_corpus_row(pool, factory_id: str, question: str, start: date, end: date, answer: str):
-    """Insert a today's agent_insight corpus row directly so tests can pre-seed."""
-    from smartbi.services.distillation_capture import compute_input_hash as _cih
-    corpus_key = _build_corpus_input_text(question, start.isoformat(), end.isoformat(), factory_id)
-    h = _cih(corpus_key)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO smart_bi_distillation_samples
-                (source, business_type, factory_id, task_type,
-                 input_text, input_hash, teacher_output, quality, metadata)
-            VALUES ('agent_insight', 'restaurant', $1, 'insight',
-                    $2, $3, $4, 5, NULL)
-            ON CONFLICT (input_hash) DO UPDATE
-                SET teacher_output = EXCLUDED.teacher_output,
-                    created_at     = NOW()
-            """,
-            factory_id, corpus_key, h, answer,
-        )
-    return h
-
-
-async def _delete_corpus_row(pool, input_hash: str):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM smart_bi_distillation_samples WHERE input_hash = $1",
-            input_hash,
-        )
 
 
 async def test_corpus_cache_hit_skips_llm(pool):
     """Corpus hit (today's agent_insight row) short-circuits before LLM.
 
     Source must be RESULT_SOURCE_CORPUS, tokens=0, and the LLM mock must
-    never be called.
+    never be called on the second identical request.
     """
     await _reset_tenant(pool, _TENANT)
+    await _delete_corpus_rows_for_tenant(pool, _TENANT)
+
     q = "本月门店表现如何"
-    corpus_answer = "【语料命中】青花椒大丸百货店表现最佳，建议加大推广。"
-    row_hash = await _seed_corpus_row(pool, _TENANT, q, _START, _END, corpus_answer)
+    fake_answer = "【语料命中】青花椒大丸百货店表现最佳，建议加大推广。"
 
-    called = {"n": 0}
-
-    def fail_on_call(req):
-        called["n"] += 1
-        return httpx.Response(500, json={})
-
-    http = httpx.AsyncClient(transport=httpx.MockTransport(fail_on_call))
-    original = _patch_llm_client_singleton(http)
+    # Call-1: LLM returns fake_answer → orchestrator captures corpus row
+    http1 = _make_mock_llm_client(fake_answer, total_tokens=300)
+    original = _patch_llm_client_singleton(http1)
     try:
-        orch = _orchestrator(pool, http)
-        result = await orch.answer_insight(_TENANT, q, _RANGE)
+        orch = _orchestrator(pool, http1)
+        r1 = await orch.answer_insight(_TENANT, q, _RANGE)
     finally:
         _restore_llm_client_singleton(original)
-        await http.aclose()
-        await _delete_corpus_row(pool, row_hash)
+        await http1.aclose()
 
-    assert result.source == RESULT_SOURCE_CORPUS, (
-        f"Expected 'corpus' but got '{result.source}' — corpus read-back may not be wired"
+    assert r1.source == RESULT_SOURCE_LLM, (
+        f"Call-1 should hit LLM (seeding corpus), got {r1.source!r}"
     )
-    assert result.answer == corpus_answer
-    assert result.tokens == 0
-    assert called["n"] == 0, "LLM must not be called on corpus hit"
+
+    # Call-2: same factory + same question, LLM must NOT be called
+    llm_called = {"n": 0}
+
+    def fail_on_call(req):
+        llm_called["n"] += 1
+        return httpx.Response(500, json={})
+
+    http2 = httpx.AsyncClient(transport=httpx.MockTransport(fail_on_call))
+    original2 = _patch_llm_client_singleton(http2)
+    try:
+        orch2 = _orchestrator(pool, http2)
+        r2 = await orch2.answer_insight(_TENANT, q, _RANGE)
+    finally:
+        _restore_llm_client_singleton(original2)
+        await http2.aclose()
+        await _delete_corpus_rows_for_tenant(pool, _TENANT)
+
+    assert r2.source == RESULT_SOURCE_CORPUS, (
+        f"Expected 'corpus' on call-2 but got '{r2.source}' — "
+        "corpus read-back may not be wired or capture did not persist"
+    )
+    assert r2.answer == fake_answer
+    assert r2.tokens == 0
+    assert llm_called["n"] == 0, "LLM must not be called on corpus hit"
 
 
 async def test_corpus_cache_miss_falls_through_to_llm(pool):
     """When there's no corpus row, the flow reaches LLM as normal."""
     await _reset_tenant(pool, _TENANT)
+    await _delete_corpus_rows_for_tenant(pool, _TENANT)
     q = "折扣活动效果如何"
     fake_answer = "折扣活动带来约 15% 营业额增长，建议持续。"
     http = _make_mock_llm_client(fake_answer, total_tokens=300)
@@ -356,6 +357,7 @@ async def test_corpus_cache_miss_falls_through_to_llm(pool):
     finally:
         _restore_llm_client_singleton(original)
         await http.aclose()
+        await _delete_corpus_rows_for_tenant(pool, _TENANT)
 
     assert result.source == RESULT_SOURCE_LLM
     assert result.tokens == 300
@@ -363,10 +365,34 @@ async def test_corpus_cache_miss_falls_through_to_llm(pool):
 
 async def test_corpus_cache_hit_takes_priority_over_budget_check(pool):
     """Corpus hit fires before the budget check — so even an exhausted budget
-    tenant gets served from corpus (no additional token consumption)."""
-    await _reset_tenant(pool, _TENANT)
+    tenant gets served from corpus (no additional token consumption).
 
-    # Exhaust budget first
+    Roundtrip strategy:
+      step-1: call with normal budget → LLM → captures corpus row
+      step-2: exhaust budget
+      step-3: call again → corpus hit (before budget check) → source=corpus
+    """
+    await _reset_tenant(pool, _TENANT)
+    await _delete_corpus_rows_for_tenant(pool, _TENANT)
+
+    q = "客单价走势"
+    fake_answer = "客单价上周平均 ¥68，本周 ¥71，建议继续推高价值套餐。"
+
+    # Step-1: seed the corpus via a normal LLM call
+    http1 = _make_mock_llm_client(fake_answer, total_tokens=100)
+    original1 = _patch_llm_client_singleton(http1)
+    try:
+        orch1 = _orchestrator(pool, http1)
+        r1 = await orch1.answer_insight(_TENANT, q, _RANGE)
+    finally:
+        _restore_llm_client_singleton(original1)
+        await http1.aclose()
+
+    assert r1.source == RESULT_SOURCE_LLM, (
+        f"Step-1 (corpus seed) should be RESULT_SOURCE_LLM, got {r1.source!r}"
+    )
+
+    # Step-2: exhaust budget (after seeding, so step-1 is not blocked)
     from smartbi.tenant_ctx import set_factory_id
     set_factory_id(_TENANT)
     async with pool.acquire() as conn:
@@ -374,96 +400,99 @@ async def test_corpus_cache_hit_takes_priority_over_budget_check(pool):
             """
             INSERT INTO agent_tenant_config (factory_id, tier, custom_cap_override)
             VALUES ($1, 'basic', 5)
+            ON CONFLICT (factory_id) DO UPDATE SET custom_cap_override = EXCLUDED.custom_cap_override
             """,
             _TENANT,
         )
     tracker = AgentBudgetTracker(pool)
     await tracker.consume(_TENANT, 20)  # over cap=5 → blocked
 
-    q = "客单价走势"
-    corpus_answer = "客单价上周平均 ¥68，本周 ¥71，建议继续推高价值套餐。"
-    row_hash = await _seed_corpus_row(pool, _TENANT, q, _START, _END, corpus_answer)
-
-    called = {"n": 0}
+    # Step-3: call with exhausted budget — corpus should fire before budget gate
+    llm_called = {"n": 0}
 
     def fail_on_call(req):
-        called["n"] += 1
+        llm_called["n"] += 1
         return httpx.Response(500, json={})
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(fail_on_call))
-    original = _patch_llm_client_singleton(http)
+    http2 = httpx.AsyncClient(transport=httpx.MockTransport(fail_on_call))
+    original2 = _patch_llm_client_singleton(http2)
     try:
-        orch = _orchestrator(pool, http)
-        result = await orch.answer_insight(_TENANT, q, _RANGE)
+        orch2 = _orchestrator(pool, http2)
+        result = await orch2.answer_insight(_TENANT, q, _RANGE)
     finally:
-        _restore_llm_client_singleton(original)
-        await http.aclose()
-        await _delete_corpus_row(pool, row_hash)
+        _restore_llm_client_singleton(original2)
+        await http2.aclose()
+        await _delete_corpus_rows_for_tenant(pool, _TENANT)
 
     assert result.source == RESULT_SOURCE_CORPUS
     assert result.tokens == 0
-    assert called["n"] == 0
+    assert llm_called["n"] == 0
 
 
 async def test_corpus_feedback_down_demoted_row_falls_through_to_llm(pool):
     """A corpus row with feedback_down >= threshold must be skipped (G4 serve-skip).
-    The flow should fall through to LLM and generate a fresh answer."""
-    await _reset_tenant(pool, _TENANT)
-    q = "折扣对客单价的影响"
-    fake_answer = "折扣降低了客单价但提升了订单量，净效应为正。"
+    The flow should fall through to LLM and generate a fresh answer.
 
-    # Seed a demoted corpus row (feedback_down=2)
-    from smartbi.services.distillation_capture import compute_input_hash as _cih
-    corpus_key = _build_corpus_input_text(q, _START.isoformat(), _END.isoformat(), _TENANT)
-    h = _cih(corpus_key)
+    Roundtrip strategy:
+      step-1: normal LLM call → captures corpus row (quality=4, no feedback_down)
+      step-2: manually UPDATE that row to inject feedback_down=2 into metadata
+      step-3: call again → corpus read-back sees feedback_down >= threshold →
+              serve-skip → LLM called → RESULT_SOURCE_LLM
+    """
+    await _reset_tenant(pool, _TENANT)
+    await _delete_corpus_rows_for_tenant(pool, _TENANT)
+
+    q = "折扣对客单价的影响"
+    first_answer = "首次生成答案，稍后会被踩。"
+    fresh_answer = "折扣降低了客单价但提升了订单量，净效应为正。"
+
+    # Step-1: seed a corpus row
+    http1 = _make_mock_llm_client(first_answer, total_tokens=200)
+    original1 = _patch_llm_client_singleton(http1)
+    try:
+        orch1 = _orchestrator(pool, http1)
+        r1 = await orch1.answer_insight(_TENANT, q, _RANGE)
+    finally:
+        _restore_llm_client_singleton(original1)
+        await http1.aclose()
+
+    assert r1.source == RESULT_SOURCE_LLM, (
+        f"Step-1 should be RESULT_SOURCE_LLM, got {r1.source!r}"
+    )
+
+    # Step-2: fetch the corpus row's input_hash and inject feedback_down=2
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT input_hash FROM smart_bi_distillation_samples"
+            " WHERE factory_id=$1 AND source='agent_insight'"
+            " AND created_at::date = CURRENT_DATE"
+            " ORDER BY created_at DESC LIMIT 1",
+            _TENANT,
+        )
+    assert row is not None, "corpus row from step-1 was not persisted"
+    corpus_hash = row["input_hash"]
+
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO smart_bi_distillation_samples
-                (source, business_type, factory_id, task_type,
-                 input_text, input_hash, teacher_output, quality,
-                 metadata)
-            VALUES ('agent_insight', 'restaurant', $1, 'insight',
-                    $2, $3, '【已踩】错误答案', 2,
-                    '{"feedback_down": 2}'::jsonb)
-            ON CONFLICT (input_hash) DO UPDATE
-                SET teacher_output = EXCLUDED.teacher_output,
-                    metadata       = EXCLUDED.metadata,
-                    created_at     = NOW()
-            """,
-            _TENANT, corpus_key, h,
+            "UPDATE smart_bi_distillation_samples"
+            " SET metadata = '{\"feedback_down\": 2}'::jsonb"
+            " WHERE input_hash = $1",
+            corpus_hash,
         )
 
-    http = _make_mock_llm_client(fake_answer, total_tokens=280)
-    original = _patch_llm_client_singleton(http)
+    # Step-3: call again — demoted row must be skipped, LLM re-called
+    http2 = _make_mock_llm_client(fresh_answer, total_tokens=280)
+    original2 = _patch_llm_client_singleton(http2)
     try:
-        orch = _orchestrator(pool, http)
-        result = await orch.answer_insight(_TENANT, q, _RANGE)
+        orch2 = _orchestrator(pool, http2)
+        result = await orch2.answer_insight(_TENANT, q, _RANGE)
     finally:
-        _restore_llm_client_singleton(original)
-        await http.aclose()
-        await _delete_corpus_row(pool, h)
+        _restore_llm_client_singleton(original2)
+        await http2.aclose()
+        await _delete_corpus_rows_for_tenant(pool, _TENANT)
 
     # Must NOT have served the demoted corpus row
     assert result.source == RESULT_SOURCE_LLM, (
         f"Demoted corpus row should be skipped, got source={result.source!r}"
     )
-    assert result.answer == fake_answer
-
-
-async def test_build_corpus_input_text_bakes_factory_id():
-    """Different factory_ids produce different corpus keys (cross-tenant isolation)."""
-    key_a = _build_corpus_input_text("本月营业额", "2025-01-01", "2025-12-31", "FACTORY_A")
-    key_b = _build_corpus_input_text("本月营业额", "2025-01-01", "2025-12-31", "FACTORY_B")
-    assert key_a != key_b
-
-    h_a = compute_input_hash(key_a)
-    h_b = compute_input_hash(key_b)
-    assert h_a != h_b
-
-
-async def test_build_corpus_input_text_normalizes_question():
-    """Question normalization (whitespace/case) makes the key stable."""
-    key1 = _build_corpus_input_text("本月  营业额如何", "2025-01-01", "2025-12-31", "F001")
-    key2 = _build_corpus_input_text("本月 营业额如何", "2025-01-01", "2025-12-31", "F001")
-    assert key1 == key2
+    assert result.answer == fresh_answer
