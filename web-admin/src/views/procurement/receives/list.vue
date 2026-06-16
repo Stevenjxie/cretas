@@ -285,6 +285,21 @@ async function handleSubmit() {
     ElMessage.warning('请至少添加一行入库物料');
     return;
   }
+  const noMatIdx = form.value.items.findIndex(i => !i.materialTypeId);
+  if (noMatIdx >= 0) {
+    ElMessage.warning(`第 ${noMatIdx + 1} 行请选择物料类型`);
+    return;
+  }
+  const badQtyIdx = form.value.items.findIndex(i => !(Number(i.receivedQuantity) > 0));
+  if (badQtyIdx >= 0) {
+    ElMessage.warning(`第 ${badQtyIdx + 1} 行到货数量必须大于 0`);
+    return;
+  }
+  const noUnitIdx = form.value.items.findIndex(i => !i.unit);
+  if (noUnitIdx >= 0) {
+    ElMessage.warning(`第 ${noUnitIdx + 1} 行请填写单位`);
+    return;
+  }
   submitting.value = true;
   try {
     const payload = { ...form.value };
@@ -637,6 +652,7 @@ onMounted(() => { loadData(); loadOptions(); });
         </div>
         <el-table :data="form.items" border>
           <el-table-column label="物料类型" min-width="200">
+            <template #header><span class="req-star">*</span>物料类型</template>
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.materialTypeId" placeholder="选择物料"
@@ -648,11 +664,13 @@ onMounted(() => { loadData(); loadOptions(); });
             </template>
           </el-table-column>
           <el-table-column label="到货数量" width="120">
+            <template #header><span class="req-star">*</span>到货数量</template>
             <template #default="{ row }">
               <el-input-number v-model="row.receivedQuantity" :min="0.001" :precision="3" :controls="false" size="small" style="width:100%" />
             </template>
           </el-table-column>
           <el-table-column label="单位" width="80">
+            <template #header><span class="req-star">*</span>单位</template>
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" />
             </template>
@@ -856,4 +874,6 @@ onMounted(() => { loadData(); loadOptions(); });
   align-items: center;
   margin-bottom: 8px;
 }
+
+.req-star { color: #f56c6c; margin-right: 2px; }
 </style>

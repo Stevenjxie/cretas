@@ -638,7 +638,14 @@ const submitting = ref(false);
 async function handleCreate() {
   if (submitting.value) return; // P-2: prevent double-submit
   if (!form.value.supplierId) return ElMessage.warning('请选择供应商');
+  if (!Array.isArray(form.value.items) || form.value.items.length === 0) {
+    return ElMessage.warning('请至少添加一行原料明细');
+  }
   if (form.value.items.some(i => !i.materialTypeId)) return ElMessage.warning('请选择所有原料');
+  const invalidQtyIndex = form.value.items.findIndex(i => !(Number(i.quantity) > 0));
+  if (invalidQtyIndex >= 0) {
+    return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
+  }
   if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
   const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
   if (invalidTaxRateIndex >= 0) {
@@ -1026,7 +1033,7 @@ function handleAiFill(params: TableRow) {
          改全屏 dialog (full-screen modal),明细行有充足空间. -->
     <el-dialog v-model="dialogVisible" :title="`新建${label('purchaseOrder')}`" fullscreen destroy-on-close>
       <el-form :model="form" label-width="100px">
-        <el-form-item :label="label('supplier')">
+        <el-form-item :label="label('supplier')" required>
           <el-select v-model="form.supplierId" placeholder="请选择" filterable style="width: 100%">
             <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
@@ -1089,10 +1096,10 @@ function handleAiFill(params: TableRow) {
           <!-- May 7 2026 用户反馈: 数量/单价/箱数 input-number 控件 -/+ 占两端,
                value 字段被挤压看不到数字. fullscreen dialog 1200px+ 有充足空间,
                把所有列加宽确保 3 位以上数字 + 小数点 + -/+ 控件都能完整显示. -->
-          <span style="width: 220px">原料名称</span>
+          <span style="width: 220px"><span class="req-star">*</span>原料名称</span>
           <span style="width: 140px">规格</span>
-          <span style="width: 140px">数量</span>
-          <span style="width: 130px">单位</span>
+          <span style="width: 140px"><span class="req-star">*</span>数量</span>
+          <span style="width: 130px"><span class="req-star">*</span>单位</span>
           <span style="width: 160px">单价</span>
           <span style="width: 130px">税率</span>
           <span style="width: 140px">箱数</span>
@@ -1364,4 +1371,5 @@ function handleAiFill(params: TableRow) {
   span { text-align: center; display: inline-block; }
 }
 .field-error { color: #f56c6c; font-size: 12px; line-height: 16px; margin-top: 2px; }
+.req-star { color: #f56c6c; margin-right: 2px; }
 </style>

@@ -108,6 +108,14 @@ async function submitCreate() {
     ElMessage.warning('请填写询价数量 (> 0)');
     return;
   }
+  if (!createForm.value.unit) {
+    ElMessage.warning('请填写单位');
+    return;
+  }
+  if (!createForm.value.inquiryDate) {
+    ElMessage.warning('请选择询价日期');
+    return;
+  }
   createSubmitting.value = true;
   try {
     const res = await createInquiry(factoryId.value, {
@@ -227,9 +235,9 @@ onMounted(load);
         <el-form-item label="规格">
           <el-input v-model="createForm.specification" placeholder="选填" maxlength="200" />
         </el-form-item>
-        <el-form-item label="数量" required>
+        <el-form-item label="数量 / 单位" required>
           <el-input-number v-model="createForm.quantity" :min="0" :precision="4" />
-          <el-input v-model="createForm.unit" placeholder="单位" style="width: 100px; margin-left: 8px" />
+          <el-input v-model="createForm.unit" placeholder="单位(必填)" style="width: 100px; margin-left: 8px" />
         </el-form-item>
         <el-form-item label="询价日期" required>
           <el-date-picker v-model="createForm.inquiryDate" type="date" value-format="YYYY-MM-DD" />
