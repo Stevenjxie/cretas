@@ -29,6 +29,7 @@ export const FACTORY_ROLES = {
   // Level 30 - 一线员工
   QUALITY_INSPECTOR: 'quality_inspector',
   OPERATOR: 'operator',
+  YIELD_OPERATOR: 'yield_operator',
   WAREHOUSE_WORKER: 'warehouse_worker',
 
   // Level 50 - 查看者
@@ -75,6 +76,7 @@ export const ROLE_METADATA: Record<string, RoleMetadata> = {
   // Level 30 - 一线员工
   quality_inspector: { displayName: '质检员', description: '执行质检、提交报告', level: 30, department: 'quality' },
   operator: { displayName: '操作员', description: '生产执行、打卡记录', level: 30, department: 'production' },
+  yield_operator: { displayName: '报工员', description: '生产报工、产量登记', level: 30, department: 'production' },
   warehouse_worker: { displayName: '仓库员', description: '出入库操作、盘点', level: 30, department: 'warehouse' },
 
   // Level 50 - 查看者
@@ -110,6 +112,7 @@ export const USER_ROLES = {
   WORKSHOP_SUPERVISOR: 'workshop_supervisor',
   QUALITY_INSPECTOR: 'quality_inspector',
   OPERATOR: 'operator',
+  YIELD_OPERATOR: 'yield_operator',
   WAREHOUSE_WORKER: 'warehouse_worker',
   VIEWER: 'viewer',
   // 已废弃 (向后兼容)
@@ -534,6 +537,7 @@ function getDefaultPermissionsForRole(role: string): string[] {
     // Level 30 - 一线员工
     quality_inspector: ['quality:write', 'production:read', 'dashboard:read', 'processing_access'],
     operator: ['production:write', 'dashboard:read', 'processing_access'],
+    yield_operator: ['production:write', 'dashboard:read', 'processing_access'],
     warehouse_worker: ['warehouse:write', 'dashboard:read'],
 
     // Level 50 - 查看者

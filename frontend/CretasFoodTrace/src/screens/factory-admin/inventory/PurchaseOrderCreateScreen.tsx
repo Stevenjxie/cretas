@@ -241,7 +241,7 @@ export default function PurchaseOrderCreateScreen() {
       <Appbar.Header>
         <Appbar.BackAction onPress={() => navigation.goBack()} />
         <Appbar.Content title="新建采购订单" />
-        <Appbar.Action icon="check" disabled={submitting} onPress={handleSubmit} />
+        <Appbar.Action icon="check" disabled={submitting} onPress={handleSubmit} testID="purchase-order-create-submit-appbar" />
       </Appbar.Header>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
@@ -438,6 +438,7 @@ export default function PurchaseOrderCreateScreen() {
           loading={submitting}
           disabled={submitting}
           icon="check"
+          testID="purchase-order-create-submit"
         >
           创建为草稿
         </Button>

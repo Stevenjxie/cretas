@@ -126,6 +126,20 @@ describe('todoApprovalApiClient', () => {
       { notes: 'count mismatch' },
     ],
     [
+      'wastage approve',
+      () => todoApprovalApiClient.wastageApprove('WR-1', 'F123'),
+      'post',
+      '/api/mobile/F123/wastage-reports/WR-1/approve',
+      undefined,
+    ],
+    [
+      'wastage reject',
+      () => todoApprovalApiClient.wastageReject('WR-1', 'photo mismatch', 'F123'),
+      'post',
+      '/api/mobile/F123/wastage-reports/WR-1/reject',
+      { reason: 'photo mismatch' },
+    ],
+    [
       'return finance approve',
       () => todoApprovalApiClient.returnFinanceApprove('RO-1', 'F123'),
       'post',

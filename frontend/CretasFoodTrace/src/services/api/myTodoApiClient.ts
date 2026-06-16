@@ -27,6 +27,7 @@ export type TodoType =
   | 'PRICE_ANOMALY'            // 送货单价格异常待审批
   | 'STOCKTAKE_APPROVAL'       // 盘点任务待财务审批
   | 'RETURN_FINANCE_REVIEW'    // 退货单待财务审批
+  | 'WASTAGE_APPROVAL'         // 报损单待审批
   | 'PAYMENT_DISBURSE';        // 已审批付款请求（出纳执行）
 
 export interface TodoItemDTO {
@@ -189,6 +190,28 @@ class TodoApprovalApiClient {
     return apiClient.post(
       `/api/mobile/${this.fid(factoryId)}/stocktakes/${stocktakeId}/reject`,
       { notes },
+    );
+  }
+
+  /** 报损单审批通过 */
+  async wastageApprove(
+    reportId: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: unknown; message?: string }> {
+    return apiClient.post(
+      `/api/mobile/${this.fid(factoryId)}/wastage-reports/${reportId}/approve`,
+    );
+  }
+
+  /** 报损单驳回 */
+  async wastageReject(
+    reportId: string,
+    reason: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: unknown; message?: string }> {
+    return apiClient.post(
+      `/api/mobile/${this.fid(factoryId)}/wastage-reports/${reportId}/reject`,
+      { reason },
     );
   }
 

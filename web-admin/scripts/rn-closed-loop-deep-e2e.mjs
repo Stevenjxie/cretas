@@ -28,6 +28,8 @@ const evidence = {
   screenshots: [],
 };
 
+const OA_TAB_SELECTOR = '[data-testid="finance-tab-oa-todo"], [data-testid="main-tab-oa-todo"]';
+
 function logStep(name, status, detail = {}) {
   const step = { name, status, detail, at: new Date().toISOString() };
   evidence.steps.push(step);
@@ -237,11 +239,11 @@ async function rnLogin(page, username) {
   await page.locator('[data-testid="login-username-input"]').fill(username);
   await page.locator('[data-testid="login-password-input"]').fill(PASSWORD);
   await page.locator('[data-testid="login-submit-btn"]').click();
-  await page.locator('[role="tab"], [data-testid="main-tab-oa-todo"]').first().waitFor({ timeout: 60000 });
+  await page.locator(`[role="tab"], ${OA_TAB_SELECTOR}`).first().waitFor({ timeout: 60000 });
 }
 
 async function clickTodoApprove(page, type, refId, screenshotPrefix) {
-  const tab = page.locator('[data-testid="main-tab-oa-todo"]');
+  const tab = page.locator(OA_TAB_SELECTOR);
   await tab.waitFor({ timeout: 60000 });
   await tab.click();
   await page.locator('[data-testid="oa-todo-list"]').waitFor({ timeout: 60000 });

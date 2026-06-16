@@ -1,8 +1,9 @@
 package com.cretas.aims.service.oa;
 
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
+import com.cretas.aims.dto.inventory.WastageReportDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
-import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -25,6 +26,7 @@ import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.WastageReportService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -89,6 +91,9 @@ class MyTodoAggregatorServiceTest {
 
     @Mock
     private SalesPriceAdjustmentService salesPriceAdjustmentService;
+
+    @Mock
+    private WastageReportService wastageReportService;
 
     private MyTodoAggregatorService service;
 
@@ -212,7 +217,8 @@ class MyTodoAggregatorServiceTest {
                 customerRepository,
                 supplierRepository,
                 paymentRequestService,
-                salesPriceAdjustmentService
+                salesPriceAdjustmentService,
+                wastageReportService
         );
     }
 
@@ -272,6 +278,41 @@ class MyTodoAggregatorServiceTest {
             assertThat(result.stream().map(TodoItemDTO::getType))
                     .doesNotContain(TodoType.PAYMENT_DISBURSE);
         }
+
+        @Test
+        @DisplayName("finance_manager: WAREHOUSE 报损单进入 WASTAGE_APPROVAL 待办")
+        void listTodos_financeManager_exposesWarehouseWastageApproval() {
+            WastageReportDTO report = new WastageReportDTO();
+            report.setId("wr-1");
+            report.setFactoryId(FACTORY_ID);
+            report.setReportNo("WR-202606-001");
+            report.setTrackType("WAREHOUSE");
+            report.setWarehouseId("WH-001");
+            report.setMaterialBatchId("BATCH-001");
+            report.setWastageQty(new BigDecimal("3.5"));
+            report.setWastageReason("DAMAGED");
+            report.setStatus("PENDING_APPROVAL");
+            report.setSubmittedBy(42L);
+            report.setSubmittedAt(NOW.minusMinutes(15));
+
+            when(wastageReportService.listPending(eq(FACTORY_ID), eq("finance_manager"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(report)));
+            when(warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("WH-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeWarehouse("WH-001", "原料仓")));
+
+            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
+
+            TodoItemDTO item = result.stream()
+                    .filter(t -> t.getType() == TodoType.WASTAGE_APPROVAL)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(item.getRefId()).isEqualTo("wr-1");
+            assertThat(item.getRefNumber()).isEqualTo("WR-202606-001");
+            assertThat(item.getCounterparty()).isEqualTo("原料仓");
+            assertThat(item.getAmount()).isNull();
+            assertThat(item.isNeedDetail()).isTrue();
+            assertThat(item.getDetailPath()).isEqualTo("TodoDetail/wastage/wr-1");
+        }
     }
 
     @Nested
@@ -300,6 +341,7 @@ class MyTodoAggregatorServiceTest {
             verifyNoInteractions(supplierDeliveryNoteService);
             verifyNoInteractions(stocktakeRepository);
             verifyNoInteractions(returnOrderRepository);
+            verifyNoInteractions(wastageReportService);
         }
 
         private PaymentRequestApprovedDTO buildPaymentEntity(

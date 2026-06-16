@@ -3,6 +3,7 @@ package com.cretas.aims.service.oa;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
 import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
+import com.cretas.aims.dto.inventory.WastageReportDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -25,6 +26,7 @@ import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.WastageReportService;
 import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,6 +74,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     private final SupplierRepository supplierRepository;
     private final PaymentRequestService paymentRequestService;
     private final SalesPriceAdjustmentService salesPriceAdjustmentService;
+    private final WastageReportService wastageReportService;
 
     // ─── Config ────────────────────────────────────────────────────────────
 
@@ -103,7 +106,8 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             CustomerRepository customerRepository,
             SupplierRepository supplierRepository,
             PaymentRequestService paymentRequestService,
-            SalesPriceAdjustmentService salesPriceAdjustmentService) {
+            SalesPriceAdjustmentService salesPriceAdjustmentService,
+            WastageReportService wastageReportService) {
         this.purchaseService = purchaseService;
         this.salesService = salesService;
         this.supplierDeliveryNoteService = supplierDeliveryNoteService;
@@ -114,6 +118,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         this.supplierRepository = supplierRepository;
         this.paymentRequestService = paymentRequestService;
         this.salesPriceAdjustmentService = salesPriceAdjustmentService;
+        this.wastageReportService = wastageReportService;
     }
 
     /**
@@ -130,11 +135,12 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             SupplierRepository supplierRepository,
             PaymentRequestService paymentRequestService,
             SalesPriceAdjustmentService salesPriceAdjustmentService,
+            WastageReportService wastageReportService,
             BigDecimal detailThreshold) {
         this(purchaseService, salesService, supplierDeliveryNoteService,
                 stocktakeRepository, warehouseRepository, returnOrderRepository,
                 customerRepository, supplierRepository, paymentRequestService,
-                salesPriceAdjustmentService);
+                salesPriceAdjustmentService, wastageReportService);
         this.detailThreshold = detailThreshold;
     }
 
@@ -151,7 +157,8 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                         TodoType.PRICE_ANOMALY,
                         TodoType.STOCKTAKE_APPROVAL,
                         TodoType.RETURN_FINANCE_REVIEW,
-                        TodoType.SALES_PRICE_ADJUSTMENT))));
+                        TodoType.SALES_PRICE_ADJUSTMENT,
+                        TodoType.WASTAGE_APPROVAL))));
         m.put("cashier", Collections.unmodifiableSet(
                 new LinkedHashSet<>(Arrays.asList(
                         TodoType.PAYMENT_DISBURSE))));
@@ -170,7 +177,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         List<TodoItemDTO> all = new ArrayList<>();
         for (TodoType type : types) {
             try {
-                List<TodoItemDTO> items = fetchByType(factoryId, type);
+                List<TodoItemDTO> items = fetchByType(factoryId, callerRole, type);
                 all.addAll(items);
             } catch (Exception e) {
                 log.warn("[MyTodoAggregator] fan-out failed for type={} factoryId={}: {}",
@@ -193,7 +200,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     // ─── Per-type fan-out ─────────────────────────────────────────────────
 
-    private List<TodoItemDTO> fetchByType(String factoryId, TodoType type) {
+    private List<TodoItemDTO> fetchByType(String factoryId, String callerRole, TodoType type) {
         return switch (type) {
             case PURCHASE_FINANCE_REVIEW -> fetchPurchaseFinanceReview(factoryId);
             case SALES_FINANCE_REVIEW    -> fetchSalesFinanceReview(factoryId);
@@ -201,6 +208,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             case STOCKTAKE_APPROVAL      -> fetchStocktakeApproval(factoryId);
             case RETURN_FINANCE_REVIEW   -> fetchReturnFinanceReview(factoryId);
             case SALES_PRICE_ADJUSTMENT  -> fetchSalesPriceAdjustment(factoryId);
+            case WASTAGE_APPROVAL        -> fetchWastageApproval(factoryId, callerRole);
             case PAYMENT_DISBURSE        -> fetchPaymentDisburse(factoryId);
         };
     }
@@ -417,6 +425,37 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .build();
     }
 
+    private List<TodoItemDTO> fetchWastageApproval(String factoryId, String callerRole) {
+        Page<WastageReportDTO> page = wastageReportService.listPending(
+                factoryId, callerRole, PageRequest.of(0, Integer.MAX_VALUE / 2));
+        if (page == null || page.getContent() == null) return Collections.emptyList();
+
+        return page.getContent().stream()
+                .map(this::mapWastageReport)
+                .collect(Collectors.toList());
+    }
+
+    private TodoItemDTO mapWastageReport(WastageReportDTO report) {
+        String counterparty = resolveWastageCounterparty(report);
+        LocalDateTime submittedAt = report.getSubmittedAt();
+        if (submittedAt == null) {
+            submittedAt = report.getCreatedAt();
+        }
+
+        return TodoItemDTO.builder()
+                .type(TodoType.WASTAGE_APPROVAL)
+                .refId(report.getId())
+                .refNumber(report.getReportNo())
+                .title("报损审批 — " + report.getReportNo())
+                .amount(null)
+                .counterparty(counterparty)
+                .submittedBy(report.getSubmittedBy() != null ? String.valueOf(report.getSubmittedBy()) : null)
+                .submittedAt(submittedAt)
+                .needDetail(true)
+                .detailPath("TodoDetail/wastage/" + report.getId())
+                .build();
+    }
+
     // ── 付款（出纳） ──────────────────────────────────────────────────────
 
     private List<TodoItemDTO> fetchPaymentDisburse(String factoryId) {
@@ -472,6 +511,23 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .map(FactoryWarehouse::getName)
                 .filter(this::hasText)
                 .orElse("盘点仓库需核对");
+    }
+
+    private String resolveWastageCounterparty(WastageReportDTO report) {
+        if (report == null) {
+            return "报损位置需核对";
+        }
+        if (hasText(report.getWarehouseId())) {
+            return warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(
+                            report.getWarehouseId(), report.getFactoryId())
+                    .map(FactoryWarehouse::getName)
+                    .filter(this::hasText)
+                    .orElse("报损仓库需核对");
+        }
+        if (hasText(report.getTrackType())) {
+            return report.getTrackType();
+        }
+        return "报损位置需核对";
     }
 
     private String resolveReturnCounterparty(ReturnOrder order) {

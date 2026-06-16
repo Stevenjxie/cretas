@@ -257,6 +257,7 @@ export default function CashierPaymentListScreen() {
               loading={isPaying}
               disabled={isPaying || paying !== null}
               style={styles.payButton}
+              testID={`cashier-payment-mark-paid-${item.id}`}
             >
               确认付款
             </Button>

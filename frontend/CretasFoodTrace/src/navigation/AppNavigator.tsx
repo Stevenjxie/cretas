@@ -34,6 +34,7 @@ import OperatorNavigator from "./OperatorNavigator";
 import SalesManagerNavigator from "./SalesManagerNavigator";
 import ProcurementManagerNavigator from "./ProcurementManagerNavigator";
 import ViewerNavigator from "./ViewerNavigator";
+import FinanceNavigator from "./FinanceNavigator";
 
 const Stack = createNativeStackNavigator();
 
@@ -111,7 +112,7 @@ function RoleBasedNavigator() {
   }
 
   // operator (操作员) 使用操作员专属界面
-  if (userRole === "operator") {
+  if (userRole === "operator" || userRole === "yield_operator") {
     return <OperatorNavigator />;
   }
 
@@ -123,6 +124,10 @@ function RoleBasedNavigator() {
   // procurement_manager (采购经理) 使用采购专属界面
   if (userRole === "procurement_manager") {
     return <ProcurementManagerNavigator />;
+  }
+
+  if (userRole === "finance_manager" || userRole === "cashier") {
+    return <FinanceNavigator />;
   }
 
   // viewer (查看员) 使用只读界面

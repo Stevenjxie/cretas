@@ -50,6 +50,7 @@ public class TodoItemDTO {
         RETURN_FINANCE_REVIEW,
         /** 销售订单行改价待审批（降价>10% 或 涨价>20% 触发） */
         SALES_PRICE_ADJUSTMENT,
+        WASTAGE_APPROVAL,
         /** 已审批付款请求（出纳执行付款） */
         PAYMENT_DISBURSE
     }

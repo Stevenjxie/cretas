@@ -181,6 +181,14 @@ const FIELD_LABELS: Record<string, string> = {
   expectedPrice: '期望价格',
   actualPrice: '实际价格',
   requestNumber: '付款申请号',
+  reportNo: '报损单号',
+  trackType: '报损轨道',
+  materialBatchId: '物料批次',
+  rawMaterialTypeId: '原料类型',
+  wastageQty: '报损数量',
+  wastageReason: '报损原因',
+  reasonDetail: '原因说明',
+  photoUrls: '现场照片',
   purchaseOrderId: '采购单ID',
   settlementTypeDisplayName: '结算方式',
   approvedAt: '审批时间',
@@ -217,6 +225,8 @@ function getDetailPath(type: TodoType, refId: string, factoryId: string): string
       return `/api/mobile/${factoryId}/stocktakes/${refId}`;
     case 'RETURN_FINANCE_REVIEW':
       return `/api/mobile/${factoryId}/return-orders/${refId}`;
+    case 'WASTAGE_APPROVAL':
+      return `/api/mobile/${factoryId}/wastage-reports/${refId}`;
     case 'PAYMENT_DISBURSE':
       return `/api/mobile/${factoryId}/payment-requests/${refId}`;
     default:
@@ -231,6 +241,7 @@ const TOP_KEYS_BY_TYPE: Record<TodoType, string[]> = {
   PRICE_ANOMALY: ['deliveryNoteNumber', 'supplierName', 'anomalyType', 'expectedPrice', 'actualPrice'],
   STOCKTAKE_APPROVAL: ['stocktakeNo', 'periodMonth', 'submittedBy', 'notes'],
   RETURN_FINANCE_REVIEW: ['returnNumber', 'returnType', 'counterpartyId', 'totalAmount', 'reason'],
+  WASTAGE_APPROVAL: ['reportNo', 'trackType', 'warehouseId', 'materialBatchId', 'wastageQty', 'wastageReason', 'reasonDetail'],
   PAYMENT_DISBURSE: ['requestNumber', 'purchaseOrderNumber', 'supplierName', 'amount', 'settlementTypeDisplayName'],
 };
 
@@ -451,6 +462,9 @@ export default function TodoDetailScreen() {
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceApprove(refId);
           break;
+        case 'WASTAGE_APPROVAL':
+          resp = await todoApprovalApiClient.wastageApprove(refId);
+          break;
         case 'PAYMENT_DISBURSE':
           resp = await todoApprovalApiClient.paymentMarkPaid(refId);
           break;
@@ -506,6 +520,9 @@ export default function TodoDetailScreen() {
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceReject(refId, reason);
+          break;
+        case 'WASTAGE_APPROVAL':
+          resp = await todoApprovalApiClient.wastageReject(refId, reason);
           break;
         case 'PAYMENT_DISBURSE':
           appAlert('不支持驳回', '付款确认操作不支持驳回');
