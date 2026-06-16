@@ -32,6 +32,15 @@ import org.springframework.context.annotation.Configuration;
  * </ul>
  * 没有任何枚举把空串作为合法取值，所以该转换不会改变正确请求的语义。
  *
+ * <p><b>集合 / 数组同理（2026-06-16 补充）</b>：可选的 {@code List}/数组字段（如报工的
+ * {@code photos}、{@code workerIds}）前端"无内容"时若提交 {@code "字段": ""}（空串而非
+ * {@code []}），Jackson 抛 <pre>Cannot coerce empty String ("") to element of `ArrayList`</pre>
+ * 这条消息<b>不含</b> "Cannot deserialize value of type"，因此不匹配 {@code GlobalExceptionHandler}
+ * 的清晰分支 → 同样落到晦涩的 "请求格式不正确" fallback。和枚举是<b>同一族</b> bug
+ * （"Cannot coerce empty String"）。把集合/数组的空串也归一成 {@code null}（= 等同于省略该字段，
+ * service 本就 null-guard）即根治。发现于报工端点 {@code process-work-reporting/normal} 的
+ * {@code photos} 注入探测（F006 soak 审计补测）。
+ *
  * <p>仅作用于 Spring Boot 自动配置的 {@code ObjectMapper}（即 MVC {@code @RequestBody}
  * 反序列化使用的那个）；AI 工具等自建 ObjectMapper 不受影响。
  *
@@ -42,8 +51,15 @@ public class EnumCoercionJacksonConfig {
 
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer enumEmptyStringAsNullCustomizer() {
-        return builder -> builder.postConfigurer(mapper ->
-                mapper.coercionConfigFor(LogicalType.Enum)
-                        .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull));
+        return builder -> builder.postConfigurer(mapper -> {
+            // 空字符串 "" → null，覆盖整个 "Cannot coerce empty String" 家族:
+            // 枚举 (taxRate/storageType...) + 集合/数组 (photos/workerIds...)。
+            mapper.coercionConfigFor(LogicalType.Enum)
+                    .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
+            mapper.coercionConfigFor(LogicalType.Collection)
+                    .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
+            mapper.coercionConfigFor(LogicalType.Array)
+                    .setCoercion(CoercionInputShape.EmptyString, CoercionAction.AsNull);
+        });
     }
 }
