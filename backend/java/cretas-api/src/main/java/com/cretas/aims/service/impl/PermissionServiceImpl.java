@@ -187,10 +187,17 @@ public class PermissionServiceImpl implements PermissionService {
         PERMISSION_MATRIX.put(FactoryUserRole.warehouse_manager, warehouseManagerPerms);
 
         // warehouse_worker
+        // Issue: 扫码收货 403 (2026-06-17, F006). Same bug-class as #812: a role with
+        // legacy "write" on its own module fails checkAction("read") AND
+        // checkAction("read_write"), blocking every GET endpoint for that module.
+        // 仓库员 must READ warehouse + inventory (扫码收货拿订单 / 出库 / 盘点 / 查库存),
+        // not just write. The authoritative fix is the L1 DB migration
+        // V20261024_22 (platform_role_permissions); this matrix entry is the
+        // hardcoded fallback and is aligned for consistency.
         Map<String, String> warehouseWorkerPerms = new HashMap<>();
         warehouseWorkerPerms.put("dashboard", "read");
-        warehouseWorkerPerms.put("warehouse", "write");
-        warehouseWorkerPerms.put("inventory", "write");
+        warehouseWorkerPerms.put("warehouse", "read_write");
+        warehouseWorkerPerms.put("inventory", "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.warehouse_worker, warehouseWorkerPerms);
 
         // hr_admin
