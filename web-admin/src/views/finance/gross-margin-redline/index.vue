@@ -310,7 +310,7 @@ onMounted(async () => {
           </div>
         </el-form-item>
 
-        <el-form-item label="目标毛利率 (%)">
+        <el-form-item label="目标毛利率 (%)" required>
           <el-input-number
             v-model="formData.marginPercent"
             :min="0.01"

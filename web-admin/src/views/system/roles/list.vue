@@ -112,6 +112,11 @@ function handleEdit(row: TableRow) {
 }
 
 async function handleEditSubmit() {
+  // fool-proof Rule 1: 角色名称不能为空, 字段级提示而非静默提交.
+  if (!editForm.displayName || !editForm.displayName.trim()) {
+    ElMessage.warning('请输入角色名称');
+    return;
+  }
   editSubmitting.value = true;
   try {
     const payload = {
@@ -410,7 +415,7 @@ onMounted(loadRoleUserCounts);
     <!-- 编辑角色 Dialog -->
     <el-dialog v-model="editDialogVisible" :title="`编辑角色 — ${editingRole?.displayName}`" width="600px" destroy-on-close>
       <el-form label-width="100px">
-        <el-form-item label="角色名称">
+        <el-form-item label="角色名称" required>
           <el-input v-model="editForm.displayName" placeholder="请输入角色名称" />
         </el-form-item>
         <el-form-item label="描述">

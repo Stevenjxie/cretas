@@ -790,8 +790,17 @@ function buildLegacyBomItemPayload() {
 }
 
 async function submitBomForm() {
+  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
   if (!bomForm.value.materialName) {
-    ElMessage.warning('Please enter material name');
+    ElMessage.warning('请输入物料名称');
+    return;
+  }
+  if (!bomForm.value.materialCategory) {
+    ElMessage.warning('请选择物料类别');
+    return;
+  }
+  if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
+    ElMessage.warning('成品含量必须大于 0');
     return;
   }
   bomDialogLoading.value = true;
@@ -923,8 +932,13 @@ function handleEditLaborCost(row: TableRow) {
 }
 
 async function submitLaborForm() {
+  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
   if (!laborForm.value.processName) {
-    ElMessage.warning('Please enter process name');
+    ElMessage.warning('请输入工序名称');
+    return;
+  }
+  if (canViewPrice.value && laborForm.value.unitPrice == null) {
+    ElMessage.warning('请填写工序单价');
     return;
   }
   laborDialogLoading.value = true;
@@ -1035,8 +1049,13 @@ function handleEditOverheadCost(row: TableRow) {
 }
 
 async function submitOverheadForm() {
+  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
   if (!overheadForm.value.name) {
-    ElMessage.warning('Please enter cost name');
+    ElMessage.warning('请输入费用名称');
+    return;
+  }
+  if (canViewPrice.value && overheadForm.value.unitPrice == null) {
+    ElMessage.warning('请填写单价');
     return;
   }
   overheadDialogLoading.value = true;
