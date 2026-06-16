@@ -22,8 +22,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
+          <el-button text :disabled="!canWrite" @click="openPasswordDialog(row)">密码</el-button>
           <el-button text :disabled="!canWrite" @click="goPermissions(row)">权限</el-button>
         </template>
       </el-table-column>
@@ -32,7 +33,7 @@
     <el-dialog v-model="createDialogVisible" title="新建员工" width="520px">
       <el-form :model="form" label-width="96px">
         <el-form-item label="账号"><el-input v-model="form.username" /></el-form-item>
-        <el-form-item label="密码"><el-input v-model="form.password" type="password" show-password /></el-form-item>
+        <el-form-item label="密码"><el-input v-model="form.password" type="password" show-password placeholder="留空默认 123456" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="form.fullName" /></el-form-item>
         <el-form-item label="手机号"><el-input v-model="form.phone" /></el-form-item>
         <el-form-item label="角色模板"><el-input v-model="form.roleCode" placeholder="factory_super_admin / viewer ..." /></el-form-item>
@@ -40,6 +41,21 @@
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitCreate">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="passwordDialogVisible" title="编辑密码" width="420px">
+      <el-form :model="passwordForm" label-width="96px">
+        <el-form-item label="账号">
+          <el-input :model-value="passwordForm.username" disabled />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.password" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitPassword">保存</el-button>
       </template>
     </el-dialog>
   </section>
@@ -50,7 +66,11 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
-import { createPermissionEmployee, listPermissionEmployees } from '@/api/permissionSettings';
+import {
+  createPermissionEmployee,
+  listPermissionEmployees,
+  updatePermissionEmployee,
+} from '@/api/permissionSettings';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 
@@ -72,12 +92,18 @@ const saving = ref(false);
 const keyword = ref('');
 const users = ref<EmployeeRow[]>([]);
 const createDialogVisible = ref(false);
+const passwordDialogVisible = ref(false);
 const form = reactive({
   username: '',
   password: '',
   fullName: '',
   phone: '',
   roleCode: 'viewer',
+});
+const passwordForm = reactive({
+  userId: '',
+  username: '',
+  password: '123456',
 });
 
 const canWrite = computed(() => permissionStore.canWriteModuleCode('permission_employee_management'));
@@ -117,6 +143,31 @@ async function submitCreate() {
     ElMessage.success('已创建员工');
     createDialogVisible.value = false;
     await loadUsers();
+  } finally {
+    saving.value = false;
+  }
+}
+
+function openPasswordDialog(row: EmployeeRow) {
+  passwordForm.userId = String(row.id);
+  passwordForm.username = row.username || '';
+  passwordForm.password = '123456';
+  passwordDialogVisible.value = true;
+}
+
+async function submitPassword() {
+  if (!factoryId.value || !passwordForm.userId) return;
+  if (!passwordForm.password.trim()) {
+    ElMessage.warning('请输入新密码');
+    return;
+  }
+  saving.value = true;
+  try {
+    await updatePermissionEmployee(factoryId.value, passwordForm.userId, {
+      password: passwordForm.password,
+    });
+    ElMessage.success('密码已更新');
+    passwordDialogVisible.value = false;
   } finally {
     saving.value = false;
   }

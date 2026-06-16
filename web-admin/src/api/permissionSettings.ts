@@ -105,6 +105,18 @@ export async function createPermissionEmployee(
   return (res as unknown as ApiResponse<PermissionEmployeeDto>).data as PermissionEmployeeDto;
 }
 
+export async function updatePermissionEmployee(
+  factoryId: string,
+  userId: string | number,
+  userData: Record<string, unknown>,
+): Promise<PermissionEmployeeDto> {
+  const res = await request.put<ApiResponse<PermissionEmployeeDto>>(
+    `/${factoryId}/permissions/employees/${encodeURIComponent(String(userId))}`,
+    userData,
+  );
+  return (res as unknown as ApiResponse<PermissionEmployeeDto>).data as PermissionEmployeeDto;
+}
+
 export async function updateUserOverrides(
   factoryId: string,
   userId: string,

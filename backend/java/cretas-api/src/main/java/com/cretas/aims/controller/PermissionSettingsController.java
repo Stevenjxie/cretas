@@ -70,6 +70,15 @@ public class PermissionSettingsController {
         return ResponseEntity.ok(userService.createUser(factoryId, request));
     }
 
+    @PutMapping("/employees/{userId}")
+    @RequireModule("permission_employee_management")
+    public ResponseEntity<?> updateEmployee(
+            @PathVariable String factoryId,
+            @PathVariable Long userId,
+            @Valid @RequestBody CreateUserRequest request) {
+        return ResponseEntity.ok(userService.updateUser(factoryId, userId, request));
+    }
+
     @GetMapping("/users/{userId}/effective")
     @RequireModule("permission_employee_overrides")
     public ResponseEntity<?> getUserEffectivePermissions(
