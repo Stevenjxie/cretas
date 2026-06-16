@@ -250,8 +250,8 @@ class SemanticMapper:
                     rule_unmapped, samples_per_col, top_k=2
                 )
                 emb_mapped: Set[str] = set()
-                # DashScope text-embedding-v3 cosine distribution is narrow
-                # on Chinese financial terms: good matches are typically
+                # gte-base-zh cosine distribution on Chinese financial terms:
+                # good matches have historically been typically
                 # 0.60-0.75. We accept top >= 0.65 AND margin(top - 2nd) >= 0.03
                 # to reduce false positives. Borderline (0.55-0.65) falls
                 # through to LLM which has broader semantic understanding.

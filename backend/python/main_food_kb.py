@@ -44,10 +44,11 @@ async def lifespan(app: FastAPI):
         encoded_pass = urllib.parse.quote(db_pass, safe="")
         db_url = f"postgresql://{db_user}:{encoded_pass}@{db_host}:{db_port}/{db_name}"
 
-        # Embedding config
+        # Embedding config: local Java embedding-service over gRPC.
+        # api_key/base_url are kept for backward-compatible configure() args.
         api_key = _env("LLM_API_KEY", _env("DASHSCOPE_API_KEY", ""))
-        base_url = _env("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        embedding_model = _env("FOOD_KB_EMBEDDING_MODEL", "text-embedding-v3")
+        base_url = _env("LLM_BASE_URL", "")
+        embedding_model = _env("FOOD_KB_EMBEDDING_MODEL", "gte-base-zh")
         embedding_dims = int(_env("FOOD_KB_EMBEDDING_DIMS", "768"))
 
         # Configure embedding service

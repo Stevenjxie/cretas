@@ -1,7 +1,7 @@
 """Template embedding index service.
 
 populate_all() iterates every registered template, embeds each
-sample_query via DashScope text-embedding-v3, and upserts into
+sample_query via the local gRPC embedding-service, and upserts into
 smart_bi_template_embeddings. Called at startup and from the
 /admin/template-embeddings/rebuild endpoint.
 
@@ -24,11 +24,11 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "text-embedding-v3"
+_MODEL = "gte-base-zh"
 
 
 async def _get_embedding(text: str) -> Optional[List[float]]:
-    """Lazy-imported DashScope embedding call; returns None on failure."""
+    """Lazy-imported local embedding call; returns None on failure."""
     try:
         from food_kb.services.embedding import get_embedding as _real
         return await _real(text)
@@ -123,14 +123,19 @@ async def cosine_topk(
 
 
 async def count_embeddings(pool) -> int:
-    """Return total number of rows in the embeddings table.
+    """Return total number of rows for the current embedding model.
 
     Used by the lifespan hook to decide whether to run populate_all at
-    startup (empty table = first boot).
+    startup. Counting the current model only prevents old external-model rows
+    from suppressing a gte-base-zh rebuild.
     """
     try:
         async with pool.acquire() as conn:
-            n = await conn.fetchval("SELECT COUNT(*) FROM smart_bi_template_embeddings")
+            n = await conn.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_template_embeddings "
+                "WHERE embedding_model = $1",
+                _MODEL,
+            )
         return int(n or 0)
     except Exception as e:
         logger.warning(f"[template-emb] count failed: {e}")

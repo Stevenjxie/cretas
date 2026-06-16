@@ -119,8 +119,8 @@ class Settings(BaseSettings):
     food_kb_postgres_user: str = "cretas_user"
     food_kb_postgres_password: str = ""
 
-    # Embedding model configuration (DashScope text-embedding-v3)
-    food_kb_embedding_model: str = "text-embedding-v3"
+    # Embedding model configuration (local Java embedding-service over gRPC)
+    food_kb_embedding_model: str = "gte-base-zh"
     food_kb_embedding_dims: int = 768
 
     @property
