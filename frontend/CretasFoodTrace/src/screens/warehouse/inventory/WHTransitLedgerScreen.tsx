@@ -21,6 +21,8 @@ const COPY = {
   reported: '\u62a5\u5de5\u4ea7\u51fa',
   tolerance: '\u5bb9\u5dee',
   receivedQty: '\u5b9e\u6536\u6570\u91cf',
+  receivedPlaceholder: '\u8bf7\u586b\u5199\u4ed3\u5e93\u590d\u6838\u540e\u7684\u5b9e\u6536\u6570\u91cf',
+  receivedHint: '\u63d0\u4ea4\u524d\u6838\u5bf9\u6765\u6e90\u5355\u3001\u62a5\u5de5\u4ea7\u51fa\u548c\u73b0\u573a\u5b9e\u7269\uff1b\u63d0\u4ea4\u540e\u7531\u540e\u7aef\u5199\u5165\u6210\u54c1\u5e93\u5b58\u3002',
   note: '\u5907\u6ce8',
   notePlaceholder: '\u53ef\u586b\u5199\u79f0\u91cd\u3001\u590d\u6838\u6216\u73b0\u573a\u8bf4\u660e',
   confirm: '\u786e\u8ba4\u5b9e\u6536',
@@ -164,6 +166,7 @@ export default function WHTransitLedgerScreen() {
     const overTolerance = isOverTolerance(item, variance);
     const name = item.productName || item.batchNumber || item.sourceNumber || item.id;
     const confirming = confirmingId === item.id;
+    const canConfirm = receivedQuantity != null && receivedQuantity > 0 && !confirming;
 
     return (
       <NeoCard style={styles.card} padding="l" variant="elevated" testID={`transit-card-${item.id}`}>
@@ -190,7 +193,8 @@ export default function WHTransitLedgerScreen() {
 
         <TextInput
           mode="outlined"
-          placeholder={COPY.receivedQty}
+          label={COPY.receivedQty}
+          placeholder={COPY.receivedPlaceholder}
           keyboardType="decimal-pad"
           value={receivedById[item.id] ?? ''}
           onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [item.id]: text }))}
@@ -198,6 +202,9 @@ export default function WHTransitLedgerScreen() {
           right={<TextInput.Affix text={item.unit || ''} />}
           testID={`transit-received-${item.id}`}
         />
+        {!receivedById[item.id] && (
+          <Text style={styles.inputHint}>{COPY.receivedHint}</Text>
+        )}
 
         <TextInput
           mode="outlined"
@@ -227,7 +234,7 @@ export default function WHTransitLedgerScreen() {
           size="large"
           onPress={() => void submitConfirm(item)}
           loading={confirming}
-          disabled={confirming}
+          disabled={!canConfirm}
           style={styles.button}
           testID={`transit-confirm-${item.id}`}
         >
@@ -370,6 +377,12 @@ const styles = StyleSheet.create({
   },
   input: {
     marginTop: theme.custom.spacing.m,
+  },
+  inputHint: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: theme.custom.spacing.xs,
   },
   varianceBox: {
     borderRadius: theme.custom.borderRadius.s,

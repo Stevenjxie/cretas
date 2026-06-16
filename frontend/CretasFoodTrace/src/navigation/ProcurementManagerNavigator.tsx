@@ -95,6 +95,7 @@ export function ProcurementManagerNavigator() {
         name="PMHomeTab"
         component={HomeScreen}
         options={{
+          tabBarButtonTestID: "pm-tab-home",
           title: "首页",
           tabBarIcon: ({ color, size }) => (
             <Icon source="home" size={size} color={color} />
@@ -106,6 +107,7 @@ export function ProcurementManagerNavigator() {
         name="PMPurchaseTab"
         component={PurchaseStackNavigator}
         options={{
+          tabBarButtonTestID: "pm-tab-purchase",
           title: "采购",
           tabBarIcon: ({ color, size }) => (
             <Icon source="package-down" size={size} color={color} />
@@ -117,6 +119,7 @@ export function ProcurementManagerNavigator() {
         name="PMSupplierTab"
         component={SupplierStackNavigator}
         options={{
+          tabBarButtonTestID: "pm-tab-supplier",
           title: "供应商",
           tabBarIcon: ({ color, size }) => (
             <Icon source="truck-delivery-outline" size={size} color={color} />
@@ -128,6 +131,7 @@ export function ProcurementManagerNavigator() {
         name="PMProfileTab"
         component={ProfileStackNavigator}
         options={{
+          tabBarButtonTestID: "pm-tab-profile",
           title: "我的",
           tabBarIcon: ({ color, size }) => (
             <Icon source="account" size={size} color={color} />

@@ -58,13 +58,69 @@ import type { OATodoStackParamList } from '../../types/navigation';
 
 function formatAmount(v: number | null | undefined): string {
   if (v == null) return '—';
-  return `¥${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fixed = v.toFixed(2);
+  const [rawInt = '0', decimals = '00'] = fixed.split('.');
+  const signed = rawInt.startsWith('-');
+  const digits = signed ? rawInt.slice(1) : rawInt;
+  const intPart = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `\u00a5${signed ? '-' : ''}${intPart}.${decimals}`;
 }
 
 function formatDate(s: string | null | undefined): string {
   if (!s) return '—';
   // ISO datetime → "YY-MM-DD HH:mm"
   return s.slice(0, 16).replace('T', ' ');
+}
+
+function isUuidLike(value: string | null | undefined): boolean {
+  return !!value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isOpaqueCounterparty(value: string | null | undefined): boolean {
+  return isUuidLike(value) || !!value && /^f\d{3}-.+-wh-\d+$/i.test(value);
+}
+
+function counterpartyFallback(item: TodoItemDTO): string {
+  switch (item.type) {
+    case 'PAYMENT_DISBURSE':
+      return '付款对象需核对';
+    case 'RETURN_FINANCE_REVIEW':
+      return '客户/供应商需核对';
+    case 'STOCKTAKE_APPROVAL':
+      return '盘点仓库需核对';
+    default:
+      return '对方需核对';
+  }
+}
+
+function counterpartyDisplay(item: TodoItemDTO): string {
+  if (!item.counterparty) {
+    if (
+      item.type === 'PAYMENT_DISBURSE'
+      || item.type === 'RETURN_FINANCE_REVIEW'
+      || item.type === 'STOCKTAKE_APPROVAL'
+    ) {
+      return counterpartyFallback(item);
+    }
+    return '—';
+  }
+  if (isOpaqueCounterparty(item.counterparty)) {
+    return counterpartyFallback(item);
+  }
+  return item.counterparty;
+}
+
+function counterpartyConfirmText(item: TodoItemDTO): string {
+  if (isOpaqueCounterparty(item.counterparty)) {
+    if (item.type === 'PAYMENT_DISBURSE') {
+      return '后端待办未返回供应商名，请按付款申请号和付款明细核对后再确认';
+    }
+    if (item.type === 'STOCKTAKE_APPROVAL') {
+      return '后端待办未返回仓库名称，请按盘点单号和盘点明细核对后再确认';
+    }
+    return '后端待办未返回可读名称，请按单号和详情核对后再确认';
+  }
+  return counterpartyDisplay(item);
 }
 
 const TODO_TYPE_LABEL: Record<TodoType, string> = {
@@ -220,11 +276,11 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
   async function handleApprove() {
     appAlert(
       `确认通过 — ${item.title}`,
-      `单号: ${item.refNumber}\n金额: ${formatAmount(item.amount)}\n对方: ${item.counterparty}\n申请人: ${item.submittedBy}`,
+      `单号: ${item.refNumber}\n金额: ${formatAmount(item.amount)}\n对方: ${counterpartyConfirmText(item)}\n申请人: ${item.submittedBy}`,
       [
         { text: '取消', style: 'cancel' },
         {
-          text: '确认通过',
+          text: item.type === 'PAYMENT_DISBURSE' ? '已核对并确认付款' : '确认通过',
           style: 'default',
           onPress: () => doApprove(),
         },
@@ -372,7 +428,7 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
           <View style={styles.infoRow}>
             <Text variant="bodySmall" style={styles.infoLabel}>对方</Text>
             <Text variant="bodyMedium" style={styles.infoValue}>
-              {item.counterparty || '—'}
+              {counterpartyDisplay(item)}
             </Text>
           </View>
           <View style={styles.infoRow}>

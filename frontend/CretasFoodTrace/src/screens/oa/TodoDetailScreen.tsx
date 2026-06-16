@@ -65,7 +65,12 @@ function formatAmount(v: unknown): string {
   if (v == null || v === '') return '—';
   const n = typeof v === 'number' ? v : parseFloat(String(v));
   if (isNaN(n)) return String(v);
-  return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fixed = n.toFixed(2);
+  const [rawInt = '0', decimals = '00'] = fixed.split('.');
+  const signed = rawInt.startsWith('-');
+  const digits = signed ? rawInt.slice(1) : rawInt;
+  const intPart = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `\u00a5${signed ? '-' : ''}${intPart}.${decimals}`;
 }
 
 function formatValue(v: unknown): string {
@@ -73,6 +78,20 @@ function formatValue(v: unknown): string {
   if (typeof v === 'boolean') return v ? '是' : '否';
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+function isUuidLike(value: unknown): boolean {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isWarehouseIdLike(value: unknown): boolean {
+  return typeof value === 'string' && /^f\d{3}-.+-wh-\d+$/i.test(value);
+}
+
+function isNumericActor(value: unknown): boolean {
+  return typeof value === 'number'
+    || (typeof value === 'string' && /^\d+$/.test(value));
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -89,16 +108,41 @@ const STATUS_LABELS: Record<string, string> = {
   POSTED_TO_FINISHED_GOODS: '已入成品库',
 };
 
+const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  UNPAID: '未收款',
+  PARTIAL: '部分收款',
+  PAID: '已收款',
+  REFUNDED: '已退款',
+};
+
 function isDateTimeKey(key: string): boolean {
   return key.endsWith('At') || key.endsWith('Time');
 }
 
 function formatDisplayValue(key: string, value: unknown): string {
+  if (key === 'warehouseId' && isWarehouseIdLike(value)) {
+    return '盘点仓库需核对';
+  }
+  if (key === 'counterpartyId' && isUuidLike(value)) {
+    return '客户/供应商需核对';
+  }
+  if ((key === 'submittedBy' || key === 'initiatedBy') && (isNumericActor(value) || isUuidLike(value))) {
+    return '发起人需核对';
+  }
   if (key.toLowerCase().includes('amount') || key.toLowerCase().includes('price')) {
     return formatAmount(value);
   }
+  if (key === 'defaultTaxRate' && value != null && value !== '') {
+    return `${String(value)}%`;
+  }
+  if (key === 'defaultInvoiceType' && typeof value === 'string') {
+    return ({ SPECIAL: '专票', NORMAL: '普票', NONE: '不开票' } as Record<string, string>)[value] ?? value;
+  }
   if (key === 'status' && typeof value === 'string') {
     return STATUS_LABELS[value] ?? value;
+  }
+  if (key === 'paymentStatus' && typeof value === 'string') {
+    return PAYMENT_STATUS_LABELS[value] ?? value;
   }
   if (isDateTimeKey(key) && (typeof value === 'string' || typeof value === 'number')) {
     const formatted = formatDateTime(value);
@@ -122,13 +166,13 @@ const FIELD_LABELS: Record<string, string> = {
   notes: '备注',
   periodMonth: '盘点周期',
   stocktakeNo: '盘点单号',
-  warehouseId: '仓库ID',
+  warehouseId: '盘点仓库',
   initiatedBy: '发起人',
   initiatedAt: '发起时间',
   rejectReason: '驳回原因',
   appliedAt: '生效时间',
   counterparty: '对方',
-  counterpartyId: '对方ID',
+  counterpartyId: '对方',
   returnNumber: '退货单号',
   returnType: '退货类型',
   reason: '退货原因',
@@ -140,6 +184,20 @@ const FIELD_LABELS: Record<string, string> = {
   purchaseOrderId: '采购单ID',
   settlementTypeDisplayName: '结算方式',
   approvedAt: '审批时间',
+  orderDate: '下单日期',
+  requiredDeliveryDate: '要求交付日期',
+  discountAmount: '优惠金额',
+  taxAmount: '税额',
+  financeReviewNotes: '审核说明',
+  confirmedAt: '确认时间',
+  remark: '备注',
+  defaultTaxRate: '默认税率',
+  defaultInvoiceType: '默认发票类型',
+  payableAmount: '应收金额',
+  paymentStatus: '收款状态',
+  lockedQty: '锁定数量',
+  reservedQty: '已预留数量',
+  shortageQty: '缺口数量',
 };
 
 function labelFor(key: string): string {
@@ -177,7 +235,27 @@ const TOP_KEYS_BY_TYPE: Record<TodoType, string[]> = {
 };
 
 // Fields to skip (too verbose or shown elsewhere)
-const SKIP_KEYS = new Set(['id', 'factoryId', 'items', 'createdBy', 'approvedBy', 'updatedAt', 'workflowInstanceId']);
+const SKIP_KEYS = new Set([
+  'id',
+  'factoryId',
+  'items',
+  'createdBy',
+  'approvedBy',
+  'updatedAt',
+  'deletedAt',
+  'deleted',
+  'workflowInstanceId',
+  'vflag',
+  'version',
+  'customerId',
+  'supplierId',
+  'purchaseOrderId',
+  'quoteId',
+]);
+
+function isEmptyDetailValue(value: unknown): boolean {
+  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // RejectModal (same pattern as list screen)
@@ -470,6 +548,7 @@ export default function TodoDetailScreen() {
     const topKeys = TOP_KEYS_BY_TYPE[todoType] ?? [];
     const allKeys = Object.keys(detail).filter((k) => !SKIP_KEYS.has(k));
     const remainingKeys = allKeys.filter((k) => !topKeys.includes(k));
+    const visibleRemainingKeys = remainingKeys.filter((key) => !isEmptyDetailValue(detail[key]));
 
     return (
       <>
@@ -482,11 +561,11 @@ export default function TodoDetailScreen() {
           );
         })}
 
-        {remainingKeys.length > 0 && (
+        {visibleRemainingKeys.length > 0 && (
           <>
             <Divider style={styles.sectionDivider} />
             <Text variant="labelSmall" style={styles.sectionLabel}>更多信息</Text>
-            {remainingKeys.map((key) => {
+            {visibleRemainingKeys.map((key) => {
               const val = detail[key];
               const display = formatDisplayValue(key, val);
               return (
@@ -652,7 +731,7 @@ const styles = StyleSheet.create({
   errorText: { color: '#C62828', textAlign: 'center' },
 
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 16 },
+  scrollContent: { padding: 16, paddingBottom: 112 },
 
   detailRow: {
     flexDirection: 'row',

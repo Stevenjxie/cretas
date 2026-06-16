@@ -453,6 +453,7 @@ export type FAManagementStackParamList = {
   PurchaseOrderFinanceReview: { orderId: string };
   ProcessTaskApproval: undefined;
   SalesOrderList: undefined;
+  SalesOrderCreate: undefined;
   SalesOrderDetail: { orderId: string };
   /** Sprint 2 Track E (S-MRP-1 / N31) — 销售单财务审核通过后的缺料分析 chain-card. Day 4 接入 navigator. */
   SalesOrderShortageReview: { orderId: string };

@@ -2,17 +2,24 @@ package com.cretas.aims.service.oa;
 
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.dto.oa.TodoItemDTO.TodoType;
+import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
+import com.cretas.aims.entity.Customer;
+import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
+import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
-import com.cretas.aims.entity.inventory.PaymentRequest;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -33,6 +40,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -65,7 +73,16 @@ class MyTodoAggregatorServiceTest {
     private FactoryStocktakeRepository stocktakeRepository;
 
     @Mock
+    private FactoryWarehouseRepository warehouseRepository;
+
+    @Mock
     private ReturnOrderRepository returnOrderRepository;
+
+    @Mock
+    private CustomerRepository customerRepository;
+
+    @Mock
+    private SupplierRepository supplierRepository;
 
     @Mock
     private PaymentRequestService paymentRequestService;
@@ -134,6 +151,7 @@ class MyTodoAggregatorServiceTest {
         order.setReturnNumber(returnNumber);
         order.setTotalAmount(amount);
         order.setCounterpartyId(counterpartyId);
+        order.setReturnType(ReturnType.SALES_RETURN);
         order.setFactoryId(FACTORY_ID);
         order.setStatus(ReturnOrderStatus.APPROVED);
         order.setApprovedAt(NOW.minusMinutes(20));
@@ -142,15 +160,44 @@ class MyTodoAggregatorServiceTest {
         return order;
     }
 
-    private PaymentRequest fakePaymentRequest(String id, String requestNumber, BigDecimal amount, String supplierId) {
-        PaymentRequest pr = new PaymentRequest();
-        pr.setId(id);
-        pr.setRequestNumber(requestNumber);
-        pr.setAmount(amount);
-        pr.setSupplierId(supplierId);
-        pr.setCreatedAt(NOW.minusHours(1));
-        pr.setUpdatedAt(NOW.minusHours(1));
-        return pr;
+    private PaymentRequestApprovedDTO fakePaymentRequest(String id, String requestNumber, BigDecimal amount, String supplierName) {
+        return PaymentRequestApprovedDTO.builder()
+                .id(id)
+                .requestNumber(requestNumber)
+                .amount(amount)
+                .supplierName(supplierName)
+                .createdAt(NOW.minusHours(1))
+                .build();
+    }
+
+    private FactoryWarehouse fakeWarehouse(String id, String name) {
+        FactoryWarehouse warehouse = new FactoryWarehouse();
+        warehouse.setId(id);
+        warehouse.setFactoryId(FACTORY_ID);
+        warehouse.setCode(id);
+        warehouse.setName(name);
+        warehouse.setType(FactoryWarehouse.WarehouseType.FINISHED);
+        return warehouse;
+    }
+
+    private Customer fakeCustomer(String id, String name) {
+        Customer customer = new Customer();
+        customer.setId(id);
+        customer.setFactoryId(FACTORY_ID);
+        customer.setCode("C-" + id);
+        customer.setCustomerCode("C-" + id);
+        customer.setName(name);
+        return customer;
+    }
+
+    private Supplier fakeSupplier(String id, String name) {
+        Supplier supplier = new Supplier();
+        supplier.setId(id);
+        supplier.setFactoryId(FACTORY_ID);
+        supplier.setCode("S-" + id);
+        supplier.setSupplierCode("S-" + id);
+        supplier.setName(name);
+        return supplier;
     }
 
     @BeforeEach
@@ -160,7 +207,10 @@ class MyTodoAggregatorServiceTest {
                 salesService,
                 supplierDeliveryNoteService,
                 stocktakeRepository,
+                warehouseRepository,
                 returnOrderRepository,
+                customerRepository,
+                supplierRepository,
                 paymentRequestService,
                 salesPriceAdjustmentService
         );
@@ -194,11 +244,15 @@ class MyTodoAggregatorServiceTest {
             when(stocktakeRepository.findByFactoryIdAndOptionalStatus(
                     eq(FACTORY_ID), eq(FactoryStocktake.Status.PENDING_APPROVAL), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(fakeStocktake("st-1", "ST-202606-001"))));
+            when(warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("WH-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeWarehouse("WH-001", "成品仓")));
 
             when(returnOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
                     eq(FACTORY_ID), eq(ReturnOrderStatus.APPROVED), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(
                             fakeReturnOrder("ro-1", "RO-001", new BigDecimal("900"), "CP-001"))));
+            when(customerRepository.findByIdAndFactoryId("CP-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeCustomer("CP-001", "叮咚买菜")));
 
             // act
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
@@ -228,7 +282,7 @@ class MyTodoAggregatorServiceTest {
         @DisplayName("cashier: 只调 payment domain → 返 PAYMENT_DISBURSE")
         void listTodos_cashier_returnsOnlyPayment() {
             // arrange
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(
                             buildPaymentEntity("pr-1", "PR-001", new BigDecimal("15000"), "北京飞熊")));
 
@@ -248,17 +302,15 @@ class MyTodoAggregatorServiceTest {
             verifyNoInteractions(returnOrderRepository);
         }
 
-        private com.cretas.aims.entity.inventory.PaymentRequest buildPaymentEntity(
-                String id, String requestNumber, BigDecimal amount, String supplierId) {
-            com.cretas.aims.entity.inventory.PaymentRequest pr =
-                    new com.cretas.aims.entity.inventory.PaymentRequest();
-            pr.setId(id);
-            pr.setRequestNumber(requestNumber);
-            pr.setAmount(amount);
-            pr.setSupplierId(supplierId);
-            pr.setCreatedAt(NOW.minusHours(5));
-            pr.setUpdatedAt(NOW.minusHours(5));
-            return pr;
+        private PaymentRequestApprovedDTO buildPaymentEntity(
+                String id, String requestNumber, BigDecimal amount, String supplierName) {
+            return PaymentRequestApprovedDTO.builder()
+                    .id(id)
+                    .requestNumber(requestNumber)
+                    .amount(amount)
+                    .supplierName(supplierName)
+                    .createdAt(NOW.minusHours(5))
+                    .build();
         }
     }
 
@@ -286,13 +338,95 @@ class MyTodoAggregatorServiceTest {
     }
 
     @Nested
+    @DisplayName("RN-R1: 待办 counterparty 必须给人话名称")
+    class ReadableCounterparty {
+
+        @Test
+        @DisplayName("盘点审批: counterparty 显示仓库名, 不显示 warehouseId")
+        void stocktakeTodo_usesWarehouseName() {
+            when(stocktakeRepository.findByFactoryIdAndOptionalStatus(
+                    eq(FACTORY_ID), eq(FactoryStocktake.Status.PENDING_APPROVAL), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(fakeStocktake("st-readable", "ST-202606-READ"))));
+            when(warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("WH-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeWarehouse("WH-001", "成品仓")));
+
+            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
+
+            TodoItemDTO item = result.stream()
+                    .filter(t -> t.getType() == TodoType.STOCKTAKE_APPROVAL)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(item.getCounterparty()).isEqualTo("成品仓");
+            assertThat(item.getCounterparty()).isNotEqualTo("WH-001");
+        }
+
+        @Test
+        @DisplayName("退货财审: 销售退货显示客户名, 不显示 customerId")
+        void returnTodo_usesCustomerNameForSalesReturn() {
+            when(returnOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                    eq(FACTORY_ID), eq(ReturnOrderStatus.APPROVED), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(
+                            fakeReturnOrder("ro-readable", "RO-READ", new BigDecimal("900"), "CP-001"))));
+            when(customerRepository.findByIdAndFactoryId("CP-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeCustomer("CP-001", "叮咚买菜")));
+
+            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
+
+            TodoItemDTO item = result.stream()
+                    .filter(t -> t.getType() == TodoType.RETURN_FINANCE_REVIEW)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(item.getCounterparty()).isEqualTo("叮咚买菜");
+            assertThat(item.getCounterparty()).isNotEqualTo("CP-001");
+        }
+
+        @Test
+        @DisplayName("退货财审: 采购退货显示供应商名, 不显示 supplierId")
+        void returnTodo_usesSupplierNameForPurchaseReturn() {
+            ReturnOrder order = fakeReturnOrder("ro-supplier", "RO-SUP", new BigDecimal("1200"), "SUP-001");
+            order.setReturnType(ReturnType.PURCHASE_RETURN);
+            when(returnOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                    eq(FACTORY_ID), eq(ReturnOrderStatus.APPROVED), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(order)));
+            when(supplierRepository.findByIdAndFactoryId("SUP-001", FACTORY_ID))
+                    .thenReturn(Optional.of(fakeSupplier("SUP-001", "北京飞熊")));
+
+            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "finance_manager");
+
+            TodoItemDTO item = result.stream()
+                    .filter(t -> t.getType() == TodoType.RETURN_FINANCE_REVIEW)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(item.getCounterparty()).isEqualTo("北京飞熊");
+            assertThat(item.getCounterparty()).isNotEqualTo("SUP-001");
+        }
+
+        @Test
+        @DisplayName("出纳付款: counterparty 显示供应商名, 不显示 supplierId")
+        void paymentTodo_usesApprovedDetailSupplierName() {
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
+                    .thenReturn(List.of(fakePaymentRequest(
+                            "pr-readable", "PR-READ", new BigDecimal("15000"), "北京飞熊")));
+
+            List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "cashier");
+
+            assertThat(result).hasSize(1);
+            TodoItemDTO item = result.get(0);
+            assertThat(item.getCounterparty()).isEqualTo("北京飞熊");
+            assertThat(item.getCounterparty()).isNotEqualTo("SUP-001");
+            verify(paymentRequestService).listApprovedForPaymentWithDetails(FACTORY_ID);
+            verify(paymentRequestService, never()).listApprovedForPayment(FACTORY_ID);
+        }
+    }
+
+    @Nested
     @DisplayName("B2-T4: needDetail 阈值边界")
     class NeedDetailThreshold {
 
         @Test
         @DisplayName("amount=6000(>5000) → needDetail=true")
         void needDetail_aboveThreshold_true() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(buildPR("pr-hi", "PR-HI", new BigDecimal("6000"))));
 
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "cashier");
@@ -304,7 +438,7 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("amount=4000(<5000) → needDetail=false")
         void needDetail_belowThreshold_false() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(buildPR("pr-lo", "PR-LO", new BigDecimal("4000"))));
 
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "cashier");
@@ -316,7 +450,7 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("amount=5000(==threshold) → needDetail=false（边界含等于）")
         void needDetail_exactThreshold_false() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(buildPR("pr-eq", "PR-EQ", new BigDecimal("5000"))));
 
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "cashier");
@@ -328,7 +462,7 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("amount=null → needDetail=true（保守）")
         void needDetail_nullAmount_true() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(buildPR("pr-null", "PR-NULL", null)));
 
             List<TodoItemDTO> result = service.listTodos(FACTORY_ID, "cashier");
@@ -337,16 +471,15 @@ class MyTodoAggregatorServiceTest {
             assertThat(result.get(0).isNeedDetail()).isTrue();
         }
 
-        private com.cretas.aims.entity.inventory.PaymentRequest buildPR(
+        private PaymentRequestApprovedDTO buildPR(
                 String id, String rn, BigDecimal amount) {
-            com.cretas.aims.entity.inventory.PaymentRequest pr =
-                    new com.cretas.aims.entity.inventory.PaymentRequest();
-            pr.setId(id);
-            pr.setRequestNumber(rn);
-            pr.setAmount(amount);
-            pr.setCreatedAt(NOW);
-            pr.setUpdatedAt(NOW);
-            return pr;
+            return PaymentRequestApprovedDTO.builder()
+                    .id(id)
+                    .requestNumber(rn)
+                    .amount(amount)
+                    .supplierName("北京飞熊")
+                    .createdAt(NOW)
+                    .build();
         }
     }
 
@@ -389,7 +522,7 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("cashier + 2 付款项 → count=2")
         void countTodos_cashier_returns2() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(List.of(
                             buildPR("pr-a", new BigDecimal("1000")),
                             buildPR("pr-b", new BigDecimal("2000"))));
@@ -406,15 +539,14 @@ class MyTodoAggregatorServiceTest {
             assertThat(count).isZero();
         }
 
-        private com.cretas.aims.entity.inventory.PaymentRequest buildPR(String id, BigDecimal amount) {
-            com.cretas.aims.entity.inventory.PaymentRequest pr =
-                    new com.cretas.aims.entity.inventory.PaymentRequest();
-            pr.setId(id);
-            pr.setRequestNumber("PR-" + id);
-            pr.setAmount(amount);
-            pr.setCreatedAt(NOW);
-            pr.setUpdatedAt(NOW);
-            return pr;
+        private PaymentRequestApprovedDTO buildPR(String id, BigDecimal amount) {
+            return PaymentRequestApprovedDTO.builder()
+                    .id(id)
+                    .requestNumber("PR-" + id)
+                    .amount(amount)
+                    .supplierName("北京飞熊")
+                    .createdAt(NOW)
+                    .build();
         }
     }
 
@@ -495,7 +627,7 @@ class MyTodoAggregatorServiceTest {
         @Test
         @DisplayName("cashier 角色不查改价域 (改价仅 finance_manager 可见)")
         void listTodos_cashier_doesNotQueryPriceAdjustment() {
-            when(paymentRequestService.listApprovedForPayment(FACTORY_ID))
+            when(paymentRequestService.listApprovedForPaymentWithDetails(FACTORY_ID))
                     .thenReturn(Collections.emptyList());
 
             service.listTodos(FACTORY_ID, "cashier");

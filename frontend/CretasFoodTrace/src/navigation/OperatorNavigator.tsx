@@ -63,6 +63,7 @@ export function OperatorNavigator() {
         name="OperatorReportTab"
         component={OperatorReportStackNavigator}
         options={{
+          tabBarButtonTestID: 'operator-tab-report',
           title: '工序',
           tabBarIcon: ({ color, size }) => (
             <Icon source="format-list-checks" size={size} color={color} />
@@ -75,6 +76,7 @@ export function OperatorNavigator() {
         name="OperatorProfileTab"
         component={ProfileStackNavigator}
         options={{
+          tabBarButtonTestID: 'operator-tab-profile',
           title: '我的',
           tabBarIcon: ({ color, size }) => (
             <Icon source="account-outline" size={size} color={color} />
