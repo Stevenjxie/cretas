@@ -127,8 +127,12 @@ async function handleCreate() {
   if (!factoryId.value) return;
   const tools = createForm.value.tools.split(',').map(t => t.trim()).filter(Boolean);
   const triggers = createForm.value.triggers ? createForm.value.triggers.split(',').map(t => t.trim()).filter(Boolean) : undefined;
-  if (!createForm.value.name || tools.length === 0) {
-    ElMessage.warning('名称和工具列表为必填');
+  if (!createForm.value.name?.trim()) {
+    ElMessage.warning('请填写 Skill 名称');
+    return;
+  }
+  if (tools.length === 0) {
+    ElMessage.warning('请填写工具列表 (逗号分隔)');
     return;
   }
   try {

@@ -56,7 +56,8 @@ function resetForm() {
 }
 
 async function handleCreate() {
-  if (!form.value.connectionName || !form.value.appKey) return ElMessage.warning('请填写必填项');
+  if (!form.value.connectionName?.trim()) return ElMessage.warning('请填写连接名称');
+  if (!form.value.appKey?.trim()) return ElMessage.warning('请填写 App Key');
   try {
     const res = await post(`/${factoryId.value}/pos/connections`, form.value);
     if (res.success) { ElMessage.success('创建成功'); resetForm(); dialogVisible.value = false; loadConnections(); }
@@ -212,8 +213,8 @@ async function handleSync(id: string) {
             <el-option v-for="(v, k) in brandMap" :key="k" :label="v.name" :value="k" />
           </el-select>
         </el-form-item>
-        <el-form-item label="连接名称"><el-input v-model="form.connectionName" placeholder="如：白垩纪-客如云POS" /></el-form-item>
-        <el-form-item label="App Key"><el-input v-model="form.appKey" /></el-form-item>
+        <el-form-item label="连接名称" required><el-input v-model="form.connectionName" placeholder="如：白垩纪-客如云POS" /></el-form-item>
+        <el-form-item label="App Key" required><el-input v-model="form.appKey" /></el-form-item>
         <el-form-item label="App Secret"><el-input v-model="form.appSecret" type="password" show-password /></el-form-item>
         <el-form-item label="门店ID"><el-input v-model="form.posStoreId" placeholder="POS系统中的门店标识" /></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
