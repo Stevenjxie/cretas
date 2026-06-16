@@ -167,6 +167,13 @@ public class PermissionServiceImpl implements PermissionService {
         operatorPerms.put("work_report", "write");
         PERMISSION_MATRIX.put(FactoryUserRole.operator, operatorPerms);
 
+        // yield_operator: ordinary report-work account, limited to production reporting.
+        Map<String, String> yieldOperatorPerms = new HashMap<>();
+        yieldOperatorPerms.put("dashboard", "read");
+        yieldOperatorPerms.put("production", "write");
+        yieldOperatorPerms.put("work_report", "write");
+        PERMISSION_MATRIX.put(FactoryUserRole.yield_operator, yieldOperatorPerms);
+
         // warehouse_manager
         Map<String, String> warehouseManagerPerms = new HashMap<>();
         warehouseManagerPerms.put("dashboard", "read_write");
