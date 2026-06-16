@@ -19,6 +19,20 @@ import { isPlatformUser, isFactoryUser, ROLE_METADATA } from '@/types/auth';
 // localStorage keys (only for non-sensitive user info)
 const USER_KEY = 'cretas_user';
 
+const FACTORY_BRAND_SUBTITLE = '白垩纪AI';
+const DEFAULT_BRAND_TITLE = '白垩纪AI Agent';
+const DEFAULT_BRAND_LOGO_URL = '/logo.svg';
+const FACTORY_BRAND_OVERRIDES: Record<string, { name: string; logoUrl: string }> = {
+  LIUSHANMEN: {
+    name: '六膳门',
+    logoUrl: '/brands/liushanmen-logo.jpg',
+  },
+};
+
+function getFactoryBrandOverride(id?: string) {
+  return id ? FACTORY_BRAND_OVERRIDES[id] : undefined;
+}
+
 export const useAuthStore = defineStore('auth', () => {
   // State
   const user = ref<User | null>(null);
@@ -66,6 +80,29 @@ export const useAuthStore = defineStore('auth', () => {
     if (isFactoryUser(u)) return u.factoryUser?.factoryType || 'FACTORY';
     return '';
   });
+
+  const factoryName = computed(() => {
+    const u = user.value as User | null;
+    if (!u || !isFactoryUser(u)) return '';
+    const factoryUser = u.factoryUser;
+    return getFactoryBrandOverride(factoryUser?.factoryId)?.name
+      || factoryUser?.factoryName
+      || factoryUser?.factoryId
+      || '';
+  });
+
+  const factoryLogoUrl = computed(() => {
+    const u = user.value as User | null;
+    if (!u || !isFactoryUser(u)) return DEFAULT_BRAND_LOGO_URL;
+    const factoryUser = u.factoryUser;
+    return getFactoryBrandOverride(factoryUser?.factoryId)?.logoUrl
+      || factoryUser?.factoryLogoUrl
+      || DEFAULT_BRAND_LOGO_URL;
+  });
+
+  const brandTitle = computed(() => factoryName.value || DEFAULT_BRAND_TITLE);
+  const brandSubtitle = computed(() => factoryName.value ? FACTORY_BRAND_SUBTITLE : '');
+  const isLiushanmenFactory = computed(() => factoryId.value === 'LIUSHANMEN' || factoryName.value === '六膳门');
 
   const roleMetadata = computed(() => {
     const role = currentRole.value;
@@ -128,6 +165,8 @@ export const useAuthStore = defineStore('auth', () => {
       factoryUser: {
         role: data.role,
         factoryId: data.factoryId,
+        factoryName: data.factoryName,
+        factoryLogoUrl: data.factoryLogoUrl,
         factoryType: data.factoryType || 'FACTORY',
         permissions: data.permissions || [],
       }
@@ -205,7 +244,12 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     currentRole,
     factoryId,
+    factoryName,
+    factoryLogoUrl,
     factoryType,
+    brandTitle,
+    brandSubtitle,
+    isLiushanmenFactory,
     roleMetadata,
     isPlatform,
     isFactory,

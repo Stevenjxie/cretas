@@ -37,6 +37,7 @@ const isNewFactory = computed(() => {
     && running === 0
     && activeAlerts === 0;
 });
+const shouldShowOnboarding = computed(() => isNewFactory.value && !authStore.isLiushanmenFactory);
 
 const onboardingSteps = [
  { title: '上传 Excel 数据', desc: '财务/销售/采购报表导入 AI 分析', route: '/smart-bi/analysis', icon: '' },
@@ -182,7 +183,7 @@ function navigateTo(route: string) {
     </div>
 
     <!-- UX Round 5: 新工厂 onboarding 引导卡 (仅当所有 KPI=0 时显示) -->
-    <el-card v-if="isNewFactory" class="onboarding-card" shadow="always">
+    <el-card v-if="shouldShowOnboarding" class="onboarding-card" shadow="always">
       <div class="onboarding-header">
  <span class="onboarding-icon"></span>
         <div>
