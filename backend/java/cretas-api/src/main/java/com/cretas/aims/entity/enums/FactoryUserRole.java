@@ -278,6 +278,7 @@ public enum FactoryUserRole {
         switch (this) {
             case platform_admin:
             case factory_super_admin:
+            case permission_admin:
                 return "*";
             case restaurant_manager:
             case restaurant_owner:
