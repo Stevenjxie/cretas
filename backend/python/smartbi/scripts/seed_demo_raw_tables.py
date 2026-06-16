@@ -8,26 +8,33 @@ writes to smart_bi_timeseries (via xlsx upload) which the dashboard ignores.
 
 Tables written:
   cretas_db / cretas_prod_db:
-    • smart_bi_sales_data    (legacy KPI path + data-date-range endpoint)
-    • smart_bi_finance_data  (finance panel KPIs)
+    * smart_bi_sales_data    (legacy KPI path + data-date-range endpoint)
+    * smart_bi_finance_data  (finance panel KPIs)
   smartbi_db / smartbi_prod_db:
-    • agg_daily              (gold-primary KPI path, used by test env)
+    * agg_daily              (gold-primary KPI path)
+    * dim_store              (store dimension, if FK constraint present)
 
-Tenants fixed:
-  DEMO_FACTORY  – sales_data already present; extends agg_daily 2026-01→now
-  DEMO_FACTORY2 – no raw data; seeded from scratch
-  DEMO_REST     – finance/agg_daily present; adds sales_data + extends to now
-  F004          – minimal finance only; full seed
+Tenants seeded (all 4, unified full-replace):
+  DEMO_FACTORY  -- manufacturing demo
+  DEMO_FACTORY2 -- manufacturing demo #2
+  DEMO_REST     -- restaurant demo
+  F004          -- manufacturing demo (smaller scale)
+
+All 4 tenants get a FULL DELETE + RESEED for every table.
+No "gap fill" logic -- guarantees consistency across tables and tenants.
+
+Date range: 2025-01-01 to --end date (capped to today, no future data).
+Organizer controls --end; default is today.
 
 Usage:
-  python seed_demo_raw_tables.py [--env prod|test]  [--dry-run]
+  python seed_demo_raw_tables.py [--env prod|test] [--end YYYY-MM-DD] [--dry-run]
 
 Run on server (requires psycopg2 in the venv):
   cd /www/wwwroot/cretas/code/backend/python
   source venv38/bin/activate
-  python smartbi/scripts/seed_demo_raw_tables.py --env prod
+  python smartbi/scripts/seed_demo_raw_tables.py --env prod --end 2026-06-16
 
-Author: feat/demo-dashboard-light worktree
+Author: fix/demo-raw-data-consistency worktree
 """
 from __future__ import annotations
 
@@ -83,6 +90,13 @@ ENVS: Dict[str, Dict[str, Any]] = {
         },
     },
 }
+
+# ---------------------------------------------------------------------------
+# DEMO TENANT REGISTRY
+# Safe guard: only these 4 IDs may be touched; never real customer data.
+# ---------------------------------------------------------------------------
+
+DEMO_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "DEMO_REST", "F004"})
 
 # ---------------------------------------------------------------------------
 # DATA GENERATORS
@@ -143,7 +157,6 @@ def _sales_row_mfg(factory_id: str, d: date, upload_id: Optional[int] = None) ->
     gm = round(rng.uniform(0.25, 0.42), 4)
     cost = round(amount * (1 - gm), 2)
     profit = round(amount - cost, 2)
-    now = "NOW()"  # placeholder for SQL
     return (
         factory_id,          # factory_id
         d,                    # order_date
@@ -420,12 +433,59 @@ DEMO_STORES: Dict[str, List[Tuple[int, str, str]]] = {
     ],
 }
 
+# Revenue scale per tenant for agg_daily daily base
+AGG_DAILY_REVENUE_BASE: Dict[str, float] = {
+    "DEMO_FACTORY": 80000.0,
+    "DEMO_FACTORY2": 65000.0,
+    "DEMO_REST": 30000.0,
+    "F004": 40000.0,
+}
 
-def ensure_dim_store(conn, factory_id: str, dry_run: bool) -> List[Tuple[int, float]]:
-    """Insert dim_store entries for factory if FK constraint exists. Returns store list."""
+# Tenant profiles for sales/finance generation
+TENANT_PROFILES: Dict[str, Dict[str, Any]] = {
+    "DEMO_FACTORY": {
+        "type": "mfg",
+        "monthly_revenue": 12_000_000.0,
+        "revenue_growth": 0.004,
+        "margin": 0.34,
+        "is_restaurant": False,
+    },
+    "DEMO_FACTORY2": {
+        "type": "mfg",
+        "monthly_revenue": 8_500_000.0,
+        "revenue_growth": 0.003,
+        "margin": 0.32,
+        "is_restaurant": False,
+    },
+    "DEMO_REST": {
+        "type": "rest",
+        "monthly_revenue": 850_000.0,
+        "revenue_growth": 0.006,
+        "margin": 0.62,
+        "is_restaurant": True,
+    },
+    "F004": {
+        "type": "mfg",
+        "monthly_revenue": 3_200_000.0,
+        "revenue_growth": 0.004,
+        "margin": 0.29,
+        "is_restaurant": False,
+    },
+}
+
+
+def _get_stores_for_agg(factory_id: str) -> List[Tuple[int, float]]:
+    """Return (store_id, revenue_base) pairs for agg_daily generation."""
+    stores_def = DEMO_STORES.get(factory_id, [])
+    base = AGG_DAILY_REVENUE_BASE.get(factory_id, 50000.0)
+    return [(s[0], base) for s in stores_def]
+
+
+def ensure_dim_store(conn, factory_id: str, dry_run: bool) -> None:
+    """Insert dim_store entries for factory if FK constraint exists."""
     stores_def = DEMO_STORES.get(factory_id, [])
     if not stores_def:
-        return []
+        return
 
     # Check if FK constraint exists (test env has it, prod doesn't)
     with conn.cursor() as cur:
@@ -451,16 +511,8 @@ def ensure_dim_store(conn, factory_id: str, dry_run: bool) -> List[Tuple[int, fl
                 execute_values(cur, DIM_STORE_UPSERT, rows)
             conn.commit()
             print(f"  dim_store {factory_id}: upserted {len(rows)} stores")
-
-    # Return (store_id, revenue_base) pairs from definition
-    revenue_bases = {
-        "DEMO_FACTORY": 80000.0,
-        "DEMO_FACTORY2": 65000.0,
-        "DEMO_REST": 30000.0,
-        "F004": 40000.0,
-    }
-    base = revenue_bases.get(factory_id, 50000.0)
-    return [(s[0], base) for s in stores_def]
+    else:
+        print(f"  dim_store {factory_id}: no FK constraint, skipping upsert")
 
 
 def _add_timestamps(rows: List[tuple]) -> List[tuple]:
@@ -470,8 +522,18 @@ def _add_timestamps(rows: List[tuple]) -> List[tuple]:
     return [r + (now, now) for r in rows]
 
 
+def _assert_demo_tenant(factory_id: str) -> None:
+    """Hard guard: refuse to touch non-demo tenants."""
+    if factory_id not in DEMO_TENANT_IDS:
+        raise ValueError(
+            f"SAFETY: factory_id '{factory_id}' is not a demo tenant. "
+            f"Allowed: {sorted(DEMO_TENANT_IDS)}"
+        )
+
+
 def upsert_sales_data(conn, factory_id: str, rows: List[tuple], dry_run: bool) -> int:
-    """Delete existing and insert new sales data for factory."""
+    """Delete all existing and insert new sales data for factory."""
+    _assert_demo_tenant(factory_id)
     if not rows:
         return 0
     rows_with_ts = _add_timestamps(rows)
@@ -492,7 +554,8 @@ def upsert_sales_data(conn, factory_id: str, rows: List[tuple], dry_run: bool) -
 
 
 def upsert_finance_data(conn, factory_id: str, rows: List[tuple], dry_run: bool) -> int:
-    """Delete existing and insert new finance data for factory."""
+    """Delete REVENUE+COST records and insert new finance data for factory."""
+    _assert_demo_tenant(factory_id)
     if not rows:
         return 0
     rows_with_ts = _add_timestamps(rows)
@@ -517,216 +580,197 @@ def _set_factory_guc(cur, factory_id: str) -> None:
     cur.execute("SET app.factory_id = %s", (factory_id,))
 
 
-def upsert_agg_daily(conn, factory_id: str, rows: List[tuple], dry_run: bool) -> int:
-    """Upsert agg_daily rows (ON CONFLICT UPDATE, safe to run multiple times).
+def replace_agg_daily(conn, factory_id: str, rows: List[tuple], dry_run: bool) -> int:
+    """Delete all existing agg_daily rows for factory, then insert new rows.
+
+    Full-replace (not gap-fill) so that the date range is guaranteed continuous
+    and consistent with smart_bi_sales_data.
 
     agg_daily has FORCE ROW SECURITY with USING (factory_id = current_setting('app.factory_id')).
-    We must SET app.factory_id within each session before touching the table.
+    We must SET app.factory_id within each connection transaction before touching the table.
+    Per feedback_asyncpg_rls_guc_must_be_in_transaction: psycopg2 autocommit is off by
+    default, so SET ... runs in the same transaction as DELETE/INSERT -- correct.
     """
+    _assert_demo_tenant(factory_id)
     if not rows:
         return 0
-    # Add computed_at=NOW() to each row (already in column order for AGG_DAILY_INSERT)
+    # Add computed_at=NOW() to each row
     from datetime import datetime
     now = datetime.now()
     rows_with_ts = [r + (now,) for r in rows]
     if dry_run:
-        print(f"  [DRY] Would upsert {len(rows)} agg_daily rows for {factory_id}")
+        print(f"  [DRY] Would delete+insert {len(rows)} agg_daily rows for {factory_id}")
         return len(rows)
     with conn.cursor() as cur:
         _set_factory_guc(cur, factory_id)
+        cur.execute(
+            "DELETE FROM agg_daily WHERE factory_id = %s",
+            (factory_id,)
+        )
+        deleted = cur.rowcount
         execute_values(cur, AGG_DAILY_INSERT, rows_with_ts)
         inserted = len(rows)
     conn.commit()
-    print(f"  agg_daily {factory_id}: upserted {inserted}")
+    print(f"  agg_daily {factory_id}: deleted {deleted}, inserted {inserted}")
     return inserted
 
 
-def get_agg_daily_date_range(conn, factory_id: str) -> Tuple[Optional[date], Optional[date]]:
-    """Return (min_date, max_date) for factory in agg_daily.
+def verify_table(conn, table: str, id_col: str, date_col: str,
+                 factory_ids: List[str], guc_needed: bool = False) -> None:
+    """Print per-tenant row count + min/max date for verification."""
+    placeholders = ",".join(["%s"] * len(factory_ids))
+    query = (
+        f"SELECT {id_col}, COUNT(*), MIN({date_col}), MAX({date_col}) "
+        f"FROM {table} WHERE {id_col} IN ({placeholders}) "
+        f"GROUP BY {id_col} ORDER BY 1"
+    )
+    print(f"\n  [{table}]")
+    for fid in factory_ids:
+        with conn.cursor() as cur:
+            if guc_needed:
+                _set_factory_guc(cur, fid)
+            cur.execute(query, factory_ids)
+            rows = cur.fetchall()
+        conn.commit()
+        # find this tenant's row
+        tenant_row = next((r for r in rows if r[0] == fid), None)
+        if tenant_row:
+            _, cnt, mn, mx = tenant_row
+            print(f"    {fid:18s}: {cnt:6d} rows  {mn} → {mx}")
+        else:
+            print(f"    {fid:18s}: 0 rows (MISSING)")
+        break  # avoid re-printing per outer loop; rewrite below
 
-    Sets app.factory_id GUC first so RLS allows the SELECT.
-    """
-    with conn.cursor() as cur:
-        _set_factory_guc(cur, factory_id)
+
+def verify_all(cretas_conn, smartbi_conn, tenant_ids: List[str]) -> None:
+    """Print verification summary for all tables and tenants."""
+    print("\n" + "=" * 60)
+    print("VERIFICATION SUMMARY")
+    print("=" * 60)
+
+    # smart_bi_sales_data
+    print("\n[smart_bi_sales_data]")
+    with cretas_conn.cursor() as cur:
+        phs = ",".join(["%s"] * len(tenant_ids))
         cur.execute(
-            "SELECT MIN(date), MAX(date) FROM agg_daily WHERE factory_id = %s",
-            (factory_id,)
-        )
-        row = cur.fetchone()
-    conn.commit()  # flush GUC session state
-    if row and row[0]:
-        return row[0], row[1]
-    return None, None
-
-
-def get_agg_daily_stores(conn, factory_id: str) -> List[Tuple[int, float]]:
-    """Get existing store_ids and their avg daily net_amount.
-
-    Sets app.factory_id GUC first so RLS allows the SELECT.
-    """
-    with conn.cursor() as cur:
-        _set_factory_guc(cur, factory_id)
-        cur.execute(
-            """
-            SELECT store_id, AVG(net_amount)
-            FROM agg_daily WHERE factory_id = %s
-            GROUP BY store_id
-            ORDER BY store_id
-            """,
-            (factory_id,)
+            f"SELECT factory_id, COUNT(*), MIN(order_date), MAX(order_date) "
+            f"FROM smart_bi_sales_data WHERE factory_id IN ({phs}) "
+            f"GROUP BY factory_id ORDER BY 1",
+            tenant_ids
         )
         rows = cur.fetchall()
-    conn.commit()
-    if rows:
-        return [(int(r[0]), float(r[1])) for r in rows]
-    return []
+    cretas_conn.commit()
+    _print_verify_rows(rows, tenant_ids)
+
+    # smart_bi_finance_data
+    print("\n[smart_bi_finance_data (REVENUE+COST only)]")
+    with cretas_conn.cursor() as cur:
+        phs = ",".join(["%s"] * len(tenant_ids))
+        cur.execute(
+            f"SELECT factory_id, COUNT(*), MIN(record_date), MAX(record_date) "
+            f"FROM smart_bi_finance_data "
+            f"WHERE factory_id IN ({phs}) AND record_type IN ('REVENUE','COST') "
+            f"GROUP BY factory_id ORDER BY 1",
+            tenant_ids
+        )
+        rows = cur.fetchall()
+    cretas_conn.commit()
+    _print_verify_rows(rows, tenant_ids)
+
+    # agg_daily (requires GUC per tenant)
+    print("\n[agg_daily]")
+    for fid in tenant_ids:
+        with smartbi_conn.cursor() as cur:
+            _set_factory_guc(cur, fid)
+            cur.execute(
+                "SELECT factory_id, COUNT(*), MIN(date), MAX(date) "
+                "FROM agg_daily WHERE factory_id = %s "
+                "GROUP BY factory_id",
+                (fid,)
+            )
+            rows = cur.fetchall()
+        smartbi_conn.commit()
+        if rows:
+            _, cnt, mn, mx = rows[0]
+            print(f"  {fid:18s}: {cnt:6d} rows  {mn} → {mx}")
+        else:
+            print(f"  {fid:18s}: 0 rows (MISSING)")
+
+
+def _print_verify_rows(rows: list, tenant_ids: List[str]) -> None:
+    row_map = {r[0]: r for r in rows}
+    for fid in tenant_ids:
+        if fid in row_map:
+            _, cnt, mn, mx = row_map[fid]
+            print(f"  {fid:18s}: {cnt:6d} rows  {mn} → {mx}")
+        else:
+            print(f"  {fid:18s}: 0 rows (MISSING)")
 
 
 # ---------------------------------------------------------------------------
 # MAIN SEED LOGIC
 # ---------------------------------------------------------------------------
 
-def seed(env: str, dry_run: bool) -> None:
+def seed(env: str, end_date: date, dry_run: bool) -> None:
     cfg = ENVS[env]
     print(f"\n{'='*60}")
-    print(f"Seeding demo raw tables — env={env}  dry_run={dry_run}")
+    print(f"Seeding demo raw tables — env={env}  end={end_date}  dry_run={dry_run}")
     print(f"{'='*60}")
 
-    # Date ranges
+    # Clamp end_date to today: never generate future data
+    today = date.today()
+    if end_date > today:
+        print(f"WARNING: --end {end_date} is in the future; clamping to today={today}")
+        end_date = today
+
     seed_start = date(2025, 1, 1)
-    seed_end = date.today()  # Include current month
+    seed_end = end_date
+
+    print(f"Date range: {seed_start} to {seed_end}")
 
     cretas_conn = psycopg2.connect(**cfg["cretas"])
     smartbi_conn = psycopg2.connect(**cfg["smartbi"])
 
     total_rows = 0
+    tenant_ids = list(DEMO_TENANT_IDS)  # order doesn't matter; process all 4
 
-    # -----------------------------------------------------------------------
-    # DEMO_FACTORY: already has smart_bi_sales_data and smart_bi_finance_data.
-    # Only need to extend agg_daily from its current end date to today.
-    # -----------------------------------------------------------------------
-    print("\n[DEMO_FACTORY] Extending agg_daily to current month...")
-    default_df_stores = ensure_dim_store(smartbi_conn, "DEMO_FACTORY", dry_run)
-    min_d, max_d = get_agg_daily_date_range(smartbi_conn, "DEMO_FACTORY")
-    if max_d is None:
-        print("  No existing agg_daily — seeding from scratch")
-        df_stores = default_df_stores
-        agg_start = seed_start
-    else:
-        print(f"  Existing agg_daily: {min_d} to {max_d}")
-        df_stores = get_agg_daily_stores(smartbi_conn, "DEMO_FACTORY") or default_df_stores
-        # Only fill the gap
-        agg_start = max_d + timedelta(days=1)
+    for factory_id in sorted(tenant_ids):
+        profile = TENANT_PROFILES[factory_id]
+        print(f"\n[{factory_id}] Full reseed ({profile['type']})...")
 
-    if agg_start <= seed_end:
-        print(f"  Filling gap: {agg_start} to {seed_end} ({(seed_end - agg_start).days + 1} days)")
-        df_agg_rows = gen_agg_daily("DEMO_FACTORY", agg_start, seed_end, df_stores)
-        total_rows += upsert_agg_daily(smartbi_conn, "DEMO_FACTORY", df_agg_rows, dry_run)
-    else:
-        print(f"  Already up to date (max_d={max_d})")
+        # ---- smart_bi_sales_data ----
+        if profile["type"] == "rest":
+            sales_rows = gen_sales_data_rest(factory_id, seed_start, seed_end)
+        else:
+            sales_rows = gen_sales_data_mfg(factory_id, seed_start, seed_end)
+        total_rows += upsert_sales_data(cretas_conn, factory_id, sales_rows, dry_run)
 
-    # -----------------------------------------------------------------------
-    # DEMO_FACTORY2: No sales data, no finance data. Seed all from scratch.
-    # -----------------------------------------------------------------------
-    print("\n[DEMO_FACTORY2] Seeding sales + finance + agg_daily...")
-    df2_sales = gen_sales_data_mfg("DEMO_FACTORY2", seed_start, seed_end)
-    total_rows += upsert_sales_data(cretas_conn, "DEMO_FACTORY2", df2_sales, dry_run)
+        # ---- smart_bi_finance_data ----
+        finance_rows = gen_finance_data(
+            factory_id, seed_start, seed_end,
+            monthly_revenue=profile["monthly_revenue"],
+            revenue_growth=profile["revenue_growth"],
+            margin=profile["margin"],
+            is_restaurant=profile["is_restaurant"],
+        )
+        total_rows += upsert_finance_data(cretas_conn, factory_id, finance_rows, dry_run)
 
-    df2_finance = gen_finance_data(
-        "DEMO_FACTORY2", seed_start, seed_end,
-        monthly_revenue=8_500_000.0, revenue_growth=0.003, margin=0.32
-    )
-    total_rows += upsert_finance_data(cretas_conn, "DEMO_FACTORY2", df2_finance, dry_run)
-
-    # agg_daily for DEMO_FACTORY2: ensure dim_store, then fill gap
-    default_df2_stores = ensure_dim_store(smartbi_conn, "DEMO_FACTORY2", dry_run)
-    min_d2, max_d2 = get_agg_daily_date_range(smartbi_conn, "DEMO_FACTORY2")
-    if max_d2 is None:
-        df2_stores = default_df2_stores
-        agg2_start = seed_start
-    else:
-        df2_stores = get_agg_daily_stores(smartbi_conn, "DEMO_FACTORY2") or default_df2_stores
-        agg2_start = max_d2 + timedelta(days=1)
-    if agg2_start <= seed_end:
-        df2_agg_rows = gen_agg_daily("DEMO_FACTORY2", agg2_start, seed_end, df2_stores)
-        total_rows += upsert_agg_daily(smartbi_conn, "DEMO_FACTORY2", df2_agg_rows, dry_run)
-
-    # -----------------------------------------------------------------------
-    # DEMO_REST: Has finance data to 2026-04; agg_daily to 2026-06-06.
-    # Add sales_data (was missing entirely) and extend finance to current month.
-    # -----------------------------------------------------------------------
-    print("\n[DEMO_REST] Adding sales_data + extending finance to current month...")
-    dr_sales = gen_sales_data_rest("DEMO_REST", seed_start, seed_end)
-    total_rows += upsert_sales_data(cretas_conn, "DEMO_REST", dr_sales, dry_run)
-
-    # Finance: extend existing data (delete REVENUE+COST and reseed full range)
-    dr_finance = gen_finance_data(
-        "DEMO_REST", seed_start, seed_end,
-        monthly_revenue=850_000.0, revenue_growth=0.006, margin=0.62,
-        is_restaurant=True,
-    )
-    total_rows += upsert_finance_data(cretas_conn, "DEMO_REST", dr_finance, dry_run)
-
-    # agg_daily: ensure dim_store, then fill gap from max_d + 1
-    default_dr_stores = ensure_dim_store(smartbi_conn, "DEMO_REST", dry_run)
-    min_dr, max_dr = get_agg_daily_date_range(smartbi_conn, "DEMO_REST")
-    if max_dr is None:
-        dr_stores = default_dr_stores
-        agg_dr_start = seed_start
-    else:
-        dr_stores = get_agg_daily_stores(smartbi_conn, "DEMO_REST") or default_dr_stores
-        agg_dr_start = max_dr + timedelta(days=1)
-    if agg_dr_start <= seed_end:
-        print(f"  DEMO_REST agg_daily gap: {agg_dr_start} to {seed_end}")
-        dr_agg_rows = gen_agg_daily("DEMO_REST", agg_dr_start, seed_end, dr_stores)
-        total_rows += upsert_agg_daily(smartbi_conn, "DEMO_REST", dr_agg_rows, dry_run)
-    else:
-        print(f"  DEMO_REST agg_daily already up to date (max_d={max_dr})")
-
-    # -----------------------------------------------------------------------
-    # F004: Has finance data only for one day (2026-02-21). Full reseed.
-    # -----------------------------------------------------------------------
-    print("\n[F004] Seeding sales + finance + agg_daily...")
-    f4_sales = gen_sales_data_mfg("F004", seed_start, seed_end)
-    total_rows += upsert_sales_data(cretas_conn, "F004", f4_sales, dry_run)
-
-    f4_finance = gen_finance_data(
-        "F004", seed_start, seed_end,
-        monthly_revenue=3_200_000.0, revenue_growth=0.004, margin=0.29
-    )
-    total_rows += upsert_finance_data(cretas_conn, "F004", f4_finance, dry_run)
-
-    # agg_daily for F004 (no existing data)
-    default_f4_stores = ensure_dim_store(smartbi_conn, "F004", dry_run)
-    min_f4, max_f4 = get_agg_daily_date_range(smartbi_conn, "F004")
-    if max_f4 is None:
-        f4_stores = default_f4_stores
-        agg_f4_start = seed_start
-    else:
-        f4_stores = get_agg_daily_stores(smartbi_conn, "F004") or default_f4_stores
-        agg_f4_start = max_f4 + timedelta(days=1)
-    if agg_f4_start <= seed_end:
-        f4_agg_rows = gen_agg_daily("F004", agg_f4_start, seed_end, f4_stores)
-        total_rows += upsert_agg_daily(smartbi_conn, "F004", f4_agg_rows, dry_run)
-
-    cretas_conn.close()
-    smartbi_conn.close()
+        # ---- dim_store (FK guard) + agg_daily ----
+        ensure_dim_store(smartbi_conn, factory_id, dry_run)
+        stores = _get_stores_for_agg(factory_id)
+        agg_rows = gen_agg_daily(factory_id, seed_start, seed_end, stores)
+        total_rows += replace_agg_daily(smartbi_conn, factory_id, agg_rows, dry_run)
 
     print(f"\n{'='*60}")
     print(f"Done. Total rows written: {total_rows}")
     print(f"{'='*60}")
 
-    # Verification summary
-    print("\nVerification (run these queries to confirm):")
-    print(f"  psql -h 127.0.0.1 -U cretas_user -d {cfg['cretas']['dbname']} -c \\")
-    print("    \"SELECT factory_id, COUNT(*), MIN(order_date), MAX(order_date) FROM smart_bi_sales_data")
-    print("     WHERE factory_id IN ('DEMO_FACTORY','DEMO_FACTORY2','DEMO_REST','F004')")
-    print("     GROUP BY factory_id ORDER BY 1;\"")
-    print()
-    print(f"  psql -h 127.0.0.1 -U smartbi_user -d {cfg['smartbi']['dbname']} -c \\")
-    print("    \"SELECT factory_id, COUNT(*), MIN(date), MAX(date) FROM agg_daily")
-    print("     WHERE factory_id IN ('DEMO_FACTORY','DEMO_FACTORY2','DEMO_REST','F004')")
-    print("     GROUP BY factory_id ORDER BY 1;\"")
+    # Verification summary (skip for dry-run since nothing was written)
+    if not dry_run:
+        verify_all(cretas_conn, smartbi_conn, sorted(tenant_ids))
+
+    cretas_conn.close()
+    smartbi_conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -737,10 +781,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Seed SmartBI raw dashboard tables for demo tenants")
     ap.add_argument("--env", choices=["prod", "test"], default="prod",
                     help="Target environment (default: prod)")
+    ap.add_argument(
+        "--end",
+        type=lambda s: date.fromisoformat(s),
+        default=date.today(),
+        metavar="YYYY-MM-DD",
+        help="End date for seed range (default: today). Will be clamped to today if future.",
+    )
     ap.add_argument("--dry-run", action="store_true",
                     help="Print what would be done without writing to DB")
     args = ap.parse_args()
-    seed(args.env, args.dry_run)
+    seed(args.env, args.end, args.dry_run)
 
 
 if __name__ == "__main__":
