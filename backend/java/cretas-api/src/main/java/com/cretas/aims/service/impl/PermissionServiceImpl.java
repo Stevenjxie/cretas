@@ -116,7 +116,7 @@ public class PermissionServiceImpl implements PermissionService {
         workshopPerms.put("dashboard", "read");
         workshopPerms.put("production", "read_write");
         workshopPerms.put("warehouse", "read");
-        workshopPerms.put("quality", "write");
+        workshopPerms.put("quality", "read_write"); // #963 same-cause: 车间主任需读质检/缺陷列表(原 write-only→read 全 403)
         workshopPerms.put("hr", "read");
         workshopPerms.put("equipment", "read");
         workshopPerms.put("scheduling", "read");
@@ -130,7 +130,7 @@ public class PermissionServiceImpl implements PermissionService {
         teamLeaderPerms.put("dashboard", "read");
         teamLeaderPerms.put("production", "read_write");
         teamLeaderPerms.put("warehouse", "read");
-        teamLeaderPerms.put("quality", "write");
+        teamLeaderPerms.put("quality", "read_write"); // #963 same-cause: 大组长读本线质检结果(write-only 读 403)
         teamLeaderPerms.put("equipment", "read");
         teamLeaderPerms.put("scheduling", "read");
         teamLeaderPerms.put("work_report", "read_write");
@@ -141,7 +141,7 @@ public class PermissionServiceImpl implements PermissionService {
         Map<String, String> groupLeaderPerms = new HashMap<>();
         groupLeaderPerms.put("dashboard", "read");
         groupLeaderPerms.put("production", "read_write");
-        groupLeaderPerms.put("quality", "write");
+        groupLeaderPerms.put("quality", "read_write"); // #963 same-cause: 小组长读本组质检结果(write-only 读 403)
         groupLeaderPerms.put("equipment", "read");
         groupLeaderPerms.put("work_report", "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.group_leader, groupLeaderPerms);
