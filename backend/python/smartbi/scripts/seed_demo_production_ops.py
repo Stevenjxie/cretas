@@ -19,8 +19,26 @@ the 5 empty analytics pages read from:
 
 DEMO_REST is SKIPPED — it is a restaurant tenant; these manufacturing pages don't apply.
 
+FK-guarded tables (quality_inspections / production_plans / factory_equipment) are
+seeded using REAL existing FK sources resolved per-tenant at runtime — no synthetic
+FK values are ever invented:
+    * quality_inspections.production_batch_id → production_batches(id) (existing)
+    * quality_inspections.inspector_id        → users(id)             (existing)
+    * production_plans.product_type_id        → product_types(id)     (existing)
+    * production_plans.created_by             → users(id)             (existing)
+    * factory_equipment.factory_id           → factories(id)          (existing)
+If a tenant lacks a required FK source, that table is SKIPPED for that tenant (the
+matching KPI keeps its hardcoded fallback). Observed env divergence (2026-06-17):
+    * prod: all 3 tenants have factories+users; DEMO_FACTORY/DEMO_FACTORY2 have
+      product_types → full coverage. F004 has 0 product_types → plans skipped.
+    * test: only F004 is in factories/users; DEMO_FACTORY/DEMO_FACTORY2 have no
+      factories/users/product_types → their FK tables skip on test.
+All @Enumerated(EnumType.STRING) values are asserted in-memory against the Java enum
+sets before insert (inspection_mode ∈ InspectionMode, status ∈ ProductionPlanStatus);
+factory_equipment.status='RUNNING' matches the KPI equipmentAvailability filter.
+
 Date range: 2025-01-01 → --end (default today, never future).
-Strategy: DELETE demo tenant rows first, then bulk INSERT.
+Strategy: DELETE demo tenant rows first (by marker/prefix), then bulk INSERT (idempotent).
 RLS: SET app.factory_id before any write to RLS-guarded tables.
 
 Usage (server):
@@ -198,6 +216,52 @@ def _months_in_range(start: date, end: date) -> List[date]:
 
 def _short_uuid() -> str:
     return str(uuid.uuid4()).replace("-", "")[:24]
+
+
+# ---------------------------------------------------------------------------
+# ENUM LEGALITY (mirror Java @Enumerated(EnumType.STRING) value sets)
+# Asserted in-memory before insert — do NOT rely on DB CHECK constraints
+# (test DB may lack them; Java rejects illegal enum on read regardless).
+# ---------------------------------------------------------------------------
+
+# QualityInspection.InspectionMode (entity QualityInspection.java)
+LEGAL_INSPECTION_MODE = frozenset({"FULL_INSPECTION", "SAMPLING"})
+# ProductionPlanStatus enum (entity enums/ProductionPlanStatus.java)
+LEGAL_PLAN_STATUS = frozenset({
+    "PLANNED", "PREPARED", "PENDING", "IN_PROGRESS", "COMPLETED",
+    "CANCELLED", "PAUSED", "PENDING_APPROVAL",
+})
+# FactoryEquipment.status is a free VARCHAR (NOT @Enumerated). KPI
+# equipmentAvailability counts status=="RUNNING" (ProductionReportServiceImpl
+# line 1200). We assert RUNNING so the KPI moves off its 85 fallback.
+LEGAL_EQUIPMENT_STATUS = frozenset({"idle", "running", "maintenance", "scrapped", "RUNNING", "运行中"})
+
+
+def _assert_quality_enums(rows: List[tuple]) -> None:
+    """Row layout: [10]=inspection_mode, [9]=result (free VARCHAR, not enum)."""
+    for r in rows:
+        if r[10] not in LEGAL_INSPECTION_MODE:
+            raise AssertionError(
+                f"ILLEGAL inspection_mode '{r[10]}' — must be one of {sorted(LEGAL_INSPECTION_MODE)}"
+            )
+
+
+def _assert_plan_enums(rows: List[tuple]) -> None:
+    """Row layout: [9]=status."""
+    for r in rows:
+        if r[9] not in LEGAL_PLAN_STATUS:
+            raise AssertionError(
+                f"ILLEGAL production_plan status '{r[9]}' — must be one of {sorted(LEGAL_PLAN_STATUS)}"
+            )
+
+
+def _assert_equipment_status(rows: List[tuple]) -> None:
+    """Row layout: [6]=status (factory_id,code,equipment_code,equipment_name,type,model,status,...)."""
+    for r in rows:
+        if r[6] not in LEGAL_EQUIPMENT_STATUS:
+            raise AssertionError(
+                f"ILLEGAL equipment status '{r[6]}' — must be one of {sorted(LEGAL_EQUIPMENT_STATUS)}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -486,18 +550,36 @@ def gen_quality_inspections(
     factory_id: str,
     start: date,
     end: date,
+    batch_ids: List[int],
+    inspector_ids: List[int],
 ) -> List[tuple]:
     """Generate quality_inspections rows.
 
-    Columns (id omitted — BIGSERIAL not in original DDL but quality_inspections.id
-    is VARCHAR(191) per bootstrap; inspector_id is BIGINT per DDL):
+    FK requirements (cretas_db DDL — both NOT NULL):
+      production_batch_id BIGINT NOT NULL → production_batches(id)
+      inspector_id        BIGINT NOT NULL → users(id)
+    Caller MUST pass real existing ids; this function raises if either is empty.
+
+    Enum/value legality:
+      result          = free VARCHAR; KPI FPY filters "PASS" (case-insensitive) or
+                        "passed" (ProductionReportServiceImpl line 1188). We emit
+                        "PASS" / "CONDITIONAL" (legal — result is NOT @Enumerated).
+      inspection_mode = @Enumerated(EnumType.STRING) InspectionMode → must be one of
+                        {FULL_INSPECTION, SAMPLING}. We emit "SAMPLING".
+
+    Columns:
       id, factory_id, production_batch_id,
       inspector_id, inspection_date, sample_size, pass_count, fail_count,
       pass_rate, result, inspection_mode, notes
     """
+    if not batch_ids:
+        raise ValueError(f"gen_quality_inspections({factory_id}): no production_batches ids (FK required)")
+    if not inspector_ids:
+        raise ValueError(f"gen_quality_inspections({factory_id}): no user ids for inspector_id (FK required)")
+
     rows: List[tuple] = []
 
-    # ~1 inspection per working day, higher pass rate = realistic
+    # ~1-3 inspections per working day, higher pass rate = realistic
     for d in _dates_in_range(start, end):
         if d.weekday() == 6:  # no Sunday inspections
             continue
@@ -511,18 +593,18 @@ def gen_quality_inspections(
             result = "PASS" if float(pass_rate) >= 90 else "CONDITIONAL"
 
             rows.append((
-                _short_uuid(),           # id (VARCHAR(191) PK)
+                _short_uuid(),               # id (VARCHAR(191) PK)
                 factory_id,
-                None,                    # production_batch_id (BIGINT, nullable)
-                None,                    # inspector_id (BIGINT, nullable per DDL)
-                d,                       # inspection_date
-                Decimal(str(sample)),    # sample_size
+                rng.choice(batch_ids),       # production_batch_id (FK → production_batches.id)
+                rng.choice(inspector_ids),   # inspector_id (FK → users.id)
+                d,                           # inspection_date
+                Decimal(str(sample)),        # sample_size
                 Decimal(str(pass_count)),
                 Decimal(str(fail_count)),
-                pass_rate,               # pass_rate (as Decimal)
-                result,
-                "SAMPLING",              # inspection_mode
-                "示范质检记录",           # notes
+                pass_rate,                   # pass_rate (as Decimal)
+                result,                      # result (free VARCHAR; FPY filter = "PASS")
+                "SAMPLING",                  # inspection_mode (InspectionMode enum legal)
+                "示范质检记录",               # notes
             ))
 
     return rows
@@ -536,16 +618,35 @@ def gen_production_plans(
     factory_id: str,
     start: date,
     end: date,
+    product_type_ids: List[str],
+    creator_id: int,
 ) -> List[tuple]:
     """Generate production_plans rows so KPI output completion rate calculates.
 
+    FK requirements (cretas_db DDL):
+      factory_id      → factories(id)        (caller guarantees existence)
+      product_type_id → product_types(id) NOT NULL  (caller passes real ids)
+      created_by      → users(id) NOT NULL          (caller passes real user id)
+
+    Enum legality:
+      status = @Enumerated ProductionPlanStatus → "COMPLETED" is legal.
+      (vflag / is_locked / skip_process_reporting have DB defaults — omitted.)
+
+    KPI note: outputCompletionRate = SUM(actual_quantity)/SUM(planned_quantity)
+      filtered on end_time BETWEEN (date-30) AND (date+1)
+      (ProductionPlanRepository.calculate{Output,PlannedOutput}BetweenDates).
+      The full-range spread guarantees recent (last-30-day) plans exist.
+
     Columns:
-      id, factory_id, plan_number, product_type_id, product_name,
+      id, factory_id, plan_number, product_type_id,
       planned_quantity, actual_quantity, unit,
-      start_time, end_time, status
+      start_time, end_time, status, created_by
     """
+    if not product_type_ids:
+        raise ValueError(
+            f"gen_production_plans({factory_id}): no product_types ids (FK required)"
+        )
     prof = TENANT_PROFILES[factory_id]
-    products = prof["products"]
     planned_lo, planned_hi = prof["planned_qty_range"]
     monthly = prof["monthly_batches"]
     rows: List[tuple] = []
@@ -565,7 +666,7 @@ def gen_production_plans(
             continue
 
         for _ in range(n_plans):
-            prod_id, prod_name = rng.choice(products)
+            prod_id = rng.choice(product_type_ids)
             planned = round(rng.uniform(planned_lo, planned_hi), 2)
             actual = round(planned * rng.uniform(0.88, 1.02), 2)  # 88-102% completion
 
@@ -582,14 +683,14 @@ def gen_production_plans(
                 _short_uuid(),
                 factory_id,
                 plan_num,
-                prod_id,
-                # product_name column does not exist in production_plans DDL
+                prod_id,             # product_type_id (real FK → product_types.id)
                 planned,
                 actual,
                 "kg",
                 start_dt,
                 end_dt,
                 "COMPLETED",
+                creator_id,          # created_by (real FK → users.id)
             ))
 
     return rows
@@ -781,7 +882,7 @@ PROD_PLAN_INSERT = """
 INSERT INTO production_plans (
     id, factory_id, plan_number, product_type_id,
     planned_quantity, actual_quantity, unit,
-    start_time, end_time, status,
+    start_time, end_time, status, created_by,
     created_at, updated_at
 ) VALUES %s
 """
@@ -876,62 +977,126 @@ def seed_cretas_tables(
         print(f"  {factory_id}: production_reports deleted={deleted}, inserted={len(reports)}")
     stats["production_reports"] = len(reports)
 
-    # --- quality_inspections ---
-    # NOTE: quality_inspections has FK constraints:
-    #   inspector_id → users(id) NOT NULL,  production_batch_id → production_batches(id) NOT NULL
-    # Demo tenants DEMO_FACTORY/DEMO_FACTORY2 have no users seeded.
-    # Skipping quality_inspections; KPI FPY will use hardcoded fallback (96%).
-    # To enable: seed users for demo tenants first, then run with --seed-quality flag.
-    print(f"  {factory_id}: quality_inspections skipped (FK constraints; FPY fallback=96)")
-    stats["quality_inspections"] = 0
-
-    # --- production_plans ---
-    # NOTE: production_plans has FK constraints:
-    #   factory_id → factories(id) NOT NULL (DEMO_FACTORY/DEMO_FACTORY2 not in factories table)
-    #   product_type_id → product_types(id) NOT NULL (synthetic IDs don't exist)
-    #   created_by → users(id) NOT NULL (no demo users for DEMO_FACTORY/DEMO_FACTORY2)
-    # Skipping production_plans; KPI outputCompletionRate will use hardcoded fallback (85%).
-    print(f"  {factory_id}: production_plans skipped (FK constraints; outputCompletionRate fallback=85)")
-    stats["production_plans"] = 0
-
-    # --- factory_equipment ---
-    # factory_equipment has FK: factory_id → factories(id), created_by → users(id) NOT NULL.
-    # Only factories that exist in the factories table AND have users can be seeded here.
-    # DEMO_FACTORY/DEMO_FACTORY2 are SmartBI-only demo tenants (no factory record).
+    # --- Resolve real FK sources for this tenant (NO synthetic FK values) ---
+    # quality_inspections FK: production_batch_id → production_batches(id),
+    #                         inspector_id → users(id)  (both NOT NULL in DB)
+    # production_plans FK:     product_type_id → product_types(id) NOT NULL,
+    #                         created_by → users(id) NOT NULL,
+    #                         factory_id → factories(id)
+    # factory_equipment FK:   factory_id → factories(id)  (created_by is plain BIGINT, NO FK)
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM factories WHERE id = %s", (factory_id,))
         factory_exists = cur.fetchone()[0] > 0
-        cur.execute("SELECT id FROM users WHERE factory_id = %s AND deleted_at IS NULL LIMIT 1", (factory_id,))
-        user_row = cur.fetchone()
 
-    if not factory_exists or user_row is None:
+        cur.execute(
+            "SELECT id FROM users WHERE factory_id = %s AND deleted_at IS NULL ORDER BY id",
+            (factory_id,),
+        )
+        user_ids = [r[0] for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT id FROM product_types WHERE factory_id = %s "
+            "AND deleted_at IS NULL ORDER BY id",
+            (factory_id,),
+        )
+        product_type_ids = [r[0] for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT id FROM production_batches WHERE factory_id = %s "
+            "AND deleted_at IS NULL ORDER BY id",
+            (factory_id,),
+        )
+        batch_ids = [r[0] for r in cur.fetchall()]
+
+    creator_id = user_ids[0] if user_ids else None
+
+    # --- quality_inspections ---
+    # FK satisfied via real production_batches.id + users.id. Idempotent via
+    # demo notes marker ('示范质检记录').
+    if not batch_ids or not user_ids:
+        print(
+            f"  {factory_id}: quality_inspections skipped "
+            f"(missing FK source: batches={len(batch_ids)}, users={len(user_ids)}; FPY fallback=96)"
+        )
+        stats["quality_inspections"] = 0
+    else:
+        quality = _add_ts(
+            gen_quality_inspections(factory_id, start, end, batch_ids, user_ids)
+        )
+        _assert_quality_enums(quality)
+        if dry_run:
+            print(f"  [DRY] {factory_id}: would seed {len(quality)} quality_inspections")
+        else:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM quality_inspections WHERE factory_id = %s AND notes = %s",
+                    (factory_id, "示范质检记录"),
+                )
+                deleted = cur.rowcount
+                execute_values(cur, QUALITY_INSERT, quality)
+                conn.commit()
+            print(f"  {factory_id}: quality_inspections deleted={deleted}, inserted={len(quality)}")
+        stats["quality_inspections"] = len(quality)
+
+    # --- production_plans ---
+    # FK satisfied via real product_types.id + users.id + factories.id.
+    # Idempotent via plan_number prefix 'PP-<factory4>-'.
+    if not factory_exists or not product_type_ids or creator_id is None:
+        print(
+            f"  {factory_id}: production_plans skipped "
+            f"(missing FK source: factory={factory_exists}, "
+            f"product_types={len(product_type_ids)}, users={len(user_ids)}; "
+            "outputCompletionRate fallback=85)"
+        )
+        stats["production_plans"] = 0
+    else:
+        plans = _add_ts(
+            gen_production_plans(factory_id, start, end, product_type_ids, creator_id)
+        )
+        _assert_plan_enums(plans)
+        if dry_run:
+            print(f"  [DRY] {factory_id}: would seed {len(plans)} production_plans")
+        else:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM production_plans WHERE factory_id = %s "
+                    "AND plan_number LIKE 'PP-' || LEFT(%s,4) || '%%'",
+                    (factory_id, factory_id),
+                )
+                deleted = cur.rowcount
+                execute_values(cur, PROD_PLAN_INSERT, plans)
+                conn.commit()
+            print(f"  {factory_id}: production_plans deleted={deleted}, inserted={len(plans)}")
+        stats["production_plans"] = len(plans)
+
+    # --- factory_equipment ---
+    # factory_equipment FK: factory_id → factories(id). created_by is a plain
+    # NOT NULL BIGINT (no FK), but we still use a real user id when available.
+    if not factory_exists:
         print(
             f"  {factory_id}: factory_equipment skipped "
-            "(no factory/user record; KPI equipmentAvailability fallback=85)"
+            "(no factory record; KPI equipmentAvailability fallback=85)"
         )
         stats["factory_equipment"] = 0
     else:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) FROM factory_equipment WHERE factory_id = %s AND deleted_at IS NULL",
-                (factory_id,),
-            )
-            existing = cur.fetchone()[0]
-
-        if existing > 0:
-            print(f"  {factory_id}: factory_equipment already has {existing} rows, skipping")
-            stats["factory_equipment"] = existing
+        equip_creator = creator_id if creator_id is not None else 0
+        equip = _add_ts_with_creator(gen_factory_equipment(factory_id), equip_creator)
+        _assert_equipment_status(equip)
+        if dry_run:
+            print(f"  [DRY] {factory_id}: would seed {len(equip)} factory_equipment")
         else:
-            creator_id = user_row[0]
-            equip = _add_ts_with_creator(gen_factory_equipment(factory_id), creator_id)
-            if dry_run:
-                print(f"  [DRY] {factory_id}: would seed {len(equip)} factory_equipment")
-            else:
-                with conn.cursor() as cur:
-                    execute_values(cur, EQUIPMENT_INSERT, equip)
-                    conn.commit()
-                print(f"  {factory_id}: factory_equipment inserted={len(equip)}")
-            stats["factory_equipment"] = len(equip)
+            with conn.cursor() as cur:
+                # Idempotent: delete demo equipment by code prefix 'EQ-<factory4>-'
+                cur.execute(
+                    "DELETE FROM factory_equipment WHERE factory_id = %s "
+                    "AND code LIKE 'EQ-' || LEFT(%s,4) || '%%'",
+                    (factory_id, factory_id),
+                )
+                deleted = cur.rowcount
+                execute_values(cur, EQUIPMENT_INSERT, equip)
+                conn.commit()
+            print(f"  {factory_id}: factory_equipment deleted={deleted}, inserted={len(equip)}")
+        stats["factory_equipment"] = len(equip)
 
     return stats
 
