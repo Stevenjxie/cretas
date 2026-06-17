@@ -161,17 +161,20 @@ public class PermissionServiceImpl implements PermissionService {
         PERMISSION_MATRIX.put(FactoryUserRole.quality_inspector, inspectorPerms);
 
         // operator
+        // V20261024_24 / #963 同因: 报工角色本职="读任务/上限/WIP + 写报工", 只写不读本职
+        // 模块 → 所有 production/work_report GET 端点 403。production/work_report 升 read_write。
         Map<String, String> operatorPerms = new HashMap<>();
         operatorPerms.put("dashboard", "read");
-        operatorPerms.put("production", "write");
-        operatorPerms.put("work_report", "write");
+        operatorPerms.put("production", "read_write");
+        operatorPerms.put("work_report", "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.operator, operatorPerms);
 
         // yield_operator: ordinary report-work account, limited to production reporting.
+        // V20261024_24 实测: production='w' 导致逐道报工 GET yield/limits/wip 全 403 (无法报工)。
         Map<String, String> yieldOperatorPerms = new HashMap<>();
         yieldOperatorPerms.put("dashboard", "read");
-        yieldOperatorPerms.put("production", "write");
-        yieldOperatorPerms.put("work_report", "write");
+        yieldOperatorPerms.put("production", "read_write");
+        yieldOperatorPerms.put("work_report", "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.yield_operator, yieldOperatorPerms);
 
         // warehouse_manager
