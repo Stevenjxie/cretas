@@ -1221,6 +1221,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 new BigDecimal(onTimeShipments).divide(new BigDecimal(totalShipments), 4, RoundingMode.HALF_UP)
                         .multiply(new BigDecimal("100")) : new BigDecimal("95");
 
+        // 单位成本 = 期间实际生产成本 / 期间产出. 无产出(如纯零售租户)或无成本数据时返 0 (诚实空, 不造假).
+        BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
+        BigDecimal unitCost = (totalActualCost != null && safeOutput.compareTo(BigDecimal.ZERO) > 0) ?
+                totalActualCost.divide(safeOutput, 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
         BigDecimal equipmentAvailability = equipments.size() > 0 ?
                 new BigDecimal(runningEquipment).divide(new BigDecimal(equipments.size()), 4, RoundingMode.HALF_UP)
                         .multiply(new BigDecimal("100")) : new BigDecimal("85");
@@ -1244,6 +1249,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .materialCostRatio(costReport.getMaterialCostRatio())
                 .laborCostRatio(costReport.getLaborCostRatio())
                 .overheadCostRatio(costReport.getOverheadCostRatio())
+                .unitCost(unitCost)
                 .otif(otif.setScale(2, RoundingMode.HALF_UP))
                 .onTimeDeliveryRate(otif.setScale(2, RoundingMode.HALF_UP))
                 .equipmentAvailability(equipmentAvailability.setScale(2, RoundingMode.HALF_UP))
