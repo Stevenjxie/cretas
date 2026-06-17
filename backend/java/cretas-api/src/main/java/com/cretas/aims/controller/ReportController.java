@@ -21,6 +21,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 报表统计控制器
@@ -40,6 +41,53 @@ public class ReportController {
     private final ReportService reportService;
     private final PriceMaskResolver priceMaskResolver;
 
+    /**
+     * 运营 Dashboard 端点的方法级权限集 (OR / hasAnyPermission).
+     *
+     * <p>类级 {@code @RequirePermission} 只放 finance/price 权限, 因为
+     * ReportController 大部分端点是真财务报表 (成本/利润/应收应付/凭证). 但
+     * 三个"运营 Dashboard"端点 (overview / production / quality) 给的是
+     * <b>各操作角色首页用的运营统计</b> (今日产量/批次/在岗工人/库存预警/合格率
+     * 等计数与率值), 不该被 finance/price 闸挡住 — 否则仓管员 / 生产工等操作
+     * 角色首页 403, 静默显示 0/默认值 (假数据, RN E2E LIUSHANMEN 真工厂实测确认).
+     *
+     * <p>方法级注解 <b>覆盖</b>类级 (见 {@code PermissionInterceptor}:
+     * {@code methodAnnotation != null ? methodAnnotation : classAnnotation}).
+     * 放宽到运营角色 + 保留财务角色 (OR), 让所有操作角色首页 (每个角色都有
+     * {@code dashboard:read}) 都能通, 财务角色仍能看完整成本字段.
+     *
+     * <p>金额脱敏: 这几个端点返回的 {@code Map<String, Object>} 里仍带少量成本
+     * 字段 ({@code kpi.unitCost} / 顶层 {@code totalCost}), 对无
+     * {@code procurement:price:view} 的角色必须脱敏 — 见
+     * {@link #maskOperationalDashboardCosts}. 因为这些是 hand-built Map,
+     * {@code PriceFieldResponseAdvice} 的 @PriceSensitive 反射 strip 走不到, 且
+     * {@code unitCost}/{@code totalCost} 不在它的 PRICE_VALUE_KEYS / price-container
+     * path 自动匹配里, 所以必须在 controller 层显式脱敏.
+     *
+     * <p>注意: {@code @RequirePermission} 注解的 value 必须是编译期常量数组字面量,
+     * 不能引用一个 {@code static final String[]} 常量 (Java 注解约束). 所以下面这组
+     * 权限在每个端点的注解里 <b>内联</b>书写, 这里仅以 JavaDoc 记录权威集合, 三处必须
+     * 保持一致:
+     * <pre>
+     *   {"dashboard:read_write","dashboard:read",
+     *    "warehouse:read_write","warehouse:read",
+     *    "production:read_write","production:read",
+     *    "inventory:read_write","inventory:read",
+     *    "quality:read_write","quality:read",
+     *    "finance:read_write","finance:read",
+     *    "procurement:price:view"}
+     * </pre>
+     */
+
+    /**
+     * 运营 Dashboard Map 里需要脱敏的成本/金额语义 key (无 price 权限角色见不到).
+     * 大小写不敏感后缀/包含匹配 — 见 {@link #maskOperationalDashboardCosts}.
+     */
+    private static final Set<String> OPERATIONAL_COST_KEYS = Set.of(
+            "unitCost", "cost", "totalCost", "materialCost", "laborCost",
+            "overheadCost", "amount", "totalAmount", "price", "unitPrice"
+    );
+
     // ============================================================
     // Dashboard 统一入口 (委托 ProcessingService)
     // 这是 ReportController 作为报表/Dashboard 统一入口的实现
@@ -47,38 +95,66 @@ public class ReportController {
     // ============================================================
 
     /**
-     * 获取生产概览 Dashboard
+     * 获取生产概览 Dashboard (运营首页统计 — 操作角色首页调用).
+     *
+     * <p>方法级 {@code @RequirePermission} 覆盖类级 finance/price 闸, 放宽到运营
+     * 角色 (warehouse / production / inventory / quality / dashboard) + 保留财务
+     * 角色. 金额字段 ({@code kpi.unitCost}) 对无 price 权限角色脱敏.
      */
     @GetMapping("/dashboard/overview")
+    @RequirePermission({"dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view"})
     @Operation(summary = "生产概览Dashboard", description = "获取生产概览数据 (委托ProcessingService)")
     public ApiResponse<Map<String, Object>> getDashboardOverview(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestParam(defaultValue = "today") @Parameter(description = "时间周期: today, week, month") String period) {
+            @RequestParam(defaultValue = "today") @Parameter(description = "时间周期: today, week, month") String period,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取生产概览Dashboard: factoryId={}, period={}", factoryId, period);
-        return ApiResponse.success(reportService.getDashboardOverview(factoryId, period));
+        Map<String, Object> overview = reportService.getDashboardOverview(factoryId, period);
+        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+            maskOperationalDashboardCosts(overview);
+        }
+        return ApiResponse.success(overview);
     }
 
     /**
-     * 获取生产统计 Dashboard
+     * 获取生产统计 Dashboard (运营统计 — 操作角色首页调用).
+     *
+     * <p>权限/脱敏说明同 {@link #getDashboardOverview}. 金额字段
+     * (顶层 {@code totalCost}) 对无 price 权限角色脱敏.
      */
     @GetMapping("/dashboard/production")
+    @RequirePermission({"dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view"})
     @Operation(summary = "生产统计Dashboard", description = "获取生产统计数据 (委托ProcessingService)")
     public ApiResponse<Map<String, Object>> getProductionDashboard(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestParam(defaultValue = "today") @Parameter(description = "时间周期: today, week, month") String period) {
+            @RequestParam(defaultValue = "today") @Parameter(description = "时间周期: today, week, month") String period,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取生产统计Dashboard: factoryId={}, period={}", factoryId, period);
-        return ApiResponse.success(reportService.getProductionDashboard(factoryId, period));
+        Map<String, Object> stats = reportService.getProductionDashboard(factoryId, period);
+        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+            maskOperationalDashboardCosts(stats);
+        }
+        return ApiResponse.success(stats);
     }
 
     /**
-     * 获取质量 Dashboard
+     * 获取质量 Dashboard (运营质量统计 — 操作角色首页调用).
+     *
+     * <p>权限说明同 {@link #getDashboardOverview}. 该端点不返回金额字段
+     * (纯质量计数/合格率), 仍走脱敏 helper 作防御性兜底 (未来若加成本字段自动覆盖).
      */
     @GetMapping("/dashboard/quality")
+    @RequirePermission({"dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view"})
     @Operation(summary = "质量Dashboard", description = "获取质量统计数据 (委托ProcessingService)")
     public ApiResponse<Map<String, Object>> getQualityDashboard(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取质量Dashboard: factoryId={}", factoryId);
-        return ApiResponse.success(reportService.getQualityDashboard(factoryId));
+        Map<String, Object> dashboard = reportService.getQualityDashboard(factoryId);
+        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+            maskOperationalDashboardCosts(dashboard);
+        }
+        return ApiResponse.success(dashboard);
     }
 
     /**
@@ -105,17 +181,32 @@ public class ReportController {
     }
 
     /**
-     * 获取趋势分析 Dashboard
+     * 获取趋势分析 Dashboard (运营趋势 — 质检员/操作角色首页流程调用).
+     *
+     * <p>权限说明同 {@link #getDashboardOverview}: 质检员 (quality_inspector) 的
+     * QITrendScreen 经 qualityInspectorApi 调本端点拿生产/质量趋势. 之前继承类级
+     * finance/price 闸 → 质检员 403 → 趋势页空 (同一运营 Dashboard bug 类). 放宽到
+     * 运营角色 + 保留财务角色.
+     *
+     * <p>金额脱敏: 返回的 {@code costTrend} 整列是成本数据 (每项 {@code value} +
+     * {@code totalCost} 都是成本), 对无 price 权限角色由
+     * {@link #maskOperationalDashboardCosts} 整列移除; production/quality 趋势保留.
      */
     @GetMapping("/dashboard/trends")
+    @RequirePermission({"dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view"})
     @Operation(summary = "趋势分析Dashboard", description = "获取趋势分析数据 (委托ProcessingService)")
     public ApiResponse<Map<String, Object>> getTrendsDashboard(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(defaultValue = "month") @Parameter(description = "时间周期: week, month, quarter, year") String period,
             @RequestParam(defaultValue = "production") @Parameter(description = "趋势类型: production, quality, equipment, cost") String metric,
-            @RequestParam(defaultValue = "30") @Parameter(description = "趋势天数") Integer days) {
+            @RequestParam(defaultValue = "30") @Parameter(description = "趋势天数") Integer days,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取趋势分析Dashboard: factoryId={}, period={}, metric={}, days={}", factoryId, period, metric, days);
-        return ApiResponse.success(reportService.getTrendsDashboard(factoryId, period, metric, days));
+        Map<String, Object> trends = reportService.getTrendsDashboard(factoryId, period, metric, days);
+        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+            maskOperationalDashboardCosts(trends);
+        }
+        return ApiResponse.success(trends);
     }
 
     // ============================================================
@@ -533,5 +624,81 @@ public class ReportController {
         List<SalesProductProfitRowDTO> rows =
                 reportService.getSalesOrderProductProfitDetail(factoryId, salesOrderId, lookbackDays);
         return ApiResponse.success(rows);
+    }
+
+    // ============================================================
+    // 运营 Dashboard 金额脱敏 helper
+    // ============================================================
+
+    /**
+     * 递归脱敏运营 Dashboard 返回 Map 里的成本/金额语义 key
+     * ({@link #OPERATIONAL_COST_KEYS}), 给无 {@code procurement:price:view} 权限的
+     * 运营角色 (放宽权限后能进这些端点) 使用.
+     *
+     * <p>策略: <b>移除</b> key (omit), 而不是设 null — 对齐项目既有 hand-built Map
+     * 脱敏惯例 (见 {@code MaterialConsumptionController.enrichConsumption}: 无权限时
+     * 价格字段不放入 Map). 前端拿不到 key → 显示空/占位, 不会泄露金额.
+     *
+     * <p>递归处理嵌套结构: {@code kpi.unitCost} (一层嵌套 Map) 与顶层
+     * {@code totalCost} 都能命中. 同时遍历 Collection / 嵌套 List<Map> (如
+     * batchStatusDistribution / productTypeStats) 作防御性兜底, 即便目前那些子项
+     * 不含金额 key.
+     *
+     * <p>命中规则: key 大小写不敏感地 <b>等于</b>某个 cost key, 或以其结尾
+     * (e.g. {@code monthlyTotalCost} 命中 {@code totalCost}). 避免过度匹配 (如
+     * {@code costBasis} / {@code unitCostBasis} 这类非金额标注字段不应被误删) — 因此
+     * 用 endsWith 而非 contains, 且对 {@code *Basis} 后缀显式放行.
+     */
+    @SuppressWarnings("unchecked")
+    private void maskOperationalDashboardCosts(Object node) {
+        if (node instanceof Map<?, ?>) {
+            Map<String, Object> map = (Map<String, Object>) node;
+
+            // Trends 端点特例: costTrend 整列是成本数据 (每项还有 totalCost 的 value
+            // 孪生 key, 与 production/quality trend 的 value 含义冲突, 不能靠通用
+            // key 名区分). 直接整列移除 — production/quality trend 仍保留.
+            try {
+                map.remove("costTrend");
+            } catch (UnsupportedOperationException ignored) {
+                // 不可变 Map (理论上顶层 analysis 是 HashMap, 这里只是防御).
+            }
+
+            // 通用: 移除命中的成本/金额 key. 不可变 Map (Map.of) 会抛
+            // UnsupportedOperationException — 捕获后逐项重建为可变副本不现实
+            // (key 已确定要删), 故对不可变 Map 静默跳过 (它们由上层 costTrend
+            // 整列移除 / 或本就不含金额 key 兜底).
+            try {
+                map.keySet().removeIf(this::isCostKey);
+            } catch (UnsupportedOperationException ignored) {
+                // 不可变 Map — 见上.
+            }
+
+            for (Object value : map.values()) {
+                maskOperationalDashboardCosts(value);
+            }
+        } else if (node instanceof Iterable<?>) {
+            for (Object item : (Iterable<?>) node) {
+                maskOperationalDashboardCosts(item);
+            }
+        }
+    }
+
+    /** Returns true when a Map key is a cost/amount field that must be masked. */
+    private boolean isCostKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        String lower = key.toLowerCase();
+        // 显式放行非金额标注字段 (单位成本计算口径标记, 非金额本身).
+        if (lower.endsWith("basis")) {
+            return false;
+        }
+        for (String costKey : OPERATIONAL_COST_KEYS) {
+            String lc = costKey.toLowerCase();
+            if (lower.equals(lc) || lower.endsWith(lc)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
