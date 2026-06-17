@@ -17,8 +17,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---- 变更探测: 按路径决定哪些重 job 在 PR 上需要跑 (push 到 main 不受影响, 全跑) ----
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      java: ${{ steps.filter.outputs.java }}
+      python: ${{ steps.filter.outputs.python }}
+      vue: ${{ steps.filter.outputs.vue }}
+      rn: ${{ steps.filter.outputs.rn }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            java:
+              - 'backend/java/**'
+            python:
+              - 'backend/python/**'
+            vue:
+              - 'web-admin/**'
+            rn:
+              - 'frontend/**'
+
   # ---- Java Backend: Build + Test ----
   java-build-test:
+    needs: changes
+    # PR: 仅当 backend/java 改动才跑 (前端/python/docs PR 跳过, 不再空等 ~10min)。
+    # push 到 main: 始终跑 (deploy-staging 的 needs 不受影响)。
+    if: github.event_name != 'pull_request' || needs.changes.outputs.java == 'true'
     runs-on: ubuntu-latest
 
     # PostgreSQL service container — enables PG-required IT classes (e.g.
@@ -67,7 +94,8 @@ jobs:
 
       - name: Maven compile and test
         working-directory: backend/java/cretas-api
-        run: mvn -B clean verify -Dspring.profiles.active=test -pl .
+        # clean 去掉: 全新 runner 无 target 可清, clean 是 no-op 反而拖时间。
+        run: mvn -B verify -Dspring.profiles.active=test -pl .
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -78,6 +106,8 @@ jobs:
 
   # ---- Python Service: Lint + Test ----
   python-lint-test:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -123,6 +153,8 @@ jobs:
 
   # ---- Vue Web Admin: Build + Type Check ----
   vue-build-check:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.vue == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -149,6 +181,8 @@ jobs:
 
   # ---- React Native: Jest Tests ----
   rn-test:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rn == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
