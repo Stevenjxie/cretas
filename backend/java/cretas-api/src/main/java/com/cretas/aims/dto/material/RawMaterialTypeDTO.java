@@ -65,7 +65,10 @@ public class RawMaterialTypeDTO {
     // 统计信息
     private Integer totalBatches;
     private BigDecimal currentStock;
+    // 价格脱敏: 库存货值/移动均价对无 procurement:price:view 角色置 null (同 MaterialStockSummaryDTO #967)
+    @PriceSensitive
     private BigDecimal totalValue;
+    @PriceSensitive
     private BigDecimal movingAvgPrice;
 
     // C-6 Canvas Reactive Default (2026-05-09): 包装层级换算系数 + 二级单位.

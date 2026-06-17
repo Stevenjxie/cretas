@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.factory;
 
+import com.cretas.aims.security.PriceSensitive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -30,6 +31,7 @@ public class SaltedReportDTO {
     private BigDecimal totalQuantity;
 
     /** 期间内盐化总金额 (unitPrice×quantity 汇总; 含 null unitPrice 行则为部分合计) */
+    @PriceSensitive
     private BigDecimal totalAmount;
 
     /** 扣量记录行 */
@@ -48,7 +50,9 @@ public class SaltedReportDTO {
         private String deductionDate;
         private BigDecimal quantity;
         private String quantityUnit;
+        @PriceSensitive
         private BigDecimal unitPrice;
+        @PriceSensitive
         private BigDecimal totalAmount;
         private String customerName;
         private String materialBatchId;
