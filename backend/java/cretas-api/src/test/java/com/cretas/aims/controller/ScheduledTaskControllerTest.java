@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.cron.ScheduledTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.cron.ScheduledTaskRepository;
+import org.springframework.mock.web.MockHttpServletRequest;
 import com.cretas.aims.repository.cron.ScheduledTaskRunLogRepository;
 import com.cretas.aims.service.cron.DynamicSchedulerService;
 import org.junit.jupiter.api.DisplayName;
@@ -70,7 +71,7 @@ class ScheduledTaskControllerTest {
         task.setTaskCode("X".repeat(101));   // 101 chars, max is 100
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.create(task),
+                () -> controller.create(req(), task),
                 "101-char taskCode 必须 reject");
 
         assertEquals(400, ex.getCode(), "must be 400, not 409 PG overflow");
@@ -97,7 +98,7 @@ class ScheduledTaskControllerTest {
         task.setTaskName("名".repeat(256));   // 256 chars, max is 255
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.create(task));
+                () -> controller.create(req(), task));
 
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("任务名称"));
@@ -121,7 +122,7 @@ class ScheduledTaskControllerTest {
         task.setCronExpression("0 ".repeat(60));   // 120 chars, max is 100
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.create(task));
+                () -> controller.create(req(), task));
 
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("Cron 表达式"),
@@ -144,7 +145,7 @@ class ScheduledTaskControllerTest {
         task.setHandlerBeanName("h".repeat(256));   // 256 chars, max is 255
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.create(task));
+                () -> controller.create(req(), task));
 
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("Handler Bean 名称"),
@@ -171,7 +172,7 @@ class ScheduledTaskControllerTest {
         when(dynamicSchedulerService.createTask(any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        ApiResponse<ScheduledTask> resp = controller.create(task);
+        ApiResponse<ScheduledTask> resp = controller.create(req(), task);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).createTask(any(ScheduledTask.class));
@@ -187,7 +188,7 @@ class ScheduledTaskControllerTest {
         body.put("taskCode", "X".repeat(200));   // way over 100
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, body),
+                () -> controller.update(req(), taskId, body),
                 "Rule 16: update path 也必须 reject");
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("任务代码"));
@@ -204,7 +205,7 @@ class ScheduledTaskControllerTest {
         body.put("taskName", "名".repeat(300));   // way over 255
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, body));
+                () -> controller.update(req(), taskId, body));
         assertEquals(400, ex.getCode());
         assertEquals("taskName", ex.getHintTarget());
         verify(dynamicSchedulerService, never()).updateTask(eq(taskId), any());
@@ -223,7 +224,7 @@ class ScheduledTaskControllerTest {
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
+        ApiResponse<ScheduledTask> resp = controller.update(req(), taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
@@ -251,7 +252,7 @@ class ScheduledTaskControllerTest {
         body.put("taskName", "覆盖尝试");
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.update(taskId, body),
+                () -> controller.update(req(), taskId, body),
                 "stale version 必须 reject 不允许 silent overwrite");
 
         assertEquals(409, ex.getCode(), "must be 409 CONFLICT, not silent 200");
@@ -294,7 +295,7 @@ class ScheduledTaskControllerTest {
                     return updated;
                 });
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
+        ApiResponse<ScheduledTask> resp = controller.update(req(), taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
@@ -316,7 +317,7 @@ class ScheduledTaskControllerTest {
         when(dynamicSchedulerService.updateTask(eq(taskId), any(ScheduledTask.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
-        ApiResponse<ScheduledTask> resp = controller.update(taskId, body);
+        ApiResponse<ScheduledTask> resp = controller.update(req(), taskId, body);
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
         verify(dynamicSchedulerService).updateTask(eq(taskId), any(ScheduledTask.class));
@@ -340,5 +341,53 @@ class ScheduledTaskControllerTest {
         t.setHandlerBeanName("cacheEvictionTaskHandler");
         t.setEnabled(true);
         return t;
+    }
+
+    /** 平台角色请求 — 绕过多租户守卫, 让现有长度/正常路径测试聚焦原逻辑。 */
+    private static MockHttpServletRequest req() {
+        MockHttpServletRequest r = new MockHttpServletRequest();
+        r.setAttribute("role", "platform_admin");
+        r.setAttribute("factoryId", "F001");
+        return r;
+    }
+
+    // ==================== 🔒 多租户隔离守卫 (2026-06-17) ====================
+
+    @Test
+    @DisplayName("🔒 工厂级管理员不能为别家工厂创建定时任务 → 403")
+    void testCrossFactoryCreateRejected() {
+        MockHttpServletRequest r = new MockHttpServletRequest();
+        r.setAttribute("role", "factory_super_admin"); // 工厂级角色
+        r.setAttribute("factoryId", "F001");
+        ScheduledTask task = newBaseTask();
+        task.setFactoryId("F999"); // 指向别家工厂
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.create(r, task), "跨工厂创建必须 403");
+
+        assertEquals(403, ex.getCode(), "must be 403 cross-tenant");
+        verify(dynamicSchedulerService, never()).createTask(any());
+    }
+
+    @Test
+    @DisplayName("🔒 工厂级管理员改别家工厂的任务 → 403 (loadTaskGuarded)")
+    void testCrossFactoryUpdateRejected() {
+        UUID taskId = UUID.randomUUID();
+        ScheduledTask otherFactoryTask = newBaseTask();
+        otherFactoryTask.setFactoryId("F999"); // task 属于别家
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(otherFactoryTask));
+
+        MockHttpServletRequest r = new MockHttpServletRequest();
+        r.setAttribute("role", "factory_super_admin");
+        r.setAttribute("factoryId", "F001"); // caller 是 F001
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("taskName", "试图篡改");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.update(r, taskId, body), "跨工厂改必须 403");
+
+        assertEquals(403, ex.getCode());
+        verify(dynamicSchedulerService, never()).updateTask(any(), any());
     }
 }

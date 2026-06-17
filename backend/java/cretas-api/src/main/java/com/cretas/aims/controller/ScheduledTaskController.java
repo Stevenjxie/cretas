@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.Arrays;
 import java.util.List;
@@ -75,23 +76,54 @@ public class ScheduledTaskController {
     private final ScheduledTaskRunLogRepository runLogRepository;
     private final ApplicationContext applicationContext;
 
+    // ==================== 🔒 多租户隔离守卫 (2026-06-17) ====================
+    // scheduled-tasks 路径被 JwtAuthInterceptor 的 path-factoryId gate 排除, 且这些端点
+    // 按全局 UUID id 取/改 task 不带 factoryId → 工厂级管理员可读/改/删别家工厂的定时任务
+    // (cron/handlerBean/参数泄露 + 跨租户篡改)。这里在 REST 层手动补 factory 守卫,
+    // 平台级角色 (platform_admin/super_admin) 可跨工厂 (by design)。
+
+    private String callerFactoryId(HttpServletRequest request) {
+        return (String) request.getAttribute("factoryId");
+    }
+
+    private boolean isPlatformRole(HttpServletRequest request) {
+        String role = (String) request.getAttribute("role");
+        return "platform_admin".equals(role) || "super_admin".equals(role);
+    }
+
+    /** 🔒 校验 task 属于 caller 工厂 (非平台角色)。平台角色跳过; 否则不存在 404, 跨厂 403。 */
+    private void guardTaskFactory(HttpServletRequest request, UUID id) {
+        if (isPlatformRole(request)) {
+            return; // 平台角色跨工厂 by design
+        }
+        ScheduledTask t = taskRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "定时任务不存在"));
+        String cf = callerFactoryId(request);
+        if (cf == null || !cf.equals(t.getFactoryId())) {
+            throw new BusinessException(403, "无权访问其他工厂的定时任务").withSeverity("error");
+        }
+    }
+
     @GetMapping
     @Operation(summary = "列出定时任务 (可按 factoryId / enabled 过滤)")
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<List<ScheduledTask>> list(
+            HttpServletRequest request,
             @RequestParam(required = false) String factoryId,
             @RequestParam(required = false) Boolean enabled
     ) {
+        // 🔒 非平台角色强制只看本厂任务 (覆盖入参 factoryId, 防 findAll() 泄露全工厂)。
+        final String fid = isPlatformRole(request) ? factoryId : callerFactoryId(request);
         List<ScheduledTask> tasks;
-        if (factoryId != null && enabled != null && enabled) {
-            tasks = taskRepository.findByFactoryIdAndEnabledTrue(factoryId);
+        if (fid != null && enabled != null && enabled) {
+            tasks = taskRepository.findByFactoryIdAndEnabledTrue(fid);
         } else if (enabled != null && enabled) {
             tasks = taskRepository.findByEnabledTrue();
         } else {
             tasks = taskRepository.findAll();
-            if (factoryId != null) {
+            if (fid != null) {
                 tasks = tasks.stream()
-                        .filter(t -> factoryId.equals(t.getFactoryId()))
+                        .filter(t -> fid.equals(t.getFactoryId()))
                         .collect(Collectors.toList());
             }
             if (enabled != null) {
@@ -106,7 +138,16 @@ public class ScheduledTaskController {
     @PostMapping
     @Operation(summary = "创建定时任务")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTask> create(@RequestBody ScheduledTask task) {
+    public ApiResponse<ScheduledTask> create(HttpServletRequest request, @RequestBody ScheduledTask task) {
+        // 🔒 非平台角色只能为本厂创建任务 (防 body.factoryId 指向别家)。
+        if (!isPlatformRole(request)) {
+            String cf = callerFactoryId(request);
+            if (task.getFactoryId() == null) {
+                task.setFactoryId(cf); // 缺省补本厂
+            } else if (!task.getFactoryId().equals(cf)) {
+                throw new BusinessException(403, "无权为其他工厂创建定时任务").withSeverity("error");
+            }
+        }
         // Phase 5 sister chat: replace ScheduledTask with a request DTO + @Valid.
         // AUD-5 B-A3 sister sweep: length pre-check produces specific 400 BEFORE
         // dispatching to service layer where PG would surface a generic 409.
@@ -118,8 +159,11 @@ public class ScheduledTaskController {
     @PutMapping("/{id}")
     @Operation(summary = "修改定时任务 (partial)")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTask> update(@PathVariable UUID id,
+    public ApiResponse<ScheduledTask> update(HttpServletRequest request,
+                                             @PathVariable UUID id,
                                              @RequestBody Map<String, Object> body) {
+        // 🔒 校验 task 属本厂 (跨厂 403 / 不存在 404)。
+        guardTaskFactory(request, id);
         // PATCH safety (per concurrent-edit-safety feedback_java_entity_as_patch_body_silent_re_enable.md HARD):
         // Accept body as Map<String, Object> so Jackson does NOT run no-args ctor on
         // ScheduledTask. The entity has {@code @Builder.Default private Boolean enabled = true},
@@ -129,6 +173,11 @@ public class ScheduledTaskController {
         // layer's "null = don't touch" merge logic in {@link DynamicSchedulerServiceImpl#updateTask}
         // works correctly.
         ScheduledTask patch = buildPatchFromBody(body);
+        // 🔒 非平台角色不能把任务转移到其他工厂 (body.factoryId 篡改)。
+        if (!isPlatformRole(request) && patch.getFactoryId() != null
+                && !patch.getFactoryId().equals(callerFactoryId(request))) {
+            throw new BusinessException(403, "无权将任务转移到其他工厂").withSeverity("error");
+        }
         validateNameLengths(patch);
         // AUD-4 wiring (PR #94 follow-up): explicit optimistic-lock check fires BEFORE
         // service.updateTask() so JPA optimistic lock actually trips on stale client
@@ -190,7 +239,8 @@ public class ScheduledTaskController {
     @PostMapping("/{id}/toggle")
     @Operation(summary = "启用/禁用")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTask> toggle(@PathVariable UUID id, @RequestParam boolean enabled) {
+    public ApiResponse<ScheduledTask> toggle(HttpServletRequest request, @PathVariable UUID id, @RequestParam boolean enabled) {
+        guardTaskFactory(request, id); // 🔒 本厂校验
         ScheduledTask updated = dynamicSchedulerService.toggleTask(id, enabled);
         return ApiResponse.success(enabled ? "任务已启用" : "任务已禁用", updated);
     }
@@ -198,7 +248,8 @@ public class ScheduledTaskController {
     @PostMapping("/{id}/run-now")
     @Operation(summary = "立即执行一次 (返回 run log)")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ScheduledTaskRunLog> runNow(@PathVariable UUID id) {
+    public ApiResponse<ScheduledTaskRunLog> runNow(HttpServletRequest request, @PathVariable UUID id) {
+        guardTaskFactory(request, id); // 🔒 本厂校验
         ScheduledTaskRunLog log = dynamicSchedulerService.runNow(id);
         return ApiResponse.success("手动执行完成", log);
     }
@@ -206,7 +257,8 @@ public class ScheduledTaskController {
     @DeleteMapping("/{id}")
     @Operation(summary = "软删除")
     @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<Void> delete(@PathVariable UUID id) {
+    public ApiResponse<Void> delete(HttpServletRequest request, @PathVariable UUID id) {
+        guardTaskFactory(request, id); // 🔒 本厂校验
         dynamicSchedulerService.deleteTask(id);
         return ApiResponse.success("定时任务已删除", null);
     }
@@ -215,10 +267,12 @@ public class ScheduledTaskController {
     @Operation(summary = "执行历史 (分页)")
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<Page<ScheduledTaskRunLog>> logs(
+            HttpServletRequest request,
             @PathVariable UUID id,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
+        guardTaskFactory(request, id); // 🔒 本厂校验
         Page<ScheduledTaskRunLog> logs = runLogRepository
                 .findByTaskIdOrderByStartedAtDesc(id, PageRequest.of(page, size));
         return ApiResponse.success("查询成功", logs);
