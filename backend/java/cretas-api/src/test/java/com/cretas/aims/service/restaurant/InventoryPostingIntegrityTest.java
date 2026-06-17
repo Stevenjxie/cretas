@@ -536,6 +536,8 @@ class InventoryPostingIntegrityTest {
             @Override public com.cretas.aims.dto.material.MaterialBatchDTO
             updateMaterialBatch(String f, String id, com.cretas.aims.dto.material.UpdateMaterialBatchRequest r) { return null; }
             @Override public void deleteMaterialBatch(String f, String id) {}
+            @Override public List<com.cretas.aims.dto.material.MaterialStockSummaryDTO>
+            listStockSummary(String f) { return List.of(); }
             @Override public com.cretas.aims.dto.common.PageResponse<com.cretas.aims.dto.material.MaterialBatchDTO>
             getMaterialBatchList(String f, com.cretas.aims.dto.common.PageRequest p) { return null; }
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
