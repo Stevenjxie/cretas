@@ -248,13 +248,69 @@ onMounted(() => {
   loadKPIData();
 });
 
+// Backend KpiMetricsDTO shape (/reports/kpi-metrics). All rate fields are plain
+// percentages (0–100), EXCEPT oee which is a ×100-scaled percentage
+// (= availability% × performance% × quality% / 10000, e.g. 7999.30 → 79.99%).
+// The template renders every nested value via `× 100` (formatPercent / el-progress
+// `:percentage="x * 100"`), so the mapper must convert each field to a 0–1 fraction.
+interface KpiMetricsResponse {
+  oee?: number;                 // ×100-scaled percentage (7999.30 = 79.99%)
+  outputCompletionRate?: number;
+  capacityUtilization?: number;
+  avgCycleTime?: number;
+  throughput?: number;
+  fpy?: number;                 // plain % (0–100)
+  overallQualityRate?: number;  // plain %
+  scrapRate?: number;           // plain %
+  reworkRate?: number;          // plain %
+  unitCost?: number;
+  materialCostRatio?: number;   // plain %
+  laborCostRatio?: number;      // plain %
+  overheadCostRatio?: number;   // plain %
+  otif?: number;                // plain %
+  onTimeDeliveryRate?: number;  // plain %
+  inFullDeliveryRate?: number;  // plain %
+  avgLeadTime?: number;
+  orderFulfillmentRate?: number;// plain %
+}
+
+// plain-% (0–100) → 0–1 fraction (template multiplies back by 100 for display)
+const pct = (v: number | undefined | null): number => (v ?? 0) / 100;
+
 async function loadKPIData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const response = await get(`/${factoryId.value}/reports/kpi`);
+    const response = await get<KpiMetricsResponse>(`/${factoryId.value}/reports/kpi-metrics`);
     if (response.success && response.data) {
-      kpiData.value = { ...kpiData.value, ...response.data };
+      const d = response.data;
+      kpiData.value = {
+        production: {
+          // oee is ×100-scaled (7999.30 = 79.99%) → divide by 10000 to get fraction
+          oee: (d.oee ?? 0) / 10000,
+          yield: pct(d.overallQualityRate),
+          cycleTime: d.avgCycleTime ?? 0,
+          throughput: d.throughput ?? 0,
+        },
+        quality: {
+          fpy: pct(d.fpy),
+          // no direct defectRate field — first-pass failure rate is an honest proxy
+          defectRate: pct(d.fpy != null ? 100 - d.fpy : 0),
+          reworkRate: pct(d.reworkRate),
+          scrapRate: pct(d.scrapRate),
+        },
+        delivery: {
+          onTimeRate: pct(d.onTimeDeliveryRate ?? d.otif),
+          leadTime: d.avgLeadTime ?? 0,
+          fillRate: pct(d.inFullDeliveryRate ?? d.orderFulfillmentRate),
+        },
+        cost: {
+          unitCost: d.unitCost ?? 0,
+          materialCost: pct(d.materialCostRatio),
+          laborCost: pct(d.laborCostRatio),
+          overheadCost: pct(d.overheadCostRatio),
+        },
+      };
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载KPI数据失败');
     }
