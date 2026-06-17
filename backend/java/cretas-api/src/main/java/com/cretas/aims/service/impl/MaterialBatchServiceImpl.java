@@ -8,6 +8,7 @@ import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
 import com.cretas.aims.dto.material.UpdateMaterialBatchRequest;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialBatchExportDTO;
+import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
 import com.cretas.aims.utils.ExcelUtil;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
@@ -1572,6 +1573,24 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Override
     public BigDecimal getInventoryValuation(String factoryId) {
         return calculateInventoryValue(factoryId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MaterialStockSummaryDTO> listStockSummary(String factoryId) {
+        List<MaterialStockSummaryDTO> summaries = materialBatchRepository.findStockSummaryByFactory(factoryId);
+        // avgUnitPrice 在 SQL 之外计算回填: totalValue / totalQuantity (除零保护 → null)。
+        // scale=4 + HALF_UP 对齐 moving_avg_price (precision 12 scale 4) 与 recalculateMovingAvgPrice。
+        for (MaterialStockSummaryDTO s : summaries) {
+            BigDecimal qty = s.getTotalQuantity();
+            BigDecimal value = s.getTotalValue();
+            if (qty != null && value != null && qty.compareTo(BigDecimal.ZERO) != 0) {
+                s.setAvgUnitPrice(value.divide(qty, 4, java.math.RoundingMode.HALF_UP));
+            } else {
+                s.setAvgUnitPrice(null);
+            }
+        }
+        return summaries;
     }
 
     @Override

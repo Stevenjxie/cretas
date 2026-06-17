@@ -7,6 +7,7 @@ import com.cretas.aims.dto.material.UndoFrozenRequest;
 import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
 import com.cretas.aims.dto.material.UpdateMaterialBatchRequest;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -264,6 +265,14 @@ public interface MaterialBatchService {
      * 获取库存价值
       */
     BigDecimal getInventoryValuation(String factoryId);
+     /**
+     * 工厂级原料总库存汇总 (按物料聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
+     *
+     * <p>每个原料类型一行: 把该物料在所有仓库的所有在库批次的当前剩余量 / 价值 汇总。
+     * 仅统计在库批次 (status NOT IN DEPLETED/USED_UP/EXPIRED/SCRAPPED/DEFECTIVE 且剩余量 &gt; 0)。
+     * avgUnitPrice = totalValue/totalQuantity (除零保护 → null)。无数据返回空列表。</p>
+      */
+    List<MaterialStockSummaryDTO> listStockSummary(String factoryId);
      /**
      * 处理过期批次
       */

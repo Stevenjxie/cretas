@@ -88,6 +88,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },
       { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse' },
+      // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
+      { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
       { path: '/warehouse/wastage-reports', title: '报损管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse' },

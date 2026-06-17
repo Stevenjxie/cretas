@@ -281,6 +281,44 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<Object[]> sumQuantityByMaterialType(@Param("factoryId") String factoryId);
 
     /**
+     * 工厂级原料总库存汇总 (按物料类型聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
+     *
+     * <p>每个原料类型一行: 把该物料在所有仓库的所有在库批次的当前剩余量 / 价值 汇总。
+     * 区别于分仓库存查询 (按单仓批次级视图)。</p>
+     *
+     * <h4>聚合口径</h4>
+     * <ul>
+     *   <li>仅在库批次: status NOT IN (DEPLETED, USED_UP, EXPIRED, SCRAPPED, DEFECTIVE)
+     *       且 (receiptQuantity - usedQuantity - reservedQuantity) &gt; 0</li>
+     *   <li>软删除排除: MaterialBatch @Where(deleted_at IS NULL) 自动生效, 无需显式条件</li>
+     *   <li>factoryId 维度过滤 (多租户隔离)</li>
+     *   <li>totalQuantity = SUM(剩余量); totalValue = SUM(剩余量 * unitPrice)</li>
+     *   <li>batchCount = COUNT(批次); warehouseCount = COUNT(DISTINCT warehouseId)</li>
+     * </ul>
+     *
+     * <p>JOIN m.materialType mt 取 name/code/category/unit。PG 严格 GROUP BY: 所有非聚合
+     * SELECT 列 (m.materialTypeId 及 mt.name/code/category/unit) 均列入 GROUP BY。
+     * avgUnitPrice 不在 SQL 聚合, 由 Service 层 totalValue/totalQuantity 计算回填。</p>
+     */
+    @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
+           "m.materialTypeId, mt.name, mt.code, mt.category, mt.unit, " +
+           "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), " +
+           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice), " +
+           "COUNT(m), COUNT(DISTINCT m.warehouseId)) " +
+           "FROM MaterialBatch m JOIN m.materialType mt " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.status NOT IN (com.cretas.aims.entity.enums.MaterialBatchStatus.DEPLETED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE) " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.materialTypeId, mt.name, mt.code, mt.category, mt.unit " +
+           "ORDER BY mt.name ASC")
+    List<com.cretas.aims.dto.material.MaterialStockSummaryDTO> findStockSummaryByFactory(
+            @Param("factoryId") String factoryId);
+
+    /**
      * 汇总指定原料类型在指定工厂的可用库存总量。
      * 用于调拨单 detail 页 "现有库存" 列 (PR #289 §B4 客户对接 2026-05-10)。
      * 与 {@link com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository#sumAvailableQuantityByProductType}
