@@ -59,6 +59,37 @@ public class PriceMaskResolver {
     }
 
     /**
+     * Returns {@code true} when the caller's permission set does NOT include
+     * {@link PriceFieldResponseAdvice#FINANCE_READ_PERMISSION} ({@code finance:read_write}),
+     * meaning operational-dashboard COST fields ({@code unitCost} / {@code totalCost} /
+     * {@code materialCost} / {@code laborCost} / ...) must be removed for that caller.
+     *
+     * <p>Production / operating cost is <strong>finance-sensitive</strong> — it must be
+     * gated on {@code finance:read_write}, NOT on {@code procurement:price:view}. This
+     * MIRRORS {@link PriceFieldResponseAdvice} Rule 2b's {@code canViewFinance} gate so
+     * the two masking layers agree. Without this alignment, a price-view-but-not-finance
+     * role (sales_manager / production_manager / procurement_manager) had the operational
+     * cost KEY kept by the dashboard masking (which used {@link #shouldMaskPrice}) but its
+     * VALUE nulled by Rule 2b → a useless {@code "unitCost": null} present-but-null
+     * inconsistency. Gating both layers on {@code finance:read_write} removes the key
+     * cleanly for every non-finance role; only finance-write roles see the value (the
+     * pre-existing effective behaviour — Rule 2b already nulled it for everyone else).
+     * Closed-by-default.
+     *
+     * @param authorization the raw {@code Authorization} request header (incl. {@code Bearer } prefix)
+     * @return {@code true} → remove operational cost keys, {@code false} → keep real values
+     * @since 2026-06-18 (dashboard cost finance-gate alignment — sales_manager must not see unitCost)
+     */
+    public boolean shouldMaskOperationalCost(String authorization) {
+        User currentUser = resolveCurrentUser(authorization);
+        if (currentUser == null) {
+            return true; // closed-by-default: no resolvable caller → mask
+        }
+        return !permissionService.hasPermission(
+                currentUser, PriceFieldResponseAdvice.FINANCE_READ_PERMISSION);
+    }
+
+    /**
      * Resolve the authenticated {@link User} entity for permission checks.
      * Returns {@code null} when the token is missing/invalid or the user row is
      * absent — caller MUST treat {@code null} as "no permission" (closed-by-default).

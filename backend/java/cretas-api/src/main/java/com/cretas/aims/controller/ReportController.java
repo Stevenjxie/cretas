@@ -110,7 +110,7 @@ public class ReportController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取生产概览Dashboard: factoryId={}, period={}", factoryId, period);
         Map<String, Object> overview = reportService.getDashboardOverview(factoryId, period);
-        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+        if (priceMaskResolver.shouldMaskOperationalCost(authorization)) {
             maskOperationalDashboardCosts(overview);
         }
         return ApiResponse.success(overview);
@@ -131,7 +131,7 @@ public class ReportController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取生产统计Dashboard: factoryId={}, period={}", factoryId, period);
         Map<String, Object> stats = reportService.getProductionDashboard(factoryId, period);
-        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+        if (priceMaskResolver.shouldMaskOperationalCost(authorization)) {
             maskOperationalDashboardCosts(stats);
         }
         return ApiResponse.success(stats);
@@ -151,7 +151,7 @@ public class ReportController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取质量Dashboard: factoryId={}", factoryId);
         Map<String, Object> dashboard = reportService.getQualityDashboard(factoryId);
-        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+        if (priceMaskResolver.shouldMaskOperationalCost(authorization)) {
             maskOperationalDashboardCosts(dashboard);
         }
         return ApiResponse.success(dashboard);
@@ -203,7 +203,7 @@ public class ReportController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         log.info("获取趋势分析Dashboard: factoryId={}, period={}, metric={}, days={}", factoryId, period, metric, days);
         Map<String, Object> trends = reportService.getTrendsDashboard(factoryId, period, metric, days);
-        if (priceMaskResolver.shouldMaskPrice(authorization)) {
+        if (priceMaskResolver.shouldMaskOperationalCost(authorization)) {
             maskOperationalDashboardCosts(trends);
         }
         return ApiResponse.success(trends);
