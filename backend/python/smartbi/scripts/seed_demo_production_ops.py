@@ -247,11 +247,11 @@ def _assert_quality_enums(rows: List[tuple]) -> None:
 
 
 def _assert_plan_enums(rows: List[tuple]) -> None:
-    """Row layout: [9]=status."""
+    """Row layout: [8]=status (after 'unit' col removed from PP INSERT)."""
     for r in rows:
-        if r[9] not in LEGAL_PLAN_STATUS:
+        if r[8] not in LEGAL_PLAN_STATUS:
             raise AssertionError(
-                f"ILLEGAL production_plan status '{r[9]}' — must be one of {sorted(LEGAL_PLAN_STATUS)}"
+                f"ILLEGAL production_plan status '{r[8]}' — must be one of {sorted(LEGAL_PLAN_STATUS)}"
             )
 
 
