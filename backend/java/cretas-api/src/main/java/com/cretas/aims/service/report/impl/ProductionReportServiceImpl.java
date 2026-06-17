@@ -1029,17 +1029,21 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
 
         long plannedHours = (long) ChronoUnit.DAYS.between(startDate, endDate) * 8 * totalEquipment;
+        // OEE 三因子(可用率/性能率/良品率)均为比率, 定义上 <=100%. 比值可能 >100%
+        // (设备实跑 >8h/天 → availability>100; 超产 actual>planned → performance>100),
+        // 不封顶会让 OEE = a*p*q/10000 算出 >100% 的不可能值, 且 *Loss 字段变负数. 一律 clamp 到 100.
+        BigDecimal hundred = new BigDecimal("100");
         BigDecimal availability = plannedHours > 0 ?
                 new BigDecimal(totalRunningHours).divide(new BigDecimal(plannedHours), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("80");
+                        .multiply(hundred).min(hundred) : new BigDecimal("80");
 
         BigDecimal performance = totalPlannedQuantity.compareTo(BigDecimal.ZERO) > 0 ?
                 totalActualQuantity.divide(totalPlannedQuantity, 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("85");
+                        .multiply(hundred).min(hundred) : new BigDecimal("85");
 
         BigDecimal quality = totalActualQuantity.compareTo(BigDecimal.ZERO) > 0 ?
                 totalGoodQuantity.divide(totalActualQuantity, 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("95");
+                        .multiply(hundred).min(hundred) : new BigDecimal("95");
 
         BigDecimal oee = availability.multiply(performance).multiply(quality)
                 .divide(new BigDecimal("10000"), 2, RoundingMode.HALF_UP);
