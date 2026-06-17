@@ -127,12 +127,9 @@ const rawMenuConfig: MenuItem[] = [
     path: '/sales', title: '销售管理', icon: 'Goods', module: 'sales',
     children: [
       { path: '/sales/orders', title: '销售订单', icon: '', module: 'sales' },
-      // Apr 24 UX: manufacturing-only concepts (批次号/生产数量/库位 / 物流发货).
-      // Restaurants don't carry finished-goods batch inventory or ship physical
-      // product, so hide from restaurant sidebar. Also /sales/shipments returns
-      // 400 "数据处理失败" for F002 (no data) — hiding removes the bad toast.
-      { path: '/sales/finished-goods', title: '成品库存', icon: '', module: 'sales',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      // 2026-06-17: 「成品库存」从销售菜单移除 (Steve: 不需要留在销售)。
+      // 成品/库存归仓储管理口径; 路由 /sales/finished-goods 保留 (深链可达), 仅撤销售侧入口。
+      // Apr 24 UX: /sales/shipments 等 manufacturing-only 概念对餐饮隐藏 (无批次/发货)。
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
       { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
