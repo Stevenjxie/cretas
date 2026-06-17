@@ -124,6 +124,11 @@ public interface ReworkRecordRepository extends JpaRepository<ReworkRecord, Long
     Long countByFactoryId(String factoryId);
 
     /**
+     * 统计指定 startTime 时间范围内的返工次数 (KPI 返工率分子).
+     */
+    long countByFactoryIdAndStartTimeBetween(String factoryId, LocalDateTime startTime, LocalDateTime endTime);
+
+    /**
      * 统计特定类型的返工次数
      */
     Long countByFactoryIdAndReworkType(String factoryId, ReworkType reworkType);

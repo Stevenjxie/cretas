@@ -98,6 +98,20 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);
 
     /**
+     * 计算指定下单日期范围内的平均交付周期(天) = 实际交付日 - 下单日.
+     * 仅统计 DELIVERED 的交付记录. 无符合记录返 null.
+     * native query: PostgreSQL date - date = integer 天数.
+     */
+    @Query(value = "SELECT AVG(dr.delivery_date - so.order_date) " +
+            "FROM sales_orders so JOIN sales_delivery_records dr ON dr.sales_order_id = so.id " +
+            "WHERE so.factory_id = :factoryId AND dr.status = 'DELIVERED' " +
+            "AND dr.delivery_date >= so.order_date " +
+            "AND so.order_date BETWEEN :startDate AND :endDate", nativeQuery = true)
+    Double calculateAvgLeadTimeDays(@Param("factoryId") String factoryId,
+                                    @Param("startDate") LocalDate startDate,
+                                    @Param("endDate") LocalDate endDate);
+
+    /**
      * Find max orderNumber by prefix (e.g. 'SO-20260411-') so order number generation
      * is based on actual DB state, not by business orderDate which may be past/future.
      * Mirrors PurchaseOrderRepository pattern to avoid duplicate-key collisions.
