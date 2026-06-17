@@ -534,8 +534,7 @@ onBeforeUnmount(() => {
         <el-icon class="fca-empty-icon"><i class="fca-empty-icon-char">📊</i></el-icon>
         <div class="fca-empty-title">该工厂暂无生产成本数据</div>
         <div class="fca-empty-desc">
-          报工时填写成本信息后，数据将在此处显示。<br/>
-          目前六扇门工厂 (F006) 已有试用数据可查看。
+          报工时填写材料、人工成本后，生产成本分析将在此处展示。
         </div>
       </div>
     </template>

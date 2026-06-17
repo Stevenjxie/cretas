@@ -39,9 +39,9 @@ const actions = computed<RowAction[]>(() => {
 });
 
 const sampleRows = computed(() => [
-  { id: 'SO-001', code: 'SO-2026-001', customer: '六扇门 F006', amount: '¥12,500' },
-  { id: 'SO-002', code: 'SO-2026-002', customer: '六扇门 F006', amount: '¥8,200' },
-  { id: 'SO-003', code: 'SO-2026-003', customer: '青花椒 F003', amount: '¥3,650' },
+  { id: 'SO-001', code: 'SO-2026-001', customer: '示例客户 A', amount: '¥12,500' },
+  { id: 'SO-002', code: 'SO-2026-002', customer: '示例客户 A', amount: '¥8,200' },
+  { id: 'SO-003', code: 'SO-2026-003', customer: '示例客户 B', amount: '¥3,650' },
 ]);
 
 async function handleAction(actionId: string, row: { id: string; code: string }) {
