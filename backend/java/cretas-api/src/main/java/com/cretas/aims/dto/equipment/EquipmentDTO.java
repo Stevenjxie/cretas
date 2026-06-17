@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.equipment;
 
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -30,15 +31,19 @@ public class EquipmentDTO {
     private String serialNumber;
     // 购买信息
     private LocalDate purchaseDate;
+    @PriceSensitive
     private BigDecimal purchasePrice;
     private Integer depreciationYears;
+    @PriceSensitive
     private BigDecimal currentValue;
     // 运行信息
     private String status;
     private String location;
+    @PriceSensitive
     private BigDecimal hourlyCost;
     private BigDecimal powerConsumptionKw;
     private Integer totalRunningHours;
+    @PriceSensitive
     private BigDecimal totalOperatingCost;
     // 维护信息
     private Integer maintenanceIntervalHours;
@@ -46,6 +51,7 @@ public class EquipmentDTO {
     private LocalDate nextMaintenanceDate;
     private LocalDate warrantyExpiryDate;
     private Integer maintenanceCount;
+    @PriceSensitive
     private BigDecimal totalMaintenanceCost;
     private Boolean needsMaintenance;
     // 效率信息

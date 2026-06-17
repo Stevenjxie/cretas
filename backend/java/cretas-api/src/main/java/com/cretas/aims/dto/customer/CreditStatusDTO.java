@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.customer;
 
 import com.cretas.aims.entity.enums.CreditStatus;
+import com.cretas.aims.security.PriceSensitive;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -40,6 +41,7 @@ public class CreditStatusDTO {
     @Schema(description = "可用额度 = creditLimit - used (null = 无限制)")
     private BigDecimal available;
 
+    @PriceSensitive
     @Schema(description = "本次请求金额 (即将占用)")
     private BigDecimal requestedAmount;
 

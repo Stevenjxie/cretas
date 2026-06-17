@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.customer;
 
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
@@ -36,6 +37,7 @@ public class CustomerDTO {
     // 业务信息
     private String paymentTerms;
     private BigDecimal creditLimit;
+    @PriceSensitive
     private BigDecimal currentBalance;
 
     /** P1 #23 S-CREDIT-1: 信用账期天数 */

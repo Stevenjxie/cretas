@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.supplier;
 
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -36,6 +37,7 @@ public class SupplierDTO {
     private String paymentTerms;
     private Integer deliveryDays;
     private BigDecimal creditLimit;
+    @PriceSensitive
     private BigDecimal currentBalance;
     // 评级信息
     private Integer rating;
@@ -46,6 +48,7 @@ public class SupplierDTO {
     private String notes;
     // 统计信息
     private Integer totalOrders;
+    @PriceSensitive
     private BigDecimal totalAmount;
     private LocalDateTime lastOrderDate;
     // 审计信息

@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.MixedBatchType;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import com.cretas.aims.security.PriceSensitive;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -92,30 +93,39 @@ public class ProductionPlanDTO {
     @Schema(description = "优先级")
     private Integer priority;
 
+    @PriceSensitive
     @Schema(description = "预估材料成本")
     private BigDecimal estimatedMaterialCost;
 
+    @PriceSensitive
     @Schema(description = "实际材料成本")
     private BigDecimal actualMaterialCost;
 
+    @PriceSensitive
     @Schema(description = "预估人工成本")
     private BigDecimal estimatedLaborCost;
 
+    @PriceSensitive
     @Schema(description = "实际人工成本")
     private BigDecimal actualLaborCost;
 
+    @PriceSensitive
     @Schema(description = "预估设备成本")
     private BigDecimal estimatedEquipmentCost;
 
+    @PriceSensitive
     @Schema(description = "实际设备成本")
     private BigDecimal actualEquipmentCost;
 
+    @PriceSensitive
     @Schema(description = "预估其他成本")
     private BigDecimal estimatedOtherCost;
 
+    @PriceSensitive
     @Schema(description = "实际其他成本")
     private BigDecimal actualOtherCost;
 
+    @PriceSensitive
     @Schema(description = "总成本")
     private BigDecimal totalCost;
 

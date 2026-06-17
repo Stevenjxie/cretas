@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.yield;
 
+import com.cretas.aims.security.PriceSensitive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -35,10 +36,13 @@ public class StepYieldDTO {
 
     // ── 单元 A.4/A.5: 逐道成本 (Σ 本道各次报工的持久化成本, null-safe) ──────────────
     /** Σ 本道人工成本(元); 全 null → null (绝不默认 0) */
+    @PriceSensitive
     private BigDecimal laborCost;
     /** Σ 本道材料成本(元); 全 null → null (绝不默认 0) */
+    @PriceSensitive
     private BigDecimal materialCost;
     /** 本道总成本 = laborCost + materialCost (null-safe; 两者全 null → null) */
+    @PriceSensitive
     private BigDecimal stepCost;
 
     // ── 适配单元3: 传统报工证据/工时段/副产物/损耗/留样 (本道各次报工合并) ──────────────
