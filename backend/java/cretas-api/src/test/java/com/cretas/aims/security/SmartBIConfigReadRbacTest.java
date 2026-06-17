@@ -2,6 +2,7 @@ package com.cretas.aims.security;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.controller.SmartBIConfigController;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +42,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listIntents (/intents) declares @RequirePermission(analytics:read)")
     void listIntents_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listIntents", String.class);
+                "listIntents", HttpServletRequest.class, String.class);
         assertGatedByAnalyticsRead(method, "/intents");
     }
 
@@ -49,7 +50,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listThresholds (/thresholds) declares @RequirePermission(analytics:read)")
     void listThresholds_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listThresholds", String.class);
+                "listThresholds", HttpServletRequest.class, String.class);
         assertGatedByAnalyticsRead(method, "/thresholds");
     }
 
@@ -57,7 +58,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listIncentiveRules (/incentive-rules) declares @RequirePermission(analytics:read)")
     void listIncentiveRules_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listIncentiveRules", String.class);
+                "listIncentiveRules", HttpServletRequest.class, String.class);
         assertGatedByAnalyticsRead(method, "/incentive-rules");
     }
 
@@ -65,7 +66,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listFieldMappings (/field-mappings) declares @RequirePermission(analytics:read)")
     void listFieldMappings_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listFieldMappings", String.class);
+                "listFieldMappings", HttpServletRequest.class, String.class);
         assertGatedByAnalyticsRead(method, "/field-mappings");
     }
 
@@ -73,7 +74,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listMetricFormulas (/metric-formulas) declares @RequirePermission(analytics:read)")
     void listMetricFormulas_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listMetricFormulas", String.class);
+                "listMetricFormulas", HttpServletRequest.class, String.class);
         assertGatedByAnalyticsRead(method, "/metric-formulas");
     }
 
@@ -81,7 +82,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("listChartTemplates (/chart-templates) declares @RequirePermission(analytics:read)")
     void listChartTemplates_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "listChartTemplates", String.class, String.class);
+                "listChartTemplates", HttpServletRequest.class, String.class, String.class);
         assertGatedByAnalyticsRead(method, "/chart-templates");
     }
 
@@ -122,7 +123,7 @@ class SmartBIConfigReadRbacTest {
     void listDataSources_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
                 "listDataSources",
-                String.class, String.class, String.class, Boolean.class, int.class, int.class);
+                HttpServletRequest.class, String.class, String.class, String.class, Boolean.class, int.class, int.class);
         assertGatedByAnalyticsRead(method, "/data-sources");
     }
 
@@ -130,7 +131,7 @@ class SmartBIConfigReadRbacTest {
     @DisplayName("getDataSource (/data-sources/{id}) declares @RequirePermission(analytics:read)")
     void getDataSource_isAnnotatedWithAnalyticsRead() throws Exception {
         Method method = SmartBIConfigController.class.getDeclaredMethod(
-                "getDataSource", Long.class, String.class);
+                "getDataSource", HttpServletRequest.class, Long.class, String.class);
         assertGatedByAnalyticsRead(method, "/data-sources/{id}");
     }
 
