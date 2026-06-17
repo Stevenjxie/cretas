@@ -686,7 +686,6 @@ def gen_production_plans(
                 prod_id,             # product_type_id (real FK → product_types.id)
                 planned,
                 actual,
-                "kg",
                 start_dt,
                 end_dt,
                 "COMPLETED",
@@ -881,7 +880,7 @@ INSERT INTO quality_inspections (
 PROD_PLAN_INSERT = """
 INSERT INTO production_plans (
     id, factory_id, plan_number, product_type_id,
-    planned_quantity, actual_quantity, unit,
+    planned_quantity, actual_quantity,
     start_time, end_time, status, created_by,
     created_at, updated_at
 ) VALUES %s
