@@ -447,6 +447,17 @@ public class MobileController {
                 && !role.equals("super_admin") && !role.equals("hr_admin"))) {
             throw new BusinessException(403, "无权重置密码，需要管理员权限").withSeverity("error");
         }
+        // 🔒 多租户隔离 (2026-06-17 实测确认跨租户账号接管漏洞): /auth/* 被 JwtAuthInterceptor 的
+        // path-factoryId gate 排除, 而本端点用**入参** factoryId 定位用户。若不校验, 工厂级管理员
+        // (factory_super_admin/hr_admin) 可传别家 factoryId 重置别家用户密码 = 跨租户账号接管。
+        // 平台级角色 (platform_admin/super_admin) 可跨工厂 (by design); 工厂级角色必须本厂。
+        boolean isPlatformRole = role.equals("platform_admin") || role.equals("super_admin");
+        if (!isPlatformRole) {
+            String callerFactoryId = (String) request.getAttribute("factoryId");
+            if (callerFactoryId == null || !callerFactoryId.equals(factoryId)) {
+                throw new BusinessException(403, "无权重置其他工厂的用户密码").withSeverity("error");
+            }
+        }
         log.info("重置密码: factoryId={}, username={}, operator={}", factoryId, username, request.getAttribute("username"));
         mobileService.resetPassword(factoryId, username, newPassword);
         return ApiResponse.success("密码重置成功", null);
