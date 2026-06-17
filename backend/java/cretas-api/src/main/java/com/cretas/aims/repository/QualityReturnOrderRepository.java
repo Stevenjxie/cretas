@@ -32,8 +32,8 @@ public interface QualityReturnOrderRepository extends JpaRepository<QualityRetur
             "AND (CAST(:targetType AS string) IS NULL OR r.targetType = :targetType) " +
             "AND (CAST(:qualityInspectionId AS string) IS NULL OR r.qualityInspectionId = :qualityInspectionId) " +
             "AND (CAST(:targetId AS string) IS NULL OR r.targetId = :targetId) " +
-            "AND (:fromDate IS NULL OR r.createdAt >= :fromDate) " +
-            "AND (:toDate IS NULL OR r.createdAt <= :toDate)")
+            "AND (CAST(:fromDate AS string) IS NULL OR r.createdAt >= :fromDate) " +
+            "AND (CAST(:toDate AS string) IS NULL OR r.createdAt <= :toDate)")
     Page<QualityReturnOrder> findByFilters(
             @Param("factoryId") String factoryId,
             @Param("status") QualityReturnStatus status,
@@ -54,8 +54,8 @@ public interface QualityReturnOrderRepository extends JpaRepository<QualityRetur
             "AND (CAST(:targetType AS string) IS NULL OR r.targetType = :targetType) " +
             "AND (CAST(:qualityInspectionId AS string) IS NULL OR r.qualityInspectionId = :qualityInspectionId) " +
             "AND (CAST(:targetId AS string) IS NULL OR r.targetId = :targetId) " +
-            "AND (:fromDate IS NULL OR r.createdAt >= :fromDate) " +
-            "AND (:toDate IS NULL OR r.createdAt <= :toDate) " +
+            "AND (CAST(:fromDate AS string) IS NULL OR r.createdAt >= :fromDate) " +
+            "AND (CAST(:toDate AS string) IS NULL OR r.createdAt <= :toDate) " +
             "AND r.createdBy IN :createdByList")
     Page<QualityReturnOrder> findByFiltersAndCreatedByIn(
             @Param("factoryId") String factoryId,
