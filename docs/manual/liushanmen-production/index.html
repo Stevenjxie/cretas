@@ -381,7 +381,7 @@
       <span>2026-06</span>
       <span>六膳门食品工厂（F006）</span>
       <span>包含 17 张标注截图</span>
-      <span>生产链 13 个步骤 + 3 个管理参考章节</span>
+      <span>生产链 13 个步骤 + 手机 APP 操作端 + 3 个管理参考章节</span>
     </div>
   </div>
 </div>
@@ -397,6 +397,7 @@
 销售订单 → 财务审核 → 生产计划 → 调拨备料 → 生产批次 → 报工（领料 + 产出）→ 完工入库 → 成品库存
     </div>
     <p style="margin-top:0.5rem; font-size:0.82rem;">前置设置（第 1–5 章）：产品/SKU → 编码规则 → 工序配置 → 原料字典 → BOM 配方，完成一次后无需重复操作。</p>
+    <p style="margin-top:0.5rem; font-size:0.82rem;"><strong>手册范围说明：</strong>本手册聚焦<strong>生产链</strong>（从产品设置到完工报工，含手机 APP 操作端）。采购下单、仓储盘点 / 报损、成品出库、盐化工艺、研发报价等模块见对应手册（待补），不在本手册范围内。</p>
   </div>
 </div>
 
@@ -420,6 +421,7 @@
     <li><a href="#ch14"><span class="step-num">14</span>工单整单撤回 / 审批流程</a></li>
     <li><a href="#ch15"><span class="step-num">15</span>工时统计与今日达成率</a></li>
     <li><a href="#ch16"><span class="step-num">16</span>金蝶凭证导出操作步骤</a></li>
+    <li><a href="#ch17"><span class="step-num">17</span>手机 APP 操作端指南 <span class="badge badge-app">手机 APP</span></a></li>
   </ol>
 </nav>
 
@@ -431,7 +433,7 @@
     <div class="chapter-num">1</div>
     <div>
       <div class="chapter-title">产品 / SKU 创建</div>
-      <div class="chapter-subtitle">菜单路径：系统管理 → 产品管理 / /system/products</div>
+      <div class="chapter-subtitle">菜单路径：系统管理 → 产品信息管理 / /system/products</div>
     </div>
   </div>
   <div class="chapter-body">
@@ -565,7 +567,7 @@
     <p><strong>如何配置编码字典（一次性初始化）：</strong></p>
 
     <ul class="steps">
-      <li>进入<mark>系统管理 → 物料编码字典</mark>，分三层逐级新建分段。</li>
+      <li>进入<mark>系统管理 → 编码规则</mark>（路径 <code>/system/encoding-rules</code>）维护编码规则；三层物料分段字典（类型 / 部位 / 品名）在<mark>仓库管理 → 物料分段字典</mark>（路径 <code>/warehouse/material-segments</code>）逐级新建分段。</li>
       <li><strong>新建 L1 类型段</strong>（3位）：点击「新建」，选层级=类型，填写段编码（如 <code>001</code>）和展示标签（如"原料"）；保存。</li>
       <li><strong>新建 L2 部位/品类段</strong>（6位累积）：选层级=部位，填写段编码（如 <code>001001</code>）、上级编码（<code>001</code>）和展示标签（如"牛腱"）；保存。</li>
       <li><strong>新建 L3 品名段</strong>（10位累积）：选层级=品名，填写段编码（如 <code>0010010001</code>）、上级编码（<code>001001</code>）和展示标签（如"牛腱 A 级"）；保存。</li>
@@ -575,8 +577,8 @@
     <hr class="chapter-divider">
     <p><strong>查看已生成编码 / 预览编码：</strong></p>
     <ul class="steps">
-      <li value="6">在物料类型页（仓库管理 → 原料类型），每条原料记录的「编码」列显示完整 16 位编码。</li>
-      <li>如需在录入前预览即将生成的编码，可调用系统预览接口（菜单：编码规则 → 生成预览）选择三级分类查看。</li>
+      <li value="6">在物料类型页（仓库管理 → 原料类型 / <code>/warehouse/material-types</code>），每条原料记录的「编码」列显示完整 16 位编码。</li>
+      <li>如需在录入前预览即将生成的编码，在<mark>编码规则</mark>页（<code>/system/encoding-rules</code>）选择三级分类查看预览结果。</li>
     </ul>
 
     <div class="warn-box">
@@ -605,7 +607,7 @@
     <div class="chapter-num">3</div>
     <div>
       <div class="chapter-title">工序配置（生成草稿 & 保存）</div>
-      <div class="chapter-subtitle">菜单路径：生产管理 → 产品工序配置，或从产品详情进入</div>
+      <div class="chapter-subtitle">菜单路径：系统管理 → 产品-工序配置 / /system/product-processes，或从产品详情进入</div>
     </div>
   </div>
   <div class="chapter-body">
@@ -621,7 +623,7 @@
     </div>
 
     <ul class="steps">
-      <li>在产品详情或工序配置菜单，找到对应产品，点击进入工序编辑界面。</li>
+      <li>在<mark>系统管理 → 产品-工序配置</mark>（<code>/system/product-processes</code>）或从产品详情进入，找到对应产品，点击进入工序编辑界面。</li>
       <li>从工序库中选择所需工序（如腌制、熟制、焯水、包装等）拖入工序流程；不需要的工序不选。</li>
       <li>AI 辅助配工序后，点击红框处<mark>生成草稿</mark>按钮，系统根据已配工序生成可编辑草稿。</li>
       <li>在草稿中确认每道工序的顺序、负责人（可选）、标准产出单位等信息。</li>
@@ -806,7 +808,7 @@
     <ul class="steps">
       <li>点击「新建订单」，填写客户名称、产品 SKU、数量、单价。</li>
       <li>确认<strong>税率</strong>：税率已在产品配置中设定（9% 或 13%），订单行会自动带入——核实是否与客户约定一致（含税价 vs 不含税价）。</li>
-      <li>系统会根据产品的 BOM 成本自动计算<strong>毛利率</strong>，若低于公司设定的红线（如 10%），页面会弹出红色预警——销售价不得低于此底线。</li>
+      <li>系统会根据产品的 BOM 成本自动计算<strong>毛利率</strong>并显示最低售价底线。<strong>计算示例</strong>：若某品 BOM 成本 = 50 元/盒，毛利红线 = 10%，则最低售价 = 50 ×（1 + 10%）= <strong>55 元/盒</strong>；当你填入的单价低于 55 元时，页面以<strong>红字提示</strong>"低于毛利红线 55 元"（红字为提示性，<strong>非强制阻断</strong>，仍可保存，但财务审核会重点核查）。</li>
       <li>确认无误后保存，订单进入「待审核」状态。</li>
     </ul>
 
@@ -1118,7 +1120,7 @@
         <ul>
           <li>领料后产出报工<strong>必须当天完成</strong>（或次日补报，超过两天系统会锁定）。</li>
           <li>如果原料库存不足（显示红色预警），先检查是否仓库调拨还未确认；不要强行报工，联系仓管确认调拨单状态。</li>
-          <li>每道报工<strong>不可重复提交</strong>——如误报，联系生管撤回，重新报工；不要重复点提交按钮。</li>
+          <li>每道报工<strong>不可重复提交</strong>——如误报，在批次详情页点「申请撤回」走撤回流程（详见第 14 章；5 分钟内本人无下游消费可免审批快速撤回），撤回后重新报工；不要重复点提交按钮。</li>
           <li>操作员只能看到分配给自己的工序任务，不能修改其他人的报工记录。</li>
         </ul>
       </div>
@@ -1172,7 +1174,7 @@
         <strong>注意事项</strong>
         <ul>
           <li>必须<strong>所有工序全部报完</strong>才能点「完工入库」——若按钮为灰色，说明还有未完成的报工工序。</li>
-          <li>完工入库后，批次状态锁定为「已入库」，<strong>不可撤销</strong>（如需撤回，联系生管在系统走撤回流程，会触发库存回滚）。</li>
+          <li>完工入库后，批次状态锁定为「已入库」，<strong>不可直接撤销</strong>（如需撤回，在批次详情页点「申请撤回」走撤回审批流程，详见第 14 章，审批通过后会触发库存回滚）。</li>
           <li>入库完成后，相关的销售订单状态自动更新为「可发货」，仓库可以操作出库。</li>
         </ul>
       </div>
@@ -1263,8 +1265,9 @@
               <tr><td>销售</td><td>创建销售订单、填写单价</td></tr>
               <tr><td>财务</td><td>审核销售订单、核实价格/税率/毛利</td></tr>
               <tr><td>厂长/生管(PMC)</td><td>创建生产计划、排产、审批调拨</td></tr>
-              <tr><td>仓管</td><td>确认调拨（出库/入库）、成品出库</td></tr>
-              <tr><td>操作员</td><td>手机 APP 报工（领料 + 产出两点）</td></tr>
+              <tr><td>仓管</td><td>手机 APP 扫码收货（采购入库，超收上限 130%）、确认调拨（出库/入库）、成品出库</td></tr>
+              <tr><td>操作员</td><td>手机 APP 报工（领料 + 产出两点）、调拨接收确认、报损拍照</td></tr>
+              <tr><td>质检员</td><td>手机 APP 扫码质检（来料/过程/成品检，拍照 + 语音留证，填合格/不合格）</td></tr>
             </tbody>
           </table>
         </div>
@@ -1350,7 +1353,7 @@
         &nbsp;&nbsp;② 检查成品是否已出货——已出货则拒绝撤回；<br>
         &nbsp;&nbsp;③ 检查是否已有 PENDING 申请（防重复提交）。</li>
       <li>三层守卫通过后，创建撤回申请，状态 = <strong>PENDING（待审批）</strong>。审批人收到待办通知。</li>
-      <li>审批人（与提交人不同，遵循四眼原则）进入<mark>生产管理 → 撤回申请列表</mark>，查看申请详情。</li>
+      <li>审批人（与提交人不同，遵循四眼原则）进入<mark>生产管理 → 撤回审批</mark>（独立列表页，路径 <code>/production/reversals</code>，即审批人待办入口），查看申请详情。</li>
       <li>审批人确认无误后，点击「<mark>审批通过</mark>」；如发现问题，点击「<mark>拒绝</mark>」并填写拒绝原因。</li>
       <li>审批通过后，系统自动执行撤回：① 软删除该批次全部报工记录；② 回滚原料库存中已扣减的 usedQuantity；③ 清除批次成本（costUnitPrice 置 null）；④ 移动均价重新计算。</li>
       <li>批次状态变为「已撤回」，可重新建单生产（新建生产计划引用同一销售订单）。</li>
@@ -1373,7 +1376,7 @@
           <li><strong>四眼原则</strong>：审批人必须与申请撤回的提交人不是同一人（「看是谁，谁提交的撤回」，需要另外一个有权限的人审批）。</li>
           <li>已发货或下游工序已消费的批次<strong>不允许撤回</strong>——守卫会在第一步拒绝申请。</li>
           <li>撤回后，成品库存（如已完工入库）会相应回滚，<strong>成本核算数据也会清零</strong>，下次报工重新生成成本。</li>
-          <li>撤回申请记录（包括拒绝记录）<strong>永久保留</strong>，可在「撤回申请列表」查阅历史，供审计追溯。</li>
+          <li>撤回申请记录（包括拒绝记录）<strong>永久保留</strong>，可在「撤回审批」列表（<code>/production/reversals</code>）查阅历史，供审计追溯。</li>
         </ul>
       </div>
     </div>
@@ -1390,7 +1393,7 @@
     <div class="chapter-num">15</div>
     <div>
       <div class="chapter-title">工时统计与今日达成率</div>
-      <div class="chapter-subtitle">SmartBI 数据驾驶舱 / 生产管理 → 批次详情（成本核算区块）</div>
+      <div class="chapter-subtitle">生产管理 → 人效看板 / 人效对比 / BOM达成率 / 工序投入产出</div>
     </div>
   </div>
   <div class="chapter-body">
@@ -1400,14 +1403,17 @@
     </div>
 
     <div class="note-box">
-      
+
       <div class="box-content">
-        <strong>当前版本工时数据查看路径</strong>
-        <p>当前版本（2026-06 上线）中，<strong>工时不在独立的"达成率看板"页单独展示</strong>，而是通过以下两个入口查阅：</p>
+        <strong>工时与达成率数据查看入口（4 个专用页面）</strong>
+        <p>系统提供 4 个生产管理下的专用页面查看工时、人效与达成率，菜单均在<strong>生产管理</strong>模块下：</p>
         <ul>
-          <li><strong>批次详情 → 成本核算区块</strong>：批次完工入库后，可看到"实际人工成本 / 成品公斤"（由 BOM 工序工时 × 时薪 折算）与"BOM 预报价人工成本"的对比及偏差率。</li>
-          <li><strong>SmartBI 数据驾驶舱 → 生产模块</strong>：管理层可查看跨批次的工时汇总趋势、各 SKU 人工成本对比（需 SmartBI 账号权限）。</li>
+          <li><strong>人效看板</strong>（<code>/production/labor-efficiency/dashboard</code>）：达成率趋势图 + 工序对比图，是查看"今日 / 近期达成率"的主看板。</li>
+          <li><strong>人效对比</strong>（<code>/production/labor-efficiency</code>）：跨人员 / 跨工序的人效（产出效率、人工成本）对比明细。</li>
+          <li><strong>BOM达成率分析</strong>（<code>/production/bom-achievement</code>）：各批次实际成本 vs BOM 预报价成本的达成率分析。</li>
+          <li><strong>工序投入产出对比</strong>（<code>/production/process-io</code>）：各工序投入（领料 / 工时）与产出的对比，定位出成率偏低工序。</li>
         </ul>
+        <p style="margin-top:0.3rem;">此外，<strong>批次详情 → 成本核算区块</strong>也可看单批次"实际人工成本 / 成品公斤"与"BOM 预报价人工成本"的对比及偏差率；管理层还可在 SmartBI 数据驾驶舱看跨批次汇总（需 SmartBI 账号权限）。</p>
       </div>
     </div>
 
@@ -1425,30 +1431,29 @@
             <td>在 BOM 配方 → 工序行中填写每道工序的标准工时（小时/批次），系统据此计算预报价人工成本（工时 × 时薪）。六膳门目前每道工序填写标准工时，时薪由管理员配置（手工填入，非反推）。</td>
           </tr>
           <tr>
-            <td>报工打卡（实际值，当前版本）</td>
-            <td>当前版本仅记录「领料报工」和「产出报工」两个端点的时间戳，<strong>未单独记录每道工序的实际工时</strong>。实际人工成本通过「实际领料成本 + BOM 工序工时」综合推算。独立的工时打卡（每道工序进出打点）计划在后续版本上线。</td>
+            <td>报工打卡（实际值）</td>
+            <td>六膳门约定只报「领料报工」和「产出报工」两个端点（中间工序免报），系统记录这两点的时间戳与产出数据，据此在人效看板 / BOM达成率页计算实际人工成本与达成率。若其他工厂开启逐道工序报工，系统也支持按每道工序进出打点记录实际工时（六膳门当前不启用，但功能已具备）。</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <p><strong>今日达成率查看（批次维度）：</strong></p>
+    <p><strong>今日达成率查看（推荐用人效看板）：</strong></p>
     <ul class="steps">
-      <li>进入<mark>生产管理 → 生产批次</mark>，筛选今日日期，查看各批次「状态」列——在制/已完工比例即为今日生产进度。</li>
-      <li>点击任一已完工批次，进入批次详情，滚动至「成本核算」区块，查看：<br>
-        &nbsp;&nbsp;• <strong>实际领料成本</strong> vs <strong>BOM 预报价成本</strong>，偏差率（目标 ±10%）<br>
-        &nbsp;&nbsp;• <strong>实际出成率</strong> vs <strong>BOM 目标出成率</strong></li>
-      <li>如需查看跨天/跨 SKU 的工时汇总对比，联系管理员开通 SmartBI 数据分析权限，登录驾驶舱查看生产效率模块。</li>
+      <li>进入<mark>生产管理 → 人效看板</mark>（<code>/production/labor-efficiency/dashboard</code>），查看达成率趋势图与工序对比图——这是查看今日 / 近期达成率的主入口。</li>
+      <li>如需逐批次明细，进入<mark>生产管理 → BOM达成率分析</mark>（<code>/production/bom-achievement</code>），查看各批次实际成本 vs BOM 预报价的达成率（目标 ±10%）。</li>
+      <li>如需定位哪道工序出成率偏低，进入<mark>生产管理 → 工序投入产出对比</mark>（<code>/production/process-io</code>）。</li>
+      <li>也可在<mark>生产管理 → 生产批次</mark>筛选今日日期，点进任一已完工批次的「成本核算」区块，查看该批次<strong>实际领料成本 vs BOM 预报价成本</strong>、<strong>实际出成率 vs BOM 目标出成率</strong>。</li>
     </ul>
 
-    <div class="warn-box">
-      
+    <div class="note-box">
+
       <div class="box-content">
-        <strong>当前版本限制说明</strong>
+        <strong>使用提示</strong>
         <ul>
-          <li>当前版本<strong>没有独立的"今日达成率看板"页面</strong>——「达成率」数据嵌在批次详情的成本核算区块中，需逐批次点进去查看。</li>
-          <li>逐道工序打卡计时（每个工人每道工序进出打点、工时折薪）属于后续规划功能，<strong>本版本未实装</strong>。</li>
-          <li>如需日报汇总（今日各 SKU 实际人工成本 vs 报价），目前需从批次数据手动汇总，或通过 SmartBI 驾驶舱导出报表。</li>
+          <li>4 个分析页面均在<strong>生产管理</strong>模块菜单下，权限由系统管理员分配；操作员通常只用报工，达成率分析面向厂长 / 生管 / 财务。</li>
+          <li>达成率与人工成本数据依赖报工数据：只有完成「领料报工 + 产出报工」两点的批次，才会在人效看板 / BOM达成率页出现完整数据。</li>
+          <li>六膳门当前只报两个端点（中间工序免报），因此工时数据为"两点时间戳 + BOM 工序工时折算"；若需要逐道工序的精确实际工时，可在工序配置中开启逐道报工（其他工厂适用）。</li>
         </ul>
       </div>
     </div>
@@ -1499,8 +1504,8 @@
     </ul>
 
     <div class="screenshot-wrap">
-      <img src="screenshots/02-product-coding-config.png" alt="财务管理页面示意（当前使用编码配置截图作为参考）">
-      <div class="screenshot-caption">图 16-1：财务管理导航位置示意（后续将替换为凭证导出页实际截图）</div>
+      <img src="screenshots/02-product-coding-config.png" alt="占位图，待替换为凭证导出页实际截图">
+      <div class="screenshot-caption">图 16-1（TODO 占位图，待替换）：本图为临时占位，<strong>非凭证导出页</strong>——凭证导出页实际入口为 财务管理 → 凭证导出（<code>/finance/voucher-export</code>），实际截图待补。</div>
     </div>
 
     <div class="tip-box">
@@ -1524,6 +1529,139 @@
           <li>导出前，请确认当月<strong>所有销售订单已完成财务审核、成品已完工入库</strong>——未完成审核的订单不计入当月凭证。</li>
           <li>如果金蝶表头字段与导出表头有出入（如字段顺序、科目编码格式不同），请<strong>不要手动修改导出文件的列顺序</strong>，而是联系系统管理员调整模板，保持每次导出格式一致。</li>
           <li>当前仅支持<strong>按自然月</strong>导出，不支持任意日期区间导出；如需月中对账，可分两次导出并手工合并。</li>
+        </ul>
+      </div>
+    </div>
+
+    <a class="back-top" href="#top">↑ 返回目录</a>
+  </div>
+</section>
+
+<!-- ===================================================
+     第 17 章 — 手机 APP 操作端指南
+======================================================-->
+<section class="chapter" id="ch17">
+  <div class="chapter-header">
+    <div class="chapter-num">17</div>
+    <div>
+      <div class="chapter-title">手机 APP 操作端指南 <span class="badge badge-app">手机 APP</span></div>
+      <div class="chapter-subtitle">仓管 / 操作员 / 质检员 每天用手机扫码作业 — 收货、领料、报工、质检、调拨接收、报损</div>
+    </div>
+  </div>
+  <div class="chapter-body">
+
+    <div class="section-desc">
+      <p>现场人员（仓管、操作员、质检员）的日常作业<strong>主要在手机 APP 完成</strong>。本章按角色逐个说明：每个流程谁来操作、前置条件、一步步点什么、系统会自动做什么。</p>
+      <p style="font-size:0.85rem; color:var(--muted);">说明：以下截图暂以占位（TODO）标注，APP 各屏均已上线，实际截图待补。</p>
+    </div>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.1 仓管 — 扫码收货（采购入库）</h3>
+    <div class="note-box">
+
+      <div class="box-content">
+        <strong>谁操作 / 前置条件</strong>
+        <p><strong>仓管</strong>操作；前置：采购单（PO）已下达，供应商送货到厂。</p>
+      </div>
+    </div>
+    <ul class="steps">
+      <li>打开 APP「采购收货」列表，找到待收货的采购单（或直接<mark>扫采购单二维码</mark>），系统按 PO 号自动匹配对应订单。</li>
+      <li>逐项核对到货物料：品名、规格、厂号是否与采购单一致。</li>
+      <li>填写<strong>实际入库数量</strong>。系统在框上方明确显示<strong>可入上限 = 订单量 × 130%</strong>（如订单 100 kg，最多可入 130 kg）；填超过上限时<strong>提交按钮自动置灰（disable）</strong>，无法提交。</li>
+      <li>若实到数量<strong>少于</strong>订单量，照实填写并在备注反馈采购（如"少收 2 kg，外箱破损"），便于采购与供应商对账。</li>
+      <li>（如需质检）进入质检环节核验，再做上架；确认后<mark>提交</mark>，系统生成入库记录并流转<strong>财务审核</strong>。</li>
+    </ul>
+    <div class="warn-box">
+
+      <div class="box-content">
+        <strong>防呆要点</strong>
+        <ul>
+          <li>收货框打开即显示"订单量 / 已收量 / 本次可入上限（含 30% 超收）"，<strong>不用心算</strong>，照着填即可。</li>
+          <li>超出 130% 上限系统直接挡住，不会让你提交错数。</li>
+        </ul>
+      </div>
+    </div>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.2 操作员 — 领料报工（扫一物一码）</h3>
+    <div class="note-box">
+
+      <div class="box-content">
+        <strong>谁操作 / 前置条件</strong>
+        <p><strong>操作员</strong>操作；前置：批次已分配、原料已调拨到车间仓。</p>
+      </div>
+    </div>
+    <ul class="steps">
+      <li>在 APP「我的工序任务」找到对应批次，点「领料报工」进入领料屏。</li>
+      <li><mark>扫一物一码</mark>：用摄像头扫原料包装标签，系统自动选中对应<strong>厂号 / 批次</strong>；也可手动从下拉选批次。</li>
+      <li>屏幕回显品名、批次号、厂号、可用库存，目视确认无误。</li>
+      <li>填写<strong>实领数量</strong>（系统校验不超过可用量，超领无法提交），点「拍照留证」拍投入照片。</li>
+      <li>点「提交领料」，系统扣减车间原料库存并记录领料时间戳。</li>
+    </ul>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.3 操作员 — 产出 / 逐道报工 + 草稿</h3>
+    <div class="note-box">
+
+      <div class="box-content">
+        <strong>谁操作 / 前置条件</strong>
+        <p><strong>操作员</strong>操作；前置：已领料、生产进行中。<strong>六膳门只报"领料 + 成品/半成品产出"两点，中间工序留空。</strong></p>
+      </div>
+    </div>
+    <ul class="steps">
+      <li>在「我的工序任务」选中批次，进入产出报工屏，确认是哪个工序 / 哪个批次（屏幕顶部显示品名 + 批次号，防止报错单）。</li>
+      <li>填写<strong>实际产出数量</strong>（成品千克 / 盒数）；若有半成品留存（如今天只焯水 500 kg），填半成品产出数量，系统记入半成品库存。</li>
+      <li>若一时无法填完，可点<mark>存草稿</mark>，稍后在「我的草稿」继续编辑，避免数据丢失。</li>
+      <li>提交后系统计算本批次实际出成率，与 BOM 预期比对显示达成率。</li>
+    </ul>
+    <div class="tip-box">
+
+      <div class="box-content">
+        <strong>逐道报工（其他工厂）</strong>
+        <p>若工厂开启了逐道工序报工，操作员可按"选批次 → 选工序 → 填产出"逐道上报，每道留时间戳。六膳门当前只报两点，中间工序在任务列表中显示为"免报"。</p>
+      </div>
+    </div>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.4 质检员 — 扫码质检</h3>
+    <div class="note-box">
+
+      <div class="box-content">
+        <strong>谁操作 / 前置条件</strong>
+        <p><strong>质检员</strong>操作；前置：有待检批次（来料检 / 过程检 / 成品检）。<em>注：质检员是独立角色，权限由管理员分配，只能看分配给自己的质检任务。</em></p>
+      </div>
+    </div>
+    <ul class="steps">
+      <li>在 APP 质检任务列表<mark>选择待检批次</mark>。</li>
+      <li><mark>扫码 / 拍照 / 语音</mark>记录质检：扫批次码确认对象，拍现场照片留证，必要时用语音录入质检描述（系统转文字）。</li>
+      <li>填写<strong>合格数 / 不合格数</strong>（系统自动算总数，防止填错）；选择不合格原因（标准下拉，如"色泽异常 / 异物 / 重量不足 / 其他"，选"其他"才需补充文字）。</li>
+      <li>提交，系统记录质检结果并关联到批次；不合格批次按流程拦截，不流入下一环节。</li>
+    </ul>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.5 车间 — 调拨接收确认</h3>
+    <div class="note-box">
+
+      <div class="box-content">
+        <strong>谁操作 / 前置条件</strong>
+        <p>车间收料人 / 操作员操作；前置：主仓已发出调拨单（状态"执行中"）。</p>
+      </div>
+    </div>
+    <ul class="steps">
+      <li>在 APP「车间库存 / 调拨接收」找到待接收的调拨单（显示调出仓 → 车间仓、物料、应收数量）。</li>
+      <li>清点实物，填写<strong>实际收到数量</strong>；与主仓发出数量不一致时照实填（如发 100 kg、收 98 kg），系统记差异 2 kg 供追因。</li>
+      <li>点<mark>确认收货</mark>，系统增加车间库存、完成调拨交接（双方各自留痕）。</li>
+    </ul>
+
+    <hr class="chapter-divider">
+    <h3 style="font-size:1rem; color:var(--primary); margin:0.5rem 0;">17.6 报损拍照</h3>
+    <div class="warn-box">
+
+      <div class="box-content">
+        <strong>报损必须拍照</strong>
+        <ul>
+          <li>发生原料 / 半成品 / 成品损耗时，在 APP 报损入口选择物料 → 填报损数量 → 选报损原因（标准下拉）→ <strong>拍照上传（必填，不拍照无法提交）</strong>。</li>
+          <li>拍照留证用于成本核对与责任追溯，避免库存差异说不清。</li>
         </ul>
       </div>
     </div>
