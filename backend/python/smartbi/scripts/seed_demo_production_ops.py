@@ -369,11 +369,17 @@ def gen_production_reports(
             if rng.random() < 0.6:
                 continue
 
-        n_progress = rng.randint(2, 4)
-        for _ in range(n_progress):
+        # Each PROGRESS report for the day must use a DISTINCT worker, because
+        # production_reports has a partial unique index
+        # uk_report_worker_type_date_no_batch ON (factory_id, worker_id,
+        # report_type, report_date) WHERE batch_id IS NULL. With batch_id=NULL,
+        # the same (worker, PROGRESS, date) can appear at most once. Sample
+        # workers without replacement (n_progress capped to worker count).
+        n_progress = min(rng.randint(2, 4), len(workers))
+        progress_workers = rng.sample(workers, n_progress)
+        for worker in progress_workers:
             prod_id, prod_name = rng.choice(products)
             process = rng.choice(processes)
-            worker = rng.choice(workers)
             output = round(rng.uniform(50, 300), 2)
             yr = rng.uniform(0.88, 0.97)
             good = round(output * yr, 2)
@@ -445,7 +451,31 @@ def gen_production_reports(
             False,
         ))
 
+    _assert_no_batch_report_uniqueness(factory_id, rows)
     return rows
+
+
+def _assert_no_batch_report_uniqueness(factory_id: str, rows: List[tuple]) -> None:
+    """Guard against the prod-only partial unique index
+    uk_report_worker_type_date_no_batch ON
+      (factory_id, worker_id, report_type, report_date) WHERE batch_id IS NULL.
+
+    test DB lacks this index (schema drift), so this in-memory check is the
+    real gate. Row tuple layout (see PROD_REPORT_INSERT / gen_production_reports):
+      [0]=factory_id [1]=batch_id [2]=worker_id [3]=report_type [5]=report_date
+    """
+    seen = set()
+    for r in rows:
+        if r[1] is not None:  # batch_id not NULL → different partial index
+            continue
+        key = (r[0], r[2], r[3], r[5])  # factory_id, worker_id, report_type, report_date
+        if key in seen:
+            raise AssertionError(
+                f"UNIQUENESS VIOLATION for {factory_id}: duplicate no-batch report "
+                f"(factory_id, worker_id, report_type, report_date)={key} would violate "
+                f"uk_report_worker_type_date_no_batch"
+            )
+        seen.add(key)
 
 
 # ---------------------------------------------------------------------------
