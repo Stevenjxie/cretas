@@ -761,6 +761,45 @@ public class MaterialBatchController {
     }
 
     /**
+     * 获取工厂级原料总库存汇总 (按物料聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
+     *
+     * <p>区别于 分仓库存查询 (按单仓批次级)。本端点把每个原料类型在所有仓库的所有在库批次
+     * 的当前剩余量 / 价值 汇总成 一行/物料 的工厂级视图。</p>
+     *
+     * <h4>聚合口径</h4>
+     * <ul>
+     *   <li>仅统计在库批次: status NOT IN (DEPLETED/USED_UP/EXPIRED/SCRAPPED/DEFECTIVE)
+     *       且 当前剩余量 (receiptQuantity - usedQuantity - reservedQuantity) &gt; 0</li>
+     *   <li>软删除批次自动排除 (实体级 @Where)</li>
+     *   <li>factoryId 维度过滤 (多租户)</li>
+     *   <li>totalQuantity = SUM(剩余量); totalValue = SUM(剩余量 * 单价)</li>
+     *   <li>batchCount = COUNT(批次); warehouseCount = COUNT(DISTINCT 仓库)</li>
+     *   <li>avgUnitPrice = totalValue / totalQuantity (移动均价, 除零 → null)</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>GET /api/mobile/F001/material-batches/stock-summary</pre>
+     *
+     * <p>RBAC: 仓储 / 库存读写或只读角色可访问 (warehouse:read_write / warehouse:read /
+     * inventory:read_write / inventory:read)。</p>
+     *
+     * @param factoryId 工厂ID
+     * @return 按物料聚合的总库存列表 (无数据返回空 list)
+     */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
+    @GetMapping("/stock-summary")
+    @Operation(summary = "获取工厂级原料总库存汇总",
+               description = "按物料类型聚合, 跨所有仓库, 仅统计在库批次 (剩余量 > 0 且非耗尽/过期/报废)")
+    public ApiResponse<List<MaterialStockSummaryDTO>> getStockSummary(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        log.info("获取工厂级原料总库存汇总: factoryId={}", factoryId);
+        List<MaterialStockSummaryDTO> summary = materialBatchService.listStockSummary(factoryId);
+        return ApiResponse.success(summary);
+    }
+
+    /**
      * 获取低库存警告
      *
      * <p>获取库存低于最低阈值的原材料列表。</p>

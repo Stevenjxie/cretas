@@ -281,6 +281,55 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<Object[]> sumQuantityByMaterialType(@Param("factoryId") String factoryId);
 
     /**
+     * 工厂级原料总库存汇总 (按物料类型聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
+     *
+     * <p>每个原料类型一行: 把该物料在所有仓库的所有在库批次的当前剩余量 / 价值 汇总。
+     * 区别于分仓库存查询 (按单仓批次级视图)。</p>
+     *
+     * <h4>聚合口径</h4>
+     * <ul>
+     *   <li>仅在库批次: status NOT IN (DEPLETED, USED_UP, EXPIRED, SCRAPPED, DEFECTIVE)
+     *       且 (receiptQuantity - usedQuantity - reservedQuantity) &gt; 0</li>
+     *   <li>软删除排除: MaterialBatch @Where(deleted_at IS NULL) 自动生效, 无需显式条件</li>
+     *   <li>factoryId 维度过滤 (多租户隔离)</li>
+     *   <li>totalQuantity = SUM(剩余量); totalValue = SUM(剩余量 * unitPrice)</li>
+     *   <li>batchCount = COUNT(批次); warehouseCount = COUNT(DISTINCT warehouseId)</li>
+     * </ul>
+     *
+     * <h4>单位口径 (UoM 正确性)</h4>
+     * <p>数量字段 (receiptQuantity/usedQuantity/reservedQuantity) 实际计量单位是
+     * {@code MaterialBatch.quantityUnit} (称重单位, 通常 kg), <b>不是</b>
+     * {@code RawMaterialType.unit} (后者是显示标签, 可能是 "箱"/"件")。见 .claude UoM 规则。
+     * 因此本查询按 <b>(materialTypeId, quantityUnit)</b> 聚合并以 {@code m.quantityUnit}
+     * 作为输出单位标签 — 确保每行只汇总同一单位的批次, 绝不跨单位 (g + kg) 混加。</p>
+     *
+     * <p><b>F006 实测</b>: 同一物料的批次可能存在不同 quantityUnit (如 "冷冻猪舌" 既有
+     * g 批次又有 kg 批次)。此时该物料按单位拆成多行 (g 一行 / kg 一行), 各行内部单位一致。
+     * 这是诚实呈现脏数据 (批次单位本就不统一), 不做隐式换算 (g↔kg 桥接由 BOM 层负责, 不在此聚合)。</p>
+     *
+     * <p>JOIN m.materialType mt 取 name/code/category。PG 严格 GROUP BY: 所有非聚合
+     * SELECT 列 (m.materialTypeId / m.quantityUnit 及 mt.name/code/category) 均列入 GROUP BY。
+     * avgUnitPrice 不在 SQL 聚合, 由 Service 层 totalValue/totalQuantity 计算回填。</p>
+     */
+    @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
+           "m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit, " +
+           "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), " +
+           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice), " +
+           "COUNT(m), COUNT(DISTINCT m.warehouseId)) " +
+           "FROM MaterialBatch m JOIN m.materialType mt " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.status NOT IN (com.cretas.aims.entity.enums.MaterialBatchStatus.DEPLETED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE) " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit " +
+           "ORDER BY mt.name ASC, m.quantityUnit ASC")
+    List<com.cretas.aims.dto.material.MaterialStockSummaryDTO> findStockSummaryByFactory(
+            @Param("factoryId") String factoryId);
+
+    /**
      * 汇总指定原料类型在指定工厂的可用库存总量。
      * 用于调拨单 detail 页 "现有库存" 列 (PR #289 §B4 客户对接 2026-05-10)。
      * 与 {@link com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository#sumAvailableQuantityByProductType}
