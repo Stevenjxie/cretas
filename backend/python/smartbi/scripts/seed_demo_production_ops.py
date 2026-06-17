@@ -39,7 +39,7 @@ import sys
 import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 try:
     import psycopg2
@@ -465,8 +465,6 @@ def gen_quality_inspections(
       inspector_id, inspection_date, sample_size, pass_count, fail_count,
       pass_rate, result, inspection_mode, notes
     """
-    prof = TENANT_PROFILES[factory_id]
-    workers = prof["workers"]
     rows: List[tuple] = []
 
     # ~1 inspection per working day, higher pass rate = realistic
@@ -475,7 +473,6 @@ def gen_quality_inspections(
             continue
         n = rng.randint(1, 3)
         for _ in range(n):
-            inspector = rng.choice(workers)
             sample = rng.randint(20, 100)
             pass_rate_raw = rng.uniform(0.88, 0.99)
             pass_count = int(sample * pass_rate_raw)
@@ -594,7 +591,8 @@ def gen_factory_equipment(factory_id: str) -> List[tuple]:
             f"{eq_type}0{i}",                      # equipment_name
             eq_type,                               # type
             f"MODEL-{eq_type[:2]}{i:03d}",         # model
-            "RUNNING",                             # status — matches equipmentAvailability filter in ProductionReportServiceImpl
+            # status — matches equipmentAvailability filter in ProductionReportServiceImpl
+            "RUNNING",
             f"{factory_id[:4]}生产车间",            # location
             rng.randint(1000, 8000),               # total_running_hours
             date(2026, 3, rng.randint(1, 28)),     # last_maintenance_date
@@ -812,7 +810,11 @@ def seed_cretas_tables(
         print(f"  [DRY] {factory_id}: would seed {len(batches)} production_batches")
     else:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM production_batches WHERE factory_id = %s AND batch_number LIKE 'PB-' || LEFT(%s,4) || '%%'", (factory_id, factory_id))
+            cur.execute(
+                "DELETE FROM production_batches WHERE factory_id = %s "
+                "AND batch_number LIKE 'PB-' || LEFT(%s,4) || '%%'",
+                (factory_id, factory_id),
+            )
             deleted = cur.rowcount
             execute_values(cur, PROD_BATCH_INSERT, batches)
             conn.commit()
@@ -829,9 +831,15 @@ def seed_cretas_tables(
             prof = TENANT_PROFILES[factory_id]
             worker_ids = tuple(_worker_id(factory_id, w) for w in prof["workers"])
             if len(worker_ids) == 1:
-                cur.execute("DELETE FROM production_reports WHERE factory_id = %s AND worker_id = %s", (factory_id, worker_ids[0]))
+                cur.execute(
+                    "DELETE FROM production_reports WHERE factory_id = %s AND worker_id = %s",
+                    (factory_id, worker_ids[0]),
+                )
             else:
-                cur.execute("DELETE FROM production_reports WHERE factory_id = %s AND worker_id IN %s", (factory_id, worker_ids))
+                cur.execute(
+                    "DELETE FROM production_reports WHERE factory_id = %s AND worker_id IN %s",
+                    (factory_id, worker_ids),
+                )
             deleted = cur.rowcount
             execute_values(cur, PROD_REPORT_INSERT, reports)
             conn.commit()
@@ -867,11 +875,17 @@ def seed_cretas_tables(
         user_row = cur.fetchone()
 
     if not factory_exists or user_row is None:
-        print(f"  {factory_id}: factory_equipment skipped (no factory/user record; KPI equipmentAvailability fallback=85)")
+        print(
+            f"  {factory_id}: factory_equipment skipped "
+            "(no factory/user record; KPI equipmentAvailability fallback=85)"
+        )
         stats["factory_equipment"] = 0
     else:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM factory_equipment WHERE factory_id = %s AND deleted_at IS NULL", (factory_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM factory_equipment WHERE factory_id = %s AND deleted_at IS NULL",
+                (factory_id,),
+            )
             existing = cur.fetchone()[0]
 
         if existing > 0:
@@ -969,7 +983,7 @@ def main() -> None:
 
     for factory_id in tenants:
         if factory_id == "DEMO_REST":
-            print(f"\n  Skipping DEMO_REST (restaurant tenant)")
+            print("\n  Skipping DEMO_REST (restaurant tenant)")
             continue
         print(f"\n--- {factory_id} ---")
         try:
