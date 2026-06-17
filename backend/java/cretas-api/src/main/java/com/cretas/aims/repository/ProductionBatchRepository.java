@@ -113,6 +113,20 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                                            @Param("endTime") LocalDateTime endTime);
 
     /**
+     * 计算指定时间范围内已完成批次的平均生产周期(分钟).
+     * 仅统计 start_time/end_time 都非空的 COMPLETED 批次. 无符合批次返 null.
+     * native query: PostgreSQL EXTRACT(EPOCH FROM interval) 在 JPQL 里不稳定, 用 native.
+     */
+    @Query(value = "SELECT AVG(EXTRACT(EPOCH FROM (end_time - start_time)) / 60.0) " +
+           "FROM production_batches WHERE factory_id = :factoryId AND status = 'COMPLETED' " +
+           "AND start_time IS NOT NULL AND end_time IS NOT NULL " +
+           "AND end_time >= start_time " +
+           "AND start_time >= :startTime AND start_time < :endTime", nativeQuery = true)
+    Double calculateAvgCycleTimeMinutes(@Param("factoryId") String factoryId,
+                                        @Param("startTime") LocalDateTime startTime,
+                                        @Param("endTime") LocalDateTime endTime);
+
+    /**
      * 统计指定工厂、指定状态、指定时间后创建的批次数量
      * @param factoryId 工厂ID
      * @param status 批次状态（枚举）

@@ -10,8 +10,12 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.*;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.report.ProductionReportService;
@@ -55,6 +59,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final QualityInspectionRepository qualityInspectionRepository;
     private final ShipmentRecordRepository shipmentRecordRepository;
     private final TimeClockRecordRepository timeClockRecordRepository;
+    private final ReworkRecordRepository reworkRecordRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     // ==================== 基础报表 ====================
 
@@ -1234,6 +1240,38 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 new BigDecimal(activeUsers).divide(new BigDecimal(totalUsers), 4, RoundingMode.HALF_UP)
                         .multiply(new BigDecimal("100")) : new BigDecimal("95");
 
+        // ===== KPI 补充指标 (真实计算, 无数据返 0 诚实空, 不造假) =====
+        // 平均生产周期(分钟): 已完成批次 end_time - start_time 均值
+        Double avgCycleMin = productionBatchRepository.calculateAvgCycleTimeMinutes(factoryId, monthStart, dayEnd);
+        BigDecimal avgCycleTime = avgCycleMin != null ?
+                BigDecimal.valueOf(avgCycleMin).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        // 平均交期(天): 已交付订单 交付日 - 下单日 均值
+        Double avgLeadDays = salesOrderRepository.calculateAvgLeadTimeDays(factoryId, date.minusDays(30), date);
+        BigDecimal avgLeadTime = avgLeadDays != null ?
+                BigDecimal.valueOf(avgLeadDays).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        // 返工率(%): 期间返工记录数 / 期间完成批次数
+        long reworkCount = reworkRecordRepository.countByFactoryIdAndStartTimeBetween(factoryId, monthStart, dayEnd);
+        long completedBatchCount = productionBatchRepository.countByFactoryIdAndStatusAndCreatedAtBetween(
+                factoryId, ProductionBatchStatus.COMPLETED, monthStart, dayEnd);
+        BigDecimal reworkRate = completedBatchCount > 0 ?
+                new BigDecimal(reworkCount).divide(new BigDecimal(completedBatchCount), 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        // 订单满足率(%): 已完成订单 / 有效订单(非草稿/取消)
+        List<SalesOrder> periodOrders = salesOrderRepository.findByFactoryIdAndDateRange(
+                factoryId, date.minusDays(30), date);
+        long activeOrders = periodOrders.stream()
+                .filter(o -> o.getStatus() != SalesOrderStatus.DRAFT && o.getStatus() != SalesOrderStatus.CANCELLED)
+                .count();
+        long fulfilledOrders = periodOrders.stream()
+                .filter(o -> o.getStatus() == SalesOrderStatus.COMPLETED)
+                .count();
+        BigDecimal orderFulfillmentRate = activeOrders > 0 ?
+                new BigDecimal(fulfilledOrders).divide(new BigDecimal(activeOrders), 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
         KpiMetricsDTO kpi = KpiMetricsDTO.builder()
                 .factoryId(factoryId)
                 .reportDate(date)
@@ -1250,6 +1288,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .laborCostRatio(costReport.getLaborCostRatio())
                 .overheadCostRatio(costReport.getOverheadCostRatio())
                 .unitCost(unitCost)
+                .avgCycleTime(avgCycleTime)
+                .avgLeadTime(avgLeadTime)
+                .reworkRate(reworkRate)
+                .orderFulfillmentRate(orderFulfillmentRate)
                 .otif(otif.setScale(2, RoundingMode.HALF_UP))
                 .onTimeDeliveryRate(otif.setScale(2, RoundingMode.HALF_UP))
                 .equipmentAvailability(equipmentAvailability.setScale(2, RoundingMode.HALF_UP))
