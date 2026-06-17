@@ -98,7 +98,7 @@
           <template #header>
             <div class="template-card-header">
               <el-radio v-model="templateMode" label="preset" />
-              <strong>六扇门含盐化代加工 (7 仓)</strong>
+              <strong>含盐化代加工预设 (7 仓)</strong>
             </div>
           </template>
           <el-table :data="LIUSHANMEN_SALTED_TEMPLATE" size="small" :show-header="false">

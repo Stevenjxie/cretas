@@ -228,7 +228,7 @@ onMounted(loadRules);
     >
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="130px">
         <el-form-item label="规则名称" prop="ruleName">
-          <el-input v-model="form.ruleName" placeholder="例: F006 默认规则" maxlength="100" show-word-limit />
+          <el-input v-model="form.ruleName" placeholder="例: 默认采购审批规则" maxlength="100" show-word-limit />
         </el-form-item>
 
         <el-form-item label="价格偏差阈值 %" prop="priceVarianceThreshold">

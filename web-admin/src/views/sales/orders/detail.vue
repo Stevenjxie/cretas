@@ -120,9 +120,9 @@ function approvalDecisionHint(row: TableRow | null): string {
     return `检测到外部渠道订单；是否免审由后台审批配置决定。订单金额：${formatAmount(safeAmount)}。`;
   }
   if (safeAmount > 5000) {
-    return `订单金额 ${formatAmount(safeAmount)} 超过 F006 默认 5000 元阈值，预计进入财务审核。`;
+    return `订单金额 ${formatAmount(safeAmount)} 超过默认阈值，预计进入财务审核。`;
   }
-  return `订单金额 ${formatAmount(safeAmount)} 未超过 F006 默认 5000 元阈值，预计免审通过。`;
+  return `订单金额 ${formatAmount(safeAmount)} 未超过默认阈值，预计免审通过。`;
 }
 
 function actionSuccessMessage(action: string, labelText: string, response: unknown): string {

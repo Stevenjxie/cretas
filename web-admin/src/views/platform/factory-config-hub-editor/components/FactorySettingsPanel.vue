@@ -89,7 +89,7 @@
         <div class="reporting-mode-setting">
           <el-switch v-model="form.skipProcessReportingDefault" />
           <el-text type="info" size="small">
-            开启=新计划默认只报领料投入+末道产出两点（适合六扇门类）；关闭=逐道报工（每工序都报）。单计划仍可单独覆盖。
+            开启=新计划默认只报领料投入+末道产出两点（适合头尾两点报工的工厂）；关闭=逐道报工（每工序都报）。单计划仍可单独覆盖。
           </el-text>
         </div>
       </el-form-item>
