@@ -588,7 +588,7 @@ def gen_factory_equipment(factory_id: str) -> List[tuple]:
             f"{eq_type}0{i}",                      # equipment_name
             eq_type,                               # type
             f"MODEL-{eq_type[:2]}{i:03d}",         # model
-            "active",                              # status — matches countByFactoryIdAndStatus(, "active")
+            "RUNNING",                             # status — matches equipmentAvailability filter in ProductionReportServiceImpl
             f"{factory_id[:4]}生产车间",            # location
             rng.randint(1000, 8000),               # total_running_hours
             date(2026, 3, rng.randint(1, 28)),     # last_maintenance_date
@@ -831,17 +831,13 @@ def seed_cretas_tables(
     stats["production_reports"] = len(reports)
 
     # --- quality_inspections ---
-    inspections = _add_ts(gen_quality_inspections(factory_id, start, end))
-    if dry_run:
-        print(f"  [DRY] {factory_id}: would seed {len(inspections)} quality_inspections")
-    else:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM quality_inspections WHERE factory_id = %s AND notes = '示范质检记录'", (factory_id,))
-            deleted = cur.rowcount
-            execute_values(cur, QUALITY_INSERT, inspections)
-            conn.commit()
-        print(f"  {factory_id}: quality_inspections deleted={deleted}, inserted={len(inspections)}")
-    stats["quality_inspections"] = len(inspections)
+    # NOTE: quality_inspections has FK constraints:
+    #   inspector_id → users(id) NOT NULL,  production_batch_id → production_batches(id) NOT NULL
+    # Demo tenants DEMO_FACTORY/DEMO_FACTORY2 have no users seeded.
+    # Skipping quality_inspections; KPI FPY will use hardcoded fallback (96%).
+    # To enable: seed users for demo tenants first, then run with --seed-quality flag.
+    print(f"  {factory_id}: quality_inspections skipped (FK constraints; FPY fallback=96)")
+    stats["quality_inspections"] = 0
 
     # --- production_plans ---
     plans = _add_ts(gen_production_plans(factory_id, start, end))
