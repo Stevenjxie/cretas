@@ -248,13 +248,13 @@ onMounted(() => {
   loadKPIData();
 });
 
-// Backend KpiMetricsDTO shape (/reports/kpi-metrics). All rate fields are plain
-// percentages (0–100), EXCEPT oee which is a ×100-scaled percentage
-// (= availability% × performance% × quality% / 10000, e.g. 7999.30 → 79.99%).
+// Backend KpiMetricsDTO shape (/reports/kpi-metrics). ALL rate fields are plain
+// percentages (0–100), including oee — backend returns availability% × performance%
+// × quality% / 10000 with each factor clamped ≤100, i.e. a 0–100 value (e.g. 91.05).
 // The template renders every nested value via `× 100` (formatPercent / el-progress
 // `:percentage="x * 100"`), so the mapper must convert each field to a 0–1 fraction.
 interface KpiMetricsResponse {
-  oee?: number;                 // ×100-scaled percentage (7999.30 = 79.99%)
+  oee?: number;                 // plain % (0–100), e.g. 91.05
   outputCompletionRate?: number;
   capacityUtilization?: number;
   avgCycleTime?: number;
@@ -286,8 +286,8 @@ async function loadKPIData() {
       const d = response.data;
       kpiData.value = {
         production: {
-          // oee is ×100-scaled (7999.30 = 79.99%) → divide by 10000 to get fraction
-          oee: (d.oee ?? 0) / 10000,
+          // oee is a plain % (0–100, e.g. 91.05) like every sibling field → /100 fraction
+          oee: pct(d.oee),
           yield: pct(d.overallQualityRate),
           cycleTime: d.avgCycleTime ?? 0,
           throughput: d.throughput ?? 0,
