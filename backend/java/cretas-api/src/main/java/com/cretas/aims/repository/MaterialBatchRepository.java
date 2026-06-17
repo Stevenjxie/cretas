@@ -296,12 +296,23 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      *   <li>batchCount = COUNT(批次); warehouseCount = COUNT(DISTINCT warehouseId)</li>
      * </ul>
      *
-     * <p>JOIN m.materialType mt 取 name/code/category/unit。PG 严格 GROUP BY: 所有非聚合
-     * SELECT 列 (m.materialTypeId 及 mt.name/code/category/unit) 均列入 GROUP BY。
+     * <h4>单位口径 (UoM 正确性)</h4>
+     * <p>数量字段 (receiptQuantity/usedQuantity/reservedQuantity) 实际计量单位是
+     * {@code MaterialBatch.quantityUnit} (称重单位, 通常 kg), <b>不是</b>
+     * {@code RawMaterialType.unit} (后者是显示标签, 可能是 "箱"/"件")。见 .claude UoM 规则。
+     * 因此本查询按 <b>(materialTypeId, quantityUnit)</b> 聚合并以 {@code m.quantityUnit}
+     * 作为输出单位标签 — 确保每行只汇总同一单位的批次, 绝不跨单位 (g + kg) 混加。</p>
+     *
+     * <p><b>F006 实测</b>: 同一物料的批次可能存在不同 quantityUnit (如 "冷冻猪舌" 既有
+     * g 批次又有 kg 批次)。此时该物料按单位拆成多行 (g 一行 / kg 一行), 各行内部单位一致。
+     * 这是诚实呈现脏数据 (批次单位本就不统一), 不做隐式换算 (g↔kg 桥接由 BOM 层负责, 不在此聚合)。</p>
+     *
+     * <p>JOIN m.materialType mt 取 name/code/category。PG 严格 GROUP BY: 所有非聚合
+     * SELECT 列 (m.materialTypeId / m.quantityUnit 及 mt.name/code/category) 均列入 GROUP BY。
      * avgUnitPrice 不在 SQL 聚合, 由 Service 层 totalValue/totalQuantity 计算回填。</p>
      */
     @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
-           "m.materialTypeId, mt.name, mt.code, mt.category, mt.unit, " +
+           "m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit, " +
            "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), " +
            "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice), " +
            "COUNT(m), COUNT(DISTINCT m.warehouseId)) " +
@@ -313,8 +324,8 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
            "com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
-           "GROUP BY m.materialTypeId, mt.name, mt.code, mt.category, mt.unit " +
-           "ORDER BY mt.name ASC")
+           "GROUP BY m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit " +
+           "ORDER BY mt.name ASC, m.quantityUnit ASC")
     List<com.cretas.aims.dto.material.MaterialStockSummaryDTO> findStockSummaryByFactory(
             @Param("factoryId") String factoryId);
 
