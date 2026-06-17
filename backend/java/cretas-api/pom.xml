@@ -561,6 +561,11 @@
                         <include>**/*Tests.java</include>
                         <include>**/*IT.java</include>
                     </includes>
+                    <!-- 并行: 2 个 JVM fork 跑不同测试类 (~2x)。保守取 2 (非 1C=全核)
+                         以降低共享 PG container 的写冲突风险。reuseForks=true 让每个
+                         fork 内 Spring context 缓存复用。验证跑全绿后再合。 -->
+                    <forkCount>2</forkCount>
+                    <reuseForks>true</reuseForks>
                 </configuration>
             </plugin>
         </plugins>
