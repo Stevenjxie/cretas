@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.yield;
 
+import com.cretas.aims.security.PriceSensitive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -32,10 +33,13 @@ public class BatchYieldDTO {
 
     // ── 单元 A.4/A.5: 整批成本聚合 (Σ steps, null-safe; 全 null → null, 绝不默认 0) ──────
     /** Σ 所有道人工成本(元); 全 null → null */
+    @PriceSensitive
     private BigDecimal totalLaborCost;
     /** Σ 所有道材料成本(元); 全 null → null */
+    @PriceSensitive
     private BigDecimal totalMaterialCost;
     /** 整批总成本 = totalLaborCost + totalMaterialCost (null-safe; 两者全 null → null) */
+    @PriceSensitive
     private BigDecimal totalCost;
 
     // ── 适配单元3: 整批副产物/损耗/留样聚合 (Σ steps, null-safe) ──────────────────────

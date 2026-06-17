@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.yield;
 
+import com.cretas.aims.security.PriceSensitive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -50,12 +51,15 @@ public class OrderYieldSummaryDTO {
     private String lastOutputUnit;
 
     /** Σ 各批次人工成本 (null-safe; 全 null → null)。 */
+    @PriceSensitive
     private BigDecimal totalLaborCost;
 
     /** Σ 各批次材料成本 (null-safe; 全 null → null)。 */
+    @PriceSensitive
     private BigDecimal totalMaterialCost;
 
     /** Σ 各批次总成本 (null-safe; 全 null → null)。 */
+    @PriceSensitive
     private BigDecimal totalCost;
 
     /** 该订单下生产批次数量。 */

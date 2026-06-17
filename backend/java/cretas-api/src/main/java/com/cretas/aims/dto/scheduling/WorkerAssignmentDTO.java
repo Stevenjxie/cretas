@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.scheduling;
 
 import com.cretas.aims.entity.WorkerAssignment;
+import com.cretas.aims.security.PriceSensitive;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -20,6 +21,7 @@ public class WorkerAssignmentDTO {
     private LocalDateTime actualStartTime;
     private LocalDateTime actualEndTime;
     private Boolean isTemporary;
+    @PriceSensitive
     private BigDecimal laborCost;
     private Integer performanceScore;
     private String status;
