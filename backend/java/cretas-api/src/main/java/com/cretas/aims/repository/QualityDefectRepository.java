@@ -39,8 +39,8 @@ public interface QualityDefectRepository extends JpaRepository<QualityDefect, St
             "AND (CAST(:defectType AS string) IS NULL OR d.defectType = :defectType) " +
             "AND (CAST(:qualityInspectionId AS string) IS NULL OR d.qualityInspectionId = :qualityInspectionId) " +
             "AND (CAST(:materialId AS string) IS NULL OR d.materialId = :materialId) " +
-            "AND (:fromDate IS NULL OR d.createdAt >= :fromDate) " +
-            "AND (:toDate IS NULL OR d.createdAt <= :toDate)")
+            "AND (CAST(:fromDate AS string) IS NULL OR d.createdAt >= :fromDate) " +
+            "AND (CAST(:toDate AS string) IS NULL OR d.createdAt <= :toDate)")
     Page<QualityDefect> findByFilters(
             @Param("factoryId") String factoryId,
             @Param("status") DefectStatus status,
