@@ -128,7 +128,7 @@ TENANT_PROFILES: Dict[str, Dict[str, Any]] = {
         "equipment_count": 6,
         "planned_qty_range": (500, 2000),   # kg per batch
         "unit_cost_base": 18.5,             # ¥/kg
-        "yield_rate_range": (0.88, 0.96),
+        "yield_rate_range": (0.93, 0.97),   # healthy demo: good/actual ~95%
     },
     "DEMO_FACTORY2": {
         "monthly_batches": 28,
@@ -143,7 +143,7 @@ TENANT_PROFILES: Dict[str, Dict[str, Any]] = {
         "equipment_count": 4,
         "planned_qty_range": (300, 1500),
         "unit_cost_base": 22.0,
-        "yield_rate_range": (0.85, 0.94),
+        "yield_rate_range": (0.92, 0.96),   # healthy demo: good/actual ~94%
     },
     "F004": {
         "monthly_batches": 18,
@@ -157,7 +157,7 @@ TENANT_PROFILES: Dict[str, Dict[str, Any]] = {
         "equipment_count": 3,
         "planned_qty_range": (200, 800),
         "unit_cost_base": 15.0,
-        "yield_rate_range": (0.87, 0.95),
+        "yield_rate_range": (0.93, 0.97),   # healthy demo: good/actual ~95%
     },
 }
 
@@ -586,11 +586,19 @@ def gen_quality_inspections(
         n = rng.randint(1, 3)
         for _ in range(n):
             sample = rng.randint(20, 100)
-            pass_rate_raw = rng.uniform(0.88, 0.99)
-            pass_count = int(sample * pass_rate_raw)
+            # Healthy demo with realistic variation (not fake-perfect): most
+            # inspections pass at 93%-99.5%, but ~4% are occasional off-spec lots
+            # at 78%-87% that fall below the PASS threshold (>=88). KPI FPY
+            # (= PASS-ratio of inspections, last 30 days) therefore lands ~94-97%
+            # rather than a flat 100%.
+            if rng.random() < 0.04:
+                pass_rate_raw = rng.uniform(0.78, 0.87)
+            else:
+                pass_rate_raw = rng.uniform(0.93, 0.995)
+            pass_count = int(round(sample * pass_rate_raw))
             fail_count = sample - pass_count
             pass_rate = round(Decimal(str(pass_count)) / Decimal(str(sample)) * 100, 2)
-            result = "PASS" if float(pass_rate) >= 90 else "CONDITIONAL"
+            result = "PASS" if float(pass_rate) >= 88 else "CONDITIONAL"
 
             rows.append((
                 _short_uuid(),               # id (VARCHAR(191) PK)
