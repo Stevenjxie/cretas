@@ -299,7 +299,7 @@ def gen_production_batches(
                 good,
                 defect,
                 "COMPLETED",        # status
-                "PASS" if yield_rate >= 0.90 else "CONDITIONAL",   # quality_status
+                "PASSED" if yield_rate >= 0.90 else "PARTIAL_PASS",   # quality_status
                 start_dt,
                 end_dt,
                 None,               # equipment_id
