@@ -172,6 +172,12 @@ def _add_ts(rows: List[tuple]) -> List[tuple]:
     return [r + (now, now) for r in rows]
 
 
+def _add_ts_with_creator(rows: List[tuple], creator_id: int) -> List[tuple]:
+    """Append created_at, updated_at, created_by to each row tuple."""
+    now = datetime.now()
+    return [r + (now, now, creator_id) for r in rows]
+
+
 def _dates_in_range(start: date, end: date) -> List[date]:
     result, d = [], start
     while d <= end:
@@ -592,6 +598,7 @@ def gen_factory_equipment(factory_id: str) -> List[tuple]:
             f"{factory_id[:4]}生产车间",            # location
             rng.randint(1000, 8000),               # total_running_hours
             date(2026, 3, rng.randint(1, 28)),     # last_maintenance_date
+            1,                                     # version (NOT NULL)
         ))
     return rows
 
@@ -756,7 +763,8 @@ INSERT INTO factory_equipment (
     factory_id, code, equipment_code, equipment_name,
     type, model, status, location,
     total_running_hours, last_maintenance_date,
-    created_at, updated_at
+    version,
+    created_at, updated_at, created_by
 ) VALUES %s
 """
 
@@ -840,36 +848,46 @@ def seed_cretas_tables(
     stats["quality_inspections"] = 0
 
     # --- production_plans ---
-    plans = _add_ts(gen_production_plans(factory_id, start, end))
-    if dry_run:
-        print(f"  [DRY] {factory_id}: would seed {len(plans)} production_plans")
+    # NOTE: production_plans has FK constraints:
+    #   factory_id → factories(id) NOT NULL (DEMO_FACTORY/DEMO_FACTORY2 not in factories table)
+    #   product_type_id → product_types(id) NOT NULL (synthetic IDs don't exist)
+    #   created_by → users(id) NOT NULL (no demo users for DEMO_FACTORY/DEMO_FACTORY2)
+    # Skipping production_plans; KPI outputCompletionRate will use hardcoded fallback (85%).
+    print(f"  {factory_id}: production_plans skipped (FK constraints; outputCompletionRate fallback=85)")
+    stats["production_plans"] = 0
+
+    # --- factory_equipment ---
+    # factory_equipment has FK: factory_id → factories(id), created_by → users(id) NOT NULL.
+    # Only factories that exist in the factories table AND have users can be seeded here.
+    # DEMO_FACTORY/DEMO_FACTORY2 are SmartBI-only demo tenants (no factory record).
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM factories WHERE id = %s", (factory_id,))
+        factory_exists = cur.fetchone()[0] > 0
+        cur.execute("SELECT id FROM users WHERE factory_id = %s AND deleted_at IS NULL LIMIT 1", (factory_id,))
+        user_row = cur.fetchone()
+
+    if not factory_exists or user_row is None:
+        print(f"  {factory_id}: factory_equipment skipped (no factory/user record; KPI equipmentAvailability fallback=85)")
+        stats["factory_equipment"] = 0
     else:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM production_plans WHERE factory_id = %s AND plan_number LIKE 'PP-' || LEFT(%s,4) || '%%'", (factory_id, factory_id))
-            deleted = cur.rowcount
-            execute_values(cur, PROD_PLAN_INSERT, plans)
-            conn.commit()
-        print(f"  {factory_id}: production_plans deleted={deleted}, inserted={len(plans)}")
-    stats["production_plans"] = len(plans)
+            cur.execute("SELECT COUNT(*) FROM factory_equipment WHERE factory_id = %s AND deleted_at IS NULL", (factory_id,))
+            existing = cur.fetchone()[0]
 
-    # --- factory_equipment (seed only if none exist) ---
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM factory_equipment WHERE factory_id = %s AND deleted_at IS NULL", (factory_id,))
-        existing = cur.fetchone()[0]
-
-    if existing > 0:
-        print(f"  {factory_id}: factory_equipment already has {existing} rows, skipping")
-        stats["factory_equipment"] = existing
-    else:
-        equip = _add_ts(gen_factory_equipment(factory_id))
-        if dry_run:
-            print(f"  [DRY] {factory_id}: would seed {len(equip)} factory_equipment")
+        if existing > 0:
+            print(f"  {factory_id}: factory_equipment already has {existing} rows, skipping")
+            stats["factory_equipment"] = existing
         else:
-            with conn.cursor() as cur:
-                execute_values(cur, EQUIPMENT_INSERT, equip)
-                conn.commit()
-            print(f"  {factory_id}: factory_equipment inserted={len(equip)}")
-        stats["factory_equipment"] = len(equip)
+            creator_id = user_row[0]
+            equip = _add_ts_with_creator(gen_factory_equipment(factory_id), creator_id)
+            if dry_run:
+                print(f"  [DRY] {factory_id}: would seed {len(equip)} factory_equipment")
+            else:
+                with conn.cursor() as cur:
+                    execute_values(cur, EQUIPMENT_INSERT, equip)
+                    conn.commit()
+                print(f"  {factory_id}: factory_equipment inserted={len(equip)}")
+            stats["factory_equipment"] = len(equip)
 
     return stats
 
