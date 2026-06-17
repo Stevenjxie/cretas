@@ -14,6 +14,8 @@ All DB interactions mocked — no real DB needed.
 """
 from __future__ import annotations
 from smartbi.gold.supplier_price_ingest_etl import (
+    MAX_SANE_UNIT_PRICE,
+    _is_sane_unit_price,
     _source_note_id,
     _to_float_safe,
     _to_upsert_row,
@@ -146,6 +148,45 @@ class TestHelpers:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Tests: _is_sane_unit_price — sanity guard against garbage/sentinel prices
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestIsSaneUnitPrice:
+    """The DEMO_REST 鲈鱼 99999/119998.80 incident: a total purchase amount entered
+    as a per-unit price poisoned food_cost → gross margin -23526%. Guard must drop
+    these before they reach agg_supplier_price."""
+
+    def test_normal_prices_sane(self):
+        assert _is_sane_unit_price(25.80) is True
+        assert _is_sane_unit_price(45.0) is True
+        assert _is_sane_unit_price(0.5) is True
+        assert _is_sane_unit_price(9999.0) is True  # high but plausible, kept
+
+    def test_none_not_sane(self):
+        assert _is_sane_unit_price(None) is False
+
+    def test_zero_not_sane(self):
+        """0 unit_price is not a usable real purchase price."""
+        assert _is_sane_unit_price(0.0) is False
+
+    def test_negative_not_sane(self):
+        assert _is_sane_unit_price(-5.0) is False
+
+    def test_sentinel_99999_not_sane(self):
+        """The exact incident value: 99999 (>= cap) must be dropped."""
+        assert _is_sane_unit_price(99999.0) is False
+
+    def test_huge_garbage_not_sane(self):
+        assert _is_sane_unit_price(119998.80) is False
+        assert _is_sane_unit_price(195140.0) is False
+
+    def test_cap_boundary(self):
+        """At the cap is rejected (>=); just below is accepted."""
+        assert _is_sane_unit_price(MAX_SANE_UNIT_PRICE) is False
+        assert _is_sane_unit_price(MAX_SANE_UNIT_PRICE - 0.01) is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Tests: _to_upsert_row — field mapping
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -237,6 +278,30 @@ class TestToUpsertRow:
         row = _to_upsert_row(raw, existing_ids=set())
         assert row is not None
         assert row["quantity"] is None
+
+    def test_insane_unit_price_returns_none(self):
+        """Sentinel/garbage unit_price (>= cap) must be dropped, not ingested."""
+        raw = self._make_raw(unit_price=Decimal("99999.00"))
+        row = _to_upsert_row(raw, existing_ids=set())
+        assert row is None
+
+    def test_huge_unit_price_returns_none(self):
+        raw = self._make_raw(unit_price=Decimal("119998.80"))
+        row = _to_upsert_row(raw, existing_ids=set())
+        assert row is None
+
+    def test_zero_unit_price_returns_none(self):
+        """0 price carries no real cost signal → skip."""
+        raw = self._make_raw(unit_price=Decimal("0.00"))
+        row = _to_upsert_row(raw, existing_ids=set())
+        assert row is None
+
+    def test_high_but_plausible_price_kept(self):
+        """A high yet plausible per-kg price (e.g. premium seafood ¥800/kg) stays."""
+        raw = self._make_raw(unit_price=Decimal("800.00"))
+        row = _to_upsert_row(raw, existing_ids=set())
+        assert row is not None
+        assert row["unit_price"] == pytest.approx(800.0)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -393,6 +458,38 @@ class TestRunSupplierPriceIngest:
         assert stats["skipped_no_date"] == 1
         assert stats["inserted"] == 1
         assert inserted_rows[0]["source_note_id"] == "mb:b2"
+
+    def test_bad_price_rows_skipped_and_counted(self):
+        """A 99999 sentinel row is dropped (skipped_bad_price++), the good row inserted.
+
+        Reproduces the DEMO_REST 鲈鱼 incident at the ingest boundary: the garbage
+        price never reaches agg_supplier_price, so it can't poison food_cost."""
+        bad = self._make_batch_row("b1", unit_price=Decimal("99999.00"))
+        good = self._make_batch_row("b2", unit_price=Decimal("45.00"))
+        cretas_conn = _FakeConn(fetch_rows=[bad, good])
+        smartbi_conn = _FakeConn(fetch_rows=[])
+
+        inserted_rows = []
+
+        async def fake_upsert(smartbi_pool, factory_id, rows):
+            inserted_rows.extend(rows)
+            return len(rows)
+
+        with patch(
+            "smartbi.gold.supplier_price_ingest_etl._insert_ingest_rows",
+            side_effect=fake_upsert,
+        ):
+            stats = _run(run_supplier_price_ingest(
+                _FakePool(cretas_conn), _FakePool(smartbi_conn), "F006"
+            ))
+
+        assert stats["total_read"] == 2
+        assert stats["skipped_bad_price"] == 1
+        assert stats["skipped_no_date"] == 0
+        assert stats["inserted"] == 1
+        assert len(inserted_rows) == 1
+        assert inserted_rows[0]["source_note_id"] == "mb:b2"
+        assert inserted_rows[0]["unit_price"] == pytest.approx(45.0)
 
     def test_ingredient_name_fallback_on_join_miss(self):
         """When material_name is None (JOIN miss), ingredient_name must be the raw type ID."""
