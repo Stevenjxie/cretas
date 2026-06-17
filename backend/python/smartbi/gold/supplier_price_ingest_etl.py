@@ -43,6 +43,37 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Sanity guard — drop garbage / sentinel unit_prices before they propagate
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A single dirty material_batches.unit_price flows: agg_supplier_price →
+# _get_latest_real_purchase_prices() → dim_ingredient.unit_price (real_purchase
+# override) → fact_restaurant_recipe_line.line_cost → agg_restaurant_product_cost
+# .food_cost → gross-margin KPI. One bad row poisons the whole dish's food cost.
+#
+# Real incident (DEMO_REST 鲈鱼): unit_price 99999.00 / 119998.80 (a total purchase
+# amount mistakenly entered as per-kg price) made food_cost ≈ ¥30k/份 and gross
+# margin ≈ -23526%. Per-unit ingredient prices for restaurant raw materials never
+# legitimately reach this magnitude, so we drop any row at/above the sentinel cap
+# rather than ingest it (honest skip + stat, not a silently fabricated price).
+#
+# This is an absolute ceiling: cheap and robust without needing per-category
+# medians at ingest time. Legitimate high-value-per-unit goods stay well under it.
+MAX_SANE_UNIT_PRICE: float = 99999.0
+
+
+def _is_sane_unit_price(price: Optional[float]) -> bool:
+    """True if price is a plausible per-unit ingredient price.
+
+    Rejects None, non-positive, and absurd sentinel/garbage values
+    (>= MAX_SANE_UNIT_PRICE) so they never override dim_ingredient.unit_price.
+    """
+    if price is None:
+        return False
+    return 0.0 < price < MAX_SANE_UNIT_PRICE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -248,6 +279,12 @@ def _to_upsert_row(raw_row, existing_ids: Set[str]) -> Optional[dict]:
     if delivery_date is None:
         return None  # no date → cannot place on price timeline; skip
 
+    # sanity guard: drop garbage / sentinel unit_prices (e.g. 99999 total-amount-as-
+    # per-unit mistakes) before they poison dim_ingredient.unit_price → food_cost.
+    unit_price = _to_float_safe(raw_row["unit_price"])
+    if not _is_sane_unit_price(unit_price):
+        return None  # insane price → skip (caller counts as skipped_bad_price)
+
     # ingredient_name: honest fallback to material_type_id string (not fabricated)
     material_name = raw_row.get("material_name")
     ingredient_name = (
@@ -272,7 +309,7 @@ def _to_upsert_row(raw_row, existing_ids: Set[str]) -> Optional[dict]:
         "ingredient_name":     ingredient_name,
         # normalized_name left to upsert_supplier_price_batch._normalize_name
         "delivery_date":       delivery_date,
-        "unit_price":          _to_float_safe(raw_row["unit_price"]),
+        "unit_price":          unit_price,
         "quantity":            _to_float_safe(raw_row.get("quantity")),
         "unit":                raw_row.get("unit"),
         "line_amount":         None,  # material_batches has no line_amount field
@@ -293,11 +330,12 @@ async def run_supplier_price_ingest(
     Idempotent: rows already present (source_note_id = 'mb:{id}') are skipped.
 
     Returns stats dict:
-        total_read       — rows from material_batches (with price)
-        skipped_no_date  — rows without purchase_date or inbound_date
-        skipped_existing — rows already in agg_supplier_price
-        inserted         — rows actually inserted
-        errors           — list of error strings (empty on full success)
+        total_read        — rows from material_batches (with price)
+        skipped_no_date   — rows without purchase_date or inbound_date
+        skipped_existing  — rows already in agg_supplier_price
+        skipped_bad_price — rows with garbage/sentinel unit_price (>= cap) dropped
+        inserted          — rows actually inserted
+        errors            — list of error strings (empty on full success)
     """
     if factory_id is None or factory_id == "":
         raise ValueError(
@@ -305,11 +343,12 @@ async def run_supplier_price_ingest(
         )
 
     stats: Dict[str, Any] = {
-        "total_read":       0,
-        "skipped_no_date":  0,
-        "skipped_existing": 0,
-        "inserted":         0,
-        "errors":           [],
+        "total_read":         0,
+        "skipped_no_date":    0,
+        "skipped_existing":   0,
+        "skipped_bad_price":  0,
+        "inserted":           0,
+        "errors":             [],
     }
 
     try:
@@ -337,9 +376,21 @@ async def run_supplier_price_ingest(
         if row is None:
             batch_id = raw["id"]
             source_id = _source_note_id(batch_id)
+            # Mirror the skip-reason precedence inside _to_upsert_row:
+            # existing > no_date > bad_price.
             if source_id in existing_ids:
                 stats["skipped_existing"] += 1
+            elif (raw.get("purchase_date") or raw.get("inbound_date")) is None:
+                stats["skipped_no_date"] += 1
+            elif not _is_sane_unit_price(_to_float_safe(raw["unit_price"])):
+                stats["skipped_bad_price"] += 1
+                logger.warning(
+                    "[supplier-ingest] factory=%s batch=%s dropped: insane unit_price=%s "
+                    "(>= %.0f sentinel cap)",
+                    factory_id, batch_id, raw["unit_price"], MAX_SANE_UNIT_PRICE,
+                )
             else:
+                # defensive: unexpected None — count as no_date to avoid silent loss
                 stats["skipped_no_date"] += 1
         else:
             upsert_rows.append(row)
@@ -362,11 +413,13 @@ async def run_supplier_price_ingest(
         return stats
 
     logger.info(
-        "[supplier-ingest] factory=%s total=%d existing=%d no_date=%d inserted=%d",
+        "[supplier-ingest] factory=%s total=%d existing=%d no_date=%d "
+        "bad_price=%d inserted=%d",
         factory_id,
         stats["total_read"],
         stats["skipped_existing"],
         stats["skipped_no_date"],
+        stats["skipped_bad_price"],
         stats["inserted"],
     )
     return stats
