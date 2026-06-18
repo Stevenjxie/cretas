@@ -368,14 +368,14 @@ class VoucherExportServiceTest {
                 .thenReturn(Optional.of(defaultConfig()));
         when(voucherRepo.findByFactoryIdAndDateRange(any(), any(), any()))
                 .thenReturn(List.of());
-        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         service.exportSequentialLedger(FACTORY_ID, buildReq(), USER_ID, out);
 
-        // 仍会 save (记录新的导出操作), 但应该 log dedup
-        // 主要验证不 throw
+        // 防呆 R4 (2026-06-18 修): dedup 命中时仍正常导出文件, 但 NOT 新建 exportRecord
+        // (修复前 dedup 命中只 log 不 return, 仍 save → 重复审计记录的 no-op)。
         verify(exportRecordRepo, atLeastOnce()).findRecentExport(any(), any(), any(), any(), any());
+        verify(exportRecordRepo, never()).save(any());
     }
 
     @Test

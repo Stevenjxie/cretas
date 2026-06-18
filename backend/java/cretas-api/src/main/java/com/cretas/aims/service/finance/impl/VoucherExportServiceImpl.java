@@ -142,18 +142,23 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         String fileName = buildFileName("voucher-ledger", factoryId, req.getStartDate(), req.getEndDate());
         int rowCount = Math.max(0, rows.size() - 1);
 
-        VoucherExportRecord record = VoucherExportRecord.builder()
-                .factoryId(factoryId)
-                .exportType(TYPE_SEQUENTIAL)
-                .targetSystem(req.getTargetSystem())
-                .periodStart(req.getStartDate())
-                .periodEnd(req.getEndDate())
-                .rowCount(rowCount)
-                .fileName(fileName)
-                .exportedBy(userId)
-                .build();
-        exportRecordRepo.save(record);
-        log.info("[SP11] exportSequentialLedger: factoryId={} rows={} file={}", factoryId, rowCount, fileName);
+        // 防呆 R4: 仅在 5min 窗口内无重复时落审计记录 — 重复请求 (recent 命中) 仍正常导出文件,
+        // 但不再插入重复 export_record (消除 dedup 命中却仍 save 的 no-op)。
+        if (recent.isEmpty()) {
+            VoucherExportRecord record = VoucherExportRecord.builder()
+                    .factoryId(factoryId)
+                    .exportType(TYPE_SEQUENTIAL)
+                    .targetSystem(req.getTargetSystem())
+                    .periodStart(req.getStartDate())
+                    .periodEnd(req.getEndDate())
+                    .rowCount(rowCount)
+                    .fileName(fileName)
+                    .exportedBy(userId)
+                    .build();
+            exportRecordRepo.save(record);
+        }
+        log.info("[SP11] exportSequentialLedger: factoryId={} rows={} file={} dedupReused={}",
+                factoryId, rowCount, fileName, recent.isPresent());
         return fileName;
     }
 
@@ -252,18 +257,22 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         String fileName = buildFileName("subject-balance", factoryId, req.getStartDate(), req.getEndDate());
         int rowCount = Math.max(0, rows.size() - 1);
 
-        VoucherExportRecord record = VoucherExportRecord.builder()
-                .factoryId(factoryId)
-                .exportType(TYPE_SUBJECT_BALANCE)
-                .targetSystem(req.getTargetSystem())
-                .periodStart(req.getStartDate())
-                .periodEnd(req.getEndDate())
-                .rowCount(rowCount)
-                .fileName(fileName)
-                .exportedBy(userId)
-                .build();
-        exportRecordRepo.save(record);
-        log.info("[SP11] exportSubjectBalance: factoryId={} rows={}", factoryId, rowCount);
+        // 防呆 R4: 仅在无 5min 窗口重复时落审计记录 — 重复请求仍正常导出, 不插重复 export_record。
+        if (recent.isEmpty()) {
+            VoucherExportRecord record = VoucherExportRecord.builder()
+                    .factoryId(factoryId)
+                    .exportType(TYPE_SUBJECT_BALANCE)
+                    .targetSystem(req.getTargetSystem())
+                    .periodStart(req.getStartDate())
+                    .periodEnd(req.getEndDate())
+                    .rowCount(rowCount)
+                    .fileName(fileName)
+                    .exportedBy(userId)
+                    .build();
+            exportRecordRepo.save(record);
+        }
+        log.info("[SP11] exportSubjectBalance: factoryId={} rows={} dedupReused={}",
+                factoryId, rowCount, recent.isPresent());
         return fileName;
     }
 
