@@ -101,6 +101,30 @@ class InquiryQuoteServiceImplTest {
         assertEquals(USER_ID, result.getCreatedBy());
     }
 
+    @Test
+    @DisplayName("create — 防呆 R4: 5min 窗口内同 物料/数量/创建人 重复 → 409, 不再 save")
+    void create_rejectsDuplicateWithin5MinWindow() {
+        CreateInquiryQuoteRequest req = new CreateInquiryQuoteRequest();
+        req.setMaterialTypeId(MATERIAL_TYPE_ID);
+        req.setMaterialName("辣椒");
+        req.setQuantity(new BigDecimal("100"));
+        req.setUnit("kg");
+        req.setInquiryDate(LocalDate.now());
+
+        InquiryQuote existing = newInquiry(InquiryQuoteStatus.DRAFT);
+        existing.setInquiryNumber("INQ-20260618-0001");
+        when(inquiryQuoteRepository.findRecentDuplicates(
+                eq(FACTORY_ID), eq(USER_ID), eq(MATERIAL_TYPE_ID), eq(new BigDecimal("100")), any()))
+                .thenReturn(List.of(existing));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.create(FACTORY_ID, req, USER_ID));
+        assertEquals(409, ex.getCode().intValue());
+        assertTrue(ex.getMessage().contains("INQ-20260618-0001"),
+                "409 message must cite existing inquiry number, was: " + ex.getMessage());
+        verify(inquiryQuoteRepository, never()).save(any(InquiryQuote.class));
+    }
+
     // ==================== submit ====================
 
     @Test

@@ -70,6 +70,21 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     @Override
     @Transactional
     public InquiryQuote create(String factoryId, CreateInquiryQuoteRequest request, Long userId) {
+        // 防呆 R4 (幂等防双击): 5min 窗口内同 工厂/创建人/物料类型/数量 的进行中核价单 → 409 + 已有单号 + 跳转提示
+        if (request.getMaterialTypeId() != null) {
+            List<InquiryQuote> dupes = inquiryQuoteRepository.findRecentDuplicates(
+                    factoryId, userId, request.getMaterialTypeId(), request.getQuantity(),
+                    LocalDateTime.now().minusMinutes(5));
+            if (!dupes.isEmpty()) {
+                InquiryQuote existing = dupes.get(0);
+                throw new BusinessException(409, String.format(
+                        "5 分钟内已创建相同核价单 (单号 %s, 物料 %s, 数量 %s), 请勿重复提交",
+                        existing.getInquiryNumber(), existing.getMaterialName(), existing.getQuantity()))
+                        .withHint("如需查看已有核价单请打开 " + existing.getInquiryNumber())
+                        .withHintTarget(existing.getId());
+            }
+        }
+
         String inquiryNumber = generateInquiryNumber(factoryId);
 
         InquiryQuote q = new InquiryQuote();

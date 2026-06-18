@@ -105,6 +105,19 @@ public class TransferServiceImpl implements TransferService {
             catch (Exception e) { log.warn("Canvas validation non-blocking: {}", e.getMessage()); }
         }
 
+        // 防呆 R4 (幂等防双击): 5min 窗口内同 源厂/目标厂/请求人/调拨日期 的未完成调拨 → 409 + 已有单号 + 跳转提示
+        List<InternalTransfer> dupes = transferRepository.findRecentDuplicates(
+                factoryId, request.getTargetFactoryId(), userId,
+                request.getTransferDate(), LocalDateTime.now().minusMinutes(5));
+        if (!dupes.isEmpty()) {
+            InternalTransfer existing = dupes.get(0);
+            throw new BusinessException(409, String.format(
+                    "5 分钟内已创建相同调拨 (调拨单 %s, 目标工厂 %s, 状态 %s), 请勿重复提交",
+                    existing.getTransferNumber(), existing.getTargetFactoryId(), existing.getStatus()))
+                    .withHint("如需查看已有调拨单请打开 " + existing.getTransferNumber())
+                    .withHintTarget(existing.getId());
+        }
+
         String transferNumber = generateTransferNumber(factoryId);
 
         InternalTransfer transfer = new InternalTransfer();

@@ -9,6 +9,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +19,29 @@ import java.util.Optional;
  */
 @Repository
 public interface InquiryQuoteRepository extends JpaRepository<InquiryQuote, String> {
+
+    /**
+     * 防呆 R4 (幂等防双击): 5 分钟窗口内、同 (工厂 + 创建人 + 物料类型 + 数量) 且仍处于
+     * 进行中状态 (DRAFT / INQUIRING) 的核价单。非空即视为重复创建 → 调用方返 409 + 已有单号。
+     * 全部用等值比较 (materialTypeId 为 null 时不命中, 即不对自由文本物料去重 — 可接受)。
+     */
+    @Query("""
+            SELECT q FROM InquiryQuote q
+            WHERE q.factoryId = :factoryId
+              AND q.createdBy = :createdBy
+              AND q.materialTypeId = :materialTypeId
+              AND q.quantity = :quantity
+              AND q.status IN (com.cretas.aims.entity.enums.InquiryQuoteStatus.DRAFT,
+                               com.cretas.aims.entity.enums.InquiryQuoteStatus.INQUIRING)
+              AND q.createdAt >= :since
+            ORDER BY q.createdAt DESC
+            """)
+    List<InquiryQuote> findRecentDuplicates(
+            @Param("factoryId") String factoryId,
+            @Param("createdBy") Long createdBy,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("quantity") BigDecimal quantity,
+            @Param("since") LocalDateTime since);
 
     Page<InquiryQuote> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
