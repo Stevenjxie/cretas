@@ -154,6 +154,13 @@ public class ProductSampleServiceImpl implements ProductSampleService {
     @Transactional
     public ProductSample submitForApproval(String factoryId, String sampleId, Long submittedBy) {
         ProductSample sample = getSample(factoryId, sampleId);
+        // 状态守卫: 防止已提交/已通过的样品被静默回退到 SUBMITTED (approvedBy/At 残留 → 状态矛盾)。
+        // 允许 DRAFT / IN_PROGRESS / REJECTED 提交; 拒绝 SUBMITTED (重复) 与 APPROVED (终态回退)。
+        String st = sample.getStatus();
+        if ("SUBMITTED".equals(st) || "APPROVED".equals(st)) {
+            throw new IllegalStateException(
+                    String.format("样品 %s 当前状态为 %s, 不可重复提交审核", sample.getName(), st));
+        }
         sample.setStatus("SUBMITTED");
         sample.setSubmittedBy(submittedBy);
         return productSampleRepository.save(sample);
@@ -184,6 +191,10 @@ public class ProductSampleServiceImpl implements ProductSampleService {
     @Transactional
     public ProductSample rejectSample(String factoryId, String sampleId, Long approvedBy, String notes) {
         ProductSample sample = getSample(factoryId, sampleId);
+        // 状态守卫 (同 approveSample): 只能驳回已提交的样品, 防止 APPROVED 终态被回退到 REJECTED。
+        if (!"SUBMITTED".equals(sample.getStatus())) {
+            throw new IllegalStateException("只能驳回已提交的样品");
+        }
         sample.setStatus("REJECTED");
         sample.setApprovedBy(approvedBy);
         sample.setApprovedAt(LocalDateTime.now());

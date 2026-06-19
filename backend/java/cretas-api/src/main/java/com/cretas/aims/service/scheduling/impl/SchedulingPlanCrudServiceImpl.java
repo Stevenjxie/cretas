@@ -5,6 +5,7 @@ import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.rules.DroolsRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.NotificationService;
@@ -63,7 +64,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
             factoryId, request.getPlanDate());
         if (existing.isPresent()) {
-            throw new RuntimeException("该日期已存在调度计划");
+            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                    .withHint("如需查看请打开该日期已有的调度计划")
+                    .withHintTarget(existing.get().getId());
         }
 
         SchedulingPlan plan = new SchedulingPlan();
@@ -199,7 +202,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             .orElseThrow(() -> new EntityNotFoundException("SchedulePlan", planId));
 
         if (plan.getStatus() != SchedulingPlan.PlanStatus.draft) {
-            throw new RuntimeException("只能修改草稿状态的计划");
+            throw new BusinessException(409, "只能修改草稿状态的计划, 当前状态: " + plan.getStatus());
         }
 
         plan.setPlanName(request.getPlanName());
@@ -216,7 +219,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             .orElseThrow(() -> new EntityNotFoundException("SchedulePlan", planId));
 
         if (plan.getStatus() != SchedulingPlan.PlanStatus.draft) {
-            throw new RuntimeException("只能确认草稿状态的计划");
+            throw new BusinessException(409, "只能确认草稿状态的计划, 当前状态: " + plan.getStatus());
         }
 
         plan.setStatus(SchedulingPlan.PlanStatus.confirmed);

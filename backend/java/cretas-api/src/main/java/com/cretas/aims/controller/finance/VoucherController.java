@@ -75,7 +75,11 @@ public class VoucherController {
         }
         PageRequest pageable = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "voucherDate", "createdAt"));
         Page<Voucher> result;
-        if (status != null) {
+        if (status != null && type != null) {
+            // 修复: status + type 同传时 type 不再被静默忽略
+            result = voucherRepo.findByFactoryIdAndStatusAndVoucherTypeAndDeletedAtIsNull(
+                    factoryId, status, type, pageable);
+        } else if (status != null) {
             result = voucherRepo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
         } else if (type != null) {
             result = voucherRepo.findByFactoryIdAndVoucherTypeAndDeletedAtIsNull(factoryId, type, pageable);

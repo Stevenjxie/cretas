@@ -22,6 +22,10 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
 
     Page<Voucher> findByFactoryIdAndVoucherTypeAndDeletedAtIsNull(String factoryId, VoucherType type, Pageable pageable);
 
+    /** 同时按 status + type 过滤 (修复 status/type 同传时 type 被静默忽略). */
+    Page<Voucher> findByFactoryIdAndStatusAndVoucherTypeAndDeletedAtIsNull(
+            String factoryId, VoucherStatus status, VoucherType type, Pageable pageable);
+
     /** Factory-scoped lookup — enforces tenant isolation. */
     Optional<Voucher> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 

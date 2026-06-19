@@ -62,10 +62,10 @@ public class LeaveRequestController {
         // dispatching to service layer where PG would surface a generic 409.
         validateReasonLength(body);
         LeaveRequest req = service.create(factoryId, userId,
-                LeaveType.valueOf((String) body.get("leaveType")),
-                LocalDate.parse((String) body.get("startDate")),
-                LocalDate.parse((String) body.get("endDate")),
-                new BigDecimal(body.get("durationHours").toString()),
+                HrBodyParse.reqEnum(body, "leaveType", "请假类型", LeaveType.class),
+                HrBodyParse.reqDate(body, "startDate", "开始日期"),
+                HrBodyParse.reqDate(body, "endDate", "结束日期"),
+                HrBodyParse.reqDecimal(body, "durationHours", "请假时长(小时)"),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已保存草稿"));
     }
@@ -79,10 +79,10 @@ public class LeaveRequestController {
         // AUD-5 B-A3 sister sweep (Rule 16: entry-point matrix — update path).
         validateReasonLength(body);
         LeaveRequest req = service.update(factoryId, userId, id,
-                LeaveType.valueOf((String) body.get("leaveType")),
-                LocalDate.parse((String) body.get("startDate")),
-                LocalDate.parse((String) body.get("endDate")),
-                new BigDecimal(body.get("durationHours").toString()),
+                HrBodyParse.reqEnum(body, "leaveType", "请假类型", LeaveType.class),
+                HrBodyParse.reqDate(body, "startDate", "开始日期"),
+                HrBodyParse.reqDate(body, "endDate", "结束日期"),
+                HrBodyParse.reqDecimal(body, "durationHours", "请假时长(小时)"),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已更新"));
     }
