@@ -3,7 +3,9 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
+import com.cretas.aims.entity.Label;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.TraceabilityService;
 import com.cretas.aims.util.ErrorSanitizer;
@@ -40,6 +42,7 @@ public class TraceabilityController {
 
     private final TraceabilityService traceabilityService;
     private final ProductionBatchRepository productionBatchRepository;
+    private final LabelRepository labelRepository;
 
     /**
      * 获取溯源记录列表
@@ -230,15 +233,14 @@ public class TraceabilityController {
         try {
             log.info("溯源码查询: traceCode={}", traceCode);
 
-            // 从溯源码中提取批次号
-            // 格式: TRACE-{batchNumber}-{uuid}
-            String batchNumber = extractBatchNumberFromTraceCode(traceCode);
+            // 解析溯源码 → 批次号 (支持两种格式, 见 resolveBatchNumberFromTraceCode)
+            String batchNumber = resolveBatchNumberFromTraceCode(traceCode);
 
             if (batchNumber == null) {
                 return ResponseEntity.ok(Map.of(
                         "success", false,
                         "code", 400,
-                        "message", "无效的溯源码格式"
+                        "message", "无效的溯源码格式或未找到对应批次"
                 ));
             }
 
@@ -260,6 +262,33 @@ public class TraceabilityController {
                     "message", ErrorSanitizer.sanitize(e)
             ));
         }
+    }
+
+    /**
+     * 溯源码 → 批次号 解析 (两种格式):
+     * <ol>
+     *   <li><b>内嵌格式</b> {@code TRACE-{batchNumber}-{uuid}} (默认/无编码规则工厂) — 直接从码里提取批次号。</li>
+     *   <li><b>编码规则格式</b> {@code TR-{工厂}-{日期}-{序号}} (配了编码规则的工厂, 如六膳门) —
+     *       这种码经 EncodingRuleService 按序号生成, <b>不内嵌批次号</b>, 无法字符串解析;
+     *       但打印标签/二维码时溯源码已持久化到 {@code labels.trace_code} (含 production_batch_id)。
+     *       故反查 Label → production_batch_id → 批次号。修复前这种码扫码必 400。</li>
+     * </ol>
+     */
+    private String resolveBatchNumberFromTraceCode(String traceCode) {
+        // 策略 1: 内嵌格式
+        String embedded = extractBatchNumberFromTraceCode(traceCode);
+        if (embedded != null) {
+            return embedded;
+        }
+        // 策略 2: 编码规则格式 → 反查打印时持久化的 Label
+        if (traceCode != null && !traceCode.isBlank()) {
+            return labelRepository.findByTraceCodeAndDeletedAtIsNull(traceCode.trim())
+                    .filter(l -> l.getProductionBatchId() != null)
+                    .flatMap(l -> productionBatchRepository.findById(l.getProductionBatchId()))
+                    .map(ProductionBatch::getBatchNumber)
+                    .orElse(null);
+        }
+        return null;
     }
 
     /**
