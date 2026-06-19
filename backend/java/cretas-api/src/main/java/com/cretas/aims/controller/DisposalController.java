@@ -148,10 +148,12 @@ public class DisposalController {
                 "message", "报废记录更新成功"
             ));
         } catch (IllegalStateException e) {
+            // 状态机拒绝 (如"已审批的记录不能修改") 的 message 是安全的用户面文案,
+            // 直接返回; 不经 ErrorSanitizer (它会把 IllegalStateException 抹成通用"操作失败")。
             log.warn("更新报废记录被拒绝: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of(
                 "success", false,
-                "message", ErrorSanitizer.sanitize(e)
+                "message", e.getMessage() != null ? e.getMessage() : "记录当前状态不允许修改"
             ));
         } catch (Exception e) {
             log.error("更新报废记录失败", e);
@@ -207,10 +209,11 @@ public class DisposalController {
                 "message", "报废记录删除成功"
             ));
         } catch (IllegalStateException e) {
+            // 状态机拒绝 (如"已审批的记录不能删除") message 安全, 直接返回; 不经 ErrorSanitizer。
             log.warn("删除报废记录被拒绝: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of(
                 "success", false,
-                "message", ErrorSanitizer.sanitize(e)
+                "message", e.getMessage() != null ? e.getMessage() : "记录当前状态不允许删除"
             ));
         } catch (Exception e) {
             log.error("删除报废记录失败", e);
