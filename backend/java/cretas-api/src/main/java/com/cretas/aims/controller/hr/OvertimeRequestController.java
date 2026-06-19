@@ -48,11 +48,11 @@ public class OvertimeRequestController {
         // dispatching to service layer where PG would surface a generic 409.
         validateReasonLength(body);
         OvertimeRequest req = service.create(factoryId, userId,
-                OvertimeType.valueOf((String) body.get("overtimeType")),
-                LocalDateTime.parse((String) body.get("startTime")),
-                LocalDateTime.parse((String) body.get("endTime")),
-                new BigDecimal(body.get("hours").toString()),
-                CompensationType.valueOf((String) body.get("compensationType")),
+                HrBodyParse.reqEnum(body, "overtimeType", "加班类型", OvertimeType.class),
+                HrBodyParse.reqDateTime(body, "startTime", "开始时间"),
+                HrBodyParse.reqDateTime(body, "endTime", "结束时间"),
+                HrBodyParse.reqDecimal(body, "hours", "加班时长(小时)"),
+                HrBodyParse.reqEnum(body, "compensationType", "补偿方式", CompensationType.class),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已保存草稿"));
     }
@@ -66,11 +66,11 @@ public class OvertimeRequestController {
         // AUD-5 B-A3 sister sweep batch 3 (Rule 16: entry-point matrix — update path).
         validateReasonLength(body);
         OvertimeRequest req = service.update(factoryId, userId, id,
-                OvertimeType.valueOf((String) body.get("overtimeType")),
-                LocalDateTime.parse((String) body.get("startTime")),
-                LocalDateTime.parse((String) body.get("endTime")),
-                new BigDecimal(body.get("hours").toString()),
-                CompensationType.valueOf((String) body.get("compensationType")),
+                HrBodyParse.reqEnum(body, "overtimeType", "加班类型", OvertimeType.class),
+                HrBodyParse.reqDateTime(body, "startTime", "开始时间"),
+                HrBodyParse.reqDateTime(body, "endTime", "结束时间"),
+                HrBodyParse.reqDecimal(body, "hours", "加班时长(小时)"),
+                HrBodyParse.reqEnum(body, "compensationType", "补偿方式", CompensationType.class),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已更新"));
     }

@@ -46,9 +46,9 @@ public class ExpenseRequestController {
         // dispatching to service layer where PG would surface a generic 409.
         validateReasonLength(body);
         ExpenseRequest req = service.create(factoryId, userId,
-                ExpenseCategory.valueOf((String) body.get("category")),
-                new BigDecimal(body.get("amount").toString()),
-                LocalDate.parse((String) body.get("expenseDate")),
+                HrBodyParse.reqEnum(body, "category", "报销类别", ExpenseCategory.class),
+                HrBodyParse.reqDecimal(body, "amount", "报销金额"),
+                HrBodyParse.reqDate(body, "expenseDate", "费用日期"),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已保存草稿"));
     }
@@ -62,9 +62,9 @@ public class ExpenseRequestController {
         // AUD-5 B-A3 sister sweep (Rule 16: entry-point matrix — update path).
         validateReasonLength(body);
         ExpenseRequest req = service.update(factoryId, userId, id,
-                ExpenseCategory.valueOf((String) body.get("category")),
-                new BigDecimal(body.get("amount").toString()),
-                LocalDate.parse((String) body.get("expenseDate")),
+                HrBodyParse.reqEnum(body, "category", "报销类别", ExpenseCategory.class),
+                HrBodyParse.reqDecimal(body, "amount", "报销金额"),
+                HrBodyParse.reqDate(body, "expenseDate", "费用日期"),
                 (String) body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", req, "message", "已更新"));
     }

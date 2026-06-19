@@ -128,6 +128,41 @@ class LeaveRequestControllerTest {
     }
 
     @Test
+    @DisplayName("缺 leaveType → 400 + 字段提示 (非 raw Map valueOf(null) 的 500 NPE)")
+    void testMissingLeaveTypeReturns400NotNpe() {
+        Map<String, Object> body = newBaseBody();
+        body.remove("leaveType");   // 必填枚举缺失 — 旧代码 valueOf(null) → NPE → 500
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.create("F001", 1L, body));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("请假类型"),
+                "400 message must name the missing field, was: " + ex.getMessage());
+        verify(service, never()).create(anyString(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("缺 startDate → 400 (非 LocalDate.parse(null) 的 500)")
+    void testMissingStartDateReturns400NotNpe() {
+        Map<String, Object> body = newBaseBody();
+        body.remove("startDate");
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.create("F001", 1L, body));
+        assertEquals(400, ex.getCode());
+        verify(service, never()).create(anyString(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("缺 durationHours → 400 (非 body.get(...).toString() 的 500)")
+    void testMissingDurationReturns400NotNpe() {
+        Map<String, Object> body = newBaseBody();
+        body.remove("durationHours");
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.create("F001", 1L, body));
+        assertEquals(400, ex.getCode());
+        verify(service, never()).create(anyString(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("AUD-5 B-A3: null reason tolerated (optional field)")
     void testNullReasonAccepted() {
         Map<String, Object> body = newBaseBody();

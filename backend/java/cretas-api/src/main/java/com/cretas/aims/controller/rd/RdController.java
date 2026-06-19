@@ -49,10 +49,10 @@ public class RdController {
     @GetMapping("/requests")
     public ResponseEntity<?> listRequests(@PathVariable String factoryId,
                                            @RequestParam(required = false) String status,
-                                           @RequestParam(defaultValue = "0") int page,
+                                           @RequestParam(defaultValue = "1") int page,
                                            @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(Map.of("success", true, "data",
-                sampleService.listRequests(factoryId, status, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")))));
+                sampleService.listRequests(factoryId, status, PageRequest.of(Math.max(0, page - 1), size, Sort.by(Sort.Direction.DESC, "createdAt")))));
     }
 
     // ==================== 样品管理 ====================
@@ -166,10 +166,10 @@ public class RdController {
     @GetMapping("/samples")
     public ResponseEntity<?> listSamples(@PathVariable String factoryId,
                                           @RequestParam(required = false) String status,
-                                          @RequestParam(defaultValue = "0") int page,
+                                          @RequestParam(defaultValue = "1") int page,
                                           @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(Map.of("success", true, "data",
-                sampleService.listSamples(factoryId, status, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")))));
+                sampleService.listSamples(factoryId, status, PageRequest.of(Math.max(0, page - 1), size, Sort.by(Sort.Direction.DESC, "createdAt")))));
     }
 
     @RequirePermission({"rd:read"})
@@ -227,10 +227,10 @@ public class RdController {
     @GetMapping("/quotations")
     public ResponseEntity<?> listQuotations(@PathVariable String factoryId,
                                              @RequestParam(required = false) String status,
-                                             @RequestParam(defaultValue = "0") int page,
+                                             @RequestParam(defaultValue = "1") int page,
                                              @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(Map.of("success", true, "data",
-                sampleService.listQuotations(factoryId, status, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")))));
+                sampleService.listQuotations(factoryId, status, PageRequest.of(Math.max(0, page - 1), size, Sort.by(Sort.Direction.DESC, "createdAt")))));
     }
 
     // ==================== SP10: 中报价 ====================
