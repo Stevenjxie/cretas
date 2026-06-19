@@ -500,16 +500,107 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     @Override
     public Map<String, Object> getKPIMetrics(String factoryId, LocalDate date) {
         log.info("获取KPI指标: factoryId={}, date={}", factoryId, date);
+        // 真实计算 (替换原硬编码 85/98/95/75 假数据). 统计窗口: 近 30 天 (与 getKpiMetricsDTO 一致)。
+        // 无数据 (如纯零售租户 / 无质检 / 无出货) → 返 0, 诚实空, 不造假。
+        LocalDate endDate = date != null ? date : LocalDate.now();
+        LocalDate startDate = endDate.minusDays(30);
+        final BigDecimal HUNDRED = new BigDecimal("100");
+
+        // 产出 / 计划 → 产能完成率 + 吞吐量
+        BigDecimal output = productionPlanRepository.calculateOutputBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        if (output == null) output = BigDecimal.ZERO;
+        BigDecimal plannedOutput = productionPlanRepository.calculatePlannedOutputBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        BigDecimal completionRate = (plannedOutput != null && plannedOutput.compareTo(BigDecimal.ZERO) > 0)
+                ? output.divide(plannedOutput, 4, RoundingMode.HALF_UP).multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        // 质检 → 良品率 / 首检合格率 (FPY) + 缺陷率
+        List<QualityInspection> inspections = qualityInspectionRepository.findByFactoryIdAndDateRange(
+                factoryId, startDate, endDate);
+        long totalInspections = inspections.size();
+        long passedInspections = inspections.stream()
+                .filter(q -> "PASS".equalsIgnoreCase(q.getResult()) || "passed".equalsIgnoreCase(q.getResult()))
+                .count();
+        BigDecimal fpy = totalInspections > 0
+                ? new BigDecimal(passedInspections).divide(new BigDecimal(totalInspections), 4, RoundingMode.HALF_UP)
+                        .multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        BigDecimal defectRate = totalInspections > 0
+                ? HUNDRED.subtract(fpy).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        // 出货 → 准时交付率
+        List<ShipmentRecord> shipments = shipmentRecordRepository.findByFactoryIdAndDateRange(
+                factoryId, startDate, endDate);
+        long totalShipments = shipments.size();
+        long onTimeShipments = shipments.stream()
+                .filter(s -> "delivered".equalsIgnoreCase(s.getStatus()) || "shipped".equalsIgnoreCase(s.getStatus()))
+                .count();
+        BigDecimal onTimeRate = totalShipments > 0
+                ? new BigDecimal(onTimeShipments).divide(new BigDecimal(totalShipments), 4, RoundingMode.HALF_UP)
+                        .multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        // 设备 → 真实 OEE (复用 getOeeReport, 已 .min(100) 封顶 + downtime 防负)
+        BigDecimal oee;
+        try {
+            OeeReportDTO oeeReport = getOeeReport(factoryId, startDate, endDate);
+            oee = oeeReport != null && oeeReport.getOeeValue() != null
+                    ? oeeReport.getOeeValue().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        } catch (Exception e) {
+            log.warn("KPI OEE 计算失败, 返 0: {}", e.getMessage());
+            oee = BigDecimal.ZERO;
+        }
+
+        // 成本 → 单位成本 (期间实际成本 / 产出). 无产出/无成本数据返 0。
+        BigDecimal unitCost = BigDecimal.ZERO;
+        try {
+            CostVarianceReportDTO costReport = getCostVarianceReport(factoryId, startDate, endDate);
+            BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
+            if (totalActualCost != null && output.compareTo(BigDecimal.ZERO) > 0) {
+                unitCost = totalActualCost.divide(output, 2, RoundingMode.HALF_UP);
+            }
+        } catch (Exception e) {
+            log.warn("KPI 单位成本计算失败, 返 0: {}", e.getMessage());
+        }
+
         Map<String, Object> kpi = new HashMap<>();
-        kpi.put("productionEfficiency", 85.0);
-        kpi.put("qualityRate", 98.0);
-        kpi.put("deliveryOnTime", 95.0);
-        kpi.put("costReduction", 5.0);
-        kpi.put("inventoryTurnover", 4.5);
-        kpi.put("equipmentOEE", 75.0);
-        kpi.put("maintenanceCompliance", 90.0);
-        kpi.put("laborProductivity", 88.0);
-        kpi.put("safetyIncidents", 0);
+
+        // 嵌套结构 (web-admin KPI 看板 views/analytics/kpi 期望的形状, 真实值)
+        Map<String, Object> production = new HashMap<>();
+        production.put("oee", oee);
+        production.put("yield", fpy);              // 良品率 ≈ 首检合格率
+        production.put("cycleTime", 0);            // 暂无真实数据源 → 诚实 0
+        production.put("throughput", output);
+        kpi.put("production", production);
+
+        Map<String, Object> quality = new HashMap<>();
+        quality.put("fpy", fpy);
+        quality.put("defectRate", defectRate);
+        quality.put("reworkRate", 0);              // 暂无真实数据源
+        quality.put("scrapRate", 0);
+        kpi.put("quality", quality);
+
+        Map<String, Object> delivery = new HashMap<>();
+        delivery.put("onTimeRate", onTimeRate);
+        delivery.put("leadTime", 0);               // 暂无真实数据源
+        delivery.put("fillRate", 0);
+        kpi.put("delivery", delivery);
+
+        Map<String, Object> cost = new HashMap<>();
+        cost.put("unitCost", unitCost);
+        cost.put("materialCost", 0);               // 占比拆分暂无真实数据源
+        cost.put("laborCost", 0);
+        cost.put("overheadCost", 0);
+        kpi.put("cost", cost);
+
+        // 扁平 key (向后兼容旧调用方, 同样真实值)
+        kpi.put("productionEfficiency", completionRate);
+        kpi.put("qualityRate", fpy);
+        kpi.put("deliveryOnTime", onTimeRate);
+        kpi.put("equipmentOEE", oee);
+
         return kpi;
     }
 
@@ -754,7 +845,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalOutput = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
         report.put("totalOutput", totalOutput != null ? totalOutput : BigDecimal.ZERO);
-        report.put("equipmentOEE", 75.0);
+        // 真实 OEE (替换硬编码 75.0); 无设备数据 → 0 诚实空。
+        try {
+            OeeReportDTO oeeReport = getOeeReport(factoryId, startDate, endDate);
+            report.put("equipmentOEE", oeeReport != null && oeeReport.getOeeValue() != null
+                    ? oeeReport.getOeeValue().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO);
+        } catch (Exception e) {
+            log.warn("效率分析 OEE 计算失败, 返 0: {}", e.getMessage());
+            report.put("equipmentOEE", BigDecimal.ZERO);
+        }
         return report;
     }
 
