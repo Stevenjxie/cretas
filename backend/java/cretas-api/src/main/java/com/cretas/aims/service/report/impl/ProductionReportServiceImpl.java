@@ -1065,7 +1065,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .quality(quality.setScale(2, RoundingMode.HALF_UP))
                 .plannedProductionTime(plannedHours * 60)
                 .actualRunTime(totalRunningHours * 60)
-                .downtime((plannedHours - totalRunningHours) * 60)
+                // 防负: 设备实跑 >8h/天 时 totalRunningHours 可超 plannedHours → 停机为负 (物理不可能)。
+                // 与 availability 的 .min(hundred) 封顶对齐, 停机量封到 0 下限。
+                .downtime(Math.max(0, plannedHours - totalRunningHours) * 60)
                 .totalOutput(totalActualQuantity)
                 .goodOutput(totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
                 .defectOutput(totalActualQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))

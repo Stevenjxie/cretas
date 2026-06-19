@@ -48,7 +48,17 @@ public class ProcessCheckinController {
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long operatorId) {
-        Long employeeId = Long.valueOf(body.get("employeeId").toString());
+        // 缺 employeeId 守卫: raw Map body.get(null).toString() → NPE → 500; 转 400 + 字段提示。
+        Object employeeIdRaw = body.get("employeeId");
+        if (employeeIdRaw == null || employeeIdRaw.toString().trim().isEmpty()) {
+            throw new BusinessException(400, "请提供员工ID (employeeId)").withHintTarget("employeeId");
+        }
+        Long employeeId;
+        try {
+            employeeId = Long.valueOf(employeeIdRaw.toString().trim());
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "员工ID必须是数字").withHintTarget("employeeId");
+        }
 
         // P2-7: 重复签到防护 — 同一员工已 CHECKED_IN 时拒绝
         List<ProcessCheckinRecord> existing = checkinRepository
