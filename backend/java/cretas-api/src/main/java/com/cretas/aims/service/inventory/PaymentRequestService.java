@@ -50,14 +50,14 @@ public interface PaymentRequestService {
             Long userId,
             String remark);
 
-    /** 提交初审（PENDING → FINANCE_REVIEW） */
-    PaymentRequest submit(String requestId, Long userId);
+    /** 提交初审（PENDING → FINANCE_REVIEW）。factoryId 用于多租户隔离校验。 */
+    PaymentRequest submit(String factoryId, String requestId, Long userId);
 
-    /** 财务初审通过（FINANCE_REVIEW → APPROVED） */
-    PaymentRequest financeApprove(String requestId, Long userId, String note);
+    /** 财务初审通过（FINANCE_REVIEW → APPROVED）。factoryId 用于多租户隔离校验。 */
+    PaymentRequest financeApprove(String factoryId, String requestId, Long userId, String note);
 
-    /** 拒绝申请（任意非终态 → REJECTED） */
-    PaymentRequest reject(String requestId, Long userId, String reason);
+    /** 拒绝申请（任意非终态 → REJECTED）。factoryId 用于多租户隔离校验。 */
+    PaymentRequest reject(String factoryId, String requestId, Long userId, String reason);
 
     /**
      * 标记付款完成（APPROVED → PAID）。按 sourceType 分流（#29）：
@@ -74,7 +74,7 @@ public interface PaymentRequestService {
      *
      * 全部在单一 @Transactional 中，任一失败全部回滚，禁止 fail-soft。
      */
-    PaymentRequest markPaid(String requestId, Long userId, String evidence);
+    PaymentRequest markPaid(String factoryId, String requestId, Long userId, String evidence);
 
     /**
      * D-9 G1 出纳付款视图（替代裸实体 listApprovedForPayment）。

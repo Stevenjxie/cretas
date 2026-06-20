@@ -124,7 +124,7 @@ class PaymentRequestWorkflowIntegrationTest {
             PaymentRequest pr = financeReviewRequest();
             when(paymentRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(pr));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "金额无误");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "金额无误");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
             assertThat(result.getFinanceReviewedBy()).isEqualTo(USER_ID);
@@ -139,7 +139,7 @@ class PaymentRequestWorkflowIntegrationTest {
             PaymentRequest pr = financeReviewRequest();
             when(paymentRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(pr));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "金额无误");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "金额无误");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
             verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), any(), any());
@@ -168,7 +168,7 @@ class PaymentRequestWorkflowIntegrationTest {
             when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq(MODULE), eq(REQUEST_ID), any(), eq(USER_ID)))
                     .thenReturn(instanceWith(InstanceStatus.APPROVED));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "审批通过");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "审批通过");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
             assertThat(result.getWorkflowInstanceId()).isEqualTo(INSTANCE_ID);
@@ -187,7 +187,7 @@ class PaymentRequestWorkflowIntegrationTest {
             when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq(MODULE), eq(REQUEST_ID), any(), eq(USER_ID)))
                     .thenReturn(instanceWith(InstanceStatus.RUNNING));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "一级通过，待二级");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "一级通过，待二级");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.FINANCE_REVIEW);
             assertThat(result.getWorkflowInstanceId()).isEqualTo(INSTANCE_ID);
@@ -207,7 +207,7 @@ class PaymentRequestWorkflowIntegrationTest {
                     eq(HistoryAction.APPROVE), anyString()))
                     .thenReturn(instanceWith(InstanceStatus.APPROVED));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "二级通过");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "二级通过");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
             verify(workflowEngine).transitionNode(eq(INSTANCE_ID), eq(USER_ID), anyString(),
@@ -225,7 +225,7 @@ class PaymentRequestWorkflowIntegrationTest {
             when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq(MODULE), eq(REQUEST_ID), any(), eq(USER_ID)))
                     .thenReturn(instanceWith(InstanceStatus.REJECTED));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "金额超预算");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "金额超预算");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.REJECTED);
             assertThat(result.getRejectReason()).isEqualTo("金额超预算");
@@ -242,7 +242,7 @@ class PaymentRequestWorkflowIntegrationTest {
             when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq(MODULE), eq(REQUEST_ID), any(), eq(USER_ID)))
                     .thenReturn(instanceWith(InstanceStatus.CANCELLED));
 
-            PaymentRequest result = service.financeApprove(REQUEST_ID, USER_ID, "");
+            PaymentRequest result = service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "");
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.FINANCE_REVIEW);
             assertThat(result.getApprovedBy()).isNull();
@@ -267,13 +267,13 @@ class PaymentRequestWorkflowIntegrationTest {
             when(workflowEngine.startWorkflow(eq(FACTORY_ID), eq(MODULE), eq(REQUEST_ID), any(), eq(USER_ID)))
                     .thenReturn(instanceWith(InstanceStatus.RUNNING));
 
-            service.financeApprove(REQUEST_ID, USER_ID, "一级通过");
+            service.financeApprove(FACTORY_ID, REQUEST_ID, USER_ID, "一级通过");
             assertThat(pr.getStatus()).isEqualTo(PaymentRequestStatus.FINANCE_REVIEW);
 
             // markPaid 要求 APPROVED → FINANCE_REVIEW 被 requireStatus 拒绝
             org.junit.jupiter.api.Assertions.assertThrows(
                     com.cretas.aims.exception.BusinessException.class,
-                    () -> service.markPaid(REQUEST_ID, USER_ID, "凭证X"));
+                    () -> service.markPaid(FACTORY_ID, REQUEST_ID, USER_ID, "凭证X"));
             // 资金路径未触达（无 ArApTransaction 写入）
             verify(arApTransactionRepository, never()).save(any());
         }
