@@ -1,6 +1,7 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.entity.EmployeeWorkSession;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.EmployeeWorkSessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -61,10 +62,22 @@ public class EmployeeWorkSessionService {
     /**
      * 结束工作会话
      */
+    /**
+     * 多租户隔离守卫: 工作会话必须属于路径 factoryId, 否则 403 (审计 round3, 同 disposal)。
+     * 此前 end/cancel/update/getById 用 findById(id) 不校验归属 → 跨租户可改别家会话(含人工成本)。
+     */
+    private void assertSameFactory(EmployeeWorkSession session, String factoryId) {
+        if (session.getFactoryId() == null || !session.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该工作会话")
+                    .withHint("该会话不属于当前工厂");
+        }
+    }
+
     @Transactional
-    public EmployeeWorkSession endSession(Long sessionId, Integer breakMinutes, String notes) {
+    public EmployeeWorkSession endSession(String factoryId, Long sessionId, Integer breakMinutes, String notes) {
         EmployeeWorkSession session = workSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new RuntimeException("工作会话不存在: " + sessionId));
+        assertSameFactory(session, factoryId);  // 多租户隔离
 
         if (!"active".equals(session.getStatus())) {
             throw new IllegalStateException("会话已结束或已取消");
@@ -102,9 +115,10 @@ public class EmployeeWorkSessionService {
      * 取消工作会话
      */
     @Transactional
-    public EmployeeWorkSession cancelSession(Long sessionId) {
+    public EmployeeWorkSession cancelSession(String factoryId, Long sessionId) {
         EmployeeWorkSession session = workSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new RuntimeException("工作会话不存在: " + sessionId));
+        assertSameFactory(session, factoryId);  // 多租户隔离
 
         if (!"active".equals(session.getStatus())) {
             throw new IllegalStateException("只能取消活跃的会话");
@@ -120,10 +134,11 @@ public class EmployeeWorkSessionService {
     }
 
     /**
-     * 根据ID获取工作会话
+     * 根据ID获取工作会话 (按 factoryId 过滤, 跨租户返空 → 404)
      */
-    public Optional<EmployeeWorkSession> getById(Long id) {
-        return workSessionRepository.findById(id);
+    public Optional<EmployeeWorkSession> getById(String factoryId, Long id) {
+        return workSessionRepository.findById(id)
+                .filter(s -> factoryId != null && factoryId.equals(s.getFactoryId()));
     }
 
     /**
@@ -217,9 +232,10 @@ public class EmployeeWorkSessionService {
      * 更新工作会话
      */
     @Transactional
-    public EmployeeWorkSession updateSession(Long id, EmployeeWorkSession updateData) {
+    public EmployeeWorkSession updateSession(String factoryId, Long id, EmployeeWorkSession updateData) {
         EmployeeWorkSession existing = workSessionRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("工作会话不存在: " + id));
+        assertSameFactory(existing, factoryId);  // 多租户隔离
 
         // 只能更新活跃的会话
         if (!"active".equals(existing.getStatus())) {
