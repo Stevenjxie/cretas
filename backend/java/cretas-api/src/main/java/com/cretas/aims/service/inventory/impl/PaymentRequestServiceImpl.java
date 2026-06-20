@@ -261,8 +261,8 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
     @Override
     @Transactional
-    public PaymentRequest submit(String requestId, Long userId) {
-        PaymentRequest pr = findAndValidate(requestId);
+    public PaymentRequest submit(String factoryId, String requestId, Long userId) {
+        PaymentRequest pr = findAndValidate(requestId, factoryId);
         requireStatus(pr, PaymentRequestStatus.PENDING, "只有 PENDING 状态的申请单可以提交");
 
         pr.setStatus(PaymentRequestStatus.FINANCE_REVIEW);
@@ -285,8 +285,8 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
      */
     @Override
     @Transactional
-    public PaymentRequest financeApprove(String requestId, Long userId, String note) {
-        PaymentRequest pr = findAndValidate(requestId);
+    public PaymentRequest financeApprove(String factoryId, String requestId, Long userId, String note) {
+        PaymentRequest pr = findAndValidate(requestId, factoryId);
         requireStatus(pr, PaymentRequestStatus.FINANCE_REVIEW, "只有 FINANCE_REVIEW 状态的申请单可以财务审批");
 
         // 六扇门 #30 — 引擎不可用直接 legacy
@@ -394,8 +394,8 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
     @Override
     @Transactional
-    public PaymentRequest reject(String requestId, Long userId, String reason) {
-        PaymentRequest pr = findAndValidate(requestId);
+    public PaymentRequest reject(String factoryId, String requestId, Long userId, String reason) {
+        PaymentRequest pr = findAndValidate(requestId, factoryId);
         if (TERMINAL_STATUSES.contains(pr.getStatus())) {
             throw new BusinessException("付款申请单已处于终态（" + pr.getStatus() + "），无法拒绝");
         }
@@ -421,9 +421,9 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
      */
     @Override
     @Transactional
-    public PaymentRequest markPaid(String requestId, Long userId, String evidence) {
+    public PaymentRequest markPaid(String factoryId, String requestId, Long userId, String evidence) {
         // Step 0: 找申请单
-        PaymentRequest pr = findAndValidate(requestId);
+        PaymentRequest pr = findAndValidate(requestId, factoryId);
         requireStatus(pr, PaymentRequestStatus.APPROVED, "只有 APPROVED 状态的申请单可以标记付款");
 
         // #29: 销售方向单独分流；其余（含 null 老数据）走原采购路径
@@ -685,9 +685,16 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
 
     // ─── 私有辅助 ─────────────────────────────────────────────────────────────
 
-    private PaymentRequest findAndValidate(String requestId) {
-        return paymentRequestRepository.findById(requestId)
+    private PaymentRequest findAndValidate(String requestId, String factoryId) {
+        PaymentRequest pr = paymentRequestRepository.findById(requestId)
                 .orElseThrow(() -> new BusinessException("付款申请单不存在: " + requestId));
+        // 多租户隔离 (审计 round4, 财务红线): 付款申请单必须属于路径 factoryId, 否则 403。
+        // 此前 findById(requestId) 不校验归属 → F006 用户可 提交/审批/驳回/标记付款 别家工厂的
+        // 付款申请单 (requestId 可枚举)。同 disposal #1009 / work-session #1010 类。
+        if (pr.getFactoryId() == null || !pr.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该付款申请单");
+        }
+        return pr;
     }
 
     private void requireStatus(PaymentRequest pr, PaymentRequestStatus expected, String message) {

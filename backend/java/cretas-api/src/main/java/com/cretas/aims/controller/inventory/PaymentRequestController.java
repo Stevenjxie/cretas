@@ -104,7 +104,7 @@ public class PaymentRequestController {
             @RequestHeader("Authorization") String authorization) {
         Long userId = extractUserId(authorization);
         log.info("[SP6] 提交付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.submit(requestId, userId);
+        PaymentRequest pr = paymentRequestService.submit(factoryId, requestId, userId);
         return ApiResponse.success("已提交财务审核", pr);
     }
 
@@ -121,7 +121,7 @@ public class PaymentRequestController {
         Long userId = extractUserId(authorization);
         String reviewNote = body != null ? body.get("reviewNote") : null;
         log.info("[SP6] 财务审批付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.financeApprove(requestId, userId, reviewNote);
+        PaymentRequest pr = paymentRequestService.financeApprove(factoryId, requestId, userId, reviewNote);
         return ApiResponse.success("审批通过", pr);
     }
 
@@ -138,7 +138,7 @@ public class PaymentRequestController {
         Long userId = extractUserId(authorization);
         String rejectReason = body != null ? body.get("rejectReason") : null;
         log.info("[SP6] 驳回付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.reject(requestId, userId, rejectReason);
+        PaymentRequest pr = paymentRequestService.reject(factoryId, requestId, userId, rejectReason);
         return ApiResponse.success("已驳回", pr);
     }
 
@@ -155,7 +155,7 @@ public class PaymentRequestController {
         Long userId = extractUserId(authorization);
         String evidence = body != null ? body.get("evidence") : null;
         log.info("[SP6] 确认付款: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.markPaid(requestId, userId, evidence);
+        PaymentRequest pr = paymentRequestService.markPaid(factoryId, requestId, userId, evidence);
         return ApiResponse.success("付款已确认", pr);
     }
 

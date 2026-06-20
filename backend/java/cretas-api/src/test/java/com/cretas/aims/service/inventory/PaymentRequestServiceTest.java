@@ -397,7 +397,7 @@ class PaymentRequestServiceTest {
             });
 
             // Must not throw NPE (#675 regression guard)
-            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-G3", 1L, null));
+            assertDoesNotThrow(() -> paymentRequestService.markPaid(FACTORY_ID, "PR-G3", 1L, null));
 
             // tx.balanceAfter must be -5000 (0 - 5000)
             ArgumentCaptor<com.cretas.aims.entity.finance.ArApTransaction> txCaptor =
@@ -439,7 +439,7 @@ class PaymentRequestServiceTest {
                 return tx;
             });
 
-            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-G3B", 1L, null));
+            assertDoesNotThrow(() -> paymentRequestService.markPaid(FACTORY_ID, "PR-G3B", 1L, null));
 
             ArgumentCaptor<com.cretas.aims.entity.finance.ArApTransaction> txCaptor =
                     ArgumentCaptor.forClass(com.cretas.aims.entity.finance.ArApTransaction.class);
@@ -688,7 +688,7 @@ class PaymentRequestServiceTest {
             PaymentRequest pr = pendingRequest();
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
-            paymentRequestService.submit("PR-001", 1L);
+            paymentRequestService.submit(FACTORY_ID, "PR-001", 1L);
 
             ArgumentCaptor<PaymentRequest> captor = ArgumentCaptor.forClass(PaymentRequest.class);
             verify(paymentRequestRepository).save(captor.capture());
@@ -701,7 +701,7 @@ class PaymentRequestServiceTest {
             PaymentRequest pr = financeReviewRequest();
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
-            paymentRequestService.financeApprove("PR-001", 2L, "财务确认金额无误");
+            paymentRequestService.financeApprove(FACTORY_ID, "PR-001", 2L, "财务确认金额无误");
 
             ArgumentCaptor<PaymentRequest> captor = ArgumentCaptor.forClass(PaymentRequest.class);
             verify(paymentRequestRepository).save(captor.capture());
@@ -715,7 +715,7 @@ class PaymentRequestServiceTest {
             PaymentRequest pr = approvedRequest();
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
-            paymentRequestService.reject("PR-001", 2L, "金额有误");
+            paymentRequestService.reject(FACTORY_ID, "PR-001", 2L, "金额有误");
 
             ArgumentCaptor<PaymentRequest> captor = ArgumentCaptor.forClass(PaymentRequest.class);
             verify(paymentRequestRepository).save(captor.capture());
@@ -730,7 +730,7 @@ class PaymentRequestServiceTest {
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.submit("PR-001", 1L));
+                    paymentRequestService.submit(FACTORY_ID, "PR-001", 1L));
         }
 
         @Test
@@ -741,7 +741,7 @@ class PaymentRequestServiceTest {
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.financeApprove("PR-001", 2L, null));
+                    paymentRequestService.financeApprove(FACTORY_ID, "PR-001", 2L, null));
         }
 
         @Test
@@ -750,7 +750,7 @@ class PaymentRequestServiceTest {
             when(paymentRequestRepository.findById("MISSING")).thenReturn(Optional.empty());
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.submit("MISSING", 1L));
+                    paymentRequestService.submit(FACTORY_ID, "MISSING", 1L));
         }
     }
 
@@ -783,7 +783,7 @@ class PaymentRequestServiceTest {
                     makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-001", 3L, "付款截图");
+            paymentRequestService.markPaid(FACTORY_ID, "PR-001", 3L, "付款截图");
 
             ArgumentCaptor<PaymentRequest> captor = ArgumentCaptor.forClass(PaymentRequest.class);
             verify(paymentRequestRepository, atLeastOnce()).save(captor.capture());
@@ -801,7 +801,7 @@ class PaymentRequestServiceTest {
                     makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-001", 3L, null);
+            paymentRequestService.markPaid(FACTORY_ID, "PR-001", 3L, null);
 
             // ArApTransaction must be saved with correct amount
             verify(arApTransactionRepository).save(argThat(tx ->
@@ -818,7 +818,7 @@ class PaymentRequestServiceTest {
             when(supplierRepository.findById(SUPPLIER_ID)).thenReturn(Optional.of(supplier));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-001", 3L, null);
+            paymentRequestService.markPaid(FACTORY_ID, "PR-001", 3L, null);
 
             // Supplier balance should be reduced by 5000
             verify(supplierRepository).save(argThat(s ->
@@ -833,7 +833,7 @@ class PaymentRequestServiceTest {
             when(paymentRequestRepository.findById("PR-001")).thenReturn(Optional.of(pr));
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.markPaid("PR-001", 3L, null));
+                    paymentRequestService.markPaid(FACTORY_ID, "PR-001", 3L, null));
 
             verifyNoInteractions(arApTransactionRepository, supplierRepository);
         }
@@ -844,7 +844,7 @@ class PaymentRequestServiceTest {
             when(paymentRequestRepository.findById("MISSING")).thenReturn(Optional.empty());
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.markPaid("MISSING", 3L, null));
+                    paymentRequestService.markPaid(FACTORY_ID, "MISSING", 3L, null));
         }
 
         private Supplier makeSupplier(String id, BigDecimal balance) {
@@ -967,7 +967,7 @@ class PaymentRequestServiceTest {
                     .thenReturn(Optional.of(makeCustomer(CUSTOMER_ID, BigDecimal.valueOf(5000))));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-SALES-001", 3L, "退款凭证");
+            paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-001", 3L, "退款凭证");
 
             ArgumentCaptor<com.cretas.aims.entity.finance.ArApTransaction> txCaptor =
                     ArgumentCaptor.forClass(com.cretas.aims.entity.finance.ArApTransaction.class);
@@ -994,7 +994,7 @@ class PaymentRequestServiceTest {
             when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.of(customer));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-SALES-001", 3L, null);
+            paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-001", 3L, null);
 
             verify(customerRepository).save(argThat(c ->
                     c.getCurrentBalance().compareTo(BigDecimal.valueOf(4200)) == 0));
@@ -1015,7 +1015,7 @@ class PaymentRequestServiceTest {
                 return t;
             });
 
-            PaymentRequest result = paymentRequestService.markPaid("PR-SALES-001", 3L, null);
+            PaymentRequest result = paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-001", 3L, null);
 
             assertThat(result.getStatus()).isEqualTo(PaymentRequestStatus.PAID);
             assertThat(result.getArapTransactionId()).isEqualTo("TX-SALES-1");
@@ -1031,7 +1031,7 @@ class PaymentRequestServiceTest {
             when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.of(customer));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-SALES-001", 3L, null));
+            assertDoesNotThrow(() -> paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-001", 3L, null));
 
             verify(arApTransactionRepository).save(argThat(tx ->
                     tx.getBalanceAfter().compareTo(BigDecimal.valueOf(-800)) == 0));
@@ -1045,7 +1045,7 @@ class PaymentRequestServiceTest {
             when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.empty());
 
             assertThrows(BusinessException.class, () ->
-                    paymentRequestService.markPaid("PR-SALES-001", 3L, null));
+                    paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-001", 3L, null));
             verify(customerRepository, never()).save(any());
         }
     }
@@ -1084,7 +1084,7 @@ class PaymentRequestServiceTest {
                     .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            paymentRequestService.markPaid("PR-REG-001", 3L, null);
+            paymentRequestService.markPaid(FACTORY_ID, "PR-REG-001", 3L, null);
 
             verify(arApTransactionRepository).save(argThat(tx ->
                     tx.getTransactionType() == ArApTransactionType.AP_PAYMENT
@@ -1105,7 +1105,7 @@ class PaymentRequestServiceTest {
                     .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
             when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            assertDoesNotThrow(() -> paymentRequestService.markPaid("PR-REG-001", 3L, null));
+            assertDoesNotThrow(() -> paymentRequestService.markPaid(FACTORY_ID, "PR-REG-001", 3L, null));
 
             verify(supplierRepository).save(any());
             verify(customerRepository, never()).save(any());
@@ -1125,6 +1125,40 @@ class PaymentRequestServiceTest {
                     .isEqualTo(com.cretas.aims.entity.enums.PaymentSourceType.PURCHASE);
             assertThat(pr.getSalesOrderId()).isNull();
             assertThat(pr.getCustomerId()).isNull();
+        }
+    }
+
+    @org.junit.jupiter.api.Nested
+    @org.junit.jupiter.api.DisplayName("多租户隔离 (审计 round4, 财务红线)")
+    class CrossTenantTests {
+
+        private PaymentRequest otherFactoryPr(String id) {
+            PaymentRequest pr = new PaymentRequest();
+            pr.setId(id);
+            pr.setFactoryId("F999");  // 别家工厂
+            pr.setStatus(com.cretas.aims.entity.enums.PaymentRequestStatus.APPROVED);
+            return pr;
+        }
+
+        @org.junit.jupiter.api.Test
+        @org.junit.jupiter.api.DisplayName("markPaid 跨租户 → 403, 不改任何余额")
+        void markPaid_crossTenant_throws403() {
+            when(paymentRequestRepository.findById("PR-XT1")).thenReturn(Optional.of(otherFactoryPr("PR-XT1")));
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> paymentRequestService.markPaid(FACTORY_ID, "PR-XT1", 1L, null))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .hasMessageContaining("无权操作");
+            verify(paymentRequestRepository, org.mockito.Mockito.never()).save(any());
+        }
+
+        @org.junit.jupiter.api.Test
+        @org.junit.jupiter.api.DisplayName("financeApprove 跨租户 → 403")
+        void financeApprove_crossTenant_throws403() {
+            when(paymentRequestRepository.findById("PR-XT2")).thenReturn(Optional.of(otherFactoryPr("PR-XT2")));
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> paymentRequestService.financeApprove(FACTORY_ID, "PR-XT2", 2L, "x"))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .hasMessageContaining("无权操作");
         }
     }
 }
