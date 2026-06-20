@@ -95,6 +95,44 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
 
+    /**
+     * A-F1/F2: 报工/领料前校验批次已开工。
+     *
+     * <p>六扇门需求 (requirements-catalog 行288/289): "开工前先看匹配工序和负责人再开工; 开工后批次工序
+     * 自动下发到对应人手机APP, 登录账号后可选择报工" —— <b>开工(开始生产)是报工的前置步骤</b>。
+     * {@code ProcessingServiceImpl.startProduction} 把批次置 IN_PROGRESS, 系统其它操作 (line 168/204/2393)
+     * 都已校验 IN_PROGRESS, 唯独报工/领料漏了 → PLANNED 批次也能报工 (批次状态停在"计划中"但报工照过)。</p>
+     *
+     * <p>放行: IN_PROGRESS / PRODUCING / PAUSED。拦: PLANNED/PLANNING (尚未开工) + COMPLETED/CANCELLED (终态)。
+     * 批次不存在 (旧数据/边界) → 不在此拦, 交下游处理 (向后兼容)。</p>
+     */
+    private void assertBatchStartedForReport(String factoryId, Long batchId, String action) {
+        if (batchId == null) {
+            return;
+        }
+        ProductionBatch pb;
+        try {
+            pb = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        } catch (RuntimeException e) {
+            // fail-open: 读不到批次状态 (DB 瞬时故障) 不阻塞报工; report 真存不下时下游 save 会失败。
+            // 与本服务既有 fail-soft 哲学一致 (rollup/lineage 写入失败也不阻塞)。
+            log.warn("批次开工状态校验读取失败 (fail-open 放行): batchId={}, err={}", batchId, e.getMessage());
+            return;
+        }
+        if (pb == null) {
+            return;
+        }
+        ProductionBatchStatus st = pb.getStatus();
+        if (st == ProductionBatchStatus.PLANNED || st == ProductionBatchStatus.PLANNING) {
+            throw new BusinessException(409, "批次尚未开始生产，无法" + action)
+                    .withHint("请先由主管在该批次点击「开始生产」后再" + action);
+        }
+        if (st == ProductionBatchStatus.COMPLETED || st == ProductionBatchStatus.CANCELLED) {
+            throw new BusinessException(409, "批次已" + st.getDescription() + "，不可再" + action)
+                    .withHint("如需调整请走撤回/重开流程");
+        }
+    }
+
     @Override
     @Transactional
     public Map<String, Object> submitReport(String factoryId, Long batchId, Long workerId, YieldReportRequest req) {
@@ -106,6 +144,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
         }
+        // A-F1/F2: 批次须已开工 (开工→报工 是六扇门明确需求顺序)。
+        assertBatchStartedForReport(factoryId, batchId, "报工");
         // 三阶段报工 (单元1): 阶段标记 INPUT/SEGMENT/OUTPUT; null = 旧式整合报工 (向后兼容)。
         String reportKind = normalizeReportKind(req.getReportKind());
         boolean isInput = "INPUT".equals(reportKind);
@@ -1107,6 +1147,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择首道工序任务").withHintTarget("workProcessTaskId");
         }
+        // A-F1/F2: 批次须已开工 (开工→领料 是六扇门明确需求顺序)。
+        assertBatchStartedForReport(factoryId, batchId, "领料");
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
 

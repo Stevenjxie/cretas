@@ -151,6 +151,46 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
         verify(materialConsumptionRepository, never()).save(any());
     }
 
+    // ── C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产 ──
+
+    @Test
+    void useBatchMaterialRejectsExpiredBatch() {
+        MaterialBatch batch = batch("MB-X1", "RM-1", "100", "0", "0", "8.50");
+        batch.setStatus(MaterialBatchStatus.EXPIRED);
+        when(materialBatchRepository.findByIdAndFactoryId("MB-X1", "F006")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.useBatchMaterial("F006", "MB-X1", new BigDecimal("10"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getMessage()).contains("不可用于生产"));
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
+    void consumeBatchMaterialRejectsScrappedBatch() {
+        MaterialBatch batch = batch("MB-X2", "RM-1", "100", "0", "50", "8.50");
+        batch.setStatus(MaterialBatchStatus.SCRAPPED);
+        when(materialBatchRepository.findById("MB-X2")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.consumeBatchMaterial("F006", "MB-X2", new BigDecimal("10"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getMessage()).contains("不可用于生产"));
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
+    void useBatchMaterialRejectsDefectiveBatch() {
+        MaterialBatch batch = batch("MB-X3", "RM-1", "100", "0", "0", "8.50");
+        batch.setStatus(MaterialBatchStatus.DEFECTIVE);
+        when(materialBatchRepository.findByIdAndFactoryId("MB-X3", "F006")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.useBatchMaterial("F006", "MB-X3", new BigDecimal("10"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class);
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
     private MaterialConsumption captureSavedConsumption() {
         ArgumentCaptor<MaterialConsumption> captor = ArgumentCaptor.forClass(MaterialConsumption.class);
         verify(materialConsumptionRepository).save(captor.capture());
