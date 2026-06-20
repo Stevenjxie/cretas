@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.workflow;
 
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.workflow.WorkflowInstancePendingDTO;
@@ -311,6 +312,8 @@ public class WorkflowInstanceController {
      * @since 2026-05-19 (Sprint 6 W1-B)
      */
     @GetMapping("/admin-running")
+    // @PreAuthorize 在本项目是 NO-OP (Spring Security method security 未启用) → 用 @RequireRole 真正守门。
+    @RequireRole({"factory_super_admin", "platform_admin"})
     @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")
     @Operation(summary = "工作流处理 admin 全局视图 — Sprint 6 W1-B (super-admin only)")
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getAdminRunning(

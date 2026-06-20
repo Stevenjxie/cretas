@@ -258,6 +258,18 @@ public class LabelController {
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
             @RequestBody @Parameter(description = "标签信息") Label label) {
         try {
+            // 防呆: 拒绝空白幽灵标签 (无类型 + 无批次引用 + 无溯源码 → 会生成 qrContent=null 的可打印空标签)。
+            // 不给共享 Label 实体加 @NotBlank (避免污染其他创建路径), 在入口处做内容校验。
+            boolean blankLabel = (label.getLabelType() == null || label.getLabelType().isBlank())
+                    && (label.getBatchId() == null || label.getBatchId().isBlank())
+                    && label.getProductionBatchId() == null
+                    && (label.getTraceCode() == null || label.getTraceCode().isBlank());
+            if (blankLabel) {
+                return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", "标签信息不完整: 请至少提供标签类型(labelType)或关联批次(batchId/productionBatchId)"
+                ));
+            }
             label.setFactoryId(factoryId);
             label.setCreatedBy(userId);
             Label created = labelService.createLabel(label);
