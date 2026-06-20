@@ -75,6 +75,10 @@ public class ProcessingServiceImpl implements ProcessingService {
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
     private final WageRecordTriggerService wageRecordTriggerService;
+    // 审计 round2: 班组报工补录时效锁 (六扇门"补录只能 T/T-1, 极限 T-2, T-3 锁死"硬规则)。
+    // optional/fail-open: 未配置 bean 时不阻塞 (与 YieldReportServiceImpl 同款)。
+    @Autowired(required = false)
+    private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
 
     /**
      * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.
@@ -446,12 +450,19 @@ public class ProcessingServiceImpl implements ProcessingService {
 
         // 解析报工时间
         LocalDateTime reportTime = LocalDateTime.now();
+        boolean reportTimeProvided = false;
         if (request.getReportTime() != null && !request.getReportTime().isEmpty()) {
             try {
                 reportTime = LocalDateTime.parse(request.getReportTime().replace("Z", ""));
+                reportTimeProvided = true;
             } catch (Exception e) {
                 log.warn("无法解析reportTime: {}, 使用当前时间", request.getReportTime());
             }
+        }
+        // 审计 round2: 补录时效锁 — 班组报工业务日期不得早于 T-maxDays (对齐 submitReport/recordMaterialInput)。
+        // 仅当显式传 reportTime 时校验 (默认 now() 必在窗口内)。
+        if (reportTimeProvided && backdateWindowValidator != null) {
+            backdateWindowValidator.assertWithinWindow(reportTime.toLocalDate(), "班组报工");
         }
 
         // 处理可选的个人明细
