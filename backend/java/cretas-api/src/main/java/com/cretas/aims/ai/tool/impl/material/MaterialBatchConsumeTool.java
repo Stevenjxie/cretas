@@ -100,8 +100,8 @@ public class MaterialBatchConsumeTool extends AbstractBusinessTool {
         log.info("执行原材料消耗: factoryId={}, batchId={}, quantity={}, productionPlanId={}",
                 factoryId, batchId, quantity, productionPlanId);
 
-        // 3. 调用服务执行消耗
-        materialBatchService.consumeBatchMaterial(factoryId, batchId, quantity, productionPlanId);
+        // 3. 调用服务执行消耗 (operatorId 写入 MaterialConsumption.recordedBy)
+        materialBatchService.consumeBatchMaterial(factoryId, batchId, quantity, productionPlanId, getUserId(context));
 
         // 4. 构建返回结果
         Map<String, Object> resultData = new HashMap<>();

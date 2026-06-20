@@ -230,8 +230,10 @@ public interface MaterialBatchService {
 
      /**
      * 使用批次材料
+     *
+     * @param operatorId 操作人用户ID, 写入 MaterialConsumption.recordedBy (NOT NULL + FK users)。
       */
-    MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId);
+    MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId);
      /**
      * 设置批次数量到绝对值 (newQuantity = param, NOT current + param).
      *
@@ -255,8 +257,10 @@ public interface MaterialBatchService {
     void releaseBatchReservation(String factoryId, String batchId, BigDecimal quantity, String productionPlanId);
      /**
      * 消耗批次材料（从预留中扣减）
+     *
+     * @param operatorId 操作人用户ID, 写入 MaterialConsumption.recordedBy (NOT NULL + FK users)。
       */
-    void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId);
+    void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId);
      /**
      * 获取库存统计
       */

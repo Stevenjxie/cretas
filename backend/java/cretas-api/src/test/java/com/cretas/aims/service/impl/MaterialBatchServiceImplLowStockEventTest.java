@@ -95,7 +95,7 @@ class MaterialBatchServiceImplLowStockEventTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType("F006", "RM-1"))
                 .thenReturn(new BigDecimal("40"));
 
-        service.consumeBatchMaterial("F006", "MB-1", new BigDecimal("10"), "PP-1");
+        service.consumeBatchMaterial("F006", "MB-1", new BigDecimal("10"), "PP-1", 1L);
 
         ArgumentCaptor<InventoryStockChangedEvent> captor =
                 ArgumentCaptor.forClass(InventoryStockChangedEvent.class);

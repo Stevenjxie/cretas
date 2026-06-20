@@ -495,11 +495,17 @@ public class MaterialBatchController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", example = "MB-2025-001")
             @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
             @Parameter(description = "使用数量 (URL参数)", hidden = true)
             @RequestParam(required = false) BigDecimal quantity,
             @Parameter(description = "生产计划ID (URL参数)", hidden = true)
             @RequestParam(required = false) String productionPlanId,
             @RequestBody(required = false) UseMaterialBatchRequest request) {
+
+        // 获取当前用户ID (写入 MaterialConsumption.recordedBy)
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
 
         // 兼容URL参数和RequestBody两种格式
         BigDecimal actualQuantity = quantity;
@@ -519,7 +525,7 @@ public class MaterialBatchController {
         }
 
         log.info("使用批次材料: factoryId={}, batchId={}, quantity={}", factoryId, batchId, actualQuantity);
-        MaterialBatchDTO batch = materialBatchService.useBatchMaterial(factoryId, batchId, actualQuantity, actualPlanId);
+        MaterialBatchDTO batch = materialBatchService.useBatchMaterial(factoryId, batchId, actualQuantity, actualPlanId, userId);
         return ApiResponse.success("材料使用成功", batch);
     }
 
@@ -696,11 +702,17 @@ public class MaterialBatchController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", example = "MB-2025-001")
             @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
             @Parameter(description = "消耗数量 (URL参数)", hidden = true)
             @RequestParam(required = false) BigDecimal quantity,
             @Parameter(description = "加工流程ID (URL参数)", hidden = true)
             @RequestParam(required = false) String processId,
             @RequestBody(required = false) ConsumeMaterialBatchRequest request) {
+
+        // 获取当前用户ID (写入 MaterialConsumption.recordedBy)
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
 
         // 兼容URL参数和RequestBody两种格式
         BigDecimal actualQuantity = quantity;
@@ -721,7 +733,7 @@ public class MaterialBatchController {
 
         log.info("消耗批次材料: factoryId={}, batchId={}, quantity={}, processId={}",
                 factoryId, batchId, actualQuantity, actualProcessId);
-        materialBatchService.consumeBatchMaterial(factoryId, batchId, actualQuantity, actualProcessId);
+        materialBatchService.consumeBatchMaterial(factoryId, batchId, actualQuantity, actualProcessId, userId);
         return ApiResponse.success("材料消耗成功", null);
     }
 

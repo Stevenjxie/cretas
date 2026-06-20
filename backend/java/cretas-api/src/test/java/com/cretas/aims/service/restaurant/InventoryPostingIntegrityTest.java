@@ -574,12 +574,12 @@ class InventoryPostingIntegrityTest {
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
             getFEFOBatches(String f, String mId, BigDecimal q) { return List.of(); }
             @Override public com.cretas.aims.dto.material.MaterialBatchDTO
-            useBatchMaterial(String f, String id, BigDecimal q, String planId) { return null; }
+            useBatchMaterial(String f, String id, BigDecimal q, String planId, Long operatorId) { return null; }
             @Override public com.cretas.aims.dto.material.MaterialBatchDTO
             updateBatchStatus(String f, String id, com.cretas.aims.entity.enums.MaterialBatchStatus s) { return null; }
             @Override public void reserveBatchMaterial(String f, String id, BigDecimal q, String planId) {}
             @Override public void releaseBatchReservation(String f, String id, BigDecimal q, String planId) {}
-            @Override public void consumeBatchMaterial(String f, String id, BigDecimal q, String planId) {}
+            @Override public void consumeBatchMaterial(String f, String id, BigDecimal q, String planId, Long operatorId) {}
             @Override public Map<String, Object> getInventoryStatistics(String f) { return Map.of(); }
             @Override public BigDecimal getInventoryValuation(String f) { return BigDecimal.ZERO; }
             @Override public int handleExpiredBatches(String f) { return 0; }

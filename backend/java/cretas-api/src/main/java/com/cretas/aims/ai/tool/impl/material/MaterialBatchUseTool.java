@@ -107,12 +107,13 @@ public class MaterialBatchUseTool extends AbstractBusinessTool {
         log.info("📦 执行原料消耗 - 批次: {}, 数量: {}, 生产计划: {}, 原因: {}",
                 batchId, quantity, productionPlanId, reason);
 
-        // 3. 调用服务执行消耗
+        // 3. 调用服务执行消耗 (operatorId 写入 MaterialConsumption.recordedBy)
         MaterialBatchDTO updatedBatch = materialBatchService.useBatchMaterial(
                 factoryId,
                 batchId,
                 quantity,
-                productionPlanId
+                productionPlanId,
+                getUserId(context)
         );
 
         // 4. 构建返回结果
