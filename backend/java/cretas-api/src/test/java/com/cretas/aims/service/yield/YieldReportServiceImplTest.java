@@ -3458,8 +3458,8 @@ class YieldReportServiceImplTest {
 
         svc.submitReport("F006", batchId, 5L, req);
 
-        // rollup 早返回 → 不调用 productionBatchRepo.findByIdAndFactoryId 也不 save
-        verify(productionBatchRepo, never()).findByIdAndFactoryId(eq(batchId), eq("F006"));
+        // A-F1/F2: 开工守卫会读批次一次 (batch=null → 放行); rollup 因全 null laborCost 早返回 → 不 save。
+        verify(productionBatchRepo, times(1)).findByIdAndFactoryId(eq(batchId), eq("F006"));
         verify(productionBatchRepo, never()).save(any(ProductionBatch.class));
     }
 
@@ -3674,5 +3674,94 @@ class YieldReportServiceImplTest {
                     assertThat(be.getErrorCode()).isEqualTo("BACKDATE_WINDOW_EXCEEDED");
                     assertThat(be.getMessage()).contains("领料");
                 });
+    }
+
+    // ── A-F1/F2: 报工/领料前批次须已开工 (开工→报工 是六扇门明确需求顺序) ──
+
+    private ProductionBatch batchWithStatus(ProductionBatchStatus status) {
+        return ProductionBatch.builder().id(1L).factoryId("F006").status(status).build();
+    }
+
+    @Test
+    void submitReport_onPlannedBatch_rejectsWithStartProductionHint() {
+        when(productionBatchRepo.findByIdAndFactoryId(1L, "F006"))
+                .thenReturn(Optional.of(batchWithStatus(ProductionBatchStatus.PLANNED)));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("尚未开始生产");
+                });
+        // 守卫在 taskRepo 查询之前抛 → 不应触达任务/保存
+        verify(taskRepo, never()).findByFactoryIdAndId(anyString(), any());
+        verify(reportRepo, never()).save(any());
+    }
+
+    @Test
+    void submitReport_onCompletedBatch_rejects() {
+        when(productionBatchRepo.findByIdAndFactoryId(1L, "F006"))
+                .thenReturn(Optional.of(batchWithStatus(ProductionBatchStatus.COMPLETED)));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("不可再");
+                });
+        verify(reportRepo, never()).save(any());
+    }
+
+    @Test
+    void submitReport_onInProgressBatch_passesStartedGuard() {
+        // IN_PROGRESS → 守卫放行; 用最小 happy-path stub 确认不因守卫被拦。
+        when(productionBatchRepo.findByIdAndFactoryId(1L, "F006"))
+                .thenReturn(Optional.of(batchWithStatus(ProductionBatchStatus.IN_PROGRESS)));
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(99L); return r;
+        });
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("70"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+        verify(reportRepo).save(any(ProductionReport.class));  // 放行后正常保存
+    }
+
+    @Test
+    void recordMaterialInput_onPlannedBatch_rejects() {
+        when(productionBatchRepo.findByIdAndFactoryId(1L, "F006"))
+                .thenReturn(Optional.of(batchWithStatus(ProductionBatchStatus.PLANNED)));
+        MaterialInputRequest req = new MaterialInputRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setFeedInQuantity(new BigDecimal("100"));
+
+        assertThatThrownBy(() -> svc.recordMaterialInput("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("尚未开始生产");
+                    assertThat(be.getMessage()).contains("领料");
+                });
+        verify(taskRepo, never()).findByFactoryIdAndId(anyString(), any());
     }
 }

@@ -1285,11 +1285,30 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         return result;
     }
 
+    /**
+     * C-B2: 校验原料批次可用于生产。
+     *
+     * <p>食品安全防呆: 已过期/已报废/不良品的批次即便有剩余量也不可投入生产。
+     * DEPLETED/USED_UP 已被剩余量检查挡 (remaining=0); 此处补防"有量但状态坏"的批次。</p>
+     */
+    private void assertMaterialBatchUsable(MaterialBatch batch) {
+        MaterialBatchStatus st = batch.getStatus();
+        if (st == MaterialBatchStatus.EXPIRED
+                || st == MaterialBatchStatus.SCRAPPED
+                || st == MaterialBatchStatus.DEFECTIVE) {
+            throw new BusinessException(409, "批次已" + st.getDisplayName() + "，不可用于生产")
+                    .withHint("请选择可用批次");
+        }
+    }
+
     @Override
     @Transactional
     public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId) {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
+
+        // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
+        assertMaterialBatchUsable(batch);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足")
@@ -1507,6 +1526,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(401, "无法识别操作人，无法记录消耗")
                     .withHint("请重新登录后重试");
         }
+
+        // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
+        assertMaterialBatchUsable(batch);
 
         runConfiguredValidation(factoryId, "CONSUME",
                 java.util.Map.of("batchId", batchId, "quantity", quantity != null ? quantity : BigDecimal.ZERO));
