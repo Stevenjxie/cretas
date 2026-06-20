@@ -1288,16 +1288,21 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /**
      * C-B2: 校验原料批次可用于生产。
      *
-     * <p>食品安全防呆: 已过期/已报废/不良品的批次即便有剩余量也不可投入生产。
+     * <p>食品安全防呆: 已过期/已报废/不良品/质检中的批次即便有剩余量也不可投入生产。
      * DEPLETED/USED_UP 已被剩余量检查挡 (remaining=0); 此处补防"有量但状态坏"的批次。</p>
+     *
+     * <p>INSPECTING (质检中) = 已收货待质检放行 (ReleaseDecisionTool 把 INSPECTING→AVAILABLE/
+     * DEFECTIVE); 未放行前不得投产 (incoming QC gate)。FEFO/available 查询本就过滤 status='AVAILABLE'
+     * 已排除 INSPECTING, 此处补防"显式传 INSPECTING batchId"的旁路 (use/consume 直接按 id 取批次)。</p>
      */
     private void assertMaterialBatchUsable(MaterialBatch batch) {
         MaterialBatchStatus st = batch.getStatus();
         if (st == MaterialBatchStatus.EXPIRED
                 || st == MaterialBatchStatus.SCRAPPED
-                || st == MaterialBatchStatus.DEFECTIVE) {
-            throw new BusinessException(409, "批次已" + st.getDisplayName() + "，不可用于生产")
-                    .withHint("请选择可用批次");
+                || st == MaterialBatchStatus.DEFECTIVE
+                || st == MaterialBatchStatus.INSPECTING) {
+            throw new BusinessException(409, "批次" + st.getDisplayName() + "，不可用于生产")
+                    .withHint(st == MaterialBatchStatus.INSPECTING ? "请先完成质检放行后再投产" : "请选择可用批次");
         }
     }
 

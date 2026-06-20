@@ -694,14 +694,20 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
             @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
             @RequestParam @NotBlank String batchId,
             @Parameter(description = "消耗数量", required = true, example = "100.5")
             @RequestParam @NotNull BigDecimal quantity) {
 
+        // 获取当前用户ID (写入 MaterialConsumption.recordedBy)
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
         log.info("记录材料消耗: factoryId={}, planId={}, batchId={}, quantity={}",
                 factoryId, planId, batchId, quantity);
-        productionPlanService.recordMaterialConsumption(factoryId, planId, batchId, quantity);
+        productionPlanService.recordMaterialConsumption(factoryId, planId, batchId, quantity, userId);
         return ApiResponse.success("消耗记录成功", null);
     }
 

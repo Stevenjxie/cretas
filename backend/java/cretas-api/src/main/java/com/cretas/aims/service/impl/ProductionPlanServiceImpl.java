@@ -2606,7 +2606,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @Override
     @Transactional
-    public void recordMaterialConsumption(String factoryId, String planId, String batchId, BigDecimal quantity) {
+    public void recordMaterialConsumption(String factoryId, String planId, String batchId, BigDecimal quantity, Long operatorId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
 
@@ -2626,15 +2626,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         // 创建消耗记录
+        // C-B1 同族 fix: MaterialConsumption.unitPrice/totalCost/recordedBy 均 NOT NULL。
+        //   - 批次单价可能为 null (未录价批次) → 兜底 ZERO, 否则 setUnitPrice(null)/multiply(null) → 500
+        //   - recordedBy 走 FK→users: 优先当前操作人 (operatorId), 兜底计划创建人, 均无则不可记录
+        BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+        Long recordedBy = operatorId != null ? operatorId : plan.getCreatedBy();
+        if (recordedBy == null) {
+            throw new BusinessException(401, "无法识别操作人，无法记录消耗")
+                    .withHint("请重新登录后重试");
+        }
         MaterialConsumption consumption = new MaterialConsumption();
         consumption.setFactoryId(factoryId);
         consumption.setProductionPlanId(planId);
         consumption.setBatchId(batchId);
         consumption.setQuantity(quantity);
-        consumption.setUnitPrice(batch.getUnitPrice());
-        consumption.setTotalCost(quantity.multiply(batch.getUnitPrice()));
+        consumption.setUnitPrice(unitPrice);
+        consumption.setTotalCost(quantity.multiply(unitPrice));
         consumption.setConsumptionTime(LocalDateTime.now());
-        consumption.setRecordedBy(plan.getCreatedBy());
+        consumption.setRecordedBy(recordedBy);
         materialConsumptionRepository.save(consumption);
 
         // 更新批次库存

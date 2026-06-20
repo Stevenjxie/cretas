@@ -186,7 +186,7 @@ public interface ProductionPlanService {
      /**
      * 记录材料消耗
       */
-    void recordMaterialConsumption(String factoryId, String planId, String batchId, BigDecimal quantity);
+    void recordMaterialConsumption(String factoryId, String planId, String batchId, BigDecimal quantity, Long operatorId);
      /**
      * 获取生产计划统计
       */
