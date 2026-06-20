@@ -556,7 +556,13 @@ public class TransferServiceImpl implements TransferService {
                 remaining = remaining.subtract(deduct);
             }
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-                log.warn("调出方成品库存不足: productTypeId={}, 缺少={}", item.getProductTypeId(), remaining);
+                // 修复: 此前仅 log.warn 静默少发 (调出方库存不足时调拨单声称数量 > 实际扣减,
+                // 接收方据单收货 → 库存对不上, 静默数据丢失)。对齐 RAW_MATERIAL 分支: 不足即 409 拦截,
+                // 禁止降级处理 (符合"禁止假数据/静默失败"核心原则 + 出库可靠性红线)。
+                throw new BusinessException(409, String.format(
+                    "成品库存不足: %s, 需要 %s, 缺少 %s",
+                    item.getProductTypeId(), item.getQuantity(), remaining))
+                        .withHint("请先生产入库或减少调拨数量");
             }
             if (preselectedBatchId == null && firstConsumedBatchId != null) {
                 item.setSourceBatchId(firstConsumedBatchId);

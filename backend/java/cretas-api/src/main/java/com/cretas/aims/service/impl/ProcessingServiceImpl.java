@@ -426,6 +426,19 @@ public class ProcessingServiceImpl implements ProcessingService {
         ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(request.getBatchId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在或不属于该工厂"));
 
+        // A-F1/F2 同族: 班组报工同样须批次已开工 (开工→报工 是六扇门明确顺序; 对齐
+        // YieldReportServiceImpl.submitReport 守卫)。放行 IN_PROGRESS/PRODUCING/PAUSED;
+        // 拦 PLANNED/PLANNING(未开工) + COMPLETED/CANCELLED(终态, 防累加产出到已结算/取消批次)。
+        ProductionBatchStatus st = batch.getStatus();
+        if (st == ProductionBatchStatus.PLANNED || st == ProductionBatchStatus.PLANNING) {
+            throw new BusinessException(409, "批次尚未开始生产，无法报工")
+                    .withHint("请先由主管在该批次点击「开始生产」后再报工");
+        }
+        if (st == ProductionBatchStatus.COMPLETED || st == ProductionBatchStatus.CANCELLED) {
+            throw new BusinessException(409, "批次已" + st.getDescription() + "，不可再报工")
+                    .withHint("如需调整请走撤回/重开流程");
+        }
+
         // 团队总产出作为主数据源
         int teamOutput = request.getTotalOutput();
         int teamGood = request.getTotalGoodQuantity() != null ? request.getTotalGoodQuantity() : teamOutput;

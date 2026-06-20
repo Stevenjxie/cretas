@@ -1,6 +1,9 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.dto.batch.TeamBatchReportRequest;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.BatchEquipmentUsageRepository;
 import com.cretas.aims.repository.BatchWorkSessionRepository;
@@ -199,5 +202,38 @@ class ProcessingServiceImplInspectionValidationTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.submitInspection(F_ID, BATCH_ID, payload));
         assert ex.getMessage().contains("无效的检验结果");
+    }
+
+    // ── A-F1/F2 同族: 班组报工(submitTeamBatchReport)须批次已开工 ──
+
+    private TeamBatchReportRequest teamReport(long batchId, int output) {
+        TeamBatchReportRequest r = new TeamBatchReportRequest();
+        r.setBatchId(batchId);
+        r.setTotalOutput(output);
+        return r;
+    }
+
+    private ProductionBatch batchWithStatus(long id, ProductionBatchStatus status) {
+        return ProductionBatch.builder().id(id).factoryId(F_ID).status(status).build();
+    }
+
+    @Test
+    @DisplayName("A-F1/F2: 班组报工 on PLANNED 批次被拒 (须先开始生产)")
+    void teamReport_onPlannedBatch_rejected() {
+        when(productionBatchRepository.findByIdAndFactoryId(7001L, F_ID))
+                .thenReturn(java.util.Optional.of(batchWithStatus(7001L, ProductionBatchStatus.PLANNED)));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.submitTeamBatchReport(F_ID, teamReport(7001L, 100)));
+        assert ex.getMessage().contains("尚未开始生产");
+    }
+
+    @Test
+    @DisplayName("A-F1/F2: 班组报工 on COMPLETED 批次被拒")
+    void teamReport_onCompletedBatch_rejected() {
+        when(productionBatchRepository.findByIdAndFactoryId(7002L, F_ID))
+                .thenReturn(java.util.Optional.of(batchWithStatus(7002L, ProductionBatchStatus.COMPLETED)));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.submitTeamBatchReport(F_ID, teamReport(7002L, 100)));
+        assert ex.getMessage().contains("不可再");
     }
 }

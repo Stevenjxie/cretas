@@ -274,4 +274,44 @@ class TransferShipBatchSelectionTest {
         assertThat(result.get(1).get("batchId")).isEqualTo("B_A2");
         assertThat(result.get(1).get("availableQuantity")).isEqualTo(new BigDecimal("100"));
     }
+
+    // ===== FG-SHORTAGE: 成品库存不足 → 409 (对齐 RAW_MATERIAL, 修复静默少发) =====
+
+    @Test
+    @DisplayName("FG-SHORTAGE: 成品库存不足时 throw 409 (此前仅 log.warn 静默少发)")
+    void shipFinishedGoods_insufficientStock_throws() {
+        InternalTransferItem item = finishedGoodsItem(201L, "PT_001", new BigDecimal("50"));
+        InternalTransfer t = buildTransfer("F001", "WH_FG", TransferStatus.APPROVED, item);
+
+        FinishedGoodsBatch only30 = finishedGoodsBatch("FG_1", new BigDecimal("30"));
+
+        when(transferRepository.findByIdAndEitherFactoryId("T_B1_001", "F001")).thenReturn(Optional.of(t));
+        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse("F001", "PT_001", "WH_FG"))
+                .thenReturn(List.of(only30));
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(i -> i.getArgument(0));
+
+        assertThatThrownBy(() -> service.shipTransfer("F001", "T_B1_001", 99L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("成品库存不足");
+    }
+
+    private InternalTransferItem finishedGoodsItem(Long id, String productTypeId, BigDecimal qty) {
+        InternalTransferItem item = new InternalTransferItem();
+        item.setId(id);
+        item.setItemType(TransferItemType.FINISHED_GOODS);
+        item.setProductTypeId(productTypeId);
+        item.setQuantity(qty);
+        item.setUnit("件");
+        return item;
+    }
+
+    private FinishedGoodsBatch finishedGoodsBatch(String id, BigDecimal produced) {
+        FinishedGoodsBatch b = new FinishedGoodsBatch();
+        b.setId(id);
+        b.setProducedQuantity(produced);
+        b.setShippedQuantity(BigDecimal.ZERO);
+        b.setReservedQuantity(BigDecimal.ZERO);
+        b.setStatus("AVAILABLE");
+        return b;
+    }
 }
