@@ -80,7 +80,7 @@ public class ReminderController {
     public ResponseEntity<ApiResponse<Reminder>> snooze(
             @PathVariable String factoryId,
             @PathVariable String id,
-            @RequestBody SnoozeRequest req) {
+            @RequestBody @jakarta.validation.Valid SnoozeRequest req) {
         Long userId = SecurityUtils.getCurrentUserId();
         Reminder updated = reminderService.snooze(factoryId, id, userId, req.getSnoozedUntil());
         return ResponseEntity.ok(ApiResponse.success("已延后", updated));

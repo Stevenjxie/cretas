@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.workflow;
 
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.WorkflowRuleRequest;
 import com.cretas.aims.entity.config.WorkflowRule;
@@ -62,6 +63,7 @@ public class WorkflowRuleController {
     }
 
     @PostMapping
+    @RequireRole({"factory_super_admin", "platform_admin"})
     @Operation(summary = "创建规则")
     public ApiResponse<WorkflowRule> create(
             @PathVariable String factoryId,
@@ -70,6 +72,7 @@ public class WorkflowRuleController {
     }
 
     @PutMapping("/{id}")
+    @RequireRole({"factory_super_admin", "platform_admin"})
     @Operation(summary = "更新规则")
     public ApiResponse<WorkflowRule> update(
             @PathVariable String factoryId,
@@ -79,6 +82,7 @@ public class WorkflowRuleController {
     }
 
     @DeleteMapping("/{id}")
+    @RequireRole({"factory_super_admin", "platform_admin"})
     @Operation(summary = "软删除规则")
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
