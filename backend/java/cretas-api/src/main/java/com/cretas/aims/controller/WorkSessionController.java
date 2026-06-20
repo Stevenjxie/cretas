@@ -80,7 +80,7 @@ public class WorkSessionController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "工作会话ID", example = "1") Long id) {
         try {
-            return workSessionService.getById(id)
+            return workSessionService.getById(factoryId, id)
                     .map(session -> ResponseEntity.ok(Map.of(
                         "success", true,
                         "data", session
@@ -141,7 +141,7 @@ public class WorkSessionController {
             Integer breakMinutes = body != null ? (Integer) body.get("breakMinutes") : null;
             String notes = body != null ? (String) body.get("notes") : null;
 
-            EmployeeWorkSession ended = workSessionService.endSession(id, breakMinutes, notes);
+            EmployeeWorkSession ended = workSessionService.endSession(factoryId, id, breakMinutes, notes);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", ended,
@@ -172,7 +172,7 @@ public class WorkSessionController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "工作会话ID", example = "1") Long id) {
         try {
-            EmployeeWorkSession cancelled = workSessionService.cancelSession(id);
+            EmployeeWorkSession cancelled = workSessionService.cancelSession(factoryId, id);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", cancelled,
@@ -204,7 +204,7 @@ public class WorkSessionController {
             @PathVariable @Parameter(description = "工作会话ID", example = "1") Long id,
             @RequestBody @Parameter(description = "更新的工作会话信息") EmployeeWorkSession updateData) {
         try {
-            EmployeeWorkSession updated = workSessionService.updateSession(id, updateData);
+            EmployeeWorkSession updated = workSessionService.updateSession(factoryId, id, updateData);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", updated,
