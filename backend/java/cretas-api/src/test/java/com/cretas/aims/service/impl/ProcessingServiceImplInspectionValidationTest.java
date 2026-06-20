@@ -80,6 +80,7 @@ class ProcessingServiceImplInspectionValidationTest {
     @Mock private QualityInspectionService qualityInspectionService;
     @Mock private ProductionAlertRepository productionAlertRepository;
     @Mock private ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
+    @Mock private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
 
     @InjectMocks
     private ProcessingServiceImpl service;
@@ -235,5 +236,35 @@ class ProcessingServiceImplInspectionValidationTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.submitTeamBatchReport(F_ID, teamReport(7002L, 100)));
         assert ex.getMessage().contains("不可再");
+    }
+
+    @Test
+    @DisplayName("审计 round2: 班组报工显式传超时效 reportTime → 补录窗口锁拦截")
+    void teamReport_backdatedReportTime_rejected() {
+        // IN_PROGRESS 批次 → 过状态守卫, 到达 reportTime 补录窗口校验。
+        // @InjectMocks 走构造器注入不做字段注入, 显式注入 @Autowired(required=false) 字段。
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "backdateWindowValidator", backdateWindowValidator);
+        when(productionBatchRepository.findByIdAndFactoryId(7003L, F_ID))
+                .thenReturn(java.util.Optional.of(batchWithStatus(7003L, ProductionBatchStatus.IN_PROGRESS)));
+        org.mockito.Mockito.doThrow(new BusinessException(409, "补录超出时效窗口"))
+                .when(backdateWindowValidator).assertWithinWindow(any(), org.mockito.ArgumentMatchers.eq("班组报工"));
+
+        TeamBatchReportRequest req = teamReport(7003L, 100);
+        req.setReportTime("2026-06-01T08:00:00");  // 远早于 T-2, 触发补录窗口锁
+
+        assertThrows(BusinessException.class, () -> service.submitTeamBatchReport(F_ID, req));
+    }
+
+    @Test
+    @DisplayName("审计 round2: 班组报工不传 reportTime (默认 now) → 不触发补录窗口校验")
+    void teamReport_noReportTime_skipsBackdateCheck() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "backdateWindowValidator", backdateWindowValidator);
+        when(productionBatchRepository.findByIdAndFactoryId(7004L, F_ID))
+                .thenReturn(java.util.Optional.of(batchWithStatus(7004L, ProductionBatchStatus.IN_PROGRESS)));
+
+        // 不设 reportTime → reportTimeProvided=false → 不调 assertWithinWindow → 正常完成 (无异常)
+        service.submitTeamBatchReport(F_ID, teamReport(7004L, 50));
+        org.mockito.Mockito.verify(backdateWindowValidator, org.mockito.Mockito.never())
+                .assertWithinWindow(any(), org.mockito.ArgumentMatchers.anyString());
     }
 }

@@ -254,6 +254,18 @@ public class EquipmentServiceImpl implements EquipmentService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 审计 round2: 报废(scrapped)是终态设备防呆守卫。报废设备不得再启动/停止/记录使用/
+     * 经通用状态接口"复活"为其它状态。scrapEquipment 是唯一进入 scrapped 的入口;
+     * 退出 scrapped 需走专门的恢复流程(目前无), 不允许经常规写操作静默 un-scrap。
+     */
+    private void assertNotScrapped(FactoryEquipment equipment, String action) {
+        if (STATUS_SCRAPPED.equals(equipment.getStatus())) {
+            throw new BusinessException(409, "设备已报废，无法" + action)
+                    .withHint("报废为终态; 如系误报废请联系管理员走恢复流程").withHintTarget("status");
+        }
+    }
+
     @Override
     @Transactional
     public EquipmentDTO updateEquipmentStatus(String factoryId, String equipmentId, String status) {
@@ -262,6 +274,12 @@ public class EquipmentServiceImpl implements EquipmentService {
         Long equipmentIdLong = Long.parseLong(equipmentId);
         FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentIdLong, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
+
+        // 审计 round2: 防止经通用状态接口把报废设备静默 un-scrap (报废→其它状态)。
+        if (STATUS_SCRAPPED.equals(equipment.getStatus()) && !STATUS_SCRAPPED.equals(status)) {
+            throw new BusinessException(409, "设备已报废，状态不可变更")
+                    .withHint("报废为终态; 如系误报废请联系管理员走恢复流程").withHintTarget("status");
+        }
 
         equipment.setStatus(status);
         equipment.setUpdatedAt(LocalDateTime.now());
@@ -280,6 +298,7 @@ public class EquipmentServiceImpl implements EquipmentService {
         FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentIdLong, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
 
+        assertNotScrapped(equipment, "启动");  // 审计 round2: 报废设备不可启动
         if ("active".equals(equipment.getStatus())) {
             // 设备已处于active状态，可以理解为已经在运行或可运行，允许重复启动
             log.warn("设备已处于active状态: id={}", equipment.getId());
@@ -306,13 +325,16 @@ public class EquipmentServiceImpl implements EquipmentService {
         FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentIdLong, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
 
+        assertNotScrapped(equipment, "停止");  // 审计 round2: 报废终态不可经停止变 inactive
         if (!"active".equals(equipment.getStatus())) {
             log.warn("设备当前状态不是active，仍允许停止: status={}", equipment.getStatus());
         }
 
         equipment.setStatus("inactive");  // 停止设备，设置为inactive
         if (runningHours != null) {
-            equipment.setTotalRunningHours(equipment.getTotalRunningHours() + runningHours);
+            // 审计 round2: totalRunningHours 可能为 null (旧数据), 兜底 0 防 NPE
+            int prior = equipment.getTotalRunningHours() != null ? equipment.getTotalRunningHours() : 0;
+            equipment.setTotalRunningHours(prior + runningHours);
         }
         equipment.setUpdatedAt(LocalDateTime.now());
         equipment = equipmentRepository.save(equipment);
