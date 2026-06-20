@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.MaterialBatchMapper;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -30,7 +31,9 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -83,12 +86,12 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType("F006", "RM-1"))
                 .thenReturn(new BigDecimal("90"));
 
-        service.useBatchMaterial("F006", "MB-1", new BigDecimal("10"), "PP-1");
+        service.useBatchMaterial("F006", "MB-1", new BigDecimal("10"), "PP-1", 42L);
 
         MaterialConsumption saved = captureSavedConsumption();
         assertThat(saved.getUnitPrice()).isEqualByComparingTo("8.50");
         assertThat(saved.getTotalCost()).isEqualByComparingTo("85.00");
-        assertThat(saved.getRecordedBy()).isNotNull().isEqualTo(0L);
+        assertThat(saved.getRecordedBy()).isEqualTo(42L);
     }
 
     @Test
@@ -101,12 +104,12 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType("F006", "RM-1"))
                 .thenReturn(new BigDecimal("90"));
 
-        service.useBatchMaterial("F006", "MB-2", new BigDecimal("10"), "PP-1");
+        service.useBatchMaterial("F006", "MB-2", new BigDecimal("10"), "PP-1", 42L);
 
         MaterialConsumption saved = captureSavedConsumption();
         assertThat(saved.getUnitPrice()).isEqualByComparingTo("0");
         assertThat(saved.getTotalCost()).isEqualByComparingTo("0");
-        assertThat(saved.getRecordedBy()).isNotNull();
+        assertThat(saved.getRecordedBy()).isEqualTo(42L);
     }
 
     @Test
@@ -118,12 +121,34 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
         when(materialBatchRepository.sumAvailableQuantityByMaterialType("F006", "RM-1"))
                 .thenReturn(new BigDecimal("40"));
 
-        service.consumeBatchMaterial("F006", "MB-3", new BigDecimal("10"), "PP-1");
+        service.consumeBatchMaterial("F006", "MB-3", new BigDecimal("10"), "PP-1", 42L);
 
         MaterialConsumption saved = captureSavedConsumption();
         assertThat(saved.getUnitPrice()).isEqualByComparingTo("8.50");
         assertThat(saved.getTotalCost()).isEqualByComparingTo("85.00");
-        assertThat(saved.getRecordedBy()).isNotNull().isEqualTo(0L);
+        assertThat(saved.getRecordedBy()).isEqualTo(42L);
+    }
+
+    @Test
+    void useBatchMaterialRejectsNullOperatorWhenRecordingConsumption() {
+        MaterialBatch batch = batch("MB-4", "RM-1", "100", "0", "0", "8.50");
+        when(materialBatchRepository.findByIdAndFactoryId("MB-4", "F006")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.useBatchMaterial("F006", "MB-4", new BigDecimal("10"), "PP-1", null))
+                .isInstanceOf(BusinessException.class);
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
+    void consumeBatchMaterialRejectsNullOperator() {
+        MaterialBatch batch = batch("MB-5", "RM-1", "100", "0", "50", "8.50");
+        when(materialBatchRepository.findById("MB-5")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.consumeBatchMaterial("F006", "MB-5", new BigDecimal("10"), "PP-1", null))
+                .isInstanceOf(BusinessException.class);
+        verify(materialConsumptionRepository, never()).save(any());
     }
 
     private MaterialConsumption captureSavedConsumption() {

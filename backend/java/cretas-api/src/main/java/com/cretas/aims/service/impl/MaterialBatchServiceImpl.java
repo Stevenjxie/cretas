@@ -10,7 +10,6 @@ import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialBatchExportDTO;
 import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
 import com.cretas.aims.utils.ExcelUtil;
-import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.MaterialConsumption;
@@ -1288,7 +1287,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Override
     @Transactional
-    public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId) {
+    public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId) {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
 
@@ -1309,10 +1308,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // 记录消耗（如果提供了生产计划ID）
         if (productionPlanId != null) {
-            // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 500。
-            // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO, recordedBy 兜底 0L。
+            // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 (500)。
+            // recordedBy 走 FK→users, 必须是真实操作人; 由 controller/AI tool 线程进 operatorId。
+            // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO。
+            if (operatorId == null) {
+                throw new BusinessException(401, "无法识别操作人，无法记录领料消耗")
+                        .withHint("请重新登录后重试");
+            }
             BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
-            Long recordedBy = SecurityUtils.getCurrentUserId();
             MaterialConsumption consumption = new MaterialConsumption();
             consumption.setFactoryId(factoryId);
             consumption.setProductionPlanId(productionPlanId);
@@ -1320,7 +1323,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             consumption.setQuantity(quantity);
             consumption.setUnitPrice(unitPrice);
             consumption.setTotalCost(quantity.multiply(unitPrice));
-            consumption.setRecordedBy(recordedBy != null ? recordedBy : 0L);
+            consumption.setRecordedBy(operatorId);
             consumption.setConsumptionTime(LocalDateTime.now());
             materialConsumptionRepository.save(consumption);
         }
@@ -1490,13 +1493,19 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Override
     @Transactional
-    public void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId) {
+    public void consumeBatchMaterial(String factoryId, String batchId, BigDecimal quantity, String productionPlanId, Long operatorId) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
         if (!batch.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权操作该批次")
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
+        }
+
+        // C-B1 fix: recordedBy 走 FK→users 必须真实操作人, 提前校验避免 INSERT 失败。
+        if (operatorId == null) {
+            throw new BusinessException(401, "无法识别操作人，无法记录消耗")
+                    .withHint("请重新登录后重试");
         }
 
         runConfiguredValidation(factoryId, "CONSUME",
@@ -1521,9 +1530,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 batchId, quantity, batch.getReservedQuantity(), batch.getUsedQuantity());
 
         // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 500。
-        // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO, recordedBy 兜底 0L。
+        // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO。recordedBy=真实操作人(上方已校验非空)。
         BigDecimal consumeUnitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
-        Long consumeRecordedBy = SecurityUtils.getCurrentUserId();
         MaterialConsumption consumption = new MaterialConsumption();
         consumption.setFactoryId(factoryId);
         consumption.setProductionPlanId(productionPlanId);
@@ -1531,7 +1539,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         consumption.setQuantity(quantity);
         consumption.setUnitPrice(consumeUnitPrice);
         consumption.setTotalCost(quantity.multiply(consumeUnitPrice));
-        consumption.setRecordedBy(consumeRecordedBy != null ? consumeRecordedBy : 0L);
+        consumption.setRecordedBy(operatorId);
         consumption.setConsumptionTime(LocalDateTime.now());
         materialConsumptionRepository.save(consumption);
 
