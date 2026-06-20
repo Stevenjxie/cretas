@@ -457,10 +457,26 @@ class StoreKpiDashboardHandler(AbstractSectionHandler):
         return self.ok(request, data=data, started=started)
 
     async def _self_query(self, factory_id, date_range, role, store_name):
-        pool = await _get_pg_pool()
-        if pool is None:
-            raise RuntimeError("smartbi_db pool unavailable")
-        return await compute_store_kpi_dashboard(pool, factory_id, date_range, role, store_name)
+        # compute() 在 FastAPI threadpool 线程里用 asyncio.run() 跑本协程 → 新事件循环。
+        # 但 _get_pg_pool() 返回的共享池是在主 uvicorn 事件循环上建的 → 其连接/Future 绑定主循环,
+        # 在新循环里使用会 "got Future attached to a different loop" 崩溃 (店长 KPI 看板整块挂)。
+        # 修: 在当前(新)事件循环里建一个短命池, 用完即关; 跨循环问题消除。
+        # 显式 set_factory_id 保证 setup 回调把 app.factory_id GUC 设对 (RLS), 不依赖 contextvar 跨线程传播。
+        import asyncpg
+        from smartbi.config import get_settings
+        from smartbi import tenant_ctx
+        settings = get_settings()
+        pg_url = settings.postgres_url
+        if not pg_url:
+            raise RuntimeError("smartbi_db url unavailable")
+        tenant_ctx.set_factory_id(factory_id)
+        pool = await asyncpg.create_pool(
+            pg_url, min_size=1, max_size=2, setup=tenant_ctx.set_pg_connection_tenant,
+        )
+        try:
+            return await compute_store_kpi_dashboard(pool, factory_id, date_range, role, store_name)
+        finally:
+            await pool.close()
 
     @staticmethod
     def _resolve_range(params: dict) -> tuple:
