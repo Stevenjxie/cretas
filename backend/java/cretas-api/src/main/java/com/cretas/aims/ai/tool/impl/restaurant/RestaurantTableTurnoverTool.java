@@ -96,7 +96,8 @@ public class RestaurantTableTurnoverTool extends AbstractBusinessTool {
             dailyList.add(row);
         }
 
-        double avgTurnover = validDays > 0 ? totalTurnover / days : 0;
+        // 用 validDays (有销售的营业日) 做分母, 不用 days (整窗口) — 否则歇业/无销售日稀释平均翻台率。
+        double avgTurnover = validDays > 0 ? totalTurnover / validDays : 0;
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", String.format("近%d天（%s 至 %s）", days, startDate, endDate));
