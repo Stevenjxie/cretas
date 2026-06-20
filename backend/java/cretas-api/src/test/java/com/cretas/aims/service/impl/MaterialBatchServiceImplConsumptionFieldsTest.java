@@ -40,7 +40,8 @@ import static org.mockito.Mockito.when;
 /**
  * C-B1 回归: useBatchMaterial / consumeBatchMaterial 创建 MaterialConsumption 时
  * 必须补齐 NOT NULL 字段 (unitPrice / totalCost / recordedBy), 否则 INSERT 失败 (DB 500)。
- * 无 SecurityContext 时 recordedBy 兜底 0L (镜像 FactoryMaterialRequisitionServiceImpl 约定)。
+ * recordedBy 取调用层线程进来的 operatorId (真实操作人, FK→users); operatorId 为 null
+ * 时抛 401 (不写假 actor / 不撞 FK), 见 *RejectsNullOperator 用例。
  */
 @ExtendWith(MockitoExtension.class)
 class MaterialBatchServiceImplConsumptionFieldsTest {
@@ -188,6 +189,20 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
         assertThatThrownBy(() ->
                 service.useBatchMaterial("F006", "MB-X3", new BigDecimal("10"), "PP-1", 42L))
                 .isInstanceOf(BusinessException.class);
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
+    void useBatchMaterialRejectsInspectingBatch() {
+        // 质检中批次 (待放行) 不得投产 — 食品安全 incoming QC gate (审计 follow-up)。
+        MaterialBatch batch = batch("MB-X4", "RM-1", "100", "0", "0", "8.50");
+        batch.setStatus(MaterialBatchStatus.INSPECTING);
+        when(materialBatchRepository.findByIdAndFactoryId("MB-X4", "F006")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() ->
+                service.useBatchMaterial("F006", "MB-X4", new BigDecimal("10"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getMessage()).contains("不可用于生产"));
         verify(materialConsumptionRepository, never()).save(any());
     }
 
