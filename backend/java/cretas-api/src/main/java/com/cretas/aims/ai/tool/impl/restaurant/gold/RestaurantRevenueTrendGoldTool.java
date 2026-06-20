@@ -110,12 +110,25 @@ public class RestaurantRevenueTrendGoldTool extends GoldBackedRestaurantTool {
             }
         }
 
-        // First→last month-over-month direction (环比 over the whole span).
+        // 排除当前进行中的月份 (尚未结束, 营收只是月初部分) 再算趋势/环比 —— 否则
+        // (last - first)/first 把"半个月 vs 整月"当成断崖式下跌 (实测 -100%)。
+        // 展示的 byMonth 仍保留当前月 (标"进行中"), 但趋势方向/环比% 只用已完结月份。
+        String curMonthPrefix = java.time.YearMonth.now().toString(); // e.g. "2026-06"
+        boolean lastIsPartial = !byMonth.isEmpty()
+                && byMonth.get(byMonth.size() - 1).get("月份") != null
+                && byMonth.get(byMonth.size() - 1).get("月份").toString().startsWith(curMonthPrefix);
+        if (lastIsPartial) {
+            byMonth.get(byMonth.size() - 1).put("进行中", true);
+        }
+        List<Map<String, Object>> completed = (lastIsPartial && byMonth.size() >= 2)
+                ? byMonth.subList(0, byMonth.size() - 1) : byMonth;
+
+        // First→last month-over-month direction (环比 over the whole span, 已完结月份).
         String momDirection = "持平";
         double momPct = 0.0;
-        if (byMonth.size() >= 2) {
-            double first = ((Number) byMonth.get(0).get("营收")).doubleValue();
-            double last = ((Number) byMonth.get(byMonth.size() - 1).get("营收")).doubleValue();
+        if (completed.size() >= 2) {
+            double first = ((Number) completed.get(0).get("营收")).doubleValue();
+            double last = ((Number) completed.get(completed.size() - 1).get("营收")).doubleValue();
             if (first > 0) {
                 momPct = Math.round(((last - first) / first) * 1000.0) / 10.0; // 1 decimal %
             }
@@ -126,12 +139,12 @@ public class RestaurantRevenueTrendGoldTool extends GoldBackedRestaurantTool {
             }
         }
 
-        // Latest-vs-previous month 环比 (last two months) — the most common "环比" ask.
+        // Latest-vs-previous month 环比 (last two 已完结 months) — the most common "环比" ask.
         String latestMomDirection = null;
         double latestMomPct = 0.0;
-        if (byMonth.size() >= 2) {
-            double prev = ((Number) byMonth.get(byMonth.size() - 2).get("营收")).doubleValue();
-            double last = ((Number) byMonth.get(byMonth.size() - 1).get("营收")).doubleValue();
+        if (completed.size() >= 2) {
+            double prev = ((Number) completed.get(completed.size() - 2).get("营收")).doubleValue();
+            double last = ((Number) completed.get(completed.size() - 1).get("营收")).doubleValue();
             if (prev > 0) {
                 latestMomPct = Math.round(((last - prev) / prev) * 1000.0) / 10.0;
             }
