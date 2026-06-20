@@ -1,0 +1,230 @@
+<!--
+  成品出厂核算 (M67 demo)
+  复用现成后端 GET /production/orders/{orderId}/yield-summary (OrderYieldController)
+  展示客户 3 个核心数: 出成率 / 单盒成本 / 单盒人工 + 逐道出成率 + 成本四拆 + 批次溯源桑基图
+-->
+<template>
+  <div class="m67-page">
+    <div class="m67-header">
+      <div>
+        <h2>成品出厂核算</h2>
+        <p class="sub">全链路出成率 · 单盒成本 · 人工成本 (按订单批次)</p>
+      </div>
+      <div class="ctrls">
+        <el-input v-model="orderId" placeholder="订单号" style="width: 220px" />
+        <span class="gw">单盒克重</span>
+        <el-input-number v-model="gramsPerBox" :min="1" :max="5000" :step="10" controls-position="right" style="width: 130px" />
+        <span class="gw">克</span>
+        <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      </div>
+    </div>
+
+    <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="mb" />
+
+    <template v-if="data">
+      <!-- 3 核心数 + 盒数 -->
+      <div class="kpis">
+        <KPICard title="整批出成率" :value="pct(data.overallYieldRate)" unit="%" format="number" :precision="1"
+                 icon="TrendCharts" :target-value="60" subtitle="成品净重 ÷ 原料投入" />
+        <KPICard title="单盒成本" :value="perBox(data.totalCost)" unit="元/盒" format="currency" :precision="2"
+                 icon="Coin" subtitle="总成本 ÷ 盒数" />
+        <KPICard title="单盒人工" :value="perBox(data.totalLaborCost)" unit="元/盒" format="currency" :precision="2"
+                 icon="User" subtitle="总人工 ÷ 盒数" />
+        <KPICard title="产出盒数" :value="boxCount" unit="盒" format="number" :precision="0"
+                 icon="Box" :subtitle="`末道产出 ${num(data.totalLastOutput)} ${data.lastOutputUnit || 'kg'}`" />
+      </div>
+
+      <el-row :gutter="16" class="mb">
+        <!-- 逐道出成率 -->
+        <el-col :span="14">
+          <el-card shadow="never">
+            <template #header><b>逐道出成率</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常)</span></template>
+            <div v-for="s in steps" :key="s.processOrder" class="step">
+              <div class="step-top">
+                <span class="pname">{{ s.processName || ('工序' + s.processOrder) }}</span>
+                <span class="qty">{{ num(s.totalInput) }} → {{ num(s.totalOutput) }} {{ s.outputUnit || 'kg' }}</span>
+                <span class="yr" :class="yieldClass(s.yieldRate)">{{ s.yieldRate == null ? '—' : (s.yieldRate * 100).toFixed(1) + '%' }}</span>
+              </div>
+              <el-progress :percentage="barPct(s.yieldRate)" :status="yieldStatus(s.yieldRate)" :stroke-width="12" :show-text="false" />
+            </div>
+          </el-card>
+        </el-col>
+
+        <!-- 单盒成本拆解 -->
+        <el-col :span="10">
+          <el-card shadow="never">
+            <template #header><b>单盒成本拆解</b></template>
+            <div class="total-box">¥{{ perBox(data.totalCost).toFixed(2) }}<span>/盒</span></div>
+            <div v-for="c in costBreakdown" :key="c.name" class="cost-row">
+              <span class="cdot" :style="{ background: c.color }"></span>
+              <span class="cname">{{ c.name }}</span>
+              <el-progress :percentage="c.share" :color="c.color" :stroke-width="14" style="flex:1" />
+              <span class="cval">¥{{ c.perBox.toFixed(2) }}</span>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <!-- 批次溯源桑基图 -->
+      <el-card shadow="never">
+        <template #header><b>批次溯源 (原料 → 各道工序 → 成品, 宽度=物料重量kg)</b></template>
+        <div ref="sankeyEl" style="height: 320px"></div>
+      </el-card>
+    </template>
+
+    <el-empty v-else-if="!loading && !error" description="输入订单号后点刷新" />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { Refresh } from '@element-plus/icons-vue';
+import echarts from '@/utils/echarts';
+import { useAuthStore } from '@/store/modules/auth';
+import { get } from '@/api/request';
+import KPICard from '@/components/smartbi/KPICard.vue';
+
+interface Step {
+  processOrder: number; processName?: string;
+  totalInput?: number; totalOutput?: number; outputUnit?: string;
+  yieldRate?: number; laborCost?: number; materialCost?: number;
+}
+interface YieldSummary {
+  orderId: string; overallYieldRate?: number;
+  totalFirstInput?: number; totalLastOutput?: number; lastOutputUnit?: string;
+  totalLaborCost?: number; totalMaterialCost?: number; totalCost?: number;
+  batches?: Array<{ steps?: Step[]; cumulativeYieldRate?: number }>;
+}
+
+const authStore = useAuthStore();
+const factoryId = computed(() => authStore.factoryId);
+const orderId = ref('SO-M67DEMO-001');
+const gramsPerBox = ref(100);
+const loading = ref(false);
+const error = ref('');
+const data = ref<YieldSummary | null>(null);
+const sankeyEl = ref<HTMLElement | null>(null);
+let chart: any = null;
+
+const steps = computed<Step[]>(() => {
+  const b = data.value?.batches?.[0];
+  return (b?.steps || []).slice().sort((a, c) => (a.processOrder || 0) - (c.processOrder || 0));
+});
+const boxCount = computed(() => {
+  const out = data.value?.totalLastOutput;
+  if (out == null || !gramsPerBox.value) return 0;
+  return Math.round((out * 1000) / gramsPerBox.value);
+});
+
+const num = (v?: number | null) => (v == null ? '—' : Number(v).toFixed(1));
+const pct = (v?: number | null) => (v == null ? 0 : v * 100);
+const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / boxCount.value);
+
+const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
+const yieldStatus = (y?: number | null) => {
+  if (y == null) return 'info';
+  const p = y * 100;
+  if (p < 50) return 'exception';        // 损耗过大 → 红
+  if (p > 130) return 'warning';          // 异常增重 → 黄
+  return 'success';
+};
+const yieldClass = (y?: number | null) => {
+  if (y == null) return 'y-na';
+  const p = y * 100;
+  if (p < 50) return 'y-low';
+  if (p > 130) return 'y-high';
+  return 'y-ok';
+};
+
+const costBreakdown = computed(() => {
+  const d = data.value; if (!d) return [];
+  const st = steps.value;
+  const labor = d.totalLaborCost || 0;
+  const matTotal = d.totalMaterialCost || 0;
+  const rawMat = st.length ? (st[0].materialCost || 0) : 0;          // 首道(修油)= 原料
+  const pkgMat = st.length ? (st[st.length - 1].materialCost || 0) : 0; // 末道(包装)= 包装材料
+  const seasoning = Math.max(0, matTotal - rawMat - pkgMat);          // 其余(熟制)= 调料
+  const total = (d.totalCost || 0) || 1;
+  const bc = boxCount.value || 1;
+  const rows = [
+    { name: '原料', amount: rawMat, color: '#5470c6' },
+    { name: '人工', amount: labor, color: '#91cc75' },
+    { name: '调料', amount: seasoning, color: '#fac858' },
+    { name: '包装', amount: pkgMat, color: '#ee6666' },
+  ];
+  return rows.map((r) => ({ ...r, share: Math.round((r.amount / total) * 100), perBox: r.amount / bc }));
+});
+
+function renderSankey() {
+  if (!sankeyEl.value || !steps.value.length) return;
+  if (!chart) chart = echarts.init(sankeyEl.value);
+  const st = steps.value;
+  const nodes: { name: string }[] = [{ name: '原料' }];
+  st.forEach((s) => nodes.push({ name: s.processName || ('工序' + s.processOrder) }));
+  const links: { source: string; target: string; value: number }[] = [];
+  let prev = '原料';
+  st.forEach((s) => {
+    const cur = s.processName || ('工序' + s.processOrder);
+    links.push({ source: prev, target: cur, value: Number(s.totalInput || 0) });
+    prev = cur;
+  });
+  chart.setOption({
+    tooltip: { trigger: 'item', formatter: (p: any) => p.dataType === 'edge' ? `${p.data.source} → ${p.data.target}: ${p.data.value} kg` : p.name },
+    series: [{
+      type: 'sankey', left: 20, right: 120, top: 20, bottom: 20,
+      emphasis: { focus: 'adjacency' },
+      lineStyle: { color: 'gradient', opacity: 0.5 },
+      label: { fontSize: 12 },
+      data: nodes, links,
+    }],
+  });
+  chart.resize();
+}
+
+async function load() {
+  if (!factoryId.value || !orderId.value) return;
+  loading.value = true; error.value = '';
+  try {
+    const resp = await get<YieldSummary>(`/${factoryId.value}/production/orders/${orderId.value}/yield-summary`);
+    if (resp.success && resp.data) {
+      data.value = resp.data;
+      await nextTick();
+      renderSankey();
+    } else {
+      error.value = resp.message || '加载失败';
+    }
+  } catch (e: any) {
+    error.value = e?.response?.data?.message || e?.message || '加载失败，请检查订单号';
+  } finally {
+    loading.value = false;
+  }
+}
+
+const onResize = () => chart?.resize();
+onMounted(() => { window.addEventListener('resize', onResize); load(); });
+onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.dispose(); });
+</script>
+
+<style scoped>
+.m67-page { padding: 16px; }
+.m67-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
+.m67-header h2 { margin: 0; }
+.sub { color: #909399; margin: 4px 0 0; font-size: 13px; }
+.ctrls { display: flex; align-items: center; gap: 8px; }
+.gw { color: #909399; font-size: 13px; }
+.mb { margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+.hint { color: #909399; font-size: 12px; margin-left: 8px; }
+.step { margin-bottom: 14px; }
+.step-top { display: flex; align-items: center; margin-bottom: 4px; }
+.pname { font-weight: 600; width: 64px; }
+.qty { color: #606266; font-size: 13px; flex: 1; }
+.yr { font-weight: 700; }
+.y-ok { color: #67c23a; } .y-low { color: #f56c6c; } .y-high { color: #e6a23c; } .y-na { color: #909399; }
+.total-box { font-size: 30px; font-weight: 800; margin-bottom: 12px; }
+.total-box span { font-size: 14px; color: #909399; font-weight: 400; }
+.cost-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cdot { width: 10px; height: 10px; border-radius: 50%; }
+.cname { width: 40px; font-size: 13px; }
+.cval { width: 64px; text-align: right; font-weight: 600; }
+</style>
