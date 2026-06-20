@@ -58,13 +58,29 @@ public class DisposalRecordService implements IDisposalRecordService {
     }
 
     /**
+     * 多租户隔离守卫: 报废记录必须属于路径 factoryId, 否则 403。
+     *
+     * <p>修复 (审计 round2): 这些按 id 加载记录的写/读方法此前不校验记录归属工厂 →
+     * JwtAuthInterceptor 只验用户拥有路径 factoryId, 但记录 id 可枚举(Long 自增) →
+     * F006 用户可读/改/审批/删除/提交其它工厂的报废记录 (跨租户)。同
+     * feedback_interceptor_excluded_path_factory_guard_gap。</p>
+     */
+    private void assertSameFactory(DisposalRecord record, String factoryId) {
+        if (record.getFactoryId() == null || !record.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该报废记录")
+                    .withHint("该记录不属于当前工厂");
+        }
+    }
+
+    /**
      * 审批报废记录
      */
     @Override
     @Transactional
-    public DisposalRecord approveDisposal(Long id, Integer approverId, String approverName) {
+    public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId, String approverName) {
         DisposalRecord record = disposalRecordRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
+        assertSameFactory(record, factoryId);  // 多租户隔离
 
         // 幂等防重 (2026-06-12, Codex Gate2): 已审批不可重复审批. 审批触发库存扣减,
         // 重复 approve 会重复扣库存 (旧代码无任何状态门, 任意次调用都成功). 返 409.
@@ -79,11 +95,12 @@ public class DisposalRecordService implements IDisposalRecordService {
     }
 
     /**
-     * 根据ID获取报废记录
+     * 根据ID获取报废记录 (按工厂过滤, 跨租户返空 → 404)
      */
     @Override
-    public Optional<DisposalRecord> getById(Long id) {
-        return disposalRecordRepository.findById(id);
+    public Optional<DisposalRecord> getById(String factoryId, Long id) {
+        return disposalRecordRepository.findById(id)
+                .filter(r -> factoryId != null && factoryId.equals(r.getFactoryId()));
     }
 
     /**
@@ -166,9 +183,10 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     @Override
     @Transactional
-    public DisposalRecord updateDisposalRecord(Long id, DisposalRecord updateData) {
+    public DisposalRecord updateDisposalRecord(String factoryId, Long id, DisposalRecord updateData) {
         DisposalRecord existing = disposalRecordRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("报废记录不存在: " + id));
+        assertSameFactory(existing, factoryId);  // 多租户隔离
 
         // 只能更新未审批的记录
         if (existing.getIsApproved()) {
@@ -209,9 +227,10 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     @Override
     @Transactional
-    public void deleteDisposalRecord(Long id) {
+    public void deleteDisposalRecord(String factoryId, Long id) {
         DisposalRecord record = disposalRecordRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("报废记录不存在: " + id));
+        assertSameFactory(record, factoryId);  // 多租户隔离
 
         if (record.getIsApproved()) {
             throw new IllegalStateException("已审批的记录不能删除");
@@ -230,6 +249,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     public String submitForApproval(Long id, String factoryId, Long userId) {
         DisposalRecord record = disposalRecordRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
+        assertSameFactory(record, factoryId);  // 多租户隔离 (此前 factoryId 仅用于 workflow context, 未校验归属)
 
         // 幂等防重：已在工作流中则 409
         if (record.getWorkflowInstanceId() != null) {

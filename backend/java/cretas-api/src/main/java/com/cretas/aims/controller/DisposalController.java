@@ -85,7 +85,7 @@ public class DisposalController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "报废记录ID", example = "1", required = true) Long id) {
         try {
-            return disposalRecordService.getById(id)
+            return disposalRecordService.getById(factoryId, id)
                     .map(record -> ResponseEntity.ok(Map.of(
                         "success", true,
                         "data", record
@@ -141,7 +141,7 @@ public class DisposalController {
             @Valid @RequestBody @Parameter(description = "更新数据，包含需要修改的字段") UpdateDisposalRecordRequest request) {
         try {
             DisposalRecord updateData = toUpdateDisposalRecord(request);
-            DisposalRecord updated = disposalRecordService.updateDisposalRecord(id, updateData);
+            DisposalRecord updated = disposalRecordService.updateDisposalRecord(factoryId, id, updateData);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", updated,
@@ -177,7 +177,7 @@ public class DisposalController {
             @Valid @RequestBody @Parameter(description = "审批信息") ApproveDisposalRequest request) {
         try {
             DisposalRecord approved = disposalRecordService.approveDisposal(
-                    id, request.getApproverId(), request.getApproverName());
+                    factoryId, id, request.getApproverId(), request.getApproverName());
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", approved,
@@ -203,7 +203,7 @@ public class DisposalController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "报废记录ID", example = "1", required = true) Long id) {
         try {
-            disposalRecordService.deleteDisposalRecord(id);
+            disposalRecordService.deleteDisposalRecord(factoryId, id);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "message", "报废记录删除成功"
