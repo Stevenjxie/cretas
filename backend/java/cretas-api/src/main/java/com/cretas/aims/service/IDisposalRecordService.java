@@ -33,15 +33,16 @@ public interface IDisposalRecordService {
      * @param approverName 审批人姓名
      * @return 审批后的记录
      */
-    DisposalRecord approveDisposal(Long id, Integer approverId, String approverName);
+    DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId, String approverName);
 
     /**
-     * 根据ID获取报废记录
+     * 根据ID获取报废记录 (按 factoryId 过滤, 多租户隔离)
      *
+     * @param factoryId 工厂ID
      * @param id 记录ID
-     * @return 报废记录（可选）
+     * @return 报废记录（可选, 跨租户返空）
      */
-    Optional<DisposalRecord> getById(Long id);
+    Optional<DisposalRecord> getById(String factoryId, Long id);
 
     /**
      * 分页查询工厂报废记录
@@ -117,14 +118,15 @@ public interface IDisposalRecordService {
      * @param updateData 更新数据
      * @return 更新后的记录
      */
-    DisposalRecord updateDisposalRecord(Long id, DisposalRecord updateData);
+    DisposalRecord updateDisposalRecord(String factoryId, Long id, DisposalRecord updateData);
 
     /**
      * 删除报废记录（软删除）
      *
+     * @param factoryId 工厂ID
      * @param id 记录ID
      */
-    void deleteDisposalRecord(Long id);
+    void deleteDisposalRecord(String factoryId, Long id);
 
     /**
      * SP12 §5.3: 提交报废记录至审批工作流。

@@ -52,14 +52,14 @@ class DisposalControllerApproveTest {
         approved.setIsApproved(true);
         approved.setApprovedBy(1);
         approved.setApprovedByName("张三");
-        when(disposalRecordService.approveDisposal(eq(42L), eq(1), eq("张三")))
+        when(disposalRecordService.approveDisposal(eq("F001"), eq(42L), eq(1), eq("张三")))
                 .thenReturn(approved);
 
         ResponseEntity<?> resp = controller.approveDisposal("F001", 42L, req);
 
         assertNotNull(resp);
         // Service called with typed args extracted from DTO (replacing Map.get cast)
-        Mockito.verify(disposalRecordService).approveDisposal(42L, 1, "张三");
+        Mockito.verify(disposalRecordService).approveDisposal("F001", 42L, 1, "张三");
     }
 
     @Test
@@ -71,7 +71,7 @@ class DisposalControllerApproveTest {
         DisposalRecord approved = new DisposalRecord();
         approved.setId(99L);
         approved.setIsApproved(true);
-        when(disposalRecordService.approveDisposal(eq(99L), eq(2), eq("李四")))
+        when(disposalRecordService.approveDisposal(eq("F002"), eq(99L), eq(2), eq("李四")))
                 .thenReturn(approved);
 
         ResponseEntity<?> resp = controller.approveDisposal("F002", 99L, req);

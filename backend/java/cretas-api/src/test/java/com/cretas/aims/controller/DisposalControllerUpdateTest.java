@@ -49,13 +49,13 @@ class DisposalControllerUpdateTest {
         // Empty wire body — every field is optional per UpdateDisposalRecordRequest.
         UpdateDisposalRecordRequest req = new UpdateDisposalRecordRequest();
 
-        when(disposalRecordService.updateDisposalRecord(eq(7L), any(DisposalRecord.class)))
+        when(disposalRecordService.updateDisposalRecord(eq("F001"), eq(7L), any(DisposalRecord.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
         ResponseEntity<?> resp = controller.updateDisposalRecord("F001", 7L, req);
 
         ArgumentCaptor<DisposalRecord> captor = ArgumentCaptor.forClass(DisposalRecord.class);
-        Mockito.verify(disposalRecordService).updateDisposalRecord(eq(7L), captor.capture());
+        Mockito.verify(disposalRecordService).updateDisposalRecord(eq("F001"), eq(7L), captor.capture());
         DisposalRecord mapped = captor.getValue();
 
         assertNotNull(resp);
@@ -94,13 +94,13 @@ class DisposalControllerUpdateTest {
         req.setEvidenceImages("https://cdn.example.com/c.jpg");
         req.setNotes("供应商已确认接收");
 
-        when(disposalRecordService.updateDisposalRecord(eq(7L), any(DisposalRecord.class)))
+        when(disposalRecordService.updateDisposalRecord(eq("F001"), eq(7L), any(DisposalRecord.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
 
         ResponseEntity<?> resp = controller.updateDisposalRecord("F001", 7L, req);
 
         ArgumentCaptor<DisposalRecord> captor = ArgumentCaptor.forClass(DisposalRecord.class);
-        Mockito.verify(disposalRecordService).updateDisposalRecord(eq(7L), captor.capture());
+        Mockito.verify(disposalRecordService).updateDisposalRecord(eq("F001"), eq(7L), captor.capture());
         DisposalRecord mapped = captor.getValue();
 
         assertNotNull(resp);
