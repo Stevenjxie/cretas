@@ -1,0 +1,34 @@
+-- M67 卤牛肉 demo 数据 (喂现成 OrderYieldController.getOrderYieldSummary)
+-- 租户: DEMO_FACTORY (demo, 绝不碰 F006/六膳门 真客户)
+-- 链路: 修油→滚揉→焯水→熟制→气调→包装, 全 kg (出成率可比); 盒数(1787)在 batch.quantity
+-- 数据复刻客户 M67 v5.0 6-16 批真实出成率: 修油90.7/滚揉119.9(注水)/焯水72.8/熟制74/气调99.4 → 整批58.2%
+-- 幂等: 按 marker 'M67DEMO-' 删除自己的行再插入。FK 真实: created_by/worker_id=1635, customer=DF_c1, product_type=DF_pt10
+-- 跑法: PGPASSWORD=cretas123 psql -h 127.0.0.1 -U cretas_user -d cretas_prod_db -v ON_ERROR_STOP=1 -f m67_demo_seed.sql
+BEGIN;
+DELETE FROM production_reports WHERE factory_id='DEMO_FACTORY' AND batch_id IN (SELECT id FROM production_batches WHERE factory_id='DEMO_FACTORY' AND batch_number LIKE 'M67DEMO-%');
+DELETE FROM production_batches WHERE factory_id='DEMO_FACTORY' AND batch_number LIKE 'M67DEMO-%';
+DELETE FROM production_plans WHERE factory_id='DEMO_FACTORY' AND plan_number LIKE 'M67DEMO-%';
+DELETE FROM sales_orders WHERE factory_id='DEMO_FACTORY' AND order_number LIKE 'M67DEMO-%';
+
+INSERT INTO sales_orders(id,factory_id,order_number,customer_id,order_date,total_amount,status,created_by,created_at,updated_at,vflag,version)
+VALUES('SO-M67DEMO-001','DEMO_FACTORY','M67DEMO-SO-001','DF_c1','2026-06-16',15000,'COMPLETED',1635,NOW(),NOW(),'CREATED',0);
+
+INSERT INTO production_plans(id,factory_id,plan_number,product_type_id,planned_quantity,status,created_by,source_order_id,created_at,updated_at)
+VALUES('PP-M67DEMO-001','DEMO_FACTORY','M67DEMO-PP-001','DF_pt10',1787,'COMPLETED',1635,'SO-M67DEMO-001',NOW(),NOW());
+
+WITH b AS (
+  INSERT INTO production_batches(factory_id,batch_number,product_type_id,production_plan_id,quantity,unit,status,created_at,updated_at)
+  VALUES('DEMO_FACTORY','M67DEMO-PB-001','DF_pt10','PP-M67DEMO-001',1787,'盒','COMPLETED',NOW(),NOW())
+  RETURNING id
+)
+INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,created_at,updated_at,version)
+SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, NOW(),NOW(),0
+FROM b,(VALUES
+  (1,101::bigint,'修油',307.0,278.5,624.0,11666.0,1440,8),   -- 原料成本计在修油道 (307kg 牛肉)
+  (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2),         -- 注水增重 119.9%
+  (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1),
+  (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1),         -- 调料/卤汤成本计在熟制道
+  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3),
+  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4)        -- 包装材料成本计在包装道
+) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw);
+COMMIT;
