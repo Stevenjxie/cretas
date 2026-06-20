@@ -40,8 +40,8 @@ public class RdController {
 
     @RequirePermission({"rd:read_write"})
     @PostMapping("/requests/{requestId}/assign")
-    public ResponseEntity<?> assignRequest(@PathVariable String requestId, @RequestBody Map<String, Object> body) {
-        var req = sampleService.assignRequest(requestId, Long.valueOf(body.get("assignedTo").toString()));
+    public ResponseEntity<?> assignRequest(@PathVariable String factoryId, @PathVariable String requestId, @RequestBody Map<String, Object> body) {
+        var req = sampleService.assignRequest(factoryId, requestId, Long.valueOf(body.get("assignedTo").toString()));
         return ResponseEntity.ok(Map.of("success", true, "data", req));
     }
 

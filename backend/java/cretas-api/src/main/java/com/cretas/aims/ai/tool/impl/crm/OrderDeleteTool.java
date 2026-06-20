@@ -73,10 +73,10 @@ public class OrderDeleteTool extends AbstractBusinessTool {
         result.put("operation", operation);
 
         if ("DELETE".equalsIgnoreCase(operation)) {
-            workOrderService.deleteWorkOrder(orderId);
+            workOrderService.deleteWorkOrder(factoryId, orderId);
             result.put("message", "订单(ID: " + orderId + ")已删除");
         } else {
-            workOrderService.cancelWorkOrder(orderId, reason, userId);
+            workOrderService.cancelWorkOrder(factoryId, orderId, reason, userId);
             result.put("message", "订单(ID: " + orderId + ")已取消");
         }
 

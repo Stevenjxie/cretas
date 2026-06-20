@@ -51,37 +51,37 @@ public interface WorkOrderService {
     /**
      * 更新工单
      */
-    WorkOrder updateWorkOrder(String id, WorkOrder updateData);
+    WorkOrder updateWorkOrder(String factoryId, String id, WorkOrder updateData);
 
     /**
      * 更新工单状态
      */
-    WorkOrder updateStatus(String id, String status, Long updatedBy);
+    WorkOrder updateStatus(String factoryId, String id, String status, Long updatedBy);
 
     /**
      * 分配工单给用户
      */
-    WorkOrder assignWorkOrder(String id, Long assignedTo, Long updatedBy);
+    WorkOrder assignWorkOrder(String factoryId, String id, Long assignedTo, Long updatedBy);
 
     /**
      * 开始工单
      */
-    WorkOrder startWorkOrder(String id, Long updatedBy);
+    WorkOrder startWorkOrder(String factoryId, String id, Long updatedBy);
 
     /**
      * 完成工单
      */
-    WorkOrder completeWorkOrder(String id, Long updatedBy);
+    WorkOrder completeWorkOrder(String factoryId, String id, Long updatedBy);
 
     /**
      * 取消工单
      */
-    WorkOrder cancelWorkOrder(String id, String reason, Long updatedBy);
+    WorkOrder cancelWorkOrder(String factoryId, String id, String reason, Long updatedBy);
 
     /**
      * 删除工单（软删除）
      */
-    void deleteWorkOrder(String id);
+    void deleteWorkOrder(String factoryId, String id);
 
     /**
      * 查询用户的工单
