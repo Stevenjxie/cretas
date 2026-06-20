@@ -115,6 +115,15 @@ async def yoy_comparison(request: YoYRequest):
             )
 
         async with pool.acquire() as conn:
+            # Explicitly set tenant GUC — asyncpg pool `setup` runs only on
+            # connection creation (not per-acquire), so the GUC may be stale.
+            # smart_bi_pg_excel_uploads has FORCE ROW LEVEL SECURITY; without
+            # the correct factory_id the SELECT returns 0 rows silently.
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)",
+                request.factory_id
+            )
+
             # 1. Load current upload metadata
             current_meta = await conn.fetchrow(
                 "SELECT id, file_name, sheet_name, created_at FROM smart_bi_pg_excel_uploads WHERE id = $1",
