@@ -10,6 +10,7 @@ import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialBatchExportDTO;
 import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
 import com.cretas.aims.utils.ExcelUtil;
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.MaterialConsumption;
@@ -1308,11 +1309,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // 记录消耗（如果提供了生产计划ID）
         if (productionPlanId != null) {
+            // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 500。
+            // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO, recordedBy 兜底 0L。
+            BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+            Long recordedBy = SecurityUtils.getCurrentUserId();
             MaterialConsumption consumption = new MaterialConsumption();
             consumption.setFactoryId(factoryId);
             consumption.setProductionPlanId(productionPlanId);
             consumption.setBatchId(batchId);
             consumption.setQuantity(quantity);
+            consumption.setUnitPrice(unitPrice);
+            consumption.setTotalCost(quantity.multiply(unitPrice));
+            consumption.setRecordedBy(recordedBy != null ? recordedBy : 0L);
             consumption.setConsumptionTime(LocalDateTime.now());
             materialConsumptionRepository.save(consumption);
         }
@@ -1512,11 +1520,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         log.info("消耗批次材料成功: batchId={}, quantity={}, reservedRemaining={}, usedTotal={}",
                 batchId, quantity, batch.getReservedQuantity(), batch.getUsedQuantity());
 
+        // C-B1 fix: 补齐 NOT NULL 字段 (unitPrice/totalCost/recordedBy), 否则 INSERT 失败 500。
+        // 镜像 FactoryMaterialRequisitionServiceImpl 既有约定: 批次单价兜底 ZERO, recordedBy 兜底 0L。
+        BigDecimal consumeUnitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
+        Long consumeRecordedBy = SecurityUtils.getCurrentUserId();
         MaterialConsumption consumption = new MaterialConsumption();
         consumption.setFactoryId(factoryId);
         consumption.setProductionPlanId(productionPlanId);
         consumption.setBatchId(batchId);
         consumption.setQuantity(quantity);
+        consumption.setUnitPrice(consumeUnitPrice);
+        consumption.setTotalCost(quantity.multiply(consumeUnitPrice));
+        consumption.setRecordedBy(consumeRecordedBy != null ? consumeRecordedBy : 0L);
         consumption.setConsumptionTime(LocalDateTime.now());
         materialConsumptionRepository.save(consumption);
 
