@@ -58,9 +58,13 @@ public class ProductSampleServiceImpl implements ProductSampleService {
 
     @Override
     @Transactional
-    public RdRequest assignRequest(String requestId, Long assignedTo) {
+    public RdRequest assignRequest(String factoryId, String requestId, Long assignedTo) {
         RdRequest req = rdRequestRepository.findById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("研发需求不存在"));
+        // 多租户隔离 (审计 round5): 研发需求必须属于路径 factoryId, 否则 403。
+        if (req.getFactoryId() == null || !req.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该研发需求");
+        }
         req.setAssignedTo(assignedTo);
         req.setStatus("ASSIGNED");
         return rdRequestRepository.save(req);

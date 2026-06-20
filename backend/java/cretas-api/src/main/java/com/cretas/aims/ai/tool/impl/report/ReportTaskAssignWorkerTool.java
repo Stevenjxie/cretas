@@ -80,7 +80,7 @@ public class ReportTaskAssignWorkerTool extends AbstractBusinessTool {
             return result;
         }
 
-        WorkOrder updated = workOrderService.assignWorkOrder(workOrderId, assigneeId, userId);
+        WorkOrder updated = workOrderService.assignWorkOrder(factoryId, workOrderId, assigneeId, userId);
 
         Map<String, Object> result = new HashMap<>();
         result.put("workOrder", updated);

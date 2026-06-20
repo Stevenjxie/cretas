@@ -11,7 +11,7 @@ public interface ProductSampleService {
     // ==================== 研发需求 ====================
     RdRequest createRequest(String factoryId, String customerName, String customerContact,
                              String requirements, String urgency, Long submittedBy);
-    RdRequest assignRequest(String requestId, Long assignedTo);
+    RdRequest assignRequest(String factoryId, String requestId, Long assignedTo);
     Page<RdRequest> listRequests(String factoryId, String status, Pageable pageable);
 
     // ==================== 样品管理 ====================

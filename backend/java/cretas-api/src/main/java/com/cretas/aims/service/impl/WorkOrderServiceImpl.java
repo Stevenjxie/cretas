@@ -78,8 +78,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder updateWorkOrder(String id, WorkOrder updateData) {
-        WorkOrder existing = workOrderRepository.findById(id)
+    public WorkOrder updateWorkOrder(String factoryId, String id, WorkOrder updateData) {
+        WorkOrder existing = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
 
         if (updateData.getTitle() != null) existing.setTitle(updateData.getTitle());
@@ -96,8 +96,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder updateStatus(String id, String status, Long updatedBy) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public WorkOrder updateStatus(String factoryId, String id, String status, Long updatedBy) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setStatus(status);
         workOrder.setUpdatedBy(updatedBy);
@@ -107,8 +107,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder assignWorkOrder(String id, Long assignedTo, Long updatedBy) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public WorkOrder assignWorkOrder(String factoryId, String id, Long assignedTo, Long updatedBy) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setAssignedTo(assignedTo);
         workOrder.setUpdatedBy(updatedBy);
@@ -118,8 +118,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder startWorkOrder(String id, Long updatedBy) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public WorkOrder startWorkOrder(String factoryId, String id, Long updatedBy) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setStatus("IN_PROGRESS");
         workOrder.setActualStartTime(LocalDateTime.now());
@@ -130,8 +130,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder completeWorkOrder(String id, Long updatedBy) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public WorkOrder completeWorkOrder(String factoryId, String id, Long updatedBy) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setStatus("COMPLETED");
         workOrder.setActualEndTime(LocalDateTime.now());
@@ -153,8 +153,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public WorkOrder cancelWorkOrder(String id, String reason, Long updatedBy) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public WorkOrder cancelWorkOrder(String factoryId, String id, String reason, Long updatedBy) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setStatus("CANCELLED");
         workOrder.setRemarks((workOrder.getRemarks() != null ? workOrder.getRemarks() + "\n" : "")
@@ -166,8 +166,8 @@ public class WorkOrderServiceImpl implements WorkOrderService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void deleteWorkOrder(String id) {
-        WorkOrder workOrder = workOrderRepository.findById(id)
+    public void deleteWorkOrder(String factoryId, String id) {
+        WorkOrder workOrder = workOrderRepository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
                 .orElseThrow(() -> new RuntimeException("工单不存在: " + id));
         workOrder.setDeletedAt(LocalDateTime.now());
         workOrderRepository.save(workOrder);

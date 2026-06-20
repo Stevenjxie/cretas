@@ -225,7 +225,7 @@ public class WorkOrderController {
             @RequestBody @Parameter(description = "更新数据") WorkOrder updateData) {
         try {
             updateData.setUpdatedBy(userId);
-            WorkOrder updated = workOrderService.updateWorkOrder(id, updateData);
+            WorkOrder updated = workOrderService.updateWorkOrder(factoryId, id, updateData);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", updated,
@@ -252,7 +252,7 @@ public class WorkOrderController {
             @PathVariable @Parameter(description = "工单ID") String id,
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId) {
         try {
-            WorkOrder started = workOrderService.startWorkOrder(id, userId);
+            WorkOrder started = workOrderService.startWorkOrder(factoryId, id, userId);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", started,
@@ -279,7 +279,7 @@ public class WorkOrderController {
             @PathVariable @Parameter(description = "工单ID") String id,
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId) {
         try {
-            WorkOrder completed = workOrderService.completeWorkOrder(id, userId);
+            WorkOrder completed = workOrderService.completeWorkOrder(factoryId, id, userId);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", completed,
@@ -308,7 +308,7 @@ public class WorkOrderController {
             @RequestBody @Parameter(description = "取消原因") Map<String, String> body) {
         try {
             String reason = body.getOrDefault("reason", "");
-            WorkOrder cancelled = workOrderService.cancelWorkOrder(id, reason, userId);
+            WorkOrder cancelled = workOrderService.cancelWorkOrder(factoryId, id, reason, userId);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", cancelled,
@@ -337,7 +337,7 @@ public class WorkOrderController {
             @RequestBody @Parameter(description = "分配信息") Map<String, Long> body) {
         try {
             Long assignedTo = body.get("assignedTo");
-            WorkOrder assigned = workOrderService.assignWorkOrder(id, assignedTo, currentUserId);
+            WorkOrder assigned = workOrderService.assignWorkOrder(factoryId, id, assignedTo, currentUserId);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", assigned,
@@ -363,7 +363,7 @@ public class WorkOrderController {
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "工单ID") String id) {
         try {
-            workOrderService.deleteWorkOrder(id);
+            workOrderService.deleteWorkOrder(factoryId, id);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "message", "工单删除成功"

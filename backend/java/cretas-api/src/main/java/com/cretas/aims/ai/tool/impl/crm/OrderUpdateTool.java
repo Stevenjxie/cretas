@@ -70,13 +70,13 @@ public class OrderUpdateTool extends AbstractBusinessTool {
 
         WorkOrder updated;
         if (status != null && !status.isEmpty()) {
-            updated = workOrderService.updateStatus(orderId, status, userId);
+            updated = workOrderService.updateStatus(factoryId, orderId, status, userId);
         } else {
             WorkOrder updateData = new WorkOrder();
             if (description != null) {
                 updateData.setDescription(description);
             }
-            updated = workOrderService.updateWorkOrder(orderId, updateData);
+            updated = workOrderService.updateWorkOrder(factoryId, orderId, updateData);
         }
 
         Map<String, Object> result = new HashMap<>();
