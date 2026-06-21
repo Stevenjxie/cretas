@@ -23,9 +23,9 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import com.cretas.aims.annotation.RequirePermission;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -60,9 +60,13 @@ import java.util.stream.Collectors;
  * </ol>
  *
  * <h3>权限</h3>
+ * <p>指标是 KPI/分析数据 (analytics 模块), 故用 {@code @RequirePermission} 对齐 analytics 模块权限。
+ * 此前用 {@code @PreAuthorize} 但本项目未启用 Spring Security method security → no-op 失效守卫
+ * (indicator:read/write 权限也从未授予任何角色)。改用真实生效的 @RequirePermission + 既有 analytics 权限,
+ * 避免锁死 (analytics 已授予 platform_admin/factory_super_admin/dispatcher/production_manager 等)。</p>
  * <ul>
- *   <li>读取类 (GET): <code>@PreAuthorize("hasAuthority('indicator:read')")</code></li>
- *   <li>重算 (POST): <code>@PreAuthorize("hasAuthority('indicator:write') or hasRole('factory_super_admin')")</code></li>
+ *   <li>读取类 (GET): <code>@RequirePermission({"analytics:read", "analytics:read_write"})</code></li>
+ *   <li>重算 (POST): <code>@RequirePermission({"analytics:read_write"})</code></li>
  * </ul>
  *
  * <h3>多租户隔离</h3>
@@ -120,7 +124,7 @@ public class IndicatorController {
      * @return 指标列表
      */
     @GetMapping
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "列出工厂启用指标", description = "可选 ?category 过滤分类")
     public ApiResponse<List<IndicatorListResponse>> listIndicators(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
@@ -154,7 +158,7 @@ public class IndicatorController {
      * @return 指标树 (根节点列表)
      */
     @GetMapping("/tree")
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "完整指标树", description = "递归 children[] 结构")
     public ApiResponse<List<IndicatorTreeNodeResponse>> getTree(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
@@ -202,7 +206,7 @@ public class IndicatorController {
      * @throws BusinessException 指标不存在
      */
     @GetMapping("/{code}")
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "按 code 获取指标详情", description = "含 thresholds[]")
     public ApiResponse<IndicatorDetailResponse> getByCode(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
@@ -235,7 +239,7 @@ public class IndicatorController {
      * @return 计算结果 + cache hit + 来源
      */
     @GetMapping("/{code}/value")
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "计算指标当前值",
             description = "策略分发 REALTIME/CACHED/PRECOMPUTED; 不传时间窗默认当月")
     public ApiResponse<IndicatorValueResponse> getValue(
@@ -290,7 +294,7 @@ public class IndicatorController {
      * @return 分页快照列表
      */
     @GetMapping("/{code}/versions")
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "指标历史快照 (分页)", description = "用于趋势图; 默认 50 条/页, 上限 200")
     public ApiResponse<PageResponse<IndicatorVersion>> getVersions(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
@@ -352,7 +356,7 @@ public class IndicatorController {
      * @return 阈值列表
      */
     @GetMapping("/thresholds/{code}")
-    @PreAuthorize("hasAuthority('indicator:read')")
+    @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "取指标阈值规则", description = "GREEN/YELLOW/RED 三色预警")
     public ApiResponse<List<ThresholdResponse>> getThresholds(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
@@ -391,7 +395,7 @@ public class IndicatorController {
      * @return 重算后的取值响应
      */
     @PostMapping("/{code}/recompute")
-    @PreAuthorize("hasAuthority('indicator:write') or hasRole('factory_super_admin')")
+    @RequirePermission({"analytics:read_write"})
     @Operation(summary = "强制重算指标值",
             description = "绕过 CACHED TTL 直接调 Python; 需要 indicator:write 或 factory_super_admin")
     public ApiResponse<IndicatorValueResponse> recompute(
