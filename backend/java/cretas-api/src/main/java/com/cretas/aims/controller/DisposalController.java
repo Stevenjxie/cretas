@@ -2,14 +2,17 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.disposal.ApproveDisposalRequest;
 import com.cretas.aims.dto.disposal.CreateDisposalRecordRequest;
+import com.cretas.aims.dto.disposal.RejectDisposalRequest;
 import com.cretas.aims.dto.disposal.UpdateDisposalRecordRequest;
 import com.cretas.aims.entity.DisposalRecord;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.service.DisposalRecordService;
 import com.cretas.aims.util.ErrorSanitizer;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -165,26 +168,72 @@ public class DisposalController {
     }
 
     /**
-     * 审批报废记录
+     * 审批报废记录 (通过)。
+     *
+     * <p>F-BUG-1: 审批信息 (approverId/approverName) 不再来自请求体 (前端只传空 body 即可),
+     * 而由后端从 JWT token 取 (F-BUG-4)。F-BUG-5: 强制财务/工厂管理员角色 (service 层守卫)。
      */
     @RequirePermission({"warehouse:read_write"})
     @RequireModule("quality_inspection")
     @PutMapping("/{id}/approve")
-    @Operation(summary = "审批报废记录", description = "审批指定的报废记录，需要提供审批人信息。审批通过后记录状态变更为已审批，库存将相应减少")
+    @Operation(summary = "审批报废记录(通过)", description = "审批通过指定报废记录。审批人从登录态取, 需财务/工厂管理员角色。通过后状态变更为已批准, 库存相应减少")
     public ResponseEntity<?> approveDisposal(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "报废记录ID", example = "1", required = true) Long id,
-            @Valid @RequestBody @Parameter(description = "审批信息") ApproveDisposalRequest request) {
+            @Valid @RequestBody(required = false) @Parameter(description = "审批信息 (可选备注)") ApproveDisposalRequest request,
+            HttpServletRequest httpRequest) {
         try {
             DisposalRecord approved = disposalRecordService.approveDisposal(
-                    factoryId, id, request.getApproverId(), request.getApproverName());
+                    factoryId, id, extractApproverId(httpRequest), extractApproverName(httpRequest),
+                    extractRole(httpRequest));
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", approved,
                 "message", "报废记录审批成功"
             ));
+        } catch (BusinessException e) {
+            // 状态机/权限/幂等拒绝 (403/409 等) message 安全, 直接返回保留 HTTP code 语义。
+            log.warn("审批报废记录被拒绝: code={}, msg={}", e.getCode(), e.getMessage());
+            throw e;  // GlobalExceptionHandler 映射 code → HTTP status + actionHint
         } catch (Exception e) {
             log.error("审批报废记录失败", e);
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", ErrorSanitizer.sanitize(e)
+            ));
+        }
+    }
+
+    /**
+     * 拒绝报废记录。
+     *
+     * <p>F-BUG-2: 此前无 reject 端点, 前端 "拒绝" 错误地走 approve → 反而批准+扣库存。
+     * 新增独立 reject 端点 → REJECTED 状态, 不扣库存, 记拒绝原因。审批人从 token 取,
+     * 强制财务/工厂管理员角色。
+     */
+    @RequirePermission({"warehouse:read_write"})
+    @RequireModule("quality_inspection")
+    @PutMapping("/{id}/reject")
+    @Operation(summary = "拒绝报废记录", description = "拒绝指定报废记录。审批人从登录态取, 需财务/工厂管理员角色。拒绝后状态变更为已拒绝, 库存不变")
+    public ResponseEntity<?> rejectDisposal(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
+            @PathVariable @Parameter(description = "报废记录ID", example = "1", required = true) Long id,
+            @Valid @RequestBody @Parameter(description = "拒绝信息 (原因必填)") RejectDisposalRequest request,
+            HttpServletRequest httpRequest) {
+        try {
+            DisposalRecord rejected = disposalRecordService.rejectDisposal(
+                    factoryId, id, extractApproverId(httpRequest), extractApproverName(httpRequest),
+                    request.getReason(), extractRole(httpRequest));
+            return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", rejected,
+                "message", "报废记录已拒绝"
+            ));
+        } catch (BusinessException e) {
+            log.warn("拒绝报废记录被拒绝: code={}, msg={}", e.getCode(), e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("拒绝报废记录失败", e);
             return ResponseEntity.badRequest().body(Map.of(
                 "success", false,
                 "message", ErrorSanitizer.sanitize(e)
@@ -338,6 +387,34 @@ public class DisposalController {
                 "message", ErrorSanitizer.sanitize(e)
             ));
         }
+    }
+
+    // ===================================================================
+    // Token extraction (F-BUG-4): 审批人身份从 JWT 取, 非请求体。
+    // 与 StocktakeController 同模式 — 用 request.getAttribute (JwtAuthInterceptor 填),
+    // 非 SecurityContext (本项目 SecurityUtils.getCurrentUserId 永返 null)。
+    // ===================================================================
+
+    /** 审批人ID (entity approvedBy 为 Integer)。 */
+    private Integer extractApproverId(HttpServletRequest request) {
+        Object userIdObj = request.getAttribute("userId");
+        if (userIdObj instanceof Number) return ((Number) userIdObj).intValue();
+        return null;  // JWT 拦截器已校验 token 合法性; approvedBy 可空
+    }
+
+    /** 审批人姓名 (从 token username)。 */
+    private String extractApproverName(HttpServletRequest request) {
+        Object username = request.getAttribute("username");
+        return username != null ? username.toString() : null;
+    }
+
+    /** 调用方角色码 (用于财务角色守卫, F-BUG-5)。缺失抛 401。 */
+    private String extractRole(HttpServletRequest request) {
+        Object role = request.getAttribute("role");
+        if (role == null || role.toString().isBlank()) {
+            throw new BusinessException(401, "无法获取角色信息，请重新登录");
+        }
+        return role.toString();
     }
 
     // ===================================================================
