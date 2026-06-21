@@ -25,7 +25,7 @@
                  icon="TrendCharts" :target-value="60" subtitle="成品净重 ÷ 原料投入" />
         <KPICard title="单盒成本" :value="perBox(totalCostClosed)" unit="元/盒" format="currency" :precision="2"
                  icon="Coin" subtitle="含上游混批 traced 原料成本 ÷ 盒数" />
-        <KPICard title="单盒人工" :value="perBox(data.totalLaborCost)" unit="元/盒" format="currency" :precision="2"
+        <KPICard title="单盒人工" :value="perBox(cb?.laborCost ?? data.totalLaborCost)" unit="元/盒" format="currency" :precision="2"
                  icon="User" subtitle="总人工 ÷ 盒数" />
         <KPICard title="产出盒数" :value="boxCount" unit="盒" format="number" :precision="0"
                  icon="Box" :subtitle="`末道产出 ${num(data.totalLastOutput)} ${data.lastOutputUnit || 'kg'}`" />

@@ -90,7 +90,9 @@ public class OrderCostBreakdownService {
                 boxCount += b.getQuantity().intValue();
             }
             for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId)) {
-                BigDecimal[] leaf = traceCost(factoryId, c, 1);
+                java.util.Set<Long> visited = new java.util.HashSet<>();
+                visited.add(b.getId());   // 起点批次入环检测集
+                BigDecimal[] leaf = traceCost(factoryId, c, 1, visited);
                 BigDecimal cost = leaf[0];
                 int depth = leaf[1].intValue();
                 raw = raw.add(cost);
@@ -142,17 +144,25 @@ public class OrderCostBreakdownService {
      * T1 递归回溯: 返回 [该消耗回溯到的成本, 谱系深度].
      * 上游批次由生产批次产出且有消耗 → 递归取其上游成本和 (回溯到更上游); 否则叶子 = consumption.totalCost。
      */
-    private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth) {
+    private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
         BigDecimal own = nz(c.getTotalCost());
-        if (depth >= MAX_DEPTH || c.getBatchId() == null) {
+        if (c.getBatchId() == null) {
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        if (depth >= MAX_DEPTH) {
+            log.warn("[M67CostBreakdown] traceCost 达 MAX_DEPTH={} (factory={}, batchId={}) — 按叶子截断, 疑似超深链/环", MAX_DEPTH, factoryId, c.getBatchId());
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
         }
         MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
         if (mb == null || !"PRODUCTION_BATCH".equalsIgnoreCase(mb.getSourceDocType()) || mb.getSourceDocId() == null) {
-            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};   // 叶子
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};   // 叶子 (原料/外购)
         }
         Long upstreamBatchId = parseLong(mb.getSourceDocId());
         if (upstreamBatchId == null) {
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        if (!visited.add(upstreamBatchId)) {   // 环检测: 该上游批次已在当前回溯路径
+            log.warn("[M67CostBreakdown] 检测到批次谱系环 (factory={}, upstreamBatchId={}) — 截断防重复计成本", factoryId, upstreamBatchId);
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
         }
         List<MaterialConsumption> up = consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId);
@@ -162,7 +172,7 @@ public class OrderCostBreakdownService {
         BigDecimal sum = BigDecimal.ZERO;
         int maxChildDepth = depth;
         for (MaterialConsumption u : up) {
-            BigDecimal[] r = traceCost(factoryId, u, depth + 1);
+            BigDecimal[] r = traceCost(factoryId, u, depth + 1, visited);
             sum = sum.add(r[0]);
             maxChildDepth = Math.max(maxChildDepth, r[1].intValue());
         }
