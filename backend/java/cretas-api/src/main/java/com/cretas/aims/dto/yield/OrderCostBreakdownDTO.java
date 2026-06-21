@@ -47,6 +47,16 @@ public class OrderCostBreakdownDTO {
     /** 副产物明细 (跨批次跨道按 名称+单位 归集)。 */
     private List<ByproductLine> byproducts;
 
+    // ---- 留样/料头 (AUDIT-006) ----
+    /** 留样数 (产出但不可售; Σ各道, 通常仅末道)。物理量, 不脱敏。 */
+    private Integer sampleRetainCount;
+    /** 损耗/料头量 (仅展示; 已体现在出成率, 不二次扣成本; 无则 null)。物理量, 不脱敏。 */
+    private BigDecimal wasteQuantity;
+    /** 可售盒数 = 产出盒数 − 留样数。物理量, 不脱敏。 */
+    private Integer sellableBoxCount;
+    /** 单盒可售成本 = 净成本 ÷ 可售盒数 (留样成本由售出盒承担; masked 时 null)。 */
+    private BigDecimal sellablePerBoxCost;
+
     /** 价格是否被脱敏 (无价格查看权限)。 */
     private boolean priceMasked;
     /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */

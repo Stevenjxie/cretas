@@ -72,6 +72,20 @@
                 单盒净成本 <b>¥{{ netPerBox.toFixed(2) }}</b><span>/盒 (毛成本扣副产回收 ¥{{ byproductCredit.toFixed(2) }})</span>
               </div>
             </template>
+
+            <!-- 留样扣减 (产出不可售 → 可售单盒成本) — AUDIT-006 -->
+            <template v-if="sampleRetainCount > 0">
+              <el-divider style="margin: 10px 0" />
+              <div class="cost-row byp">
+                <span class="cdot" style="background:#909399"></span>
+                <span class="cname" style="width:auto">留样 (不可售)</span>
+                <span class="byp-meta">{{ sampleRetainCount }} 盒 · 可售 {{ sellableBoxCount }} 盒<template v-if="wasteQty"> · 料头损耗 {{ wasteQty }}kg</template></span>
+                <span class="cval"></span>
+              </div>
+              <div v-if="sellablePerBox != null" class="net-box sell">
+                可售单盒成本 <b>¥{{ sellablePerBox.toFixed(2) }}</b><span>/盒 (净成本 ÷ 可售 {{ sellableBoxCount }} 盒, 留样成本由售出盒承担)</span>
+              </div>
+            </template>
           </el-card>
         </el-col>
       </el-row>
@@ -136,6 +150,7 @@ interface CostBreakdown {
   boxCount?: number; rawMaterialCost?: number; laborCost?: number; seasoningCost?: number;
   packagingCost?: number; totalCost?: number; perBoxCost?: number; priceMasked?: boolean; hasData?: boolean;
   byproductCredit?: number; netTotalCost?: number; netPerBoxCost?: number; byproducts?: ByproductLine[];
+  sampleRetainCount?: number; wasteQuantity?: number; sellableBoxCount?: number; sellablePerBoxCost?: number;
   sources?: CostSource[];
 }
 interface YieldSummary {
@@ -188,6 +203,12 @@ const byproducts = computed<ByproductLine[]>(() => cb.value?.byproducts || []);
 const hasByproduct = computed(() => byproducts.value.length > 0);
 const byproductCredit = computed(() => Number(cb.value?.byproductCredit ?? 0));
 const netPerBox = computed(() => cb.value?.netPerBoxCost != null ? Number(cb.value.netPerBoxCost) : null);
+
+// 留样扣减 (产出不可售 → 可售单盒成本); 料头损耗仅展示 (已体现在出成率, 不二次扣) — AUDIT-006
+const sampleRetainCount = computed(() => Number(cb.value?.sampleRetainCount ?? 0));
+const sellableBoxCount = computed(() => Number(cb.value?.sellableBoxCount ?? 0));
+const sellablePerBox = computed(() => cb.value?.sellablePerBoxCost != null ? Number(cb.value.sellablePerBoxCost) : null);
+const wasteQty = computed(() => cb.value?.wasteQuantity != null ? Number(cb.value.wasteQuantity) : null);
 
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
@@ -383,4 +404,6 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .net-box { margin-top: 8px; padding: 8px 12px; background: #f0f9eb; border-radius: 6px; font-size: 14px; }
 .net-box b { font-size: 20px; color: #529b2e; }
 .net-box span { color: #909399; font-size: 12px; margin-left: 4px; }
+.net-box.sell { background: #fdf6ec; }
+.net-box.sell b { color: #b88230; }
 </style>

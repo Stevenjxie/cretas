@@ -69,6 +69,8 @@ public class OrderCostBreakdownService {
         BigDecimal packaging = BigDecimal.ZERO;
         BigDecimal raw = BigDecimal.ZERO;
         int boxCount = 0;
+        int sampleRetain = 0;             // 留样数 (不可售; Σ各道, 通常仅末道)
+        BigDecimal waste = BigDecimal.ZERO; // 损耗/料头量 (仅展示; 已体现在出成率, 不二次扣成本)
         List<SourceCost> sources = new ArrayList<>();
         // 副产物按 名称|单位 归集 (跨批次跨道)
         LinkedHashMap<String, ByproductLine> byproductAcc = new LinkedHashMap<>();
@@ -82,6 +84,12 @@ public class OrderCostBreakdownService {
                 List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
                 for (int i = 0; i < steps.size(); i++) {
                     accumulateByproducts(byproductAcc, steps.get(i).getByproducts());
+                    if (steps.get(i).getSampleRetainQuantity() != null) {
+                        sampleRetain += steps.get(i).getSampleRetainQuantity();
+                    }
+                    if (steps.get(i).getWasteQuantity() != null) {
+                        waste = waste.add(steps.get(i).getWasteQuantity());
+                    }
                     BigDecimal m = steps.get(i).getMaterialCost();
                     if (m == null) {
                         continue;
@@ -125,6 +133,12 @@ public class OrderCostBreakdownService {
         BigDecimal netTotal = total.subtract(byproductCredit);
         BigDecimal netPerBox = boxCount > 0 ? netTotal.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
+        // 可售成本: 留样产出但不可售 → 净成本摊到 (产出盒数 − 留样数), 每个售出盒真实承担留样成本。
+        // 损耗/料头(waste)已体现在出成率(产出更低→盒数更少), 不二次扣, 仅展示。
+        int sellableBoxCount = Math.max(0, boxCount - sampleRetain);
+        BigDecimal sellablePerBox = sellableBoxCount > 0
+                ? netTotal.divide(BigDecimal.valueOf(sellableBoxCount), 2, RoundingMode.HALF_UP) : netPerBox;
+
         BigDecimal totalQty = sources.stream().map(s -> nz(s.getQuantity())).reduce(BigDecimal.ZERO, BigDecimal::add);
         for (SourceCost s : sources) {
             s.setWeightSharePct(totalQty.signum() > 0
@@ -148,6 +162,10 @@ public class OrderCostBreakdownService {
                 .netTotalCost(netTotal)
                 .netPerBoxCost(netPerBox)
                 .byproducts(byproducts)
+                .sampleRetainCount(sampleRetain)
+                .wasteQuantity(waste.signum() > 0 ? waste : null)
+                .sellableBoxCount(sellableBoxCount)
+                .sellablePerBoxCost(sellablePerBox)
                 .sources(sources)
                 .build();
         if (maskPrice) {
@@ -266,6 +284,7 @@ public class OrderCostBreakdownService {
         dto.setByproductCredit(null);
         dto.setNetTotalCost(null);
         dto.setNetPerBoxCost(null);
+        dto.setSellablePerBoxCost(null);   // 成本派生; sampleRetainCount/sellableBoxCount/wasteQuantity 是物理量, 保留
         if (dto.getByproducts() != null) {
             for (ByproductLine l : dto.getByproducts()) {
                 l.setUnitPrice(null);
