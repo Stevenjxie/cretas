@@ -437,6 +437,23 @@ class OrderCostBreakdownServiceTest {
     }
 
     @Test
+    @DisplayName("单工序批次 (首道即末道) 启发式归 SKIP 非 PACKAGING — 修复与 traced 原料双计")
+    void singleStepBatchHeuristicSkipsNotPackaging() {
+        // 1 工序, materialCost=500 (null costCategory → 启发式); 原料来自 consumption 1000
+        stubOneBatch(1L, "100",
+                batchYield("0", new BigDecimal("500")),   // 单工序
+                List.of(cons("MB1", "10", "100", "1000")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "源", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("0");      // 修复: 不再误把单工序 material 当包装
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("0");
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("1000"); // 仅 traced consumption
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("1000");       // 500 步材料 SKIP (避免与原料双计)
+    }
+
+    @Test
     @DisplayName("空订单: 无生产计划 → hasData=false, 诚实空")
     void emptyOrderHonestEmpty() {
         when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of());

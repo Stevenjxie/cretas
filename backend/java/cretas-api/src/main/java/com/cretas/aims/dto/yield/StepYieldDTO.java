@@ -68,7 +68,8 @@ public class StepYieldDTO {
     private List<Map<String, Object>> packagingDetail;
     /** AUDIT-004 共享锅标识 (各次报工取首个非 null); null=辅料不按锅分摊 */
     private String auxPotNo;
-    /** AUDIT-004 该锅辅料总成本 (取首个非 null) */
+    /** AUDIT-004 该锅辅料总成本 (取首个非 null)。@PriceSensitive: 经 yield 端点暴露时对无 procurement:price:view 用户脱敏 (与 OrderCostBreakdown maskCosts 一致) */
+    @PriceSensitive
     private BigDecimal auxPotTotalCost;
     /** AUDIT-004 分摊方式 BY_OUTPUT/FIXED_RATIO (取首个非 null) */
     private String auxAllocMethod;

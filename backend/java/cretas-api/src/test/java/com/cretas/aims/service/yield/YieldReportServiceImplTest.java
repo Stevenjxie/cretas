@@ -159,8 +159,40 @@ class YieldReportServiceImplTest {
         ProductionReport saved = cap.getValue();
         assertThat(saved.getCostCategory()).isEqualTo("SEASONING");      // 继承
         assertThat(saved.getAuxAllocMethod()).isEqualTo("BY_OUTPUT");    // 继承
-        assertThat(saved.getPackagingDetail()).hasSize(1);              // 继承模板
+        assertThat(saved.getPackagingDetail()).hasSize(1);              // 继承模板 (首条报工)
         assertThat(saved.getPackagingDetail().get(0)).containsEntry("name", "膜");
+    }
+
+    @Test
+    void submitReport_packagingTemplateInheritedOnlyOnFirstReport() {
+        // 非首条报工: packagingDetail 模板不再继承 (防跨报工拼接重复计成本); costCategory 仍继承 (幂等)
+        WorkProcessTask t = task(10L, 4, "WP-LU");
+        t.setProductWorkProcessId(20L);
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        // 已有一条本 task 报工 → 本次非首条
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("50")).build()));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+        com.cretas.aims.entity.ProductWorkProcess pwp = com.cretas.aims.entity.ProductWorkProcess.builder()
+                .id(20L).factoryId("F006").defaultCostCategory("SEASONING")
+                .packagingTemplate(List.of(Map.of("name", "膜", "cost", 300))).build();
+        when(productWorkProcessRepository.findByFactoryIdAndId("F006", 20L)).thenReturn(Optional.of(pwp));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getCostCategory()).isEqualTo("SEASONING");   // costCategory 仍继承 (首个非null幂等)
+        assertThat(saved.getPackagingDetail()).isNull();             // 包装模板不继承 (非首条, 防重复计)
     }
 
     @Test

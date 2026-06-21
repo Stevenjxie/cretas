@@ -347,14 +347,16 @@ public class OrderCostBreakdownService {
                     // 落入下方启发式
             }
         }
-        // 启发式 (向后兼容): 末道=包装, 中间道=调料, 首道=原料(traced 承载, SKIP)
+        // 启发式 (向后兼容): 首道=原料(traced 承载, SKIP) > 末道=包装 > 中间道=调料。
+        // 首道优先判断: 单工序批次(stepCount==1, 首道即末道)归 SKIP 而非 PACKAGING,
+        // 否则其 materialCost 会与 traced consumption 的原料重复计 (单工序批次启发式双计 bug)。
+        if (idx == 0) {
+            return "SKIP";
+        }
         if (idx == stepCount - 1) {
             return "PACKAGING";
         }
-        if (idx > 0) {
-            return "SEASONING";
-        }
-        return "SKIP";
+        return "SEASONING";
     }
 
     private static BigDecimal toBigDecimal(Object o) {
