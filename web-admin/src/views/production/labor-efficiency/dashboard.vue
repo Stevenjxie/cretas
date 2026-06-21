@@ -57,11 +57,12 @@ async function loadProductTypes() {
 // 查询条件
 // ============================================================================
 
+// 默认近30天 — 用 sv-SE locale 得到本地时区的 YYYY-MM-DD，避免 UTC 偏移在 UTC+8 凌晨给出昨天的日期
 function defaultDateRange(): [string, string] {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 30);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const fmt = (d: Date) => d.toLocaleDateString('sv-SE'); // YYYY-MM-DD in local timezone
   return [fmt(start), fmt(end)];
 }
 

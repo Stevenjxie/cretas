@@ -47,12 +47,12 @@ async function loadProductTypes() {
 // 查询条件
 // ============================================================================
 
-// 默认近30天
+// 默认近30天 — 用 sv-SE locale 得到本地时区的 YYYY-MM-DD，避免 UTC 偏移在 UTC+8 凌晨给出昨天的日期
 function defaultDateRange(): [string, string] {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 30);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const fmt = (d: Date) => d.toLocaleDateString('sv-SE'); // YYYY-MM-DD in local timezone
   return [fmt(start), fmt(end)];
 }
 
@@ -121,6 +121,7 @@ function fmtMin(minutes: number | null | undefined): string {
 
 function varianceStatusType(status: string): string {
   switch (status) {
+    case 'OK':
     case 'NORMAL': return 'success';
     case 'WARNING': return 'warning';
     case 'CRITICAL': return 'danger';
@@ -130,6 +131,7 @@ function varianceStatusType(status: string): string {
 
 function varianceStatusLabel(status: string): string {
   switch (status) {
+    case 'OK':
     case 'NORMAL': return '正常';
     case 'WARNING': return '预警';
     case 'CRITICAL': return '严重超支';
@@ -306,8 +308,8 @@ onMounted(async () => {
           >
             <el-table-column prop="processName" label="工序" min-width="140" />
             <el-table-column label="工时" align="right" min-width="90">
-              <template #default="{ step }: { step: LaborVarianceItemDTO }">
-                {{ fmtMin((step as unknown as LaborVarianceItemDTO).totalWorkMinutes) }}
+              <template #default="{ row: step }">
+                {{ fmtMin((step as LaborVarianceItemDTO).totalWorkMinutes) }}
               </template>
             </el-table-column>
             <el-table-column label="人数" align="right" min-width="80">

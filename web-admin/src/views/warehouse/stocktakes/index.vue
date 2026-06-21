@@ -69,7 +69,7 @@ async function loadData() {
   loading.value = true;
   try {
     const params: Record<string, unknown> = {
-      page: pagination.value.page,
+      page: Math.max(0, pagination.value.page - 1), // el-pagination is 1-based; backend expects 0-based
       size: pagination.value.size,
     };
     if (statusFilter.value) params.status = statusFilter.value;
