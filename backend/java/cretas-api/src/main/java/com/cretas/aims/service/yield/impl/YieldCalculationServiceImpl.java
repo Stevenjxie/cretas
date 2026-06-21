@@ -57,6 +57,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             Integer stepSampleRetain = null;
             String stepCostCategory = null;          // CALC-003: 本道成本类别 (取首个非 null)
             List<Map<String, Object>> stepPackagingDetail = null;  // AUDIT-002: 包装明细拼接
+            String stepAuxPotNo = null;              // AUDIT-004: 共享锅 (取首个非 null)
+            BigDecimal stepAuxPotTotalCost = null;
+            String stepAuxAllocMethod = null;
             Integer stepWorkersMax = null;           // MAX headcount across reports (peak, 非 SUM)
             // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
             List<String> stepInputPhotos = null;     // 去重保序
@@ -175,6 +178,12 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     if (stepPackagingDetail == null) stepPackagingDetail = new ArrayList<>();
                     stepPackagingDetail.addAll(r.getPackagingDetail());
                 }
+                // AUDIT-004 共享锅辅料分摊: 本道取首个非 null
+                if (stepAuxPotNo == null && r.getAuxPotNo() != null) {
+                    stepAuxPotNo = r.getAuxPotNo();
+                    stepAuxPotTotalCost = r.getAuxPotTotalCost();
+                    stepAuxAllocMethod = r.getAuxAllocMethod();
+                }
                 // SP1 双产出: outputKind 取首个非 null; semiOutputQuantity Σ; semiCode/semiOutputUnit 取首个非 null
                 if (stepOutputKind == null && r.getOutputKind() != null) {
                     stepOutputKind = r.getOutputKind();
@@ -240,6 +249,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .sampleRetainQuantity(stepSampleRetain)
                     .costCategory(stepCostCategory)
                     .packagingDetail(stepPackagingDetail)
+                    .auxPotNo(stepAuxPotNo)
+                    .auxPotTotalCost(stepAuxPotTotalCost)
+                    .auxAllocMethod(stepAuxAllocMethod)
                     // 三阶段 (单元1): phase 推断 + 照片按 reportKind 分组
                     .phase(phase)
                     .inputPhotos(stepInputPhotos)

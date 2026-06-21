@@ -109,6 +109,13 @@ public class YieldReportRequest {
     /** AUDIT-002 包装明细 [{name,cost}] (膜/气体/标签/其他); 通常仅包装道; null=未拆 */
     private List<Map<String, Object>> packagingDetail;
 
+    /** AUDIT-004 共享锅标识 (同号报工共用一锅辅料, 按产出量分摊); null=不分摊 */
+    private String auxPotNo;
+    /** AUDIT-004 该锅辅料总成本 */
+    private BigDecimal auxPotTotalCost;
+    /** AUDIT-004 分摊方式 BY_OUTPUT/FIXED_RATIO */
+    private String auxAllocMethod;
+
     /**
      * C-074/C-075/X-10 补录时效锁: 报工业务日期 (可选)。
      * <ul>

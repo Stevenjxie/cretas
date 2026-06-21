@@ -69,6 +69,20 @@
               </div>
             </div>
 
+            <!-- 辅料按锅分摊 (一锅辅料被多批共用→按产出量分摊) — AUDIT-004 -->
+            <div v-if="auxAllocations.length" class="aux-alloc">
+              <div v-for="a in auxAllocations" :key="a.potNo" class="aux-row">
+                <div class="aux-line1">辅料按锅分摊 · {{ a.method === 'FIXED_RATIO' ? '固定比例' : '按产出量' }}
+                  <span class="aux-pot">锅 {{ a.potNo }}</span></div>
+                <div class="aux-line2">
+                  锅总{{ a.potTotalCost != null ? '¥' + Number(a.potTotalCost).toFixed(2) : '(需价格权限)' }}
+                  · 本批 {{ num(a.batchOutput) }}/{{ num(a.potTotalOutput) }}kg
+                  <span v-if="a.batchSharePct != null">({{ Number(a.batchSharePct).toFixed(1) }}%)</span>
+                  <span v-if="a.batchShare != null" class="aux-share">→ 本批分摊 ¥{{ Number(a.batchShare).toFixed(2) }}</span>
+                </div>
+              </div>
+            </div>
+
             <!-- 副产回收 (肥油/料头变现冲减成本) — AUDIT-001 -->
             <template v-if="hasByproduct">
               <el-divider style="margin: 10px 0" />
@@ -157,12 +171,13 @@ interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; un
 interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
 interface ByproductLine { name?: string; quantity?: number; unit?: string; unitPrice?: number; value?: number }
 interface PackagingItem { name?: string; cost?: number }
+interface AuxAllocation { potNo?: string; method?: string; potTotalCost?: number; potTotalOutput?: number; batchOutput?: number; batchShare?: number; batchSharePct?: number }
 interface CostBreakdown {
   boxCount?: number; rawMaterialCost?: number; laborCost?: number; seasoningCost?: number;
   packagingCost?: number; totalCost?: number; perBoxCost?: number; priceMasked?: boolean; hasData?: boolean;
   byproductCredit?: number; netTotalCost?: number; netPerBoxCost?: number; byproducts?: ByproductLine[];
   sampleRetainCount?: number; wasteQuantity?: number; sellableBoxCount?: number; sellablePerBoxCost?: number;
-  packagingDetail?: PackagingItem[];
+  packagingDetail?: PackagingItem[]; auxiliaryAllocations?: AuxAllocation[];
   sources?: CostSource[];
 }
 interface YieldSummary {
@@ -225,6 +240,9 @@ const wasteQty = computed(() => cb.value?.wasteQuantity != null ? Number(cb.valu
 // 包装明细 4 拆 (膜/气体/标签/其他) — AUDIT-002
 const packagingDetail = computed<PackagingItem[]>(() => cb.value?.packagingDetail || []);
 const packagingTotal = computed(() => packagingDetail.value.reduce((s, p) => s + Number(p.cost || 0), 0));
+
+// 辅料按锅分摊 (一锅辅料被多批共用→按产出量分摊) — AUDIT-004
+const auxAllocations = computed<AuxAllocation[]>(() => cb.value?.auxiliaryAllocations || []);
 
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
@@ -428,4 +446,9 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .pkg-name { width: 48px; color: #606266; }
 .pkg-cost { width: 80px; text-align: right; font-weight: 600; }
 .pkg-perbox { color: #909399; font-size: 12px; }
+.aux-alloc { margin: 6px 0 4px 18px; padding: 8px 12px; background: #f4f8fb; border-radius: 6px; border-left: 3px solid #5470c6; }
+.aux-line1 { font-size: 13px; color: #606266; font-weight: 600; }
+.aux-pot { color: #909399; font-weight: 400; margin-left: 6px; }
+.aux-line2 { font-size: 12px; color: #909399; margin-top: 2px; }
+.aux-share { color: #409eff; font-weight: 600; margin-left: 4px; }
 </style>

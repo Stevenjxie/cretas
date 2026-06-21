@@ -250,6 +250,13 @@ export interface YieldReportRequest {
 
   /** AUDIT-002 包装明细 [{name,cost}] (膜/气体/标签/其他); 通常仅包装道; null=未拆 */
   packagingDetail?: Array<{ name: string; cost: number }>;
+
+  /** AUDIT-004 共享锅标识 (同号报工共用一锅辅料, 按产出量分摊); null=不分摊 */
+  auxPotNo?: string;
+  /** AUDIT-004 该锅辅料总成本 */
+  auxPotTotalCost?: number;
+  /** AUDIT-004 分摊方式 BY_OUTPUT(按产出量)/FIXED_RATIO(固定比例) */
+  auxAllocMethod?: 'BY_OUTPUT' | 'FIXED_RATIO';
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14

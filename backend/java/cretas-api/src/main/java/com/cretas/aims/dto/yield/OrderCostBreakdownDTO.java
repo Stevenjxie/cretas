@@ -60,6 +60,9 @@ public class OrderCostBreakdownDTO {
     /** 包装明细 (AUDIT-002: 膜/气体/标签/其他, 按名称归集; 各项 cost 之和=packagingCost; masked 时 cost null)。 */
     private List<PackagingItem> packagingDetail;
 
+    /** 辅料按锅分摊 (AUDIT-004: 一锅辅料被多批共用时按产出量分摊到本批; masked 时金额 null)。 */
+    private List<AuxiliaryAllocation> auxiliaryAllocations;
+
     /** 价格是否被脱敏 (无价格查看权限)。 */
     private boolean priceMasked;
     /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */
@@ -113,5 +116,26 @@ public class OrderCostBreakdownDTO {
         private String name;
         /** 该包材项成本 (元); masked 时 null。 */
         private BigDecimal cost;
+    }
+
+    /** 辅料按锅分摊 (AUDIT-004)。本批 share = potTotalCost × batchOutput ÷ potTotalOutput。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AuxiliaryAllocation {
+        private String potNo;
+        /** 分摊方式 BY_OUTPUT/FIXED_RATIO。 */
+        private String method;
+        /** 该锅辅料总成本 (元); masked 时 null。 */
+        private BigDecimal potTotalCost;
+        /** 该锅总产出量 (用于分摊基数); 物理量, 不脱敏。 */
+        private BigDecimal potTotalOutput;
+        /** 本批本道产出量; 物理量, 不脱敏。 */
+        private BigDecimal batchOutput;
+        /** 本批分摊到的辅料成本 (元); masked 时 null。 */
+        private BigDecimal batchShare;
+        /** 本批分摊占比 % (scale 1); 物理量, 不脱敏。 */
+        private BigDecimal batchSharePct;
     }
 }
