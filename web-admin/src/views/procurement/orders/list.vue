@@ -715,8 +715,19 @@ async function handleAction(orderId: string, action: string) {
   };
   const a = actionMap[action];
   if (!a) return;
+  // 防呆 Rule2 (fool-proof-design): 确认框必带身份信息 (单号/供应商/金额),
+  // 不用泛泛的"确认审批此采购订单？" —— 低技术素养用户需明确知道在操作哪一单。
+  const row = tableData.value.find((r) => String(r.id) === String(orderId));
+  const ctx = row
+    ? `${row.orderNumber || ''}${row.supplierName ? ' · ' + row.supplierName : ''}` +
+      `${row.totalAmount != null ? ' · ¥' + Number(row.totalAmount).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) : ''}`
+    : '';
   try {
-    await ElMessageBox.confirm(`确认${a.label}此${label('purchaseOrder')}？`, '操作确认');
+    await ElMessageBox.confirm(
+      ctx ? `确认${a.label}采购订单 ${ctx}？` : `确认${a.label}此${label('purchaseOrder')}？`,
+      `${a.label}采购订单`,
+      { type: 'warning', confirmButtonText: `确认${a.label}`, cancelButtonText: '取消' },
+    );
     const res = await post(a.url);
     if (res.success) {
       ElMessage.success(`${a.label}成功`);

@@ -245,10 +245,35 @@ function handleCreate() {
   // Auto-populate supplier when PO selected (single-source-of-truth FE convenience)
 }
 
-function handlePoChange(poId: string) {
+async function handlePoChange(poId: string) {
   if (!poId) return;
   const po = purchaseOrderOptions.value.find(p => p.id === poId);
   if (po?.supplierId) form.value.supplierId = po.supplierId;
+  // 防呆 Rule1/2 (fool-proof-design; 客户原话: "你告诉他这个东西你要收多少就行了"):
+  // 选 PO 后自动带入待收物料明细, 默认实收数量 = 待收量, 仓管只需核对实收 + 厂号/产地,
+  // 不用手动「添加物料」再逐个选物料类型 (对低技术素养仓管员太重)。
+  try {
+    const res = await get<{ items?: Array<Record<string, unknown>> }>(
+      `/${factoryId.value}/purchase/orders/${poId}`
+    );
+    const items = (res?.data?.items || []).filter(
+      (it) => Number((it.pendingQuantity ?? it.quantity) || 0) > 0
+    );
+    if (items.length) {
+      form.value.items = items.map((it) => ({
+        materialTypeId: String(it.materialTypeId || ''),
+        materialName: String(it.materialName || ''),
+        receivedQuantity: Number(it.pendingQuantity ?? it.quantity ?? 0),
+        unit: String(it.unit || 'kg'),
+        unitPrice: it.unitPrice != null ? Number(it.unitPrice) : undefined,
+        qcResult: '',
+        factoryNumber: '',
+        originPlace: '',
+        remark: '',
+      }));
+      ElMessage.success(`已带入 ${items.length} 项待收物料 (默认实收=待收量)，请核对实收数量与厂号/产地`);
+    }
+  } catch { /* interceptor 已 toast */ }
 }
 
 function addItem() {
