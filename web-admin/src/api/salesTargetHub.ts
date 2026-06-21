@@ -65,7 +65,7 @@ export interface CommissionPreview {
 
 // ==================== Endpoints ====================
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/canvas-sales-target`
+const base = (factoryId: string) => `/${factoryId}/canvas-sales-target`
 
 export function getOverview(factoryId: string) {
   return request.get<any, { success: boolean; data: SalesTargetOverview }>(

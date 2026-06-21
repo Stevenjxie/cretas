@@ -81,7 +81,7 @@ export interface CashFlowDTO {
  */
 export function getBalanceSheet(factoryId: string, year: number, month: number) {
   return get<BalanceSheetDTO>(
-    `/api/mobile/${factoryId}/finance/report/balance-sheet`,
+    `/${factoryId}/finance/report/balance-sheet`,
     { params: { year, month } }
   );
 }
@@ -97,7 +97,7 @@ export function getIncomeStatement(
   endMonth: number,
 ) {
   return get<IncomeStatementDTO>(
-    `/api/mobile/${factoryId}/finance/report/income-statement`,
+    `/${factoryId}/finance/report/income-statement`,
     { params: { startYear, startMonth, endYear, endMonth } }
   );
 }
@@ -113,7 +113,7 @@ export function getCashFlow(
   endMonth: number,
 ) {
   return get<CashFlowDTO>(
-    `/api/mobile/${factoryId}/finance/report/cash-flow`,
+    `/${factoryId}/finance/report/cash-flow`,
     { params: { startYear, startMonth, endYear, endMonth } }
   );
 }

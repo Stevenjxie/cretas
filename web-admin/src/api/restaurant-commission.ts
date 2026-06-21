@@ -54,7 +54,7 @@ export interface CommissionListData {
   count: number
 }
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/restaurant/commission`
+const base = (factoryId: string) => `/${factoryId}/restaurant/commission`
 
 export function listCommissions(
   factoryId: string,
