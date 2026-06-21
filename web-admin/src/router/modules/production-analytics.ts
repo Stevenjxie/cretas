@@ -35,6 +35,12 @@ const productionAnalyticsRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/production-analytics/M67YieldCost.vue'),
         meta: { requiresAuth: true, title: '成品出厂核算', icon: 'Coin', module: 'analytics' },
       },
+      {
+        path: 'cost-summary',
+        name: 'PACostSummary',
+        component: () => import('@/views/production-analytics/M67CostSummary.vue'),
+        meta: { requiresAuth: true, title: '成本汇总', icon: 'Tickets', module: 'analytics' },
+      },
     ],
   },
 ];
