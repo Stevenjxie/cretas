@@ -26,14 +26,35 @@ public interface IDisposalRecordService {
     DisposalRecord createDisposalRecord(DisposalRecord record);
 
     /**
-     * 审批报废记录
+     * 审批报废记录 (通过 → APPROVED, 触发库存扣减)。
      *
+     * <p>F-BUG-4: 审批人由 controller 从 token 取。F-BUG-5: 强制财务角色。
+     *
+     * @param factoryId 工厂ID (多租户隔离)
      * @param id 记录ID
-     * @param approverId 审批人ID
-     * @param approverName 审批人姓名
+     * @param approverId 审批人ID (token)
+     * @param approverName 审批人姓名 (token)
+     * @param requestRole 调用方角色码 (token, 用于财务角色守卫)
      * @return 审批后的记录
      */
-    DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId, String approverName);
+    DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId,
+            String approverName, String requestRole);
+
+    /**
+     * 拒绝报废记录 (→ REJECTED, 不扣减库存)。
+     *
+     * <p>F-BUG-2: 新增 reject 路径 (此前 "拒绝" 错误走 approve)。
+     *
+     * @param factoryId 工厂ID (多租户隔离)
+     * @param id 记录ID
+     * @param approverId 审批人ID (token)
+     * @param approverName 审批人姓名 (token)
+     * @param reason 拒绝原因
+     * @param requestRole 调用方角色码 (token, 用于财务角色守卫)
+     * @return 拒绝后的记录
+     */
+    DisposalRecord rejectDisposal(String factoryId, Long id, Integer approverId,
+            String approverName, String reason, String requestRole);
 
     /**
      * 根据ID获取报废记录 (按 factoryId 过滤, 多租户隔离)

@@ -73,24 +73,75 @@ public class DisposalRecordService implements IDisposalRecordService {
     }
 
     /**
-     * 审批报废记录
+     * 报废审批角色守卫 (F-BUG-5)。
+     *
+     * <p>转录硬约束: 仓库报损/报废须财务审批。此前 controller 仅 {@code @RequirePermission
+     * ("warehouse:read_write")} → 仓管员可自批报废扣库存。改为强制财务/工厂管理员角色,
+     * 对齐 {@link com.cretas.aims.service.factory.impl.FactoryStocktakeServiceImpl}。
+     *
+     * <p>角色码为小写 (JWT/request attribute "role" 携带 factory_super_admin 等)。
+     */
+    private static final java.util.Set<String> DISPOSAL_APPROVAL_ROLES = java.util.Set.of(
+            "finance_manager", "factory_super_admin", "platform_super_admin", "platform_admin");
+
+    private void assertApprovalRole(String requestRole) {
+        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
+        if (!DISPOSAL_APPROVAL_ROLES.contains(normalized)) {
+            throw new BusinessException(403,
+                    "报废审批需要财务经理或工厂管理员角色，当前角色：" + requestRole)
+                    .withHint("请联系财务经理 (finance_manager) 或工厂超管审批");
+        }
+    }
+
+    /**
+     * 审批报废记录 (通过 → APPROVED, 触发库存扣减)。
+     *
+     * <p>F-BUG-4: 审批人 {@code approverId} / {@code approverName} 由调用方 (controller)
+     * 从 JWT token 取, 不再信任请求体。F-BUG-5: 强制财务/工厂管理员角色。
      */
     @Override
     @Transactional
-    public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId, String approverName) {
+    public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId,
+            String approverName, String requestRole) {
+        assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
         DisposalRecord record = disposalRecordRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
         assertSameFactory(record, factoryId);  // 多租户隔离
 
-        // 幂等防重 (2026-06-12, Codex Gate2): 已审批不可重复审批. 审批触发库存扣减,
-        // 重复 approve 会重复扣库存 (旧代码无任何状态门, 任意次调用都成功). 返 409.
-        if (Boolean.TRUE.equals(record.getIsApproved())) {
-            throw new BusinessException(409, "报废记录已审批, 请勿重复操作")
-                    .withHint("查看已审批记录").withHintTarget("status");
+        // 幂等防重 (2026-06-12, Codex Gate2): 已审批/已拒绝 (终态) 不可重复操作.
+        // 审批触发库存扣减, 重复 approve 会重复扣库存. 返 409.
+        if (!"PENDING".equals(record.getStatus())) {
+            throw new BusinessException(409, "报废记录已处理 (" + record.getStatus() + "), 请勿重复操作")
+                    .withHint("查看记录状态").withHintTarget("status");
         }
 
         record.approve(approverId, approverName);
-        log.info("审批报废记录: id={}, 审批人={}", id, approverName);
+        log.info("审批报废记录: id={}, 审批人={} ({})", id, approverName, approverId);
+        return disposalRecordRepository.save(record);
+    }
+
+    /**
+     * 拒绝报废记录 (→ REJECTED, <b>不</b>扣减库存)。
+     *
+     * <p>F-BUG-2: 此前无 reject 端点, 前端 "拒绝" 错误地走 approve → 反而批准+扣库存。
+     * F-BUG-4/5: 审批人从 token 取 + 财务角色守卫。
+     */
+    @Override
+    @Transactional
+    public DisposalRecord rejectDisposal(String factoryId, Long id, Integer approverId,
+            String approverName, String reason, String requestRole) {
+        assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
+        DisposalRecord record = disposalRecordRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "报废记录不存在: " + id));
+        assertSameFactory(record, factoryId);  // 多租户隔离
+
+        if (!"PENDING".equals(record.getStatus())) {
+            throw new BusinessException(409, "报废记录已处理 (" + record.getStatus() + "), 请勿重复操作")
+                    .withHint("查看记录状态").withHintTarget("status");
+        }
+
+        record.reject(approverId, approverName, reason);
+        log.info("拒绝报废记录: id={}, 审批人={} ({}), 原因={}", id, approverName, approverId, reason);
         return disposalRecordRepository.save(record);
     }
 

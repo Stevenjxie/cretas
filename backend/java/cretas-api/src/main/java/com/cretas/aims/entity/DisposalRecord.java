@@ -178,6 +178,26 @@ public class DisposalRecord extends BaseEntity {
     private Boolean isApproved = false;
 
     /**
+     * 审批状态: PENDING(待审批) / APPROVED(已批准) / REJECTED(已拒绝)。
+     *
+     * <p>引入原因 (审计 round1 F-BUG-2): 此前实体只有 {@code isApproved} 布尔, 无法区分
+     * "待审批" 与 "已拒绝" — 前端却读 {@code row.status} (PENDING/APPROVED/REJECTED) 决定
+     * 按钮显示与状态标签。拒绝必须可持久化, 故新增显式状态列。
+     *
+     * <p>{@code isApproved} 保留为派生真值 (APPROVED 时为 true), 兼容旧统计查询
+     * ({@code countByFactoryIdAndIsApproved}) 与库存扣减判断。</p>
+     */
+    @Column(name = "approval_status", nullable = false, length = 20)
+    @Builder.Default
+    private String approvalStatus = "PENDING";
+
+    /**
+     * 拒绝原因 (仅 REJECTED 时有值)。
+     */
+    @Column(name = "reject_reason", columnDefinition = "TEXT")
+    private String rejectReason;
+
+    /**
      * SP12 §5.3: 工作流实例 ID，关联 ApprovalWorkflowInstance.id。
      * 非空时表示已通过审批工作流审批；直接调用 approveDisposal() 绕过流程时保持 null。
      */
@@ -213,13 +233,29 @@ public class DisposalRecord extends BaseEntity {
     // ===================================================================
 
     /**
-     * 审批报废申请
+     * 审批报废申请 (置 APPROVED, 触发库存扣减)。
      */
     public void approve(Integer approverId, String approverName) {
         this.isApproved = true;
+        this.approvalStatus = "APPROVED";
         this.approvedBy = approverId;
         this.approvedByName = approverName;
         this.approvalDate = LocalDateTime.now();
+    }
+
+    /**
+     * 拒绝报废申请 (置 REJECTED, <b>不</b>扣减库存)。
+     *
+     * <p>记录审批人 (拒绝亦是审批动作, 复用 approvedBy/approvalDate 字段留痕)
+     * 与拒绝原因。{@code isApproved} 保持 false。
+     */
+    public void reject(Integer approverId, String approverName, String reason) {
+        this.isApproved = false;
+        this.approvalStatus = "REJECTED";
+        this.approvedBy = approverId;
+        this.approvedByName = approverName;
+        this.approvalDate = LocalDateTime.now();
+        this.rejectReason = reason;
     }
 
     /**
@@ -289,6 +325,23 @@ public class DisposalRecord extends BaseEntity {
         return isRecyclable();
     }
 
+    /**
+     * status 别名 (兼容前端): 前端 list.vue 读 {@code row.status}
+     * (PENDING/APPROVED/REJECTED) 决定按钮显示与状态标签。
+     *
+     * <p>F-BUG-2 修复: 此前实体不序列化任何 status 字段 → 前端 {@code row.status}
+     * 永远 undefined → 审批/拒绝按钮 (gated on status==='PENDING') 永不显示。
+     *
+     * <p>对历史行 (approvalStatus 列为 null, 仅有 isApproved): 派生 APPROVED/PENDING 兜底。
+     */
+    @JsonProperty("status")
+    public String getStatus() {
+        if (approvalStatus != null && !approvalStatus.isBlank()) {
+            return approvalStatus;
+        }
+        return Boolean.TRUE.equals(isApproved) ? "APPROVED" : "PENDING";
+    }
+
     @PrePersist
     protected void onCreate() {
         super.onCreate();
@@ -297,6 +350,9 @@ public class DisposalRecord extends BaseEntity {
         }
         if (isApproved == null) {
             isApproved = false;
+        }
+        if (approvalStatus == null || approvalStatus.isBlank()) {
+            approvalStatus = Boolean.TRUE.equals(isApproved) ? "APPROVED" : "PENDING";
         }
     }
 }

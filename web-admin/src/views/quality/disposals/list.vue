@@ -35,6 +35,14 @@ const disposalForm = ref({
 const actionLoading = ref(false);
 const batches = ref<TableRow[]>([]);
 
+// F-FP-2 防呆: 选中批次的可用量上限 (后端 MaterialBatch 暴露 currentQuantity/remainingQuantity)。
+const selectedBatchMax = computed<number | null>(() => {
+  const b = batches.value.find((x) => x.id === disposalForm.value.batchId);
+  if (!b) return null;
+  const avail = (b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined;
+  return typeof avail === 'number' ? avail : null;
+});
+
 onMounted(() => {
   loadData();
   loadBatches();
@@ -47,15 +55,16 @@ async function loadData() {
   try {
     const response = await get(`/${factoryId.value}/disposal-records`, {
       params: {
-        page: pagination.value.page,
+        // 后端 @RequestParam page 是 0-based; el-pagination 的 pagination.page 是 1-based → 转换 (修: 之前直传致首屏请求第2页, 列表空)
+        page: Math.max(0, pagination.value.page - 1),
         size: pagination.value.size,
-        keyword: searchForm.value.keyword || undefined,
-        status: searchForm.value.status || undefined
+        type: searchForm.value.status || undefined
       }
     });
-    if (response.success && response.data) {
-      tableData.value = response.data.content || [];
-      pagination.value.total = response.data.totalElements || 0;
+    if (response.success && response.data !== undefined) {
+      // 后端 getDisposalRecords 返回扁平 data=[数组] + 同级 totalElements (非 Spring Page 信封), 兼容两种形态
+      tableData.value = Array.isArray(response.data) ? response.data : (response.data.content || []);
+      pagination.value.total = (response as any).totalElements ?? response.data?.totalElements ?? tableData.value.length;
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载数据失败');
     }
@@ -134,6 +143,16 @@ async function submitDisposal() {
     ElMessage.warning('请输入废弃原因');
     return;
   }
+  // F-FP-1 防呆: 报废必须留证据 (转录硬约束). 至少 1 个证据 URL。
+  if (!disposalForm.value.evidenceImages.trim()) {
+    ElMessage.warning('请上传/粘贴至少一张证据照片');
+    return;
+  }
+  // F-FP-2 防呆: 报废数量不得超过批次可用量。
+  if (selectedBatchMax.value != null && disposalForm.value.quantity > selectedBatchMax.value) {
+    ElMessage.warning(`报废数量不能超过批次可用量 ${selectedBatchMax.value}`);
+    return;
+  }
 
   // Issue #811 fix — rename FE form fields to match backend wire contract
   // (CreateDisposalRecordRequest DTO). FE form uses {batchId, quantity, reason}
@@ -168,14 +187,20 @@ async function submitDisposal() {
 
 async function handleApprove(row: TableRow) {
   if (actionLoading.value) return;
+  // 防呆 Rule 2: confirm 带品名/批次/数量/损失 context, 不再笼统 "确定批准?"
+  const ctx = approvalContextHtml(row);
   try {
-    await ElMessageBox.confirm('确定批准此废弃申请?', '审批确认', { type: 'warning' });
+    await ElMessageBox.confirm(ctx, '审批确认 — 批准报废', {
+      type: 'warning',
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '确认批准',
+      cancelButtonText: '取消'
+    });
   } catch { return; }
   actionLoading.value = true;
   try {
-    const response = await put(`/${factoryId.value}/disposal-records/${row.id}/approve`, {
-      approved: true
-    });
+    // F-BUG-1/F-BUG-4: 审批人从后端 token 取, 前端无需传 approverId/approverName。
+    const response = await put(`/${factoryId.value}/disposal-records/${row.id}/approve`, {});
     if (response.success) {
       ElMessage.success('已批准');
       loadData();
@@ -190,30 +215,70 @@ async function handleApprove(row: TableRow) {
   }
 }
 
-async function handleReject(row: TableRow) {
+// ==================== Reject (F-BUG-2 + 防呆 Rule 3) ====================
+// 拒绝原因: 标准枚举 dropdown + "其他" 才填 textarea (替代纯自由文本, 便于统计)。
+const rejectDialogVisible = ref(false);
+const rejectRow = ref<TableRow | null>(null);
+const rejectForm = ref({ reasonCode: '', detail: '' });
+const REJECT_REASONS = [
+  { value: '证据不足', label: '证据不足' },
+  { value: '数量不符', label: '数量与实际不符' },
+  { value: '可返工/可销售', label: '可返工或仍可销售, 无需报废' },
+  { value: '需复核', label: '需现场复核' },
+  { value: '其他', label: '其他' }
+];
+
+function approvalContextHtml(row: TableRow): string {
+  const name = row.materialTypeName || row.batchNumber || '报废记录';
+  const batch = row.batchNumber ? `批次 ${row.batchNumber}` : '';
+  const qty = row.quantity != null ? `数量 ${row.quantity}` : '';
+  const type = getTypeText(row.disposalType as string);
+  const loss = row.estimatedLoss != null ? `预估损失 ¥${row.estimatedLoss}` : '';
+  const parts = [batch, qty, `类型 ${type}`, loss].filter(Boolean);
+  return `<div style="line-height:1.8">
+    <div><b>${name}</b></div>
+    <div style="color:#606266">${parts.join(' · ')}</div>
+    <div style="margin-top:6px;color:#e6a23c">批准后将扣减对应库存, 不可撤销。</div>
+  </div>`;
+}
+
+function handleReject(row: TableRow) {
   if (actionLoading.value) return;
-  let reason: string;
-  try {
-    const { value } = await ElMessageBox.prompt('请输入拒绝原因', '拒绝申请', {
-      inputPattern: /.+/,
-      inputErrorMessage: '请输入拒绝原因'
-    });
-    reason = value;
-  } catch { return; }
+  rejectRow.value = row;
+  rejectForm.value = { reasonCode: '', detail: '' };
+  rejectDialogVisible.value = true;
+}
+
+async function submitReject() {
+  if (!rejectForm.value.reasonCode) {
+    ElMessage.warning('请选择拒绝原因');
+    return;
+  }
+  // "其他" 必须补充说明
+  if (rejectForm.value.reasonCode === '其他' && !rejectForm.value.detail.trim()) {
+    ElMessage.warning('请补充拒绝原因说明');
+    return;
+  }
+  const reason = rejectForm.value.reasonCode === '其他'
+    ? rejectForm.value.detail.trim()
+    : (rejectForm.value.detail.trim()
+        ? `${rejectForm.value.reasonCode}: ${rejectForm.value.detail.trim()}`
+        : rejectForm.value.reasonCode);
+
   actionLoading.value = true;
   try {
-    const response = await put(`/${factoryId.value}/disposal-records/${row.id}/approve`, {
-      approved: false,
-      rejectReason: reason
+    // F-BUG-2: 走独立 reject 端点 (此前误走 approve → 反而批准+扣库存)。
+    const response = await put(`/${factoryId.value}/disposal-records/${rejectRow.value?.id}/reject`, {
+      reason
     });
     if (response.success) {
       ElMessage.success('已拒绝');
+      rejectDialogVisible.value = false;
       loadData();
     } else {
       ElMessage.error(response.message || '操作失败');
     }
   } catch (e: any) {
-    // Interceptor shows specific toast; dedupe fallback
     console.error('[操作失败]', e);
   } finally {
     actionLoading.value = false;
@@ -402,21 +467,30 @@ function getTypeText(type: string) {
           </el-select>
         </el-form-item>
         <el-form-item label="数量" required>
-          <el-input-number v-model="disposalForm.quantity" :min="1" style="width: 100%" />
+          <el-input-number
+            v-model="disposalForm.quantity"
+            :min="1"
+            :max="selectedBatchMax ?? undefined"
+            style="width: 100%"
+          />
+          <div v-if="selectedBatchMax != null" style="font-size:12px;color:#909399;margin-top:4px">
+            该批次可用量 {{ selectedBatchMax }}，报废数量不可超过此值
+          </div>
         </el-form-item>
         <el-form-item label="废弃原因" required>
           <el-input v-model="disposalForm.reason" type="textarea" :rows="2" placeholder="请输入废弃原因" />
         </el-form-item>
-        <!-- Gap-3 防呆: 证据留存入口 (照片 URL 逗号分隔). 防呆 Rule 2 — 写操作必留证据.
-             存入独立列 evidence_images (V20261024_15), 不再塞 notes 字段. -->
-        <el-form-item label="证据留存">
+        <!-- Gap-3 + F-FP-1 防呆: 证据留存入口 (照片 URL 逗号分隔). 报废必须留证据 (转录硬约束).
+             存入独立列 evidence_images (V20261024_15), 不再塞 notes 字段.
+             TODO(F-FP-1): 当前为 URL 文本粘贴, 后续接入 el-upload 文件上传组件 (需先确认 OSS 上传端点). -->
+        <el-form-item label="证据留存" required>
           <el-input
             v-model="disposalForm.evidenceImages"
             type="textarea"
             :rows="3"
             placeholder="粘贴照片 URL（多张用逗号分隔）&#10;例: https://cdn.example.com/photo1.jpg, https://cdn.example.com/photo2.jpg"
           />
-          <div style="font-size:12px;color:#909399;margin-top:4px">建议上传现场照片证明废弃情况，便于审批和留档</div>
+          <div style="font-size:12px;color:#e6a23c;margin-top:4px">报废必须上传现场照片证明，便于审批和留档（必填）</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="disposalForm.notes" type="textarea" :rows="2" />
@@ -425,6 +499,34 @@ function getTypeText(type: string) {
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="dialogLoading" @click="submitDisposal">提交申请</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 拒绝报废对话框 (F-BUG-2 + 防呆 Rule 3: 标准原因 dropdown) -->
+    <el-dialog v-model="rejectDialogVisible" title="拒绝报废申请" width="480px" destroy-on-close>
+      <el-form label-width="90px">
+        <el-form-item label="报废记录">
+          <span>{{ rejectRow?.materialTypeName || rejectRow?.batchNumber || '-' }}
+            <span v-if="rejectRow?.batchNumber" style="color:#909399"> ({{ rejectRow?.batchNumber }})</span>
+          </span>
+        </el-form-item>
+        <el-form-item label="拒绝原因" required>
+          <el-select v-model="rejectForm.reasonCode" placeholder="选择拒绝原因" style="width: 100%">
+            <el-option v-for="r in REJECT_REASONS" :key="r.value" :label="r.label" :value="r.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="rejectForm.reasonCode === '其他' ? '说明' : '补充说明'">
+          <el-input
+            v-model="rejectForm.detail"
+            type="textarea"
+            :rows="2"
+            :placeholder="rejectForm.reasonCode === '其他' ? '请填写具体拒绝原因（必填）' : '可选补充说明'"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="rejectDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="actionLoading" @click="submitReject">确认拒绝</el-button>
       </template>
     </el-dialog>
   </div>
