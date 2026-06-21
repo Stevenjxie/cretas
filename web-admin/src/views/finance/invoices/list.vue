@@ -25,7 +25,7 @@ function handleWorkflowNodeClick(nodeId: string) {
   const primary = getBucketPrimaryStatus('finance', nodeId);
   if (!primary) return;
   statusFilter.value = primary;
-  pagination.value.page = 1;
+  pagination.value.page = 0;
   loadData();
   ElMessage.success(`已切到 "${getBucketLabel('finance', nodeId)}" (显示状态: ${primary}). finance 是 Invoice+Payment 复合, done 节点实为 payment.VERIFIED 但本表仅 invoice — 详情请去收款管理.`);
 }
@@ -35,7 +35,11 @@ function handleWorkflowAITrigger() {
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
-const pagination = ref({ page: 1, size: 20, total: 0 });
+// 2026-06-21 fix: backend /finance/invoices is 0-based (defaultValue=0); template uses
+// :current-page="page+1" and @current-change sets page=p-1, so page is 0-based internally.
+// Init must be 0 — else first load requests page index 1 (2nd page) and the list is empty
+// whenever total<=size (pagination control hidden → unreachable).
+const pagination = ref({ page: 0, size: 20, total: 0 });
 const statusFilter = ref('');
 
 const statusMap: Record<string, { text: string; type: string }> = {
@@ -82,7 +86,7 @@ async function loadData() {
 
 // Apr 20 Bug BR-11 fix: keyword state
 const searchKeyword = ref('');
-function handleSearch() { pagination.value.page = 1; loadData(); }
+function handleSearch() { pagination.value.page = 0; loadData(); }
 function handleReset() { searchKeyword.value = ''; statusFilter.value = ''; handleSearch(); }
 
 // Apr 21 2026: load invoiceable sales orders so FE can offer a dropdown

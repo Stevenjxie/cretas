@@ -23,7 +23,12 @@ const { fetchLinkChipCounts, countsFor: linkCountsFor } =
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
-const pagination = ref({ page: 1, size: 20, total: 0 });
+// 2026-06-21 fix: backend /finance/payments is 0-based (defaultValue=0); template
+// uses :current-page="page+1" and @current-change sets page=p-1, so page is 0-based
+// internally. Init must be 0 — else first load requests page index 1 (2nd page) and the
+// list is empty whenever total<=size (pagination control hidden → unreachable),
+// making 收款确认 (verify) impossible → SO stuck UNPAID.
+const pagination = ref({ page: 0, size: 20, total: 0 });
 const statusFilter = ref('');
 
 const statusMap: Record<string, { text: string; type: string }> = {
@@ -99,7 +104,7 @@ async function loadData() {
 
 // Apr 20 Bug BR-12 fix: keyword state
 const searchKeyword = ref('');
-function handleSearch() { pagination.value.page = 1; loadData(); }
+function handleSearch() { pagination.value.page = 0; loadData(); }
 function handleReset() { searchKeyword.value = ''; statusFilter.value = ''; handleSearch(); }
 
 async function handleVerify(id: string) {
