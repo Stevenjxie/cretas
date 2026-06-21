@@ -31,4 +31,14 @@ FROM b,(VALUES
   (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3),
   (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4)        -- 包装材料成本计在包装道
 ) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw);
+
+-- 多批混锅溯源边 (batch_relations): 本批(熟制) 来自 2 个上游焯水批次 → 喂现成 /batch-relations/trace/backward
+-- 前端「多批混锅溯源」桑基图数据驱动来源。production_batch_id 按 batch_number 解析(可复现)。
+DELETE FROM batch_relations WHERE id LIKE 'M67DEMO-BR-%';
+INSERT INTO batch_relations(id,factory_id,material_batch_id,production_batch_id,relation_type,quantity_used,unit,stage,used_at,created_at,updated_at)
+SELECT 'M67DEMO-BR-001','DEMO_FACTORY','焯水0613 (原料A链)',pb.id,'SEMI_FINISHED',78,'kg','熟制',NOW(),NOW(),NOW()
+FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_number='M67DEMO-PB-001'
+UNION ALL
+SELECT 'M67DEMO-BR-002','DEMO_FACTORY','焯水0614 (原料B链)',pb.id,'SEMI_FINISHED',22,'kg','熟制',NOW(),NOW(),NOW()
+FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_number='M67DEMO-PB-001';
 COMMIT;

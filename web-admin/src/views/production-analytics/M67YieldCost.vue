@@ -71,14 +71,14 @@
         <div ref="sankeyEl" style="height: 320px"></div>
       </el-card>
 
-      <!-- 多批混锅溯源 (多对多) -->
-      <el-card shadow="never">
+      <!-- 多批混锅溯源 (多对多) — 数据驱动, 仅当该批有多个上游来源时显示 -->
+      <el-card v-if="hasMix" shadow="never">
         <template #header>
           <b>多批混锅溯源</b>
-          <span class="hint">一锅熟制来自多个焯水批次 — 系统按实际投料量逐批溯源 (Excel 做不到的"多对多")</span>
+          <span class="hint">实时从批次关联溯源 — 一锅熟制来自 {{ mixRels.length }} 个上游批次, 按实测投料量逐批归集 (Excel 做不到的"多对多")</span>
         </template>
         <div ref="mixEl" style="height: 300px"></div>
-        <div class="mix-note">示例: 熟制0614 = 焯水0613 (78kg, 原料A 链) + 焯水0614 (22kg, 原料B 链) → 熟制产出 74kg。两条上游链各自的出成率/成本按 78:22 实测量精确归集, 不是糊一个平均。</div>
+        <div class="mix-note">本批来自 {{ mixRels.length }} 个上游批次：{{ mixRels.map(r => `${r.materialBatchId} ${r.quantityUsed}${r.unit || 'kg'}`).join(' + ') }}。两条链各自的出成率/成本按实测投料量精确归集，不是糊一个平均。数据来源：批次关联表实时溯源 (/batch-relations/trace/backward)。</div>
       </el-card>
     </template>
 
@@ -99,11 +99,12 @@ interface Step {
   totalInput?: number; totalOutput?: number; outputUnit?: string;
   yieldRate?: number; laborCost?: number; materialCost?: number;
 }
+interface MixRel { materialBatchId?: string; quantityUsed?: number; unit?: string; stage?: string; productionBatchId?: number }
 interface YieldSummary {
   orderId: string; overallYieldRate?: number;
   totalFirstInput?: number; totalLastOutput?: number; lastOutputUnit?: string;
   totalLaborCost?: number; totalMaterialCost?: number; totalCost?: number;
-  batches?: Array<{ steps?: Step[]; cumulativeYieldRate?: number }>;
+  batches?: Array<{ batchId?: number; steps?: Step[]; cumulativeYieldRate?: number }>;
 }
 
 const authStore = useAuthStore();
@@ -115,6 +116,8 @@ const error = ref('');
 const data = ref<YieldSummary | null>(null);
 const sankeyEl = ref<HTMLElement | null>(null);
 const mixEl = ref<HTMLElement | null>(null);
+const mixRels = ref<MixRel[]>([]);
+const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = 真混批
 let chart: any = null;
 let mixChart: any = null;
 
@@ -197,25 +200,39 @@ function renderSankey() {
   chart.resize();
 }
 
-// 多批混锅溯源 (示例: 熟制0614 = 焯水0613 78kg + 焯水0614 22kg, 来自客户 M67 v5.0 真实数据)
+// 多批混锅溯源 — 数据驱动: 调 /batch-relations/trace/backward/{batchId} 取真实上游批次关系
+async function loadMix() {
+  mixRels.value = [];
+  const bid = data.value?.batches?.[0]?.batchId;
+  if (!factoryId.value || bid == null) return;
+  try {
+    const resp = await get<MixRel[]>(`/${factoryId.value}/batch-relations/trace/backward/${bid}`);
+    if (resp.success && Array.isArray(resp.data)) mixRels.value = resp.data;
+  } catch { /* 无溯源关系 → 该卡不显示 */ }
+}
+
 function renderMix() {
-  if (!mixEl.value) return;
+  if (!mixEl.value || !mixRels.value.length) return;
   if (!mixChart) mixChart = echarts.init(mixEl.value);
-  const nodes = [
-    { name: '原料A', itemStyle: { color: '#5470c6' } },
-    { name: '原料B', itemStyle: { color: '#73c0de' } },
-    { name: '焯水0613', itemStyle: { color: '#5470c6' } },
-    { name: '焯水0614', itemStyle: { color: '#73c0de' } },
-    { name: '熟制0614', itemStyle: { color: '#fac858' } },
-    { name: '成品(气调/包装)', itemStyle: { color: '#91cc75' } },
-  ];
-  const links = [
-    { source: '原料A', target: '焯水0613', value: 78 },
-    { source: '原料B', target: '焯水0614', value: 22 },
-    { source: '焯水0613', target: '熟制0614', value: 78 },
-    { source: '焯水0614', target: '熟制0614', value: 22 },
-    { source: '熟制0614', target: '成品(气调/包装)', value: 74 },
-  ];
+  const SZ = '熟制 (本批)';
+  const FG = '成品';
+  const palette = ['#5470c6', '#73c0de', '#fac858', '#ee6666', '#9a60b4'];
+  const nodes: any[] = [];
+  const seen = new Set<string>();
+  const addNode = (name: string, color: string) => { if (!seen.has(name)) { seen.add(name); nodes.push({ name, itemStyle: { color } }); } };
+  const links: { source: string; target: string; value: number }[] = [];
+  let totalIn = 0;
+  mixRels.value.forEach((r, i) => {
+    const src = r.materialBatchId || ('上游' + (i + 1));
+    const v = Number(r.quantityUsed || 0);
+    totalIn += v;
+    addNode(src, palette[i % palette.length]);
+    links.push({ source: src, target: SZ, value: v });
+  });
+  addNode(SZ, '#fac858');
+  addNode(FG, '#91cc75');
+  const fgVal = Number(data.value?.totalLastOutput || totalIn);
+  links.push({ source: SZ, target: FG, value: fgVal });
   mixChart.setOption({
     tooltip: { trigger: 'item', formatter: (p: any) => p.dataType === 'edge' ? `${p.data.source} → ${p.data.target}: ${p.data.value} kg` : p.name },
     series: [{
@@ -236,6 +253,7 @@ async function load() {
     const resp = await get<YieldSummary>(`/${factoryId.value}/production/orders/${orderId.value}/yield-summary`);
     if (resp.success && resp.data) {
       data.value = resp.data;
+      await loadMix();
       await nextTick();
       renderSankey();
       renderMix();
