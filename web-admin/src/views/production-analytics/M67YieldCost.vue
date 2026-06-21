@@ -95,9 +95,9 @@
               </tr>
             </tbody>
           </table>
-          <div class="mix-note">注意：本批两条上游链<b>单价不同</b>，所以<b>成本占比 ≠ 重量占比</b>——按重量糊一个平均会算错成本，必须按实测投料量×各自单价精确归集。这正是 Excel(XLOOKUP 只取一条链)做不到、客户"只能加权平均"的盲区。数据来源：批次消耗记录实时计算 (/material-consumptions)。</div>
+          <div class="mix-note">注意：本批两条上游链<b>单价不同</b>，所以<b>成本占比 ≠ 重量占比</b>——按重量糊一个平均会算错成本，必须按实测投料量×各自单价精确归集。这正是 Excel(XLOOKUP 只取一条链)做不到、客户"只能加权平均"的盲区。数据来源：后端单一权威成本服务 (/production/orders/.../cost-breakdown, 谱系遍历+上游成本回溯)。</div>
         </div>
-        <div v-else class="mix-note">本批来自 {{ mixRels.length }} 个上游批次，按实测投料量逐批溯源。成本金额需价格查看权限。数据来源：批次消耗记录 (/material-consumptions)。</div>
+        <div v-else class="mix-note">本批来自 {{ mixRels.length }} 个上游批次，按实测投料量逐批溯源。成本金额需价格查看权限。数据来源：后端成本拆分服务 (/cost-breakdown)。</div>
       </el-card>
     </template>
 
@@ -119,6 +119,12 @@ interface Step {
   yieldRate?: number; laborCost?: number; materialCost?: number;
 }
 interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; unitPrice?: number; totalCost?: number; sourceType?: string }
+interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
+interface CostBreakdown {
+  boxCount?: number; rawMaterialCost?: number; laborCost?: number; seasoningCost?: number;
+  packagingCost?: number; totalCost?: number; perBoxCost?: number; priceMasked?: boolean; hasData?: boolean;
+  sources?: CostSource[];
+}
 interface YieldSummary {
   orderId: string; overallYieldRate?: number;
   totalFirstInput?: number; totalLastOutput?: number; lastOutputUnit?: string;
@@ -136,6 +142,7 @@ const data = ref<YieldSummary | null>(null);
 const sankeyEl = ref<HTMLElement | null>(null);
 const mixEl = ref<HTMLElement | null>(null);
 const mixRels = ref<MixRel[]>([]);
+const cb = ref<CostBreakdown | null>(null);   // 后端单一权威成本拆分 (谱系遍历)
 const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = 真混批
 let chart: any = null;
 let mixChart: any = null;
@@ -149,6 +156,7 @@ const steps = computed<Step[]>(() => {
   return (b?.steps || []).slice().sort((a, c) => (a.processOrder || 0) - (c.processOrder || 0));
 });
 const boxCount = computed(() => {
+  if (cb.value?.boxCount) return cb.value.boxCount;   // 权威: 后端 Σ批次盒数
   const out = data.value?.totalLastOutput;
   if (out == null || !gramsPerBox.value) return 0;
   return Math.round((out * 1000) / gramsPerBox.value);
@@ -158,10 +166,9 @@ const num = (v?: number | null) => (v == null ? '—' : Number(v).toFixed(1));
 const pct = (v?: number | null) => (v == null ? 0 : v * 100);
 const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / boxCount.value);
 
-// 混批闭环: 原料成本 = 上游各批 traced 成本之和 (来自 material-consumptions, 按实测投料量×各自累计单价)
-const upstreamCost = computed(() => mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0));
-// 单盒成本闭环口径 = 订单聚合成本(已含人工/调料/包装, 原料道已置0) + 上游 traced 原料成本
-const totalCostClosed = computed(() => Number(data.value?.totalCost || 0) + upstreamCost.value);
+// 成本全部以后端单一权威服务 cb 为准 (谱系遍历 + 上游成本回溯); 缺失时回退订单聚合
+const upstreamCost = computed(() => Number(cb.value?.rawMaterialCost ?? mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0)));
+const totalCostClosed = computed(() => Number(cb.value?.totalCost ?? (Number(data.value?.totalCost || 0) + upstreamCost.value)));
 
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
@@ -180,13 +187,13 @@ const yieldClass = (y?: number | null) => {
 };
 
 const costBreakdown = computed(() => {
-  const d = data.value; if (!d) return [];
+  const d = data.value; if (!d && !cb.value) return [];
   const st = steps.value;
-  const labor = d.totalLaborCost || 0;
-  const matTotal = d.totalMaterialCost || 0;
-  const rawMat = upstreamCost.value > 0 ? upstreamCost.value : (st.length ? (st[0].materialCost || 0) : 0); // 有上游 traced 用之(混批闭环), 否则首道材料
-  const pkgMat = st.length ? (st[st.length - 1].materialCost || 0) : 0; // 末道(包装)= 包装材料
-  const seasoning = Math.max(0, matTotal - pkgMat);                  // 报告侧材料(熟制调料; 修油道已置0)
+  // 全部以后端权威 cb 为准; cb 缺失时回退订单聚合/报告
+  const labor = Number(cb.value?.laborCost ?? d?.totalLaborCost ?? 0);
+  const rawMat = Number(cb.value?.rawMaterialCost ?? (upstreamCost.value > 0 ? upstreamCost.value : (st.length ? (st[0].materialCost || 0) : 0)));
+  const pkgMat = Number(cb.value?.packagingCost ?? (st.length ? (st[st.length - 1].materialCost || 0) : 0));
+  const seasoning = Number(cb.value?.seasoningCost ?? Math.max(0, (d?.totalMaterialCost || 0) - pkgMat));
   const total = totalCostClosed.value || 1;
   const bc = boxCount.value || 1;
   const rows = [
@@ -224,16 +231,21 @@ function renderSankey() {
   chart.resize();
 }
 
-// 多批混锅溯源 — 数据驱动: 调现成 /processing/material-consumptions/batch/{batchId}
-// 返回本批每个上游来源的 投料量 + 单价 + 成本 (价格按 procurement:price:view 权限脱敏)
-async function loadMix() {
-  mixRels.value = [];
-  const bid = data.value?.batches?.[0]?.batchId;
-  if (!factoryId.value || bid == null) return;
+// 单一权威: 调后端 /production/orders/{orderId}/cost-breakdown (谱系遍历+上游成本回溯+人工归集)
+// cb.sources 映射进 mixRels 供溯源桑基图/成本拆分表复用 (价格按 procurement:price:view 权限脱敏)
+async function loadCostBreakdown() {
+  mixRels.value = []; cb.value = null;
+  if (!factoryId.value || !orderId.value) return;
   try {
-    const resp = await get<MixRel[]>(`/${factoryId.value}/processing/material-consumptions/batch/${bid}`);
-    if (resp.success && Array.isArray(resp.data)) mixRels.value = resp.data;
-  } catch { /* 无消耗记录 → 该卡不显示 */ }
+    const resp = await get<CostBreakdown>(`/${factoryId.value}/production/orders/${orderId.value}/cost-breakdown`);
+    if (resp.success && resp.data) {
+      cb.value = resp.data;
+      mixRels.value = (resp.data.sources || []).map(s => ({
+        batchNumber: s.batchName, batchId: s.batchId, quantity: s.quantity,
+        unitPrice: s.unitPrice, totalCost: s.cost,
+      }));
+    }
+  } catch { /* 无成本拆分 → 混批卡不显示 */ }
 }
 
 // 成本拆分: 按实测投料量×单价 (异质成本下 成本占比 ≠ 重量占比, 正是 Excel 糊平均的盲区)
@@ -297,7 +309,7 @@ async function load() {
     const resp = await get<YieldSummary>(`/${factoryId.value}/production/orders/${orderId.value}/yield-summary`);
     if (resp.success && resp.data) {
       data.value = resp.data;
-      await loadMix();
+      await loadCostBreakdown();
       await nextTick();
       renderSankey();
       renderMix();
