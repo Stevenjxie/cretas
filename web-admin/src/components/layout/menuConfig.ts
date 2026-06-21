@@ -311,6 +311,8 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/production-analytics/yield-cost', title: '成品出厂核算', icon: 'Coin', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/production-analytics/cost-summary', title: '成本汇总', icon: 'Tickets', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
       // -- 数据管理 --
       { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
       { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
