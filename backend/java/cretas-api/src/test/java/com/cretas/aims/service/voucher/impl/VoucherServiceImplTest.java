@@ -75,6 +75,7 @@ class VoucherServiceImplTest {
         SalesOrder order = new SalesOrder();
         order.setId("so-1");
         order.setOrderNumber("SO-2026-0001");
+        order.setFactoryId("F001");
         order.setOrderDate(LocalDate.of(2026, 5, 16));
         order.setTotalAmount(new BigDecimal("500.00"));
 
@@ -99,6 +100,7 @@ class VoucherServiceImplTest {
         SalesOrder order = new SalesOrder();
         order.setId("so-1");
         order.setOrderNumber("SO-2026-0001");
+        order.setFactoryId("F001");
         order.setOrderDate(LocalDate.of(2026, 5, 16));
         order.setTotalAmount(new BigDecimal("500.00"));
 
@@ -128,6 +130,7 @@ class VoucherServiceImplTest {
         SalesOrder order = new SalesOrder();
         order.setId("so-2");
         order.setOrderNumber("SO-2026-0002");
+        order.setFactoryId("F001");
         order.setOrderDate(LocalDate.of(2026, 5, 16));
         order.setTotalAmount(new BigDecimal("300.00"));
 

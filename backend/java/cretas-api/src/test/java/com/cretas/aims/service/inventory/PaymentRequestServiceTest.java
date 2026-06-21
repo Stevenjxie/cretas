@@ -96,7 +96,7 @@ class PaymentRequestServiceTest {
                     return pr;
                 });
         // Default: PO not found (降级降级，不阻塞) — override in specific tests
-        when(purchaseOrderRepository.findById(anyString())).thenReturn(Optional.empty());
+        when(purchaseOrderRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -176,7 +176,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.DRAFT, SettlementType.CREDIT_PERIOD);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             BusinessException ex = assertThrows(BusinessException.class, () ->
                     paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
@@ -196,7 +196,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.PARTIAL_RECEIVED, SettlementType.MONTHLY);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             assertThrows(BusinessException.class, () ->
                     paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
@@ -209,7 +209,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.COMPLETED, SettlementType.CREDIT_PERIOD);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);
@@ -224,7 +224,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.DRAFT, SettlementType.PREPAID);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);
@@ -238,7 +238,7 @@ class PaymentRequestServiceTest {
         void poNotFound_gracefulDegradation_allowsCreate() {
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.empty());
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.empty());
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);
@@ -252,7 +252,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.COMPLETED, null);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             // null settlementType is not in PREPAID_EXEMPT → must be COMPLETED → passes
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
@@ -267,7 +267,7 @@ class PaymentRequestServiceTest {
             PurchaseOrder po = makePo(PO_ID, PurchaseOrderStatus.DRAFT, null);
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             assertThrows(BusinessException.class, () ->
                     paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
@@ -303,7 +303,7 @@ class PaymentRequestServiceTest {
 
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);
@@ -322,7 +322,7 @@ class PaymentRequestServiceTest {
 
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(3000), "bank", 1L, null);
@@ -335,7 +335,7 @@ class PaymentRequestServiceTest {
         void poNotFound_settlementTypeNull() {
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.empty());
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.empty());
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);
@@ -355,7 +355,7 @@ class PaymentRequestServiceTest {
 
             when(paymentRequestRepository.findActiveByPurchaseOrderId(eq(PO_ID), anyList()))
                     .thenReturn(Collections.emptyList());
-            when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+            when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID)).thenReturn(Optional.of(po));
 
             PaymentRequest result = paymentRequestService.create(FACTORY_ID, PO_ID, SUPPLIER_ID,
                     BigDecimal.valueOf(5000), "transfer", 1L, null);

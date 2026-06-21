@@ -132,7 +132,7 @@ class WorkReportingServiceImplTest {
                     .thenReturn(false);
             when(reportRepository.save(any(ProductionReport.class))).thenReturn(saved);
             // batchId != null → updateBatchActualQuantity 查批次 (返 empty 不影响主流程)
-            when(productionBatchRepository.findById(BATCH_ID)).thenReturn(java.util.Optional.empty());
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(java.util.Optional.empty());
 
             WorkReportResponse resp = service.submitReport(FACTORY_ID, WORKER_ID, req);
 
@@ -156,7 +156,7 @@ class WorkReportingServiceImplTest {
                             eq(FACTORY_ID), eq(WORKER_ID), eq(BATCH_ID), eq(REPORT_TYPE), cutoffCaptor.capture()))
                     .thenReturn(false);
             when(reportRepository.save(any(ProductionReport.class))).thenReturn(saved);
-            when(productionBatchRepository.findById(BATCH_ID)).thenReturn(java.util.Optional.empty());
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(java.util.Optional.empty());
 
             service.submitReport(FACTORY_ID, WORKER_ID, req);
 
