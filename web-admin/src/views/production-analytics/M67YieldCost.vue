@@ -78,7 +78,26 @@
           <span class="hint">实时从批次关联溯源 — 一锅熟制来自 {{ mixRels.length }} 个上游批次, 按实测投料量逐批归集 (Excel 做不到的"多对多")</span>
         </template>
         <div ref="mixEl" style="height: 300px"></div>
-        <div class="mix-note">本批来自 {{ mixRels.length }} 个上游批次：{{ mixRels.map(r => `${r.materialBatchId} ${r.quantityUsed}${r.unit || 'kg'}`).join(' + ') }}。两条链各自的出成率/成本按实测投料量精确归集，不是糊一个平均。数据来源：批次关联表实时溯源 (/batch-relations/trace/backward)。</div>
+
+        <!-- 成本按混批比例真拆 (异质成本: 成本占比 ≠ 重量占比) -->
+        <div v-if="mixCostSplit.hasCost" class="mix-cost">
+          <div class="mix-cost-title">混批成本拆分 — 按实测投料量 × 各自单价精确归集 (合计 ¥{{ mixCostSplit.totalCost.toFixed(2) }})</div>
+          <table class="mix-tbl">
+            <thead><tr><th>上游来源</th><th>投料量</th><th>单价</th><th>成本</th><th>重量占比</th><th>成本占比</th></tr></thead>
+            <tbody>
+              <tr v-for="row in mixCostSplit.rows" :key="row.name">
+                <td>{{ row.name }}</td>
+                <td>{{ row.qty }} kg</td>
+                <td>¥{{ Number(row.unitPrice).toFixed(2) }}/kg</td>
+                <td>¥{{ Number(row.cost).toFixed(2) }}</td>
+                <td>{{ row.weightShare }}%</td>
+                <td :class="{ hl: row.costShare !== row.weightShare }">{{ row.costShare }}%</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="mix-note">注意：本批两条上游链<b>单价不同</b>，所以<b>成本占比 ≠ 重量占比</b>——按重量糊一个平均会算错成本，必须按实测投料量×各自单价精确归集。这正是 Excel(XLOOKUP 只取一条链)做不到、客户"只能加权平均"的盲区。数据来源：批次消耗记录实时计算 (/material-consumptions)。</div>
+        </div>
+        <div v-else class="mix-note">本批来自 {{ mixRels.length }} 个上游批次，按实测投料量逐批溯源。成本金额需价格查看权限。数据来源：批次消耗记录 (/material-consumptions)。</div>
       </el-card>
     </template>
 
@@ -99,7 +118,7 @@ interface Step {
   totalInput?: number; totalOutput?: number; outputUnit?: string;
   yieldRate?: number; laborCost?: number; materialCost?: number;
 }
-interface MixRel { materialBatchId?: string; quantityUsed?: number; unit?: string; stage?: string; productionBatchId?: number }
+interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; unitPrice?: number; totalCost?: number; sourceType?: string }
 interface YieldSummary {
   orderId: string; overallYieldRate?: number;
   totalFirstInput?: number; totalLastOutput?: number; lastOutputUnit?: string;
@@ -200,16 +219,36 @@ function renderSankey() {
   chart.resize();
 }
 
-// 多批混锅溯源 — 数据驱动: 调 /batch-relations/trace/backward/{batchId} 取真实上游批次关系
+// 多批混锅溯源 — 数据驱动: 调现成 /processing/material-consumptions/batch/{batchId}
+// 返回本批每个上游来源的 投料量 + 单价 + 成本 (价格按 procurement:price:view 权限脱敏)
 async function loadMix() {
   mixRels.value = [];
   const bid = data.value?.batches?.[0]?.batchId;
   if (!factoryId.value || bid == null) return;
   try {
-    const resp = await get<MixRel[]>(`/${factoryId.value}/batch-relations/trace/backward/${bid}`);
+    const resp = await get<MixRel[]>(`/${factoryId.value}/processing/material-consumptions/batch/${bid}`);
     if (resp.success && Array.isArray(resp.data)) mixRels.value = resp.data;
-  } catch { /* 无溯源关系 → 该卡不显示 */ }
+  } catch { /* 无消耗记录 → 该卡不显示 */ }
 }
+
+// 成本拆分: 按实测投料量×单价 (异质成本下 成本占比 ≠ 重量占比, 正是 Excel 糊平均的盲区)
+const mixCostSplit = computed(() => {
+  const rows = mixRels.value.filter(r => r.totalCost != null);
+  const totalCost = rows.reduce((s, r) => s + Number(r.totalCost || 0), 0);
+  const totalQty = mixRels.value.reduce((s, r) => s + Number(r.quantity || 0), 0) || 1;
+  return {
+    hasCost: rows.length > 0,
+    totalCost,
+    rows: mixRels.value.map(r => ({
+      name: r.batchNumber || r.batchId || '上游',
+      qty: Number(r.quantity || 0),
+      unitPrice: r.unitPrice,
+      cost: r.totalCost,
+      weightShare: Math.round((Number(r.quantity || 0) / totalQty) * 1000) / 10,
+      costShare: totalCost ? Math.round((Number(r.totalCost || 0) / totalCost) * 1000) / 10 : null,
+    })),
+  };
+});
 
 function renderMix() {
   if (!mixEl.value || !mixRels.value.length) return;
@@ -223,8 +262,8 @@ function renderMix() {
   const links: { source: string; target: string; value: number }[] = [];
   let totalIn = 0;
   mixRels.value.forEach((r, i) => {
-    const src = r.materialBatchId || ('上游' + (i + 1));
-    const v = Number(r.quantityUsed || 0);
+    const src = r.batchNumber || r.batchId || ('上游' + (i + 1));
+    const v = Number(r.quantity || 0);
     totalIn += v;
     addNode(src, palette[i % palette.length]);
     links.push({ source: src, target: SZ, value: v });
@@ -283,6 +322,13 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
 .hint { color: #909399; font-size: 12px; margin-left: 8px; }
 .mix-note { color: #606266; font-size: 13px; background: #f4f6fa; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
+.mix-cost { margin-top: 12px; }
+.mix-cost-title { font-weight: 600; margin-bottom: 8px; }
+.mix-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mix-tbl th, .mix-tbl td { border: 1px solid #ebeef5; padding: 6px 10px; text-align: right; }
+.mix-tbl th:first-child, .mix-tbl td:first-child { text-align: left; }
+.mix-tbl thead th { background: #f5f7fa; color: #606266; font-weight: 600; }
+.mix-tbl td.hl { color: #e6a23c; font-weight: 700; }
 .step { margin-bottom: 14px; }
 .step-top { display: flex; align-items: center; margin-bottom: 4px; }
 .pname { font-weight: 600; width: 64px; }
