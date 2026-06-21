@@ -83,6 +83,15 @@ class OrderCostBreakdownServiceTest {
         return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
     }
 
+    /** 带显式 costCategory 的 BatchYieldDTO (CALC-003); cats[i] 对应第 i 道材料类别。 */
+    private BatchYieldDTO batchYieldWithCategory(String labor, String[] cats, BigDecimal... mats) {
+        StepYieldDTO[] steps = new StepYieldDTO[mats.length];
+        for (int i = 0; i < mats.length; i++) {
+            steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(mats[i]).costCategory(cats[i]).build();
+        }
+        return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
+    }
+
     /** 通用步骤构造: 首道可挂副产物/料头, 末道可挂留样 (AUDIT-001+006 组合场景)。 */
     private BatchYieldDTO buildBatch(String labor, List<Map<String, Object>> bpFirst, Integer sampleLast, BigDecimal wasteFirst, BigDecimal... mats) {
         StepYieldDTO[] steps = new StepYieldDTO[mats.length];
@@ -296,6 +305,44 @@ class OrderCostBreakdownServiceTest {
         assertThat(masked.getSellablePerBoxCost()).isNull();
         assertThat(masked.getSampleRetainCount()).isEqualTo(5);               // 物理量保留
         assertThat(masked.getSellableBoxCount()).isEqualTo(1782);
+    }
+
+    @Test
+    @DisplayName("CALC-003 显式 costCategory 分类不依赖工序顺序 (包装不在末道也正确归类)")
+    void explicitCostCategoryOrderIndependent() {
+        // 工序乱序: 包装(880)在中间道, 调料(980)在末道。
+        // 旧启发式会错(末道→包装=980, 中间→调料=880); 显式类别纠正为 包装880/调料980。
+        stubOneBatch(1L, "100",
+                batchYieldWithCategory("0",
+                        new String[]{"RAW_MATERIAL", "PACKAGING", "SEASONING"},
+                        BigDecimal.ZERO, new BigDecimal("880"), new BigDecimal("980")),
+                List.of(cons("MB1", "10", "100", "1000")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "源", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("880");   // 按类别(中间道), 非按末道
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("980");   // 按类别(末道), 非启发式末道→包装
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("1000"); // RAW_MATERIAL 道不计, 原料来自 traced consumption
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("2860");       // 1000+880+980
+    }
+
+    @Test
+    @DisplayName("CALC-003 未知/缺失 costCategory → 回退 step-index 启发式 (向后兼容)")
+    void unknownCategoryFallsBackToHeuristic() {
+        // cats: [null, "BOGUS", null] → 全部回退启发式: i0 skip, i1(中)→调料980, i2(末)→包装880
+        stubOneBatch(1L, "100",
+                batchYieldWithCategory("0",
+                        new String[]{null, "BOGUS", null},
+                        BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")),
+                List.of(cons("MB1", "10", "100", "1000")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "源", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("980");   // 启发式中间道
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("880");   // 启发式末道
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("1000");
     }
 
     @Test

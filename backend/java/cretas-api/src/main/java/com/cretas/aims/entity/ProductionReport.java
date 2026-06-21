@@ -226,6 +226,10 @@ public class ProductionReport {
     @Column(name = "sample_retain_quantity")
     private Integer sampleRetainQuantity;
 
+    /** CALC-003 成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; null=回退 step-index 启发式 */
+    @Column(name = "cost_category", length = 20)
+    private String costCategory;
+
     /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
     @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
     private BigDecimal warehouseOutQuantity;

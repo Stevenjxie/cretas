@@ -94,11 +94,14 @@ public class OrderCostBreakdownService {
                     if (m == null) {
                         continue;
                     }
-                    if (i == steps.size() - 1) {
-                        packaging = packaging.add(m);   // 末道 = 包装材料
-                    } else if (i > 0) {
-                        seasoning = seasoning.add(m);    // 中间道 = 调料 (首道原料由上游 traced 承载, 不计)
+                    // CALC-003: 显式 costCategory 优先分类; null/未知 → 回退 step-index 启发式 (向后兼容)
+                    String bucket = resolveCostBucket(steps.get(i).getCostCategory(), i, steps.size(), factoryId, orderId);
+                    if ("PACKAGING".equals(bucket)) {
+                        packaging = packaging.add(m);
+                    } else if ("SEASONING".equals(bucket)) {
+                        seasoning = seasoning.add(m);
                     }
+                    // "SKIP" → 原料由上游 traced consumption 承载, 不计 (避免双计)
                 }
             }
             if (b.getQuantity() != null) {
@@ -254,6 +257,37 @@ public class OrderCostBreakdownService {
                 line.setUnitPrice(line.getValue().divide(line.getQuantity(), 4, RoundingMode.HALF_UP));
             }
         }
+    }
+
+    /**
+     * CALC-003: 解析本道材料成本归入哪个桶 — PACKAGING(包装) / SEASONING(调料) / SKIP(原料, 由上游 traced 承载不计)。
+     * 显式 costCategory 优先 (分类不依赖工序顺序); null 或未知值 → 回退 step-index 启发式 (末道=包装, 中间道=调料, 首道=原料)。
+     */
+    private String resolveCostBucket(String costCategory, int idx, int stepCount, String factoryId, String orderId) {
+        if (costCategory != null) {
+            switch (costCategory.trim().toUpperCase()) {
+                case "PACKAGING":
+                    return "PACKAGING";
+                case "SEASONING":
+                case "AUXILIARY":
+                case "OTHER":
+                    return "SEASONING";
+                case "RAW_MATERIAL":
+                    return "SKIP";   // 原料由上游 traced consumption 承载, 不计
+                default:
+                    log.warn("[M67CostBreakdown] 未知 costCategory={} (factory={}, order={}) — 回退 step-index 启发式",
+                            costCategory, factoryId, orderId);
+                    // 落入下方启发式
+            }
+        }
+        // 启发式 (向后兼容): 末道=包装, 中间道=调料, 首道=原料(traced 承载, SKIP)
+        if (idx == stepCount - 1) {
+            return "PACKAGING";
+        }
+        if (idx > 0) {
+            return "SEASONING";
+        }
+        return "SKIP";
     }
 
     private static BigDecimal toBigDecimal(Object o) {

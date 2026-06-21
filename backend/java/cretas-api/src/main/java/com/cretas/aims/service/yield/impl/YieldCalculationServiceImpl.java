@@ -55,6 +55,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             List<Map<String, Object>> stepByproducts = null;     // 拼接
             BigDecimal stepWaste = null;
             Integer stepSampleRetain = null;
+            String stepCostCategory = null;          // CALC-003: 本道成本类别 (取首个非 null)
             Integer stepWorkersMax = null;           // MAX headcount across reports (peak, 非 SUM)
             // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
             List<String> stepInputPhotos = null;     // 去重保序
@@ -164,6 +165,10 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (r.getSampleRetainQuantity() != null) {
                     stepSampleRetain = (stepSampleRetain == null ? 0 : stepSampleRetain) + r.getSampleRetainQuantity();
                 }
+                // CALC-003 成本类别: 本道取首个非 null (同道各次报工应一致)
+                if (stepCostCategory == null && r.getCostCategory() != null) {
+                    stepCostCategory = r.getCostCategory();
+                }
                 // SP1 双产出: outputKind 取首个非 null; semiOutputQuantity Σ; semiCode/semiOutputUnit 取首个非 null
                 if (stepOutputKind == null && r.getOutputKind() != null) {
                     stepOutputKind = r.getOutputKind();
@@ -227,6 +232,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .byproducts(stepByproducts)
                     .wasteQuantity(stepWaste)
                     .sampleRetainQuantity(stepSampleRetain)
+                    .costCategory(stepCostCategory)
                     // 三阶段 (单元1): phase 推断 + 照片按 reportKind 分组
                     .phase(phase)
                     .inputPhotos(stepInputPhotos)

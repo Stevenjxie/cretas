@@ -269,6 +269,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
                 .sampleRetainQuantity(effSampleRetain)
+                .costCategory(req.getCostCategory())   // CALC-003: 成本类别 (null=按 step-index 启发式)
                 .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)

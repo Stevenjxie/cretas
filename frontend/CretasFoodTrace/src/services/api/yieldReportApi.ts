@@ -244,6 +244,9 @@ export interface YieldReportRequest {
   semiOutputQuantity?: number;
   /** SP1 半成品编码 (来自 output-options 接口返回; 不许前端自由输入, F7 防呆) */
   semiCode?: string;
+
+  /** CALC-003 成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; null=按工序顺序启发式分类 (通常由工序配置派生, 不由操作员手填) */
+  costCategory?: 'RAW_MATERIAL' | 'SEASONING' | 'AUXILIARY' | 'PACKAGING' | 'OTHER';
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14

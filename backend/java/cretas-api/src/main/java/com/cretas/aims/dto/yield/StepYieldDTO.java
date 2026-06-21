@@ -62,6 +62,8 @@ public class StepYieldDTO {
     private BigDecimal wasteQuantity;
     /** Σ 本道留样数 (null-safe; 全 null → null; 通常仅末道有) */
     private Integer sampleRetainQuantity;
+    /** CALC-003 本道成本类别 (各次报工取首个非 null); null=回退 step-index 启发式分类 */
+    private String costCategory;
 
     // ── 三阶段报工 (单元1): 阶段推断 + 照片按 reportKind 分组 ──────────────
     /** 本道阶段: AWAITING_INPUT (无投入) / IN_PRODUCTION (有投入无产出) / COMPLETED (有产出)。
