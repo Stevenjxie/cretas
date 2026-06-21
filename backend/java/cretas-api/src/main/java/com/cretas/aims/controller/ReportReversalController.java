@@ -164,11 +164,28 @@ public class ReportReversalController {
 
         Long wipId = body.get("wipId") instanceof Number
                 ? ((Number) body.get("wipId")).longValue() : null;
-        BigDecimal quantity = body.get("quantity") != null
-                ? new BigDecimal(body.get("quantity").toString()) : null;
+        // C-BUG-5 (2026-06-21 transcript-e2e R1): raw Map 手动 parse — 畸形/缺失值
+        // 之前抛 NumberFormatException/DateTimeParseException 落到泛化 handler (数字 400 无字段名,
+        // 日期 500)。这里 per-site 守卫给出精确字段名提示 (防呆 Rule 5: dead-end → next action)。
+        BigDecimal quantity;
+        try {
+            quantity = body.get("quantity") != null
+                    ? new BigDecimal(body.get("quantity").toString()) : null;
+        } catch (NumberFormatException ex) {
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "字段 'quantity' 数量格式不正确 (值: \"" + body.get("quantity") + "\")")
+                    .withHint("请填写有效的数字，例: 50 或 50.5");
+        }
         String productTypeId = (String) body.get("productTypeId");
-        LocalDate plannedDate = body.get("plannedDate") != null
-                ? LocalDate.parse(body.get("plannedDate").toString()) : null;
+        LocalDate plannedDate;
+        try {
+            plannedDate = body.get("plannedDate") != null
+                    ? LocalDate.parse(body.get("plannedDate").toString()) : null;
+        } catch (java.time.format.DateTimeParseException ex) {
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "字段 'plannedDate' 日期格式不正确 (值: \"" + body.get("plannedDate") + "\")")
+                    .withHint("请使用 yyyy-MM-dd 格式，例: 2026-06-21");
+        }
 
         log.info("SP2 创建二次加工计划: factoryId={}, wipId={}, quantity={}, productTypeId={}",
                 factoryId, wipId, quantity, productTypeId);

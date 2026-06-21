@@ -150,6 +150,18 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
     public PaymentRequest create(String factoryId, String poId, String supplierId,
                                  BigDecimal amount, String paymentMethod, Long userId, String remark) {
 
+        // D-BUG4 (2026-06-21 transcript-e2e R1): controller 用 raw Map getBigDecimal(body,"amount"),
+        // 缺失/畸形时返回 null。之前直接 pr.setAmount(null) → DB NOT NULL 约束 → 500。
+        // 与 createSalesPayment 一致, 在 service 层显式守卫给友好 422 (单一真源, 也覆盖 AI tool 直调)。
+        if (supplierId == null || supplierId.isBlank()) {
+            throw new BusinessException(422, "付款申请必须指定供应商（supplierId）。")
+                    .withHint("请选择供应商后再提交付款申请");
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new BusinessException(422, "付款金额必须大于 0。")
+                    .withHint("请填写有效的付款金额");
+        }
+
         // 幂等性检查：同一 PO 已有 PENDING/FINANCE_REVIEW/APPROVED → 409
         List<PaymentRequest> active = paymentRequestRepository.findActiveByPurchaseOrderId(
                 poId, ACTIVE_STATUSES);

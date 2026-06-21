@@ -5,6 +5,7 @@ import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.VoucherEntryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,6 +29,9 @@ class AccountServiceTest {
 
     @Mock
     private AccountRepository accountRepo;
+
+    @Mock
+    private VoucherEntryRepository voucherEntryRepo;
 
     @InjectMocks
     private AccountService accountService;
@@ -176,9 +180,34 @@ class AccountServiceTest {
                 .build();
         when(accountRepo.findByIdAndDeletedAtIsNull("acc-id")).thenReturn(Optional.of(existing));
         when(accountRepo.countByParentIdAndDeletedAtIsNull("acc-id")).thenReturn(0L);
+        // H-BUG-3: 无凭证分录引用 → 允许删除
+        when(voucherEntryRepo.countBySubjectCodeAndFactory("F006", "1001")).thenReturn(0L);
 
         assertDoesNotThrow(() -> accountService.softDelete("F006", "acc-id"));
         verify(accountRepo).save(argThat(a -> a.getDeletedAt() != null));
+    }
+
+    @Test
+    void softDeleteWithVoucherEntryReferenceThrows409() {
+        // H-BUG-3 (2026-06-21 transcript-e2e R1): 已被凭证分录引用的科目禁删。
+        Account existing = Account.builder()
+                .id("acc-id")
+                .factoryId("F006")
+                .code("1001")
+                .name("库存现金")
+                .category(AccountCategory.ASSET)
+                .balanceType(AccountBalanceType.DEBIT_NORMAL)
+                .build();
+        when(accountRepo.findByIdAndDeletedAtIsNull("acc-id")).thenReturn(Optional.of(existing));
+        when(accountRepo.countByParentIdAndDeletedAtIsNull("acc-id")).thenReturn(0L);
+        when(voucherEntryRepo.countBySubjectCodeAndFactory("F006", "1001")).thenReturn(5L);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> accountService.softDelete("F006", "acc-id"));
+        assertEquals(Integer.valueOf(409), ex.getCode());
+        assertTrue(ex.getMessage().contains("5 条凭证分录"), "应说明被几条分录引用");
+        assertNotNull(ex.getActionHint(), "actionHint required for Rule 5 dead-end nav");
+        verify(accountRepo, never()).save(any());
     }
 
     @Test

@@ -80,6 +80,32 @@ public class BomCostSummaryDTO {
 
     private String caliberHint;
 
+    // ============ B-BUG-1: 缺价完整性标记 (2026-06-21 transcript-e2e R1) ============
+
+    /**
+     * 是否存在缺单价的原辅料行。
+     *
+     * <p>背景: 缺单价的行无法计入成本 (单价未知)。之前静默当 ¥0 并入 {@code materialCostTotal},
+     * 导致总成本被低估却"看起来完整" (违反"禁止降级"铁律)。现显式标记, 让前端展示
+     * "成本不完整 / 缺 N 行价格", 而非假装完整。
+     *
+     * <p>{@code true} 时 {@code materialCostTotal}/{@code totalCost} 仅含已知价格行的累加,
+     * 不代表完整成本; 前端应据此提示用户补全单价后重新计算。
+     */
+    @Builder.Default
+    private boolean hasMissingPrice = false;
+
+    /**
+     * 缺单价的原辅料行数 (hasMissingPrice=true 时 &gt; 0)。
+     */
+    @Builder.Default
+    private int missingPriceCount = 0;
+
+    /**
+     * 缺单价的原辅料名称列表, 供前端直接展示"缺价: XXX, YYY"。
+     */
+    private List<String> missingPriceMaterials;
+
     /**
      * 计算时间戳
      */
@@ -143,6 +169,13 @@ public class BomCostSummaryDTO {
          */
         @PriceSensitive
         private BigDecimal subtotal;
+
+        /**
+         * B-BUG-1: 此行是否缺单价。{@code true} 时 {@code subtotal} 不可信 (单价未知,
+         * 无法计入成本)。前端应高亮该行并提示"缺单价"。
+         */
+        @Builder.Default
+        private boolean missingPrice = false;
     }
 
     /**

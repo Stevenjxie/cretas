@@ -32,6 +32,10 @@ import java.util.UUID;
 public class AccountService {
 
     private final AccountRepository accountRepo;
+    // H-BUG-3 (2026-06-21 transcript-e2e R1): softDelete 的 voucher_entry 引用阻删校验需要。
+    // 此前 import 了 VoucherEntryRepository 但既未注入也未使用, javadoc 声称"已被 voucher_entry
+    // 引用的科目禁删"实际是死承诺。
+    private final VoucherEntryRepository voucherEntryRepo;
 
     /**
      * 系统级 (NULL factoryId) 或 factory 自定义科目都能 list. NULL factoryId 系统标准跨
@@ -163,6 +167,14 @@ public class AccountService {
             throw new BusinessException(409,
                     String.format("科目 %s 下有 %d 个子科目, 不可删除", existing.getCode(), childCount))
                     .withHint("先删除子科目, 或改为禁用 active=false");
+        }
+        // H-BUG-3: 已被凭证分录引用的科目禁删 (此前 javadoc 声称有此校验, 实际缺失)。
+        // 删除被引用科目会孤立历史凭证记录, 破坏账务追溯。
+        long entryCount = voucherEntryRepo.countBySubjectCodeAndFactory(factoryId, existing.getCode());
+        if (entryCount > 0) {
+            throw new BusinessException(409,
+                    String.format("科目 %s 已被 %d 条凭证分录引用, 不可删除", existing.getCode(), entryCount))
+                    .withHint("已记账的科目不可删除, 请改为禁用 active=false");
         }
         existing.softDelete();
         accountRepo.save(existing);

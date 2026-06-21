@@ -140,8 +140,32 @@ public class TransferController {
             if (raw != null) {
                 itemActualQuantities = new java.util.HashMap<>();
                 for (Map.Entry<String, Object> e : raw.entrySet()) {
-                    Long id = Long.parseLong(e.getKey());
-                    BigDecimal qty = new BigDecimal(e.getValue().toString());
+                    // F-BUG-6 (2026-06-21 transcript-e2e R1): raw Map 手动 parse —
+                    // key 非数字 → NumberFormatException (泛化 400 无字段名);
+                    // value=null → NPE (e.getValue().toString()) → 500。
+                    // per-site 守卫给出精确 itemId + next action (防呆 Rule 5)。
+                    Long id;
+                    try {
+                        id = Long.parseLong(e.getKey());
+                    } catch (NumberFormatException ex) {
+                        throw new com.cretas.aims.exception.BusinessException(400,
+                                "itemActualQuantities 的明细行 ID 格式不正确 (值: \"" + e.getKey() + "\")")
+                                .withHint("明细行 ID 必须是数字，请检查请求体 itemActualQuantities 的 key");
+                    }
+                    Object rawQty = e.getValue();
+                    if (rawQty == null) {
+                        throw new com.cretas.aims.exception.BusinessException(400,
+                                "明细行 " + id + " 的实收数量不能为空")
+                                .withHint("请为该明细行填写有效的实收数量");
+                    }
+                    BigDecimal qty;
+                    try {
+                        qty = new BigDecimal(rawQty.toString());
+                    } catch (NumberFormatException ex) {
+                        throw new com.cretas.aims.exception.BusinessException(400,
+                                "明细行 " + id + " 的实收数量格式不正确 (值: \"" + rawQty + "\")")
+                                .withHint("实收数量必须是数字，例: 50 或 50.5");
+                    }
                     itemActualQuantities.put(id, qty);
                 }
             }
