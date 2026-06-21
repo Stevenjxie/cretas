@@ -49,6 +49,7 @@ public class OrderCostBreakdownService {
     private final ProductionBatchRepository batchRepository;
     private final MaterialConsumptionRepository consumptionRepository;
     private final MaterialBatchRepository materialBatchRepository;
+    private final com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
     private final YieldReportService yieldReportService;
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
@@ -77,6 +78,8 @@ public class OrderCostBreakdownService {
         LinkedHashMap<String, ByproductLine> byproductAcc = new LinkedHashMap<>();
         // AUDIT-002 包装明细按 名称 归集成本 (跨批次跨道)
         LinkedHashMap<String, BigDecimal> packagingAcc = new LinkedHashMap<>();
+        // AUDIT-004 辅料按锅分摊明细 (按 锅号 去重)
+        LinkedHashMap<String, OrderCostBreakdownDTO.AuxiliaryAllocation> auxAllocAcc = new LinkedHashMap<>();
 
         for (ProductionBatch b : batches) {
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
@@ -103,7 +106,28 @@ public class OrderCostBreakdownService {
                     if ("PACKAGING".equals(bucket)) {
                         packaging = packaging.add(m);
                     } else if ("SEASONING".equals(bucket)) {
-                        seasoning = seasoning.add(m);
+                        // AUDIT-004: 该道辅料若标了共享锅 → 按产出量分摊本批 share (替代报工 material_cost); 否则原样计
+                        BigDecimal contribution = m;
+                        StepYieldDTO step = steps.get(i);
+                        if (step.getAuxPotNo() != null && step.getAuxPotTotalCost() != null) {
+                            BigDecimal potOutput = nz(productionReportRepository.sumOutputByAuxPotNo(factoryId, step.getAuxPotNo()));
+                            BigDecimal myOutput = nz(step.getTotalOutput());
+                            BigDecimal share = potOutput.signum() > 0
+                                    ? step.getAuxPotTotalCost().multiply(myOutput).divide(potOutput, 2, RoundingMode.HALF_UP)
+                                    : step.getAuxPotTotalCost();
+                            contribution = share;
+                            auxAllocAcc.put(step.getAuxPotNo(), OrderCostBreakdownDTO.AuxiliaryAllocation.builder()
+                                    .potNo(step.getAuxPotNo())
+                                    .method(step.getAuxAllocMethod())
+                                    .potTotalCost(step.getAuxPotTotalCost())
+                                    .potTotalOutput(potOutput)
+                                    .batchOutput(myOutput)
+                                    .batchShare(share)
+                                    .batchSharePct(potOutput.signum() > 0
+                                            ? myOutput.multiply(HUNDRED).divide(potOutput, 1, RoundingMode.HALF_UP) : null)
+                                    .build());
+                        }
+                        seasoning = seasoning.add(contribution);
                     }
                     // "SKIP" → 原料由上游 traced consumption 承载, 不计 (避免双计)
                 }
@@ -152,6 +176,10 @@ public class OrderCostBreakdownService {
                         .map(e -> PackagingItem.builder().name(e.getKey()).cost(e.getValue()).build())
                         .collect(Collectors.toList());
 
+        // AUDIT-004 辅料按锅分摊明细 (null=无共享锅)
+        List<OrderCostBreakdownDTO.AuxiliaryAllocation> auxiliaryAllocations =
+                auxAllocAcc.isEmpty() ? null : new ArrayList<>(auxAllocAcc.values());
+
         BigDecimal totalQty = sources.stream().map(s -> nz(s.getQuantity())).reduce(BigDecimal.ZERO, BigDecimal::add);
         for (SourceCost s : sources) {
             s.setWeightSharePct(totalQty.signum() > 0
@@ -180,6 +208,7 @@ public class OrderCostBreakdownService {
                 .sellableBoxCount(sellableBoxCount)
                 .sellablePerBoxCost(sellablePerBox)
                 .packagingDetail(packagingDetail)
+                .auxiliaryAllocations(auxiliaryAllocations)
                 .sources(sources)
                 .build();
         if (maskPrice) {
@@ -373,6 +402,12 @@ public class OrderCostBreakdownService {
         if (dto.getPackagingDetail() != null) {
             for (PackagingItem p : dto.getPackagingDetail()) {
                 p.setCost(null);   // 成本敏感; 保留 name (包材项名是物理信息)
+            }
+        }
+        if (dto.getAuxiliaryAllocations() != null) {
+            for (OrderCostBreakdownDTO.AuxiliaryAllocation a : dto.getAuxiliaryAllocations()) {
+                a.setPotTotalCost(null);
+                a.setBatchShare(null);   // 金额敏感; 保留 potNo/method/产出量/占比 (物理量)
             }
         }
     }

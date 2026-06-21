@@ -66,6 +66,12 @@ public class StepYieldDTO {
     private String costCategory;
     /** AUDIT-002 包装明细 [{name,cost}] (本道各次报工拼接; 通常仅包装道有); null=未拆 */
     private List<Map<String, Object>> packagingDetail;
+    /** AUDIT-004 共享锅标识 (各次报工取首个非 null); null=辅料不按锅分摊 */
+    private String auxPotNo;
+    /** AUDIT-004 该锅辅料总成本 (取首个非 null) */
+    private BigDecimal auxPotTotalCost;
+    /** AUDIT-004 分摊方式 BY_OUTPUT/FIXED_RATIO (取首个非 null) */
+    private String auxAllocMethod;
 
     // ── 三阶段报工 (单元1): 阶段推断 + 照片按 reportKind 分组 ──────────────
     /** 本道阶段: AWAITING_INPUT (无投入) / IN_PRODUCTION (有投入无产出) / COMPLETED (有产出)。

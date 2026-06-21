@@ -235,6 +235,16 @@ public class ProductionReport {
     @Column(name = "packaging_detail", columnDefinition = "jsonb")
     private List<Map<String, Object>> packagingDetail;
 
+    /** AUDIT-004 共享锅标识 (同号报工共用一锅辅料, 按产出量分摊); null=不分摊 */
+    @Column(name = "aux_pot_no", length = 64)
+    private String auxPotNo;
+    /** AUDIT-004 该锅辅料总成本 (按各批产出量分摊到各批) */
+    @Column(name = "aux_pot_total_cost", precision = 14, scale = 2)
+    private BigDecimal auxPotTotalCost;
+    /** AUDIT-004 分摊方式 BY_OUTPUT(按产出量)/FIXED_RATIO(固定比例) */
+    @Column(name = "aux_alloc_method", length = 20)
+    private String auxAllocMethod;
+
     /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
     @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
     private BigDecimal warehouseOutQuantity;

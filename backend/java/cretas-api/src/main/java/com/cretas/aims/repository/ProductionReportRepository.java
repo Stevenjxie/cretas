@@ -18,6 +18,13 @@ import java.util.Optional;
 @Repository
 public interface ProductionReportRepository extends JpaRepository<ProductionReport, Long> {
 
+    // ==================== AUDIT-004 辅料按锅平摊 ====================
+
+    /** 某共享锅的总产出量 (Σ output_quantity), 用于辅料按产出量分摊。 */
+    @Query("SELECT COALESCE(SUM(r.outputQuantity), 0) FROM ProductionReport r " +
+           "WHERE r.factoryId = :factoryId AND r.auxPotNo = :auxPotNo AND r.deletedAt IS NULL")
+    BigDecimal sumOutputByAuxPotNo(@Param("factoryId") String factoryId, @Param("auxPotNo") String auxPotNo);
+
     // ==================== 列表查询 ====================
 
     Page<ProductionReport> findByFactoryIdAndDeletedAtIsNull(

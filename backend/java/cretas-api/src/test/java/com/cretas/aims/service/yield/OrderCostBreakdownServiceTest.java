@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,6 +47,7 @@ class OrderCostBreakdownServiceTest {
     @Mock private ProductionBatchRepository batchRepository;
     @Mock private MaterialConsumptionRepository consumptionRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;
+    @Mock private ProductionReportRepository productionReportRepository;
     @Mock private YieldReportService yieldReportService;
     @InjectMocks private OrderCostBreakdownService service;
 
@@ -90,6 +92,15 @@ class OrderCostBreakdownServiceTest {
             steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(mats[i]).costCategory(cats[i]).build();
         }
         return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
+    }
+
+    /** 2 道 (RAW + SEASONING带共享锅) 的 BatchYieldDTO (AUDIT-004)。 */
+    private BatchYieldDTO batchYieldAuxPot(String labor, String potNo, BigDecimal potTotal, String method,
+                                           BigDecimal stepOutput, BigDecimal seasoningMat) {
+        StepYieldDTO raw = StepYieldDTO.builder().processOrder(1).materialCost(BigDecimal.ZERO).costCategory("RAW_MATERIAL").build();
+        StepYieldDTO sea = StepYieldDTO.builder().processOrder(2).materialCost(seasoningMat).costCategory("SEASONING")
+                .totalOutput(stepOutput).auxPotNo(potNo).auxPotTotalCost(potTotal).auxAllocMethod(method).build();
+        return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(raw, sea)).build();
     }
 
     /** 末道带包装明细 (AUDIT-002); 末道 costCategory=PACKAGING。 */
@@ -381,6 +392,48 @@ class OrderCostBreakdownServiceTest {
         OrderCostBreakdownDTO masked = service.compute(F, ORDER, true);
         assertThat(masked.getPackagingDetail().get(0).getCost()).isNull();      // 成本脱敏
         assertThat(masked.getPackagingDetail().get(0).getName()).isEqualTo("膜"); // 名称保留
+    }
+
+    @Test
+    @DisplayName("AUDIT-004 辅料按锅平摊: 本批 share=锅总×本批产出÷锅总产出; 脱敏金额null 保留物理量")
+    void auxPotAllocationByOutput() {
+        // 熟制辅料锅 POT1 总成本¥980; 锅总产出 300kg, 本批 180kg → 本批 share = 980×180/300 = 588
+        stubOneBatch(1L, "100",
+                batchYieldAuxPot("0", "POT1", new BigDecimal("980"), "BY_OUTPUT", new BigDecimal("180"), new BigDecimal("980")),
+                List.of(cons("MB1", "10", "100", "1000")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "源", null, null)));
+        when(productionReportRepository.sumOutputByAuxPotNo(F, "POT1")).thenReturn(new BigDecimal("300"));
+
+        OrderCostBreakdownDTO open = service.compute(F, ORDER, false);
+        assertThat(open.getSeasoningCost()).isEqualByComparingTo("588");   // 980×180/300, 非整锅 980
+        assertThat(open.getAuxiliaryAllocations()).hasSize(1);
+        OrderCostBreakdownDTO.AuxiliaryAllocation a = open.getAuxiliaryAllocations().get(0);
+        assertThat(a.getPotNo()).isEqualTo("POT1");
+        assertThat(a.getBatchShare()).isEqualByComparingTo("588");
+        assertThat(a.getBatchSharePct()).isEqualByComparingTo("60.0");      // 180/300
+        assertThat(a.getPotTotalOutput()).isEqualByComparingTo("300");
+        assertThat(a.getBatchOutput()).isEqualByComparingTo("180");
+
+        OrderCostBreakdownDTO masked = service.compute(F, ORDER, true);
+        OrderCostBreakdownDTO.AuxiliaryAllocation am = masked.getAuxiliaryAllocations().get(0);
+        assertThat(am.getBatchShare()).isNull();
+        assertThat(am.getPotTotalCost()).isNull();
+        assertThat(am.getPotNo()).isEqualTo("POT1");                        // 物理量保留
+        assertThat(am.getBatchSharePct()).isEqualByComparingTo("60.0");
+    }
+
+    @Test
+    @DisplayName("AUDIT-004 锅唯一成员 → 分摊100%=锅总成本 (demo 场景: 数字不变)")
+    void auxPotSoleMemberFullCost() {
+        stubOneBatch(1L, "1787",
+                batchYieldAuxPot("0", "POT-M67", new BigDecimal("980"), "BY_OUTPUT", new BigDecimal("179.8"), new BigDecimal("980")),
+                List.of(cons("MB1", "10", "100", "1000")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "源", null, null)));
+        when(productionReportRepository.sumOutputByAuxPotNo(F, "POT-M67")).thenReturn(new BigDecimal("179.8"));
+
+        OrderCostBreakdownDTO open = service.compute(F, ORDER, false);
+        assertThat(open.getSeasoningCost()).isEqualByComparingTo("980");    // 100% = 整锅, 数字不变
+        assertThat(open.getAuxiliaryAllocations().get(0).getBatchSharePct()).isEqualByComparingTo("100.0");
     }
 
     @Test
