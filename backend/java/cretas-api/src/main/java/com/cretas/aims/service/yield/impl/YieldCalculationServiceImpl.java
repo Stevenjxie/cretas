@@ -56,6 +56,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             BigDecimal stepWaste = null;
             Integer stepSampleRetain = null;
             String stepCostCategory = null;          // CALC-003: 本道成本类别 (取首个非 null)
+            List<Map<String, Object>> stepPackagingDetail = null;  // AUDIT-002: 包装明细拼接
             Integer stepWorkersMax = null;           // MAX headcount across reports (peak, 非 SUM)
             // 三阶段 (单元1): 照片按 reportKind 分组 (INPUT/SEGMENT/legacy → inputPhotos; OUTPUT → outputPhotos)
             List<String> stepInputPhotos = null;     // 去重保序
@@ -169,6 +170,11 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (stepCostCategory == null && r.getCostCategory() != null) {
                     stepCostCategory = r.getCostCategory();
                 }
+                // AUDIT-002 包装明细拼接 (本道各次报工)
+                if (r.getPackagingDetail() != null && !r.getPackagingDetail().isEmpty()) {
+                    if (stepPackagingDetail == null) stepPackagingDetail = new ArrayList<>();
+                    stepPackagingDetail.addAll(r.getPackagingDetail());
+                }
                 // SP1 双产出: outputKind 取首个非 null; semiOutputQuantity Σ; semiCode/semiOutputUnit 取首个非 null
                 if (stepOutputKind == null && r.getOutputKind() != null) {
                     stepOutputKind = r.getOutputKind();
@@ -233,6 +239,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .wasteQuantity(stepWaste)
                     .sampleRetainQuantity(stepSampleRetain)
                     .costCategory(stepCostCategory)
+                    .packagingDetail(stepPackagingDetail)
                     // 三阶段 (单元1): phase 推断 + 照片按 reportKind 分组
                     .phase(phase)
                     .inputPhotos(stepInputPhotos)

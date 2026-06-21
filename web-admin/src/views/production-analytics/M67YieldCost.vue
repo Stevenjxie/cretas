@@ -59,6 +59,16 @@
               <span class="cval">¥{{ c.perBox.toFixed(2) }}</span>
             </div>
 
+            <!-- 包装明细 4 拆 (膜/气体/标签/其他) — AUDIT-002 -->
+            <div v-if="packagingDetail.length" class="pkg-detail">
+              <div class="pkg-title">包装明细<span v-if="packagingTotal > 0"> (合计 ¥{{ packagingTotal.toFixed(2) }})</span></div>
+              <div v-for="p in packagingDetail" :key="p.name" class="pkg-row">
+                <span class="pkg-name">{{ p.name }}</span>
+                <span class="pkg-cost">{{ p.cost != null ? '¥' + Number(p.cost).toFixed(2) : '需价格权限' }}</span>
+                <span v-if="p.cost != null" class="pkg-perbox">¥{{ (Number(p.cost) / (boxCount || 1)).toFixed(3) }}/盒</span>
+              </div>
+            </div>
+
             <!-- 副产回收 (肥油/料头变现冲减成本) — AUDIT-001 -->
             <template v-if="hasByproduct">
               <el-divider style="margin: 10px 0" />
@@ -146,11 +156,13 @@ interface Step {
 interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; unitPrice?: number; totalCost?: number; sourceType?: string }
 interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
 interface ByproductLine { name?: string; quantity?: number; unit?: string; unitPrice?: number; value?: number }
+interface PackagingItem { name?: string; cost?: number }
 interface CostBreakdown {
   boxCount?: number; rawMaterialCost?: number; laborCost?: number; seasoningCost?: number;
   packagingCost?: number; totalCost?: number; perBoxCost?: number; priceMasked?: boolean; hasData?: boolean;
   byproductCredit?: number; netTotalCost?: number; netPerBoxCost?: number; byproducts?: ByproductLine[];
   sampleRetainCount?: number; wasteQuantity?: number; sellableBoxCount?: number; sellablePerBoxCost?: number;
+  packagingDetail?: PackagingItem[];
   sources?: CostSource[];
 }
 interface YieldSummary {
@@ -209,6 +221,10 @@ const sampleRetainCount = computed(() => Number(cb.value?.sampleRetainCount ?? 0
 const sellableBoxCount = computed(() => Number(cb.value?.sellableBoxCount ?? 0));
 const sellablePerBox = computed(() => cb.value?.sellablePerBoxCost != null ? Number(cb.value.sellablePerBoxCost) : null);
 const wasteQty = computed(() => cb.value?.wasteQuantity != null ? Number(cb.value.wasteQuantity) : null);
+
+// 包装明细 4 拆 (膜/气体/标签/其他) — AUDIT-002
+const packagingDetail = computed<PackagingItem[]>(() => cb.value?.packagingDetail || []);
+const packagingTotal = computed(() => packagingDetail.value.reduce((s, p) => s + Number(p.cost || 0), 0));
 
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
@@ -406,4 +422,10 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .net-box span { color: #909399; font-size: 12px; margin-left: 4px; }
 .net-box.sell { background: #fdf6ec; }
 .net-box.sell b { color: #b88230; }
+.pkg-detail { margin: 6px 0 4px 18px; padding: 8px 12px; background: #f9fafc; border-radius: 6px; border-left: 3px solid #ee6666; }
+.pkg-title { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.pkg-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
+.pkg-name { width: 48px; color: #606266; }
+.pkg-cost { width: 80px; text-align: right; font-weight: 600; }
+.pkg-perbox { color: #909399; font-size: 12px; }
 </style>

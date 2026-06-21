@@ -106,6 +106,9 @@ public class YieldReportRequest {
     /** CALC-003 成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; null=按 step-index 启发式分类 */
     private String costCategory;
 
+    /** AUDIT-002 包装明细 [{name,cost}] (膜/气体/标签/其他); 通常仅包装道; null=未拆 */
+    private List<Map<String, Object>> packagingDetail;
+
     /**
      * C-074/C-075/X-10 补录时效锁: 报工业务日期 (可选)。
      * <ul>

@@ -57,6 +57,9 @@ public class OrderCostBreakdownDTO {
     /** 单盒可售成本 = 净成本 ÷ 可售盒数 (留样成本由售出盒承担; masked 时 null)。 */
     private BigDecimal sellablePerBoxCost;
 
+    /** 包装明细 (AUDIT-002: 膜/气体/标签/其他, 按名称归集; 各项 cost 之和=packagingCost; masked 时 cost null)。 */
+    private List<PackagingItem> packagingDetail;
+
     /** 价格是否被脱敏 (无价格查看权限)。 */
     private boolean priceMasked;
     /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */
@@ -99,5 +102,16 @@ public class OrderCostBreakdownDTO {
         private BigDecimal unitPrice;
         /** 变现价值 = quantity × unitPrice (报工未录单价则 null/0); masked 时 null。 */
         private BigDecimal value;
+    }
+
+    /** 包装明细项 (AUDIT-002: 膜/气体/标签/其他, 按名称跨批次归集)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PackagingItem {
+        private String name;
+        /** 该包材项成本 (元); masked 时 null。 */
+        private BigDecimal cost;
     }
 }

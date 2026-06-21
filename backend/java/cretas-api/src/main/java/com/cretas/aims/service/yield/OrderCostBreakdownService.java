@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.ByproductLine;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.PackagingItem;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -74,6 +75,8 @@ public class OrderCostBreakdownService {
         List<SourceCost> sources = new ArrayList<>();
         // 副产物按 名称|单位 归集 (跨批次跨道)
         LinkedHashMap<String, ByproductLine> byproductAcc = new LinkedHashMap<>();
+        // AUDIT-002 包装明细按 名称 归集成本 (跨批次跨道)
+        LinkedHashMap<String, BigDecimal> packagingAcc = new LinkedHashMap<>();
 
         for (ProductionBatch b : batches) {
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
@@ -90,6 +93,7 @@ public class OrderCostBreakdownService {
                     if (steps.get(i).getWasteQuantity() != null) {
                         waste = waste.add(steps.get(i).getWasteQuantity());
                     }
+                    accumulatePackaging(packagingAcc, steps.get(i).getPackagingDetail());
                     BigDecimal m = steps.get(i).getMaterialCost();
                     if (m == null) {
                         continue;
@@ -142,6 +146,12 @@ public class OrderCostBreakdownService {
         BigDecimal sellablePerBox = sellableBoxCount > 0
                 ? netTotal.divide(BigDecimal.valueOf(sellableBoxCount), 2, RoundingMode.HALF_UP) : netPerBox;
 
+        // AUDIT-002 包装明细 (按名称归集成本; null=未拆)
+        List<PackagingItem> packagingDetail = packagingAcc.isEmpty() ? null
+                : packagingAcc.entrySet().stream()
+                        .map(e -> PackagingItem.builder().name(e.getKey()).cost(e.getValue()).build())
+                        .collect(Collectors.toList());
+
         BigDecimal totalQty = sources.stream().map(s -> nz(s.getQuantity())).reduce(BigDecimal.ZERO, BigDecimal::add);
         for (SourceCost s : sources) {
             s.setWeightSharePct(totalQty.signum() > 0
@@ -169,6 +179,7 @@ public class OrderCostBreakdownService {
                 .wasteQuantity(waste.signum() > 0 ? waste : null)
                 .sellableBoxCount(sellableBoxCount)
                 .sellablePerBoxCost(sellablePerBox)
+                .packagingDetail(packagingDetail)
                 .sources(sources)
                 .build();
         if (maskPrice) {
@@ -260,6 +271,33 @@ public class OrderCostBreakdownService {
     }
 
     /**
+     * AUDIT-002: 归集包装明细 (名称维度跨批次累加成本)。jsonb [{name, cost}]; cost 缺失则按 quantity×unitPrice。
+     */
+    private void accumulatePackaging(LinkedHashMap<String, BigDecimal> acc, List<Map<String, Object>> raws) {
+        if (raws == null) {
+            return;
+        }
+        for (Map<String, Object> r : raws) {
+            if (r == null) {
+                continue;
+            }
+            String name = r.get("name") == null ? "其他" : String.valueOf(r.get("name")).trim();
+            BigDecimal cost = toBigDecimal(r.get("cost"));
+            if (cost == null) {
+                BigDecimal qty = toBigDecimal(r.get("quantity"));
+                BigDecimal unitPrice = toBigDecimal(r.get("unitPrice"));
+                if (qty != null && unitPrice != null) {
+                    cost = qty.multiply(unitPrice);
+                }
+            }
+            if (cost == null) {
+                continue;   // 无成本信息的明细项跳过 (诚实, 不臆造)
+            }
+            acc.merge(name, cost, BigDecimal::add);
+        }
+    }
+
+    /**
      * CALC-003: 解析本道材料成本归入哪个桶 — PACKAGING(包装) / SEASONING(调料) / SKIP(原料, 由上游 traced 承载不计)。
      * 显式 costCategory 优先 (分类不依赖工序顺序); null 或未知值 → 回退 step-index 启发式 (末道=包装, 中间道=调料, 首道=原料)。
      */
@@ -330,6 +368,11 @@ public class OrderCostBreakdownService {
                 s.setUnitPrice(null);
                 s.setCost(null);
                 s.setCostSharePct(null);
+            }
+        }
+        if (dto.getPackagingDetail() != null) {
+            for (PackagingItem p : dto.getPackagingDetail()) {
+                p.setCost(null);   // 成本敏感; 保留 name (包材项名是物理信息)
             }
         }
     }
