@@ -26,8 +26,8 @@
       <div class="kpis">
         <KPICard title="整批出成率" :value="pct(data.overallYieldRate)" unit="%" format="number" :precision="1"
                  icon="TrendCharts" :target-value="60" subtitle="成品净重 ÷ 原料投入" />
-        <KPICard title="单盒成本" :value="perBox(data.totalCost)" unit="元/盒" format="currency" :precision="2"
-                 icon="Coin" subtitle="总成本 ÷ 盒数" />
+        <KPICard title="单盒成本" :value="perBox(totalCostClosed)" unit="元/盒" format="currency" :precision="2"
+                 icon="Coin" subtitle="含上游混批 traced 原料成本 ÷ 盒数" />
         <KPICard title="单盒人工" :value="perBox(data.totalLaborCost)" unit="元/盒" format="currency" :precision="2"
                  icon="User" subtitle="总人工 ÷ 盒数" />
         <KPICard title="产出盒数" :value="boxCount" unit="盒" format="number" :precision="0"
@@ -53,8 +53,8 @@
         <!-- 单盒成本拆解 -->
         <el-col :span="10">
           <el-card shadow="never">
-            <template #header><b>单盒成本拆解</b></template>
-            <div class="total-box">¥{{ perBox(data.totalCost).toFixed(2) }}<span>/盒</span></div>
+            <template #header><b>单盒成本拆解</b><span class="hint">原料=上游混批 traced 成本之和 (闭环)</span></template>
+            <div class="total-box">¥{{ perBox(totalCostClosed).toFixed(2) }}<span>/盒</span></div>
             <div v-for="c in costBreakdown" :key="c.name" class="cost-row">
               <span class="cdot" :style="{ background: c.color }"></span>
               <span class="cname">{{ c.name }}</span>
@@ -158,6 +158,11 @@ const num = (v?: number | null) => (v == null ? '—' : Number(v).toFixed(1));
 const pct = (v?: number | null) => (v == null ? 0 : v * 100);
 const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / boxCount.value);
 
+// 混批闭环: 原料成本 = 上游各批 traced 成本之和 (来自 material-consumptions, 按实测投料量×各自累计单价)
+const upstreamCost = computed(() => mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0));
+// 单盒成本闭环口径 = 订单聚合成本(已含人工/调料/包装, 原料道已置0) + 上游 traced 原料成本
+const totalCostClosed = computed(() => Number(data.value?.totalCost || 0) + upstreamCost.value);
+
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
   if (y == null) return 'info';
@@ -179,10 +184,10 @@ const costBreakdown = computed(() => {
   const st = steps.value;
   const labor = d.totalLaborCost || 0;
   const matTotal = d.totalMaterialCost || 0;
-  const rawMat = st.length ? (st[0].materialCost || 0) : 0;          // 首道(修油)= 原料
+  const rawMat = upstreamCost.value > 0 ? upstreamCost.value : (st.length ? (st[0].materialCost || 0) : 0); // 有上游 traced 用之(混批闭环), 否则首道材料
   const pkgMat = st.length ? (st[st.length - 1].materialCost || 0) : 0; // 末道(包装)= 包装材料
-  const seasoning = Math.max(0, matTotal - rawMat - pkgMat);          // 其余(熟制)= 调料
-  const total = (d.totalCost || 0) || 1;
+  const seasoning = Math.max(0, matTotal - pkgMat);                  // 报告侧材料(熟制调料; 修油道已置0)
+  const total = totalCostClosed.value || 1;
   const bc = boxCount.value || 1;
   const rows = [
     { name: '原料', amount: rawMat, color: '#5470c6' },

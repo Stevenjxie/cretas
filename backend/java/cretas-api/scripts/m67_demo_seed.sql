@@ -24,7 +24,7 @@ WITH b AS (
 INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,created_at,updated_at,version)
 SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, NOW(),NOW(),0
 FROM b,(VALUES
-  (1,101::bigint,'修油',307.0,278.5,624.0,11666.0,1440,8),   -- 原料成本计在修油道 (307kg 牛肉)
+  (1,101::bigint,'修油',307.0,278.5,624.0,0.0,1440,8),       -- 原料成本由上游 traced consumption 承载(混批闭环), 修油道置0避免双计
   (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2),         -- 注水增重 119.9%
   (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1),
   (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1),         -- 调料/卤汤成本计在熟制道
@@ -41,4 +41,17 @@ FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_numbe
 UNION ALL
 SELECT 'M67DEMO-BR-002','DEMO_FACTORY','焯水0614 (原料B链)',pb.id,'SEMI_FINISHED',22,'kg','熟制',NOW(),NOW(),NOW()
 FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_number='M67DEMO-PB-001';
+
+-- 混批成本闭环: 2 个上游来源批次 + 消耗记录(异质累计单价) → 喂现成 /processing/material-consumptions/batch/{id}
+-- 前端「混批成本拆分」+ 单盒成本原料口径数据驱动来源。total_cost=该链累计成本(原料+加工至焯水)。
+DELETE FROM material_consumptions WHERE batch_id LIKE 'M67DEMO-MB-%';
+DELETE FROM material_batches WHERE id LIKE 'M67DEMO-MB-%';
+INSERT INTO material_batches(id,factory_id,batch_number,material_type_id,warehouse_id,created_by,quantity_unit,inbound_date,receipt_quantity,reserved_quantity,used_quantity,status,unit_price,created_at,updated_at)
+VALUES
+ ('M67DEMO-MB-0613','DEMO_FACTORY','焯水0613 (原料A链)','DF_rmt1','DF_fw1',1635,'kg','2026-06-13',78,0,78,'DEPLETED',91.92,NOW(),NOW()),
+ ('M67DEMO-MB-0614','DEMO_FACTORY','焯水0614 (原料B链)','DF_rmt1','DF_fw1',1635,'kg','2026-06-14',22,0,22,'DEPLETED',170.00,NOW(),NOW());
+INSERT INTO material_consumptions(factory_id,production_batch_id,batch_id,material_type_id,quantity,unit_price,total_cost,source_type,consumption_time,consumed_at,recorded_by,created_at,updated_at)
+SELECT 'DEMO_FACTORY',pb.id,'M67DEMO-MB-0613','DF_rmt1',78,91.92,7170,'SEMI_FINISHED',NOW(),NOW(),1635,NOW(),NOW() FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_number='M67DEMO-PB-001'
+UNION ALL
+SELECT 'DEMO_FACTORY',pb.id,'M67DEMO-MB-0614','DF_rmt1',22,170.00,3740,'SEMI_FINISHED',NOW(),NOW(),1635,NOW(),NOW() FROM production_batches pb WHERE pb.factory_id='DEMO_FACTORY' AND pb.batch_number='M67DEMO-PB-001';
 COMMIT;
