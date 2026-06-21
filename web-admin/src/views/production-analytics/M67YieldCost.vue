@@ -66,9 +66,19 @@
       </el-row>
 
       <!-- 批次溯源桑基图 -->
-      <el-card shadow="never">
+      <el-card shadow="never" class="mb">
         <template #header><b>批次溯源 (原料 → 各道工序 → 成品, 宽度=物料重量kg)</b></template>
         <div ref="sankeyEl" style="height: 320px"></div>
+      </el-card>
+
+      <!-- 多批混锅溯源 (多对多) -->
+      <el-card shadow="never">
+        <template #header>
+          <b>多批混锅溯源</b>
+          <span class="hint">一锅熟制来自多个焯水批次 — 系统按实际投料量逐批溯源 (Excel 做不到的"多对多")</span>
+        </template>
+        <div ref="mixEl" style="height: 300px"></div>
+        <div class="mix-note">示例: 熟制0614 = 焯水0613 (78kg, 原料A 链) + 焯水0614 (22kg, 原料B 链) → 熟制产出 74kg。两条上游链各自的出成率/成本按 78:22 实测量精确归集, 不是糊一个平均。</div>
       </el-card>
     </template>
 
@@ -104,7 +114,9 @@ const loading = ref(false);
 const error = ref('');
 const data = ref<YieldSummary | null>(null);
 const sankeyEl = ref<HTMLElement | null>(null);
+const mixEl = ref<HTMLElement | null>(null);
 let chart: any = null;
+let mixChart: any = null;
 
 // 工序名 fallback (后端 processName 未解析时, 按 M67 卤味标准工序序显示)
 const STAGE_NAMES: Record<number, string> = { 1: '修油', 2: '滚揉', 3: '焯水', 4: '熟制', 5: '气调', 6: '包装' };
@@ -185,6 +197,38 @@ function renderSankey() {
   chart.resize();
 }
 
+// 多批混锅溯源 (示例: 熟制0614 = 焯水0613 78kg + 焯水0614 22kg, 来自客户 M67 v5.0 真实数据)
+function renderMix() {
+  if (!mixEl.value) return;
+  if (!mixChart) mixChart = echarts.init(mixEl.value);
+  const nodes = [
+    { name: '原料A', itemStyle: { color: '#5470c6' } },
+    { name: '原料B', itemStyle: { color: '#73c0de' } },
+    { name: '焯水0613', itemStyle: { color: '#5470c6' } },
+    { name: '焯水0614', itemStyle: { color: '#73c0de' } },
+    { name: '熟制0614', itemStyle: { color: '#fac858' } },
+    { name: '成品(气调/包装)', itemStyle: { color: '#91cc75' } },
+  ];
+  const links = [
+    { source: '原料A', target: '焯水0613', value: 78 },
+    { source: '原料B', target: '焯水0614', value: 22 },
+    { source: '焯水0613', target: '熟制0614', value: 78 },
+    { source: '焯水0614', target: '熟制0614', value: 22 },
+    { source: '熟制0614', target: '成品(气调/包装)', value: 74 },
+  ];
+  mixChart.setOption({
+    tooltip: { trigger: 'item', formatter: (p: any) => p.dataType === 'edge' ? `${p.data.source} → ${p.data.target}: ${p.data.value} kg` : p.name },
+    series: [{
+      type: 'sankey', left: 20, right: 140, top: 20, bottom: 20,
+      emphasis: { focus: 'adjacency' },
+      lineStyle: { color: 'gradient', opacity: 0.5 },
+      label: { fontSize: 12 },
+      data: nodes, links,
+    }],
+  });
+  mixChart.resize();
+}
+
 async function load() {
   if (!factoryId.value || !orderId.value) return;
   loading.value = true; error.value = '';
@@ -194,6 +238,7 @@ async function load() {
       data.value = resp.data;
       await nextTick();
       renderSankey();
+      renderMix();
     } else {
       error.value = resp.message || '加载失败';
     }
@@ -204,9 +249,9 @@ async function load() {
   }
 }
 
-const onResize = () => chart?.resize();
+const onResize = () => { chart?.resize(); mixChart?.resize(); };
 onMounted(() => { window.addEventListener('resize', onResize); load(); });
-onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.dispose(); });
+onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.dispose(); mixChart?.dispose(); });
 </script>
 
 <style scoped>
@@ -219,6 +264,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .mb { margin-bottom: 16px; }
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
 .hint { color: #909399; font-size: 12px; margin-left: 8px; }
+.mix-note { color: #606266; font-size: 13px; background: #f4f6fa; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
 .step { margin-bottom: 14px; }
 .step-top { display: flex; align-items: center; margin-bottom: 4px; }
 .pname { font-weight: 600; width: 64px; }
