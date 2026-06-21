@@ -93,34 +93,34 @@ export interface ApplyTemplateResult {
 
 export function listWarehouses(factoryId: string, type?: WarehouseType) {
   return request.get<any, { success: boolean; data: FactoryWarehouse[] }>(
-    `/api/mobile/${factoryId}/factory/warehouses`,
+    `/${factoryId}/factory/warehouses`,
     { params: type ? { type } : {} },
   )
 }
 
 export function createWarehouse(factoryId: string, body: CreateWarehouseBody) {
   return request.post<any, { success: boolean; data: FactoryWarehouse; message?: string }>(
-    `/api/mobile/${factoryId}/factory/warehouses`,
+    `/${factoryId}/factory/warehouses`,
     body,
   )
 }
 
 export function updateWarehouse(factoryId: string, id: string, body: UpdateWarehouseBody) {
   return request.put<any, { success: boolean; data: FactoryWarehouse; message?: string }>(
-    `/api/mobile/${factoryId}/factory/warehouses/${id}`,
+    `/${factoryId}/factory/warehouses/${id}`,
     body,
   )
 }
 
 export function deleteWarehouse(factoryId: string, id: string) {
   return request.delete<any, { success: boolean; message?: string }>(
-    `/api/mobile/${factoryId}/factory/warehouses/${id}`,
+    `/${factoryId}/factory/warehouses/${id}`,
   )
 }
 
 export function applyWarehouseTemplate(factoryId: string, body: ApplyTemplateBody) {
   return request.post<any, { success: boolean; data: ApplyTemplateResult; message?: string }>(
-    `/api/mobile/${factoryId}/factory/warehouses/apply-template`,
+    `/${factoryId}/factory/warehouses/apply-template`,
     body,
   )
 }

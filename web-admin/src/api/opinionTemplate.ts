@@ -59,7 +59,7 @@ interface ApiResponse<T> {
 
 // ==================== API methods ====================
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/opinion-templates`
+const base = (factoryId: string) => `/${factoryId}/opinion-templates`
 
 /** 弹框用: 工厂可见模板 (自定义 + 系统预设), 按 sortOrder. */
 export const listAvailable = (factoryId: string, decisionType: DecisionType) =>

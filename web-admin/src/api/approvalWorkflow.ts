@@ -187,7 +187,7 @@ export interface ApiResponse<T> {
 
 // ==================== API methods ====================
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/approval-workflows`
+const base = (factoryId: string) => `/${factoryId}/approval-workflows`
 
 export const getAllWorkflows = (factoryId: string) =>
   request.get<ApiResponse<ApprovalWorkflowDTO[]>>(base(factoryId))

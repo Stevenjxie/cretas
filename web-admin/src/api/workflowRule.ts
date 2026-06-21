@@ -76,7 +76,7 @@ export interface ApiResponse<T> {
   code?: string
 }
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/workflow-rules`
+const base = (factoryId: string) => `/${factoryId}/workflow-rules`
 
 export const listRulesByWorkflow = (factoryId: string, workflowId: string) =>
   request.get<ApiResponse<WorkflowRuleDTO[]>>(`${base(factoryId)}?workflowId=${workflowId}`)

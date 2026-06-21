@@ -46,7 +46,7 @@ interface ApiResponse<T> {
   code?: string
 }
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/workflow-variables`
+const base = (factoryId: string) => `/${factoryId}/workflow-variables`
 
 /** 编辑器使用: 工厂可见变量 (自定义 + 系统预设). */
 export const listAvailableVariables = (factoryId: string) =>

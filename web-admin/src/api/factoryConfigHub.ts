@@ -176,7 +176,7 @@ export interface FactorySettings {
 
 // ==================== Endpoints ====================
 
-const base = (factoryId: string) => `/api/mobile/${factoryId}/canvas-factory-config`
+const base = (factoryId: string) => `/${factoryId}/canvas-factory-config`
 
 export function getOverview(factoryId: string) {
   return request.get<any, { success: boolean; data: FactoryConfigOverview }>(
