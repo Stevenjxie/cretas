@@ -164,17 +164,20 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
         // (防呆: 操作员不手填会计类别/包装明细; 生产铺开一次性配置, 真实报工自动带出)。req 显式传值优先。
+        // costCategory/auxAllocMethod 用"首个非 null"聚合(幂等), 任意阶段继承安全;
+        // packagingDetail 是"跨报工拼接"(累加), 多阶段/多次报工各自继承会重复计 → 仅首条报工继承 (见下方 isFirstReportForTask 处)。
         String effCostCategory = req.getCostCategory();
         List<Map<String, Object>> effPackagingDetail = req.getPackagingDetail();
         String effAuxAllocMethod = req.getAuxAllocMethod();
+        com.cretas.aims.entity.ProductWorkProcess pwpConfig = null;
         if (t.getProductWorkProcessId() != null
                 && (effCostCategory == null || effPackagingDetail == null || effAuxAllocMethod == null)) {
-            com.cretas.aims.entity.ProductWorkProcess pwp = productWorkProcessRepository
+            pwpConfig = productWorkProcessRepository
                     .findByFactoryIdAndId(factoryId, t.getProductWorkProcessId()).orElse(null);
-            if (pwp != null) {
-                if (effCostCategory == null) effCostCategory = pwp.getDefaultCostCategory();
-                if (effPackagingDetail == null) effPackagingDetail = pwp.getPackagingTemplate();
-                if (effAuxAllocMethod == null) effAuxAllocMethod = pwp.getAuxAllocMethod();
+            if (pwpConfig != null) {
+                if (effCostCategory == null) effCostCategory = pwpConfig.getDefaultCostCategory();
+                if (effAuxAllocMethod == null) effAuxAllocMethod = pwpConfig.getAuxAllocMethod();
+                // packagingDetail 不在此继承; 延后到 isFirstReportForTask 已知处, 防多报工拼接重复计成本
             }
         }
 
@@ -229,6 +232,12 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
         List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
         boolean isFirstReportForTask = existingTaskReports.isEmpty();
+
+        // 包装模板继承: 仅首条报工继承 (packagingDetail 跨报工拼接累加, 多阶段/多次报工各自继承会重复计成本)。
+        // req 显式传值优先; 仅当本次未传且为该 task 首条报工时, 从工序定义继承一次。
+        if (effPackagingDetail == null && isFirstReportForTask && pwpConfig != null) {
+            effPackagingDetail = pwpConfig.getPackagingTemplate();
+        }
 
         // — A.4/A.5: 逐道成本 (人工 + 材料), 诚实 null 传播 (缺输入则该项 null, 绝不默认 0) —
         // 人工成本依赖本道 WorkProcess.standardHourlyRate; sourceWip 已在上方解析 (G7 路径)。
