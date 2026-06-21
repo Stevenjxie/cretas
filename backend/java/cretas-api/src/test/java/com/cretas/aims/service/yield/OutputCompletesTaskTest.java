@@ -84,7 +84,8 @@ class OutputCompletesTaskTest {
                 mock(ProductionPlanRepository.class),
                 wipRepo, lineageEdgeRepo,
                 new ObjectMapper(),
-                recipeRepo, wipInventoryService, pwpAssigneeRepository
+                recipeRepo, wipInventoryService, pwpAssigneeRepository,
+                mock(com.cretas.aims.repository.ProductWorkProcessRepository.class)
         );
     }
 

@@ -2,7 +2,11 @@ package com.cretas.aims.entity;
 
 import lombok.*;
 import jakarta.persistence.*;
+import io.hypersistence.utils.hibernate.type.json.JsonType;
+import org.hibernate.annotations.Type;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 @Data
 @AllArgsConstructor
@@ -57,6 +61,20 @@ public class ProductWorkProcess {
     @Column(name = "reporting_required", nullable = false)
     @Builder.Default
     private Boolean reportingRequired = true;
+
+    // ── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ──────────────
+    /** 该工序默认成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; 报工未传 costCategory 时继承 (CALC-003) */
+    @Column(name = "default_cost_category", length = 20)
+    private String defaultCostCategory;
+
+    /** 该工序默认包装明细模板 [{name,cost}] (膜/气体/标签/其他); 报工未传 packagingDetail 时继承 (AUDIT-002) */
+    @Type(JsonType.class)
+    @Column(name = "packaging_template", columnDefinition = "jsonb")
+    private List<Map<String, Object>> packagingTemplate;
+
+    /** 该工序辅料分摊方式 BY_OUTPUT/FIXED_RATIO; 报工未传 auxAllocMethod 时继承 (AUDIT-004) */
+    @Column(name = "aux_alloc_method", length = 20)
+    private String auxAllocMethod;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

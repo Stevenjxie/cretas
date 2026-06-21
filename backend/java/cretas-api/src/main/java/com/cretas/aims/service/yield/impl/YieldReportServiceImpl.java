@@ -90,6 +90,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final ProcessMaterialRecipeRepository recipeRepository;
     private final WipInventoryService wipInventoryService;
     private final ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
+    private final com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
@@ -160,6 +161,22 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
         WorkProcessTask t = taskRepo.findByFactoryIdAndId(factoryId, req.getWorkProcessTaskId())
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + req.getWorkProcessTaskId()));
+
+        // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
+        // (防呆: 操作员不手填会计类别/包装明细; 生产铺开一次性配置, 真实报工自动带出)。req 显式传值优先。
+        String effCostCategory = req.getCostCategory();
+        List<Map<String, Object>> effPackagingDetail = req.getPackagingDetail();
+        String effAuxAllocMethod = req.getAuxAllocMethod();
+        if (t.getProductWorkProcessId() != null
+                && (effCostCategory == null || effPackagingDetail == null || effAuxAllocMethod == null)) {
+            com.cretas.aims.entity.ProductWorkProcess pwp = productWorkProcessRepository
+                    .findByFactoryIdAndId(factoryId, t.getProductWorkProcessId()).orElse(null);
+            if (pwp != null) {
+                if (effCostCategory == null) effCostCategory = pwp.getDefaultCostCategory();
+                if (effPackagingDetail == null) effPackagingDetail = pwp.getPackagingTemplate();
+                if (effAuxAllocMethod == null) effAuxAllocMethod = pwp.getAuxAllocMethod();
+            }
+        }
 
         // T121 归属鉴权 — 操作员必须是工序 join 表中的负责人之一 (或兜底 responsible_worker_id); 主管可代报任意任务。
         boolean isSupervisor = ReportAuthGuard.isSupervisor(ReportAuthGuard.currentRole());
@@ -269,11 +286,11 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .byproducts(toByproductMaps(effByproducts))
                 .wasteQuantity(effWaste)
                 .sampleRetainQuantity(effSampleRetain)
-                .costCategory(req.getCostCategory())   // CALC-003: 成本类别 (null=按 step-index 启发式)
-                .packagingDetail(req.getPackagingDetail())   // AUDIT-002: 包装明细 (null=未拆)
-                .auxPotNo(req.getAuxPotNo())                 // AUDIT-004: 共享锅辅料分摊 (null=不分摊)
+                .costCategory(effCostCategory)         // CALC-003: 成本类别 (req优先, 否则继承工序配置; null=启发式)
+                .packagingDetail(effPackagingDetail)   // AUDIT-002: 包装明细 (req优先, 否则继承工序模板)
+                .auxPotNo(req.getAuxPotNo())                 // AUDIT-004: 共享锅(运行时锅号, 不继承)
                 .auxPotTotalCost(req.getAuxPotTotalCost())
-                .auxAllocMethod(req.getAuxAllocMethod())
+                .auxAllocMethod(effAuxAllocMethod)     // AUDIT-004: 分摊方式 (req优先, 否则继承工序配置)
                 .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)

@@ -223,6 +223,12 @@ export interface ProductWorkProcessItem {
    * 六扇门只在领料/产出两点报工, 中间工序标 false。
    */
   reportingRequired?: boolean;
+  /** 工序默认成本类别 (报工自动继承; 防呆: 操作员不手填)。RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER */
+  defaultCostCategory?: string | null;
+  /** 工序默认包装明细模板 [{name,cost}] (膜/气体/标签/其他); 报工自动继承。 */
+  packagingTemplate?: Array<{ name: string; cost: number }> | null;
+  /** 工序辅料分摊方式 BY_OUTPUT/FIXED_RATIO; 报工自动继承。 */
+  auxAllocMethod?: string | null;
 }
 
 export interface RecommendedWorkProcess {

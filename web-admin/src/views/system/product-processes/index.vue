@@ -732,6 +732,52 @@ async function handleRefresh() {
   if (!ok) return;
   await loadLinkedProcesses();
 }
+
+// ───── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ─────
+const costDialogVisible = ref(false);
+const costSaving = ref(false);
+const costEditId = ref<number | null>(null);
+const costEditName = ref('');
+const costForm = ref<{ defaultCostCategory: string; auxAllocMethod: string; packagingTemplate: Array<{ name: string; cost: number | null }> }>({
+  defaultCostCategory: '', auxAllocMethod: '', packagingTemplate: [],
+});
+
+function openCostConfig(item: any) {
+  costEditId.value = item.id;
+  costEditName.value = item.processName || item.workProcessId;
+  costForm.value = {
+    defaultCostCategory: item.defaultCostCategory || '',
+    auxAllocMethod: item.auxAllocMethod || '',
+    packagingTemplate: Array.isArray(item.packagingTemplate)
+      ? item.packagingTemplate.map((p: any) => ({ name: p.name, cost: Number(p.cost) }))
+      : [],
+  };
+  costDialogVisible.value = true;
+}
+function addPkgRow() { costForm.value.packagingTemplate.push({ name: '', cost: null }); }
+function removePkgRow(i: number) { costForm.value.packagingTemplate.splice(i, 1); }
+
+async function saveCostConfig() {
+  if (costEditId.value == null) return;
+  costSaving.value = true;
+  try {
+    const pkg = costForm.value.packagingTemplate
+      .filter((r) => r.name && r.cost != null)
+      .map((r) => ({ name: r.name, cost: Number(r.cost) }));
+    // 仅传成本字段做 partial update (后端 null=no-change; packagingTemplate 传 [] 可清空)
+    const payload: Record<string, unknown> = { packagingTemplate: pkg };
+    if (costForm.value.defaultCostCategory) payload.defaultCostCategory = costForm.value.defaultCostCategory;
+    if (costForm.value.auxAllocMethod) payload.auxAllocMethod = costForm.value.auxAllocMethod;
+    await updateProductWorkProcess(factoryId.value, costEditId.value, payload as Partial<ProductWorkProcessItem>);
+    ElMessage.success('成本配置已保存 (报工将自动继承)');
+    costDialogVisible.value = false;
+    await loadLinkedProcesses();
+  } catch (e) {
+    handleCatchError(e, '保存成本配置失败');
+  } finally {
+    costSaving.value = false;
+  }
+}
 </script>
 
 <template>
@@ -908,6 +954,7 @@ async function handleRefresh() {
               </div>
 
               <div class="step-actions" v-if="canWrite">
+                <el-button text size="small" v-if="!item.isPending" @click="openCostConfig(item)" title="成本配置 (报工自动继承)">成本</el-button>
                 <el-button text size="small" :disabled="index === 0" @click="handleMoveUp(index)" title="上移">
                   <el-icon><Rank /></el-icon>
                 </el-button>
@@ -955,6 +1002,43 @@ async function handleRefresh() {
         </div>
       </el-card>
     </div>
+
+    <!-- 工序成本配置 dialog (报工自动继承) -->
+    <el-dialog v-model="costDialogVisible" :title="`工序成本配置 — ${costEditName}`" width="540px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
+        title="报工时自动继承这些默认值, 操作员无需手填 (防呆); 报工显式传值时以报工为准。" />
+      <el-form label-width="120px">
+        <el-form-item label="默认成本类别">
+          <el-select v-model="costForm.defaultCostCategory" clearable placeholder="不设置 (按工序顺序启发式)" style="width: 100%">
+            <el-option label="原料 RAW_MATERIAL" value="RAW_MATERIAL" />
+            <el-option label="调料 SEASONING" value="SEASONING" />
+            <el-option label="辅料 AUXILIARY" value="AUXILIARY" />
+            <el-option label="包装 PACKAGING" value="PACKAGING" />
+            <el-option label="其他 OTHER" value="OTHER" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="辅料分摊方式">
+          <el-select v-model="costForm.auxAllocMethod" clearable placeholder="不设置" style="width: 100%">
+            <el-option label="按产出量 BY_OUTPUT" value="BY_OUTPUT" />
+            <el-option label="固定比例 FIXED_RATIO" value="FIXED_RATIO" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="包装明细模板">
+          <div style="width: 100%">
+            <div v-for="(row, i) in costForm.packagingTemplate" :key="i" style="display:flex; gap:8px; margin-bottom:6px">
+              <el-input v-model="row.name" placeholder="包材名 (膜/气体/标签/其他)" style="flex:1" />
+              <el-input-number v-model="row.cost" :min="0" :precision="2" controls-position="right" style="width:140px" />
+              <el-button text type="danger" @click="removePkgRow(i)">删</el-button>
+            </div>
+            <el-button text type="primary" @click="addPkgRow">+ 添加包材项</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="costDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="costSaving" @click="saveCostConfig">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
