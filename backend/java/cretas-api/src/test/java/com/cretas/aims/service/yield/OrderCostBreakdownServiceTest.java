@@ -92,6 +92,17 @@ class OrderCostBreakdownServiceTest {
         return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
     }
 
+    /** 末道带包装明细 (AUDIT-002); 末道 costCategory=PACKAGING。 */
+    private BatchYieldDTO batchYieldWithPackaging(String labor, List<Map<String, Object>> pkgLast, BigDecimal... mats) {
+        StepYieldDTO[] steps = new StepYieldDTO[mats.length];
+        for (int i = 0; i < mats.length; i++) {
+            steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(mats[i])
+                    .costCategory(i == mats.length - 1 ? "PACKAGING" : null)
+                    .packagingDetail(i == mats.length - 1 ? pkgLast : null).build();
+        }
+        return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
+    }
+
     /** 通用步骤构造: 首道可挂副产物/料头, 末道可挂留样 (AUDIT-001+006 组合场景)。 */
     private BatchYieldDTO buildBatch(String labor, List<Map<String, Object>> bpFirst, Integer sampleLast, BigDecimal wasteFirst, BigDecimal... mats) {
         StepYieldDTO[] steps = new StepYieldDTO[mats.length];
@@ -343,6 +354,33 @@ class OrderCostBreakdownServiceTest {
         assertThat(dto.getSeasoningCost()).isEqualByComparingTo("980");   // 启发式中间道
         assertThat(dto.getPackagingCost()).isEqualByComparingTo("880");   // 启发式末道
         assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    @DisplayName("AUDIT-002 包装明细按名称归集; 各项之和=包装成本; 脱敏时 cost null 保留 name")
+    void packagingDetailAggregationAndMask() {
+        List<Map<String, Object>> pkg = List.of(
+                Map.of("name", "膜", "cost", 300),
+                Map.of("name", "气体", "cost", 180),
+                Map.of("name", "标签", "cost", 120),
+                Map.of("name", "其他", "cost", 280));
+        stubOneBatch(1L, "1787",
+                batchYieldWithPackaging("0", pkg, BigDecimal.ZERO, new BigDecimal("880")),  // 末道包装 880
+                List.of(cons("MB1", "78", "91.92", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "焯水", null, null)));
+
+        OrderCostBreakdownDTO open = service.compute(F, ORDER, false);
+        assertThat(open.getPackagingCost()).isEqualByComparingTo("880");
+        assertThat(open.getPackagingDetail()).hasSize(4);
+        BigDecimal sum = open.getPackagingDetail().stream()
+                .map(OrderCostBreakdownDTO.PackagingItem::getCost).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(sum).isEqualByComparingTo("880");                         // 明细之和 = 包装成本
+        assertThat(open.getPackagingDetail().get(0).getName()).isEqualTo("膜"); // 归集保序
+        assertThat(open.getPackagingDetail().get(0).getCost()).isEqualByComparingTo("300");
+
+        OrderCostBreakdownDTO masked = service.compute(F, ORDER, true);
+        assertThat(masked.getPackagingDetail().get(0).getCost()).isNull();      // 成本脱敏
+        assertThat(masked.getPackagingDetail().get(0).getName()).isEqualTo("膜"); // 名称保留
     }
 
     @Test

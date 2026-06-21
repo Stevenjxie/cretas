@@ -247,6 +247,9 @@ export interface YieldReportRequest {
 
   /** CALC-003 成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; null=按工序顺序启发式分类 (通常由工序配置派生, 不由操作员手填) */
   costCategory?: 'RAW_MATERIAL' | 'SEASONING' | 'AUXILIARY' | 'PACKAGING' | 'OTHER';
+
+  /** AUDIT-002 包装明细 [{name,cost}] (膜/气体/标签/其他); 通常仅包装道; null=未拆 */
+  packagingDetail?: Array<{ name: string; cost: number }>;
 }
 
 // mirror backend dto/yield/MaterialInputRequest.java:9-14

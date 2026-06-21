@@ -230,6 +230,11 @@ public class ProductionReport {
     @Column(name = "cost_category", length = 20)
     private String costCategory;
 
+    /** AUDIT-002 包装明细 [{name,cost}] (膜/气体/标签/其他); 各项 cost 之和=包装材料成本; null=未拆 */
+    @Type(JsonType.class)
+    @Column(name = "packaging_detail", columnDefinition = "jsonb")
+    private List<Map<String, Object>> packagingDetail;
+
     /** 领料出库量 (张权 A1, 如 998; 仅首道领料填) */
     @Column(name = "warehouse_out_quantity", precision = 12, scale = 2)
     private BigDecimal warehouseOutQuantity;
