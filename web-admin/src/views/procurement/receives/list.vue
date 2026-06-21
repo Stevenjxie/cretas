@@ -218,7 +218,15 @@ async function loadOptions() {
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);
     materialOptions.value = ext<MaterialTypeOption>(mat);
-    purchaseOrderOptions.value = ext<PurchaseOrderOption>(po);
+    // 后端 /reference-data/purchase-orders 返回 { id, poNumber, supplierId }
+    // (ReferenceDataController: displayField=poNumber per V13), 不含 orderNumber/supplierName。
+    // normalize 到本组件契约 (orderNumber + supplierName), 否则下拉 label 显示 "undefined ·"
+    // 且 matchedPo 按 orderNumber 匹配永远失败 → 选 PO 自动带物料/供应商全部失效。
+    purchaseOrderOptions.value = ext<PurchaseOrderOption & { poNumber?: string }>(po).map((p) => ({
+      ...p,
+      orderNumber: p.orderNumber || p.poNumber || '',
+      supplierName: p.supplierName || supplierOptions.value.find((s) => s.id === p.supplierId)?.name || '',
+    }));
     manufacturerOptions.value = ext<ManufacturerRegistry>(manufacturers);
   } catch { /* interceptor */ }
 }
