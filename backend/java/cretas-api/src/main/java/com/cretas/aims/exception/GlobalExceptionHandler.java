@@ -1100,6 +1100,29 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(400, "数字格式不正确");
     }
 
+    /**
+     * 处理直接抛出的 DateTimeParseException (controller 手动 {@code LocalDate.parse(...)}).
+     *
+     * <p>背景 (2026-06-21 transcript-e2e R1, C-BUG-5 / H-BUG-5): 多个 controller 用
+     * raw Map / {@code @RequestParam String} 手动 parse 日期 (e.g.
+     * {@code ReportReversalController.createSecondaryPlan} 的 plannedDate,
+     * {@code VoucherExportController} 8 个导出端点的 startDate/endDate)。畸形/缺失日期值
+     * 抛 {@link java.time.format.DateTimeParseException} — 它是 {@code RuntimeException} 的子类,
+     * 没有专用 handler 时落到 {@link #handleRuntimeException} → 误导性的 500 "系统处理异常"。
+     *
+     * <p>注意: body-path 日期 ({@code @RequestBody} + Jackson @JsonFormat) 的解析失败被包成
+     * {@link HttpMessageNotReadableException}, 由 {@link #handleHttpMessageNotReadableException}
+     * (精确类型匹配优先) 处理, 不会到这里 —— 两者不冲突。本 handler 只兜底"手动 parse"路径。
+     *
+     * <p>复用 {@link #buildDateError} 提取畸形值 + 给出形状特定提示 (T 后缀 / 时区 / 非法日期)。
+     */
+    @ExceptionHandler(java.time.format.DateTimeParseException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<?> handleDateTimeParseException(java.time.format.DateTimeParseException e) {
+        log.warn("日期解析失败 (手动 parse 路径): value=\"{}\", msg={}", e.getParsedString(), e.getMessage());
+        return buildDateError(e.getParsedString(), e.getMessage());
+    }
+
     // ==================== 客户端中断 ====================
 
     /**

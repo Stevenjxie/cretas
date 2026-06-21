@@ -406,12 +406,22 @@ public class BomServiceImpl implements BomService {
         List<BomCostSummaryDTO.MaterialCostItem> materialCostItems = new ArrayList<>();
         BigDecimal materialCostTotal = BigDecimal.ZERO;
         boolean hasMissingTaxRate = false;
+        // B-BUG-1 (2026-06-21 transcript-e2e R1): 显式追踪缺单价行 (禁止降级)。
+        // 缺单价行无法计入成本 (单价未知), 之前静默当 ¥0 使 materialCostTotal "看起来完整",
+        // 现在标记每行 + 汇总, 让前端展示"成本不完整, 缺 N 行价格"。
+        List<String> missingPriceMaterials = new ArrayList<>();
 
         for (BomItem item : bomItems) {
             BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
             BigDecimal subtotal = calculateMaterialCost(factoryId, actualQuantity, item.getUnitPrice());
             if (item.getTaxRate() == null) {
                 hasMissingTaxRate = true;
+            }
+            boolean missingPrice = item.getUnitPrice() == null;
+            if (missingPrice) {
+                missingPriceMaterials.add(
+                    item.getMaterialName() != null ? item.getMaterialName()
+                        : (item.getMaterialTypeId() != null ? item.getMaterialTypeId() : "(未命名物料)"));
             }
 
             BomCostSummaryDTO.MaterialCostItem costItem = BomCostSummaryDTO.MaterialCostItem.builder()
@@ -426,11 +436,13 @@ public class BomServiceImpl implements BomService {
                 .caliberHint(materialCaliberHint(item.getTaxRate()))
                 .taxRate(item.getTaxRate())
                 .subtotal(subtotal)
+                .missingPrice(missingPrice)
                 .build();
 
             materialCostItems.add(costItem);
             materialCostTotal = materialCostTotal.add(subtotal);
         }
+        boolean hasMissingPrice = !missingPriceMaterials.isEmpty();
 
         // 5. 计算人工成本
         List<BomCostSummaryDTO.LaborCostItem> laborCostItems = new ArrayList<>();
@@ -493,7 +505,11 @@ public class BomServiceImpl implements BomService {
             .overheadCostTotal(overheadCostTotal.setScale(4, RoundingMode.HALF_UP))
             .totalCost(totalCost)
             .costCaliber(COST_CALIBER_PRE_TAX)
-            .caliberHint(summaryCaliberHint(hasMissingTaxRate))
+            .caliberHint(summaryCaliberHint(hasMissingTaxRate, hasMissingPrice, missingPriceMaterials.size()))
+            // B-BUG-1: 缺价完整性标记
+            .hasMissingPrice(hasMissingPrice)
+            .missingPriceCount(missingPriceMaterials.size())
+            .missingPriceMaterials(hasMissingPrice ? missingPriceMaterials : null)
             .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
             .build();
 
@@ -519,11 +535,17 @@ public class BomServiceImpl implements BomService {
 
     // ============ Private Helper Methods ============
 
-    private String summaryCaliberHint(boolean hasMissingTaxRate) {
+    private String summaryCaliberHint(boolean hasMissingTaxRate, boolean hasMissingPrice, int missingPriceCount) {
+        StringBuilder sb = new StringBuilder(PRE_TAX_CALIBER_HINT);
         if (hasMissingTaxRate) {
-            return PRE_TAX_CALIBER_HINT + MISSING_TAX_RATE_HINT;
+            sb.append(MISSING_TAX_RATE_HINT);
         }
-        return PRE_TAX_CALIBER_HINT;
+        // B-BUG-1: 缺价时显式提示成本不完整 (禁止降级 — 不假装总成本完整)。
+        if (hasMissingPrice) {
+            sb.append("⚠️ 成本不完整: 有 ").append(missingPriceCount)
+              .append(" 行原辅料缺单价, 其成本未计入合计, 总成本被低估, 请补全单价后重新计算。");
+        }
+        return sb.toString();
     }
 
     private String materialCaliberHint(BigDecimal taxRate) {

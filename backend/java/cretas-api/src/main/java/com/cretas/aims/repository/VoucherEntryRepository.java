@@ -18,6 +18,20 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
     void deleteByVoucherId(String voucherId);
 
     /**
+     * H-BUG-3 (2026-06-21 transcript-e2e R1): 统计指定科目 (subjectCode) 在某工厂下被多少条
+     * 凭证分录引用。用于 {@code AccountService.softDelete} 的引用阻删校验。
+     *
+     * <p>VoucherEntry 通过 {@code subject_code} 引用 Account.code (非 FK), 工厂归属经
+     * {@code voucher.factoryId} 判定。{@code @Where(deleted_at IS NULL)} 已在 VoucherEntry
+     * 与 Voucher 上强制软删过滤, 故只统计存活的分录/凭证 (含 DRAFT/POSTED/VOID —— 任何历史引用
+     * 都意味着删除该科目会孤立历史凭证记录, 因此都阻删)。
+     */
+    @Query("SELECT COUNT(e) FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId AND e.subjectCode = :subjectCode")
+    long countBySubjectCodeAndFactory(@Param("factoryId") String factoryId,
+                                      @Param("subjectCode") String subjectCode);
+
+    /**
      * Sprint 6 W4-A: 按 auxiliaryEntityId 聚合一段时间内的分录, 计算借/贷/净余额/分录数.
      *
      * <p>过滤条件:

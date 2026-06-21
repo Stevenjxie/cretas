@@ -204,6 +204,16 @@ public class VoucherServiceImpl implements VoucherService {
         // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权作废别厂凭证)
         Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
+        // H-BUG-4 (2026-06-21 transcript-e2e R1): 此前无状态守卫 — 已作废凭证可重复"作废",
+        // 每次都把 " [作废: reason]" 追加到 description (无限累积), 且 approvedBy/approvedAt 被反复覆盖。
+        // 幂等拒绝: 已 VOID → 409 (作废是终态, 不可重复)。
+        if (v.getStatus() == VoucherStatus.VOID) {
+            throw new IllegalStateException("凭证已作废, 不可重复作废");
+        }
+        // 注: POSTED (已过账) 凭证当前允许直接置 VOID 而不生成红字冲销凭证。严格会计准则下,
+        // 已过账凭证应通过"红字冲销" (生成反向凭证) 而非直接作废来保持账务可追溯。红字冲销是
+        // 独立的财务能力 (产品决策), 本次不实现; 这里仅修复重复作废的幂等缺陷。
+        // TODO(product): POSTED 凭证作废是否应强制走红字冲销流程, 待业务确认。
         // Sprint 7 T2 F-PERIOD: 作废也是修改 voucher 状态, 走期间结账 gate
         assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
         v.setStatus(VoucherStatus.VOID);

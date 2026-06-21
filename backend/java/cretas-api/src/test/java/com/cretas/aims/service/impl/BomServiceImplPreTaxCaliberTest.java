@@ -109,4 +109,64 @@ class BomServiceImplPreTaxCaliberTest {
         });
         assertThat(result.getCaliberHint()).contains("缺税率");
     }
+
+    @Test
+    @DisplayName("B-BUG-1: 缺单价的原料行不静默当 ¥0, 而是显式标记 hasMissingPrice + 缺价列表 + caliberHint 警示")
+    void calculateProductCost_missingPriceSurfacedNotSilentlyZero() {
+        // 一行有价 (¥10 * 1 = ¥10), 一行缺价 (unitPrice=null → 之前静默当 ¥0 并入合计)。
+        BomItem priced = BomItem.builder()
+                .factoryId("F006")
+                .productTypeId("P-MISSING-PRICE")
+                .productName("missing price product")
+                .materialTypeId("RM-PRICED")
+                .materialName("有价原料")
+                .standardQuantity(new BigDecimal("1.0000"))
+                .yieldRate(new BigDecimal("100.00"))
+                .unit("kg")
+                .unitPrice(new BigDecimal("10.0000"))
+                .taxRate(new BigDecimal("13.00"))
+                .build();
+        BomItem noPrice = BomItem.builder()
+                .factoryId("F006")
+                .productTypeId("P-MISSING-PRICE")
+                .productName("missing price product")
+                .materialTypeId("RM-NOPRICE")
+                .materialName("缺价原料")
+                .standardQuantity(new BigDecimal("2.0000"))
+                .yieldRate(new BigDecimal("100.00"))
+                .unit("kg")
+                .unitPrice(null)
+                .taxRate(new BigDecimal("13.00"))
+                .build();
+
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+                "F006", "P-MISSING-PRICE"))
+                .thenReturn(List.of(priced, noPrice));
+        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
+                "F006", "P-MISSING-PRICE"))
+                .thenReturn(List.of());
+        when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdIsNullAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
+                .thenReturn(List.of());
+        when(overheadCostConfigRepository.findByFactoryIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006"))
+                .thenReturn(List.of());
+
+        BomCostSummaryDTO result = service.calculateProductCost("F006", "P-MISSING-PRICE");
+
+        // 总成本仍只含已知价格行 (¥10), 但 incompleteness 被显式 surface (禁止降级)。
+        assertThat(result.isHasMissingPrice()).isTrue();
+        assertThat(result.getMissingPriceCount()).isEqualTo(1);
+        assertThat(result.getMissingPriceMaterials()).containsExactly("缺价原料");
+        assertThat(result.getCaliberHint()).contains("成本不完整");
+        assertThat(result.getMaterialCostTotal()).isEqualByComparingTo("10.0000");
+
+        // 每行 missingPrice 标记正确
+        assertThat(result.getMaterialCosts())
+                .filteredOn(item -> "缺价原料".equals(item.getMaterialName()))
+                .singleElement()
+                .satisfies(item -> assertThat(item.isMissingPrice()).isTrue());
+        assertThat(result.getMaterialCosts())
+                .filteredOn(item -> "有价原料".equals(item.getMaterialName()))
+                .singleElement()
+                .satisfies(item -> assertThat(item.isMissingPrice()).isFalse());
+    }
 }

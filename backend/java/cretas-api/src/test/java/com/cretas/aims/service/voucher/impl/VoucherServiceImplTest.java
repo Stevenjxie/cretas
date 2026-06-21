@@ -217,4 +217,18 @@ class VoucherServiceImplTest {
         assertEquals(VoucherStatus.VOID, v.getStatus());
         assertTrue(v.getDescription().contains("录入错误"));
     }
+
+    @Test
+    void voidVoucherRejectsAlreadyVoided() {
+        // H-BUG-4 (2026-06-21 transcript-e2e R1): 已作废凭证不可重复作废 (幂等)。
+        Voucher v = Voucher.builder().id("v-1").factoryId("F001")
+                .status(VoucherStatus.VOID).description("foo [作废: 第一次]").build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.voidVoucher("F001", "v-1", "第二次", 42L));
+        // 不应再次写库, description 不应被二次追加
+        verify(voucherRepo, never()).save(any());
+        assertEquals("foo [作废: 第一次]", v.getDescription());
+    }
 }
