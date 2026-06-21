@@ -37,6 +37,16 @@ public class OrderCostBreakdownDTO {
     private BigDecimal totalCost;
     private BigDecimal perBoxCost;
 
+    // ---- 副产回收 (肥油/料头等可变现副产物; masked 时为 null) ----
+    /** 副产回收价值 = Σ 各道报工副产物(quantity×单价); 无单价的副产物按 0 (诚实, 不臆造). */
+    private BigDecimal byproductCredit;
+    /** 净成本 = 总成本 − 副产回收 (副产物变现冲减主产品成本)。 */
+    private BigDecimal netTotalCost;
+    /** 单盒净成本 = 净成本 ÷ 盒数。 */
+    private BigDecimal netPerBoxCost;
+    /** 副产物明细 (跨批次跨道按 名称+单位 归集)。 */
+    private List<ByproductLine> byproducts;
+
     /** 价格是否被脱敏 (无价格查看权限)。 */
     private boolean priceMasked;
     /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */
@@ -64,5 +74,20 @@ public class OrderCostBreakdownDTO {
         private BigDecimal costSharePct;
         /** 谱系深度 (1=直接上游; >1=多级回溯)。 */
         private Integer depth;
+    }
+
+    /** 副产物归集行 (名称+单位 维度跨批次汇总)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ByproductLine {
+        private String name;
+        private BigDecimal quantity;
+        private String unit;
+        /** 单价 (元/单位); 报工未录则 null; masked 时 null。 */
+        private BigDecimal unitPrice;
+        /** 变现价值 = quantity × unitPrice (报工未录单价则 null/0); masked 时 null。 */
+        private BigDecimal value;
     }
 }

@@ -16,10 +16,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.ByproductLine;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -66,6 +70,8 @@ public class OrderCostBreakdownService {
         BigDecimal raw = BigDecimal.ZERO;
         int boxCount = 0;
         List<SourceCost> sources = new ArrayList<>();
+        // 副产物按 名称|单位 归集 (跨批次跨道)
+        LinkedHashMap<String, ByproductLine> byproductAcc = new LinkedHashMap<>();
 
         for (ProductionBatch b : batches) {
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
@@ -75,6 +81,7 @@ public class OrderCostBreakdownService {
                 }
                 List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
                 for (int i = 0; i < steps.size(); i++) {
+                    accumulateByproducts(byproductAcc, steps.get(i).getByproducts());
                     BigDecimal m = steps.get(i).getMaterialCost();
                     if (m == null) {
                         continue;
@@ -113,6 +120,11 @@ public class OrderCostBreakdownService {
         BigDecimal total = labor.add(seasoning).add(packaging).add(raw);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
+        List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
+        BigDecimal byproductCredit = byproducts.stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal netTotal = total.subtract(byproductCredit);
+        BigDecimal netPerBox = boxCount > 0 ? netTotal.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
         BigDecimal totalQty = sources.stream().map(s -> nz(s.getQuantity())).reduce(BigDecimal.ZERO, BigDecimal::add);
         for (SourceCost s : sources) {
             s.setWeightSharePct(totalQty.signum() > 0
@@ -132,6 +144,10 @@ public class OrderCostBreakdownService {
                 .packagingCost(packaging)
                 .totalCost(total)
                 .perBoxCost(perBox)
+                .byproductCredit(byproductCredit)
+                .netTotalCost(netTotal)
+                .netPerBoxCost(netPerBox)
+                .byproducts(byproducts)
                 .sources(sources)
                 .build();
         if (maskPrice) {
@@ -179,6 +195,67 @@ public class OrderCostBreakdownService {
         return new BigDecimal[]{sum.signum() > 0 ? sum : own, BigDecimal.valueOf(maxChildDepth)};
     }
 
+    /**
+     * 归集副产物明细 (名称|单位 维度跨批次累加)。变现价值 = quantity×unitPrice;
+     * 报工 jsonb 可直接录 value/totalValue (优先), 否则按 quantity×unitPrice; 单价缺失 → value=null (诚实, 不臆造)。
+     */
+    private void accumulateByproducts(LinkedHashMap<String, ByproductLine> acc, List<Map<String, Object>> raws) {
+        if (raws == null) {
+            return;
+        }
+        for (Map<String, Object> r : raws) {
+            if (r == null) {
+                continue;
+            }
+            String name = r.get("name") == null ? "副产物" : String.valueOf(r.get("name")).trim();
+            String unit = r.get("unit") == null ? "" : String.valueOf(r.get("unit")).trim();
+            BigDecimal qty = toBigDecimal(r.get("quantity"));
+            BigDecimal unitPrice = toBigDecimal(r.get("unitPrice"));
+            BigDecimal value = toBigDecimal(r.get("value"));
+            if (value == null) {
+                value = toBigDecimal(r.get("totalValue"));
+            }
+            if (value == null && qty != null && unitPrice != null) {
+                value = qty.multiply(unitPrice);
+            }
+            String key = name + "|" + unit;
+            ByproductLine line = acc.get(key);
+            if (line == null) {
+                line = ByproductLine.builder().name(name).unit(unit)
+                        .quantity(BigDecimal.ZERO).build();
+                acc.put(key, line);
+            }
+            if (qty != null) {
+                line.setQuantity(nz(line.getQuantity()).add(qty));
+            }
+            if (value != null) {
+                line.setValue(nz(line.getValue()).add(value));
+            }
+            // 归集后 unitPrice 由 value/quantity 反推 (混录多单价时取加权), 仅 value 有值时
+            if (line.getValue() != null && line.getQuantity() != null && line.getQuantity().signum() > 0) {
+                line.setUnitPrice(line.getValue().divide(line.getQuantity(), 4, RoundingMode.HALF_UP));
+            }
+        }
+    }
+
+    private static BigDecimal toBigDecimal(Object o) {
+        if (o == null) {
+            return null;
+        }
+        if (o instanceof BigDecimal) {
+            return (BigDecimal) o;
+        }
+        if (o instanceof Number) {
+            return new BigDecimal(o.toString());
+        }
+        try {
+            String s = o.toString().trim();
+            return s.isEmpty() ? null : new BigDecimal(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void maskCosts(OrderCostBreakdownDTO dto) {
         dto.setRawMaterialCost(null);
         dto.setLaborCost(null);
@@ -186,6 +263,15 @@ public class OrderCostBreakdownService {
         dto.setPackagingCost(null);
         dto.setTotalCost(null);
         dto.setPerBoxCost(null);
+        dto.setByproductCredit(null);
+        dto.setNetTotalCost(null);
+        dto.setNetPerBoxCost(null);
+        if (dto.getByproducts() != null) {
+            for (ByproductLine l : dto.getByproducts()) {
+                l.setUnitPrice(null);
+                l.setValue(null);   // 价值/单价价格敏感; 保留 name/quantity/unit (物理量)
+            }
+        }
         if (dto.getSources() != null) {
             for (SourceCost s : dto.getSources()) {
                 s.setUnitPrice(null);
@@ -198,7 +284,7 @@ public class OrderCostBreakdownService {
     private OrderCostBreakdownDTO empty(String orderId, boolean maskPrice) {
         return OrderCostBreakdownDTO.builder()
                 .orderId(orderId).boxCount(0).hasData(false).priceMasked(maskPrice)
-                .sources(List.of()).build();
+                .sources(List.of()).byproducts(List.of()).build();
     }
 
     private static BigDecimal nz(BigDecimal v) {
