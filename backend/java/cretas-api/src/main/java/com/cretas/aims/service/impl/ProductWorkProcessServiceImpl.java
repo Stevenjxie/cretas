@@ -76,6 +76,10 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .responsibleWorkerId(normalizedRw)
                 // Wave2 可配置报工粒度: null → 默认 true (逐道报, 向后兼容); 显式 false → 免报。
                 .reportingRequired(dto.getReportingRequired() == null ? Boolean.TRUE : dto.getReportingRequired())
+                // 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别)
+                .defaultCostCategory(dto.getDefaultCostCategory())
+                .packagingTemplate(dto.getPackagingTemplate())
+                .auxAllocMethod(dto.getAuxAllocMethod())
                 .build();
 
         ProductWorkProcess saved = repository.save(entity);
@@ -142,6 +146,10 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getEstimatedMinutesOverride() != null) entity.setEstimatedMinutesOverride(dto.getEstimatedMinutesOverride());
         // Wave2 可配置报工粒度: null → no-change (partial update 不动现有值); 非 null → set (true/false 均可显式设)。
         if (dto.getReportingRequired() != null) entity.setReportingRequired(dto.getReportingRequired());
+        // 工序成本配置 partial update: null → no-change; 非 null → set
+        if (dto.getDefaultCostCategory() != null) entity.setDefaultCostCategory(dto.getDefaultCostCategory());
+        if (dto.getPackagingTemplate() != null) entity.setPackagingTemplate(dto.getPackagingTemplate());
+        if (dto.getAuxAllocMethod() != null) entity.setAuxAllocMethod(dto.getAuxAllocMethod());
 
         // T121: if assigneeWorkerIds provided, they govern responsible_worker_id + join table.
         List<Long> assignees = dto.getAssigneeWorkerIds();
@@ -215,6 +223,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .assigneeWorkerIds(assigneeIds.isEmpty() ? null : assigneeIds)
                 .isActive(entity.getIsActive())
                 .reportingRequired(entity.getReportingRequired())
+                .defaultCostCategory(entity.getDefaultCostCategory())
+                .packagingTemplate(entity.getPackagingTemplate())
+                .auxAllocMethod(entity.getAuxAllocMethod())
                 .createdAt(entity.getCreatedAt());
 
         if (wp != null) {

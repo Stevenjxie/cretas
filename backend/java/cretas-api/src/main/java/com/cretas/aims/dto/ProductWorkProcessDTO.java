@@ -63,6 +63,14 @@ public class ProductWorkProcessDTO {
      */
     private Boolean reportingRequired;
 
+    /**
+     * 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别/明细)。
+     * partial update 语义: null → 不修改现有值。
+     */
+    private String defaultCostCategory;           // CALC-003 默认成本类别
+    private java.util.List<java.util.Map<String, Object>> packagingTemplate;  // AUDIT-002 默认包装明细模板 [{name,cost}]
+    private String auxAllocMethod;                 // AUDIT-004 辅料分摊方式 BY_OUTPUT/FIXED_RATIO
+
     // Read-only fields populated from joined WorkProcess
     private String processName;
     private String processCategory;

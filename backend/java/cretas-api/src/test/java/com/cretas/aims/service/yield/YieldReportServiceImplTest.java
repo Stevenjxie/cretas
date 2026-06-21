@@ -75,6 +75,7 @@ class YieldReportServiceImplTest {
     private ProcessMaterialRecipeRepository recipeRepo;
     private WipInventoryService wipInventoryService;
     private ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
+    private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -95,6 +96,9 @@ class YieldReportServiceImplTest {
         recipeRepo = mock(ProcessMaterialRecipeRepository.class);
         wipInventoryService = mock(WipInventoryService.class);
         pwpAssigneeRepository = mock(ProductWorkProcessAssigneeRepository.class);
+        productWorkProcessRepository = mock(com.cretas.aims.repository.ProductWorkProcessRepository.class);
+        // default: 任务无 productWorkProcessId → 不查; 显式测继承的用例单独 stub
+        when(productWorkProcessRepository.findByFactoryIdAndId(anyString(), any())).thenReturn(Optional.empty());
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
         when(wipRepo.findByIntermediateBatchNoAndDeletedAtIsNull(anyString())).thenReturn(Optional.empty());
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(anyString(), anyString()))
@@ -109,7 +113,7 @@ class YieldReportServiceImplTest {
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService,
-                pwpAssigneeRepository);
+                pwpAssigneeRepository, productWorkProcessRepository);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -124,6 +128,66 @@ class YieldReportServiceImplTest {
         assertThat(report.getCustomFields()).isNotNull();
         assertThat(report.getCustomFields()).containsEntry("reportStack", "YIELD");
         assertThat(report.getCustomFields()).containsEntry("wipPostingMode", "APPROVAL");
+    }
+
+    @Test
+    void submitReport_inheritsCostConfigFromProcessDefinition_whenRequestOmits() {
+        // 工序定义配了默认成本类别/包装模板/分摊方式; 报工未传 → 自动继承 (防呆)
+        WorkProcessTask t = task(10L, 4, "WP-LU");
+        t.setProductWorkProcessId(20L);
+        t.setAssignedTo(5L);   // 报工人=5, 通过归属鉴权
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+        com.cretas.aims.entity.ProductWorkProcess pwp = com.cretas.aims.entity.ProductWorkProcess.builder()
+                .id(20L).factoryId("F006").defaultCostCategory("SEASONING").auxAllocMethod("BY_OUTPUT")
+                .packagingTemplate(List.of(Map.of("name", "膜", "cost", 300))).build();
+        when(productWorkProcessRepository.findByFactoryIdAndId("F006", 20L)).thenReturn(Optional.of(pwp));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("200")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("180")); req.setOutputUnit("kg");
+        // 不传 costCategory / packagingDetail / auxAllocMethod
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        ProductionReport saved = cap.getValue();
+        assertThat(saved.getCostCategory()).isEqualTo("SEASONING");      // 继承
+        assertThat(saved.getAuxAllocMethod()).isEqualTo("BY_OUTPUT");    // 继承
+        assertThat(saved.getPackagingDetail()).hasSize(1);              // 继承模板
+        assertThat(saved.getPackagingDetail().get(0)).containsEntry("name", "膜");
+    }
+
+    @Test
+    void submitReport_requestCostCategoryWinsOverProcessDefault() {
+        WorkProcessTask t = task(10L, 4, "WP-LU");
+        t.setProductWorkProcessId(20L);
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+        com.cretas.aims.entity.ProductWorkProcess pwp = com.cretas.aims.entity.ProductWorkProcess.builder()
+                .id(20L).factoryId("F006").defaultCostCategory("SEASONING").build();
+        when(productWorkProcessRepository.findByFactoryIdAndId("F006", 20L)).thenReturn(Optional.of(pwp));
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("200")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("180")); req.setOutputUnit("kg");
+        req.setCostCategory("PACKAGING");   // 显式传值
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getCostCategory()).isEqualTo("PACKAGING");   // req 优先, 非继承 SEASONING
     }
 
     @Test
@@ -3657,7 +3721,7 @@ class YieldReportServiceImplTest {
                 reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo,
-                wipInventoryService, pwpAssigneeRepository);
+                wipInventoryService, pwpAssigneeRepository, productWorkProcessRepository);
         ReflectionTestUtils.setField(svcWithValidator, "backdateWindowValidator", validator);
 
         MaterialInputRequest req = new MaterialInputRequest();
