@@ -25,16 +25,16 @@ WITH b AS (
   VALUES('DEMO_FACTORY','M67DEMO-PB-001','DF_pt10','PP-M67DEMO-001',1787,'盒','COMPLETED',NOW(),NOW())
   RETURNING id
 )
-INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,byproducts,sample_retain_quantity,waste_quantity,created_at,updated_at,version)
-SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, v.bp::jsonb, v.sr, v.wq, NOW(),NOW(),0
+INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,byproducts,sample_retain_quantity,waste_quantity,cost_category,created_at,updated_at,version)
+SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, v.bp::jsonb, v.sr, v.wq, v.cc, NOW(),NOW(),0
 FROM b,(VALUES
-  (1,101::bigint,'修油',307.0,278.5,624.0,0.0,1440,8, '[{"name":"肥油","quantity":20,"unit":"kg","unitPrice":8}]', NULL::int, 8.5::numeric),  -- 修油削下 28.5kg: 肥油20kg(可变现冲减) + 料头损耗8.5kg(已体现在出成率, 不二次扣); 原料成本由上游 traced 承载本道置0
-  (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2, NULL, NULL::int, NULL::numeric),         -- 注水增重 119.9%
-  (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1, NULL, NULL::int, NULL::numeric),
-  (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1, NULL, NULL::int, NULL::numeric),         -- 调料/卤汤成本计在熟制道
-  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3, NULL, NULL::int, NULL::numeric),
-  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4, NULL, 5::int, NULL::numeric)        -- 包装道留样5盒(不可售); 包装材料成本计在本道
-) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw,bp,sr,wq);
+  (1,101::bigint,'修油',307.0,278.5,624.0,0.0,1440,8, '[{"name":"肥油","quantity":20,"unit":"kg","unitPrice":8}]', NULL::int, 8.5::numeric, 'RAW_MATERIAL'),  -- CALC-003 显式原料(由上游 traced 承载不计); 修油削下 28.5kg=肥油20(冲减)+料头8.5(已在出成率不二次扣)
+  (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2, NULL, NULL::int, NULL::numeric, NULL),         -- 注水增重 119.9% (无材料成本)
+  (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1, NULL, NULL::int, NULL::numeric, NULL),
+  (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1, NULL, NULL::int, NULL::numeric, 'SEASONING'),         -- CALC-003 显式调料(卤汤); 不依赖工序顺序
+  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3, NULL, NULL::int, NULL::numeric, NULL),
+  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4, NULL, 5::int, NULL::numeric, 'PACKAGING')        -- CALC-003 显式包装; 留样5盒(不可售)
+) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw,bp,sr,wq,cc);
 
 -- 多批混锅溯源边 (batch_relations): 本批(熟制) 来自 2 个上游焯水批次 → 喂现成 /batch-relations/trace/backward
 -- 前端「多批混锅溯源」桑基图数据驱动来源。production_batch_id 按 batch_number 解析(可复现)。
