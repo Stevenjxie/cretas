@@ -12,9 +12,6 @@
       </div>
       <div class="ctrls">
         <el-input v-model="orderId" placeholder="订单号" style="width: 220px" />
-        <span class="gw">单盒克重</span>
-        <el-input-number v-model="gramsPerBox" :min="1" :max="5000" :step="10" controls-position="right" style="width: 130px" />
-        <span class="gw">克</span>
         <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
     </div>
