@@ -25,16 +25,16 @@ WITH b AS (
   VALUES('DEMO_FACTORY','M67DEMO-PB-001','DF_pt10','PP-M67DEMO-001',1787,'盒','COMPLETED',NOW(),NOW())
   RETURNING id
 )
-INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,created_at,updated_at,version)
-SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, NOW(),NOW(),0
+INSERT INTO production_reports(factory_id,batch_id,worker_id,report_type,report_date,report_mode,process_order,work_process_task_id,process_category,product_name,input_quantity,input_unit,output_quantity,output_unit,labor_cost,material_cost,total_work_minutes,total_workers,byproducts,created_at,updated_at,version)
+SELECT 'DEMO_FACTORY', b.id, 1635,'YIELD','2026-06-16','MODE_1', v.po, v.wpt, v.cat,'M67卤牛肉', v.inq,'kg', v.outq,'kg', v.lc, v.mc, v.wm, v.tw, v.bp::jsonb, NOW(),NOW(),0
 FROM b,(VALUES
-  (1,101::bigint,'修油',307.0,278.5,624.0,0.0,1440,8),       -- 原料成本由上游 traced consumption 承载(混批闭环), 修油道置0避免双计
-  (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2),         -- 注水增重 119.9%
-  (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1),
-  (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1),         -- 调料/卤汤成本计在熟制道
-  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3),
-  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4)        -- 包装材料成本计在包装道
-) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw);
+  (1,101::bigint,'修油',307.0,278.5,624.0,0.0,1440,8, '[{"name":"肥油","quantity":20,"unit":"kg","unitPrice":8}]'),  -- 修油削下肥油 20kg@¥8 可变现冲减成本; 原料成本由上游 traced consumption 承载, 本道置0避免双计
+  (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2, NULL),         -- 注水增重 119.9%
+  (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1, NULL),
+  (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1, NULL),         -- 调料/卤汤成本计在熟制道
+  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3, NULL),
+  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4, NULL)        -- 包装材料成本计在包装道
+) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw,bp);
 
 -- 多批混锅溯源边 (batch_relations): 本批(熟制) 来自 2 个上游焯水批次 → 喂现成 /batch-relations/trace/backward
 -- 前端「多批混锅溯源」桑基图数据驱动来源。production_batch_id 按 batch_number 解析(可复现)。

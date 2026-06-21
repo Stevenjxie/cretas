@@ -22,6 +22,7 @@ import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +69,16 @@ class OrderCostBreakdownServiceTest {
         StepYieldDTO[] steps = new StepYieldDTO[stepMaterials.length];
         for (int i = 0; i < stepMaterials.length; i++) {
             steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(stepMaterials[i]).build();
+        }
+        return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
+    }
+
+    /** 首道带副产物的 BatchYieldDTO (副产物挂在首道, 模拟修油削肥油)。 */
+    private BatchYieldDTO batchYieldWithByproduct(String labor, List<Map<String, Object>> bp, BigDecimal... stepMaterials) {
+        StepYieldDTO[] steps = new StepYieldDTO[stepMaterials.length];
+        for (int i = 0; i < stepMaterials.length; i++) {
+            steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(stepMaterials[i])
+                    .byproducts(i == 0 ? bp : null).build();
         }
         return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
     }
@@ -165,6 +176,73 @@ class OrderCostBreakdownServiceTest {
         // 量/重量占比仍保留
         assertThat(dto.getSources().get(0).getQuantity()).isEqualByComparingTo("78");
         assertThat(dto.getSources().get(0).getWeightSharePct()).isEqualByComparingTo("78.0");
+    }
+
+    @Test
+    @DisplayName("副产回收: 肥油 20kg×¥8 冲减成本 → 净成本/单盒净成本 (AUDIT-001)")
+    void byproductCreditReducesNetCost() {
+        // 总成本 14104 (人工1334+调料980+包装880+原料10910); 副产 肥油 20kg@¥8=¥160
+        stubOneBatch(1L, "1787",
+                batchYieldWithByproduct("1334",
+                        List.of(Map.of("name", "肥油", "quantity", 20, "unit", "kg", "unitPrice", 8)),
+                        BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")),
+                List.of(cons("MB1", "78", "91.92", "7170"), cons("MB2", "22", "170", "3740")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "焯水0613", null, null)));
+        when(materialBatchRepository.findByIdAndFactoryId("MB2", F)).thenReturn(Optional.of(mb("MB2", "焯水0614", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("14104");        // 毛成本不变
+        assertThat(dto.getByproductCredit()).isEqualByComparingTo("160");    // 20×8
+        assertThat(dto.getNetTotalCost()).isEqualByComparingTo("13944");     // 14104−160
+        assertThat(dto.getNetPerBoxCost()).isEqualByComparingTo("7.80");     // 13944/1787
+        assertThat(dto.getByproducts()).hasSize(1);
+        OrderCostBreakdownDTO.ByproductLine bp = dto.getByproducts().get(0);
+        assertThat(bp.getName()).isEqualTo("肥油");
+        assertThat(bp.getQuantity()).isEqualByComparingTo("20");
+        assertThat(bp.getUnit()).isEqualTo("kg");
+        assertThat(bp.getValue()).isEqualByComparingTo("160");
+        assertThat(bp.getUnitPrice()).isEqualByComparingTo("8");
+    }
+
+    @Test
+    @DisplayName("副产物无单价: 只录数量 → value/credit 为 0, 不臆造价值 (诚实)")
+    void byproductWithoutPriceNoCredit() {
+        stubOneBatch(1L, "100",
+                batchYieldWithByproduct("0",
+                        List.of(Map.of("name", "牛骨", "quantity", 5, "unit", "kg")),  // 无 unitPrice
+                        new BigDecimal("100")),
+                List.of());
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getByproductCredit()).isEqualByComparingTo("0");
+        assertThat(dto.getNetTotalCost()).isEqualByComparingTo(dto.getTotalCost());  // 无冲减
+        assertThat(dto.getByproducts()).hasSize(1);
+        assertThat(dto.getByproducts().get(0).getValue()).isNull();  // 不臆造
+        assertThat(dto.getByproducts().get(0).getQuantity()).isEqualByComparingTo("5");
+    }
+
+    @Test
+    @DisplayName("价格脱敏: 副产物 value/单价 置 null, 保留名称/数量/单位 (物理量)")
+    void byproductMaskedWhenNoPermission() {
+        stubOneBatch(1L, "1787",
+                batchYieldWithByproduct("1334",
+                        List.of(Map.of("name", "肥油", "quantity", 20, "unit", "kg", "unitPrice", 8)),
+                        BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")),
+                List.of(cons("MB1", "78", "91.92", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "焯水0613", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, true);
+
+        assertThat(dto.getByproductCredit()).isNull();
+        assertThat(dto.getNetTotalCost()).isNull();
+        assertThat(dto.getNetPerBoxCost()).isNull();
+        OrderCostBreakdownDTO.ByproductLine bp = dto.getByproducts().get(0);
+        assertThat(bp.getValue()).isNull();
+        assertThat(bp.getUnitPrice()).isNull();
+        assertThat(bp.getName()).isEqualTo("肥油");           // 物理量保留
+        assertThat(bp.getQuantity()).isEqualByComparingTo("20");
     }
 
     @Test

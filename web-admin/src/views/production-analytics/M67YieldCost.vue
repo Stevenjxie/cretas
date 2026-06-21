@@ -58,6 +58,20 @@
               <el-progress :percentage="c.share" :color="c.color" :stroke-width="14" style="flex:1" />
               <span class="cval">¥{{ c.perBox.toFixed(2) }}</span>
             </div>
+
+            <!-- 副产回收 (肥油/料头变现冲减成本) — AUDIT-001 -->
+            <template v-if="hasByproduct">
+              <el-divider style="margin: 10px 0" />
+              <div v-for="b in byproducts" :key="b.name" class="cost-row byp">
+                <span class="cdot" style="background:#909399"></span>
+                <span class="cname" style="width:auto">副产·{{ b.name }}</span>
+                <span class="byp-meta">{{ num(b.quantity) }} {{ b.unit }}<template v-if="b.unitPrice != null"> × ¥{{ Number(b.unitPrice).toFixed(2) }}</template></span>
+                <span class="cval" :class="{ credit: b.value != null }">{{ b.value != null ? '−¥' + ((b.value || 0) / (boxCount || 1)).toFixed(2) : '需价格权限' }}</span>
+              </div>
+              <div v-if="netPerBox != null" class="net-box">
+                单盒净成本 <b>¥{{ netPerBox.toFixed(2) }}</b><span>/盒 (毛成本扣副产回收 ¥{{ byproductCredit.toFixed(2) }})</span>
+              </div>
+            </template>
           </el-card>
         </el-col>
       </el-row>
@@ -117,9 +131,11 @@ interface Step {
 }
 interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; unitPrice?: number; totalCost?: number; sourceType?: string }
 interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
+interface ByproductLine { name?: string; quantity?: number; unit?: string; unitPrice?: number; value?: number }
 interface CostBreakdown {
   boxCount?: number; rawMaterialCost?: number; laborCost?: number; seasoningCost?: number;
   packagingCost?: number; totalCost?: number; perBoxCost?: number; priceMasked?: boolean; hasData?: boolean;
+  byproductCredit?: number; netTotalCost?: number; netPerBoxCost?: number; byproducts?: ByproductLine[];
   sources?: CostSource[];
 }
 interface YieldSummary {
@@ -166,6 +182,12 @@ const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / bo
 // 成本全部以后端单一权威服务 cb 为准 (谱系遍历 + 上游成本回溯); 缺失时回退订单聚合
 const upstreamCost = computed(() => Number(cb.value?.rawMaterialCost ?? mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0)));
 const totalCostClosed = computed(() => Number(cb.value?.totalCost ?? (Number(data.value?.totalCost || 0) + upstreamCost.value)));
+
+// 副产回收 (肥油/料头等可变现副产物冲减成本); 价格脱敏时 value/credit/net 为 null
+const byproducts = computed<ByproductLine[]>(() => cb.value?.byproducts || []);
+const hasByproduct = computed(() => byproducts.value.length > 0);
+const byproductCredit = computed(() => Number(cb.value?.byproductCredit ?? 0));
+const netPerBox = computed(() => cb.value?.netPerBoxCost != null ? Number(cb.value.netPerBoxCost) : null);
 
 const barPct = (y?: number | null) => (y == null ? 0 : Math.min(100, Math.round(y * 100)));
 const yieldStatus = (y?: number | null) => {
@@ -355,4 +377,10 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .cdot { width: 10px; height: 10px; border-radius: 50%; }
 .cname { width: 40px; font-size: 13px; }
 .cval { width: 64px; text-align: right; font-weight: 600; }
+.cost-row.byp .byp-meta { flex: 1; color: #909399; font-size: 12px; }
+.cost-row.byp .cval { width: auto; min-width: 64px; font-weight: 600; }
+.cost-row.byp .cval.credit { color: #67c23a; }
+.net-box { margin-top: 8px; padding: 8px 12px; background: #f0f9eb; border-radius: 6px; font-size: 14px; }
+.net-box b { font-size: 20px; color: #529b2e; }
+.net-box span { color: #909399; font-size: 12px; margin-left: 4px; }
 </style>
