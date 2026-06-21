@@ -49,8 +49,19 @@ public class AccountService {
         return accountRepo.findVisibleByCategory(factoryId, category);
     }
 
-    public Optional<Account> findById(String id) {
-        return accountRepo.findByIdAndDeletedAtIsNull(id);
+    /**
+     * 详情读取. 跨租户校验: 系统级科目 (factoryId == null, 全工厂可见) 或本厂科目可读;
+     * 其它工厂的科目 → 403。
+     */
+    public Optional<Account> findById(String factoryId, String id) {
+        Optional<Account> acctOpt = accountRepo.findByIdAndDeletedAtIsNull(id);
+        acctOpt.ifPresent(acct -> {
+            if (acct.getFactoryId() != null && !acct.getFactoryId().equals(factoryId)) {
+                throw new BusinessException(403, "无权访问该科目 / 该科目不属于当前工厂")
+                        .withHint("请确认科目 ID 是否属于本工厂");
+            }
+        });
+        return acctOpt;
     }
 
     /**
@@ -112,9 +123,14 @@ public class AccountService {
      * parentId / level 不可改 (会破坏既有 voucher_entry 引用).
      */
     @Transactional
-    public Account update(String id, Account patch) {
+    public Account update(String factoryId, String id, Account patch) {
         Account existing = accountRepo.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new BusinessException("科目不存在: " + id));
+        // 跨租户校验 (写): 只能改本厂自定义科目; 系统标准科目 (factoryId == null) 不可改, 别厂科目越权。
+        if (existing.getFactoryId() == null || !existing.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权修改该科目 / 系统标准科目不可修改")
+                    .withHint("系统标准科目为全工厂共享, 不可修改; 自定义科目请在本工厂操作");
+        }
         if (patch.getName() != null && !patch.getName().isBlank()) {
             existing.setName(patch.getName());
         }
@@ -134,9 +150,14 @@ public class AccountService {
      * 软删除 — 已被 voucher 引用 / 有子科目 时禁删 (Rule 5 dead-end nav: 改 active=false).
      */
     @Transactional
-    public void softDelete(String id) {
+    public void softDelete(String factoryId, String id) {
         Account existing = accountRepo.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new BusinessException("科目不存在: " + id));
+        // 跨租户校验 (写): 只能删本厂自定义科目; 系统标准科目 (factoryId == null) 不可删, 别厂科目越权。
+        if (existing.getFactoryId() == null || !existing.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权删除该科目 / 系统标准科目不可删除")
+                    .withHint("系统标准科目为全工厂共享, 不可删除; 自定义科目请在本工厂操作");
+        }
         long childCount = accountRepo.countByParentIdAndDeletedAtIsNull(id);
         if (childCount > 0) {
             throw new BusinessException(409,

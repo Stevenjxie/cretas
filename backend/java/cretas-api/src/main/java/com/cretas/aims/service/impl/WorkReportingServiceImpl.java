@@ -118,7 +118,7 @@ public class WorkReportingServiceImpl {
 
         // 如果关联批次且有产量，更新批次实际产量
         if (request.getBatchId() != null && request.getOutputQuantity() != null) {
-            updateBatchActualQuantity(request.getBatchId(), request.getOutputQuantity());
+            updateBatchActualQuantity(factoryId, request.getBatchId(), request.getOutputQuantity());
         }
 
         return toResponse(report);
@@ -342,9 +342,10 @@ public class WorkReportingServiceImpl {
 
     // --- private helpers ---
 
-    private void updateBatchActualQuantity(Long batchId, BigDecimal outputQuantity) {
+    private void updateBatchActualQuantity(String factoryId, Long batchId, BigDecimal outputQuantity) {
         try {
-            Optional<ProductionBatch> batchOpt = productionBatchRepository.findById(batchId);
+            // 跨租户校验: 批次须属于当前工厂 (findByIdAndFactoryId 过滤, 避免把产量累计到别厂批次)
+            Optional<ProductionBatch> batchOpt = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId);
             if (batchOpt.isPresent()) {
                 ProductionBatch batch = batchOpt.get();
                 BigDecimal current = batch.getActualQuantity() != null ? batch.getActualQuantity() : BigDecimal.ZERO;

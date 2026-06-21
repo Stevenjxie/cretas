@@ -157,7 +157,7 @@ class AccountServiceTest {
         when(accountRepo.countByParentIdAndDeletedAtIsNull("acc-id")).thenReturn(3L);
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> accountService.softDelete("acc-id"));
+                () -> accountService.softDelete("F006", "acc-id"));
         assertEquals(Integer.valueOf(409), ex.getCode());
         assertTrue(ex.getMessage().contains("3 个子科目"));
         assertNotNull(ex.getActionHint(), "actionHint required for Rule 5 dead-end nav");
@@ -177,7 +177,7 @@ class AccountServiceTest {
         when(accountRepo.findByIdAndDeletedAtIsNull("acc-id")).thenReturn(Optional.of(existing));
         when(accountRepo.countByParentIdAndDeletedAtIsNull("acc-id")).thenReturn(0L);
 
-        assertDoesNotThrow(() -> accountService.softDelete("acc-id"));
+        assertDoesNotThrow(() -> accountService.softDelete("F006", "acc-id"));
         verify(accountRepo).save(argThat(a -> a.getDeletedAt() != null));
     }
 
@@ -204,7 +204,7 @@ class AccountServiceTest {
                 .sortOrder(99)
                 .code("9999")  // attempt to change immutable — ignored
                 .build();
-        Account result = accountService.update("acc-id", patch);
+        Account result = accountService.update("F006", "acc-id", patch);
         assertEquals("新名称", result.getName());
         assertEquals("更新描述", result.getDescription());
         assertFalse(result.getActive());

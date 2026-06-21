@@ -87,9 +87,10 @@ public class PaymentRecordController {
     @PostMapping("/{paymentId}/verify")
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> verify(
+            @PathVariable String factoryId,
             @PathVariable String paymentId,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        var record = paymentRecordService.verifyPayment(paymentId, userId);
+        var record = paymentRecordService.verifyPayment(factoryId, paymentId, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", record, "message", "收款已确认"));
     }
 
@@ -97,10 +98,11 @@ public class PaymentRecordController {
     @PostMapping("/{paymentId}/reject")
     @RequirePermission("finance:read_write")
     public ResponseEntity<?> reject(
+            @PathVariable String factoryId,
             @PathVariable String paymentId,
             @RequestBody Map<String, String> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        var record = paymentRecordService.rejectPayment(paymentId, userId, body.get("reason"));
+        var record = paymentRecordService.rejectPayment(factoryId, paymentId, userId, body.get("reason"));
         return ResponseEntity.ok(Map.of("success", true, "data", record, "message", "收款已驳回"));
     }
 
@@ -123,8 +125,8 @@ public class PaymentRecordController {
     // Sprint1-Fix-K5 (2026-05-15): drop finance:read too — viewer 有 finance:read
     // 仍泄 customerName/salesOrderId. 财务付款仅 finance/sales 管理员 (write 权限) 可看。
     @RequirePermission({"finance:read_write", "sales:read_write"})
-    public ResponseEntity<?> detail(@PathVariable String paymentId) {
-        return ResponseEntity.ok(Map.of("success", true, "data", paymentRecordService.getPayment(paymentId)));
+    public ResponseEntity<?> detail(@PathVariable String factoryId, @PathVariable String paymentId) {
+        return ResponseEntity.ok(Map.of("success", true, "data", paymentRecordService.getPayment(factoryId, paymentId)));
     }
 
     /** List all payment records for a sales order — used by sales order detail page tab. */

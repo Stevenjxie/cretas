@@ -2383,8 +2383,12 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
-    public List<SalesDeliveryRecord> getDeliveryRecordsByOrder(String salesOrderId) {
-        return deliveryRecordRepository.findBySalesOrderId(salesOrderId);
+    public List<SalesDeliveryRecord> getDeliveryRecordsByOrder(String factoryId, String salesOrderId) {
+        // 跨租户校验: 仅返回属于当前工厂的发货记录 (防止越权读取别厂订单的发货明细)。
+        // 参考 getDeliveryRecordById 的 factoryId 归属校验写法。
+        return deliveryRecordRepository.findBySalesOrderId(salesOrderId).stream()
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .collect(java.util.stream.Collectors.toList());
     }
 
     // ==================== Issue #740 仓库侧 confirm 流程 ====================

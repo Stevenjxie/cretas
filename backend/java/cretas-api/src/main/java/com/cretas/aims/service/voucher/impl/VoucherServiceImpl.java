@@ -88,6 +88,11 @@ public class VoucherServiceImpl implements VoucherService {
                     "源业务单不存在: " + businessType + "/" + businessId);
         }
 
+        // 跨租户校验 (Rule 8 sweep): loadEntity 用裸 findById, 不校验业务单归属工厂。
+        // 攻击者把自己的 factoryId 放 URL、传别厂业务单 id → 把别厂数据生成进本厂凭证。
+        // 这里校验加载到的业务实体 factoryId 必须 == 路径 factoryId。
+        assertEntityBelongsToFactory(businessType, businessId, entity, factoryId);
+
         // 3. Find generator
         @SuppressWarnings("rawtypes")
         VoucherGenerator generator = registry.findByBusinessType(businessType)
@@ -178,8 +183,9 @@ public class VoucherServiceImpl implements VoucherService {
 
     @Override
     @Transactional
-    public Voucher post(String voucherId, Long userId) {
-        Voucher v = voucherRepo.findById(voucherId)
+    public Voucher post(String factoryId, String voucherId, Long userId) {
+        // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权过账别厂凭证)
+        Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
         if (v.getStatus() != VoucherStatus.DRAFT) {
             throw new IllegalStateException("仅 DRAFT 凭证可过账, 当前=" + v.getStatus());
@@ -194,8 +200,9 @@ public class VoucherServiceImpl implements VoucherService {
 
     @Override
     @Transactional
-    public void voidVoucher(String voucherId, String reason, Long userId) {
-        Voucher v = voucherRepo.findById(voucherId)
+    public void voidVoucher(String factoryId, String voucherId, String reason, Long userId) {
+        // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权作废别厂凭证)
+        Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
         // Sprint 7 T2 F-PERIOD: 作废也是修改 voucher 状态, 走期间结账 gate
         assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
@@ -218,6 +225,30 @@ public class VoucherServiceImpl implements VoucherService {
     }
 
     // ==================== private helpers ====================
+
+    /**
+     * 跨租户校验 (Rule 8 sweep): 校验 {@link #loadEntity} 加载的业务实体归属当前工厂。
+     * 各业务单的工厂字段不同 (InternalTransfer 用 sourceFactoryId)，逐类型取归属工厂比对。
+     * 不属于当前工厂 → 403。
+     */
+    private void assertEntityBelongsToFactory(String businessType, String businessId,
+                                              Object entity, String factoryId) {
+        String entityFactoryId;
+        switch (businessType) {
+            case "SALES_ORDER":      entityFactoryId = ((SalesOrder) entity).getFactoryId(); break;
+            case "PURCHASE_ORDER":   entityFactoryId = ((PurchaseOrder) entity).getFactoryId(); break;
+            case "RETURN_ORDER":     entityFactoryId = ((ReturnOrder) entity).getFactoryId(); break;
+            case "INTERNAL_TRANSFER":entityFactoryId = ((InternalTransfer) entity).getSourceFactoryId(); break;
+            case "WASTAGE_RECORD":   entityFactoryId = ((WastageRecord) entity).getFactoryId(); break;
+            case "PAYROLL_RECORD":   entityFactoryId = ((PayrollRecord) entity).getFactoryId(); break;
+            default:                 return; // 未知类型不在 loadEntity 支持范围, 不阻塞
+        }
+        if (entityFactoryId == null || !entityFactoryId.equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403,
+                    "无权操作该业务单 / 该业务单不属于当前工厂: " + businessType + "/" + businessId)
+                    .withHint("请确认业务单 ID 是否属于本工厂");
+        }
+    }
 
     private Object loadEntity(String businessType, String businessId) {
         switch (businessType) {

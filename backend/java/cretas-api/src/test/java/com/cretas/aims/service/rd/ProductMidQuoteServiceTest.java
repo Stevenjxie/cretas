@@ -79,7 +79,7 @@ class ProductMidQuoteServiceTest {
 
         when(quotationTaskRepository.findById(taskId))
                 .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
-        when(productionBatchRepository.findById(batchId))
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
                 .thenReturn(Optional.of(buildTrialBatch(batchId)));
         when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
                 .thenReturn(Optional.empty());
@@ -112,7 +112,7 @@ class ProductMidQuoteServiceTest {
 
         when(quotationTaskRepository.findById(taskId))
                 .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
-        when(productionBatchRepository.findById(batchId))
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
                 .thenReturn(Optional.of(buildTrialBatch(batchId)));
         when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
                 .thenReturn(Optional.empty());
@@ -171,7 +171,7 @@ class ProductMidQuoteServiceTest {
 
         when(quotationTaskRepository.findById(taskId))
                 .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
-        when(productionBatchRepository.findById(batchId))
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
                 .thenReturn(Optional.of(incompleteBatch));
         when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
                 .thenReturn(Optional.empty());
@@ -195,7 +195,7 @@ class ProductMidQuoteServiceTest {
 
         when(quotationTaskRepository.findById(taskId))
                 .thenReturn(Optional.of(cheapPreQuote));
-        when(productionBatchRepository.findById(batchId))
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
                 .thenReturn(Optional.of(buildTrialBatch(batchId)));
         when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
                 .thenReturn(Optional.empty());

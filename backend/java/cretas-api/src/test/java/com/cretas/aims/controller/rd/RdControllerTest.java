@@ -223,13 +223,13 @@ class RdControllerTest {
         body.put("suggestedPrice", "30.00");
         // materialCost 缺失
 
-        ResponseEntity<?> resp = controller.submitQuotation("task-001", body, 1L);
+        ResponseEntity<?> resp = controller.submitQuotation("F001", "task-001", body, 1L);
 
         assertEquals(400, resp.getStatusCode().value());
         Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
         assertThat(respBody.get("success")).isEqualTo(false);
         assertThat(respBody.get("message").toString()).contains("materialCost");
-        verify(sampleService, never()).submitQuotation(any(), any(), any(), any(), any(), any(), any());
+        verify(sampleService, never()).submitQuotation(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -239,7 +239,7 @@ class RdControllerTest {
         QuotationTask task = new QuotationTask();
         task.setId("task-001");
         task.setStatus("QUOTED");
-        when(sampleService.submitQuotation(eq("task-001"),
+        when(sampleService.submitQuotation(eq("F001"), eq("task-001"),
                 eq(new BigDecimal("20.00")), eq(new BigDecimal("5.00")),
                 eq(new BigDecimal("2.00")), eq(new BigDecimal("30.00")),
                 isNull(), eq(1L)))
@@ -251,7 +251,7 @@ class RdControllerTest {
         body.put("overheadCost", "2.00");
         body.put("suggestedPrice", "30.00");
 
-        ResponseEntity<?> resp = controller.submitQuotation("task-001", body, 1L);
+        ResponseEntity<?> resp = controller.submitQuotation("F001", "task-001", body, 1L);
         assertEquals(200, resp.getStatusCode().value());
         Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
         assertThat(respBody.get("success")).isEqualTo(true);
@@ -268,7 +268,7 @@ class RdControllerTest {
     void confirmQuotation_missingFinalPrice_badRequest() {
         Map<String, Object> body = new HashMap<>();
 
-        ResponseEntity<?> resp = controller.confirmQuotation("task-001", body, 1L);
+        ResponseEntity<?> resp = controller.confirmQuotation("F001", "task-001", body, 1L);
 
         assertEquals(400, resp.getStatusCode().value());
         Map<String, Object> respBody = (Map<String, Object>) resp.getBody();

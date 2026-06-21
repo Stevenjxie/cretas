@@ -227,11 +227,15 @@ public class ProductSampleServiceImpl implements ProductSampleService {
 
     @Override
     @Transactional
-    public QuotationTask submitQuotation(String taskId, BigDecimal materialCost, BigDecimal laborCost,
+    public QuotationTask submitQuotation(String factoryId, String taskId, BigDecimal materialCost, BigDecimal laborCost,
                                           BigDecimal overheadCost, BigDecimal suggestedPrice,
                                           BigDecimal laborPerKg, Long quotedBy) {
         QuotationTask task = quotationTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("报价任务不存在"));
+        // 跨租户校验: 报价任务须属于当前工厂 (防止越权对别厂报价任务写入价格)
+        if (task.getFactoryId() == null || !task.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该报价任务 / 该报价任务不属于当前工厂");
+        }
         task.setMaterialCost(materialCost);
         task.setLaborCost(laborCost);
         task.setOverheadCost(overheadCost);
@@ -255,9 +259,13 @@ public class ProductSampleServiceImpl implements ProductSampleService {
 
     @Override
     @Transactional
-    public QuotationTask confirmQuotation(String taskId, BigDecimal finalPrice, Long confirmedBy) {
+    public QuotationTask confirmQuotation(String factoryId, String taskId, BigDecimal finalPrice, Long confirmedBy) {
         QuotationTask task = quotationTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("报价任务不存在"));
+        // 跨租户校验: 报价任务须属于当前工厂 (防止越权确认别厂报价任务)
+        if (task.getFactoryId() == null || !task.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该报价任务 / 该报价任务不属于当前工厂");
+        }
         task.setFinalPrice(finalPrice);
         task.setStatus("CONFIRMED");
         task.setConfirmedBy(confirmedBy);

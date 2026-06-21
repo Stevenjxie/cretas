@@ -97,7 +97,7 @@ public class ReportReversalController {
             HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
         log.info("SP2 批准撤回: logId={}, approvedBy={}, factoryId={}", logId, userId, factoryId);
-        reversalService.approveReversal(logId, userId);
+        reversalService.approveReversal(factoryId, logId, userId);
         return ApiResponse.success(null);
     }
 
@@ -115,7 +115,7 @@ public class ReportReversalController {
         Long userId = (Long) request.getAttribute("userId");
         String reason = body.getOrDefault("reason", "");
         log.info("SP2 拒绝撤回: logId={}, approvedBy={}, factoryId={}", logId, userId, factoryId);
-        reversalService.rejectReversal(logId, userId, reason);
+        reversalService.rejectReversal(factoryId, logId, userId, reason);
         return ApiResponse.success(null);
     }
 

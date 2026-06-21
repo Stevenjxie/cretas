@@ -104,7 +104,9 @@ public class VoucherController {
             @PathVariable String businessType,
             @PathVariable String businessId) {
         Optional<Voucher> v = voucherService.findBySourceBusiness(businessType, businessId);
-        if (v.isEmpty()) {
+        // 跨租户校验 (Rule 8 sweep): findBySourceBusiness 按 businessType+businessId 全局查询不带 factory,
+        // 返回的凭证可能属于别厂。仅当凭证归属当前工厂时才返回, 否则视作"未生成"(不泄漏别厂凭证存在性)。
+        if (v.isEmpty() || !factoryId.equals(v.get().getFactoryId())) {
             return ResponseEntity.ok(Map.of("success", true, "data", null, "message", "未生成凭证"));
         }
         return ResponseEntity.ok(Map.of("success", true, "data", v.get()));
@@ -141,7 +143,7 @@ public class VoucherController {
             @PathVariable String factoryId,
             @PathVariable String id,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        Voucher v = voucherService.post(id, userId);
+        Voucher v = voucherService.post(factoryId, id, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", v, "message", "凭证已过账"));
     }
 
@@ -153,7 +155,7 @@ public class VoucherController {
             @Valid @RequestBody VoucherVoidRequest req,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         String reason = (req.getReason() == null || req.getReason().isBlank()) ? "未填写原因" : req.getReason();
-        voucherService.voidVoucher(id, reason, userId);
+        voucherService.voidVoucher(factoryId, id, reason, userId);
         return ResponseEntity.ok(Map.of("success", true, "message", "凭证已作废"));
     }
 
