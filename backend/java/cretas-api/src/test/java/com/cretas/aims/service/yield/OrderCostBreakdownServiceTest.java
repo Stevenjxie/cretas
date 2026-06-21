@@ -83,6 +83,18 @@ class OrderCostBreakdownServiceTest {
         return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
     }
 
+    /** 通用步骤构造: 首道可挂副产物/料头, 末道可挂留样 (AUDIT-001+006 组合场景)。 */
+    private BatchYieldDTO buildBatch(String labor, List<Map<String, Object>> bpFirst, Integer sampleLast, BigDecimal wasteFirst, BigDecimal... mats) {
+        StepYieldDTO[] steps = new StepYieldDTO[mats.length];
+        for (int i = 0; i < mats.length; i++) {
+            steps[i] = StepYieldDTO.builder().processOrder(i + 1).materialCost(mats[i])
+                    .byproducts(i == 0 ? bpFirst : null)
+                    .sampleRetainQuantity(i == mats.length - 1 ? sampleLast : null)
+                    .wasteQuantity(i == 0 ? wasteFirst : null).build();
+        }
+        return BatchYieldDTO.builder().totalLaborCost(new BigDecimal(labor)).steps(List.of(steps)).build();
+    }
+
     private void stubOneBatch(Long batchId, String qty, BatchYieldDTO y, List<MaterialConsumption> cons) {
         when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of(plan("PP1")));
         when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any())).thenReturn(List.of(batch(batchId, qty)));
@@ -243,6 +255,47 @@ class OrderCostBreakdownServiceTest {
         assertThat(bp.getUnitPrice()).isNull();
         assertThat(bp.getName()).isEqualTo("肥油");           // 物理量保留
         assertThat(bp.getQuantity()).isEqualByComparingTo("20");
+    }
+
+    @Test
+    @DisplayName("留样扣减: 5盒留样不可售 → 可售单盒成本=净成本÷可售盒数; 料头仅展示 (AUDIT-006)")
+    void sampleRetainSellablePerBox() {
+        // 总14104(无副产→net=14104); 盒数1787; 留样5→可售1782; 料头8.5kg 仅展示不扣成本
+        stubOneBatch(1L, "1787",
+                buildBatch("1334", null, 5, new BigDecimal("8.5"), BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")),
+                List.of(cons("MB1", "78", "91.92", "7170"), cons("MB2", "22", "170", "3740")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "焯水0613", null, null)));
+        when(materialBatchRepository.findByIdAndFactoryId("MB2", F)).thenReturn(Optional.of(mb("MB2", "焯水0614", null, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getSampleRetainCount()).isEqualTo(5);
+        assertThat(dto.getSellableBoxCount()).isEqualTo(1782);          // 1787−5
+        assertThat(dto.getWasteQuantity()).isEqualByComparingTo("8.5"); // 仅展示
+        assertThat(dto.getPerBoxCost()).isEqualByComparingTo("7.89");   // 毛 14104/1787 不变
+        assertThat(dto.getSellablePerBoxCost()).isEqualByComparingTo("7.91"); // 14104/1782
+    }
+
+    @Test
+    @DisplayName("副产+留样组合 (seed 场景): 净成本÷可售盒数; 脱敏时 sellable 为 null (AUDIT-001+006)")
+    void byproductPlusSampleCombined() {
+        // 副产 肥油160 → net=13944; 留样5 → 可售1782; sellable=13944/1782
+        stubOneBatch(1L, "1787",
+                buildBatch("1334", List.of(Map.of("name", "肥油", "quantity", 20, "unit", "kg", "unitPrice", 8)),
+                        5, new BigDecimal("8.5"), BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")),
+                List.of(cons("MB1", "78", "91.92", "7170"), cons("MB2", "22", "170", "3740")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F)).thenReturn(Optional.of(mb("MB1", "焯水0613", null, null)));
+        when(materialBatchRepository.findByIdAndFactoryId("MB2", F)).thenReturn(Optional.of(mb("MB2", "焯水0614", null, null)));
+
+        OrderCostBreakdownDTO open = service.compute(F, ORDER, false);
+        assertThat(open.getNetTotalCost()).isEqualByComparingTo("13944");      // 14104−160
+        assertThat(open.getSellableBoxCount()).isEqualTo(1782);
+        assertThat(open.getSellablePerBoxCost()).isEqualByComparingTo("7.82"); // 13944/1782
+
+        OrderCostBreakdownDTO masked = service.compute(F, ORDER, true);
+        assertThat(masked.getSellablePerBoxCost()).isNull();
+        assertThat(masked.getSampleRetainCount()).isEqualTo(5);               // 物理量保留
+        assertThat(masked.getSellableBoxCount()).isEqualTo(1782);
     }
 
     @Test
