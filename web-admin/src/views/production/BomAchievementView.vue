@@ -56,18 +56,22 @@ interface ConsumptionSummary {
 const kpi = computed(() => {
   const rows = tableData.value;
   const total = rows.length;
-  if (total === 0) return { total: 0, avgRate: 0, overConsumptionCount: 0, minRate: 0 };
+  if (total === 0) return { total: 0, avgRate: null as number | null, overConsumptionCount: 0, minRate: null as number | null };
 
-  const rates = rows.map(r => r.achievementRate ?? 100);
-  const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
-  const overCount = rates.filter(r => r < 95).length;
-  const minRate = Math.min(...rates);
+  // Only include rows that have a real achievementRate (not null/undefined)
+  const rowsWithRate = rows.filter(r => r.achievementRate != null);
+  const rates = rowsWithRate.map(r => r.achievementRate as number);
+
+  const avg = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+  // Only count as over-consumption rows with actual data showing < 95%
+  const overCount = rows.filter(r => r.achievementRate != null && r.achievementRate < 95).length;
+  const minRate = rates.length > 0 ? Math.min(...rates) : null;
 
   return {
     total,
-    avgRate: Math.round(avg * 10) / 10,
+    avgRate: avg != null ? Math.round(avg * 10) / 10 : null,
     overConsumptionCount: overCount,
-    minRate: Math.round(minRate * 10) / 10,
+    minRate: minRate != null ? Math.round(minRate * 10) / 10 : null,
   };
 });
 
@@ -122,11 +126,15 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
       const planned = items.reduce((s: number, r) => s + (Number(r.plannedQty ?? r.plannedQuantity ?? 0)), 0);
       const actual = items.reduce((s: number, r) => s + (Number(r.actualQty ?? r.actualQuantity ?? 0)), 0);
       if (items.length > 0) {
+        // If planned > 0 we can compute from items; otherwise use backend overallAchievementRate if present.
+        // Never fall back to 100 — null means no data.
+        const computedRate = planned > 0 ? Math.round((actual / planned) * 1000) / 10 : null;
+        const backendRate = res.data.overallAchievementRate != null ? Number(res.data.overallAchievementRate) : null;
         return {
           ...batch,
           plannedTotal: Math.round(planned * 100) / 100,
           actualTotal: Math.round(actual * 100) / 100,
-          achievementRate: planned > 0 ? Math.round((actual / planned) * 1000) / 10 : (Number(res.data.overallAchievementRate) || 100),
+          achievementRate: computedRate ?? backendRate ?? undefined,
         };
       }
     }
@@ -137,9 +145,10 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
     ...batch,
     plannedTotal: batch.plannedQuantity ?? 0,
     actualTotal: batch.actualQuantity ?? 0,
-    achievementRate: batch.plannedQuantity
-      ? Math.round(((batch.actualQuantity ?? 0) / batch.plannedQuantity) * 1000) / 10
-      : 100,
+    // Never use 100 as a fake default — null means no consumption data available
+    achievementRate: batch.plannedQuantity && batch.actualQuantity != null
+      ? Math.round((batch.actualQuantity / batch.plannedQuantity) * 1000) / 10
+      : undefined,
   };
 }
 
@@ -268,8 +277,8 @@ function handleSizeChange(size: number) {
           <div class="kpi-label">总批次数</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: getRateColor(kpi.avgRate) }">
-            {{ kpi.avgRate }}%
+          <div class="kpi-value" :style="{ color: kpi.avgRate != null ? getRateColor(kpi.avgRate) : '#909399' }">
+            {{ kpi.avgRate != null ? kpi.avgRate + '%' : '—' }}
           </div>
           <div class="kpi-label">平均达成率</div>
         </el-card>
@@ -278,8 +287,8 @@ function handleSizeChange(size: number) {
           <div class="kpi-label">超耗批次数 (&lt;95%)</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: getRateColor(kpi.minRate) }">
-            {{ kpi.minRate }}%
+          <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : '#909399' }">
+            {{ kpi.minRate != null ? kpi.minRate + '%' : '—' }}
           </div>
           <div class="kpi-label">最低达成率</div>
         </el-card>
