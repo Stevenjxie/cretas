@@ -57,8 +57,13 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
         // ── 2. 加载依赖实体 ────────────────────────────────────────────────
         QuotationTask task = quotationTaskRepository.findById(quotationTaskId)
                 .orElseThrow(() -> new EntityNotFoundException("报价任务不存在: " + quotationTaskId));
+        // 跨租户校验: 报价任务须属于当前工厂 (防止把别厂 task 的 sampleId 写进本厂 midQuote)
+        if (task.getFactoryId() == null || !task.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该报价任务 / 该报价任务不属于当前工厂");
+        }
 
-        ProductionBatch batch = productionBatchRepository.findById(trialBatchId)
+        // 跨租户校验: 试制批次须属于当前工厂 (findByIdAndFactoryId)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(trialBatchId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("试制批次不存在: " + trialBatchId));
 
         // ── 3. 批次必须已完成 (有产出量) ───────────────────────────────────

@@ -144,6 +144,10 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
         QuotationTask task = quotationTaskRepository.findById(quotationTaskId)
                 .orElseThrow(() -> new jakarta.persistence.EntityNotFoundException(
                         "报价任务不存在: " + quotationTaskId));
+        // 跨租户校验: 报价任务须属于当前工厂 (防止用别厂 task 的 sampleId 越权读三价对比)
+        if (task.getFactoryId() == null || !task.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "无权操作该报价任务 / 该报价任务不属于当前工厂");
+        }
         return getThreePriceComparison(factoryId, task.getSampleId());
     }
 }

@@ -294,7 +294,7 @@ class ReportReversalServiceTest {
                     .thenReturn(Collections.emptyList());
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
-            service.approveReversal(LOG_ID, 99L);
+            service.approveReversal(FACTORY_ID, LOG_ID, 99L);
 
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
@@ -360,7 +360,7 @@ class ReportReversalServiceTest {
                     .build();
             when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(done));
 
-            assertThatThrownBy(() -> service.approveReversal(LOG_ID, 99L))
+            assertThatThrownBy(() -> service.approveReversal(FACTORY_ID, LOG_ID, 99L))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("只有待审批");
         }
@@ -376,7 +376,7 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
-            service.rejectReversal(LOG_ID, 99L, "不符合要求");
+            service.rejectReversal(FACTORY_ID, LOG_ID, 99L, "不符合要求");
 
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo).save(captor.capture());
@@ -398,7 +398,7 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
 
             // 提交人 == 审批人 → 拒绝
-            assertThatThrownBy(() -> service.approveReversal(LOG_ID, SUBMITTED_BY))
+            assertThatThrownBy(() -> service.approveReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("审批人不能与提交人相同");
 
@@ -422,7 +422,7 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
             // 主管 (id=99) ≠ 提交人 (id=7) → 放行
-            service.approveReversal(LOG_ID, 99L);
+            service.approveReversal(FACTORY_ID, LOG_ID, 99L);
 
             verify(reversalLogRepo, atLeastOnce()).save(any());
             // executeReversal 被触发 (查询报工)
@@ -441,7 +441,7 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
-            service.rejectReversal(LOG_ID, 99L, "成品已部分出库, 无法撤回");
+            service.rejectReversal(FACTORY_ID, LOG_ID, 99L, "成品已部分出库, 无法撤回");
 
             // 申请人 (SUBMITTED_BY=7) 收到通知, 内容含驳回原因
             verify(notificationService).sendNotification(
@@ -467,7 +467,7 @@ class ReportReversalServiceTest {
             when(reversalLogRepo.save(any())).thenReturn(pending);
 
             // 申请人自己驳回 (approvedBy == submittedBy)
-            service.rejectReversal(LOG_ID, SUBMITTED_BY, "自行撤销申请");
+            service.rejectReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY, "自行撤销申请");
 
             verify(notificationService, never()).sendNotification(
                     anyString(), anyLong(), anyString(), anyString(), any(), anyString(), anyString());
@@ -489,7 +489,7 @@ class ReportReversalServiceTest {
                     .thenThrow(new RuntimeException("通知渠道不可用"));
 
             // 通知抛异常不应冒泡 → 驳回成功
-            service.rejectReversal(LOG_ID, 99L, "测试");
+            service.rejectReversal(FACTORY_ID, LOG_ID, 99L, "测试");
 
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo).save(captor.capture());

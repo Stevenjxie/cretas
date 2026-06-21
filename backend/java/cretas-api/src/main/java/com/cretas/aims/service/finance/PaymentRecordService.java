@@ -33,13 +33,14 @@ public interface PaymentRecordService {
     PaymentRecord recordExpenseReimbursement(String factoryId, String expenseRequestId,
                                              BigDecimal amount, Long recordedBy, String remark);
 
-    PaymentRecord verifyPayment(String paymentId, Long verifiedBy);
+    PaymentRecord verifyPayment(String factoryId, String paymentId, Long verifiedBy);
 
-    PaymentRecord rejectPayment(String paymentId, Long verifiedBy, String reason);
+    PaymentRecord rejectPayment(String factoryId, String paymentId, Long verifiedBy, String reason);
 
     Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status, Pageable pageable);
 
-    PaymentRecord getPayment(String paymentId);
+    /** 按工厂作用域加载收款记录 (跨租户校验: 记录须属于该工厂)。 */
+    PaymentRecord getPayment(String factoryId, String paymentId);
 
     /** List all payment records for a given sales order, factory-scoped. */
     java.util.List<PaymentRecord> listPaymentsBySalesOrder(String factoryId, String salesOrderId);

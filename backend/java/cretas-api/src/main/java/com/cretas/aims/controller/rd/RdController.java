@@ -41,6 +41,10 @@ public class RdController {
     @RequirePermission({"rd:read_write"})
     @PostMapping("/requests/{requestId}/assign")
     public ResponseEntity<?> assignRequest(@PathVariable String factoryId, @PathVariable String requestId, @RequestBody Map<String, Object> body) {
+        // raw Map 缺字段守卫: assignedTo 缺失 → Long.valueOf(null) NPE → 500。返 400 + 字段名。
+        if (body.get("assignedTo") == null) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "缺少必填字段: assignedTo"));
+        }
         var req = sampleService.assignRequest(factoryId, requestId, Long.valueOf(body.get("assignedTo").toString()));
         return ResponseEntity.ok(Map.of("success", true, "data", req));
     }
@@ -193,7 +197,8 @@ public class RdController {
 
     @RequirePermission({"rd:read_write"})
     @PostMapping("/quotations/{taskId}/submit")
-    public ResponseEntity<?> submitQuotation(@PathVariable String taskId, @RequestBody Map<String, Object> body,
+    public ResponseEntity<?> submitQuotation(@PathVariable String factoryId, @PathVariable String taskId,
+                                              @RequestBody Map<String, Object> body,
                                               @RequestAttribute(value = "userId", required = false) Long userId) {
         for (String field : new String[]{"materialCost", "laborCost", "overheadCost", "suggestedPrice"}) {
             if (body.get(field) == null) {
@@ -203,7 +208,7 @@ public class RdController {
         // feedback_dto_roundtrip_silent_drop fix: 第1处 — controller 层提取 laborPerKg (可选, null 透传)
         BigDecimal laborPerKg = body.get("laborPerKg") != null
                 ? new BigDecimal(body.get("laborPerKg").toString()) : null;
-        var task = sampleService.submitQuotation(taskId,
+        var task = sampleService.submitQuotation(factoryId, taskId,
                 new BigDecimal(body.get("materialCost").toString()),
                 new BigDecimal(body.get("laborCost").toString()),
                 new BigDecimal(body.get("overheadCost").toString()),
@@ -214,12 +219,13 @@ public class RdController {
 
     @RequirePermission({"rd:read_write"})
     @PostMapping("/quotations/{taskId}/confirm")
-    public ResponseEntity<?> confirmQuotation(@PathVariable String taskId, @RequestBody Map<String, Object> body,
+    public ResponseEntity<?> confirmQuotation(@PathVariable String factoryId, @PathVariable String taskId,
+                                               @RequestBody Map<String, Object> body,
                                                @RequestAttribute(value = "userId", required = false) Long userId) {
         if (body.get("finalPrice") == null) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "message", "缺少必填字段: finalPrice"));
         }
-        var task = sampleService.confirmQuotation(taskId, new BigDecimal(body.get("finalPrice").toString()), userId);
+        var task = sampleService.confirmQuotation(factoryId, taskId, new BigDecimal(body.get("finalPrice").toString()), userId);
         return ResponseEntity.ok(Map.of("success", true, "data", task, "message", "报价已确认"));
     }
 

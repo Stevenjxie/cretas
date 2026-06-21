@@ -184,11 +184,11 @@ class VoucherServiceImplTest {
 
     @Test
     void postTransitionsDraftToPosted() {
-        Voucher v = Voucher.builder().id("v-1").status(VoucherStatus.DRAFT).build();
-        when(voucherRepo.findById("v-1")).thenReturn(Optional.of(v));
+        Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.DRAFT).build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
         when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        Voucher result = service.post("v-1", 42L);
+        Voucher result = service.post("F001", "v-1", 42L);
 
         assertEquals(VoucherStatus.POSTED, result.getStatus());
         assertEquals(42L, result.getApprovedBy());
@@ -197,19 +197,19 @@ class VoucherServiceImplTest {
 
     @Test
     void postRejectsAlreadyPosted() {
-        Voucher v = Voucher.builder().id("v-1").status(VoucherStatus.POSTED).build();
-        when(voucherRepo.findById("v-1")).thenReturn(Optional.of(v));
+        Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.POSTED).build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
 
-        assertThrows(IllegalStateException.class, () -> service.post("v-1", 42L));
+        assertThrows(IllegalStateException.class, () -> service.post("F001", "v-1", 42L));
     }
 
     @Test
     void voidVoucherSetsVoidStatus() {
-        Voucher v = Voucher.builder().id("v-1").status(VoucherStatus.POSTED).description("foo").build();
-        when(voucherRepo.findById("v-1")).thenReturn(Optional.of(v));
+        Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.POSTED).description("foo").build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
         when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.voidVoucher("v-1", "录入错误", 42L);
+        service.voidVoucher("F001", "v-1", "录入错误", 42L);
 
         assertEquals(VoucherStatus.VOID, v.getStatus());
         assertTrue(v.getDescription().contains("录入错误"));

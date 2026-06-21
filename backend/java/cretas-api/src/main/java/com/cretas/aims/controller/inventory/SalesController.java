@@ -610,7 +610,7 @@ public class SalesController {
     public ApiResponse<List<SalesDeliveryRecord>> getDeliveriesByOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
-        List<SalesDeliveryRecord> records = salesService.getDeliveryRecordsByOrder(orderId);
+        List<SalesDeliveryRecord> records = salesService.getDeliveryRecordsByOrder(factoryId, orderId);
         return ApiResponse.success("查询成功", records);
     }
 

@@ -116,8 +116,8 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
 
     @Override
     @Transactional
-    public PaymentRecord verifyPayment(String paymentId, Long verifiedBy) {
-        PaymentRecord record = getPayment(paymentId);
+    public PaymentRecord verifyPayment(String factoryId, String paymentId, Long verifiedBy) {
+        PaymentRecord record = getPayment(factoryId, paymentId);
         if (record.getStatus() != PaymentRecordStatus.PENDING) {
             throw new IllegalStateException("只能验证PENDING状态的收款记录");
         }
@@ -165,8 +165,8 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
 
     @Override
     @Transactional
-    public PaymentRecord rejectPayment(String paymentId, Long verifiedBy, String reason) {
-        PaymentRecord record = getPayment(paymentId);
+    public PaymentRecord rejectPayment(String factoryId, String paymentId, Long verifiedBy, String reason) {
+        PaymentRecord record = getPayment(factoryId, paymentId);
         if (record.getStatus() != PaymentRecordStatus.PENDING) {
             throw new IllegalStateException("只能驳回PENDING状态的收款记录");
         }
@@ -186,9 +186,16 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
     }
 
     @Override
-    public PaymentRecord getPayment(String paymentId) {
-        return paymentRecordRepository.findById(paymentId)
+    public PaymentRecord getPayment(String factoryId, String paymentId) {
+        PaymentRecord record = paymentRecordRepository.findById(paymentId)
                 .orElseThrow(() -> new IllegalArgumentException("收款记录不存在: " + paymentId));
+        // 跨租户校验: 收款记录须属于当前工厂 (防止越权查看/确认/驳回其它工厂的收款记录)
+        if (record.getFactoryId() == null || !record.getFactoryId().equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403,
+                    "无权操作该收款记录 / 该收款记录不属于当前工厂")
+                    .withHint("请确认收款记录 ID 是否属于本工厂");
+        }
+        return record;
     }
 
     @Override

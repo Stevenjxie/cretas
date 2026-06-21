@@ -120,7 +120,7 @@ public interface SalesService {
 
     PageResponse<SalesDeliveryRecord> getDeliveryRecords(String factoryId, int page, int size);
 
-    List<SalesDeliveryRecord> getDeliveryRecordsByOrder(String salesOrderId);
+    List<SalesDeliveryRecord> getDeliveryRecordsByOrder(String factoryId, String salesOrderId);
 
     /**
      * Issue #740: list deliveries awaiting warehouse confirmation (DRAFT / PENDING_WAREHOUSE_CONFIRM /

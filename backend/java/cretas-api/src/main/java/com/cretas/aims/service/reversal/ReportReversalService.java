@@ -44,19 +44,21 @@ public interface ReportReversalService {
     /**
      * 审批通过。仅 PENDING 状态可批准, 批准后自动执行撤回。
      *
+     * @param factoryId  工厂 ID (跨租户校验: 撤回日志须属于此工厂)
      * @param logId      ReportReversalLog.id
      * @param approvedBy 审批人 ID
      */
-    void approveReversal(Long logId, Long approvedBy);
+    void approveReversal(String factoryId, Long logId, Long approvedBy);
 
     /**
      * 审批拒绝。仅 PENDING 状态可拒绝。
      *
+     * @param factoryId  工厂 ID (跨租户校验: 撤回日志须属于此工厂)
      * @param logId      ReportReversalLog.id
      * @param approvedBy 审批人 ID
      * @param reason     拒绝原因
      */
-    void rejectReversal(Long logId, Long approvedBy, String reason);
+    void rejectReversal(String factoryId, Long logId, Long approvedBy, String reason);
 
     /**
      * 列出工厂的撤回申请, 可按状态过滤。

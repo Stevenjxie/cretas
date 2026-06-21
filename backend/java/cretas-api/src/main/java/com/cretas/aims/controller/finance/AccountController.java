@@ -75,7 +75,7 @@ public class AccountController {
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<Account>> detail(
             @PathVariable String factoryId, @PathVariable String id) {
-        Account a = accountService.findById(id)
+        Account a = accountService.findById(factoryId, id)
                 .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "科目不存在: " + id));
         return ResponseEntity.ok(ApiResponse.success(a));
     }
@@ -97,7 +97,7 @@ public class AccountController {
             @PathVariable String factoryId,
             @PathVariable String id,
             @Valid @RequestBody Account body) {
-        Account saved = accountService.update(id, body);
+        Account saved = accountService.update(factoryId, id, body);
         return ResponseEntity.ok(ApiResponse.success("科目已更新", saved));
     }
 
@@ -105,7 +105,7 @@ public class AccountController {
     @RequirePermission("finance:read_write")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable String factoryId, @PathVariable String id) {
-        accountService.softDelete(id);
+        accountService.softDelete(factoryId, id);
         return ResponseEntity.ok(ApiResponse.successMessage("科目已删除"));
     }
 }

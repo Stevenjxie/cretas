@@ -346,9 +346,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     // ==================== 审批操作 ====================
 
     @Override
-    public void approveReversal(Long logId, Long approvedBy) {
+    public void approveReversal(String factoryId, Long logId, Long approvedBy) {
         ReportReversalLog log_ = reversalLogRepo.findById(logId)
                 .orElseThrow(() -> new BusinessException(404, "撤回申请不存在: " + logId));
+        // 跨租户校验: 撤回日志须属于当前工厂 (防止越权批准其它工厂的撤回执行)
+        if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该撤回申请 / 该撤回申请不属于当前工厂")
+                    .withHint("请确认撤回申请 ID 是否属于本工厂");
+        }
         if (ReportReversalLog.ReversalStatus.PENDING != log_.getStatus()) {
             throw new BusinessException(409, String.format(
                     "只有待审批状态的撤回申请可审批，当前状态: %s (logId=%d)", log_.getStatus(), logId))
@@ -374,9 +379,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     @Override
-    public void rejectReversal(Long logId, Long approvedBy, String reason) {
+    public void rejectReversal(String factoryId, Long logId, Long approvedBy, String reason) {
         ReportReversalLog log_ = reversalLogRepo.findById(logId)
                 .orElseThrow(() -> new BusinessException(404, "撤回申请不存在: " + logId));
+        // 跨租户校验: 撤回日志须属于当前工厂 (防止越权驳回其它工厂的撤回申请)
+        if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该撤回申请 / 该撤回申请不属于当前工厂")
+                    .withHint("请确认撤回申请 ID 是否属于本工厂");
+        }
         if (ReportReversalLog.ReversalStatus.PENDING != log_.getStatus()) {
             throw new BusinessException(409, String.format(
                     "撤回申请 %d 当前状态为 %s，无法拒绝", logId, log_.getStatus()))

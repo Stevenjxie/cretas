@@ -159,8 +159,10 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         }
 
         // D-9 G7 + G2: 查 PO，继承 settlementType 并做入库前置检查
+        // 跨租户校验: 用 findByIdAndFactoryId 加载 PO (防止读取/继承别厂 PO 的结算方式/状态)。
+        // 别厂 PO → null → 走下方降级分支 (不读别厂数据)。
         SettlementType inheritedSettlementType = null;
-        PurchaseOrder po = purchaseOrderRepository.findById(poId).orElse(null);
+        PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId).orElse(null);
         if (po != null) {
             // G7: 继承结算方式
             inheritedSettlementType = po.getSettlementType();
