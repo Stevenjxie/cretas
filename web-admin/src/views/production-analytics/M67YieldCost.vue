@@ -41,7 +41,7 @@
             <template #header><b>逐道出成率</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常)</span></template>
             <div v-for="s in steps" :key="s.processOrder" class="step">
               <div class="step-top">
-                <span class="pname">{{ s.processName || ('工序' + s.processOrder) }}</span>
+                <span class="pname">{{ stepName(s) }}</span>
                 <span class="qty">{{ num(s.totalInput) }} → {{ num(s.totalOutput) }} {{ s.outputUnit || 'kg' }}</span>
                 <span class="yr" :class="yieldClass(s.yieldRate)">{{ s.yieldRate == null ? '—' : (s.yieldRate * 100).toFixed(1) + '%' }}</span>
               </div>
@@ -106,6 +106,10 @@ const data = ref<YieldSummary | null>(null);
 const sankeyEl = ref<HTMLElement | null>(null);
 let chart: any = null;
 
+// 工序名 fallback (后端 processName 未解析时, 按 M67 卤味标准工序序显示)
+const STAGE_NAMES: Record<number, string> = { 1: '修油', 2: '滚揉', 3: '焯水', 4: '熟制', 5: '气调', 6: '包装' };
+const stepName = (s: Step) => s.processName || STAGE_NAMES[s.processOrder] || ('工序' + s.processOrder);
+
 const steps = computed<Step[]>(() => {
   const b = data.value?.batches?.[0];
   return (b?.steps || []).slice().sort((a, c) => (a.processOrder || 0) - (c.processOrder || 0));
@@ -160,11 +164,11 @@ function renderSankey() {
   if (!chart) chart = echarts.init(sankeyEl.value);
   const st = steps.value;
   const nodes: { name: string }[] = [{ name: '原料' }];
-  st.forEach((s) => nodes.push({ name: s.processName || ('工序' + s.processOrder) }));
+  st.forEach((s) => nodes.push({ name: stepName(s) }));
   const links: { source: string; target: string; value: number }[] = [];
   let prev = '原料';
   st.forEach((s) => {
-    const cur = s.processName || ('工序' + s.processOrder);
+    const cur = stepName(s);
     links.push({ source: prev, target: cur, value: Number(s.totalInput || 0) });
     prev = cur;
   });
