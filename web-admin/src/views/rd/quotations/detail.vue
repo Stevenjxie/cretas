@@ -90,19 +90,21 @@ function openSubmitDialog() {
 }
 
 async function handleSubmitQuotation() {
-  const { materialCost, laborCost, overheadCost, suggestedPrice } = submitForm.value;
-  if (!materialCost || !laborCost || !overheadCost || !suggestedPrice) {
-    ElMessage.warning('请填写材料成本、人工成本、间接成本和建议售价');
+  const { suggestedPrice } = submitForm.value;
+  if (!suggestedPrice) {
+    ElMessage.warning('请填写建议售价');
     return;
   }
   submitting.value = true;
   try {
+    const { materialCost, laborCost, overheadCost } = submitForm.value;
     const payload: Record<string, unknown> = {
-      materialCost: Number(materialCost),
-      laborCost: Number(laborCost),
-      overheadCost: Number(overheadCost),
       suggestedPrice: Number(suggestedPrice),
     };
+    // 总额字段从任务数据带入（只读展示），有值则一并回传
+    if (materialCost !== '' && materialCost != null) payload.materialCost = Number(materialCost);
+    if (laborCost !== '' && laborCost != null) payload.laborCost = Number(laborCost);
+    if (overheadCost !== '' && overheadCost != null) payload.overheadCost = Number(overheadCost);
     if (submitForm.value.laborPerKg) {
       payload.laborPerKg = Number(submitForm.value.laborPerKg);
     }
@@ -282,15 +284,25 @@ function goMidQuote() {
           <el-text v-else type="info">填写人工成本后自动计算</el-text>
         </el-form-item>
 
-        <el-form-item label="材料成本（总）" required>
-          <el-input-number v-model="submitForm.materialCost" :min="0" :precision="2" style="width:200px" />
-          <el-text type="info" style="margin-left:8px;font-size:12px">元（总金额）</el-text>
+        <!-- 总额三项：从任务数据带入只读展示，不可手动录入（批量尺寸换算引擎待 R13 上线） -->
+        <el-form-item label="材料成本（总）">
+          <el-text v-if="submitForm.materialCost !== '' && submitForm.materialCost != null" style="font-weight:600">
+            ¥{{ submitForm.materialCost }}
+          </el-text>
+          <el-text v-else type="info">—（待 R13 批量换算引擎）</el-text>
+          <el-text type="info" style="margin-left:8px;font-size:12px">元（总金额，只读）</el-text>
         </el-form-item>
-        <el-form-item label="人工成本（总）" required>
-          <el-input-number v-model="submitForm.laborCost" :min="0" :precision="2" style="width:200px" />
+        <el-form-item label="人工成本（总）">
+          <el-text v-if="submitForm.laborCost !== '' && submitForm.laborCost != null" style="font-weight:600">
+            ¥{{ submitForm.laborCost }}
+          </el-text>
+          <el-text v-else type="info">—（待 R13 批量换算引擎）</el-text>
         </el-form-item>
-        <el-form-item label="间接成本（总）" required>
-          <el-input-number v-model="submitForm.overheadCost" :min="0" :precision="2" style="width:200px" />
+        <el-form-item label="间接成本（总）">
+          <el-text v-if="submitForm.overheadCost !== '' && submitForm.overheadCost != null" style="font-weight:600">
+            ¥{{ submitForm.overheadCost }}
+          </el-text>
+          <el-text v-else type="info">—（待 R13 批量换算引擎）</el-text>
         </el-form-item>
         <el-form-item label="建议售价" required>
           <el-input-number v-model="submitForm.suggestedPrice" :min="0" :precision="2" style="width:200px" />
