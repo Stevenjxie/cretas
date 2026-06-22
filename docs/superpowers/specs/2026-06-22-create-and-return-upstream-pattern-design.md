@@ -62,7 +62,7 @@
 新文件：`web-admin/src/composables/useCreateAndReturn.ts`
 
 职责（薄封装，无业务）：
-- `canReach(permission: string): boolean` — 查 `permissionStore` 判断用户是否有目标页权限。
+- `canReach(module: string, opts?: { write?: boolean }): boolean` — 查 `permissionStore.canAccess(module)`（默认）或 `canWrite(module)`（`write:true`）。**权限按【模块】判断**——仓库无 code 级 `'sales:read_write'` 检查，统一用 `canAccess`/`canWrite`。
 - `goCreate(targetPath: string, opts?: { reopen?: string }): void` — 跳到 `targetPath`，自动附加 `_returnTo = encodeURIComponent(reopen ?? route.fullPath)`。`reopen` 用于「返回后需要重开弹窗」的场景（携带重开意图的 URL，见 §5.1）。
   - 若 `targetPath` 已含 query，正确合并 `_returnTo`（用 `URL`/手工拼接，保证 encode 一致）。
 
@@ -76,14 +76,15 @@ Props：
 | prop | 类型 | 说明 |
 |---|---|---|
 | `description` | string | 缺什么，如「该订单暂无产品行」 |
-| `targetPermission` | string | 目标页所需权限/模块（如 `sales:read_write`） |
+| `targetModule` | string | 目标页所属模块（如 `sales` / `system`） |
+| `requireWrite` | boolean | 是否需写权限（默认 false=只需 `canAccess`；true=需 `canWrite`） |
 | `actionText` | string | 有权限时按钮文案，如「去销售订单添加产品行」 |
 | `contactText` | string | 无权限时提示文案，如「请联系销售或管理员为该订单补充产品行」 |
 
 事件：`@action` — 有权限且用户点击按钮时触发（消费者在这里调 `goCreate`）。
 
 渲染逻辑（把权限边界焊进 UI）：
-- `canReach(targetPermission) === true` → 渲染 `description` + 主按钮（点击 emit `action`）。
+- `canReach(targetModule, { write: requireWrite }) === true` → 渲染 `description` + 主按钮（点击 emit `action`）。
 - 否则 → 渲染 `description` + `contactText`（灰字提示，无按钮）。
 
 这是 fool-proof Rule 5（dead-end → 要么导航、要么明确「找谁」）的标准化落点。
@@ -105,7 +106,8 @@ Props：
 ```vue
 <UpstreamMissingHint
   description="该订单暂无产品行，无法据此排产"
-  target-permission="sales:read_write"
+  target-module="sales"
+  require-write
   action-text="去销售订单添加产品行"
   contact-text="请联系销售或管理员为该订单补充产品行后再排产"
   @action="goAddOrderItems(planForm.sourceOrderId)" />
@@ -118,7 +120,7 @@ function goAddOrderItems(soId: string) {
 }
 ```
 
-> 生产→销售本就是跨模块：纯生产用户 `canReach('sales:read_write')===false` → 看到「联系销售补充」；多模块管理员 → 看到跳转按钮。**完全符合 §1 权限约束。**
+> 生产→销售本就是跨模块：纯生产用户 `canReach('sales', { write: true })===false` → 看到「联系销售补充」；多模块管理员 → 看到跳转按钮。**完全符合 §1 权限约束。**
 
 **(b) `onMounted` 读 query 自动重开弹窗（统一入口）**
 
@@ -141,7 +143,7 @@ function goAddOrderItems(soId: string) {
 ```vue
 <UpstreamMissingHint
   description="本工厂暂无产品类型"
-  target-permission="system"
+  target-module="system"
   action-text="去创建产品类型"
   contact-text="请联系管理员先创建产品类型"
   @action="goCreate('/system/products')" />
@@ -169,7 +171,7 @@ function goAddOrderItems(soId: string) {
 |---|---|
 | Rule 5（dead-end→导航/找谁） | 每个空状态都用 `<UpstreamMissingHint>`：有权限→按钮，无权限→「联系谁」 |
 | Rule 2（上下文） | SO 编辑弹窗标题带订单号；按钮文案说清做什么 |
-| 权限边界（客户约束） | 跳转按钮一律经 `canReach(permission)` 门控；跨模块对无权限用户隐藏 |
+| 权限边界（客户约束） | 跳转按钮一律经 `canReach(module, {write})` 门控；跨模块对无权限用户隐藏 |
 | 多租户/状态安全 | SO 行编辑仅 DRAFT（对齐后端 `PUT` 约束），不碰已发货/已开票订单；后端 `@RequirePermission("sales:read_write")` 仍是权威闸 |
 | 幂等 | 重开弹窗用后即 `router.replace` 清 query，防刷新重复触发 |
 
