@@ -21,4 +21,6 @@ public interface FactoryWarehouseRepository extends JpaRepository<FactoryWarehou
     Optional<FactoryWarehouse> findByFactoryIdAndCodeAndDeletedAtIsNull(String factoryId, String code);
 
     Optional<FactoryWarehouse> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
+
+    Optional<FactoryWarehouse> findFirstByFactoryIdAndDeletedAtIsNull(String factoryId);
 }
