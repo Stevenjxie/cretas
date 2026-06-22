@@ -287,8 +287,8 @@ async function submitReject() {
 }
 
 // B-FP-5: BOM 单位白名单 — 与后端 CreateBomRecipeRequest @Pattern 同步
-// TODO: 是否补"斤"（转录牛腱按斤）待产品确认后决策
-const BOM_UNIT_OPTIONS = ['g', 'kg', 'mg', 'ml', 'L', '个', '袋', '箱', '瓶', '盒'] as const;
+// TODO(R13): 1斤=0.5kg 换算引擎待做, 当前斤为独立计量标签
+const BOM_UNIT_OPTIONS = ['g', 'kg', 'mg', 'ml', 'L', '个', '袋', '箱', '瓶', '盒', '斤'] as const;
 
 /** Batch form. 全 mode 共用 — 不同 type 不同字段 enabled. */
 const batchForm = ref({

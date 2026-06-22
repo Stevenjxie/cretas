@@ -54,6 +54,10 @@ async function handleCalculate() {
     ElMessage.warning('请选择试制批次');
     return;
   }
+  if (calcForm.value.materialCostPerKg == null) {
+    ElMessage.warning('请填写材料成本/kg（移动均价自动算待 R12 上线）');
+    return;
+  }
   calculating.value = true;
   try {
     const payload: Record<string, unknown> = {
@@ -128,9 +132,9 @@ onMounted(loadTrialBatches);
               仅显示 is_trial=true 的批次；任务 {{ taskId }}
             </el-text>
           </el-form-item>
-          <el-form-item label="材料成本/kg (手填)">
+          <el-form-item label="材料成本/kg" required>
             <el-input-number v-model="calcForm.materialCostPerKg" :min="0" :precision="4" style="width:200px" />
-            <el-text type="info" style="margin-left:8px;font-size:12px">可选，留空则从移动均价自动算</el-text>
+            <el-text type="info" style="margin-left:8px;font-size:12px">必填（移动均价自动算待 R12 上线）</el-text>
           </el-form-item>
           <el-form-item label="人工成本/kg (手填)">
             <el-input-number v-model="calcForm.laborCostPerKg" :min="0" :precision="4" style="width:200px" />

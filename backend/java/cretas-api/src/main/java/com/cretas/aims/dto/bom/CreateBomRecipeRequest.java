@@ -83,10 +83,11 @@ public class CreateBomRecipeRequest {
         @DecimalMax(value = "100", message = "出成率必须 <= 100")
         private BigDecimal yieldRate;
 
-        @Schema(description = "计量单位 (限定 g/kg/mg/ml/L/个/袋/箱/瓶/盒)", required = true)
+        @Schema(description = "计量单位 (限定 g/kg/mg/ml/L/个/袋/箱/瓶/盒/斤)", required = true)
         @NotBlank(message = "单位不能为空")
-        @Pattern(regexp = "^(g|kg|mg|ml|L|个|袋|箱|瓶|盒)$",
-                 message = "单位必须是 g/kg/mg/ml/L/个/袋/箱/瓶/盒 之一")
+        // TODO(R13): 1斤=0.5kg 换算引擎待做, 当前斤为独立计量标签
+        @Pattern(regexp = "^(g|kg|mg|ml|L|个|袋|箱|瓶|盒|斤)$",
+                 message = "单位必须是 g/kg/mg/ml/L/个/袋/箱/瓶/盒/斤 之一")
         private String unit;
 
         @Schema(description = "未税单价 (可选, 含税采购价需先在物料主数据入口按税率换算税前; 仅有 procurement:price:view 权限的角色可见)")
