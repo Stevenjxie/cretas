@@ -207,6 +207,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /**
+     * 一物一码 (转录 6.9 行62/68/105): 批次号由编码规则原子序号系统生成, 不手填防重码。
+     * optional + fail-open: 无 EncodingRule 配置时回退到默认 MB-{FACTORY}-{YYYYMMDD}-{SEQ} 格式
+     * (见 generateUniqueBatchNumber), 不阻断入库。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.EncodingRuleService encodingRuleService;
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public MaterialBatchServiceImpl(
             MaterialBatchRepository materialBatchRepository,
@@ -286,8 +294,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 request.getReceiptDate(), materialType.getShelfLifeDays(), expireDate);
         }
 
-        // 生成唯一批次号
-        String batchNumber = generateUniqueBatchNumber(batch.getBatchNumber());
+        // 一物一码: 批次号系统自动生成 (转录 6.9 行68/105 流水号自动生成, 防手敲重码)。
+        // 复用 EncodingRule (MATERIAL_BATCH) 原子序号; 忽略前端任何手填值。
+        String batchNumber = generateUniqueBatchNumber(generateMaterialBatchNumber(factoryId));
         batch.setBatchNumber(batchNumber);
         batch = materialBatchRepository.save(batch);
         log.info("创建原材料批次成功: batchNumber={}", batch.getBatchNumber());
@@ -1852,15 +1861,45 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     /**
-     * 生成唯一批次号
+     * 一物一码: 复用 EncodingRule (MATERIAL_BATCH) 原子序号生成系统批次号。
+     *
+     * <p>转录 6.9 行62/68/105: "编码16位=前10位固定段+后段流水号系统生成"、"流水号自动生成
+     * 非手填"、"编号自动生成防手敲重码"。EncodingRule.incrementSequence 走 DB UPDATE 原子自增,
+     * 跨并发唯一; 配合 {@link #generateUniqueBatchNumber} 的 existsBy 兜底, 保证全局唯一。</p>
+     *
+     * <p>fail-open: encodingRuleService 缺失 (旧上下文/测试) 或生成异常时回退到
+     * MB-{factoryId}-{YYYYMMDD}-{millis%10000} 默认格式, 不阻断入库。</p>
+     */
+    private String generateMaterialBatchNumber(String factoryId) {
+        if (encodingRuleService != null) {
+            try {
+                String code = encodingRuleService.generateCode(factoryId, "MATERIAL_BATCH");
+                if (code != null && !code.isBlank()) {
+                    return code;
+                }
+            } catch (Exception e) {
+                log.warn("EncodingRule 生成原料批次号失败, 回退默认格式: {}", e.getMessage());
+            }
+        }
+        String date = java.time.LocalDate.now()
+                .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+        String seq = String.format("%04d", System.currentTimeMillis() % 10000);
+        return "MB-" + factoryId + "-" + date + "-" + seq;
+    }
+
+    /**
+     * 生成唯一批次号 (existsBy 兜底防撞)。baseNumber 为空时用时间戳兜底, 不返 null。
      */
     private String generateUniqueBatchNumber(String baseNumber) {
-        String batchNumber = baseNumber;
+        String base = (baseNumber != null && !baseNumber.isBlank())
+                ? baseNumber
+                : "MB-" + System.currentTimeMillis();
+        String batchNumber = base;
         int counter = 0;
 
         while (materialBatchRepository.existsByBatchNumber(batchNumber)) {
             counter++;
-            batchNumber = baseNumber + "-" + counter;
+            batchNumber = base + "-" + counter;
         }
 
         return batchNumber;

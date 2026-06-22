@@ -4,6 +4,9 @@ import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DisposalRecordRepository;
+import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,6 +42,9 @@ import static org.mockito.Mockito.*;
 class DisposalWorkflowIntegrationTest {
 
     @Mock private DisposalRecordRepository disposalRecordRepository;
+    @Mock private MaterialBatchRepository materialBatchRepository;
+    @Mock private MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
+    @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private WorkflowEngineService workflowEngine;
 
     private DisposalRecordService service;
@@ -50,7 +56,8 @@ class DisposalWorkflowIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        service = new DisposalRecordService(disposalRecordRepository);
+        service = new DisposalRecordService(disposalRecordRepository, materialBatchRepository,
+                materialBatchAdjustmentRepository, productionBatchRepository);
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
     }
 
