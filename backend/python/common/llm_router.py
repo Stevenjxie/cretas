@@ -234,6 +234,67 @@ def get_cb_stats() -> Dict[str, Any]:
         }
 
 
+# ─── Quota-exhaustion skip cache (2026-06-22) ───
+# The circuit breaker above re-probes every CB_COOLDOWN (60s). That cadence is
+# correct for *transient* failures (timeout / 5xx) but wrong for free-tier
+# *quota* exhaustion, which lasts until the account's MONTHLY reset. Re-probing
+# an exhausted model every 60s just burns a 403 round-trip on every request
+# (egress audit 2026-06-22: qwen3.7-max-2026-06-08 on aliyun_b = 409 calls/7d,
+# 0 success, all 403 FreeTierOnly — pure spin before falling to a working SKU).
+#
+# So when a model returns a *quota* signal (403 FreeTierOnly / 429 / 402, i.e.
+# _is_quota_exhausted is True), skip that (account,model) for QUOTA_SKIP_TTL —
+# long enough to stop the per-request spin, short enough to re-probe a few times
+# a day and pick up the monthly free-quota reset. This is layered ON TOP of the
+# circuit breaker (both checked before a call); a clean success clears both.
+#
+# Quality is preserved: premium SKUs (qwen3.7-max for INSIGHTS/REVIEW) still sit
+# at the chain head and are tried first after each TTL re-probe / monthly reset —
+# they're only skipped while *known* exhausted, not demoted out of the chain.
+_QUOTA_EXHAUSTED_UNTIL: Dict[str, float] = {}   # "account/model" → unix ts to skip until
+_QUOTA_LOCK = Lock()
+QUOTA_SKIP_TTL = 6 * 3600.0    # 6h: re-probe ~4×/day to catch monthly free-quota reset
+
+
+def _quota_should_skip(cb_key: str) -> bool:
+    """True if this (account,model) returned a quota signal within QUOTA_SKIP_TTL.
+
+    Auto-clears the mark once the TTL elapses so the model gets one re-probe; if
+    that probe is still quota-exhausted it is re-marked for another TTL window.
+    """
+    with _QUOTA_LOCK:
+        until = _QUOTA_EXHAUSTED_UNTIL.get(cb_key, 0.0)
+        if until <= 0.0:
+            return False
+        if time.time() < until:
+            return True
+        # TTL elapsed — clear and allow a re-probe
+        del _QUOTA_EXHAUSTED_UNTIL[cb_key]
+        return False
+
+
+def _quota_record_exhausted(cb_key: str) -> None:
+    """Mark this (account,model) as quota-exhausted for QUOTA_SKIP_TTL seconds."""
+    with _QUOTA_LOCK:
+        _QUOTA_EXHAUSTED_UNTIL[cb_key] = time.time() + QUOTA_SKIP_TTL
+
+
+def _quota_record_success(cb_key: str) -> None:
+    """Clear the quota-exhausted mark on a clean success (quota came back)."""
+    with _QUOTA_LOCK:
+        _QUOTA_EXHAUSTED_UNTIL.pop(cb_key, None)
+
+
+def get_quota_skip_stats() -> Dict[str, Any]:
+    """Snapshot of currently quota-skipped (account,model) pairs for ops visibility."""
+    with _QUOTA_LOCK:
+        now = time.time()
+        return {
+            "skipped": {k: round(v - now, 1) for k, v in _QUOTA_EXHAUSTED_UNTIL.items() if v > now},
+            "ttl_seconds": QUOTA_SKIP_TTL,
+        }
+
+
 class SLOT(str, Enum):
     """Logical slot that maps to a specific model per provider."""
     CHAT = "chat"
@@ -649,6 +710,16 @@ async def call_chain(
             errors.append(f"{account}: cb_open")
             continue
 
+        # Quota-exhaustion skip — a model known free-quota-exhausted is skipped
+        # for QUOTA_SKIP_TTL instead of re-probed (and re-403'd) every request.
+        if _quota_should_skip(cb_key):
+            logger.info(
+                f"[llm_router] slot={slot.value} skipping {account}/{model} "
+                f"(quota-exhausted, re-probe after TTL)"
+            )
+            errors.append(f"{account}/{model}: quota_skip")
+            continue
+
         base_url, api_key = _provider_config(account)
         if not api_key:
             logger.debug(f"[llm_router] {account}: no API key, skip")
@@ -680,6 +751,7 @@ async def call_chain(
 
             if 200 <= resp.status_code < 300:
                 _cb_record_success(cb_key)
+                _quota_record_success(cb_key)
                 body_json = resp.json()
                 _log_cache_and_record_budget(slot.value, account, model, body_json)
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
@@ -687,11 +759,12 @@ async def call_chain(
 
             if _is_quota_exhausted(resp.status_code, body_text):
                 _cb_record_failure(cb_key)
+                _quota_record_exhausted(cb_key)
                 fails = _CB_FAILURES.get(account, 0)
                 logger.warning(
                     f"[llm_router] slot={slot.value} {account}/{model} "
                     f"quota exhausted (status={resp.status_code}, "
-                    f"cb_fails={fails}/{CB_THRESHOLD}), falling back"
+                    f"cb_fails={fails}/{CB_THRESHOLD}), skip {QUOTA_SKIP_TTL/3600:.0f}h, falling back"
                 )
                 errors.append(f"{account}/{model}: quota {resp.status_code}")
                 continue
@@ -814,6 +887,16 @@ async def call_chain_stream(
             errors.append(f"{account}: cb_open")
             continue
 
+        # Quota-exhaustion skip — see call_chain. Skip a known-exhausted model
+        # for QUOTA_SKIP_TTL instead of re-probing it every request.
+        if _quota_should_skip(cb_key):
+            logger.info(
+                f"[llm_router_stream] slot={slot.value} skipping {account}/{model} "
+                f"(quota-exhausted, re-probe after TTL)"
+            )
+            errors.append(f"{account}/{model}: quota_skip")
+            continue
+
         base_url, api_key = _provider_config(account)
         if not api_key:
             logger.debug(f"[llm_router_stream] {account}: no API key, skip")
@@ -841,10 +924,11 @@ async def call_chain_stream(
                     _cb_record_failure(cb_key)
                     fails = _CB_FAILURES.get(account, 0)
                     if _is_quota_exhausted(resp.status_code, body_text):
+                        _quota_record_exhausted(cb_key)
                         logger.warning(
                             f"[llm_router_stream] slot={slot.value} {account}/{model} "
                             f"quota exhausted (status={resp.status_code}, "
-                            f"cb_fails={fails}/{CB_THRESHOLD}), falling back"
+                            f"cb_fails={fails}/{CB_THRESHOLD}), skip {QUOTA_SKIP_TTL/3600:.0f}h, falling back"
                         )
                         errors.append(f"{account}/{model}: quota {resp.status_code}")
                         continue
@@ -921,6 +1005,7 @@ async def call_chain_stream(
                             yield {"type": "usage", "tokens": total}
                 # Successful stream — record CB success and return
                 _cb_record_success(cb_key)
+                _quota_record_success(cb_key)
                 return
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
