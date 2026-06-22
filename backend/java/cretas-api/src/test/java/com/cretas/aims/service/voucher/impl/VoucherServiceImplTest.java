@@ -288,10 +288,10 @@ class VoucherServiceImplTest {
         assertEquals(LocalDate.of(2026, 6, 1), reversal.getVoucherDate(), "冲销凭证沿用原凭证期间");
         assertEquals(2, reversal.getEntries().size());
 
-        // ⚠️ 红字冲销凭证 NOT 复制原凭证 source business — 否则撞 uk_voucher_source_business
-        // 唯一约束 (DataIntegrityViolation → 409 "数据已存在", prod 实暴). 关联靠 originalVoucherId.
-        assertNull(reversal.getSourceBusinessType(), "冲销凭证不得复制原 business key (撞唯一约束)");
-        assertNull(reversal.getSourceBusinessId(), "冲销凭证不得复制原 business id (撞唯一约束)");
+        // ⚠️ 红字冲销凭证 source = 合成 (VOUCHER_REVERSAL, 原凭证id): 非 null 满足 prod NOT NULL 约束,
+        // 且不撞原凭证的 uk_voucher_source_business 唯一约束 (type 不同). 关联另由 originalVoucherId 承载.
+        assertEquals("VOUCHER_REVERSAL", reversal.getSourceBusinessType(), "冲销凭证用合成 source type (非 null, 不撞原凭证)");
+        assertEquals("v-orig", reversal.getSourceBusinessId(), "冲销凭证 sourceBusinessId = 原凭证 id (唯一, 非 null)");
 
         // line1: 原借 应收 500 → 冲销贷 应收 500 (方向互换, 金额正数, 辅助核算保留)
         VoucherEntry r1 = reversal.getEntries().get(0);
