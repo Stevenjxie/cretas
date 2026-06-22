@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -52,6 +54,8 @@ import {
 } from './statusVisuals';
 
 const router = useRouter();
+const route = useRoute();
+const { goCreate } = useCreateAndReturn();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -280,24 +284,30 @@ function tomorrowStr(): string {
 }
 const selectableSalesOrders = ref<TableRow[]>([]);
 const salesOrdersLoading = ref(false);
+let _selectableSalesOrdersInflight: Promise<void> | null = null;
 
 async function loadSelectableSalesOrders() {
   if (!factoryId.value) return;
-  salesOrdersLoading.value = true;
-  try {
-    const res = await get(`/${factoryId.value}/production-plans/sales-orders/selectable`);
-    if (res.success && Array.isArray(res.data)) {
-      selectableSalesOrders.value = res.data;
-    } else if (res.success === false) {
-      ElMessage.error(res.message || '加载销售订单失败');
+  if (_selectableSalesOrdersInflight) return _selectableSalesOrdersInflight;
+  _selectableSalesOrdersInflight = (async () => {
+    salesOrdersLoading.value = true;
+    try {
+      const res = await get(`/${factoryId.value}/production-plans/sales-orders/selectable`);
+      if (res.success && Array.isArray(res.data)) {
+        selectableSalesOrders.value = res.data;
+      } else if (res.success === false) {
+        ElMessage.error(res.message || '加载销售订单失败');
+      }
+    } catch (e) {
+      // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+      // fallback only for network errors (避免双 toast).
+      handleCatchError(e, '加载销售订单失败');
+    } finally {
+      salesOrdersLoading.value = false;
+      _selectableSalesOrdersInflight = null;
     }
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '加载销售订单失败');
-  } finally {
-    salesOrdersLoading.value = false;
-  }
+  })();
+  return _selectableSalesOrdersInflight;
 }
 
 function handleSourceTypeChange(val: string) {
@@ -374,6 +384,7 @@ onMounted(() => {
   loadReferenceData();
   loadCustomers();
   loadReportModeDefault();
+  void maybeReopenFromQuery();
 });
 
 async function loadData() {
@@ -605,6 +616,30 @@ function handleCreate() {
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
   if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
+}
+
+function goAddOrderItems(soId: string) {
+  if (!soId) return;
+  goCreate(`/sales/orders/${soId}?editItems=1`, {
+    reopen: `/production/plans?reopenPlan=1&planSO=${soId}`,
+  });
+}
+
+async function maybeReopenFromQuery() {
+  const q = route.query;
+  const soId = (q.reopenPlan === '1' && typeof q.planSO === 'string' && q.planSO)
+    || (q.action === 'create' && typeof q.salesOrderId === 'string' && q.salesOrderId)
+    || '';
+  if (!soId) return;
+  // handleCreate is synchronous and fires loadSelectableSalesOrders without await.
+  // We must await the SO list ourselves before calling handleSalesOrderSelect.
+  handleCreate();
+  await loadSelectableSalesOrders();
+  planForm.value.sourceType = 'CUSTOMER_ORDER';
+  planForm.value.sourceOrderId = String(soId);
+  handleSalesOrderSelect(String(soId));
+  const { reopenPlan: _a, planSO: _b, salesOrderId: _c, action: _d, ...rest } = q as Record<string, unknown>;
+  router.replace({ query: rest as any });
 }
 
 async function submitPlan() {
@@ -2283,6 +2318,15 @@ function handleAiFill(params: TableRow) {
               :value="String(it.id)"
             />
           </el-select>
+          <UpstreamMissingHint
+            v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId && selectedOrderItems.length === 0"
+            description="该订单暂无产品行，无法据此排产"
+            target-module="sales"
+            :require-write="true"
+            action-text="去销售订单添加产品行"
+            contact-text="请联系销售或管理员为该订单补充产品行后再排产"
+            @action="goAddOrderItems(planForm.sourceOrderId || '')"
+          />
         </el-form-item>
         <el-form-item label="产品类型" required>
           <!-- A4: 来源=销售订单时锁定产品类型，不允许自由选择 -->

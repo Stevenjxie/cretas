@@ -4,7 +4,10 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
-import { get, post } from '@/api/request';
+import { get, post, put } from '@/api/request';
+import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
@@ -203,13 +206,80 @@ const orderTransportStatusMap: Record<string, { text: string; type: string }> = 
 
 const orderFormulas = ref<TableRow>({});
 
-onMounted(() => {
-  loadOrder();
+// ─── Task 4: DRAFT 编辑产品行 ───
+const { goCreate } = useCreateAndReturn();
+
+const editItemsVisible = ref(false);
+const editItemsRows = ref<OrderItemRow[]>([]);
+const editItemsSaving = ref(false);
+const products = ref<Array<{ id: string; name: string; unit?: string }>>([]);
+
+const isDraft = computed(() => String((order.value as any)?.status || '').toUpperCase() === 'DRAFT');
+
+async function loadProductsForEdit() {
+  if (!factoryId.value) return;
+  try {
+    // Mirror list.vue loadProducts — same endpoint / response shape.
+    const res = await get(`/${factoryId.value}/product-types/active`, { _silent: true } as never);
+    const list = Array.isArray(res?.data) ? res.data : (res?.data?.content ?? []) as any[];
+    products.value = list.map((p: any) => ({
+      id: String(p.id),
+      name: String(p.name ?? p.productName ?? ''),
+      unit: p.unit,
+    }));
+  } catch { products.value = []; }
+}
+
+function openEditItems() {
+  const existing = Array.isArray((order.value as any)?.items) ? (order.value as any).items : [];
+  editItemsRows.value = existing.length
+    ? existing.map((it: any) => ({
+        productTypeId: String(it.productTypeId ?? ''),
+        productName: it.productName,
+        quantity: Number(it.quantity ?? 0),
+        unit: it.unit ?? '份',
+        unitPrice: Number(it.unitPrice ?? 0),
+        taxRate: Number(it.taxRate ?? 13),
+        specification: it.specification ?? '',
+      }))
+    : [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxRate: 13 }];
+  editItemsVisible.value = true;
+}
+
+function goCreateProductType() {
+  goCreate('/system/products');
+}
+
+async function saveEditItems() {
+  if (!factoryId.value || !orderId.value) return;
+  const items = editItemsRows.value
+    .filter((r) => r.productTypeId)
+    .map((r) => ({ ...r, quantity: r.quantity ?? 0, unitPrice: r.unitPrice ?? 0, taxRate: r.taxRate ?? 0 }));
+  if (items.length === 0) { ElMessage.warning('请至少添加一个产品行'); return; }
+  editItemsSaving.value = true;
+  try {
+    const res = await put(`/${factoryId.value}/sales/orders/${orderId.value}`, { items });
+    if (res.success) {
+      ElMessage.success('产品行已保存');
+      editItemsVisible.value = false;
+      await loadOrder();
+    }
+  } finally { editItemsSaving.value = false; }
+}
+
+onMounted(async () => {
+  await loadOrder();
   loadDeliveries();
   loadInvoices();
   loadPayments();
   loadPurchaseOrders();
   loadFormulas();
+  await loadProductsForEdit();
+  if (route.query.editItems === '1' && isDraft.value) {
+    openEditItems();
+    const { editItems: _omit, ...rest } = route.query;
+    router.replace({ query: rest as Record<string, string> });
+  }
 });
 
 async function loadOrder() {
@@ -1131,6 +1201,16 @@ async function handleQuickPayFull() {
             </el-descriptions>
 
             <h3 style="margin: 20px 0 12px">{{ label('product') }}明细</h3>
+            <!-- Task 4: DRAFT 草稿可编辑产品行 -->
+            <div v-if="isDraft && canWrite" style="margin-bottom: 8px;">
+              <el-button type="primary" size="small" @click="openEditItems">编辑产品行</el-button>
+            </div>
+            <el-alert
+              v-else-if="!isDraft && !(order.items && order.items.length)"
+              type="info"
+              :closable="false"
+              title="该订单非草稿状态且无产品行，请联系销售在草稿阶段补充。"
+            />
             <!-- T3-13 fix (issue #524): widen 规格 + 产品 columns + scroll-x fallback to prevent 成品详情规格列盖住. -->
             <el-table :data="order.items || []" border stripe style="width: 100%" :scrollbar-always-on="true">
               <el-table-column prop="productName" :label="label('product')" min-width="180" show-overflow-tooltip />
@@ -1764,6 +1844,31 @@ async function handleQuickPayFull() {
         >
           {{ financeReviewForm.isApprove ? '确认审核通过' : '确认驳回' }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ─── Task 4: 编辑产品行对话框 ─── -->
+    <el-dialog
+      v-model="editItemsVisible"
+      :title="`编辑产品行 — ${order?.orderNumber || ''}`"
+      width="820px"
+      destroy-on-close
+    >
+      <OrderItemsEditor v-model:items="editItemsRows" :products="products">
+        <template #empty-products>
+          <UpstreamMissingHint
+            description="本工厂暂无产品类型，无法添加产品行"
+            target-module="system"
+            action-text="去创建产品类型"
+            contact-text="请联系管理员先创建产品类型"
+            :require-write="true"
+            @action="goCreateProductType"
+          />
+        </template>
+      </OrderItemsEditor>
+      <template #footer>
+        <el-button @click="editItemsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="editItemsSaving" @click="saveEditItems">保存</el-button>
       </template>
     </el-dialog>
   </div>
