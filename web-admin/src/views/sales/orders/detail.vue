@@ -258,7 +258,11 @@ async function saveEditItems() {
   if (items.length === 0) { ElMessage.warning('请至少添加一个产品行'); return; }
   editItemsSaving.value = true;
   try {
-    const res = await put(`/${factoryId.value}/sales/orders/${orderId.value}`, { items });
+    // 带 version 启用后端乐观锁 (updateSalesOrder: request.version 非空时比对) — 防并发编辑静默覆盖
+    const res = await put(`/${factoryId.value}/sales/orders/${orderId.value}`, {
+      items,
+      version: (order.value as { version?: number } | null)?.version,
+    });
     if (res.success) {
       ElMessage.success('产品行已保存');
       editItemsVisible.value = false;
