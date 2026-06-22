@@ -32,8 +32,8 @@ FROM b,(VALUES
   (2,102::bigint,'滚揉',278.5,334.0,143.0,0.0,330,2, NULL, NULL::int, NULL::numeric, NULL, NULL, NULL, NULL::numeric, NULL),         -- 注水增重 119.9% (无材料成本)
   (3,103::bigint,'焯水',334.0,243.0,39.0,0.0,90,1, NULL, NULL::int, NULL::numeric, NULL, NULL, NULL, NULL::numeric, NULL),
   (4,104::bigint,'熟制',243.0,179.8,39.0,980.0,90,1, NULL, NULL::int, NULL::numeric, 'SEASONING', NULL, 'POT-M67DEMO-01', 980.0::numeric, 'BY_OUTPUT'),         -- CALC-003 显式调料(卤汤); AUDIT-004 共享锅(本批为唯一成员→分摊100%=¥980; 多批时按产出量分摊)
-  (5,105::bigint,'气调',179.8,178.7,359.0,0.0,828,3, NULL, NULL::int, NULL::numeric, NULL, NULL, NULL, NULL::numeric, NULL),
-  (6,106::bigint,'包装',178.7,178.7,130.0,880.0,300,4, NULL, 3::int, NULL::numeric, 'PACKAGING', '[{"name":"膜","cost":300},{"name":"气体","cost":180},{"name":"标签","cost":120},{"name":"其他","cost":280}]', NULL, NULL::numeric, NULL)        -- CALC-003 显式包装; AUDIT-002 包装明细; v5.0 实测留样3盒(不可售)
+  (5,105::bigint,'气调',179.8,179.8,359.0,0.0,828,3, NULL, NULL::int, NULL::numeric, NULL, NULL, NULL, NULL::numeric, NULL),         -- v5.0: 气调出成率=1 (无损耗); 产出=投入179.8
+  (6,106::bigint,'包装',179.8,179.8,130.0,880.0,300,4, NULL, 3::int, NULL::numeric, 'PACKAGING', '[{"name":"膜","cost":300},{"name":"气体","cost":180},{"name":"标签","cost":120},{"name":"其他","cost":280}]', NULL, NULL::numeric, NULL)        -- CALC-003 显式包装; AUDIT-002 包装明细; v5.0 留样3盒; 包装不改重→末道产出179.8 → 总出成率179.8/307=58.57% 与 v5.0 一致
 ) AS v(po,wpt,cat,inq,outq,lc,mc,wm,tw,bp,sr,wq,cc,pd,apn,aptc,aam);
 
 -- 多批混锅溯源边 (batch_relations): 本批(熟制) 来自 2 个上游焯水批次 → 喂现成 /batch-relations/trace/backward
