@@ -329,12 +329,102 @@ class ReverseTransferServiceTest {
         verify(transferService, never()).createTransfer(anyString(), any(), anyLong());
     }
 
+    // ==================== R6 #5 同厂自动推进 ====================
+
+    @Test
+    @DisplayName("R6 #5 同厂: 创建 DRAFT 后自动推进 request→approve→ship→receive→confirm")
+    void intraFactory_autoAdvancesToConfirmed() {
+        stubWarehouseHappy();
+        MaterialBatch m1 = newMaterial("mat-A", "100", "20", "0");
+        when(materialBatchRepository.findAllAvailableInWarehouse(FACTORY_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(List.of(m1));
+        when(rawMaterialTypeRepository.findById("mat-A"))
+                .thenReturn(Optional.of(newRawType("mat-A", "面粉", "kg")));
+        when(finishedGoodsBatchRepository.findAvailableByPlanAndWarehouse(FACTORY_ID, PLAN_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(Collections.emptyList());
+        // targetFactoryId == FACTORY_ID (同厂) → 应自动推进
+        InternalTransfer draft = mockTransfer("xfer-intra", "TRF-INTRA");
+        draft.setSourceFactoryId(FACTORY_ID);
+        draft.setTargetFactoryId(FACTORY_ID);
+        when(transferService.createTransfer(eq(FACTORY_ID), any(CreateTransferRequest.class), anyLong()))
+                .thenReturn(draft);
+
+        service.onProductionCompleted(newEvent());
+
+        // 验证 5 步生命周期全部以同厂 + system user 调用
+        verify(transferService, times(1)).requestTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+        verify(transferService, times(1)).approveTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+        verify(transferService, times(1)).shipTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+        verify(transferService, times(1)).receiveTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+        verify(transferService, times(1)).confirmTransfer(eq(FACTORY_ID), eq("xfer-intra"), anyLong());
+    }
+
+    @Test
+    @DisplayName("R6 #5 跨厂: 创建 DRAFT 后保留手动多步, 不自动推进")
+    void crossFactory_doesNotAutoAdvance() {
+        stubWarehouseHappy();
+        MaterialBatch m1 = newMaterial("mat-A", "100", "20", "0");
+        when(materialBatchRepository.findAllAvailableInWarehouse(FACTORY_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(List.of(m1));
+        when(rawMaterialTypeRepository.findById("mat-A"))
+                .thenReturn(Optional.of(newRawType("mat-A", "面粉", "kg")));
+        when(finishedGoodsBatchRepository.findAvailableByPlanAndWarehouse(FACTORY_ID, PLAN_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(Collections.emptyList());
+        // targetFactoryId != FACTORY_ID (跨厂) → 不应自动推进
+        InternalTransfer draft = mockTransfer("xfer-cross", "TRF-CROSS");
+        draft.setSourceFactoryId(FACTORY_ID);
+        draft.setTargetFactoryId("F002");
+        when(transferService.createTransfer(eq(FACTORY_ID), any(CreateTransferRequest.class), anyLong()))
+                .thenReturn(draft);
+
+        service.onProductionCompleted(newEvent());
+
+        verify(transferService, times(1)).createTransfer(eq(FACTORY_ID), any(), anyLong());
+        verify(transferService, never()).requestTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).approveTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).shipTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).receiveTransfer(anyString(), anyString(), anyLong());
+        verify(transferService, never()).confirmTransfer(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("R6 #5 同厂推进失败异常隔离: ship 抛 409 → 静默吞 (草稿已创建, 不抛出)")
+    void intraFactory_advanceFailure_swallowed() {
+        stubWarehouseHappy();
+        MaterialBatch m1 = newMaterial("mat-A", "100", "20", "0");
+        when(materialBatchRepository.findAllAvailableInWarehouse(FACTORY_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(List.of(m1));
+        when(rawMaterialTypeRepository.findById("mat-A"))
+                .thenReturn(Optional.of(newRawType("mat-A", "面粉", "kg")));
+        when(finishedGoodsBatchRepository.findAvailableByPlanAndWarehouse(FACTORY_ID, PLAN_ID, WKS_WAREHOUSE_ID))
+                .thenReturn(Collections.emptyList());
+        InternalTransfer draft = mockTransfer("xfer-fail", "TRF-FAIL");
+        draft.setSourceFactoryId(FACTORY_ID);
+        draft.setTargetFactoryId(FACTORY_ID);
+        when(transferService.createTransfer(eq(FACTORY_ID), any(CreateTransferRequest.class), anyLong()))
+                .thenReturn(draft);
+        // ship 抛异常 (e.g. 库存不足 409) — 不应 propagate 出 onProductionCompleted
+        when(transferService.shipTransfer(eq(FACTORY_ID), eq("xfer-fail"), anyLong()))
+                .thenThrow(new RuntimeException("Simulated stock insufficient"));
+
+        // 不应抛出 (异常隔离: 生产完成主流程不能被自动推进失败阻塞)
+        service.onProductionCompleted(newEvent());
+
+        // 草稿仍被创建; ship 被尝试; confirm 因 ship 失败未到达
+        verify(transferService, times(1)).createTransfer(eq(FACTORY_ID), any(), anyLong());
+        verify(transferService, times(1)).shipTransfer(eq(FACTORY_ID), eq("xfer-fail"), anyLong());
+        verify(transferService, never()).confirmTransfer(anyString(), anyString(), anyLong());
+    }
+
     /** 辅助: 构造一个 mock 的 InternalTransfer 返回值。 */
     private InternalTransfer mockTransfer(String id, String number) {
         InternalTransfer t = new InternalTransfer();
         t.setId(id);
         t.setTransferNumber(number);
         t.setStatus(TransferStatus.DRAFT);
+        // 默认同厂 (大多数测试场景); 跨厂测试显式覆盖 targetFactoryId
+        t.setSourceFactoryId(FACTORY_ID);
+        t.setTargetFactoryId(FACTORY_ID);
         return t;
     }
 }

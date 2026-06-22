@@ -2856,6 +2856,23 @@ public class SalesServiceImpl implements SalesService {
     /**
      * FIFO 扣减成品库存
      * 按生产日期从早到晚，依次扣减可用库存
+     *
+     * <p><b>R6 #6 幻影预留释放 (2026-06-22)</b>: SO 经财务审核通过后由
+     * {@code InventoryMatchingService.reserveStock} 按 FEFO 在成品批次上设 {@code reservedQuantity}
+     * (软占位, 防其他订单抢同一库存)。发货时本方法把 reserved <b>转为</b> shipped —— 同一批物理库存
+     * 不能既"已发"又"被预留"。
+     * 旧逻辑只 {@code shipped += deduct} 不释放 reserved → {@code available = produced - shipped - reserved}
+     * 双扣低估 (一批 produced=237.5 预留 50 发货 50 后 shipped=50 + reserved=50 → avail=137.5, 少 50),
+     * 且若一批被预留耗尽 ({@code available=0}) 会误报"成品库存不足"无法发货。
+     *
+     * <p>修复: 扣减容量改为<b>物理未发量</b> {@code produced - shipped} (含被自己预留的部分),
+     * 每批发货 {@code deduct} 后释放该批 reserved {@code min(deduct, reserved)} —— 永不为负、
+     * 永不超发物理库存。
+     *
+     * <p>⚠️ <b>已知局限 (需终审知悉)</b>: reservedQuantity 是 productType 级 FEFO <b>聚合</b>预留,
+     * 不绑定具体 SO。本修复优先扣<b>未预留</b>可用量 (available)、再扣本批被预留部分 —— 单 SO 场景
+     * (预留它的 SO = 发货的 SO) 完全正确; 极端并发场景 (同批被多 SO 预留, 某 SO 超发) 理论上可能
+     * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
     private void deductFinishedGoodsInventory(String factoryId, SalesDeliveryItem item) {
         // T4-D5 #572: honor per-row sourceWarehouseCode (PR #547/#564 data contract).
@@ -2864,29 +2881,41 @@ public class SalesServiceImpl implements SalesService {
         String warehouseId = (sourceCode != null && !sourceCode.isBlank())
                 ? warehouseResolver.resolveId(factoryId, sourceCode)
                 : warehouseResolver.resolveLogisticsId(factoryId);
+        // R6 #6: 用 findShippableBatchesByWarehouse (过滤 produced-shipped>0, 不减 reserved),
+        // 让被本 SO 预留耗尽 (available=0) 的批次也能进入发货候选 —— Pass 2 动用其预留物理库存。
         List<FinishedGoodsBatch> batches = finishedGoodsBatchRepository
-                .findAvailableBatchesByWarehouse(factoryId, item.getProductTypeId(), warehouseId);
+                .findShippableBatchesByWarehouse(factoryId, item.getProductTypeId(), warehouseId);
 
         BigDecimal remaining = item.getDeliveredQuantity();
 
+        // Pass 1: 先扣未被预留的可用量 (available = produced - shipped - reserved) —— 不动任何预留。
         for (FinishedGoodsBatch batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
-
             BigDecimal available = batch.getAvailableQuantity();
+            if (available.compareTo(BigDecimal.ZERO) <= 0) continue;
             BigDecimal deduct = remaining.min(available);
-
-            batch.setShippedQuantity(batch.getShippedQuantity().add(deduct));
-            if (batch.isDepleted()) {
-                batch.setStatus("DEPLETED");
-            }
-            finishedGoodsBatchRepository.save(batch);
-
-            // 记录扣减的批次
-            if (item.getFinishedGoodsBatchId() == null) {
-                item.setFinishedGoodsBatchId(batch.getId());
-            }
-
+            applyShipment(batch, deduct, BigDecimal.ZERO);  // 不释放预留 (扣的是未预留部分)
+            recordDeductedBatch(item, batch);
             remaining = remaining.subtract(deduct);
+        }
+
+        // Pass 2: 仍不足 → 动用<b>本批被预留</b>的物理库存 (即本 SO 自己的预留), 发货同时释放对应 reserved。
+        // 容量 = 物理未发量 - available = 被预留且未发的部分 = reserved (受限于 produced-shipped)。
+        if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+            for (FinishedGoodsBatch batch : batches) {
+                if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+                BigDecimal reserved = batch.getReservedQuantity() != null
+                        ? batch.getReservedQuantity() : BigDecimal.ZERO;
+                BigDecimal physicalUnshipped = batch.getProducedQuantity()
+                        .subtract(batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO);
+                // 本批可从预留中发出的物理量 = min(reserved, 物理未发量)
+                BigDecimal fromReserved = reserved.min(physicalUnshipped);
+                if (fromReserved.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal deduct = remaining.min(fromReserved);
+                applyShipment(batch, deduct, deduct);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
+                recordDeductedBatch(item, batch);
+                remaining = remaining.subtract(deduct);
+            }
         }
 
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
@@ -2895,6 +2924,32 @@ public class SalesServiceImpl implements SalesService {
                 item.getProductTypeId(), warehouseDisplay, remaining.toPlainString()))
                 .withHint("请检查 " + warehouseDisplay + " 库存, 或调整销售订单的来源仓库后再发货")
                 .withHintTarget("生产计划");
+        }
+    }
+
+    /**
+     * 对成品批次执行发货: shipped += shipQty, reserved -= releaseReserved (不为负), 更新 DEPLETED 状态并保存。
+     * R6 #6: releaseReserved 让发货释放对应预留, 避免 available 双扣低估。
+     */
+    private void applyShipment(FinishedGoodsBatch batch, BigDecimal shipQty, BigDecimal releaseReserved) {
+        batch.setShippedQuantity(
+                (batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO).add(shipQty));
+        if (releaseReserved.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal reserved = batch.getReservedQuantity() != null
+                    ? batch.getReservedQuantity() : BigDecimal.ZERO;
+            // 防御性 max(0): 释放量已被 min(reserved, ...) 约束, 不应为负, 但守住不变式 reserved >= 0。
+            batch.setReservedQuantity(reserved.subtract(releaseReserved).max(BigDecimal.ZERO));
+        }
+        if (batch.isDepleted()) {
+            batch.setStatus("DEPLETED");
+        }
+        finishedGoodsBatchRepository.save(batch);
+    }
+
+    /** 记录发货行首个扣减的成品批次 (用于溯源)。 */
+    private void recordDeductedBatch(SalesDeliveryItem item, FinishedGoodsBatch batch) {
+        if (item.getFinishedGoodsBatchId() == null) {
+            item.setFinishedGoodsBatchId(batch.getId());
         }
     }
 

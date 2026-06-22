@@ -45,6 +45,25 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId,
             @Param("warehouseId") String warehouseId);
 
+    /**
+     * R6 #6 (2026-06-22): 发货可出库批次 (FEFO) —— 过滤条件用<b>物理未发量</b>
+     * {@code (producedQuantity - shippedQuantity) > 0}, <b>不</b>减 reservedQuantity。
+     *
+     * <p>区别于 {@link #findAvailableBatchesByWarehouse} (后者减 reserved, 用于"还能预占/可卖给新订单"语义):
+     * 发货时本 SO 自己预留的批次即使 {@code available=0} (被预留耗尽) 也应能发出 —— 发货会把 reserved 转 shipped。
+     * 用于销售发货扣减, 让 {@code deductFinishedGoodsInventory} 先扣未预留 available、再动用本批预留物理库存。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.warehouseId = :warehouseId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findShippableBatchesByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("warehouseId") String warehouseId);
+
     /** FIFO 推荐：按生产日期升序返回可用成品批次（先进先出） */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
