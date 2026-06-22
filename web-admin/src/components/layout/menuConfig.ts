@@ -58,10 +58,12 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
-      { path: '/system/products', title: '成品 / SKU (本厂生产)', icon: '', module: 'system' },
-      { path: '/system/work-processes', title: '工序管理', icon: '', module: 'system',
+      // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
+      // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
+      { path: '/system/products', title: '成品 / SKU (本厂生产)', icon: '', module: 'production' },
+      { path: '/system/work-processes', title: '工序管理', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'system',
+      { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
       // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
