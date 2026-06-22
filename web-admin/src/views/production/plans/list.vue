@@ -52,6 +52,7 @@ import {
   planRowClassNameByStatus,
   planStatusClass,
 } from './statusVisuals';
+import ProcessChainEntryDrawer from '../components/ProcessChainEntryDrawer.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -711,6 +712,32 @@ async function handleStart(row: TableRow) {
     actionLoading.value = false;
   }
 }
+
+// ==================== 逐道录入抽屉 (SP-B2) ====================
+const entryDrawerVisible = ref(false);
+const entryProcessList = ref<Array<{ processOrder: number; processName: string; processCategory?: string | null }>>([]);
+const entryRow = ref<any>(null);
+
+function isStepwise(row: any): boolean {
+  return row.skipProcessReporting === false;
+}
+
+async function openProcessEntry(row: any) {
+  entryRow.value = row;
+  try {
+    const resp = await getProductWorkProcesses(factoryId.value, row.productTypeId);
+    entryProcessList.value = (resp.data || []).map((p: any) => ({
+      processOrder: p.processOrder,
+      processName: p.processName,
+      processCategory: p.processCategory ?? null,
+    }));
+  } catch {
+    entryProcessList.value = [];
+  }
+  entryDrawerVisible.value = true;
+}
+
+function onEntrySubmitted() { loadData(); }
 
 // ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
 interface SettlementRawConsumptionForm {
@@ -2038,6 +2065,14 @@ function handleAiFill(params: TableRow) {
               @click="handleComplete(row)"
             >核对结单</el-button>
             <el-button
+              v-if="canWrite && isStepwise(row) && isUnfinishedStatus(row.status)"
+              type="success"
+              link
+              size="small"
+              title="文员逐道工序录入（批次链/混锅来源/投入产出）"
+              @click="openProcessEntry(row)"
+            >逐道录入</el-button>
+            <el-button
               v-if="canConfirmReceipt(row)"
               type="success"
               size="small"
@@ -3055,6 +3090,18 @@ function handleAiFill(params: TableRow) {
       v-model="aiEntryVisible"
       :config="PRODUCTION_PLAN_CONFIG"
       @fill-form="handleAiFill"
+    />
+
+    <!-- SP-B2: 逐道工序录入抽屉 -->
+    <ProcessChainEntryDrawer
+      v-model:visible="entryDrawerVisible"
+      :factory-id="factoryId"
+      :plan-id="String(entryRow?.id || '')"
+      :product-type-id="entryRow?.productTypeId || ''"
+      :process-list="entryProcessList"
+      :planned-quantity="Number(entryRow?.plannedQuantity || 0)"
+      :product-name="entryRow?.productTypeName || entryRow?.productName"
+      @submitted="onEntrySubmitted"
     />
   </div>
   </CanvasAwareWrapper>
