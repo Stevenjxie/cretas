@@ -34,8 +34,19 @@ const filterVoucherNumber = ref('');
 
 const voidDialogVisible = ref(false);
 const voidTargetId = ref('');
+const voidTargetRow = ref<Voucher | null>(null); // Rule 2: 携带凭证上下文
 const voidReason = ref('');
+const voidOtherText = ref(''); // Rule 3: "其他" 时补充文本
 const voiding = ref(false);
+
+// Rule 3: 作废原因标准选项
+const VOID_REASON_OPTIONS = [
+  { value: '录入有误', label: '录入有误' },
+  { value: '业务撤销', label: '业务撤销' },
+  { value: '重复生成', label: '重复生成' },
+  { value: '科目错误', label: '科目错误' },
+  { value: '_other', label: '其他原因' },
+];
 
 // ==================== Load ====================
 
@@ -118,20 +129,28 @@ async function handlePost(id: string) {
   }
 }
 
-function openVoidDialog(id: string) {
-  voidTargetId.value = id;
+function openVoidDialog(row: Voucher) {
+  voidTargetId.value = row.id;
+  voidTargetRow.value = row; // Rule 2: 保存完整行供 dialog 显示
   voidReason.value = '';
+  voidOtherText.value = '';
   voidDialogVisible.value = true;
 }
 
 async function submitVoid() {
-  if (!voidReason.value.trim()) {
-    ElMessage.warning('请填写作废原因');
+  if (!voidReason.value) {
+    ElMessage.warning('请选择作废原因');
     return;
   }
+  if (voidReason.value === '_other' && !voidOtherText.value.trim()) {
+    ElMessage.warning('请填写具体作废原因');
+    return;
+  }
+  const finalReason =
+    voidReason.value === '_other' ? voidOtherText.value.trim() : voidReason.value;
   voiding.value = true;
   try {
-    await voidVoucher(factoryId.value, voidTargetId.value, voidReason.value.trim());
+    await voidVoucher(factoryId.value, voidTargetId.value, finalReason);
     ElMessage.success('凭证已作废');
     voidDialogVisible.value = false;
     loadData();
@@ -254,7 +273,7 @@ onMounted(() => loadData());
               link
               type="danger"
               size="small"
-              @click="openVoidDialog(row.id)"
+              @click="openVoidDialog(row)"
             >
               作废
             </el-button>
@@ -273,30 +292,51 @@ onMounted(() => loadData());
       />
     </el-card>
 
-    <!-- 作废凭证 dialog (防呆: Rule3 原因选项+补充, Rule2 凭证号 context) -->
+    <!-- 作废凭证 dialog (Rule 2: 凭证号+类型+金额 context; Rule 3: 原因 dropdown) -->
     <el-dialog
       v-model="voidDialogVisible"
-      title="作废凭证"
+      :title="`作废凭证 — ${voidTargetRow?.voucherNumber || '—'}`"
       width="480px"
       destroy-on-close
     >
+      <!-- Rule 2: 凭证身份信息 -->
+      <el-descriptions v-if="voidTargetRow" :column="2" border size="small" style="margin-bottom:16px">
+        <el-descriptions-item label="凭证字号">{{ voidTargetRow.voucherNumber }}</el-descriptions-item>
+        <el-descriptions-item label="类型">
+          {{ VOUCHER_TYPE_LABEL[voidTargetRow.voucherType as VoucherType] || voidTargetRow.voucherType }}
+        </el-descriptions-item>
+        <el-descriptions-item label="凭证日期">{{ voidTargetRow.voucherDate || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="借方合计">{{ formatAmount(voidTargetRow.totalDebit) }}</el-descriptions-item>
+      </el-descriptions>
       <el-alert
         type="warning"
         :closable="false"
         show-icon
+        title="凭证作废后状态变为「已作废」，不可恢复。"
         style="margin-bottom:16px"
-      >
-        <template #title>
-          凭证作废后状态变为「已作废」，不可恢复。请确认作废原因后提交。
-        </template>
-      </el-alert>
+      />
       <el-form label-width="90px">
+        <!-- Rule 3: 标准选项 -->
         <el-form-item label="作废原因" required>
-          <el-input
+          <el-select
             v-model="voidReason"
+            placeholder="请选择作废原因"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in VOID_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="voidReason === '_other'" label="具体原因" required>
+          <el-input
+            v-model="voidOtherText"
             type="textarea"
-            :rows="3"
-            placeholder="请说明作废原因，如：录入有误、业务撤销等"
+            :rows="2"
+            placeholder="请填写具体作废原因"
             maxlength="200"
             show-word-limit
           />
@@ -307,7 +347,7 @@ onMounted(() => loadData());
         <el-button
           type="danger"
           :loading="voiding"
-          :disabled="!voidReason.trim()"
+          :disabled="!voidReason || (voidReason === '_other' && !voidOtherText.trim())"
           @click="submitVoid"
         >
           确认作废

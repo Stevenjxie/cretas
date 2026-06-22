@@ -162,6 +162,27 @@ async function loadSalespersons() {
   } catch { /* optional */ }
 }
 
+// Rule 3: 研发需求关联改 el-select
+interface RdRequestOption { id: string; label: string }
+const rdRequestOptions = ref<RdRequestOption[]>([]);
+const rdRequestOptionsLoading = ref(false);
+
+async function loadRdRequestOptions() {
+  if (!factoryId.value || rdRequestOptions.value.length > 0) return;
+  rdRequestOptionsLoading.value = true;
+  try {
+    const res = await get(`/${factoryId.value}/rd/requests`, { params: { size: 200, page: 0 } });
+    if (res.success && res.data) {
+      const rows: TableRow[] = res.data.content ?? (Array.isArray(res.data) ? res.data : []);
+      rdRequestOptions.value = rows.map((r) => ({
+        id: String(r.id),
+        label: `${r.requestNumber || r.id} — ${r.customerName || r.customer || ''}`.trim().replace(/—\s*$/, ''),
+      }));
+    }
+  } catch { /* optional */ }
+  finally { rdRequestOptionsLoading.value = false; }
+}
+
 // D13: Dirty form guard — warn user before leaving with unsaved changes
 const isDirty = ref(false);
 watch([requestDialogVisible, sampleDialogVisible], ([req, smp]) => { isDirty.value = req || smp; });
@@ -491,7 +512,25 @@ async function addTrackingRecord() {
             <el-option label="常温" value="常温" />
           </el-select>
         </el-form-item>
-        <el-form-item label="关联需求"><el-input v-model="sampleForm.rdRequestId" placeholder="研发需求ID（可选）" /></el-form-item>
+        <!-- Rule 3: 关联需求改 el-select (UUID → 研发需求编号+客户名) -->
+        <el-form-item label="关联需求">
+          <el-select
+            v-model="sampleForm.rdRequestId"
+            filterable
+            clearable
+            :loading="rdRequestOptionsLoading"
+            placeholder="按需求编号/客户搜索（可选）"
+            style="width: 100%"
+            @focus="loadRdRequestOptions"
+          >
+            <el-option
+              v-for="r in rdRequestOptions"
+              :key="r.id"
+              :label="r.label"
+              :value="r.id"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="sampleDialogVisible = false">取消</el-button>

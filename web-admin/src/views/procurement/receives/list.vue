@@ -356,10 +356,17 @@ async function handleSubmit() {
 
 async function handleConfirm(row: ReceiveRow) {
   if (row.status !== 'DRAFT') return;
+  // Rule 2: 入库确认前展示物料清单, 防止误操作
+  const itemLines = (row.items ?? [])
+    .map((item) => `  • ${item.materialName || item.materialTypeId}: ${item.receivedQuantity} ${item.unit || ''}`.trimEnd())
+    .join('\n');
+  const msgBody = itemLines
+    ? `物料清单:\n${itemLines}\n\n确认后将生成物料批次，无法撤销。`
+    : '确认后将生成物料批次，无法撤销。';
   try {
     await ElMessageBox.confirm(
-      `确认入库单 ${row.receiveNumber}？\n确认后将生成物料批次,无法撤销。`,
-      '确认入库',
+      msgBody,
+      `确认入库 — ${row.receiveNumber}${row.supplierName ? ' (' + row.supplierName + ')' : ''}`,
       { type: 'warning', confirmButtonText: '确认入库', cancelButtonText: '取消' }
     );
     await post(`/${factoryId.value}/purchase/receives/${row.id}/confirm`);

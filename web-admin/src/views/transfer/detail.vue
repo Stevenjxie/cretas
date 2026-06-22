@@ -28,6 +28,19 @@ const transfer = ref<TableRow | null>(null);
 const notFound = ref(false);
 const notFoundMessage = ref('');
 
+// Rule 3: reject / cancel 原因 dropdown
+const TRANSFER_REJECT_REASONS = [
+  { value: '库存不足', label: '库存不足' },
+  { value: '计划取消', label: '计划取消' },
+  { value: '重复调拨', label: '重复调拨' },
+  { value: '信息有误', label: '信息有误' },
+  { value: '_other', label: '其他原因' },
+];
+const reasonDialogVisible = ref(false);
+const reasonDialogAction = ref(''); // 'reject' | 'cancel'
+const reasonSelect = ref('');
+const reasonOtherText = ref('');
+
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   REQUESTED: { text: '已申请', type: 'warning' },
@@ -86,14 +99,20 @@ const isOutbound = computed(() => transfer.value?.sourceFactoryId === factoryId.
 
 async function handleAction(action: string) {
   if (submitting.value) return;
+  // Rule 3: reject / cancel 需先收集原因，走独立 dialog
+  if (action === 'reject' || action === 'cancel') {
+    reasonDialogAction.value = action;
+    reasonSelect.value = '';
+    reasonOtherText.value = '';
+    reasonDialogVisible.value = true;
+    return;
+  }
   const map: Record<string, { label: string; url: string }> = {
     request: { label: '提交申请', url: `/${factoryId.value}/transfers/${transferId.value}/request` },
     approve: { label: '审批通过', url: `/${factoryId.value}/transfers/${transferId.value}/approve` },
-    reject: { label: '驳回', url: `/${factoryId.value}/transfers/${transferId.value}/reject` },
     ship: { label: '确认发运', url: `/${factoryId.value}/transfers/${transferId.value}/ship` },
     receive: { label: '确认签收', url: `/${factoryId.value}/transfers/${transferId.value}/receive` },
     confirm: { label: '确认入库', url: `/${factoryId.value}/transfers/${transferId.value}/confirm` },
-    cancel: { label: '取消', url: `/${factoryId.value}/transfers/${transferId.value}/cancel` },
   };
   const a = map[action];
   if (!a) return;
@@ -106,6 +125,33 @@ async function handleAction(action: string) {
     if (res.success) { ElMessage.success(`${a.label}成功`); loadTransfer(); }
     else { ElMessage.error(res.message || `${a.label}失败，请重试`); }
   } catch (e) { handleCatchError(e, `${a.label}失败，请检查网络`); }
+  finally { submitting.value = false; }
+}
+
+// Rule 3: 提交带原因的 reject / cancel
+async function submitReasonAction() {
+  if (!reasonSelect.value) {
+    ElMessage.warning('请选择原因');
+    return;
+  }
+  if (reasonSelect.value === '_other' && !reasonOtherText.value.trim()) {
+    ElMessage.warning('请填写具体原因');
+    return;
+  }
+  const reason =
+    reasonSelect.value === '_other' ? reasonOtherText.value.trim() : reasonSelect.value;
+  const action = reasonDialogAction.value;
+  const labelMap: Record<string, string> = { reject: '驳回', cancel: '取消' };
+  const actionLabel = labelMap[action] ?? action;
+  // 后端 reject/cancel 用 @RequestParam reason (query 参数), 非 body → 拼进 URL
+  const url = `/${factoryId.value}/transfers/${transferId.value}/${action}?reason=${encodeURIComponent(reason)}`;
+  reasonDialogVisible.value = false;
+  submitting.value = true;
+  try {
+    const res = await post(url, {});
+    if (res.success) { ElMessage.success(`${actionLabel}成功`); loadTransfer(); }
+    else { ElMessage({ message: res.message || `${actionLabel}失败，请重试`, type: 'error', duration: 0, showClose: true }); }
+  } catch (e) { handleCatchError(e, `${actionLabel}失败，请检查网络`); }
   finally { submitting.value = false; }
 }
 
@@ -525,6 +571,56 @@ async function submitDecide() {
     <template #footer>
       <el-button @click="decideDialogVisible = false">取消</el-button>
       <el-button type="primary" :loading="decideSubmitting" @click="submitDecide">确认处理</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- Rule 3: 驳回/取消 原因 dialog -->
+  <el-dialog
+    v-model="reasonDialogVisible"
+    :title="reasonDialogAction === 'reject' ? '驳回调拨单' : '取消调拨单'"
+    width="420px"
+    destroy-on-close
+  >
+    <el-descriptions v-if="transfer" :column="1" size="small" border style="margin-bottom:14px">
+      <el-descriptions-item label="调拨单号">{{ transfer.transferNumber || transfer.id }}</el-descriptions-item>
+      <el-descriptions-item label="状态">{{ statusMap[transfer.status as string]?.text || transfer.status }}</el-descriptions-item>
+    </el-descriptions>
+    <el-form label-width="80px">
+      <el-form-item :label="reasonDialogAction === 'reject' ? '驳回原因' : '取消原因'" required>
+        <el-select
+          v-model="reasonSelect"
+          placeholder="请选择原因"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in TRANSFER_REJECT_REASONS"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="reasonSelect === '_other'" label="具体原因" required>
+        <el-input
+          v-model="reasonOtherText"
+          type="textarea"
+          :rows="2"
+          placeholder="请填写具体原因"
+          maxlength="200"
+          show-word-limit
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="reasonDialogVisible = false">关闭</el-button>
+      <el-button
+        :type="reasonDialogAction === 'reject' ? 'danger' : 'warning'"
+        :loading="submitting"
+        :disabled="!reasonSelect || (reasonSelect === '_other' && !reasonOtherText.trim())"
+        @click="submitReasonAction"
+      >
+        {{ reasonDialogAction === 'reject' ? '确认驳回' : '确认取消' }}
+      </el-button>
     </template>
   </el-dialog>
 </template>

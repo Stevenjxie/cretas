@@ -43,6 +43,18 @@ const notes = ref('');
 const loading = ref(false);
 const submitting = ref(false);
 
+// Rule 3: 驳回原因改 dropdown，与 payment-requests/list.vue 对齐
+const FINANCE_REJECT_REASONS = [
+  { value: '金额超出预算', label: '金额超出预算' },
+  { value: '缺少发票凭证', label: '缺少发票凭证' },
+  { value: '供应商信息不符', label: '供应商信息不符' },
+  { value: '付款条件不符合协议', label: '付款条件不符合协议' },
+  { value: '采购单状态异常', label: '采购单状态异常' },
+  { value: '_other', label: '其他原因' },
+];
+const rejectReasonSelect = ref('');
+const rejectOtherText = ref('');
+
 const alertCount = computed(() =>
   priceComparisons.value.filter((p) => p.priceAlert).length,
 );
@@ -104,13 +116,21 @@ async function handleApprove() {
 }
 
 async function handleReject() {
-  if (!notes.value.trim()) {
-    ElMessage.warning('驳回必须填写备注说明原因');
+  if (!rejectReasonSelect.value) {
+    ElMessage.warning('驳回必须选择原因');
     return;
   }
+  if (rejectReasonSelect.value === '_other' && !rejectOtherText.value.trim()) {
+    ElMessage.warning('请填写具体驳回原因');
+    return;
+  }
+  const rejectNote =
+    rejectReasonSelect.value === '_other'
+      ? rejectOtherText.value.trim()
+      : rejectReasonSelect.value;
   try {
     await ElMessageBox.confirm(
-      `确认驳回采购单 ${order.value?.orderNumber}? 备注: ${notes.value}`,
+      `确认驳回采购单 ${order.value?.orderNumber}?\n驳回原因: ${rejectNote}`,
       '财务驳回',
       { type: 'warning', confirmButtonText: '确认驳回', cancelButtonText: '取消' },
     );
@@ -119,7 +139,7 @@ async function handleReject() {
   }
   submitting.value = true;
   try {
-    const res = await financeReject(factoryId.value, orderId.value, notes.value);
+    const res = await financeReject(factoryId.value, orderId.value, rejectNote);
     if (res.success) {
       ElMessage.success('已驳回, 订单退回采购员');
       router.back();
@@ -243,15 +263,47 @@ onMounted(load);
       <template #header>
         <span class="card-title">审核意见</span>
       </template>
-      <el-input
-        v-model="notes"
-        type="textarea"
-        :rows="3"
-        placeholder="驳回必填, 通过可选"
-        maxlength="500"
-        show-word-limit
-        :disabled="submitting"
-      />
+      <!-- 通过: 可选备注 -->
+      <el-form label-width="90px">
+        <el-form-item label="通过备注">
+          <el-input
+            v-model="notes"
+            type="textarea"
+            :rows="2"
+            placeholder="通过可留空"
+            maxlength="500"
+            show-word-limit
+            :disabled="submitting"
+          />
+        </el-form-item>
+        <!-- Rule 3: 驳回原因改 dropdown -->
+        <el-form-item label="驳回原因" required>
+          <el-select
+            v-model="rejectReasonSelect"
+            placeholder="请选择驳回原因"
+            style="width: 100%"
+            :disabled="submitting"
+          >
+            <el-option
+              v-for="opt in FINANCE_REJECT_REASONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="rejectReasonSelect === '_other'" label="具体原因" required>
+          <el-input
+            v-model="rejectOtherText"
+            type="textarea"
+            :rows="2"
+            placeholder="请填写具体驳回原因"
+            maxlength="200"
+            show-word-limit
+            :disabled="submitting"
+          />
+        </el-form-item>
+      </el-form>
       <div class="action-row">
         <el-button
           plain
