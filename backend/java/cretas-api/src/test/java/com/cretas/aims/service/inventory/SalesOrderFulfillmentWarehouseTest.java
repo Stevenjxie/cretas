@@ -121,7 +121,8 @@ class SalesOrderFulfillmentWarehouseTest {
     @DisplayName("标准: 仅查询 WH-LOG 批次, 用 WH-LOG warehouseId 解析")
     void deduct_queriesWhLogOnly() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        // R6 #6: deduct 路径改用 findShippableBatchesByWarehouse (produced-shipped>0, 不减 reserved)
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
@@ -130,7 +131,7 @@ class SalesOrderFulfillmentWarehouseTest {
         // WH-LOG repository 查询调用 1 次, factory-only 查询 (无 warehouse 过滤) 永远不调用
         verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
         verify(finishedGoodsBatchRepository, times(1))
-                .findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
+                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
         verify(finishedGoodsBatchRepository, never())
                 .findAvailableBatches(anyString(), anyString());
 
@@ -147,7 +148,7 @@ class SalesOrderFulfillmentWarehouseTest {
         FinishedGoodsBatch oldBatch = buildAvailableBatch("B-LOG-OLD", WH_LOG_ID, new BigDecimal("20"));
         FinishedGoodsBatch newBatch = buildAvailableBatch("B-LOG-NEW", WH_LOG_ID, new BigDecimal("40"));
         // Repository returns FEFO ordered (oldest first)
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
                 .thenReturn(List.of(oldBatch, newBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("35"));
@@ -173,7 +174,7 @@ class SalesOrderFulfillmentWarehouseTest {
     @DisplayName("负: 仅 WH-WKS 有库存 → 销售扣减抛 BusinessException (不可用)")
     void deduct_onlyWhWksAvailable_throwsInsufficient() throws Exception {
         // Repository 按 WH-LOG warehouseId 查 → 返空 (WH-WKS 批次被仓库 filter 排除)
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
                 .thenReturn(Collections.emptyList());
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
@@ -227,7 +228,7 @@ class SalesOrderFulfillmentWarehouseTest {
         when(warehouseResolver.resolveId(FACTORY_A, WarehouseCodes.WH_WKS)).thenReturn(WH_WKS_ID);
 
         FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", WH_WKS_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
                 .thenReturn(List.of(wksBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
@@ -238,7 +239,7 @@ class SalesOrderFulfillmentWarehouseTest {
         verify(warehouseResolver, times(1)).resolveId(FACTORY_A, WarehouseCodes.WH_WKS);
         verify(warehouseResolver, never()).resolveLogisticsId(anyString());
         verify(finishedGoodsBatchRepository, times(1))
-                .findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID);
+                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID);
 
         // 扣减 30 / 50
         assertEquals(0, wksBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
@@ -248,7 +249,7 @@ class SalesOrderFulfillmentWarehouseTest {
     @DisplayName("T4-D5 #572: sourceWarehouseCode=null (legacy) → 回落 WH-LOG, 行为与 D5 一致")
     void deduct_nullSourceWarehouseCode_fallsBackToWhLog() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
@@ -259,7 +260,7 @@ class SalesOrderFulfillmentWarehouseTest {
         verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
         verify(finishedGoodsBatchRepository, times(1))
-                .findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
+                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
 
         assertEquals(0, whLogBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
     }
@@ -268,7 +269,7 @@ class SalesOrderFulfillmentWarehouseTest {
     @DisplayName("T4-D5 #572: sourceWarehouseCode=空字符串 → 也走 fallback (blank-safe)")
     void deduct_blankSourceWarehouseCode_fallsBackToWhLog() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
@@ -284,7 +285,7 @@ class SalesOrderFulfillmentWarehouseTest {
     void deduct_insufficientStock_errorMessageIncludesWarehouse() throws Exception {
         final String WH_WKS_ID = "wh-wks-f001";
         when(warehouseResolver.resolveId(FACTORY_A, WarehouseCodes.WH_WKS)).thenReturn(WH_WKS_ID);
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
                 .thenReturn(Collections.emptyList());
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
@@ -344,6 +345,70 @@ class SalesOrderFulfillmentWarehouseTest {
 
         verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+    }
+
+    // ============================================================
+    // R6 #6: 发货释放预留 reservedQuantity (避免 available 双扣低估)
+    // ============================================================
+
+    @Test
+    @DisplayName("R6 #6: 部分预留批次发货 → shipped 增 + reserved 释放对应量, available 不双扣")
+    void deduct_releasesReservedOnShip() throws Exception {
+        // produced=100, reserved=50 (本 SO 预留), available=50. 发货 50。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-RSV", WH_LOG_ID, new BigDecimal("100"));
+        batch.setReservedQuantity(new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);
+
+        // Pass 1 先扣 available(50) — shipped=50. 不动 reserved (扣的是未预留部分)。
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        // 修复后 available = 100 - 50 - 50 = 0 (仍正确: 这 50 是预留给别的/还没发)。
+        // 关键: reserved 没被"发货+预留"双占。本场景 Pass1 已满足, reserved 不变 (=50)。
+        assertEquals(0, batch.getReservedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
+    }
+
+    @Test
+    @DisplayName("R6 #6: 批次被预留耗尽 (available=0) 仍可发货 — 动用预留物理库存并释放")
+    void deduct_fullyReservedBatch_shipsAndReleasesReserved() throws Exception {
+        // produced=50, reserved=50, available=0. 本 SO 预留了全部 50, 现在发货 50。
+        // 旧逻辑: available=0 → 报"库存不足"无法发货 (幻影预留 bug)。
+        // 新逻辑: findShippableBatchesByWarehouse 返回该批 (produced-shipped=50>0), Pass2 动用预留发货。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-FULLRSV", WH_LOG_ID, new BigDecimal("50"));
+        batch.setReservedQuantity(new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);  // 不应抛"库存不足"
+
+        // shipped=50, reserved 释放 50 → reserved=0, available=50-50-0=0
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getReservedQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals("DEPLETED", batch.getStatus());  // produced - shipped = 0 → depleted
+    }
+
+    @Test
+    @DisplayName("R6 #6: 发超过 available 但有预留 → 先扣 available 再动用预留, 释放对应预留量")
+    void deduct_partlyFromAvailableThenReserved() throws Exception {
+        // produced=100, reserved=70, available=30. 发货 50 (> available 30)。
+        // Pass1 扣 available 30; Pass2 从预留再发 20, 释放预留 20。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-MIX", WH_LOG_ID, new BigDecimal("100"));
+        batch.setReservedQuantity(new BigDecimal("70"));
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);
+
+        // shipped=50, reserved=70-20=50, available=100-50-50=0
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getReservedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
     }
 
     @Test

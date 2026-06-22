@@ -566,11 +566,18 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
       const deliveredQuantity = Number(it.deliveredQuantity || 0);
       const productName = (it.productName as string) || ((it.productType as TableRow)?.name as string) || '未命名产品';
       const deliveryItemId = it.id as string;
+      // R6 #7: 传该行的 sourceWarehouseCode 给 recommend-fifo, 使预填的 FEFO 推荐与
+      // 后端 commit/deduct 用同一仓库 (后端 recommendFifo 已 honor 该参数; 不传则 default WH-LOG,
+      // 与按行仓库发货的批次会对不上)。空值省略, 走后端默认。
+      const sourceWarehouseCode = (it.sourceWarehouseCode as string) || '';
 
       let allocations: AllocRow[] = [];
       if (productTypeId && deliveredQuantity > 0) {
+        const swcParam = sourceWarehouseCode
+          ? `&sourceWarehouseCode=${encodeURIComponent(sourceWarehouseCode)}`
+          : '';
         const recRes = await get<Array<TableRow>>(
-          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}`
+          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}${swcParam}`
         );
         if (recRes.success && Array.isArray(recRes.data)) {
           allocations = recRes.data.map(r => ({
