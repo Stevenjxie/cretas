@@ -139,6 +139,7 @@
           <el-select v-model="dialogForm.productTypeId" filterable placeholder="选择菜品" style="width: 100%">
             <el-option v-for="pt in productTypes" :key="pt.id" :label="pt.name" :value="pt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="productTypes.length === 0" description="本店暂无菜品，无法领料" target-module="system" require-write action-text="去创建菜品" contact-text="请联系管理员先创建菜品" @action="goCreate('/system/products')" />
         </el-form-item>
         <el-form-item v-if="dialogForm.type === 'PRODUCTION'" label="制作份数">
           <el-input-number v-model="dialogForm.dishQuantity" :min="1" />
@@ -162,6 +163,7 @@
           <el-select v-else v-model="dialogForm.rawMaterialTypeId" filterable placeholder="选择食材" style="width: 100%">
             <el-option v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="materialTypes.length === 0" description="本店暂无食材，无法领料" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库或管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
         </el-form-item>
         <el-form-item label="申请数量" prop="requestedQuantity">
           <el-input-number v-model="dialogForm.requestedQuantity" :precision="4" :step="0.5" :min="0" />
@@ -212,10 +214,13 @@ import type { RequisitionItem } from '@/types/restaurant';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import { handleCatchError } from '@/utils/errorToast';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const factoryId = useFactoryId();
 const permissionStore = usePermissionStore();
 const canWrite = computed(() => permissionStore.canWrite('restaurant'));
+const { goCreate } = useCreateAndReturn();
 
 const productTypes = ref<{ id: string; name: string }[]>([]);
 const materialTypes = ref<{ id: string; name: string }[]>([]);

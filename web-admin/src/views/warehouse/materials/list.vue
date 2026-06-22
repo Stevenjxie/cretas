@@ -8,10 +8,12 @@ import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer
 import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Plus, Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -19,6 +21,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -516,11 +519,13 @@ async function handleGenerateLabel(row: TableRow) {
           <el-select v-model="formData.materialTypeId" placeholder="选择原料类型" filterable style="width: 100%">
             <el-option v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="materialTypes.length === 0" description="本工厂暂无物料类型" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
         </el-form-item>
         <el-form-item label="供应商" prop="supplierId">
           <el-select v-model="formData.supplierId" placeholder="选择供应商" filterable style="width: 100%">
             <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
+          <UpstreamMissingHint v-if="suppliers.length === 0" description="本工厂暂无供应商" target-module="procurement" require-write action-text="去创建供应商" contact-text="请联系采购或管理员先创建供应商" @action="goCreate('/procurement/suppliers')" />
         </el-form-item>
         <el-form-item label="数量" prop="receiptQuantity">
           <el-input-number v-model="formData.receiptQuantity" :min="0" :precision="1" style="width: 100%" />

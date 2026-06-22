@@ -9,11 +9,13 @@ import { ElMessage } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import type { TableRow } from '@/types/api';
 import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -22,6 +24,7 @@ const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -463,6 +466,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-form-item>
 
         <el-divider content-position="left">调拨物料</el-divider>
+        <UpstreamMissingHint v-if="materialOptions.length === 0" description="本工厂暂无物料，无法调拨" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
         <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
           <el-table-column label="类型" width="140">
