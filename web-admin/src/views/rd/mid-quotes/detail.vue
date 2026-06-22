@@ -120,11 +120,13 @@ onMounted(loadTrialBatches);
               <el-option
                 v-for="b in trialBatches"
                 :key="b.id"
-                :label="`${b.batchNumber || b.id} (${b.productName || '未知产品'})`"
+                :label="`${b.batchNumber || b.id} · ${b.productName || '未知产品'}${b.status ? ' [' + b.status + ']' : ''}`"
                 :value="b.id"
               />
             </el-select>
-            <el-text type="info" style="margin-left:8px;font-size:12px">仅显示 is_trial=true 的批次</el-text>
+            <el-text type="info" style="margin-left:8px;font-size:12px">
+              仅显示 is_trial=true 的批次；任务 {{ taskId }}
+            </el-text>
           </el-form-item>
           <el-form-item label="材料成本/kg (手填)">
             <el-input-number v-model="calcForm.materialCostPerKg" :min="0" :precision="4" style="width:200px" />

@@ -262,12 +262,39 @@ onMounted(async () => {
           <template #default="{ row }">{{ fmt(row.actualLaborCostPerBox) }}</template>
         </el-table-column>
 
-        <!-- 偏差率 + 状态 -->
-        <el-table-column label="偏差率" align="right" min-width="110">
+        <!-- 偏差率 + 状态 (Rule 5: 无报价时引导配置) -->
+        <el-table-column align="right" min-width="150">
+          <template #header>
+            <span>偏差率</span>
+            <el-tooltip
+              content="偏差率需先在「研发样品管理」为该批次配置预估人工成本"
+              placement="top"
+            >
+              <el-button
+                link
+                type="primary"
+                size="small"
+                style="margin-left:4px;font-size:11px"
+                @click="router.push('/rd/samples')"
+              >
+                去配置
+              </el-button>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
-            <span :class="varianceRateClass(row.varianceRate, row.varianceStatus)">
+            <span v-if="row.varianceRate != null" :class="varianceRateClass(row.varianceRate, row.varianceStatus)">
               {{ fmtPct(row.varianceRate) }}
             </span>
+            <!-- Rule 5: dead-end → 导航 -->
+            <el-button
+              v-else
+              link
+              type="info"
+              size="small"
+              @click="router.push('/rd/samples')"
+            >
+              未设标准 →
+            </el-button>
           </template>
         </el-table-column>
         <el-table-column label="状态" align="center" min-width="100">

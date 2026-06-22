@@ -30,6 +30,45 @@ import {
   type BomVersionStatus,
   type BatchResult,
 } from '@/api/bomVersion';
+import { bomRecipeApi, type BomRecipeSummary } from '@/api/bom';
+import { get } from '@/api/request';
+
+// Rule 3: material type + BOM recipe options for UUID inputs → el-select
+interface MaterialTypeOption { id: string; name: string; code?: string | null }
+interface BomRecipeOption { id: string; label: string }
+
+const materialTypeOptions = ref<MaterialTypeOption[]>([]);
+const bomRecipeOptions = ref<BomRecipeOption[]>([]);
+const materialOptionsLoading = ref(false);
+const recipeOptionsLoading = ref(false);
+
+async function loadMaterialTypeOptions() {
+  if (!factoryId.value || materialTypeOptions.value.length > 0) return;
+  materialOptionsLoading.value = true;
+  try {
+    const res = await get<{ content: MaterialTypeOption[] }>(`/${factoryId.value}/raw-material-types`, { params: { size: 300 } });
+    if (res.success && res.data) {
+      materialTypeOptions.value = (res.data.content ?? (res.data as unknown as MaterialTypeOption[]));
+    }
+  } catch { /* optional, inputs remain as text fallback */ }
+  finally { materialOptionsLoading.value = false; }
+}
+
+async function loadBomRecipeOptions() {
+  if (!factoryId.value || bomRecipeOptions.value.length > 0) return;
+  recipeOptionsLoading.value = true;
+  try {
+    const res = await bomRecipeApi.listRecipes(factoryId.value, { size: 200 });
+    if (res.success && res.data) {
+      const rows: BomRecipeSummary[] = res.data.content ?? [];
+      bomRecipeOptions.value = rows.map((r) => ({
+        id: r.id,
+        label: `${r.productName || r.recipeCode} (${r.recipeCode})`,
+      }));
+    }
+  } catch { /* optional */ }
+  finally { recipeOptionsLoading.value = false; }
+}
 
 /** Sprint 6 W4-C — 防呆 Rule 3 reason dropdown (5 标准 + "其他"). */
 const ECN_REASON_OPTIONS: Array<{ value: BomBatchEcnReason; label: string }> = [
@@ -156,29 +195,8 @@ async function handleApprove(row: BomVersion) {
 }
 
 async function handleReject(row: BomVersion) {
-  if (!factoryId.value || !userId.value) return;
-  // Rule 3 fool-proof: 拒绝原因目前用 prompt 暂时方案, Sprint 6 改 dropdown + textarea
-  const reason = await ElMessageBox.prompt(
-    `拒绝版本 ${row.versionNumber}, 请输入原因:`,
-    '拒绝审批',
-    {
-      confirmButtonText: '拒绝',
-      cancelButtonText: '取消',
-      inputValidator: (v) => (v && v.trim().length > 0) || '原因不能为空',
-    },
-  ).catch(() => null);
-  if (!reason) return;
-  try {
-    await bomVersionApi.reject(factoryId.value, row.id, {
-      approverId: userId.value,
-      rejectionReason: reason.value,
-    });
-    ElMessage.success('已拒绝');
-    loadHistory();
-  } catch (e) {
-    const err = e as { actionHint?: string; status?: number } | undefined;
-    if (!err?.actionHint) ElMessage.error('操作失败');
-  }
+  // Rule 3: 改为 el-select dropdown dialog (Sprint 6)
+  openRejectDialog(row);
 }
 
 async function handleCreateDraft() {
@@ -232,6 +250,42 @@ const batchDialogType = ref<BatchType>(null);
 const batchSubmitLoading = ref(false);
 const batchResultDialog = ref<BatchResult | null>(null);
 
+// Rule 3: handleReject 原因 dialog state
+const rejectDialogVisible = ref(false);
+const rejectingRow = ref<BomVersion | null>(null);
+const rejectReasonSelect = ref<BomBatchEcnReason | ''>('');
+const rejectOtherText = ref('');
+
+async function openRejectDialog(row: BomVersion) {
+  if (!factoryId.value || !userId.value) return;
+  rejectingRow.value = row;
+  rejectReasonSelect.value = '';
+  rejectOtherText.value = '';
+  rejectDialogVisible.value = true;
+}
+
+async function submitReject() {
+  if (!rejectReasonSelect.value) {
+    ElMessage.warning('请选择拒绝原因');
+    return;
+  }
+  const row = rejectingRow.value;
+  if (!row || !factoryId.value || !userId.value) return;
+  rejectDialogVisible.value = false;
+  try {
+    await bomVersionApi.reject(factoryId.value, row.id, {
+      approverId: userId.value,
+      rejectionReason: rejectReasonSelect.value,
+      ecnReasonDetail: rejectOtherText.value.trim() || undefined,
+    });
+    ElMessage.success('已拒绝');
+    loadHistory();
+  } catch (e) {
+    const err = e as { actionHint?: string; status?: number } | undefined;
+    if (!err?.actionHint) ElMessage.error('操作失败');
+  }
+}
+
 /** Batch form. 全 mode 共用 — 不同 type 不同字段 enabled. */
 const batchForm = ref({
   materialId: '',
@@ -265,6 +319,9 @@ function openBatchDialog(type: Exclude<BatchType, null>) {
     ElMessage.warning('请先选中至少一行 BomVersion (对应 N 个 BomRecipe)');
     return;
   }
+  // Rule 3: 懒加载下拉选项
+  loadMaterialTypeOptions();
+  if (type === 'REPLACE') loadBomRecipeOptions(); // inputBomRecipeId uses BOM recipes
   // Reset form
   batchForm.value = {
     materialId: '',
@@ -393,13 +450,24 @@ async function submitBatch() {
       </template>
 
       <el-form inline @submit.prevent="loadHistory">
-        <el-form-item label="BOM Recipe ID">
-          <el-input
+        <el-form-item label="BOM Recipe">
+          <!-- Rule 3: UUID → el-select by product name + recipeCode (lazily loaded) -->
+          <el-select
             v-model="inputBomRecipeId"
-            placeholder="UUID 或自定义 ID"
+            filterable
             clearable
+            :loading="recipeOptionsLoading"
+            placeholder="按产品名/配方编码搜索"
             style="width: 320px"
-          />
+            @focus="loadBomRecipeOptions"
+          >
+            <el-option
+              v-for="r in bomRecipeOptions"
+              :key="r.id"
+              :label="r.label"
+              :value="r.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Refresh" @click="loadHistory">
@@ -596,8 +664,22 @@ async function submitBatch() {
       <el-form :model="batchForm" label-width="140px">
         <!-- MODIFY: materialId + newStandardQuantity + newUnit -->
         <template v-if="batchDialogType === 'MODIFY'">
-          <el-form-item label="物料 ID" required>
-            <el-input v-model="batchForm.materialId" placeholder="目标物料 UUID" />
+          <!-- Rule 3: UUID → el-select by material name -->
+          <el-form-item label="目标物料" required>
+            <el-select
+              v-model="batchForm.materialId"
+              filterable
+              :loading="materialOptionsLoading"
+              placeholder="按名称搜索物料"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="m in materialTypeOptions"
+                :key="m.id"
+                :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                :value="m.id"
+              />
+            </el-select>
           </el-form-item>
           <el-form-item label="新数量 (per 单位)" required>
             <el-input-number v-model="batchForm.newStandardQuantity" :min="0" :precision="4" />
@@ -609,11 +691,38 @@ async function submitBatch() {
 
         <!-- REPLACE: oldMaterialId + newMaterialId + preserveQuantity -->
         <template v-else-if="batchDialogType === 'REPLACE'">
-          <el-form-item label="旧物料 ID" required>
-            <el-input v-model="batchForm.oldMaterialId" placeholder="将被替换的物料 UUID" />
+          <!-- Rule 3: UUID → el-select -->
+          <el-form-item label="旧物料" required>
+            <el-select
+              v-model="batchForm.oldMaterialId"
+              filterable
+              :loading="materialOptionsLoading"
+              placeholder="按名称搜索被替换物料"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="m in materialTypeOptions"
+                :key="m.id"
+                :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                :value="m.id"
+              />
+            </el-select>
           </el-form-item>
-          <el-form-item label="新物料 ID" required>
-            <el-input v-model="batchForm.newMaterialId" placeholder="替换后物料 UUID" />
+          <el-form-item label="新物料" required>
+            <el-select
+              v-model="batchForm.newMaterialId"
+              filterable
+              :loading="materialOptionsLoading"
+              placeholder="按名称搜索替换后物料"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="m in materialTypeOptions"
+                :key="m.id"
+                :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                :value="m.id"
+              />
+            </el-select>
           </el-form-item>
           <el-form-item label="保留原数量/单位">
             <el-switch v-model="batchForm.preserveQuantity" />
@@ -623,8 +732,22 @@ async function submitBatch() {
 
         <!-- DELETE: materialId -->
         <template v-else-if="batchDialogType === 'DELETE'">
-          <el-form-item label="物料 ID" required>
-            <el-input v-model="batchForm.materialId" placeholder="将被删除的物料 UUID" />
+          <!-- Rule 3: UUID → el-select -->
+          <el-form-item label="将删除的物料" required>
+            <el-select
+              v-model="batchForm.materialId"
+              filterable
+              :loading="materialOptionsLoading"
+              placeholder="按名称搜索物料"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="m in materialTypeOptions"
+                :key="m.id"
+                :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                :value="m.id"
+              />
+            </el-select>
           </el-form-item>
           <el-alert
             type="warning"
@@ -635,8 +758,22 @@ async function submitBatch() {
 
         <!-- ADD: materialId + standardQuantity + yieldRate + unit + materialCategory + skipIfAlreadyPresent -->
         <template v-else-if="batchDialogType === 'ADD'">
-          <el-form-item label="物料 ID" required>
-            <el-input v-model="batchForm.materialId" placeholder="将新增的物料 UUID" />
+          <!-- Rule 3: UUID → el-select -->
+          <el-form-item label="将新增的物料" required>
+            <el-select
+              v-model="batchForm.materialId"
+              filterable
+              :loading="materialOptionsLoading"
+              placeholder="按名称搜索物料"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="m in materialTypeOptions"
+                :key="m.id"
+                :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                :value="m.id"
+              />
+            </el-select>
           </el-form-item>
           <el-form-item label="数量 (per 单位)" required>
             <el-input-number v-model="batchForm.standardQuantity" :min="0" :precision="4" />
@@ -739,6 +876,51 @@ async function submitBatch() {
       </div>
       <template #footer>
         <el-button @click="batchResultDialog = null">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Rule 3: 拒绝审批原因 dialog (Sprint 6 升级: prompt → dropdown) -->
+    <el-dialog
+      v-model="rejectDialogVisible"
+      :title="`拒绝版本 ${rejectingRow?.versionNumber || ''} — 请选择原因`"
+      width="420px"
+      destroy-on-close
+    >
+      <el-form label-width="90px">
+        <el-form-item label="拒绝原因" required>
+          <el-select
+            v-model="rejectReasonSelect"
+            placeholder="请选择拒绝原因"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in ECN_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="补充说明">
+          <el-input
+            v-model="rejectOtherText"
+            type="textarea"
+            :rows="2"
+            placeholder="可选：填写具体说明"
+            maxlength="200"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="rejectDialogVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :disabled="!rejectReasonSelect"
+          @click="submitReject"
+        >
+          确认拒绝
+        </el-button>
       </template>
     </el-dialog>
   </div>
