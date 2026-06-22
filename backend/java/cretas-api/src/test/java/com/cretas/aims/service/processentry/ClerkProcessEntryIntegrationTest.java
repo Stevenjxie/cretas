@@ -264,6 +264,35 @@ class ClerkProcessEntryIntegrationTest {
         assertThat(dto.getRawMaterialCost())
                 .as("raw 桶不应包含调料成本 (raw < raw+seasoning)")
                 .isLessThan(rawPlusSeasoning);
+
+        // ── Per-source assertion (dto.sources 有 SourceCost.cost 字段) ──
+        // sources = [焯水A WIP (traced ¥7170), 焯水B WIP (traced ¥3740)]
+        // cost-share: 焯水A ≈ 65.7%, 焯水B ≈ 34.3%
+        assertThat(dto.getSources())
+                .as("sources 列表应有 2 条上游来源 (焯水A + 焯水B)")
+                .isNotNull()
+                .hasSize(2);
+        // Sort by cost descending for stable assertion order
+        List<OrderCostBreakdownDTO.SourceCost> sortedSources = dto.getSources().stream()
+                .sorted((a, b) -> b.getCost().compareTo(a.getCost()))
+                .toList();
+        assertThat(sortedSources.get(0).getCost())
+                .as("最大上游来源 (焯水A) traced 成本应 = ¥7170 (100kg × ¥71.70)")
+                .isNotNull()
+                .isEqualByComparingTo(new BigDecimal("7170.00"));
+        assertThat(sortedSources.get(1).getCost())
+                .as("第二上游来源 (焯水B) traced 成本应 = ¥3740 (22kg × ¥170)")
+                .isNotNull()
+                .isEqualByComparingTo(new BigDecimal("3740.00"));
+        // Cost-share percentages: 7170/10910 ≈ 65.7%, 3740/10910 ≈ 34.3%
+        assertThat(sortedSources.get(0).getCostSharePct())
+                .as("焯水A 成本占比 ≈ 65.7%")
+                .isNotNull()
+                .isBetween(new BigDecimal("65.0"), new BigDecimal("66.5"));
+        assertThat(sortedSources.get(1).getCostSharePct())
+                .as("焯水B 成本占比 ≈ 34.3%")
+                .isNotNull()
+                .isBetween(new BigDecimal("33.5"), new BigDecimal("35.0"));
     }
 
     /**

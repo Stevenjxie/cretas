@@ -68,6 +68,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
+    // TODO(SP-C): 替换为 factory_cost_settings 工时单价查询
     // ¥26/工时 兜底 (SP-C 接 factory_cost_settings 后可精化)
     private static final BigDecimal LABOR_RATE_DEFAULT = new BigDecimal("26");
 
@@ -89,6 +90,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @Transactional
     public ProcessChainEntryResult recordChain(String factoryId, String planId,
                                                ProcessChainEntryRequest req, Long operatorId) {
+        if (planId == null || planId.isBlank()) throw new BusinessException(400, "planId 必填");
         if (operatorId == null) {
             throw new BusinessException(401, "未登录，无法录入报工 (operatorId 为 null)");
         }
@@ -236,18 +238,25 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 ? be.getBatchNumber()
                 : generateBatchNumber(factoryId, be.isFinished());
 
-        // Ensure uniqueness
+        // Ensure uniqueness; DB UNIQUE(batch_number) 兜底并发
         if (batchRepo.existsByFactoryIdAndBatchNumber(factoryId, batchNumber)) {
             batchNumber = batchNumber + "-" + (System.currentTimeMillis() % 10000);
         }
 
         // Determine planned / actual quantity from last step output
-        BigDecimal qty = be.getSteps() == null ? BigDecimal.ONE
+        Optional<BigDecimal> lastOutputOpt = be.getSteps() == null ? Optional.empty()
                 : be.getSteps().stream()
                 .filter(s -> s.getOutputQuantity() != null && s.getOutputQuantity().signum() > 0)
                 .reduce((a, b) -> b)  // last step
-                .map(StepEntry::getOutputQuantity)
-                .orElse(BigDecimal.ONE);
+                .map(StepEntry::getOutputQuantity);
+        BigDecimal qty;
+        if (be.isFinished()) {
+            // For FINISHED batches, missing output quantity is an error — not a silent fallback
+            qty = lastOutputOpt.orElseThrow(() ->
+                    new BusinessException(400, "成品批次无有效产出数量, 无法核算单盒成本"));
+        } else {
+            qty = lastOutputOpt.orElse(BigDecimal.ONE);
+        }
 
         ProductionBatch batch = new ProductionBatch();
         batch.setFactoryId(factoryId);
@@ -258,7 +267,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         batch.setProductTypeId(be.getProductTypeId());
         batch.setBatchNumber(batchNumber);
         batch.setQuantity(qty);
-        batch.setUnit("kg");
+        batch.setUnit(be.getSteps() == null ? "kg"
+                : be.getSteps().stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
         batch.setCreatedAt(LocalDateTime.now());
 
@@ -340,6 +350,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * OrderCostBreakdownService.compute() 经 yieldReportService.getYield → steps[i].materialCost
      * 路径读取，resolveCostBucket 对 costCategory=SEASONING 返回 "SEASONING" 桶。
      */
+    // getYield() 按 batchId 聚合, 不过滤 workProcessTaskId, 故无 task 的调料报工可见 (T1 验证)
     private void writeSeasoningReport(String factoryId, Long productionBatchId,
                                        StepEntry st, BigDecimal seasoningCost, Long operatorId) {
         ProductionReport report = new ProductionReport();
@@ -362,7 +373,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
 
     private boolean isSeasoningStep(StepEntry st) {
-        return "SEASONING".equals(st.getProcessCategory()) || st.getPotCount() != null;
+        return "SEASONING".equals(st.getProcessCategory()) ||
+               (st.getProcessCategory() == null && st.getPotCount() != null);
     }
 
     private BigDecimal computeSeasoningCost(String factoryId, String productTypeId,
@@ -420,6 +432,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             if (endMin < startMin) endMin += 24 * 60;
             return endMin - startMin;
         } catch (Exception ex) {
+            log.warn("无法解析人工时间段: start={}, end={}", hhmmStart, hhmmEnd);
             return 0;
         }
     }
@@ -437,11 +450,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         return warehouseRepo.findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, code)
                 .map(w -> w.getId())
                 .orElseGet(() -> {
-                    // Fallback: any warehouse
-                    return warehouseRepo.findAll().stream()
-                            .filter(w -> factoryId.equals(w.getFactoryId())
-                                    && w.getDeletedAt() == null)
-                            .findFirst()
+                    // Fallback: any warehouse in this factory (factory-scoped, no cross-tenant scan)
+                    return warehouseRepo.findFirstByFactoryIdAndDeletedAtIsNull(factoryId)
                             .map(w -> {
                                 warnings.add("工厂 " + factoryId + " 无 " + code + " 仓库，使用第一个可用仓库");
                                 return w.getId();
