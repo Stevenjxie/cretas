@@ -10,8 +10,10 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import com.cretas.aims.entity.enums.ReportMode;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.recipe.ProductRecipe;
 import com.cretas.aims.entity.recipe.RecipeIngredient;
@@ -20,6 +22,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
@@ -75,6 +78,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final FactoryWarehouseRepository warehouseRepo;
     private final ProductRecipeRepository recipeRepo;
     private final RecipeIngredientRepository ingredientRepo;
+    private final ProductionReportRepository reportRepo;
     private final ObjectMapper objectMapper;
 
     // ─────────────────────────────────────────────────────────────
@@ -168,17 +172,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 }
 
                 // 4c. 调料成本 (熟制道，使用 RecipeCostCalculator)
+                // 写 ProductionReport 行 (costCategory=SEASONING)，让 OrderCostBreakdownService
+                // 通过 yieldReportService.getYield → steps[i].materialCost 读取。
+                // 禁止写 SEASONING_VIRTUAL MaterialConsumption：traceCost() 只递归真实 MaterialBatch，
+                // 虚拟占位符会误入 raw 成本桶导致分桶错乱。
                 if (isSeasoningStep(st)) {
                     BigDecimal seasoningCost = computeSeasoningCost(factoryId, be.getProductTypeId(), st, warnings);
                     if (seasoningCost.signum() > 0) {
-                        // 调料无具体 MaterialBatch；用工厂层级虚拟批次 ID 占位
-                        // batchId NOT NULL → 使用 "SEASONING_VIRTUAL" 占位符
-                        writeConsumption(factoryId, planId, batch.getId(),
-                                "SEASONING_VIRTUAL", null,
-                                nz(st.getInputQuantity()), BigDecimal.ZERO,
-                                seasoningCost, "SEASONING", operatorId);
+                        writeSeasoningReport(factoryId, batch.getId(), st, seasoningCost, operatorId);
                         batchTotalCost = batchTotalCost.add(seasoningCost);
-                        consumptionsWritten++;
                     }
                 }
 
@@ -249,7 +251,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         ProductionBatch batch = new ProductionBatch();
         batch.setFactoryId(factoryId);
-        batch.setProductionPlanId(planId);  // nullable — OK
+        // Only link FINISHED batches to the plan so OrderCostBreakdownService.compute()
+        // doesn't double-count WIP batch raw costs (WIP costs are already traced via
+        // traceCost() when the finished batch's consumption is followed upstream).
+        batch.setProductionPlanId(be.isFinished() ? planId : null);
         batch.setProductTypeId(be.getProductTypeId());
         batch.setBatchNumber(batchNumber);
         batch.setQuantity(qty);
@@ -324,6 +329,32 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         c.setConsumedAt(LocalDateTime.now());
         c.setRecordedBy(operatorId);
         consumptionRepo.save(c);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Seasoning ProductionReport write
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 将调料成本写入 ProductionReport (costCategory=SEASONING)。
+     * OrderCostBreakdownService.compute() 经 yieldReportService.getYield → steps[i].materialCost
+     * 路径读取，resolveCostBucket 对 costCategory=SEASONING 返回 "SEASONING" 桶。
+     */
+    private void writeSeasoningReport(String factoryId, Long productionBatchId,
+                                       StepEntry st, BigDecimal seasoningCost, Long operatorId) {
+        ProductionReport report = new ProductionReport();
+        report.setFactoryId(factoryId);
+        report.setBatchId(productionBatchId);
+        report.setWorkerId(operatorId);
+        report.setReportType("YIELD");
+        report.setReportMode(ReportMode.MODE_1);
+        report.setReportDate(LocalDate.now());
+        report.setCostCategory("SEASONING");
+        report.setMaterialCost(seasoningCost);
+        report.setProcessOrder(st.getProcessOrder());
+        report.setOutputQuantity(st.getOutputQuantity());
+        report.setInputQuantity(st.getInputQuantity());
+        reportRepo.save(report);
     }
 
     // ─────────────────────────────────────────────────────────────
