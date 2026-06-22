@@ -48,7 +48,9 @@ onMounted(() => {
 });
 
 // Apr 21 2026: load confirmed sales orders for dropdown in 录入收款 dialog
-interface SalesOrderOption { id: string; orderNumber: string; customerName: string; totalAmount?: number }
+// E-FP-3 (fool-proof Rule 1): SalesOrder 实体已序列化 paidAmount (entity line 223),
+// 故 dialog 可计算 + 显示 "可收余额" 并 gate input :max — 纯前端, 无需后端改动.
+interface SalesOrderOption { id: string; orderNumber: string; customerName: string; totalAmount?: number; paidAmount?: number }
 const salesOrderOptions = ref<SalesOrderOption[]>([]);
 async function loadSalesOrderOptions() {
   if (!factoryId.value) return;
@@ -133,9 +135,33 @@ const recordForm = ref({
 });
 const submitting = ref(false);
 
+// E-FP-3 (fool-proof Rule 1): 选定 SO 后计算未收金额, gate input :max + el-alert 显示
+// "订单总额 / 已收 / 可收" 上下文 (仿 invoices/list.vue 开票防呆).
+const selectedSO = computed<SalesOrderOption | null>(() =>
+  salesOrderOptions.value.find(o => o.id === recordForm.value.salesOrderId) || null
+);
+const remainingAmount = computed<number>(() => {
+  if (!selectedSO.value) return 0;
+  const total = Number(selectedSO.value.totalAmount || 0);
+  const paid = Number(selectedSO.value.paidAmount || 0);
+  return Math.max(0, total - paid);
+});
+const recordOverLimit = computed<boolean>(() =>
+  Number(recordForm.value.amount || 0) > remainingAmount.value + 0.001
+);
+// 选 SO → 预填收款金额为可收余额 (用户可改). 仅当当前金额为 0 时预填, 不覆盖用户已输.
+function onSalesOrderSelect() {
+  if (!recordForm.value.amount || recordForm.value.amount === 0) {
+    recordForm.value.amount = remainingAmount.value;
+  }
+}
+
 async function handleRecordSubmit() {
   if (!recordForm.value.salesOrderId || !recordForm.value.amount) {
     ElMessage.warning('请填写订单ID和收款金额'); return;
+  }
+  if (recordOverLimit.value) {
+    ElMessage.warning(`收款金额超过可收余额 ¥${remainingAmount.value.toFixed(2)}, 请调低`); return;
   }
   submitting.value = true;
   try {
@@ -237,8 +263,15 @@ async function handleRecordSubmit() {
       />
     </el-card>
 
-    <!-- 录入收款弹窗 -->
-    <el-dialog v-model="recordDialogVisible" title="录入收款" width="480px" destroy-on-close>
+    <!-- 录入收款弹窗 (E-FP-3 防呆 R1 retrofit) -->
+    <el-dialog
+      v-model="recordDialogVisible"
+      :title="selectedSO
+        ? `录入收款 — ${selectedSO.customerName || '客户未知'} (${selectedSO.orderNumber})`
+        : '录入收款'"
+      width="480px"
+      destroy-on-close
+    >
       <el-form label-width="90px">
         <el-form-item label="销售订单" required>
           <el-select
@@ -246,6 +279,7 @@ async function handleRecordSubmit() {
             placeholder="选择已确认的销售订单"
             filterable
             style="width:100%"
+            @change="onSalesOrderSelect"
           >
             <el-option
               v-for="o in salesOrderOptions"
@@ -258,12 +292,35 @@ async function handleRecordSubmit() {
             </template>
           </el-select>
         </el-form-item>
-        <!-- E-FP-3 Rule1 DEFERRED: `:max` 需要后端在 SO 列表中暴露 paidAmount/remainingAmount 字段。
-             当前 SalesOrderOption 只有 { id, orderNumber, customerName, totalAmount }，无已收/可收余额。
-             实现路径: 后端 SalesController.listOrders 补充 paidAmount 字段 → 前端 :max=totalAmount-paidAmount
-             + el-alert 显示"订单总额/已收/可收"上下文 (参考 invoices/list.vue 含税开票上限防呆)。 -->
+        <!-- E-FP-3 (fool-proof Rule 1): 显式列出 订单总额 / 已收 / 可收 + input :max.
+             paidAmount 由 SalesOrder 实体直接序列化 (entity line 223), 纯前端实现. -->
+        <el-alert
+          v-if="canViewPrice && selectedSO"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom:12px"
+        >
+          <template #title>
+            订单总额 <b>¥{{ Number(selectedSO.totalAmount || 0).toFixed(2) }}</b>
+            · 已收 <b>¥{{ Number(selectedSO.paidAmount || 0).toFixed(2) }}</b>
+            · <span :style="{ color: remainingAmount > 0 ? '#67c23a' : '#f56c6c' }">可收 <b>¥{{ remainingAmount.toFixed(2) }}</b></span>
+          </template>
+          <template v-if="remainingAmount === 0" #default>
+            该订单已全额收款, 无需再次录入
+          </template>
+        </el-alert>
         <el-form-item v-if="canViewPrice" label="收款金额" required>
-          <el-input-number v-model="recordForm.amount" :min="0" :precision="2" style="width:100%" />
+          <el-input-number
+            v-model="recordForm.amount"
+            :min="0"
+            :max="selectedSO && remainingAmount > 0 ? remainingAmount : undefined"
+            :precision="2"
+            style="width:100%"
+          />
+          <span v-if="recordOverLimit" style="color:#f56c6c;margin-left:8px;font-size:12px">
+            超过可收余额 ¥{{ remainingAmount.toFixed(2) }}, 请调低
+          </span>
         </el-form-item>
         <el-form-item label="支付方式">
           <el-select v-model="recordForm.paymentMethod" style="width:100%">
@@ -282,7 +339,12 @@ async function handleRecordSubmit() {
       </el-form>
       <template #footer>
         <el-button @click="recordDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleRecordSubmit">提交</el-button>
+        <el-button
+          type="primary"
+          :loading="submitting"
+          :disabled="!recordForm.salesOrderId || !canViewPrice || recordOverLimit || (!!selectedSO && remainingAmount === 0)"
+          @click="handleRecordSubmit"
+        >提交</el-button>
       </template>
     </el-dialog>
   </div>

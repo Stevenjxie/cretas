@@ -1052,6 +1052,11 @@ async function handleCreate() {
 }
 
 async function handleAction(orderId: string, action: string) {
+  // E-FP-2 (fool-proof Rule 3): 取消改走标准原因采集 dialog, 不用裸 confirm.
+  if (action === 'cancel') {
+    openCancelDialog([orderId]);
+    return;
+  }
   const map: Record<string, { label: string; url: string }> = {
     confirm: { label: '确认', url: `/${factoryId.value}/sales/orders/${orderId}/confirm` },
     cancel: { label: '取消', url: `/${factoryId.value}/sales/orders/${orderId}/cancel` },
@@ -1361,10 +1366,80 @@ async function handleBatchConfirm(): Promise<void> {
 }
 
 async function handleBatchCancel(): Promise<void> {
-  await runBatchSimple('取消', BATCH_CANCEL_STATUSES, async (row) => {
-    const res = await post(`/${factoryId.value}/sales/orders/${row.id}/cancel`);
-    if (!res?.success) throw new Error(res?.message || '取消失败');
-  });
+  // E-FP-2 (fool-proof Rule 3): 批量取消先采集统一原因 (整批共用一个原因), 再逐单调用.
+  const eligible = selectedRows.value.filter((r) =>
+    BATCH_CANCEL_STATUSES.includes(String(r.status || ''))
+  );
+  if (eligible.length === 0) {
+    ElMessage.warning('选中订单中没有可取消的');
+    return;
+  }
+  openCancelDialog(eligible.map((r) => String(r.id)));
+}
+
+// ==================== E-FP-2 取消原因采集 dialog (fool-proof Rule 3) ====================
+// 标准原因 dropdown + 选"其他"展 textarea. 单单/批量共用 (pendingCancelIds 区分).
+const cancelDialogVisible = ref(false);
+const cancelSubmitting = ref(false);
+const pendingCancelIds = ref<string[]>([]);
+const cancelReasonCode = ref('');
+const cancelReasonOther = ref('');
+const CANCEL_REASONS = ['客户撤单', '原料缺货', '质量问题', '排程冲突', '价格分歧', '其他'];
+
+function openCancelDialog(ids: string[]) {
+  pendingCancelIds.value = ids;
+  cancelReasonCode.value = '';
+  cancelReasonOther.value = '';
+  cancelDialogVisible.value = true;
+}
+
+// 最终原因: 选"其他"用 textarea 内容, 否则用 dropdown 选项.
+const resolvedCancelReason = computed<string>(() =>
+  cancelReasonCode.value === '其他' ? cancelReasonOther.value.trim() : cancelReasonCode.value
+);
+
+async function submitCancel(): Promise<void> {
+  if (!cancelReasonCode.value) {
+    ElMessage.warning('请选择取消原因');
+    return;
+  }
+  if (cancelReasonCode.value === '其他' && !cancelReasonOther.value.trim()) {
+    ElMessage.warning('请填写"其他"原因');
+    return;
+  }
+  const ids = pendingCancelIds.value;
+  const reason = resolvedCancelReason.value;
+  cancelSubmitting.value = true;
+  try {
+    if (ids.length === 1) {
+      const res = await post(
+        `/${factoryId.value}/sales/orders/${ids[0]}/cancel`,
+        undefined,
+        { params: { reason } }
+      );
+      if (res?.success) { ElMessage.success('取消成功'); }
+      else { ElMessage.error(res?.message || '取消失败'); return; }
+    } else {
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          post(`/${factoryId.value}/sales/orders/${id}/cancel`, undefined, { params: { reason } })
+            .then((res) => { if (!res?.success) throw new Error(res?.message || '取消失败'); })
+        )
+      );
+      const success = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = results.length - success;
+      ElNotification({
+        title: '批量取消结果',
+        message: `成功 ${success} 条，失败 ${failed} 条。`,
+        type: failed > 0 ? 'warning' : 'success',
+        duration: failed > 0 ? 0 : 4500,
+      });
+    }
+    cancelDialogVisible.value = false;
+    await loadData();
+  } finally {
+    cancelSubmitting.value = false;
+  }
 }
 
 async function handleBatchDelete(): Promise<void> {
@@ -2485,6 +2560,41 @@ function handleStartPurchase(row: TableRow) {
       :entity-id="forwardEntityId"
       :entity-label="forwardEntityLabel"
     />
+
+    <!-- E-FP-2 取消原因采集 dialog (fool-proof Rule 3): 标准原因 dropdown + "其他"展 textarea -->
+    <el-dialog
+      v-model="cancelDialogVisible"
+      :title="pendingCancelIds.length > 1 ? `批量取消 ${pendingCancelIds.length} 个销售订单` : '取消销售订单'"
+      width="460px"
+      destroy-on-close
+    >
+      <el-form label-width="90px">
+        <el-form-item label="取消原因" required>
+          <el-select v-model="cancelReasonCode" placeholder="请选择取消原因" style="width:100%">
+            <el-option v-for="r in CANCEL_REASONS" :key="r" :label="r" :value="r" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="cancelReasonCode === '其他'" label="补充说明" required>
+          <el-input
+            v-model="cancelReasonOther"
+            type="textarea"
+            :rows="2"
+            placeholder="请填写具体取消原因"
+            maxlength="200"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="cancelDialogVisible = false">返回</el-button>
+        <el-button
+          type="danger"
+          :loading="cancelSubmitting"
+          :disabled="!cancelReasonCode || (cancelReasonCode === '其他' && !cancelReasonOther.trim())"
+          @click="submitCancel"
+        >确认取消</el-button>
+      </template>
+    </el-dialog>
   </div>
   </CanvasAwareWrapper>
 </template>

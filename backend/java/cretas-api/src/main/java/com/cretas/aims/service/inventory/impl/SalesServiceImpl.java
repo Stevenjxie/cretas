@@ -1978,7 +1978,8 @@ public class SalesServiceImpl implements SalesService {
     @Transactional
     @Loggable(module = "SALES_ORDER", action = "CANCEL", entityType = "SalesOrder",
               entityIdParam = "orderId")
-    public SalesOrder cancelOrder(String factoryId, String orderId) {
+    public SalesOrder cancelOrder(String factoryId, String orderId, String reason) {
+        // getSalesOrderById 内部做 factoryId 租户隔离校验 (不属于该工厂 → 403).
         SalesOrder order = getSalesOrderById(factoryId, orderId);
         // R39 BUG-8 fix: was only blocking COMPLETED → FINANCE_APPROVED+/PROCESSING/SHIPPED/CANCELLED
         // could be cancelled, breaking AR + production_plan invariants. Use whitelist.
@@ -1989,7 +1990,14 @@ public class SalesServiceImpl implements SalesService {
                     .withHint("请刷新订单列表查看最新状态");
         }
         order.setStatus(SalesOrderStatus.CANCELLED);
-        log.info("取消销售订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
+        // E-FP-2 (fool-proof Rule 3): 取消原因追加到 remark, 无专用字段故复用 remark 追溯.
+        if (reason != null && !reason.isBlank()) {
+            String existing = order.getRemark();
+            String tag = "[取消原因: " + reason.trim() + "]";
+            order.setRemark(existing == null || existing.isBlank() ? tag : existing + " " + tag);
+        }
+        log.info("取消销售订单: orderId={}, orderNumber={}, reason={}",
+                orderId, order.getOrderNumber(), reason);
         return salesOrderRepository.save(order);
     }
 
