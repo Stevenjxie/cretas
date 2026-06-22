@@ -396,8 +396,11 @@ public class SalesController {
     @RequirePermission("sales:read_write")
     public ApiResponse<SalesOrder> cancelOrder(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String orderId) {
-        SalesOrder order = salesService.cancelOrder(factoryId, orderId);
+            @PathVariable @NotBlank String orderId,
+            // E-FP-2 (fool-proof Rule 3): 取消原因 — 前端 el-select 标准原因 (客户撤单/原料缺货/
+            // 质量问题/排程冲突/价格分歧/其他)。required=false 以保持向后兼容 (旧调用方不传).
+            @RequestParam(required = false) String reason) {
+        SalesOrder order = salesService.cancelOrder(factoryId, orderId, reason);
         return ApiResponse.success("销售订单已取消", order);
     }
 

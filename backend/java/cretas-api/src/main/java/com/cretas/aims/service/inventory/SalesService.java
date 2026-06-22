@@ -78,7 +78,15 @@ public interface SalesService {
 
     SalesOrder updateSalesOrder(String factoryId, String orderId, UpdateSalesOrderRequest request);
 
-    SalesOrder cancelOrder(String factoryId, String orderId);
+    /**
+     * 取消销售订单。
+     *
+     * @param factoryId 工厂 ID (租户隔离)
+     * @param orderId   订单 ID
+     * @param reason    取消原因 (E-FP-2 fool-proof Rule 3, 可为 null)。非空时追加到 remark
+     *                  ("[取消原因: X]"), 便于事后追溯。
+     */
+    SalesOrder cancelOrder(String factoryId, String orderId, String reason);
 
     /**
      * 复制销售订单 — 基于现有订单创建新草稿 (#860 follow-up).
