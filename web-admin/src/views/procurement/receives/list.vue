@@ -16,6 +16,8 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { get, post } from '@/api/request';
 import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
 // 单元 G (F006 R-B3): 跨页累计 + 分次收货时序明细 (后端权威值, 替代 page-local 聚合)
@@ -77,6 +79,7 @@ const router = useRouter();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
+const { goCreate } = useCreateAndReturn();
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 function rowActionsFor(row: ReceiveRow) {
@@ -677,6 +680,15 @@ onMounted(() => { loadData(); loadOptions(); });
           <el-select v-model="form.supplierId" placeholder="选择供应商" filterable style="width:100%">
             <el-option v-for="s in supplierOptions" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
+          <UpstreamMissingHint
+            v-if="supplierOptions.length === 0"
+            description="本工厂暂无供应商，无法录入采购入库"
+            target-module="procurement"
+            require-write
+            action-text="去创建供应商"
+            contact-text="请联系采购或管理员先创建供应商"
+            @action="goCreate('/procurement/suppliers')"
+          />
         </el-form-item>
         <el-form-item label="入库日期" prop="receiveDate">
           <el-date-picker v-model="form.receiveDate" type="date" value-format="YYYY-MM-DD" style="width:200px" />

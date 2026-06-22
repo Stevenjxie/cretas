@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import request, { get, post } from '@/api/request';
 // request.patch is used by U-MARKER-1 below; default export already imported.
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -43,6 +45,7 @@ const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
+const { goCreate } = useCreateAndReturn();
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
@@ -1048,6 +1051,15 @@ function handleAiFill(params: TableRow) {
           <el-select v-model="form.supplierId" placeholder="请选择" filterable style="width: 100%">
             <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
+          <UpstreamMissingHint
+            v-if="suppliers.length === 0"
+            description="本工厂暂无供应商，无法下采购单"
+            target-module="procurement"
+            require-write
+            action-text="去创建供应商"
+            contact-text="请联系采购或管理员先创建供应商"
+            @action="goCreate('/procurement/suppliers')"
+          />
         </el-form-item>
         <el-form-item label="采购类型">
           <el-radio-group v-model="form.purchaseType">
