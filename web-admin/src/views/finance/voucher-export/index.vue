@@ -100,7 +100,15 @@ const ledgerExportLoading = ref<Record<LedgerReportType, boolean>>({
   incomeStatement: false,
   quantityAmount: false,
 });
-const exportDateRange = ref<[string, string] | null>(null);
+// H-FP-3 Rule4: 预填当月首末日，财务几乎按月导出，不让用户每次手动选
+function currentMonthRange(): [string, string] {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
+  return [`${y}-${m}-01`, `${y}-${m}-${String(lastDay).padStart(2, '0')}`];
+}
+const exportDateRange = ref<[string, string] | null>(currentMonthRange());
 const exportTargetSystem = ref<VoucherTargetSystem>('KINGDEE');
 const selectedConfigId = ref('');
 

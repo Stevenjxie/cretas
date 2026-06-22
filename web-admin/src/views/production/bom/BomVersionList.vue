@@ -286,6 +286,10 @@ async function submitReject() {
   }
 }
 
+// B-FP-5: BOM 单位白名单 — 与后端 CreateBomRecipeRequest @Pattern 同步
+// TODO: 是否补"斤"（转录牛腱按斤）待产品确认后决策
+const BOM_UNIT_OPTIONS = ['g', 'kg', 'mg', 'ml', 'L', '个', '袋', '箱', '瓶', '盒'] as const;
+
 /** Batch form. 全 mode 共用 — 不同 type 不同字段 enabled. */
 const batchForm = ref({
   materialId: '',
@@ -684,8 +688,12 @@ async function submitBatch() {
           <el-form-item label="新数量 (per 单位)" required>
             <el-input-number v-model="batchForm.newStandardQuantity" :min="0" :precision="4" />
           </el-form-item>
+          <!-- B-FP-5 Rule3: 改 el-select，同步后端 @Pattern 白名单，避免手填"斤"/"KG"触发400 -->
+          <!-- TODO: 白名单缺"斤"（转录牛腱按斤），是否补充待产品确认 -->
           <el-form-item label="新单位 (可选)">
-            <el-input v-model="batchForm.newUnit" placeholder="g/kg/L 等 (空 = 保留)" />
+            <el-select v-model="batchForm.newUnit" clearable placeholder="不改单位则留空" style="width: 100%">
+              <el-option v-for="u in BOM_UNIT_OPTIONS" :key="u" :label="u" :value="u" />
+            </el-select>
           </el-form-item>
         </template>
 
@@ -778,8 +786,12 @@ async function submitBatch() {
           <el-form-item label="数量 (per 单位)" required>
             <el-input-number v-model="batchForm.standardQuantity" :min="0" :precision="4" />
           </el-form-item>
+          <!-- B-FP-5 Rule3: 改 el-select，同步后端 @Pattern 白名单，避免手填"斤"/"KG"触发400 -->
+          <!-- TODO: 白名单缺"斤"（转录牛腱按斤），是否补充待产品确认 -->
           <el-form-item label="单位" required>
-            <el-input v-model="batchForm.unit" placeholder="g/kg/L 等" />
+            <el-select v-model="batchForm.unit" placeholder="请选择单位" style="width: 100%">
+              <el-option v-for="u in BOM_UNIT_OPTIONS" :key="u" :label="u" :value="u" />
+            </el-select>
           </el-form-item>
           <el-form-item label="出成率 (%)">
             <el-input-number v-model="batchForm.yieldRate" :min="0" :max="100" :precision="2" />

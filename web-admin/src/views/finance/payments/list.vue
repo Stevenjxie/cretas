@@ -258,6 +258,10 @@ async function handleRecordSubmit() {
             </template>
           </el-select>
         </el-form-item>
+        <!-- E-FP-3 Rule1 DEFERRED: `:max` 需要后端在 SO 列表中暴露 paidAmount/remainingAmount 字段。
+             当前 SalesOrderOption 只有 { id, orderNumber, customerName, totalAmount }，无已收/可收余额。
+             实现路径: 后端 SalesController.listOrders 补充 paidAmount 字段 → 前端 :max=totalAmount-paidAmount
+             + el-alert 显示"订单总额/已收/可收"上下文 (参考 invoices/list.vue 含税开票上限防呆)。 -->
         <el-form-item v-if="canViewPrice" label="收款金额" required>
           <el-input-number v-model="recordForm.amount" :min="0" :precision="2" style="width:100%" />
         </el-form-item>

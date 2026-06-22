@@ -50,10 +50,11 @@ const form = reactive<SegmentForm>({
   isActive: true,
 });
 
+// A-FP-3: 汉化标签（与编码值/数字无关，仅改显示文案）
 const levelOptions = [
-  { label: 'L1 type', value: 1 },
-  { label: 'L2 part', value: 2 },
-  { label: 'L3 item', value: 3 },
+  { label: 'L1 大类（3位）', value: 1 },
+  { label: 'L2 中类（6位）', value: 2 },
+  { label: 'L3 小类（10位）', value: 3 },
 ] as const;
 
 const flatRows = computed(() => {
@@ -127,23 +128,23 @@ function openEdit(row: SegmentNode) {
 function validateForm(): boolean {
   const code = form.segmentCode.trim();
   if (!form.segmentLabel.trim()) {
-    showStickyError('Segment name is required.');
+    showStickyError('名称不能为空，请填写分类名称。');
     return false;
   }
   if (form.level === 1 && !/^\d{3}$/.test(code)) {
-    showStickyError('L1 code must be 3 digits, for example 001.');
+    showStickyError('L1大类编码必须为3位数字，例如 001。');
     return false;
   }
   if (form.level === 2 && !/^\d{6}$/.test(code)) {
-    showStickyError('L2 code must be 6 cumulative digits, for example 001001.');
+    showStickyError('L2中类编码必须为6位累积数字，例如 001001。');
     return false;
   }
   if (form.level === 3 && !/^\d{10}$/.test(code)) {
-    showStickyError('L3 code must be 10 cumulative digits, for example 0010010001.');
+    showStickyError('L3小类编码必须为10位累积数字，例如 0010010001。');
     return false;
   }
   if (form.level > 1 && !form.parentCode) {
-    showStickyError('Parent segment is required.');
+    showStickyError('请选择上级分类。');
     return false;
   }
   return true;
@@ -163,15 +164,15 @@ async function saveSegment() {
   try {
     if (form.id) {
       await put(`/${factoryId.value}/material-segments/${form.id}`, payload);
-      ElMessage.success('Segment updated.');
+      ElMessage.success('编码分类已更新。');
     } else {
       await post(`/${factoryId.value}/material-segments`, payload);
-      ElMessage.success('Segment created.');
+      ElMessage.success('编码分类已创建。');
     }
     dialogVisible.value = false;
     await loadTree();
   } catch (error) {
-    showStickyError(errorMessage(error, 'Segment save failed. Check the code path and retry.'));
+    showStickyError(errorMessage(error, '保存失败，请检查编码是否重复，然后重试。'));
   } finally {
     saving.value = false;
   }
@@ -181,16 +182,16 @@ async function deleteSegment(row: SegmentNode) {
   if (!factoryId.value) return;
   try {
     await ElMessageBox.confirm(
-      `Delete segment ${row.segmentCode} ${row.segmentLabel}?`,
-      'Delete segment',
-      { type: 'warning', confirmButtonText: 'Delete', cancelButtonText: 'Cancel' },
+      `确认删除编码分类「${row.segmentCode} ${row.segmentLabel}」？`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     );
     await del(`/${factoryId.value}/material-segments/${row.id}`);
-    ElMessage.success('Segment deleted.');
+    ElMessage.success('编码分类已删除。');
     await loadTree();
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
-    showStickyError(errorMessage(error, 'Segment delete failed. Remove child segments first, then retry.'));
+    showStickyError(errorMessage(error, '删除失败，请先删除下级分类，再重试。'));
   }
 }
 
@@ -200,22 +201,23 @@ onMounted(loadTree);
 <template>
   <div class="page-wrapper">
     <el-card shadow="never">
+      <!-- A-FP-3: 全页面汉化，低文化素质仓管/配置员可读 -->
       <template #header>
         <div class="card-header">
           <div>
-            <div class="page-title">Material Code Segments</div>
-            <div class="page-subtitle">L1 type, L2 part, L3 item</div>
+            <div class="page-title">16位物料编码字典</div>
+            <div class="page-subtitle">L1 大类（3位） · L2 中类（6位） · L3 小类（10位）</div>
           </div>
           <div class="header-actions">
-            <el-button :icon="Refresh" :loading="loading" @click="loadTree">Refresh</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate()">New</el-button>
+            <el-button :icon="Refresh" :loading="loading" @click="loadTree">刷新</el-button>
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate()">新增分类</el-button>
           </div>
         </div>
       </template>
 
       <el-alert
         v-if="treeData.length === 0 && !loading"
-        title="No segment dictionary is configured for this factory."
+        title="该工厂暂未配置物料编码字典，点击「新增分类」开始配置。"
         type="warning"
         :closable="false"
         show-icon
@@ -224,39 +226,39 @@ onMounted(loadTree);
 
       <el-segmented v-model="selectedLevel" :options="levelOptions" class="level-tabs" />
 
-      <el-table v-loading="loading" :data="tableRows" stripe row-key="id" empty-text="No segments">
-        <el-table-column prop="segmentCode" label="Code" width="150" />
-        <el-table-column prop="segmentLabel" label="Name" min-width="180" />
-        <el-table-column prop="parentCode" label="Parent" width="140">
+      <el-table v-loading="loading" :data="tableRows" stripe row-key="id" empty-text="暂无数据">
+        <el-table-column prop="segmentCode" label="编码" width="150" />
+        <el-table-column prop="segmentLabel" label="名称" min-width="180" />
+        <el-table-column prop="parentCode" label="上级编码" width="140">
           <template #default="{ row }">{{ row.parentCode || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="sortOrder" label="Sort" width="100" />
-        <el-table-column label="Status" width="100">
+        <el-table-column prop="sortOrder" label="排序" width="100" />
+        <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.isActive === false ? 'info' : 'success'" size="small">
-              {{ row.isActive === false ? 'Inactive' : 'Active' }}
+              {{ row.isActive === false ? '停用' : '启用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="Actions" width="150" fixed="right">
+        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">Edit</el-button>
-            <el-button link type="danger" :icon="DeleteIcon" @click="deleteSegment(row)">Delete</el-button>
+            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" :icon="DeleteIcon" @click="deleteSegment(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="form.id ? 'Edit segment' : 'New segment'" width="520px" destroy-on-close>
+    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑编码分类' : '新增编码分类'" width="520px" destroy-on-close>
       <el-form :model="form" label-width="112px">
-        <el-form-item label="Level" required>
+        <el-form-item label="层级" required>
           <el-select v-model="form.level" :disabled="!!form.id" style="width: 100%">
-            <el-option label="L1 type (3)" :value="1" />
-            <el-option label="L2 part (6)" :value="2" />
-            <el-option label="L3 item (10)" :value="3" />
+            <el-option label="L1 大类（3位，如 001）" :value="1" />
+            <el-option label="L2 中类（6位，如 001001）" :value="2" />
+            <el-option label="L3 小类（10位，如 0010010001）" :value="3" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.level > 1" label="Parent" required>
+        <el-form-item v-if="form.level > 1" label="上级分类" required>
           <el-select v-model="form.parentCode" filterable style="width: 100%">
             <el-option
               v-for="item in parentOptions"
@@ -266,22 +268,22 @@ onMounted(loadTree);
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="Code" required>
-          <el-input v-model="form.segmentCode" maxlength="10" placeholder="001 / 001001 / 0010010001" />
+        <el-form-item label="编码" required>
+          <el-input v-model="form.segmentCode" maxlength="10" placeholder="如：001 / 001001 / 0010010001" />
         </el-form-item>
-        <el-form-item label="Name" required>
-          <el-input v-model="form.segmentLabel" maxlength="100" placeholder="Raw material / Beef / Beef shank" />
+        <el-form-item label="名称" required>
+          <el-input v-model="form.segmentLabel" maxlength="100" placeholder="如：牛肉类 / 牛腱 / 卤牛腱" />
         </el-form-item>
-        <el-form-item label="Sort">
+        <el-form-item label="排序">
           <el-input-number v-model="form.sortOrder" :min="0" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="Active">
-          <el-switch v-model="form.isActive" />
+        <el-form-item label="是否启用">
+          <el-switch v-model="form.isActive" active-text="启用" inactive-text="停用" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="saveSegment">Save</el-button>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveSegment">保存</el-button>
       </template>
     </el-dialog>
   </div>

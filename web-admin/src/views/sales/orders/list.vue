@@ -2216,7 +2216,10 @@ function handleStartPurchase(row: TableRow) {
           <span style="width: 120px">规格</span>
           <span style="width: 130px">下单数量</span>
           <span style="width: 80px">单位</span>
-          <span style="width: 130px">单价</span>
+          <span style="width: 130px">单价 (未税)</span>
+          <!-- E-FP-1 Rule2: 含税单价/含税小计派生只读，用户填未税+税率，此列自动显示 -->
+          <span style="width: 130px">含税单价</span>
+          <span style="width: 130px">含税小计</span>
           <span style="width: 130px">箱数</span>
           <span style="width: 90px" title="税率 (开票 G1 按此分组): 9=原料, 13=加工, 6=服务">税率(%)</span>
           <!-- T4-D1 (issue #525): 来源仓库 — F006 客户反馈 "成品会调回总仓, 总仓再安排发货".
@@ -2279,6 +2282,26 @@ function handleStartPurchase(row: TableRow) {
               </el-tag>
             </el-tooltip>
           </div>
+          <!-- E-FP-1 Rule2: 含税单价 = 未税单价 × (1 + 税率/100), 只读派生，不提交后端 -->
+          <el-tooltip content="含税单价 = 未税单价 × (1 + 税率/100)，自动计算，不可编辑" placement="top">
+            <el-input
+              :model-value="item.unitPrice != null && item.taxRate != null
+                ? (item.unitPrice * (1 + (item.taxRate as number) / 100)).toFixed(2)
+                : '-'"
+              disabled
+              style="width: 130px"
+            />
+          </el-tooltip>
+          <!-- E-FP-1 Rule2: 含税小计 = 含税单价 × 数量，只读派生，不提交后端 -->
+          <el-tooltip content="含税小计 = 含税单价 × 数量，自动计算，不可编辑" placement="top">
+            <el-input
+              :model-value="item.unitPrice != null && item.taxRate != null && item.quantity != null
+                ? (item.unitPrice * (1 + (item.taxRate as number) / 100) * (item.quantity as number)).toFixed(2)
+                : '-'"
+              disabled
+              style="width: 130px"
+            />
+          </el-tooltip>
           <!-- P1-3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 -->
           <!-- T130 Feature D — 箱数只读 (由数量×箱规自动计算, 非第二销售单位); 抄码品/未配置箱规分别提示. -->
           <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 130px; text-align: center;">抄码品</el-tag>
