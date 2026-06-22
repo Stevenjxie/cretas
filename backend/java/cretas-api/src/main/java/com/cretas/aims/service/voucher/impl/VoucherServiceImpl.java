@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.VoucherFlag;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
@@ -24,6 +25,7 @@ import com.cretas.aims.service.finance.AccountingPeriodService;
 import com.cretas.aims.service.voucher.VoucherGenerator;
 import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
 import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.exception.BusinessException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -204,16 +207,32 @@ public class VoucherServiceImpl implements VoucherService {
         // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权作废别厂凭证)
         Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
-        // H-BUG-4 (2026-06-21 transcript-e2e R1): 此前无状态守卫 — 已作废凭证可重复"作废",
-        // 每次都把 " [作废: reason]" 追加到 description (无限累积), 且 approvedBy/approvedAt 被反复覆盖。
-        // 幂等拒绝: 已 VOID → 409 (作废是终态, 不可重复)。
+
+        // H-BUG-4 (2026-06-21 transcript-e2e R1): 已作废凭证不可重复"作废" (幂等终态)。
+        // 已红字冲销凭证 (REVERSED) 同样是终态, 不可再次冲销/作废。
         if (v.getStatus() == VoucherStatus.VOID) {
-            throw new IllegalStateException("凭证已作废, 不可重复作废");
+            throw new BusinessException(409, "凭证已作废, 不可重复作废")
+                    .withCode("VOUCHER_ALREADY_VOID");
         }
-        // 注: POSTED (已过账) 凭证当前允许直接置 VOID 而不生成红字冲销凭证。严格会计准则下,
-        // 已过账凭证应通过"红字冲销" (生成反向凭证) 而非直接作废来保持账务可追溯。红字冲销是
-        // 独立的财务能力 (产品决策), 本次不实现; 这里仅修复重复作废的幂等缺陷。
-        // TODO(product): POSTED 凭证作废是否应强制走红字冲销流程, 待业务确认。
+        if (v.getStatus() == VoucherStatus.REVERSED) {
+            throw new BusinessException(409, "凭证已红字冲销, 不可重复冲销/作废")
+                    .withCode("VOUCHER_ALREADY_REVERSED")
+                    .withHint("如需查看冲销凭证, 请打开关联的红字冲销凭证");
+        }
+        // 红字冲销凭证本身 (original_voucher_id 非 null) 不允许再被作废/冲销 — 它已是账务终态。
+        if (v.getOriginalVoucherId() != null) {
+            throw new BusinessException(409, "红字冲销凭证不可作废/再冲销")
+                    .withCode("VOUCHER_IS_REVERSAL");
+        }
+
+        // Feature #7 (R12): 金蝶规范 — 已过账 (POSTED) 凭证不可直接 VOID 抹掉 (已进账簿),
+        // 应生成一张红字冲销凭证 (借贷方向互换) 关联原凭证, 原凭证标记 REVERSED, 账簿可追溯。
+        if (v.getStatus() == VoucherStatus.POSTED) {
+            reversePostedVoucher(v, reason, userId);
+            return;
+        }
+
+        // DRAFT 凭证: 未过账, 无需红字冲销, 保持直接置 VOID (向后兼容)。
         // Sprint 7 T2 F-PERIOD: 作废也是修改 voucher 状态, 走期间结账 gate
         assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
         v.setStatus(VoucherStatus.VOID);
@@ -221,6 +240,98 @@ public class VoucherServiceImpl implements VoucherService {
         v.setApprovedAt(LocalDateTime.now());
         v.setDescription((v.getDescription() == null ? "" : v.getDescription()) + " [作废: " + reason + "]");
         voucherRepo.save(v);
+    }
+
+    /**
+     * Feature #7 (R12): 已过账凭证红字冲销 (金蝶规范).
+     *
+     * <p>生成一张红字冲销凭证 — 复制原凭证所有分录, <b>借贷方向互换</b> (原借→贷, 原贷→借),
+     * 金额保持正数。互换 (而非负数) 与现有账务模型最一致:
+     * <ul>
+     *   <li>{@link Voucher#validateBalanced()} 要求 sum(debit)==sum(credit)==totalDebit==totalCredit,
+     *       互换后 borrow/credit 各自总额对调仍精确相等, 全程正数无需放宽不变式。</li>
+     *   <li>{@code aggregateByAuxiliary} 的 SUM(debit)/SUM(credit) 已排除 VOID, 但纳入冲销凭证:
+     *       原凭证 debit X + 冲销凭证 credit X → 该辅助核算实体净额归零, 账务自洽。</li>
+     * </ul>
+     *
+     * <p>期间: 冲销凭证沿用原凭证日期/期间 (与原凭证同期对冲, 账簿逐期可追溯);
+     * 复用 {@link #assertPeriodOpen} — 若原期间已结账则拒绝冲销, 与 post/void 一致的 gate 行为。
+     *
+     * <p>原凭证标记 {@link VoucherStatus#REVERSED} (不物理删), 双向关联 reversal_voucher_id /
+     * original_voucher_id。冲销凭证状态直接 POSTED (冲销即生效)。
+     */
+    private void reversePostedVoucher(Voucher original, String reason, Long userId) {
+        // 期间结账 gate: 原凭证日期落在 CLOSED 期间则拒绝冲销 (与 void/post 一致)。
+        assertPeriodOpen(original.getFactoryId(), original.getVoucherDate());
+
+        LocalDate reversalDate = original.getVoucherDate();
+        String reversalNumber = generateVoucherNumber(original.getFactoryId(), reversalDate);
+
+        Voucher reversal = Voucher.builder()
+                .factoryId(original.getFactoryId())
+                .voucherNumber(reversalNumber)
+                .voucherType(original.getVoucherType())
+                .voucherDate(reversalDate)
+                .sourceBusinessType(original.getSourceBusinessType())
+                .sourceBusinessId(original.getSourceBusinessId())
+                // 红字冲销凭证创建即生效 (POSTED), approver = 操作人
+                .status(VoucherStatus.POSTED)
+                .createdBy(userId)
+                .approvedBy(userId)
+                .approvedAt(LocalDateTime.now())
+                .description("红字冲销凭证 [冲销 " + original.getVoucherNumber() + "]"
+                        + (reason == null || reason.isBlank() ? "" : " 原因: " + reason))
+                .originalVoucherId(original.getId())
+                .build();
+
+        // 复制原分录, 借贷互换 (debit↔credit), 金额正数, 辅助核算保持不变。
+        int lineNo = 1;
+        for (VoucherEntry oe : original.getEntries()) {
+            VoucherEntry re = VoucherEntry.builder()
+                    .lineNo(lineNo++)
+                    .subjectCode(oe.getSubjectCode())
+                    .subjectName(oe.getSubjectName())
+                    // 方向互换: 原借方金额 → 冲销贷方; 原贷方金额 → 冲销借方
+                    .debit(nz(oe.getCredit()))
+                    .credit(nz(oe.getDebit()))
+                    .description("红冲: " + (oe.getDescription() == null ? "" : oe.getDescription()))
+                    .costCenter(oe.getCostCenter())
+                    .auxiliaryType(oe.getAuxiliaryType())
+                    .auxiliaryEntityId(oe.getAuxiliaryEntityId())
+                    .voucher(reversal)
+                    .build();
+            reversal.getEntries().add(re);
+        }
+
+        // totals: 互换后总借=原总贷, 总贷=原总借 (原凭证已平, 故两者仍相等)。
+        BigDecimal totalDebit = reversal.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = reversal.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        reversal.setTotalDebit(totalDebit);
+        reversal.setTotalCredit(totalCredit);
+
+        // 借贷必平自校验 (与 generator 一致)
+        reversal.validateBalanced();
+
+        Voucher savedReversal = voucherRepo.save(reversal);
+
+        // 原凭证标记 REVERSED + 双向关联 (不物理删, 账簿可追溯)
+        original.setStatus(VoucherStatus.REVERSED);
+        original.setReversalVoucherId(savedReversal.getId());
+        original.setApprovedBy(userId);
+        original.setApprovedAt(LocalDateTime.now());
+        original.setDescription((original.getDescription() == null ? "" : original.getDescription())
+                + " [红字冲销: " + reason + " → " + savedReversal.getVoucherNumber() + "]");
+        voucherRepo.save(original);
+
+        log.info("✅ 红字冲销: 原凭证 {} (POSTED→REVERSED) → 冲销凭证 {} (POSTED), factory={}, total={}",
+                original.getVoucherNumber(), savedReversal.getVoucherNumber(),
+                original.getFactoryId(), totalDebit);
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
     }
 
     @Override

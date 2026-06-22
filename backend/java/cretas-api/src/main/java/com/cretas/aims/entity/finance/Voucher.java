@@ -112,6 +112,20 @@ public class Voucher extends BaseEntity {
     @Column(name = "description", length = 500)
     private String description;
 
+    /**
+     * 红字冲销 (Feature #7): 原凭证 → 指向其红字冲销凭证 id (一对一).
+     * 仅当原凭证被红字冲销 (status=REVERSED) 时非 null。
+     */
+    @Column(name = "reversal_voucher_id", length = 191)
+    private String reversalVoucherId;
+
+    /**
+     * 红字冲销 (Feature #7): 红字冲销凭证 → 指回原凭证 id.
+     * 仅红字冲销凭证 (反向分录) 非 null; 普通凭证为 null。
+     */
+    @Column(name = "original_voucher_id", length = 191)
+    private String originalVoucherId;
+
     @OneToMany(mappedBy = "voucher", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @Builder.Default
     private List<VoucherEntry> entries = new ArrayList<>();

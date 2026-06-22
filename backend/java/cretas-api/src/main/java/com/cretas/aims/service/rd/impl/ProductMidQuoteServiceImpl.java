@@ -32,6 +32,7 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
     private final ProductMidQuoteRepository midQuoteRepository;
     private final QuotationTaskRepository quotationTaskRepository;
     private final ProductionBatchRepository productionBatchRepository;
+    private final com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
 
     @Override
     @Transactional
@@ -74,6 +75,16 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
 
         // ── 4. 构建 warnings ───────────────────────────────────────────────
         List<String> warnings = new ArrayList<>();
+
+        // Feature #4 (R12): caller 未传 materialCostPerKg → 从试制批次领料记录按移动均价自动算。
+        // 口径: Σ(领料量 × 移动均价) ÷ 产出量(kg) = 材料成本/kg。
+        // 复用现有 MaterialConsumption.totalCost (= quantity × batch.unitPrice[移动均价],
+        // 退料记录为负 totalCost → 自动净销), 与 OrderCostBreakdownService 同一成本口径, 不自创。
+        // 自动算不了 (无领料记录 / 产出量缺失或≤0) → 保持 null + warning (诚实空值, 不降级假数据)。
+        if (materialCostPerKg == null) {
+            materialCostPerKg = autoComputeMaterialCostPerKg(factoryId, trialBatchId, batch, warnings);
+        }
+
         if (laborCostPerKg == null) warnings.add("人工成本数据缺失, totalCostPerKg 暂无法计算");
         if (overheadCostPerKg == null) warnings.add("制造费用数据缺失, totalCostPerKg 暂无法计算");
         if (materialCostPerKg == null) warnings.add("原材料成本数据缺失, totalCostPerKg 暂无法计算");
@@ -190,5 +201,51 @@ public class ProductMidQuoteServiceImpl implements ProductMidQuoteService {
             return null;
         }
         return material.add(labor).add(overhead).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Feature #4 (R12): 试制批次材料成本/kg 自动核算 (移动均价口径).
+     *
+     * <p>口径: 材料成本/kg = Σ(该试制批次领料记录 totalCost) ÷ 产出量(kg)。
+     * 其中 {@link com.cretas.aims.entity.MaterialConsumption#totalCost} 在领料时按
+     * {@code quantity × batch.unitPrice (移动均价)} 写入 (见 FactoryMaterialRequisitionServiceImpl /
+     * 报工领料路径), 退料记录写负 totalCost → Σ 自动净销。与 OrderCostBreakdownService 同一
+     * 成本口径, 不自创不一致算法。
+     *
+     * <p>产出量用 {@code goodQuantity} (良品产出, 与 {@code trialOutputKg} 一致); 缺失则回退
+     * {@code actualQuantity} (镜像 ProductionBatch#calculate unitCost 的分母选择)。
+     *
+     * <p>诚实空值: 无领料记录 / 产出量缺失或 ≤0 → 返 null + warning, 不臆造 0。
+     *
+     * @return 材料成本/kg (scale=4 HALF_UP), 或 null (数据不足)
+     */
+    private BigDecimal autoComputeMaterialCostPerKg(String factoryId, Long trialBatchId,
+            ProductionBatch batch, List<String> warnings) {
+        // 跨租户安全: 按 (productionBatchId, factoryId) 查领料记录
+        List<com.cretas.aims.entity.MaterialConsumption> consumptions =
+                materialConsumptionRepository.findByProductionBatchIdAndFactoryId(trialBatchId, factoryId);
+        if (consumptions.isEmpty()) {
+            warnings.add("试制批次无领料记录, 无法按移动均价自动核算材料成本/kg (请人工填或先完成领料)");
+            return null;
+        }
+
+        // 产出量: 优先 goodQuantity (与 trialOutputKg 一致), 回退 actualQuantity
+        BigDecimal outputKg = (batch.getGoodQuantity() != null
+                && batch.getGoodQuantity().compareTo(BigDecimal.ZERO) > 0)
+                ? batch.getGoodQuantity() : batch.getActualQuantity();
+        if (outputKg == null || outputKg.compareTo(BigDecimal.ZERO) <= 0) {
+            warnings.add("试制批次产出量缺失或为 0, 无法按移动均价自动核算材料成本/kg");
+            return null;
+        }
+
+        // Σ totalCost (退料负值自动净销; null 视为 0 不参与, 与 MaterialConsumption.totalCost NOT NULL 语义一致)
+        BigDecimal totalMaterialCost = consumptions.stream()
+                .map(c -> c.getTotalCost() != null ? c.getTotalCost() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal perKg = totalMaterialCost.divide(outputKg, 4, RoundingMode.HALF_UP);
+        log.info("[SP10][R12] 自动核算材料成本/kg: batch={} 领料totalCost={} 产出={}kg → {}/kg",
+                trialBatchId, totalMaterialCost, outputKg, perKg);
+        return perKg;
     }
 }
