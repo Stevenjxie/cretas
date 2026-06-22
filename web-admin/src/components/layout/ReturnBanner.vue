@@ -14,15 +14,15 @@ import { ArrowLeft, Close } from '@element-plus/icons-vue';
 const route = useRoute();
 const router = useRouter();
 
-// 解码 _returnTo 来源路径
+// _returnTo 来源路径。注意: vue-router 已对 query value 解码一次,
+// 这里【不能】再 decodeURIComponent — 否则多级嵌套的 _returnTo
+// (计划←订单←产品 级联跳转, 内层 _returnTo 自带编码的 ?/&) 会被过度解码,
+// 内层 query 的 ?/& 变成字面量 → 回退时内层参数 (planSO/editItems 等) 丢失,
+// 三级级联最后一跳无法重开弹窗。单级返回不受影响 (router 解码后即可直接用)。
 const returnTo = computed(() => {
   const raw = route.query._returnTo;
   if (!raw || typeof raw !== 'string') return null;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return null;
-  }
+  return raw;
 });
 
 // 反查来源路由的 meta.title（用于友好显示）
