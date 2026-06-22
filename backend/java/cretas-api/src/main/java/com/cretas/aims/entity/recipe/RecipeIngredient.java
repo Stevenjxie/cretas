@@ -3,6 +3,7 @@ package com.cretas.aims.entity.recipe;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 import java.util.UUID;

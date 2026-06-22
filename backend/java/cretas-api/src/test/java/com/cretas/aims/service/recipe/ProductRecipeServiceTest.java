@@ -81,6 +81,7 @@ class ProductRecipeServiceTest {
             if (p.getId() == null) p.setId("R-1");
             return p;
         });
+        when(ingredientRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         var dto = service.create(F, req());
         // 熟制全量/kg = 1000/1000 × 1 = 1.0; 第一锅每kg = 注射0 + 熟制1.0
         assertEquals(0, new BigDecimal("1.0000").compareTo(dto.getCookingFullCostPerKg()));

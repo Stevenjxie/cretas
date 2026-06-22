@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -27,7 +28,6 @@ import java.util.Optional;
 public class ProductRecipeServiceImpl implements ProductRecipeService {
 
     private static final String STATUS_ACTIVE = "ACTIVE";
-    private static final BigDecimal DEFAULT_RATIO = new BigDecimal("0.3333");
 
     private final ProductRecipeRepository recipeRepo;
     private final RecipeIngredientRepository ingredientRepo;
@@ -75,6 +75,7 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
         validate(req);
         applyHead(r, req);
         recipeRepo.save(r);
+        // 替换明细: 事务内硬删旧明细再插新 (master data 低频, 无审计需求; FK 保护防孤儿)
         ingredientRepo.deleteByRecipeId(id);
         List<RecipeIngredient> updatedIngs = saveIngredients(factoryId, id, req.getIngredients());
         return toDTO(r, updatedIngs);
@@ -85,6 +86,9 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
     public void delete(String factoryId, String id) {
         ProductRecipe r = recipeRepo.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new BusinessException(404, "配方不存在"));
+        if ("INACTIVE".equals(r.getStatus())) {
+            return; // 已停用, 幂等 no-op
+        }
         r.setStatus("INACTIVE");
         r.softDelete();
         recipeRepo.save(r);
@@ -99,6 +103,10 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
             throw new BusinessException(400, "第二锅起比例须在 (0,1]");
         }
         for (RecipeIngredientDTO i : req.getIngredients()) {
+            if (!RecipeIngredient.SECTION_INJECTION.equals(i.getSection())
+                    && !RecipeIngredient.SECTION_COOKING.equals(i.getSection())) {
+                throw new BusinessException(400, "料「" + i.getName() + "」工序段非法(须 INJECTION/COOKING)");
+            }
             if (i.getPriceSource1() == null && i.getPriceSource2() == null) {
                 throw new BusinessException(400, "料「" + i.getName() + "」单价两源至少填一个");
             }
@@ -110,7 +118,7 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
         r.setName(req.getName());
         r.setInjectionRate(req.getInjectionRate());
         r.setCookingPotBaseKg(req.getCookingPotBaseKg());
-        r.setSubsequentPotRatio(req.getSubsequentPotRatio() == null ? DEFAULT_RATIO : req.getSubsequentPotRatio());
+        r.setSubsequentPotRatio(req.getSubsequentPotRatio() == null ? ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO : req.getSubsequentPotRatio());
     }
 
     private List<RecipeIngredient> saveIngredients(String factoryId, String recipeId, List<RecipeIngredientDTO> items) {
@@ -128,9 +136,7 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
             e.setPriceSource2(dto.getPriceSource2());
             e.setCountInSeasoning(dto.getCountInSeasoning() == null ? Boolean.TRUE : dto.getCountInSeasoning());
             e.setRemark(dto.getRemark());
-            // Add the entity to result BEFORE save so we have data even when repo mock returns null
-            result.add(e);
-            ingredientRepo.save(e);
+            result.add(ingredientRepo.save(e));
         }
         return result;
     }
@@ -168,10 +174,12 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
                 r, ings, BigDecimal.ONE, List.of(BigDecimal.ONE));
         dto.setInjectionCostPerKg(rate.getInjectionCostPerKg());
         dto.setCookingFullCostPerKg(rate.getCookingFullCostPerKg());
-        dto.setCostPerKgFirstPot(rate.getInjectionCostPerKg().add(rate.getCookingFullCostPerKg()));
-        BigDecimal ratio = r.getSubsequentPotRatio() == null ? DEFAULT_RATIO : r.getSubsequentPotRatio();
+        dto.setCostPerKgFirstPot(rate.getInjectionCostPerKg().add(rate.getCookingFullCostPerKg())
+                .setScale(4, RoundingMode.HALF_UP));
+        BigDecimal ratio = r.getSubsequentPotRatio() == null ? ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO : r.getSubsequentPotRatio();
         dto.setCostPerKgSubsequentPot(
-                rate.getInjectionCostPerKg().add(rate.getCookingFullCostPerKg().multiply(ratio)));
+                rate.getInjectionCostPerKg().add(rate.getCookingFullCostPerKg().multiply(ratio))
+                        .setScale(4, RoundingMode.HALF_UP));
         return dto;
     }
 }

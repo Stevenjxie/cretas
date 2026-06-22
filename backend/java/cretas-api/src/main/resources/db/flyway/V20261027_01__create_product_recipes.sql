@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     deleted_at TIMESTAMP,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    FOREIGN KEY (recipe_id) REFERENCES product_recipes(id)
 );
 CREATE INDEX IF NOT EXISTS idx_ringredient_recipe
     ON recipe_ingredients (recipe_id);

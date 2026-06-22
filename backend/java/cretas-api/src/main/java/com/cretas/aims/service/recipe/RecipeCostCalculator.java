@@ -38,7 +38,7 @@ public final class RecipeCostCalculator {
                 .setScale(SCALE, RoundingMode.HALF_UP);
 
         BigDecimal ratio = recipe.getSubsequentPotRatio() == null
-                ? new BigDecimal("0.3333") : recipe.getSubsequentPotRatio();
+                ? ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO : recipe.getSubsequentPotRatio();
 
         BigDecimal cookingTotal = BigDecimal.ZERO;
         if (potRawKgs != null) {
@@ -55,14 +55,14 @@ public final class RecipeCostCalculator {
         return new SeasoningCost(injPerKg, cookPerKg, injectionTotal, cookingTotal, total);
     }
 
-    /** Σ section 明细: dosage_g/1000 × max(p1,p2); excludeOldSoup 时跳过 countInSeasoning=false. */
+    /** Σ section 明细: dosage_g/1000 × max(p1,p2); applyCountInSeasoning 时跳过 countInSeasoning=false 的行. */
     private static BigDecimal perKg(List<RecipeIngredient> ingredients,
-                                    String section, boolean excludeOldSoup) {
+                                    String section, boolean applyCountInSeasoning) {
         BigDecimal sum = BigDecimal.ZERO;
         if (ingredients == null) return sum.setScale(SCALE, RoundingMode.HALF_UP);
         for (RecipeIngredient ing : ingredients) {
             if (!section.equals(ing.getSection())) continue;
-            if (excludeOldSoup && !Boolean.TRUE.equals(ing.getCountInSeasoning())) continue;
+            if (applyCountInSeasoning && !Boolean.TRUE.equals(ing.getCountInSeasoning())) continue;
             BigDecimal dosageKgPerKg = nz(ing.getDosagePerKgG()).divide(G_PER_KG, 8, RoundingMode.HALF_UP);
             sum = sum.add(dosageKgPerKg.multiply(maxPrice(ing)));
         }

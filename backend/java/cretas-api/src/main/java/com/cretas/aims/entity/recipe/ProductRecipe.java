@@ -3,6 +3,7 @@ package com.cretas.aims.entity.recipe;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -44,6 +45,9 @@ public class ProductRecipe extends BaseEntity {
     /** 熟制每锅基准原料(kg), 如 160 */
     @Column(name = "cooking_pot_base_kg", precision = 12, scale = 3)
     private BigDecimal cookingPotBaseKg;
+
+    /** 第二锅起比例默认值(单一权威来源) */
+    public static final BigDecimal DEFAULT_SUBSEQUENT_POT_RATIO = new BigDecimal("0.3333");
 
     /** 第二锅起比例, 默认 0.3333, per-SKU 可配 */
     @Column(name = "subsequent_pot_ratio", nullable = false, precision = 8, scale = 4)
