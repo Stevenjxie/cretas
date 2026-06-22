@@ -14,6 +14,11 @@ DELETE FROM material_batches WHERE id LIKE 'M67DEMO-MB-%';
 DELETE FROM production_plans WHERE factory_id='DEMO_FACTORY' AND plan_number LIKE 'M67DEMO-%';
 DELETE FROM sales_orders WHERE factory_id='DEMO_FACTORY' AND order_number LIKE 'M67DEMO-%';
 
+-- 自包含: 确保 M67 product_type 锚点存在 (通用 demo 重灌会清掉 DF_pt10, 这里幂等补回, 防再次孤儿)
+INSERT INTO product_types(id,factory_id,name,code,unit,category,is_active,created_by,created_at,updated_at)
+VALUES('DF_pt10','DEMO_FACTORY','M67卤牛肉','M67-LNR','盒','熟食卤味',true,1635,NOW(),NOW())
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO sales_orders(id,factory_id,order_number,customer_id,order_date,total_amount,status,created_by,created_at,updated_at,vflag,version)
 VALUES('SO-M67DEMO-001','DEMO_FACTORY','M67DEMO-SO-001','DF_c1','2026-06-16',15000,'COMPLETED',1635,NOW(),NOW(),'CREATED',0);
 
