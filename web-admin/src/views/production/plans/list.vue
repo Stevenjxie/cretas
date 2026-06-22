@@ -284,24 +284,30 @@ function tomorrowStr(): string {
 }
 const selectableSalesOrders = ref<TableRow[]>([]);
 const salesOrdersLoading = ref(false);
+let _selectableSalesOrdersInflight: Promise<void> | null = null;
 
 async function loadSelectableSalesOrders() {
   if (!factoryId.value) return;
-  salesOrdersLoading.value = true;
-  try {
-    const res = await get(`/${factoryId.value}/production-plans/sales-orders/selectable`);
-    if (res.success && Array.isArray(res.data)) {
-      selectableSalesOrders.value = res.data;
-    } else if (res.success === false) {
-      ElMessage.error(res.message || '加载销售订单失败');
+  if (_selectableSalesOrdersInflight) return _selectableSalesOrdersInflight;
+  _selectableSalesOrdersInflight = (async () => {
+    salesOrdersLoading.value = true;
+    try {
+      const res = await get(`/${factoryId.value}/production-plans/sales-orders/selectable`);
+      if (res.success && Array.isArray(res.data)) {
+        selectableSalesOrders.value = res.data;
+      } else if (res.success === false) {
+        ElMessage.error(res.message || '加载销售订单失败');
+      }
+    } catch (e) {
+      // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
+      // fallback only for network errors (避免双 toast).
+      handleCatchError(e, '加载销售订单失败');
+    } finally {
+      salesOrdersLoading.value = false;
+      _selectableSalesOrdersInflight = null;
     }
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '加载销售订单失败');
-  } finally {
-    salesOrdersLoading.value = false;
-  }
+  })();
+  return _selectableSalesOrdersInflight;
 }
 
 function handleSourceTypeChange(val: string) {

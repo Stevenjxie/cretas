@@ -1,5 +1,6 @@
 import { useRoute, useRouter } from 'vue-router';
 import { usePermissionStore } from '@/store/modules/permission';
+import type { ModuleName } from '@/store/modules/permission';
 
 /**
  * 缺上游依赖 → 创建并返回 通用机制。
@@ -14,8 +15,8 @@ export function useCreateAndReturn() {
   /** 用户能否到达目标模块页（按模块判断；write=true 时需写权限）。 */
   function canReach(module: string, opts?: { write?: boolean }): boolean {
     return opts?.write
-      ? permissionStore.canWrite(module as never)
-      : permissionStore.canAccess(module as never);
+      ? permissionStore.canWrite(module as ModuleName)
+      : permissionStore.canAccess(module as ModuleName);
   }
 
   /**

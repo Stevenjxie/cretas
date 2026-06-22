@@ -252,12 +252,14 @@ function goCreateProductType() {
 
 async function saveEditItems() {
   if (!factoryId.value || !orderId.value) return;
-  const items = editItemsRows.value.filter((r) => r.productTypeId);
+  const items = editItemsRows.value
+    .filter((r) => r.productTypeId)
+    .map((r) => ({ ...r, quantity: r.quantity ?? 0, unitPrice: r.unitPrice ?? 0, taxRate: r.taxRate ?? 0 }));
   if (items.length === 0) { ElMessage.warning('请至少添加一个产品行'); return; }
   editItemsSaving.value = true;
   try {
     const res = await put(`/${factoryId.value}/sales/orders/${orderId.value}`, { items });
-    if ((res as any)?.success !== false) {
+    if (res.success) {
       ElMessage.success('产品行已保存');
       editItemsVisible.value = false;
       await loadOrder();
@@ -273,7 +275,11 @@ onMounted(async () => {
   loadPurchaseOrders();
   loadFormulas();
   await loadProductsForEdit();
-  if (route.query.editItems === '1' && isDraft.value) openEditItems();
+  if (route.query.editItems === '1' && isDraft.value) {
+    openEditItems();
+    const { editItems: _omit, ...rest } = route.query;
+    router.replace({ query: rest as Record<string, string> });
+  }
 });
 
 async function loadOrder() {
@@ -1855,6 +1861,7 @@ async function handleQuickPayFull() {
             target-module="system"
             action-text="去创建产品类型"
             contact-text="请联系管理员先创建产品类型"
+            :require-write="true"
             @action="goCreateProductType"
           />
         </template>
