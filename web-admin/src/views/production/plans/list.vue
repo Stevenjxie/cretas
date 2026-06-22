@@ -262,6 +262,9 @@ const bomProcesses = ref<string[]>([]);
 const productWorkProcessList = ref<TableRow[]>([]);
 // Wave2: 当前产品是否已配置工序 (0工序→强制两点, 开关 disabled 锁定勾选)
 const hasProcesses = computed(() => productWorkProcessList.value.length > 0);
+// 报工模式开关只在「已选产品且该产品 0 工序」时锁死(强制免工序);
+// 未选产品 或 产品有工序 时均可自由切换 — 避免空表单时被误锁在工厂默认值上(防呆 Rule 5: 不制造 dead-end)
+const reportModeLocked = computed(() => !!planForm.value.productTypeId && !hasProcesses.value);
 const customers = ref<TableRow[]>([]);
 
 // A5: today helper
@@ -2313,7 +2316,7 @@ function handleAiFill(params: TableRow) {
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <el-switch
               v-model="planForm.skipProcessReporting"
-              :disabled="!hasProcesses"
+              :disabled="reportModeLocked"
               active-text="免工序报工"
               inactive-text="逐道报工"
               :active-value="true"
