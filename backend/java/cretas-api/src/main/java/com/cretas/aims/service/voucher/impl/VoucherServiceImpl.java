@@ -272,8 +272,12 @@ public class VoucherServiceImpl implements VoucherService {
                 .voucherNumber(reversalNumber)
                 .voucherType(original.getVoucherType())
                 .voucherDate(reversalDate)
-                .sourceBusinessType(original.getSourceBusinessType())
-                .sourceBusinessId(original.getSourceBusinessId())
+                // ⚠️ 红字冲销凭证 NOT 复制原凭证 source business — uk_voucher_source_business
+                // 唯一约束 (source_business_type, source_business_id) 会与原凭证撞 → DataIntegrityViolation
+                // → 409 "数据已存在" (单测 mock repo 照不到 DB 约束, prod 才暴). 冲销与原凭证的关联由
+                // originalVoucherId 承载, 不需要 business key (PG unique 允许多 null, 同 createDepreciation 手工凭证).
+                .sourceBusinessType(null)
+                .sourceBusinessId(null)
                 // 红字冲销凭证创建即生效 (POSTED), approver = 操作人
                 .status(VoucherStatus.POSTED)
                 .createdBy(userId)
