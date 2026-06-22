@@ -21,6 +21,7 @@ const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'submitt
 
 const submitting = ref(false);
 const batches = ref<BatchEntry[]>([]);
+const idempotencyKey = ref<string>('');
 
 function blankStep(p: { processOrder: number; processName: string; processCategory?: string | null }): StepEntry {
   return {
@@ -45,7 +46,13 @@ const wipBatchKeys = computed(() =>
   batches.value.filter((b) => !b.finished).map((b) => b.clientBatchKey));
 
 watch(() => props.visible, (v) => {
-  if (v && batches.value.length === 0) { addBatch(false); addBatch(true); }
+  if (v && batches.value.length === 0) {
+    addBatch(false);
+    addBatch(true);
+    if (!idempotencyKey.value) {
+      idempotencyKey.value = 'web-process-' + props.planId + '-' + Date.now();
+    }
+  }
 });
 
 // 防呆 Rule 1: 每道投入默认=上道产出
@@ -84,7 +91,7 @@ async function submit() {
   const err = validate();
   if (err) { ElMessage({ message: err, type: 'warning', duration: 0, showClose: true }); return; }
   const body: ProcessChainEntryRequest = {
-    idempotencyKey: `web-process-${props.planId}-${batches.value.length}-${Date.now()}`,
+    idempotencyKey: idempotencyKey.value,
     batches: batches.value,
   };
   submitting.value = true;
@@ -104,7 +111,11 @@ async function submit() {
     submitting.value = false;
   }
 }
-function close() { emit('update:visible', false); }
+function close() {
+  batches.value = [];
+  idempotencyKey.value = '';
+  emit('update:visible', false);
+}
 </script>
 
 <template>
