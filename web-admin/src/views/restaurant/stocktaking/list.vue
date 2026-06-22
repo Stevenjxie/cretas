@@ -133,6 +133,7 @@
           <el-select v-model="dialogForm.rawMaterialTypeId" filterable placeholder="选择食材" style="width: 100%">
             <el-option v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="materialTypes.length === 0" description="本店暂无食材，无法盘点" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库或管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
         </el-form-item>
         <el-form-item label="盘点日期" prop="stocktakingDate">
           <el-date-picker v-model="dialogForm.stocktakingDate" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 200px" />
@@ -200,11 +201,14 @@ import { emptyCell, formatDateCell, exportTableToExcel } from '@/utils/tableForm
 import { formatDate } from '@/utils/dateFormat';
 import type { StocktakingRecord } from '@/types/restaurant';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const factoryId = useFactoryId();
 const permissionStore = usePermissionStore();
 const canWrite = computed(() => permissionStore.canWrite('restaurant'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
 
 const materialTypes = ref<{ id: string; name: string }[]>([]);
 const materialNameMap = computed(() => Object.fromEntries(materialTypes.value.map(m => [m.id, m.name])));

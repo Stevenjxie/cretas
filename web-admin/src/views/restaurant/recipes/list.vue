@@ -136,11 +136,13 @@
           <el-select v-model="dialogForm.productTypeId" filterable placeholder="选择菜品" style="width: 100%">
             <el-option v-for="pt in productTypes" :key="pt.id" :label="pt.name" :value="pt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="productTypes.length === 0" description="本店暂无菜品，无法配置配方" target-module="system" require-write action-text="去创建菜品" contact-text="请联系管理员先创建菜品" @action="goCreate('/system/products')" />
         </el-form-item>
         <el-form-item label="食材" prop="rawMaterialTypeId">
           <el-select v-model="dialogForm.rawMaterialTypeId" filterable placeholder="选择食材" style="width: 100%">
             <el-option v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
           </el-select>
+          <UpstreamMissingHint v-if="materialTypes.length === 0" description="本店暂无食材，无法配置配方" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库或管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
         </el-form-item>
         <el-form-item label="标准用量" prop="standardQuantity">
           <el-input-number v-model="dialogForm.standardQuantity" :precision="4" :step="0.1" :min="0" />
@@ -536,11 +538,14 @@ import { getRecipes, getRecipe, getRecipeSummary, createRecipe, updateRecipe, de
 import { emptyCell, exportTableToExcel } from '@/utils/tableFormatters';
 import type { RecipeItem } from '@/types/restaurant';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const factoryId = useFactoryId();
 const permissionStore = usePermissionStore();
 const canWrite = computed(() => permissionStore.canWrite('restaurant'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
 
 const productTypes = ref<{ id: string; name: string }[]>([]);
 const materialTypes = ref<{ id: string; name: string }[]>([]);

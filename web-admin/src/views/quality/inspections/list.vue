@@ -12,11 +12,14 @@ import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('quality'));
+const { goCreate } = useCreateAndReturn();
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -363,6 +366,7 @@ function showDetail(row: TableRow) {
               :value="String(b.id)"
             />
           </el-select>
+          <UpstreamMissingHint v-if="productionBatches.length === 0" description="暂无生产批次，无法发起质检" target-module="production" require-write action-text="去生产管理" contact-text="请联系生产部门先开工生产批次" @action="goCreate('/production/plans')" />
         </el-form-item>
         <!-- Issue #745: 抽样/合格/不合格 联动自动平衡 - 填两个第三自动算 -->
         <el-form-item label="抽样数量" required>
