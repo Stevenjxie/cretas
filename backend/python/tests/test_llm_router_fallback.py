@@ -66,12 +66,14 @@ _FORBIDDEN_ON_ALIYUN = {
 
 @pytest.fixture(autouse=True)
 def _reset_cb():
-    """Reset circuit-breaker state between tests so they don't bleed."""
+    """Reset circuit-breaker + quota-skip state between tests so they don't bleed."""
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
+    llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
     yield
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
+    llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
 
 
 def _fake_response(status_code: int, body: str = "", json_payload: Dict | None = None):
