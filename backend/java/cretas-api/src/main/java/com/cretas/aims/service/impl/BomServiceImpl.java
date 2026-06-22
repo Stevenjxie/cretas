@@ -76,6 +76,21 @@ public class BomServiceImpl implements BomService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DefaultValueResolver defaultValueResolver;
 
+    /**
+     * R13 (2026-06-22): 计量单位换算 — 成本计算前把 BOM 行用量按重量单位归一到
+     * 物料主数据单位, 使其与"按主数据单位计价"的 unitPrice 口径一致.
+     * 可选注入: 单测旧构造器 (3-arg) 不传, null → 退化为不归一 (旧行为, 不崩).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
+    /**
+     * R13: 物料主数据仓库 — 取 RawMaterialType.unit 作为计价单位标尺.
+     * 可选注入, 同上.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -413,7 +428,11 @@ public class BomServiceImpl implements BomService {
 
         for (BomItem item : bomItems) {
             BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
-            BigDecimal subtotal = calculateMaterialCost(factoryId, actualQuantity, item.getUnitPrice());
+            // R13: 价-量口径对齐. unitPrice 按物料主数据单位计价 (auto-fill 自
+            //   RawMaterialType.unitPrice), 但 BOM 行用量可能按"斤"等其他重量单位录入.
+            //   计价用量须先折算到主数据单位 (e.g. 斤→kg), 否则 斤量×kg价 翻倍/折半失真.
+            BigDecimal pricingQuantity = reconcileQuantityForPricing(actualQuantity, item);
+            BigDecimal subtotal = calculateMaterialCost(factoryId, pricingQuantity, item.getUnitPrice());
             if (item.getTaxRate() == null) {
                 hasMissingTaxRate = true;
             }
@@ -601,6 +620,69 @@ public class BomServiceImpl implements BomService {
             yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP),
             6, RoundingMode.HALF_UP
         );
+    }
+
+    /**
+     * R13 (2026-06-22): 计价口径对齐 — 把 BOM 行用量折算到物料主数据计价单位.
+     *
+     * <p><b>问题:</b> BOM 行 {@code unitPrice} 默认 auto-fill 自 {@link com.cretas.aims.entity.RawMaterialType#getUnitPrice()}
+     * (见 {@code BomBatchOperationServiceImpl#290}, {@code BomReverseQueryServiceImpl#134}),
+     * 该价按物料主数据单位 ({@code RawMaterialType.unit}, 通常 kg) 计价. 但 BOM 行用量
+     * ({@code standardQuantity}) 可能按"斤"等其他<b>重量</b>单位录入 (R10 加入斤白名单).
+     * 直接 {@code 斤量 × kg价} = 失真 2× (1斤=0.5kg).
+     *
+     * <p><b>归一规则 (仅重量维度, 最小爆炸半径):</b>
+     * <ul>
+     *   <li>行单位与主数据单位<b>都是重量单位且不同</b> (e.g. 斤 vs kg, g vs kg) → 把用量
+     *       从行单位折算到主数据单位 (经 {@link com.cretas.aims.service.UnitConversionService}),
+     *       使 {@code 折算量 × 主数据价} 口径一致.</li>
+     *   <li>行单位 == 主数据单位 (e.g. 都 kg, 或 BOM 自定价 per 斤) → 透传, 不变 (旧行为).</li>
+     *   <li>非重量单位 (个/箱/袋) / 跨维度 / 缺主数据 / 缺换算依赖 → 透传原量 (绝不强行当 kg).</li>
+     * </ul>
+     *
+     * <p><b>为何只在成本层归一, 不改存储:</b> 改存储语义 (把斤量存成kg) 会动 BOM 行展示
+     * 与所有读路径, 爆炸半径大且不可逆. 成本计算点归一是单点、可逆、口径自洽的最小改动.
+     *
+     * @param actualQuantity 行实际用量 (行单位)
+     * @param item           BOM 行 (取 unit + materialTypeId)
+     * @return 折算到主数据计价单位后的用量; 无法/无需归一时返回原量
+     */
+    private BigDecimal reconcileQuantityForPricing(BigDecimal actualQuantity, BomItem item) {
+        if (actualQuantity == null || item == null) return actualQuantity;
+        // 依赖未注入 (旧单测 3-arg 构造) → 退化为不归一 (旧行为)
+        if (unitConversionService == null || rawMaterialTypeRepository == null) return actualQuantity;
+
+        String itemUnit = item.getUnit();
+        String materialTypeId = item.getMaterialTypeId();
+        if (itemUnit == null || itemUnit.isBlank() || materialTypeId == null || materialTypeId.isBlank()) {
+            return actualQuantity;
+        }
+        // 仅重量单位参与归一; 个/箱/袋/ml/L 等不归一
+        if (!unitConversionService.isWeightUnit(itemUnit)) {
+            return actualQuantity;
+        }
+
+        com.cretas.aims.entity.RawMaterialType material;
+        try {
+            material = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+        } catch (Exception e) {
+            log.debug("[R13-UOM] 加载物料失败 {}: {} — 用量不归一", materialTypeId, e.getMessage());
+            return actualQuantity;
+        }
+        if (material == null) return actualQuantity;
+
+        String masterUnit = material.getUnit();
+        if (masterUnit == null || masterUnit.isBlank()) return actualQuantity;
+        // 主数据单位非重量 (e.g. 主数据按"箱"计价) → 不在本最小修范围内, 透传 (见终审点)
+        if (!unitConversionService.isWeightUnit(masterUnit)) return actualQuantity;
+
+        BigDecimal converted = unitConversionService.convert(actualQuantity, itemUnit, masterUnit);
+        if (converted == null) return actualQuantity;   // 不应发生 (两者均重量), 防御
+        if (converted.compareTo(actualQuantity) != 0) {
+            log.debug("[R13-UOM] BOM 计价口径归一: material={} {}{} → {}{} (主数据计价单位)",
+                    materialTypeId, actualQuantity, itemUnit, converted, masterUnit);
+        }
+        return converted;
     }
 
     /**

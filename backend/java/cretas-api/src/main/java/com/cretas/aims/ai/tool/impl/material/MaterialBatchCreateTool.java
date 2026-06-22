@@ -51,6 +51,10 @@ public class MaterialBatchCreateTool extends AbstractBusinessTool {
     @Lazy
     private SupplierService supplierService;
 
+    /** R13: 计量单位换算 (斤=0.5kg / 吨=1000kg 等). 唯一权威, 取代散落硬编码. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
     // 数量提取正则：匹配 "500公斤"、"300kg"、"100斤" 等
     private static final Pattern QUANTITY_PATTERN = Pattern.compile(
             "(\\d+(?:\\.\\d+)?)\\s*(公斤|kg|千克|斤|吨|t|箱|件|袋|桶|瓶|个)",
@@ -271,6 +275,18 @@ public class MaterialBatchCreateTool extends AbstractBusinessTool {
     private BigDecimal convertToKg(BigDecimal quantity, String unit) {
         if (quantity == null) return BigDecimal.ZERO;
 
+        // R13: 优先走 UnitConversionService (斤/吨/g/mg/公斤/千克/克 → kg 的唯一权威).
+        if (unitConversionService != null && unit != null) {
+            BigDecimal inKg = unitConversionService.toKg(quantity, unit);
+            if (inKg != null) {
+                return inKg;
+            }
+            // toKg 返 null = 非重量单位 (箱/件/袋/桶/瓶/个): 沿用原值 (旧 default 行为).
+            return quantity;
+        }
+
+        // Fallback (service 未注入, e.g. 旧单测): 保持既有本地系数, 行为不变.
+        if (unit == null) return quantity;
         switch (unit) {
             case "吨":
             case "t":

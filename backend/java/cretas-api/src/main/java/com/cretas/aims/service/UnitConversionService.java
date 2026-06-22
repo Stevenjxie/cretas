@@ -41,6 +41,31 @@ public class UnitConversionService {
     private static final BigDecimal THOUSAND = new BigDecimal("1000");
 
     /**
+     * 质量单位 → kg 基准的换算系数 (R13, 2026-06-22).
+     *
+     * <p>客户决策 (R13): 凡按非-kg 重量单位录入的量, 成本/库存计算前归一到 kg 基准.
+     * 1斤=0.5kg (中国市制斤), 1吨=1000kg, 1g=0.001kg, 1mg=0.000001kg.
+     *
+     * <p>所有 key 已 lowercase (中文不受 lowercase 影响). 含中文别名 (斤/吨/克/公斤/千克/毫克)
+     * + latin token (kg/g/mg/t), 与 {@code MaterialBatchCreateTool.convertToKg} 既有
+     * 斤=0.5 / 吨=1000 系数对齐 (本表为唯一权威, 消除散落硬编码 drift).
+     *
+     * <p><b>不含</b> ml/L (体积维度) 与 个/箱/袋 (离散计数) — 这些不是重量, 没有 kg 系数.
+     */
+    private static final java.util.Map<String, BigDecimal> WEIGHT_TO_KG = java.util.Map.ofEntries(
+            java.util.Map.entry("kg", BigDecimal.ONE),
+            java.util.Map.entry("千克", BigDecimal.ONE),
+            java.util.Map.entry("公斤", BigDecimal.ONE),
+            java.util.Map.entry("g", new BigDecimal("0.001")),
+            java.util.Map.entry("克", new BigDecimal("0.001")),
+            java.util.Map.entry("mg", new BigDecimal("0.000001")),
+            java.util.Map.entry("毫克", new BigDecimal("0.000001")),
+            java.util.Map.entry("斤", new BigDecimal("0.5")),
+            java.util.Map.entry("吨", new BigDecimal("1000")),
+            java.util.Map.entry("t", new BigDecimal("1000"))
+    );
+
+    /**
      * 单位换算.
      *
      * @param value     原值, null → null
@@ -56,12 +81,14 @@ public class UnitConversionService {
 
         if (from.equals(to)) return value;
 
-        // 质量: g ↔ kg
-        if ("g".equals(from) && "kg".equals(to)) {
-            return value.divide(THOUSAND, 6, RoundingMode.HALF_UP);
-        }
-        if ("kg".equals(from) && "g".equals(to)) {
-            return value.multiply(THOUSAND);
+        // 质量: 任意重量单位 ↔ 任意重量单位 (经 kg 基准, R13).
+        //   覆盖 g↔kg / 斤↔kg / 吨↔kg / mg↔kg / 斤↔g / 斤↔吨 等全部重量两两组合.
+        BigDecimal fromFactor = WEIGHT_TO_KG.get(from);
+        BigDecimal toFactor = WEIGHT_TO_KG.get(to);
+        if (fromFactor != null && toFactor != null) {
+            // value(from) → kg → to:  value × fromFactor / toFactor
+            BigDecimal inKg = value.multiply(fromFactor);
+            return inKg.divide(toFactor, 6, RoundingMode.HALF_UP);
         }
 
         // 体积: ml ↔ L
@@ -75,6 +102,30 @@ public class UnitConversionService {
         // 不支持的换算 (跨维度 / 离散单位): null 表示沿用原值
         log.debug("UnitConversionService: unsupported conversion {}→{}, returning null", fromUnit, toUnit);
         return null;
+    }
+
+    /**
+     * 把一个 (value, unit) 折算到 kg 基准 (R13, 2026-06-22).
+     *
+     * <p>用于成本/库存计算前的"边界归一": 凡重量单位 (kg/g/mg/斤/吨/克/公斤/千克/t)
+     * 一律折到 kg; <b>非重量单位</b> (个/箱/袋/ml/L 等离散或体积单位) <b>不归一</b>,
+     * 返回 {@code null} 让 caller 保持原值原单位 (绝不强行当 kg).
+     *
+     * @param value 原值, null → null
+     * @param unit  原单位
+     * @return kg 基准值 (scale=6 HALF_UP); 非重量单位 / null 单位 → null
+     */
+    public BigDecimal toKg(BigDecimal value, String unit) {
+        if (value == null || unit == null) return null;
+        BigDecimal factor = WEIGHT_TO_KG.get(unit.trim().toLowerCase());
+        if (factor == null) return null;          // 非重量单位: 不归一
+        if (BigDecimal.ONE.compareTo(factor) == 0) return value;   // 已是 kg, 透传
+        return value.multiply(factor).setScale(6, RoundingMode.HALF_UP);
+    }
+
+    /** 该单位是否为可归一到 kg 的重量单位 (kg/g/mg/斤/吨/克/公斤/千克/t). */
+    public boolean isWeightUnit(String unit) {
+        return unit != null && WEIGHT_TO_KG.containsKey(unit.trim().toLowerCase());
     }
 
     /**
@@ -96,9 +147,11 @@ public class UnitConversionService {
         String from = fromUnit.trim().toLowerCase();
         String to = toUnit.trim().toLowerCase();
         if (from.equals(to)) return true;
-        return ("g".equals(from) && "kg".equals(to))
-            || ("kg".equals(from) && "g".equals(to))
-            || ("ml".equals(from) && "l".equals(to))
+        // 任意两个重量单位之间可换算 (经 kg 基准, R13)
+        if (WEIGHT_TO_KG.containsKey(from) && WEIGHT_TO_KG.containsKey(to)) {
+            return true;
+        }
+        return ("ml".equals(from) && "l".equals(to))
             || ("l".equals(from) && "ml".equals(to));
     }
 }
