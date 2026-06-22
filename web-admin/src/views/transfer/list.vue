@@ -86,6 +86,9 @@ const formRules = {
 const materialOptions = ref<MaterialTypeOption[]>([]);
 const factoryNetworkOptions = ref<FactoryNetworkEntry[]>([]);
 const factoryNetworkLoading = ref(false);
+// F-FP-4: 仓库下拉 (参考 stocktakes/index.vue 写法)
+interface WarehouseOption { id: string | number; name: string; type?: string }
+const warehouseOptions = ref<WarehouseOption[]>([]);
 
 onMounted(() => loadData());
 
@@ -138,6 +141,15 @@ async function loadFactoryNetwork() {
   }
 }
 
+// F-FP-4: 加载本厂仓库列表 (同 stocktakes/index.vue loadWarehouses)
+async function loadWarehouses() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<WarehouseOption[]>(`/${factoryId.value}/factory/warehouses`);
+    warehouseOptions.value = Array.isArray(res.data) ? res.data : [];
+  } catch { /* 失败时仓库下拉为空，用户仍可不填 (字段可选) */ }
+}
+
 function openCreateDialog() {
   form.value = {
     transferType: 'BRANCH_TO_HQ',
@@ -151,6 +163,7 @@ function openCreateDialog() {
   };
   loadMaterialOptions();
   loadFactoryNetwork();
+  loadWarehouses();
   createVisible.value = true;
 }
 
@@ -200,6 +213,12 @@ async function submitCreate() {
     if (!it.materialTypeId) { ElMessage.warning('请为每行选择物料'); return; }
     if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
     if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
+    // F-FP-3 Rule1: 超过现有库存时阻止提交，边界前置
+    const stock = (it as any)._currentStock;
+    if (stock != null && stock !== '' && Number(it.quantity) > Number(stock)) {
+      ElMessage({ message: `调拨数量 ${it.quantity} 超过现有库存 ${stock}（物料：${it.itemName || it.materialTypeId}），请调整数量`, type: 'error', duration: 0, showClose: true });
+      return;
+    }
   }
   submitting.value = true;
   try {
@@ -386,15 +405,42 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             </el-form-item>
           </el-col>
         </el-row>
+        <!-- F-FP-4 Rule3: 仓库改 el-select，仓管员无需记 UUID，参考 stocktakes/index.vue -->
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="调出仓库" prop="sourceWarehouseId">
-              <el-input v-model="form.sourceWarehouseId" placeholder="(可选) 跨仓调拨时填,本厂总仓不填" clearable />
+              <el-select
+                v-model="form.sourceWarehouseId"
+                placeholder="(可选) 选择调出仓库"
+                clearable
+                filterable
+                style="width:100%"
+              >
+                <el-option
+                  v-for="w in warehouseOptions"
+                  :key="String(w.id)"
+                  :label="String(w.name)"
+                  :value="String(w.id)"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="调入仓库" prop="targetWarehouseId">
-              <el-input v-model="form.targetWarehouseId" placeholder="(可选) 跨仓调拨时填" clearable />
+              <el-select
+                v-model="form.targetWarehouseId"
+                placeholder="(可选) 选择调入仓库"
+                clearable
+                filterable
+                style="width:100%"
+              >
+                <el-option
+                  v-for="w in warehouseOptions"
+                  :key="String(w.id)"
+                  :label="String(w.name)"
+                  :value="String(w.id)"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
@@ -444,10 +490,13 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             </template>
           </el-table-column>
           <el-table-column label="数量" width="130">
+            <!-- F-FP-3 Rule1: :max = 现有库存，超量时橙色提示边框，超量禁提交 -->
             <template #default="{ row }">
               <el-input-number
                 v-model="row.quantity" :min="0.001" :precision="3"
+                :max="row._currentStock != null && row._currentStock !== '' ? Number(row._currentStock) : undefined"
                 :controls="false" size="small" style="width:100%"
+                :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && Number(row.quantity) > Number(row._currentStock) }"
               />
             </template>
           </el-table-column>
@@ -510,4 +559,6 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
   .header-right { display: flex; gap: 8px; }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+/* F-FP-3: 超库存时橙色边框提示 */
+:deep(.over-stock .el-input__wrapper) { box-shadow: 0 0 0 1px #e6a23c inset !important; }
 </style>
