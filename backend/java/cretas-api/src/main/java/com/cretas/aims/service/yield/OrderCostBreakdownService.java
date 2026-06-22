@@ -220,6 +220,13 @@ public class OrderCostBreakdownService {
     /**
      * T1 递归回溯: 返回 [该消耗回溯到的成本, 谱系深度].
      * 上游批次由生产批次产出且有消耗 → 递归取其上游成本和 (回溯到更上游); 否则叶子 = consumption.totalCost。
+     *
+     * <p><b>共享上游按消耗比例分摊 (SP-B1):</b> 若上游批次被多个下游消耗, 每个下游只取上游总成本的
+     * {@code consumedQty / upstreamReceiptQty} 份额, 防止双重计数。
+     * <br>向后兼容论证: 既有单链 1:1 全量消耗时 consumedQty == upstreamReceiptQty → 比例=1 →
+     * apportioned == upstreamSum, 与改前一致。只有「部分消耗/共享上游」才缩放。
+     * <br>缺量兜底: consumedQty 或 upstreamReceiptQty 为 null/0 时退回 own
+     * (consumption.totalCost = 写入时 qty×单价 的切片, 已是合理估值)。
      */
     private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
         BigDecimal own = nz(c.getTotalCost());
@@ -253,7 +260,19 @@ public class OrderCostBreakdownService {
             sum = sum.add(r[0]);
             maxChildDepth = Math.max(maxChildDepth, r[1].intValue());
         }
-        return new BigDecimal[]{sum.signum() > 0 ? sum : own, BigDecimal.valueOf(maxChildDepth)};
+        // ★ SP-B1: 按消耗比例分摊上游成本, 防共享上游双重计数。
+        // 向后兼容: 1:1 全量消耗时 consumedQty==upstreamReceiptQty → 比例=1 → apportioned==sum (无变化)。
+        // 缺量兜底: 任一为 null/0 → 退回 own (消耗写入时切片, 已是合理估值)。
+        BigDecimal consumedQty = nz(c.getQuantity());
+        BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
+        BigDecimal apportioned;
+        if (sum.signum() > 0 && consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
+            apportioned = sum.multiply(consumedQty)
+                    .divide(upstreamQty, 4, java.math.RoundingMode.HALF_UP);
+        } else {
+            apportioned = own;   // 缺量数据时退回消耗自身 totalCost
+        }
+        return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
     }
 
     /**
