@@ -40,13 +40,15 @@ class ProductMidQuoteServiceTest {
     @Mock ProductMidQuoteRepository midQuoteRepository;
     @Mock QuotationTaskRepository quotationTaskRepository;
     @Mock ProductionBatchRepository productionBatchRepository;
+    @Mock com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
 
     private ProductMidQuoteServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ProductMidQuoteServiceImpl(
-                midQuoteRepository, quotationTaskRepository, productionBatchRepository);
+                midQuoteRepository, quotationTaskRepository, productionBatchRepository,
+                materialConsumptionRepository);
     }
 
     private QuotationTask buildPreQuoteTask(String taskId) {
@@ -210,6 +212,132 @@ class ProductMidQuoteServiceTest {
         );
 
         assertTrue(result.getMidQuote().isVarianceAlert(), "超支应触发 varianceAlert=true");
+    }
+
+    // ==================== Feature #4 (R12): 材料成本/kg 移动均价自动核算 ====================
+
+    private com.cretas.aims.entity.MaterialConsumption consumption(BigDecimal qty, BigDecimal unitPrice) {
+        com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
+        c.setQuantity(qty);
+        c.setUnitPrice(unitPrice);
+        c.setTotalCost(qty.multiply(unitPrice));  // 报工/领料路径写入口径
+        return c;
+    }
+
+    @Test
+    @DisplayName("calculate() — materialCostPerKg=null 时从领料移动均价自动核算")
+    void calculate_autoComputesMaterialCostFromConsumptions() {
+        Long batchId = 2001L;
+        String taskId = "task-001";
+
+        when(quotationTaskRepository.findById(taskId))
+                .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
+                .thenReturn(Optional.of(buildTrialBatch(batchId)));  // goodQuantity=47.5
+        when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
+                .thenReturn(Optional.empty());
+        when(midQuoteRepository.save(any(ProductMidQuote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        // 领料: 100kg×¥10 + 50kg×¥20 = 1000 + 1000 = 2000 totalCost
+        when(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(batchId, "F006"))
+                .thenReturn(java.util.List.of(
+                        consumption(new BigDecimal("100"), new BigDecimal("10")),
+                        consumption(new BigDecimal("50"), new BigDecimal("20"))));
+
+        // materialCostPerKg = null → 触发自动核算
+        MidQuoteCalculationResultDTO result = service.calculate(
+                "F006", batchId, taskId,
+                null,                        // material → 自动算
+                new BigDecimal("12.5000"),  // labor
+                new BigDecimal("5.0000"),   // overhead
+                new BigDecimal("10.00"));
+
+        // 2000 / 47.5 = 42.1053
+        assertEquals(0, new BigDecimal("42.1053").compareTo(result.getMidQuote().getMaterialCostPerKg()),
+                "材料成本/kg = Σ totalCost(2000) / 产出(47.5kg)");
+        // total = 42.1053 + 12.5 + 5 = 59.6053
+        assertEquals(0, new BigDecimal("59.6053").compareTo(result.getMidQuote().getTotalCostPerKg()));
+    }
+
+    @Test
+    @DisplayName("calculate() — 退料负 totalCost 自动净销")
+    void calculate_autoComputeNetsReturns() {
+        Long batchId = 2002L;
+        String taskId = "task-001";
+
+        when(quotationTaskRepository.findById(taskId))
+                .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
+                .thenReturn(Optional.of(buildTrialBatch(batchId)));  // goodQuantity=47.5
+        when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
+                .thenReturn(Optional.empty());
+        when(midQuoteRepository.save(any(ProductMidQuote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        // 领 100kg×¥10=1000, 退 20kg×¥10=-200 → 净 800
+        when(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(batchId, "F006"))
+                .thenReturn(java.util.List.of(
+                        consumption(new BigDecimal("100"), new BigDecimal("10")),
+                        consumption(new BigDecimal("-20"), new BigDecimal("10"))));
+
+        MidQuoteCalculationResultDTO result = service.calculate(
+                "F006", batchId, taskId, null,
+                new BigDecimal("12.5000"), new BigDecimal("5.0000"), new BigDecimal("10.00"));
+
+        // 800 / 47.5 = 16.8421
+        assertEquals(0, new BigDecimal("16.8421").compareTo(result.getMidQuote().getMaterialCostPerKg()));
+    }
+
+    @Test
+    @DisplayName("calculate() — 无领料记录 → materialCostPerKg=null + warning (诚实空值)")
+    void calculate_noConsumptions_returnsNullMaterialCostWithWarning() {
+        Long batchId = 2003L;
+        String taskId = "task-001";
+
+        when(quotationTaskRepository.findById(taskId))
+                .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
+                .thenReturn(Optional.of(buildTrialBatch(batchId)));
+        when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
+                .thenReturn(Optional.empty());
+        when(midQuoteRepository.save(any(ProductMidQuote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(batchId, "F006"))
+                .thenReturn(java.util.List.of());  // 无领料
+
+        MidQuoteCalculationResultDTO result = service.calculate(
+                "F006", batchId, taskId, null,
+                new BigDecimal("12.5000"), new BigDecimal("5.0000"), new BigDecimal("10.00"));
+
+        assertNull(result.getMidQuote().getMaterialCostPerKg(), "无领料 → 材料成本/kg 诚实 null");
+        assertNull(result.getMidQuote().getTotalCostPerKg(), "材料 null → total null");
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("无领料记录")),
+                "应含无领料记录 warning");
+    }
+
+    @Test
+    @DisplayName("calculate() — caller 显式传 materialCostPerKg 时不触发自动核算 (人工值优先)")
+    void calculate_explicitMaterialCost_skipsAutoCompute() {
+        Long batchId = 2004L;
+        String taskId = "task-001";
+
+        when(quotationTaskRepository.findById(taskId))
+                .thenReturn(Optional.of(buildPreQuoteTask(taskId)));
+        when(productionBatchRepository.findByIdAndFactoryId(batchId, "F006"))
+                .thenReturn(Optional.of(buildTrialBatch(batchId)));
+        when(midQuoteRepository.findByFactoryIdAndTrialBatchId("F006", batchId))
+                .thenReturn(Optional.empty());
+        when(midQuoteRepository.save(any(ProductMidQuote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        MidQuoteCalculationResultDTO result = service.calculate(
+                "F006", batchId, taskId,
+                new BigDecimal("33.0000"),  // 显式材料成本
+                new BigDecimal("12.5000"), new BigDecimal("5.0000"), new BigDecimal("10.00"));
+
+        assertEquals(0, new BigDecimal("33.0000").compareTo(result.getMidQuote().getMaterialCostPerKg()),
+                "显式传值优先, 不被自动核算覆盖");
+        // 不应查领料记录
+        verify(materialConsumptionRepository, never()).findByProductionBatchIdAndFactoryId(any(), any());
     }
 
     // ==================== confirmMidQuote 测试 ====================

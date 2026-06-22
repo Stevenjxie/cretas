@@ -2,8 +2,11 @@ package com.cretas.aims.service.voucher.impl;
 
 import com.cretas.aims.entity.enums.VoucherFlag;
 import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.PayrollRecordRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.VoucherRepository;
@@ -207,8 +210,9 @@ class VoucherServiceImplTest {
     }
 
     @Test
-    void voidVoucherSetsVoidStatus() {
-        Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.POSTED).description("foo").build();
+    void voidVoucherDraftSetsVoidStatus() {
+        // DRAFT 凭证未过账, 直接置 VOID (向后兼容, 无需红字冲销)。
+        Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.DRAFT).description("foo").build();
         when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
         when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -225,10 +229,157 @@ class VoucherServiceImplTest {
                 .status(VoucherStatus.VOID).description("foo [作废: 第一次]").build();
         when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
 
-        assertThrows(IllegalStateException.class,
+        BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.voidVoucher("F001", "v-1", "第二次", 42L));
+        assertEquals(409, ex.getCode());
+        assertEquals("VOUCHER_ALREADY_VOID", ex.getErrorCode());
         // 不应再次写库, description 不应被二次追加
         verify(voucherRepo, never()).save(any());
         assertEquals("foo [作废: 第一次]", v.getDescription());
+    }
+
+    // ==================== Feature #7 (R12): 红字冲销 ====================
+
+    /** POSTED 凭证作废 → 生成红字冲销凭证 (借贷互换), 原凭证标 REVERSED, 双向关联。 */
+    @Test
+    void voidPostedVoucherGeneratesRedLetterReversal() {
+        Voucher original = Voucher.builder()
+                .id("v-orig").factoryId("F001").voucherNumber("V-2026-0007")
+                .voucherType(VoucherType.SALES_RECEIPT)
+                .voucherDate(LocalDate.of(2026, 6, 1))
+                .sourceBusinessType("SALES_ORDER").sourceBusinessId("so-9")
+                .status(VoucherStatus.POSTED)
+                .totalDebit(new BigDecimal("500.00")).totalCredit(new BigDecimal("500.00"))
+                .description("销售订单 SO-9")
+                .build();
+        // 原分录: 借 应收 500 / 贷 收入 500 (含客户辅助核算)
+        original.getEntries().add(com.cretas.aims.entity.finance.VoucherEntry.builder()
+                .lineNo(1).subjectCode("1122").subjectName("应收账款")
+                .debit(new BigDecimal("500.00")).credit(BigDecimal.ZERO)
+                .auxiliaryType(com.cretas.aims.entity.enums.AuxiliaryType.CUSTOMER)
+                .auxiliaryEntityId("cust-1").description("销售收入挂账").build());
+        original.getEntries().add(com.cretas.aims.entity.finance.VoucherEntry.builder()
+                .lineNo(2).subjectCode("6001").subjectName("主营业务收入")
+                .debit(BigDecimal.ZERO).credit(new BigDecimal("500.00"))
+                .description("销售订单 SO-9").build());
+
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-orig", "F001"))
+                .thenReturn(Optional.of(original));
+        when(voucherRepo.countByFactoryIdAndYear("F001", "2026")).thenReturn(7L);
+        when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
+            Voucher v = inv.getArgument(0);
+            if (v.getId() == null) v.setId("v-reversal");
+            return v;
+        });
+
+        service.voidVoucher("F001", "v-orig", "客户退单", 42L);
+
+        // 捕获两次 save: 冲销凭证 + 原凭证
+        org.mockito.ArgumentCaptor<Voucher> captor = org.mockito.ArgumentCaptor.forClass(Voucher.class);
+        verify(voucherRepo, times(2)).save(captor.capture());
+        Voucher reversal = captor.getAllValues().get(0);
+        Voucher savedOriginal = captor.getAllValues().get(1);
+
+        // 红字冲销凭证: POSTED, 关联原凭证, 借贷互换
+        assertEquals(VoucherStatus.POSTED, reversal.getStatus());
+        assertEquals("v-orig", reversal.getOriginalVoucherId());
+        assertEquals("V-2026-0008", reversal.getVoucherNumber());
+        assertEquals(VoucherType.SALES_RECEIPT, reversal.getVoucherType());
+        assertEquals(LocalDate.of(2026, 6, 1), reversal.getVoucherDate(), "冲销凭证沿用原凭证期间");
+        assertEquals(2, reversal.getEntries().size());
+
+        // line1: 原借 应收 500 → 冲销贷 应收 500 (方向互换, 金额正数, 辅助核算保留)
+        VoucherEntry r1 = reversal.getEntries().get(0);
+        assertEquals("1122", r1.getSubjectCode());
+        assertEquals(0, BigDecimal.ZERO.compareTo(r1.getDebit()));
+        assertEquals(0, new BigDecimal("500.00").compareTo(r1.getCredit()));
+        assertEquals(com.cretas.aims.entity.enums.AuxiliaryType.CUSTOMER, r1.getAuxiliaryType());
+        assertEquals("cust-1", r1.getAuxiliaryEntityId());
+        // line2: 原贷 收入 500 → 冲销借 收入 500
+        VoucherEntry r2 = reversal.getEntries().get(1);
+        assertEquals("6001", r2.getSubjectCode());
+        assertEquals(0, new BigDecimal("500.00").compareTo(r2.getDebit()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(r2.getCredit()));
+
+        // 借贷必平: totalDebit == totalCredit == 500
+        assertEquals(0, new BigDecimal("500.00").compareTo(reversal.getTotalDebit()));
+        assertEquals(0, new BigDecimal("500.00").compareTo(reversal.getTotalCredit()));
+
+        // 原凭证: REVERSED, 反向关联冲销凭证
+        assertEquals(VoucherStatus.REVERSED, savedOriginal.getStatus());
+        assertEquals("v-reversal", savedOriginal.getReversalVoucherId());
+        assertTrue(savedOriginal.getDescription().contains("红字冲销"));
+        assertTrue(savedOriginal.getDescription().contains("客户退单"));
+    }
+
+    /** POSTED 凭证含销项税 3 行 — 互换后仍借贷平衡。 */
+    @Test
+    void voidPostedVoucherWithTaxLineBalances() {
+        Voucher original = Voucher.builder()
+                .id("v-tax").factoryId("F001").voucherNumber("V-2026-0010")
+                .voucherType(VoucherType.SALES_RECEIPT)
+                .voucherDate(LocalDate.of(2026, 6, 2))
+                .sourceBusinessType("SALES_ORDER").sourceBusinessId("so-tax")
+                .status(VoucherStatus.POSTED)
+                .totalDebit(new BigDecimal("1130.00")).totalCredit(new BigDecimal("1130.00"))
+                .build();
+        original.getEntries().add(com.cretas.aims.entity.finance.VoucherEntry.builder()
+                .lineNo(1).subjectCode("1122").subjectName("应收账款")
+                .debit(new BigDecimal("1130.00")).credit(BigDecimal.ZERO).build());
+        original.getEntries().add(com.cretas.aims.entity.finance.VoucherEntry.builder()
+                .lineNo(2).subjectCode("6001").subjectName("主营业务收入")
+                .debit(BigDecimal.ZERO).credit(new BigDecimal("1000.00")).build());
+        original.getEntries().add(com.cretas.aims.entity.finance.VoucherEntry.builder()
+                .lineNo(3).subjectCode("2221.01").subjectName("应交税费-销项税额")
+                .debit(BigDecimal.ZERO).credit(new BigDecimal("130.00")).build());
+
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-tax", "F001"))
+                .thenReturn(Optional.of(original));
+        when(voucherRepo.countByFactoryIdAndYear("F001", "2026")).thenReturn(10L);
+        when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> {
+            Voucher v = inv.getArgument(0);
+            if (v.getId() == null) v.setId("v-rev-tax");
+            return v;
+        });
+
+        // 不抛 UnbalancedVoucherException 即证明 validateBalanced 通过
+        assertDoesNotThrow(() -> service.voidVoucher("F001", "v-tax", "开票错误", 1L));
+
+        org.mockito.ArgumentCaptor<Voucher> captor = org.mockito.ArgumentCaptor.forClass(Voucher.class);
+        verify(voucherRepo, times(2)).save(captor.capture());
+        Voucher reversal = captor.getAllValues().get(0);
+        assertEquals(3, reversal.getEntries().size());
+        // 互换: 借 1000+130=1130 (原贷两行) / 贷 1130 (原借一行)
+        assertEquals(0, new BigDecimal("1130.00").compareTo(reversal.getTotalDebit()));
+        assertEquals(0, new BigDecimal("1130.00").compareTo(reversal.getTotalCredit()));
+    }
+
+    /** 已 REVERSED 凭证不可再次冲销/作废 (幂等 409)。 */
+    @Test
+    void voidReversedVoucherRejected() {
+        Voucher v = Voucher.builder().id("v-r").factoryId("F001")
+                .status(VoucherStatus.REVERSED).reversalVoucherId("v-rev").build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-r", "F001")).thenReturn(Optional.of(v));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.voidVoucher("F001", "v-r", "重复", 1L));
+        assertEquals(409, ex.getCode());
+        assertEquals("VOUCHER_ALREADY_REVERSED", ex.getErrorCode());
+        verify(voucherRepo, never()).save(any());
+    }
+
+    /** 红字冲销凭证本身 (original_voucher_id 非 null) 不可被作废/再冲销。 */
+    @Test
+    void voidReversalVoucherItselfRejected() {
+        Voucher reversal = Voucher.builder().id("v-rev").factoryId("F001")
+                .status(VoucherStatus.POSTED).originalVoucherId("v-orig").build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-rev", "F001"))
+                .thenReturn(Optional.of(reversal));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.voidVoucher("F001", "v-rev", "x", 1L));
+        assertEquals(409, ex.getCode());
+        assertEquals("VOUCHER_IS_REVERSAL", ex.getErrorCode());
+        verify(voucherRepo, never()).save(any());
     }
 }
