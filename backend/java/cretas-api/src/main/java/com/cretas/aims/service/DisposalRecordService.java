@@ -1,9 +1,15 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.entity.DisposalRecord;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DisposalRecordRepository;
+import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,11 +22,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 报废记录服务层实现
@@ -35,6 +43,13 @@ import java.util.Optional;
 public class DisposalRecordService implements IDisposalRecordService {
 
     private final DisposalRecordRepository disposalRecordRepository;
+
+    /** 报损审批通过时扣减原料批次库存 + 写 MaterialBatchAdjustment 留痕。 */
+    private final MaterialBatchRepository materialBatchRepository;
+    private final MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
+
+    /** 报损审批通过时扣减成品(生产)批次库存。 */
+    private final ProductionBatchRepository productionBatchRepository;
 
     /** SP12 §5.3: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
     @Autowired(required = false)
@@ -94,7 +109,23 @@ public class DisposalRecordService implements IDisposalRecordService {
     }
 
     /**
-     * 审批报废记录 (通过 → APPROVED, 触发库存扣减)。
+     * 审批报废记录 (通过 → APPROVED, <b>真实扣减库存 + 记损失金额</b>)。
+     *
+     * <p>转录硬约束 (6.9 行337 "报损成本增加" / 行520 "所有库存变动必须财务审批"):
+     * 报损审批通过应真扣对应批次库存并写入实际损失金额 {@code actualLoss}。此前仅置
+     * {@code approvalStatus=APPROVED} (前端 dialog 与 javadoc 声称的 "扣减库存" 是 aspirational)。
+     *
+     * <p>按关联批次类型分流扣减:
+     * <ul>
+     *   <li>{@code materialBatchId} 非空 (原料报损) → MaterialBatch 按可用量 currentQuantity
+     *       (= receiptQuantity - usedQuantity - reservedQuantity) 把关, 增 usedQuantity 扣减
+     *       (与正常领料 {@code MaterialBatchServiceImpl.useBatchQuantity} 一致) +
+     *       写 MaterialBatchAdjustment 负数留痕, 单价取 batch.unitPrice。</li>
+     *   <li>{@code productionBatchId} 非空 (成品报损) → H2 安全阻止 (422):
+     *       ProductionBatch.quantity 是产出额定值非可售库存, 可售库存在 FinishedGoodsBatch,
+     *       但 DisposalRecord 无法可靠定位 FG 批次 → 不扣错表, 抛 422 明确阻止。</li>
+     * </ul>
+     * 库存不足 → 409 阻止审批 (不允许扣成负)。幂等: 仅 PENDING 可审批, 扣库存只发生一次。
      *
      * <p>F-BUG-4: 审批人 {@code approverId} / {@code approverName} 由调用方 (controller)
      * 从 JWT token 取, 不再信任请求体。F-BUG-5: 强制财务/工厂管理员角色。
@@ -115,9 +146,130 @@ public class DisposalRecordService implements IDisposalRecordService {
                     .withHint("查看记录状态").withHintTarget("status");
         }
 
+        // 真实扣减库存 + 计算实际损失 (同一事务, 库存不足抛 409 阻止审批)
+        BigDecimal actualLoss = applyDisposalToInventory(record, approverId, requestRole);
+        record.setActualLoss(actualLoss);
+
         record.approve(approverId, approverName);
-        log.info("审批报废记录: id={}, 审批人={} ({})", id, approverName, approverId);
+        log.info("审批报废记录: id={}, 审批人={} ({}), 实际损失={}", id, approverName, approverId, actualLoss);
         return disposalRecordRepository.save(record);
+    }
+
+    /**
+     * 按关联批次类型扣减对应库存, 返回实际损失金额 (数量 × 批次单价)。
+     *
+     * <p>红线: 复用现有扣减写法 (WastageReportServiceImpl.applyWastageToInventory)。
+     * 库存不足 → 409 阻止审批。无关联批次 (仅质检/返工关联, 无 material/production 批次)
+     * → 不扣库存, actualLoss 取估损 estimatedLoss 兜底。
+     */
+    private BigDecimal applyDisposalToInventory(DisposalRecord record, Integer approverId,
+            String requestRole) {
+        BigDecimal qty = record.getDisposalQuantity();
+        if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(422, "报损数量必须大于0")
+                    .withHint("请核实报损数量").withHintTarget("disposalQuantity");
+        }
+        BigDecimal disposalQty = qty.setScale(2, RoundingMode.HALF_UP);
+
+        // 原料报损 → 扣 MaterialBatch (按可用量 currentQuantity 把关, 增 usedQuantity 扣减) + 写 adjustment 负数
+        if (record.getMaterialBatchId() != null && !record.getMaterialBatchId().isBlank()) {
+            MaterialBatch batch = materialBatchRepository.findById(record.getMaterialBatchId())
+                    .orElseThrow(() -> new BusinessException(404,
+                            "报损批次不存在: " + record.getMaterialBatchId()));
+            // 跨租户: 批次必须属于同工厂
+            if (batch.getFactoryId() == null || !batch.getFactoryId().equals(record.getFactoryId())) {
+                throw new BusinessException(403, "无权操作该批次")
+                        .withHint("批次不属于当前工厂");
+            }
+
+            // H1 (审计 round2): 库存不足判定 + 扣减必须用真实可用量
+            // currentQuantity = receiptQuantity - usedQuantity - reservedQuantity (MaterialBatch.getCurrentQuantity),
+            // 不能只看 receiptQuantity —— 否则会扣进别人已领用(usedQuantity)/已预留(reservedQuantity)的量,
+            // 把 currentQuantity 扣成负数(库存错乱). 扣减方式与正常领料一致(MaterialBatchServiceImpl.useBatchQuantity):
+            // 增 usedQuantity 而非减 receiptQuantity, 使 currentQuantity 正确反映 + 与领料模型一致.
+            // 注: WastageReportServiceImpl 有同款 receiptQuantity-only gate 隐患, 待单独修.
+            BigDecimal available = batch.getCurrentQuantity() != null
+                    ? batch.getCurrentQuantity() : BigDecimal.ZERO;
+            if (available.subtract(disposalQty).signum() < 0) {
+                throw new BusinessException(409,
+                        "报损数量 " + disposalQty + " 超过批次可用库存 " + available + ", 无法报损")
+                        .withHint("请核实报损数量，当前批次可用库存: " + available)
+                        .withHintTarget("disposalQuantity");
+            }
+
+            BigDecimal usedBefore = batch.getUsedQuantity() != null
+                    ? batch.getUsedQuantity() : BigDecimal.ZERO;
+            BigDecimal usedAfter = usedBefore.add(disposalQty);
+            BigDecimal availableAfter = available.subtract(disposalQty);
+
+            // adjustment 留痕: before/after 取可用量(currentQuantity), 负数变更, 与扣减语义一致
+            MaterialBatchAdjustment adj = new MaterialBatchAdjustment();
+            adj.setId(UUID.randomUUID().toString());
+            adj.setMaterialBatchId(batch.getId());
+            adj.setAdjustmentType("DISPOSAL");
+            adj.setQuantityBefore(available.setScale(2, RoundingMode.HALF_UP));
+            adj.setAdjustmentQuantity(disposalQty.negate()); // 负数
+            adj.setQuantityAfter(availableAfter.setScale(2, RoundingMode.HALF_UP));
+            adj.setReason("报损审批 [id=" + record.getId() + "] 类型: " + record.getDisposalType()
+                    + (record.getDisposalReason() != null ? " - " + record.getDisposalReason() : ""));
+            adj.setAdjustmentTime(LocalDateTime.now());
+            adj.setAdjustedBy(approverId != null ? approverId.longValue() : null);
+            adj.setNotes("disposalRecordId=" + record.getId() + " approverRole=" + requestRole);
+            materialBatchAdjustmentRepository.save(adj);
+
+            batch.setUsedQuantity(usedAfter.setScale(2, RoundingMode.HALF_UP));
+            batch.setLastUsedAt(LocalDateTime.now());
+            materialBatchRepository.save(batch);
+
+            return valuate(disposalQty, batch.getUnitPrice(), record.getEstimatedLoss());
+        }
+
+        // 成品报损 → H2 (审计 round2): 安全阻止, 不扣错表.
+        //
+        // 此前扣 ProductionBatch.quantity, 但那是生产批次的【产出额定值】(创建时设, 从不被发货/销售扣减,
+        // 还有 @Positive 校验, 扣到 0 触发 bean validation 失败). 真正可售成品库存在 FinishedGoodsBatch
+        // (producedQuantity/shippedQuantity/reservedQuantity), 发货/调拨扣的是它.
+        // 扣 ProductionBatch.quantity = 成品报损不减可售库存 + 污染生产分析(yield-rate 分母) + @Positive 风险.
+        //
+        // DisposalRecord 仅有 productionBatchId (→ ProductionBatch.id), 无 finishedGoodsBatchId 字段;
+        // FinishedGoodsBatch 只经 productionPlanId(计划级, 一对多) 关联, 无法从单个 productionBatch 可靠定位
+        // 唯一 FG 批次 (一个计划产出多个 FG 批次, 跨产品/仓库). 可靠定位需 schema 改 (加 finishedGoodsBatchId
+        // 字段 + UI 选 FG 批次), 属更大 feature. 当前路径先安全阻止 —— 绝不扣错表污染生产分析.
+        if (record.getProductionBatchId() != null && !record.getProductionBatchId().isBlank()) {
+            // 校验生产批次存在 + 归属(明确错误信息), 但不扣其 quantity
+            Long pbId;
+            try {
+                pbId = Long.valueOf(record.getProductionBatchId());
+            } catch (NumberFormatException e) {
+                throw new BusinessException(404,
+                        "生产批次ID非法: " + record.getProductionBatchId());
+            }
+            ProductionBatch batch = productionBatchRepository.findById(pbId)
+                    .orElseThrow(() -> new BusinessException(404,
+                            "报损生产批次不存在: " + record.getProductionBatchId()));
+            if (batch.getFactoryId() == null || !batch.getFactoryId().equals(record.getFactoryId())) {
+                throw new BusinessException(403, "无权操作该生产批次")
+                        .withHint("批次不属于当前工厂");
+            }
+            throw new BusinessException(422,
+                    "成品报损暂不支持自动扣减库存, 请联系管理员")
+                    .withHint("成品报损批次定位待完善 (需关联成品库存批次 FinishedGoodsBatch)")
+                    .withHintTarget("productionBatchId");
+        }
+
+        // 无关联批次 (仅质检/返工关联) → 不扣库存, 取估损兜底
+        log.info("报损记录 id={} 无关联批次, 不扣库存, actualLoss 取估损", record.getId());
+        return record.getEstimatedLoss();
+    }
+
+    /**
+     * 损失金额 = 数量 × 单价; 单价缺失 (含 @PriceSensitive 脱敏或未录) 时回退估损。
+     */
+    private BigDecimal valuate(BigDecimal qty, BigDecimal unitPrice, BigDecimal estimatedLoss) {
+        if (unitPrice == null) {
+            return estimatedLoss;
+        }
+        return qty.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

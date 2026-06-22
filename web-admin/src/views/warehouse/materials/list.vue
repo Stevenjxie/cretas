@@ -203,7 +203,7 @@ async function handleScanQuery() {
 const selectedMaterialUnit = ref<string | null>(null);
 
 const formRules = {
-  batchNumber: [{ required: true, message: '请输入批次号', trigger: 'blur' }],
+  // 一物一码: 批次号由系统自动生成, 非手填, 故无 required 校验 (转录 6.9 行68/105 防手敲重码)
   materialTypeId: [{ required: true, message: '请选择原料类型', trigger: 'change' }],
   supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
   receiptQuantity: [{ required: true, message: '请输入数量', trigger: 'blur' }],
@@ -501,10 +501,16 @@ async function handleGenerateLabel(row: TableRow) {
     <el-dialog v-model="formDialogVisible" :title="formDialogTitle" width="500px" destroy-on-close>
       <el-form ref="formRef" :model="formData" :rules="formRules" label-width="80px">
         <el-form-item label="批次号" prop="batchNumber">
-          <el-tooltip v-if="!!editingId" content="批次号作为追溯标识, 创建后不可修改" placement="top-start">
-            <el-input v-model="formData.batchNumber" placeholder="如 MB-2026-001" :disabled="true" />
+          <el-tooltip
+            :content="editingId ? '批次号作为追溯标识, 创建后不可修改' : '批次号由系统自动生成 (一物一码), 防手敲重码, 无需填写'"
+            placement="top-start"
+          >
+            <el-input
+              v-model="formData.batchNumber"
+              :placeholder="editingId ? '' : '系统自动生成'"
+              :disabled="true"
+            />
           </el-tooltip>
-          <el-input v-else v-model="formData.batchNumber" placeholder="如 MB-2026-001" />
         </el-form-item>
         <el-form-item label="原料类型" prop="materialTypeId">
           <el-select v-model="formData.materialTypeId" placeholder="选择原料类型" filterable style="width: 100%">
