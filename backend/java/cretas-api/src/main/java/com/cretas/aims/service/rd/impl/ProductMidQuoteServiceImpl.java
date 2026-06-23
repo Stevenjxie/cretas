@@ -8,7 +8,7 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.rd.ProductMidQuoteRepository;
 import com.cretas.aims.repository.rd.QuotationTaskRepository;
 import com.cretas.aims.service.rd.ProductMidQuoteService;
-import jakarta.persistence.EntityNotFoundException;
+import com.cretas.aims.exception.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
