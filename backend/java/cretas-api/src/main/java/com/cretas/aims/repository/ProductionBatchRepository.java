@@ -40,9 +40,12 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     boolean existsByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
 
     /**
-     * 分页查找工厂的生产批次
+     * 分页查找工厂的生产批次 (排除 CLERK_WIP 内部工件批次).
+     * SP-D Fix 1a: 批次列表不展示文员录入产生的中间 WIP 批次, 防止用户混淆.
      */
-    Page<ProductionBatch> findByFactoryId(String factoryId, Pageable pageable);
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.batchType <> 'CLERK_WIP' " +
+           "ORDER BY p.createdAt DESC")
+    Page<ProductionBatch> findByFactoryId(@Param("factoryId") String factoryId, Pageable pageable);
 
     /**
      * 根据状态分页查找
@@ -78,9 +81,13 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             LocalDateTime endDate);
 
     /**
-     * 统计某时间后的批次数
+     * 统计某时间后的批次数 (排除 CLERK_WIP 内部工件批次).
+     * SP-D Fix 1a: CLERK_WIP 批次不应计入今日批次数等仪表盘指标.
      */
-    long countByFactoryIdAndCreatedAtAfter(String factoryId, LocalDateTime createdAt);
+    @Query("SELECT COUNT(p) FROM ProductionBatch p WHERE p.factoryId = :factoryId " +
+           "AND p.createdAt > :createdAt AND p.batchType <> 'CLERK_WIP'")
+    long countByFactoryIdAndCreatedAtAfter(@Param("factoryId") String factoryId,
+                                           @Param("createdAt") LocalDateTime createdAt);
 
     /**
      * 查询某时间后的所有批次
@@ -88,9 +95,13 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByFactoryIdAndCreatedAtAfter(String factoryId, LocalDateTime createdAt);
 
     /**
-     * 统计某状态的批次数
+     * 统计某状态的批次数 (排除 CLERK_WIP 内部工件批次, 避免虚增仪表盘指标).
+     * SP-D Fix 1a: CLERK_WIP 批次是文员录入的中间半成品, 不应计入面向用户的统计.
      */
-    long countByFactoryIdAndStatus(String factoryId, ProductionBatchStatus status);
+    @Query("SELECT COUNT(p) FROM ProductionBatch p WHERE p.factoryId = :factoryId " +
+           "AND p.status = :status AND p.batchType <> 'CLERK_WIP'")
+    long countByFactoryIdAndStatus(@Param("factoryId") String factoryId,
+                                   @Param("status") ProductionBatchStatus status);
 
     /**
      * 统计指定时间范围内的批次数
@@ -152,10 +163,11 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                                          @Param("startDate") LocalDateTime startDate);
 
     /**
-     * 计算某时间后的总产量
+     * 计算某时间后的总产量 (排除 CLERK_WIP 内部工件批次).
+     * SP-D Fix 1a: CLERK_WIP 中间批次的 actualQuantity 是 WIP 产出, 不是最终产品产量, 不应纳入汇总.
      */
     @Query("SELECT SUM(p.actualQuantity) FROM ProductionBatch p WHERE p.factoryId = :factoryId " +
-           "AND p.createdAt >= :startDate")
+           "AND p.createdAt >= :startDate AND p.batchType <> 'CLERK_WIP'")
     BigDecimal calculateTotalOutputAfter(@Param("factoryId") String factoryId,
                                          @Param("startDate") LocalDateTime startDate);
 

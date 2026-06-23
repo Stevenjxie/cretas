@@ -23,6 +23,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -84,6 +85,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final ObjectMapper objectMapper;
     /** SP-C: 工时单价配置 repo; null-tolerant (兼容测试 @InjectMocks 未注入时走 fallback). */
     private final FactoryCostSettingsRepository costSettingsRepository;
+    /** SP-D Fix 2: 跨租户守卫 — 验证 planId 归属 factoryId. null-tolerant (测试 @InjectMocks 未注入时 skip check). */
+    private final ProductionPlanRepository planRepository;
 
     // ─────────────────────────────────────────────────────────────
     // Public API
@@ -96,6 +99,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (planId == null || planId.isBlank()) throw new BusinessException(400, "planId 必填");
         if (operatorId == null) {
             throw new BusinessException(401, "未登录，无法录入报工 (operatorId 为 null)");
+        }
+
+        // SP-D Fix 2: 跨租户守卫 — planId 必须归属本 factoryId
+        // null-tolerant: planRepository 为 null 时 (测试 @InjectMocks 未注入) 跳过, 不 NPE.
+        if (planRepository != null &&
+                planRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
+            throw new BusinessException(404, "生产计划不存在: " + planId);
         }
 
         // 1. 幂等检查
@@ -190,6 +200,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         writeSeasoningReport(factoryId, batch.getId(), st, seasoningCost, operatorId);
                         batchTotalCost = batchTotalCost.add(seasoningCost);
                     }
+                } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+                    // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
+                    // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
+                    String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
+                    warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
+                            " 调料成本未计入 — 请配置工序成本类别");
                 }
 
                 // 4d. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
@@ -276,6 +292,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         batch.setUnit(be.getSteps() == null ? "kg"
                 : be.getSteps().stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
+        // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
+        // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
+        batch.setBatchType(be.isFinished() ? "REGULAR" : "CLERK_WIP");
         batch.setCreatedAt(LocalDateTime.now());
 
         return batchRepo.save(batch);
