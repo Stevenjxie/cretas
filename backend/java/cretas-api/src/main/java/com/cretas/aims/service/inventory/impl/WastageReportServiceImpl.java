@@ -151,7 +151,7 @@ public class WastageReportServiceImpl implements WastageReportService {
     }
 
     /**
-     * 审批通过后原子写 MaterialBatchAdjustment + 扣减 receiptQuantity。
+     * 审批通过后原子写 MaterialBatchAdjustment + 增 usedQuantity 扣减可用库存。
      * 教训 feedback_failsoft_catch_cannot_save_doomed_tx: 不用 fail-soft try/catch 吞异常。
      */
     @Override
@@ -279,32 +279,42 @@ public class WastageReportServiceImpl implements WastageReportService {
     }
 
     /**
-     * 原子写 MaterialBatchAdjustment + 扣减 receiptQuantity。
+     * 原子写 MaterialBatchAdjustment + 增 usedQuantity 扣减可用库存。
      * 红线 §3.4: 每次库存变动必须产生 MaterialBatchAdjustment 留痕。
+     *
+     * <p>H1 修复 (套用 DisposalRecordService 的 R11 范式, 审计 round2): 库存不足判定 +
+     * 扣减必须用真实可用量 currentQuantity (= receiptQuantity - usedQuantity - reservedQuantity),
+     * 不能只看 receiptQuantity —— 否则会吃进别人已领用 (usedQuantity)/已预留 (reservedQuantity)
+     * 的量, 把 currentQuantity 扣成负数 (库存错乱)。扣减方式与正常领料一致
+     * (BatchConsumptionServiceImpl / MaterialBatchServiceImpl.useBatchQuantity): 增 usedQuantity
+     * 而非减 receiptQuantity, 使 currentQuantity 正确反映 + 与领料模型一致。
+     * (DisposalRecordService.applyDisposalToInventory 原料分支同款写法, 已先行落地。)
      */
     private void applyWastageToInventory(WastageReport report, Long approverId, String approverRole) {
         MaterialBatch batch = materialBatchRepo.findById(report.getMaterialBatchId())
                 .orElseThrow(() -> new BusinessException(404,
                         "报损批次不存在: " + report.getMaterialBatchId()));
 
-        BigDecimal quantityBefore = batch.getReceiptQuantity() != null
-                ? batch.getReceiptQuantity() : BigDecimal.ZERO;
         BigDecimal wastageQty = report.getWastageQty().setScale(2, RoundingMode.HALF_UP);
-        BigDecimal quantityAfter = quantityBefore.subtract(wastageQty);
-        if (quantityAfter.compareTo(BigDecimal.ZERO) < 0) {
+
+        // 把关用真实可用量 (currentQuantity), 不足 → 422 阻止 (不允许吃已领/已预留)
+        BigDecimal available = batch.getCurrentQuantity() != null
+                ? batch.getCurrentQuantity() : BigDecimal.ZERO;
+        BigDecimal availableAfter = available.subtract(wastageQty);
+        if (availableAfter.compareTo(BigDecimal.ZERO) < 0) {
             throw new BusinessException(422,
-                    "报损数量 " + wastageQty + " 超过当前库存 " + quantityBefore)
-                    .withHint("请核实报损数量，当前库存: " + quantityBefore);
+                    "报损数量 " + wastageQty + " 超过批次可用库存 " + available)
+                    .withHint("请核实报损数量，当前批次可用库存: " + available);
         }
 
-        // audit 记录
+        // audit 记录: before/after 取可用量 (currentQuantity), 负数变更, 与扣减语义一致
         MaterialBatchAdjustment adj = new MaterialBatchAdjustment();
         adj.setId(UUID.randomUUID().toString());
         adj.setMaterialBatchId(report.getMaterialBatchId());
         adj.setAdjustmentType("WASTAGE");
-        adj.setQuantityBefore(quantityBefore.setScale(2, RoundingMode.HALF_UP));
+        adj.setQuantityBefore(available.setScale(2, RoundingMode.HALF_UP));
         adj.setAdjustmentQuantity(wastageQty.negate()); // 负数
-        adj.setQuantityAfter(quantityAfter.setScale(2, RoundingMode.HALF_UP));
+        adj.setQuantityAfter(availableAfter.setScale(2, RoundingMode.HALF_UP));
         adj.setReason("报损单 [" + report.getReportNo() + "] 原因: " + report.getWastageReason() +
                 (report.getReasonDetail() != null ? " - " + report.getReasonDetail() : ""));
         adj.setAdjustmentTime(LocalDateTime.now());
@@ -312,8 +322,11 @@ public class WastageReportServiceImpl implements WastageReportService {
         adj.setNotes("wastageReportId=" + report.getId() + " approverRole=" + approverRole);
         adjustmentRepo.save(adj);
 
-        // 扣减库存（null 安全）
-        batch.setReceiptQuantity(quantityAfter.setScale(2, RoundingMode.HALF_UP));
+        // 扣减库存: 增 usedQuantity (而非减 receiptQuantity), 与领料模型一致 (null 安全)
+        BigDecimal usedBefore = batch.getUsedQuantity() != null
+                ? batch.getUsedQuantity() : BigDecimal.ZERO;
+        batch.setUsedQuantity(usedBefore.add(wastageQty).setScale(2, RoundingMode.HALF_UP));
+        batch.setLastUsedAt(LocalDateTime.now());
         materialBatchRepo.save(batch);
         inventoryLowStockEventPublisher.publishIfLowStock(report.getFactoryId(), batch, "WASTAGE");
     }
