@@ -250,6 +250,10 @@ public class ShipmentController {
                 "data", created,
                 "message", "出货记录创建成功"
             ));
+        } catch (com.cretas.aims.exception.BusinessException be) {
+            // 让业务异常 (含 R4 去重 409 / 状态守卫) 透传 GlobalExceptionHandler 正确映射状态码,
+            // 不被下面的 catch-all 降级成 400 (edge-case 审计 2026-06-24)。
+            throw be;
         } catch (Exception e) {
             log.error("创建出货记录失败", e);
             return ResponseEntity.badRequest().body(Map.of(
@@ -277,6 +281,8 @@ public class ShipmentController {
                 "data", updated,
                 "message", "出货记录更新成功"
             ));
+        } catch (com.cretas.aims.exception.BusinessException be) {
+            throw be;
         } catch (Exception e) {
             log.error("更新出货记录失败", e);
             return ResponseEntity.badRequest().body(Map.of(
@@ -305,6 +311,8 @@ public class ShipmentController {
                 "data", updated,
                 "message", "状态更新成功"
             ));
+        } catch (com.cretas.aims.exception.BusinessException be) {
+            throw be;
         } catch (Exception e) {
             log.error("更新出货状态失败", e);
             return ResponseEntity.badRequest().body(Map.of(
@@ -330,6 +338,8 @@ public class ShipmentController {
                 "success", true,
                 "message", "出货记录删除成功"
             ));
+        } catch (com.cretas.aims.exception.BusinessException be) {
+            throw be;
         } catch (Exception e) {
             log.error("删除出货记录失败", e);
             return ResponseEntity.badRequest().body(Map.of(
