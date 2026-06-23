@@ -33,6 +33,10 @@ import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.recipe.RecipeCostCalculator;
 import com.cretas.aims.service.recipe.SeasoningCost;
@@ -85,6 +89,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final FactoryWarehouseRepository warehouseRepo;
     private final ProductRecipeRepository recipeRepo;
     private final RecipeIngredientRepository ingredientRepo;
+    /** BOM 统管配方+锅序 (2026-06-24): 调料读路径优先 BOM. null-tolerant (@InjectMocks 未注入时回退 product_recipes). */
+    private final BomRecipeRepository bomRecipeRepo;
+    private final BomSeasoningItemRepository bomSeasoningItemRepo;
     private final ProductionReportRepository reportRepo;
     private final ObjectMapper objectMapper;
     /** SP-C: 工时单价配置 repo; null-tolerant (兼容测试 @InjectMocks 未注入时走 fallback). */
@@ -580,16 +587,35 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
     private BigDecimal computeSeasoningCost(String factoryId, String productTypeId,
                                              StepEntry st, List<String> warnings) {
+        BigDecimal injectionRawKg = nz(st.getInputQuantity());
+        List<BigDecimal> potRawKgs = buildPotRawKgs(st);
+
+        // BOM 统管配方+锅序 (2026-06-24): 调料折叠进 BOM → 优先读 BOM 的锅序参数 + bom_seasoning_items.
+        // 算法一字不改 (RecipeCostCalculator 同源), 仅换数据源. null-tolerant: @InjectMocks 测试未注入 bom repo
+        // 时跳过, 走下方 product_recipes 兼容路径 (灰度期未迁移 SKU 也走兼容路径, 保证零回归).
+        if (bomRecipeRepo != null && bomSeasoningItemRepo != null) {
+            Optional<BomRecipe> bomOpt = bomRecipeRepo
+                    .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+            if (bomOpt.isPresent()) {
+                List<BomSeasoningItem> bomSeasoning =
+                        bomSeasoningItemRepo.findByRecipeIdOrderBySeqAsc(bomOpt.get().getId());
+                if (!bomSeasoning.isEmpty()) {
+                    SeasoningCost sc = RecipeCostCalculator.compute(
+                            bomOpt.get().getSubsequentPotRatio(), bomSeasoning, injectionRawKg, potRawKgs);
+                    return sc.getTotal();
+                }
+            }
+        }
+
+        // 兼容/回退路径: 旧 product_recipes (灰度未迁移 SKU). cleanup 删 product_recipes 后移除本段.
         Optional<ProductRecipe> recipeOpt = recipeRepo
                 .findByFactoryIdAndProductTypeIdAndStatus(factoryId, productTypeId, "ACTIVE");
         if (recipeOpt.isEmpty()) {
-            warnings.add("产品 " + productTypeId + " 无有效调料配方(ACTIVE)，调料成本跳过");
+            warnings.add("产品 " + productTypeId + " 无有效调料配方(BOM 或 ACTIVE)，调料成本跳过");
             return BigDecimal.ZERO;
         }
         ProductRecipe recipe = recipeOpt.get();
         List<RecipeIngredient> ingredients = ingredientRepo.findByRecipeIdOrderBySeqAsc(recipe.getId());
-        BigDecimal injectionRawKg = nz(st.getInputQuantity());
-        List<BigDecimal> potRawKgs = buildPotRawKgs(st);
         SeasoningCost sc = RecipeCostCalculator.compute(recipe, ingredients, injectionRawKg, potRawKgs);
         return sc.getTotal();
     }
