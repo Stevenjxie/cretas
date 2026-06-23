@@ -83,6 +83,9 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
     placeholder: gramsPerUnitPlaceholder.value },
   { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '规格信息', precision: 4, order: 4,
     placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
+  // 六扇门 配料单 (配料员按锅配料): 单锅产能 = 1 锅产出数量 (同计划产量单位); 配料单据此算锅数 = ceil(计划量/单锅产能)
+  { key: 'singlePotCapacity', label: '单锅产能', type: 'decimal', group: '规格信息', precision: 3, order: 6,
+    placeholder: '1 锅产出数量(同计划产量单位), 配料单算锅数用; 留空则配料单不计每锅量' },
   // SP9-M1: 研发预估人工成本 (quotedLaborCost); 供人效双口径对比用; 成品才有意义, 原辅料留空即可
   { key: 'quotedLaborCostPerKg', label: '研发人工成本(元/kg)', type: 'decimal', group: '规格信息', precision: 4, order: 5,
     suffix: '元/kg', placeholder: '研发预估人工, 不填则双口径对比中报价列显示"-"' },

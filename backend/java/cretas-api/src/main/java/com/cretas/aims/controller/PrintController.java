@@ -123,6 +123,10 @@ public class PrintController {
     @Autowired(required = false)
     private TransferService transferService;
 
+    /** Optional: 产品类型 repository (配料单 — 取 单锅产能 算锅数). */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
     /** Optional: JWT helper used only for printed-by audit metadata. */
     @Autowired(required = false)
     private JwtUtil jwtUtil;
@@ -344,6 +348,96 @@ public class PrintController {
         applyPrintAudit(payload, authorization);
         return proxyToPython("consolidated-material-requisition", payload,
                 "consolidated-req-" + planId, authorization);
+    }
+
+    /**
+     * 配料单 PDF (六扇门 配料员按锅配料, 转录 [87:50-88:00]).
+     *
+     * <p>锅数 = ceil(计划产量 / 单锅产能[ProductType.singlePotCapacity]); 每锅料量 = 物料总需求 / 锅数。
+     * 单锅产能未配置时 potCount=null → 模板显"请先在产品配置单锅产能"。配料员当前用现有生产/报工角色兼任。
+     */
+    @GetMapping("/batching-sheet/{planId}")
+    @RequirePermission({"production:read", "production:read_write",
+            "warehouse:read", "warehouse:read_write"})
+    public ResponseEntity<byte[]> printBatchingSheet(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Map<String, Object> payload = buildBatchingSheetPayload(factoryId, planId, overrides);
+        applyPrintAudit(payload, authorization);
+        return proxyToPython("batching-sheet", payload, "batching-sheet-" + planId, authorization);
+    }
+
+    /**
+     * 配料单 payload builder. 锅数 = ceil(计划产量 / 单锅产能); 每锅料量由 Python 渲染时按 总需求/锅数 算。
+     */
+    private Map<String, Object> buildBatchingSheetPayload(
+            String factoryId, String planId, Map<String, String> overrides) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
+        p.put("planId", planId);
+        p.put("printDate", java.time.LocalDate.now().toString());
+
+        String productTypeId = null;
+        java.math.BigDecimal plannedQty = null;
+        if (productionPlanService != null) {
+            try {
+                ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
+                p.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+                p.put("productName", plan.getProductName() != null ? plan.getProductName() : "(产品)");
+                p.put("salesOrderNumbers", salesOrderNumbers(plan));
+                productTypeId = plan.getProductTypeId();
+                plannedQty = plan.getPlannedQuantity();
+            } catch (Exception e) {
+                log.warn("printBatchingSheet: plan {} not found: {}", planId, e.getMessage());
+                p.put("planNumber", or(overrides, "planNumber", planId));
+                p.put("productName", or(overrides, "productName", "(产品)"));
+                p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
+            }
+        } else {
+            p.put("planNumber", or(overrides, "planNumber", planId));
+            p.put("productName", or(overrides, "productName", "(产品)"));
+            p.put("salesOrderNumbers", or(overrides, "salesOrderNumbers", "-"));
+        }
+
+        // 单锅产能 + 单位 取自 ProductType
+        java.math.BigDecimal potCapacity = null;
+        String unit = "-";
+        if (productTypeRepository != null && productTypeId != null) {
+            // 跨租户安全: 按 (id, factoryId) 查, 防 productTypeId 指向别厂产品 (复用项目既有红线修法)
+            com.cretas.aims.entity.ProductType pt =
+                    productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).orElse(null);
+            if (pt != null) {
+                potCapacity = pt.getSinglePotCapacity();
+                if (pt.getUnit() != null) unit = pt.getUnit();
+            }
+        }
+        p.put("plannedQuantity", plannedQty != null ? formatQty(plannedQty) : "-");
+        p.put("unit", unit);
+        p.put("singlePotCapacity", potCapacity != null ? formatQty(potCapacity) : null);
+
+        // 锅数 = ceil(计划产量 / 单锅产能); 未配置单锅产能 → null (模板显提示, 不伪造)
+        Integer potCount = null;
+        if (potCapacity != null && potCapacity.compareTo(java.math.BigDecimal.ZERO) > 0 && plannedQty != null) {
+            potCount = plannedQty.divide(potCapacity, 0, java.math.RoundingMode.CEILING).intValue();
+        }
+        p.put("potCount", potCount);
+
+        // 物料明细 (复用跨批次汇总): 每锅料量由 Python 按 totalQty/potCount 算
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (factoryMaterialRequisitionService != null) {
+            try {
+                List<FactoryMaterialRequisition> requisitions =
+                        factoryMaterialRequisitionService.listByPlan(factoryId, planId);
+                items.addAll(aggregateMaterialRequirementRows(requisitions));
+            } catch (Exception e) {
+                log.warn("printBatchingSheet: failed to load requisitions for plan {}: {}", planId, e.getMessage());
+            }
+        }
+        p.put("items", items);
+        p.put("remark", or(overrides, "remark", null));
+        return p;
     }
 
     // ==================== 调拨指示单 (transfer-instruction 打印) ====================
@@ -874,6 +968,10 @@ public class PrintController {
                     r.put("plannedAuxiliaryQtyValue", BigDecimal.ZERO);
                     r.put("plannedSemiFinishedQtyValue", BigDecimal.ZERO);
                     r.put("totalQtyValue", BigDecimal.ZERO);
+                    // SP12 T8 续: 成交(应需=requiredQty=totalQty) / 打算(已拣=pickedQty) / 送到(已发=issuedQty)
+                    // 三列 (转录行2902-2904 [86:53-55])。picked/issued null-init → 未拣发时显空, 不伪造 0。
+                    r.put("plannedIssueQtyValue", null);
+                    r.put("deliveredQtyValue", null);
                     r.put("actualUsedQtyValue", null);
                     r.put("batchRefsList", new ArrayList<String>());
                     return r;
@@ -889,6 +987,16 @@ public class PrintController {
                     addQty(row, "plannedAuxiliaryQtyValue", requiredQty);
                 }
 
+                if (item.getPickedQty() != null) {
+                    BigDecimal existing = (BigDecimal) row.get("plannedIssueQtyValue");
+                    row.put("plannedIssueQtyValue",
+                            existing == null ? item.getPickedQty() : existing.add(item.getPickedQty()));
+                }
+                if (item.getIssuedQty() != null) {
+                    BigDecimal existing = (BigDecimal) row.get("deliveredQtyValue");
+                    row.put("deliveredQtyValue",
+                            existing == null ? item.getIssuedQty() : existing.add(item.getIssuedQty()));
+                }
                 if (item.getConsumedQty() != null) {
                     BigDecimal existing = (BigDecimal) row.get("actualUsedQtyValue");
                     row.put("actualUsedQtyValue",
@@ -915,6 +1023,8 @@ public class PrintController {
             BigDecimal plannedAux = (BigDecimal) row.remove("plannedAuxiliaryQtyValue");
             BigDecimal plannedSemi = (BigDecimal) row.remove("plannedSemiFinishedQtyValue");
             BigDecimal totalQty = (BigDecimal) row.remove("totalQtyValue");
+            BigDecimal plannedIssue = (BigDecimal) row.remove("plannedIssueQtyValue");
+            BigDecimal delivered = (BigDecimal) row.remove("deliveredQtyValue");
             BigDecimal actualUsed = (BigDecimal) row.remove("actualUsedQtyValue");
             @SuppressWarnings("unchecked")
             List<String> batchRefs = (List<String>) row.remove("batchRefsList");
@@ -923,6 +1033,11 @@ public class PrintController {
             row.put("plannedAuxiliaryQty", positiveQtyOrBlank(plannedAux));
             row.put("plannedSemiFinishedQty", positiveQtyOrBlank(plannedSemi));
             row.put("totalQty", formatQty(totalQty));
+            // 成交(应需) = totalQty(requiredQty); 打算(已拣) = pickedQty; 送到(已发) = issuedQty。
+            // 未拣/未发显 "________" (诚实空, 仓库填), 不伪造 0。
+            row.put("transactedQty", formatQty(totalQty));
+            row.put("plannedIssueQty", plannedIssue != null ? formatQty(plannedIssue) : "________");
+            row.put("deliveredQty", delivered != null ? formatQty(delivered) : "________");
             row.put("actualUsedQty", actualUsed != null ? formatQty(actualUsed) : "________");
             row.put("batchRefs", batchRefs.isEmpty() ? null : String.join(", ", batchRefs));
             rows.add(row);
