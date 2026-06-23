@@ -63,6 +63,23 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
                     .withHintTarget("销售订单");
         }
 
+        // 防呆 R4 (幂等防双击/重试): 60s 窗口内同 工厂/销售单/金额 的待核收款 → 409 + 已有单号。
+        // 金额双计入 SO paidAmount 是资金完整性 bug (edge-case 审计 2026-06-24 抓: 双击建 2 条 PENDING)。
+        // 窗口取 60s (非 5min): 双击/网络重试是亚秒级, 60s 足够拦截; 同时把"60s 内两笔真实等额分期"
+        // 的误拦面缩到极小 (reviewer ISSUE-2)。窗口长度可按业务调整。
+        // 注: 这是应用层瞬时去重, 与 TransferService R4 同范式; 极端并发 (同毫秒双请求) 仍可能各过一次,
+        // 但不加 DB 唯一约束 — 那会永久禁止合法等额分期 (reviewer ISSUE-1 的修法与其 ISSUE-2 自相矛盾)。
+        java.util.List<PaymentRecord> dupes = paymentRecordRepository.findRecentDuplicatePayments(
+                factoryId, salesOrderId, amount, java.time.LocalDateTime.now().minusSeconds(60));
+        if (!dupes.isEmpty()) {
+            PaymentRecord existing = dupes.get(0);
+            throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                    "1 分钟内已对该订单录入相同金额收款 (%s, ¥%s, 状态 %s), 如确为另一笔请稍候再录",
+                    existing.getPaymentNumber(), existing.getAmount(), existing.getStatus()))
+                    .withHint("如需查看已有收款记录请打开 " + existing.getPaymentNumber())
+                    .withHintTarget(existing.getId());
+        }
+
         PaymentRecord record = new PaymentRecord();
         record.setFactoryId(factoryId);
         record.setPaymentNumber(generatePaymentNumber());
