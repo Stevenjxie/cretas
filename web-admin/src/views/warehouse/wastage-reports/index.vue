@@ -120,6 +120,37 @@ function warehouseName(id: string) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// 批次下拉 (防呆: 选批次 → 报损数量绑定该批次可用量, 与报废处置一致)。
+// 批次选填: 留空=物料级报损 (现有行为不变, 后端 approve 时 gate 可用量)。
+// ────────────────────────────────────────────────────────────────────────────
+const batches = ref<TableRow[]>([]);
+
+async function loadBatches() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/material-batches`, {
+      params: { status: 'AVAILABLE', size: 200 },
+    });
+    if (res.success && res.data) batches.value = res.data.content || res.data || [];
+  } catch { /* silent — 批次选填, 加载失败不阻塞物料级报损 */ }
+}
+
+// 按所选仓库过滤批次 (仓库未选则显全部)
+const warehouseBatches = computed<TableRow[]>(() => {
+  const wid = createForm.value.warehouseId;
+  if (!wid) return batches.value;
+  return batches.value.filter((b) => String(b.warehouseId) === String(wid));
+});
+
+// 选中批次的可用量 (currentQuantity 优先); 未选批次 → null (qty 无 max, 物料级)
+const selectedWastageMax = computed<number | null>(() => {
+  const b = batches.value.find((x) => String(x.id) === String(createForm.value.materialBatchId));
+  if (!b) return null;
+  const avail = (b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined;
+  return avail != null ? Number(avail) : null;
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // Create wastage report dialog
 // ────────────────────────────────────────────────────────────────────────────
 const createDialogVisible = ref(false);
@@ -172,6 +203,11 @@ async function submitCreate() {
   }
   if (!form.wastageQty || form.wastageQty <= 0) {
     ElMessage({ message: '请填写报损数量', type: 'warning', duration: 3000 });
+    return;
+  }
+  // 防呆: 选了批次则报损数量不可超过该批次可用量 (与报废处置一致; 留空批次=物料级不校验)
+  if (selectedWastageMax.value != null && form.wastageQty > selectedWastageMax.value) {
+    ElMessage({ message: `报损数量不能超过批次可用量 ${selectedWastageMax.value}`, type: 'warning', duration: 0, showClose: true });
     return;
   }
   if (!form.wastageReason) {
@@ -350,6 +386,7 @@ function openPhotoViewer(row: TableRow) {
 // ────────────────────────────────────────────────────────────────────────────
 onMounted(async () => {
   await loadWarehouses();
+  await loadBatches();
   await loadData();
 });
 </script>
@@ -480,7 +517,7 @@ onMounted(async () => {
           </el-text>
         </el-form-item>
         <el-form-item label="仓库" required>
-          <el-select v-model="createForm.warehouseId" placeholder="选择仓库" style="width: 100%">
+          <el-select v-model="createForm.warehouseId" placeholder="选择仓库" style="width: 100%" @change="createForm.materialBatchId = ''">
             <el-option v-for="w in warehouses" :key="String(w.id)" :label="String(w.name)" :value="String(w.id)">
               <span>{{ w.name }}</span>
               <el-tag
@@ -493,17 +530,34 @@ onMounted(async () => {
             </el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="批次ID">
-          <el-input v-model="createForm.materialBatchId" placeholder="可选，填批次ID" />
+        <el-form-item label="批次">
+          <el-select
+            v-model="createForm.materialBatchId"
+            placeholder="可选 — 选批次后限定报损数量上限；留空=物料级报损"
+            clearable
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="b in warehouseBatches"
+              :key="String(b.id)"
+              :label="`${b.batchNumber} - ${b.materialName || b.materialTypeName || '物料'} (可用 ${b.currentQuantity ?? b.remainingQuantity ?? 0})`"
+              :value="String(b.id)"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="报损数量" required>
           <el-input-number
             v-model="createForm.wastageQty"
             :min="0.001"
+            :max="selectedWastageMax ?? undefined"
             :precision="3"
             style="width: 200px"
             placeholder="数量"
           />
+          <div v-if="selectedWastageMax != null" style="font-size:12px;color:#909399;margin-top:4px">
+            该批次可用量 {{ selectedWastageMax }}，报损数量不可超过此值
+          </div>
         </el-form-item>
         <el-form-item label="报损原因" required>
           <el-select v-model="createForm.wastageReason" placeholder="选择原因" style="width: 100%">
