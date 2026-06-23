@@ -18,7 +18,7 @@ import java.util.UUID;
         @Index(name = "idx_ringredient_recipe", columnList = "recipe_id")
 })
 @Where(clause = "deleted_at IS NULL")
-public class RecipeIngredient extends BaseEntity {
+public class RecipeIngredient extends BaseEntity implements SeasoningLine {
 
     /** 注射段 / 熟制段 */
     public static final String SECTION_INJECTION = "INJECTION";
