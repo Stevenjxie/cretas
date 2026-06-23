@@ -1,5 +1,6 @@
 package com.cretas.aims.service.processentry;
 
+import com.cretas.aims.dto.processentry.LaborSegment;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.BatchEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.RawInput;
@@ -670,6 +671,42 @@ class ClerkProcessEntryServiceImplTest {
     // ─────────────────────────────────────────────────────────────
     // SP-D Fix 3 regression: Q2 seasoning silent-0 warning
     // ─────────────────────────────────────────────────────────────
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Task 1.4 — computeLaborCost(List<LaborSegment>, BigDecimal)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * T12 — 多段工时求和.
+     *
+     * <p>段A: 08:00→10:00, 2人 → 2h × 2 = 4 工时
+     * 段B: 13:00→14:00, 3人 → 1h × 3 = 3 工时
+     * 合计 7 工时 × ¥26 = ¥182.00
+     */
+    @Test
+    @DisplayName("T12: 多段工时求和 — 2h×2 + 1h×3 = 7工时 × ¥26 = ¥182.00")
+    void computeLaborCost_sumsMultipleSegments() {
+        LaborSegment a = new LaborSegment();
+        a.setStartTime("08:00"); a.setEndTime("10:00"); a.setWorkerCount(2); // 2h×2=4
+        LaborSegment b = new LaborSegment();
+        b.setStartTime("13:00"); b.setEndTime("14:00"); b.setWorkerCount(3); // 1h×3=3
+        BigDecimal rate = new BigDecimal("26");
+        // (4+3)=7 工时 × 26 = 182.00
+        assertThat(service.computeLaborCost(java.util.List.of(a, b), rate))
+                .isEqualByComparingTo("182.00");
+    }
+
+    /**
+     * T13 — null 或空 segments 返回零.
+     */
+    @Test
+    @DisplayName("T13: null 或空 segments → BigDecimal.ZERO")
+    void computeLaborCost_nullOrEmptySegments_returnsZero() {
+        assertThat(service.computeLaborCost((java.util.List<LaborSegment>) null, new BigDecimal("26")))
+                .isEqualByComparingTo("0");
+        assertThat(service.computeLaborCost(java.util.List.of(), new BigDecimal("26")))
+                .isEqualByComparingTo("0");
+    }
 
     /**
      * T11 — Fix 3: blend step with upstreamSources but no seasoning config → warning emitted.

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.processentry.impl;
 
+import com.cretas.aims.dto.processentry.LaborSegment;
 import com.cretas.aims.dto.processentry.MaterializeContext;
 import com.cretas.aims.dto.processentry.MaterializedBatch;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
@@ -515,6 +516,31 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 .divide(new BigDecimal("60"), 4, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal(st.getWorkerCount()));
         return workerHours.multiply(laborRate).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * SP-F Task 1.4: 多段工时求和版本。
+     *
+     * <p>每段: (end-start 分钟 / 60) × workerCount → 小时数 (scale 4, HALF_UP)。
+     * 所有段求和后 × rate, 最终 setScale(2, HALF_UP)。
+     * 与单段方法的舍入形状完全一致 (per-segment divide then multiply)。
+     *
+     * <p>public, 供测试及未来 ProcessSheetServiceImpl 调用。
+     */
+    public BigDecimal computeLaborCost(List<LaborSegment> segs, BigDecimal rate) {
+        if (segs == null || segs.isEmpty()) return BigDecimal.ZERO;
+        BigDecimal hours = segs.stream()
+                .map(s -> {
+                    int minutes = minutesBetween(s.getStartTime(), s.getEndTime());
+                    if (minutes <= 0) return BigDecimal.ZERO;
+                    int workers = s.getWorkerCount() == null ? 0 : s.getWorkerCount();
+                    if (workers <= 0) return BigDecimal.ZERO;
+                    return new BigDecimal(minutes)
+                            .divide(new BigDecimal("60"), 4, RoundingMode.HALF_UP)
+                            .multiply(new BigDecimal(workers));
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return hours.multiply(rate).setScale(2, RoundingMode.HALF_UP);
     }
 
     /** Parse "HH:mm" → integer minutes. Handles overnight spans (end < start → +24h). */
