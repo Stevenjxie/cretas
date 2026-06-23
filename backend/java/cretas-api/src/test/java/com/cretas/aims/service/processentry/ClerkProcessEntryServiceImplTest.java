@@ -13,10 +13,12 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
@@ -76,6 +78,7 @@ class ClerkProcessEntryServiceImplTest {
     @Mock private FactoryWarehouseRepository warehouseRepo;
     @Mock private ProductRecipeRepository recipeRepo;
     @Mock private RecipeIngredientRepository ingredientRepo;
+    @Mock private ProductionPlanRepository planRepository;
 
     @InjectMocks
     private ClerkProcessEntryServiceImpl service;
@@ -99,6 +102,15 @@ class ClerkProcessEntryServiceImplTest {
     private void stubNoIdempotency(String key) {
         when(idempotencyRepo.findByFactoryIdAndPlanIdAndIdempotencyKey(FACTORY, PLAN_ID, key))
                 .thenReturn(Optional.empty());
+    }
+
+    /** SP-D Fix 2: stub planRepository to allow planId for FACTORY. */
+    private void stubPlan() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY);
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY))
+                .thenReturn(Optional.of(plan));
     }
 
     private void stubWarehouse() {
@@ -243,6 +255,7 @@ class ClerkProcessEntryServiceImplTest {
     @DisplayName("T1: 混锅 65.7:34.3 — 两路上游各写一条 SEMI_FINISHED 行, 合计成本正确")
     void t1_blendedPot_65_7_34_3() {
         stubNoIdempotency("T1-KEY");
+        stubPlan();
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -302,6 +315,7 @@ class ClerkProcessEntryServiceImplTest {
     @Test
     @DisplayName("T2: 菱形拓扑 — 两下游各消耗50kg, 各¥300, 合计¥600 == 上游总成本")
     void t2_diamond_noDoubleCount() {
+        stubPlan();
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -385,6 +399,7 @@ class ClerkProcessEntryServiceImplTest {
     @Test
     @DisplayName("T3: 幂等重放 — 同 key 第二次返回缓存, 不重复写库")
     void t3_idempotency_replay() {
+        stubPlan();
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -443,6 +458,7 @@ class ClerkProcessEntryServiceImplTest {
     @DisplayName("T4: 跨租户 404 — 引用其他工厂 MaterialBatch 抛 BusinessException(404)")
     void t4_crossTenant_404() {
         stubNoIdempotency("T4-KEY");
+        stubPlan();
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -475,6 +491,7 @@ class ClerkProcessEntryServiceImplTest {
     @DisplayName("T5: recordedBy == operatorId — 不能为 null (SecurityUtils 永返 null 已禁用)")
     void t5_recordedBy_nonNull() {
         stubNoIdempotency("T5-KEY");
+        stubPlan();
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -538,5 +555,171 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(service.minutesBetween("08:00", "10:30")).isEqualTo(150);
         assertThat(service.minutesBetween("22:00", "02:00")).isEqualTo(240);
         assertThat(service.minutesBetween("09:00", "09:00")).isEqualTo(0);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-D Fix 1a regression: REGULAR vs CLERK_WIP batchType
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * T8 — REGULAR batchType set for finished batch.
+     * SP-D Fix 1a: isFinished=true → batchType must be "REGULAR" so it appears in dashboard/list.
+     */
+    @Test
+    @DisplayName("T8: isFinished=true → batchType=REGULAR (SP-D Fix 1a)")
+    void t8_finishedBatch_isRegular() {
+        stubNoIdempotency("T8-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T8", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T8", FACTORY)).thenReturn(Optional.of(raw));
+
+        BatchEntry batch = finishedBatch("FIN-T8", "PT-X", List.of(
+                rawStep(1, "10", "8", List.of(rawInput("RAW-T8", "10")))
+        ));
+        service.recordChain(FACTORY, PLAN_ID, req("T8-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo).save(cap.capture());
+        assertThat(cap.getValue().getBatchType())
+                .as("finished batch batchType must be REGULAR")
+                .isEqualTo("REGULAR");
+    }
+
+    /**
+     * T9 — CLERK_WIP batchType set for WIP batch.
+     * SP-D Fix 1a: isFinished=false → batchType must be "CLERK_WIP" to be excluded from dashboard/list.
+     */
+    @Test
+    @DisplayName("T9: isFinished=false → batchType=CLERK_WIP (SP-D Fix 1a)")
+    void t9_wipBatch_isClerkWip() {
+        stubNoIdempotency("T9-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T9", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T9", FACTORY)).thenReturn(Optional.of(raw));
+
+        // Only a WIP batch (no finished batch)
+        BatchEntry wip = wipBatch("WIP-T9", "PT-X", List.of(
+                rawStep(1, "20", "18", List.of(rawInput("RAW-T9", "20")))
+        ));
+
+        // Need a finished batch too (WIP-only raises no FINISHED batch but finishedBatchNumber is null)
+        // Use a simple finished batch to make the chain valid
+        BatchEntry fin = finishedBatch("FIN-T9", "PT-Y", List.of(
+                blendStep(1, "18", "15", List.of(upstreamSource("WIP-T9", "18")))
+        ));
+        service.recordChain(FACTORY, PLAN_ID, req("T9-KEY", List.of(wip, fin)), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        // Two batches saved: first the WIP then the finished
+        verify(batchRepo, times(2)).save(cap.capture());
+        List<ProductionBatch> saved = cap.getAllValues();
+
+        // The first saved batch is the WIP (sorted: finished=false first)
+        assertThat(saved.get(0).getBatchType())
+                .as("WIP batch (isFinished=false) batchType must be CLERK_WIP")
+                .isEqualTo("CLERK_WIP");
+        assertThat(saved.get(1).getBatchType())
+                .as("Finished batch (isFinished=true) batchType must be REGULAR")
+                .isEqualTo("REGULAR");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-D Fix 2 regression: cross-tenant planId guard
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * T10 — cross-tenant planId guard.
+     * SP-D Fix 2: planId that belongs to another factory → BusinessException(404).
+     */
+    @Test
+    @DisplayName("T10: planId 归属其他工厂 → BusinessException(404) (SP-D Fix 2)")
+    void t10_crossTenantPlanId_throws404() {
+        // planRepository returns empty → plan not found for this factory
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.empty());
+
+        BatchEntry batch = finishedBatch("F-CROSS", "PT-X", List.of(
+                rawStep(1, "10", "8", List.of(rawInput("RAW-CROSS", "10")))
+        ));
+
+        assertThatThrownBy(() ->
+                service.recordChain(FACTORY, PLAN_ID, req("T10-KEY", List.of(batch)), OPERATOR_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode())
+                        .as("HTTP 404 for cross-tenant planId")
+                        .isEqualTo(404));
+
+        // No batches or consumptions should be written
+        verify(batchRepo, never()).save(any());
+        verify(consumptionRepo, never()).save(any());
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-D Fix 3 regression: Q2 seasoning silent-0 warning
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * T11 — Fix 3: blend step with upstreamSources but no seasoning config → warning emitted.
+     * SP-D Fix 3: A step with upstreamSources but processCategory != SEASONING and potCount == null
+     * should emit a warning about unconfigured seasoning, NOT silently drop cost.
+     */
+    @Test
+    @DisplayName("T11: 混锅工序无 processCategory=SEASONING → warnings 含调料配置提示 (SP-D Fix 3)")
+    void t11_nonSeasoningBlendStep_emitsWarning() {
+        stubNoIdempotency("T11-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch rawA = rawMb("RAW-T11A", FACTORY, new BigDecimal("10"));
+        MaterialBatch rawB = rawMb("RAW-T11B", FACTORY, new BigDecimal("8"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T11A", FACTORY)).thenReturn(Optional.of(rawA));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T11B", FACTORY)).thenReturn(Optional.of(rawB));
+
+        // WIP batches
+        BatchEntry wipA = wipBatch("WIP-T11A", "PT-A", List.of(
+                rawStep(1, "50", "50", List.of(rawInput("RAW-T11A", "50")))
+        ));
+        BatchEntry wipB = wipBatch("WIP-T11B", "PT-B", List.of(
+                rawStep(1, "30", "30", List.of(rawInput("RAW-T11B", "30")))
+        ));
+
+        // Finished batch: blend step with upstreamSources, but NO processCategory=SEASONING and NO potCount
+        StepEntry blendNoSeasoning = new StepEntry();
+        blendNoSeasoning.setProcessOrder(1);
+        blendNoSeasoning.setProcessName("熟制");
+        blendNoSeasoning.setInputQuantity(new BigDecimal("80"));
+        blendNoSeasoning.setOutputQuantity(new BigDecimal("70"));
+        blendNoSeasoning.setUpstreamSources(List.of(
+                upstreamSource("WIP-T11A", "50"),
+                upstreamSource("WIP-T11B", "30")
+        ));
+        // processCategory is null and potCount is null → isSeasoningStep = false
+        BatchEntry fin = finishedBatch("FIN-T11", "PT-FINAL", List.of(blendNoSeasoning));
+
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID, req("T11-KEY", List.of(wipA, wipB, fin)), OPERATOR_ID);
+
+        // Warning must mention the step name and the missing configuration
+        assertThat(result.getWarnings())
+                .as("should contain seasoning configuration warning for 熟制 step")
+                .anyMatch(w -> w.contains("熟制") && w.contains("调料成本未计入"));
     }
 }
