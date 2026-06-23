@@ -173,6 +173,17 @@ public class OrderCostBreakdownService {
                         .cost(cost)
                         .depth(depth)
                         .build());
+
+                // ★ SP-F ①b: 沿 WIP 链回溯上游 *生产批次* 的 人工/调料, 按与 traceCost 相同的
+                //   consumedQty/upstreamReceiptQty 比例分摊累加。本批自身的人工/调料已由上方 getYield
+                //   循环计入, 故只从上游(WIP 产出批)起累加, 不重复计本批。
+                //   只有 clerk/逐工序录入链会产出 MaterialBatch(sourceDocType=PRODUCTION_BATCH)
+                //   被 MaterialConsumption 消耗 —— 常规生产批不走此链, 故对常规批零影响 (见 traceCost javadoc)。
+                java.util.Set<Long> chainVisited = new java.util.HashSet<>();
+                chainVisited.add(b.getId());
+                BigDecimal[] up = aggregateUpstreamLaborSeasoning(factoryId, c, 1, chainVisited);
+                labor = labor.add(up[0]);
+                seasoning = seasoning.add(up[1]);
             }
         }
 
@@ -296,6 +307,96 @@ public class OrderCostBreakdownService {
             apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
         }
         return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
+    }
+
+    /**
+     * SP-F ①b: 沿 WIP 链回溯, 累加上游 *生产批次* 的 人工/调料 成本, 按与 {@link #traceCost} 完全相同的
+     * {@code consumedQty/upstreamReceiptQty} 比例分摊。返回 {@code [labor, seasoning]}。
+     *
+     * <p><b>仅 WIP 链 (clerk/逐工序录入) 受影响:</b> 只有当某消耗的上游 {@link MaterialBatch} 是
+     * {@code sourceDocType='PRODUCTION_BATCH'} 且该生产批有自己的消耗时, 才递归进上游并累加其
+     * 人工/调料。常规生产批次不产出此类 MaterialBatch 被消耗 (它们经成品库存/SemiFinishedInventory 流转,
+     * 非 MaterialConsumption→MaterialBatch(PRODUCTION_BATCH) 链), 故 {@code aggregate} 在常规批上
+     * 命中 leaf-分支立即返回 [0,0] —— 对常规批成本拆分零回归。
+     *
+     * <p>本批自身的人工/调料<b>不</b>在此累加 (已由 computeForBatches 的 getYield 主循环计入);
+     * 此方法从上游 (depth≥2) 起累加, 避免双计。叶子/缺量/环/超深 → 返回 [0,0]。
+     *
+     * <p>分摊镜像 traceCost: 上游成本 sum × consumedQty/upstreamReceiptQty。1:1 全量消耗时比例=1。
+     * 缺量 (consumedQty/upstreamReceiptQty 任一为 null/0) → 不分摊, 取上游全额 (与 traceCost 的
+     * legacy 兜底一致, WIP 物化批必带 receiptQuantity 故分摊分支总命中)。
+     */
+    private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
+                                                         int depth, java.util.Set<Long> visited) {
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO};
+        if (c.getBatchId() == null || depth >= MAX_DEPTH) {
+            return zero;
+        }
+        MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+        if (mb == null || !"PRODUCTION_BATCH".equalsIgnoreCase(mb.getSourceDocType()) || mb.getSourceDocId() == null) {
+            return zero;   // 叶子 (原料/外购) — 无上游生产批, 无可累加的人工/调料
+        }
+        Long upstreamBatchId = parseLong(mb.getSourceDocId());
+        if (upstreamBatchId == null || !visited.add(upstreamBatchId)) {
+            return zero;   // 解析失败 或 环 → 截断
+        }
+        // 上游生产批自身的 人工/调料 (该批的 getYield)
+        BigDecimal[] self = batchLaborSeasoning(factoryId, upstreamBatchId);
+        BigDecimal labor = self[0];
+        BigDecimal seasoning = self[1];
+        // 再递归该上游批的消耗 → 更上游的 人工/调料
+        for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
+            BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
+            labor = labor.add(r[0]);
+            seasoning = seasoning.add(r[1]);
+        }
+        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料 × consumedQty/upstreamReceiptQty。
+        BigDecimal consumedQty = nz(c.getQuantity());
+        BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
+        if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
+            labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+        }
+        // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
+        return new BigDecimal[]{labor, seasoning};
+    }
+
+    /**
+     * SP-F ①b: 计算单个生产批次 *自身* (不含上游链) 的 人工/调料 成本, 返回 {@code [labor, seasoning]}。
+     *
+     * <p>人工 = {@code getYield(batchId).totalLaborCost}。调料 = Σ 该批各道 SEASONING 桶 materialCost
+     * (按 {@link #resolveCostBucket} 分类; 与 computeForBatches 主循环同口径, 含 AUDIT-004 共享锅分摊)。
+     * 这是为 WIP 上游批准备的 —— clerk WIP 批的调料报工不带共享锅 (auxPotNo=null), 故走原样累加分支。
+     */
+    private BigDecimal[] batchLaborSeasoning(String factoryId, Long batchId) {
+        BatchYieldDTO y = yieldReportService.getYield(factoryId, batchId);
+        if (y == null) {
+            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO};
+        }
+        BigDecimal labor = nz(y.getTotalLaborCost());
+        BigDecimal seasoning = BigDecimal.ZERO;
+        List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
+        for (int i = 0; i < steps.size(); i++) {
+            StepYieldDTO step = steps.get(i);
+            BigDecimal m = step.getMaterialCost();
+            if (m == null) {
+                continue;
+            }
+            String bucket = resolveCostBucket(step.getCostCategory(), i, steps.size(), factoryId, "WIP:" + batchId);
+            if (!"SEASONING".equals(bucket)) {
+                continue;   // 只取 SEASONING 桶; PACKAGING/SKIP 不计 (包装由末道成品计, 原料由 traceCost 承载)
+            }
+            BigDecimal contribution = m;
+            if (step.getAuxPotNo() != null && step.getAuxPotTotalCost() != null) {
+                BigDecimal potOutput = nz(productionReportRepository.sumOutputByAuxPotNo(factoryId, step.getAuxPotNo()));
+                BigDecimal myOutput = nz(step.getTotalOutput());
+                contribution = potOutput.signum() > 0
+                        ? step.getAuxPotTotalCost().multiply(myOutput).divide(potOutput, 2, RoundingMode.HALF_UP)
+                        : step.getAuxPotTotalCost();
+            }
+            seasoning = seasoning.add(contribution);
+        }
+        return new BigDecimal[]{labor, seasoning};
     }
 
     /**

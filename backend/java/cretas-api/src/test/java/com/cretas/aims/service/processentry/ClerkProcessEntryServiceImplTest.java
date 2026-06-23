@@ -80,6 +80,7 @@ class ClerkProcessEntryServiceImplTest {
     @Mock private ProductRecipeRepository recipeRepo;
     @Mock private RecipeIngredientRepository ingredientRepo;
     @Mock private ProductionPlanRepository planRepository;
+    @Mock private com.cretas.aims.repository.ProductionReportRepository reportRepo;
 
     @InjectMocks
     private ClerkProcessEntryServiceImpl service;
@@ -916,6 +917,86 @@ class ClerkProcessEntryServiceImplTest {
         ProcessChainEntryResult result = service.recordChain(
                 FACTORY, PLAN_ID, req("T14E-KEY", List.of(batch)), OPERATOR_ID);
         assertThat(result.getFinishedBatchNumber()).isNotNull();
+    }
+
+    /**
+     * T15 — SP-F ①a: 人工成本写一条 ProductionReport(costCategory=LABOR, laborCost 字段)。
+     *
+     * <p>单道领料 08:00→10:00 2人 = 2h×2 = 4 工时 × ¥26 = ¥104.00。
+     * 期望: reportRepo.save 收到一条 reportType=YIELD, costCategory=LABOR, laborCost=104.00 的报工。
+     */
+    @Test
+    @DisplayName("T15: 人工写 ProductionReport(costCategory=LABOR, laborCost=104.00) (SP-F ①a)")
+    void t15_laborReport_written() {
+        stubNoIdempotency("T15-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T15", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T15", FACTORY)).thenReturn(Optional.of(raw));
+
+        // 单道领料 + 人工 08:00→10:00, 2 人 → 4 工时 × ¥26(默认) = ¥104.00
+        StepEntry step = rawStep(1, "100", "80", List.of(rawInput("RAW-T15", "100")));
+        step.setLaborStartTime("08:00");
+        step.setLaborEndTime("10:00");
+        step.setWorkerCount(2);
+
+        BatchEntry batch = finishedBatch("FIN-T15", "PT-X", List.of(step));
+        service.recordChain(FACTORY, PLAN_ID, req("T15-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeastOnce()).save(cap.capture());
+
+        com.cretas.aims.entity.ProductionReport laborRpt = cap.getAllValues().stream()
+                .filter(r -> "LABOR".equals(r.getCostCategory()))
+                .findFirst()
+                .orElse(null);
+        assertThat(laborRpt).as("a LABOR-category ProductionReport must be written").isNotNull();
+        assertThat(laborRpt.getReportType()).isEqualTo("YIELD");
+        assertThat(laborRpt.getLaborCost())
+                .as("4 工时 × ¥26 = ¥104.00").isEqualByComparingTo("104.00");
+        assertThat(laborRpt.getMaterialCost())
+                .as("labor report 不设 materialCost (不进材料分桶)").isNull();
+        assertThat(laborRpt.getBatchId()).as("挂在本批").isNotNull();
+        assertThat(laborRpt.getWorkerId()).isEqualTo(OPERATOR_ID);
+    }
+
+    /**
+     * T16 — SP-F ①a: laborCost=0 时不写 LABOR 报工 (无工时/人数 → ¥0, 诚实不造空行)。
+     */
+    @Test
+    @DisplayName("T16: laborCost=0 → 不写 LABOR 报工 (SP-F ①a)")
+    void t16_zeroLabor_noReport() {
+        stubNoIdempotency("T16-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T16", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T16", FACTORY)).thenReturn(Optional.of(raw));
+
+        // 无 labor 字段 → computeLaborCost 返回 0 → 不写 LABOR 报工
+        StepEntry step = rawStep(1, "100", "80", List.of(rawInput("RAW-T16", "100")));
+        BatchEntry batch = finishedBatch("FIN-T16", "PT-X", List.of(step));
+        service.recordChain(FACTORY, PLAN_ID, req("T16-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeast(0)).save(cap.capture());
+
+        boolean anyLabor = cap.getAllValues().stream()
+                .anyMatch(r -> "LABOR".equals(r.getCostCategory()));
+        assertThat(anyLabor).as("零人工不应写 LABOR 报工").isFalse();
     }
 
     /**

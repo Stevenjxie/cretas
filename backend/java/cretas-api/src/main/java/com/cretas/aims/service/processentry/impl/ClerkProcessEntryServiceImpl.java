@@ -272,8 +272,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
                 // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
                 String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
-                warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
-                        " 调料成本未计入 — 请配置工序成本类别");
+                warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
+                        "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
             }
 
             // 3b. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
@@ -283,6 +283,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
                     : computeLaborCost(st, ctx.getLaborRate());
             batchTotalCost = batchTotalCost.add(laborCost);
+            // SP-F ①a: 人工写一条 ProductionReport(costCategory=LABOR), 让 OrderCostBreakdownService
+            // 经 getYield → totalLaborCost 读取。否则人工只折进 WIP unitPrice, 成本拆分里 laborCost=0。
+            if (laborCost.signum() > 0) {
+                writeLaborReport(ctx.getFactoryId(), batch.getId(), st, laborCost, ctx.getUserId());
+            }
 
             // 追踪产出量 (取最后一道有产出的 step)
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
@@ -344,14 +349,19 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 }
             } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
                 String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
-                warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
-                        " 调料成本未计入 — 请配置工序成本类别");
+                warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
+                        "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
             }
 
             BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
                     ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
                     : computeLaborCost(st, ctx.getLaborRate());
             batchTotalCost = batchTotalCost.add(laborCost);
+            // SP-F ①a: 重物化也写人工 ProductionReport (镜像 materializeBatch)。
+            // caller 已软删旧报工 (含旧人工行), 这里重新写入保持 getYield 可读。
+            if (laborCost.signum() > 0) {
+                writeLaborReport(ctx.getFactoryId(), existingBatchId, st, laborCost, ctx.getUserId());
+            }
 
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
                 lastOutputQty = st.getOutputQuantity();
@@ -525,6 +535,34 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setReportDate(LocalDate.now());
         report.setCostCategory("SEASONING");
         report.setMaterialCost(seasoningCost);
+        report.setProcessOrder(st.getProcessOrder());
+        report.setOutputQuantity(st.getOutputQuantity());
+        report.setInputQuantity(st.getInputQuantity());
+        reportRepo.save(report);
+    }
+
+    /**
+     * SP-F ①a: 将本道人工成本写入 ProductionReport (costCategory=LABOR, laborCost 字段)。
+     *
+     * <p>镜像 {@link #writeSeasoningReport}, 但成本落 {@code laborCost} 而非 {@code materialCost} ——
+     * OrderCostBreakdownService 经 {@code yieldReportService.getYield → BatchYieldDTO.totalLaborCost}
+     * 读取 (该聚合 Σ 所有道 ProductionReport.laborCost)。materialCost 留 null, 不进 resolveCostBucket
+     * 的材料分桶 (避免误计入原料/调料/包装)。
+     *
+     * <p>文员录入无 workProcessTaskId —— getYield 的 calculateSteps 按 taskId(null) 分组, 本批
+     * 全部人工/调料报工归一组, totalLaborCost Σ 全组 laborCost, 正确。
+     */
+    private void writeLaborReport(String factoryId, Long productionBatchId,
+                                   StepEntry st, BigDecimal laborCost, Long operatorId) {
+        ProductionReport report = new ProductionReport();
+        report.setFactoryId(factoryId);
+        report.setBatchId(productionBatchId);
+        report.setWorkerId(operatorId);
+        report.setReportType("YIELD");
+        report.setReportMode(ReportMode.MODE_1);
+        report.setReportDate(LocalDate.now());
+        report.setCostCategory("LABOR");
+        report.setLaborCost(laborCost);
         report.setProcessOrder(st.getProcessOrder());
         report.setOutputQuantity(st.getOutputQuantity());
         report.setInputQuantity(st.getInputQuantity());

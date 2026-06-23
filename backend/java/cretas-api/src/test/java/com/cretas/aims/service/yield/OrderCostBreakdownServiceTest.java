@@ -453,6 +453,147 @@ class OrderCostBreakdownServiceTest {
         assertThat(dto.getTotalCost()).isEqualByComparingTo("1000");       // 500 步材料 SKIP (避免与原料双计)
     }
 
+    /**
+     * SP-F ①b: 文员链 修油→焯水→熟制 的 computeByBatch(熟制) 跨链聚合 人工/调料。
+     *
+     * <p>拓扑 (线性, 1:1 全量消耗 → 分摊比例=1):
+     * <pre>
+     *   修油批(id=10, labor 104) → WIP-修油(receipt 100) ─consume 100→ 焯水批(id=20, labor 104)
+     *   焯水批(id=20)            → WIP-焯水(receipt 100) ─consume 100→ 熟制批(id=30, labor 156, 调料 33)
+     *   修油批消耗 RAW 牛大肠 (leaf, ¥7170)
+     * </pre>
+     * 期望 computeByBatch(熟制): rawMaterialCost=7170 (traced raw),
+     * laborCost=156(熟制自身)+104(焯水)+104(修油)=364, seasoningCost=33, totalCost=7170+364+33=7567。
+     * (= 熟制 WIP 应有的 unitPrice×qty: 151.35×50≈7567)。
+     */
+    @Test
+    @DisplayName("SP-F ①b: 文员链 computeByBatch(熟制) 聚合上游人工 → labor=364, total=7567")
+    void clerkChainAggregatesUpstreamLaborSeasoning() {
+        // ── 熟制 finished batch (id=30, 50 盒); computeByBatch 按批次号查 ──
+        when(batchRepository.findByFactoryIdAndBatchNumber(F, "CLK-B-XX"))
+                .thenReturn(Optional.of(batch(30L, "50")));
+        // 熟制自身: 人工 156, 调料 33 (SEASONING 道)
+        when(yieldReportService.getYield(F, 30L)).thenReturn(
+                batchYieldWithCategory("156", new String[]{"SEASONING"}, new BigDecimal("33")));
+        // 熟制消耗 WIP-焯水 100kg (1:1 全量)
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(30L, F))
+                .thenReturn(List.of(cons("WIP-CS", "100", "0", "0")));
+
+        // WIP-焯水 由焯水批(id=20)产出, receiptQuantity=100
+        when(materialBatchRepository.findByIdAndFactoryId("WIP-CS", F))
+                .thenReturn(Optional.of(wipMb("WIP-CS", 20L, "100")));
+        // 焯水批自身: 人工 104, 无调料
+        when(yieldReportService.getYield(F, 20L)).thenReturn(batchYield("104", BigDecimal.ZERO));
+        // 焯水消耗 WIP-修油 100kg (1:1)
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(20L, F))
+                .thenReturn(List.of(cons("WIP-XY", "100", "0", "0")));
+
+        // WIP-修油 由修油批(id=10)产出, receiptQuantity=100
+        when(materialBatchRepository.findByIdAndFactoryId("WIP-XY", F))
+                .thenReturn(Optional.of(wipMb("WIP-XY", 10L, "100")));
+        // 修油批自身: 人工 104, 无调料
+        when(yieldReportService.getYield(F, 10L)).thenReturn(batchYield("104", BigDecimal.ZERO));
+        // 修油消耗 RAW 牛大肠 100kg = ¥7170 (leaf)
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(10L, F))
+                .thenReturn(List.of(cons("RAW-NIU", "100", "71.70", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("RAW-NIU", F))
+                .thenReturn(Optional.of(mb("RAW-NIU", "牛大肠0613", null, null)));
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, "CLK-B-XX", false);
+
+        assertThat(dto.getRawMaterialCost()).as("traced 原料 7170").isEqualByComparingTo("7170");
+        assertThat(dto.getLaborCost())
+                .as("熟制156 + 焯水104 + 修油104 = 364").isEqualByComparingTo("364");
+        assertThat(dto.getSeasoningCost()).as("仅熟制调料 33").isEqualByComparingTo("33");
+        assertThat(dto.getTotalCost())
+                .as("7170 + 364 + 33 = 7567 (= WIP unitPrice 151.35×50)").isEqualByComparingTo("7567");
+    }
+
+    /** wipMb helper: WIP MaterialBatch produced by a production batch (sourceDocType=PRODUCTION_BATCH). */
+    private MaterialBatch wipMb(String id, long srcProdBatchId, String receiptQty) {
+        MaterialBatch m = new MaterialBatch();
+        m.setId(id); m.setFactoryId(F); m.setBatchNumber(id); m.setQuantityUnit("kg");
+        m.setSourceDocType("PRODUCTION_BATCH"); m.setSourceDocId(String.valueOf(srcProdBatchId));
+        m.setReceiptQuantity(new BigDecimal(receiptQty));
+        return m;
+    }
+
+    /**
+     * SP-F ①b 回归: 部分消耗时上游人工按比例分摊 (镜像 traceCost)。
+     * 熟制只消耗 WIP-焯水 50kg (产出 100kg) → 焯水/修油人工各按 50% 分摊。
+     * 期望 laborCost = 156(熟制全额) + (104+104)×50% = 156 + 104 = 260。
+     */
+    @Test
+    @DisplayName("SP-F ①b: 部分消耗(50/100) → 上游人工按比例分摊 (laborCost=260)")
+    void clerkChainPartialConsumptionApportionsLabor() {
+        when(batchRepository.findByFactoryIdAndBatchNumber(F, "CLK-B-YY"))
+                .thenReturn(Optional.of(batch(30L, "50")));
+        when(yieldReportService.getYield(F, 30L)).thenReturn(batchYield("156", BigDecimal.ZERO));
+        // 熟制只消耗 50kg of WIP-焯水 (产出 100) → 比例 0.5
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(30L, F))
+                .thenReturn(List.of(cons("WIP-CS2", "50", "0", "0")));
+        when(materialBatchRepository.findByIdAndFactoryId("WIP-CS2", F))
+                .thenReturn(Optional.of(wipMb("WIP-CS2", 20L, "100")));
+        when(yieldReportService.getYield(F, 20L)).thenReturn(batchYield("104", BigDecimal.ZERO));
+        // 焯水全量消耗 WIP-修油 100kg (1:1)
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(20L, F))
+                .thenReturn(List.of(cons("WIP-XY2", "100", "0", "0")));
+        when(materialBatchRepository.findByIdAndFactoryId("WIP-XY2", F))
+                .thenReturn(Optional.of(wipMb("WIP-XY2", 10L, "100")));
+        when(yieldReportService.getYield(F, 10L)).thenReturn(batchYield("104", BigDecimal.ZERO));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(10L, F))
+                .thenReturn(List.of(cons("RAW-NIU2", "100", "71.70", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("RAW-NIU2", F))
+                .thenReturn(Optional.of(mb("RAW-NIU2", "牛大肠", null, null)));
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, "CLK-B-YY", false);
+
+        // 熟制 156 全额 + (焯水104 + 修油104) × 50% = 156 + 104 = 260
+        assertThat(dto.getLaborCost())
+                .as("熟制156 + 上游(104+104)×0.5 = 260").isEqualByComparingTo("260");
+    }
+
+    /**
+     * SP-F ①b 回归 (M67 demo seed 拓扑): 上游 WIP 生产批 *无* labor/seasoning 报工 →
+     * 跨链聚合加 0 → 成品成本与改前一致 (零回归)。
+     *
+     * <p>这正是 M67 demo seed 的形状: 熟制(PB-001)消耗 焯水0613(MB-0613, sourceDocType=PRODUCTION_BATCH
+     * → 上游 WIP 批 PB-CS0613), 而 PB-CS0613 无任何 production_reports (seed 只给成品批写报工)。
+     * 故 aggregateUpstreamLaborSeasoning 递归进 PB-CS0613 取 getYield → 空 → [0,0]。
+     * 断言: laborCost 仍为成品批自身的 1334, 不因上游链多计。
+     */
+    @Test
+    @DisplayName("SP-F ①b 回归: 上游WIP无报工 → 成品成本零回归 (M67 demo: labor=1334 不变)")
+    void m67SeedTopologyNoRegressionWhenUpstreamHasNoReports() {
+        // 成品批 (id=1, 1787盒); 自身 人工1334, 调料980, 包装880
+        when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of(plan("PP1")));
+        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any()))
+                .thenReturn(List.of(batch(1L, "1787")));
+        when(yieldReportService.getYield(F, 1L)).thenReturn(
+                batchYield("1334", BigDecimal.ZERO, new BigDecimal("980"), new BigDecimal("880")));
+        // 消耗 MB-0613 (焯水0613) — sourceDocType=PRODUCTION_BATCH → 上游 WIP 批 8971
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(1L, F))
+                .thenReturn(List.of(cons("MB-0613", "78", "91.92", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-0613", F))
+                .thenReturn(Optional.of(wipMb("MB-0613", 8971L, "78")));
+        // 上游 WIP 批 8971 消耗原料 (leaf) — 但 8971 无 production_reports (getYield 返回 null)
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(8971L, F))
+                .thenReturn(List.of(cons("RAWA", "100", "71.70", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("RAWA", F))
+                .thenReturn(Optional.of(mb("RAWA", "原料A", null, null)));
+        // 8971 getYield NOT stubbed (LENIENT) → null → batchLaborSeasoning 返 [0,0]
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        // 全部与改前一致: 上游链无报工 → 加 0
+        assertThat(dto.getLaborCost()).as("成品自身 1334, 上游链加 0").isEqualByComparingTo("1334");
+        assertThat(dto.getSeasoningCost()).as("成品调料 980, 上游链加 0").isEqualByComparingTo("980");
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("880");
+        assertThat(dto.getRawMaterialCost()).as("traced 回溯到原料 7170").isEqualByComparingTo("7170");
+        assertThat(dto.getTotalCost()).as("1334+980+880+7170 = 10364").isEqualByComparingTo("10364");
+        assertThat(dto.getSources().get(0).getDepth()).as("depth=2 (递归回溯)").isEqualTo(2);
+    }
+
     @Test
     @DisplayName("空订单: 无生产计划 → hasData=false, 诚实空")
     void emptyOrderHonestEmpty() {
