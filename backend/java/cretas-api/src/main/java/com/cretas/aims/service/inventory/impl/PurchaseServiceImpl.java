@@ -271,6 +271,19 @@ public class PurchaseServiceImpl implements PurchaseService {
         supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
 
+        // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同买手对同供应商重复建 DRAFT 单 → 409。
+        // 键含 createdBy, 误拦仅"同一人 60s 内对同供应商双击"; 合法重复下单 (不同人/超 60s) 不受影响。
+        java.util.List<PurchaseOrder> poDupes = purchaseOrderRepository.findRecentDuplicateOrders(
+                factoryId, request.getSupplierId(), userId, java.time.LocalDateTime.now().minusSeconds(60));
+        if (!poDupes.isEmpty()) {
+            PurchaseOrder existing = poDupes.get(0);
+            throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                    "60 秒内已对该供应商创建采购单 (%s, 状态 %s), 如确为另一单请稍候再建",
+                    existing.getOrderNumber(), existing.getStatus()))
+                    .withHint("如需查看已有采购单请打开 " + existing.getOrderNumber())
+                    .withHintTarget(existing.getId());
+        }
+
         // 生成订单号: PO-YYYYMMDD-序号
         String orderNumber = generateOrderNumber(factoryId);
 

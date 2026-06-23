@@ -69,9 +69,21 @@ public class WorkReportingServiceImpl {
         // 接受并持久化一条跨租户关联的报工行 + 返 200 (虽 updateBatchActualQuantity 有 findByIdAndFactoryId
         // 防住别厂批次产量被改, 但仍产生垃圾行+误导成功)。提前校验 → 404, 与项目跨租户红线一致。
         if (request.getBatchId() != null) {
-            productionBatchRepository.findByIdAndFactoryId(request.getBatchId(), factoryId)
+            com.cretas.aims.entity.ProductionBatch reportBatch = productionBatchRepository
+                    .findByIdAndFactoryId(request.getBatchId(), factoryId)
                     .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
                             "生产批次不存在或不属于当前工厂: " + request.getBatchId()));
+            // 开工守卫 (edge-case 审计 2026-06-24, Steve 批): legacy 路径漏批次开工守卫
+            // (新 YieldReport/ProcessWorkReporting 路径已有)。未开工/终态批次不可报工。
+            ProductionBatchStatus st = reportBatch.getStatus();
+            if (st == ProductionBatchStatus.PLANNED || st == ProductionBatchStatus.PLANNING) {
+                throw new BusinessException(409, "批次尚未开始生产, 不可报工")
+                        .withHint("请先点击『开始生产』后再报工").withHintTarget("batchId");
+            }
+            if (st == ProductionBatchStatus.COMPLETED || st == ProductionBatchStatus.CANCELLED) {
+                throw new BusinessException(409, "批次已" + st.getDescription() + ", 不可报工")
+                        .withHint("已完工/已取消的批次不能再报工");
+            }
         }
 
         // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
