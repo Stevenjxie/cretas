@@ -4,12 +4,16 @@ import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +54,13 @@ public class DisposalRecordService implements IDisposalRecordService {
 
     /** 报损审批通过时扣减成品(生产)批次库存。 */
     private final ProductionBatchRepository productionBatchRepository;
+
+    /**
+     * R12: 成品报损扣减可售成品库存 (FinishedGoodsBatch) + 写调整日志留痕。
+     * 镜像 SalesServiceImpl.adjustFinishedGoodsQuantity 的 SCRAP 调整语义 (减 producedQuantity)。
+     */
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
     /** SP12 §5.3: 可选工作流引擎（无配置时降级运行，不抛 NPE）。 */
     @Autowired(required = false)
@@ -121,9 +132,13 @@ public class DisposalRecordService implements IDisposalRecordService {
      *       (= receiptQuantity - usedQuantity - reservedQuantity) 把关, 增 usedQuantity 扣减
      *       (与正常领料 {@code MaterialBatchServiceImpl.useBatchQuantity} 一致) +
      *       写 MaterialBatchAdjustment 负数留痕, 单价取 batch.unitPrice。</li>
-     *   <li>{@code productionBatchId} 非空 (成品报损) → H2 安全阻止 (422):
-     *       ProductionBatch.quantity 是产出额定值非可售库存, 可售库存在 FinishedGoodsBatch,
-     *       但 DisposalRecord 无法可靠定位 FG 批次 → 不扣错表, 抛 422 明确阻止。</li>
+     *   <li>{@code finishedGoodsBatchId} 非空 (成品报损, R12) → FinishedGoodsBatch 按可用量
+     *       getAvailableQuantity() (= producedQuantity - shippedQuantity - reservedQuantity) 把关,
+     *       减 producedQuantity 扣减 (镜像 SalesServiceImpl.adjustFinishedGoodsQuantity 的 SCRAP
+     *       调整语义) + 写 FinishedGoodsAdjustmentLog SCRAP 留痕, 单价取 batch.unitPrice, 扣空标 DEPLETED。</li>
+     *   <li>{@code productionBatchId} 非空但无 {@code finishedGoodsBatchId} (旧数据) → H2 安全阻止
+     *       (422): ProductionBatch.quantity 是产出额定值非可售库存, 无法可靠定位 FG 批次 →
+     *       不扣错表, 抛 422 明确阻止 (向后兼容)。</li>
      * </ul>
      * 库存不足 → 409 阻止审批 (不允许扣成负)。幂等: 仅 PENDING 可审批, 扣库存只发生一次。
      *
@@ -224,7 +239,62 @@ public class DisposalRecordService implements IDisposalRecordService {
             return valuate(disposalQty, batch.getUnitPrice(), record.getEstimatedLoss());
         }
 
-        // 成品报损 → H2 (审计 round2): 安全阻止, 不扣错表.
+        // 成品报损 (R12) → 优先用 finishedGoodsBatchId 扣减 FinishedGoodsBatch 可售库存.
+        //
+        // 扣减方式: 镜像 SalesServiceImpl.adjustFinishedGoodsQuantity 的 SCRAP 调整语义 ——
+        // 减 producedQuantity (而非加 shippedQuantity). 理由: shippedQuantity 语义是【已发货/已售】,
+        // 报损品从未售出, 加 shipped 会虚增发货/销售分析口径; 减 producedQuantity = 成品库存"凭空消失"
+        // 的正确语义 (同 adjust SCRAP), 且写 FinishedGoodsAdjustmentLog(referenceType=SCRAP) 可审计.
+        // 可用量 getAvailableQuantity() = producedQuantity - shippedQuantity - reservedQuantity 把关,
+        // 不足 → 409 (不扣成负, 不动已发/已预留部分). 扣空 → 标 DEPLETED.
+        if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
+            FinishedGoodsBatch fgBatch = finishedGoodsBatchRepository
+                    .findById(record.getFinishedGoodsBatchId())
+                    .orElseThrow(() -> new BusinessException(404,
+                            "报损成品批次不存在: " + record.getFinishedGoodsBatchId()));
+            // 跨租户: 批次必须属于同工厂
+            if (fgBatch.getFactoryId() == null || !fgBatch.getFactoryId().equals(record.getFactoryId())) {
+                throw new BusinessException(403, "无权操作该成品批次")
+                        .withHint("批次不属于当前工厂");
+            }
+
+            BigDecimal available = fgBatch.getAvailableQuantity() != null
+                    ? fgBatch.getAvailableQuantity() : BigDecimal.ZERO;
+            if (available.subtract(disposalQty).signum() < 0) {
+                throw new BusinessException(409,
+                        "报损数量 " + disposalQty + " 超过成品批次可用库存 " + available + ", 无法报损")
+                        .withHint("请核实报损数量，当前成品批次可用库存: " + available)
+                        .withHintTarget("disposalQuantity");
+            }
+
+            BigDecimal beforeProduced = fgBatch.getProducedQuantity() != null
+                    ? fgBatch.getProducedQuantity() : BigDecimal.ZERO;
+            BigDecimal afterProduced = beforeProduced.subtract(disposalQty);
+
+            // 调整日志留痕 (referenceType=SCRAP, 负数变更, before/after 取 producedQuantity, 与扣减语义一致)
+            FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
+                    .factoryId(fgBatch.getFactoryId())
+                    .batchId(fgBatch.getId())
+                    .adjustmentQuantity(disposalQty.negate()) // 负数
+                    .beforeProduced(beforeProduced)
+                    .afterProduced(afterProduced)
+                    .reason("报损审批 [id=" + record.getId() + "] 类型: " + record.getDisposalType()
+                            + (record.getDisposalReason() != null ? " - " + record.getDisposalReason() : ""))
+                    .referenceType("SCRAP")
+                    .operatorId(approverId != null ? approverId.longValue() : null)
+                    .build();
+            finishedGoodsAdjustmentLogRepository.save(logEntry);
+
+            fgBatch.setProducedQuantity(afterProduced);
+            if (fgBatch.isDepleted()) {
+                fgBatch.setStatus(FinishedGoodsBatch.Status.DEPLETED);
+            }
+            finishedGoodsBatchRepository.save(fgBatch);
+
+            return valuate(disposalQty, fgBatch.getUnitPrice(), record.getEstimatedLoss());
+        }
+
+        // 成品报损 → H2 (审计 round2): 仅有 productionBatchId 无 finishedGoodsBatchId → 安全阻止, 不扣错表.
         //
         // 此前扣 ProductionBatch.quantity, 但那是生产批次的【产出额定值】(创建时设, 从不被发货/销售扣减,
         // 还有 @Positive 校验, 扣到 0 触发 bean validation 失败). 真正可售成品库存在 FinishedGoodsBatch

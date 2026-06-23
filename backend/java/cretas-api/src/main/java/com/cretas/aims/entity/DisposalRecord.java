@@ -82,6 +82,20 @@ public class DisposalRecord extends BaseEntity {
     private String materialBatchId;
 
     /**
+     * 成品库存批次ID（针对成品报损 → 扣减 FinishedGoodsBatch 可售库存）。
+     *
+     * <p>R12 (2026-06-23): 此前成品报损只有 {@code productionBatchId} (生产批次的产出额定值,
+     * 非可售库存) → approveDisposal 走 422 安全阻止。新增本字段后, 成品报损可直接关联
+     * {@link com.cretas.aims.entity.inventory.FinishedGoodsBatch} (可售成品库存批次),
+     * 审批通过时真扣其可用量 (减 producedQuantity + 写 FinishedGoodsAdjustmentLog SCRAP 留痕)。
+     *
+     * <p>向后兼容: 旧数据仅有 productionBatchId 无 finishedGoodsBatchId → 仍走 422 安全阻止,
+     * 绝不静默扣错表。
+     */
+    @Column(name = "finished_goods_batch_id", length = 191)
+    private String finishedGoodsBatchId;
+
+    /**
      * 报废数量
      */
     @Column(name = "disposal_quantity", nullable = false, precision = 12, scale = 2)

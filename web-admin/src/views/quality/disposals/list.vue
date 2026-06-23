@@ -24,7 +24,9 @@ const searchForm = ref({
 // 新建废弃对话框
 const dialogVisible = ref(false);
 const dialogLoading = ref(false);
+// R12: targetType 区分报损对象 —— 'MATERIAL'(原料批次, 扣 MaterialBatch) / 'FINISHED'(成品批次, 扣 FinishedGoodsBatch)。
 const disposalForm = ref({
+  targetType: 'MATERIAL' as 'MATERIAL' | 'FINISHED',
   batchId: '',
   disposalType: '',
   quantity: 0,
@@ -33,19 +35,36 @@ const disposalForm = ref({
   notes: ''
 });
 const actionLoading = ref(false);
-const batches = ref<TableRow[]>([]);
+const batches = ref<TableRow[]>([]);           // 原料批次 (MaterialBatch)
+const fgBatches = ref<TableRow[]>([]);          // R12: 成品批次 (FinishedGoodsBatch)
 
-// F-FP-2 防呆: 选中批次的可用量上限 (后端 MaterialBatch 暴露 currentQuantity/remainingQuantity)。
+// R12: 当前报损对象对应的批次下拉数据源。
+const currentBatches = computed<TableRow[]>(() =>
+  disposalForm.value.targetType === 'FINISHED' ? fgBatches.value : batches.value
+);
+
+// F-FP-2 防呆 + R12: 选中批次的可用量上限。
+// 原料: MaterialBatch.currentQuantity/remainingQuantity/receiptQuantity。
+// 成品: FinishedGoodsBatch.availableQuantity (= produced - shipped - reserved)。
 const selectedBatchMax = computed<number | null>(() => {
-  const b = batches.value.find((x) => x.id === disposalForm.value.batchId);
+  const b = currentBatches.value.find((x) => x.id === disposalForm.value.batchId);
   if (!b) return null;
-  const avail = (b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined;
+  const avail = disposalForm.value.targetType === 'FINISHED'
+    ? ((b.availableQuantity ?? b.producedQuantity) as number | undefined)
+    : ((b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined);
   return typeof avail === 'number' ? avail : null;
 });
+
+// R12: 切换报损对象时清空已选批次, 避免跨数据源残留无效 batchId。
+function handleTargetTypeChange() {
+  disposalForm.value.batchId = '';
+  disposalForm.value.quantity = 0;
+}
 
 onMounted(() => {
   loadData();
   loadBatches();
+  loadFgBatches();
 });
 
 async function loadData() {
@@ -91,6 +110,22 @@ async function loadBatches() {
   }
 }
 
+// R12: 加载可售成品批次 (FinishedGoodsBatch) 供成品报损选择。
+async function loadFgBatches() {
+  if (!factoryId.value) return;
+  try {
+    const response = await get(`/${factoryId.value}/sales/finished-goods`, {
+      params: { status: 'AVAILABLE', size: 100 }
+    });
+    if (response.success && response.data) {
+      fgBatches.value = response.data.content || response.data || [];
+    }
+  } catch (error: any) {
+    console.error('加载成品批次列表失败:', error);
+    if (!error?.actionHint) ElMessage.error('加载成品批次列表失败');
+  }
+}
+
 function handleSearch() {
   pagination.value.page = 1;
   loadData();
@@ -115,6 +150,7 @@ function handleSizeChange(size: number) {
 
 function handleCreate() {
   disposalForm.value = {
+    targetType: 'MATERIAL',
     batchId: '',
     disposalType: '',
     quantity: 0,
@@ -158,14 +194,20 @@ async function submitDisposal() {
   // (CreateDisposalRecordRequest DTO). FE form uses {batchId, quantity, reason}
   // but backend expects {materialBatchId, disposalQuantity, disposalReason}.
   // evidenceImages goes to dedicated evidence_images column (V20261024_15).
-  const payload = {
-    materialBatchId: disposalForm.value.batchId,
+  // R12: targetType 决定批次字段 —— 成品报损传 finishedGoodsBatchId (扣 FinishedGoodsBatch),
+  // 原料报损传 materialBatchId (扣 MaterialBatch)。
+  const payload: Record<string, unknown> = {
     disposalType: disposalForm.value.disposalType,
     disposalQuantity: disposalForm.value.quantity,
     disposalReason: disposalForm.value.reason,
     evidenceImages: disposalForm.value.evidenceImages.trim() || undefined,
     notes: disposalForm.value.notes.trim() || undefined
   };
+  if (disposalForm.value.targetType === 'FINISHED') {
+    payload.finishedGoodsBatchId = disposalForm.value.batchId;
+  } else {
+    payload.materialBatchId = disposalForm.value.batchId;
+  }
 
   dialogLoading.value = true;
   try {
@@ -448,12 +490,22 @@ function getTypeText(type: string) {
     <!-- 新建废弃申请对话框 -->
     <el-dialog v-model="dialogVisible" title="新建废弃申请" width="500px">
       <el-form :model="disposalForm" label-width="100px">
+        <!-- R12 防呆 Rule 3: 报损对象用单选, 切换批次数据源 (原料 / 成品)。 -->
+        <el-form-item label="报损对象" required>
+          <el-radio-group v-model="disposalForm.targetType" @change="handleTargetTypeChange">
+            <el-radio-button label="MATERIAL">原料批次</el-radio-button>
+            <el-radio-button label="FINISHED">成品批次</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="批次" required>
           <el-select v-model="disposalForm.batchId" placeholder="选择批次" style="width: 100%">
+            <!-- R12: 成品批次显批次号 + 产品名 + 可用量 (防呆 Rule 1 显边界); 原料批次显批次号 + 物料名。 -->
             <el-option
-              v-for="item in batches"
+              v-for="item in currentBatches"
               :key="item.id"
-              :label="`${item.batchNumber} - ${item.materialTypeName}`"
+              :label="disposalForm.targetType === 'FINISHED'
+                ? `${item.batchNumber} - ${item.productName || item.productTypeName || '成品'} (可用 ${item.availableQuantity ?? item.producedQuantity ?? 0})`
+                : `${item.batchNumber} - ${item.materialTypeName}`"
               :value="item.id"
             />
           </el-select>

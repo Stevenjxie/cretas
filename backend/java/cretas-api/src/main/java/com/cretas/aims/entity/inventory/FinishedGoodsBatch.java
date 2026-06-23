@@ -10,6 +10,7 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -72,9 +73,12 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "product_name", length = 200)
     private String productName;
 
-    /** 生产/入库数量 */
+    /** 生产/入库数量。
+     * H1 (B2): @Positive→@PositiveOrZero —— 成品报损(SCRAP)减 producedQuantity, 全量报损会到 0;
+     * @Positive 会在 flush 触发 ConstraintViolation→500 (spring-boot-starter-validation 在 update 校验)。
+     * 0 是合法状态(批次已耗尽 DEPLETED, 历史由 FinishedGoodsAdjustmentLog 保留)。创建路径始终传 >0, 无回归。 */
     @NotNull
-    @Positive
+    @PositiveOrZero
     @Column(name = "produced_quantity", nullable = false, precision = 15, scale = 4)
     private BigDecimal producedQuantity;
 

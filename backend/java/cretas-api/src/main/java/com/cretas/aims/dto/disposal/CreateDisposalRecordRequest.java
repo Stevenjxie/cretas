@@ -76,6 +76,10 @@ public class CreateDisposalRecordRequest {
     @Size(max = 191, message = "原材料批次ID长度不能超过191个字符")
     private String materialBatchId;
 
+    @Schema(description = "成品库存批次ID（针对成品报损 → 扣减 FinishedGoodsBatch 可售库存）")
+    @Size(max = 191, message = "成品库存批次ID长度不能超过191个字符")
+    private String finishedGoodsBatchId;
+
     @Schema(description = "预估损失金额", example = "5000.00")
     @PositiveOrZero(message = "预估损失金额不能为负数")
     private BigDecimal estimatedLoss;
