@@ -25,6 +25,8 @@ const props = defineProps<{
   productTypeId: string;
   /** WIP inventory items from the upstream process (for dropdown + remaining calc) */
   upstreamItems: ProcessSheetInventoryItem[];
+  /** WIP inventory items for THIS process (for grid 剩余 column on saved rows) */
+  ownInventoryItems?: ProcessSheetInventoryItem[];
   /** Existing saved rows loaded from backend on mount */
   initialRows: ProcessSheetRowView[];
   /** Layout mode toggled in the drawer header. Default: 'grid'. */
@@ -43,8 +45,8 @@ interface SheetRow {
   rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
   saving: boolean;
   deleting: boolean;
-  /** Generic per-process scalar fields: date / number values keyed by ColDef.key */
-  fields: Record<string, string | number | null>;
+  /** Generic per-process scalar fields: date / number / daterange ([start,end]) values keyed by ColDef.key */
+  fields: Record<string, string | number | [string, string] | null>;
   /** 修油: selected raw material batch id → rawMaterialInputs[0].materialBatchId */
   rawBatchId: string;
   /** 修油: out-weight (kg) → rawMaterialInputs[0].quantity */
@@ -127,14 +129,32 @@ async function loadRawBatches() {
 // -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
+
+/** Returns today as YYYY-MM-DD (local time). */
+function todayStr(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function blankRow(): SheetRow {
+  // Default daterange fields to [today, today] for each daterange col in this process.
+  const today = todayStr();
+  const daterangeDefaults: Record<string, [string, string]> = {};
+  for (const col of PROCESS_SHEET_CONFIG[props.processCode] ?? []) {
+    if (col.type === 'daterange') {
+      daterangeDefaults[col.key] = [today, today];
+    }
+  }
   return {
     clientRowId: genClientRowId(props.processCode),
     batchNumber: null,
     rowStatus: 'UNSAVED',
     saving: false,
     deleting: false,
-    fields: {},
+    fields: { ...daterangeDefaults },
     rawBatchId: '',
     rawBatchQty: null,
     upstreamBatch: '',
@@ -173,12 +193,25 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   }
   row.laborSegments = (p.laborSegments ?? []).map((s) => ({ ...s }));
 
-  // Generic date fields
+  // Generic date / daterange fields
+  const today = todayStr();
   for (const col of cols.value) {
     if (col.type === 'date' && !(col.key in row.fields)) {
-      // prodDate for xiuyou, date for chaoshui/shuzhi — stored under their col.key
-      // These aren't tracked in the current payload; default to null
       row.fields[col.key] = null;
+    }
+    if (col.type === 'daterange') {
+      // Payload stores daterange as [start, end] array under col.key.
+      // Try to recover it; fall back to [today, today] for older rows that
+      // predate the daterange feature (they had a scalar string or null).
+      const stored = p[col.key as keyof typeof p];
+      if (Array.isArray(stored) && stored.length === 2) {
+        row.fields[col.key] = [String(stored[0]), String(stored[1])];
+      } else if (typeof stored === 'string' && stored) {
+        // Legacy single-date value: treat as both start and end.
+        row.fields[col.key] = [stored, stored];
+      } else {
+        row.fields[col.key] = [today, today];
+      }
     }
   }
   return row;
@@ -245,6 +278,13 @@ function calcTotalHours(row: SheetRow): number {
 }
 
 function calcRemaining(row: SheetRow): number | null {
+  // For SAVED rows with a batchNumber: look up in own-process inventory.
+  // This is the authoritative value and matches what the 半成品库存 table shows.
+  if (row.rowStatus === 'SAVED' && row.batchNumber && props.ownInventoryItems?.length) {
+    const inv = props.ownInventoryItems.find((b) => b.batchNumber === row.batchNumber);
+    if (inv != null) return inv.remaining;
+  }
+  // Fallback for chaoshui unsaved rows: derive from upstream usage (original logic).
   if (props.processCode === 'chaoshui') {
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     return inv ? inv.remaining : null;
@@ -299,8 +339,8 @@ function saveDisabledReason(row: SheetRow): string | null {
 // -------------------------------------------------------------------------
 // Build request
 // -------------------------------------------------------------------------
-function buildRequest(row: SheetRow): ProcessSheetRowRequest {
-  const base: ProcessSheetRowRequest = {
+function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, unknown> {
+  const base: ProcessSheetRowRequest & Record<string, unknown> = {
     clientRowId: row.clientRowId,
     processCode: props.processCode,
     processOrder: props.processOrder,
@@ -313,6 +353,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest {
     potCount: row.potCount > 1 ? row.potCount : undefined,
     potRawKgs: row.potCount > 1 ? (row.potRawKgs.filter(Boolean) as number[]) : undefined,
   };
+
+  // Append daterange fields so the backend stores them in row_payload JSON.
+  for (const col of cols.value) {
+    if (col.type === 'daterange') {
+      base[col.key] = row.fields[col.key] ?? null;
+    }
+  }
 
   if (isXiuYou.value) {
     base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
@@ -593,6 +640,18 @@ onMounted(() => {
                 type="date" value-format="YYYY-MM-DD"
                 style="width:160px" size="small" />
 
+              <!-- daterange picker: card mode full-width -->
+              <el-date-picker
+                v-else-if="col.type === 'daterange'"
+                :model-value="(row.fields[col.key] as [string,string]) || null"
+                @update:model-value="(v: [string,string] | null) => row.fields[col.key] = v ?? null"
+                type="daterange"
+                range-separator="~"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                value-format="YYYY-MM-DD"
+                style="width:100%" size="small" />
+
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
                 {{ calcYield(row) != null ? calcYield(row)!.toFixed(2) + '%' : '—' }}
               </span>
@@ -669,7 +728,11 @@ onMounted(() => {
             <template v-for="col in cols" :key="col.key">
               <th v-if="!['rawBatch','outWeight','upstreamBatch','batch'].includes(col.key)"
                   class="sp-th"
-                  :class="{ 'sp-th-num': col.type === 'number' || col.type === 'auto', 'sp-th-date': col.type === 'date' }">
+                  :class="{
+                    'sp-th-num': col.type === 'number' || col.type === 'auto',
+                    'sp-th-date': col.type === 'date',
+                    'sp-th-daterange': col.type === 'daterange',
+                  }">
                 {{ col.label }}
               </th>
             </template>
@@ -769,7 +832,11 @@ onMounted(() => {
                 <td
                   v-if="!['rawBatch','outWeight','upstreamBatch','batch'].includes(col.key)"
                   class="sp-td"
-                  :class="{ 'sp-td-num': col.type === 'number' || col.type === 'auto', 'sp-td-date': col.type === 'date' }">
+                  :class="{
+                    'sp-td-num': col.type === 'number' || col.type === 'auto',
+                    'sp-td-date': col.type === 'date',
+                    'sp-td-daterange': col.type === 'daterange',
+                  }">
 
                   <!-- number input -->
                   <el-input-number
@@ -780,13 +847,25 @@ onMounted(() => {
                     controls-position="right"
                     style="width:110px" size="small" />
 
-                  <!-- date picker -->
+                  <!-- date picker (single) -->
                   <el-date-picker
                     v-else-if="col.type === 'date'"
                     :model-value="(row.fields[col.key] as string) || undefined"
                     @update:model-value="(v: string) => row.fields[col.key] = v"
                     type="date" value-format="YYYY-MM-DD"
                     style="width:130px" size="small" />
+
+                  <!-- daterange picker: 开始日期 ~ 结束日期 -->
+                  <el-date-picker
+                    v-else-if="col.type === 'daterange'"
+                    :model-value="(row.fields[col.key] as [string,string]) || null"
+                    @update:model-value="(v: [string,string] | null) => row.fields[col.key] = v ?? null"
+                    type="daterange"
+                    range-separator="~"
+                    start-placeholder="开始"
+                    end-placeholder="结束"
+                    value-format="YYYY-MM-DD"
+                    style="width:230px" size="small" />
 
                   <!-- auto: yield -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
@@ -966,12 +1045,13 @@ onMounted(() => {
   white-space: nowrap;
   text-align: left;
 }
-.sp-th-status  { width: 72px; }
-.sp-th-num     { text-align: right; width: 120px; }
-.sp-th-date    { width: 140px; }
-.sp-th-batch   { width: 160px; min-width: 130px; }
-.sp-th-labor   { width: 100px; }
-.sp-th-actions { width: 120px; text-align: center; }
+.sp-th-status    { width: 72px; }
+.sp-th-num       { text-align: right; width: 120px; }
+.sp-th-date      { width: 140px; }
+.sp-th-daterange { width: 240px; }
+.sp-th-batch     { width: 160px; min-width: 130px; }
+.sp-th-labor     { width: 100px; }
+.sp-th-actions   { width: 120px; text-align: center; }
 
 /* Body cells */
 .sp-td {
@@ -979,10 +1059,11 @@ onMounted(() => {
   padding: 5px 6px;
   vertical-align: middle;
 }
-.sp-td-status  { width: 72px; text-align: center; }
-.sp-td-num     { text-align: right; }
-.sp-td-date    {}
-.sp-td-batch   { color: #409eff; font-weight: 600; font-size: 11px; }
+.sp-td-status    { width: 72px; text-align: center; }
+.sp-td-num       { text-align: right; }
+.sp-td-date      {}
+.sp-td-daterange {}
+.sp-td-batch     { color: #409eff; font-weight: 600; font-size: 11px; }
 .sp-td-labor   { text-align: center; }
 .sp-td-actions { text-align: center; white-space: nowrap; }
 

@@ -24,14 +24,15 @@
 /**
  * 列的输入类型.
  *
- * - dropdown : 从库存/批次列表选择 (上游批次/原料批次).
- * - number   : 数字输入框.
- * - date     : 日期选择器.
- * - auto     : 客户端自动计算 (即时反馈); 权威值来自后端响应.
- * - readonly : 只读显示 (系统生成的批次号 / 派生的剩余量).
- * - text     : 自由文本输入.
+ * - dropdown   : 从库存/批次列表选择 (上游批次/原料批次).
+ * - number     : 数字输入框.
+ * - date       : 日期选择器 (单日).
+ * - daterange  : 日期范围选择器 (开始日期 ~ 结束日期); 存为 [start, end] 字符串数组.
+ * - auto       : 客户端自动计算 (即时反馈); 权威值来自后端响应.
+ * - readonly   : 只读显示 (系统生成的批次号 / 派生的剩余量).
+ * - text       : 自由文本输入.
  */
-export type ColType = 'dropdown' | 'number' | 'date' | 'auto' | 'readonly' | 'text';
+export type ColType = 'dropdown' | 'number' | 'date' | 'daterange' | 'auto' | 'readonly' | 'text';
 
 /**
  * 自动计算公式标识.
@@ -89,7 +90,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
     { key: 'rawBatch',    type: 'dropdown', label: '原料批次', source: 'raw' }, // → rawMaterialInputs (选原料 MaterialBatch)
     { key: 'outWeight',   type: 'number',   label: '出库重量(kg)' },        // → rawInput.quantity
     { key: 'batch',       type: 'readonly', label: '修油批次' },            // 系统生成, 作下游下拉项
-    { key: 'prodDate',    type: 'date',     label: '生产日期' },
+    { key: 'prodDate',    type: 'daterange', label: '生产日期' },
     { key: 'output',      type: 'number',   label: '产出数量(kg)' },        // → outputQuantity
     { key: 'feedWeight',  type: 'auto',     label: '投料重量(kg)' },        // 前端 = outWeight (即时反馈)
     { key: 'yieldRate',   type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
@@ -104,7 +105,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   chaoshui: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '修油批次' },  // 切片折叠 (真实=滚揉批)
     { key: 'batch',         type: 'readonly',                       label: '焯水批次' },   // 系统生成
-    { key: 'date',          type: 'date',                           label: '焯水日期' },
+    { key: 'date',          type: 'daterange',                      label: '焯水日期' },
     { key: 'before',        type: 'number',                         label: '焯水前(kg)' }, // → inputQuantity
     { key: 'after',         type: 'number',                         label: '焯水后(kg)' }, // → outputQuantity
     { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
@@ -120,7 +121,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   shuzhi: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '焯水批次(混锅)' }, // 切片折叠 (真实=去舌苔批), 多选
     { key: 'batch',         type: 'readonly',                        label: '熟制批次' },        // 系统生成
-    { key: 'date',          type: 'date',                            label: '日期' },
+    { key: 'date',          type: 'daterange',                       label: '日期' },
     { key: 'input',         type: 'number',                          label: '投入(kg)' },        // → inputQuantity
     { key: 'output',        type: 'number',                          label: '产出(kg)' },        // → outputQuantity
     { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
