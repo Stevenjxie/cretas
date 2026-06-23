@@ -178,12 +178,16 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<MaterialBatch> findByStatus(MaterialBatchStatus status);
 
     /**
-     * 查找可用的批次（FIFO - 按购买日期排序）
+     * 查找可用的批次（FIFO - 按购买日期排序，排除 PRODUCTION_BATCH 来源）.
+     * SP-D Fix 1b: WIP MaterialBatch (sourceDocType=PRODUCTION_BATCH) 是文员录入的内部半成品,
+     * 仅供 traceCost() 溯源使用, 不参与 FIFO/FEFO 出库分配 (避免被当作原料重复消耗).
+     * findByIdAndFactoryId 不受影响 (traceCost 专用).
      */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "ORDER BY m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFIFO(@Param("factoryId") String factoryId,
                                                   @Param("materialTypeId") String materialTypeId);
@@ -203,12 +207,14 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                             @Param("warehouseId") String warehouseId);
 
     /**
-     * 查找可用的批次（FEFO - 先到期先出，食品行业合规）
+     * 查找可用的批次（FEFO - 先到期先出，食品行业合规，排除 PRODUCTION_BATCH 来源）.
+     * SP-D Fix 1b: 同 findAvailableBatchesFIFO，WIP 半成品不参与 FEFO 出库分配.
      */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFO(@Param("factoryId") String factoryId,
                                                   @Param("materialTypeId") String materialTypeId);
@@ -228,10 +234,12 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                             @Param("warehouseId") String warehouseId);
 
     /**
-     * 查找 warehouse 内所有可用批次（不限 materialType）。D1 反向调拨触发 (PR #309 A3=A, 2026-05-10 spec)。
+     * 查找 warehouse 内所有可用批次（不限 materialType，排除 PRODUCTION_BATCH 来源）。
+     * D1 反向调拨触发 (PR #309 A3=A, 2026-05-10 spec)。SP-D Fix 1b.
      *
      * <p>用途：报工完成后, 反向调拨编排查询 WH-WKS 内的所有余料 (剩余原料),
      * 聚合后作为 BRANCH_TO_HQ 调拨单 items 候选。
+     * PRODUCTION_BATCH 来源的 WIP 批次不是可调拨的余料, 排除之.
      *
      * <p>排序按 materialTypeId 升序方便按类型聚合 (同 materialTypeId 多批次合并成 1 行 item)。
      */
@@ -239,6 +247,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.warehouseId = :warehouseId " +
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "ORDER BY m.materialTypeId ASC, m.expireDate ASC NULLS LAST, m.receiptDate ASC")
     List<MaterialBatch> findAllAvailableInWarehouse(@Param("factoryId") String factoryId,
                                                      @Param("warehouseId") String warehouseId);
@@ -266,10 +275,12 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<MaterialBatch> findByFactoryIdAndSupplierId(String factoryId, String supplierId);
 
     /**
-     * 计算库存总值
+     * 计算库存总值 (排除 PRODUCTION_BATCH 来源的 WIP 批次).
+     * SP-D Fix 1b: WIP MaterialBatch 是内部成本路由工件, 不计入原料库存价值.
      */
     @Query("SELECT SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice) FROM MaterialBatch m " +
-           "WHERE m.factoryId = :factoryId AND m.status = 'AVAILABLE'")
+           "WHERE m.factoryId = :factoryId AND m.status = 'AVAILABLE' " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH')")
     BigDecimal calculateInventoryValue(@Param("factoryId") String factoryId);
 
     /**
