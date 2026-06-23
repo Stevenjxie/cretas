@@ -405,7 +405,9 @@ public class PrintController {
         java.math.BigDecimal potCapacity = null;
         String unit = "-";
         if (productTypeRepository != null && productTypeId != null) {
-            com.cretas.aims.entity.ProductType pt = productTypeRepository.findById(productTypeId).orElse(null);
+            // 跨租户安全: 按 (id, factoryId) 查, 防 productTypeId 指向别厂产品 (复用项目既有红线修法)
+            com.cretas.aims.entity.ProductType pt =
+                    productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).orElse(null);
             if (pt != null) {
                 potCapacity = pt.getSinglePotCapacity();
                 if (pt.getUnit() != null) unit = pt.getUnit();
