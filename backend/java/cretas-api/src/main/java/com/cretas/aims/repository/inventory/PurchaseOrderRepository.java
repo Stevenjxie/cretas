@@ -52,6 +52,17 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
 
     List<PurchaseOrder> findByFactoryIdAndSupplierId(String factoryId, String supplierId);
 
+    /**
+     * 防呆 R4 (幂等防双击): 60s 窗口内同 工厂/供应商/创建人 的 DRAFT 采购单 → 视为重复点击。
+     * 键收窄到 createdBy: 误拦面 = 同一买手 60s 内对同供应商重复建单 (几乎必是双击),
+     * 不同买手/超 60s 的合法重复下单不受影响 (reviewer ISSUE-2 经验)。
+     */
+    @Query("SELECT po FROM PurchaseOrder po WHERE po.factoryId = ?1 AND po.supplierId = ?2 "
+            + "AND po.createdBy = ?3 AND po.status = com.cretas.aims.entity.enums.PurchaseOrderStatus.DRAFT "
+            + "AND po.deletedAt IS NULL AND po.createdAt >= ?4 ORDER BY po.createdAt DESC")
+    List<PurchaseOrder> findRecentDuplicateOrders(String factoryId, String supplierId,
+            Long createdBy, java.time.LocalDateTime cutoff);
+
     @Query("SELECT po FROM PurchaseOrder po WHERE po.factoryId = :factoryId " +
             "AND po.orderDate BETWEEN :startDate AND :endDate ORDER BY po.orderDate DESC")
     List<PurchaseOrder> findByFactoryIdAndDateRange(
