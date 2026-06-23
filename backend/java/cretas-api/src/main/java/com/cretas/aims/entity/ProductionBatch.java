@@ -276,6 +276,23 @@ public class ProductionBatch extends BaseEntity {
     @Column(name = "planned_unit", length = 20)
     private String plannedUnit;
 
+    // ==================== SP-D: WIP 批次判别 ====================
+
+    /**
+     * 批次类型判别列 (SP-D Fix 1a).
+     *
+     * <p>REGULAR (默认) — 常规生产批次, 计入仪表盘统计和批次列表.<br>
+     * CLERK_WIP — 文员录入的中间半成品批次 (CLK-W- 前缀, isFinished=false 路径).
+     * 这类批次是成本路由的内部工件, 不应出现在面向用户的统计和列表中,
+     * 否则会虚增"今日批次""在制批次""总产量"等指标.
+     * </p>
+     *
+     * <p>DB 列 batch_type VARCHAR(20) NOT NULL DEFAULT 'REGULAR' (V20261027_05).</p>
+     */
+    @Builder.Default
+    @Column(name = "batch_type", nullable = false, length = 20)
+    private String batchType = "REGULAR";
+
     // ==================== SP10: 试制批次标记 ====================
 
     /**
