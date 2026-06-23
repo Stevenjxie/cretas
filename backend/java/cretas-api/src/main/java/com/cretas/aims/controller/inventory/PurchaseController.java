@@ -531,6 +531,25 @@ public class PurchaseController {
         return ApiResponse.success("采购建议生成成功", result);
     }
 
+    /**
+     * 多销售订单合并生成采购建议 (转录行3650: 多个 SO 用"加号"逐个追加合并成一张采购单).
+     *
+     * <p>跨所有 SO 按 materialTypeId 聚合需求, 统一扣一次库存得净需求。
+     * 返回每行标注合并自哪几张 SO + 逐 SO 的 hasBom 摘要 (诚实暴露无配方的 SO)。
+     *
+     * <p>路径: {@code POST /api/mobile/{factoryId}/purchase/orders/suggestions/from-so-multi}
+     */
+    @PostMapping("/orders/suggestions/from-so-multi")
+    @Operation(summary = "多销售订单合并生成采购建议",
+            description = "跨多张SO展开BOM并按物料聚合需求, 统一扣减库存得净需求, 返回合并预填PO明细")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<com.cretas.aims.dto.inventory.PurchaseSuggestionMultiResponse> generatePurchaseSuggestionMulti(
+            @PathVariable @NotBlank String factoryId,
+            @Valid @RequestBody com.cretas.aims.dto.inventory.MultiSoPurchaseSuggestionRequest request) {
+        var result = purchaseService.generatePurchaseSuggestionMulti(factoryId, request.getSalesOrderIds());
+        return ApiResponse.success("采购建议生成成功", result);
+    }
+
     // ==================== 内部方法 ====================
 
     private Long extractUserId(String authorization) {
