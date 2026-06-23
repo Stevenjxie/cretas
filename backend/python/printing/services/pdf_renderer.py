@@ -719,8 +719,9 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
       sourceOrderId,       # C-051 新增: 单 SO 时的销售单 ID
       requisitionCount,
       printedBy, printedAccount,
-      items: [{materialName, category, unit, plannedRawQty, plannedAuxiliaryQty,
-               plannedSemiFinishedQty, totalQty, actualUsedQty, batchRefs}],
+      items: [{materialName, category, unit, transactedQty(成交/应需),
+               plannedIssueQty(打算/已拣), deliveredQty(送到/已发),
+               actualUsedQty(实际领用), batchRefs}],
       remark
     }
     """
@@ -751,11 +752,15 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
         Paragraph("汇总领料明细", s["h2"]),
         _render_items_table(
             data.get("items") or [],
+            # 转录行2902-2904 [86:53-55]: 预领量公单含 成交/打算/送到 三列。
+            # 成交(应需)=requiredQty, 打算(已拣)=pickedQty, 送到(已发)=issuedQty, 实际领用=consumedQty。
+            # 替换原 原料/辅料/半成品报名值 内部拆分列 (与"分类"列冗余), 改为客户要的拣发追踪列。
             [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
-             ("单位", "unit", "CENTER"), ("原料报名值", "plannedRawQty", "RIGHT"),
-             ("辅料报名值", "plannedAuxiliaryQty", "RIGHT"),
-             ("半成品报名值", "plannedSemiFinishedQty", "RIGHT"),
-             ("汇总数量", "totalQty", "RIGHT"), ("实际领用(结单填)", "actualUsedQty", "RIGHT"),
+             ("单位", "unit", "CENTER"),
+             ("成交(应需)", "transactedQty", "RIGHT"),
+             ("打算(已拣)", "plannedIssueQty", "RIGHT"),
+             ("送到(已发)", "deliveredQty", "RIGHT"),
+             ("实际领用(结单填)", "actualUsedQty", "RIGHT"),
              ("批次关联", "batchRefs", "LEFT")],
             s["font"],
         ),

@@ -874,6 +874,10 @@ public class PrintController {
                     r.put("plannedAuxiliaryQtyValue", BigDecimal.ZERO);
                     r.put("plannedSemiFinishedQtyValue", BigDecimal.ZERO);
                     r.put("totalQtyValue", BigDecimal.ZERO);
+                    // SP12 T8 续: 成交(应需=requiredQty=totalQty) / 打算(已拣=pickedQty) / 送到(已发=issuedQty)
+                    // 三列 (转录行2902-2904 [86:53-55])。picked/issued null-init → 未拣发时显空, 不伪造 0。
+                    r.put("plannedIssueQtyValue", null);
+                    r.put("deliveredQtyValue", null);
                     r.put("actualUsedQtyValue", null);
                     r.put("batchRefsList", new ArrayList<String>());
                     return r;
@@ -889,6 +893,16 @@ public class PrintController {
                     addQty(row, "plannedAuxiliaryQtyValue", requiredQty);
                 }
 
+                if (item.getPickedQty() != null) {
+                    BigDecimal existing = (BigDecimal) row.get("plannedIssueQtyValue");
+                    row.put("plannedIssueQtyValue",
+                            existing == null ? item.getPickedQty() : existing.add(item.getPickedQty()));
+                }
+                if (item.getIssuedQty() != null) {
+                    BigDecimal existing = (BigDecimal) row.get("deliveredQtyValue");
+                    row.put("deliveredQtyValue",
+                            existing == null ? item.getIssuedQty() : existing.add(item.getIssuedQty()));
+                }
                 if (item.getConsumedQty() != null) {
                     BigDecimal existing = (BigDecimal) row.get("actualUsedQtyValue");
                     row.put("actualUsedQtyValue",
@@ -915,6 +929,8 @@ public class PrintController {
             BigDecimal plannedAux = (BigDecimal) row.remove("plannedAuxiliaryQtyValue");
             BigDecimal plannedSemi = (BigDecimal) row.remove("plannedSemiFinishedQtyValue");
             BigDecimal totalQty = (BigDecimal) row.remove("totalQtyValue");
+            BigDecimal plannedIssue = (BigDecimal) row.remove("plannedIssueQtyValue");
+            BigDecimal delivered = (BigDecimal) row.remove("deliveredQtyValue");
             BigDecimal actualUsed = (BigDecimal) row.remove("actualUsedQtyValue");
             @SuppressWarnings("unchecked")
             List<String> batchRefs = (List<String>) row.remove("batchRefsList");
@@ -923,6 +939,11 @@ public class PrintController {
             row.put("plannedAuxiliaryQty", positiveQtyOrBlank(plannedAux));
             row.put("plannedSemiFinishedQty", positiveQtyOrBlank(plannedSemi));
             row.put("totalQty", formatQty(totalQty));
+            // 成交(应需) = totalQty(requiredQty); 打算(已拣) = pickedQty; 送到(已发) = issuedQty。
+            // 未拣/未发显 "________" (诚实空, 仓库填), 不伪造 0。
+            row.put("transactedQty", formatQty(totalQty));
+            row.put("plannedIssueQty", plannedIssue != null ? formatQty(plannedIssue) : "________");
+            row.put("deliveredQty", delivered != null ? formatQty(delivered) : "________");
             row.put("actualUsedQty", actualUsed != null ? formatQty(actualUsed) : "________");
             row.put("batchRefs", batchRefs.isEmpty() ? null : String.join(", ", batchRefs));
             rows.add(row);
