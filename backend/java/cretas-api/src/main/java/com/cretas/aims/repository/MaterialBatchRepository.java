@@ -488,6 +488,13 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     boolean existsByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
 
     /**
+     * SP-F: 按工厂ID + 来源单据类型 + 来源单据ID 查找批次。
+     * 用于混锅上游 WIP MaterialBatch 解析 (sourceDocType='PRODUCTION_BATCH')，工厂隔离防跨租户。
+     */
+    Optional<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocId(
+            String factoryId, String sourceDocType, String sourceDocId);
+
+    /**
      * 统计低库存材料数量
      */
     @Query(value = "SELECT COUNT(*) FROM (SELECT m.material_type_id FROM material_batches m " +

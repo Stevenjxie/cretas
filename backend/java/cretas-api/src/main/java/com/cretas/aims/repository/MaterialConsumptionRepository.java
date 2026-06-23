@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.MaterialConsumption;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -134,4 +135,14 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
      * 按生产批次ID和来源类型查询
      */
     List<MaterialConsumption> findByProductionBatchIdAndSourceType(Long productionBatchId, String sourceType);
+
+    /**
+     * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
+     * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
+     */
+    @Modifying
+    @Query("UPDATE MaterialConsumption c SET c.deletedAt = CURRENT_TIMESTAMP " +
+           "WHERE c.factoryId = :f AND c.productionBatchId = :pbId AND c.deletedAt IS NULL")
+    int softDeleteByFactoryIdAndProductionBatchId(@Param("f") String factoryId,
+                                                  @Param("pbId") Long productionBatchId);
 }

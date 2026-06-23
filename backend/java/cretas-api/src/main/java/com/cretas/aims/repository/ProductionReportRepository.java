@@ -4,6 +4,7 @@ import com.cretas.aims.entity.ProductionReport;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -509,4 +510,15 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
         ORDER BY wpt.work_process_id, pr.batch_id
         """, nativeQuery = true)
     List<Map<String, Object>> findYieldStandardSamples(@Param("factoryId") String factoryId);
+
+    /**
+     * SP-F: 软删除某生产批次(batchId)的全部报工记录。
+     * 用于 re-save/delete 时逆向清除已物化的报工行，factory-scoped 防跨租户。
+     * ProductionReport.batchId 是 Long (production_batch.id)。
+     */
+    @Modifying
+    @Query("UPDATE ProductionReport r SET r.deletedAt = CURRENT_TIMESTAMP " +
+           "WHERE r.factoryId = :f AND r.batchId = :bId AND r.deletedAt IS NULL")
+    int softDeleteByFactoryIdAndBatchId(@Param("f") String factoryId,
+                                        @Param("bId") Long batchId);
 }
