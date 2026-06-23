@@ -22,4 +22,11 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
 
     List<ProcessSheetRow> findByFactoryIdAndPlanId(
             String factoryId, String planId);
+
+    /**
+     * SP-F Task 1.8: 按 (factory, plan, clientRowId) 查行 —— delete 端点路径不含 processCode。
+     * 正常情况下 clientRowId 在同一 plan 内跨工序不重复，返回 1 条；边缘情形返多条则全删。
+     */
+    List<ProcessSheetRow> findByFactoryIdAndPlanIdAndClientRowId(
+            String factoryId, String planId, String clientRowId);
 }

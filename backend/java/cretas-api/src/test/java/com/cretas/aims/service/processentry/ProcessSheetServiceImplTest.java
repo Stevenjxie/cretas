@@ -491,6 +491,95 @@ class ProcessSheetServiceImplTest {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // SP-F Task 1.8 — deleteRow
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("10: deleteRow 已物化无下游 → 软删行 + WIP + ProductionBatch + 消耗边")
+    void deleteRow_materializedNoDownstream_softDeletesAll() {
+        // 创建物化行
+        ProcessSheetRowResult mat = saveXiuyou("row-del-mat", "100", "80");
+        Long batchId = mat.getBatchId();
+        assertThat(batchId).isNotNull();
+
+        // 确认 WIP 存在
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId))).isPresent();
+
+        // 删除
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-mat");
+
+        // 行已软删 (@Where deleted_at IS NULL → 查不到)
+        assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-mat"))
+                .as("行已软删").isEmpty();
+
+        // WIP MaterialBatch 软删
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId)))
+                .as("WIP 软删后查不到").isEmpty();
+
+        // ProductionBatch 软删
+        assertThat(batchRepo.findByIdAndFactoryId(batchId, FACTORY_ID))
+                .as("ProductionBatch 软删后查不到").isEmpty();
+
+        // 消耗边 0 条 active
+        assertThat(consumptionRepo.findByProductionBatchId(batchId))
+                .as("消耗边全软删").isEmpty();
+    }
+
+    @Test
+    @DisplayName("11: deleteRow 已被下游消耗 → 409 含 '已被下游'")
+    void deleteRow_withDownstreamConsumed_throws409() {
+        // 上游 修油 batch
+        ProcessSheetRowResult up = saveXiuyou("row-del-up", "60", "50");
+
+        // 下游 熟制 消耗它
+        seedSeasoningRecipe();
+        ProcessSheetRowRequest down = baseReq("row-del-down", "shuzhi", 3, "45");
+        down.setInputQuantity(new BigDecimal("50"));
+        down.setSeasoningStep(true);
+        down.setPotCount(1);
+        down.setUpstreamSources(List.of(upstreamRef(up.getBatchNumber(), "50")));
+        processSheetService.saveRow(FACTORY_ID, planId, down, operatorId);
+
+        // 删除上游行 → 409 (已被下游消耗)
+        assertThatThrownBy(() -> processSheetService.deleteRow(FACTORY_ID, planId, "row-del-up"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(ex.getMessage()).contains("已被下游");
+                });
+    }
+
+    @Test
+    @DisplayName("12: deleteRow DRAFT 行 (batchId null) → 仅软删行, 无批次操作")
+    void deleteRow_draftRow_removesRowOnly() {
+        // output=0 → DRAFT
+        ProcessSheetRowRequest req = baseReq("row-del-draft", "xiuyou", 1, "0");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        ProcessSheetRowResult draft = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(draft.getBatchId()).isNull();
+
+        // 删除
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-draft");
+
+        // 行已软删
+        assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-draft"))
+                .as("DRAFT 行已软删").isEmpty();
+        // 无 ProductionBatch / WIP 创建, 断言 consumption 列表也为空 (无 batchId 可查)
+    }
+
+    @Test
+    @DisplayName("13: deleteRow 不存在的行 → 404")
+    void deleteRow_notFound_throws404() {
+        assertThatThrownBy(() ->
+                processSheetService.deleteRow(FACTORY_ID, planId, "DOES-NOT-EXIST"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(404));
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Seasoning recipe seed
     // ─────────────────────────────────────────────────────────────
 

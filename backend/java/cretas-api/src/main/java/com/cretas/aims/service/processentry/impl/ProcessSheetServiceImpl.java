@@ -200,27 +200,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
 
-        // 无下游 → 安全重写。先软删旧边/报工 (同事务)。
-        consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
-        reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
-
         // ── CASE B1: 新产出≤0 → 逆向物化为 DRAFT ─────────────────────
         if (!hasOutput) {
-            // 软删 WIP MaterialBatch + ProductionBatch (有 @Where deleted_at IS NULL, 自动从查询排除)。
-            wipOpt.ifPresent(wip -> {
-                wip.softDelete();
-                materialBatchRepo.save(wip);
-            });
-            productionBatchRepo.findByIdAndFactoryId(existing.getBatchId(), factoryId)
-                    .ifPresent(pb -> {
-                        pb.softDelete();
-                        productionBatchRepo.save(pb);
-                    });
+            // reverseMaterialization 含软删边/报工/WIP/ProductionBatch 的完整逆向
+            reverseMaterialization(factoryId, existing.getBatchId(), wipOpt);
             updateRowInPlace(existing, req, null, null, "DRAFT");
             return buildResult(req, null, null, null, null, null, true, false, warnings);
         }
 
         // ── CASE B2: 新产出>0 → 原地重物化 (保 id) ───────────────────
+        // B2 仅软删旧边/报工 (WIP + ProductionBatch 原地更新, 不软删): 先清旧消耗再重物化。
+        consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
+        reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
         String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
         StepEntry step = buildStepEntry(req);
         MaterializeContext ctx = new MaterializeContext(
@@ -243,6 +234,79 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return buildResult(req, existing.getBatchId(), existing.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
                 true, true, warnings);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Delete row (Task 1.8)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * SP-F Task 1.8: 删除一行。
+     *
+     * <p>finder 选择: 使用 (factory, plan, clientRowId) 三列查询而非携带 processCode。
+     * 理由: delete 端点路径仅包含 clientRowId，强迫 caller 额外传 processCode 会增加 API 负担。
+     * 实际上同一 plan 内 clientRowId 跨工序不重复，返回 1 条；若因数据异常返多条则全部删除。
+     */
+    @Override
+    @Transactional
+    public void deleteRow(String factoryId, String planId, String clientRowId) {
+        List<ProcessSheetRow> rows = rowRepo
+                .findByFactoryIdAndPlanIdAndClientRowId(factoryId, planId, clientRowId);
+        if (rows.isEmpty()) {
+            throw new BusinessException(404, "工序行不存在");
+        }
+
+        for (ProcessSheetRow row : rows) {
+            if (row.getBatchId() != null) {
+                // 查既有 WIP 产出批
+                Optional<MaterialBatch> wipOpt = materialBatchRepo
+                        .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                                factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
+
+                // 下游消耗守卫 (🔒): 谁消耗了本批的 WIP? 非空 → 拒绝
+                if (wipOpt.isPresent()) {
+                    List<MaterialConsumption> downstream = consumptionRepo
+                            .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
+                    if (!downstream.isEmpty()) {
+                        throw new BusinessException(409,
+                                "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+                    }
+                }
+
+                // 逆向物化 (软删边/报工/WIP/ProductionBatch)
+                reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
+            }
+
+            // 软删行本身
+            row.softDelete();
+            rowRepo.save(row);
+        }
+    }
+
+    /**
+     * 逆向物化共用逻辑 (CASE B1 + deleteRow 共享): 软删消耗边 + 报工 + WIP MaterialBatch + ProductionBatch。
+     * 调用前必须已完成下游消耗守卫检查 (有下游则不调用此方法)。
+     *
+     * @param factoryId 工厂 ID
+     * @param batchId   ProductionBatch.id (非 null)
+     * @param wipOpt    已查到的 WIP MaterialBatch (可能 absent: 物化异常的边缘情形)
+     */
+    private void reverseMaterialization(String factoryId, Long batchId,
+                                        Optional<MaterialBatch> wipOpt) {
+        // 软删消耗边 + 报工
+        consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, batchId);
+        reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, batchId);
+
+        // 软删 WIP MaterialBatch + ProductionBatch
+        wipOpt.ifPresent(wip -> {
+            wip.softDelete();
+            materialBatchRepo.save(wip);
+        });
+        productionBatchRepo.findByIdAndFactoryId(batchId, factoryId)
+                .ifPresent(pb -> {
+                    pb.softDelete();
+                    productionBatchRepo.save(pb);
+                });
     }
 
     // ─────────────────────────────────────────────────────────────

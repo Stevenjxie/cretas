@@ -28,4 +28,19 @@ public interface ProcessSheetService {
      */
     ProcessSheetRowResult saveRow(String factoryId, String planId,
                                   ProcessSheetRowRequest req, Long userId);
+
+    /**
+     * 删除一行 (SP-F Task 1.8)。
+     *
+     * <p>若行已物化 (batchId != null): 先检查下游消耗守卫 (有消耗 → 409)，再逆向物化
+     * (软删消耗边 + 报工 + WIP MaterialBatch + ProductionBatch)，最后软删行本身。
+     *
+     * <p>若行为 DRAFT (batchId == null): 直接软删行，不涉及批次操作。
+     *
+     * @param factoryId  工厂 ID
+     * @param planId     生产计划 ID
+     * @param clientRowId 前端行键 (在同一 plan 内唯一)
+     * @throws BusinessException 404 — 行不存在; 409 — 已被下游消耗
+     */
+    void deleteRow(String factoryId, String planId, String clientRowId);
 }
