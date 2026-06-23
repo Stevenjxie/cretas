@@ -3,7 +3,7 @@ package com.cretas.aims.service.inventory.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateReturnOrderRequest;
 import com.cretas.aims.entity.MaterialBatch;
-import com.cretas.aims.entity.enums.InboundType;
+import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
@@ -12,6 +12,7 @@ import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
@@ -33,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -69,6 +71,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MaterialBatchRepository materialBatchRepository;
+
+    /**
+     * BLOCKER 2 fix: PURCHASE_RETURN with-goods 完成时从源库存扣减 (货物理离开退回供应商),
+     * 写 MaterialBatchAdjustment 负数留痕 (镜像 DisposalRecordService 扣减语义)。
+     * required=false 兼容单元测试 mock 场景。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
 
     /** Round 11 T2 — Canvas Integration Template hook 1: DB-driven validation. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -479,57 +489,44 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                             returnOrderId, e);
                 }
             } else if (order.getReturnType() == ReturnType.PURCHASE_RETURN
-                    && materialBatchRepository != null && warehouseResolver != null) {
-                // Issue #795: PURCHASE_RETURN with-goods → 不良品入库 (镜像 SALES_RETURN logic).
-                // 顾客 (六扇门第四次 May 10 L980-1011): "有食物的话, 库存入库到总仓 + 不良品状态".
-                // 现实场景: 采购退货发现质量问题, 物料先回 WH-LOG, 后续仓管员决定丢弃 / 退给供应商.
+                    && materialBatchRepository != null) {
+                // BLOCKER 2 fix (取代 issue #795 反向逻辑): PURCHASE_RETURN with-goods 完成
+                // = 货物理离开退回供应商 → 从现有库存【扣减】退货数量, 而非创建新批次。
+                //
+                // 此前 (#795) 镜像 SALES_RETURN 的"货退回来→加库存"逻辑, 给 PURCHASE_RETURN 创建
+                // 一个新 DEFECTIVE MaterialBatch。但语义相反:
+                //   - SALES_RETURN  (客户退货回来): 货物进厂 → 加库存 (现状, 上面分支保留)。
+                //   - PURCHASE_RETURN (退给供应商): 货物离厂 → 扣库存 (本分支)。
+                // 超收的量在采购收货时已加进库存 (createMaterialBatchFromReceiveItem 用全部收货量),
+                // 退货完成时若再创建一个新批次 = 账面双计 (130 + 30 = 160)。正确应扣回 30 → 100。
+                //
+                // 扣减方式镜像 DisposalRecordService: 增 usedQuantity (不减 receiptQuantity),
+                // 使 currentQuantity = receiptQuantity - usedQuantity - reservedQuantity 正确反映,
+                // 并写 MaterialBatchAdjustment 负数留痕。源批次按 FEFO 跨同物料类型批次扣减
+                // (ReturnOrderItem 不可靠引用单一批次; 退货物料 = exceptionQty 的同物料类型库存)。
                 try {
-                    String whLogId = warehouseResolver.resolveLogisticsId(factoryId);
-                    int itemIdx = 0;
-                    int created = 0;
+                    int deducted = 0;
                     for (ReturnOrderItem item : order.getItems()) {
-                        itemIdx++;
                         if (item.getMaterialTypeId() == null || item.getQuantity() == null
                                 || item.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                            // Skip 行: PURCHASE_RETURN items 必须有 materialTypeId.
-                            // 历史脏数据 / 误填 productTypeId 的 row, 跳过 inventory 创建,
-                            // status flip + AR/AP 冲减 仍然 OK.
+                            // Skip 行: PURCHASE_RETURN items 必须有 materialTypeId。
                             continue;
                         }
-                        MaterialBatch batch = new MaterialBatch();
-                        batch.setId(UUID.randomUUID().toString());
-                        batch.setFactoryId(factoryId);
-                        batch.setBatchNumber("RTN-" + order.getReturnNumber() + "-" + itemIdx);
-                        batch.setMaterialTypeId(item.getMaterialTypeId());
-                        batch.setReceiptQuantity(item.getQuantity());
-                        batch.setUsedQuantity(BigDecimal.ZERO);
-                        batch.setReservedQuantity(BigDecimal.ZERO);
-                        // 单位 — ReturnOrderItem 没有 unit 字段, 默认 "件" 跟 SALES_RETURN 对齐.
-                        // 仓管员后续 disposal 流程可纠正.
-                        batch.setQuantityUnit("件");
-                        batch.setUnitPrice(item.getUnitPrice());
-                        batch.setReceiptDate(LocalDate.now());
-                        batch.setPurchaseDate(LocalDate.now());
-                        batch.setWarehouseId(whLogId);
-                        batch.setStatus(MaterialBatchStatus.DEFECTIVE);
-                        batch.setInboundType(InboundType.SUPPLIER_RETURN);
-                        // P0-17 source doc traceability (镜像采购入库 createMaterialBatchFromReceiveItem 的语义).
-                        batch.setSourceDocType("PURCHASE_RETURN");
-                        batch.setSourceDocId(order.getId());
-                        batch.setCreatedBy(order.getApprovedBy());
-                        batch.setNotes("采购退货入库(不良品) - " + order.getReturnNumber()
-                                + " - 原因: " + (item.getReason() != null ? item.getReason() : order.getReason()));
-                        materialBatchRepository.save(batch);
-                        created++;
+                        deductMaterialForPurchaseReturn(factoryId, order, item);
+                        deducted++;
                     }
-                    log.info("采购退货 不良品入库完成 (issue #795): returnNumber={}, batches={}/{} items, warehouse=WH-LOG",
-                            order.getReturnNumber(), created,
+                    log.info("采购退货 库存扣减完成 (BLOCKER 2): returnNumber={}, lines={}/{} items, 货退回供应商",
+                            order.getReturnNumber(), deducted,
                             order.getItems() != null ? order.getItems().size() : 0);
+                } catch (BusinessException e) {
+                    // 库存不足 = 真错误 (账面/物理不一致), 必须 fail-loud 阻断完成, 不能静默吞。
+                    // 退货单停在 FINANCE_APPROVED, 仓管员核实库存后重试。
+                    throw e;
                 } catch (Exception e) {
-                    // Non-blocking — AR/AP 冲减 + status flip 必须生效. 库存入库失败仅影响 traceability,
-                    // 仓管员可手动补录. 镜像 SALES_RETURN 的错误恢复策略.
-                    log.error("采购退货 不良品入库失败 (status flip + AP冲减 仍生效, issue #795): returnOrderId={}",
-                            returnOrderId, e);
+                    // 非预期错误同样 fail-loud — 退货扣减是出库可靠性红线, 不能像加库存那样 best-effort。
+                    log.error("采购退货 库存扣减失败 (BLOCKER 2, 阻断完成): returnOrderId={}", returnOrderId, e);
+                    throw new BusinessException(500, "采购退货库存扣减失败, 退货单未完成")
+                            .withHint("请联系管理员核实库存后重试: " + e.getMessage());
                 }
             }
         }
@@ -537,6 +534,85 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         order.setStatus(ReturnOrderStatus.COMPLETED);
         log.info("完成退货单: returnOrderId={}, returnNumber={}, withGoods={}", returnOrderId, order.getReturnNumber(), withGoods);
         return returnOrderRepository.save(order);
+    }
+
+    /**
+     * BLOCKER 2: PURCHASE_RETURN with-goods 完成时, 从现有库存扣减退货数量 (货退回供应商, 物理离厂)。
+     *
+     * <p>扣减策略: 按 FEFO 跨同物料类型 (item.materialTypeId) 的可用批次扣减 item.quantity。
+     * ReturnOrderItem 不可靠引用单一源批次 (采购入库批次不存 sourceDocId 关联到 receiveRecord),
+     * 故按物料类型聚合扣减 —— 退的就是该物料类型的库存, FEFO 顺序确定性。
+     *
+     * <p>扣减方式镜像 {@code DisposalRecordService}: 增 usedQuantity (不减 receiptQuantity),
+     * 使 {@code currentQuantity = receiptQuantity - usedQuantity - reservedQuantity} 正确反映,
+     * 并写 {@link MaterialBatchAdjustment} 负数留痕。库存不足抛 409 (账面/物理不一致, fail-loud)。
+     *
+     * @throws BusinessException 库存不足 (409) — 阻断退货完成, 不扣成负数
+     */
+    private void deductMaterialForPurchaseReturn(String factoryId, ReturnOrder order, ReturnOrderItem item) {
+        BigDecimal returnQty = item.getQuantity().setScale(2, RoundingMode.HALF_UP);
+
+        // FEFO 可用批次 (status='AVAILABLE' AND currentQuantity > 0), 按到期/入库排序。
+        List<MaterialBatch> batches =
+                materialBatchRepository.findAvailableBatchesFEFO(factoryId, item.getMaterialTypeId());
+
+        // 先校验总可用量 >= 退货量, 不足则整体阻断 (不部分扣减留下不一致)。
+        BigDecimal totalAvailable = batches.stream()
+                .map(b -> b.getCurrentQuantity() != null ? b.getCurrentQuantity() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalAvailable.compareTo(returnQty) < 0) {
+            throw new BusinessException(409,
+                    "退货物料「" + (item.getItemName() != null ? item.getItemName() : item.getMaterialTypeId())
+                            + "」可用库存 " + totalAvailable.stripTrailingZeros().toPlainString()
+                            + " 不足以退货 " + returnQty.stripTrailingZeros().toPlainString() + ", 无法完成退货")
+                    .withHint("货物退回供应商需从库存扣减, 当前可用库存不足。请核实库存或退货数量。")
+                    .withHintTarget("quantity");
+        }
+
+        BigDecimal remaining = returnQty;
+        for (MaterialBatch batch : batches) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+
+            BigDecimal available = batch.getCurrentQuantity() != null
+                    ? batch.getCurrentQuantity() : BigDecimal.ZERO;
+            if (available.compareTo(BigDecimal.ZERO) <= 0) continue;
+
+            BigDecimal deductFromBatch = available.min(remaining);
+            BigDecimal usedBefore = batch.getUsedQuantity() != null
+                    ? batch.getUsedQuantity() : BigDecimal.ZERO;
+            BigDecimal usedAfter = usedBefore.add(deductFromBatch);
+            BigDecimal availableAfter = available.subtract(deductFromBatch);
+
+            // adjustment 留痕: before/after 取可用量, 负数变更 (与 DisposalRecordService 一致)。
+            MaterialBatchAdjustment adj = new MaterialBatchAdjustment();
+            adj.setId(UUID.randomUUID().toString());
+            adj.setMaterialBatchId(batch.getId());
+            adj.setAdjustmentType("PURCHASE_RETURN");
+            adj.setQuantityBefore(available.setScale(2, RoundingMode.HALF_UP));
+            adj.setAdjustmentQuantity(deductFromBatch.negate()); // 负数 (出库)
+            adj.setQuantityAfter(availableAfter.setScale(2, RoundingMode.HALF_UP));
+            adj.setReason("采购退货出库 [退货单 " + order.getReturnNumber() + "] 货退回供应商"
+                    + (order.getReason() != null ? " - " + order.getReason() : ""));
+            adj.setAdjustmentTime(LocalDateTime.now());
+            adj.setAdjustedBy(order.getApprovedBy());
+            adj.setNotes("returnOrderId=" + order.getId() + " materialTypeId=" + item.getMaterialTypeId());
+            if (materialBatchAdjustmentRepository != null) {
+                materialBatchAdjustmentRepository.save(adj);
+            }
+
+            batch.setUsedQuantity(usedAfter.setScale(2, RoundingMode.HALF_UP));
+            batch.setLastUsedAt(LocalDateTime.now());
+            // 批次扣空 → 标 USED_UP (与领料/报损一致, FEFO 查询自动排除)。
+            if (batch.getCurrentQuantity() != null
+                    && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+                batch.setStatus(MaterialBatchStatus.USED_UP);
+            }
+            materialBatchRepository.save(batch);
+
+            remaining = remaining.subtract(deductFromBatch);
+        }
+        log.info("采购退货扣减库存: returnNumber={}, materialTypeId={}, qty={}",
+                order.getReturnNumber(), item.getMaterialTypeId(), returnQty.stripTrailingZeros().toPlainString());
     }
 
     @Override

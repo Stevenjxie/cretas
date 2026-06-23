@@ -645,6 +645,13 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/procurement/exceptions/list.vue'),
             meta: { requiresAuth: true, title: '入库异常', module: 'procurement' }
           },
+          // D-BUG3 — 采购退货 (来自入库异常 RETURN_OVER 决策; 退货必须先财务审批)
+          {
+            path: 'returns',
+            name: 'PurchaseReturns',
+            component: () => import('@/views/procurement/returns/list.vue'),
+            meta: { requiresAuth: true, title: '采购退货', module: 'procurement' }
+          },
           // 六扇门 U-SP6 — 付款申请 (PENDING→FINANCE_REVIEW→APPROVED→PAID 状态机)
           {
             path: 'payment-requests',

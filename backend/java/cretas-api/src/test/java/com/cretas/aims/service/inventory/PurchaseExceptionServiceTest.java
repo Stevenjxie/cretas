@@ -1,13 +1,19 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.dto.inventory.CreateReturnOrderRequest;
 import com.cretas.aims.entity.enums.ExceptionDecision;
 import com.cretas.aims.entity.enums.ReceiveDecisionStatus;
 import com.cretas.aims.entity.enums.ReceiveExceptionType;
+import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.PurchaseException;
+import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseExceptionRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
+import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.inventory.impl.PurchaseExceptionServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -51,6 +57,12 @@ class PurchaseExceptionServiceTest {
 
     @Mock
     private PurchaseOrderRepository purchaseOrderRepository;
+
+    @Mock
+    private ReturnOrderService returnOrderService;
+
+    @Mock
+    private PurchaseOrderItemRepository purchaseOrderItemRepository;
 
     @InjectMocks
     private PurchaseExceptionServiceImpl exceptionService;
@@ -179,6 +191,8 @@ class PurchaseExceptionServiceTest {
             ex.setStatus("PENDING");
             ex.setReceiveRecordId(RECEIVE_ID);
             ex.setPurchaseOrderId(PO_ID);
+            // BLOCKER 3: RETURN_OVER 路径需要 supplierId (否则前置校验 422)。
+            ex.setSupplierId("SUP-DEFAULT");
             ex.setExceptionQty(BigDecimal.TEN);
             ex.setCreatedBy(1L);
             ex.setOwnerUserId(OWNER_USER_ID);
@@ -222,12 +236,14 @@ class PurchaseExceptionServiceTest {
         void returnOver_resolvesException() {
             PurchaseException ex = pendingOverException();
             when(exceptionRepository.findById("EXC-001")).thenReturn(Optional.of(ex));
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenReturn(stubReturnOrder("RO-1", "RT-PUR-20260101-0001"));
 
             exceptionService.decideException("EXC-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
                     "退回多余", OWNER_USER_ID, null);
 
             ArgumentCaptor<PurchaseException> captor = ArgumentCaptor.forClass(PurchaseException.class);
-            verify(exceptionRepository).save(captor.capture());
+            verify(exceptionRepository, atLeastOnce()).save(captor.capture());
             assertEquals("RESOLVED", captor.getValue().getStatus());
         }
 
@@ -334,7 +350,247 @@ class PurchaseExceptionServiceTest {
                     exceptionService.decideException("EXC-001", FACTORY_ID,
                             ExceptionDecision.ACCEPT_OVER, null, OTHER_USER_ID, "procurement_manager"));
 
-            verify(exceptionRepository).save(any(PurchaseException.class));
+            verify(exceptionRepository, atLeastOnce()).save(any(PurchaseException.class));
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // D-BUG3: RETURN_OVER 决策 → 创建 PURCHASE_RETURN 退货单 + 财务审批链可达
+    // ───────────────────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("decideException(RETURN_OVER) 创建采购退货单 (D-BUG3)")
+    class ReturnOverCreatesReturnOrderTests {
+
+        private static final String PO_ID = "PO-RT-001";
+        private static final String SUPPLIER_ID = "SUP-001";
+        private static final String MATERIAL_TYPE_ID = "MAT-猪大肠";
+
+        /** 超收异常: PO 100, 实收 130 → exceptionQty = 30 (超收差值)。 */
+        private PurchaseException pendingOverException30() {
+            PurchaseException ex = new PurchaseException();
+            ex.setId("EXC-RT-001");
+            ex.setFactoryId(FACTORY_ID);
+            ex.setExceptionNumber("EX-F006-20260101-0001");
+            ex.setExceptionType(ReceiveExceptionType.OVER_RECEIVE);
+            ex.setStatus("PENDING");
+            ex.setReceiveRecordId(RECEIVE_ID);
+            ex.setPurchaseOrderId(PO_ID);
+            ex.setSupplierId(SUPPLIER_ID);
+            ex.setMaterialTypeId(MATERIAL_TYPE_ID);
+            ex.setMaterialName("猪大肠");
+            ex.setPoQuantity(BigDecimal.valueOf(100));
+            ex.setReceivedQuantity(BigDecimal.valueOf(130));
+            ex.setExceptionQty(BigDecimal.valueOf(30));
+            ex.setUnit("kg");
+            ex.setCreatedBy(1L);
+            ex.setOwnerUserId(OWNER_USER_ID);
+            ex.setOwnerName("张三");
+            return ex;
+        }
+
+        @Test
+        @DisplayName("RETURN_OVER 创建 PURCHASE_RETURN 退货单, DRAFT (不自动审批), 数量=超收差值, 单价来自源 PO")
+        void returnOver_createsPurchaseReturnOrder() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+
+            // 源采购单该物料行单价 = 10.00
+            PurchaseOrderItem poItem = new PurchaseOrderItem();
+            poItem.setMaterialTypeId(MATERIAL_TYPE_ID);
+            poItem.setUnitPrice(new BigDecimal("10.0000"));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
+
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(CreateReturnOrderRequest.class), eq(OWNER_USER_ID)))
+                    .thenReturn(stubReturnOrder("RO-NEW", "RT-PUR-20260101-0001"));
+
+            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                    "拒收超收部分", OWNER_USER_ID, null);
+
+            ArgumentCaptor<CreateReturnOrderRequest> reqCaptor = ArgumentCaptor.forClass(CreateReturnOrderRequest.class);
+            verify(returnOrderService).createReturnOrder(eq(FACTORY_ID), reqCaptor.capture(), eq(OWNER_USER_ID));
+            CreateReturnOrderRequest req = reqCaptor.getValue();
+
+            assertEquals(ReturnType.PURCHASE_RETURN.name(), req.getReturnType(), "退货类型应为 PURCHASE_RETURN");
+            assertEquals(SUPPLIER_ID, req.getCounterpartyId(), "counterparty 应为供应商");
+            assertEquals(PO_ID, req.getSourceOrderId(), "源单应为采购单");
+            assertEquals(1, req.getItems().size());
+
+            CreateReturnOrderRequest.ReturnOrderItemDTO item = req.getItems().get(0);
+            assertEquals(0, BigDecimal.valueOf(30).compareTo(item.getQuantity()),
+                    "退货数量应等于超收差值 130-100=30");
+            assertEquals(MATERIAL_TYPE_ID, item.getMaterialTypeId());
+            assertEquals(0, new BigDecimal("10.0000").compareTo(item.getUnitPrice()),
+                    "退货单价应取自源 PO 行项目");
+
+            // 异常单回写 returnOrderId (关联可追溯)
+            assertEquals("RO-NEW", ex.getReturnOrderId(), "异常单应回写退货单 ID");
+            // 退货单初始状态由 ReturnOrderService 强制为 DRAFT, 此处不自动审批 (客户红线: 先财务审批)。
+        }
+
+        @Test
+        @DisplayName("幂等: 已有 returnOrderId 的异常单重复 RETURN_OVER 不重复创建退货单")
+        void returnOver_idempotent_doesNotRecreate() {
+            PurchaseException ex = pendingOverException30();
+            // 模拟历史脏数据 / 并发: 异常单仍 PENDING 但已挂 returnOrderId。
+            // (正常路径 PENDING 守卫已拦重复决策; 此为双保险测试。)
+            ex.setReturnOrderId("RO-EXISTING");
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+
+            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                    null, OWNER_USER_ID, null);
+
+            verify(returnOrderService, never()).createReturnOrder(anyString(), any(), anyLong());
+            assertEquals("RO-EXISTING", ex.getReturnOrderId(), "returnOrderId 不应被覆盖");
+        }
+
+        @Test
+        @DisplayName("退货单价: 源 PO 无对应物料行 → 单价 null, 退货单仍创建 (不阻断)")
+        void returnOver_noPoUnitPrice_stillCreates() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of()); // 无行
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenReturn(stubReturnOrder("RO-NEW2", "RT-PUR-20260101-0002"));
+
+            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                    null, OWNER_USER_ID, null);
+
+            ArgumentCaptor<CreateReturnOrderRequest> reqCaptor = ArgumentCaptor.forClass(CreateReturnOrderRequest.class);
+            verify(returnOrderService).createReturnOrder(eq(FACTORY_ID), reqCaptor.capture(), eq(OWNER_USER_ID));
+            assertNull(reqCaptor.getValue().getItems().get(0).getUnitPrice(), "无 PO 单价时退货单价应为 null");
+            assertEquals("RO-NEW2", ex.getReturnOrderId());
+        }
+
+        @Test
+        @DisplayName("退货单创建失败 (REQUIRES_NEW 隔离) → 异常单仍标 RESOLVED, 不回滚")
+        void returnOver_returnOrderCreationFails_exceptionStillResolved() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            // 退货单创建抛异常 (模拟 doomed-tx / 校验失败)
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenThrow(new RuntimeException("退货单创建失败 (模拟)"));
+
+            // 异常单决策本身不应抛 (失败被隔离 + catch)
+            assertDoesNotThrow(() ->
+                    exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                            null, OWNER_USER_ID, null));
+
+            assertEquals("RESOLVED", ex.getStatus(), "退货单创建失败不应回滚异常单 RESOLVED");
+            assertNull(ex.getReturnOrderId(), "退货单创建失败, 不应回写 returnOrderId");
+        }
+
+        @Test
+        @DisplayName("跨租户: 退货单 factoryId 透传异常单 factoryId (ReturnOrderService 强制隔离)")
+        void returnOver_passesExceptionFactoryId() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenReturn(stubReturnOrder("RO-X", "RT-PUR-X"));
+
+            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                    null, OWNER_USER_ID, null);
+
+            // 退货单创建用的 factoryId 必须 = 异常单 factoryId (不是任意传入), 跨租户安全。
+            verify(returnOrderService).createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID));
+        }
+
+        @Test
+        @DisplayName("ACCEPT_OVER (非退货决策) 不创建退货单")
+        void acceptOver_noReturnOrderCreated() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+
+            exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.ACCEPT_OVER,
+                    "接受超收全部入库", OWNER_USER_ID, null);
+
+            verify(returnOrderService, never()).createReturnOrder(anyString(), any(), anyLong());
+            assertNull(ex.getReturnOrderId());
+        }
+
+        // ── BLOCKER 3: null supplierId 不能静默丢退货 ────────────────────────────
+
+        @Test
+        @DisplayName("BLOCKER 3: supplierId 为 null → 422, 不变 RESOLVED, 不创建退货单 (禁降级假成功)")
+        void returnOver_nullSupplier_throws422_notResolved() {
+            PurchaseException ex = pendingOverException30();
+            ex.setSupplierId(null); // 无供应商信息
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+
+            BusinessException be = assertThrows(BusinessException.class, () ->
+                    exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                            "拒收超收部分", OWNER_USER_ID, null));
+
+            assertEquals(Integer.valueOf(422), be.getCode(), "缺供应商应返 422");
+            assertTrue(be.getMessage().contains("供应商"), "错误信息应说明缺供应商");
+            // 决策必须在 RESOLVED flip 之前被拦截: 状态保持 PENDING, 无退货单, 无 save。
+            assertEquals("PENDING", ex.getStatus(), "校验失败不应翻 RESOLVED");
+            assertNull(ex.getReturnOrderId(), "校验失败不应创建退货单");
+            verify(returnOrderService, never()).createReturnOrder(anyString(), any(), anyLong());
+            verify(exceptionRepository, never()).save(any(PurchaseException.class));
+        }
+
+        @Test
+        @DisplayName("BLOCKER 3: supplierId 空白串 → 422, 同 null 处理")
+        void returnOver_blankSupplier_throws422() {
+            PurchaseException ex = pendingOverException30();
+            ex.setSupplierId("   "); // 空白
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+
+            BusinessException be = assertThrows(BusinessException.class, () ->
+                    exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                            null, OWNER_USER_ID, null));
+            assertEquals(Integer.valueOf(422), be.getCode());
+            assertEquals("PENDING", ex.getStatus());
+            verify(returnOrderService, never()).createReturnOrder(anyString(), any(), anyLong());
+        }
+
+        // ── MEDIUM: fail-soft catch 收窄 — 业务规则拒绝 fail-loud ──────────────────
+
+        @Test
+        @DisplayName("MEDIUM: 退货单创建抛 BusinessException (业务拒绝) → fail-loud re-throw, 不吞成假成功")
+        void returnOver_businessExceptionFromCreate_failLoud() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            // ReturnOrderService 因下游业务规则拒绝 (e.g. 校验失败)
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenThrow(new BusinessException(409, "退货单下游业务校验失败"));
+
+            BusinessException be = assertThrows(BusinessException.class, () ->
+                    exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                            null, OWNER_USER_ID, null));
+            assertTrue(be.getMessage().contains("下游业务校验失败"),
+                    "应原样抛出下游 BusinessException (fail-loud), 不吞成 RESOLVED 假成功");
+        }
+
+        @Test
+        @DisplayName("MEDIUM: 退货单创建抛非业务异常 (瞬时基础设施) → best-effort 吞, 异常单仍 RESOLVED")
+        void returnOver_runtimeExceptionFromCreate_bestEffortSwallow() {
+            PurchaseException ex = pendingOverException30();
+            when(exceptionRepository.findById("EXC-RT-001")).thenReturn(Optional.of(ex));
+            when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of());
+            when(returnOrderService.createReturnOrder(eq(FACTORY_ID), any(), eq(OWNER_USER_ID)))
+                    .thenThrow(new RuntimeException("瞬时 DB 连接失败"));
+
+            // 非业务异常 best-effort 吞: 决策不抛, 异常单仍 RESOLVED (可手动补建退货单)。
+            assertDoesNotThrow(() ->
+                    exceptionService.decideException("EXC-RT-001", FACTORY_ID, ExceptionDecision.RETURN_OVER,
+                            null, OWNER_USER_ID, null));
+            assertEquals("RESOLVED", ex.getStatus());
+            assertNull(ex.getReturnOrderId());
+        }
+    }
+
+    /** 构造一个最小 ReturnOrder stub (DRAFT) 供 mock 返回。 */
+    private static ReturnOrder stubReturnOrder(String id, String returnNumber) {
+        ReturnOrder ro = new ReturnOrder();
+        ro.setId(id);
+        ro.setReturnNumber(returnNumber);
+        ro.setReturnType(ReturnType.PURCHASE_RETURN);
+        ro.setStatus(com.cretas.aims.entity.enums.ReturnOrderStatus.DRAFT);
+        return ro;
     }
 }

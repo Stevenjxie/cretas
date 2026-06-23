@@ -200,6 +200,23 @@ export async function financeApproveReturnOrder(
   return res.data;
 }
 
+/**
+ * POST /{id}/finance-reject — APPROVED → REJECTED (财务驳回).
+ * 六扇门 Tier0 #16: 仅财务角色 (finance:read_write)。
+ */
+export async function financeRejectReturnOrder(
+  factoryId: string,
+  returnOrderId: string,
+): Promise<ReturnOrder> {
+  const res = await post<ReturnOrder>(
+    `${basePath(factoryId)}/${returnOrderId}/finance-reject`,
+  );
+  if (!res.success || !res.data) {
+    throw new Error(res.message || '财务驳回退货单失败');
+  }
+  return res.data;
+}
+
 /** POST /{id}/reject — SUBMITTED → REJECTED. */
 export async function rejectReturnOrder(
   factoryId: string,

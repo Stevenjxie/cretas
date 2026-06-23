@@ -205,6 +205,13 @@
           <el-descriptions-item label="处理决定">
             {{ currentRow.decision ? decisionLabel(currentRow.decision) : '—' }}
           </el-descriptions-item>
+          <el-descriptions-item label="关联退货单" :span="2">
+            <template v-if="currentRow.returnOrderId">
+              <el-link type="primary" @click="goToReturns">采购退货单（点击前往审批）</el-link>
+              <span class="text-muted" style="margin-left: 8px">待财务审批</span>
+            </template>
+            <span v-else class="text-muted">—</span>
+          </el-descriptions-item>
           <el-descriptions-item label="处理备注" :span="2">{{ currentRow.decisionNotes || '—' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
           <el-descriptions-item label="处理时间">{{ formatDate(currentRow.decisionAt) }}</el-descriptions-item>
@@ -219,7 +226,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { get, post } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
@@ -248,6 +256,8 @@ interface ExceptionRow {
   // D-6 责任绑定字段
   ownerUserId: number | null
   ownerName: string | null
+  // D-BUG3: RETURN_OVER 决策生成的采购退货单 ID (待财务审批)
+  returnOrderId: string | null
 }
 
 interface DecisionForm {
@@ -256,6 +266,7 @@ interface DecisionForm {
 }
 
 // ─── Store ────────────────────────────────────────────────────
+const router = useRouter()
 const authStore = useAuthStore()
 const permStore = usePermissionStore()
 const factoryId = computed(() => authStore.factoryId)
@@ -401,6 +412,11 @@ function openDetailDialog(row: ExceptionRow) {
   detailDialogVisible.value = true
 }
 
+function goToReturns() {
+  detailDialogVisible.value = false
+  router.push('/procurement/returns')
+}
+
 async function submitDecision() {
   if (!decisionFormRef.value) return
   await decisionFormRef.value.validate(async (valid) => {
@@ -417,9 +433,23 @@ async function submitDecision() {
         }
       )
       if (res.success) {
-        ElMessage({ message: '处理成功', type: 'success', duration: 3000 })
         decisionDialogVisible.value = false
-        fetchData()
+        // D-BUG3: RETURN_OVER 决策 → 后端已生成采购退货单 (DRAFT, 待财务审批)。
+        // 提示用户并提供跳转到采购退货页继续走 提交→审批→财务审批 链。
+        const updated = res.data as ExceptionRow | null
+        if (decisionForm.value.decision === 'RETURN_OVER' && updated?.returnOrderId) {
+          fetchData()
+          ElMessageBox.confirm(
+            '已生成采购退货单，退货跟资金相关，需走「提交 → 业务审批 → 财务审批」后才能完成出货。是否前往采购退货页查看？',
+            '已生成采购退货单',
+            { confirmButtonText: '前往采购退货', cancelButtonText: '留在本页', type: 'success' },
+          ).then(() => {
+            router.push('/procurement/returns')
+          }).catch(() => { /* 留在本页 */ })
+        } else {
+          ElMessage({ message: '处理成功', type: 'success', duration: 3000 })
+          fetchData()
+        }
       } else {
         // 4-in-1 sticky error toast with backend message
         ElMessage({
