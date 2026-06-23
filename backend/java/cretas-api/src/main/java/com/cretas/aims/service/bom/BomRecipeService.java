@@ -1,5 +1,7 @@
 package com.cretas.aims.service.bom;
 
+import com.cretas.aims.dto.bom.BomSeasoningResponse;
+import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -64,4 +66,30 @@ public interface BomRecipeService {
 
     /** 删除配方项 (软删). */
     void deleteItem(String factoryId, Long itemId);
+
+    // ========== U5: 调料配方 CRUD (BOM 统管配方+锅序, 2026-06-24) ==========
+
+    /**
+     * 取 BOM 调料配方 (锅序参数 + 段明细).
+     *
+     * @throws com.cretas.aims.exception.EntityNotFoundException BOM 不存在
+     * @throws IllegalArgumentException                          BOM 不属于该工厂 (跨租户防护)
+     */
+    BomSeasoningResponse getSeasoning(String factoryId, String recipeId);
+
+    /**
+     * 按产品取当前 BOM 的调料配方; 无当前 BOM 时返回 {@link Optional#empty()}.
+     * Controller 将 empty → 404 "产品未建 BOM 配方".
+     */
+    Optional<BomSeasoningResponse> getSeasoningByProduct(String factoryId, String productTypeId);
+
+    /**
+     * 全量替换 BOM 调料配方 (仅 DRAFT).
+     *
+     * <p>锅序三参数写进 bom_recipes; 调料明细软删旧行 + 插入新行.
+     * section 必须为 INJECTION|COOKING, 违反 → {@link com.cretas.aims.exception.BusinessException} 400.
+     *
+     * @throws IllegalStateException BOM 非 DRAFT 状态
+     */
+    BomSeasoningResponse saveSeasoning(String factoryId, String recipeId, BomSeasoningSaveRequest req);
 }

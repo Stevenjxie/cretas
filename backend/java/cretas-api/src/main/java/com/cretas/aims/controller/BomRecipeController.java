@@ -4,6 +4,8 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.bom.BomRecipeMigrationReport;
+import com.cretas.aims.dto.bom.BomSeasoningResponse;
+import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
@@ -189,6 +191,36 @@ public class BomRecipeController {
             @PathVariable Long itemId) {
         recipeService.deleteItem(factoryId, itemId);
         return ApiResponse.success(null);
+    }
+
+    // ========== U5: 调料配方 CRUD ==========
+
+    @GetMapping("/{recipeId}/seasoning")
+    @Operation(summary = "取 BOM 调料配方 (锅序参数 + 注射/熟制段明细)")
+    public ApiResponse<BomSeasoningResponse> getSeasoning(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId) {
+        return ApiResponse.success(recipeService.getSeasoning(factoryId, recipeId));
+    }
+
+    @GetMapping("/by-product/{productTypeId}/seasoning")
+    @Operation(summary = "按产品取当前 BOM 调料配方 (is_current=TRUE)")
+    public ApiResponse<BomSeasoningResponse> getSeasoningByProduct(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId) {
+        return recipeService.getSeasoningByProduct(factoryId, productTypeId)
+                .map(ApiResponse::success)
+                .orElseGet(() -> ApiResponse.error(404, "产品未建 BOM 配方: " + productTypeId));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PutMapping("/{recipeId}/seasoning")
+    @Operation(summary = "全量替换 BOM 调料配方 (仅 DRAFT)")
+    public ApiResponse<BomSeasoningResponse> saveSeasoning(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId,
+            @Valid @RequestBody BomSeasoningSaveRequest request) {
+        return ApiResponse.success(recipeService.saveSeasoning(factoryId, recipeId, request));
     }
 
     // ========== U3: product_recipes → BOM 一次性迁移 (BOM 统管配方+锅序合并) ==========
