@@ -143,4 +143,10 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     public List<PurchaseInvoice> listByPurchaseOrder(String factoryId, String poId) {
         return invoiceRepository.findByFactoryIdAndPurchaseOrderId(factoryId, poId);
     }
+
+    // ─── listByFactory (采购发票管理页直接进入, 不带 poId 列全量) ─────────────────
+    @Override
+    public List<PurchaseInvoice> listByFactory(String factoryId) {
+        return invoiceRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId);
+    }
 }
