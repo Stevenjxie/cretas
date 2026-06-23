@@ -5,6 +5,20 @@ import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 
 // -------------------------------------------------------------------------
+// View mode: 'grid' (电子表格) | 'card' (卡片)
+// Persisted in localStorage so the preference survives page refreshes.
+// -------------------------------------------------------------------------
+const VIEW_MODE_KEY = 'sp-f-process-sheet-view';
+const savedView = localStorage.getItem(VIEW_MODE_KEY);
+const viewMode = ref<'grid' | 'card'>(savedView === 'card' ? 'card' : 'grid');
+
+function onViewModeChange(val: string | number | boolean) {
+  const mode = val as 'grid' | 'card';
+  viewMode.value = mode;
+  localStorage.setItem(VIEW_MODE_KEY, mode);
+}
+
+// -------------------------------------------------------------------------
 // Props
 // -------------------------------------------------------------------------
 const props = defineProps<{
@@ -119,15 +133,25 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
 <template>
   <div v-loading="loading" style="height:100%;display:flex;flex-direction:column">
     <!-- Header -->
-    <div style="padding:0 4px 12px;flex-shrink:0">
-      <div style="font-size:15px;font-weight:600;color:#303133">
-        逐工序电子表格
-        <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
-        <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">计划 {{ plannedQuantity }} kg</span>
+    <div style="padding:0 4px 12px;flex-shrink:0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-size:15px;font-weight:600;color:#303133">
+          逐工序电子表格
+          <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
+          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">计划 {{ plannedQuantity }} kg</span>
+        </div>
+        <div style="font-size:12px;color:#909399;margin-top:4px">
+          每行独立保存 · 保存后自动生成批次号 · 可随时追加
+        </div>
       </div>
-      <div style="font-size:12px;color:#909399;margin-top:4px">
-        每行独立保存 · 保存后自动生成批次号 · 可随时追加
-      </div>
+      <!-- View-mode toggle: applies to all process tabs simultaneously -->
+      <el-segmented
+        :model-value="viewMode"
+        :options="[{ label: '电子表格', value: 'grid' }, { label: '卡片', value: 'card' }]"
+        size="small"
+        style="flex-shrink:0;align-self:center"
+        @change="onViewModeChange"
+      />
     </div>
 
     <!-- Tabs -->
@@ -150,6 +174,7 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
               :product-type-id="productTypeId"
               :upstream-items="upstreamItems(proc.code)"
               :initial-rows="initialRowsMap[proc.code]"
+              :view-mode="viewMode"
               @row-saved="onRowSaved(proc.code)"
             />
           </el-col>

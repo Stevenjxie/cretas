@@ -27,6 +27,8 @@ const props = defineProps<{
   upstreamItems: ProcessSheetInventoryItem[];
   /** Existing saved rows loaded from backend on mount */
   initialRows: ProcessSheetRowView[];
+  /** Layout mode toggled in the drawer header. Default: 'grid'. */
+  viewMode?: 'grid' | 'card';
 }>();
 const emit = defineEmits<{
   (e: 'row-saved'): void;
@@ -418,6 +420,225 @@ onMounted(() => {
 
 <template>
   <div class="sp-grid-wrap">
+
+    <!-- ====================================================================
+         CARD LAYOUT
+         One card per row. Same row model + editors as the grid, different
+         visual wrapper. Expandable labor / mix sections rendered inline.
+         ==================================================================== -->
+    <template v-if="viewMode === 'card'">
+      <div v-for="(row, ri) in rows" :key="row.clientRowId" class="sp-card"
+           :class="{ 'sp-card-saved': row.rowStatus === 'SAVED', 'sp-card-draft': row.rowStatus === 'DRAFT' }">
+
+        <!-- Card header: row index + status tag + batch + warning + actions -->
+        <div class="sp-card-header">
+          <span class="sp-card-idx">#{{ ri + 1 }}</span>
+          <el-tag
+            :type="row.rowStatus === 'SAVED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
+            size="small" style="white-space:nowrap">
+            {{ row.rowStatus === 'SAVED' ? '已物化' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
+          </el-tag>
+          <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
+            <el-icon style="color:#e6a23c;cursor:pointer"><Warning /></el-icon>
+          </el-tooltip>
+          <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+          <span v-else class="sp-card-batchnum sp-card-batchnum-pending">(保存后生成批次号)</span>
+          <div style="flex:1" />
+          <!-- Actions -->
+          <el-button
+            type="primary" size="small" :icon="Check"
+            :loading="row.saving"
+            :disabled="!!saveDisabledReason(row)"
+            :title="saveDisabledReason(row) || '保存此行'"
+            @click="handleSave(row)"
+            style="padding:3px 8px">保存</el-button>
+          <el-button
+            type="danger" link size="small" :icon="Delete"
+            :loading="row.deleting"
+            @click="handleDelete(row)"
+            style="margin-left:4px" />
+        </div>
+
+        <!-- Card body: field grid -->
+        <div class="sp-card-body">
+
+          <!-- 修油: raw-material batch dropdown + out-weight -->
+          <template v-if="isXiuYou">
+            <div class="sp-card-field">
+              <label class="sp-card-label">原料批次</label>
+              <el-select
+                v-model="row.rawBatchId"
+                :loading="rawBatchLoading"
+                placeholder="选原料批次"
+                filterable clearable
+                style="width:100%" size="small">
+                <el-option
+                  v-for="b in rawBatchOptions" :key="b.id"
+                  :label="rawBatchLabel(b)" :value="b.id"
+                  :disabled="rawBatchAvailable(b) <= 0" />
+                <template #empty>
+                  <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次</span>
+                </template>
+              </el-select>
+            </div>
+            <div class="sp-card-field">
+              <label class="sp-card-label">出库重量(kg)</label>
+              <el-input-number
+                v-model="row.rawBatchQty"
+                :min="0" :precision="2"
+                controls-position="right"
+                style="width:160px" size="small" />
+            </div>
+          </template>
+
+          <!-- 焯水: single upstream dropdown -->
+          <template v-else-if="processCode === 'chaoshui'">
+            <div class="sp-card-field">
+              <label class="sp-card-label">修油批次</label>
+              <el-select
+                v-model="row.upstreamBatch"
+                placeholder="选修油批次"
+                filterable clearable
+                style="width:100%" size="small">
+                <el-option
+                  v-for="item in upstreamItems" :key="item.batchNumber"
+                  :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                  :value="item.batchNumber"
+                  :disabled="item.remaining <= 0" />
+              </el-select>
+            </div>
+          </template>
+
+          <!-- 熟制: multi-source expander -->
+          <template v-else-if="isShuZhi">
+            <div class="sp-card-field sp-card-field-full">
+              <label class="sp-card-label">焯水来源(混锅)</label>
+              <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
+                <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
+              </el-button>
+            </div>
+            <!-- Mix expanded inline -->
+            <div v-if="row.mixExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
+              <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;font-weight:600;color:#303133">焯水来源批 (混锅)</span>
+                <el-button size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
+              </div>
+              <div v-for="(src, si) in row.upstreamSources" :key="si"
+                   style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                <el-select
+                  v-model="src.sourceBatchNumber"
+                  placeholder="选焯水批次" filterable clearable
+                  style="width:220px" size="small">
+                  <el-option
+                    v-for="item in upstreamItems" :key="item.batchNumber"
+                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                    :value="item.batchNumber"
+                    :disabled="item.remaining <= 0" />
+                </el-select>
+                <el-input-number
+                  v-model="src.feedQuantityKg"
+                  :min="0" :precision="2"
+                  placeholder="投料kg"
+                  controls-position="right"
+                  size="small" style="width:120px" />
+                <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
+                  {{ (() => { const inv = upstreamItems.find(b => b.batchNumber === src.sourceBatchNumber); return inv ? `余${inv.remaining}kg` : ''; })() }}
+                </span>
+                <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
+              </div>
+              <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
+                暂无来源批，点击 + 来源批 添加
+              </div>
+              <!-- Pot count -->
+              <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:12px;font-weight:600;color:#303133">锅数:</span>
+                <el-input-number
+                  :model-value="row.potCount"
+                  @update:model-value="(v: number) => onPotCountChange(row, v)"
+                  :min="1" :precision="0" size="small" style="width:80px" />
+                <template v-if="row.potCount > 1">
+                  <div v-for="pi in row.potCount" :key="pi"
+                       style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:12px;color:#606266">第{{ pi }}锅(kg):</span>
+                    <el-input-number
+                      v-model="row.potRawKgs[pi - 1]"
+                      :min="0" :precision="2" size="small" style="width:100px" />
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <!-- Generic columns from config (skip special-cased keys) -->
+          <template v-for="col in cols" :key="col.key">
+            <div
+              v-if="!['rawBatch','outWeight','upstreamBatch','batch'].includes(col.key)"
+              class="sp-card-field"
+              :class="{ 'sp-card-field-auto': col.type === 'auto' || col.type === 'readonly' }">
+              <label class="sp-card-label">{{ col.label }}</label>
+
+              <el-input-number
+                v-if="col.type === 'number'"
+                :model-value="(row.fields[col.key] as number) ?? undefined"
+                @update:model-value="(v: number) => row.fields[col.key] = v"
+                :min="0" :precision="2"
+                controls-position="right"
+                style="width:160px" size="small" />
+
+              <el-date-picker
+                v-else-if="col.type === 'date'"
+                :model-value="(row.fields[col.key] as string) || undefined"
+                @update:model-value="(v: string) => row.fields[col.key] = v"
+                type="date" value-format="YYYY-MM-DD"
+                style="width:160px" size="small" />
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
+                {{ calcYield(row) != null ? calcYield(row)!.toFixed(2) + '%' : '—' }}
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'remaining'" class="sp-readonly"
+                :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? '#f56c6c' : undefined }">
+                {{ calcRemaining(row) != null ? calcRemaining(row)!.toFixed(2) : '—' }}
+              </span>
+
+              <!-- totalHours shown in the labor expander below; skip inline -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
+
+              <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+                {{ row.fields[col.key] ?? '—' }}
+              </span>
+            </div>
+          </template>
+
+          <!-- Labor expander -->
+          <div class="sp-card-field sp-card-field-full">
+            <label class="sp-card-label">工时</label>
+            <el-button link size="small" @click="row.laborExpanded = !row.laborExpanded" style="font-size:12px">
+              <el-icon style="margin-right:3px"><component :is="row.laborExpanded ? ArrowDown : ArrowRight" /></el-icon>
+              {{ calcTotalHours(row).toFixed(1) }}h · {{ row.laborSegments.length }}段
+            </el-button>
+          </div>
+          <div v-if="row.laborExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
+            <div style="font-size:12px;font-weight:600;color:#303133;margin-bottom:8px">
+              工时录入 — {{ row.batchNumber || '(未保存行)' }}
+            </div>
+            <WorkHoursTable v-model="row.laborSegments" />
+          </div>
+
+        </div><!-- /.sp-card-body -->
+      </div><!-- /v-for cards -->
+
+      <!-- Add row button (card mode) -->
+      <div style="margin-top:8px">
+        <el-button :icon="Plus" @click="addRow" style="width:100%" plain>+ 新增行</el-button>
+      </div>
+    </template>
+
+    <!-- ====================================================================
+         GRID LAYOUT (original flat spreadsheet table)
+         ==================================================================== -->
+    <template v-else>
     <!-- Flat spreadsheet table -->
     <div class="sp-table-scroll">
       <table class="sp-grid">
@@ -699,12 +920,14 @@ onMounted(() => {
       </table>
     </div><!-- /.sp-table-scroll -->
 
-    <!-- Add row button -->
+    <!-- Add row button (grid mode) -->
     <div style="margin-top:8px">
       <el-button :icon="Plus" @click="addRow" style="width:100%" plain>
         + 新增行
       </el-button>
     </div>
+    </template><!-- /grid layout -->
+
   </div>
 </template>
 
@@ -801,5 +1024,85 @@ onMounted(() => {
   color: #409eff;
   font-size: 11px;
   word-break: break-all;
+}
+
+/* -------------------------------------------------------------------------
+   Card layout
+   ------------------------------------------------------------------------- */
+.sp-card {
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.sp-card-saved {
+  border-color: #b3e19d;
+}
+.sp-card-draft {
+  border-color: #f5dab1;
+}
+
+.sp-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+  flex-wrap: wrap;
+}
+.sp-card-idx {
+  font-size: 12px;
+  color: #909399;
+  min-width: 22px;
+}
+.sp-card-batchnum {
+  font-size: 11px;
+  color: #409eff;
+  font-weight: 600;
+  word-break: break-all;
+}
+.sp-card-batchnum-pending {
+  color: #c0c4cc;
+  font-weight: 400;
+}
+
+.sp-card-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.sp-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+/* Full-width fields (upstream source expander / labor / mix) */
+.sp-card-field-full {
+  flex: 1 1 100%;
+  min-width: 100%;
+}
+/* Auto/readonly fields can be narrower */
+.sp-card-field-auto {
+  min-width: 110px;
+}
+
+.sp-card-label {
+  font-size: 11px;
+  color: #909399;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Inline expand sections within card (labor / mix) */
+.sp-card-expand-section {
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  border-radius: 4px;
+  padding: 10px 12px;
 }
 </style>
