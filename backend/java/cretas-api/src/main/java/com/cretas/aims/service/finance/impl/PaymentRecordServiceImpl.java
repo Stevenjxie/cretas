@@ -63,6 +63,19 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
                     .withHintTarget("销售订单");
         }
 
+        // 防呆 R4 (幂等防双击): 5min 窗口内同 工厂/销售单/金额 的待核收款 → 409 + 已有单号。
+        // 金额双计入 SO paidAmount 是资金完整性 bug (edge-case 审计 2026-06-24 抓: 双击建 2 条 PENDING)。
+        java.util.List<PaymentRecord> dupes = paymentRecordRepository.findRecentDuplicatePayments(
+                factoryId, salesOrderId, amount, java.time.LocalDateTime.now().minusMinutes(5));
+        if (!dupes.isEmpty()) {
+            PaymentRecord existing = dupes.get(0);
+            throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                    "5 分钟内已对该订单录入相同金额收款 (%s, ¥%s, 状态 %s), 请勿重复提交",
+                    existing.getPaymentNumber(), existing.getAmount(), existing.getStatus()))
+                    .withHint("如需查看已有收款记录请打开 " + existing.getPaymentNumber())
+                    .withHintTarget(existing.getId());
+        }
+
         PaymentRecord record = new PaymentRecord();
         record.setFactoryId(factoryId);
         record.setPaymentNumber(generatePaymentNumber());
