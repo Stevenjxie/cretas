@@ -77,6 +77,13 @@ const loadState = ref<LoadState>('idle');
 
 const current = ref<BomSeasoningResponse | null>(null);
 
+/**
+ * 克隆后锁定到新草稿的 recipeId — 因为克隆出的 DRAFT is_current=false,
+ * 若仍按产品 getByProduct 会取回旧 ACTIVE, 用户编辑看似丢失 (audit R2 Issue 3).
+ * pin 时按 recipeId 加载, 切换产品时清除. null = 按产品加载当前 BOM.
+ */
+const pinnedRecipeId = ref<string | null>(null);
+
 // Form mirror — local editable copy
 const formCookingPotBaseKg = ref<number | null>(null);
 const formSubsequentPotRatio = ref<number | null>(0.3333);
@@ -109,10 +116,10 @@ async function loadSeasoning() {
   current.value = null;
   formItems.value = [];
   try {
-    const res = await bomSeasoningApi.getByProduct(
-      factoryId.value,
-      selectedProductTypeId.value,
-    );
+    // pin 时按 recipeId 取 (克隆出的非当前草稿); 否则按产品取当前 BOM.
+    const res = pinnedRecipeId.value
+      ? await bomSeasoningApi.getById(factoryId.value, pinnedRecipeId.value)
+      : await bomSeasoningApi.getByProduct(factoryId.value, selectedProductTypeId.value);
     if (res.success && res.data) {
       applyToForm(res.data);
       loadState.value = 'loaded';
@@ -138,6 +145,7 @@ async function loadSeasoning() {
 }
 
 watch(selectedProductTypeId, () => {
+  pinnedRecipeId.value = null; // 切换产品 → 回到按产品取当前 BOM (放弃上一克隆草稿的 pin)
   if (selectedProductTypeId.value) loadSeasoning();
   else {
     loadState.value = 'idle';
@@ -200,6 +208,14 @@ async function save() {
   const blankNames = formItems.value.filter((i) => !i.name.trim());
   if (blankNames.length > 0) {
     ElMessage.warning('存在未填名称的调料行，请补充');
+    return;
+  }
+  // fool-proof Rule 1: 后端 dosagePerKgG @NotNull, 提前拦住空值避免 400 (audit R2 Issue 2)
+  const nullDosage = formItems.value.filter(
+    (i) => i.dosagePerKgG === null || i.dosagePerKgG === undefined,
+  );
+  if (nullDosage.length > 0) {
+    ElMessage.warning('存在未填「每 kg 用量」的调料行，请补充后再保存');
     return;
   }
 
@@ -276,6 +292,8 @@ async function handleClone() {
     const res = await bomSeasoningApi.clone(factoryId.value, current.value.bomRecipeId);
     if (res.success && res.data) {
       ElMessage.success('已克隆为新草稿，正在加载...');
+      // pin 到新草稿 (is_current=false) → 后续刷新按 recipeId 取, 不会回退到旧 ACTIVE.
+      pinnedRecipeId.value = res.data.id;
       // Load the new DRAFT's seasoning directly by recipeId
       const newRes = await bomSeasoningApi.getById(factoryId.value, res.data.id);
       if (newRes.success && newRes.data) {
@@ -301,18 +319,63 @@ async function handleClone() {
 }
 
 // =========================================================================
+// Activate cloned DRAFT → ACTIVE (使编辑后的新版本生效为当前配方)
+// =========================================================================
+const activating = ref(false);
+
+/** pin 的草稿(克隆产物) 需激活才生效; 非 pin 的当前 BOM 草稿本就是 is_current, 无需此动作. */
+const canActivate = computed(
+  () => pinnedRecipeId.value !== null && current.value?.status === 'DRAFT',
+);
+
+async function handleActivate() {
+  if (!factoryId.value || !current.value) return;
+  try {
+    await ElMessageBox.confirm(
+      // fool-proof Rule 2: 上下文 — 品名 + 此操作含义
+      `将「${current.value.productName || '此产品'}」的新草稿激活为当前生效配方。\n` +
+        `激活后, 之后的生产报工调料成本将按此版本计算, 原版本归档。\n\n确认激活？`,
+      '激活为当前版本',
+      { confirmButtonText: '激活', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  activating.value = true;
+  try {
+    const res = await bomSeasoningApi.activate(factoryId.value, current.value.bomRecipeId);
+    if (res.success) {
+      ElMessage.success('已激活为当前生效配方');
+      pinnedRecipeId.value = null; // 解除 pin → 回到按产品取 (现在它就是当前 BOM)
+      await loadSeasoning();
+    } else {
+      ElMessage({ message: res.message || '激活失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (err: unknown) {
+    const msg =
+      (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+      '激活失败，请稍后重试';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    activating.value = false;
+  }
+}
+
+// =========================================================================
 // U7: EmptyState — no BOM → guide user to create BOM first
 // =========================================================================
 const canCreateBom = computed(() => canReach('production', { write: true }));
 
 function goCreateBom() {
   if (!canCreateBom.value) return;
-  // Jump to the BOM materials tab, carrying productTypeId for pre-selection.
-  // _returnTo = current page (tab=recipe) so ReturnBanner brings user back here.
-  const targetPath = `/production/bom-unified?tab=materials${
-    selectedProductTypeId.value ? `&productTypeId=${selectedProductTypeId.value}` : ''
-  }`;
-  goCreate(targetPath);
+  // 显式构造 returnTo (tab=recipe) — 宿主 bom-unified 仅在 mount 时读 ?tab, 不把 tab 写回 URL,
+  // 故 route.fullPath 不含 tab=recipe; 不显式传 reopen 会返回到默认 materials tab (audit R2 Issue 5).
+  const productParam = selectedProductTypeId.value
+    ? `&productTypeId=${selectedProductTypeId.value}`
+    : '';
+  const targetPath = `/production/bom-unified?tab=materials${productParam}`;
+  const returnPath = `/production/bom-unified?tab=recipe${productParam}`;
+  goCreate(targetPath, { reopen: returnPath });
 }
 </script>
 
@@ -424,6 +487,16 @@ function goCreateBom() {
         </template>
       </el-alert>
 
+      <!-- 克隆草稿提示 (fool-proof Rule 2): 编辑中的是非当前草稿, 保存后需激活 -->
+      <el-alert
+        v-if="pinnedRecipeId && !isReadOnly"
+        type="info"
+        show-icon
+        :closable="false"
+        title="您正在编辑新克隆的草稿（尚未生效）。保存后点「激活此版本」使其成为当前生效配方，否则生产报工仍按原版本计算成本。"
+        style="margin: 12px 0;"
+      />
+
       <!-- Pot parameters -->
       <el-card shadow="never" style="margin-bottom: 16px;">
         <template #header>
@@ -467,7 +540,8 @@ function goCreateBom() {
         </el-form>
       </el-card>
 
-      <!-- 注射配方 -->
+      <!-- 注射配方 (无「计入调料」开关: 成本引擎对注射段恒计入,
+           RecipeCostCalculator.perKg(INJECTION, applyCountInSeasoning=false), 故不暴露该字段) -->
       <el-card shadow="never" style="margin-bottom: 16px;">
         <template #header>
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -643,12 +717,19 @@ function goCreateBom() {
           :loading="cloning"
           @click="handleClone"
         >克隆为新版本以修改</el-button>
-        <el-button
-          v-else
-          type="primary"
-          :loading="saving"
-          @click="save"
-        >保存调料配方</el-button>
+        <template v-else>
+          <el-button
+            :loading="saving"
+            @click="save"
+          >保存调料配方</el-button>
+          <!-- 克隆草稿: 保存后需激活才生效 (audit R2 Issue 3 + usage-logic) -->
+          <el-button
+            v-if="canActivate"
+            type="primary"
+            :loading="activating"
+            @click="handleActivate"
+          >激活此版本</el-button>
+        </template>
       </div>
     </template>
   </div>

@@ -300,6 +300,9 @@ export const bomSeasoningApi = {
   getByProduct: (factoryId: string, productTypeId: string) =>
     get<BomSeasoningResponse>(
       `${seasoningBase(factoryId)}/by-product/${productTypeId}/seasoning`,
+      // _silent: 无 BOM 时后端返 404, 由组件用 EmptyState 引导建 BOM —
+      // 抑制全局 404 toast, 避免 toast + EmptyState 双重提示 (audit R2 Issue 1).
+      { _silent: true },
     ),
 
   /** 按 recipeId 加载调料配方 */
@@ -325,6 +328,16 @@ export const bomSeasoningApi = {
   clone: (factoryId: string, recipeId: string) =>
     post<BomRecipeSummary>(
       `${seasoningBase(factoryId)}/${recipeId}/clone`,
+      null,
+    ),
+
+  /**
+   * 激活 BOM 配方 (DRAFT → ACTIVE, 置为当前版本)。
+   * 克隆-编辑后调用使新草稿生效 (POST /{recipeId}/activate).
+   */
+  activate: (factoryId: string, recipeId: string) =>
+    post<BomRecipeSummary>(
+      `${seasoningBase(factoryId)}/${recipeId}/activate`,
       null,
     ),
 };
