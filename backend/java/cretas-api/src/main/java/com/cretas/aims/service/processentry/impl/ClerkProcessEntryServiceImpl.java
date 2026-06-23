@@ -557,15 +557,24 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     private List<BigDecimal> buildPotRawKgs(StepEntry st) {
+        int n = st.getPotCount() != null && st.getPotCount() > 0 ? st.getPotCount() : 1;
+        // SP-F Fix 1: N > 1 时必须逐锅填写原料投入量，不允许静默等分。
+        // 沉默等分会在各锅原料量不同时（这是 N>1 的典型场景）产生错误的调料成本。
+        if (n > 1) {
+            List<BigDecimal> supplied = st.getPotRawKgs();
+            if (supplied == null || supplied.isEmpty() || supplied.size() != n) {
+                throw new BusinessException(400,
+                        "N 锅生产必须逐锅填写原料投入量 (锅数=" + n + ", 已填=" +
+                                (supplied == null ? 0 : supplied.size()) + ")");
+            }
+            return supplied;
+        }
+        // N == 1 (单锅或未指定锅数): 沿用原逻辑 — 有 potRawKgs 用 potRawKgs，否则用整批投入量。
         if (st.getPotRawKgs() != null && !st.getPotRawKgs().isEmpty()) {
             return st.getPotRawKgs();
         }
-        int n = st.getPotCount() != null && st.getPotCount() > 0 ? st.getPotCount() : 1;
         BigDecimal input = nz(st.getInputQuantity());
-        BigDecimal each = input.divide(new BigDecimal(n), 4, RoundingMode.HALF_UP);
-        List<BigDecimal> result = new ArrayList<>();
-        for (int i = 0; i < n; i++) result.add(each);
-        return result;
+        return List.of(input);
     }
 
     // ─────────────────────────────────────────────────────────────

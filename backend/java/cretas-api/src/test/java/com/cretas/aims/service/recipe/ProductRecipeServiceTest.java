@@ -87,4 +87,110 @@ class ProductRecipeServiceTest {
         assertEquals(0, new BigDecimal("1.0000").compareTo(dto.getCookingFullCostPerKg()));
         assertEquals(0, new BigDecimal("1.0000").compareTo(dto.getCostPerKgFirstPot()));
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Fix 2 — 老汤(countInSeasoning=false) 不要求单价
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * V1 — 老汤(countInSeasoning=false) 无单价 → validation 通过.
+     * 老汤不计入调料成本(RecipeCostCalculator 跳过), 强制填单价无意义(防呆 Rule).
+     */
+    @Test
+    @DisplayName("V1: 老汤(countInSeasoning=false) 无单价 → validation 通过(create 成功)")
+    void v1_laotang_noPriceRequired() {
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(F, "DF_pt10", "ACTIVE"))
+                .thenReturn(Optional.empty());
+        when(recipeRepo.save(any(ProductRecipe.class))).thenAnswer(inv -> {
+            ProductRecipe p = inv.getArgument(0);
+            if (p.getId() == null) p.setId("R-LT");
+            return p;
+        });
+        when(ingredientRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SaveRecipeRequest r = new SaveRecipeRequest();
+        r.setProductTypeId("DF_pt10");
+        r.setName("老汤测试配方");
+        r.setSubsequentPotRatio(new BigDecimal("0.3333"));
+
+        // 老汤: countInSeasoning=false, 无单价 — should NOT throw
+        RecipeIngredientDTO laotang = new RecipeIngredientDTO();
+        laotang.setSection("COOKING");
+        laotang.setName("老汤");
+        laotang.setDosagePerKgG(new BigDecimal("500"));
+        laotang.setPriceSource1(null); // no price
+        laotang.setPriceSource2(null); // no price
+        laotang.setCountInSeasoning(false); // 老汤
+
+        // Also add a normal ingredient that counts, with a price
+        RecipeIngredientDTO normal = new RecipeIngredientDTO();
+        normal.setSection("COOKING");
+        normal.setName("香料");
+        normal.setDosagePerKgG(new BigDecimal("100"));
+        normal.setPriceSource1(new BigDecimal("5.00"));
+        normal.setCountInSeasoning(true);
+
+        r.setIngredients(List.of(laotang, normal));
+
+        // Must NOT throw
+        assertDoesNotThrow(() -> service.create(F, r));
+    }
+
+    /**
+     * V2 — 普通调料(countInSeasoning=true 或 null) 无单价 → validation 失败(400).
+     * 计入成本的原料必须有单价，否则调料成本会是 ¥0 静默丢失。
+     */
+    @Test
+    @DisplayName("V2: 普通调料(countInSeasoning=true) 无单价 → BusinessException(400)")
+    void v2_normalIngredient_noPriceRequired_throws400() {
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(F, "DF_pt10", "ACTIVE"))
+                .thenReturn(Optional.empty());
+
+        SaveRecipeRequest r = new SaveRecipeRequest();
+        r.setProductTypeId("DF_pt10");
+        r.setName("无价格配方");
+        r.setSubsequentPotRatio(new BigDecimal("0.3333"));
+
+        RecipeIngredientDTO noPrice = new RecipeIngredientDTO();
+        noPrice.setSection("COOKING");
+        noPrice.setName("花椒");
+        noPrice.setDosagePerKgG(new BigDecimal("50"));
+        noPrice.setPriceSource1(null); // missing price
+        noPrice.setPriceSource2(null);
+        noPrice.setCountInSeasoning(true); // counts in cost → price required
+
+        r.setIngredients(List.of(noPrice));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(F, r));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("花椒"), "error message should name the ingredient");
+    }
+
+    /**
+     * V3 — countInSeasoning=null (default, treats as true) 无单价 → validation 失败(400).
+     * null 视同 true (saveIngredients 默认值逻辑的对称测试).
+     */
+    @Test
+    @DisplayName("V3: countInSeasoning=null (视同 true) 无单价 → BusinessException(400)")
+    void v3_nullCountInSeasoning_noPriceRequired_throws400() {
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(F, "DF_pt10", "ACTIVE"))
+                .thenReturn(Optional.empty());
+
+        SaveRecipeRequest r = new SaveRecipeRequest();
+        r.setProductTypeId("DF_pt10");
+        r.setName("缺单价配方");
+
+        RecipeIngredientDTO noPrice = new RecipeIngredientDTO();
+        noPrice.setSection("COOKING");
+        noPrice.setName("盐");
+        noPrice.setDosagePerKgG(new BigDecimal("20"));
+        noPrice.setPriceSource1(null);
+        noPrice.setPriceSource2(null);
+        noPrice.setCountInSeasoning(null); // null → treated as true → price required
+
+        r.setIngredients(List.of(noPrice));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(F, r));
+        assertEquals(400, ex.getCode());
+    }
 }

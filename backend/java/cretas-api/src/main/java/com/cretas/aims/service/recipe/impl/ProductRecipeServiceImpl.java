@@ -107,7 +107,11 @@ public class ProductRecipeServiceImpl implements ProductRecipeService {
                     && !RecipeIngredient.SECTION_COOKING.equals(i.getSection())) {
                 throw new BusinessException(400, "料「" + i.getName() + "」工序段非法(须 INJECTION/COOKING)");
             }
-            if (i.getPriceSource1() == null && i.getPriceSource2() == null) {
+            // SP-F Fix 2: 老汤类(countInSeasoning=false)不参与成本核算，无需单价。
+            // RecipeCostCalculator.perKg() 在 applyCountInSeasoning=true 时跳过这些行，
+            // 强制要求单价既无用又增加文员录入负担(防呆 Rule: 不要求录入不会被使用的数据)。
+            boolean countsInCost = !Boolean.FALSE.equals(i.getCountInSeasoning()); // null → true (默认计入)
+            if (countsInCost && i.getPriceSource1() == null && i.getPriceSource2() == null) {
                 throw new BusinessException(400, "料「" + i.getName() + "」单价两源至少填一个");
             }
         }

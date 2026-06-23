@@ -708,6 +708,216 @@ class ClerkProcessEntryServiceImplTest {
                 .isEqualByComparingTo("0");
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Fix 1 — multi-pot N>1 requires per-pot kg
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * T14a — potCount=2, potRawKgs=null → BusinessException(400).
+     * N>1 에서 per-pot 원료量 미입력 시 靜默 等分을 허용하면 안 됨.
+     */
+    @Test
+    @DisplayName("T14a: potCount=2, potRawKgs=null → BusinessException(400) 不允许静默等分")
+    void t14a_multiPot_noPerPotKgs_throws400() {
+        stubNoIdempotency("T14A-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        // Need a recipe so computeSeasoningCost is actually called
+        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
+        recipe.setId("R-MULTI");
+        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
+                .thenReturn(Optional.of(recipe));
+        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+
+        MaterialBatch raw = rawMb("RAW-T14A", FACTORY, new BigDecimal("10"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T14A", FACTORY)).thenReturn(Optional.of(raw));
+
+        // Seasoning step: potCount=2 but NO potRawKgs
+        StepEntry seasoning = new StepEntry();
+        seasoning.setProcessOrder(1);
+        seasoning.setProcessName("熟制");
+        seasoning.setProcessCategory("SEASONING");
+        seasoning.setPotCount(2);
+        seasoning.setPotRawKgs(null); // ← missing!
+        seasoning.setInputQuantity(new BigDecimal("100"));
+        seasoning.setOutputQuantity(new BigDecimal("90"));
+
+        BatchEntry batch = finishedBatch("FIN-T14A", "PT-X", List.of(
+                rawStep(0, "100", "100", List.of(rawInput("RAW-T14A", "100"))),
+                seasoning
+        ));
+
+        assertThatThrownBy(() ->
+                service.recordChain(FACTORY, PLAN_ID, req("T14A-KEY", List.of(batch)), OPERATOR_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).as("HTTP 400").isEqualTo(400);
+                    assertThat(ex.getMessage()).as("message mentions pot count").contains("锅数=2");
+                });
+    }
+
+    /**
+     * T14b — potCount=2, potRawKgs size!=potCount → BusinessException(400).
+     * 如只填了 1 个锅的数据，同样拒绝。
+     */
+    @Test
+    @DisplayName("T14b: potCount=2, potRawKgs.size=1 (不足) → BusinessException(400)")
+    void t14b_multiPot_wrongSizePerPotKgs_throws400() {
+        stubNoIdempotency("T14B-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
+        recipe.setId("R-MULTI2");
+        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
+                .thenReturn(Optional.of(recipe));
+        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+
+        MaterialBatch raw = rawMb("RAW-T14B", FACTORY, new BigDecimal("10"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T14B", FACTORY)).thenReturn(Optional.of(raw));
+
+        StepEntry seasoning = new StepEntry();
+        seasoning.setProcessOrder(1);
+        seasoning.setProcessCategory("SEASONING");
+        seasoning.setPotCount(2);
+        seasoning.setPotRawKgs(List.of(new BigDecimal("60"))); // only 1, need 2
+        seasoning.setInputQuantity(new BigDecimal("100"));
+        seasoning.setOutputQuantity(new BigDecimal("90"));
+
+        BatchEntry batch = finishedBatch("FIN-T14B", "PT-X", List.of(
+                rawStep(0, "100", "100", List.of(rawInput("RAW-T14B", "100"))),
+                seasoning
+        ));
+
+        assertThatThrownBy(() ->
+                service.recordChain(FACTORY, PLAN_ID, req("T14B-KEY", List.of(batch)), OPERATOR_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+    }
+
+    /**
+     * T14c — potCount=2, potRawKgs=[60,40] (correct size) → OK, no exception.
+     */
+    @Test
+    @DisplayName("T14c: potCount=2, potRawKgs=[60,40] (size 匹配) → 正常执行，无异常")
+    void t14c_multiPot_correctPerPotKgs_ok() {
+        stubNoIdempotency("T14C-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
+        recipe.setId("R-MULTI3");
+        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
+                .thenReturn(Optional.of(recipe));
+        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+
+        MaterialBatch raw = rawMb("RAW-T14C", FACTORY, new BigDecimal("10"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T14C", FACTORY)).thenReturn(Optional.of(raw));
+
+        StepEntry seasoning = new StepEntry();
+        seasoning.setProcessOrder(1);
+        seasoning.setProcessCategory("SEASONING");
+        seasoning.setPotCount(2);
+        seasoning.setPotRawKgs(List.of(new BigDecimal("60"), new BigDecimal("40")));
+        seasoning.setInputQuantity(new BigDecimal("100"));
+        seasoning.setOutputQuantity(new BigDecimal("90"));
+
+        BatchEntry batch = finishedBatch("FIN-T14C", "PT-X", List.of(
+                rawStep(0, "100", "100", List.of(rawInput("RAW-T14C", "100"))),
+                seasoning
+        ));
+
+        // Should not throw
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID, req("T14C-KEY", List.of(batch)), OPERATOR_ID);
+        assertThat(result.getFinishedBatchNumber()).as("finished batch produced").isNotNull();
+    }
+
+    /**
+     * T14d — potCount=1 (单锅), potRawKgs=null → OK (N==1 不强制 per-pot kg).
+     */
+    @Test
+    @DisplayName("T14d: potCount=1, potRawKgs=null → OK (单锅不需要逐锅填写)")
+    void t14d_singlePot_noPotRawKgs_ok() {
+        stubNoIdempotency("T14D-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T14D", FACTORY, new BigDecimal("10"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T14D", FACTORY)).thenReturn(Optional.of(raw));
+
+        // potCount=1 (or null) → no guard triggered
+        StepEntry seasoning = new StepEntry();
+        seasoning.setProcessOrder(1);
+        seasoning.setProcessCategory("SEASONING");
+        seasoning.setPotCount(1);
+        seasoning.setPotRawKgs(null); // fine for single pot
+        seasoning.setInputQuantity(new BigDecimal("100"));
+        seasoning.setOutputQuantity(new BigDecimal("90"));
+
+        BatchEntry batch = finishedBatch("FIN-T14D", "PT-X", List.of(
+                rawStep(0, "100", "100", List.of(rawInput("RAW-T14D", "100"))),
+                seasoning
+        ));
+
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID, req("T14D-KEY", List.of(batch)), OPERATOR_ID);
+        assertThat(result.getFinishedBatchNumber()).isNotNull();
+    }
+
+    /**
+     * T14e — potCount=null (未指定锅数), potRawKgs=null → OK.
+     */
+    @Test
+    @DisplayName("T14e: potCount=null (未指定), potRawKgs=null → OK (视同单锅)")
+    void t14e_nullPotCount_ok() {
+        stubNoIdempotency("T14E-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-T14E", FACTORY, new BigDecimal("10"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T14E", FACTORY)).thenReturn(Optional.of(raw));
+
+        StepEntry seasoning = new StepEntry();
+        seasoning.setProcessOrder(1);
+        seasoning.setPotCount(null); // ← null → treated as single pot
+        seasoning.setPotRawKgs(null);
+        seasoning.setInputQuantity(new BigDecimal("50"));
+        seasoning.setOutputQuantity(new BigDecimal("45"));
+
+        BatchEntry batch = finishedBatch("FIN-T14E", "PT-X", List.of(
+                rawStep(0, "50", "50", List.of(rawInput("RAW-T14E", "50"))),
+                seasoning
+        ));
+
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID, req("T14E-KEY", List.of(batch)), OPERATOR_ID);
+        assertThat(result.getFinishedBatchNumber()).isNotNull();
+    }
+
     /**
      * T11 — Fix 3: blend step with upstreamSources but no seasoning config → warning emitted.
      * SP-D Fix 3: A step with upstreamSources but processCategory != SEASONING and potCount == null
