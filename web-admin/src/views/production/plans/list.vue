@@ -2065,7 +2065,7 @@ function handleAiFill(params: TableRow) {
               @click="handleComplete(row)"
             >核对结单</el-button>
             <el-button
-              v-if="canWrite && isStepwise(row) && isUnfinishedStatus(row.status)"
+              v-if="canWrite && isUnfinishedStatus(row.status)"
               type="success"
               link
               size="small"
