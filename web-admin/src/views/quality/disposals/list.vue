@@ -271,7 +271,7 @@ const REJECT_REASONS = [
 ];
 
 function approvalContextHtml(row: TableRow): string {
-  const name = row.materialTypeName || row.batchNumber || '报废记录';
+  const name = row.materialName || row.materialTypeName || row.batchNumber || '报废记录';
   const batch = row.batchNumber ? `批次 ${row.batchNumber}` : '';
   const qty = row.quantity != null ? `数量 ${row.quantity}` : '';
   const type = getTypeText(row.disposalType as string);
@@ -505,7 +505,7 @@ function getTypeText(type: string) {
               :key="item.id"
               :label="disposalForm.targetType === 'FINISHED'
                 ? `${item.batchNumber} - ${item.productName || item.productTypeName || '成品'} (可用 ${item.availableQuantity ?? item.producedQuantity ?? 0})`
-                : `${item.batchNumber} - ${item.materialTypeName}`"
+                : `${item.batchNumber} - ${item.materialName || item.materialTypeName || '物料'}`"
               :value="item.id"
             />
           </el-select>
@@ -558,7 +558,7 @@ function getTypeText(type: string) {
     <el-dialog v-model="rejectDialogVisible" title="拒绝报废申请" width="480px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item label="报废记录">
-          <span>{{ rejectRow?.materialTypeName || rejectRow?.batchNumber || '-' }}
+          <span>{{ rejectRow?.materialName || rejectRow?.materialTypeName || rejectRow?.batchNumber || '-' }}
             <span v-if="rejectRow?.batchNumber" style="color:#909399"> ({{ rejectRow?.batchNumber }})</span>
           </span>
         </el-form-item>

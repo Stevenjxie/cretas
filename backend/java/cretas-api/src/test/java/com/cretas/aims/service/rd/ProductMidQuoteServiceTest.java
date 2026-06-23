@@ -15,7 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import jakarta.persistence.EntityNotFoundException;
+import com.cretas.aims.exception.EntityNotFoundException;
 
 import java.math.BigDecimal;
 import java.util.Optional;

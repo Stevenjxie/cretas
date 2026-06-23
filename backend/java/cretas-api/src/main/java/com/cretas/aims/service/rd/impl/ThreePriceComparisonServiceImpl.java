@@ -142,7 +142,7 @@ public class ThreePriceComparisonServiceImpl implements ThreePriceComparisonServ
     @Transactional(readOnly = true)
     public ThreePriceComparisonDTO getThreePriceComparisonByTaskId(String factoryId, String quotationTaskId) {
         QuotationTask task = quotationTaskRepository.findById(quotationTaskId)
-                .orElseThrow(() -> new jakarta.persistence.EntityNotFoundException(
+                .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
                         "报价任务不存在: " + quotationTaskId));
         // 跨租户校验: 报价任务须属于当前工厂 (防止用别厂 task 的 sampleId 越权读三价对比)
         if (task.getFactoryId() == null || !task.getFactoryId().equals(factoryId)) {

@@ -18,7 +18,7 @@ import com.cretas.aims.repository.restaurant.WastageRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
 import com.cretas.aims.service.voucher.impl.SalesReceiptVoucherGenerator;
-import jakarta.persistence.EntityNotFoundException;
+import com.cretas.aims.exception.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

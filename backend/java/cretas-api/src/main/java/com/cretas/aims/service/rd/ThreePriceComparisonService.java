@@ -24,7 +24,7 @@ public interface ThreePriceComparisonService {
      * @param factoryId     工厂 ID
      * @param quotationTaskId 报价任务 ID
      * @return 三价对比 DTO
-     * @throws jakarta.persistence.EntityNotFoundException 报价任务不存在
+     * @throws com.cretas.aims.exception.EntityNotFoundException 报价任务不存在
      */
     ThreePriceComparisonDTO getThreePriceComparisonByTaskId(String factoryId, String quotationTaskId);
 }
