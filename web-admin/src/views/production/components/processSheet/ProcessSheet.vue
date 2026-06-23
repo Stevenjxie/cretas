@@ -163,24 +163,24 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
         :name="proc.code"
         style="height:100%;overflow-y:auto;padding:4px 0"
       >
-        <el-row :gutter="12" style="height:100%">
-          <!-- Left: data entry table -->
-          <el-col :span="16" style="height:100%;overflow-y:auto">
-            <ProcessDataTable
-              :factory-id="factoryId"
-              :plan-id="planId"
-              :process-code="proc.code"
-              :process-order="proc.order"
-              :product-type-id="productTypeId"
-              :upstream-items="upstreamItems(proc.code)"
-              :initial-rows="initialRowsMap[proc.code]"
-              :view-mode="viewMode"
-              @row-saved="onRowSaved(proc.code)"
-            />
-          </el-col>
+        <!-- Vertical stack: data-entry table (full width) → 半成品库存 (full width below) -->
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <!-- Data entry table — full width -->
+          <ProcessDataTable
+            :factory-id="factoryId"
+            :plan-id="planId"
+            :process-code="proc.code"
+            :process-order="proc.order"
+            :product-type-id="productTypeId"
+            :upstream-items="upstreamItems(proc.code)"
+            :own-inventory-items="inventoryMap[proc.code]"
+            :initial-rows="initialRowsMap[proc.code]"
+            :view-mode="viewMode"
+            @row-saved="onRowSaved(proc.code)"
+          />
 
-          <!-- Right: inventory sub-table -->
-          <el-col :span="8" style="height:100%;overflow-y:auto">
+          <!-- 半成品库存 — full width below the grid -->
+          <div>
             <div style="font-size:12px;font-weight:600;color:#606266;margin-bottom:6px">
               {{ proc.label }} 半成品库存
             </div>
@@ -190,8 +190,8 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
               :plan-id="planId"
               :process-code="proc.code"
             />
-          </el-col>
-        </el-row>
+          </div>
+        </div>
       </el-tab-pane>
     </el-tabs>
   </div>
