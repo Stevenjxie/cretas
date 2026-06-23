@@ -446,6 +446,7 @@ public class DisposalController {
         rec.setReworkRecordId(r.getReworkRecordId());
         rec.setProductionBatchId(r.getProductionBatchId());
         rec.setMaterialBatchId(r.getMaterialBatchId());
+        rec.setFinishedGoodsBatchId(r.getFinishedGoodsBatchId());
         rec.setEstimatedLoss(r.getEstimatedLoss());
         rec.setRecoveryValue(r.getRecoveryValue());
         rec.setEvidenceImages(r.getEvidenceImages());

@@ -7,6 +7,8 @@ import com.cretas.aims.repository.DisposalRecordRepository;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +47,8 @@ class DisposalWorkflowIntegrationTest {
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+    @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
     @Mock private WorkflowEngineService workflowEngine;
 
     private DisposalRecordService service;
@@ -57,7 +61,8 @@ class DisposalWorkflowIntegrationTest {
     @BeforeEach
     void setUp() {
         service = new DisposalRecordService(disposalRecordRepository, materialBatchRepository,
-                materialBatchAdjustmentRepository, productionBatchRepository);
+                materialBatchAdjustmentRepository, productionBatchRepository,
+                finishedGoodsBatchRepository, finishedGoodsAdjustmentLogRepository);
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
     }
 
