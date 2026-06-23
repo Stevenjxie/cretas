@@ -430,6 +430,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         // Full-replace: soft-delete existing seasoning items, then insert new ones.
         // Mirror the pattern from updateRecipe (oldItems.softDelete + saveAll).
+        // ⚠️ 走 repo 直写, 不碰 recipe.getSeasoningItems() (LAZY 受管集合, orphanRemoval=true).
+        //    切勿在本 tx 内 saveAll 之后再读/改 recipe.getSeasoningItems() — 受管集合是 flush 前的
+        //    旧快照, flush 时 orphanRemoval 会把刚插入的行当孤儿删掉 (audit R4 latent trap).
         List<BomSeasoningItem> oldItems = seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipeId);
         for (BomSeasoningItem old : oldItems) {
             old.softDelete();

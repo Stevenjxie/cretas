@@ -128,12 +128,18 @@ async function loadSeasoning() {
       loadState.value = 'error';
     }
   } catch (err: unknown) {
-    // 404 from request.ts — ApiError with status 404 (or code NOT_FOUND)
+    // 后端 getSeasoningByProduct 返 ApiResponse.error(404,...) = HTTP 200 + body code 404,
+    // interceptor 转成 ApiError(message, code=404 数字, status=undefined). 故需识别 body-code 404
+    // (而非仅 HTTP status / 'NOT_FOUND' 字符串) — 否则 NO_BOM 永远落到 error 态, U7 引导失效
+    // (audit R4 confirmed bug). 兼容数字/字符串 code + 真 HTTP 404.
+    const errCode = (err as { code?: unknown })?.code;
+    const errStatus = (err as { status?: number })?.status;
     const isNotFound =
-      isAxiosError(err)
-        ? err.response?.status === 404
-        : (err as { code?: string })?.code === 'NOT_FOUND' ||
-          (err as { status?: number })?.status === 404;
+      errCode === 404 ||
+      errCode === '404' ||
+      errCode === 'NOT_FOUND' ||
+      errStatus === 404 ||
+      (isAxiosError(err) && err.response?.status === 404);
     if (isNotFound) {
       // U7: product has no BOM — show EmptyState, suppress the generic 404 toast
       // (request.ts already showed it; we need to override the UX instead of adding a second toast)
@@ -309,8 +315,11 @@ async function handleClone() {
       });
     }
   } catch (err: unknown) {
+    // ApiError 把后端 message 放 err.message (非 err.response.data.message) — 补 err.message
+    // 兜底, 否则 DRAFT 守卫等业务拒绝被吞成通用文案 (audit R4 fool-proof a/b).
     const msg =
       (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+      (err as { message?: string })?.message ||
       '克隆失败，请稍后重试';
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
@@ -354,6 +363,7 @@ async function handleActivate() {
   } catch (err: unknown) {
     const msg =
       (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+      (err as { message?: string })?.message ||
       '激活失败，请稍后重试';
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
