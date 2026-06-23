@@ -1324,6 +1324,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
         assertMaterialBatchUsable(batch);
 
+        // 输入边界 (edge-case 审计 2026-06-24): 领料量必须 > 0。否则负数会绕过下面的
+        // remaining<quantity 检查, 撞 DB 约束被脱敏成通用 409 "操作未能完成"。与 adjust/disposal/
+        // transfer/receive 已有的 quantity<=0→400 守卫一致。
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "领料数量必须大于0")
+                    .withHint("请输入大于 0 的领料数量").withHintTarget("quantity");
+        }
+
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足")
                     .withHint("请刷新批次库存或选择其他批次");
@@ -1544,8 +1552,16 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
         assertMaterialBatchUsable(batch);
 
+        // 输入边界 (edge-case 审计 2026-06-24, reviewer ISSUE-3): 消耗量必须 > 0。否则负数会绕过下面的
+        // reservedQuantity<quantity 检查 (任何正预留 > 负数), 把 usedQuantity/reservedQuantity 向反向写坏账。
+        // 与 useBatchMaterial 的同款守卫对称。
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "消耗数量必须大于0")
+                    .withHint("请输入大于 0 的消耗数量").withHintTarget("quantity");
+        }
+
         runConfiguredValidation(factoryId, "CONSUME",
-                java.util.Map.of("batchId", batchId, "quantity", quantity != null ? quantity : BigDecimal.ZERO));
+                java.util.Map.of("batchId", batchId, "quantity", quantity));
 
         if (batch.getReservedQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "预留数量不足以消耗")

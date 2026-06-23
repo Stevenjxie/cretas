@@ -114,6 +114,31 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
     }
 
     @Test
+    void useBatchMaterialRejectsNonPositiveQuantity() {
+        // edge-case 审计 2026-06-24: 领料量 <= 0 → 400 (否则负数绕过 remaining<qty 检查写坏账)
+        MaterialBatch batch = batch("MB-NEG", "RM-1", "100", "0", "0", "8.50");
+        when(materialBatchRepository.findByIdAndFactoryId("MB-NEG", "F006")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.useBatchMaterial("F006", "MB-NEG", new BigDecimal("-5"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("必须大于0");
+        verify(materialBatchRepository, never()).save(any());
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
+    void consumeBatchMaterialRejectsNonPositiveQuantity() {
+        // reviewer ISSUE-3: consumeBatchMaterial 同款负数守卫 (负数会反向写坏 used/reserved)
+        MaterialBatch batch = batch("MB-NEG2", "RM-1", "100", "0", "50", "8.50");
+        when(materialBatchRepository.findById("MB-NEG2")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.consumeBatchMaterial("F006", "MB-NEG2", new BigDecimal("-5"), "PP-1", 42L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("必须大于0");
+        verify(materialConsumptionRepository, never()).save(any());
+    }
+
+    @Test
     void consumeBatchMaterialPopulatesNotNullConsumptionFields() {
         MaterialBatch batch = batch("MB-3", "RM-1", "100", "0", "50", "8.50");
         when(materialBatchRepository.findById("MB-3")).thenReturn(Optional.of(batch));

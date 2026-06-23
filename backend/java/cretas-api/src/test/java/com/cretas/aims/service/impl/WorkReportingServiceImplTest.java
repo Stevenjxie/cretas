@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.WorkReportSubmitRequest;
 import com.cretas.aims.dto.WorkReportResponse;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.enums.ReportMode;
 import com.cretas.aims.exception.BusinessException;
@@ -93,6 +94,10 @@ class WorkReportingServiceImplTest {
         void submitReport_recentDuplicateWithin5Min_throws409() {
             WorkReportSubmitRequest req = validRequest();
 
+            // 跨租户守卫前置: batchId 须属本厂 (新增 guard), happy/dedup 路径须 stub 存在的同厂批次
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                    .thenReturn(java.util.Optional.of(
+                            ProductionBatch.builder().id(BATCH_ID).factoryId(FACTORY_ID).build()));
             when(reportRepository
                     .existsByFactoryIdAndWorkerIdAndBatchIdAndReportTypeAndCreatedAtAfterAndDeletedAtIsNull(
                             eq(FACTORY_ID), eq(WORKER_ID), eq(BATCH_ID), eq(REPORT_TYPE), any(LocalDateTime.class)))
@@ -131,8 +136,11 @@ class WorkReportingServiceImplTest {
                             eq(FACTORY_ID), eq(WORKER_ID), eq(BATCH_ID), eq(REPORT_TYPE), any(LocalDateTime.class)))
                     .thenReturn(false);
             when(reportRepository.save(any(ProductionReport.class))).thenReturn(saved);
-            // batchId != null → updateBatchActualQuantity 查批次 (返 empty 不影响主流程)
-            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(java.util.Optional.empty());
+            // batchId != null → 跨租户 guard + updateBatchActualQuantity 查批次. 须 stub 存在的同厂批次
+            // (plannedQuantity null → checkAndCompleteBatch 提前返回, 不触发完成事件)。
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                    .thenReturn(java.util.Optional.of(
+                            ProductionBatch.builder().id(BATCH_ID).factoryId(FACTORY_ID).build()));
 
             WorkReportResponse resp = service.submitReport(FACTORY_ID, WORKER_ID, req);
 
@@ -156,7 +164,9 @@ class WorkReportingServiceImplTest {
                             eq(FACTORY_ID), eq(WORKER_ID), eq(BATCH_ID), eq(REPORT_TYPE), cutoffCaptor.capture()))
                     .thenReturn(false);
             when(reportRepository.save(any(ProductionReport.class))).thenReturn(saved);
-            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(java.util.Optional.empty());
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                    .thenReturn(java.util.Optional.of(
+                            ProductionBatch.builder().id(BATCH_ID).factoryId(FACTORY_ID).build()));
 
             service.submitReport(FACTORY_ID, WORKER_ID, req);
 
@@ -173,6 +183,23 @@ class WorkReportingServiceImplTest {
             verify(reportRepository, never())
                     .existsByFactoryIdAndWorkerIdAndBatchIdAndReportTypeAndReportDateAndDeletedAtIsNull(
                             anyString(), anyLong(), anyLong(), anyString(), any(LocalDate.class));
+        }
+
+        @Test
+        @DisplayName("UT-WR-B05: 跨租户 batchId (别厂批次) → 404, 不持久化报工")
+        void submitReport_crossTenantBatch_throws404() {
+            WorkReportSubmitRequest req = validRequest();
+            // batchId 不属于当前工厂 → findByIdAndFactoryId 返 empty → guard 抛 EntityNotFound(404)
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                    .thenReturn(java.util.Optional.empty());
+
+            com.cretas.aims.exception.EntityNotFoundException ex = assertThrows(
+                    com.cretas.aims.exception.EntityNotFoundException.class,
+                    () -> service.submitReport(FACTORY_ID, WORKER_ID, req));
+            assertTrue(ex.getMessage().contains("不属于当前工厂") || ex.getMessage().contains("不存在"),
+                    "应提示批次不存在/不属于当前工厂, 实际: " + ex.getMessage());
+            // 跨租户报工不得持久化任何行
+            verify(reportRepository, never()).save(any(ProductionReport.class));
         }
 
         @Test

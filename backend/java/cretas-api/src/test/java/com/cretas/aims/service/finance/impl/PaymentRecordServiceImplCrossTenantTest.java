@@ -66,4 +66,35 @@ class PaymentRecordServiceImplCrossTenantTest {
         assertEquals(403, ex.getCode());
         verify(paymentRecordRepository, never()).save(any());
     }
+
+    /**
+     * 防呆 R4 (edge-case 审计 2026-06-24): 5min 窗口内对同 SO/同金额 重复录入收款 → 409, 不再 save。
+     * 防资金双计入 SO paidAmount。
+     */
+    @Test
+    void recordPayment_recentDuplicate_throws409_andDoesNotSave() {
+        com.cretas.aims.entity.inventory.SalesOrder so = new com.cretas.aims.entity.inventory.SalesOrder();
+        so.setId("so-1");
+        so.setFactoryId("F001");
+        so.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
+        when(salesOrderRepository.findById("so-1")).thenReturn(Optional.of(so));
+
+        PaymentRecord existing = new PaymentRecord();
+        existing.setId("pay-existing");
+        existing.setPaymentNumber("PR-EXIST");
+        existing.setAmount(new java.math.BigDecimal("100.00"));
+        existing.setStatus(com.cretas.aims.entity.enums.PaymentRecordStatus.PENDING);
+        when(paymentRecordRepository.findRecentDuplicatePayments(
+                org.mockito.ArgumentMatchers.eq("F001"), org.mockito.ArgumentMatchers.eq("so-1"),
+                org.mockito.ArgumentMatchers.eq(new java.math.BigDecimal("100.00")),
+                org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class)))
+                .thenReturn(java.util.List.of(existing));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.recordPayment("F001", "so-1", new java.math.BigDecimal("100.00"),
+                        com.cretas.aims.entity.enums.PaymentMethod.BANK_TRANSFER, null,
+                        "REF", null, 42L, null));
+        assertEquals(409, ex.getCode());
+        verify(paymentRecordRepository, never()).save(any());
+    }
 }

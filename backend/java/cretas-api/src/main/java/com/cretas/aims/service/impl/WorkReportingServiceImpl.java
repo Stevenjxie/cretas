@@ -65,6 +65,15 @@ public class WorkReportingServiceImpl {
                     .withHint("请选择参与报工的工人").withHintTarget("workerIds");
         }
 
+        // 跨租户校验 (edge-case 审计 2026-06-24 抓): batchId 须属于当前工厂, 否则别厂 batchId 会被
+        // 接受并持久化一条跨租户关联的报工行 + 返 200 (虽 updateBatchActualQuantity 有 findByIdAndFactoryId
+        // 防住别厂批次产量被改, 但仍产生垃圾行+误导成功)。提前校验 → 404, 与项目跨租户红线一致。
+        if (request.getBatchId() != null) {
+            productionBatchRepository.findByIdAndFactoryId(request.getBatchId(), factoryId)
+                    .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
+                            "生产批次不存在或不属于当前工厂: " + request.getBatchId()));
+        }
+
         // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
         // 客户张权要"累加式分时段报工"(每小时报一次后台累加), 旧的全天去重把累加封死。
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
