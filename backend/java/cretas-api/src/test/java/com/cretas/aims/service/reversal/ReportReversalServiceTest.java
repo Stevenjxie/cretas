@@ -366,6 +366,41 @@ class ReportReversalServiceTest {
         }
 
         @Test
+        @DisplayName("跨租户: 别厂调用方审批本厂撤回 → 403, 不写库 (R2 跨租户校验)")
+        void approve_crossTenant_throws403_andDoesNotSave() {
+            // 撤回日志属于 FACTORY_ID(F006), 调用方为 OTHER_FACTORY → 跨租户拒绝。
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+
+            assertThatThrownBy(() -> service.approveReversal("OTHER_FACTORY", LOG_ID, 99L))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getCode())
+                    .isEqualTo(403);
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("跨租户: 别厂调用方驳回本厂撤回 → 403, 不写库 (R2 跨租户校验)")
+        void reject_crossTenant_throws403_andDoesNotSave() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+
+            assertThatThrownBy(() -> service.rejectReversal("OTHER_FACTORY", LOG_ID, 99L, "越权驳回"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getCode())
+                    .isEqualTo(403);
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
         @DisplayName("reject PENDING → status=REJECTED 被保存")
         void reject_pending_savesRejected() {
             ReportReversalLog pending = ReportReversalLog.builder()

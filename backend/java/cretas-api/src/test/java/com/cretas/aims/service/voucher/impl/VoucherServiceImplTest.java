@@ -210,6 +210,24 @@ class VoucherServiceImplTest {
     }
 
     @Test
+    void postRejectsCrossTenant() {
+        // 跨租户: F002 调用者过账 F001 的凭证 → findByIdAndFactoryId 命中不到 → EntityNotFoundException, 不写库。
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F002")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.post("F002", "v-1", 42L));
+        verify(voucherRepo, never()).save(any());
+    }
+
+    @Test
+    void voidVoucherRejectsCrossTenant() {
+        // 跨租户: F002 调用者作废 F001 的凭证 → findByIdAndFactoryId 命中不到 → EntityNotFoundException, 不写库。
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F002")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.voidVoucher("F002", "v-1", "越权作废", 42L));
+        verify(voucherRepo, never()).save(any());
+    }
+
+    @Test
     void voidVoucherDraftSetsVoidStatus() {
         // DRAFT 凭证未过账, 直接置 VOID (向后兼容, 无需红字冲销)。
         Voucher v = Voucher.builder().id("v-1").factoryId("F001").status(VoucherStatus.DRAFT).description("foo").build();

@@ -1554,7 +1554,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         SalesOrder so = salesOrderRepository.findById(salesOrderId)
                 .orElseThrow(() -> new ResourceNotFoundException("SalesOrder", "id", salesOrderId));
         if (!factoryId.equals(so.getFactoryId())) {
-            throw new BusinessException("403: 无权访问此销售订单");
+            throw new BusinessException(403, "无权访问此销售订单");
         }
 
         // 2. 加载 SO 行项目
@@ -1640,7 +1640,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .orElseThrow(() -> new ResourceNotFoundException("SalesOrder", "id", soId));
             // 多租户隔离: 任一 SO 不属本厂 → 403 (与单 SO 行为一致).
             if (!factoryId.equals(so.getFactoryId())) {
-                throw new BusinessException("403: 无权访问此销售订单 " + soId);
+                throw new BusinessException(403, "无权访问此销售订单 " + soId);
             }
 
             orderedIds.add(soId);

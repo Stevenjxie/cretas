@@ -48,6 +48,20 @@ public class StandardCostServiceImpl implements StandardCostService {
     private final BomRecipeService bomRecipeService;
     private final QuotationTaskRepository quotationTaskRepository;
 
+    /**
+     * 可选注入: 统一单位换算 (R13 / #7 drift sweep, 2026-06-22).
+     *
+     * <p>消除本类原 {@link #toKilograms} 本地硬编码 g/kg switch 的 drift —
+     * 委托 {@link com.cretas.aims.service.UnitConversionService#toKg} 让斤/吨/mg
+     * 也能折算到 kg (与 BOM 成本点 R13 同源)。
+     *
+     * <p>{@code @Autowired(required = false)} + null fallback: 单测旧构造器
+     * (2-arg @RequiredArgsConstructor) 不传时退化为本地 g/kg switch (旧行为不崩),
+     * 与 {@code BomServiceImpl} R13 一致。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
     @Override
     @Transactional(readOnly = true)
     public StandardUnitCost resolveStandardUnitCost(String factoryId, String productTypeId) {
@@ -186,9 +200,21 @@ public class StandardCostServiceImpl implements StandardCostService {
     /**
      * 把 BOM 单位成品产量折算到 kg.
      *
-     * @return kg 值; 单位非 g/kg (个/件/...) 时返 null (无法折算)
+     * <p>#7 drift sweep (2026-06-22): 优先委托 {@link com.cretas.aims.service.UnitConversionService#toKg}
+     * (统一权威表, 多认斤/吨/mg 等重量单位); UnitConversionService 缺失 (旧 2-arg
+     * 构造器单测) 时回退本地 g/kg switch (旧行为不变, 不崩)。
+     *
+     * <p>g/kg/克/千克/公斤 现有换算结果与旧 switch 完全一致 (1g=0.001kg / kg 透传);
+     * 仅新增 斤(0.5kg)/吨(1000kg)/mg(0.000001kg) 的折算能力。
+     *
+     * @return kg 值; 单位非重量 (个/件/ml/...) 时返 null (无法折算)
      */
     private BigDecimal toKilograms(BigDecimal outputQtyPerUnit, String outputUnit) {
+        // 优先委托统一换算服务 (消除 drift, 多认斤/吨/mg).
+        if (unitConversionService != null) {
+            return unitConversionService.toKg(outputQtyPerUnit, outputUnit);
+        }
+        // Fallback: UnitConversionService 未注入 (旧单测) → 本地 g/kg switch (旧行为).
         String unit = outputUnit == null ? "" : outputUnit.trim().toLowerCase();
         switch (unit) {
             case "g":
