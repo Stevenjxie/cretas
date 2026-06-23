@@ -18,11 +18,13 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.recipe.ProductRecipe;
 import com.cretas.aims.entity.recipe.RecipeIngredient;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.config.FactoryCostSettings;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
@@ -68,8 +70,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
-    // TODO(SP-C): 替换为 factory_cost_settings 工时单价查询
-    // ¥26/工时 兜底 (SP-C 接 factory_cost_settings 后可精化)
+    // ¥26/工时 兜底 (当 factory_cost_settings 未配置时使用)
     private static final BigDecimal LABOR_RATE_DEFAULT = new BigDecimal("26");
 
     private final ProductionBatchRepository batchRepo;
@@ -81,6 +82,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final RecipeIngredientRepository ingredientRepo;
     private final ProductionReportRepository reportRepo;
     private final ObjectMapper objectMapper;
+    /** SP-C: 工时单价配置 repo; null-tolerant (兼容测试 @InjectMocks 未注入时走 fallback). */
+    private final FactoryCostSettingsRepository costSettingsRepository;
 
     // ─────────────────────────────────────────────────────────────
     // Public API
@@ -116,6 +119,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         int consumptionsWritten = 0;
         int wipMaterialized = 0;
         List<String> warnings = new ArrayList<>();
+
+        // SP-C: 工时单价 — 每次 recordChain 只查一次配置 (避免 N+1)
+        BigDecimal laborRate = resolveLaborRate(factoryId, warnings);
 
         // WH-WKS id for this factory (WIP 产出放车间仓)
         String wksWarehouseId = resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings);
@@ -187,7 +193,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 }
 
                 // 4d. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
-                BigDecimal laborCost = computeLaborCost(st);
+                BigDecimal laborCost = computeLaborCost(st, laborRate);
                 batchTotalCost = batchTotalCost.add(laborCost);
 
                 // 追踪产出量 (取最后一道有产出的 step)
@@ -409,7 +415,25 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // Labor cost calculation
     // ─────────────────────────────────────────────────────────────
 
-    private BigDecimal computeLaborCost(StepEntry st) {
+    /**
+     * SP-C: 从 factory_cost_settings 读工时单价; 未配置则回退 LABOR_RATE_DEFAULT 并记 warning.
+     * null-tolerant: costSettingsRepository 为 null 时(测试 @InjectMocks 未注入)直接走 fallback.
+     * public for testing — mirrors minutesBetween visibility pattern.
+     */
+    public BigDecimal resolveLaborRate(String factoryId, List<String> warnings) {
+        if (costSettingsRepository == null) {
+            return LABOR_RATE_DEFAULT;   // 测试环境 @InjectMocks 未注入 repo → 静默 fallback, 不 NPE
+        }
+        return costSettingsRepository.findByFactoryId(factoryId)
+                .map(FactoryCostSettings::getLaborHourlyRate)
+                .filter(r -> r != null && r.signum() > 0)
+                .orElseGet(() -> {
+                    warnings.add("工时单价未配置, 暂用默认 ¥" + LABOR_RATE_DEFAULT + "/工时, 请在工厂成本设置中配置");
+                    return LABOR_RATE_DEFAULT;
+                });
+    }
+
+    private BigDecimal computeLaborCost(StepEntry st, BigDecimal laborRate) {
         if (st.getLaborStartTime() == null || st.getLaborEndTime() == null
                 || st.getWorkerCount() == null || st.getWorkerCount() <= 0) {
             return BigDecimal.ZERO;
@@ -419,7 +443,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         BigDecimal workerHours = new BigDecimal(minutes)
                 .divide(new BigDecimal("60"), 4, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal(st.getWorkerCount()));
-        return workerHours.multiply(LABOR_RATE_DEFAULT).setScale(2, RoundingMode.HALF_UP);
+        return workerHours.multiply(laborRate).setScale(2, RoundingMode.HALF_UP);
     }
 
     /** Parse "HH:mm" → integer minutes. Handles overnight spans (end < start → +24h). */
