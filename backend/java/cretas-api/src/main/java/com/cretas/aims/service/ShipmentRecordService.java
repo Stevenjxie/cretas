@@ -45,6 +45,22 @@ public class ShipmentRecordService {
             } catch (com.cretas.aims.exception.BusinessException e) { throw e; }
             catch (Exception e) { log.warn("Canvas validation non-blocking: {}", e.getMessage()); }
         }
+        // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同 工厂/客户/数量/经手人 的出货 → 409。
+        // 键含 recordedBy (reviewer must-fix); 仅当 4 项齐备时校验, 误拦仅"同一经手人 60s 内对同客户出同量"(双击)。
+        if (shipment.getFactoryId() != null && shipment.getCustomerId() != null
+                && shipment.getQuantity() != null && shipment.getRecordedBy() != null) {
+            java.util.List<ShipmentRecord> dupes = shipmentRecordRepository.findRecentDuplicateShipments(
+                    shipment.getFactoryId(), shipment.getCustomerId(), shipment.getQuantity(),
+                    shipment.getRecordedBy(), java.time.LocalDateTime.now().minusSeconds(60));
+            if (!dupes.isEmpty()) {
+                ShipmentRecord existing = dupes.get(0);
+                throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                        "60 秒内已对该客户创建相同数量出货 (%s), 如确为另一单请稍候再建",
+                        existing.getShipmentNumber()))
+                        .withHint("如需查看已有出货记录请打开 " + existing.getShipmentNumber())
+                        .withHintTarget(existing.getId());
+            }
+        }
         if (shipment.getId() == null) {
             shipment.setId(UUID.randomUUID().toString());
         }

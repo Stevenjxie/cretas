@@ -28,6 +28,17 @@ public interface ShipmentRecordRepository extends JpaRepository<ShipmentRecord, 
     Page<ShipmentRecord> findByFactoryIdOrderByShipmentDateDesc(String factoryId, Pageable pageable);
 
     /**
+     * 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 窗口内同 工厂/客户/数量/经手人 的出货 → 视为重复点击。
+     * 键含 recordedBy (reviewer must-fix: 否则 customer+quantity 太宽, 会拦不同经手人对同客户出同量的合法分单)。
+     * 误拦仅"同一经手人 60s 内对同客户出完全相同数量"(几乎必是双击)。
+     */
+    @Query("SELECT s FROM ShipmentRecord s WHERE s.factoryId = ?1 AND s.customerId = ?2 "
+            + "AND s.quantity = ?3 AND s.recordedBy = ?4 AND s.deletedAt IS NULL "
+            + "AND s.createdAt >= ?5 ORDER BY s.createdAt DESC")
+    List<ShipmentRecord> findRecentDuplicateShipments(String factoryId, String customerId,
+            java.math.BigDecimal quantity, Long recordedBy, java.time.LocalDateTime cutoff);
+
+    /**
      * 根据工厂ID和状态查询出货记录
      */
     Page<ShipmentRecord> findByFactoryIdAndStatusOrderByShipmentDateDesc(

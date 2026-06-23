@@ -203,6 +203,23 @@ class WorkReportingServiceImplTest {
         }
 
         @Test
+        @DisplayName("UT-WR-B06: PLANNED 批次报工 → 409 请先开始生产, 不持久化")
+        void submitReport_plannedBatch_throws409() {
+            WorkReportSubmitRequest req = validRequest();
+            when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                    .thenReturn(java.util.Optional.of(ProductionBatch.builder()
+                            .id(BATCH_ID).factoryId(FACTORY_ID)
+                            .status(com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED).build()));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.submitReport(FACTORY_ID, WORKER_ID, req));
+            assertEquals(409, ex.getCode());
+            assertTrue(ex.getMessage().contains("尚未开始生产"),
+                    "应提示批次未开工, 实际: " + ex.getMessage());
+            verify(reportRepository, never()).save(any(ProductionReport.class));
+        }
+
+        @Test
         @DisplayName("UT-WR-B04: batchId 为空 → 走 BatchIdIsNull 的 CreatedAtAfter 分支")
         void submitReport_nullBatch_usesNullBranchCreatedAtAfter() {
             WorkReportSubmitRequest req = validRequest();
