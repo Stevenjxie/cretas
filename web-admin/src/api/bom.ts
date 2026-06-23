@@ -2,6 +2,7 @@
  * BOM API — includes:
  *   - BOM Recipe lifecycle (BomRecipeController): activate DRAFT → ACTIVE
  *   - BOM Yield Estimate (BomYieldEstimateController): Phase B/C endpoints
+ *   - BOM Seasoning (BomSeasoningController): 调料配方 folded into BOM subsystem
  *
  * Base URL is /api/mobile (set in request.ts baseURL).
  * Endpoint prefix: /{factoryId}/bom/recipes/{recipeId}/...
@@ -233,4 +234,97 @@ export const bomYieldEstimateApi = {
     items: RecalculateApplyItem[],
   ) =>
     post<RecalculateApplyResponse>(`${base(factoryId)}/recalculate-apply`, items),
+};
+
+// =========================================================================
+// BOM Seasoning — 调料配方 (注射+熟制) folded into BOM subsystem
+// Endpoints:  /{factoryId}/bom/recipes/by-product/{productTypeId}/seasoning
+//             /{factoryId}/bom/recipes/{recipeId}/seasoning  (GET + PUT)
+//             /{factoryId}/bom/recipes/{recipeId}/clone       (POST)
+// =========================================================================
+
+/** One seasoning ingredient item (mirrors BomSeasoningItem entity) */
+export interface BomSeasoningItem {
+  id?: string | null;
+  recipeId?: string | null;
+  factoryId?: string | null;
+  /** INJECTION = 注射段; COOKING = 熟制段 */
+  section: 'INJECTION' | 'COOKING';
+  seq: number;
+  name: string;
+  dosagePerKgG: number | null;
+  priceSource1: number | null;
+  priceSource2: number | null;
+  /** false for 老汤 (老汤不计入调料成本) */
+  countInSeasoning: boolean;
+  remark?: string | null;
+}
+
+/** Full seasoning response (mirrors BomSeasoningResponse) */
+export interface BomSeasoningResponse {
+  bomRecipeId: string;
+  productTypeId: string;
+  productName: string;
+  /** DRAFT = 可编辑; ACTIVE / ARCHIVED = 只读 */
+  status: BomRecipeStatus;
+  cookingPotBaseKg: number | null;
+  subsequentPotRatio: number | null;
+  injectionRate: number | null;
+  seasoningItems: BomSeasoningItem[];
+}
+
+/** Save request body for PUT /{recipeId}/seasoning */
+export interface BomSeasoningSaveRequest {
+  cookingPotBaseKg: number | null;
+  subsequentPotRatio: number | null;
+  injectionRate: number | null;
+  seasoningItems: Array<{
+    section: 'INJECTION' | 'COOKING';
+    seq: number;
+    name: string;
+    dosagePerKgG: number | null;
+    priceSource1: number | null;
+    priceSource2: number | null;
+    countInSeasoning: boolean;
+    remark?: string | null;
+  }>;
+}
+
+const seasoningBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
+
+export const bomSeasoningApi = {
+  /**
+   * 按产品类型加载当前 BOM 的调料配方。
+   * 若该产品尚未建 BOM，后端返回 404 { success:false, message:"产品未建 BOM 配方: ..." }。
+   */
+  getByProduct: (factoryId: string, productTypeId: string) =>
+    get<BomSeasoningResponse>(
+      `${seasoningBase(factoryId)}/by-product/${productTypeId}/seasoning`,
+    ),
+
+  /** 按 recipeId 加载调料配方 */
+  getById: (factoryId: string, recipeId: string) =>
+    get<BomSeasoningResponse>(
+      `${seasoningBase(factoryId)}/${recipeId}/seasoning`,
+    ),
+
+  /**
+   * 保存调料配方（全量替换）。
+   * 后端要求 BOM 为 DRAFT 状态，否则抛业务异常。
+   */
+  save: (factoryId: string, recipeId: string, payload: BomSeasoningSaveRequest) =>
+    put<BomSeasoningResponse>(
+      `${seasoningBase(factoryId)}/${recipeId}/seasoning`,
+      payload,
+    ),
+
+  /**
+   * 克隆当前 BOM 为新 DRAFT 版本（POST /{recipeId}/clone）。
+   * 返回新 BomRecipe（含新 recipeId，status=DRAFT）。
+   */
+  clone: (factoryId: string, recipeId: string) =>
+    post<BomRecipeSummary>(
+      `${seasoningBase(factoryId)}/${recipeId}/clone`,
+      null,
+    ),
 };
