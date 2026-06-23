@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -60,5 +61,19 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestParam @NotBlank String process) {
         return ApiResponse.success(service.getInventory(factoryId, planId, process));
+    }
+
+    /**
+     * SP-F Task 2.2: 读回指定工序下已保存的行列表 (供前端电子表格重载)。
+     *
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/rows?process=xiuyou
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/rows")
+    public ApiResponse<List<ProcessSheetRowView>> getRows(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @RequestParam @NotBlank String process) {
+        return ApiResponse.success(service.getRows(factoryId, planId, process));
     }
 }

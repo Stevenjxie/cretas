@@ -7,6 +7,7 @@ import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
@@ -345,6 +346,38 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     nz(wip.getUnitPrice())));
         }
         return result;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 已保存行列表读取 (Task 2.2)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * SP-F Task 2.2: 读回指定工序下已保存的行列表。
+     *
+     * <p>查询 factory-scoped 🔒 (rowRepo 三键 factory+plan+processCode); 同时返回 SAVED 与 DRAFT 行。
+     * row_payload 经 objectMapper 反序列化为 ProcessSheetRowRequest, 序列化失败 → 500。
+     */
+    @Override
+    public List<ProcessSheetRowView> getRows(String factoryId, String planId, String processCode) {
+        return rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode)
+                .stream()
+                .map(row -> new ProcessSheetRowView(
+                        row.getClientRowId(),
+                        row.getBatchNumber(),
+                        row.getBatchId(),
+                        row.getRowStatus(),
+                        row.getBatchId() != null,
+                        deserializePayload(row.getRowPayload())))
+                .toList();
+    }
+
+    private ProcessSheetRowRequest deserializePayload(String json) {
+        try {
+            return objectMapper.readValue(json, ProcessSheetRowRequest.class);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(500, "行数据反序列化失败: " + e.getMessage());
+        }
     }
 
     /**

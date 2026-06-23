@@ -3,6 +3,7 @@ package com.cretas.aims.service.processentry;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 
 import java.util.List;
 
@@ -63,4 +64,17 @@ public interface ProcessSheetService {
      * @return 该工序下所有已物化行的库存视图列表 (DRAFT 行跳过)
      */
     List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId, String processCode);
+
+    /**
+     * SP-F Task 2.2: 读回指定工序下已保存的行列表 (供前端电子表格重载)。
+     *
+     * <p>同时返回 SAVED (已物化) 和 DRAFT (未物化) 行，包含原始录入 payload 的反序列化结果，
+     * 可直接回填前端表单。查询 factory-scoped 🔒 (rowRepo 三键过滤)。
+     *
+     * @param factoryId   工厂 ID
+     * @param planId      生产计划 ID
+     * @param processCode 工序代码 (e.g. "xiuyou")
+     * @return 该工序下所有行的视图列表 (含 DRAFT)
+     */
+    List<ProcessSheetRowView> getRows(String factoryId, String planId, String processCode);
 }
