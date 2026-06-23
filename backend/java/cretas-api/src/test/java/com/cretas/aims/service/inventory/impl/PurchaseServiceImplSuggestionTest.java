@@ -179,7 +179,9 @@ class PurchaseServiceImplSuggestionTest {
         when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(so));
         assertThatThrownBy(() -> service.generatePurchaseSuggestion(FACTORY, SO_ID))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("403");
+                .hasMessageContaining("无权")
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(403);
     }
 
     @Test
