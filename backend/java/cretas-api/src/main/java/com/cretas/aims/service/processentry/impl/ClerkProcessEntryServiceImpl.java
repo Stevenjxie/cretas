@@ -1,11 +1,14 @@
 package com.cretas.aims.service.processentry.impl;
 
+import com.cretas.aims.dto.processentry.MaterializeContext;
+import com.cretas.aims.dto.processentry.MaterializedBatch;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.BatchEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.RawInput;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
+import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
@@ -137,19 +140,16 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         String wksWarehouseId = resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings);
 
         for (BatchEntry be : ordered) {
-            // 3. 建 ProductionBatch (IN_PROGRESS — 文员录入意味着生产已完成)
-            ProductionBatch batch = createProductionBatch(factoryId, planId, be, operatorId);
-            batchIdsByKey.put(be.getClientBatchKey(), batch.getId());
-            batchNumbersByKey.put(be.getClientBatchKey(), batch.getBatchNumber());
-
-            BigDecimal batchTotalCost = BigDecimal.ZERO;
-            BigDecimal lastOutputQty = BigDecimal.ZERO;
+            // 3. 上游边解析 (CALLER 职责) —— recordChain 用 in-memory wipMbIdByKey map 解析混锅来源.
+            //    新的逐行 caller 将改用 PERSISTED 批次号解析, 故 resolution 留在 caller, 不进 materializeBatch.
+            //    保留拓扑预排序 (WIP 先于成品), 使 map 按序填充, 混锅来源已物化.
+            List<ResolvedEdge> edges = new ArrayList<>();
             // Fix: WIP MaterialBatch must carry a raw_material_types FK, not a product_types id.
-            // Capture the first available raw materialTypeId from this batch's lineage.
+            // Capture the first available raw materialTypeId from this batch's lineage (step order).
             String firstRawMaterialTypeId = null;
 
             for (StepEntry st : be.getSteps()) {
-                // 4a. 原料消耗 (首道领料)
+                // 4a. 原料边 (首道领料) —— 抓取 factory-scoped raw MaterialBatch.
                 if (st.getRawMaterialInputs() != null) {
                     for (RawInput ri : st.getRawMaterialInputs()) {
                         MaterialBatch rawMb = materialBatchRepo.findByIdAndFactoryId(
@@ -159,18 +159,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         if (firstRawMaterialTypeId == null && rawMb.getMaterialTypeId() != null) {
                             firstRawMaterialTypeId = rawMb.getMaterialTypeId();
                         }
-                        BigDecimal price = nz(rawMb.getUnitPrice());
-                        BigDecimal qty = nz(ri.getQuantity());
-                        BigDecimal lineCost = price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
-                        writeConsumption(factoryId, planId, batch.getId(),
-                                rawMb.getId(), rawMb.getMaterialTypeId(),
-                                qty, price, lineCost, "RAW_MATERIAL", operatorId);
-                        batchTotalCost = batchTotalCost.add(lineCost);
-                        consumptionsWritten++;
+                        edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
                     }
                 }
 
-                // 4b. 混锅来源消耗 (SEMI_FINISHED): feedKg × 上游单价
+                // 4b. 混锅来源边 (SEMI_FINISHED) —— 经 in-memory map 解析上游 WIP MaterialBatch.
                 if (st.getUpstreamSources() != null) {
                     for (UpstreamSource us : st.getUpstreamSources()) {
                         String srcKey = us.getSourceClientBatchKey();
@@ -186,60 +179,28 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         if (firstRawMaterialTypeId == null && srcMb.getMaterialTypeId() != null) {
                             firstRawMaterialTypeId = srcMb.getMaterialTypeId();
                         }
-                        BigDecimal feedKg = nz(us.getFeedQuantityKg());
-                        BigDecimal upstreamUnitPrice = nz(srcMb.getUnitPrice());
-                        BigDecimal edgeCost = upstreamUnitPrice.multiply(feedKg)
-                                .setScale(2, RoundingMode.HALF_UP);
-                        writeConsumption(factoryId, planId, batch.getId(),
-                                srcMbId, srcMb.getMaterialTypeId(),
-                                feedKg, upstreamUnitPrice, edgeCost, "SEMI_FINISHED", operatorId);
-                        batchTotalCost = batchTotalCost.add(edgeCost);
-                        consumptionsWritten++;
+                        edges.add(new ResolvedEdge(srcMb, nz(us.getFeedQuantityKg()), "SEMI_FINISHED"));
                     }
-                }
-
-                // 4c. 调料成本 (熟制道，使用 RecipeCostCalculator)
-                // 写 ProductionReport 行 (costCategory=SEASONING)，让 OrderCostBreakdownService
-                // 通过 yieldReportService.getYield → steps[i].materialCost 读取。
-                // 禁止写 SEASONING_VIRTUAL MaterialConsumption：traceCost() 只递归真实 MaterialBatch，
-                // 虚拟占位符会误入 raw 成本桶导致分桶错乱。
-                if (isSeasoningStep(st)) {
-                    BigDecimal seasoningCost = computeSeasoningCost(factoryId, be.getProductTypeId(), st, warnings);
-                    if (seasoningCost.signum() > 0) {
-                        writeSeasoningReport(factoryId, batch.getId(), st, seasoningCost, operatorId);
-                        batchTotalCost = batchTotalCost.add(seasoningCost);
-                    }
-                } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
-                    // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
-                    // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
-                    String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
-                    warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
-                            " 调料成本未计入 — 请配置工序成本类别");
-                }
-
-                // 4d. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
-                BigDecimal laborCost = computeLaborCost(st, laborRate);
-                batchTotalCost = batchTotalCost.add(laborCost);
-
-                // 追踪产出量 (取最后一道有产出的 step)
-                if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
-                    lastOutputQty = st.getOutputQuantity();
                 }
             }
 
-            // 5. 半成品批产出 → MaterialBatch(priced, PRODUCTION_BATCH 来源)
-            if (!be.isFinished() && lastOutputQty.signum() > 0) {
-                BigDecimal wipUnitPrice = batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0
-                        ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
-                        : BigDecimal.ZERO;
-                String wipMbId = createWipMaterialBatch(
-                        factoryId, batch, firstRawMaterialTypeId,
-                        lastOutputQty, wipUnitPrice, wksWarehouseId, operatorId);
-                wipMbIdByKey.put(be.getClientBatchKey(), wipMbId);
+            // 4. 物化 WRITE 逻辑 (共享 seam) —— 建批 + 写消耗 + 调料/人工 + WIP 产出.
+            MaterializeContext ctx = new MaterializeContext(
+                    factoryId, be.isFinished() ? planId : null, be.getProductTypeId(),
+                    be.getBatchNumber(), be.isFinished(), laborRate, wksWarehouseId,
+                    firstRawMaterialTypeId, operatorId);
+
+            MaterializedBatch mat = materializeBatch(ctx, be.getSteps(), edges, warnings);
+
+            batchIdsByKey.put(be.getClientBatchKey(), mat.getProductionBatchId());
+            batchNumbersByKey.put(be.getClientBatchKey(), mat.getBatchNumber());
+            consumptionsWritten += mat.getConsumptionsWritten();
+            if (mat.getWipMaterialBatchId() != null) {
+                wipMbIdByKey.put(be.getClientBatchKey(), mat.getWipMaterialBatchId());
                 wipMaterialized++;
             }
             if (be.isFinished()) {
-                finishedBatchNumber = batch.getBatchNumber();
+                finishedBatchNumber = mat.getBatchNumber();
             }
         }
 
@@ -260,28 +221,107 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Shared materialization seam (SP-F Task 1.3 KEYSTONE)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 物化单批 WRITE 逻辑 —— edges/ctx 全部由 caller 预解析 (上游/仓库/工时单价 hoisted out)。
+     * 见接口 Javadoc。recordChain 与未来逐行 caller 共享此方法; 后者用持久化批次号解析上游边。
+     */
+    @Override
+    public MaterializedBatch materializeBatch(MaterializeContext ctx,
+                                              List<StepEntry> steps,
+                                              List<ResolvedEdge> edges,
+                                              List<String> warnings) {
+        // 1. 建 ProductionBatch (IN_PROGRESS — 文员录入意味着生产已完成)
+        ProductionBatch batch = createProductionBatch(ctx, steps);
+
+        BigDecimal batchTotalCost = BigDecimal.ZERO;
+        int consumptionsWritten = 0;
+
+        // 2. 写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
+        //    ⛔ 不访问任何 in-memory map —— edges 是唯一上游输入.
+        for (ResolvedEdge e : edges) {
+            MaterialBatch src = e.getSourceBatch();
+            BigDecimal unitPrice = nz(src.getUnitPrice());
+            BigDecimal qty = nz(e.getFeedQuantityKg());
+            BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
+            writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), batch.getId(),
+                    src.getId(), src.getMaterialTypeId(),
+                    qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
+            batchTotalCost = batchTotalCost.add(edgeCost);
+            consumptionsWritten++;
+        }
+
+        // 3. 调料 + 人工 + 产出量 —— 逐工序计算 (上游消耗已由 edges 替代).
+        BigDecimal lastOutputQty = BigDecimal.ZERO;
+        for (StepEntry st : steps) {
+            // 3a. 调料成本 (熟制道，使用 RecipeCostCalculator)
+            // 写 ProductionReport 行 (costCategory=SEASONING)，让 OrderCostBreakdownService
+            // 通过 yieldReportService.getYield → steps[i].materialCost 读取。
+            // 禁止写 SEASONING_VIRTUAL MaterialConsumption：traceCost() 只递归真实 MaterialBatch，
+            // 虚拟占位符会误入 raw 成本桶导致分桶错乱。
+            if (isSeasoningStep(st)) {
+                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
+                if (seasoningCost.signum() > 0) {
+                    writeSeasoningReport(ctx.getFactoryId(), batch.getId(), st, seasoningCost, ctx.getUserId());
+                    batchTotalCost = batchTotalCost.add(seasoningCost);
+                }
+            } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+                // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
+                // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
+                String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
+                warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
+                        " 调料成本未计入 — 请配置工序成本类别");
+            }
+
+            // 3b. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
+            BigDecimal laborCost = computeLaborCost(st, ctx.getLaborRate());
+            batchTotalCost = batchTotalCost.add(laborCost);
+
+            // 追踪产出量 (取最后一道有产出的 step)
+            if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
+                lastOutputQty = st.getOutputQuantity();
+            }
+        }
+
+        // 4. 半成品批产出 → MaterialBatch(priced, PRODUCTION_BATCH 来源)
+        String wipMbId = null;
+        if (!ctx.isFinished() && lastOutputQty.signum() > 0) {
+            BigDecimal wipUnitPrice = batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0
+                    ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            wipMbId = createWipMaterialBatch(
+                    ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
+                    lastOutputQty, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
+        }
+
+        return new MaterializedBatch(batch.getId(), batch.getBatchNumber(),
+                wipMbId, batchTotalCost, consumptionsWritten);
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Batch creation
     // ─────────────────────────────────────────────────────────────
 
-    private ProductionBatch createProductionBatch(String factoryId, String planId,
-                                                   BatchEntry be, Long operatorId) {
-        String batchNumber = be.getBatchNumber() != null && !be.getBatchNumber().isBlank()
-                ? be.getBatchNumber()
-                : generateBatchNumber(factoryId, be.isFinished());
+    private ProductionBatch createProductionBatch(MaterializeContext ctx, List<StepEntry> steps) {
+        String batchNumber = ctx.getBatchNumber() != null && !ctx.getBatchNumber().isBlank()
+                ? ctx.getBatchNumber()
+                : generateBatchNumber(ctx.getFactoryId(), ctx.isFinished());
 
         // Ensure uniqueness; DB UNIQUE(batch_number) 兜底并发
-        if (batchRepo.existsByFactoryIdAndBatchNumber(factoryId, batchNumber)) {
+        if (batchRepo.existsByFactoryIdAndBatchNumber(ctx.getFactoryId(), batchNumber)) {
             batchNumber = batchNumber + "-" + (System.currentTimeMillis() % 10000);
         }
 
         // Determine planned / actual quantity from last step output
-        Optional<BigDecimal> lastOutputOpt = be.getSteps() == null ? Optional.empty()
-                : be.getSteps().stream()
+        Optional<BigDecimal> lastOutputOpt = steps == null ? Optional.empty()
+                : steps.stream()
                 .filter(s -> s.getOutputQuantity() != null && s.getOutputQuantity().signum() > 0)
                 .reduce((a, b) -> b)  // last step
                 .map(StepEntry::getOutputQuantity);
         BigDecimal qty;
-        if (be.isFinished()) {
+        if (ctx.isFinished()) {
             // For FINISHED batches, missing output quantity is an error — not a silent fallback
             qty = lastOutputOpt.orElseThrow(() ->
                     new BusinessException(400, "成品批次无有效产出数量, 无法核算单盒成本"));
@@ -290,20 +330,21 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
 
         ProductionBatch batch = new ProductionBatch();
-        batch.setFactoryId(factoryId);
+        batch.setFactoryId(ctx.getFactoryId());
         // Only link FINISHED batches to the plan so OrderCostBreakdownService.compute()
         // doesn't double-count WIP batch raw costs (WIP costs are already traced via
         // traceCost() when the finished batch's consumption is followed upstream).
-        batch.setProductionPlanId(be.isFinished() ? planId : null);
-        batch.setProductTypeId(be.getProductTypeId());
+        // NOTE: ctx.planId is already resolved by caller to (finished ? planId : null).
+        batch.setProductionPlanId(ctx.getPlanId());
+        batch.setProductTypeId(ctx.getProductTypeId());
         batch.setBatchNumber(batchNumber);
         batch.setQuantity(qty);
-        batch.setUnit(be.getSteps() == null ? "kg"
-                : be.getSteps().stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
+        batch.setUnit(steps == null ? "kg"
+                : steps.stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
         // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
         // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
-        batch.setBatchType(be.isFinished() ? "REGULAR" : "CLERK_WIP");
+        batch.setBatchType(ctx.isFinished() ? "REGULAR" : "CLERK_WIP");
         batch.setCreatedAt(LocalDateTime.now());
 
         return batchRepo.save(batch);

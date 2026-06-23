@@ -1,7 +1,13 @@
 package com.cretas.aims.service.processentry;
 
+import com.cretas.aims.dto.processentry.MaterializeContext;
+import com.cretas.aims.dto.processentry.MaterializedBatch;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
+import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
+import com.cretas.aims.dto.processentry.ResolvedEdge;
+
+import java.util.List;
 
 /**
  * 文员逐道录入服务接口. SP-B1 Task 3.
@@ -22,4 +28,25 @@ public interface ClerkProcessEntryService {
      */
     ProcessChainEntryResult recordChain(String factoryId, String planId,
                                         ProcessChainEntryRequest req, Long operatorId);
+
+    /**
+     * 物化单个批次的 WRITE 逻辑 (SP-F Task 1.3 KEYSTONE seam)。
+     *
+     * <p>共享给 {@code recordChain} 和未来的逐行 caller (ProcessSheetService)。
+     * <b>不做任何上游/仓库/工时单价 resolution</b> —— edges 与 ctx 全部已由 caller 预解析,
+     * 这样不同 caller 可用不同上游解析策略 (in-memory map vs 持久化批次号)。
+     *
+     * <p>职责: 建 ProductionBatch + 写 MaterialConsumption(每条 edge) +
+     * SEASONING ProductionReport + 人工成本累加 + WIP MaterialBatch 产出。
+     *
+     * @param ctx      单批上下文 (factoryId/planId/finished/laborRate/warehouseId/rawMaterialTypeId 等已预解析)
+     * @param steps    本批工序列表 (供调料/人工/产出量计算; 上游消耗已由 edges 替代, 不在此重新解析)
+     * @param edges    已解析的上游消耗边 (RAW + SEMI_FINISHED), 是本方法唯一的上游消耗输入
+     * @param warnings 警告收集器 (调料配方缺失/未识别调味工序 等), 由 caller 提供并汇总
+     * @return 物化结果 (批次 id/号 + WIP MaterialBatch id + 总成本 + 消耗行数)
+     */
+    MaterializedBatch materializeBatch(MaterializeContext ctx,
+                                       List<StepEntry> steps,
+                                       List<ResolvedEdge> edges,
+                                       List<String> warnings);
 }
