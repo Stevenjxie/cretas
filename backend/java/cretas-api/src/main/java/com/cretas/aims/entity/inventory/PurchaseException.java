@@ -136,4 +136,22 @@ public class PurchaseException extends BaseEntity {
      */
     @Column(name = "owner_name", length = 100)
     private String ownerName;
+
+    /**
+     * D-BUG3：RETURN_OVER 决策时生成的采购退货单（ReturnOrder）ID。
+     * null = 尚未生成退货单。作为幂等键：RETURN_OVER 重复决策时，
+     * 若已有 returnOrderId 则不重复创建退货单。
+     */
+    @Column(name = "return_order_id", length = 191)
+    private String returnOrderId;
+
+    /**
+     * HIGH (并发幂等): 乐观锁版本号。
+     * 防止两个并发 decideException(RETURN_OVER) 都读到 returnOrderId==null + PENDING
+     * 各自创建一张退货单 (重复供应商退货)。两并发事务读同 version → 一个 save 成功 (version+1),
+     * 另一个 save 抛 OptimisticLockingFailureException 回滚 → 只生成一张退货单。
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
 }

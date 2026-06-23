@@ -1,12 +1,14 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.entity.MaterialBatch;
-import com.cretas.aims.entity.enums.InboundType;
+import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.ReturnOrderItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
@@ -31,37 +33,36 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Issue #795 — PURCHASE_RETURN with-goods 不良品入库.
+ * BLOCKER 2 (取代 issue #795 反向逻辑): PURCHASE_RETURN with-goods 完成 = 从现有库存【扣减】
+ * (货退回供应商, 物理离厂), 而非创建新 DEFECTIVE 批次 (那是 SALES_RETURN 加库存的语义)。
  *
- * <p>Mirrors SALES_RETURN with-goods test scope (Phase C, issue #571). Verifies:
+ * <p>背景: 超收量在采购收货时已加进库存 (createMaterialBatchFromReceiveItem 用全部收货量),
+ * 退货完成时若再创建一个新批次 = 账面双计 (130 + 30 = 160)。正确应扣回 30 → 100。
+ *
+ * <p>扣减镜像 {@code DisposalRecordService}: 增 usedQuantity (不减 receiptQuantity),
+ * 写 {@link MaterialBatchAdjustment} 负数留痕。库存不足 → 409 阻断完成 (fail-loud, 不扣成负)。
+ *
+ * <p>Verifies:
  * <ol>
- *   <li>PURCHASE_RETURN + withGoods=true + FINANCE_APPROVED → completeReturnOrder creates
- *       a {@link MaterialBatch} with status=DEFECTIVE for each item that has
- *       materialTypeId + quantity&gt;0.</li>
- *   <li>PURCHASE_RETURN + withGoods=false → no MaterialBatch created (refund-only
- *       path; AR/AP 冲减 already happened at approve, completion is a no-op for
- *       inventory).</li>
- *   <li>Rows missing materialTypeId or with zero quantity are skipped (no batch
- *       created) but other valid rows still create batches (defensive partial-write).</li>
- *   <li>SALES_RETURN regression — PURCHASE_RETURN handler does NOT fire for
- *       SALES_RETURN orders (mutual exclusion via else-if).</li>
- *   <li>materialBatchRepository null (legacy DI gap) → completion still succeeds,
- *       status flips to COMPLETED, only inventory creation is skipped.</li>
+ *   <li>PURCHASE_RETURN + withGoods=true + FINANCE_APPROVED → 从 FEFO 可用批次扣减,
+ *       净扣 = 退货量 (usedQuantity += qty), 写负数 MaterialBatchAdjustment, 不创建新批次。</li>
+ *   <li>库存不足 → 409, 退货单不 COMPLETED (fail-loud)。</li>
+ *   <li>跨批次 FEFO 扣减: 第一批扣空标 USED_UP, 余量从第二批扣。</li>
+ *   <li>PURCHASE_RETURN + withGoods=false → 无库存动作 (refund-only)。</li>
+ *   <li>SALES_RETURN regression: 仍走 FinishedGoodsBatch 加库存, 不碰 MaterialBatch 扣减。</li>
  * </ol>
  *
- * <p>Test pattern mirrors {@code SalesOrderFulfillmentWarehouseTest} — 4-arg
- * constructor with null + reflective injection of optional @Autowired fields
- * ({@code materialBatchRepository}, {@code warehouseResolver}).
- *
- * @since 2026-05-17 issue #795
+ * @since 2026-06-23 BLOCKER 2 (库存方向修复)
  */
-@DisplayName("Issue #795: PURCHASE_RETURN with-goods 不良品入库 (MaterialBatch DEFECTIVE)")
+@DisplayName("BLOCKER 2: PURCHASE_RETURN with-goods 库存扣减 (货退回供应商, 非加库存)")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class ReturnOrderPurchaseReturnDefectiveTest {
@@ -71,6 +72,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     @Mock private ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchRepository materialBatchRepository;
+    @Mock private MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
@@ -89,9 +91,9 @@ class ReturnOrderPurchaseReturnDefectiveTest {
                 arApService,
                 applicationEventPublisher);
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
+        ReflectionTestUtils.setField(service, "materialBatchAdjustmentRepository", materialBatchAdjustmentRepository);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
-        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn(WH_LOG);
     }
 
     // ===== helpers =====
@@ -116,10 +118,28 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     private ReturnOrderItem item(String materialTypeId, BigDecimal qty, String reason) {
         ReturnOrderItem it = new ReturnOrderItem();
         it.setMaterialTypeId(materialTypeId);
+        it.setItemName("猪大肠");
         it.setQuantity(qty);
         it.setUnitPrice(new BigDecimal("50.00"));
         it.setReason(reason);
         return it;
+    }
+
+    /** 构造一个可用批次 (receiptQuantity, usedQuantity=0, reservedQuantity=0 → currentQuantity=receipt)。 */
+    private MaterialBatch availableBatch(String id, String materialTypeId, BigDecimal receiptQty) {
+        MaterialBatch b = new MaterialBatch();
+        b.setId(id);
+        b.setFactoryId(FACTORY);
+        b.setBatchNumber("MT-" + id);
+        b.setMaterialTypeId(materialTypeId);
+        b.setReceiptQuantity(receiptQty);
+        b.setUsedQuantity(BigDecimal.ZERO);
+        b.setReservedQuantity(BigDecimal.ZERO);
+        b.setQuantityUnit("kg");
+        b.setUnitPrice(new BigDecimal("10.00"));
+        b.setWarehouseId(WH_LOG);
+        b.setStatus(MaterialBatchStatus.AVAILABLE);
+        return b;
     }
 
     private void stubFindAndSave(ReturnOrder order) {
@@ -130,11 +150,14 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     // ===== tests =====
 
     @Test
-    @DisplayName("PURCHASE_RETURN + withGoods=true: 创建 MaterialBatch status=DEFECTIVE in WH-LOG")
-    void purchaseReturnWithGoods_createsDefectiveMaterialBatch() {
-        List<ReturnOrderItem> items = new ArrayList<>();
-        items.add(item(MATERIAL_TYPE, new BigDecimal("10.0000"), "包装破损"));
-        items.add(item("MT-002", new BigDecimal("5.0000"), null));  // null reason → fall back to order.reason
+    @DisplayName("PURCHASE_RETURN + withGoods=true: 从 FEFO 批次扣减退货量 (usedQuantity += qty), 写负数留痕, 不创建新批次")
+    void purchaseReturnWithGoods_deductsFromExistingBatch_netDeduct() {
+        // 收货时已入库 130 (含超收 30), 退货 30 → 净扣 30 → currentQuantity 130→100。
+        MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("130.00"));
+        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+                .thenReturn(new ArrayList<>(List.of(batch)));
+
+        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
         ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
@@ -142,36 +165,27 @@ class ReturnOrderPurchaseReturnDefectiveTest {
 
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
 
-        ArgumentCaptor<MaterialBatch> captor = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepository, times(2)).save(captor.capture());
-        List<MaterialBatch> saved = captor.getAllValues();
+        // 净扣 30: usedQuantity 0 → 30, currentQuantity 130 → 100。
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository, times(1)).save(batchCaptor.capture());
+        MaterialBatch savedBatch = batchCaptor.getValue();
+        assertThat(savedBatch.getId()).isEqualTo("B1");
+        assertThat(savedBatch.getUsedQuantity()).isEqualByComparingTo(new BigDecimal("30.00"));
+        assertThat(savedBatch.getCurrentQuantity()).isEqualByComparingTo(new BigDecimal("100.00"));
+        // 批次未扣空 → 仍 AVAILABLE。
+        assertThat(savedBatch.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
 
-        assertThat(saved).hasSize(2);
-        // Both batches: status=DEFECTIVE, warehouse=WH-LOG, inboundType=SUPPLIER_RETURN
-        assertThat(saved).allSatisfy(b -> {
-            assertThat(b.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
-            assertThat(b.getWarehouseId()).isEqualTo(WH_LOG);
-            assertThat(b.getFactoryId()).isEqualTo(FACTORY);
-            assertThat(b.getInboundType()).isEqualTo(InboundType.SUPPLIER_RETURN);
-            assertThat(b.getSourceDocType()).isEqualTo("PURCHASE_RETURN");
-            assertThat(b.getSourceDocId()).isEqualTo(order.getId());
-            assertThat(b.getCreatedBy()).isEqualTo(APPROVER);
-            assertThat(b.getUsedQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
-            assertThat(b.getReservedQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
-            assertThat(b.getBatchNumber()).startsWith("RTN-RT-PUR-");
-        });
-        // First item carries item-level reason
-        assertThat(saved.get(0).getNotes()).contains("包装破损").contains(order.getReturnNumber());
-        // Second item null reason → falls back to order-level reason
-        assertThat(saved.get(1).getNotes()).contains("质量不合格");
-        // Material type IDs preserved
-        assertThat(saved.get(0).getMaterialTypeId()).isEqualTo(MATERIAL_TYPE);
-        assertThat(saved.get(1).getMaterialTypeId()).isEqualTo("MT-002");
-        // Quantities preserved
-        assertThat(saved.get(0).getReceiptQuantity()).isEqualByComparingTo(new BigDecimal("10.0000"));
-        assertThat(saved.get(1).getReceiptQuantity()).isEqualByComparingTo(new BigDecimal("5.0000"));
+        // 写一条负数 MaterialBatchAdjustment 留痕。
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(materialBatchAdjustmentRepository, times(1)).save(adjCaptor.capture());
+        MaterialBatchAdjustment adj = adjCaptor.getValue();
+        assertThat(adj.getAdjustmentType()).isEqualTo("PURCHASE_RETURN");
+        assertThat(adj.getAdjustmentQuantity()).isEqualByComparingTo(new BigDecimal("-30.00"));
+        assertThat(adj.getQuantityBefore()).isEqualByComparingTo(new BigDecimal("130.00"));
+        assertThat(adj.getQuantityAfter()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(adj.getMaterialBatchId()).isEqualTo("B1");
 
-        // AP 冲减 (deferred from approve) triggered exactly once
+        // AP 冲减 (deferred from approve) 触发一次。
         verify(arApService, times(1)).recordAdjustment(
                 eqStr(FACTORY),
                 org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER),
@@ -182,18 +196,72 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     }
 
     @Test
-    @DisplayName("PURCHASE_RETURN + withGoods=false: 不创建 MaterialBatch (refund-only path)")
-    void purchaseReturnWithoutGoods_noMaterialBatch() {
-        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("10.0000"), "x"));
+    @DisplayName("BLOCKER 2: 库存不足 → 409, 退货单不 COMPLETED (fail-loud, 不扣成负)")
+    void purchaseReturnWithGoods_insufficientStock_throws409_notCompleted() {
+        // 可用仅 10, 退货要 30 → 不足。
+        MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("10.00"));
+        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+                .thenReturn(new ArrayList<>(List.of(batch)));
+
+        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
+        stubFindAndSave(order);
+
+        assertThatThrownBy(() -> service.completeReturnOrder(FACTORY, order.getId()))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409))
+                .hasMessageContaining("不足");
+
+        // 不扣库存, 不写留痕, 退货单状态保持 (未翻 COMPLETED)。
+        verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchAdjustmentRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        assertThat(order.getStatus()).isEqualTo(ReturnOrderStatus.FINANCE_APPROVED);
+    }
+
+    @Test
+    @DisplayName("BLOCKER 2: 跨批次 FEFO 扣减 — 第一批扣空标 USED_UP, 余量从第二批扣")
+    void purchaseReturnWithGoods_deductsAcrossBatchesFEFO() {
+        // 退 30: 批1 仅 20 (扣空→USED_UP), 批2 100 (扣 10)。
+        MaterialBatch b1 = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("20.00"));
+        MaterialBatch b2 = availableBatch("B2", MATERIAL_TYPE, new BigDecimal("100.00"));
+        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+                .thenReturn(new ArrayList<>(List.of(b1, b2)));
+
+        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
+        stubFindAndSave(order);
+
+        ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
+        assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
+
+        // 批1 扣空: usedQuantity 0→20, currentQuantity 0, status USED_UP。
+        assertThat(b1.getUsedQuantity()).isEqualByComparingTo(new BigDecimal("20.00"));
+        assertThat(b1.getCurrentQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(b1.getStatus()).isEqualTo(MaterialBatchStatus.USED_UP);
+        // 批2 扣 10: usedQuantity 0→10, currentQuantity 90, 仍 AVAILABLE。
+        assertThat(b2.getUsedQuantity()).isEqualByComparingTo(new BigDecimal("10.00"));
+        assertThat(b2.getCurrentQuantity()).isEqualByComparingTo(new BigDecimal("90.00"));
+        assertThat(b2.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
+
+        // 两条 adjustment (每批一条)。
+        verify(materialBatchAdjustmentRepository, times(2)).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchRepository, times(2)).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("PURCHASE_RETURN + withGoods=false: 无库存动作 (refund-only path)")
+    void purchaseReturnWithoutGoods_noInventoryAction() {
+        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("10.00"), "x"));
         ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, false, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
 
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
-        // No-goods path — completion is no-op for AR/AP (already triggered at approve)
-        // and zero inventory writes.
+        // No-goods path — 不扣库存, 不查 FEFO, AR/AP 已在 approve 触发。
         verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFO(anyString(), anyString());
+        verify(materialBatchAdjustmentRepository, never()).save(org.mockito.ArgumentMatchers.any());
         verify(arApService, never()).recordAdjustment(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(),
@@ -204,34 +272,9 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     }
 
     @Test
-    @DisplayName("PURCHASE_RETURN with-goods: skip 行缺 materialTypeId / 零数量, 但保留 valid rows")
-    void purchaseReturnWithGoods_skipsInvalidItems_keepsValid() {
-        List<ReturnOrderItem> items = new ArrayList<>();
-        items.add(item(MATERIAL_TYPE, new BigDecimal("3.0000"), "valid"));   // valid → save
-        items.add(item(null, new BigDecimal("99.0000"), "no material"));     // null materialTypeId → skip
-        items.add(item("MT-009", BigDecimal.ZERO, "zero qty"));              // zero qty → skip
-        items.add(item("MT-010", null, "null qty"));                          // null qty → skip
-        items.add(item("MT-011", new BigDecimal("7.0000"), "valid 2"));      // valid → save
-        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
-        stubFindAndSave(order);
-
-        ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
-
-        assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
-        ArgumentCaptor<MaterialBatch> captor = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepository, times(2)).save(captor.capture());
-        // Saved batches correspond to row 1 (MT-001 qty 3) and row 5 (MT-011 qty 7).
-        assertThat(captor.getAllValues())
-                .extracting(MaterialBatch::getMaterialTypeId)
-                .containsExactly(MATERIAL_TYPE, "MT-011");
-        assertThat(captor.getAllValues())
-                .extracting(MaterialBatch::getReceiptQuantity)
-                .containsExactly(new BigDecimal("3.0000"), new BigDecimal("7.0000"));
-    }
-
-    @Test
-    @DisplayName("SALES_RETURN regression: PURCHASE_RETURN 分支不触发 (不创建 MaterialBatch)")
-    void salesReturnWithGoods_doesNotTriggerPurchaseBranch() {
+    @DisplayName("SALES_RETURN regression: 仍走 FinishedGoodsBatch 加库存, 不触发 PURCHASE_RETURN 扣减")
+    void salesReturnWithGoods_addsFinishedGoods_doesNotDeductMaterial() {
+        when(warehouseResolver.resolveLogisticsId(FACTORY)).thenReturn(WH_LOG);
         ReturnOrderItem it = new ReturnOrderItem();
         it.setProductTypeId("PT-001");  // SALES_RETURN uses productTypeId, not materialTypeId
         it.setQuantity(new BigDecimal("2.0000"));
@@ -244,31 +287,34 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
 
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
-        // MaterialBatchRepository must NOT be invoked for SALES_RETURN —
-        // FinishedGoodsBatchRepository handles it (different code path).
-        verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        // SALES_RETURN 加库存到 FinishedGoodsBatch, 不触发 MaterialBatch 扣减。
         verify(finishedGoodsBatchRepository, times(1)).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFO(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("materialBatchRepository null (legacy DI gap): status flip + AP 冲减 仍生效, 仅跳过库存创建")
-    void materialBatchRepositoryNull_completionStillSucceeds() {
-        ReflectionTestUtils.setField(service, "materialBatchRepository", null);
-        List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("4.0000"), "x"));
+    @DisplayName("PURCHASE_RETURN with-goods: skip 行缺 materialTypeId / 零数量, 只扣 valid 行")
+    void purchaseReturnWithGoods_skipsInvalidItems() {
+        MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("100.00"));
+        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+                .thenReturn(new ArrayList<>(List.of(batch)));
+
+        List<ReturnOrderItem> items = new ArrayList<>();
+        items.add(item(MATERIAL_TYPE, new BigDecimal("5.00"), "valid"));   // valid → 扣
+        items.add(item(null, new BigDecimal("99.00"), "no material"));     // null materialTypeId → skip
+        items.add(item("MT-009", BigDecimal.ZERO, "zero qty"));            // zero qty → skip
+        items.add(item("MT-010", null, "null qty"));                        // null qty → skip
         ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, true, ReturnOrderStatus.FINANCE_APPROVED, items);
         stubFindAndSave(order);
 
         ReturnOrder result = service.completeReturnOrder(FACTORY, order.getId());
-
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
-        // No NPE; status flip + AP 冲减 都已生效.
-        verify(arApService, times(1)).recordAdjustment(
-                eqStr(FACTORY),
-                org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER),
-                org.mockito.ArgumentMatchers.eq("SUP-001"),
-                org.mockito.ArgumentMatchers.any(BigDecimal.class),
-                org.mockito.ArgumentMatchers.eq(APPROVER),
-                org.mockito.ArgumentMatchers.contains("采购退货冲减(实物已入库)"));
+
+        // 只有 valid 行触发扣减 (1 批次 save + 1 adjustment)。
+        verify(materialBatchRepository, times(1)).save(org.mockito.ArgumentMatchers.any());
+        verify(materialBatchAdjustmentRepository, times(1)).save(org.mockito.ArgumentMatchers.any());
+        assertThat(batch.getUsedQuantity()).isEqualByComparingTo(new BigDecimal("5.00"));
     }
 
     // Mockito eq() overload helper for String to avoid varargs clash with anyString().
