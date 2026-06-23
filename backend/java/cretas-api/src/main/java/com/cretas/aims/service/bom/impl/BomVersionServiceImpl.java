@@ -2,6 +2,7 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.BomVersion.VersionStatus;
 import com.cretas.aims.exception.EntityNotFoundException;
@@ -213,6 +214,30 @@ public class BomVersionServiceImpl implements BomVersionService {
         snapshot.put("status", recipe.getStatus() == null ? null : recipe.getStatus().name());
         snapshot.put("sourceType", recipe.getSourceType() == null ? null : recipe.getSourceType().name());
         snapshot.put("notes", recipe.getNotes());
+
+        // BOM 统管配方+锅序 (2026-06-24): 折叠进 BOM 的配方也纳入版本快照 → 配方改动走版本/ECN (decision 3).
+        snapshot.put("cookingPotBaseKg", recipe.getCookingPotBaseKg());
+        snapshot.put("subsequentPotRatio", recipe.getSubsequentPotRatio());
+        snapshot.put("injectionRate", recipe.getInjectionRate());
+
+        List<Map<String, Object>> seasoning = new ArrayList<>();
+        List<BomSeasoningItem> seasoningItems = recipe.getSeasoningItems();
+        if (seasoningItems != null) {
+            for (BomSeasoningItem si : seasoningItems) {
+                Map<String, Object> snap = new LinkedHashMap<>();
+                snap.put("id", si.getId());
+                snap.put("section", si.getSection());
+                snap.put("seq", si.getSeq());
+                snap.put("name", si.getName());
+                snap.put("dosagePerKgG", si.getDosagePerKgG());
+                snap.put("priceSource1", si.getPriceSource1());
+                snap.put("priceSource2", si.getPriceSource2());
+                snap.put("countInSeasoning", si.getCountInSeasoning());
+                snap.put("remark", si.getRemark());
+                seasoning.add(snap);
+            }
+        }
+        snapshot.put("seasoningItems", seasoning);
 
         List<Map<String, Object>> items = new ArrayList<>();
         List<BomRecipeItem> recipeItems = recipe.getItems();
