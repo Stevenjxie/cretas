@@ -95,12 +95,12 @@
 
 ---
 
-## 7. 开放问题 (Steve 定)
+## 7. 决策 (Steve 已定 2026-06-24)
 
-1. **没有 BOM 但有配方的 SKU 怎么办** — 迁移时自动建空 BOM,还是要求先建 BOM?(影响迁移脚本 + 业务流程)
-2. **配方进 BOM 后是否要走 BOM 的版本/审批/ECN** — 改个调料比例是否要审批?还是配方部分免审批?(影响 UX + 数据模型)
-3. **product_recipes 何时真删** — 保留只读多久?(回滚窗口)
-4. **决策 1 选 A(真折叠)还是 B(引用)** — 我推荐 A,但 A 工作量+迁移风险大;B 快但不算真「都是 BOM」。
+1. **决策 1 = A (真折叠)** ✅ — 配方实体折叠进 BOM,弃用 `product_recipes`。配方继承 BOM 版本/ECN。
+2. **缺 BOM 的 SKU = 要求现有 BOM** ✅ — 迁移时**不自动建空 BOM**;且运行时若某 SKU 无 BOM 配方,做**自动跳转防呆**:提示「该 SKU 未设置 BOM/配方」+ 一键跳到 BOM/配方设置页 + **快捷返回**(复用 `useCreateAndReturn` + `ReturnBanner` 的「缺上游→创建并返回」模式,见 [[feedback_returnbanner_double_decode_and_strict_audit]])。
+3. **配方走 BOM 版本/审批/ECN = 要** ✅ — 配方改动(含调料比例)纳入 BOM 的版本/审批流。「先做进去,回头不要了再拆」。
+4. **product_recipes 保留只读** ✅ — 迁移后保留只读作回滚保险,prod 稳定一段后单独 cleanup 删(Steve 无特别期限,organizer 默认: 灰度稳定 + 一个回归周期后删)。
 
 ---
 
