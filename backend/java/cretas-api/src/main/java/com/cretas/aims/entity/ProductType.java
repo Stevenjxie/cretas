@@ -66,6 +66,13 @@ public class ProductType extends BaseEntity {
     @Column(name = "shelf_life_days")
     private Integer shelfLifeDays;
 
+    /**
+     * 单锅产能 (六扇门 配料单 — 配料员按锅配料). 1 锅可产出本产品的数量, 与 plannedQuantity 同单位。
+     * 配料单据此算: 锅数 = ceil(计划产量 / 单锅产能); 每锅料量 = 物料总需求 / 锅数。null = 未配置 (配料单显提示)。
+     */
+    @Column(name = "single_pot_capacity", precision = 14, scale = 3)
+    private java.math.BigDecimal singlePotCapacity;
+
     // ==================== Sprint 2 S2-1: Form Template Association ====================
 
     /**

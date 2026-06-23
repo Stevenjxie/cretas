@@ -2134,6 +2134,14 @@ function handleAiFill(params: TableRow) {
               size="small"
               @click="safePrint('consolidated-material-requisition', factoryId, String(row.id), { fileName: `汇总领料单_${row.planNumber || row.id}` })"
             >领料单</el-button>
+            <!-- 六扇门: 打印配料单 (按锅配料, PrintController /print/batching-sheet/{planId}) -->
+            <el-button
+              v-if="canPrintPlanDocuments(row.status)"
+              type="info"
+              link
+              size="small"
+              @click="safePrint('batching-sheet', factoryId, String(row.id), { fileName: `配料单_${row.planNumber || row.id}` })"
+            >配料单</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"

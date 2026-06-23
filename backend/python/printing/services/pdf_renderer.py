@@ -778,6 +778,94 @@ def render_consolidated_material_requisition(data: dict) -> bytes:
     return buffer.getvalue()
 
 
+def render_batching_sheet(data: dict) -> bytes:
+    """配料单 PDF — 六扇门 配料员按锅配料 (转录 [87:50-88:00]).
+
+    锅数 = ceil(计划产量 / 单锅产能[ProductType.singlePotCapacity]); 每锅料量 = 物料总需求 / 锅数。
+    单锅产能未配置 (potCount=None) → 显提示, 不伪造每锅用量。配料员当前用现有生产/报工角色兼任。
+
+    expected data: {
+      factoryName, planId, planNumber, productName, printDate, salesOrderNumbers,
+      plannedQuantity, unit, singlePotCapacity, potCount,
+      items: [{materialName, unit, totalQty, ...}], printedBy, printedAccount, remark
+    }
+    """
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _get_styles()
+    buffer = io.BytesIO()
+    doc = _make_doc(buffer)
+
+    pot_count = data.get("potCount")
+    pot_capacity = data.get("singlePotCapacity")
+    plan_qty = data.get("plannedQuantity", "-")
+    unit = data.get("unit", "-")
+    sales_order_numbers = data.get("salesOrderNumbers") or "-"
+    plan_number = data.get("planNumber") or data.get("planId", "-")
+    pot_count_display = (str(pot_count) + " 锅") if pot_count else "请先在产品配置单锅产能"
+
+    def _per_pot(total_str: Any) -> str:
+        """每锅用量 = 物料总需求 / 锅数; 锅数缺失或非正 → '—' (不伪造)。"""
+        if not pot_count or pot_count <= 0:
+            return "—"
+        try:
+            total = float(str(total_str).replace(",", ""))
+        except (TypeError, ValueError):
+            return "—"
+        v = total / pot_count
+        return str(int(v)) if v == int(v) else f"{v:.3f}".rstrip("0").rstrip(".")
+
+    rendered_items = [
+        {
+            "materialName": it.get("materialName", "-"),
+            "unit": it.get("unit", "-"),
+            "totalQty": it.get("totalQty", "-"),
+            "perPotQty": _per_pot(it.get("totalQty")),
+        }
+        for it in (data.get("items") or [])
+    ]
+
+    story: list[Any] = [
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("配料单 · Batching Sheet (按锅配料)", s["title"]),
+        _kv_table([
+            ("关联销售单号", sales_order_numbers),
+            ("生产计划单号", plan_number),
+            ("生产产品", data.get("productName", "-")),
+            ("计划产量", f"{plan_qty} {unit}"),
+            ("单锅产能", f"{pot_capacity} {unit}" if pot_capacity else "未配置"),
+            ("配料锅数", pot_count_display),
+            ("打印日期", data.get("printDate", "-")),
+            ("打印人", data.get("printedBy", "-")),
+            ("打印账号", data.get("printedAccount", "-")),
+        ], s["font"]),
+        Spacer(1, 0.5 * cm),
+        Paragraph("每锅配料明细", s["h2"]),
+        _render_items_table(
+            rendered_items,
+            [("物料名称", "materialName", "LEFT"), ("单位", "unit", "CENTER"),
+             ("物料总需求", "totalQty", "RIGHT"), ("每锅用量", "perPotQty", "RIGHT")],
+            s["font"],
+        ),
+    ]
+    if not pot_count:
+        story.extend([
+            Spacer(1, 0.4 * cm),
+            Paragraph("注意: 单锅产能未配置, 无法计算每锅用量。请先在 产品管理 → 该产品 设置「单锅产能」后重新打印。", s["body"]),
+        ])
+    if data.get("remark"):
+        story.extend([Spacer(1, 0.5 * cm), Paragraph("备注", s["h2"]),
+                      Paragraph(str(data["remark"]), s["body"])])
+    story.extend([
+        Spacer(1, 1.0 * cm),
+        Paragraph("配料员签名: ____________________________", s["body"]),
+        Paragraph("生产计划员签名: __________________________", s["body"]),
+    ])
+    doc.build(story)
+    return buffer.getvalue()
+
+
 def render_production_work_order_multi(data: dict) -> bytes:
     """多 SO 合并生产工单 PDF — P1 #37.
 
@@ -953,6 +1041,8 @@ RENDERERS: dict[str, Any] = {
     # SP12 T8 — 2 new templates: 生产工单 + 汇总领料单
     "production-work-order": render_production_work_order,
     "consolidated-material-requisition": render_consolidated_material_requisition,
+    # 六扇门 配料单 (配料员按锅配料)
+    "batching-sheet": render_batching_sheet,
     # P1 #37 — 多 SO 合并公单
     "production-work-order-multi": render_production_work_order_multi,
     # 调拨指示单 (客户[37:00] 纸质指示单)
