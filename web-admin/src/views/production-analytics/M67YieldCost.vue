@@ -1,7 +1,7 @@
 <!--
   成品出厂核算 (M67 demo)
-  复用现成后端 GET /production/orders/{orderId}/yield-summary (OrderYieldController)
-  展示客户 3 个核心数: 出成率 / 单盒成本 / 单盒人工 + 逐道出成率 + 成本四拆 + 批次溯源桑基图
+  支持「按订单号」(OrderYieldSummaryDTO) 和「按批次号」(BatchYieldDTO → normalize) 双模式查询。
+  批次号模式适用于存货生产 (无对应订单号) 场景。
 -->
 <template>
   <div class="m67-page">
@@ -11,7 +11,12 @@
         <p class="sub">全链路出成率 · 单盒成本 · 人工成本 (按订单批次)</p>
       </div>
       <div class="ctrls">
-        <el-input v-model="orderId" placeholder="订单号" style="width: 220px" />
+        <el-radio-group v-model="queryMode" size="small">
+          <el-radio-button value="order">订单号</el-radio-button>
+          <el-radio-button value="batch">批次号</el-radio-button>
+        </el-radio-group>
+        <el-input v-if="queryMode === 'order'" v-model="orderId" placeholder="订单号" style="width: 220px" />
+        <el-input v-else v-model="batchNumber" placeholder="批次号" style="width: 220px" />
         <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
     </div>
@@ -150,7 +155,7 @@
       </el-card>
     </template>
 
-    <el-empty v-else-if="!loading && !error" description="输入订单号后点刷新" />
+    <el-empty v-else-if="!loading && !error" :description="queryMode === 'batch' ? '输入批次号后点刷新' : '输入订单号后点刷新'" />
   </div>
 </template>
 
@@ -186,11 +191,42 @@ interface YieldSummary {
   totalLaborCost?: number; totalMaterialCost?: number; totalCost?: number;
   batches?: Array<{ batchId?: number; steps?: Step[]; cumulativeYieldRate?: number }>;
 }
+/** Raw shape returned by by-batch endpoint (BatchYieldDTO) */
+interface BatchYieldDTO {
+  batchId?: number; batchNumber?: string;
+  firstStepInput?: number; lastStepOutput?: number;
+  firstStepInputUnit?: string; lastStepOutputUnit?: string;
+  cumulativeYieldRate?: number;
+  steps?: Step[];
+  totalLaborCost?: number; totalMaterialCost?: number; totalCost?: number;
+  complete?: boolean; inProgress?: boolean;
+}
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
+const queryMode = ref<'order' | 'batch'>('order');
 const orderId = ref('SO-M67DEMO-001');
+const batchNumber = ref('');
 const gramsPerBox = ref(100);
+
+/** Map BatchYieldDTO (by-batch single-batch response) into YieldSummary (the shape the page renders). */
+function normalizeBatchYield(dto: BatchYieldDTO): YieldSummary {
+  return {
+    orderId: dto.batchNumber || String(dto.batchId || ''),
+    overallYieldRate: dto.cumulativeYieldRate,
+    totalFirstInput: dto.firstStepInput,
+    totalLastOutput: dto.lastStepOutput,
+    lastOutputUnit: dto.lastStepOutputUnit,
+    totalLaborCost: dto.totalLaborCost,
+    totalMaterialCost: dto.totalMaterialCost,
+    totalCost: dto.totalCost,
+    batches: [{
+      batchId: dto.batchId,
+      cumulativeYieldRate: dto.cumulativeYieldRate,
+      steps: dto.steps,
+    }],
+  };
+}
 const loading = ref(false);
 const error = ref('');
 const data = ref<YieldSummary | null>(null);
@@ -305,13 +341,20 @@ function renderSankey() {
   chart.resize();
 }
 
-// 单一权威: 调后端 /production/orders/{orderId}/cost-breakdown (谱系遍历+上游成本回溯+人工归集)
+// 单一权威: 调后端成本拆分端点 (谱系遍历+上游成本回溯+人工归集)
 // cb.sources 映射进 mixRels 供溯源桑基图/成本拆分表复用 (价格按 procurement:price:view 权限脱敏)
+// 订单号模式: /production/orders/{orderId}/cost-breakdown
+// 批次号模式: /production/batches/{batchNumber}/cost-breakdown (返回相同 OrderCostBreakdownDTO 形态)
 async function loadCostBreakdown() {
   mixRels.value = []; cb.value = null;
-  if (!factoryId.value || !orderId.value) return;
+  const fid = factoryId.value;
+  if (!fid) return;
+  const costUrl = queryMode.value === 'batch'
+    ? (batchNumber.value ? `/${fid}/production/batches/${batchNumber.value}/cost-breakdown` : null)
+    : (orderId.value ? `/${fid}/production/orders/${orderId.value}/cost-breakdown` : null);
+  if (!costUrl) return;
   try {
-    const resp = await get<CostBreakdown>(`/${factoryId.value}/production/orders/${orderId.value}/cost-breakdown`);
+    const resp = await get<CostBreakdown>(costUrl);
     if (resp.success && resp.data) {
       cb.value = resp.data;
       mixRels.value = (resp.data.sources || []).map(s => ({
@@ -377,21 +420,37 @@ function renderMix() {
 }
 
 async function load() {
-  if (!factoryId.value || !orderId.value) return;
+  const fid = factoryId.value;
+  const isBatch = queryMode.value === 'batch';
+  const key = isBatch ? batchNumber.value : orderId.value;
+  if (!fid || !key) return;
   loading.value = true; error.value = '';
   try {
-    const resp = await get<YieldSummary>(`/${factoryId.value}/production/orders/${orderId.value}/yield-summary`);
-    if (resp.success && resp.data) {
-      data.value = resp.data;
-      await loadCostBreakdown();
-      await nextTick();
-      renderSankey();
-      renderMix();
+    if (isBatch) {
+      const resp = await get<BatchYieldDTO>(`/${fid}/production/batches/${key}/yield-summary`);
+      if (resp.success && resp.data) {
+        data.value = normalizeBatchYield(resp.data);
+      } else {
+        error.value = resp.message || '加载失败';
+        loading.value = false;
+        return;
+      }
     } else {
-      error.value = resp.message || '加载失败';
+      const resp = await get<YieldSummary>(`/${fid}/production/orders/${key}/yield-summary`);
+      if (resp.success && resp.data) {
+        data.value = resp.data;
+      } else {
+        error.value = resp.message || '加载失败';
+        loading.value = false;
+        return;
+      }
     }
+    await loadCostBreakdown();
+    await nextTick();
+    renderSankey();
+    renderMix();
   } catch (e: any) {
-    error.value = e?.response?.data?.message || e?.message || '加载失败，请检查订单号';
+    error.value = e?.response?.data?.message || e?.message || `加载失败，请检查${isBatch ? '批次号' : '订单号'}`;
   } finally {
     loading.value = false;
   }
