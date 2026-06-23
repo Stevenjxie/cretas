@@ -4,6 +4,7 @@ import com.cretas.aims.dto.processentry.MaterializeContext;
 import com.cretas.aims.dto.processentry.MaterializedBatch;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
+import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
@@ -281,6 +282,69 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             row.softDelete();
             rowRepo.save(row);
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // WIP 在制品库存读取 (Task 2.1)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * SP-F Task 2.1: 读取指定工序的 WIP 在制品库存视图。
+     *
+     * <p>计划归属通过 rowRepo 的 (factory, plan) 双键隐式保证: 只有属于本 factory + planId
+     * 的行才会被返回, 无需额外 productionPlanRepository 查询 (🔒 factory-scoped)。
+     *
+     * <p>used 的查询走 findByFactoryIdAndBatchId —— 该方法的 JPQL 含 factory 过滤且
+     * MaterialConsumption @Where(deleted_at IS NULL) 自动排除软删边, 因此:
+     * <ul>
+     *   <li>跨租户 (其他 factory) 的消耗边不会混入 used (🔒)</li>
+     *   <li>因 re-save/delete 软删的旧消耗边不计入 used (正确: 不会 double-count)</li>
+     * </ul>
+     */
+    @Override
+    public List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId,
+                                                        String processCode) {
+        List<ProcessSheetRow> rows = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
+
+        List<ProcessSheetInventoryItem> result = new ArrayList<>();
+        for (ProcessSheetRow row : rows) {
+            // DRAFT 行 (batchId == null, outputQty <= 0 未物化) → 跳过
+            if (row.getBatchId() == null) {
+                continue;
+            }
+
+            // 找 WIP MaterialBatch (sourceDocType='PRODUCTION_BATCH', sourceDocId=batchId)
+            Optional<MaterialBatch> wipOpt = materialBatchRepo
+                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                            factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
+            if (wipOpt.isEmpty()) {
+                // 防御: 物化行但无对应 WIP (异常数据 / 已逆向物化但行未软删) → 跳过
+                continue;
+            }
+            MaterialBatch wip = wipOpt.get();
+
+            BigDecimal produced = nz(wip.getReceiptQuantity());
+
+            // Σ 下游 MaterialConsumption.quantity (factory-scoped 🔒, soft-deleted excluded by @Where)
+            BigDecimal used = consumptionRepo
+                    .findByFactoryIdAndBatchId(factoryId, wip.getId())
+                    .stream()
+                    .map(c -> nz(c.getQuantity()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal remaining = produced.subtract(used);
+            String status = remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE";
+
+            result.add(new ProcessSheetInventoryItem(
+                    row.getBatchNumber(),
+                    produced,
+                    used,
+                    remaining,
+                    status,
+                    nz(wip.getUnitPrice())));
+        }
+        return result;
     }
 
     /**

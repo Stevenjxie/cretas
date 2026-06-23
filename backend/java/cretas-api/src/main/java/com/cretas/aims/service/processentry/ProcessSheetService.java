@@ -1,7 +1,10 @@
 package com.cretas.aims.service.processentry;
 
+import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+
+import java.util.List;
 
 /**
  * SP-F 逐工序电子表格服务 (spec §4)。
@@ -43,4 +46,21 @@ public interface ProcessSheetService {
      * @throws BusinessException 404 — 行不存在; 409 — 已被下游消耗
      */
     void deleteRow(String factoryId, String planId, String clientRowId);
+
+    /**
+     * SP-F Task 2.1: 读取指定工序的 WIP 在制品库存视图。
+     *
+     * <p>通过 process_sheet_rows (plan + processCode 范围, 🔒) 找到所属行,
+     * 再经 WIP MaterialBatch 和下游 MaterialConsumption 汇总每批次的
+     * produced / used / remaining / status / unitPrice。
+     *
+     * <p>plan 归属校验 (跨租户守卫) 由 controller 层前置或由 rowRepo 查询的
+     * (factory, plan) 双键隐式覆盖 (factory-scoped 自然隔离 🔒)。
+     *
+     * @param factoryId   工厂 ID
+     * @param planId      生产计划 ID
+     * @param processCode 工序代码 (e.g. "xiuyou")
+     * @return 该工序下所有已物化行的库存视图列表 (DRAFT 行跳过)
+     */
+    List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId, String processCode);
 }

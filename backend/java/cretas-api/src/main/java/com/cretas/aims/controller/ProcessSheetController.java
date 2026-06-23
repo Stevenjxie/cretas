@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.service.processentry.ProcessSheetService;
@@ -9,6 +10,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * SP-F 逐工序电子表格端点 (spec §4)。
@@ -40,5 +43,22 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String clientRowId) {
         service.deleteRow(factoryId, planId, clientRowId);
         return ApiResponse.success("删除成功", null);
+    }
+
+    /**
+     * SP-F Task 2.1: 读取指定工序的 WIP 在制品库存视图。
+     *
+     * <p>只读端点 — 权限 "production:read"，与 OrderCostBreakdownController / OrderYieldController
+     * 等生产读端点一致 (比写端点 "production:read_write" 宽松一级，让只读角色也可访问)。
+     *
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/inventory?process=xiuyou
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/inventory")
+    public ApiResponse<List<ProcessSheetInventoryItem>> getInventory(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @RequestParam @NotBlank String process) {
+        return ApiResponse.success(service.getInventory(factoryId, planId, process));
     }
 }
