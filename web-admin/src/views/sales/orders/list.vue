@@ -18,7 +18,7 @@ import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlacehol
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
-import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog, StartPurchaseDialog } from '@/components/dialog';
+import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog, StartPurchaseDialog, MergePurchaseDialog } from '@/components/dialog';
 // PR #872 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import request from '@/api/request';
@@ -78,6 +78,10 @@ const startPurchaseVisible = ref(false);
 const startPurchaseSoId = ref('');
 const startPurchaseSoNumber = ref('');
 const startPurchaseCustomer = ref('');
+
+// 转录行3650 — 多 SO 合并采购弹窗 (勾选多张 SO → 合并成一张采购单).
+const mergePurchaseVisible = ref(false);
+const mergePurchaseSos = ref<{ id: string; number: string; customer?: string }[]>([]);
 
 const router = useRouter();
 const route = useRoute();
@@ -1728,6 +1732,23 @@ function handleStartPurchase(row: TableRow) {
   startPurchaseCustomer.value = row.customerName ?? row.customer?.name ?? '';
   startPurchaseVisible.value = true;
 }
+
+/**
+ * 合并采购 — 把勾选的多张 SO 合并成一张采购单 (转录行3650 "加号逐个追加合并").
+ * 跨 SO 按物料聚合需求, 库存统一扣一次. 防呆: 至少选 1 张; 单张时等价于开始采购但走合并弹窗.
+ */
+function handleMergePurchase() {
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先勾选至少一张销售订单');
+    return;
+  }
+  mergePurchaseSos.value = selectedRows.value.map((r) => ({
+    id: r.id,
+    number: r.orderNumber ?? '',
+    customer: r.customerName ?? r.customer?.name ?? '',
+  }));
+  mergePurchaseVisible.value = true;
+}
 </script>
 
 <template>
@@ -1861,6 +1882,12 @@ function handleStartPurchase(row: TableRow) {
           :loading="batchLoading"
           @click="handleBatchDelete"
         >批量删除</el-button>
+        <!-- 转录行3650 — 多 SO 合并采购 (勾选多张 → 合并成一张采购单, 跨 SO 按物料聚合). -->
+        <el-button
+          type="primary" size="small" plain
+          :disabled="batchLoading"
+          @click="handleMergePurchase"
+        >合并采购 ({{ selectedRows.length }})</el-button>
       </div>
 
       <GridView
@@ -2540,6 +2567,14 @@ function handleStartPurchase(row: TableRow) {
       :sales-order-number="startPurchaseSoNumber"
       :customer-name="startPurchaseCustomer"
       @created="(poId: string) => { ElMessage.success(`采购单已创建 — 可在采购管理查看 (ID: ${poId})`); loadData(); }"
+    />
+
+    <!-- 合并采购弹窗 — 多张 SO 合并成一张采购单 (转录行3650 "加号逐个追加合并") -->
+    <MergePurchaseDialog
+      v-model="mergePurchaseVisible"
+      :factory-id="factoryId"
+      :sales-orders="mergePurchaseSos"
+      @created="(poId: string) => { ElMessage.success(`合并采购单已创建 — 可在采购管理查看 (ID: ${poId})`); loadData(); }"
     />
 
     <!-- PR #861: per-row operation log timeline (replaces the disabled "审计" chip). -->

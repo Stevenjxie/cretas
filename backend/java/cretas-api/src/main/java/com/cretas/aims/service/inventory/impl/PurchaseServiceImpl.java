@@ -6,6 +6,7 @@ import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
+import com.cretas.aims.dto.inventory.PurchaseSuggestionMultiResponse;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -1570,11 +1571,143 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .build();
         }
 
-        // 3. BOM 展开：每个 SO 行 × BOM 原料用量，按 materialTypeId 合并
-        // key = materialTypeId, value = 累加的需求量
-        Map<String, BigDecimal> aggregatedQty = new LinkedHashMap<>();
-        // 保留第一次看到该 materialTypeId 时的 BomItem 信息（名称/分类/单位/参考价）
-        Map<String, PurchaseSuggestionResponse.SuggestionItem> itemTemplate = new LinkedHashMap<>();
+        // 3. BOM 展开（共享逻辑）：每个 SO 行 × BOM 原料用量，按 materialTypeId 合并
+        Map<String, MaterialAccumulator> accumulators = new LinkedHashMap<>();
+        boolean hasBom = expandSoItemsInto(factoryId, so.getOrderNumber(), soItems, accumulators);
+
+        // 4. 查每种原料当前库存，计算净需求（共享逻辑）
+        List<PurchaseSuggestionResponse.SuggestionItem> resultItems = new ArrayList<>();
+        for (MaterialAccumulator acc : accumulators.values()) {
+            BigDecimal totalRequired = acc.requiredQty.setScale(4, BigDecimal.ROUND_HALF_UP);
+            BigDecimal currentStock = resolveCurrentStock(factoryId, acc.materialTypeId);
+            BigDecimal netRequired = computeNetRequired(totalRequired, currentStock);
+
+            resultItems.add(PurchaseSuggestionResponse.SuggestionItem.builder()
+                    .materialTypeId(acc.materialTypeId)
+                    .materialName(acc.materialName)
+                    .materialCategory(acc.materialCategory)
+                    .sourceProductName(acc.sourceProductName)
+                    .requiredQuantity(totalRequired)
+                    .unit(acc.unit)
+                    .currentStock(currentStock)
+                    .netRequired(netRequired)
+                    .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
+                    .referenceUnitPrice(acc.referenceUnitPrice)
+                    .build());
+        }
+
+        return PurchaseSuggestionResponse.builder()
+                .salesOrderId(salesOrderId)
+                .salesOrderNumber(so.getOrderNumber())
+                .customerName(so.getCustomerName())
+                .hasBom(hasBom)
+                .items(resultItems)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PurchaseSuggestionMultiResponse generatePurchaseSuggestionMulti(
+            String factoryId, List<String> salesOrderIds) {
+        // 0. 入参校验
+        if (salesOrderRepository == null) {
+            throw new BusinessException("销售订单服务不可用");
+        }
+        if (salesOrderIds == null || salesOrderIds.isEmpty()) {
+            throw new BusinessException("请至少选择一张销售订单")
+                    .withHint("勾选一张或多张销售订单后再合并生成采购建议");
+        }
+        // 去重 (用户可能误重复追加同一张 SO), 保留首次出现顺序.
+        List<String> distinctIds = salesOrderIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+        if (distinctIds.isEmpty()) {
+            throw new BusinessException("请至少选择一张销售订单")
+                    .withHint("勾选一张或多张销售订单后再合并生成采购建议");
+        }
+
+        // 1. 跨所有 SO 累加需求 (库存只在最后扣一次).
+        Map<String, MaterialAccumulator> accumulators = new LinkedHashMap<>();
+        List<String> orderedIds = new ArrayList<>();
+        List<String> orderedNumbers = new ArrayList<>();
+        Set<String> customerNames = new LinkedHashSet<>();
+        List<PurchaseSuggestionMultiResponse.SoSummary> soSummaries = new ArrayList<>();
+        boolean anyBom = false;
+
+        for (String soId : distinctIds) {
+            SalesOrder so = salesOrderRepository.findById(soId)
+                    .orElseThrow(() -> new ResourceNotFoundException("SalesOrder", "id", soId));
+            // 多租户隔离: 任一 SO 不属本厂 → 403 (与单 SO 行为一致).
+            if (!factoryId.equals(so.getFactoryId())) {
+                throw new BusinessException("403: 无权访问此销售订单 " + soId);
+            }
+
+            orderedIds.add(soId);
+            orderedNumbers.add(so.getOrderNumber());
+            if (so.getCustomerName() != null) customerNames.add(so.getCustomerName());
+
+            List<SalesOrderItem> soItems = salesOrderItemRepository != null
+                    ? salesOrderItemRepository.findBySalesOrderId(soId)
+                    : List.of();
+
+            // 展开本 SO 的 BOM, 累加进共享 accumulators (跨 SO 同 materialTypeId 合并).
+            boolean soHasBom = !soItems.isEmpty()
+                    && expandSoItemsInto(factoryId, so.getOrderNumber(), soItems, accumulators);
+            if (soHasBom) anyBom = true;
+
+            // 诚实暴露: 该 SO 无行项目 / 无 BOM → hasBom=false, 不静默跳过.
+            soSummaries.add(PurchaseSuggestionMultiResponse.SoSummary.builder()
+                    .salesOrderId(soId)
+                    .salesOrderNumber(so.getOrderNumber())
+                    .customerName(so.getCustomerName())
+                    .hasBom(soHasBom)
+                    .build());
+        }
+
+        // 2. 合并后统一扣一次库存 (库存只有一份, 净需求 = Σrequired − 当前库存).
+        List<PurchaseSuggestionMultiResponse.SuggestionItem> resultItems = new ArrayList<>();
+        for (MaterialAccumulator acc : accumulators.values()) {
+            BigDecimal totalRequired = acc.requiredQty.setScale(4, BigDecimal.ROUND_HALF_UP);
+            BigDecimal currentStock = resolveCurrentStock(factoryId, acc.materialTypeId);
+            BigDecimal netRequired = computeNetRequired(totalRequired, currentStock);
+
+            resultItems.add(PurchaseSuggestionMultiResponse.SuggestionItem.builder()
+                    .materialTypeId(acc.materialTypeId)
+                    .materialName(acc.materialName)
+                    .materialCategory(acc.materialCategory)
+                    .sourceProductName(acc.sourceProductName)
+                    .sourceSalesOrderNumbers(new ArrayList<>(acc.sourceSalesOrderNumbers))
+                    .requiredQuantity(totalRequired)
+                    .unit(acc.unit)
+                    .currentStock(currentStock)
+                    .netRequired(netRequired)
+                    .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
+                    .referenceUnitPrice(acc.referenceUnitPrice)
+                    .build());
+        }
+
+        return PurchaseSuggestionMultiResponse.builder()
+                .salesOrderIds(orderedIds)
+                .salesOrderNumbers(orderedNumbers)
+                .customerNames(new ArrayList<>(customerNames))
+                .hasBom(anyBom)
+                .items(resultItems)
+                .soSummaries(soSummaries)
+                .build();
+    }
+
+    /**
+     * 共享 BOM 展开 + 跨 SO 聚合逻辑 (单 SO 与多 SO 共用).
+     *
+     * <p>对一张 SO 的所有行项目展开 BOM (优先 bom_recipe_items, 回退 legacy bom_items),
+     * 按 materialTypeId 累加进传入的 {@code accumulators} —— 多次调用 (多 SO) 会跨 SO 合并同物料。
+     * <b>本方法不扣库存</b>: 库存只在调用方汇总后统一扣一次, 避免多 SO 各扣一次重复计算。
+     *
+     * @return 本次调用是否至少展开出一条 BOM 明细 (该 SO 的 hasBom)
+     */
+    private boolean expandSoItemsInto(String factoryId, String salesOrderNumber,
+            List<SalesOrderItem> soItems, Map<String, MaterialAccumulator> accumulators) {
         boolean hasBom = false;
 
         for (SalesOrderItem soItem : soItems) {
@@ -1596,17 +1729,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                     if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
 
                     BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
-                    String matId = ri.getMaterialTypeId();
-
-                    aggregatedQty.merge(matId, required, BigDecimal::add);
-                    itemTemplate.putIfAbsent(matId, PurchaseSuggestionResponse.SuggestionItem.builder()
-                            .materialTypeId(matId)
-                            .materialName(ri.getMaterialName() != null ? ri.getMaterialName() : "未知原料")
-                            .materialCategory(ri.getMaterialCategory() != null ? ri.getMaterialCategory() : "RAW")
-                            .sourceProductName(soProductName)
-                            .unit(ri.getUnit())
-                            .referenceUnitPrice(ri.getUnitPrice())
-                            .build());
+                    accumulateMaterial(accumulators, ri.getMaterialTypeId(), required, salesOrderNumber,
+                            ri.getMaterialName() != null ? ri.getMaterialName() : "未知原料",
+                            ri.getMaterialCategory() != null ? ri.getMaterialCategory() : "RAW",
+                            soProductName, ri.getUnit(), ri.getUnitPrice());
                     expandedAny = true;
                 }
                 if (expandedAny) hasBom = true;
@@ -1629,56 +1755,67 @@ public class PurchaseServiceImpl implements PurchaseService {
                 if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
 
                 BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
-                String matId = bom.getMaterialTypeId();
-
-                aggregatedQty.merge(matId, required, BigDecimal::add);
-                itemTemplate.putIfAbsent(matId, PurchaseSuggestionResponse.SuggestionItem.builder()
-                        .materialTypeId(matId)
-                        .materialName(bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料")
-                        .materialCategory(bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW")
-                        .sourceProductName(soProductName)
-                        .unit(bom.getUnit())
-                        .referenceUnitPrice(bom.getUnitPrice())
-                        .build());
+                accumulateMaterial(accumulators, bom.getMaterialTypeId(), required, salesOrderNumber,
+                        bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料",
+                        bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW",
+                        soProductName, bom.getUnit(), bom.getUnitPrice());
             }
         }
 
-        // 4. 查每种原料当前库存，计算净需求
-        List<PurchaseSuggestionResponse.SuggestionItem> resultItems = new ArrayList<>();
-        for (Map.Entry<String, BigDecimal> entry : aggregatedQty.entrySet()) {
-            String matId = entry.getKey();
-            BigDecimal totalRequired = entry.getValue().setScale(4, BigDecimal.ROUND_HALF_UP);
-            BigDecimal currentStock = materialBatchRepository != null
-                    ? materialBatchRepository.sumAvailableQuantityByMaterialType(factoryId, matId)
-                    : BigDecimal.ZERO;
-            if (currentStock == null) currentStock = BigDecimal.ZERO;
+        return hasBom;
+    }
 
-            BigDecimal netRequired = totalRequired.subtract(currentStock);
-            if (netRequired.compareTo(BigDecimal.ZERO) < 0) netRequired = BigDecimal.ZERO;
-            netRequired = netRequired.setScale(4, BigDecimal.ROUND_HALF_UP);
+    /**
+     * 把一条 BOM 展开结果累加进 accumulators (按 materialTypeId 合并需求量 + 记录来源 SO).
+     * 第一次见到某 materialTypeId 时记录其名称/分类/单位/参考价 (后续同物料沿用首次模板)。
+     */
+    private void accumulateMaterial(Map<String, MaterialAccumulator> accumulators,
+            String matId, BigDecimal required, String salesOrderNumber,
+            String materialName, String materialCategory, String sourceProductName,
+            String unit, BigDecimal referenceUnitPrice) {
+        MaterialAccumulator acc = accumulators.computeIfAbsent(matId, k -> {
+            MaterialAccumulator a = new MaterialAccumulator();
+            a.materialTypeId = matId;
+            a.materialName = materialName;
+            a.materialCategory = materialCategory;
+            a.sourceProductName = sourceProductName;
+            a.unit = unit;
+            a.referenceUnitPrice = referenceUnitPrice;
+            return a;
+        });
+        acc.requiredQty = acc.requiredQty.add(required);
+        if (salesOrderNumber != null) acc.sourceSalesOrderNumbers.add(salesOrderNumber);
+    }
 
-            PurchaseSuggestionResponse.SuggestionItem template = itemTemplate.get(matId);
-            resultItems.add(PurchaseSuggestionResponse.SuggestionItem.builder()
-                    .materialTypeId(matId)
-                    .materialName(template.getMaterialName())
-                    .materialCategory(template.getMaterialCategory())
-                    .sourceProductName(template.getSourceProductName())
-                    .requiredQuantity(totalRequired)
-                    .unit(template.getUnit())
-                    .currentStock(currentStock)
-                    .netRequired(netRequired)
-                    .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
-                    .referenceUnitPrice(template.getReferenceUnitPrice())
-                    .build());
-        }
+    /** 查某物料当前可用库存 (null-safe, repo 缺失返 0). */
+    private BigDecimal resolveCurrentStock(String factoryId, String materialTypeId) {
+        BigDecimal currentStock = materialBatchRepository != null
+                ? materialBatchRepository.sumAvailableQuantityByMaterialType(factoryId, materialTypeId)
+                : BigDecimal.ZERO;
+        return currentStock != null ? currentStock : BigDecimal.ZERO;
+    }
 
-        return PurchaseSuggestionResponse.builder()
-                .salesOrderId(salesOrderId)
-                .salesOrderNumber(so.getOrderNumber())
-                .customerName(so.getCustomerName())
-                .hasBom(hasBom)
-                .items(resultItems)
-                .build();
+    /** 净需求 = max(required − stock, 0), scale 4. */
+    private BigDecimal computeNetRequired(BigDecimal totalRequired, BigDecimal currentStock) {
+        BigDecimal netRequired = totalRequired.subtract(currentStock);
+        if (netRequired.compareTo(BigDecimal.ZERO) < 0) netRequired = BigDecimal.ZERO;
+        return netRequired.setScale(4, BigDecimal.ROUND_HALF_UP);
+    }
+
+    /**
+     * 共享累加器 — 跨 SO 按 materialTypeId 合并需求量 + 来源 SO 号 (去重保序).
+     * 库存与净需求由调用方在汇总后统一计算 (本结构只攒 required 与来源).
+     */
+    private static class MaterialAccumulator {
+        String materialTypeId;
+        String materialName;
+        String materialCategory;
+        String sourceProductName;
+        String unit;
+        BigDecimal referenceUnitPrice;
+        BigDecimal requiredQty = BigDecimal.ZERO;
+        /** LinkedHashSet: 去重 + 保留首次出现顺序 (同 SO 多产品共用同物料只记一次 SO 号). */
+        java.util.LinkedHashSet<String> sourceSalesOrderNumbers = new java.util.LinkedHashSet<>();
     }
 
     /**

@@ -153,6 +153,26 @@ public interface PurchaseService {
      */
     PurchaseSuggestionResponse generatePurchaseSuggestion(String factoryId, String salesOrderId);
 
+    /**
+     * 多销售订单合并生成采购建议 (转录行3650: 多个 SO 用"加号"逐个追加合并成一张采购单).
+     *
+     * <p>对每张 SO 展开 BOM, <b>跨所有 SO 按 materialTypeId 聚合</b> 需求量
+     * (如 SO1 需牛腱 50 + SO2 需牛腱 30 → 合并 80), 再 <b>统一扣减一次当前库存</b> 得净需求
+     * (库存只有一份, 净需求 = Σrequired − 当前库存; 避免每 SO 各扣一次重复计算)。
+     *
+     * <p>复用单 SO 的 BOM 展开 + 聚合逻辑 ({@code expandSoItemsInto}); 单 SO 即此方法退化情形。
+     * 返回顶层 salesOrderIds/Numbers + 每行 sourceSalesOrderNumbers (合并自哪几张 SO) +
+     * 逐 SO 的 hasBom 摘要 (诚实暴露无配方的 SO, 不静默跳过)。
+     *
+     * @param factoryId     工厂 ID（多租户隔离）
+     * @param salesOrderIds 销售订单 ID 列表 (去重后聚合)
+     * @return 合并采购建议响应
+     * @throws com.cretas.aims.exception.ResourceNotFoundException 任一 SO 不存在
+     * @throws com.cretas.aims.exception.BusinessException 403 任一 SO 跨工厂; 或列表为空
+     */
+    com.cretas.aims.dto.inventory.PurchaseSuggestionMultiResponse generatePurchaseSuggestionMulti(
+            String factoryId, java.util.List<String> salesOrderIds);
+
     // ==================== 三价对比 ====================
 
     /**
