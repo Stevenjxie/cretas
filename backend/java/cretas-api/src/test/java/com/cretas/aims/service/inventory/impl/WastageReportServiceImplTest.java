@@ -172,7 +172,7 @@ class WastageReportServiceImplTest {
     // 6. WAREHOUSE 轨 finance_manager 角色 approve → 原子写 adjustment + 扣减库存
     // -------------------------------------------------------
     @Test
-    @DisplayName("T6: WAREHOUSE 轨 finance_manager approve → 写 adjustment + 扣减库存 + 状态 APPLIED")
+    @DisplayName("T6: WAREHOUSE 轨 finance_manager approve → 写 adjustment + 增 usedQuantity 扣减 + 状态 APPLIED")
     void approve_warehouseTrack_finance_writesAdjustmentAndUpdatesStock() {
         WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
         report.setWastageQty(new BigDecimal("10.0000"));
@@ -181,6 +181,8 @@ class WastageReportServiceImplTest {
         MaterialBatch batch = new MaterialBatch();
         batch.setId(BATCH_ID);
         batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
         when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
         when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(batchRepo().save(any())).thenReturn(batch);
@@ -188,18 +190,22 @@ class WastageReportServiceImplTest {
 
         service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
 
-        // Verify adjustment written with negative quantity
+        // Verify adjustment written with negative quantity; before/after 取可用量 (currentQuantity)
         ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
         verify(adjustmentRepo).save(adjCaptor.capture());
         MaterialBatchAdjustment adj = adjCaptor.getValue();
         assertThat(adj.getAdjustmentType()).isEqualTo("WASTAGE");
         assertThat(adj.getAdjustmentQuantity()).isNegative();
+        assertThat(adj.getQuantityBefore().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
         assertThat(adj.getQuantityAfter().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
 
-        // Verify batch decremented
+        // Verify batch decremented via usedQuantity (receiptQuantity 不变), currentQuantity = 90
         ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(batchRepo()).save(batchCaptor.capture());
-        assertThat(batchCaptor.getValue().getReceiptQuantity().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
+        MaterialBatch savedBatch = batchCaptor.getValue();
+        assertThat(savedBatch.getReceiptQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(savedBatch.getUsedQuantity().compareTo(new BigDecimal("10.00"))).isEqualTo(0);
+        assertThat(savedBatch.getCurrentQuantity().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
         verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "WASTAGE");
 
         // Verify status → APPLIED (entity enum, not DTO string)
@@ -418,6 +424,107 @@ class WastageReportServiceImplTest {
         ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
         verify(wastageReportRepo).save(captor.capture());
         assertThat(captor.getValue().getApproverRole()).isEqualTo("finance_manager");
+    }
+
+    // -------------------------------------------------------
+    // 17. H1 过扣修复: receipt=100 / used=80 (可用20) / 报损50 → 422 (不能吃已领量, 不 save)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T17: H1 过扣修复 — receipt=100/used=80/报损50 → 422 (不能吃已领30), 不扣库存")
+    void approve_wastageExceedsCurrentQuantity_throws422_doesNotSave() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("50.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(new BigDecimal("80.00"));   // 可用 = 100 - 80 = 20
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        // 报损50 > 可用20 → 旧逻辑 (100-50=50≥0) 会通过并把库存吃成负 (-30); 新逻辑 422 阻止
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(422);
+
+        // 不写 adjustment, 不扣库存, 不改报损单状态
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(wastageReportRepo, never()).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 18. H1 边界: receipt=100 / used=80 (可用20) / 报损20 → 成功, usedQuantity 80→100, 可用→0
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T18: receipt=100/used=80/报损20 → 成功, usedQuantity 80→100, currentQuantity→0, adjustment 留痕用可用量")
+    void approve_wastageEqualsCurrentQuantity_succeeds_incrementsUsedQuantity() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("20.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(new BigDecimal("80.00"));   // 可用 = 20
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        // adjustment 留痕: before=20 (可用), after=0 (可用)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getQuantityBefore().compareTo(new BigDecimal("20.00"))).isEqualTo(0);
+        assertThat(adjCaptor.getValue().getQuantityAfter().compareTo(new BigDecimal("0.00"))).isEqualTo(0);
+
+        // usedQuantity 80 → 100, receiptQuantity 不变, currentQuantity → 0
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getUsedQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(saved.getReceiptQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(saved.getCurrentQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+    }
+
+    // -------------------------------------------------------
+    // 19. 无已领量: receipt=100 / used=0 / 报损30 → 成功, currentQuantity 100→70
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T19: receipt=100/used=0/报损30 → 成功, usedQuantity 0→30, currentQuantity 100→70")
+    void approve_freshBatch_succeeds_currentQuantityReflectsWastage() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("30.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getUsedQuantity().compareTo(new BigDecimal("30.00"))).isEqualTo(0);
+        assertThat(saved.getCurrentQuantity().compareTo(new BigDecimal("70.00"))).isEqualTo(0);
+
+        // adjustment before=100 (可用), after=70 (可用)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getQuantityBefore().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(adjCaptor.getValue().getQuantityAfter().compareTo(new BigDecimal("70.00"))).isEqualTo(0);
     }
 
     // -------------------------------------------------------

@@ -202,7 +202,8 @@ public class DisposalRecordService implements IDisposalRecordService {
             // 不能只看 receiptQuantity —— 否则会扣进别人已领用(usedQuantity)/已预留(reservedQuantity)的量,
             // 把 currentQuantity 扣成负数(库存错乱). 扣减方式与正常领料一致(MaterialBatchServiceImpl.useBatchQuantity):
             // 增 usedQuantity 而非减 receiptQuantity, 使 currentQuantity 正确反映 + 与领料模型一致.
-            // 注: WastageReportServiceImpl 有同款 receiptQuantity-only gate 隐患, 待单独修.
+            // 注: WastageReportServiceImpl 此前有同款 receiptQuantity-only gate 隐患, 已修
+            //     (applyWastageToInventory 改用 currentQuantity 把关 + 增 usedQuantity, 与本范式一致).
             BigDecimal available = batch.getCurrentQuantity() != null
                     ? batch.getCurrentQuantity() : BigDecimal.ZERO;
             if (available.subtract(disposalQty).signum() < 0) {

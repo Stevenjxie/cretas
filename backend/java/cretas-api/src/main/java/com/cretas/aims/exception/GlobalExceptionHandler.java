@@ -223,6 +223,7 @@ public class GlobalExceptionHandler {
             case 409 -> HttpStatus.CONFLICT;
             // 410 GONE — PR #872 share link expired / revoked.
             case 410 -> HttpStatus.GONE;
+            case 422 -> HttpStatus.UNPROCESSABLE_ENTITY;
             case 429 -> HttpStatus.TOO_MANY_REQUESTS;
             case 500 -> HttpStatus.INTERNAL_SERVER_ERROR;
             case 502 -> HttpStatus.BAD_GATEWAY;
