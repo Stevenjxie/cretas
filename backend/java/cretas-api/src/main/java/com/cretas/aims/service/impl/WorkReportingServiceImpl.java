@@ -84,6 +84,7 @@ public class WorkReportingServiceImpl {
                 throw new BusinessException(409, "批次已" + st.getDescription() + ", 不可报工")
                         .withHint("已完工/已取消的批次不能再报工");
             }
+            // null status = 旧数据/迁移遗留 (status 列历史未设), 放行交下游处理, 与 YieldReport 向后兼容口径一致。
         }
 
         // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
