@@ -29,7 +29,8 @@ export type PrintDocType =
   | 'production-task'
   | 'material-requisition'
   | 'production-work-order'         // SP12: 生产工单 (PrintController)
-  | 'consolidated-material-requisition'; // SP12: 汇总领料单 (PrintController)
+  | 'consolidated-material-requisition' // SP12: 汇总领料单 (PrintController)
+  | 'batching-sheet';               // 六扇门: 配料单 (按锅配料, PrintController)
 
 export interface PrintOptions {
   /** Optional query overrides forwarded as ?key=value (Day-6 MVP placeholder). */
@@ -49,6 +50,7 @@ const DEFAULT_FILENAMES: Record<PrintDocType, string> = {
   'material-requisition': '领料单',
   'production-work-order': '生产工单',
   'consolidated-material-requisition': '汇总领料单',
+  'batching-sheet': '配料单',
 };
 
 async function downloadPdf(

@@ -18,7 +18,7 @@ import com.cretas.aims.repository.restaurant.WastageRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
 import com.cretas.aims.service.voucher.impl.SalesReceiptVoucherGenerator;
-import jakarta.persistence.EntityNotFoundException;
+import com.cretas.aims.exception.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -207,6 +207,24 @@ class VoucherServiceImplTest {
         when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v));
 
         assertThrows(IllegalStateException.class, () -> service.post("F001", "v-1", 42L));
+    }
+
+    @Test
+    void postRejectsCrossTenant() {
+        // 跨租户: F002 调用者过账 F001 的凭证 → findByIdAndFactoryId 命中不到 → EntityNotFoundException, 不写库。
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F002")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.post("F002", "v-1", 42L));
+        verify(voucherRepo, never()).save(any());
+    }
+
+    @Test
+    void voidVoucherRejectsCrossTenant() {
+        // 跨租户: F002 调用者作废 F001 的凭证 → findByIdAndFactoryId 命中不到 → EntityNotFoundException, 不写库。
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F002")).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.voidVoucher("F002", "v-1", "越权作废", 42L));
+        verify(voucherRepo, never()).save(any());
     }
 
     @Test

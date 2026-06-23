@@ -56,6 +56,19 @@ public class SampleApprovedEventListener {
     private final RawMaterialTypeRepository materialTypeRepository;
     private final NotificationService notificationService;
 
+    /**
+     * 可选注入: 统一单位换算 (#7 drift sweep, 2026-06-22).
+     *
+     * <p>消除本类原 {@link #toKilograms} 本地 g/kg switch 的 drift — 委托
+     * {@link com.cretas.aims.service.UnitConversionService#toKg} 让斤/吨/mg 也能
+     * 折到 kg (与 BOM 成本点 R13 / StandardCostServiceImpl 同源)。
+     *
+     * <p>{@code @Autowired(required = false)} + null fallback: 旧单测构造器不传时
+     * 退化为本地 g/kg switch (旧行为不崩)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
     @EventListener
     @Async
     @Transactional
@@ -178,11 +191,21 @@ public class SampleApprovedEventListener {
         }
     }
 
-    /** 输出量折算到 kg. 仅支持常见 g/kg, 其他单位返 null (不写, 诚实留空). */
+    /**
+     * 输出量折算到 kg. 重量单位 (kg/g/克/千克/公斤/斤/吨/mg) → kg, 其他返 null (不写, 诚实留空).
+     *
+     * <p>#7 drift sweep: 优先委托 {@link com.cretas.aims.service.UnitConversionService#toKg}
+     * (统一权威表, 多认斤/吨/mg); service 缺失 (旧单测) 时回退本地 g/kg switch (旧行为不变)。
+     */
     private BigDecimal toKilograms(BigDecimal quantity, String unit) {
         if (unit == null) {
             return null;
         }
+        // 优先委托统一换算服务 (消除 drift, 多认斤/吨/mg).
+        if (unitConversionService != null) {
+            return unitConversionService.toKg(quantity, unit);
+        }
+        // Fallback: UnitConversionService 未注入 (旧单测) → 本地 g/kg switch (旧行为).
         switch (unit.trim().toLowerCase()) {
             case "kg":
             case "千克":

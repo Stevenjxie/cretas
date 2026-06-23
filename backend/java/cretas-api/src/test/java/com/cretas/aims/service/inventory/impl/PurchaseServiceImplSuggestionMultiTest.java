@@ -164,7 +164,9 @@ class PurchaseServiceImplSuggestionMultiTest {
 
         assertThatThrownBy(() -> service.generatePurchaseSuggestionMulti(FACTORY, List.of("so-1", "so-2")))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("403");
+                .hasMessageContaining("无权")
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(403);
     }
 
     @Test

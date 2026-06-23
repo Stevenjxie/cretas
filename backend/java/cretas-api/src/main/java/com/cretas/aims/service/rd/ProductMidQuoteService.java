@@ -23,7 +23,7 @@ public interface ProductMidQuoteService {
      * @param overheadCostPerKg  制造费用 元/kg (null = 数据缺失)
      * @param varianceThresholdPct 偏差预警阈值 %
      * @return 计算结果含中报价实体 + warnings
-     * @throws jakarta.persistence.EntityNotFoundException 批次 / 报价任务不存在
+     * @throws com.cretas.aims.exception.EntityNotFoundException 批次 / 报价任务不存在
      * @throws IllegalStateException 批次未完成 (actualQuantity = null)
      */
     MidQuoteCalculationResultDTO calculate(
@@ -46,7 +46,7 @@ public interface ProductMidQuoteService {
      * @param notes        可选确认备注
      * @param confirmedBy  操作人 userId
      * @return 已确认的中报价实体
-     * @throws jakarta.persistence.EntityNotFoundException 中报价不存在或不属于该工厂
+     * @throws com.cretas.aims.exception.EntityNotFoundException 中报价不存在或不属于该工厂
      * @throws IllegalStateException 状态非 CALCULATED (不能重复确认或确认草稿)
      */
     ProductMidQuote confirmMidQuote(String factoryId, String midQuoteId, String notes, Long confirmedBy);
@@ -57,7 +57,7 @@ public interface ProductMidQuoteService {
      * @param factoryId   工厂 ID (隔离鉴权)
      * @param midQuoteId  ProductMidQuote.id
      * @return 中报价实体
-     * @throws jakarta.persistence.EntityNotFoundException 不存在或不属于该工厂
+     * @throws com.cretas.aims.exception.EntityNotFoundException 不存在或不属于该工厂
      */
     ProductMidQuote getMidQuoteById(String factoryId, String midQuoteId);
 }

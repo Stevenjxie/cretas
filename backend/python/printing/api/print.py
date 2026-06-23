@@ -167,6 +167,23 @@ def print_consolidated_material_requisition(payload: dict[str, Any] = Body(...))
     return _pdf_response(pdf, f"consolidated-req-{plan_id}")
 
 
+# ==================== 配料单 (batching-sheet) — 六扇门 配料员按锅配料 ====================
+
+@router.post("/batching-sheet")
+def print_batching_sheet(payload: dict[str, Any] = Body(...)) -> Response:
+    """配料单 PDF — 六扇门 配料员按锅配料 (转录 [87:50-88:00]).
+
+    Java PrintController.printBatchingSheet → here.
+    锅数 = ceil(计划产量/单锅产能); 每锅料量 = 物料总需求/锅数 (renderer 算)。
+    payload: { factoryName, planId, planNumber, productName, printDate, salesOrderNumbers,
+               plannedQuantity, unit, singlePotCapacity, potCount,
+               items: [{materialName, unit, totalQty, ...}], printedBy, printedAccount, remark }
+    """
+    pdf = _render_pdf("batching-sheet", payload)
+    plan_id = payload.get("planId") or payload.get("planNumber", "na")
+    return _pdf_response(pdf, f"batching-sheet-{plan_id}")
+
+
 # ==================== 调拨指示单 (transfer-instruction) ====================
 
 @router.post("/transfer-instruction")

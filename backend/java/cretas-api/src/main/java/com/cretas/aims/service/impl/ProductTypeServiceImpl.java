@@ -145,6 +145,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setUnitPrice(dto.getUnitPrice());
         productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
         productType.setShelfLifeDays(dto.getShelfLifeDays());
+        productType.setSinglePotCapacity(dto.getSinglePotCapacity());
         productType.setPackageSpec(dto.getPackageSpec());
         productType.setSpecification(dto.getSpecification());
         productType.setRelatedCustomer(dto.getRelatedCustomer());
@@ -254,6 +255,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getUnitPrice() != null) productType.setUnitPrice(dto.getUnitPrice());
         if (dto.getProductionTimeMinutes() != null) productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
         if (dto.getShelfLifeDays() != null) productType.setShelfLifeDays(dto.getShelfLifeDays());
+        if (dto.getSinglePotCapacity() != null) productType.setSinglePotCapacity(dto.getSinglePotCapacity());
         if (dto.getPackageSpec() != null) productType.setPackageSpec(dto.getPackageSpec());
         if (dto.getNotes() != null) productType.setNotes(dto.getNotes());
         if (dto.getIsActive() != null) productType.setIsActive(dto.getIsActive());
@@ -846,6 +848,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .unitPrice(productType.getUnitPrice())
                 .productionTimeMinutes(productType.getProductionTimeMinutes())
                 .shelfLifeDays(productType.getShelfLifeDays())
+                .singlePotCapacity(productType.getSinglePotCapacity())
                 .packageSpec(productType.getPackageSpec())
                 .relatedCustomer(productType.getRelatedCustomer())
                 .imageUrl(productType.getImageUrl())

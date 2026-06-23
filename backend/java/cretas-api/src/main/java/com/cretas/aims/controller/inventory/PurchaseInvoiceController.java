@@ -88,15 +88,17 @@ public class PurchaseInvoiceController {
         return ApiResponse.success("查询成功", poIds);
     }
 
-    // ─── 按 PO 查询发票列表 ────────────────────────────────────────────────────
+    // ─── 查询发票列表 (poId 可选: 传则按 PO 查, 不传则列本厂全量) ──────────────────
 
     @GetMapping
-    @Operation(summary = "按采购订单查询发票列表", description = "必须传 poId 参数")
+    @Operation(summary = "查询发票列表", description = "poId 可选: 传则按采购订单查; 不传则列本工厂全部发票 (采购发票管理页直接进入)")
     @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
     public ApiResponse<List<PurchaseInvoice>> listByPurchaseOrder(
             @PathVariable @NotBlank String factoryId,
-            @RequestParam @NotBlank String poId) {
-        List<PurchaseInvoice> list = purchaseInvoiceService.listByPurchaseOrder(factoryId, poId);
+            @RequestParam(required = false) String poId) {
+        List<PurchaseInvoice> list = (poId == null || poId.isBlank())
+                ? purchaseInvoiceService.listByFactory(factoryId)
+                : purchaseInvoiceService.listByPurchaseOrder(factoryId, poId);
         return ApiResponse.success("查询成功", list);
     }
 
