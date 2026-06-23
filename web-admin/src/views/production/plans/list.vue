@@ -255,6 +255,8 @@ const planForm = ref({
   sourceType: 'CUSTOMER_ORDER' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
   sourceOrderId: '' as string | undefined,
   sourceOrderItemId: '' as string | undefined,
+  // 以销定产多产品 (2026-06-24): 选 SO 默认带出全部产品行, 多选可取消; 每行各建一张计划。
+  sourceOrderItemIds: [] as string[],
   // SP5 多SO合并工单: 追加的额外销售订单ID列表 (不含 primarySourceOrderId, 提交前合并)
   extraSourceOrderIds: [] as string[],
   customFields: {} as TableRow,
@@ -332,12 +334,15 @@ function handleSalesOrderSelect(orderId: string) {
   const so = selectableSalesOrders.value.find((o) => String(o.id) === String(orderId));
   // 切换订单时清空已选行
   planForm.value.sourceOrderItemId = '';
+  planForm.value.sourceOrderItemIds = [];
   planForm.value.productTypeId = '';
   productWorkProcessList.value = [];
   if (so) {
     planForm.value.sourceCustomerName = String(so.customerName || '');
-    // A4: 若订单只有一个产品行，自动选中
+    // 以销定产 (2026-06-24): 默认带出全部产品行 (多选), 用户可取消不需要的。每行各建一张计划。
     const items = Array.isArray(so.items) ? (so.items as TableRow[]) : [];
+    planForm.value.sourceOrderItemIds = items.map((it) => String(it.id));
+    // 兼容单产品: 仅 1 行时也回填单字段 (产品类型/客户), 供 UI 摘要展示
     if (items.length === 1) {
       planForm.value.sourceOrderItemId = String(items[0].id);
       handleSalesOrderItemSelect(String(items[0].id));
@@ -606,6 +611,7 @@ function handleCreate() {
     sourceType: 'CUSTOMER_ORDER',
     sourceOrderId: '',
     sourceOrderItemId: '',
+    sourceOrderItemIds: [],
     // SP5: 重置追加SO列表
     extraSourceOrderIds: [],
     customFields: {} as TableRow,
@@ -644,7 +650,52 @@ async function maybeReopenFromQuery() {
 }
 
 async function submitPlan() {
-  // 防呆 Rule 2: 逐字段提示缺什么, 不再用 generic "请填写完整信息" 让用户摸不着头脑
+  if (!planForm.value.plannedDate) {
+    ElMessage.warning('请选择计划生产日');
+    return;
+  }
+  if (!factoryId.value) return;
+
+  // 以销定产 (2026-06-24): 来源=销售订单 → 按选中的产品行批量建计划 (每行一张, 产品/数量取自 SO 行)。
+  const isSoDriven = planForm.value.sourceType === 'CUSTOMER_ORDER';
+  if (isSoDriven) {
+    if (!planForm.value.sourceOrderId) {
+      ElMessage.warning('请选择来源销售订单');
+      return;
+    }
+    if (!planForm.value.sourceOrderItemIds || planForm.value.sourceOrderItemIds.length === 0) {
+      ElMessage.warning('请至少保留一个产品行 (在「产品行」多选中至少选 1 项)');
+      return;
+    }
+    dialogLoading.value = true;
+    try {
+      const payload = {
+        sourceOrderId: planForm.value.sourceOrderId,
+        itemIds: planForm.value.sourceOrderItemIds,
+        plannedDate: planForm.value.plannedDate,
+        estimatedWorkers: planForm.value.estimatedWorkers,
+        assignedSupervisorId: planForm.value.assignedSupervisorId || undefined,
+        notes: planForm.value.notes || undefined,
+        skipProcessReporting: planForm.value.skipProcessReporting,
+      };
+      const response = await post(`/${factoryId.value}/production-plans/batch-from-so`, payload);
+      if (response.success) {
+        const n = Array.isArray(response.data) ? response.data.length : planForm.value.sourceOrderItemIds.length;
+        ElMessage.success(`已生成 ${n} 张生产计划`);
+        dialogVisible.value = false;
+        loadData();
+      } else {
+        ElMessage.error(response.message || '创建失败');
+      }
+    } catch (error: any) {
+      console.error('[以销定产批量建计划失败]', error);
+    } finally {
+      dialogLoading.value = false;
+    }
+    return;
+  }
+
+  // 非 SO 来源 (MANUAL / AI_FORECAST / SAFETY_STOCK): 单产品手填 (原逻辑不变)
   if (!planForm.value.productTypeId) {
     ElMessage.warning('请选择产品类型');
     return;
@@ -653,29 +704,9 @@ async function submitPlan() {
     ElMessage.warning('请输入计划数量');
     return;
   }
-  if (!planForm.value.plannedDate) {
-    ElMessage.warning('请选择计划生产日');
-    return;
-  }
-  if (planForm.value.sourceType === 'CUSTOMER_ORDER' && !planForm.value.sourceOrderItemId) {
-    ElMessage.warning('选择"销售订单"来源时必须选择关联的销售订单产品行');
-    return;
-  }
-
-  if (!factoryId.value) return;
   dialogLoading.value = true;
   try {
-    // SP5 多SO合并: 构建 sourceOrderIds (主SO + 追加SO, 去重)
-    const primarySoId = planForm.value.sourceOrderId;
-    const allSoIds: string[] = [];
-    if (primarySoId) allSoIds.push(primarySoId);
-    for (const id of planForm.value.extraSourceOrderIds) {
-      if (id && !allSoIds.includes(id)) allSoIds.push(id);
-    }
-    const payload = {
-      ...planForm.value,
-      sourceOrderIds: allSoIds.length > 1 ? allSoIds : undefined,
-    };
+    const payload = { ...planForm.value };
     const response = await post(`/${factoryId.value}/production-plans`, payload);
     if (response.success) {
       ElMessage.success('创建成功');
@@ -2336,12 +2367,13 @@ function handleAiFill(params: TableRow) {
           label="产品行"
           required
         >
+          <!-- 以销定产 (2026-06-24): 多选, 选 SO 默认带出全部产品行, 取消不需要的; 每保留行各建一张计划 (产品/数量取自该行) -->
           <el-select
-            v-model="planForm.sourceOrderItemId"
-            placeholder="选择关联的销售订单产品行"
+            v-model="planForm.sourceOrderItemIds"
+            multiple
+            placeholder="默认已带出全部产品行, 可取消不需要的 (每行各建一张计划)"
             filterable
             style="width: 100%"
-            @change="handleSalesOrderItemSelect"
           >
             <el-option
               v-for="it in selectedOrderItems"
@@ -2350,6 +2382,9 @@ function handleAiFill(params: TableRow) {
               :value="String(it.id)"
             />
           </el-select>
+          <div v-if="planForm.sourceOrderItemIds.length > 1" style="font-size:12px;color:#909399;margin-top:4px">
+            已选 {{ planForm.sourceOrderItemIds.length }} 个产品, 将各建一张生产计划 (产品类型/数量自动取自销售订单行)
+          </div>
           <UpstreamMissingHint
             v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId && selectedOrderItems.length === 0"
             description="该订单暂无产品行，无法据此排产"
@@ -2360,13 +2395,12 @@ function handleAiFill(params: TableRow) {
             @action="goAddOrderItems(planForm.sourceOrderId || '')"
           />
         </el-form-item>
-        <el-form-item label="产品类型" required>
-          <!-- A4: 来源=销售订单时锁定产品类型，不允许自由选择 -->
+        <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
+        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="产品类型" required>
           <el-select
             v-model="planForm.productTypeId"
             placeholder="选择产品类型"
             filterable
-            :disabled="planForm.sourceType === 'CUSTOMER_ORDER'"
             style="width: 100%"
             @change="handleProductChange"
           >
@@ -2455,7 +2489,8 @@ function handleAiFill(params: TableRow) {
             批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
           </div>
         </el-form-item>
-        <el-form-item label="计划数量" required>
+        <!-- 以销定产: 来源=销售订单时数量按各产品行取, 不手填 → 隐藏 -->
+        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="计划数量" required>
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
         </el-form-item>
         <el-form-item label="计划生产日" required>

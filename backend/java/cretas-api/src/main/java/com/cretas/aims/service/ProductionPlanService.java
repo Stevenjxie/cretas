@@ -32,6 +32,19 @@ public interface ProductionPlanService {
     ProductionPlanDTO createProductionPlan(String factoryId, CreateProductionPlanRequest request, Long userId);
 
     /**
+     * 以销定产批量建计划 (六扇门 2026-06-24): 选一张销售订单的多个产品行, 各建一张生产计划。
+     *
+     * <p>每个产品行的 产品类型 + 计划数量 取自该 SO 行 (后端权威解析, 不信前端传值);
+     * 计划级共享设置 (计划生产日/报工模式/主管/工人数/备注) 应用到所有计划。
+     * 复用 {@link #createProductionPlan} 逐行创建, @Transactional 原子 (任一失败全回滚)。
+     * 单产品 = itemIds 只 1 个, 与原单条创建等价。
+     *
+     * @return 创建的生产计划列表 (按 itemIds 顺序)
+     */
+    java.util.List<ProductionPlanDTO> createPlansFromSalesOrder(
+            String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest request, Long userId);
+
+    /**
      * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
      *
      * <p>web 新建计划对话框初始化"免工序报工"开关时调用: F006 返 true (默认勾选两点),

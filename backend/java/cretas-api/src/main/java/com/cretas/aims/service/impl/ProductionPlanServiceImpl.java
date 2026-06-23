@@ -896,6 +896,61 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
+     * 以销定产批量建计划 (六扇门 2026-06-24): 选 SO 多个产品行, 各建一张计划。
+     * 产品+数量后端权威解析自 SalesOrderItem (不信前端传值); @Transactional 原子。
+     */
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public java.util.List<ProductionPlanDTO> createPlansFromSalesOrder(
+            String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest req, Long userId) {
+        // 跨租户校验: SO 须属当前工厂
+        SalesOrder so = salesOrderRepository.findById(req.getSourceOrderId())
+                .filter(o -> factoryId.equals(o.getFactoryId()))
+                .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
+                        "销售订单不存在或不属于当前工厂: " + req.getSourceOrderId()));
+
+        // SO 行 (权威来源): 按 id 索引, 只接受属于本 SO 的行
+        java.util.Map<String, SalesOrderItem> itemById = new java.util.HashMap<>();
+        for (SalesOrderItem it : salesOrderItemRepository.findBySalesOrderId(so.getId())) {
+            itemById.put(String.valueOf(it.getId()), it);
+        }
+
+        java.util.List<ProductionPlanDTO> created = new java.util.ArrayList<>();
+        for (String itemId : req.getItemIds()) {
+            SalesOrderItem item = itemById.get(itemId);
+            if (item == null) {
+                throw new com.cretas.aims.exception.BusinessException(400,
+                        "产品行不属于该销售订单: " + itemId)
+                        .withHint("请刷新后重新选择产品行");
+            }
+            if (item.getProductTypeId() == null) {
+                throw new com.cretas.aims.exception.BusinessException(400,
+                        "产品行缺少产品类型, 无法生成计划: " + (item.getProductName() != null ? item.getProductName() : itemId));
+            }
+            CreateProductionPlanRequest one = new CreateProductionPlanRequest();
+            // 每行各自的产品 + 数量 (权威自 SO 行)
+            one.setProductTypeId(item.getProductTypeId());
+            one.setPlannedQuantity(item.getQuantity());
+            one.setSourceType(PlanSourceType.CUSTOMER_ORDER);
+            one.setSourceOrderId(so.getId());
+            one.setSourceOrderItemId(itemId);
+            one.setSourceCustomerName(so.getCustomerName());
+            one.setCustomerOrderNumber(so.getOrderNumber());
+            // 计划级共享设置
+            one.setPlannedDate(req.getPlannedDate());
+            one.setExpectedCompletionDate(req.getExpectedCompletionDate());
+            one.setEstimatedWorkers(req.getEstimatedWorkers());
+            one.setAssignedSupervisorId(req.getAssignedSupervisorId());
+            one.setNotes(req.getNotes());
+            one.setSkipProcessReporting(req.getSkipProcessReporting());
+            created.add(createProductionPlan(factoryId, one, userId));
+        }
+        log.info("以销定产批量建计划: factoryId={}, soId={}, 产品行={}, 创建计划={}",
+                factoryId, so.getId(), req.getItemIds().size(), created.size());
+        return created;
+    }
+
+    /**
      * M-PREP-1 (Sprint 4 W2): 创建草稿态生产计划 — status=PREPARED.
      *
      * <p>调用 {@link #createProductionPlan} 走完正常创建流程后,
