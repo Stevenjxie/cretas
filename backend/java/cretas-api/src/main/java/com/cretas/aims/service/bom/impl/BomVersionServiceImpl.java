@@ -7,6 +7,7 @@ import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.BomVersion.VersionStatus;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomVersionRepository;
 import com.cretas.aims.service.bom.BomVersionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +37,7 @@ public class BomVersionServiceImpl implements BomVersionService {
 
     private final BomVersionRepository versionRepo;
     private final BomRecipeRepository recipeRepo;
+    private final BomSeasoningItemRepository seasoningItemRepo;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -221,21 +223,20 @@ public class BomVersionServiceImpl implements BomVersionService {
         snapshot.put("injectionRate", recipe.getInjectionRate());
 
         List<Map<String, Object>> seasoning = new ArrayList<>();
-        List<BomSeasoningItem> seasoningItems = recipe.getSeasoningItems();
-        if (seasoningItems != null) {
-            for (BomSeasoningItem si : seasoningItems) {
-                Map<String, Object> snap = new LinkedHashMap<>();
-                snap.put("id", si.getId());
-                snap.put("section", si.getSection());
-                snap.put("seq", si.getSeq());
-                snap.put("name", si.getName());
-                snap.put("dosagePerKgG", si.getDosagePerKgG());
-                snap.put("priceSource1", si.getPriceSource1());
-                snap.put("priceSource2", si.getPriceSource2());
-                snap.put("countInSeasoning", si.getCountInSeasoning());
-                snap.put("remark", si.getRemark());
-                seasoning.add(snap);
-            }
+        // 经 repo 取 (非 LAZY 集合) — tx 内外都安全, 避免 LazyInitializationException / 隐藏 N+1 (audit Issue 2).
+        List<BomSeasoningItem> seasoningItems = seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId());
+        for (BomSeasoningItem si : seasoningItems) {
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("id", si.getId());
+            snap.put("section", si.getSection());
+            snap.put("seq", si.getSeq());
+            snap.put("name", si.getName());
+            snap.put("dosagePerKgG", si.getDosagePerKgG());
+            snap.put("priceSource1", si.getPriceSource1());
+            snap.put("priceSource2", si.getPriceSource2());
+            snap.put("countInSeasoning", si.getCountInSeasoning());
+            snap.put("remark", si.getRemark());
+            seasoning.add(snap);
         }
         snapshot.put("seasoningItems", seasoning);
 

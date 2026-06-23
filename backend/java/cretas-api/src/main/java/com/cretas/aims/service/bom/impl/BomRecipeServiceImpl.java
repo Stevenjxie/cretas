@@ -219,6 +219,30 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
         clone.getItems().clear();
         clone.getItems().addAll(clonedItems);
+
+        // BOM 统管配方+锅序 (2026-06-24): clone 必须带上折叠后的配方 (锅序参数 + 调料明细),
+        // 否则克隆出的 DRAFT 调料为空 → 激活后调料成本静默归 0 (audit Issue 1).
+        clone.setCookingPotBaseKg(source.getCookingPotBaseKg());
+        clone.setSubsequentPotRatio(source.getSubsequentPotRatio());
+        clone.setInjectionRate(source.getInjectionRate());
+        List<BomSeasoningItem> sourceSeasoning = seasoningItemRepo.findByRecipeIdOrderBySeqAsc(source.getId());
+        List<BomSeasoningItem> clonedSeasoning = new ArrayList<>();
+        for (BomSeasoningItem s : sourceSeasoning) {
+            BomSeasoningItem cs = new BomSeasoningItem();
+            cs.setRecipeId(clone.getId());
+            cs.setFactoryId(factoryId);
+            cs.setSection(s.getSection());
+            cs.setSeq(s.getSeq());
+            cs.setName(s.getName());
+            cs.setDosagePerKgG(s.getDosagePerKgG());
+            cs.setPriceSource1(s.getPriceSource1());
+            cs.setPriceSource2(s.getPriceSource2());
+            cs.setCountInSeasoning(s.getCountInSeasoning());
+            cs.setRemark(s.getRemark());
+            clonedSeasoning.add(cs);
+        }
+        seasoningItemRepo.saveAll(clonedSeasoning);
+
         recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
     }

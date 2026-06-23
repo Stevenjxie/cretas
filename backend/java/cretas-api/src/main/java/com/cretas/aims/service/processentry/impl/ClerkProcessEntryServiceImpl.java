@@ -593,6 +593,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // BOM 统管配方+锅序 (2026-06-24): 调料折叠进 BOM → 优先读 BOM 的锅序参数 + bom_seasoning_items.
         // 算法一字不改 (RecipeCostCalculator 同源), 仅换数据源. null-tolerant: @InjectMocks 测试未注入 bom repo
         // 时跳过, 走下方 product_recipes 兼容路径 (灰度期未迁移 SKU 也走兼容路径, 保证零回归).
+        //
+        // 读 is_current BOM (任意 status, 含 DRAFT) — 与迁移目标 + 调料配方 tab + BomRecipe 的
+        // "定义即生效无需激活仪式" 一致 (BomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue).
+        // 不按 ACTIVE 收窄: 迁移逐字拷贝 product_recipes → 同 SKU BOM 成本与旧 ACTIVE 配方逐分一致
+        // (U8 cutover 逐 SKU 0-diff 验证兜底), 故选 is_current 不影响零回归; ACTIVE-gating 是可选的更
+        // 保守语义 (audit Issue 4), 如需收窄改 findBy...IsCurrentTrueAndStatus(ACTIVE) — 留 Steve 决策.
         if (bomRecipeRepo != null && bomSeasoningItemRepo != null) {
             Optional<BomRecipe> bomOpt = bomRecipeRepo
                     .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);

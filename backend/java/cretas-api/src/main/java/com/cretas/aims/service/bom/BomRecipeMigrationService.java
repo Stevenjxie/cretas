@@ -87,7 +87,8 @@ public class BomRecipeMigrationService {
 
             BomRecipe bom = bomOpt.get();
 
-            if (bomSeasoningItemRepo.existsByRecipeId(bom.getId())) {
+            // 含软删除计数: "曾迁移过即跳过" — 防 saveSeasoning 清空后重跑迁移覆盖用户编辑 (audit Issue 3).
+            if (bomSeasoningItemRepo.countByRecipeIdIncludingDeleted(bom.getId()) > 0) {
                 skippedAlready++;
                 results.add(SkuResult.builder()
                         .productTypeId(pr.getProductTypeId())

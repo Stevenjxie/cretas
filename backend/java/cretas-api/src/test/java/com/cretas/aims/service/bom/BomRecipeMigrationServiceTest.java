@@ -81,7 +81,7 @@ class BomRecipeMigrationServiceTest {
         when(productRecipeRepo.findByFactoryId(F)).thenReturn(List.of(pr));
         when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(F, PT))
                 .thenReturn(Optional.of(currentBom()));
-        when(bomSeasoningItemRepo.existsByRecipeId("bom-1")).thenReturn(false);
+        when(bomSeasoningItemRepo.countByRecipeIdIncludingDeleted("bom-1")).thenReturn(0L);
         when(ingredientRepo.findByRecipeIdOrderBySeqAsc("pr-1")).thenReturn(List.of(
                 ing("INJECTION", "盐水", "1200", true, 0),
                 ing("COOKING", "卤料包", "800", true, 1),
@@ -120,7 +120,7 @@ class BomRecipeMigrationServiceTest {
         when(productRecipeRepo.findByFactoryId(F)).thenReturn(List.of(activeRecipe()));
         when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(F, PT))
                 .thenReturn(Optional.of(currentBom()));
-        when(bomSeasoningItemRepo.existsByRecipeId("bom-1")).thenReturn(true);
+        when(bomSeasoningItemRepo.countByRecipeIdIncludingDeleted("bom-1")).thenReturn(3L);
 
         BomRecipeMigrationReport report = service.migrate(F, false);
 
@@ -155,7 +155,7 @@ class BomRecipeMigrationServiceTest {
         when(productRecipeRepo.findByFactoryId(F)).thenReturn(List.of(activeRecipe()));
         when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(F, PT))
                 .thenReturn(Optional.of(currentBom()));
-        when(bomSeasoningItemRepo.existsByRecipeId("bom-1")).thenReturn(false);
+        when(bomSeasoningItemRepo.countByRecipeIdIncludingDeleted("bom-1")).thenReturn(0L);
         when(ingredientRepo.findByRecipeIdOrderBySeqAsc("pr-1")).thenReturn(List.of(
                 ing("COOKING", "卤料包", "800", true, 0)));
 

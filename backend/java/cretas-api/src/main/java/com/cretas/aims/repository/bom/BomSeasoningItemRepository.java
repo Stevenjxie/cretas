@@ -2,6 +2,8 @@ package com.cretas.aims.repository.bom;
 
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -19,4 +21,12 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
 
     /** 幂等迁移用: 判断该 BOM 是否已有调料 (已迁移则跳过). */
     boolean existsByRecipeId(String recipeId);
+
+    /**
+     * 幂等迁移用 — 含软删除行计数. 原生查询绕过 {@code @Where(deleted_at IS NULL)},
+     * 实现 "曾经迁移过即跳过" 语义: 防止 saveSeasoning 清空(软删)后再次运行迁移
+     * 把 product_recipes 原始数据重新灌回, 覆盖用户编辑 (audit Issue 3).
+     */
+    @Query(value = "SELECT COUNT(*) FROM bom_seasoning_items WHERE recipe_id = :recipeId", nativeQuery = true)
+    long countByRecipeIdIncludingDeleted(@Param("recipeId") String recipeId);
 }
