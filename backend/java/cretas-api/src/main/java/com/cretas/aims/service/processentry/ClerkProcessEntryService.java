@@ -52,6 +52,32 @@ public interface ClerkProcessEntryService {
                                        List<String> warnings);
 
     /**
+     * SP-F Task 1.6: 原地重物化一个<b>已存在</b>的批次 (保留 ProductionBatch + WIP MaterialBatch 的 id)。
+     *
+     * <p>与 {@link #materializeBatch} 的关键区别: <b>不新建</b> ProductionBatch / WIP MaterialBatch ——
+     * 而是复用 caller 传入的 {@code existingBatchId} + {@code existingWipMbId}, 仅重写消耗边/报工 +
+     * 更新 WIP 批的 receiptQuantity/unitPrice + ProductionBatch.quantity。
+     *
+     * <p><b>为什么原地更新而非删除重建</b>: 下游消费者按 id 引用这两个实体
+     * (MaterialConsumption.batchId = WIP UUID; MaterialBatch.sourceDocId = ProductionBatch id)。
+     * 删除重建会 churn id 并悬挂这些引用。
+     *
+     * <p><b>caller 的前置职责</b> (本方法<b>不</b>做): 已校验无下游消耗 + 已软删旧消耗边/报工。
+     * 本方法只: 重写消耗边 + SEASONING/人工报工 + 重算总成本 + 更新现有 WIP 批 + ProductionBatch.quantity。
+     *
+     * @param ctx            单批上下文 (batchNumber 必传现有批次号以保留, planId/finished/laborRate 等已预解析)
+     * @param existingBatchId 现有 ProductionBatch.id (保留, 不新建)
+     * @param existingWipMbId 现有 WIP MaterialBatch.id (保留, 不新建; 可空 = 此批之前无 WIP 产出)
+     * @param steps          本批工序列表 (供调料/人工/产出量计算)
+     * @param edges          已解析的上游消耗边 (RAW + SEMI_FINISHED), 唯一上游消耗输入
+     * @param warnings       警告收集器
+     * @return 物化结果 (productionBatchId = existingBatchId, wipMaterialBatchId = existingWipMbId, 新总成本 + 消耗行数)
+     */
+    MaterializedBatch rematerializeInPlace(MaterializeContext ctx, Long existingBatchId,
+                                           String existingWipMbId, List<StepEntry> steps,
+                                           List<ResolvedEdge> edges, List<String> warnings);
+
+    /**
      * 解析工厂工时单价 (SP-F: 暴露给 ProcessSheetService 复用, 单一真相)。
      *
      * <p>从 factory_cost_settings 读 laborHourlyRate; 未配置则回退默认值并记 warning。

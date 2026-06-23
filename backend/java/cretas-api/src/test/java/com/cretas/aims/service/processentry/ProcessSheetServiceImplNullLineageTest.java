@@ -7,9 +7,11 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +52,8 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private ProcessSheetRowRepository rowRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private ProductionBatchRepository productionBatchRepo;
+    @Mock private MaterialConsumptionRepository consumptionRepo;
+    @Mock private ProductionReportRepository reportRepo;
     @Mock private ProductionPlanRepository productionPlanRepository;
 
     @Test
@@ -57,7 +61,7 @@ class ProcessSheetServiceImplNullLineageTest {
     void saveRow_nullRawLineage_throws400() {
         ProcessSheetServiceImpl service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
-                productionPlanRepository, new ObjectMapper());
+                consumptionRepo, reportRepo, productionPlanRepository, new ObjectMapper());
 
         // plan belongs to factory
         ProductionPlan plan = new ProductionPlan();

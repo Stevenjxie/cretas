@@ -8,14 +8,17 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -55,6 +58,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final ProcessSheetRowRepository rowRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final ProductionBatchRepository productionBatchRepo;
+    private final MaterialConsumptionRepository consumptionRepo;
+    private final ProductionReportRepository reportRepo;
     private final ProductionPlanRepository productionPlanRepository;
     private final ObjectMapper objectMapper;
 
@@ -116,17 +121,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
 
         // 9. 组装结果
-        BigDecimal output = req.getOutputQuantity();
-        BigDecimal yieldRate = (req.getInputQuantity() != null && req.getInputQuantity().signum() > 0)
-                ? output.divide(req.getInputQuantity(), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100"))
-                : null;
-        BigDecimal unitPrice = output.signum() > 0
-                ? mat.getRowTotalCost().divide(output, 4, RoundingMode.HALF_UP)
-                : null;
-
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
-                yieldRate, mat.getRowTotalCost(), unitPrice, false, true, warnings);
+                yieldRate(req), mat.getRowTotalCost(),
+                unitPrice(mat.getRowTotalCost(), req.getOutputQuantity()), false, true, warnings);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -134,12 +131,118 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * 覆盖已有行 (update-in-place 保 id)。Task 1.6 实现 —— 当前 stub。
+     * 覆盖已有行 (update-in-place 保 id) —— SP-F Task 1.6。
+     *
+     * <p>跑在 {@code saveRow} 的 {@code @Transactional} 内, 所有软删 + 重写都在同一事务 (原子)。
+     * 下游消耗守卫 (409) 在任何写入之前抛出。re-save 走 UPDATE 现有行, 不会撞 UK insert 冲突,
+     * 故无需 {@code DataIntegrityViolationException} 处理。
+     *
+     * <p>三种情形:
+     * <ul>
+     *   <li><b>CASE A</b> (existing.batchId == null, 之前是 DRAFT): output≤0 仍 DRAFT; output&gt;0 则
+     *       像 create 一样新建批次 (DRAFT 无既有批可保), 更新行为 SAVED。</li>
+     *   <li><b>CASE B1</b> (existing.batchId != null, output≤0): 逆向物化为 DRAFT ——
+     *       软删旧边/报工 + 软删 WIP/ProductionBatch + 行 batchId 置 null。</li>
+     *   <li><b>CASE B2</b> (existing.batchId != null, output&gt;0): 软删旧边/报工 + 原地重物化 (保 id)。</li>
+     * </ul>
+     * CASE B 前先查下游消耗 (谁消耗了本批的 WIP); 非空 → 409 (🔒 成本图完整性)。
      */
     private ProcessSheetRowResult resaveRow(String factoryId, String planId,
                                             ProcessSheetRowRequest req, Long userId,
                                             ProcessSheetRow existing) {
-        throw new BusinessException(409, "re-save 待 Task 1.6 实现");
+        List<String> warnings = new ArrayList<>();
+
+        // 与 create 同的 factory-scoped 上游/原料边解析 (🔒)
+        List<ResolvedEdge> edges = resolveEdges(factoryId, req);
+        BigDecimal newOutput = req.getOutputQuantity();
+        boolean hasOutput = newOutput != null && newOutput.signum() > 0;
+
+        // ── CASE A: 之前是 DRAFT (无既有批次) ─────────────────────────
+        if (existing.getBatchId() == null) {
+            if (!hasOutput) {
+                // 仍是 DRAFT —— 仅更新行 payload, 保持 DRAFT, 不物化。
+                updateRowInPlace(existing, req, null, null, "DRAFT");
+                return buildResult(req, null, null, null, null, null, true, false, warnings);
+            }
+            // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
+            String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+            StepEntry step = buildStepEntry(req);
+            MaterializeContext ctx = new MaterializeContext(
+                    factoryId,
+                    req.isFinished() ? planId : null,
+                    req.getProductTypeId(),
+                    req.getBatchNumber(),
+                    req.isFinished(),
+                    clerkService.resolveLaborRate(factoryId, warnings),
+                    clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
+                    rawMaterialTypeId,
+                    userId);
+            MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+            updateRowInPlace(existing, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+            return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
+                    yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
+                    true, true, warnings);
+        }
+
+        // ── CASE B: 之前已物化 (existing.batchId != null) ────────────
+        // 查既有 WIP 产出批 (可能为空: 之前 output=0 但 batchId 已设的边缘情形 → 防御处理)。
+        Optional<MaterialBatch> wipOpt = materialBatchRepo
+                .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                        factoryId, "PRODUCTION_BATCH", existing.getBatchId().toString());
+
+        // 下游消耗守卫 (🔒): 谁消耗了本批的 WIP? 非空 → 拒绝 (任何写入之前)。
+        if (wipOpt.isPresent()) {
+            List<MaterialConsumption> downstream = consumptionRepo
+                    .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
+            if (!downstream.isEmpty()) {
+                throw new BusinessException(409,
+                        "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+            }
+        }
+
+        // 无下游 → 安全重写。先软删旧边/报工 (同事务)。
+        consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
+        reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
+
+        // ── CASE B1: 新产出≤0 → 逆向物化为 DRAFT ─────────────────────
+        if (!hasOutput) {
+            // 软删 WIP MaterialBatch + ProductionBatch (有 @Where deleted_at IS NULL, 自动从查询排除)。
+            wipOpt.ifPresent(wip -> {
+                wip.softDelete();
+                materialBatchRepo.save(wip);
+            });
+            productionBatchRepo.findByIdAndFactoryId(existing.getBatchId(), factoryId)
+                    .ifPresent(pb -> {
+                        pb.softDelete();
+                        productionBatchRepo.save(pb);
+                    });
+            updateRowInPlace(existing, req, null, null, "DRAFT");
+            return buildResult(req, null, null, null, null, null, true, false, warnings);
+        }
+
+        // ── CASE B2: 新产出>0 → 原地重物化 (保 id) ───────────────────
+        String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+        StepEntry step = buildStepEntry(req);
+        MaterializeContext ctx = new MaterializeContext(
+                factoryId,
+                req.isFinished() ? planId : null,
+                req.getProductTypeId(),
+                existing.getBatchNumber(),  // 保留现有批次号
+                req.isFinished(),
+                clerkService.resolveLaborRate(factoryId, warnings),
+                clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
+                rawMaterialTypeId,
+                userId);
+
+        String existingWipMbId = wipOpt.map(MaterialBatch::getId).orElse(null);
+        MaterializedBatch mat = clerkService.rematerializeInPlace(
+                ctx, existing.getBatchId(), existingWipMbId, List.of(step), edges, warnings);
+
+        // batchId/batchNumber 不变; 仅刷新 payload + status。
+        updateRowInPlace(existing, req, existing.getBatchId(), existing.getBatchNumber(), "SAVED");
+        return buildResult(req, existing.getBatchId(), existing.getBatchNumber(),
+                yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
+                true, true, warnings);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -264,6 +367,37 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // 完整幂等读已有行测在 Task 1.7; 这里映射 409 + 整事务回滚 loser 的物化图。
             throw new BusinessException(409, "该行已存在 (并发提交)");
         }
+    }
+
+    /**
+     * SP-F Task 1.6: 原地更新已存在的 process_sheet_rows 行 (保 row id)。
+     * 用于 re-save —— 刷新 batchId/batchNumber/payload/status, 不 insert 新行 (不撞 UK)。
+     */
+    private void updateRowInPlace(ProcessSheetRow existing, ProcessSheetRowRequest req,
+                                  Long batchId, String batchNumber, String rowStatus) {
+        existing.setBatchId(batchId);
+        existing.setBatchNumber(batchNumber);
+        existing.setRowPayload(serializePayload(req));
+        existing.setRowStatus(rowStatus);
+        rowRepo.save(existing);
+    }
+
+    /** yieldRate = output/input × 100 (scale 4, HALF_UP); input≤0 → null。 */
+    private BigDecimal yieldRate(ProcessSheetRowRequest req) {
+        BigDecimal output = req.getOutputQuantity();
+        if (output == null || req.getInputQuantity() == null || req.getInputQuantity().signum() <= 0) {
+            return null;
+        }
+        return output.divide(req.getInputQuantity(), 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"));
+    }
+
+    /** unitPrice = rowTotalCost/output (scale 4, HALF_UP); output≤0 → null。 */
+    private BigDecimal unitPrice(BigDecimal rowTotalCost, BigDecimal output) {
+        if (rowTotalCost == null || output == null || output.signum() <= 0) {
+            return null;
+        }
+        return rowTotalCost.divide(output, 4, RoundingMode.HALF_UP);
     }
 
     private String serializePayload(ProcessSheetRowRequest req) {

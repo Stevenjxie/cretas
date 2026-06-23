@@ -10,6 +10,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.recipe.ProductRecipe;
@@ -20,6 +21,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
@@ -82,6 +84,9 @@ class ProcessSheetServiceImplTest {
 
     @Autowired
     private ProductionPlanRepository planRepo;
+
+    @Autowired
+    private ProcessSheetRowRepository rowRepo;
 
     @Autowired
     private UserRepository userRepo;
@@ -348,6 +353,141 @@ class ProcessSheetServiceImplTest {
         assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Task 1.6 — re-save (update-in-place) path
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("6: re-save 无下游 → 原地更新保 id, 旧边软删, WIP 同 id 量价刷新")
+    void resave_noDownstream_updatesInPlacePreservingIds() {
+        // 初次保存 修油 output=80
+        ProcessSheetRowResult first = saveXiuyou("row-resave", "100", "80");
+        Long originalBatchId = first.getBatchId();
+        String originalBatchNumber = first.getBatchNumber();
+        assertThat(originalBatchId).isNotNull();
+
+        MaterialBatch wipBefore = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(originalBatchId)).orElseThrow();
+        String originalWipId = wipBefore.getId();
+        assertThat(wipBefore.getReceiptQuantity()).isEqualByComparingTo("80");
+
+        // re-save 同 clientRowId, output=90, 无下游
+        ProcessSheetRowResult second = saveXiuyou("row-resave", "100", "90");
+
+        assertThat(second.isUpdated()).as("re-save → updated=true").isTrue();
+        assertThat(second.isMaterialized()).isTrue();
+        assertThat(second.getBatchId()).as("batchId 保留不变").isEqualTo(originalBatchId);
+        assertThat(second.getBatchNumber()).as("batchNumber 保留不变").isEqualTo(originalBatchNumber);
+
+        // 恰好一条 active RAW consumption (旧的已软删, @Where deleted_at IS NULL 排除)
+        List<MaterialConsumption> active = consumptionRepo.findByProductionBatchId(originalBatchId);
+        assertThat(active).as("旧边软删后只剩 1 条 active").hasSize(1);
+        assertThat(active.get(0).getSourceType()).isEqualTo("RAW_MATERIAL");
+        // 新边量 100kg × ¥10 = ¥1000 (input 不变)
+        assertThat(active.get(0).getTotalCost()).isEqualByComparingTo("1000.00");
+
+        // WIP 同 id, receiptQuantity 刷为 90, unitPrice 重算 (1000/90 = 11.1111)
+        MaterialBatch wipAfter = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(originalBatchId)).orElseThrow();
+        assertThat(wipAfter.getId()).as("WIP id 保留不变").isEqualTo(originalWipId);
+        assertThat(wipAfter.getReceiptQuantity()).isEqualByComparingTo("90");
+        assertThat(wipAfter.getUnitPrice()).isEqualByComparingTo("11.1111");
+
+        // ProductionBatch.quantity 刷为 90
+        ProductionBatch pb = batchRepo.findByIdAndFactoryId(originalBatchId, FACTORY_ID).orElseThrow();
+        assertThat(pb.getQuantity()).isEqualByComparingTo("90");
+    }
+
+    @Test
+    @DisplayName("7: re-save 已被下游消耗 → 409")
+    void resave_withDownstreamConsumed_throws409() {
+        // 上游 修油 batch
+        ProcessSheetRowResult up = saveXiuyou("row-up", "60", "50");
+
+        // 下游 熟制 消耗它
+        seedSeasoningRecipe();
+        ProcessSheetRowRequest down = baseReq("row-down", "shuzhi", 3, "45");
+        down.setInputQuantity(new BigDecimal("50"));
+        down.setSeasoningStep(true);
+        down.setPotCount(1);
+        down.setUpstreamSources(List.of(upstreamRef(up.getBatchNumber(), "50")));
+        processSheetService.saveRow(FACTORY_ID, planId, down, operatorId);
+
+        // re-save 上游行 → 409 (已被下游消耗)
+        ProcessSheetRowRequest upResave = baseReq("row-up", "xiuyou", 1, "55");
+        upResave.setInputQuantity(new BigDecimal("60"));
+        upResave.setRawMaterialInputs(List.of(rawInput(rawBatchId, "60")));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, upResave, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(ex.getMessage()).contains("已被下游");
+                });
+    }
+
+    @Test
+    @DisplayName("8: DRAFT 行 re-save 带产出 → 物化 (batchId 由 null 变非空)")
+    void resave_draftThenMaterialize() {
+        // 初次 output=0 → DRAFT
+        ProcessSheetRowResult draft = saveXiuyou("row-draft-mat", "100", "0");
+        assertThat(draft.getBatchId()).isNull();
+        assertThat(draft.isMaterialized()).isFalse();
+
+        // re-save 同 clientRowId, output=50 → 物化
+        ProcessSheetRowResult materialized = saveXiuyou("row-draft-mat", "100", "50");
+
+        assertThat(materialized.isUpdated()).isTrue();
+        assertThat(materialized.isMaterialized()).as("DRAFT → 物化").isTrue();
+        assertThat(materialized.getBatchId()).as("batchId 现已设置").isNotNull();
+
+        // 行状态 SAVED, batchId 落库
+        ProcessSheetRow row = rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                FACTORY_ID, planId, "xiuyou", "row-draft-mat").orElseThrow();
+        assertThat(row.getRowStatus()).isEqualTo("SAVED");
+        assertThat(row.getBatchId()).isEqualTo(materialized.getBatchId());
+
+        // WIP 批已物化, receiptQuantity=50
+        MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(materialized.getBatchId())).orElseThrow();
+        assertThat(wip.getReceiptQuantity()).isEqualByComparingTo("50");
+    }
+
+    @Test
+    @DisplayName("9: 已物化行 re-save output=0 无下游 → 逆向为 DRAFT (软删 WIP/批)")
+    void resave_materializedToZero_reversesToDraft() {
+        // 初次 output=80 → 物化
+        ProcessSheetRowResult mat = saveXiuyou("row-reverse", "100", "80");
+        Long batchId = mat.getBatchId();
+        assertThat(batchId).isNotNull();
+
+        // re-save output=0 无下游 → 逆向 DRAFT
+        ProcessSheetRowResult reversed = saveXiuyou("row-reverse", "100", "0");
+
+        assertThat(reversed.isUpdated()).isTrue();
+        assertThat(reversed.isMaterialized()).as("逆向 → 不再物化").isFalse();
+        assertThat(reversed.getBatchId()).as("batchId 置 null").isNull();
+
+        // 行 batchId null, status DRAFT
+        ProcessSheetRow row = rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                FACTORY_ID, planId, "xiuyou", "row-reverse").orElseThrow();
+        assertThat(row.getBatchId()).isNull();
+        assertThat(row.getRowStatus()).isEqualTo("DRAFT");
+
+        // WIP MaterialBatch 软删 (@Where deleted_at IS NULL → 查询排除)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId)))
+                .as("WIP 软删后查不到").isEmpty();
+
+        // ProductionBatch 软删 (@Where → findByIdAndFactoryId 排除)
+        assertThat(batchRepo.findByIdAndFactoryId(batchId, FACTORY_ID))
+                .as("ProductionBatch 软删后查不到").isEmpty();
+
+        // 旧边软删 → 0 条 active consumption
+        assertThat(consumptionRepo.findByProductionBatchId(batchId))
+                .as("旧消耗边软删").isEmpty();
     }
 
     // ─────────────────────────────────────────────────────────────

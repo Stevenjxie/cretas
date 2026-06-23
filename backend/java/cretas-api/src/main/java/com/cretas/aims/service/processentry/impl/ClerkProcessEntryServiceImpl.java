@@ -305,6 +305,87 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 wipMbId, batchTotalCost, consumptionsWritten);
     }
 
+    /**
+     * SP-F Task 1.6: 原地重物化 —— 见接口 Javadoc。
+     *
+     * <p>镜像 {@link #materializeBatch} 的成本计算 (消耗边 + 调料/人工)，但写入对象是
+     * caller 传入的 {@code existingBatchId}，并<b>更新</b>现有 WIP MaterialBatch + ProductionBatch
+     * (factory-scoped 加载)，而非新建。保 id 防止悬挂下游引用 (🔒 成本图完整性)。
+     */
+    @Override
+    public MaterializedBatch rematerializeInPlace(MaterializeContext ctx, Long existingBatchId,
+                                                  String existingWipMbId, List<StepEntry> steps,
+                                                  List<ResolvedEdge> edges, List<String> warnings) {
+        BigDecimal batchTotalCost = BigDecimal.ZERO;
+        int consumptionsWritten = 0;
+
+        // 1. 重写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
+        //    与 materializeBatch 同算式 (setScale(2,HALF_UP)), 写入 existingBatchId.
+        for (ResolvedEdge e : edges) {
+            MaterialBatch src = e.getSourceBatch();
+            BigDecimal unitPrice = nz(src.getUnitPrice());
+            BigDecimal qty = nz(e.getFeedQuantityKg());
+            BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
+            writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), existingBatchId,
+                    src.getId(), src.getMaterialTypeId(),
+                    qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
+            batchTotalCost = batchTotalCost.add(edgeCost);
+            consumptionsWritten++;
+        }
+
+        // 2. 调料 + 人工 + 产出量 —— 逐工序计算 (镜像 materializeBatch).
+        BigDecimal lastOutputQty = BigDecimal.ZERO;
+        for (StepEntry st : steps) {
+            if (isSeasoningStep(st)) {
+                BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
+                if (seasoningCost.signum() > 0) {
+                    writeSeasoningReport(ctx.getFactoryId(), existingBatchId, st, seasoningCost, ctx.getUserId());
+                    batchTotalCost = batchTotalCost.add(seasoningCost);
+                }
+            } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+                String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
+                warnings.add("熟制工序「" + processName + "」未识别为调味(缺 processCategory=SEASONING 或锅数)," +
+                        " 调料成本未计入 — 请配置工序成本类别");
+            }
+
+            BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
+                    ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
+                    : computeLaborCost(st, ctx.getLaborRate());
+            batchTotalCost = batchTotalCost.add(laborCost);
+
+            if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
+                lastOutputQty = st.getOutputQuantity();
+            }
+        }
+
+        // 3. 更新现有 WIP MaterialBatch (保 id) —— 重置 receiptQuantity + unitPrice.
+        //    caller 保证 existingWipMbId 非空 (CASE B2: 之前 output>0 已物化 WIP)。
+        //    factory-scoped 加载防跨租户 (🔒)。
+        if (existingWipMbId != null) {
+            MaterialBatch wip = materialBatchRepo.findByIdAndFactoryId(existingWipMbId, ctx.getFactoryId())
+                    .orElseThrow(() -> new BusinessException(404,
+                            "WIP 批次不存在或无权访问: " + existingWipMbId));
+            wip.setReceiptQuantity(lastOutputQty);
+            BigDecimal wipUnitPrice = (batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0)
+                    ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            wip.setUnitPrice(wipUnitPrice);
+            materialBatchRepo.save(wip);
+        }
+
+        // 4. 更新 ProductionBatch.quantity (保 id) —— factory-scoped (🔒).
+        ProductionBatch pb = batchRepo.findByIdAndFactoryId(existingBatchId, ctx.getFactoryId())
+                .orElseThrow(() -> new BusinessException(404,
+                        "生产批次不存在或无权访问: " + existingBatchId));
+        if (lastOutputQty.signum() > 0) {
+            pb.setQuantity(lastOutputQty);
+        }
+        batchRepo.save(pb);
+
+        return new MaterializedBatch(existingBatchId, pb.getBatchNumber(),
+                existingWipMbId, batchTotalCost, consumptionsWritten);
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Batch creation
     // ─────────────────────────────────────────────────────────────
