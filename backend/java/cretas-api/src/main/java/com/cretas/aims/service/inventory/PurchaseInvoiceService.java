@@ -61,4 +61,7 @@ public interface PurchaseInvoiceService {
 
     /** 查询某采购订单的全部发票 */
     List<PurchaseInvoice> listByPurchaseOrder(String factoryId, String poId);
+
+    /** 查询本工厂全部发票 (采购发票管理页直接进入, 不带 poId 时列全量, 按创建时间倒序) */
+    List<PurchaseInvoice> listByFactory(String factoryId);
 }
