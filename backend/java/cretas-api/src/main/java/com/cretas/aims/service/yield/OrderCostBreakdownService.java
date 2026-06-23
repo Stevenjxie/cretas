@@ -65,7 +65,27 @@ public class OrderCostBreakdownService {
         if (batches.isEmpty()) {
             return empty(orderId, maskPrice);
         }
+        return computeForBatches(factoryId, orderId, batches, maskPrice);
+    }
 
+    /**
+     * SP-C: 按批次号查单盒成本 (存货生产无订单号场景).
+     * findByFactoryIdAndBatchNumber 是 factory-scoped — 跨租户安全。
+     * DTO.orderId 字段填 batchNumber (前端仅作展示 label)。
+     */
+    public OrderCostBreakdownDTO computeByBatch(String factoryId, String batchNumber, boolean maskPrice) {
+        ProductionBatch b = batchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产批次不存在: " + batchNumber));
+        return computeForBatches(factoryId, batchNumber, List.of(b), maskPrice);
+    }
+
+    /**
+     * 内核: 已有 batches 列表 → 成本归集 → OrderCostBreakdownDTO.
+     * by-order 与 by-batch 共用此方法; {@code label} 填入 DTO.orderId (展示用, by-order=orderId, by-batch=batchNumber).
+     * <p>纯 extract-method: 无任何逻辑变更, by-order 行为零回归。
+     */
+    private OrderCostBreakdownDTO computeForBatches(String factoryId, String label,
+                                                     List<ProductionBatch> batches, boolean maskPrice) {
         BigDecimal labor = BigDecimal.ZERO;
         BigDecimal seasoning = BigDecimal.ZERO;
         BigDecimal packaging = BigDecimal.ZERO;
@@ -102,7 +122,7 @@ public class OrderCostBreakdownService {
                         continue;
                     }
                     // CALC-003: 显式 costCategory 优先分类; null/未知 → 回退 step-index 启发式 (向后兼容)
-                    String bucket = resolveCostBucket(steps.get(i).getCostCategory(), i, steps.size(), factoryId, orderId);
+                    String bucket = resolveCostBucket(steps.get(i).getCostCategory(), i, steps.size(), factoryId, label);
                     if ("PACKAGING".equals(bucket)) {
                         packaging = packaging.add(m);
                     } else if ("SEASONING".equals(bucket)) {
@@ -189,7 +209,7 @@ public class OrderCostBreakdownService {
         }
 
         OrderCostBreakdownDTO dto = OrderCostBreakdownDTO.builder()
-                .orderId(orderId)
+                .orderId(label)
                 .boxCount(boxCount)
                 .hasData(true)
                 .priceMasked(maskPrice)

@@ -24,6 +24,13 @@ public interface YieldReportService {
     BatchYieldDTO getYield(String factoryId, Long batchId);
 
     /**
+     * SP-C: 按批次号查出成率 (存货生产无订单号场景).
+     * 通过 findByFactoryIdAndBatchNumber 解析批次 id, 再复用 getYield.
+     * 批次不存在 → {@code BusinessException(404)}.
+     */
+    BatchYieldDTO getBatchYieldByNumber(String factoryId, String batchNumber);
+
+    /**
      * 单元 F (F006 REQ-21 "以订单的模式呈现…分订单分产品分工序"):
      * 一张销售订单下全部生产批次的出成率聚合 (复用 {@link #getYield} 逐批求, 再聚合)。
      *
