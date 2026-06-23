@@ -144,6 +144,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
             BigDecimal batchTotalCost = BigDecimal.ZERO;
             BigDecimal lastOutputQty = BigDecimal.ZERO;
+            // Fix: WIP MaterialBatch must carry a raw_material_types FK, not a product_types id.
+            // Capture the first available raw materialTypeId from this batch's lineage.
+            String firstRawMaterialTypeId = null;
 
             for (StepEntry st : be.getSteps()) {
                 // 4a. 原料消耗 (首道领料)
@@ -153,6 +156,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                         ri.getMaterialBatchId(), factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "原料批次不存在: " + ri.getMaterialBatchId()));
+                        if (firstRawMaterialTypeId == null && rawMb.getMaterialTypeId() != null) {
+                            firstRawMaterialTypeId = rawMb.getMaterialTypeId();
+                        }
                         BigDecimal price = nz(rawMb.getUnitPrice());
                         BigDecimal qty = nz(ri.getQuantity());
                         BigDecimal lineCost = price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
@@ -177,6 +183,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         MaterialBatch srcMb = materialBatchRepo.findByIdAndFactoryId(srcMbId, factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "WIP 批次 MaterialBatch 不存在: " + srcMbId));
+                        if (firstRawMaterialTypeId == null && srcMb.getMaterialTypeId() != null) {
+                            firstRawMaterialTypeId = srcMb.getMaterialTypeId();
+                        }
                         BigDecimal feedKg = nz(us.getFeedQuantityKg());
                         BigDecimal upstreamUnitPrice = nz(srcMb.getUnitPrice());
                         BigDecimal edgeCost = upstreamUnitPrice.multiply(feedKg)
@@ -224,7 +233,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
                         : BigDecimal.ZERO;
                 String wipMbId = createWipMaterialBatch(
-                        factoryId, batch, be.getProductTypeId(),
+                        factoryId, batch, firstRawMaterialTypeId,
                         lastOutputQty, wipUnitPrice, wksWarehouseId, operatorId);
                 wipMbIdByKey.put(be.getClientBatchKey(), wipMbId);
                 wipMaterialized++;
@@ -311,7 +320,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
 
     private String createWipMaterialBatch(String factoryId, ProductionBatch batch,
-                                           String productTypeId, BigDecimal outputQty,
+                                           String rawMaterialTypeId, BigDecimal outputQty,
                                            BigDecimal unitPrice, String warehouseId,
                                            Long operatorId) {
         String mbId = UUID.randomUUID().toString();
@@ -325,7 +334,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setId(mbId);
         mb.setFactoryId(factoryId);
         mb.setBatchNumber(mbNumber);
-        mb.setMaterialTypeId(productTypeId);
+        // rawMaterialTypeId is the FK to raw_material_types (nullable when no raw lineage).
+        // Previously this was set to productTypeId which is a product_types FK — an invalid reference.
+        mb.setMaterialTypeId(rawMaterialTypeId);
         mb.setWarehouseId(warehouseId);
         mb.setReceiptQuantity(outputQty);
         mb.setQuantityUnit("kg");
