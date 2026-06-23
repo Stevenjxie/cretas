@@ -203,6 +203,8 @@ export interface RawMaterialBatchOption {
   quantityUnit: string | null;
   unit: string | null;
   unitPrice: number | null;
+  /** Present when the backend returns it; 'PRODUCTION_BATCH' means WIP/clerk batch. */
+  sourceDocType?: string | null;
 }
 
 export function getAvailableRawBatches(

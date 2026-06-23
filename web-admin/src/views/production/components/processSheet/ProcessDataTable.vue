@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 import {
@@ -80,9 +80,21 @@ function extractRawBatches(
   data: RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] } | null | undefined,
 ): RawMaterialBatchOption[] {
   if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (typeof data === 'object' && 'content' in data && Array.isArray(data.content)) return data.content;
-  return [];
+  const all: RawMaterialBatchOption[] = Array.isArray(data)
+    ? data
+    : (typeof data === 'object' && 'content' in data && Array.isArray(data.content))
+      ? data.content
+      : [];
+  // 修油 首道只能领用真实原料批次，不能领 WIP/半成品批次。
+  // 过滤策略（双重防御）:
+  //   1. 优先用 sourceDocType === 'PRODUCTION_BATCH'（后端已返回时最可靠）。
+  //   2. 兜底用 batchNumber 前缀 — SP-F 文员逐道录入产生的 WIP 批均以
+  //      "WIP-" 或 "CLK-" 开头 (CLK-W- / CLK-B- 是后端 ProcessSheetService 的命名方案).
+  return all.filter((b) => {
+    if (b.sourceDocType != null) return b.sourceDocType !== 'PRODUCTION_BATCH';
+    const bn = b.batchNumber ?? '';
+    return !bn.startsWith('WIP-') && !bn.startsWith('CLK-');
+  });
 }
 
 function rawBatchAvailable(batch: RawMaterialBatchOption): number {
@@ -173,7 +185,27 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
 // -------------------------------------------------------------------------
 // Rows state
 // -------------------------------------------------------------------------
-const rows = ref<SheetRow[]>(props.initialRows.map(hydrateRow));
+// Initialise empty; the watch below populates rows once the async fetch in
+// the parent (ProcessSheet.vue → loadAll → getRows) resolves and the
+// initialRows prop arrives.  Without a watch, rows was set ONCE at setup()
+// time when initialRows was still [] (the fetch hadn't returned yet).
+const rows = ref<SheetRow[]>([]);
+
+// Re-hydrate saved rows whenever the parent delivers them.
+// Guard: only apply when rows is still in its initial-load state (all
+// UNSAVED rows means no user edits yet), so we don't clobber a row the
+// user has already started filling in after the sheet was opened.
+watch(
+  () => props.initialRows,
+  (incoming) => {
+    // If the user has already added unsaved rows, don't overwrite them.
+    // Only hydrate on the first non-empty delivery (initial load).
+    const hasUserEdits = rows.value.some((r) => r.rowStatus === 'UNSAVED');
+    if (hasUserEdits && rows.value.length > 0) return;
+    rows.value = (incoming ?? []).map(hydrateRow);
+  },
+  { immediate: true, deep: false },
+);
 
 function addRow() {
   rows.value.push(blankRow());
