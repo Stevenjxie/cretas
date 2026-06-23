@@ -1,0 +1,302 @@
+package com.cretas.aims.service.processentry.impl;
+
+import com.cretas.aims.dto.processentry.MaterializeContext;
+import com.cretas.aims.dto.processentry.MaterializedBatch;
+import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
+import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.dto.processentry.ResolvedEdge;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.factory.WarehouseCodes;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.service.processentry.ClerkProcessEntryService;
+import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * SP-F Task 1.5 — 逐工序电子表格单行增量服务实现 (新建路径)。
+ *
+ * <p>复用 {@link ClerkProcessEntryService#materializeBatch} 写核心; caller 这边负责:
+ * <ul>
+ *   <li>跨租户守卫 (plan 归属 factory)</li>
+ *   <li>factory-scoped 上游/原料边解析 (rawMaterialInputs → RAW; upstreamSources → SEMI via 持久化 batchNumber)</li>
+ *   <li>SP-E FK 防线: WIP 批 materialTypeId 必从原料或上游 WIP 派生 (空 → 400)</li>
+ *   <li>把请求映射为单个 StepEntry (含 multi-segment laborSegments)</li>
+ *   <li>写/更新 process_sheet_rows 行追踪表</li>
+ * </ul>
+ *
+ * <p>再次保存已存在的行 → 委托 {@link #resaveRow} (Task 1.6, 当前为 409 stub)。
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class ProcessSheetServiceImpl implements ProcessSheetService {
+
+    private final ClerkProcessEntryService clerkService;
+    private final ProcessSheetRowRepository rowRepo;
+    private final MaterialBatchRepository materialBatchRepo;
+    private final ProductionBatchRepository productionBatchRepo;
+    private final ProductionPlanRepository productionPlanRepository;
+    private final ObjectMapper objectMapper;
+
+    @Override
+    @Transactional
+    public ProcessSheetRowResult saveRow(String factoryId, String planId,
+                                         ProcessSheetRowRequest req, Long userId) {
+        if (userId == null) {
+            throw new BusinessException(401, "未登录，无法保存工序行 (userId 为 null)");
+        }
+
+        // 1. 跨租户守卫: plan 必须归属本 factory (🔒)
+        if (productionPlanRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
+            throw new BusinessException(403, "无权访问该计划");
+        }
+
+        // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
+        Optional<ProcessSheetRow> existing = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        factoryId, planId, req.getProcessCode(), req.getClientRowId());
+        if (existing.isPresent()) {
+            // TODO(Task 1.6): re-save = update-in-place 保 id (校验无下游消耗 + 重写边/报工)。
+            return resaveRow(factoryId, planId, req, userId, existing.get());
+        }
+
+        List<String> warnings = new ArrayList<>();
+
+        // 3. 解析上游消耗边 (factory-scoped, 🔒)
+        List<ResolvedEdge> edges = resolveEdges(factoryId, req);
+
+        // 6. outputQuantity gate: <=0 → 存 DRAFT 行, 不物化 WIP 批
+        if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
+            persistRow(factoryId, planId, req, null, null, "DRAFT");
+            // (req, batchId, batchNumber, yieldRate, rowTotalCost, unitPrice, updated, materialized, warnings)
+            return buildResult(req, null, null, null, null, null, false, false, warnings);
+        }
+
+        // 4. SP-E FK 防线: WIP 批 material_type_id 必从原料或上游 WIP 派生 (空 → 400)
+        String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+
+        // 5. 映射单个 StepEntry
+        StepEntry step = buildStepEntry(req);
+
+        // 7. 物化
+        MaterializeContext ctx = new MaterializeContext(
+                factoryId,
+                req.isFinished() ? planId : null,
+                req.getProductTypeId(),
+                req.getBatchNumber(),
+                req.isFinished(),
+                clerkService.resolveLaborRate(factoryId, warnings),
+                clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
+                rawMaterialTypeId,
+                userId);
+
+        MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+
+        // 8. 写 process_sheet_rows (try/catch UK 冲突 → 409; 完整并发测在 Task 1.7)
+        persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+
+        // 9. 组装结果
+        BigDecimal output = req.getOutputQuantity();
+        BigDecimal yieldRate = (req.getInputQuantity() != null && req.getInputQuantity().signum() > 0)
+                ? output.divide(req.getInputQuantity(), 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                : null;
+        BigDecimal unitPrice = output.signum() > 0
+                ? mat.getRowTotalCost().divide(output, 4, RoundingMode.HALF_UP)
+                : null;
+
+        return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
+                yieldRate, mat.getRowTotalCost(), unitPrice, false, true, warnings);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Re-save stub (Task 1.6 fills this in)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 覆盖已有行 (update-in-place 保 id)。Task 1.6 实现 —— 当前 stub。
+     */
+    private ProcessSheetRowResult resaveRow(String factoryId, String planId,
+                                            ProcessSheetRowRequest req, Long userId,
+                                            ProcessSheetRow existing) {
+        throw new BusinessException(409, "re-save 待 Task 1.6 实现");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Edge resolution (factory-scoped 🔒)
+    // ─────────────────────────────────────────────────────────────
+
+    private List<ResolvedEdge> resolveEdges(String factoryId, ProcessSheetRowRequest req) {
+        List<ResolvedEdge> edges = new ArrayList<>();
+
+        // 原料边 (修油首道领料) — factory-scoped raw MaterialBatch
+        if (req.getRawMaterialInputs() != null) {
+            for (ProcessSheetRowRequest.RawInput ri : req.getRawMaterialInputs()) {
+                MaterialBatch rawMb = materialBatchRepo
+                        .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
+                        .orElseThrow(() -> new BusinessException(404,
+                                "原料批次不存在: " + ri.getMaterialBatchId()));
+                edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
+            }
+        }
+
+        // 混锅上游边 (SEMI_FINISHED) — 经持久化 batchNumber 解析上游 WIP MaterialBatch
+        if (req.getUpstreamSources() != null) {
+            for (ProcessSheetRowRequest.UpstreamRef ur : req.getUpstreamSources()) {
+                ProductionBatch pb = productionBatchRepo
+                        .findByFactoryIdAndBatchNumber(factoryId, ur.getSourceBatchNumber())
+                        .orElseThrow(() -> new BusinessException(409,
+                                "上游批次 " + ur.getSourceBatchNumber() + " 不存在"));
+                MaterialBatch srcMb = materialBatchRepo
+                        .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                                factoryId, "PRODUCTION_BATCH", pb.getId().toString())
+                        .orElseThrow(() -> new BusinessException(409,
+                                "上游批次 " + ur.getSourceBatchNumber() + " 尚未物化半成品 (无 WIP 库存)"));
+                // 防御: 双重确认 factory 归属 (findBy* 已 factory-scoped, 这里二次断言)
+                if (!factoryId.equals(srcMb.getFactoryId())) {
+                    throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
+                }
+                edges.add(new ResolvedEdge(srcMb, nz(ur.getFeedQuantityKg()), "SEMI_FINISHED"));
+            }
+        }
+
+        return edges;
+    }
+
+    /**
+     * SP-E FK 防线: WIP 产出 MaterialBatch.material_type_id 必须指向 raw_material_types。
+     * 优先取首个 RAW 边的 materialTypeId; 否则取首个 SEMI 边上游 WIP 的 materialTypeId;
+     * 仍为空 → 400 (H2 不会捕获 null FK, 代码层强制)。
+     */
+    private String resolveRawMaterialTypeId(ProcessSheetRowRequest req, List<ResolvedEdge> edges) {
+        // 首个 RAW
+        for (ResolvedEdge e : edges) {
+            if ("RAW_MATERIAL".equals(e.getSourceType())
+                    && e.getSourceBatch().getMaterialTypeId() != null) {
+                return e.getSourceBatch().getMaterialTypeId();
+            }
+        }
+        // 否则首个 SEMI 上游 WIP
+        for (ResolvedEdge e : edges) {
+            if ("SEMI_FINISHED".equals(e.getSourceType())
+                    && e.getSourceBatch().getMaterialTypeId() != null) {
+                return e.getSourceBatch().getMaterialTypeId();
+            }
+        }
+        throw new BusinessException(400, "无法确定原料类型，无法物化批次");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Request → StepEntry mapping
+    // ─────────────────────────────────────────────────────────────
+
+    private StepEntry buildStepEntry(ProcessSheetRowRequest req) {
+        StepEntry st = new StepEntry();
+        st.setProcessOrder(req.getProcessOrder());
+        st.setProcessName(req.getProcessName());
+        // isSeasoningStep 决定: seasoningStep=true → processCategory=SEASONING;
+        // 否则设非空非 SEASONING 值, 关闭 (processCategory==null && potCount!=null) 的启发式回退,
+        // 避免普通带锅工序被误判为调味。
+        st.setProcessCategory(req.isSeasoningStep() ? "SEASONING" : "NORMAL");
+        st.setInputQuantity(req.getInputQuantity());
+        st.setOutputQuantity(req.getOutputQuantity());
+        st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
+        st.setPotCount(req.getPotCount());
+        st.setPotRawKgs(req.getPotRawKgs());
+        // 多时段工时 (materializeBatch 优先用此求和)
+        st.setLaborSegments(req.getLaborSegments());
+        // 上游消耗已由 edges 解析; rawMaterialInputs 不传 (materializeBatch 只用 edges)。
+        // 但 SP-D Fix 3 警告分支检查 st.getUpstreamSources(): 镜像 req.upstreamSources,
+        // 使非调味混锅步骤正确触发 "调料成本未计入" 警告。
+        if (req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty()) {
+            List<UpstreamSource> mirror = new ArrayList<>();
+            for (ProcessSheetRowRequest.UpstreamRef ur : req.getUpstreamSources()) {
+                UpstreamSource us = new UpstreamSource();
+                // sourceClientBatchKey 不被 materializeBatch 使用 (edges 已解析), 仅占位让列表非空。
+                us.setSourceClientBatchKey(ur.getSourceBatchNumber());
+                us.setFeedQuantityKg(ur.getFeedQuantityKg());
+                mirror.add(us);
+            }
+            st.setUpstreamSources(mirror);
+        }
+        return st;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // process_sheet_rows persistence
+    // ─────────────────────────────────────────────────────────────
+
+    private void persistRow(String factoryId, String planId, ProcessSheetRowRequest req,
+                            Long batchId, String batchNumber, String rowStatus) {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(factoryId);
+        row.setPlanId(planId);
+        row.setProcessCode(req.getProcessCode());
+        row.setClientRowId(req.getClientRowId());
+        row.setBatchId(batchId);
+        row.setBatchNumber(batchNumber);
+        row.setRowPayload(serializePayload(req));
+        row.setRowStatus(rowStatus);
+        try {
+            rowRepo.saveAndFlush(row);
+        } catch (DataIntegrityViolationException e) {
+            // UK (factory,plan,processCode,clientRowId) 冲突 — 并发双 POST。
+            // 完整幂等读已有行测在 Task 1.7; 这里映射 409 + 整事务回滚 loser 的物化图。
+            throw new BusinessException(409, "该行已存在 (并发提交)");
+        }
+    }
+
+    private String serializePayload(ProcessSheetRowRequest req) {
+        try {
+            return objectMapper.writeValueAsString(req);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(500, "行数据序列化失败: " + e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Result assembly
+    // ─────────────────────────────────────────────────────────────
+
+    private ProcessSheetRowResult buildResult(ProcessSheetRowRequest req, Long batchId,
+                                              String batchNumber, BigDecimal yieldRate,
+                                              BigDecimal rowTotalCost, BigDecimal unitPrice,
+                                              boolean updated, boolean materialized,
+                                              List<String> warnings) {
+        ProcessSheetRowResult r = new ProcessSheetRowResult();
+        r.setClientRowId(req.getClientRowId());
+        r.setBatchId(batchId);
+        r.setBatchNumber(batchNumber);
+        r.setYieldRate(yieldRate);
+        r.setRowTotalCost(rowTotalCost);
+        r.setUnitPrice(unitPrice);
+        r.setUpdated(updated);
+        r.setMaterialized(materialized);
+        r.setWarnings(warnings);
+        return r;
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+}

@@ -7,6 +7,7 @@ import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -49,4 +50,28 @@ public interface ClerkProcessEntryService {
                                        List<StepEntry> steps,
                                        List<ResolvedEdge> edges,
                                        List<String> warnings);
+
+    /**
+     * 解析工厂工时单价 (SP-F: 暴露给 ProcessSheetService 复用, 单一真相)。
+     *
+     * <p>从 factory_cost_settings 读 laborHourlyRate; 未配置则回退默认值并记 warning。
+     *
+     * @param factoryId 工厂 ID
+     * @param warnings  warning 收集器 (fallback 时追加)
+     * @return 工时单价 (¥/工时)
+     */
+    BigDecimal resolveLaborRate(String factoryId, List<String> warnings);
+
+    /**
+     * 解析工厂仓库 ID (SP-F: 暴露给 ProcessSheetService 复用, 单一真相)。
+     *
+     * <p>按 code 查 (通常 WH_WKS 车间仓); 未找到则回退第一个可用仓库并记 warning;
+     * 工厂无任何仓库时回退 placeholder。factory-scoped, 无跨租户扫描。
+     *
+     * @param factoryId 工厂 ID
+     * @param code      仓库 code (如 WarehouseCodes.WH_WKS)
+     * @param warnings  warning 收集器 (fallback 时追加)
+     * @return 仓库 ID
+     */
+    String resolveWarehouseId(String factoryId, String code, List<String> warnings);
 }

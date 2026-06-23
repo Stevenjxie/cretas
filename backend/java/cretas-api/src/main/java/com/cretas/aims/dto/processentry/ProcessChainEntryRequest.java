@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List;
+// LaborSegment is in the same package (com.cretas.aims.dto.processentry) — no import needed.
 
 /** 文员逐道录入负载: 一条生产链(多个半成品批 + 1 成品批)。Spec §4. */
 @Data
@@ -56,6 +57,13 @@ public class ProcessChainEntryRequest {
         private Integer potCount;            // 锅数 N
         private List<BigDecimal> potRawKgs;  // 逐锅原料(N>1 必填)
         private List<UpstreamSource> upstreamSources; // 混锅来源
+        /**
+         * SP-F: 多时段工时 (per-row caller 用)。非空且非空列表时,
+         * materializeBatch 用 computeLaborCost(List, rate) 求和; 否则回退单段
+         * (laborStartTime/laborEndTime/workerCount) 路径。recordChain 永不设此字段 (null),
+         * 故 recordChain labor 行为不变。
+         */
+        private List<LaborSegment> laborSegments;
     }
 
     @Data

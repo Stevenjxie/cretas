@@ -277,7 +277,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             }
 
             // 3b. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)
-            BigDecimal laborCost = computeLaborCost(st, ctx.getLaborRate());
+            // SP-F: per-row caller 携带多时段 laborSegments → 求和; recordChain 永不设此字段 (null)
+            // → 回退单段 (laborStartTime/laborEndTime/workerCount) 路径, recordChain labor 行为不变。
+            BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
+                    ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
+                    : computeLaborCost(st, ctx.getLaborRate());
             batchTotalCost = batchTotalCost.add(laborCost);
 
             // 追踪产出量 (取最后一道有产出的 step)
@@ -491,7 +495,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * SP-C: 从 factory_cost_settings 读工时单价; 未配置则回退 LABOR_RATE_DEFAULT 并记 warning.
      * null-tolerant: costSettingsRepository 为 null 时(测试 @InjectMocks 未注入)直接走 fallback.
      * public for testing — mirrors minutesBetween visibility pattern.
+     * SP-F: 提升到接口 (ClerkProcessEntryService) 供 ProcessSheetService 复用。
      */
+    @Override
     public BigDecimal resolveLaborRate(String factoryId, List<String> warnings) {
         if (costSettingsRepository == null) {
             return LABOR_RATE_DEFAULT;   // 测试环境 @InjectMocks 未注入 repo → 静默 fallback, 不 NPE
@@ -567,7 +573,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // Warehouse lookup
     // ─────────────────────────────────────────────────────────────
 
-    private String resolveWarehouseId(String factoryId, String code, List<String> warnings) {
+    /**
+     * SP-F: 提升到接口 (ClerkProcessEntryService) 供 ProcessSheetService 复用 (单一真相)。
+     */
+    @Override
+    public String resolveWarehouseId(String factoryId, String code, List<String> warnings) {
         return warehouseRepo.findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, code)
                 .map(w -> w.getId())
                 .orElseGet(() -> {
