@@ -101,6 +101,34 @@ public class ProductionPlanController {
     }
 
     /**
+     * 以销定产批量建计划 (六扇门 2026-06-24): 选一张销售订单的多个产品行, 各建一张生产计划。
+     * 产品+数量后端权威解析自 SO 行; 原子 (任一失败全回滚)。单产品 = itemIds 1 个。
+     */
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/batch-from-so")
+    @Operation(summary = "以销定产批量建计划", description = "选 SO 多个产品行各建一张计划, 产品/数量取自 SO 行")
+    @com.cretas.aims.annotation.Loggable(module = "PRODUCTION_PLAN", action = "CREATE",
+            entityType = "ProductionPlan")
+    public ApiResponse<java.util.List<ProductionPlanDTO>> createPlansFromSalesOrder(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "访问令牌", required = true)
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest request) {
+
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("以销定产批量建计划: factoryId={}, soId={}, 产品行数={}",
+                factoryId, request.getSourceOrderId(),
+                request.getItemIds() != null ? request.getItemIds().size() : 0);
+        java.util.List<ProductionPlanDTO> plans =
+                productionPlanService.createPlansFromSalesOrder(factoryId, request, userId);
+        return ApiResponse.success("已生成 " + plans.size() + " 张生产计划", plans);
+    }
+
+    /**
      * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
      *
      * <p>web 新建计划对话框据此初始化"免工序报工"开关: F006 返 true (默认两点), 其他工厂返 false (默认逐道)。
