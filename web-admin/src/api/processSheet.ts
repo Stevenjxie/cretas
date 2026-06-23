@@ -183,3 +183,33 @@ export function getRows(
     params: { process },
   });
 }
+
+// =========================================================================
+// Raw material batch (for 修油 首道 原料领料 dropdown)
+// =========================================================================
+
+/**
+ * 可用原料批次 (status=AVAILABLE).
+ * Mirrors the pattern used by production/plans/list.vue §loadWipAndMaterialOptions.
+ * GET /{factoryId}/material-batches/status/AVAILABLE
+ */
+export interface RawMaterialBatchOption {
+  id: string;
+  batchNumber: string | null;
+  materialName: string | null;
+  materialTypeName: string | null;
+  currentQuantity: number | string | null;
+  quantity: number | string | null;
+  quantityUnit: string | null;
+  unit: string | null;
+  unitPrice: number | null;
+}
+
+export function getAvailableRawBatches(
+  factoryId: string,
+): Promise<ApiResponse<RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] }>> {
+  return get<RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] }>(
+    `/${factoryId}/material-batches/status/AVAILABLE`,
+    { params: { size: 200 } },
+  );
+}

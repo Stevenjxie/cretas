@@ -51,6 +51,9 @@ export type AutoCalc = 'yield' | 'remaining' | 'totalHours';
  * @param type      - 列输入类型.
  * @param upstream  - dropdown 上游工序代码 (对应 PROCESS_SHEET_CONFIG 的 key),
  *                    指示该列的选项来自哪道工序的库存端点.
+ * @param source    - dropdown 数据来源:
+ *                      'raw'      → 从 GET /material-batches/status/AVAILABLE 拉原料批次 (首道).
+ *                      'upstream' → 从上游工序库存端点拉 WIP 批次 (默认, 省略时即此值).
  * @param autoCalc  - type='auto' 时的公式标识.
  */
 export interface ColDef {
@@ -58,6 +61,8 @@ export interface ColDef {
   label: string;
   type: ColType;
   upstream?: string;
+  /** 'raw' = 原料批次下拉 (修油首道); 'upstream' = 上游 WIP 批次下拉 (默认). */
+  source?: 'raw' | 'upstream';
   autoCalc?: AutoCalc;
 }
 
@@ -81,7 +86,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // 切片不录肥油(byproduct), defer Q6
   // -----------------------------------------------------------------------
   xiuyou: [
-    { key: 'rawBatch',    type: 'dropdown', label: '原料批次' },           // → rawMaterialInputs (选原料 MaterialBatch)
+    { key: 'rawBatch',    type: 'dropdown', label: '原料批次', source: 'raw' }, // → rawMaterialInputs (选原料 MaterialBatch)
     { key: 'outWeight',   type: 'number',   label: '出库重量(kg)' },        // → rawInput.quantity
     { key: 'batch',       type: 'readonly', label: '修油批次' },            // 系统生成, 作下游下拉项
     { key: 'prodDate',    type: 'date',     label: '生产日期' },
