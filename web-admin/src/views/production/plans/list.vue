@@ -52,7 +52,7 @@ import {
   planRowClassNameByStatus,
   planStatusClass,
 } from './statusVisuals';
-import ProcessChainEntryDrawer from '../components/ProcessChainEntryDrawer.vue';
+import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -713,27 +713,16 @@ async function handleStart(row: TableRow) {
   }
 }
 
-// ==================== 逐道录入抽屉 (SP-B2) ====================
+// ==================== 逐工序电子表格抽屉 (SP-F) ====================
 const entryDrawerVisible = ref(false);
-const entryProcessList = ref<Array<{ processOrder: number; processName: string; processCategory?: string | null }>>([]);
 const entryRow = ref<any>(null);
 
 function isStepwise(row: any): boolean {
   return row.skipProcessReporting === false;
 }
 
-async function openProcessEntry(row: any) {
+function openProcessEntry(row: any) {
   entryRow.value = row;
-  try {
-    const resp = await getProductWorkProcesses(factoryId.value, row.productTypeId);
-    entryProcessList.value = (resp.data || []).map((p: any) => ({
-      processOrder: p.processOrder,
-      processName: p.processName,
-      processCategory: p.processCategory ?? null,
-    }));
-  } catch {
-    entryProcessList.value = [];
-  }
   entryDrawerVisible.value = true;
 }
 
@@ -3092,17 +3081,24 @@ function handleAiFill(params: TableRow) {
       @fill-form="handleAiFill"
     />
 
-    <!-- SP-B2: 逐道工序录入抽屉 -->
-    <ProcessChainEntryDrawer
-      v-model:visible="entryDrawerVisible"
-      :factory-id="factoryId"
-      :plan-id="String(entryRow?.id || '')"
-      :product-type-id="entryRow?.productTypeId || ''"
-      :process-list="entryProcessList"
-      :planned-quantity="Number(entryRow?.plannedQuantity || 0)"
-      :product-name="entryRow?.productTypeName || entryRow?.productName"
-      @submitted="onEntrySubmitted"
-    />
+    <!-- SP-F: 逐工序电子表格抽屉 -->
+    <el-drawer
+      v-model="entryDrawerVisible"
+      :title="`逐工序录入 — ${entryRow?.productTypeName || entryRow?.productName || entryRow?.productTypeId || ''}`"
+      size="80%"
+      :close-on-click-modal="false"
+      :destroy-on-close="false"
+    >
+      <ProcessSheet
+        v-if="entryRow"
+        :factory-id="String(factoryId)"
+        :plan-id="String(entryRow?.id || '')"
+        :product-type-id="String(entryRow?.productTypeId || '')"
+        :product-name="entryRow?.productTypeName || entryRow?.productName"
+        :planned-quantity="Number(entryRow?.plannedQuantity || 0)"
+        @submitted="onEntrySubmitted"
+      />
+    </el-drawer>
   </div>
   </CanvasAwareWrapper>
 </template>
