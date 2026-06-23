@@ -174,6 +174,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
+
     /**
      * 完工链 GAP 3/4 (F006 — 2026-06-02): 转批次时从 product_work_processes 模板 spawn 工序任务.
      * {@code WorkProcessTaskServiceImpl} 不注入 ProductionPlanService → 无循环依赖, 普通注入即可.
@@ -927,15 +931,44 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 throw new com.cretas.aims.exception.BusinessException(400,
                         "产品行缺少产品类型, 无法生成计划: " + (item.getProductName() != null ? item.getProductName() : itemId));
             }
+            // reviewer Issue4: 计划数量取"未交付剩余量"(订单量 - 已交付), 避免对已部分交付的 SO 过量生产。
+            // 转录"据销售领用量算出需领量"。全部已交付 → 拒绝该行 (防呆: 提示取消)。
+            BigDecimal ordered = item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO;
+            BigDecimal delivered = item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO;
+            BigDecimal remaining = ordered.subtract(delivered);
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new com.cretas.aims.exception.BusinessException(400,
+                        "产品行已全部交付, 无需生产: " + (item.getProductName() != null ? item.getProductName() : itemId))
+                        .withHint("请在产品行多选中取消该已交付产品");
+            }
+            // reviewer Issue1: CUSTOMER_ORDER 来源在 createProductionPlan 强制要求 processName + batchDate
+            // (P1-4 gate)。批量路径补齐: processName 取该产品工序名 (镜像前端, 0 工序→两点报工);
+            // batchDate 沿用共享计划生产日 (新建计划未开工, 批次日=计划日合理)。
+            String processName = "两点报工";
+            if (productWorkProcessService != null) {
+                try {
+                    java.util.List<String> names = productWorkProcessService
+                            .listByProduct(factoryId, item.getProductTypeId()).stream()
+                            .map(com.cretas.aims.dto.ProductWorkProcessDTO::getProcessName)
+                            .filter(n -> n != null && !n.isBlank())
+                            .distinct().collect(java.util.stream.Collectors.toList());
+                    if (!names.isEmpty()) processName = String.join("、", names);
+                } catch (Exception e) {
+                    log.warn("以销定产取工序名失败, 用默认两点报工: productTypeId={}, err={}",
+                            item.getProductTypeId(), e.getMessage());
+                }
+            }
             CreateProductionPlanRequest one = new CreateProductionPlanRequest();
             // 每行各自的产品 + 数量 (权威自 SO 行)
             one.setProductTypeId(item.getProductTypeId());
-            one.setPlannedQuantity(item.getQuantity());
+            one.setPlannedQuantity(remaining);
             one.setSourceType(PlanSourceType.CUSTOMER_ORDER);
             one.setSourceOrderId(so.getId());
             one.setSourceOrderItemId(itemId);
             one.setSourceCustomerName(so.getCustomerName());
             one.setCustomerOrderNumber(so.getOrderNumber());
+            one.setProcessName(processName);
+            one.setBatchDate(req.getPlannedDate());
             // 计划级共享设置
             one.setPlannedDate(req.getPlannedDate());
             one.setExpectedCompletionDate(req.getExpectedCompletionDate());
@@ -943,6 +976,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             one.setAssignedSupervisorId(req.getAssignedSupervisorId());
             one.setNotes(req.getNotes());
             one.setSkipProcessReporting(req.getSkipProcessReporting());
+            // 注 (reviewer Issue2): createProductionPlan 走 REQUIRED 传播参与本外层事务, 其 afterCommit
+            // 自动排程在外层唯一一次 commit 后逐 plan 触发 (回滚则全不触发) — 原子语义正确。
             created.add(createProductionPlan(factoryId, one, userId));
         }
         log.info("以销定产批量建计划: factoryId={}, soId={}, 产品行={}, 创建计划={}",

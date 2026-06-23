@@ -29,6 +29,7 @@ public class BatchPlanFromSalesOrderRequest {
     @Schema(description = "选中的销售订单产品行ID列表 (每行各建一张计划)")
     private List<String> itemIds;
 
+    @jakarta.validation.constraints.NotNull(message = "计划生产日不能为空")
     @Schema(description = "计划生产日 (共享到所有生成的计划)")
     private LocalDate plannedDate;
 
