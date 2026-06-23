@@ -617,7 +617,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         Optional<ProductRecipe> recipeOpt = recipeRepo
                 .findByFactoryIdAndProductTypeIdAndStatus(factoryId, productTypeId, "ACTIVE");
         if (recipeOpt.isEmpty()) {
-            warnings.add("产品 " + productTypeId + " 无有效调料配方(BOM 或 ACTIVE)，调料成本跳过");
+            // 防呆 (U7): 非静默 0 — 明确 warning + 指向设置位置 (fool-proof Rule 5: 告诉用户去哪配).
+            warnings.add("产品 " + productTypeId + " 未设置调料配方，调料成本暂记 0；"
+                    + "请在「生产 → BOM 配方 → 调料配方」tab 为该产品设置注射/熟制配方后重新核算。");
             return BigDecimal.ZERO;
         }
         ProductRecipe recipe = recipeOpt.get();
