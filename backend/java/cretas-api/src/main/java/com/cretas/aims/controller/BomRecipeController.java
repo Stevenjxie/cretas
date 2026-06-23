@@ -2,12 +2,15 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.dto.bom.BomRecipeMigrationReport;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.service.bom.BomRecipeMigrationService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -45,6 +48,7 @@ import java.util.Optional;
 public class BomRecipeController {
 
     private final BomRecipeService recipeService;
+    private final BomRecipeMigrationService migrationService;
 
     // ========== List / detail ==========
 
@@ -185,5 +189,24 @@ public class BomRecipeController {
             @PathVariable Long itemId) {
         recipeService.deleteItem(factoryId, itemId);
         return ApiResponse.success(null);
+    }
+
+    // ========== U3: product_recipes → BOM 一次性迁移 (BOM 统管配方+锅序合并) ==========
+
+    /**
+     * 把 SP-A {@code product_recipes} 折叠进 BOM (锅序列 + bom_seasoning_items).
+     *
+     * <p>🔒 仅 factory_super_admin. 幂等 + 默认 dryRun=true (只读对比). 灰度: 先 test/DEMO 跑
+     * {@code dryRun=true} 核对报告, 再 {@code dryRun=false} 实迁移; 真客户 prod 需明确 GO.
+     * {@code product_recipes} 不删 (只读回滚保险).
+     */
+    @RequireRole({"factory_super_admin"})
+    @PostMapping("/migrate-from-product-recipes")
+    @Operation(summary = "[迁移] product_recipes 折叠进 BOM (幂等, 默认 dryRun)")
+    public ApiResponse<BomRecipeMigrationReport> migrateFromProductRecipes(
+            @PathVariable String factoryId,
+            @RequestParam(defaultValue = "true") @Parameter(description = "true=只读对比不写; false=实际迁移") boolean dryRun) {
+        log.warn("[BOM-MIGRATE] factory={} dryRun={} requested", factoryId, dryRun);
+        return ApiResponse.success(migrationService.migrate(factoryId, dryRun));
     }
 }
