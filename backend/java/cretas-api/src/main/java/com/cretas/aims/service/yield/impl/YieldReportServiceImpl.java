@@ -1314,6 +1314,19 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     /**
+     * SP-C: 按批次号查出成率 (存货生产无订单号场景).
+     * findByFactoryIdAndBatchNumber 是 factory-scoped — 跨租户安全。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public BatchYieldDTO getBatchYieldByNumber(String factoryId, String batchNumber) {
+        com.cretas.aims.entity.ProductionBatch batch = productionBatchRepository
+                .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .orElseThrow(() -> new BusinessException(404, "生产批次不存在: " + batchNumber));
+        return getYield(factoryId, batch.getId());
+    }
+
+    /**
      * 单元 F (F006 REQ-21): 分订单出成率聚合。
      *
      * <p>orderId → 计划 (source_order_id) → 批次 (production_plan_id IN 计划ids) → 每批 {@link #getYield}。
