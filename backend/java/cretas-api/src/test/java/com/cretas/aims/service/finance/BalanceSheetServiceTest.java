@@ -242,6 +242,59 @@ class BalanceSheetServiceTest {
     }
 
     @Test
+    void generate_bookedEquityPlusUnclosedRevenue_balances() {
+        // 生产典型场景: 已记账权益 (实收资本 50000) + 未结转收入 70000, 配平凭证.
+        //   借 现金 120000 / 贷 实收资本 50000 + 贷 收入 70000
+        //   资产 120000 ≡ 负债 0 + (实收资本 50000 + 未分配利润 70000)
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "120000.00", "0.00"),
+                row("4001", "实收资本", "0.00", "50000.00"),
+                row("5001", "主营业务收入", "0.00", "70000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, capitalAccount, revenueAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(2, dto.getEquity().size(), "实收资本 + 未分配利润 两行");
+        assertEquals(new BigDecimal("120000.00"), dto.getTotalEquity(), "50000 + 70000");
+        assertEquals(new BigDecimal("120000.00"), dto.getTotalAssets());
+        assertTrue(dto.getBalanceCheck(), "已记账权益 + 未分配利润 = 资产");
+    }
+
+    @Test
+    void generate_existing4104PlusUnclosedRevenue_foldedIntoSingleLine() {
+        // 防 4104 冲突: 工厂已手工记账 4104(利润分配) 30000 (往年结转), 当期又有未结转收入 50000.
+        //   未结转净额并入既有 4104 行 → 单条 4104 = 80000, 不出现两条 4104.
+        Account profitDistAccount = Account.builder()
+                .id("acc-4104").code("4104").name("利润分配")
+                .category(AccountCategory.EQUITY).balanceType(AccountBalanceType.CREDIT_NORMAL).build();
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "80000.00", "0.00"),
+                row("4104", "利润分配", "0.00", "30000.00"),
+                row("5001", "主营业务收入", "0.00", "50000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, profitDistAccount, revenueAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(1, dto.getEquity().size(), "单条 4104, 未结转净额并入而非另起一行");
+        assertEquals("4104", dto.getEquity().get(0).getAccountCode());
+        assertEquals(new BigDecimal("80000.00"), dto.getEquity().get(0).getAmount(), "30000 + 50000");
+        assertEquals(new BigDecimal("80000.00"), dto.getTotalEquity());
+        assertTrue(dto.getBalanceCheck());
+    }
+
+    @Test
     void generate_legacyEntryWithoutAccount_fallsBackByCodePrefix() {
         // subjectCode = "1xxx-custom" 没绑 Account, 按 prefix '1' fallback ASSET
         List<SubjectAggregateRow> aggregates = Arrays.asList(

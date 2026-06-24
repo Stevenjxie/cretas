@@ -151,14 +151,27 @@ public class BalanceSheetService {
             }
         }
 
-        // 未分配利润合成权益行 (4104). 仅在非零时加入 — 平衡的双分录凭证下,
-        // 此行确保 资产 ≡ 负债 + (已记账权益 + 未分配利润).
+        // 未结转损益作为"未分配利润"并入权益. 4103(本年利润)/4104(利润分配) 是系统级
+        // EQUITY 科目 (V20260701_02 seed). 若该工厂已手工记账 4104, 把未结转净额并入
+        // 该既有行 (避免出现两条 4104); 否则新增合成 4104"未分配利润"行.
+        // 注: 本系统月结 (MonthCloseServiceImpl) 不自动过结转损益凭证, 故未结转损益常驻
+        // 5/6xxx 科目, 本行是其进入资产负债表的唯一途径. 由复式记账恒等式 (Σ借=Σ贷),
+        // 配平凭证下 资产 ≡ 负债 + (已记账权益 + 未分配利润) 恒成立 (与本行用何 code 无关,
+        // 仅影响展示是否合并).
         if (retainedEarnings.signum() != 0) {
-            equityItems.add(BalanceSheetDTO.LineItem.builder()
-                    .accountCode("4104")
-                    .accountName("未分配利润")
-                    .amount(retainedEarnings.setScale(2, RoundingMode.HALF_UP))
-                    .build());
+            BigDecimal retained = retainedEarnings.setScale(2, RoundingMode.HALF_UP);
+            BalanceSheetDTO.LineItem existing4104 = equityItems.stream()
+                    .filter(e -> "4104".equals(e.getAccountCode()))
+                    .findFirst().orElse(null);
+            if (existing4104 != null) {
+                existing4104.setAmount(existing4104.getAmount().add(retained));
+            } else {
+                equityItems.add(BalanceSheetDTO.LineItem.builder()
+                        .accountCode("4104")
+                        .accountName("未分配利润")
+                        .amount(retained)
+                        .build());
+            }
         }
 
         // Step 4: 按 accountCode 排序
