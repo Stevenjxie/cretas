@@ -46,6 +46,8 @@ export interface ProcessSheetRowRequest {
   processCode: string;
   processOrder: number;
   processName?: string;
+  /** 该工序实际操作日 (跨天: 焯水/熟制各记各日) → 后端成本报工按真实日期归集. ISO "YYYY-MM-DD" */
+  processDate?: string;
   productTypeId: string;
   /** 可空 — 首存时系统生成 (CLK-W-/CLK-B-), re-save 时传已有值 */
   batchNumber?: string;
