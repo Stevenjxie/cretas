@@ -73,6 +73,11 @@ interface SheetRow {
 const cols = computed(() => PROCESS_SHEET_CONFIG[props.processCode] || []);
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
 const isXiuYou = computed(() => props.processCode === 'xiuyou');
+/** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
+const isSingleUpstream = computed(() =>
+  props.processCode === 'chaoshui' || props.processCode === 'gunrou',
+);
+const isQuSheTou = computed(() => props.processCode === 'qushetou');
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -179,10 +184,20 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.rawBatchQty = p.rawMaterialInputs?.[0]?.quantity ?? null;
     row.fields['output'] = p.outputQuantity ?? null;
   }
-  if (props.processCode === 'chaoshui') {
+  if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: 结构相同 (before → inputQuantity, after → outputQuantity)
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
     row.fields['before'] = p.inputQuantity ?? null;
     row.fields['after'] = p.outputQuantity ?? null;
+  }
+  if (isQuSheTou.value) {
+    // 去舌苔: output + scrap → input 反推. inputQuantity = scrap + output.
+    row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+    row.fields['output'] = p.outputQuantity ?? null;
+    // scrap = inputQuantity - outputQuantity (反推恢复, 若无法恢复则留 null)
+    const inp = p.inputQuantity ?? null;
+    const out = p.outputQuantity ?? null;
+    row.fields['scrap'] = inp != null && out != null ? inp - out : null;
   }
   if (isShuZhi.value) {
     row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
@@ -249,6 +264,14 @@ function addRow() {
 // -------------------------------------------------------------------------
 // Auto-calc helpers
 // -------------------------------------------------------------------------
+/** 反推投入量: scrap + output. 去舌苔专用. */
+function calcReverseInput(row: SheetRow): number | null {
+  const scrap = (row.fields['scrap'] as number) ?? null;
+  const output = (row.fields['output'] as number) ?? null;
+  if (scrap == null || output == null) return null;
+  return scrap + output;
+}
+
 function calcYield(row: SheetRow): number | null {
   let input: number | null = null;
   let output: number | null = null;
@@ -256,9 +279,14 @@ function calcYield(row: SheetRow): number | null {
   if (isXiuYou.value) {
     input = row.rawBatchQty;
     output = (row.fields['output'] as number) ?? null;
-  } else if (props.processCode === 'chaoshui') {
+  } else if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: before/after 字段
     input = (row.fields['before'] as number) ?? null;
     output = (row.fields['after'] as number) ?? null;
+  } else if (isQuSheTou.value) {
+    // 去舌苔: 分母是反推投入量 (scrap + output), 分子是 output
+    input = calcReverseInput(row);
+    output = (row.fields['output'] as number) ?? null;
   } else if (isShuZhi.value) {
     input = (row.fields['input'] as number) ?? null;
     output = (row.fields['output'] as number) ?? null;
@@ -284,8 +312,8 @@ function calcRemaining(row: SheetRow): number | null {
     const inv = props.ownInventoryItems.find((b) => b.batchNumber === row.batchNumber);
     if (inv != null) return inv.remaining;
   }
-  // Fallback for chaoshui unsaved rows: derive from upstream usage (original logic).
-  if (props.processCode === 'chaoshui') {
+  // Fallback for single-upstream / qushetou unsaved rows: derive from upstream usage.
+  if (isSingleUpstream.value || isQuSheTou.value) {
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     return inv ? inv.remaining : null;
   }
@@ -293,10 +321,18 @@ function calcRemaining(row: SheetRow): number | null {
 }
 
 function upstreamWarning(row: SheetRow): string | null {
-  if (props.processCode === 'chaoshui') {
+  if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: 用量 = before
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     if (!inv) return null;
     const usage = (row.fields['before'] as number) ?? 0;
+    if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
+  }
+  if (isQuSheTou.value) {
+    // 去舌苔: 用量 = 投入量 = scrap + output
+    const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
+    if (!inv) return null;
+    const usage = calcReverseInput(row) ?? 0;
     if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
   }
   if (isShuZhi.value) {
@@ -320,12 +356,19 @@ function saveDisabledReason(row: SheetRow): string | null {
     if (!row.rawBatchId) return '请选择原料批次';
     if (row.rawBatchQty == null) return '请填写出库重量';
     if ((row.fields['output'] as number) == null) return '请填写产出数量';
-  } else if (props.processCode === 'chaoshui') {
-    if (!row.upstreamBatch) return '请选择修油批次';
-    if ((row.fields['before'] as number) == null) return '请填写焯水前重量';
-    if ((row.fields['after'] as number) == null) return '请填写焯水后重量';
+  } else if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: before/after 校验
+    const processLabel = props.processCode === 'gunrou' ? '滚揉' : '焯水';
+    const upstreamLabel = props.processCode === 'gunrou' ? '修油批次' : '上游批次';
+    if (!row.upstreamBatch) return `请选择${upstreamLabel}`;
+    if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
+    if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
+  } else if (isQuSheTou.value) {
+    if (!row.upstreamBatch) return '请选择上游批次';
+    if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
+    if ((row.fields['output'] as number) == null) return '请填写产出重量';
   } else if (isShuZhi.value) {
-    if (row.upstreamSources.length === 0) return '请添加焯水来源批';
+    if (row.upstreamSources.length === 0) return '请添加上游来源批';
     if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
     if ((row.fields['output'] as number) == null) return '请填写产出数量';
     if (row.potCount > 1) {
@@ -375,10 +418,20 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.inputQuantity = row.rawBatchQty ?? undefined;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
     base.unit = 'kg';
-  } else if (props.processCode === 'chaoshui') {
+  } else if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0 }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
+    base.unit = 'kg';
+  } else if (isQuSheTou.value) {
+    // 去舌苔: inputQuantity = scrap + output (反推); feedQuantityKg = 同 inputQuantity.
+    const output = (row.fields['output'] as number) ?? 0;
+    const scrap = (row.fields['scrap'] as number) ?? 0;
+    const inputQty = scrap + output;
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty }];
+    base.inputQuantity = inputQty;
+    base.outputQuantity = output;
     base.unit = 'kg';
   } else if (isShuZhi.value) {
     base.upstreamSources = row.upstreamSources;
@@ -547,13 +600,31 @@ onMounted(() => {
             </div>
           </template>
 
-          <!-- 焯水: single upstream dropdown -->
-          <template v-else-if="processCode === 'chaoshui'">
+          <!-- 焯水 + 滚揉: single upstream dropdown (结构相同) -->
+          <template v-else-if="isSingleUpstream">
             <div class="sp-card-field">
-              <label class="sp-card-label">修油批次</label>
+              <label class="sp-card-label">{{ processCode === 'gunrou' ? '修油批次' : '滚揉批次' }}</label>
               <el-select
                 v-model="row.upstreamBatch"
-                placeholder="选修油批次"
+                :placeholder="processCode === 'gunrou' ? '选修油批次' : '选滚揉批次'"
+                filterable clearable
+                style="width:100%" size="small">
+                <el-option
+                  v-for="item in upstreamItems" :key="item.batchNumber"
+                  :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                  :value="item.batchNumber"
+                  :disabled="item.remaining <= 0" />
+              </el-select>
+            </div>
+          </template>
+
+          <!-- 去舌苔: single upstream dropdown -->
+          <template v-else-if="isQuSheTou">
+            <div class="sp-card-field">
+              <label class="sp-card-label">焯水批次</label>
+              <el-select
+                v-model="row.upstreamBatch"
+                placeholder="选焯水批次"
                 filterable clearable
                 style="width:100%" size="small">
                 <el-option
@@ -661,6 +732,10 @@ onMounted(() => {
                 value-format="YYYY-MM-DD"
                 style="width:100%" size="small" />
 
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
+                {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+              </span>
+
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
                 {{ calcYield(row) != null ? calcYield(row)!.toFixed(2) + '%' : '—' }}
               </span>
@@ -723,9 +798,14 @@ onMounted(() => {
               <th class="sp-th sp-th-num">出库重量(kg)</th>
             </template>
 
-            <!-- 焯水: upstream single-select -->
-            <template v-else-if="processCode === 'chaoshui'">
-              <th class="sp-th">修油批次</th>
+            <!-- 焯水 + 滚揉: upstream single-select -->
+            <template v-else-if="isSingleUpstream">
+              <th class="sp-th">{{ processCode === 'gunrou' ? '修油批次' : '滚揉批次' }}</th>
+            </template>
+
+            <!-- 去舌苔: upstream single-select -->
+            <template v-else-if="isQuSheTou">
+              <th class="sp-th">焯水批次</th>
             </template>
 
             <!-- 熟制: multi-source (rendered as expander cell) -->
@@ -805,12 +885,30 @@ onMounted(() => {
                 </td>
               </template>
 
-              <!-- ---- 焯水: single upstream dropdown ---- -->
-              <template v-else-if="processCode === 'chaoshui'">
+              <!-- ---- 焯水 + 滚揉: single upstream dropdown (结构相同) ---- -->
+              <template v-else-if="isSingleUpstream">
                 <td class="sp-td">
                   <el-select
                     v-model="row.upstreamBatch"
-                    placeholder="选修油批次"
+                    :placeholder="processCode === 'gunrou' ? '选修油批次' : '选滚揉批次'"
+                    filterable clearable
+                    style="width:200px" size="small">
+                    <el-option
+                      v-for="item in upstreamItems"
+                      :key="item.batchNumber"
+                      :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                      :value="item.batchNumber"
+                      :disabled="item.remaining <= 0" />
+                  </el-select>
+                </td>
+              </template>
+
+              <!-- ---- 去舌苔: single upstream dropdown ---- -->
+              <template v-else-if="isQuSheTou">
+                <td class="sp-td">
+                  <el-select
+                    v-model="row.upstreamBatch"
+                    placeholder="选焯水批次"
                     filterable clearable
                     style="width:200px" size="small">
                     <el-option
@@ -875,6 +973,11 @@ onMounted(() => {
                     end-placeholder="结束"
                     value-format="YYYY-MM-DD"
                     style="width:230px" size="small" />
+
+                  <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
+                    {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+                  </span>
 
                   <!-- auto: yield -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
