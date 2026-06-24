@@ -187,6 +187,12 @@ public class OrderCostBreakdownService {
             }
         }
 
+        // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
+        // 文员逐道录入(SP-F)的气调步只写 packaging_detail 明细不写 materialCost-PACKAGING;
+        // M67 等有 materialCost-PACKAGING 的批 packaging>0 → 不重复加明细。严格测试 2026-06-24 抓到。
+        if (packaging.signum() == 0 && !packagingAcc.isEmpty()) {
+            packaging = packagingAcc.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
         BigDecimal total = labor.add(seasoning).add(packaging).add(raw);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
