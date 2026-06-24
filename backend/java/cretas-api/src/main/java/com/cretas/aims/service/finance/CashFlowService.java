@@ -315,25 +315,39 @@ public class CashFlowService {
     // 原有私有方法
     // -------------------------------------------------------------------------
 
+    /** 投资活动对手科目前缀: 15xx 长期投资 / 16xx 固定资产 / 17xx 无形资产 / 18xx 长期待摊. */
+    private static final Set<String> INVESTING_PREFIX2 = Set.of("15", "16", "17", "18");
+    /** 投资活动具体科目: 交易性金融资产 / 应收股利 / 应收利息 (投资收益往来). */
+    private static final Set<String> INVESTING_CODES = Set.of("1101", "1131", "1132");
+    /** 筹资活动具体科目: 短期借款 / 应付利息 / 应付股利 / 长期借款 / 应付债券 / 长期应付款. */
+    private static final Set<String> FINANCING_CODES = Set.of("2001", "2231", "2232", "2501", "2502", "2701");
+
     /**
-     * 按 code 前缀决定活动分类:
-     * - 14xx/15xx/19xx → INVESTING (固定资产/无形资产/长期投资)
-     * - 22xx + 4xxx → FINANCING (长期负债 + 权益)
-     * - default → OPERATING (5xxx 收入 / 6xxx 成本 / 应收应付等)
+     * 按对手科目 code 决定现金流量表活动分类 (经营 / 投资 / 筹资).
+     *
+     * <p>历史 bug (已修): 旧逻辑 14-19 一刀切归投资、22-25 一刀切归筹资, 把 <b>存货 (14xx)</b>
+     * 错归投资、<b>应付账款/票据/预收/薪酬/税费 (22xx 流动往来)</b> 错归筹资, 且漏了
+     * <b>短期借款 (2001) / 长期应付款 (2701)</b> 应属筹资. 现按真实科目语义分类:
+     * <ul>
+     *   <li>筹资: 借款/债券/应付利息股利/长期应付 ({@link #FINANCING_CODES}) + 权益 (4xxx)</li>
+     *   <li>投资: 长期资产 15-18 + 短期投资/投资收益往来 ({@link #INVESTING_CODES})</li>
+     *   <li>经营: 其余 (现金/应收预付/存货/应付往来/税费/薪酬/收入/成本/费用)</li>
+     * </ul>
+     * 子科目 (如 2221.01) 按主科目前缀归类.
      */
-    private String classifyActivity(String code) {
+    String classifyActivity(String code) {
         if (code == null || code.length() < 2) return "OPERATING";
-        String prefix2 = code.substring(0, 2);
-        // 投资类: 14xx 长期股权 / 15xx 投资性资产 / 16xx 固定资产 / 17xx 无形资产 / 19xx 其他长期
-        if (prefix2.equals("14") || prefix2.equals("15") || prefix2.equals("16")
-                || prefix2.equals("17") || prefix2.equals("18") || prefix2.equals("19")) {
-            return "INVESTING";
-        }
-        // 筹资类: 22xx 长期借款 / 25xx 长期应付 / 4xxx 权益 (实收资本/资本公积/留存收益)
-        if (prefix2.equals("22") || prefix2.equals("23") || prefix2.equals("24")
-                || prefix2.equals("25") || code.startsWith("4")) {
+        String mainCode = code.contains(".") ? code.substring(0, code.indexOf('.')) : code;
+        String prefix2 = mainCode.length() >= 2 ? mainCode.substring(0, 2) : mainCode;
+        // 筹资活动: 借款/债券/利息股利/长期应付 + 权益 (4xxx)
+        if (FINANCING_CODES.contains(mainCode) || mainCode.startsWith("4")) {
             return "FINANCING";
         }
+        // 投资活动: 长期资产 15-18 + 短期投资/投资收益往来
+        if (INVESTING_PREFIX2.contains(prefix2) || INVESTING_CODES.contains(mainCode)) {
+            return "INVESTING";
+        }
+        // 经营活动 (默认): 现金/应收预付/存货/应付往来/税费/薪酬/收入/成本/费用
         return "OPERATING";
     }
 
