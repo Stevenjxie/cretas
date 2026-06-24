@@ -2,15 +2,20 @@ package com.cretas.aims.scheduler;
 
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.service.finance.AccountingPeriodService;
+import com.cretas.aims.service.finance.ProfitLossClosingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
 
@@ -37,6 +42,8 @@ public class AccountingPeriodScheduler {
 
     private final FactoryRepository factoryRepository;
     private final AccountingPeriodService accountingPeriodService;
+    private final AccountingPeriodRepository periodRepo;
+    private final ProfitLossClosingService profitLossClosingService;
 
     @Value("${accounting-period.auto-close.enabled:true}")
     private boolean enabled;
@@ -98,5 +105,50 @@ public class AccountingPeriodScheduler {
         long duration = System.currentTimeMillis() - startMs;
         log.info("[AccountingPeriodScheduler] 完成: total={} success={} skipped={} failed={} 耗时={}ms",
                 factoryIds.size(), success, skipped, failed, duration);
+    }
+
+    /**
+     * 结转损益 finalize (方案A): 每日 03:00 扫描 CLOSED 且调整窗口已 LOCKED 且未结转
+     * (closing_posted_at IS NULL) 的期间, 自动过结转损益凭证。窗口锁定后无业务凭证可入,
+     * 故结转一次成型不陈旧 (spec §2.2)。系统触发 userId=null。
+     */
+    @Scheduled(cron = "${accounting-period.finalize.cron:0 0 3 * * ?}")
+    @SchedulerLock(
+            name = "AccountingPeriodScheduler.finalizeLockedPeriods",
+            lockAtMostFor = "PT60M",
+            lockAtLeastFor = "PT1M")
+    @Transactional
+    public void finalizeLockedPeriods() {
+        if (!enabled) return;
+        List<String> factoryIds;
+        try {
+            factoryIds = factoryRepository.findAllActiveFactoryIds();
+        } catch (Exception e) {
+            log.error("[Finalize] 取 active factory 失败: {}", e.getMessage(), e);
+            return;
+        }
+        int closed = 0;
+        for (String factoryId : factoryIds) {
+            List<AccountingPeriod> periods =
+                    periodRepo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, AccountingPeriod.Status.CLOSED);
+            for (AccountingPeriod p : periods) {
+                if (p.getClosingPostedAt() != null) continue; // 已结转
+                if (p.getAdjustWindowState() != AccountingPeriod.AdjustWindowState.LOCKED) continue; // 窗口未过
+                try {
+                    profitLossClosingService.closePeriod(factoryId, p.getYear(), p.getMonth(), null);
+                    p.setClosingPostedAt(LocalDateTime.now());
+                    periodRepo.save(p);
+                    closed++;
+                } catch (DataIntegrityViolationException dup) {
+                    // 并发/重复: 唯一约束撞 → 幂等 no-op, 仍标记已结转
+                    p.setClosingPostedAt(LocalDateTime.now());
+                    periodRepo.save(p);
+                    log.warn("[Finalize] {}-{}-{} 唯一约束撞, 幂等跳过", factoryId, p.getYear(), p.getMonth());
+                } catch (Exception e) {
+                    log.error("[Finalize] {}-{}-{} 结转失败: {}", factoryId, p.getYear(), p.getMonth(), e.getMessage(), e);
+                }
+            }
+        }
+        if (closed > 0) log.info("[Finalize] 本轮结转 {} 个期间", closed);
     }
 }
