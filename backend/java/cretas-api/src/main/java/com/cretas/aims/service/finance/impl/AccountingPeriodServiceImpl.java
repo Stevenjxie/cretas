@@ -47,6 +47,14 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Autowired(required = false)
     private InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
 
+    /**
+     * 结转损益 (可选注入; required=false 打破 bean 循环:
+     * AccountingPeriodService → PLClosing → VoucherService → AccountingPeriodService)。
+     * 反结账时若该期已结转, 红冲结转凭证。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.finance.ProfitLossClosingService profitLossClosingService;
+
     @Override
     @Transactional
     public AccountingPeriod openPeriod(String factoryId, Integer year, Integer month, Long userId) {
@@ -159,13 +167,24 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
                     String.format("%d-%02d 期间状态=%s, 仅 CLOSED 可反结账", year, month, p.getStatus()));
         }
 
+        boolean hadClosing = (p.getClosingPostedAt() != null);
+
         p.setStatus(AccountingPeriod.Status.OPEN);
         p.setReopenedAt(LocalDateTime.now());
         p.setReopenedBy(userId);
         p.setReopenReason(reason.trim());
         AccountingPeriod saved = repo.save(p);
-        log.warn("[AccountingPeriod] REOPENED {}-{}-{} by user={} reason='{}'",
-                factoryId, year, month, userId, reason);
+
+        // 结转损益: 若已结转, 红冲结转凭证。必须在 setStatus(OPEN)+save 之后 —
+        // 红冲走 reversePostedVoucher → assertPeriodOpen, 期间须已 OPEN 才放行 (否则 PeriodClosedException)。
+        if (profitLossClosingService != null && hadClosing) {
+            profitLossClosingService.reversePeriodClosing(factoryId, year, month, userId);
+            saved.setClosingPostedAt(null);
+            saved = repo.save(saved);
+        }
+
+        log.warn("[AccountingPeriod] REOPENED {}-{}-{} by user={} reason='{}' closingReversed={}",
+                factoryId, year, month, userId, reason, hadClosing);
         return saved;
     }
 
