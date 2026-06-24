@@ -123,8 +123,28 @@ function getPercentage(type: string) {
   return total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
 }
 
-onMounted(() => {
-  loadFinanceData();
+// 财务数据是否为空 (无营收/成本/明细) — 用于默认期落地自动展开判断
+function isFinanceDataEmpty(): boolean {
+  const d = financeData.value;
+  const hasRevenue = !!d.totalRevenue;
+  const hasCost = !!d.totalCost;
+  const hasStats = Array.isArray(d.dailyStats) && d.dailyStats.length > 0;
+  return !hasRevenue && !hasCost && !hasStats;
+}
+
+onMounted(async () => {
+  await loadFinanceData();
+  // 优化默认落地 (2026-06-24): 财务数据来自 SmartBI 上传, 常落在更早会计期。
+  // 近 30 天若无数据, 自动展开到近 12 个月重载一次, 让用户落地即见数据 (而非空状态)。
+  if (isFinanceDataEmpty()) {
+    const wideStart = new Date();
+    wideStart.setMonth(wideStart.getMonth() - 12);
+    dateRange.value = [wideStart, new Date()];
+    await loadFinanceData();
+    if (!isFinanceDataEmpty()) {
+      ElMessage.info('近 30 天暂无财务数据，已自动展开至近 12 个月');
+    }
+  }
 });
 
 async function loadFinanceData() {
