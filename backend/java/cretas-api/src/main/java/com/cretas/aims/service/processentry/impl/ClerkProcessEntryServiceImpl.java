@@ -618,8 +618,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setReportMode(ReportMode.MODE_1);
         report.setReportDate(resolveReportDate(st));
         report.setProcessOrder(st.getProcessOrder());
-        report.setOutputQuantity(st.getOutputQuantity());
-        report.setInputQuantity(st.getInputQuantity());
+        // ⛔ 不设 output/input: YieldCalculationServiceImpl.getYield 对同 task(文员录入 task=null
+        // → 全批一组) Σ 所有 report 的 output/input (L115/L123)。本辅助报工只承载副产/留样/包装明细
+        // (getYield L160-179 独立读取, 不依赖 output), 设 output 会与 seasoning/labor 报工的 output
+        // 重复累加 → 虚高产出/盒数。故 output/input 留 null。
         if (st.getByproducts() != null && !st.getByproducts().isEmpty()) {
             report.setByproducts(toByproductMaps(st.getByproducts()));
         }
