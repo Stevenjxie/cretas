@@ -296,6 +296,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 writeLaborReport(ctx.getFactoryId(), batch.getId(), st, laborCost, ctx.getUserId());
             }
 
+            // SP-G G3a: 副产物/留样/包装明细 写 YIELD 报工，让 YieldCalculationServiceImpl.getYield
+            // 经 StepYieldDTO.byproducts/sampleRetainQuantity/packagingDetail 读取，
+            // 进而 OrderCostBreakdownService.computeByBatch 消费包装明细成本分桶。
+            if (hasAuxFields(st)) {
+                writeYieldAuxReport(ctx.getFactoryId(), batch.getId(), st, ctx.getUserId());
+            }
+
             // 追踪产出量 (取最后一道有产出的 step)
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
                 lastOutputQty = st.getOutputQuantity();
@@ -368,6 +375,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // caller 已软删旧报工 (含旧人工行), 这里重新写入保持 getYield 可读。
             if (laborCost.signum() > 0) {
                 writeLaborReport(ctx.getFactoryId(), existingBatchId, st, laborCost, ctx.getUserId());
+            }
+
+            // SP-G G3a: 重物化也写副产物/留样/包装明细 (镜像 materializeBatch)。
+            if (hasAuxFields(st)) {
+                writeYieldAuxReport(ctx.getFactoryId(), existingBatchId, st, ctx.getUserId());
             }
 
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
@@ -574,6 +586,64 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setOutputQuantity(st.getOutputQuantity());
         report.setInputQuantity(st.getInputQuantity());
         reportRepo.save(report);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-G G3a: Byproducts / SampleRetain / PackagingDetail YIELD report
+    // ─────────────────────────────────────────────────────────────
+
+    private boolean hasAuxFields(StepEntry st) {
+        return (st.getByproducts() != null && !st.getByproducts().isEmpty())
+                || st.getSampleRetainQuantity() != null
+                || (st.getPackagingDetail() != null && !st.getPackagingDetail().isEmpty());
+    }
+
+    /**
+     * SP-G G3a: 将副产物/留样/包装明细写入 ProductionReport (reportType=YIELD, costCategory=null)，
+     * 让 YieldCalculationServiceImpl.getYield → StepYieldDTO 读取，
+     * 进而 OrderCostBreakdownService.computeByBatch 消费。
+     *
+     * <p>packagingDetail 模板继承 (从 ProductWorkProcess 继承) 仅在 YieldReportServiceImpl 操作员
+     * 手机端报工路径中执行 (需要 workProcessTaskId + pwpConfig 查找)。文员逐道录入无 WorkProcess
+     * 基础设施，故降级：仅在 req 显式提供 packagingDetail 时写入，不尝试模板继承。
+     * 若将来需要继承，应在 SP-G 后续子项中为 ClerkProcessEntryService 引入 ProductWorkProcess 查找。
+     */
+    private void writeYieldAuxReport(String factoryId, Long productionBatchId,
+                                     StepEntry st, Long operatorId) {
+        ProductionReport report = new ProductionReport();
+        report.setFactoryId(factoryId);
+        report.setBatchId(productionBatchId);
+        report.setWorkerId(operatorId);
+        report.setReportType("YIELD");
+        report.setReportMode(ReportMode.MODE_1);
+        report.setReportDate(resolveReportDate(st));
+        report.setProcessOrder(st.getProcessOrder());
+        // ⛔ 不设 output/input: YieldCalculationServiceImpl.getYield 对同 task(文员录入 task=null
+        // → 全批一组) Σ 所有 report 的 output/input (L115/L123)。本辅助报工只承载副产/留样/包装明细
+        // (getYield L160-179 独立读取, 不依赖 output), 设 output 会与 seasoning/labor 报工的 output
+        // 重复累加 → 虚高产出/盒数。故 output/input 留 null。
+        if (st.getByproducts() != null && !st.getByproducts().isEmpty()) {
+            report.setByproducts(toByproductMaps(st.getByproducts()));
+        }
+        report.setSampleRetainQuantity(st.getSampleRetainQuantity());
+        if (st.getPackagingDetail() != null && !st.getPackagingDetail().isEmpty()) {
+            report.setPackagingDetail(st.getPackagingDetail());
+        }
+        reportRepo.save(report);
+    }
+
+    /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */
+    private List<Map<String, Object>> toByproductMaps(List<ProcessChainEntryRequest.Byproduct> bps) {
+        if (bps == null || bps.isEmpty()) return null;
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ProcessChainEntryRequest.Byproduct b : bps) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", b.getName());
+            m.put("quantity", b.getQuantity());
+            if (b.getUnit() != null) m.put("unit", b.getUnit());
+            result.add(m);
+        }
+        return result;
     }
 
     // ─────────────────────────────────────────────────────────────

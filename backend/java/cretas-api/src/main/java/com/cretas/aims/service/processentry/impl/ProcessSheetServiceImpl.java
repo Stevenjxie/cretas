@@ -504,6 +504,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             st.setUpstreamSources(mirror);
         }
+        // SP-G G3a: 透传副产物/留样/包装明细 → materializeBatch 写 YIELD 报工
+        st.setByproducts(req.getByproducts());
+        st.setSampleRetainQuantity(req.getSampleRetainQuantity());
+        st.setPackagingDetail(req.getPackagingDetail());
         return st;
     }
 

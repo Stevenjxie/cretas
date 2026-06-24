@@ -67,6 +67,8 @@ public class ProcessChainEntryRequest {
          * 故 recordChain labor 行为不变。
          */
         private List<LaborSegment> laborSegments;
+        /** SP-G G3a: 包装明细 [{name,cost}] (膜/气体/标签/其他); 随 YIELD 报工写入 ProductionReport。 */
+        private List<java.util.Map<String, Object>> packagingDetail;
     }
 
     @Data

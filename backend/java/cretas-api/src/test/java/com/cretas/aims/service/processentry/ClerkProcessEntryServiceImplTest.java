@@ -1089,4 +1089,79 @@ class ClerkProcessEntryServiceImplTest {
                 .as("should contain seasoning configuration warning for 熟制 step")
                 .anyMatch(w -> w.contains("熟制") && w.contains("调料成本未计入"));
     }
+
+    /**
+     * SP-G G3a — 副产物/留样/包装明细 写 YIELD 报工。
+     *
+     * <p>单道领料 step 带 byproducts(1项) + sampleRetainQuantity(3) + packagingDetail(1项)
+     * → recordChain 物化 → 捕获的某条 ProductionReport 含这 3 字段且值正确。
+     */
+    @Test
+    @DisplayName("SP-G G3a: byproducts/留样/packagingDetail → 写 YIELD 报工 (byproducts map, sampleRetain=3, packagingDetail)")
+    void spg_g3a_auxFields_yieldReportWritten() {
+        stubNoIdempotency("G3A-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        com.cretas.aims.entity.MaterialBatch raw = rawMb("RAW-G3A", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-G3A", FACTORY)).thenReturn(Optional.of(raw));
+
+        // 构造带副产物/留样/包装明细的 step
+        StepEntry step = rawStep(1, "100", "80", List.of(rawInput("RAW-G3A", "100")));
+
+        // byproducts: 1 项 (料头, 8kg)
+        com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct bp =
+                new com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct();
+        bp.setName("料头");
+        bp.setQuantity(new java.math.BigDecimal("8"));
+        bp.setUnit("kg");
+        step.setByproducts(List.of(bp));
+
+        // sampleRetainQuantity: 3 盒
+        step.setSampleRetainQuantity(3);
+
+        // packagingDetail: 1 项 (包装膜, ¥1.50)
+        java.util.Map<String, Object> pkgItem = new java.util.LinkedHashMap<>();
+        pkgItem.put("name", "包装膜");
+        pkgItem.put("cost", new java.math.BigDecimal("1.50"));
+        step.setPackagingDetail(List.of(pkgItem));
+
+        BatchEntry batch = finishedBatch("FIN-G3A", "PT-X", List.of(step));
+        service.recordChain(FACTORY, PLAN_ID, req("G3A-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeastOnce()).save(cap.capture());
+
+        // 找到写了副产物/留样/包装明细的那条 YIELD 报工
+        com.cretas.aims.entity.ProductionReport auxRpt = cap.getAllValues().stream()
+                .filter(r -> r.getByproducts() != null || r.getSampleRetainQuantity() != null
+                        || r.getPackagingDetail() != null)
+                .findFirst()
+                .orElse(null);
+
+        assertThat(auxRpt).as("应写出一条含副产物/留样/包装明细的 ProductionReport").isNotNull();
+        assertThat(auxRpt.getReportType()).isEqualTo("YIELD");
+        assertThat(auxRpt.getBatchId()).as("挂在本批").isNotNull();
+        assertThat(auxRpt.getWorkerId()).isEqualTo(OPERATOR_ID);
+
+        // byproducts 转 Map: [{name=料头, quantity=8, unit=kg}]
+        assertThat(auxRpt.getByproducts()).as("byproducts 非空").isNotNull().hasSize(1);
+        assertThat(auxRpt.getByproducts().get(0))
+                .containsEntry("name", "料头")
+                .containsKey("quantity");
+
+        // sampleRetainQuantity = 3
+        assertThat(auxRpt.getSampleRetainQuantity()).as("留样件数 = 3").isEqualTo(3);
+
+        // packagingDetail = [{name=包装膜, cost=1.50}]
+        assertThat(auxRpt.getPackagingDetail()).as("packagingDetail 非空").isNotNull().hasSize(1);
+        assertThat(auxRpt.getPackagingDetail().get(0))
+                .containsEntry("name", "包装膜");
+    }
 }
