@@ -101,6 +101,26 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("endDate") LocalDate endDate);
 
     /**
+     * 结转损益专用: 仅 POSTED 凭证按 subjectCode 聚合 [startDate, endDate].
+     * 与 {@link #aggregateBySubject} 区别: 排除 DRAFT/REVERSED (只算已过账), 防把草稿计进结转。
+     */
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "  e.subjectCode, MAX(e.subjectName), " +
+            "  COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
+            "  COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "  AND v.status = com.cretas.aims.entity.enums.VoucherStatus.POSTED " +
+            "  AND v.deletedAt IS NULL " +
+            "GROUP BY e.subjectCode " +
+            "ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectPosted(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
      * Sprint 7 T3 现金流量表: 找出指定现金科目在期间内的 voucher entries + 对手科目列表.
      *
      * <p>返回 voucher_id 列表 — caller 拉 voucher 详情找对手 entry.
