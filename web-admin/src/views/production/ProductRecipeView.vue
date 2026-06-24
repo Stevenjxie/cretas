@@ -374,8 +374,9 @@ function goCreateBom() {
   const productParam = selectedProductTypeId.value
     ? `&productTypeId=${selectedProductTypeId.value}`
     : '';
-  const targetPath = `/production/bom-unified?tab=materials${productParam}`;
-  const returnPath = `/production/bom-unified?tab=recipe${productParam}`;
+  // 路由实际路径是 /production/bom (bom-unified 组件挂在此 path); 用 bom-unified 会 404 (headed 验证抓到)。
+  const targetPath = `/production/bom?tab=materials${productParam}`;
+  const returnPath = `/production/bom?tab=recipe${productParam}`;
   goCreate(targetPath, { reopen: returnPath });
 }
 </script>
@@ -416,24 +417,23 @@ function goCreateBom() {
       description="该产品尚未建立 BOM 配方，调料配方挂在 BOM 下，请先创建 BOM"
       style="margin-top: 40px;"
     >
-      <template #extra>
-        <template v-if="canCreateBom">
-          <el-button type="primary" @click="goCreateBom">
-            前往创建 BOM 配方
-          </el-button>
-          <p style="margin-top: 8px; font-size: 12px; color: #909399;">
-            创建完成后，点击顶部返回栏回到此页继续填写调料配方
-          </p>
-        </template>
-        <template v-else>
-          <el-alert
-            :closable="false"
-            type="warning"
-            show-icon
-            title="需要生产写入权限才能创建 BOM，请联系管理员开通"
-          />
-        </template>
+      <!-- el-empty 用 default slot 放动作 (无 #extra slot — headed 验证抓到) -->
+      <template v-if="canCreateBom">
+        <el-button type="primary" @click="goCreateBom">
+          前往创建 BOM 配方
+        </el-button>
+        <p style="margin-top: 8px; font-size: 12px; color: #909399;">
+          创建完成后，点击顶部返回栏回到此页继续填写调料配方
+        </p>
       </template>
+      <el-alert
+        v-else
+        :closable="false"
+        type="warning"
+        show-icon
+        title="需要生产写入权限才能创建 BOM，请联系管理员开通"
+        style="max-width: 420px;"
+      />
     </el-empty>
 
     <!-- Error state -->
@@ -442,9 +442,7 @@ function goCreateBom() {
       description="加载调料配方失败，请刷新重试"
       style="margin-top: 40px;"
     >
-      <template #extra>
-        <el-button @click="loadSeasoning">重试</el-button>
-      </template>
+      <el-button @click="loadSeasoning">重试</el-button>
     </el-empty>
 
     <!-- Idle: no product selected -->
