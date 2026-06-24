@@ -115,25 +115,35 @@ mockup `production-cost-app(1).html` JS(line 2620-2665)给了精确公式,**直�
 
 ## 5. 分期(建议 PR 切分)
 
-| PR | 内容 | 风险 | 模型 |
-|---|---|---|---|
-| **G1** | 滚揉纯配置 + 接线恢复 | 低 | Sonnet(规则轻) |
-| **G2** | 去舌苔 + reverseInput AutoCalc | 中(新公式) | Opus 定公式 + Sonnet 实现 |
-| **G3** | 气调装盒 + 成品批 + byproduct/留样 DTO + 新 AutoCalc | **高**(成品批语义 + 成本正确性) | Opus 主导 |
-| **G4** | M67YieldCost 去硬编码 → 通用单盒页 | 中 | Sonnet |
-| **G5** | Q1 注射基重 **verify**(偏差才修) | 低(只读核对) | Opus verify |
+| PR | 内容 | 风险 | 依赖 | 模型 |
+|---|---|---|---|---|
+| **G3a**(后端 keystone) | byproducts/sampleRetain/packagingDetail **写路径**(请求→StepEntry→report) | **高**(成本正确性) | 无(独立) | **Opus** |
+| **G0**(基础重构 🔒) | upstream static config → **动态 prev-process** 解析 | **高**(改现有接线) | 无 | **Opus** 主导 |
+| **G1** | 滚揉 config(G0 后接近纯配置) | 低 | G0 | Sonnet |
+| **G2** | 去舌苔 + reverseInput AutoCalc | 中 | G0 | Sonnet(公式已锁) |
+| **G3b**(前端) | 气调 config + 新 AutoCalc(sumBoxes/sumWeight/yieldByProductWeight/laborPerBox) + finished=true + byproduct/留样 录入 | **高** | G0+G3a | Opus 主导 |
+| **G4** | M67YieldCost 去硬编码 → 通用单盒页 | 中 | G3b | Sonnet |
+| **G5** | Q1 注射基重 **verify** | 低 | 无 | Opus verify |
 
-> G3 是 🔒 红线(成品批语义 / 成本正确性), 执行者只到 PR, Opus 终审 + 从 main 部署。**成本引擎已就绪, G3 只是把录入字段接进去**。先对完 D1 气调口径再开 G3。
+> **先做 G3a(后端写路径) + G0(动态接线)两个独立 keystone(Opus)**, 它们是其余的前提且互不依赖, 可并行。再 G1/G2(fleet)→ G3b → G4。G0/G3a/G3b 是 🔒 红线(成本/接线), 执行者只到 PR, Opus 终审。
 
 ---
 
 ## 6. 开工前必 verify(不假设, 审计教训)
 
-1. **process-sheet saveRow 支持 finished 行吗**(SP-F 写死 false)? 看 ProcessSheetServiceImpl + materializeBatch finished 分支。
-2. **computeByBatch 产 per-process labor 吗**(汇总页前提)? 当前疑单一人工桶 —— 决定汇总页是否进 scope。
-3. ~~OrderCostBreakdownService 已算 留样/料头/副产?~~ **已确认实现**(computeByBatch L193-202, #1027/1028)→ G3 只「接录入」, 不改引擎。
-4. **张权 mockup 气调页的列口径**(D1) —— 让 Steve 给 mockup 或对一遍。
-5. **Q1 注射基重**:RecipeCostCalculator 的 injectionRawKg 基重 = mockup 口径? (G5 verify)
+1. ~~process-sheet saveRow 支持 finished 行吗?~~ **✅ 已支持**(`req.isFinished()` 透传 MaterializeContext L111/114) → G3 成品批后端就绪, 前端送 finished=true 即可。
+2. ~~computeByBatch 产 per-process labor 吗?~~ **❌ 单一人工桶**(`getTotalLaborCost()` 批级汇总, 非逐道) → **D3 决定: 汇总页 defer**(per-process labor 列要额外后端聚合, 不进 SP-G)。
+3. ~~留样/副产引擎已实现?~~ **✅ 引擎(reader)就绪**, 但 ⚠️ **写路径缺**: `ProductionReport` 有 byproducts/sample_retain_quantity/packaging_detail 列 + computeByBatch 读它们, 但 `materializeBatch` **从不写** → M67 demo 是 seed 进 report 的。**G3 后端 keystone = 补写路径**(请求 → StepEntry → report 写 3 字段)。
+4. ~~mockup 口径?~~ **✅ D1 已解决**(§4.1)。
+5. **Q1 注射基重**:RecipeCostCalculator injectionRawKg 基重 = mockup? (G5 verify, 仍开)
+
+### 6a. 关键设计 fork(审计新发现) —— G0 动态接线
+
+SP-F 上游是**静态 `PROCESS_SHEET_CONFIG.upstream`**(如 `chaoshui.upstream='xiuyou'` 折叠接线)。插入 滚揉/去舌苔 不是纯加 config —— 改 `chaoshui.upstream='gunrou'` 会让**没有滚揉的产品**(现 3 道切片)断链。
+
+**决策 D6(架构, Opus 拍板倾向)**:上游改**动态 prev-process 解析** —— 取产品 `ProductWorkProcess` 配置里**本道的上一道**, 而非静态 config。这样任意工序子集自动接线, 6 道/3 道产品都对。
+- 新增 **G0**(基础重构, 🔒): upstream resolution 由 static config → dynamic(产品工序链 prev)。**G1/G2 的真正前提**。
+- G0 后, G1 滚揉 / G2 去舌苔 才真的接近「纯加 config」。
 
 ---
 
