@@ -302,6 +302,14 @@ public class OrderCostBreakdownService {
         // 1:1 全量消耗时 consumedQty==upstreamReceiptQty → 比例=1 → apportioned==sum (无变化)。
         // 缺量兜底**严格保留改前行为** (sum>0?sum:own), 不切换到 own —— 避免影响 receiptQuantity
         // 缺失的既有订单成本数据。新 SP-B1 物化的 WIP 批必带 receiptQuantity, 故分摊分支总能命中。
+        // ★ 严格审计 2026-06-25 (Edge G): 真实 0 消耗 (consumedQty 显式 = 0, 非 null) →
+        // 本批未从该上游源取料, 贡献 0 成本。**显式 0 必须早返回**, 否则下方 legacy 兜底
+        // (sum>0?sum:own) + L 末 (apportioned>0?apportioned:own) 两处都会把它推成"全量", 造成
+        // 混批 feed=0 的源被全额计入 → 原料虚高 (Edge G: g1投50+g2投0, 原料应 466 实得 932)。
+        // 仅对**显式 0** 生效; consumedQty 为 null (缺量旧数据) 仍走下方 legacy 兜底, 零回归。
+        if (c.getQuantity() != null && c.getQuantity().signum() == 0) {
+            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.valueOf(maxChildDepth)};
+        }
         BigDecimal legacy = sum.signum() > 0 ? sum : own;
         BigDecimal consumedQty = nz(c.getQuantity());
         BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
