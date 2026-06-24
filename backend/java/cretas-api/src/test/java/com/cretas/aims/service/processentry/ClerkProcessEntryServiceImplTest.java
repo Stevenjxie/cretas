@@ -1120,6 +1120,7 @@ class ClerkProcessEntryServiceImplTest {
         bp.setName("料头");
         bp.setQuantity(new java.math.BigDecimal("8"));
         bp.setUnit("kg");
+        bp.setUnitPrice(new java.math.BigDecimal("8"));   // 回收价 (可选, 提供时须流到报工→副产回收)
         step.setByproducts(List.of(bp));
 
         // sampleRetainQuantity: 3 盒
@@ -1150,11 +1151,12 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(auxRpt.getBatchId()).as("挂在本批").isNotNull();
         assertThat(auxRpt.getWorkerId()).isEqualTo(OPERATOR_ID);
 
-        // byproducts 转 Map: [{name=料头, quantity=8, unit=kg}]
+        // byproducts 转 Map: [{name=料头, quantity=8, unit=kg, unitPrice=8}]
         assertThat(auxRpt.getByproducts()).as("byproducts 非空").isNotNull().hasSize(1);
         assertThat(auxRpt.getByproducts().get(0))
                 .containsEntry("name", "料头")
-                .containsKey("quantity");
+                .containsKey("quantity")
+                .containsEntry("unitPrice", new java.math.BigDecimal("8"));   // 严格测试: 回收价须流到报工
 
         // sampleRetainQuantity = 3
         assertThat(auxRpt.getSampleRetainQuantity()).as("留样件数 = 3").isEqualTo(3);

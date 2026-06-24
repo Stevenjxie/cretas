@@ -641,6 +641,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             m.put("name", b.getName());
             m.put("quantity", b.getQuantity());
             if (b.getUnit() != null) m.put("unit", b.getUnit());
+            // 副产回收价 (¥/单位): 必须写进报工, 否则 computeByBatch 的 accumulateByproducts
+            // 读不到 unitPrice → value=0 → 副产回收=0 (严格测试 2026-06-24 抓到)。
+            if (b.getUnitPrice() != null) m.put("unitPrice", b.getUnitPrice());
             result.add(m);
         }
         return result;
