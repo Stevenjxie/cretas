@@ -1,7 +1,8 @@
 <!--
-  成品出厂核算 (M67 demo)
+  成品出厂核算 (通用版, 由 M67 demo 泛化而来)
   支持「按订单号」(OrderYieldSummaryDTO) 和「按批次号」(BatchYieldDTO → normalize) 双模式查询。
   批次号模式适用于存货生产 (无对应订单号) 场景。
+  任意产品/批次均可查询; 无 M67 demo 硬编码。
 -->
 <template>
   <div class="m67-page">
@@ -149,7 +150,7 @@
               </tr>
             </tbody>
           </table>
-          <div class="mix-note">注意：本批两条上游链<b>单价不同</b>，所以<b>成本占比 ≠ 重量占比</b>——按重量糊一个平均会算错成本，必须按实测投料量×各自单价精确归集。这正是 Excel(XLOOKUP 只取一条链)做不到、客户"只能加权平均"的盲区。数据来源：后端单一权威成本服务 (/production/orders/.../cost-breakdown, 谱系遍历+上游成本回溯)。</div>
+          <div class="mix-note">注意：各上游批次<b>单价可能不同</b>，因此<b>成本占比 ≠ 重量占比</b>——必须按实测投料量×各自单价精确归集，加权平均会引入误差。数据来源：后端单一权威成本服务 (/production/orders/.../cost-breakdown, 谱系遍历+上游成本回溯)。</div>
         </div>
         <div v-else class="mix-note">本批来自 {{ mixRels.length }} 个上游批次，按实测投料量逐批溯源。成本金额需价格查看权限。数据来源：后端成本拆分服务 (/cost-breakdown)。</div>
       </el-card>
@@ -205,7 +206,7 @@ interface BatchYieldDTO {
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const queryMode = ref<'order' | 'batch'>('order');
-const orderId = ref('SO-M67DEMO-001');
+const orderId = ref('');
 const batchNumber = ref('');
 const gramsPerBox = ref(100);
 
@@ -238,8 +239,10 @@ const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = �
 let chart: any = null;
 let mixChart: any = null;
 
-// 工序名 fallback (后端 processName 未解析时, 按 M67 卤味标准工序序显示)
-const STAGE_NAMES: Record<number, string> = { 1: '修油', 2: '滚揉', 3: '焯水', 4: '熟制', 5: '气调', 6: '包装' };
+// 工序名 fallback: 后端 yield steps 暂未带 processName, 按标准卤味全链工序序显示
+// (修油→滚揉→焯水→去舌苔→熟制→气调)。非卤味/不同链回退「工序N」。
+// (真正按产品工序配置取名 = 后续优化, 需前端 fetch ProductWorkProcess by processOrder)
+const STAGE_NAMES: Record<number, string> = { 1: '修油', 2: '滚揉', 3: '焯水', 4: '去舌苔', 5: '熟制', 6: '气调' };
 const stepName = (s: Step) => s.processName || STAGE_NAMES[s.processOrder] || ('工序' + s.processOrder);
 
 const steps = computed<Step[]>(() => {
