@@ -297,7 +297,7 @@ function handleExport() {
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span class="page-title">财务报表</span>
+          <span class="page-title">财务分析(Excel)</span>
           <div class="header-actions">
             <el-date-picker
               v-model="dateRange"

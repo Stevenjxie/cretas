@@ -1059,7 +1059,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'reports',
             name: 'FinanceReports',
             component: () => import('@/views/finance/reports/index.vue'),
-            meta: { requiresAuth: true, title: '财务报表', module: 'finance' }
+            meta: { requiresAuth: true, title: '财务分析(Excel)', module: 'finance' }
           },
           {
             path: 'ar-ap',
@@ -1132,7 +1132,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'three-statements',
             name: 'FinanceThreeStatements',
             component: () => import('@/views/finance/report/index.vue'),
-            meta: { requiresAuth: true, title: '财务三表', module: 'finance' }
+            meta: { requiresAuth: true, title: '财务报表', module: 'finance' }
           },
           // SP11 U-SP11: 进销存台账报表 (期初/期中/期末 + 数量/金额, @PriceSensitive 脱敏)
           {
