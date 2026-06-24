@@ -1,15 +1,17 @@
 /**
  * SP-F 逐工序电子表格 — 配置描述符
  *
- * 切片 3 道工序 (修油 + 焯水 + 熟制):
- *   - 修油 (xiuyou):  首道, 原料领料 → RAW MaterialConsumption, WIP 批生成.
- *   - 焯水 (chaoshui): 单上游 WIP 库存扣减, 出成率.  切片折叠: 真实链有滚揉在中间.
- *   - 熟制 (shuzhi):  混锅多来源分摊 + 调料 + labor.  切片折叠: 真实链有去舌苔在中间.
+ * 工序配置 (修油 + 滚揉 + 焯水 + 去舌苔 + 熟制):
+ *   - 修油 (xiuyou):     首道, 原料领料 → RAW MaterialConsumption, WIP 批生成.
+ *   - 滚揉 (gunrou):     单上游 (修油), 出成率. G1 新增.
+ *   - 焯水 (chaoshui):   单上游 (滚揉), 出成率.
+ *   - 去舌苔 (qushetou): 单上游 (焯水), reverseInput 反推: input = scrap + output. G2 新增.
+ *   - 熟制 (shuzhi):     混锅多来源分摊 + 调料 + labor.
  *
  * 「纯加配置铺全 6 道」的边界说明 (spec §6.2 审计):
- *   - 滚揉可纯加配置 (单上游, 无特殊公式).
- *   - 去舌苔 / 气调需新增 AutoCalc 类型 (投入=碎肉+产出反推 / 单盒克重/每盒人工等),
- *     不是纯配置. AutoCalc union 设计为可扩展 string literal.
+ *   - 滚揉可纯加配置 (单上游, 无特殊公式). ✅ G1 完成.
+ *   - 去舌苔需新增 'reverseInput' AutoCalc 类型 (投入=碎肉+产出反推). ✅ G2 完成.
+ *   - 气调需新增更多 AutoCalc 类型 (单盒克重/每盒人工等), defer.
  *
  * clientRowId 全局唯一要求:
  *   后端删除 finder 按 (factory, plan, clientRowId) 查, **不含 processCode**,
@@ -36,13 +38,13 @@ export type ColType = 'dropdown' | 'number' | 'date' | 'daterange' | 'auto' | 'r
 
 /**
  * 自动计算公式标识.
- * 扩展点: 去舌苔 / 气调需新增 'reverseInput' | 'perBoxCost' | ... 等类型.
  *
- * - yield      : 出成率 = 产出 / 投入 × 100
- * - remaining  : 剩余量 — 派生自后端库存端点 (§5), 前端只读展示, 不本地计算.
- * - totalHours : 总工时 = Σ (时段时长 × 人数), 来自工时子表 laborSegments.
+ * - yield        : 出成率 = 产出 / 投入 × 100
+ * - remaining    : 剩余量 — 派生自后端库存端点 (§5), 前端只读展示, 不本地计算.
+ * - totalHours   : 总工时 = Σ (时段时长 × 人数), 来自工时子表 laborSegments.
+ * - reverseInput : 反推投入量 = scrap + output (去舌苔). G2 新增.
  */
-export type AutoCalc = 'yield' | 'remaining' | 'totalHours';
+export type AutoCalc = 'yield' | 'remaining' | 'totalHours' | 'reverseInput';
 
 /**
  * 单列描述符.
@@ -68,17 +70,17 @@ export interface ColDef {
 }
 
 // =========================================================================
-// 切片 3 道工序配置
+// 工序配置
 // =========================================================================
 
 /**
  * 配置表: 工序代码 → 列描述符数组.
  * 顺序即表格列顺序.
  *
- * 切片折叠接线 (spec §2.2 说明):
- *   - 焯水的上游写 'xiuyou' (真实链中间有滚揉, 切片省略).
- *   - 熟制的上游写 'chaoshui' (真实链中间有去舌苔, 切片省略).
- *   滚揉 / 去舌苔 / 气调后续加入时, 只需在此加条目并修正 upstream 接线.
+ * G0 动态接线: ProcessSheet.vue 按产品 ProductWorkProcess 动态解析工序链,
+ * 按工序名关键词子串匹配 → 列定义 key. upstream 字段此处写静态默认值,
+ * G0 动态链解析会按链序自动将"前一道"传入 upstreamItems, 此处 upstream
+ * 仅作 fallback 或文档说明, 不影响 G0 动态接线.
  */
 export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
@@ -98,28 +100,61 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   ],
 
   // -----------------------------------------------------------------------
-  // 焯水 (chaoshui) — 单上游 (切片折叠: 真实链上游是滚揉, 切片接修油)
+  // 滚揉 (gunrou) — 单上游 (修油), 镜像焯水结构. G1 新增.
   // upstreamBatch → upstreamSources[0]; before → inputQuantity; after → outputQuantity
-  // 剩余量 (remain) 只读, 由后端库存端点派生 (spec §6.3 审计 F-1)
+  // 剩余量只读, 由后端库存端点派生.
   // -----------------------------------------------------------------------
-  chaoshui: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '修油批次' },  // 切片折叠 (真实=滚揉批)
-    { key: 'batch',         type: 'readonly',                       label: '焯水批次' },   // 系统生成
-    { key: 'date',          type: 'daterange',                      label: '焯水日期' },
-    { key: 'before',        type: 'number',                         label: '焯水前(kg)' }, // → inputQuantity
-    { key: 'after',         type: 'number',                         label: '焯水后(kg)' }, // → outputQuantity
+  gunrou: [
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '修油批次' },   // G0 动态接线: 前道传入
+    { key: 'batch',         type: 'readonly',                       label: '滚揉批次' },    // 系统生成
+    { key: 'date',          type: 'daterange',                      label: '滚揉日期' },
+    { key: 'before',        type: 'number',                         label: '滚揉前(kg)' },  // → inputQuantity
+    { key: 'after',         type: 'number',                         label: '滚揉后(kg)' },  // → outputQuantity
     { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
     { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
     { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
   ],
 
   // -----------------------------------------------------------------------
-  // 熟制 (shuzhi) — 混锅多来源 (切片折叠: 真实链上游是去舌苔, 切片接焯水)
+  // 焯水 (chaoshui) — 单上游 (滚揉, G0 动态接线; 无滚揉时接修油)
+  // upstreamBatch → upstreamSources[0]; before → inputQuantity; after → outputQuantity
+  // 剩余量 (remain) 只读, 由后端库存端点派生 (spec §6.3 审计 F-1)
+  // -----------------------------------------------------------------------
+  chaoshui: [
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'gunrou',   label: '滚揉批次' },   // G0 动态接线: 前道传入
+    { key: 'batch',         type: 'readonly',                        label: '焯水批次' },   // 系统生成
+    { key: 'date',          type: 'daterange',                       label: '焯水日期' },
+    { key: 'before',        type: 'number',                          label: '焯水前(kg)' }, // → inputQuantity
+    { key: 'after',         type: 'number',                          label: '焯水后(kg)' }, // → outputQuantity
+    { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
+    { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
+    { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
+  ],
+
+  // -----------------------------------------------------------------------
+  // 去舌苔 (qushetou) — 单上游 (焯水), reverseInput 反推. G2 新增.
+  // upstreamBatch → upstreamSources[0]; input = scrap + output (反推); output → outputQuantity
+  // feedQuantityKg = scrap + output (领用量 = 投入量)
+  // -----------------------------------------------------------------------
+  qushetou: [
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '焯水批次' },   // G0 动态接线: 前道传入
+    { key: 'batch',         type: 'readonly',                        label: '去舌苔批次' }, // 系统生成
+    { key: 'date',          type: 'daterange',                       label: '去舌苔日期' },
+    { key: 'scrap',         type: 'number',                          label: '碎肉(kg)' },   // → 反推分量 (scrap)
+    { key: 'output',        type: 'number',                          label: '产出(kg)' },   // → outputQuantity
+    { key: 'input',         type: 'auto',     autoCalc: 'reverseInput', label: '投入(kg)' }, // = scrap + output, 只读
+    { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',        label: '出成率(%)' }, // = output / input × 100
+    { key: 'remain',        type: 'auto',     autoCalc: 'remaining',    label: '剩余(kg)' }, // 后端派生, 只读
+    { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours',   label: '总工时(h)' },
+  ],
+
+  // -----------------------------------------------------------------------
+  // 熟制 (shuzhi) — 混锅多来源 (G0 动态接线: 前道传入, 默认=去舌苔/焯水批)
   // upstreamBatch 多选 → upstreamSources[]; input → inputQuantity; output → outputQuantity
   // 剩余量只读 (同焯水)
   // -----------------------------------------------------------------------
   shuzhi: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '焯水批次(混锅)' }, // 切片折叠 (真实=去舌苔批), 多选
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'qushetou', label: '去舌苔批次(混锅)' }, // G0 动态接线: 前道传入, 多选
     { key: 'batch',         type: 'readonly',                        label: '熟制批次' },        // 系统生成
     { key: 'date',          type: 'daterange',                       label: '日期' },
     { key: 'input',         type: 'number',                          label: '投入(kg)' },        // → inputQuantity
@@ -146,7 +181,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
  *   在毫秒级并发下存在碰撞风险. 编码 processCode 后不同工序
  *   之间天然不会碰撞.
  *
- * @param processCode - 工序代码 (如 "xiuyou" / "chaoshui" / "shuzhi").
+ * @param processCode - 工序代码 (如 "xiuyou" / "gunrou" / "chaoshui" / "qushetou" / "shuzhi").
  */
 export function genClientRowId(processCode: string): string {
   const ts = Date.now().toString(36);                      // base36 timestamp
