@@ -454,6 +454,17 @@ function goCreateBom() {
 
     <!-- Main editor (loaded) -->
     <template v-else-if="loadState === 'loaded' && current">
+      <!-- 产品上下文 (fool-proof Rule 2): 始终显示正在编辑哪个产品 + BOM 状态, 防克隆后改错版本 -->
+      <div style="display:flex; align-items:center; gap:8px; margin:8px 0 4px;">
+        <span style="font-size:15px; font-weight:600;">{{ current.productName }}</span>
+        <el-tag
+          :type="current.status === 'DRAFT' ? 'warning' : current.status === 'ACTIVE' ? 'success' : 'info'"
+          size="small"
+          disable-transitions
+        >{{ current.status === 'DRAFT' ? '草稿(可编辑)' : current.status === 'ACTIVE' ? '生效版本' : '已归档' }}</el-tag>
+        <span style="font-size:12px; color:#909399;">调料配方</span>
+      </div>
+
       <!-- U6 DRAFT gate: read-only banner when BOM is ACTIVE/ARCHIVED (fool-proof Rule 2 + 5) -->
       <el-alert
         v-if="isReadOnly"
@@ -499,9 +510,12 @@ function goCreateBom() {
       <!-- Pot parameters -->
       <el-card shadow="never" style="margin-bottom: 16px;">
         <template #header>
-          <span style="font-size: 14px; font-weight: 600;">锅序参数</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size: 14px; font-weight: 600;">锅序参数</span>
+            <span style="font-size:12px; color:#909399;">第一锅全量投入，第二锅起按比例（老汤可复用）</span>
+          </div>
         </template>
-        <el-form label-width="140px" size="default">
+        <el-form :inline="true" label-width="auto" size="default">
           <el-form-item label="注射率">
             <el-input-number
               v-model="formInjectionRate"
@@ -566,9 +580,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.dosagePerKgG"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 120px;"
+                style="width: 110px;"
               />
               <span v-else>{{ row.dosagePerKgG ?? '—' }}</span>
             </template>
@@ -579,9 +594,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.priceSource1"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 100px;"
+                style="width: 90px;"
               />
               <span v-else>{{ row.priceSource1 ?? '—' }}</span>
             </template>
@@ -592,9 +608,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.priceSource2"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 100px;"
+                style="width: 90px;"
               />
               <span v-else>{{ row.priceSource2 ?? '—' }}</span>
             </template>
@@ -645,9 +662,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.dosagePerKgG"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 120px;"
+                style="width: 110px;"
               />
               <span v-else>{{ row.dosagePerKgG ?? '—' }}</span>
             </template>
@@ -658,9 +676,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.priceSource1"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 100px;"
+                style="width: 90px;"
               />
               <span v-else>{{ row.priceSource1 ?? '—' }}</span>
             </template>
@@ -671,9 +690,10 @@ function goCreateBom() {
                 v-if="!isReadOnly"
                 v-model="row.priceSource2"
                 size="small"
-                :precision="4"
+                :controls="false"
+                :precision="2"
                 :min="0"
-                style="width: 100px;"
+                style="width: 90px;"
               />
               <span v-else>{{ row.priceSource2 ?? '—' }}</span>
             </template>
