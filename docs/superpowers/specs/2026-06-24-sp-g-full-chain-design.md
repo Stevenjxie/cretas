@@ -66,12 +66,34 @@ SP-F 是 Steve 当时拍板的**垂直切片 = 修油+焯水+熟制 3 道**(设�
 
 ## 4. 技术难点(review 重点)
 
-### 4.1 新 AutoCalc 类型(非纯配置)
-现 `AutoCalc = 'yield'|'remaining'|'totalHours'`。需扩:
-- **`reverseInput`**(去舌苔):投入不是上游产出直传,而是 `碎肉量 + 本道产出` 反推。需在 ProcessDataTable 加公式分支 + 明确录入哪个/算哪个。
-- **气调装盒**(一组新公式):`实际生产 = 入库 + 留样 + 剩余 + 领用`;`总重 = 成品重 + 料头`;`盒数 = 成品重 / 单盒克重`;`每盒人工 = 总人工 / 盒数`。可能不止一个 AutoCalc, 需逐个定义 + 测试。
+### 4.1 新 AutoCalc 类型(口径已从 mockup 锁定 ✅ D1 resolved)
 
-> **决策点 D1**:气调这组公式直接照张权 mockup 的列定义实现,还是先跟 Steve 对一遍口径(哪些录入/哪些算)?建议**先对口径**(气调是单盒成本的关键, 算错全盘错)。
+mockup `production-cost-app(1).html` JS(line 2620-2665)给了精确公式,**直接照实现**:
+
+现 `AutoCalc = 'yield'|'remaining'|'totalHours'`。需扩:
+
+**① 滚揉(gunrou)** — 纯配置, 沿用现有 `yield` pattern(单上游→产出, 出成率=产出/投入), 无新公式。
+
+**② 去舌苔(qushetou)** — 新 `reverseInput`:
+```
+录入: 碎肉(scrap) + 产出(output)
+算:   投入 input = scrap + output        // 反推!
+      出成率 = output / input
+      剩余 remain = output − 下游领用
+```
+
+**③ 气调装盒(qidiao)** — 新一组(成品批):
+```
+录入: 入库 storage / 留样 sample / 剩余 remain / 领用 claim / 成品重 productWeight / 料头 trimmings / 单盒克重 boxWeight / 工时段
+算:   实际生产(盒) actualProd = storage + sample + remain + claim
+      总重量 totalWeight = productWeight + trimmings
+      气调出成率 = productWeight / usedWeight   (usedWeight=上游投料合计)
+      每盒人工费 laborPerBox = (员工单价 × 总工时) / actualProd
+```
+
+→ 新 AutoCalc: `reverseInput`(去舌苔) + `sumBoxes`(实际生产) + `sumWeight`(总重量) + `yieldByProductWeight`(气调出成率) + `laborPerBox`。`AutoCalc` union 已设计为可扩展。
+
+> **D1 已解决**:口径来自 mockup JS, 不需再对。注: mockup 的「单盒成本测算」只算 **调料+包装(不含人工/原料)** —— 我们 `computeByBatch` 的全四拆 + 副产/留样 **比 mockup 更全**, G4 直接用更全的, 不退回 mockup 的简版。
 
 ### 4.2 气调装盒 = 成品批(finished=true)的语义
 - 切片所有批 finished=false。气调要产 finished=true 成品批 → 触发 `createWipMaterialBatch` 不同分支(成品批不建 WIP, 直接是成品)。
@@ -117,7 +139,7 @@ SP-F 是 Steve 当时拍板的**垂直切片 = 修油+焯水+熟制 3 道**(设�
 
 ## 7. 开放问题(待 Steve 拍板)
 
-- **D1**:气调装盒公式口径先对还是直接照 mockup 实现?(建议先对 —— 气调是单盒成本关键)
+- ~~D1:气调口径~~ **已解决**(§4.1, mockup JS line 2620-2665 锁定全部公式)。
 - ~~D2:留样/副产引擎已实现?~~ **已确认实现**(verify #3), G3 只接录入。
 - **D3**:汇总页是否进 SP-G?(取决于 verify #2 — computeByBatch 是否产 per-process labor)
 - **D4**:先全程 DEMO 验证 + GO 后才碰真客户铺全 6 道?(建议 yes, 同 BOM 合并的 hard-gate)
