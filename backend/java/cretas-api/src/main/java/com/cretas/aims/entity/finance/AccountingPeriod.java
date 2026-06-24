@@ -129,6 +129,10 @@ public class AccountingPeriod extends BaseEntity {
     @Column(name = "adjust_deadline")
     private LocalDateTime adjustDeadline;
 
+    /** 结转损益凭证已过账时间 (方案A: LOCKED 后 finalize 过账)。NULL=未结转, 反结账时清回 NULL。 */
+    @Column(name = "closing_posted_at")
+    private LocalDateTime closingPostedAt;
+
     /** 结账前对账校验结论: PASS | WARNING | null (未执行月结编排). */
     @Column(name = "reconciliation_status", length = 32)
     private String reconciliationStatus;
