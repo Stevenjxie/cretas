@@ -74,7 +74,7 @@ const allQuickActions = [
   { title: '盘点管理', icon: ShoppingCart, route: '/restaurant/stocktaking', color: '#FFAB00', module: 'restaurant' },
   { title: '损耗管理', icon: Warning, route: '/restaurant/wastage', color: '#FF5630', module: 'restaurant' },
   { title: '采购订单', icon: ShoppingCart, route: '/procurement/orders', color: '#909399', module: 'procurement' },
-  { title: '财务报表', icon: Money, route: '/finance/reports', color: '#5ad8a6', module: 'finance' },
+  { title: '财务报表', icon: Money, route: '/finance/three-statements', color: '#5ad8a6', module: 'finance' },
   { title: '智能BI', icon: TrendCharts, route: '/smart-bi/dashboard', color: '#5b8ff9', module: 'analytics' }
 ];
 const quickActions = computed(() => allQuickActions.filter(a => permissionStore.canAccess(a.module as ModuleName)));

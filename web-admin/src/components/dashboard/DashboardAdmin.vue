@@ -104,7 +104,7 @@ const quickActions = [
   { title: '生产管理', icon: TrendCharts, route: '/production/batches', color: '#2D8B57' },
   { title: '仓储管理', icon: Box, route: '/warehouse/materials', color: '#36B37E' },
   { title: '人员管理', icon: User, route: '/hr/employees', color: '#FFAB00' },
-  { title: '财务报表', icon: Money, route: '/finance/reports', color: '#FF5630' },
+  { title: '财务报表', icon: Money, route: '/finance/three-statements', color: '#FF5630' },
   { title: '系统设置', icon: Setting, route: '/system/settings', color: '#6B778C' },
   { title: '车间看板', icon: DataLine, route: '/analytics/production-report', color: '#6554C0' },
   { title: '人效分析', icon: User, route: '/production-analytics/efficiency', color: '#00B8D9' },
