@@ -33,6 +33,10 @@ import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.recipe.RecipeCostCalculator;
 import com.cretas.aims.service.recipe.SeasoningCost;
@@ -85,6 +89,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final FactoryWarehouseRepository warehouseRepo;
     private final ProductRecipeRepository recipeRepo;
     private final RecipeIngredientRepository ingredientRepo;
+    /** BOM 统管配方+锅序 (2026-06-24): 调料读路径优先 BOM. null-tolerant (@InjectMocks 未注入时回退 product_recipes). */
+    private final BomRecipeRepository bomRecipeRepo;
+    private final BomSeasoningItemRepository bomSeasoningItemRepo;
     private final ProductionReportRepository reportRepo;
     private final ObjectMapper objectMapper;
     /** SP-C: 工时单价配置 repo; null-tolerant (兼容测试 @InjectMocks 未注入时走 fallback). */
@@ -580,16 +587,56 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
     private BigDecimal computeSeasoningCost(String factoryId, String productTypeId,
                                              StepEntry st, List<String> warnings) {
+        BigDecimal injectionRawKg = nz(st.getInputQuantity());
+        List<BigDecimal> potRawKgs = buildPotRawKgs(st);
+
+        // BOM 统管配方+锅序 (2026-06-24): 调料折叠进 BOM → 优先读 BOM 的锅序参数 + bom_seasoning_items.
+        // 算法一字不改 (RecipeCostCalculator 同源), 仅换数据源. null-tolerant: @InjectMocks 测试未注入 bom repo
+        // 时跳过, 走下方 product_recipes 兼容路径 (灰度期未迁移 SKU 也走兼容路径, 保证零回归).
+        //
+        // 读 is_current BOM (任意 status, 含 DRAFT) — 与迁移目标 + 调料配方 tab + BomRecipe 的
+        // "定义即生效无需激活仪式" 一致 (BomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue).
+        // 不按 ACTIVE 收窄: 迁移逐字拷贝 product_recipes → 同 SKU BOM 成本与旧 ACTIVE 配方逐分一致
+        // (U8 cutover 逐 SKU 0-diff 验证兜底), 故选 is_current 不影响零回归; ACTIVE-gating 是可选的更
+        // 保守语义 (audit Issue 4), 如需收窄改 findBy...IsCurrentTrueAndStatus(ACTIVE) — 留 Steve 决策.
+        boolean bomExistedButEmptySeasoning = false;
+        if (bomRecipeRepo != null && bomSeasoningItemRepo != null) {
+            Optional<BomRecipe> bomOpt = bomRecipeRepo
+                    .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+            if (bomOpt.isPresent()) {
+                List<BomSeasoningItem> bomSeasoning =
+                        bomSeasoningItemRepo.findByRecipeIdOrderBySeqAsc(bomOpt.get().getId());
+                if (!bomSeasoning.isEmpty()) {
+                    SeasoningCost sc = RecipeCostCalculator.compute(
+                            bomOpt.get().getSubsequentPotRatio(), bomSeasoning, injectionRawKg, potRawKgs);
+                    return sc.getTotal();
+                }
+                // BOM 已建但无调料明细 — 记下, 仅当下方 legacy 也无配方 (真 0 成本) 时才区分性 warning,
+                // 避免灰度期 (有原辅料 BOM, 调料尚走 legacy) 每次报工误报 (audit R4 silent-degrade).
+                bomExistedButEmptySeasoning = true;
+            }
+        } else {
+            // 仅 @InjectMocks 测试进此分支; prod 注入后恒非 null. 留 breadcrumb 防未来 wiring 回归静默退化 (audit R4).
+            log.warn("[SEASONING-COST] BOM repos 不可用, 回退 product_recipes (factory={}, sku={})",
+                    factoryId, productTypeId);
+        }
+
+        // 兼容/回退路径: 旧 product_recipes (灰度未迁移 SKU). cleanup 删 product_recipes 后移除本段.
         Optional<ProductRecipe> recipeOpt = recipeRepo
                 .findByFactoryIdAndProductTypeIdAndStatus(factoryId, productTypeId, "ACTIVE");
         if (recipeOpt.isEmpty()) {
-            warnings.add("产品 " + productTypeId + " 无有效调料配方(ACTIVE)，调料成本跳过");
+            // 防呆 (U7): 非静默 0 — 明确 warning + 指向设置位置 (fool-proof Rule 5). 区分两种 0 来源 (audit R4):
+            if (bomExistedButEmptySeasoning) {
+                warnings.add("产品 " + productTypeId + " 的 BOM 已建但无调料明细，调料成本暂记 0；"
+                        + "疑似迁移遗漏或配方未填，请核对「生产 → BOM 配方 → 调料配方」。");
+            } else {
+                warnings.add("产品 " + productTypeId + " 未设置调料配方，调料成本暂记 0；"
+                        + "请在「生产 → BOM 配方 → 调料配方」tab 为该产品设置注射/熟制配方后重新核算。");
+            }
             return BigDecimal.ZERO;
         }
         ProductRecipe recipe = recipeOpt.get();
         List<RecipeIngredient> ingredients = ingredientRepo.findByRecipeIdOrderBySeqAsc(recipe.getId());
-        BigDecimal injectionRawKg = nz(st.getInputQuantity());
-        List<BigDecimal> potRawKgs = buildPotRawKgs(st);
         SeasoningCost sc = RecipeCostCalculator.compute(recipe, ingredients, injectionRawKg, potRawKgs);
         return sc.getTotal();
     }

@@ -1,16 +1,21 @@
 package com.cretas.aims.service.bom.impl;
 
+import com.cretas.aims.dto.bom.BomSeasoningResponse;
+import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
+import com.cretas.aims.dto.bom.BomSeasoningSaveRequest.SeasoningItemDTO;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
@@ -60,6 +65,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final MaterialUomConverter materialUomConverter;
     /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
     private final NestedBomCostService nestedBomCostService;
+    /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
+    private final BomSeasoningItemRepository seasoningItemRepo;
 
     @Override
     @Transactional
@@ -212,6 +219,30 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
         clone.getItems().clear();
         clone.getItems().addAll(clonedItems);
+
+        // BOM 统管配方+锅序 (2026-06-24): clone 必须带上折叠后的配方 (锅序参数 + 调料明细),
+        // 否则克隆出的 DRAFT 调料为空 → 激活后调料成本静默归 0 (audit Issue 1).
+        clone.setCookingPotBaseKg(source.getCookingPotBaseKg());
+        clone.setSubsequentPotRatio(source.getSubsequentPotRatio());
+        clone.setInjectionRate(source.getInjectionRate());
+        List<BomSeasoningItem> sourceSeasoning = seasoningItemRepo.findByRecipeIdOrderBySeqAsc(source.getId());
+        List<BomSeasoningItem> clonedSeasoning = new ArrayList<>();
+        for (BomSeasoningItem s : sourceSeasoning) {
+            BomSeasoningItem cs = new BomSeasoningItem();
+            cs.setRecipeId(clone.getId());
+            cs.setFactoryId(factoryId);
+            cs.setSection(s.getSection());
+            cs.setSeq(s.getSeq());
+            cs.setName(s.getName());
+            cs.setDosagePerKgG(s.getDosagePerKgG());
+            cs.setPriceSource1(s.getPriceSource1());
+            cs.setPriceSource2(s.getPriceSource2());
+            cs.setCountInSeasoning(s.getCountInSeasoning());
+            cs.setRemark(s.getRemark());
+            clonedSeasoning.add(cs);
+        }
+        seasoningItemRepo.saveAll(clonedSeasoning);
+
         recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
     }
@@ -351,6 +382,97 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
+    }
+
+    // ========== U5: 调料配方 CRUD ==========
+
+    @Override
+    public BomSeasoningResponse getSeasoning(String factoryId, String recipeId) {
+        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        return buildSeasoningResponse(recipe, seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipeId));
+    }
+
+    @Override
+    public Optional<BomSeasoningResponse> getSeasoningByProduct(String factoryId, String productTypeId) {
+        Optional<BomRecipe> opt = recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+        return opt.map(recipe ->
+                buildSeasoningResponse(recipe, seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId())));
+    }
+
+    @Override
+    @Transactional
+    public BomSeasoningResponse saveSeasoning(String factoryId, String recipeId, BomSeasoningSaveRequest req) {
+        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        // DRAFT-only guard — mirror the same check used in addItem/updateItem/deleteItem.
+        if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
+            throw new IllegalStateException(
+                    "只有 DRAFT 状态可修改调料配方; 当前 status=" + recipe.getStatus()
+                    + ", 请克隆为新版本后再改");
+        }
+
+        // Validate sections before any write.
+        List<SeasoningItemDTO> items = req.getSeasoningItems();
+        if (items != null) {
+            for (SeasoningItemDTO dto : items) {
+                if (!"INJECTION".equals(dto.getSection()) && !"COOKING".equals(dto.getSection())) {
+                    throw new BusinessException(400,
+                            "调料 section 只允许 INJECTION 或 COOKING, 收到: " + dto.getSection())
+                            .withHint("请将 section 改为 INJECTION(注射段) 或 COOKING(熟制段)")
+                            .withHintTarget("section");
+                }
+            }
+        }
+
+        // Set pot params on the recipe (any null → keep unchanged).
+        if (req.getCookingPotBaseKg() != null)    recipe.setCookingPotBaseKg(req.getCookingPotBaseKg());
+        if (req.getSubsequentPotRatio() != null)  recipe.setSubsequentPotRatio(req.getSubsequentPotRatio());
+        if (req.getInjectionRate() != null)       recipe.setInjectionRate(req.getInjectionRate());
+
+        // Full-replace: soft-delete existing seasoning items, then insert new ones.
+        // Mirror the pattern from updateRecipe (oldItems.softDelete + saveAll).
+        // ⚠️ 走 repo 直写, 不碰 recipe.getSeasoningItems() (LAZY 受管集合, orphanRemoval=true).
+        //    切勿在本 tx 内 saveAll 之后再读/改 recipe.getSeasoningItems() — 受管集合是 flush 前的
+        //    旧快照, flush 时 orphanRemoval 会把刚插入的行当孤儿删掉 (audit R4 latent trap).
+        List<BomSeasoningItem> oldItems = seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipeId);
+        for (BomSeasoningItem old : oldItems) {
+            old.softDelete();
+        }
+        seasoningItemRepo.saveAll(oldItems);
+
+        List<BomSeasoningItem> newItems = new ArrayList<>();
+        if (items != null) {
+            for (SeasoningItemDTO dto : items) {
+                BomSeasoningItem si = new BomSeasoningItem();
+                si.setRecipeId(recipeId);
+                si.setFactoryId(factoryId);
+                si.setSection(dto.getSection());
+                si.setSeq(dto.getSeq() != null ? dto.getSeq() : 0);
+                si.setName(dto.getName());
+                si.setDosagePerKgG(dto.getDosagePerKgG());
+                si.setPriceSource1(dto.getPriceSource1());
+                si.setPriceSource2(dto.getPriceSource2());
+                si.setCountInSeasoning(dto.getCountInSeasoning() != null ? dto.getCountInSeasoning() : Boolean.TRUE);
+                si.setRemark(dto.getRemark());
+                newItems.add(si);
+            }
+        }
+        seasoningItemRepo.saveAll(newItems);
+        recipeRepo.save(recipe);
+
+        return buildSeasoningResponse(recipe, newItems);
+    }
+
+    private BomSeasoningResponse buildSeasoningResponse(BomRecipe recipe, List<BomSeasoningItem> seasoningItems) {
+        BomSeasoningResponse resp = new BomSeasoningResponse();
+        resp.setBomRecipeId(recipe.getId());
+        resp.setProductTypeId(recipe.getProductTypeId());
+        resp.setProductName(recipe.getProductName());
+        resp.setStatus(recipe.getStatus());
+        resp.setCookingPotBaseKg(recipe.getCookingPotBaseKg());
+        resp.setSubsequentPotRatio(recipe.getSubsequentPotRatio());
+        resp.setInjectionRate(recipe.getInjectionRate());
+        resp.setSeasoningItems(seasoningItems);
+        return resp;
     }
 
     /**
