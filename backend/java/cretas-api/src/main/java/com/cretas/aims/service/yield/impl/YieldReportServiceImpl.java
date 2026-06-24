@@ -1307,7 +1307,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // P0-2: 解析末道产品标准克重, 打通 kg↔份 折算 (跨单位且无克重时 cumulative 保持 null, 诚实)
         BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
         BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
-        enrichProcessNames(factoryId, dto);
+        enrichProcessNames(factoryId, batchId, dto);
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
@@ -1557,28 +1557,55 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */
-    private void enrichProcessNames(String factoryId, BatchYieldDTO dto) {
+    private void enrichProcessNames(String factoryId, Long batchId, BatchYieldDTO dto) {
         if (dto.getSteps() == null || dto.getSteps().isEmpty()) {
             return;
         }
+        // 1) 操作员报工 (有 taskId): taskId → WorkProcessTask → WorkProcess.processName
         Set<Long> taskIds = dto.getSteps().stream()
                 .map(StepYieldDTO::getWorkProcessTaskId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        if (taskIds.isEmpty()) {
-            return;
-        }
-        Map<Long, String> taskToProcessId = taskRepo.findByFactoryIdAndIdIn(factoryId, taskIds).stream()
-                .filter(t -> t.getWorkProcessId() != null)
-                .collect(Collectors.toMap(WorkProcessTask::getId, WorkProcessTask::getWorkProcessId, (a, b) -> a));
-        Set<String> processIds = new HashSet<>(taskToProcessId.values());
-        Map<String, String> processIdToName = processRepo.findAllById(processIds).stream()
-                .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
-        for (StepYieldDTO step : dto.getSteps()) {
-            String pid = taskToProcessId.get(step.getWorkProcessTaskId());
-            if (pid != null) {
-                step.setProcessName(processIdToName.get(pid));
+        if (!taskIds.isEmpty()) {
+            Map<Long, String> taskToProcessId = taskRepo.findByFactoryIdAndIdIn(factoryId, taskIds).stream()
+                    .filter(t -> t.getWorkProcessId() != null)
+                    .collect(Collectors.toMap(WorkProcessTask::getId, WorkProcessTask::getWorkProcessId, (a, b) -> a));
+            Set<String> processIds = new HashSet<>(taskToProcessId.values());
+            Map<String, String> processIdToName = processRepo.findAllById(processIds).stream()
+                    .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+            for (StepYieldDTO step : dto.getSteps()) {
+                String pid = taskToProcessId.get(step.getWorkProcessTaskId());
+                if (pid != null) {
+                    step.setProcessName(processIdToName.get(pid));
+                }
             }
+        }
+        // 2) 文员逐道录入 (task=null): 按产品工序配置 (ProductWorkProcess) processOrder → processName。
+        //    Config-driven, 非硬编码。G0 后文员行 processOrder = ProductWorkProcess.processOrder (同源), 对齐安全。
+        boolean anyMissing = dto.getSteps().stream().anyMatch(s -> s.getProcessName() == null);
+        if (anyMissing && batchId != null) {
+            productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).ifPresent(pb -> {
+                List<com.cretas.aims.entity.ProductWorkProcess> pwps = productWorkProcessRepository
+                        .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, pb.getProductTypeId());
+                // ProductWorkProcess 无 processName, 经 workProcessId join WorkProcess.processName (同 task 路径)
+                Set<String> wpIds = pwps.stream()
+                        .map(com.cretas.aims.entity.ProductWorkProcess::getWorkProcessId)
+                        .filter(Objects::nonNull).collect(Collectors.toSet());
+                Map<String, String> wpName = processRepo.findAllById(wpIds).stream()
+                        .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+                Map<Integer, String> orderToName = new HashMap<>();
+                for (com.cretas.aims.entity.ProductWorkProcess p : pwps) {
+                    if (p.getProcessOrder() != null && p.getWorkProcessId() != null) {
+                        String name = wpName.get(p.getWorkProcessId());
+                        if (name != null) orderToName.putIfAbsent(p.getProcessOrder(), name);
+                    }
+                }
+                for (StepYieldDTO step : dto.getSteps()) {
+                    if (step.getProcessName() == null && step.getProcessOrder() != null) {
+                        step.setProcessName(orderToName.get(step.getProcessOrder()));
+                    }
+                }
+            });
         }
     }
 
