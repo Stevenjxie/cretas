@@ -91,49 +91,58 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
   // 修油 (xiuyou) — 首道, 无上游工序 (直接消耗原料 MaterialBatch)
   // rawBatch → rawMaterialInputs[]; outWeight → rawInput.quantity
-  // 切片不录肥油(byproduct), defer Q6
+  // SP-G G3c: 副产(肥油等) 列 — byproductQty/byproductPrice → byproducts[{name:'副产',...}]
   // -----------------------------------------------------------------------
   xiuyou: [
-    { key: 'rawBatch',    type: 'dropdown', label: '原料批次', source: 'raw' }, // → rawMaterialInputs (选原料 MaterialBatch)
-    { key: 'outWeight',   type: 'number',   label: '出库重量(kg)' },        // → rawInput.quantity
-    { key: 'batch',       type: 'readonly', label: '本道批次' },            // 系统生成, 作下游下拉项
-    { key: 'prodDate',    type: 'daterange', label: '生产日期' },
-    { key: 'output',      type: 'number',   label: '产出数量(kg)' },        // → outputQuantity
-    { key: 'feedWeight',  type: 'auto',     label: '投料重量(kg)' },        // 前端 = outWeight (即时反馈)
-    { key: 'yieldRate',   type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
-    { key: 'totalHours',  type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
+    { key: 'rawBatch',        type: 'dropdown', label: '原料批次', source: 'raw' }, // → rawMaterialInputs (选原料 MaterialBatch)
+    { key: 'outWeight',       type: 'number',   label: '出库重量(kg)' },            // → rawInput.quantity
+    { key: 'batch',           type: 'readonly', label: '本道批次' },                // 系统生成, 作下游下拉项
+    { key: 'prodDate',        type: 'daterange', label: '生产日期' },
+    { key: 'output',          type: 'number',   label: '产出数量(kg)' },            // → outputQuantity
+    { key: 'feedWeight',      type: 'auto',     label: '投料重量(kg)' },            // 前端 = outWeight (即时反馈)
+    { key: 'yieldRate',       type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
+    { key: 'byproductQty',   type: 'number',   label: '副产(kg)' },               // → byproducts[0].quantity (可空)
+    { key: 'byproductPrice', type: 'number',   label: '副产回收单价(元/kg)' },    // → byproducts[0].unitPrice (可空)
+    { key: 'totalHours',      type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
   ],
 
   // -----------------------------------------------------------------------
   // 滚揉 (gunrou) — 单上游 (修油), 镜像焯水结构. G1 新增.
   // upstreamBatch → upstreamSources[0]; before → inputQuantity; after → outputQuantity
   // 剩余量只读, 由后端库存端点派生.
+  // SP-G G3c: 副产列 — byproductQty/byproductPrice → byproducts[{name:'副产',...}]
   // -----------------------------------------------------------------------
   gunrou: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
-    { key: 'batch',         type: 'readonly',                       label: '本道批次' },    // 系统生成
-    { key: 'date',          type: 'daterange',                      label: '流程日期' },
-    { key: 'before',        type: 'number',                         label: '投入(kg)' },    // → inputQuantity
-    { key: 'after',         type: 'number',                         label: '产出(kg)' },    // → outputQuantity
-    { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
-    { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
-    { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
+    { key: 'upstreamBatch',  type: 'dropdown', upstream: 'xiuyou',  label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
+    { key: 'batch',          type: 'readonly',                       label: '本道批次' },    // 系统生成
+    { key: 'date',           type: 'daterange',                      label: '流程日期' },
+    { key: 'before',         type: 'number',                         label: '投入(kg)' },    // → inputQuantity
+    { key: 'after',          type: 'number',                         label: '产出(kg)' },    // → outputQuantity
+    { key: 'yieldRate',      type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
+    { key: 'remain',         type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
+    { key: 'byproductQty',  type: 'number',   label: '副产(kg)' },                          // → byproducts[0].quantity (可空)
+    { key: 'byproductPrice', type: 'number',   label: '副产回收单价(元/kg)' },              // → byproducts[0].unitPrice (可空)
+    { key: 'totalHours',     type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
   ],
 
   // -----------------------------------------------------------------------
   // 焯水 (chaoshui) — 单上游 (滚揉, G0 动态接线; 无滚揉时接修油)
   // upstreamBatch → upstreamSources[0]; before → inputQuantity; after → outputQuantity
   // 剩余量 (remain) 只读, 由后端库存端点派生 (spec §6.3 审计 F-1)
+  // SP-G G3c: 副产列 — byproductQty/byproductPrice → byproducts[{name:'副产',...}]
+  // 六膳门修油工序实际角色 = chaoshui/gunrou (普通), 肥油副产录此.
   // -----------------------------------------------------------------------
   chaoshui: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'gunrou',   label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
-    { key: 'batch',         type: 'readonly',                        label: '本道批次' },   // 系统生成
-    { key: 'date',          type: 'daterange',                       label: '流程日期' },
-    { key: 'before',        type: 'number',                          label: '投入(kg)' },   // → inputQuantity
-    { key: 'after',         type: 'number',                          label: '产出(kg)' },   // → outputQuantity
-    { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
-    { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
-    { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
+    { key: 'upstreamBatch',  type: 'dropdown', upstream: 'gunrou',   label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
+    { key: 'batch',          type: 'readonly',                        label: '本道批次' },   // 系统生成
+    { key: 'date',           type: 'daterange',                       label: '流程日期' },
+    { key: 'before',         type: 'number',                          label: '投入(kg)' },   // → inputQuantity
+    { key: 'after',          type: 'number',                          label: '产出(kg)' },   // → outputQuantity
+    { key: 'yieldRate',      type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
+    { key: 'remain',         type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
+    { key: 'byproductQty',  type: 'number',   label: '副产(kg)' },                          // → byproducts[0].quantity (可空)
+    { key: 'byproductPrice', type: 'number',   label: '副产回收单价(元/kg)' },              // → byproducts[0].unitPrice (可空)
+    { key: 'totalHours',     type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
   ],
 
   // -----------------------------------------------------------------------
