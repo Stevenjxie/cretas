@@ -71,6 +71,12 @@ export interface ProcessSheetRowRequest {
   seasoningStep: boolean;
   /** 可选防双击 key (同 clientRowId 在同一 saveRow 内使用) */
   idempotencyKey?: string;
+  /** SP-G G3a: 副产品列表 (气调: 料头等) */
+  byproducts?: Array<{ name: string; quantity: number; unit: string; unitPrice?: number }>;
+  /** SP-G G3a: 留样数量 (气调: 留样盒数) */
+  sampleRetainQuantity?: number;
+  /** SP-G G3a: 包装明细 (来自产品-工序配置, 气调不在此录) */
+  packagingDetail?: Array<Record<string, unknown>>;
 }
 
 /**

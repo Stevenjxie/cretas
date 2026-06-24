@@ -78,6 +78,7 @@ const isSingleUpstream = computed(() =>
   props.processCode === 'chaoshui' || props.processCode === 'gunrou',
 );
 const isQuSheTou = computed(() => props.processCode === 'qushetou');
+const isQidiao = computed(() => props.processCode === 'qidiao');
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -206,6 +207,19 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.potCount = p.potCount ?? 1;
     row.potRawKgs = (p.potRawKgs ?? []).map((v) => v);
   }
+  if (isQidiao.value) {
+    row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
+    row.fields['usedWeight'] = p.inputQuantity ?? null;
+    // outputQuantity = actualProd (盒数); restored from payload into auto-calc fields
+    row.fields['storage']       = (p as Record<string, unknown>)['storage']       as number ?? null;
+    row.fields['sample']        = (p as Record<string, unknown>)['sample']        as number ?? null;
+    row.fields['remainBox']     = (p as Record<string, unknown>)['remainBox']     as number ?? null;
+    row.fields['claim']         = (p as Record<string, unknown>)['claim']         as number ?? null;
+    row.fields['productWeight'] = (p as Record<string, unknown>)['productWeight'] as number ?? null;
+    row.fields['trimmings']     = (p as Record<string, unknown>)['trimmings']     as number ?? null;
+    row.fields['boxWeight']     = (p as Record<string, unknown>)['boxWeight']     as number ?? null;
+    row.fields['workerPrice']   = (p as Record<string, unknown>)['workerPrice']   as number ?? null;
+  }
   row.laborSegments = (p.laborSegments ?? []).map((s) => ({ ...s }));
 
   // Generic date / daterange fields
@@ -320,6 +334,41 @@ function calcRemaining(row: SheetRow): number | null {
   return null;
 }
 
+// -------------------------------------------------------------------------
+// 气调 AutoCalc helpers (SP-G G3b)
+// -------------------------------------------------------------------------
+
+/** 实际生产(盒) = 入库 + 留样 + 剩余 + 领用 */
+function calcSumBoxes(row: SheetRow): number {
+  return ((row.fields['storage'] as number) || 0)
+    + ((row.fields['sample'] as number) || 0)
+    + ((row.fields['remainBox'] as number) || 0)
+    + ((row.fields['claim'] as number) || 0);
+}
+
+/** 总重量(kg) = 成品重 + 料头 */
+function calcSumWeight(row: SheetRow): number {
+  return ((row.fields['productWeight'] as number) || 0)
+    + ((row.fields['trimmings'] as number) || 0);
+}
+
+/** 出成率(%) = 成品重 / 使用重量 × 100 */
+function calcYieldByProductWeight(row: SheetRow): number | null {
+  const usedWeight = (row.fields['usedWeight'] as number) ?? 0;
+  const productWeight = (row.fields['productWeight'] as number) ?? 0;
+  if (!usedWeight) return null;
+  return Math.round((productWeight / usedWeight) * 10000) / 100;
+}
+
+/** 每盒人工费(元) = workerPrice × totalHours / actualProd */
+function calcLaborPerBox(row: SheetRow): number | null {
+  const workerPrice = (row.fields['workerPrice'] as number) ?? 0;
+  const totalH = calcTotalHours(row);
+  const actualProd = calcSumBoxes(row);
+  if (!actualProd || !workerPrice) return null;
+  return Math.round((workerPrice * totalH / actualProd) * 10000) / 10000;
+}
+
 function upstreamWarning(row: SheetRow): string | null {
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 用量 = before
@@ -335,7 +384,7 @@ function upstreamWarning(row: SheetRow): string | null {
     const usage = calcReverseInput(row) ?? 0;
     if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
   }
-  if (isShuZhi.value) {
+  if (isShuZhi.value || isQidiao.value) {
     const warnings: string[] = [];
     for (const src of row.upstreamSources) {
       const inv = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
@@ -375,6 +424,11 @@ function saveDisabledReason(row: SheetRow): string | null {
       const filled = row.potRawKgs.filter((v) => v != null && v > 0);
       if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
     }
+  } else if (isQidiao.value) {
+    if (row.upstreamSources.length === 0) return '请添加熟制来源批';
+    if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
+    if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
+    if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
   }
   return null;
 }
@@ -389,7 +443,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     processOrder: props.processOrder,
     productTypeId: props.productTypeId,
     batchNumber: row.batchNumber ?? undefined,
-    finished: false,
+    finished: props.processCode === 'qidiao', // ⭐ 气调成品批
     outputQuantity: 0,
     seasoningStep: props.processCode === 'shuzhi',
     laborSegments: row.laborSegments.length ? row.laborSegments : undefined,
@@ -439,6 +493,27 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
     base.unit = 'kg';
+  } else if (isQidiao.value) {
+    // ⭐ outputQuantity = 盒数 (actualProd), NOT kg
+    const actualProd = calcSumBoxes(row);
+    base.upstreamSources = row.upstreamSources;
+    base.inputQuantity = (row.fields['usedWeight'] as number) ?? undefined;
+    base.outputQuantity = actualProd;            // ⭐⭐ 盒数!
+    base.unit = '盒';
+    // 副产品: 料头
+    const trimmings = (row.fields['trimmings'] as number) ?? 0;
+    if (trimmings > 0) {
+      base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
+    }
+    // 留样盒数 (Integer)
+    const sample = (row.fields['sample'] as number) ?? 0;
+    if (sample > 0) {
+      base.sampleRetainQuantity = Math.round(sample);
+    }
+    // Persist numeric fields into payload JSON (backend stores row_payload)
+    for (const key of ['storage', 'sample', 'remainBox', 'claim', 'productWeight', 'trimmings', 'usedWeight', 'boxWeight', 'workerPrice'] as const) {
+      base[key] = row.fields[key] ?? null;
+    }
   }
   return base;
 }
@@ -636,10 +711,10 @@ onMounted(() => {
             </div>
           </template>
 
-          <!-- 熟制: multi-source expander -->
-          <template v-else-if="isShuZhi">
+          <!-- 熟制 / 气调: multi-source expander -->
+          <template v-else-if="isShuZhi || isQidiao">
             <div class="sp-card-field sp-card-field-full">
-              <label class="sp-card-label">焯水来源(混锅)</label>
+              <label class="sp-card-label">{{ isShuZhi ? '焯水来源(混锅)' : '熟制来源(混锅)' }}</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
                 <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
                 {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
@@ -648,14 +723,14 @@ onMounted(() => {
             <!-- Mix expanded inline -->
             <div v-if="row.mixExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
               <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                <span style="font-size:12px;font-weight:600;color:#303133">焯水来源批 (混锅)</span>
+                <span style="font-size:12px;font-weight:600;color:#303133">{{ isShuZhi ? '焯水来源批 (混锅)' : '熟制来源批 (混锅)' }}</span>
                 <el-button size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
               </div>
               <div v-for="(src, si) in row.upstreamSources" :key="si"
                    style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
                 <el-select
                   v-model="src.sourceBatchNumber"
-                  placeholder="选焯水批次" filterable clearable
+                  :placeholder="isShuZhi ? '选焯水批次' : '选熟制批次'" filterable clearable
                   style="width:220px" size="small">
                   <el-option
                     v-for="item in upstreamItems" :key="item.batchNumber"
@@ -677,7 +752,8 @@ onMounted(() => {
               <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
                 暂无来源批，点击 + 来源批 添加
               </div>
-              <!-- Pot count -->
+              <!-- Pot count (熟制 only) -->
+              <template v-if="isShuZhi">
               <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                 <span style="font-size:12px;font-weight:600;color:#303133">锅数:</span>
                 <el-input-number
@@ -694,6 +770,7 @@ onMounted(() => {
                   </div>
                 </template>
               </div>
+              </template>
             </div>
           </template>
 
@@ -747,6 +824,26 @@ onMounted(() => {
 
               <!-- totalHours shown in the labor expander below; skip inline -->
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
+
+              <!-- auto: sumBoxes (气调: 实际生产=入库+留样+剩余+领用) -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumBoxes'" class="sp-readonly">
+                {{ calcSumBoxes(row) }}
+              </span>
+
+              <!-- auto: sumWeight (气调: 总重量=成品重+料头) -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumWeight'" class="sp-readonly">
+                {{ calcSumWeight(row).toFixed(2) }}
+              </span>
+
+              <!-- auto: yieldByProductWeight (气调: 出成率=成品重/使用重量×100) -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'yieldByProductWeight'" class="sp-readonly">
+                {{ calcYieldByProductWeight(row) != null ? calcYieldByProductWeight(row)!.toFixed(2) + '%' : '—' }}
+              </span>
+
+              <!-- auto: laborPerBox (气调: 每盒人工费=工时单价×总工时/实际生产) -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'laborPerBox'" class="sp-readonly">
+                {{ calcLaborPerBox(row) != null ? '¥' + calcLaborPerBox(row)!.toFixed(4) : '—' }}
+              </span>
 
               <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
                 {{ row.fields[col.key] ?? '—' }}
@@ -811,6 +908,11 @@ onMounted(() => {
             <!-- 熟制: multi-source (rendered as expander cell) -->
             <template v-else-if="isShuZhi">
               <th class="sp-th">焯水来源(混锅)</th>
+            </template>
+
+            <!-- 气调: multi-source (rendered as expander cell) -->
+            <template v-else-if="isQidiao">
+              <th class="sp-th">熟制来源(混锅)</th>
             </template>
 
             <!-- Generic cols from config (skip special-cased keys) -->
@@ -921,8 +1023,8 @@ onMounted(() => {
                 </td>
               </template>
 
-              <!-- ---- 熟制: multi-source expander cell ---- -->
-              <template v-else-if="isShuZhi">
+              <!-- ---- 熟制 / 气调: multi-source expander cell ---- -->
+              <template v-else-if="isShuZhi || isQidiao">
                 <td class="sp-td">
                   <el-button
                     link size="small"
@@ -992,6 +1094,26 @@ onMounted(() => {
 
                   <!-- auto: totalHours — shown in dedicated labor column instead -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
+
+                  <!-- auto: sumBoxes (气调: 实际生产=入库+留样+剩余+领用) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumBoxes'" class="sp-readonly">
+                    {{ calcSumBoxes(row) }}
+                  </span>
+
+                  <!-- auto: sumWeight (气调: 总重量=成品重+料头) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumWeight'" class="sp-readonly">
+                    {{ calcSumWeight(row).toFixed(2) }}
+                  </span>
+
+                  <!-- auto: yieldByProductWeight (气调: 出成率=成品重/使用重量×100) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'yieldByProductWeight'" class="sp-readonly">
+                    {{ calcYieldByProductWeight(row) != null ? calcYieldByProductWeight(row)!.toFixed(2) + '%' : '—' }}
+                  </span>
+
+                  <!-- auto: laborPerBox (气调: 每盒人工费=工时单价×总工时/实际生产) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'laborPerBox'" class="sp-readonly">
+                    {{ calcLaborPerBox(row) != null ? '¥' + calcLaborPerBox(row)!.toFixed(4) : '—' }}
+                  </span>
 
                   <!-- readonly / text -->
                   <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
@@ -1101,6 +1223,51 @@ onMounted(() => {
                           :min="0" :precision="2" size="small" style="width:100px" />
                       </div>
                     </template>
+                  </div>
+                </div>
+              </td>
+            </tr>
+
+            <!-- ============================================================
+                 气调: 混锅来源 expander row (SP-G G3b)
+                 ============================================================ -->
+            <tr v-if="isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
+                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
+              <td :colspan="999" class="sp-td-expand">
+                <div class="sp-expand-section">
+                  <div class="sp-expand-title">
+                    熟制来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
+                    <el-button size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
+                      + 来源批
+                    </el-button>
+                  </div>
+
+                  <!-- Multi-source rows -->
+                  <div v-for="(src, si) in row.upstreamSources" :key="si"
+                       style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                    <el-select
+                      v-model="src.sourceBatchNumber"
+                      placeholder="选熟制批次" filterable clearable
+                      style="width:220px" size="small">
+                      <el-option
+                        v-for="item in upstreamItems" :key="item.batchNumber"
+                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                        :value="item.batchNumber"
+                        :disabled="item.remaining <= 0" />
+                    </el-select>
+                    <el-input-number
+                      v-model="src.feedQuantityKg"
+                      :min="0" :precision="2"
+                      placeholder="投料kg"
+                      controls-position="right"
+                      size="small" style="width:120px" />
+                    <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
+                      {{ (() => { const inv = upstreamItems.find(b => b.batchNumber === src.sourceBatchNumber); return inv ? `余${inv.remaining}kg` : ''; })() }}
+                    </span>
+                    <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
+                  </div>
+                  <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
+                    暂无来源批，点击 + 来源批 添加
                   </div>
                 </div>
               </td>
