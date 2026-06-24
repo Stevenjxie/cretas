@@ -478,6 +478,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         StepEntry st = new StepEntry();
         st.setProcessOrder(req.getProcessOrder());
         st.setProcessName(req.getProcessName());
+        st.setProcessDate(req.getProcessDate());  // 跨天: 该工序实际操作日 → 报工日期
         // isSeasoningStep 决定: seasoningStep=true → processCategory=SEASONING;
         // 否则设非空非 SEASONING 值, 关闭 (processCategory==null && potCount!=null) 的启发式回退,
         // 避免普通带锅工序被误判为调味。

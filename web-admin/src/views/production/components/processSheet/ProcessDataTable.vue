@@ -361,6 +361,15 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }
   }
 
+  // 跨天: 取本工序日期列(daterange)的开始日作 processDate →
+  // 后端把成本报工(SEASONING/LABOR)归到该工序真实操作日 (非录入当天)。
+  const dateCol = cols.value.find((c) => c.type === 'daterange' || c.type === 'date');
+  if (dateCol) {
+    const v = row.fields[dateCol.key];
+    const start = Array.isArray(v) ? v[0] : (typeof v === 'string' ? v : null);
+    if (start) base.processDate = start;
+  }
+
   if (isXiuYou.value) {
     base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
     base.inputQuantity = row.rawBatchQty ?? undefined;

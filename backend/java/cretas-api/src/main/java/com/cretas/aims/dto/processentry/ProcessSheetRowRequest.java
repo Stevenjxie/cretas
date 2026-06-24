@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -30,6 +31,9 @@ public class ProcessSheetRowRequest {
     private Integer processOrder;
 
     private String processName;
+
+    /** 该工序实际操作日期 (跨天: 焯水/熟制各记各日)。null → 报工日期回退当天。前端「流程日期」列。 */
+    private LocalDate processDate;
 
     @NotBlank
     private String productTypeId;
