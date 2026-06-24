@@ -7,6 +7,8 @@ export interface UpstreamSource { sourceClientBatchKey: string; feedQuantityKg: 
 export interface StepEntry {
   processOrder: number;
   processName?: string;
+  /** 该工序实际操作日 (跨天: 各道各日) → 后端成本报工按真实日期归集. ISO "YYYY-MM-DD". null=录入当天 */
+  processDate?: string | null;
   processCategory?: string | null;   // RAW_MATERIAL | SEASONING | PACKAGING | null
   inputQuantity: number | null;
   outputQuantity: number | null;

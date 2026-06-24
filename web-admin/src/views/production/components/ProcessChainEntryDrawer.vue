@@ -26,6 +26,7 @@ const idempotencyKey = ref<string>('');
 function blankStep(p: { processOrder: number; processName: string; processCategory?: string | null }): StepEntry {
   return {
     processOrder: p.processOrder, processName: p.processName, processCategory: p.processCategory ?? null,
+    processDate: null,  // 跨天: 该工序实际操作日 → 成本报工按真实日期归集
     inputQuantity: null, outputQuantity: null, unit: 'kg',
     laborStartTime: null, laborEndTime: null, workerCount: null,
     byproducts: [], wasteQuantity: null, sampleRetainQuantity: null,
@@ -158,6 +159,11 @@ function close() {
             </template>
 
             <el-form label-width="96px" size="small">
+              <el-form-item label="流程日期">
+                <el-date-picker v-model="s.processDate" type="date" value-format="YYYY-MM-DD"
+                  placeholder="该工序操作日(跨天: 各道各日)" style="width:240px" />
+                <span style="margin-left:8px;color:#909399">不填=录入当天</span>
+              </el-form-item>
               <el-form-item label="投入重量">
                 <el-input-number v-model="s.inputQuantity" :precision="2" :min="0" />
                 <span style="margin-left:8px;color:#909399" v-if="prevOutput(b, si) != null">
