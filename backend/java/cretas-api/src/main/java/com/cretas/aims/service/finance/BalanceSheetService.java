@@ -90,6 +90,10 @@ public class BalanceSheetService {
         List<BalanceSheetDTO.LineItem> assets = new ArrayList<>();
         List<BalanceSheetDTO.LineItem> liabilities = new ArrayList<>();
         List<BalanceSheetDTO.LineItem> equityItems = new ArrayList<>();
+        // 未结转损益 (REVENUE/COST/EXPENSE 净额) 累计 → 期末作为"未分配利润"权益合成行.
+        // 不滚入权益则任何有收入但未结账的工厂资产负债表永远不平 (assets 因收入增加,
+        // 权益却为 0). 统一符号 (credit - debit): 收入贷方为正, 成本/费用借方为负.
+        BigDecimal retainedEarnings = BigDecimal.ZERO;
 
         for (SubjectAggregateRow row : aggregates) {
             Account account = accountByCode.get(row.getSubjectCode());
@@ -104,8 +108,11 @@ public class BalanceSheetService {
                     liabilities.add(buildLineItem(row, false));
                 } else if (prefix.startsWith("3") || prefix.startsWith("4")) {
                     equityItems.add(buildLineItem(row, false));
+                } else if (prefix.startsWith("5") || prefix.startsWith("6")) {
+                    // REVENUE/COST/EXPENSE legacy entry — 滚入未分配利润 (credit - debit)
+                    retainedEarnings = retainedEarnings.add(
+                            safeSubtract(row.getTotalCredit(), row.getTotalDebit()));
                 }
-                // 5/6xxx (REVENUE/COST/EXPENSE) skip — 归利润表
                 continue;
             }
 
@@ -132,8 +139,39 @@ public class BalanceSheetService {
                         .accountName(account.getName())
                         .amount(safeSubtract(row.getTotalCredit(), row.getTotalDebit()))
                         .build());
+            } else if (cat == AccountCategory.REVENUE
+                    || cat == AccountCategory.COST
+                    || cat == AccountCategory.EXPENSE) {
+                // 未结转损益滚入未分配利润. 统一 credit - debit:
+                //   REVENUE (贷方正常): credit - debit = +收入
+                //   COST / EXPENSE (借方正常): credit - debit = -成本/费用
+                // 结账后 (借收入/贷本年利润) 收入科目净额归零 → 此处自动为 0, 不重复计.
+                retainedEarnings = retainedEarnings.add(
+                        safeSubtract(row.getTotalCredit(), row.getTotalDebit()));
             }
-            // REVENUE / COST / EXPENSE → 归利润表, skip 资产负债表
+        }
+
+        // 未结转损益作为"未分配利润"并入权益. 4103(本年利润)/4104(利润分配) 是系统级
+        // EQUITY 科目 (V20260701_02 seed). 若该工厂已手工记账 4104, 把未结转净额并入
+        // 该既有行 (避免出现两条 4104); 否则新增合成 4104"未分配利润"行.
+        // 注: 本系统月结 (MonthCloseServiceImpl) 不自动过结转损益凭证, 故未结转损益常驻
+        // 5/6xxx 科目, 本行是其进入资产负债表的唯一途径. 由复式记账恒等式 (Σ借=Σ贷),
+        // 配平凭证下 资产 ≡ 负债 + (已记账权益 + 未分配利润) 恒成立 (与本行用何 code 无关,
+        // 仅影响展示是否合并).
+        if (retainedEarnings.signum() != 0) {
+            BigDecimal retained = retainedEarnings.setScale(2, RoundingMode.HALF_UP);
+            BalanceSheetDTO.LineItem existing4104 = equityItems.stream()
+                    .filter(e -> "4104".equals(e.getAccountCode()))
+                    .findFirst().orElse(null);
+            if (existing4104 != null) {
+                existing4104.setAmount(existing4104.getAmount().add(retained));
+            } else {
+                equityItems.add(BalanceSheetDTO.LineItem.builder()
+                        .accountCode("4104")
+                        .accountName("未分配利润")
+                        .amount(retained)
+                        .build());
+            }
         }
 
         // Step 4: 按 accountCode 排序

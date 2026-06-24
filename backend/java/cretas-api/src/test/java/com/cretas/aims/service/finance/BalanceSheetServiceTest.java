@@ -154,8 +154,10 @@ class BalanceSheetServiceTest {
     }
 
     @Test
-    void generate_revenueAndExpenseAccounts_excluded() {
-        // 5001 收入 + 1001 现金 — 5001 应被排除, 资产负债表只剩 1 资产
+    void generate_revenueAndExpenseAccounts_notListedAsBookedAccounts() {
+        // 5001 收入 不作为资产/负债/已记账权益科目列出, 但其净额滚入"未分配利润"权益合成行.
+        // 此处用的是 NON-balanced 人工数据 (借 1000 ≠ 贷 5000), 所以即便滚入仍不平衡 —
+        // 验证 service 不把 revenue 当资产, 同时确认 revenue 进了 retained-earnings 而非凭空消失.
         List<SubjectAggregateRow> aggregates = Arrays.asList(
                 row("1001", "库存现金", "1000.00", "0.00"),
                 row("5001", "主营业务收入", "0.00", "5000.00")
@@ -171,9 +173,125 @@ class BalanceSheetServiceTest {
 
         assertEquals(1, dto.getAssets().size(), "only cash, not revenue");
         assertEquals(0, dto.getLiabilities().size());
-        assertEquals(0, dto.getEquity().size());
-        // 资产 1000 vs 负债+权益 0 → 不平衡 (这是数据问题, 不是 service bug)
+        // revenue 5000 滚入"未分配利润"合成权益行 (而非作为 5001 收入科目列出)
+        assertEquals(1, dto.getEquity().size(), "retained-earnings synthetic line");
+        assertTrue(dto.getEquity().get(0).getAccountName().contains("未分配利润"));
+        assertEquals(new BigDecimal("5000.00"), dto.getEquity().get(0).getAmount());
+        // 资产 1000 vs 负债+权益 5000 → 仍不平衡 (人工非配平数据, 非真实凭证)
         assertFalse(dto.getBalanceCheck());
+    }
+
+    @Test
+    void generate_revenueWithoutClosing_rolledIntoRetainedEarnings() {
+        // 真实场景 (F006): 配平销售凭证 借 现金 9,710,036.42 / 贷 主营业务收入 9,710,036.42.
+        // 无任何已记账权益科目, 也未做结转损益 (期间未结账).
+        // 修复前: 资产 9.7M vs 权益 0 → balanceCheck=false (利润未滚入权益).
+        // 修复后: 未结转 P&L 净额作为"未分配利润"合成权益行 → 平衡.
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "9710036.42", "0.00"),
+                row("5001", "主营业务收入", "0.00", "9710036.42")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, revenueAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(new BigDecimal("9710036.42"), dto.getTotalAssets());
+        assertEquals(BigDecimal.ZERO.setScale(2), dto.getTotalLiabilities());
+        assertEquals(new BigDecimal("9710036.42"), dto.getTotalEquity(), "未分配利润 = 净利润");
+        assertEquals(1, dto.getEquity().size(), "single retained-earnings line");
+        assertTrue(dto.getEquity().get(0).getAccountName().contains("未分配利润"));
+        assertEquals(new BigDecimal("9710036.42"), dto.getEquity().get(0).getAmount());
+        assertTrue(dto.getBalanceCheck(), "资产 ≡ 负债 + (已记账权益 + 未分配利润)");
+    }
+
+    @Test
+    void generate_costAndExpenseReduceRetainedEarnings() {
+        // 配平凭证: 借 现金 700 + 借 主营业务成本 200 + 借 管理费用 100 / 贷 收入 1000
+        //   资产(现金) = 700
+        //   未分配利润 = 收入1000 - 成本200 - 费用100 = 700
+        //   资产 700 ≡ 权益 700 → 平衡
+        Account costAccount = Account.builder()
+                .id("acc-6401").code("6401").name("主营业务成本")
+                .category(AccountCategory.COST).balanceType(AccountBalanceType.DEBIT_NORMAL).build();
+        Account expenseAccount = Account.builder()
+                .id("acc-6602").code("6602").name("管理费用")
+                .category(AccountCategory.EXPENSE).balanceType(AccountBalanceType.DEBIT_NORMAL).build();
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "700.00", "0.00"),
+                row("6401", "主营业务成本", "200.00", "0.00"),
+                row("6602", "管理费用", "100.00", "0.00"),
+                row("5001", "主营业务收入", "0.00", "1000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, revenueAccount, costAccount, expenseAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(new BigDecimal("700.00"), dto.getTotalAssets());
+        assertEquals(new BigDecimal("700.00"), dto.getTotalEquity(), "1000 - 200 - 100");
+        assertTrue(dto.getBalanceCheck(), "成本/费用降低未分配利润后仍平衡");
+    }
+
+    @Test
+    void generate_bookedEquityPlusUnclosedRevenue_balances() {
+        // 生产典型场景: 已记账权益 (实收资本 50000) + 未结转收入 70000, 配平凭证.
+        //   借 现金 120000 / 贷 实收资本 50000 + 贷 收入 70000
+        //   资产 120000 ≡ 负债 0 + (实收资本 50000 + 未分配利润 70000)
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "120000.00", "0.00"),
+                row("4001", "实收资本", "0.00", "50000.00"),
+                row("5001", "主营业务收入", "0.00", "70000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, capitalAccount, revenueAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(2, dto.getEquity().size(), "实收资本 + 未分配利润 两行");
+        assertEquals(new BigDecimal("120000.00"), dto.getTotalEquity(), "50000 + 70000");
+        assertEquals(new BigDecimal("120000.00"), dto.getTotalAssets());
+        assertTrue(dto.getBalanceCheck(), "已记账权益 + 未分配利润 = 资产");
+    }
+
+    @Test
+    void generate_existing4104PlusUnclosedRevenue_foldedIntoSingleLine() {
+        // 防 4104 冲突: 工厂已手工记账 4104(利润分配) 30000 (往年结转), 当期又有未结转收入 50000.
+        //   未结转净额并入既有 4104 行 → 单条 4104 = 80000, 不出现两条 4104.
+        Account profitDistAccount = Account.builder()
+                .id("acc-4104").code("4104").name("利润分配")
+                .category(AccountCategory.EQUITY).balanceType(AccountBalanceType.CREDIT_NORMAL).build();
+        List<SubjectAggregateRow> aggregates = Arrays.asList(
+                row("1001", "库存现金", "80000.00", "0.00"),
+                row("4104", "利润分配", "0.00", "30000.00"),
+                row("5001", "主营业务收入", "0.00", "50000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(aggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, profitDistAccount, revenueAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.OPEN);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        assertEquals(1, dto.getEquity().size(), "单条 4104, 未结转净额并入而非另起一行");
+        assertEquals("4104", dto.getEquity().get(0).getAccountCode());
+        assertEquals(new BigDecimal("80000.00"), dto.getEquity().get(0).getAmount(), "30000 + 50000");
+        assertEquals(new BigDecimal("80000.00"), dto.getTotalEquity());
+        assertTrue(dto.getBalanceCheck());
     }
 
     @Test
