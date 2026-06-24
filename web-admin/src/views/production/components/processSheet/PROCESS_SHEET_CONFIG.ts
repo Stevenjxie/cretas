@@ -105,7 +105,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // 剩余量只读, 由后端库存端点派生.
   // -----------------------------------------------------------------------
   gunrou: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '修油批次' },   // G0 动态接线: 前道传入
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
     { key: 'batch',         type: 'readonly',                       label: '滚揉批次' },    // 系统生成
     { key: 'date',          type: 'daterange',                      label: '滚揉日期' },
     { key: 'before',        type: 'number',                         label: '滚揉前(kg)' },  // → inputQuantity
@@ -121,7 +121,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // 剩余量 (remain) 只读, 由后端库存端点派生 (spec §6.3 审计 F-1)
   // -----------------------------------------------------------------------
   chaoshui: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'gunrou',   label: '滚揉批次' },   // G0 动态接线: 前道传入
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'gunrou',   label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
     { key: 'batch',         type: 'readonly',                        label: '焯水批次' },   // 系统生成
     { key: 'date',          type: 'daterange',                       label: '焯水日期' },
     { key: 'before',        type: 'number',                          label: '焯水前(kg)' }, // → inputQuantity
@@ -137,7 +137,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // feedQuantityKg = scrap + output (领用量 = 投入量)
   // -----------------------------------------------------------------------
   qushetou: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '焯水批次' },   // G0 动态接线: 前道传入
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
     { key: 'batch',         type: 'readonly',                        label: '去舌苔批次' }, // 系统生成
     { key: 'date',          type: 'daterange',                       label: '去舌苔日期' },
     { key: 'scrap',         type: 'number',                          label: '碎肉(kg)' },   // → 反推分量 (scrap)
@@ -154,7 +154,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // 剩余量只读 (同焯水)
   // -----------------------------------------------------------------------
   shuzhi: [
-    { key: 'upstreamBatch', type: 'dropdown', upstream: 'qushetou', label: '去舌苔批次(混锅)' }, // G0 动态接线: 前道传入, 多选
+    { key: 'upstreamBatch', type: 'dropdown', upstream: 'qushetou', label: '上游批次(混锅)' }, // G0 动态接线: label 通用(上游随产品工序链变), 多选
     { key: 'batch',         type: 'readonly',                        label: '熟制批次' },        // 系统生成
     { key: 'date',          type: 'daterange',                       label: '日期' },
     { key: 'input',         type: 'number',                          label: '投入(kg)' },        // → inputQuantity

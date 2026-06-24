@@ -364,11 +364,11 @@ function saveDisabledReason(row: SheetRow): string | null {
     if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
     if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
   } else if (isQuSheTou.value) {
-    if (!row.upstreamBatch) return '请选择焯水批次';
+    if (!row.upstreamBatch) return '请选择上游批次';
     if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
     if ((row.fields['output'] as number) == null) return '请填写产出重量';
   } else if (isShuZhi.value) {
-    if (row.upstreamSources.length === 0) return '请添加焯水来源批';
+    if (row.upstreamSources.length === 0) return '请添加上游来源批';
     if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
     if ((row.fields['output'] as number) == null) return '请填写产出数量';
     if (row.potCount > 1) {
