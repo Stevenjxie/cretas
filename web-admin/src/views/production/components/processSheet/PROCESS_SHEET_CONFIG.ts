@@ -96,7 +96,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   xiuyou: [
     { key: 'rawBatch',    type: 'dropdown', label: '原料批次', source: 'raw' }, // → rawMaterialInputs (选原料 MaterialBatch)
     { key: 'outWeight',   type: 'number',   label: '出库重量(kg)' },        // → rawInput.quantity
-    { key: 'batch',       type: 'readonly', label: '修油批次' },            // 系统生成, 作下游下拉项
+    { key: 'batch',       type: 'readonly', label: '本道批次' },            // 系统生成, 作下游下拉项
     { key: 'prodDate',    type: 'daterange', label: '生产日期' },
     { key: 'output',      type: 'number',   label: '产出数量(kg)' },        // → outputQuantity
     { key: 'feedWeight',  type: 'auto',     label: '投料重量(kg)' },        // 前端 = outWeight (即时反馈)
@@ -111,10 +111,10 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
   gunrou: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'xiuyou',  label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
-    { key: 'batch',         type: 'readonly',                       label: '滚揉批次' },    // 系统生成
-    { key: 'date',          type: 'daterange',                      label: '滚揉日期' },
-    { key: 'before',        type: 'number',                         label: '滚揉前(kg)' },  // → inputQuantity
-    { key: 'after',         type: 'number',                         label: '滚揉后(kg)' },  // → outputQuantity
+    { key: 'batch',         type: 'readonly',                       label: '本道批次' },    // 系统生成
+    { key: 'date',          type: 'daterange',                      label: '流程日期' },
+    { key: 'before',        type: 'number',                         label: '投入(kg)' },    // → inputQuantity
+    { key: 'after',         type: 'number',                         label: '产出(kg)' },    // → outputQuantity
     { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
     { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
     { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
@@ -127,10 +127,10 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
   chaoshui: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'gunrou',   label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
-    { key: 'batch',         type: 'readonly',                        label: '焯水批次' },   // 系统生成
-    { key: 'date',          type: 'daterange',                       label: '焯水日期' },
-    { key: 'before',        type: 'number',                          label: '焯水前(kg)' }, // → inputQuantity
-    { key: 'after',         type: 'number',                          label: '焯水后(kg)' }, // → outputQuantity
+    { key: 'batch',         type: 'readonly',                        label: '本道批次' },   // 系统生成
+    { key: 'date',          type: 'daterange',                       label: '流程日期' },
+    { key: 'before',        type: 'number',                          label: '投入(kg)' },   // → inputQuantity
+    { key: 'after',         type: 'number',                          label: '产出(kg)' },   // → outputQuantity
     { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
     { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余量(kg)' }, // 后端派生, 只读
     { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
@@ -143,7 +143,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
   qushetou: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'chaoshui', label: '上游批次' },   // G0 动态接线: label 通用(上游随产品工序链变)
-    { key: 'batch',         type: 'readonly',                        label: '去舌苔批次' }, // 系统生成
+    { key: 'batch',         type: 'readonly',                        label: '本道批次' },   // 系统生成
     { key: 'date',          type: 'daterange',                       label: '去舌苔日期' },
     { key: 'scrap',         type: 'number',                          label: '碎肉(kg)' },   // → 反推分量 (scrap)
     { key: 'output',        type: 'number',                          label: '产出(kg)' },   // → outputQuantity
@@ -160,7 +160,7 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   // -----------------------------------------------------------------------
   shuzhi: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'qushetou', label: '上游批次(混锅)' }, // G0 动态接线: label 通用(上游随产品工序链变), 多选
-    { key: 'batch',         type: 'readonly',                        label: '熟制批次' },        // 系统生成
+    { key: 'batch',         type: 'readonly',                        label: '本道批次' },        // 系统生成
     { key: 'date',          type: 'daterange',                       label: '日期' },
     { key: 'input',         type: 'number',                          label: '投入(kg)' },        // → inputQuantity
     { key: 'output',        type: 'number',                          label: '产出(kg)' },        // → outputQuantity
