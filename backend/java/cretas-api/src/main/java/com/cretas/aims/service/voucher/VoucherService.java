@@ -42,4 +42,14 @@ public interface VoucherService {
 
     /** 按状态查 — controller page 用. */
     List<Voucher> findByStatus(String factoryId, VoucherStatus status);
+
+    /**
+     * 直建已过账凭证 (手工指定分录)。用于系统结转损益/红冲等无业务单来源的凭证。
+     * ⚠️ 蓄意绕过期间结账 gate (assertPeriodOpen) — 仅限系统结转 (锁定期间须能过结转凭证)。
+     * 借贷必平 (validateBalanced); 直接 status=POSTED。
+     */
+    com.cretas.aims.entity.finance.Voucher createManual(
+            String factoryId, com.cretas.aims.entity.enums.VoucherType type,
+            java.time.LocalDate voucherDate, java.util.List<com.cretas.aims.dto.finance.VoucherEntrySpec> entries,
+            String sourceBusinessType, String sourceBusinessId, String description, Long userId);
 }
