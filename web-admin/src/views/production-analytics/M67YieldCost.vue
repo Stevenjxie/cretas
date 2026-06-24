@@ -41,11 +41,12 @@
         <!-- 逐道出成率 -->
         <el-col :span="14">
           <el-card shadow="never">
-            <template #header><b>逐道出成率</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常)</span></template>
+            <template #header><b>逐道出成率 · 人工</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常) · 每道人工成本</span></template>
             <div v-for="s in steps" :key="s.processOrder" class="step">
               <div class="step-top">
                 <span class="pname">{{ stepName(s) }}</span>
                 <span class="qty">{{ num(s.totalInput) }} → {{ num(s.totalOutput) }} {{ s.outputUnit || 'kg' }}</span>
+                <span v-if="s.laborCost != null && s.laborCost > 0" class="step-labor">人工 ¥{{ s.laborCost.toFixed(2) }}</span>
                 <span class="yr" :class="yieldClass(s.yieldRate)">{{ s.yieldRate == null ? '—' : (s.yieldRate * 100).toFixed(1) + '%' }}</span>
               </div>
               <el-progress :percentage="barPct(s.yieldRate)" :status="yieldStatus(s.yieldRate)" :stroke-width="12" :show-text="false" />
@@ -484,6 +485,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .step-top { display: flex; align-items: center; margin-bottom: 4px; }
 .pname { font-weight: 600; width: 64px; }
 .qty { color: #606266; font-size: 13px; flex: 1; }
+.step-labor { color: #e6a23c; font-size: 12px; margin-right: 10px; white-space: nowrap; }
 .yr { font-weight: 700; }
 .y-ok { color: #67c23a; } .y-low { color: #f56c6c; } .y-high { color: #e6a23c; } .y-na { color: #909399; }
 .total-box { font-size: 30px; font-weight: 800; margin-bottom: 12px; }
