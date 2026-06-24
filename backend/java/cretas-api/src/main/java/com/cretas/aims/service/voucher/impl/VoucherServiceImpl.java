@@ -144,7 +144,7 @@ public class VoucherServiceImpl implements VoucherService {
         return switch (type) {
             case SALES_RECEIPT, RETURN -> "sale";
             case PURCHASE_PAYMENT, INVENTORY_TRANSFER -> "stock";
-            case WAGE, EXPENSE, DEPRECATION -> "free";
+            case WAGE, EXPENSE, DEPRECATION, PL_CLOSING -> "free";
         };
     }
 

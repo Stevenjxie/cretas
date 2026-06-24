@@ -18,5 +18,7 @@ public enum VoucherType {
     /** 退货 — ReturnOrder → 反向销售凭证 */
     RETURN,
     /** 折旧 — DepreciationSchedule → 累计折旧/管理费用 */
-    DEPRECATION
+    DEPRECATION,
+    /** 结转损益凭证 (期末自动). */
+    PL_CLOSING
 }
