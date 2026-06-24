@@ -39,6 +39,17 @@ const emit = defineEmits<{
 // -------------------------------------------------------------------------
 type ProcEntry = { code: string; order: number; label: string };
 
+// ---- Role-first mapping (SP-G A): defaultCostCategory → archetype ----
+// When any process in a product's process list has a non-null defaultCostCategory,
+// we use role mode for that product — every process maps via this table.
+// Processes whose category is not listed default to 'chaoshui' (generic processing step).
+const ROLE_TO_ARCHETYPE: Record<string, string> = {
+  RAW_MATERIAL: 'xiuyou',
+  SEASONING:    'shuzhi',
+  PACKAGING:    'qidiao',
+};
+
+// ---- Name-keyword fallback (unchanged, safety net for products without roles) ----
 // 工序名关键词 → PROCESS_SHEET_CONFIG key。后端 ProductWorkProcess 无 processCode (前端约定),
 // 真实工序名常带前缀 (如「叮咚-猪舌-修油」「气调包装」「领料」), 故按关键词**子串**匹配 (非精确)。
 // 关键词互不为子串, 子串匹配安全。新工序加列定义时在此登记关键词。
@@ -69,18 +80,44 @@ const upstreamCodeOf = computed<Record<string, string | null>>(() => {
 });
 
 /**
- * 动态解析产品工序链 (G0): 取该产品 ProductWorkProcess (按 processOrder),
- * 映射 processName → 列定义 key, 过滤掉无列定义的工序 (未铺的滚揉/去舌苔/气调),
- * 排序后即得本产品在电子表格里能录的工序链。失败或 <1 道可录 → 回退切片。
+ * 动态解析产品工序链 (G0 + SP-G A 真自由配置):
+ *
+ * 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
+ *
+ * 1. Role mode (SP-G A): 若本产品任意工序有非 null 的 defaultCostCategory,
+ *    则对每道工序用 ROLE_TO_ARCHETYPE[defaultCostCategory] 映射; 未登记的
+ *    角色回退 'chaoshui' (通用加工步骤).
+ *
+ * 2. Name-keyword fallback: 产品所有工序均无 defaultCostCategory 时,
+ *    按工序名关键词子串匹配 (原 G0 逻辑, 零回归).
+ *
+ * 两种模式均过滤掉无列定义的工序. 失败或 <1 道可录 → 回退切片.
  */
 async function resolveProcesses() {
   try {
     const resp = await getProductWorkProcesses(props.factoryId, props.productTypeId);
     const items = resp.data || [];
+
+    // Determine if any process has a role configured (non-null defaultCostCategory)
+    const hasRoles = items.some((it) => it.defaultCostCategory != null);
+
     const mapped: ProcEntry[] = items
-      .map((it) => ({ code: nameToConfigCode(it.processName) as string, order: it.processOrder, label: it.processName }))
+      .map((it) => {
+        let code: string | undefined;
+        if (hasRoles) {
+          // Role mode: map via defaultCostCategory; unknown roles fall back to 'chaoshui'
+          code = it.defaultCostCategory != null
+            ? (ROLE_TO_ARCHETYPE[it.defaultCostCategory] ?? 'chaoshui')
+            : 'chaoshui';
+        } else {
+          // Name-keyword fallback (original G0 logic)
+          code = nameToConfigCode(it.processName);
+        }
+        return { code: code as string, order: it.processOrder, label: it.processName };
+      })
       .filter((p): p is ProcEntry => !!p.code && !!PROCESS_SHEET_CONFIG[p.code])
       .sort((a, b) => a.order - b.order);
+
     if (mapped.length >= 1) PROCESSES.value = mapped;
   } catch (e) {
     console.warn('[ProcessSheet] resolveProcesses 失败, 回退切片', e);
