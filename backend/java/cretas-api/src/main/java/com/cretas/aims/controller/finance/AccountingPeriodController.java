@@ -140,6 +140,20 @@ public class AccountingPeriodController {
         return ResponseEntity.ok(ApiResponse.success("期间已反结账, voucher 可继续修改", p));
     }
 
+    /**
+     * 立即锁定结转 (逃生口). CLOSED 期间强制 LOCKED 并立即结转损益, 不必等 20 天调整窗口。
+     * 财务确认无后续调整时用。需 finance_manager / factory_super_admin role.
+     */
+    @PostMapping("/force-lock-close")
+    @RequirePermission("finance:read_write")
+    public ResponseEntity<ApiResponse<AccountingPeriod>> forceLockClose(
+            @PathVariable String factoryId,
+            @RequestBody PeriodRequest req,
+            @RequestAttribute(value = "userId", required = false) Long userId) {
+        AccountingPeriod p = periodService.forceLockAndClose(factoryId, req.year(), req.month(), userId);
+        return ResponseEntity.ok(ApiResponse.success("期间已锁定并结转损益", p));
+    }
+
     // ==================== DTO records ====================
 
     public record PeriodRequest(Integer year, Integer month) {}

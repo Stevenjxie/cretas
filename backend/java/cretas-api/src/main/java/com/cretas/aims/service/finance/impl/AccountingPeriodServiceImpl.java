@@ -189,6 +189,31 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     }
 
     @Override
+    @Transactional
+    public AccountingPeriod forceLockAndClose(String factoryId, Integer year, Integer month, Long userId) {
+        validateInput(factoryId, year, month);
+        AccountingPeriod p = repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month)
+                .orElseThrow(() -> new BusinessException(404,
+                        String.format("%d-%02d 期间不存在", year, month)));
+        if (p.getStatus() != AccountingPeriod.Status.CLOSED) {
+            throw new BusinessException(400,
+                    String.format("%d-%02d 期间状态=%s, 仅 CLOSED 可立即锁定结转", year, month, p.getStatus()));
+        }
+        if (p.getClosingPostedAt() != null) {
+            return p; // 幂等: 已结转
+        }
+        p.setAdjustDeadline(LocalDateTime.now()); // 强制 LOCKED
+        // closePeriod 经 createManual 直建 POSTED (绕期间 gate), 故 CLOSED 期间也能过结转凭证。
+        if (profitLossClosingService != null) {
+            profitLossClosingService.closePeriod(factoryId, year, month, userId);
+        }
+        p.setClosingPostedAt(LocalDateTime.now());
+        AccountingPeriod saved = repo.save(p);
+        log.info("[AccountingPeriod] 手工立即锁定结转 {}-{}-{} by user={}", factoryId, year, month, userId);
+        return saved;
+    }
+
+    @Override
     public AccountingPeriod.Status getStatus(String factoryId, Integer year, Integer month) {
         validateInput(factoryId, year, month);
         return repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month)
