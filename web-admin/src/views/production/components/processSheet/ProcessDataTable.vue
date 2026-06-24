@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
+import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock } from '@element-plus/icons-vue';
 import {
-  saveRow, deleteRow, getAvailableRawBatches,
+  saveRow, deleteRow, getAvailableRawBatches, getRowHistory,
   type ProcessSheetInventoryItem,
   type LaborSegment,
   type UpstreamRef,
   type ProcessSheetRowView,
   type ProcessSheetRowRequest,
+  type ProcessSheetRowHistoryView,
   type RawMaterialBatchOption,
 } from '@/api/processSheet';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
@@ -575,6 +576,46 @@ async function handleDelete(row: SheetRow) {
 }
 
 // -------------------------------------------------------------------------
+// SP-G P3: 操作记录 (行级 diff 时间线)
+// -------------------------------------------------------------------------
+const historyVisible = ref(false);
+const historyLoading = ref(false);
+const historyRows = ref<ProcessSheetRowHistoryView[]>([]);
+const historyBatchLabel = ref('');
+
+const OP_LABEL: Record<string, string> = { CREATE: '新建', UPDATE: '修改', DELETE: '删除' };
+const OP_TYPE: Record<string, 'success' | 'warning' | 'danger'> = {
+  CREATE: 'success', UPDATE: 'warning', DELETE: 'danger',
+};
+
+/** 仅已保存过的行 (SAVED/DRAFT) 才有服务端操作记录; UNSAVED 行无历史。 */
+function hasHistory(row: SheetRow): boolean {
+  return row.rowStatus === 'SAVED' || row.rowStatus === 'DRAFT';
+}
+
+async function openHistory(row: SheetRow) {
+  historyVisible.value = true;
+  historyLoading.value = true;
+  historyRows.value = [];
+  historyBatchLabel.value = row.batchNumber || '(未生成批次号)';
+  try {
+    const resp = await getRowHistory(props.factoryId, props.planId, props.processCode, row.clientRowId);
+    historyRows.value = resp.data || [];
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '加载操作记录失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+function formatHistoryTime(iso: string): string {
+  if (!iso) return '';
+  // Trim to "YYYY-MM-DD HH:mm:ss" from ISO datetime (handles trailing micros).
+  return iso.replace('T', ' ').slice(0, 19);
+}
+
+// -------------------------------------------------------------------------
 // 熟制: multi-source helpers
 // -------------------------------------------------------------------------
 function addUpstreamSource(row: SheetRow) {
@@ -636,6 +677,12 @@ onMounted(() => {
             :title="saveDisabledReason(row) || '保存此行'"
             @click="handleSave(row)"
             style="padding:3px 8px">保存</el-button>
+          <el-button
+            v-if="hasHistory(row)"
+            link size="small" :icon="Clock"
+            title="操作记录"
+            @click="openHistory(row)"
+            style="margin-left:4px" />
           <el-button
             type="danger" link size="small" :icon="Delete"
             :loading="row.deleting"
@@ -1145,6 +1192,12 @@ onMounted(() => {
                   @click="handleSave(row)"
                   style="padding:3px 8px">保存</el-button>
                 <el-button
+                  v-if="hasHistory(row)"
+                  link size="small" :icon="Clock"
+                  title="操作记录"
+                  @click="openHistory(row)"
+                  style="margin-left:4px" />
+                <el-button
                   type="danger" link size="small" :icon="Delete"
                   :loading="row.deleting"
                   @click="handleDelete(row)"
@@ -1285,6 +1338,46 @@ onMounted(() => {
       </el-button>
     </div>
     </template><!-- /grid layout -->
+
+    <!-- ====================================================================
+         SP-G P3: 操作记录 (行级 diff 时间线)
+         ==================================================================== -->
+    <el-dialog
+      v-model="historyVisible"
+      title="操作记录"
+      width="560px"
+      append-to-body>
+      <div style="margin-bottom:8px;font-size:12px;color:#909399">
+        批次: <span style="color:#409eff;font-weight:600">{{ historyBatchLabel }}</span>
+      </div>
+      <div v-loading="historyLoading">
+        <el-empty
+          v-if="!historyLoading && historyRows.length === 0"
+          description="暂无操作记录" :image-size="60" />
+        <el-timeline v-else>
+          <el-timeline-item
+            v-for="h in historyRows" :key="h.id"
+            :type="OP_TYPE[h.operation] || 'primary'"
+            :timestamp="formatHistoryTime(h.createdAt)"
+            placement="top">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <el-tag :type="OP_TYPE[h.operation] || 'info'" size="small">
+                {{ OP_LABEL[h.operation] || h.operation }}
+              </el-tag>
+              <span v-if="h.operatorId != null" style="font-size:11px;color:#909399">
+                操作人 #{{ h.operatorId }}
+              </span>
+            </div>
+            <div style="font-size:12px;color:#606266;white-space:pre-wrap;word-break:break-all">
+              {{ h.diffSummary || '(无变更摘要)' }}
+            </div>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
+      <template #footer>
+        <el-button @click="historyVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
   </div>
 </template>

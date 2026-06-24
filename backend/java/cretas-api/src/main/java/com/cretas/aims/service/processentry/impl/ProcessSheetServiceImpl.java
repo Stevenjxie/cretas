@@ -5,6 +5,7 @@ import com.cretas.aims.dto.processentry.MaterializedBatch;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
+import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
@@ -14,9 +15,11 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -24,6 +27,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,8 +38,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * SP-F Task 1.5 — 逐工序电子表格单行增量服务实现 (新建路径)。
@@ -63,6 +72,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final MaterialConsumptionRepository consumptionRepo;
     private final ProductionReportRepository reportRepo;
     private final ProductionPlanRepository productionPlanRepository;
+    private final ProcessSheetRowChangeLogRepository changeLogRepo;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -95,6 +105,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 6. outputQuantity gate: <=0 → 存 DRAFT 行, 不物化 WIP 批
         if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
             persistRow(factoryId, planId, req, null, null, "DRAFT");
+            logChange(factoryId, planId, req, "CREATE", null, req, userId);
             // (req, batchId, batchNumber, yieldRate, rowTotalCost, unitPrice, updated, materialized, warnings)
             return buildResult(req, null, null, null, null, null, false, false, warnings);
         }
@@ -121,6 +132,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 8. 写 process_sheet_rows (try/catch UK 冲突 → 409; 完整并发测在 Task 1.7)
         persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+        logChange(factoryId, planId, req, "CREATE", null, req, userId);
 
         // 9. 组装结果
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
@@ -154,6 +166,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                             ProcessSheetRow existing) {
         List<String> warnings = new ArrayList<>();
 
+        // SP-G P3: 捕获变更前 payload (在任何 updateRowInPlace 之前), 供 UPDATE diff 审计。
+        ProcessSheetRowRequest beforeReq = tryDeserialize(existing.getRowPayload());
+
         // 与 create 同的 factory-scoped 上游/原料边解析 (🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, req);
         BigDecimal newOutput = req.getOutputQuantity();
@@ -164,6 +179,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (!hasOutput) {
                 // 仍是 DRAFT —— 仅更新行 payload, 保持 DRAFT, 不物化。
                 updateRowInPlace(existing, req, null, null, "DRAFT");
+                logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
                 return buildResult(req, null, null, null, null, null, true, false, warnings);
             }
             // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
@@ -181,6 +197,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     userId);
             MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
             updateRowInPlace(existing, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+            logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
             return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
                     yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
                     true, true, warnings);
@@ -207,6 +224,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // reverseMaterialization 含软删边/报工/WIP/ProductionBatch 的完整逆向
             reverseMaterialization(factoryId, existing.getBatchId(), wipOpt);
             updateRowInPlace(existing, req, null, null, "DRAFT");
+            logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
             return buildResult(req, null, null, null, null, null, true, false, warnings);
         }
 
@@ -233,6 +251,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // batchId/batchNumber 不变; 仅刷新 payload + status。
         updateRowInPlace(existing, req, existing.getBatchId(), existing.getBatchNumber(), "SAVED");
+        logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
         return buildResult(req, existing.getBatchId(), existing.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
                 true, true, warnings);
@@ -251,7 +270,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     @Override
     @Transactional
-    public void deleteRow(String factoryId, String planId, String clientRowId) {
+    public void deleteRow(String factoryId, String planId, String clientRowId, Long userId) {
         List<ProcessSheetRow> rows = rowRepo
                 .findByFactoryIdAndPlanIdAndClientRowId(factoryId, planId, clientRowId);
         if (rows.isEmpty()) {
@@ -278,6 +297,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 // 逆向物化 (软删边/报工/WIP/ProductionBatch)
                 reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
             }
+
+            // SP-G P3: DELETE 操作记录 (before = 被删行 payload, after = null)。
+            ProcessSheetRowRequest beforeReq = tryDeserialize(row.getRowPayload());
+            logChange(factoryId, planId, beforeReq, "DELETE", beforeReq, null, userId,
+                    row.getProcessCode(), row.getClientRowId());
 
             // 软删行本身
             row.softDelete();
@@ -378,6 +402,134 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         } catch (JsonProcessingException e) {
             throw new BusinessException(500, "行数据反序列化失败: " + e.getMessage());
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-G P3: 行级操作记录 (字段级 diff 审计)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * SP-G P3: 读取某一行的操作记录时间线 (按创建时间倒序)。查询 factory-scoped 🔒。
+     */
+    @Override
+    public List<ProcessSheetRowHistoryView> getRowHistory(String factoryId, String planId,
+                                                          String processCode, String clientRowId) {
+        return changeLogRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowIdOrderByCreatedAtDesc(
+                        factoryId, planId, processCode, clientRowId)
+                .stream()
+                .map(log -> new ProcessSheetRowHistoryView(
+                        log.getId(),
+                        log.getOperation(),
+                        log.getBeforeValue(),
+                        log.getAfterValue(),
+                        log.getDiffSummary(),
+                        log.getOperatorId(),
+                        log.getCreatedAt()))
+                .toList();
+    }
+
+    /**
+     * 写一条行级操作记录 (CREATE/UPDATE/DELETE)。processCode/clientRowId 取自请求体。
+     * 用于 saveRow / resaveRow (req 即变更目标行)。
+     */
+    private void logChange(String factoryId, String planId, ProcessSheetRowRequest keyReq,
+                           String operation, ProcessSheetRowRequest before,
+                           ProcessSheetRowRequest after, Long userId) {
+        logChange(factoryId, planId, keyReq, operation, before, after, userId,
+                keyReq.getProcessCode(), keyReq.getClientRowId());
+    }
+
+    /**
+     * 写一条行级操作记录, 显式指定 processCode/clientRowId (deleteRow 走此重载, key 取自被删行)。
+     *
+     * <p>before/after 各序列化为字段快照 Map; diffSummary 比对快照列出变更字段 ("字段: 旧→新")。
+     * 审计失败不应阻断主写路径 —— 包 try/catch 仅记 warn。
+     */
+    private void logChange(String factoryId, String planId, ProcessSheetRowRequest keyReq,
+                           String operation, ProcessSheetRowRequest before,
+                           ProcessSheetRowRequest after, Long userId,
+                           String processCode, String clientRowId) {
+        try {
+            Map<String, Object> beforeMap = snapshot(before);
+            Map<String, Object> afterMap = snapshot(after);
+            ProcessSheetRowChangeLog logEntry = ProcessSheetRowChangeLog.builder()
+                    .factoryId(factoryId)
+                    .planId(planId)
+                    .processCode(processCode)
+                    .clientRowId(clientRowId)
+                    .operation(operation)
+                    .beforeValue(beforeMap)
+                    .afterValue(afterMap)
+                    .diffSummary(buildDiffSummary(operation, beforeMap, afterMap))
+                    .operatorId(userId)
+                    .build();
+            changeLogRepo.save(logEntry);
+        } catch (Exception e) {
+            // 操作记录是旁路审计, 失败不阻断主流程 (行已成功写入)。
+            log.warn("写行级操作记录失败 (operation={}, plan={}, process={}, row={}): {}",
+                    operation, planId, processCode, clientRowId, e.getMessage());
+        }
+    }
+
+    /** payload → 字段快照 Map (null → null)。用 ObjectMapper 转 LinkedHashMap 保字段序。 */
+    private Map<String, Object> snapshot(ProcessSheetRowRequest req) {
+        if (req == null) {
+            return null;
+        }
+        return objectMapper.convertValue(req, new TypeReference<LinkedHashMap<String, Object>>() {});
+    }
+
+    /** 容错反序列化 row_payload (审计前快照; 失败返 null, 不阻断主流程)。 */
+    private ProcessSheetRowRequest tryDeserialize(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, ProcessSheetRowRequest.class);
+        } catch (JsonProcessingException e) {
+            log.warn("操作记录 before 快照反序列化失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 构造人类可读变更摘要。
+     * <ul>
+     *   <li>CREATE: "新建行"</li>
+     *   <li>DELETE: "删除行"</li>
+     *   <li>UPDATE: 对比 before/after 快照, 列出变更字段 "字段: 旧→新" (分号分隔); 无变更 → "(无字段变更)"</li>
+     * </ul>
+     */
+    private String buildDiffSummary(String operation, Map<String, Object> before,
+                                    Map<String, Object> after) {
+        if ("CREATE".equals(operation)) {
+            return "新建行";
+        }
+        if ("DELETE".equals(operation)) {
+            return "删除行";
+        }
+        // UPDATE: 比对 before/after 快照的并集 key。
+        Map<String, Object> b = before != null ? before : Map.of();
+        Map<String, Object> a = after != null ? after : Map.of();
+        Set<String> keys = new LinkedHashSet<>();
+        keys.addAll(b.keySet());
+        keys.addAll(a.keySet());
+
+        List<String> changes = new ArrayList<>();
+        for (String key : keys) {
+            Object bv = b.get(key);
+            Object av = a.get(key);
+            if (!Objects.equals(bv, av)) {
+                changes.add(key + ": " + fmt(bv) + "→" + fmt(av));
+            }
+        }
+        return changes.isEmpty() ? "(无字段变更)" : String.join("; ", changes);
+    }
+
+    /** 格式化 diff 值: null → "空", 其余 toString (集合/嵌套对象保留 JSON-ish 结构)。 */
+    private String fmt(Object v) {
+        return v == null ? "空" : String.valueOf(v);
     }
 
     /**

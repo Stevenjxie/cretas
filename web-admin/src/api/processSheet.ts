@@ -117,6 +117,26 @@ export interface ProcessSheetInventoryItem {
 }
 
 /**
+ * 行级操作记录 (mirrors ProcessSheetRowHistoryView Java DTO).
+ * 某一行的一次变更 (CREATE / UPDATE / DELETE).
+ */
+export interface ProcessSheetRowHistoryView {
+  id: number;
+  /** 操作类型 */
+  operation: 'CREATE' | 'UPDATE' | 'DELETE';
+  /** 变更前字段快照 (CREATE 时 null) */
+  beforeValue: Record<string, unknown> | null;
+  /** 变更后字段快照 (DELETE 时 null) */
+  afterValue: Record<string, unknown> | null;
+  /** 人类可读摘要: "字段: 旧→新" 列表 */
+  diffSummary: string | null;
+  /** 操作人 userId (可能为 null) */
+  operatorId: number | null;
+  /** 变更时间 (ISO datetime) */
+  createdAt: string;
+}
+
+/**
  * 已存行回读视图 (mirrors ProcessSheetRowView Java DTO).
  * row_payload 原样返回, 供前端重建行状态.
  */
@@ -190,6 +210,22 @@ export function getRows(
   return get<ProcessSheetRowView[]>(`${sheetBase(factoryId, planId)}/rows`, {
     params: { process },
   });
+}
+
+/**
+ * SP-G P3: 读取某一行的操作记录时间线 (行级 diff 审计, 时间倒序).
+ * GET /{factoryId}/production-plans/{planId}/process-sheet/row/{clientRowId}/history?process={process}
+ */
+export function getRowHistory(
+  factoryId: string,
+  planId: string,
+  process: string,
+  clientRowId: string,
+): Promise<ApiResponse<ProcessSheetRowHistoryView[]>> {
+  return get<ProcessSheetRowHistoryView[]>(
+    `${sheetBase(factoryId, planId)}/row/${encodeURIComponent(clientRowId)}/history`,
+    { params: { process } },
+  );
 }
 
 // =========================================================================

@@ -10,6 +10,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
@@ -55,13 +56,15 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private MaterialConsumptionRepository consumptionRepo;
     @Mock private ProductionReportRepository reportRepo;
     @Mock private ProductionPlanRepository productionPlanRepository;
+    @Mock private ProcessSheetRowChangeLogRepository changeLogRepo;
 
     @Test
     @DisplayName("3: 上游 WIP materialTypeId 为 null + 无原料行 → 400 (不物化)")
     void saveRow_nullRawLineage_throws400() {
         ProcessSheetServiceImpl service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
-                consumptionRepo, reportRepo, productionPlanRepository, new ObjectMapper());
+                consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
+                new ObjectMapper());
 
         // plan belongs to factory
         ProductionPlan plan = new ProductionPlan();
