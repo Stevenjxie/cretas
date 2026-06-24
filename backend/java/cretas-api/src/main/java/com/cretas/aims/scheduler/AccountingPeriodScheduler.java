@@ -4,7 +4,6 @@ import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.service.finance.AccountingPeriodService;
-import com.cretas.aims.service.finance.ProfitLossClosingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -12,10 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
 
@@ -43,7 +40,6 @@ public class AccountingPeriodScheduler {
     private final FactoryRepository factoryRepository;
     private final AccountingPeriodService accountingPeriodService;
     private final AccountingPeriodRepository periodRepo;
-    private final ProfitLossClosingService profitLossClosingService;
 
     @Value("${accounting-period.auto-close.enabled:true}")
     private boolean enabled;
@@ -117,7 +113,6 @@ public class AccountingPeriodScheduler {
             name = "AccountingPeriodScheduler.finalizeLockedPeriods",
             lockAtMostFor = "PT60M",
             lockAtLeastFor = "PT1M")
-    @Transactional
     public void finalizeLockedPeriods() {
         if (!enabled) return;
         List<String> factoryIds;
@@ -135,15 +130,14 @@ public class AccountingPeriodScheduler {
                 if (p.getClosingPostedAt() != null) continue; // 已结转
                 if (p.getAdjustWindowState() != AccountingPeriod.AdjustWindowState.LOCKED) continue; // 窗口未过
                 try {
-                    profitLossClosingService.closePeriod(factoryId, p.getYear(), p.getMonth(), null);
-                    p.setClosingPostedAt(LocalDateTime.now());
-                    periodRepo.save(p);
+                    // forceLockAndClose 是 per-period 原子事务 (closePeriod + 标记 closingPostedAt 同事务),
+                    // 经 service proxy 调用 → 每期独立事务, 一期失败不污染其它期 (避免 batch @Transactional
+                    // 遇 DataIntegrity 整批 rollback-only)。系统触发 userId=null。
+                    accountingPeriodService.forceLockAndClose(factoryId, p.getYear(), p.getMonth(), null);
                     closed++;
                 } catch (DataIntegrityViolationException dup) {
-                    // 并发/重复: 唯一约束撞 → 幂等 no-op, 仍标记已结转
-                    p.setClosingPostedAt(LocalDateTime.now());
-                    periodRepo.save(p);
-                    log.warn("[Finalize] {}-{}-{} 唯一约束撞, 幂等跳过", factoryId, p.getYear(), p.getMonth());
+                    // 并发 (manual force-lock 同刻撞): 输方整事务回滚, 赢方已提交凭证+closingPostedAt → 终态正确, 仅 log。
+                    log.warn("[Finalize] {}-{}-{} 唯一约束撞 (已被并发结转), 幂等跳过", factoryId, p.getYear(), p.getMonth());
                 } catch (Exception e) {
                     log.error("[Finalize] {}-{}-{} 结转失败: {}", factoryId, p.getYear(), p.getMonth(), e.getMessage(), e);
                 }
