@@ -21,6 +21,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
@@ -87,6 +88,9 @@ class ProcessSheetServiceImplTest {
 
     @Autowired
     private ProcessSheetRowRepository rowRepo;
+
+    @Autowired
+    private ProcessSheetRowChangeLogRepository changeLogRepo;
 
     @Autowired
     private UserRepository userRepo;
@@ -507,7 +511,7 @@ class ProcessSheetServiceImplTest {
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId))).isPresent();
 
         // 删除
-        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-mat");
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-mat", operatorId);
 
         // 行已软删 (@Where deleted_at IS NULL → 查不到)
         assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-mat"))
@@ -543,7 +547,7 @@ class ProcessSheetServiceImplTest {
         processSheetService.saveRow(FACTORY_ID, planId, down, operatorId);
 
         // 删除上游行 → 409 (已被下游消耗)
-        assertThatThrownBy(() -> processSheetService.deleteRow(FACTORY_ID, planId, "row-del-up"))
+        assertThatThrownBy(() -> processSheetService.deleteRow(FACTORY_ID, planId, "row-del-up", operatorId))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
@@ -562,7 +566,7 @@ class ProcessSheetServiceImplTest {
         assertThat(draft.getBatchId()).isNull();
 
         // 删除
-        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-draft");
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-draft", operatorId);
 
         // 行已软删
         assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-draft"))
@@ -574,9 +578,65 @@ class ProcessSheetServiceImplTest {
     @DisplayName("13: deleteRow 不存在的行 → 404")
     void deleteRow_notFound_throws404() {
         assertThatThrownBy(() ->
-                processSheetService.deleteRow(FACTORY_ID, planId, "DOES-NOT-EXIST"))
+                processSheetService.deleteRow(FACTORY_ID, planId, "DOES-NOT-EXIST", operatorId))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(404));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-G P3: 行级操作记录 (字段级 diff 审计)
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SP-G P3: saveRow 首存 → 1 条 CREATE 操作记录")
+    void saveRow_create_writesCreateChangeLog() {
+        saveXiuyou("row-log-create", "100", "80");
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-create");
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).getOperation()).isEqualTo("CREATE");
+        assertThat(history.get(0).getDiffSummary()).isEqualTo("新建行");
+        assertThat(history.get(0).getBeforeValue()).as("CREATE before 为 null").isNull();
+        assertThat(history.get(0).getAfterValue()).as("CREATE after 含字段快照").isNotNull();
+        assertThat(history.get(0).getOperatorId()).isEqualTo(operatorId);
+    }
+
+    @Test
+    @DisplayName("SP-G P3: saveRow 覆盖已存行 → 追加 1 条 UPDATE, diffSummary 含变更字段")
+    void resaveRow_update_writesUpdateChangeLogWithChangedField() {
+        // 首存 output=80, 再覆盖 output=90 (同 clientRowId → resave UPDATE)
+        saveXiuyou("row-log-update", "100", "80");
+        saveXiuyou("row-log-update", "100", "90");
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-update");
+        // 倒序: [0]=UPDATE (最新), [1]=CREATE
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getOperation()).isEqualTo("UPDATE");
+        assertThat(history.get(1).getOperation()).isEqualTo("CREATE");
+
+        // UPDATE diffSummary 应含变更的产出字段 (outputQuantity: 80→90)
+        assertThat(history.get(0).getDiffSummary())
+                .as("diffSummary 列出变更字段").contains("outputQuantity");
+        assertThat(history.get(0).getBeforeValue()).as("UPDATE before 非 null").isNotNull();
+        assertThat(history.get(0).getAfterValue()).as("UPDATE after 非 null").isNotNull();
+    }
+
+    @Test
+    @DisplayName("SP-G P3: deleteRow → 追加 1 条 DELETE 操作记录 (before=被删行, after=null)")
+    void deleteRow_writesDeleteChangeLog() {
+        saveXiuyou("row-log-delete", "100", "80");
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-log-delete", operatorId);
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-delete");
+        // [0]=DELETE (最新), [1]=CREATE
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getOperation()).isEqualTo("DELETE");
+        assertThat(history.get(0).getDiffSummary()).isEqualTo("删除行");
+        assertThat(history.get(0).getBeforeValue()).as("DELETE before 含被删行快照").isNotNull();
+        assertThat(history.get(0).getAfterValue()).as("DELETE after 为 null").isNull();
     }
 
     // ─────────────────────────────────────────────────────────────

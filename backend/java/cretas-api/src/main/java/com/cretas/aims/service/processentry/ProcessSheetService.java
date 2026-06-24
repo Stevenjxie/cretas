@@ -1,6 +1,7 @@
 package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
+import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
@@ -44,9 +45,10 @@ public interface ProcessSheetService {
      * @param factoryId  工厂 ID
      * @param planId     生产计划 ID
      * @param clientRowId 前端行键 (在同一 plan 内唯一)
+     * @param userId     操作人 userId (controller @RequestAttribute 注入, 供 SP-G P3 操作记录)
      * @throws BusinessException 404 — 行不存在; 409 — 已被下游消耗
      */
-    void deleteRow(String factoryId, String planId, String clientRowId);
+    void deleteRow(String factoryId, String planId, String clientRowId, Long userId);
 
     /**
      * SP-F Task 2.1: 读取指定工序的 WIP 在制品库存视图。
@@ -77,4 +79,19 @@ public interface ProcessSheetService {
      * @return 该工序下所有行的视图列表 (含 DRAFT)
      */
     List<ProcessSheetRowView> getRows(String factoryId, String planId, String processCode);
+
+    /**
+     * SP-G P3: 读取某一行的操作记录时间线 (字段级 diff 审计)。
+     *
+     * <p>按 (factory, plan, processCode, clientRowId) 定位某一行的全部变更，按创建时间倒序
+     * (最新在前)。查询天然 factory-scoped (🔒)。
+     *
+     * @param factoryId   工厂 ID
+     * @param planId      生产计划 ID
+     * @param processCode 工序代码 (e.g. "xiuyou")
+     * @param clientRowId 前端行键
+     * @return 该行的全部变更记录 (CREATE / UPDATE / DELETE)，时间倒序
+     */
+    List<ProcessSheetRowHistoryView> getRowHistory(String factoryId, String planId,
+                                                   String processCode, String clientRowId);
 }

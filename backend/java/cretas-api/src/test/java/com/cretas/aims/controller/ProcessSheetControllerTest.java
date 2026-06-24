@@ -112,6 +112,6 @@ class ProcessSheetControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
 
-        verify(service).deleteRow(eq(FACTORY_ID), eq(PLAN_ID), eq("ROW-001"));
+        verify(service).deleteRow(eq(FACTORY_ID), eq(PLAN_ID), eq("ROW-001"), eq(USER_ID));
     }
 }

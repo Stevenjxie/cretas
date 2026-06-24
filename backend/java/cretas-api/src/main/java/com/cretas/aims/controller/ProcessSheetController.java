@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
+import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
@@ -41,8 +42,9 @@ public class ProcessSheetController {
     public ApiResponse<Void> deleteRow(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
-            @PathVariable @NotBlank String clientRowId) {
-        service.deleteRow(factoryId, planId, clientRowId);
+            @PathVariable @NotBlank String clientRowId,
+            @RequestAttribute("userId") Long userId) {
+        service.deleteRow(factoryId, planId, clientRowId, userId);
         return ApiResponse.success("删除成功", null);
     }
 
@@ -75,5 +77,23 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String planId,
             @RequestParam @NotBlank String process) {
         return ApiResponse.success(service.getRows(factoryId, planId, process));
+    }
+
+    /**
+     * SP-G P3: 读取某一行的操作记录时间线 (行级 diff 审计)。
+     *
+     * <p>按 (factory, plan, processCode, clientRowId) 定位行的全部变更, 时间倒序 (最新在前)。
+     *
+     * <p>URL 示例:
+     * GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/row/{clientRowId}/history?process=xiuyou
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/row/{clientRowId}/history")
+    public ApiResponse<List<ProcessSheetRowHistoryView>> getRowHistory(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @PathVariable @NotBlank String clientRowId,
+            @RequestParam @NotBlank String process) {
+        return ApiResponse.success(service.getRowHistory(factoryId, planId, process, clientRowId));
     }
 }
