@@ -104,7 +104,7 @@ public class TrainingSample {
      * Embedding 向量 (可选，用于微调)
      * 768维 * 4字节 = 3072字节
      */
-    @Column(name = "embedding_blob", columnDefinition = "BLOB")
+    @Column(name = "embedding_blob", columnDefinition = "bytea")
     private byte[] embeddingBlob;
 
     /**

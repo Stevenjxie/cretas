@@ -48,10 +48,13 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     private InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
 
     /**
-     * 结转损益 (可选注入; required=false 打破 bean 循环:
-     * AccountingPeriodService → PLClosing → VoucherService → AccountingPeriodService)。
+     * 结转损益 (可选注入)。**@Lazy 必需**: 打破 bean 循环
+     * VoucherService →(field) AccountingPeriodService →(field) PLClosing →(constructor) VoucherService。
+     * PLClosing 的 VoucherService 是构造器依赖, 不能用 early reference, 故纯 field 注入无法破环
+     * (会抛 "Requested bean is currently in creation")。@Lazy 注入代理, 首次 reopen/forceLock 时才解析。
      * 反结账时若该期已结转, 红冲结转凭证。
      */
+    @org.springframework.context.annotation.Lazy
     @Autowired(required = false)
     private com.cretas.aims.service.finance.ProfitLossClosingService profitLossClosingService;
 
