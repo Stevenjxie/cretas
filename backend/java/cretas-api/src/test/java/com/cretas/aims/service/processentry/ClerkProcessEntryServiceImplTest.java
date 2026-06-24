@@ -968,6 +968,45 @@ class ClerkProcessEntryServiceImplTest {
     }
 
     /**
+     * 跨天: step.processDate 设置时, 成本报工 reportDate 取该工序实际操作日 (非录入当天)。
+     * 让焯水周一/熟制周三等跨天工序成本归到各自真实日期。
+     */
+    @Test
+    @DisplayName("跨天: step.processDate → 报工 reportDate 取该操作日 (非当天)")
+    void crossDay_reportDate_fromProcessDate() {
+        stubNoIdempotency("CROSSDAY-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-CD", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-CD", FACTORY)).thenReturn(Optional.of(raw));
+
+        java.time.LocalDate opDay = java.time.LocalDate.of(2026, 6, 16);
+        StepEntry step = rawStep(1, "100", "80", List.of(rawInput("RAW-CD", "100")));
+        step.setLaborStartTime("08:00");
+        step.setLaborEndTime("10:00");
+        step.setWorkerCount(2);
+        step.setProcessDate(opDay);  // 跨天: 该工序实际操作日
+
+        BatchEntry batch = finishedBatch("FIN-CD", "PT-X", List.of(step));
+        service.recordChain(FACTORY, PLAN_ID, req("CROSSDAY-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeastOnce()).save(cap.capture());
+        com.cretas.aims.entity.ProductionReport rpt = cap.getAllValues().stream()
+                .filter(r -> "LABOR".equals(r.getCostCategory())).findFirst().orElse(null);
+        assertThat(rpt).as("LABOR 报工应写出").isNotNull();
+        assertThat(rpt.getReportDate())
+                .as("报工日期 = 工序操作日 2026-06-16, 非录入当天").isEqualTo(opDay);
+    }
+
+    /**
      * T16 — SP-F ①a: laborCost=0 时不写 LABOR 报工 (无工时/人数 → ¥0, 诚实不造空行)。
      */
     @Test

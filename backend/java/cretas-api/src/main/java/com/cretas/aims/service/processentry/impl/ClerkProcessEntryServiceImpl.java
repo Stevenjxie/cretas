@@ -539,7 +539,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setWorkerId(operatorId);
         report.setReportType("YIELD");
         report.setReportMode(ReportMode.MODE_1);
-        report.setReportDate(LocalDate.now());
+        report.setReportDate(resolveReportDate(st));
         report.setCostCategory("SEASONING");
         report.setMaterialCost(seasoningCost);
         report.setProcessOrder(st.getProcessOrder());
@@ -567,7 +567,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setWorkerId(operatorId);
         report.setReportType("YIELD");
         report.setReportMode(ReportMode.MODE_1);
-        report.setReportDate(LocalDate.now());
+        report.setReportDate(resolveReportDate(st));
         report.setCostCategory("LABOR");
         report.setLaborCost(laborCost);
         report.setProcessOrder(st.getProcessOrder());
@@ -583,6 +583,14 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private boolean isSeasoningStep(StepEntry st) {
         return "SEASONING".equals(st.getProcessCategory()) ||
                (st.getProcessCategory() == null && st.getPotCount() != null);
+    }
+
+    /**
+     * 跨天: 报工日期取该工序实际操作日 ({@code st.processDate})；未填回退当天。
+     * 让焯水/熟制等工序跨天时, 成本报工归到各自真实日期 (成本按日归集正确)。
+     */
+    private LocalDate resolveReportDate(StepEntry st) {
+        return st.getProcessDate() != null ? st.getProcessDate() : LocalDate.now();
     }
 
     private BigDecimal computeSeasoningCost(String factoryId, String productTypeId,

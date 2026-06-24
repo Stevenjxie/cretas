@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 // LaborSegment is in the same package (com.cretas.aims.dto.processentry) — no import needed.
 
@@ -38,6 +39,8 @@ public class ProcessChainEntryRequest {
         @NotNull
         private Integer processOrder;
         private String processName;
+        /** 该工序实际操作日期 (跨天生产: 焯水周一/熟制周三各记各日)。null → 报工日期回退当天。 */
+        private LocalDate processDate;
         /** 成本桶: RAW_MATERIAL | SEASONING | PACKAGING | null(普通工序) */
         private String processCategory;
         private BigDecimal inputQuantity;
