@@ -7,6 +7,7 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SP-F 逐工序电子表格 — 单行增量录入请求 (spec §4.2)。
@@ -14,7 +15,7 @@ import java.util.List;
  * <p>一行 = 一个批次的一道工序。上游引用走真实持久化的 batchNumber (跨请求),
  * 不同于 SP-B 抽屉的内存 clientBatchKey 互指。
  *
- * <p>切片不带 byproducts / sampleRetainQuantity (defer 随 Q6/气调, spec §2.3)。
+ * <p>SP-G G3a: 补入 byproducts / sampleRetainQuantity / packagingDetail (原 defer 已解锁)。
  */
 @Data
 public class ProcessSheetRowRequest {
@@ -73,6 +74,14 @@ public class ProcessSheetRowRequest {
 
     /** 可选防双击 (同 clientRowId 一次保存内)。 */
     private String idempotencyKey;
+
+    // SP-G G3a: 产出附加 (mirror ProcessChainEntryRequest.StepEntry)
+    /** 副产物明细 [{name,quantity,unit,unitPrice}]。 */
+    private List<ProcessChainEntryRequest.Byproduct> byproducts;
+    /** 留样件数 (末道装盒后留样)。 */
+    private Integer sampleRetainQuantity;
+    /** 包装明细 [{name,cost}] (膜/气体/标签/其他)。 */
+    private List<Map<String, Object>> packagingDetail;
 
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
