@@ -239,11 +239,9 @@ const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = �
 let chart: any = null;
 let mixChart: any = null;
 
-// 工序名 fallback: 后端 yield steps 暂未带 processName, 按标准卤味全链工序序显示
-// (修油→滚揉→焯水→去舌苔→熟制→气调)。非卤味/不同链回退「工序N」。
-// (真正按产品工序配置取名 = 后续优化, 需前端 fetch ProductWorkProcess by processOrder)
-const STAGE_NAMES: Record<number, string> = { 1: '修油', 2: '滚揉', 3: '焯水', 4: '去舌苔', 5: '熟制', 6: '气调' };
-const stepName = (s: Step) => s.processName || STAGE_NAMES[s.processOrder] || ('工序' + s.processOrder);
+// 工序名来自后端: getYield 按产品工序配置 (ProductWorkProcess) 填充 step.processName
+// (config-driven, 非硬编码 — 操作员报工经 WorkProcessTask, 文员录入经 processOrder→配置名)。
+const stepName = (s: Step) => s.processName || ('工序' + s.processOrder);
 
 const steps = computed<Step[]>(() => {
   const b = data.value?.batches?.[0];
