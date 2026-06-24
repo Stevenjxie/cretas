@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { getInventory, getRows, type ProcessSheetInventoryItem, type ProcessSheetRowView } from '@/api/processSheet';
+import { getProductWorkProcesses } from '@/api/processProduction';
+import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 
@@ -33,47 +35,68 @@ const emit = defineEmits<{
 }>();
 
 // -------------------------------------------------------------------------
-// 3 processes in chain order
+// 工序链 — 动态从产品工序配置(ProductWorkProcess)解析 (G0)
 // -------------------------------------------------------------------------
-const PROCESSES = [
+type ProcEntry = { code: string; order: number; label: string };
+
+// 工序名关键词 → PROCESS_SHEET_CONFIG key。后端 ProductWorkProcess 无 processCode (前端约定),
+// 真实工序名常带前缀 (如「叮咚-猪舌-修油」「气调包装」「领料」), 故按关键词**子串**匹配 (非精确)。
+// 关键词互不为子串, 子串匹配安全。新工序加列定义时在此登记关键词。
+const PROCESS_NAME_TO_CODE: Record<string, string> = {
+  修油: 'xiuyou', 滚揉: 'gunrou', 焯水: 'chaoshui',
+  去舌苔: 'qushetou', 熟制: 'shuzhi', 气调: 'qidiao',
+};
+const PROCESS_KEYWORDS = Object.keys(PROCESS_NAME_TO_CODE);
+function nameToConfigCode(processName: string): string | undefined {
+  const kw = PROCESS_KEYWORDS.find((k) => processName.includes(k));
+  return kw ? PROCESS_NAME_TO_CODE[kw] : undefined;
+}
+
+// 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
+const FALLBACK_PROCESSES: ProcEntry[] = [
   { code: 'xiuyou',   order: 1, label: '修油' },
   { code: 'chaoshui', order: 2, label: '焯水' },
   { code: 'shuzhi',   order: 3, label: '熟制' },
-] as const;
+];
 
-// upstream chain: xiuyou→null, chaoshui→xiuyou, shuzhi→chaoshui
-const upstreamCodeOf: Record<string, string | null> = {
-  xiuyou:   null,
-  chaoshui: 'xiuyou',
-  shuzhi:   'chaoshui',
-};
+const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
+
+// upstream chain: 链中前一道有列定义的工序 (跳过未铺工序 → 折叠接线自动保持)
+const upstreamCodeOf = computed<Record<string, string | null>>(() => {
+  const map: Record<string, string | null> = {};
+  PROCESSES.value.forEach((p, i) => { map[p.code] = i > 0 ? PROCESSES.value[i - 1].code : null; });
+  return map;
+});
+
+/**
+ * 动态解析产品工序链 (G0): 取该产品 ProductWorkProcess (按 processOrder),
+ * 映射 processName → 列定义 key, 过滤掉无列定义的工序 (未铺的滚揉/去舌苔/气调),
+ * 排序后即得本产品在电子表格里能录的工序链。失败或 <1 道可录 → 回退切片。
+ */
+async function resolveProcesses() {
+  try {
+    const resp = await getProductWorkProcesses(props.factoryId, props.productTypeId);
+    const items = resp.data || [];
+    const mapped: ProcEntry[] = items
+      .map((it) => ({ code: nameToConfigCode(it.processName) as string, order: it.processOrder, label: it.processName }))
+      .filter((p): p is ProcEntry => !!p.code && !!PROCESS_SHEET_CONFIG[p.code])
+      .sort((a, b) => a.order - b.order);
+    if (mapped.length >= 1) PROCESSES.value = mapped;
+  } catch (e) {
+    console.warn('[ProcessSheet] resolveProcesses 失败, 回退切片', e);
+  }
+}
 
 // -------------------------------------------------------------------------
 // State
 // -------------------------------------------------------------------------
-const activeTab = ref<string>('xiuyou');
+const activeTab = ref<string>(FALLBACK_PROCESSES[0].code);
 const loading = ref(false);
 
-// inventory per process: processCode → items
-const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({
-  xiuyou:   [],
-  chaoshui: [],
-  shuzhi:   [],
-});
-
-// initial rows per process (loaded once on mount)
-const initialRowsMap = ref<Record<string, ProcessSheetRowView[]>>({
-  xiuyou:   [],
-  chaoshui: [],
-  shuzhi:   [],
-});
-
-// refs to InventoryTable components so we can call .refresh()
-const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable> | null>>({
-  xiuyou:   null,
-  chaoshui: null,
-  shuzhi:   null,
-});
+// inventory/rows/refs per process: processCode → ... (动态填充, 键随 PROCESSES 变)
+const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({});
+const initialRowsMap = ref<Record<string, ProcessSheetRowView[]>>({});
+const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable> | null>>({});
 
 // -------------------------------------------------------------------------
 // Load all data on mount
@@ -82,8 +105,13 @@ async function loadAll() {
   if (!props.factoryId || !props.planId) return;
   loading.value = true;
   try {
+    // G0: 先解析本产品工序链 (动态), 再加载各道库存/行
+    await resolveProcesses();
+    if (!PROCESSES.value.some((p) => p.code === activeTab.value)) {
+      activeTab.value = PROCESSES.value[0]?.code ?? FALLBACK_PROCESSES[0].code;
+    }
     await Promise.all(
-      PROCESSES.map(async (proc) => {
+      PROCESSES.value.map(async (proc) => {
         // load inventory (including upstream for dropdown purposes)
         const [invResp, rowsResp] = await Promise.all([
           getInventory(props.factoryId, props.planId, proc.code),
@@ -107,7 +135,7 @@ onMounted(loadAll);
 // -------------------------------------------------------------------------
 async function onRowSaved(processCode: string) {
   // Refresh inventory for this process and all downstream processes
-  const toRefresh = PROCESSES.map((p) => p.code);
+  const toRefresh = PROCESSES.value.map((p) => p.code);
   await Promise.all(
     toRefresh.map(async (code) => {
       try {
@@ -124,7 +152,7 @@ async function onRowSaved(processCode: string) {
 
 // Helper: get upstream inventory items for a given process
 function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
-  const upCode = upstreamCodeOf[processCode];
+  const upCode = upstreamCodeOf.value[processCode];
   if (!upCode) return [];
   return inventoryMap.value[upCode] || [];
 }
