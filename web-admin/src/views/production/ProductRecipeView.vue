@@ -465,6 +465,16 @@ function goCreateBom() {
         <span style="font-size:12px; color:#909399;">调料配方</span>
       </div>
 
+      <!-- 空配方引导 (fool-proof): 新建/空配方时告诉用户填什么、有什么用 -->
+      <el-alert
+        v-if="!isReadOnly && formItems.length === 0"
+        type="info"
+        show-icon
+        :closable="false"
+        title="填写注射段 / 熟制段调料 + 锅序比例，保存后用于报工时自动核算调料成本。老汤等可复用料把「计入调料」关掉即可不计成本。"
+        style="margin: 4px 0 12px;"
+      />
+
       <!-- U6 DRAFT gate: read-only banner when BOM is ACTIVE/ARCHIVED (fool-proof Rule 2 + 5) -->
       <el-alert
         v-if="isReadOnly"
@@ -558,7 +568,7 @@ function goCreateBom() {
       <el-card shadow="never" style="margin-bottom: 16px;">
         <template #header>
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-size: 14px; font-weight: 600;">注射配方（INJECTION）</span>
+            <span style="font-size: 14px; font-weight: 600; border-left: 3px solid #409eff; padding-left: 8px;">注射配方（INJECTION）</span>
             <el-button
               v-if="!isReadOnly"
               size="small"
@@ -635,7 +645,7 @@ function goCreateBom() {
       <el-card shadow="never" style="margin-bottom: 16px;">
         <template #header>
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-size: 14px; font-weight: 600;">
+            <span style="font-size: 14px; font-weight: 600; border-left: 3px solid #e6a23c; padding-left: 8px;">
               熟制配方（COOKING）
               <el-tooltip content="老汤取消「计入调料」开关，不计入调料成本" placement="top">
                 <el-icon style="color: #909399; margin-left: 4px;"><InfoFilled /></el-icon>
@@ -728,8 +738,8 @@ function goCreateBom() {
         <el-empty v-if="cookingRows.length === 0" description="暂无熟制料" :image-size="60" />
       </el-card>
 
-      <!-- Footer actions -->
-      <div style="text-align: right; margin-top: 8px;">
+      <!-- Footer actions (sticky: 长表单滚动时保存/激活常驻底部) -->
+      <div class="recipe-view__footer">
         <el-button
           v-if="isReadOnly"
           type="primary"
@@ -763,5 +773,17 @@ function goCreateBom() {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
+}
+
+/* sticky 底栏: 长配方表单滚动时, 保存/激活/克隆 常驻底部可见 */
+.recipe-view__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  text-align: right;
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--el-bg-color, #fff);
+  border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
 }
 </style>
