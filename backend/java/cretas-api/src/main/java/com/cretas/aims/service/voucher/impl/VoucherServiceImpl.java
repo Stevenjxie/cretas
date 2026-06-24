@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.PayrollRecord;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.VoucherFlag;
@@ -144,7 +145,7 @@ public class VoucherServiceImpl implements VoucherService {
         return switch (type) {
             case SALES_RECEIPT, RETURN -> "sale";
             case PURCHASE_PAYMENT, INVENTORY_TRANSFER -> "stock";
-            case WAGE, EXPENSE, DEPRECATION -> "free";
+            case WAGE, EXPENSE, DEPRECATION, PL_CLOSING -> "free";
         };
     }
 
@@ -348,6 +349,56 @@ public class VoucherServiceImpl implements VoucherService {
     public List<Voucher> findByStatus(String factoryId, VoucherStatus status) {
         return voucherRepo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status,
                 org.springframework.data.domain.Pageable.unpaged()).getContent();
+    }
+
+    @Override
+    @Transactional
+    public Voucher createManual(String factoryId, VoucherType type, LocalDate voucherDate,
+                                List<VoucherEntrySpec> entries, String sourceBusinessType,
+                                String sourceBusinessId, String description, Long userId) {
+        if (entries == null || entries.isEmpty()) {
+            throw new IllegalArgumentException("createManual: entries 不能为空");
+        }
+        // ⚠️ 不调 assertPeriodOpen — 结转凭证须能过进 LOCKED 期间 (见接口注释)。
+        Voucher voucher = Voucher.builder()
+                .factoryId(factoryId)
+                .voucherNumber(generateVoucherNumber(factoryId, voucherDate))
+                .voucherType(type)
+                .voucherDate(voucherDate)
+                .sourceBusinessType(sourceBusinessType)
+                .sourceBusinessId(sourceBusinessId)
+                .status(VoucherStatus.POSTED)
+                .createdBy(userId)
+                .approvedBy(userId)
+                .approvedAt(LocalDateTime.now())
+                .description(description)
+                .build();
+
+        int lineNo = 1;
+        for (VoucherEntrySpec spec : entries) {
+            VoucherEntry e = VoucherEntry.builder()
+                    .lineNo(lineNo++)
+                    .subjectCode(spec.subjectCode())
+                    .subjectName(spec.subjectName())
+                    .debit(nz(spec.debit()))
+                    .credit(nz(spec.credit()))
+                    .description(spec.description())
+                    .voucher(voucher)
+                    .build();
+            voucher.getEntries().add(e);
+        }
+        BigDecimal totalDebit = voucher.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = voucher.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        voucher.setTotalDebit(totalDebit);
+        voucher.setTotalCredit(totalCredit);
+        voucher.validateBalanced();
+
+        Voucher saved = voucherRepo.save(voucher);
+        log.info("✅ 手工凭证 (POSTED): {} type={} source={}/{} total={}",
+                saved.getVoucherNumber(), type, sourceBusinessType, sourceBusinessId, totalDebit);
+        return saved;
     }
 
     // ==================== private helpers ====================

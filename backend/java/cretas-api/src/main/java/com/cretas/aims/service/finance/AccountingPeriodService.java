@@ -60,6 +60,12 @@ public interface AccountingPeriodService {
                                   String reason, Long userId);
 
     /**
+     * 手工立即锁定结转: 把 CLOSED 期间 adjustDeadline 设为 now (强制 LOCKED) 并立即结转损益。
+     * 财务确认无后续调整时用, 不必等 20 天窗口。需 finance 权限 (Controller 守门)。幂等 (已结转直接返回)。
+     */
+    AccountingPeriod forceLockAndClose(String factoryId, Integer year, Integer month, Long userId);
+
+    /**
      * 查询期间状态. 无 row 时返回 OPEN (backwards compat — legacy factory 默认不被 gate).
      *
      * @return 该 period 的状态. 总返非 null.
