@@ -33,6 +33,7 @@ class ProfitLossClosingServiceTest {
     @Mock VoucherService voucherService;
     @Mock VoucherEntryRepository voucherEntryRepo;
     @Mock AccountRepository accountRepo;
+    @Mock com.cretas.aims.repository.VoucherRepository voucherRepo;
     @InjectMocks ProfitLossClosingServiceImpl service;
 
     @Captor ArgumentCaptor<List<VoucherEntrySpec>> entriesCap;
@@ -123,5 +124,24 @@ class ProfitLossClosingServiceTest {
         when(accountRepo.findVisibleToFactory("F006")).thenReturn(List.of());
         service.closePeriod("F006", 2026, 5, 1309L);
         verify(voucherService, never()).createManual(any(), any(), any(), anyList(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reversePeriodClosing_redReversesActiveBatch() {
+        Voucher active = Voucher.builder().id("vc1").factoryId("F006").build();
+        when(voucherRepo.findActiveClosingVouchers(eq("F006"), contains("closing-F006-2026-5-monthly-r")))
+                .thenReturn(List.of(active));
+
+        service.reversePeriodClosing("F006", 2026, 5, 1309L);
+
+        // voidVoucher 对 POSTED 凭证执行红字冲销
+        verify(voucherService).voidVoucher("F006", "vc1", "反结账自动红冲", 1309L);
+    }
+
+    @Test
+    void reversePeriodClosing_noActive_noOp() {
+        when(voucherRepo.findActiveClosingVouchers(eq("F006"), anyString())).thenReturn(List.of());
+        service.reversePeriodClosing("F006", 2026, 5, 1309L);
+        verifyNoInteractions(voucherService);
     }
 }

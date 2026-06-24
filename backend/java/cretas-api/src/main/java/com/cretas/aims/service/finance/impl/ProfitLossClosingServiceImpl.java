@@ -5,8 +5,10 @@ import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Account;
+import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.service.finance.ProfitLossClosingService;
 import com.cretas.aims.service.voucher.VoucherService;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,7 @@ public class ProfitLossClosingServiceImpl implements ProfitLossClosingService {
     private final VoucherService voucherService;
     private final VoucherEntryRepository voucherEntryRepo;
     private final AccountRepository accountRepo;
+    private final VoucherRepository voucherRepo;
 
     private static final String RETAINED_EARNINGS_CODE = "4103";
     private static final String RETAINED_EARNINGS_NAME = "本年利润";
@@ -107,12 +110,23 @@ public class ProfitLossClosingServiceImpl implements ProfitLossClosingService {
     @Override
     @Transactional
     public void reversePeriodClosing(String factoryId, int year, int month, Long userId) {
-        // 在 Task 7 实现
-        throw new UnsupportedOperationException("Task 7");
+        String prefix = String.format("closing-%s-%d-%d-monthly-r%%", factoryId, year, month);
+        List<Voucher> active = voucherRepo.findActiveClosingVouchers(factoryId, prefix);
+        if (active.isEmpty()) {
+            log.info("[PLClosing] {}-{}-{} 无 active 结转凭证, 反冲 no-op", factoryId, year, month);
+            return;
+        }
+        // voidVoucher 对 POSTED 凭证执行红字冲销 (借贷互换镜像 + 原凭证置 REVERSED)。
+        // ⚠️ reversePostedVoucher 内有 assertPeriodOpen — 调用方须确保期间已 OPEN (见 reopenPeriod 接入)。
+        for (Voucher v : active) {
+            voucherService.voidVoucher(factoryId, v.getId(), "反结账自动红冲", userId);
+        }
+        log.info("[PLClosing] {}-{}-{} 反冲 {} 张结转凭证", factoryId, year, month, active.size());
     }
 
-    /** rev = 该期历史结转批次数 (含已 REVERSED), 用于 source_business_id 避免撞键。Task 7 完善。 */
+    /** rev = 该期历史结转批次数 (含已 REVERSED, 排红冲镜像), 用于 source_business_id 避免撞键。 */
     private int currentRevision(String factoryId, int year, int month) {
-        return 0; // P1 Task 6: 首次结转 r0; Task 7 加 reopen 后用真实计数
+        String prefix = String.format("closing-%s-%d-%d-monthly-r%%", factoryId, year, month);
+        return (int) voucherRepo.countClosingBatches(factoryId, prefix);
     }
 }
