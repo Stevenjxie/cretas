@@ -185,12 +185,24 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.rawBatchId = p.rawMaterialInputs?.[0]?.materialBatchId ?? '';
     row.rawBatchQty = p.rawMaterialInputs?.[0]?.quantity ?? null;
     row.fields['output'] = p.outputQuantity ?? null;
+    // SP-G G3c: 副产 hydrate (修油)
+    const bp0 = p.byproducts?.[0];
+    if (bp0) {
+      row.fields['byproductQty']   = bp0.quantity ?? null;
+      row.fields['byproductPrice'] = bp0.unitPrice ?? null;
+    }
   }
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同 (before → inputQuantity, after → outputQuantity)
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
     row.fields['before'] = p.inputQuantity ?? null;
     row.fields['after'] = p.outputQuantity ?? null;
+    // SP-G G3c: 副产 hydrate (焯水 + 滚揉)
+    const bp0 = p.byproducts?.[0];
+    if (bp0) {
+      row.fields['byproductQty']   = bp0.quantity ?? null;
+      row.fields['byproductPrice'] = bp0.unitPrice ?? null;
+    }
   }
   if (isQuSheTou.value) {
     // 去舌苔: output + scrap → input 反推. inputQuantity = scrap + output.
@@ -473,12 +485,24 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.inputQuantity = row.rawBatchQty ?? undefined;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
     base.unit = 'kg';
+    // SP-G G3c: 副产 (修油 — 肥油等)
+    const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+    if (bpQty > 0) {
+      const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+      base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+    }
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0 }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
     base.unit = 'kg';
+    // SP-G G3c: 副产 (焯水/滚揉 — 肥油等)
+    const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+    if (bpQty > 0) {
+      const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+      base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+    }
   } else if (isQuSheTou.value) {
     // 去舌苔: inputQuantity = scrap + output (反推); feedQuantityKg = 同 inputQuantity.
     const output = (row.fields['output'] as number) ?? 0;
