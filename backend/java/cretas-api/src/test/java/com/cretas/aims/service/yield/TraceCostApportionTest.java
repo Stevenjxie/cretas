@@ -206,4 +206,31 @@ class TraceCostApportionTest {
                 .as("1:1 全量消耗应得到全部父成本¥600 (向后兼容)")
                 .isEqualByComparingTo("600.00");
     }
+
+    @Test
+    @DisplayName("严格审计 Edge G: 显式消耗 0kg 上游源(混批 feed=0) → 该源贡献 ¥0, 不兜底全量 ¥600")
+    void zeroConsumption_contributesZero() {
+        /*
+         * 混批 source feed=0 场景: 下游显式消耗 0kg 的 MB-WIP-Z (父成本¥600, 产出100kg)。
+         * 修前: consumedQty=0 → 跳过比例分摊 → legacy 兜底 = 全量¥600 (虚高)。
+         * 修后: 显式 0 (非 null) → 早返回 ¥0。
+         */
+        MaterialConsumption parentRaw = cons("MB-RAW", "100", "600");
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(400L, F))
+                .thenReturn(List.of(parentRaw));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-RAW", F))
+                .thenReturn(Optional.of(leafMb("MB-RAW")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WIP-Z", F))
+                .thenReturn(Optional.of(wipMb("MB-WIP-Z", 400L, "100")));
+
+        // 下游显式消耗 0kg 的 MB-WIP-Z
+        MaterialConsumption zeroCons = cons("MB-WIP-Z", "0", "0");
+        stubSingleBatch(4L, List.of(zeroCons));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getRawMaterialCost())
+                .as("显式消耗 0kg 的上游源应贡献 ¥0, 不应兜底为全量父成本 ¥600 (Edge G)")
+                .isEqualByComparingTo("0.00");
+    }
 }
