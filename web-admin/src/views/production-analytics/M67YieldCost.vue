@@ -42,7 +42,7 @@
         <el-col :span="14">
           <el-card shadow="never">
             <template #header><b>逐道出成率 · 人工</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常) · 每道人工成本</span></template>
-            <div v-for="s in steps" :key="s.processOrder" class="step">
+            <div v-for="(s, idx) in steps" :key="s.processOrder" class="step">
               <div class="step-top">
                 <span class="pname">{{ stepName(s) }}</span>
                 <span class="qty">{{ num(s.totalInput) }} → {{ num(s.totalOutput) }} {{ s.outputUnit || 'kg' }}</span>
@@ -50,6 +50,20 @@
                 <span class="yr" :class="yieldClass(s.yieldRate)">{{ s.yieldRate == null ? '—' : (s.yieldRate * 100).toFixed(1) + '%' }}</span>
               </div>
               <el-progress :percentage="barPct(s.yieldRate)" :status="yieldStatus(s.yieldRate)" :stroke-width="12" :show-text="false" />
+              <!-- 逐工序完整成本: 原料摊首道 · 包装摊末道 -->
+              <div class="step-cost">
+                <template v-if="stepFullCostValue(s, idx, steps) !== null">
+                  <span class="sc-full">
+                    本道完整成本 ¥{{ stepFullCostValue(s, idx, steps)!.toFixed(2) }}
+                    <span v-if="idx === 0" class="sc-tag">(含原料)</span>
+                    <span v-if="idx === steps.length - 1" class="sc-tag">(含包装)</span>
+                  </span>
+                  <span v-if="stepPerBoxValue(stepFullCostValue(s, idx, steps)) !== null" class="sc-perbox">
+                    每盒 ¥{{ stepPerBoxValue(stepFullCostValue(s, idx, steps))!.toFixed(4) }}
+                  </span>
+                </template>
+                <span v-else class="sc-masked">成本需价格权限</span>
+              </div>
             </div>
           </el-card>
         </el-col>
@@ -258,6 +272,36 @@ const boxCount = computed(() => {
 const num = (v?: number | null) => (v == null ? '—' : Number(v).toFixed(1));
 const pct = (v?: number | null) => (v == null ? 0 : v * 100);
 const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / boxCount.value);
+
+/**
+ * 计算每道工序的完整成本:
+ *   base = step.laborCost + step.materialCost (调料/辅料已由后端按道分配)
+ *   首道 (index===0) 追加 cb.rawMaterialCost (原料成本)
+ *   末道 (index===steps.length-1) 追加 cb.packagingCost (包装成本)
+ *
+ * 注意: Step 接口只有 laborCost / materialCost, 没有 stepCost 字段.
+ * 当 priceMasked 或需追加的成本分量为 null 时返回 null → 触发"—"展示.
+ */
+function stepFullCostValue(s: Step, index: number, allSteps: Step[]): number | null {
+  const cbVal = cb.value;
+  if (cbVal?.priceMasked) return null;
+  const base = (s.laborCost ?? 0) + (s.materialCost ?? 0);
+  let full = base;
+  if (index === 0) {
+    if (cbVal?.rawMaterialCost == null) return null;
+    full += cbVal.rawMaterialCost;
+  }
+  if (index === allSteps.length - 1) {
+    if (cbVal?.packagingCost == null) return null;
+    full += cbVal.packagingCost;
+  }
+  return full;
+}
+
+function stepPerBoxValue(fullCost: number | null): number | null {
+  if (fullCost == null || !boxCount.value) return null;
+  return fullCost / boxCount.value;
+}
 
 // 成本全部以后端单一权威服务 cb 为准 (谱系遍历 + 上游成本回溯); 缺失时回退订单聚合
 const upstreamCost = computed(() => Number(cb.value?.rawMaterialCost ?? mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0)));
@@ -513,4 +557,9 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .aux-pot { color: #909399; font-weight: 400; margin-left: 6px; }
 .aux-line2 { font-size: 12px; color: #909399; margin-top: 2px; }
 .aux-share { color: #409eff; font-weight: 600; margin-left: 4px; }
+.step-cost { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: #606266; }
+.sc-full { font-weight: 600; color: #303133; }
+.sc-tag { color: #409eff; font-weight: 400; margin-left: 4px; }
+.sc-perbox { color: #909399; }
+.sc-masked { color: #c0c4cc; font-style: italic; }
 </style>
