@@ -19,21 +19,34 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
 
     private static final int YIELD_SCALE = 4;
 
+    /**
+     * P1 分组键: 有 workProcessTaskId 用 "task-{id}" (操作员报工, 分组不变);
+     * 文员逐道录入 taskId=null → "ord-{processOrder}" 退化为按工序分组 (逐道拆分)。
+     * String 前缀命名空间避免 taskId 与 processOrder 数值碰撞。
+     */
+    private static String groupKey(ProductionReport r) {
+        return r.getWorkProcessTaskId() != null
+                ? "task-" + r.getWorkProcessTaskId()
+                : "ord-" + (r.getProcessOrder() == null ? 0 : r.getProcessOrder());
+    }
+
     @Override
     public List<StepYieldDTO> calculateSteps(List<ProductionReport> reports) {
-        // 按 workProcessTaskId 分组, 保持 processOrder 升序
-        Map<Long, List<ProductionReport>> byTask = new LinkedHashMap<>();
+        // P1: 按 workProcessTaskId 分组, 保持 processOrder 升序。
+        // 文员逐道录入 workProcessTaskId=null → 退化为按 processOrder 分组 (否则全批塌缩成 1 组:
+        // 出成率跨道 Σ 虚高 + 汇总页拿不到逐道 labor)。操作员报工有 taskId → 分组不变, 行为不变。
+        Map<String, List<ProductionReport>> byTask = new LinkedHashMap<>();
         reports.stream()
                 .sorted((a, b) -> {
                     int ao = a.getProcessOrder() == null ? 0 : a.getProcessOrder();
                     int bo = b.getProcessOrder() == null ? 0 : b.getProcessOrder();
                     return Integer.compare(ao, bo);
                 })
-                .forEach(r -> byTask.computeIfAbsent(r.getWorkProcessTaskId(), k -> new ArrayList<>()).add(r));
+                .forEach(r -> byTask.computeIfAbsent(groupKey(r), k -> new ArrayList<>()).add(r));
 
         List<StepYieldDTO> steps = new ArrayList<>();
         BigDecimal prevOutput = null;
-        for (Map.Entry<Long, List<ProductionReport>> e : byTask.entrySet()) {
+        for (Map.Entry<String, List<ProductionReport>> e : byTask.entrySet()) {
             List<ProductionReport> group = e.getValue();
             BigDecimal totalInput = BigDecimal.ZERO;
             BigDecimal totalOutput = BigDecimal.ZERO;

@@ -26,6 +26,34 @@ class YieldCalculationServiceImplTest {
                 .build();
     }
 
+    /** P1: 文员逐道录入报工 (workProcessTaskId=null), 仅靠 processOrder 区分工序。 */
+    private ProductionReport rptNullTask(int order, String in, String out) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(null).processOrder(order)
+                .inputQuantity(new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(new BigDecimal(out)).outputUnit("kg")
+                .build();
+    }
+
+    @Test
+    void p1_clerkNullTaskReports_splitByProcessOrder_notCollapsed() {
+        // 文员逐道录入 (taskId=null) 3 道 → 应按 processOrder 拆成 3 个 step (非塌缩成 1)
+        List<ProductionReport> reports = List.of(
+                rptNullTask(1, "320", "300"),   // 修油
+                rptNullTask(2, "300", "175"),   // 熟制
+                rptNullTask(3, "175", "175")    // 包装
+        );
+        List<StepYieldDTO> steps = svc.calculateSteps(reports);
+        assertThat(steps).as("文员 null-task 按 processOrder 拆 3 step, 非塌缩成 1").hasSize(3);
+
+        // 出成率端到端正确 (首投 320 → 末产 175 = 0.5469), 非塌缩前的跨道 Σ 虚高 (825/1095=0.75)
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getFirstStepInput()).isEqualByComparingTo("320");
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("175");
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.5469");
+    }
+
     @Test
     void cumulativeYield_matchesGoldStandard_0_3828() {
         // 猪舌简化链 (首投 998kg -> 末产 382.08kg, 累计 0.3828)
