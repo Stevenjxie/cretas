@@ -159,7 +159,7 @@ class ProcessSheetRowsTest {
         assertThat(draft.isMaterialized()).isFalse();
         assertThat(draft.getBatchId()).isNull();
 
-        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "xiuyou");
+        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(rows).hasSize(2);
 
@@ -201,7 +201,7 @@ class ProcessSheetRowsTest {
         // 保存一个 xiuyou 行，但查询 zhaoshui
         saveXiuyou("rows2-xiuyou", "100", "80");
 
-        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "zhaoshui");
+        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "zhaoshui", null);
 
         assertThat(rows).as("该工序无行时返回空列表").isEmpty();
     }
@@ -265,7 +265,7 @@ class ProcessSheetRowsTest {
         processSheetService.saveRow(otherFactory, otherPlanId, otherReq, operatorId);
 
         // Query FACTORY_ID only
-        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "xiuyou");
+        List<ProcessSheetRowView> rows = processSheetService.getRows(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getClientRowId())

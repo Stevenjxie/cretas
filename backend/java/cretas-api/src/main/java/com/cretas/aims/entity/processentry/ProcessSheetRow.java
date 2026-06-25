@@ -36,6 +36,17 @@ public class ProcessSheetRow extends BaseEntity {
     @Column(name = "process_code", nullable = false)
     private String processCode;
 
+    /**
+     * 链内唯一工序序号 (SP-F role-mode fix)。
+     *
+     * <p>role-mode 下多道普通工序可共享同一 archetype process_code (如 'chaoshui'),
+     * 故 process_code 不是唯一工序标识; process_order (产品工序链内唯一) 才是。
+     * getInventory/getRows 在 process_order 非空时用 (process_code, process_order) 双键过滤,
+     * 避免同 archetype 多工序库存/行碰撞。历史行由 V20261027_17 从 row_payload 回填。
+     */
+    @Column(name = "process_order")
+    private Integer processOrder;
+
     @Column(name = "client_row_id", nullable = false)
     private String clientRowId;
 

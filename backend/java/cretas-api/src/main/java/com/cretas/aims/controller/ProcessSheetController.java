@@ -54,29 +54,36 @@ public class ProcessSheetController {
      * <p>只读端点 — 权限 "production:read"，与 OrderCostBreakdownController / OrderYieldController
      * 等生产读端点一致 (比写端点 "production:read_write" 宽松一级，让只读角色也可访问)。
      *
-     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/inventory?process=xiuyou
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/inventory?process=chaoshui&processOrder=3
+     *
+     * <p>processOrder (可选): SP-F role-mode fix —— role-mode 下多道普通工序共享同一 archetype
+     * process_code (如 'chaoshui'), 传 processOrder (链内唯一) 隔离各道库存; 不传则 code-only 回退。
      */
     @RequirePermission({"production:read"})
     @GetMapping("/inventory")
     public ApiResponse<List<ProcessSheetInventoryItem>> getInventory(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
-            @RequestParam @NotBlank String process) {
-        return ApiResponse.success(service.getInventory(factoryId, planId, process));
+            @RequestParam @NotBlank String process,
+            @RequestParam(required = false) Integer processOrder) {
+        return ApiResponse.success(service.getInventory(factoryId, planId, process, processOrder));
     }
 
     /**
      * SP-F Task 2.2: 读回指定工序下已保存的行列表 (供前端电子表格重载)。
      *
-     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/rows?process=xiuyou
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/rows?process=chaoshui&processOrder=3
+     *
+     * <p>processOrder (可选): 同 inventory —— role-mode 下隔离同 archetype 多工序的行; 不传则 code-only 回退。
      */
     @RequirePermission({"production:read"})
     @GetMapping("/rows")
     public ApiResponse<List<ProcessSheetRowView>> getRows(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
-            @RequestParam @NotBlank String process) {
-        return ApiResponse.success(service.getRows(factoryId, planId, process));
+            @RequestParam @NotBlank String process,
+            @RequestParam(required = false) Integer processOrder) {
+        return ApiResponse.success(service.getRows(factoryId, planId, process, processOrder));
     }
 
     /**

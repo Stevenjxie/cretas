@@ -37,7 +37,16 @@ const emit = defineEmits<{
 // -------------------------------------------------------------------------
 // 工序链 — 动态从产品工序配置(ProductWorkProcess)解析 (G0)
 // -------------------------------------------------------------------------
+// SP-F role-mode fix: code(archetype) 不是唯一工序标识 —— role-mode 下多道普通工序
+// (修油/滚揉/焯水/去舌苔) 可全映射到同一 archetype code (如 'chaoshui')。用 order
+// (产品工序链内唯一) 作唯一 key, code 仅用于①查列定义 PROCESS_SHEET_CONFIG[code]
+// ②透传给后端作 process_code 列 + 双键过滤的 archetype 分量。
 type ProcEntry = { code: string; order: number; label: string };
+
+/** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
+function procKey(p: ProcEntry): string {
+  return String(p.order);
+}
 
 // ---- Role-first mapping (SP-G A): defaultCostCategory → archetype ----
 // When any process in a product's process list has a non-null defaultCostCategory,
@@ -72,10 +81,13 @@ const FALLBACK_PROCESSES: ProcEntry[] = [
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
 
-// upstream chain: 链中前一道有列定义的工序 (跳过未铺工序 → 折叠接线自动保持)
-const upstreamCodeOf = computed<Record<string, string | null>>(() => {
+// upstream chain: 链中前一道工序 (按 PROCESSES 顺序; 第一道 → null)。
+// SP-F role-mode fix: 键改用唯一 procKey (order), 不再用 code (会碰撞)。
+const upstreamKeyOf = computed<Record<string, string | null>>(() => {
   const map: Record<string, string | null> = {};
-  PROCESSES.value.forEach((p, i) => { map[p.code] = i > 0 ? PROCESSES.value[i - 1].code : null; });
+  PROCESSES.value.forEach((p, i) => {
+    map[procKey(p)] = i > 0 ? procKey(PROCESSES.value[i - 1]) : null;
+  });
   return map;
 });
 
@@ -127,10 +139,12 @@ async function resolveProcesses() {
 // -------------------------------------------------------------------------
 // State
 // -------------------------------------------------------------------------
-const activeTab = ref<string>(FALLBACK_PROCESSES[0].code);
+// SP-F role-mode fix: activeTab + 所有 per-process map 一律用唯一 procKey (order),
+// 不用 code —— 否则同 archetype 多工序 tab/库存/行/refs 全碰撞。
+const activeTab = ref<string>(procKey(FALLBACK_PROCESSES[0]));
 const loading = ref(false);
 
-// inventory/rows/refs per process: processCode → ... (动态填充, 键随 PROCESSES 变)
+// inventory/rows/refs per process: procKey(order) → ... (动态填充, 键随 PROCESSES 变)
 const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({});
 const initialRowsMap = ref<Record<string, ProcessSheetRowView[]>>({});
 const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable> | null>>({});
@@ -144,18 +158,20 @@ async function loadAll() {
   try {
     // G0: 先解析本产品工序链 (动态), 再加载各道库存/行
     await resolveProcesses();
-    if (!PROCESSES.value.some((p) => p.code === activeTab.value)) {
-      activeTab.value = PROCESSES.value[0]?.code ?? FALLBACK_PROCESSES[0].code;
+    if (!PROCESSES.value.some((p) => procKey(p) === activeTab.value)) {
+      activeTab.value = PROCESSES.value[0] ? procKey(PROCESSES.value[0]) : procKey(FALLBACK_PROCESSES[0]);
     }
     await Promise.all(
       PROCESSES.value.map(async (proc) => {
-        // load inventory (including upstream for dropdown purposes)
+        // load inventory (including upstream for dropdown purposes)。
+        // SP-F role-mode fix: 传 proc.order 让后端双键过滤, 隔离同 archetype 多工序;
+        // 结果按唯一 procKey 入 map (不用 proc.code, 会碰撞)。
         const [invResp, rowsResp] = await Promise.all([
-          getInventory(props.factoryId, props.planId, proc.code),
-          getRows(props.factoryId, props.planId, proc.code),
+          getInventory(props.factoryId, props.planId, proc.code, proc.order),
+          getRows(props.factoryId, props.planId, proc.code, proc.order),
         ]);
-        inventoryMap.value[proc.code] = invResp.data || [];
-        initialRowsMap.value[proc.code] = rowsResp.data || [];
+        inventoryMap.value[procKey(proc)] = invResp.data || [];
+        initialRowsMap.value[procKey(proc)] = rowsResp.data || [];
       })
     );
   } catch (e) {
@@ -170,28 +186,28 @@ onMounted(loadAll);
 // -------------------------------------------------------------------------
 // After a row is saved: refresh inventory of this process + active tab inventory table
 // -------------------------------------------------------------------------
-async function onRowSaved(processCode: string) {
-  // Refresh inventory for this process and all downstream processes
-  const toRefresh = PROCESSES.value.map((p) => p.code);
+async function onRowSaved(savedProc: ProcEntry) {
+  // Refresh inventory for ALL processes (a saved row can affect downstream dropdowns)。
+  // SP-F role-mode fix: 按唯一 procKey 刷新 + 传 order 双键过滤。
   await Promise.all(
-    toRefresh.map(async (code) => {
+    PROCESSES.value.map(async (p) => {
       try {
-        const resp = await getInventory(props.factoryId, props.planId, code);
-        inventoryMap.value[code] = resp.data || [];
+        const resp = await getInventory(props.factoryId, props.planId, p.code, p.order);
+        inventoryMap.value[procKey(p)] = resp.data || [];
       } catch {
         // ignore
       }
     })
   );
-  // Also trigger the InventoryTable component's refresh if in view
-  inventoryTableRefs.value[processCode]?.refresh?.();
+  // Also trigger the InventoryTable component's refresh if in view (keyed by procKey)
+  inventoryTableRefs.value[procKey(savedProc)]?.refresh?.();
 }
 
-// Helper: get upstream inventory items for a given process
-function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
-  const upCode = upstreamCodeOf.value[processCode];
-  if (!upCode) return [];
-  return inventoryMap.value[upCode] || [];
+// Helper: get upstream inventory items for a given process (keyed by unique procKey)
+function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
+  const upKey = upstreamKeyOf.value[procKey(proc)];
+  if (!upKey) return [];
+  return inventoryMap.value[upKey] || [];
 }
 </script>
 
@@ -221,11 +237,13 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
 
     <!-- Tabs -->
     <el-tabs v-model="activeTab" style="flex:1;overflow:hidden;display:flex;flex-direction:column" tab-position="top">
+      <!-- SP-F role-mode fix: tab :key/:name 用唯一 procKey(order), 不用 code (同 archetype 会碰撞);
+           per-process map 取值一律 procKey(proc); process-code 仍传 archetype 给列定义+后端。 -->
       <el-tab-pane
         v-for="proc in PROCESSES"
-        :key="proc.code"
+        :key="procKey(proc)"
         :label="proc.label"
-        :name="proc.code"
+        :name="procKey(proc)"
         style="height:100%;overflow-y:auto;padding:4px 0"
       >
         <!-- Vertical stack: data-entry table (full width) → 半成品库存 (full width below) -->
@@ -237,11 +255,11 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
             :process-code="proc.code"
             :process-order="proc.order"
             :product-type-id="productTypeId"
-            :upstream-items="upstreamItems(proc.code)"
-            :own-inventory-items="inventoryMap[proc.code]"
-            :initial-rows="initialRowsMap[proc.code]"
+            :upstream-items="upstreamItems(proc)"
+            :own-inventory-items="inventoryMap[procKey(proc)]"
+            :initial-rows="initialRowsMap[procKey(proc)]"
             :view-mode="viewMode"
-            @row-saved="onRowSaved(proc.code)"
+            @row-saved="onRowSaved(proc)"
           />
 
           <!-- 半成品库存 — full width below the grid -->
@@ -250,10 +268,11 @@ function upstreamItems(processCode: string): ProcessSheetInventoryItem[] {
               {{ proc.label }} 半成品库存
             </div>
             <InventoryTable
-              :ref="(el: any) => inventoryTableRefs[proc.code] = el"
+              :ref="(el: any) => inventoryTableRefs[procKey(proc)] = el"
               :factory-id="factoryId"
               :plan-id="planId"
               :process-code="proc.code"
+              :process-order="proc.order"
             />
           </div>
         </div>

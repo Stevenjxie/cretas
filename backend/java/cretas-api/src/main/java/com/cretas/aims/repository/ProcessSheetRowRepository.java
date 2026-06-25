@@ -20,6 +20,17 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
     List<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessCode(
             String factoryId, String planId, String processCode);
 
+    /**
+     * SP-F role-mode fix: 双键查询 (factory, plan, processCode, processOrder)。
+     *
+     * <p>role-mode 下多道普通工序共享同一 archetype processCode (如 'chaoshui'),
+     * 仅 processCode 过滤会把多道的行/库存混在一起。加 processOrder (链内唯一) 后
+     * 每道分别隔离。仅当 processOrder 非空时由 service 调用; 旧客户端不传 processOrder
+     * 时回退到 code-only finder (向后兼容)。
+     */
+    List<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
+            String factoryId, String planId, String processCode, Integer processOrder);
+
     List<ProcessSheetRow> findByFactoryIdAndPlanId(
             String factoryId, String planId);
 
