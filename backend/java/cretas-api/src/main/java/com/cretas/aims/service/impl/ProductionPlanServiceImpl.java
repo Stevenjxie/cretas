@@ -1584,6 +1584,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /** 数量差异预填阈值: |计划-实际|/计划 ≤ 5% 视为"无显著差异", 自动填原因; 超则留空让人选。 */
     private static final BigDecimal SETTLEMENT_VARIANCE_THRESHOLD = new BigDecimal("0.05");
 
+    /**
+     * A修: 判断计划是否跨单位 (末道产出单位 份/盒 ≠ 原计划单位 kg)。
+     *
+     * <p>completeProduction 把批次 unit 覆盖成产出单位时, 原计划单位写入 {@code plannedUnit}
+     * (见 {@link ProductionBatch#getPlannedUnit()})。任一非取消批次 plannedUnit != unit 即跨单位 →
+     * {@code actualFinished(份)} 与 {@code plan.plannedQuantity(kg)} 不可直接比较, 跳过超产判断,
+     * 镜像 batch 层 efficiency=null 的诚实留空做法。</p>
+     */
+    private boolean isCrossUnitPlan(List<ProductionBatch> batches) {
+        if (batches == null) {
+            return false;
+        }
+        return batches.stream()
+                .filter(b -> b != null && b.getStatus() != ProductionBatchStatus.CANCELLED)
+                .anyMatch(b -> b.getPlannedUnit() != null && b.getUnit() != null
+                        && !b.getPlannedUnit().equals(b.getUnit()));
+    }
+
     @Override
     @Transactional(readOnly = true)
     public ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId) {
@@ -1644,8 +1662,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 5) quantityVarianceReason ← 阈值内自动填, 超阈值留空 + issue
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
+        // A修: 末道产出单位(份/盒) 可能 ≠ plan.plannedQuantity 单位(kg) → 跨单位裸比误报超产.
+        boolean crossUnit = isCrossUnitPlan(batches);
         String varianceReason = null;
-        if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+        if (crossUnit) {
+            // 跨单位: 不比较产量差异, 不臆造; 留 INFO 让人核对实际产量 (非 BLOCKER, 不阻一键确认).
+            issues.add(infoIssue("QUANTITY_UNIT_CROSS",
+                    "末道产出单位与计划单位不同(如 份/盒 vs kg), 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    "quantityVarianceReason"));
+        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal diff = actualFinished.subtract(planned).abs();
             BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
             if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
@@ -2133,7 +2158,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        if (planned.compareTo(BigDecimal.ZERO) > 0
+        // A修: 跨单位(份/盒 vs kg)时产量裸比无意义, 跳过超产校验 (prefill 已留 INFO 让人核对).
+        boolean crossUnit = isCrossUnitPlan(
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()));
+        if (!crossUnit
+                && planned.compareTo(BigDecimal.ZERO) > 0
                 && finished.compareTo(planned) > 0
                 && isBlank(request.getQuantityVarianceReason())) {
             throw new BusinessException(409, "实际产量超过计划产量, 必须选择超产原因")
