@@ -1,6 +1,7 @@
 package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.CostReconcileResult;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
@@ -29,6 +30,15 @@ public interface YieldReportService {
      * 批次不存在 → {@code BusinessException(404)}.
      */
     BatchYieldDTO getBatchYieldByNumber(String factoryId, String batchNumber);
+
+    /**
+     * 段2(B): 按批次号做辅料标准单价双锚点投料-产出对账 (抓多投/误差)。
+     *
+     * <p>标准侧 = (产品×工序) 配置的 {@code standardYieldRate}, 实际侧 = 逐道报工 (复用 {@link #getYield})。
+     * 标准应投 ÷ 实际投料 → 多投信号; 辅料标准/实际/多投; 阈值工厂可配 (默认 5%)。只读, 不动库存。
+     * 批次不存在 → {@code BusinessException(404)}; 无报工 → 诚实空态 (issue NO_ACTUAL_STEPS)。</p>
+     */
+    CostReconcileResult getBatchReconcile(String factoryId, String batchNumber);
 
     /**
      * 单元 F (F006 REQ-21 "以订单的模式呈现…分订单分产品分工序"):

@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.CostReconcileResult;
 import com.cretas.aims.dto.yield.FinishedBatchSummaryDTO;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -78,6 +79,24 @@ public class ProductionBatchCostController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
         return ApiResponse.success(orderCostBreakdownService.computeByBatch(factoryId, batchNumber, maskPrice));
+    }
+
+    /**
+     * 段2(B): 按批次号辅料标准单价双锚点投料-产出对账 (抓多投/误差).
+     *
+     * <p>路径: GET /api/mobile/{factoryId}/production/batches/{batchNumber}/aux-cost-reconcile
+     * <p>标准侧 = (产品×工序) 配置 standardYieldRate/auxUnitPrice/auxBasis; 实际侧 = 逐道报工。
+     * 标准应投 vs 实际投料 → 多投; 辅料 标准/实际/多投; 阈值工厂可配 (默认 5%)。<b>只读, 不动库存。</b>
+     * <p>多租户安全: factory guard (path {factoryId}) + service findByFactoryIdAndBatchNumber。
+     * 成本字段 @PriceSensitive — 无 procurement:price:view 自动脱敏 (与 cost-breakdown 一致)。
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/{batchNumber}/aux-cost-reconcile")
+    @Operation(summary = "按批次号辅料标准单价双锚点投料-产出对账 (抓多投/误差)")
+    public ApiResponse<CostReconcileResult> getBatchAuxCostReconcile(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "批次号, 如 PB-20260622-XXXXX") String batchNumber) {
+        return ApiResponse.success(yieldReportService.getBatchReconcile(factoryId, batchNumber));
     }
 
     /**

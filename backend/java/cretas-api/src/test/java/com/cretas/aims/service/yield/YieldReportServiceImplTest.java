@@ -113,7 +113,7 @@ class YieldReportServiceImplTest {
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService,
-                pwpAssigneeRepository, productWorkProcessRepository);
+                pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService());
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -3753,7 +3753,8 @@ class YieldReportServiceImplTest {
                 reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo,
-                wipInventoryService, pwpAssigneeRepository, productWorkProcessRepository);
+                wipInventoryService, pwpAssigneeRepository, productWorkProcessRepository,
+                new com.cretas.aims.service.yield.CostReconcileService());
         ReflectionTestUtils.setField(svcWithValidator, "backdateWindowValidator", validator);
 
         MaterialInputRequest req = new MaterialInputRequest();

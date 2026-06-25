@@ -244,6 +244,9 @@ public class FactorySettingsDTO {
 
         @Schema(description = "出成率报工超收容差 (0.30 = 30%), null 时默认 30%", example = "0.30")
         private java.math.BigDecimal yieldOverReceiptTolerance;
+
+        @Schema(description = "辅料/投料多投对账预警阈值 (0.05 = 5%), null 时默认 5%", example = "0.05")
+        private java.math.BigDecimal auxVarianceThreshold;
     }
 
     /**

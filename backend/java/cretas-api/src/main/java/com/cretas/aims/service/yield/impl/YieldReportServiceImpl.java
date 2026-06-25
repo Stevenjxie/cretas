@@ -2,6 +2,7 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.CostReconcileResult;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
 import com.cretas.aims.dto.yield.MaterialInputRequest;
 import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
@@ -9,6 +10,8 @@ import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -33,6 +36,7 @@ import com.cretas.aims.repository.recipe.ProcessMaterialRecipeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.wip.WipInventoryService;
+import com.cretas.aims.service.yield.CostReconcileService;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.utils.ReportAuthGuard;
@@ -91,6 +95,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final WipInventoryService wipInventoryService;
     private final ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
     private final com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
+    private final CostReconcileService costReconcileService;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
@@ -1324,6 +1329,55 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
                 .orElseThrow(() -> new BusinessException(404, "生产批次不存在: " + batchNumber));
         return getYield(factoryId, batch.getId());
+    }
+
+    /**
+     * 段2(B): 按批次号辅料标准单价双锚点投料-产出对账。
+     *
+     * <p>标准侧 = (产品×工序) 配置的 standardYieldRate/auxUnitPrice/auxBasis;
+     * 实际侧 = {@link #getYield} 逐道报工步骤 (已 enrich 工序名 + 跨单位折算)。
+     * 折算系数取批次产品的 gramsPerUnit; 份数 N = 末道产出量; 阈值工厂可配 (默认 5%)。只读。</p>
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public CostReconcileResult getBatchReconcile(String factoryId, String batchNumber) {
+        ProductionBatch batch = productionBatchRepository
+                .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .orElseThrow(() -> new BusinessException(404, "生产批次不存在: " + batchNumber));
+        BatchYieldDTO yield = getYield(factoryId, batch.getId());   // steps: 工序名 + 逐道实际投入/产出
+
+        List<ProductWorkProcess> configs = batch.getProductTypeId() == null
+                ? java.util.Collections.emptyList()
+                : productWorkProcessRepository
+                        .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, batch.getProductTypeId());
+
+        BigDecimal gramsPerUnit = batch.getProductTypeId() == null ? null
+                : productTypeRepository.findByIdAndFactoryId(batch.getProductTypeId(), factoryId)
+                        .map(ProductType::getGramsPerUnit).orElse(null);
+
+        BigDecimal portionCount = yield.getLastStepOutput();   // N = 末道产出数量 (份/盒/kg)
+        BigDecimal threshold = resolveAuxThreshold(factoryId);
+
+        return costReconcileService.reconcile(yield.getSteps(), configs, gramsPerUnit, portionCount, threshold);
+    }
+
+    /**
+     * 段2(B): 读取工厂级辅料多投预警阈值 (镜像 {@link #getToleranceForFactory})。
+     * ProductionSettings.auxVarianceThreshold (JSON, 无需迁移); 无配置/解析失败 → 默认 5%。
+     */
+    private BigDecimal resolveAuxThreshold(String factoryId) {
+        try {
+            String json = factorySettingsRepo.findProductionSettingsByFactoryId(factoryId);
+            if (json == null) return CostReconcileService.DEFAULT_THRESHOLD;
+            FactorySettingsDTO.ProductionSettings ps =
+                    objectMapper.readValue(json, FactorySettingsDTO.ProductionSettings.class);
+            return ps.getAuxVarianceThreshold() != null
+                    ? ps.getAuxVarianceThreshold()
+                    : CostReconcileService.DEFAULT_THRESHOLD;
+        } catch (Exception e) {
+            log.warn("[辅料对账] 读取阈值设置失败, 使用默认 5%", e);
+            return CostReconcileService.DEFAULT_THRESHOLD;
+        }
     }
 
     /**
