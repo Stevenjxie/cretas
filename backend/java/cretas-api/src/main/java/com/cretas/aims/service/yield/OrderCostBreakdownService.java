@@ -286,12 +286,16 @@ public class OrderCostBreakdownService {
         if (upstreamBatchId == null) {
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
         }
-        if (!visited.add(upstreamBatchId)) {   // 环检测: 该上游批次已在当前回溯路径
-            log.warn("[M67CostBreakdown] 检测到批次谱系环 (factory={}, upstreamBatchId={}) — 截断防重复计成本", factoryId, upstreamBatchId);
+        if (!visited.add(upstreamBatchId)) {   // 真环检测: 该上游批次已在**当前回溯路径**(祖先链)
+            log.warn("[M67CostBreakdown] 检测到批次谱系环 (factory={}, upstreamBatchId={}) — 截断防无限递归", factoryId, upstreamBatchId);
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
         }
+        // ★ 严格审计 2026-06-25: visited 改**路径作用域**(出栈即移除) —— 否则 diamond(同上游被多个兄弟
+        // 消耗, 如 焯水1-1+焯水1-2 都源自滚揉1-1) 第二条路径被误判为环 → 回退 own(WIP含labor) → labor
+        // 漏进 raw。双计由下方 consumedQty/upstreamQty 分摊防, 不靠 visited, 故移除合法 diamond 不双计。
         List<MaterialConsumption> up = consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId);
         if (up.isEmpty()) {
+            visited.remove(upstreamBatchId);
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
         }
         BigDecimal sum = BigDecimal.ZERO;
@@ -312,6 +316,7 @@ public class OrderCostBreakdownService {
         // 混批 feed=0 的源被全额计入 → 原料虚高 (Edge G: g1投50+g2投0, 原料应 466 实得 932)。
         // 仅对**显式 0** 生效; consumedQty 为 null (缺量旧数据) 仍走下方 legacy 兜底, 零回归。
         if (c.getQuantity() != null && c.getQuantity().signum() == 0) {
+            visited.remove(upstreamBatchId);
             return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.valueOf(maxChildDepth)};
         }
         BigDecimal legacy = sum.signum() > 0 ? sum : own;
@@ -324,6 +329,7 @@ public class OrderCostBreakdownService {
         } else {
             apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
         }
+        visited.remove(upstreamBatchId);   // 路径作用域出栈 (见上方 diamond 注释)
         return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
     }
 
@@ -379,6 +385,9 @@ public class OrderCostBreakdownService {
             byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
+        // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游
+        // (否则第二条路径被误判为环 → 返 zero → diamond 下 labor/调料/副产少计; 镜像 traceCost)。
+        visited.remove(upstreamBatchId);
         return new BigDecimal[]{labor, seasoning, byproductCredit};
     }
 
