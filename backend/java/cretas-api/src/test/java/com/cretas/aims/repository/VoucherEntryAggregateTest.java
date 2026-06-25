@@ -15,10 +15,15 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
+import com.cretas.aims.dto.finance.SubjectAggregateRow;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -152,6 +157,70 @@ class VoucherEntryAggregateTest {
         assertEquals("mat-1", rows.get(0).getAuxiliaryEntityId());
         assertEquals(1L, rows.get(0).getEntryCount());
         assertEquals(0, new BigDecimal("500").compareTo(rows.get(0).getNetBalance()));
+    }
+
+    @Test
+    @DisplayName("aggregateBySubjectPosted 排除 PL_CLOSING 凭证 — 结转/红冲镜像不污染再结转聚合 (reopen→reclose 双计 bug)")
+    void aggregateBySubjectPosted_excludesClosingVouchers() {
+        final String F = "F-PLX";
+        final LocalDate may = LocalDate.of(2026, 5, 15);
+        final LocalDate end = LocalDate.of(2026, 5, 31);
+
+        // 业务凭证: 收入 6001 贷 1000, 成本 6401 借 600 → 净利 400, 必须参与结转聚合
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.POSTED, may,
+                line("6001", "0", "1000"), line("1122", "1000", "0"));
+        persistPnl(F, VoucherType.EXPENSE, VoucherStatus.POSTED, may,
+                line("6401", "600", "0"), line("1122", "0", "600"));
+
+        // 结转凭证 (PL_CLOSING POSTED): 借6001 1000 / 贷6401 600 / 贷4103 400 — 结转产物, 必须排除
+        persistPnl(F, VoucherType.PL_CLOSING, VoucherStatus.POSTED, end,
+                line("6001", "1000", "0"), line("6401", "0", "600"), line("4103", "0", "400"));
+        // 红冲镜像 (PL_CLOSING POSTED, reopen 反结账产生): 借贷互换 — 也必须排除
+        // 旧 bug: 原结转被置 REVERSED 排除, 但镜像 POSTED 被计入 → 再结转双计 6xxx
+        persistPnl(F, VoucherType.PL_CLOSING, VoucherStatus.POSTED, end,
+                line("6001", "0", "1000"), line("6401", "600", "0"), line("4103", "400", "0"));
+
+        List<SubjectAggregateRow> rows = entryRepo.aggregateBySubjectPosted(
+                F, LocalDate.of(2026, 5, 1), end);
+        Map<String, SubjectAggregateRow> byCode = rows.stream()
+                .collect(Collectors.toMap(SubjectAggregateRow::getSubjectCode, r -> r));
+
+        // 6001 只剩业务收入 (贷 1000, 借 0) — 不含结转的借1000/镜像的贷1000
+        assertNotNull(byCode.get("6001"), "6001 应有业务行");
+        assertEquals(0, new BigDecimal("1000").compareTo(byCode.get("6001").getTotalCredit()), "6001 业务贷=1000");
+        assertEquals(0, BigDecimal.ZERO.compareTo(byCode.get("6001").getTotalDebit()), "6001 不含结转/红冲借方");
+        // 6401 只剩业务成本 (借 600, 贷 0)
+        assertEquals(0, new BigDecimal("600").compareTo(byCode.get("6401").getTotalDebit()), "6401 业务借=600");
+        assertEquals(0, BigDecimal.ZERO.compareTo(byCode.get("6401").getTotalCredit()), "6401 不含结转贷方");
+        // 4103 只存在于被排除的结转凭证 → 聚合不应出现
+        assertFalse(byCode.containsKey("4103"), "4103 仅在结转凭证里, 排除后聚合不应出现");
+    }
+
+    private String[] line(String code, String debit, String credit) {
+        return new String[]{code, debit, credit};
+    }
+
+    /** 持久化一个 P&L 凭证 (指定 voucherType/status + 任意分录行). */
+    @SafeVarargs
+    private void persistPnl(String factoryId, VoucherType type, VoucherStatus status,
+            LocalDate date, String[]... lines) {
+        Voucher v = makeVoucher(factoryId, date, status);
+        v.setVoucherType(type);
+        List<VoucherEntry> entries = new ArrayList<>();
+        BigDecimal td = BigDecimal.ZERO, tc = BigDecimal.ZERO;
+        int ln = 1;
+        for (String[] l : lines) {
+            BigDecimal d = new BigDecimal(l[1]);
+            BigDecimal c = new BigDecimal(l[2]);
+            entries.add(VoucherEntry.builder().lineNo(ln++).subjectCode(l[0]).subjectName(l[0])
+                    .debit(d).credit(c).voucher(v).build());
+            td = td.add(d);
+            tc = tc.add(c);
+        }
+        v.setTotalDebit(td);
+        v.setTotalCredit(tc);
+        v.setEntries(entries);
+        voucherRepo.saveAndFlush(v);
     }
 
     // ==================== Helpers ====================
