@@ -416,7 +416,7 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                    "  AND b.is_trial = false " +
                    "  AND b.deleted_at IS NULL " +
                    "  AND b.end_time >= :since " +
-                   "  AND (:productTypeId IS NULL OR b.product_type_id = :productTypeId) " +
+                   "  AND (CAST(:productTypeId AS text) IS NULL OR b.product_type_id = :productTypeId) " +
                    "ORDER BY b.end_time DESC NULLS LAST",
            nativeQuery = true)
     java.util.List<Object[]> findFinishedBatchSummaries(
