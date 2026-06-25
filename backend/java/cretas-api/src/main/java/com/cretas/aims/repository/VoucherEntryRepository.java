@@ -101,8 +101,21 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("endDate") LocalDate endDate);
 
     /**
-     * 结转损益专用: 仅 POSTED 凭证按 subjectCode 聚合 [startDate, endDate].
-     * 与 {@link #aggregateBySubject} 区别: 排除 DRAFT/REVERSED (只算已过账), 防把草稿计进结转。
+     * 结转损益专用: 仅 POSTED 业务凭证按 subjectCode 聚合 [startDate, endDate].
+     *
+     * <p>与 {@link #aggregateBySubject} 区别:
+     * <ul>
+     *   <li>排除 DRAFT/REVERSED (只算已过账), 防把草稿计进结转;</li>
+     *   <li><b>排除 PL_CLOSING 类型凭证</b> (结转凭证本身 + 其红冲镜像) —— 结转聚合的是
+     *       <b>业务</b>损益发生额, 结转产物不算业务活动。</li>
+     * </ul>
+     *
+     * <p><b>为什么必须排除 PL_CLOSING</b> (2026-06-25 reopen→reclose 双计 bug):
+     * 反结账 (reversePeriodClosing → voidVoucher) 把原结转凭证置 REVERSED (本查询已排除),
+     * 但同时 POST 一张借贷互换的红冲镜像 (voucherType 仍是 PL_CLOSING, status=POSTED)。
+     * 若不排 PL_CLOSING, 该镜像的 6xxx 分录会漏进聚合 → 再结转时把 6xxx 双计
+     * (原结转 REVERSED 被排, 镜像 POSTED 被计, 二者不相抵)。排除 PL_CLOSING 后,
+     * 聚合永远只看业务 6xxx, reopen→reclose 任意多次都得正确净额。
      */
     @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
             "  e.subjectCode, MAX(e.subjectName), " +
@@ -112,6 +125,7 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             "WHERE v.factoryId = :factoryId " +
             "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
             "  AND v.status = com.cretas.aims.entity.enums.VoucherStatus.POSTED " +
+            "  AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
             "  AND v.deletedAt IS NULL " +
             "GROUP BY e.subjectCode " +
             "ORDER BY e.subjectCode ASC")
