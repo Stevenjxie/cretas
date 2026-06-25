@@ -328,9 +328,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     @Override
     public List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId,
-                                                        String processCode) {
-        List<ProcessSheetRow> rows = rowRepo
-                .findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
+                                                        String processCode, Integer processOrder) {
+        // SP-F role-mode fix: processOrder 非空 → 双键过滤 (隔离同 archetype 多工序);
+        // null → code-only 回退 (向后兼容旧客户端)。
+        List<ProcessSheetRow> rows = processOrder != null
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
+                        factoryId, planId, processCode, processOrder)
+                : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
 
         List<ProcessSheetInventoryItem> result = new ArrayList<>();
         for (ProcessSheetRow row : rows) {
@@ -383,9 +387,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * row_payload 经 objectMapper 反序列化为 ProcessSheetRowRequest, 序列化失败 → 500。
      */
     @Override
-    public List<ProcessSheetRowView> getRows(String factoryId, String planId, String processCode) {
-        return rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode)
-                .stream()
+    public List<ProcessSheetRowView> getRows(String factoryId, String planId,
+                                             String processCode, Integer processOrder) {
+        // SP-F role-mode fix: processOrder 非空 → 双键过滤; null → code-only 回退 (向后兼容)。
+        List<ProcessSheetRow> rows = processOrder != null
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
+                        factoryId, planId, processCode, processOrder)
+                : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
+        return rows.stream()
                 .map(row -> new ProcessSheetRowView(
                         row.getClientRowId(),
                         row.getBatchNumber(),
@@ -673,6 +682,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         row.setFactoryId(factoryId);
         row.setPlanId(planId);
         row.setProcessCode(req.getProcessCode());
+        // SP-F role-mode fix: 持久化链内唯一 processOrder, 供双键 (code, order) 查询。
+        row.setProcessOrder(req.getProcessOrder());
         row.setClientRowId(req.getClientRowId());
         row.setBatchId(batchId);
         row.setBatchNumber(batchNumber);
@@ -695,6 +706,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                   Long batchId, String batchNumber, String rowStatus) {
         existing.setBatchId(batchId);
         existing.setBatchNumber(batchNumber);
+        // SP-F role-mode fix: re-save 时同步 processOrder (回填历史 DRAFT 行 / 防御性保持一致)。
+        existing.setProcessOrder(req.getProcessOrder());
         existing.setRowPayload(serializePayload(req));
         existing.setRowStatus(rowStatus);
         rowRepo.save(existing);

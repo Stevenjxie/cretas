@@ -186,29 +186,36 @@ export function deleteRow(
 /**
  * 读半成品库存 (经 process_sheet_rows join, 范围限本计划).
  * 仅列 materialized && remaining>0 的 WIP 批供上游下拉.
- * GET /{factoryId}/production-plans/{planId}/process-sheet/inventory?process={process}
+ * GET /{factoryId}/production-plans/{planId}/process-sheet/inventory?process={process}[&processOrder={n}]
+ *
+ * processOrder (可选): SP-F role-mode fix — role-mode 下多道普通工序共享同一 archetype
+ * process_code (如 'chaoshui'), 传 processOrder (链内唯一) 隔离各道库存; 不传则后端 code-only 回退.
  */
 export function getInventory(
   factoryId: string,
   planId: string,
   process: string,
+  processOrder?: number,
 ): Promise<ApiResponse<ProcessSheetInventoryItem[]>> {
   return get<ProcessSheetInventoryItem[]>(`${sheetBase(factoryId, planId)}/inventory`, {
-    params: { process },
+    params: { process, ...(processOrder !== undefined ? { processOrder } : {}) },
   });
 }
 
 /**
  * 回读本工序所有已存行 (用于重开/编辑时恢复表格状态).
- * GET /{factoryId}/production-plans/{planId}/process-sheet/rows?process={process}
+ * GET /{factoryId}/production-plans/{planId}/process-sheet/rows?process={process}[&processOrder={n}]
+ *
+ * processOrder (可选): 同 getInventory — role-mode 下隔离同 archetype 多工序的行; 不传则后端 code-only 回退.
  */
 export function getRows(
   factoryId: string,
   planId: string,
   process: string,
+  processOrder?: number,
 ): Promise<ApiResponse<ProcessSheetRowView[]>> {
   return get<ProcessSheetRowView[]>(`${sheetBase(factoryId, planId)}/rows`, {
-    params: { process },
+    params: { process, ...(processOrder !== undefined ? { processOrder } : {}) },
   });
 }
 

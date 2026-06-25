@@ -201,7 +201,7 @@ class ProcessSheetInventoryTest {
         saveZhaoshui("inv1-zhaoshui", xiuyou.getBatchNumber(), "30", "28");
 
         List<ProcessSheetInventoryItem> inventory =
-                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou");
+                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(inventory).hasSize(1);
         ProcessSheetInventoryItem item = inventory.get(0);
@@ -222,7 +222,7 @@ class ProcessSheetInventoryTest {
         saveZhaoshui("inv2-zhaoshui", xiuyou.getBatchNumber(), "80", "70");
 
         List<ProcessSheetInventoryItem> inventory =
-                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou");
+                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(inventory).hasSize(1);
         ProcessSheetInventoryItem item = inventory.get(0);
@@ -240,7 +240,7 @@ class ProcessSheetInventoryTest {
         assertThat(draft.getBatchId()).as("output=0 → DRAFT, no batchId").isNull();
 
         List<ProcessSheetInventoryItem> inventory =
-                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou");
+                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(inventory).as("DRAFT 行不出现在库存列表").isEmpty();
     }
@@ -308,7 +308,7 @@ class ProcessSheetInventoryTest {
 
         // Query planId — should only see this plan's row
         List<ProcessSheetInventoryItem> inventory =
-                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou");
+                processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", null);
 
         assertThat(inventory).hasSize(1);
         assertThat(inventory.get(0).getBatchNumber())

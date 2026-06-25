@@ -6,6 +6,8 @@ const props = defineProps<{
   factoryId: string;
   planId: string;
   processCode: string;
+  /** SP-F role-mode fix: 链内唯一工序序号; 传给后端双键过滤, 隔离同 archetype 多工序库存。 */
+  processOrder?: number;
 }>();
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
@@ -15,7 +17,7 @@ async function refresh() {
   if (!props.factoryId || !props.planId) return;
   loading.value = true;
   try {
-    const resp = await getInventory(props.factoryId, props.planId, props.processCode);
+    const resp = await getInventory(props.factoryId, props.planId, props.processCode, props.processOrder);
     rows.value = resp.data || [];
   } catch {
     rows.value = [];
