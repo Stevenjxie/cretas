@@ -44,19 +44,19 @@ function updateSeg(idx: number, field: keyof LaborSegment, value: string | numbe
     <el-table :data="modelValue" size="small" border style="width:100%">
       <el-table-column label="开始时间" width="130">
         <template #default="{ row, $index }">
-          <el-time-select
+          <el-time-picker
             :model-value="row.startTime"
-            @update:model-value="(v: string) => updateSeg($index, 'startTime', v)"
-            start="00:00" step="00:15" end="23:45" placeholder="开始" style="width:115px"
+            @update:model-value="(v: string) => updateSeg($index, 'startTime', v || '')"
+            format="HH:mm" value-format="HH:mm" placeholder="开始" style="width:115px"
           />
         </template>
       </el-table-column>
       <el-table-column label="结束时间" width="130">
         <template #default="{ row, $index }">
-          <el-time-select
+          <el-time-picker
             :model-value="row.endTime"
-            @update:model-value="(v: string) => updateSeg($index, 'endTime', v)"
-            start="00:00" step="00:15" end="23:45" placeholder="结束" style="width:115px"
+            @update:model-value="(v: string) => updateSeg($index, 'endTime', v || '')"
+            format="HH:mm" value-format="HH:mm" placeholder="结束" style="width:115px"
           />
         </template>
       </el-table-column>

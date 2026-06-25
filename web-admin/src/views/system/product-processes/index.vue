@@ -738,6 +738,9 @@ const costDialogVisible = ref(false);
 const costSaving = ref(false);
 const costEditId = ref<number | null>(null);
 const costEditName = ref('');
+// 后端 update() @Valid 要求 productTypeId + workProcessId 非空 (即便 partial update), 否则 400。
+const costEditProductTypeId = ref('');
+const costEditWorkProcessId = ref('');
 const costForm = ref<{
   defaultCostCategory: string; auxAllocMethod: string;
   packagingTemplate: Array<{ name: string; cost: number | null }>;
@@ -752,6 +755,8 @@ const costForm = ref<{
 function openCostConfig(item: any) {
   costEditId.value = item.id;
   costEditName.value = item.processName || item.workProcessId;
+  costEditProductTypeId.value = item.productTypeId || selectedProductId.value || '';
+  costEditWorkProcessId.value = item.workProcessId || '';
   costForm.value = {
     defaultCostCategory: item.defaultCostCategory || '',
     auxAllocMethod: item.auxAllocMethod || '',
@@ -775,7 +780,12 @@ async function saveCostConfig() {
       .filter((r) => r.name && r.cost != null)
       .map((r) => ({ name: r.name, cost: Number(r.cost) }));
     // 仅传成本字段做 partial update (后端 null=no-change; packagingTemplate 传 [] 可清空)
-    const payload: Record<string, unknown> = { packagingTemplate: pkg };
+    // 后端 update() @Valid 强制 productTypeId + workProcessId 非空 → 必带 (identity, update 不改值)。
+    const payload: Record<string, unknown> = {
+      packagingTemplate: pkg,
+      productTypeId: costEditProductTypeId.value,
+      workProcessId: costEditWorkProcessId.value,
+    };
     if (costForm.value.defaultCostCategory) payload.defaultCostCategory = costForm.value.defaultCostCategory;
     if (costForm.value.auxAllocMethod) payload.auxAllocMethod = costForm.value.auxAllocMethod;
     // 段2(B): 标准率 UI 百分比 → 小数 (0.85); 辅料单价/基准
