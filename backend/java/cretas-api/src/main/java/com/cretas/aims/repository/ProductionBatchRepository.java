@@ -393,4 +393,34 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("startDate") java.time.LocalDateTime startDate,
             @Param("endDate") java.time.LocalDateTime endDate,
             @Param("productTypeId") String productTypeId);
+
+    /**
+     * 成品出厂核算 — 已完工批次列表 (含关联订单 ID).
+     *
+     * <p>LEFT JOIN production_plans 获取 source_order_id (存货生产无关联订单时为 null).
+     * 只返回非试产 (is_trial=false)、非文员WIP (batchType &lt;&gt; 'CLERK_WIP') 的正式批次.
+     * 可选按 productTypeId 过滤.
+     *
+     * @param factoryId     工厂 ID (租户隔离)
+     * @param since         完工时间下限 (endTime &gt;= since)
+     * @param productTypeId 产品类型过滤 (null = 全部)
+     * @return Object[] 每行: [batchNumber, orderId, productName, plannedQty, actualQty, unit, endTime, totalCost]
+     */
+    @Query(value = "SELECT b.batch_number, pp.source_order_id, b.product_name, " +
+                   "       b.planned_quantity, b.actual_quantity, b.unit, b.end_time, b.total_cost " +
+                   "FROM production_batches b " +
+                   "LEFT JOIN production_plans pp ON pp.id::text = b.production_plan_id " +
+                   "WHERE b.factory_id = :factoryId " +
+                   "  AND b.status = 'COMPLETED' " +
+                   "  AND b.batch_type <> 'CLERK_WIP' " +
+                   "  AND b.is_trial = false " +
+                   "  AND b.deleted_at IS NULL " +
+                   "  AND b.end_time >= :since " +
+                   "  AND (:productTypeId IS NULL OR b.product_type_id = :productTypeId) " +
+                   "ORDER BY b.end_time DESC NULLS LAST",
+           nativeQuery = true)
+    java.util.List<Object[]> findFinishedBatchSummaries(
+            @Param("factoryId") String factoryId,
+            @Param("since") java.time.LocalDateTime since,
+            @Param("productTypeId") String productTypeId);
 }

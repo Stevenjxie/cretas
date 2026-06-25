@@ -11,14 +11,38 @@
         <h2>成品出厂核算</h2>
         <p class="sub">全链路出成率 · 单盒成本 · 人工成本 (按订单批次)</p>
       </div>
-      <div class="ctrls">
-        <el-radio-group v-model="queryMode" size="small">
-          <el-radio-button value="order">订单号</el-radio-button>
-          <el-radio-button value="batch">批次号</el-radio-button>
-        </el-radio-group>
-        <el-input v-if="queryMode === 'order'" v-model="orderId" placeholder="订单号" style="width: 220px" />
-        <el-input v-else v-model="batchNumber" placeholder="批次号" style="width: 220px" />
-        <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      <div class="ctrls-wrap">
+        <el-select
+          v-model="selectedBatchKey"
+          filterable
+          clearable
+          placeholder="选择完工批次 (快速填入)"
+          style="width: 320px"
+          :loading="batchesLoading"
+          @change="onBatchSelect"
+        >
+          <el-option
+            v-for="b in finishedBatches"
+            :key="b.batchNumber"
+            :value="b.batchNumber"
+            :label="`${b.productName ?? ''} · ${b.batchNumber}`"
+          >
+            <div class="batch-opt">
+              <span class="batch-name">{{ b.productName ?? '未知品名' }} <span :class="b.settled ? 'badge-settled' : 'badge-unsettled'">{{ b.settled ? '已核算' : '未核算' }}</span></span>
+              <span class="batch-no">批次: {{ b.batchNumber }}<template v-if="b.orderId"> · 订单: {{ b.orderId }}</template></span>
+              <span class="batch-time">完工: {{ fmtTime(b.completedAt) }}</span>
+            </div>
+          </el-option>
+        </el-select>
+        <div class="ctrls">
+          <el-radio-group v-model="queryMode" size="small">
+            <el-radio-button value="order">订单号</el-radio-button>
+            <el-radio-button value="batch">批次号</el-radio-button>
+          </el-radio-group>
+          <el-input v-if="queryMode === 'order'" v-model="orderId" placeholder="订单号" style="width: 220px" />
+          <el-input v-else v-model="batchNumber" placeholder="批次号" style="width: 220px" />
+          <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        </div>
       </div>
     </div>
 
@@ -178,6 +202,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
+import { useRoute } from 'vue-router';
 import echarts from '@/utils/echarts';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
@@ -218,12 +243,73 @@ interface BatchYieldDTO {
   complete?: boolean; inProgress?: boolean;
 }
 
+/** Phase 1: 完工批次下拉数据源 */
+interface FinishedBatch {
+  batchNumber: string;
+  orderId?: string;
+  productName?: string;
+  plannedQty?: number;
+  actualQty?: number;
+  unit?: string;
+  completedAt?: string;
+  settled?: boolean;
+}
+
+const route = useRoute();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const queryMode = ref<'order' | 'batch'>('order');
 const orderId = ref('');
 const batchNumber = ref('');
 const gramsPerBox = ref(100);
+
+/** Phase 1: 完工批次下拉 */
+const finishedBatches = ref<FinishedBatch[]>([]);
+const selectedBatchKey = ref<string | null>(null);
+const batchesLoading = ref(false);
+
+function fmtTime(iso?: string): string {
+  if (!iso) return '—';
+  // "2026-06-25T10:30:00" → "06-25 10:30"
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}-${dd} ${hh}:${min}`;
+}
+
+async function loadFinishedBatches() {
+  const fid = factoryId.value;
+  if (!fid) return;
+  batchesLoading.value = true;
+  try {
+    const resp = await get<FinishedBatch[]>(`/${fid}/production/batches/finished`);
+    if (resp.success && Array.isArray(resp.data)) {
+      finishedBatches.value = resp.data;
+    }
+  } catch {
+    // 列表加载失败不影响手动输入
+  } finally {
+    batchesLoading.value = false;
+  }
+}
+
+function onBatchSelect(bn: string | null) {
+  if (!bn) return;
+  const match = finishedBatches.value.find((b) => b.batchNumber === bn);
+  if (match) {
+    batchNumber.value = match.batchNumber;
+    if (match.orderId) {
+      queryMode.value = 'order';
+      orderId.value = match.orderId;
+    } else {
+      queryMode.value = 'batch';
+    }
+    load();
+  }
+}
 
 /** Map BatchYieldDTO (by-batch single-batch response) into YieldSummary (the shape the page renders). */
 function normalizeBatchYield(dto: BatchYieldDTO): YieldSummary {
@@ -503,7 +589,23 @@ async function load() {
 }
 
 const onResize = () => { chart?.resize(); mixChart?.resize(); };
-onMounted(() => { window.addEventListener('resize', onResize); load(); });
+onMounted(() => {
+  window.addEventListener('resize', onResize);
+  loadFinishedBatches();
+  const qOrderId = route.query.orderId as string | undefined;
+  const qBatchNumber = route.query.batchNumber as string | undefined;
+  if (qOrderId) {
+    queryMode.value = 'order';
+    orderId.value = qOrderId;
+    load();
+  } else if (qBatchNumber) {
+    queryMode.value = 'batch';
+    batchNumber.value = qBatchNumber;
+    load();
+  } else {
+    load();
+  }
+});
 onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.dispose(); mixChart?.dispose(); });
 </script>
 
@@ -562,4 +664,11 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .sc-tag { color: #409eff; font-weight: 400; margin-left: 4px; }
 .sc-perbox { color: #909399; }
 .sc-masked { color: #c0c4cc; font-style: italic; }
+.ctrls-wrap { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.batch-opt { display: flex; flex-direction: column; gap: 2px; }
+.batch-name { font-weight: 600; font-size: 14px; }
+.batch-no { font-size: 12px; color: #909399; }
+.batch-time { font-size: 12px; color: #909399; }
+.badge-settled { background: #f0f9eb; color: #529b2e; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+.badge-unsettled { background: #fef9f0; color: #b88230; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
 </style>

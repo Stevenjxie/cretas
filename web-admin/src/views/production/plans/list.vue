@@ -2162,6 +2162,14 @@ function handleAiFill(params: TableRow) {
               size="small"
               @click="safePrint('batching-sheet', factoryId, String(row.id), { fileName: `配料单_${row.planNumber || row.id}` })"
             >配料单</el-button>
+            <el-button
+              v-if="String(row.status || '').toUpperCase() === 'COMPLETED'"
+              type="primary"
+              link
+              size="small"
+              title="查看该批次的出成率与成本核算"
+              @click="router.push({ path: '/production-analytics/yield-cost', query: { orderId: row.sourceOrderId } })"
+            >看成本核算</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
