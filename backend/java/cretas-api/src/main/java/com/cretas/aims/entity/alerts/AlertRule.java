@@ -63,7 +63,7 @@ public class AlertRule extends BaseEntity {
     private String factoryId;
 
     /** 告警类型 — 决定 trigger 路由到哪套业务上下文检查. */
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = AlertTypeConverter.class)   // 容错: 未知 alert_type → null 跳过, 不阻断启动 (见 AlertTypeConverter)
     @Column(name = "alert_type", length = 50, nullable = false)
     private AlertType alertType;
 
