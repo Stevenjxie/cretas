@@ -91,6 +91,25 @@ public interface ProcessSheetService {
                                       String processCode, Integer processOrder);
 
     /**
+     * F006 双出成率: 计划级半成品库存卡 (跨工序汇总视图)。
+     *
+     * <p>返回该计划所有生产批次下的 SemiFinishedInventory 行, 按 processOrder 升序排列,
+     * 并填充 stepYieldRate (对上工序) 与 cumulativeYieldRate (对原料) 两个出成率字段。
+     *
+     * <p><b>stepYieldRate 算法</b>: 首道 = Σ该批次YIELD报工 inputQuantity (原料投入);
+     * 后续道 = 上一道 WIP 行的 producedQuantity. 产出 / 投入 × 100, scale 4 HALF_UP.
+     * 投入 = 0 / 无数据 → null (诚实, 不造假).
+     *
+     * <p><b>cumulativeYieldRate 算法</b>: 本道产出折算首道单位后 / 首道原料投入 × 100.
+     * 跨单位时用 ProductType.gramsPerUnit (g/份) 折算 kg; 无折算系数 → null.
+     *
+     * @param factoryId 工厂 ID (factory-scoped 🔒)
+     * @param planId    生产计划 ID
+     * @return 按 processOrder 升序排列的库存卡行列表 (含出成率)
+     */
+    List<ProcessSheetInventoryItem> getInventoryYieldCard(String factoryId, String planId);
+
+    /**
      * SP-G P3: 读取某一行的操作记录时间线 (字段级 diff 审计)。
      *
      * <p>按 (factory, plan, processCode, clientRowId) 定位某一行的全部变更，按创建时间倒序

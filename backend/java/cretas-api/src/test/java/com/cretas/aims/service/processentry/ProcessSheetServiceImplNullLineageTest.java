@@ -9,10 +9,14 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -57,6 +61,11 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private ProductionReportRepository reportRepo;
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private ProcessSheetRowChangeLogRepository changeLogRepo;
+    // F006 双出成率 扩展依赖 (测试中不使用，但 @RequiredArgsConstructor 构造器需要)
+    @Mock private SemiFinishedInventoryRepository wipRepo;
+    @Mock private WorkProcessTaskRepository taskRepo;
+    @Mock private WorkProcessRepository processRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
 
     @Test
     @DisplayName("3: 上游 WIP materialTypeId 为 null + 无原料行 → 400 (不物化)")
@@ -64,7 +73,7 @@ class ProcessSheetServiceImplNullLineageTest {
         ProcessSheetServiceImpl service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
-                new ObjectMapper());
+                new ObjectMapper(), wipRepo, taskRepo, processRepo, productTypeRepo);
 
         // plan belongs to factory
         ProductionPlan plan = new ProductionPlan();

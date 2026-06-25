@@ -87,6 +87,21 @@ public class ProcessSheetController {
     }
 
     /**
+     * F006 双出成率: 计划级半成品库存卡 (跨工序汇总视图, 含 stepYieldRate / cumulativeYieldRate)。
+     *
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/inventory/yield-card
+     *
+     * <p>无需 ?process= 参数 — 返回该计划所有工序的 WIP 行, 按 processOrder 升序。
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/inventory/yield-card")
+    public ApiResponse<List<ProcessSheetInventoryItem>> getInventoryYieldCard(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId) {
+        return ApiResponse.success(service.getInventoryYieldCard(factoryId, planId));
+    }
+
+    /**
      * SP-G P3: 读取某一行的操作记录时间线 (行级 diff 审计)。
      *
      * <p>按 (factory, plan, processCode, clientRowId) 定位行的全部变更, 时间倒序 (最新在前)。

@@ -106,6 +106,9 @@ export interface ProcessSheetRowResult {
 /**
  * 半成品库存项 (mirrors ProcessSheetInventoryItem Java DTO).
  * 由后端经 process_sheet_rows join 派生, 供上游下拉 + 库存子表.
+ *
+ * getInventory (per-process) 只填基础 6 字段; getInventoryYieldCard (plan-wide)
+ * 额外填充双出成率扩展字段 (processOrder / processName / unit / stepYieldRate / cumulativeYieldRate).
  */
 export interface ProcessSheetInventoryItem {
   batchNumber: string;
@@ -114,6 +117,31 @@ export interface ProcessSheetInventoryItem {
   remaining: number;
   status: 'ACTIVE' | 'DEPLETED';
   unitPrice: number;
+  // F006 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null)
+  /** 链内工序序号 */
+  processOrder?: number | null;
+  /** 工序名称 */
+  processName?: string | null;
+  /** 本道产出单位 */
+  unit?: string | null;
+  /** 对上工序出成率 (%) = 本道产出 / 本道投入 × 100; null = 无投入数据或除数为0 */
+  stepYieldRate?: number | null;
+  /** 对原料累计出成率 (%) = 本道产出(折算首道单位) / 首道投入 × 100; null = 跨单位无折算系数 */
+  cumulativeYieldRate?: number | null;
+}
+
+/**
+ * F006 双出成率: 计划级半成品库存卡 (所有工序汇总视图).
+ * GET /{factoryId}/production-plans/{planId}/process-sheet/inventory/yield-card
+ *
+ * 注意: 路径不含 ?process= 参数 — 返回该计划所有工序的 WIP 行, 按 processOrder 升序.
+ * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
+ */
+export function getInventoryYieldCard(
+  factoryId: string,
+  planId: string,
+): Promise<ApiResponse<ProcessSheetInventoryItem[]>> {
+  return get<ProcessSheetInventoryItem[]>(`${sheetBase(factoryId, planId)}/inventory/yield-card`);
 }
 
 /**
