@@ -98,12 +98,16 @@ const upstreamKeyOf = computed<Record<string, string | null>>(() => {
  *
  * 1. Role mode (SP-G A): 若本产品任意工序有非 null 的 defaultCostCategory,
  *    则对每道工序用 ROLE_TO_ARCHETYPE[defaultCostCategory] 映射; 未登记的
- *    角色回退 'chaoshui' (通用加工步骤).
+ *    角色回退 'chaoshui' (通用加工步骤). Role mode 所有 code 均有列定义 → 不过滤。
  *
  * 2. Name-keyword fallback: 产品所有工序均无 defaultCostCategory 时,
- *    按工序名关键词子串匹配 (原 G0 逻辑, 零回归).
+ *    按工序名关键词子串匹配. 未匹配工序不再丢弃 (Bug A 修), 改按位置默认:
+ *      - 排序后 index 0 (首道) → 'xiuyou' (原料领料入口)
+ *      - 其余 → 'chaoshui' (通用加工步骤)
+ *    理由: 只有首道是领料 (消耗原料); 其余工序即使名字像 "修油" (xiuyou 关键词)
+ *    也应是普通工序, 因为不在首位。
  *
- * 两种模式均过滤掉无列定义的工序. 失败或 <1 道可录 → 回退切片.
+ * 失败或 <1 道可录 → 回退切片.
  */
 async function resolveProcesses() {
   try {
@@ -113,22 +117,37 @@ async function resolveProcesses() {
     // Determine if any process has a role configured (non-null defaultCostCategory)
     const hasRoles = items.some((it) => it.defaultCostCategory != null);
 
-    const mapped: ProcEntry[] = items
-      .map((it) => {
-        let code: string | undefined;
+    // Pre-sort by processOrder so position-based default (index 0 = 首道) is correct.
+    const sorted = [...items].sort((a, b) => a.processOrder - b.processOrder);
+
+    const mapped: ProcEntry[] = sorted
+      .map((it, idx) => {
+        let code: string;
         if (hasRoles) {
           // Role mode: map via defaultCostCategory; unknown roles fall back to 'chaoshui'
           code = it.defaultCostCategory != null
             ? (ROLE_TO_ARCHETYPE[it.defaultCostCategory] ?? 'chaoshui')
             : 'chaoshui';
         } else {
-          // Name-keyword fallback (original G0 logic)
-          code = nameToConfigCode(it.processName);
+          // Name-keyword fallback — no longer drops unmatched processes (Bug A fix).
+          // nameToConfigCode returns undefined for names like "去舌胎膜" / "拆包".
+          // Position-based default: 首道 → 'xiuyou', 其余 → 'chaoshui'.
+          // Additionally guard: even if keyword matches 'xiuyou' for a non-first process,
+          // treat it as 'chaoshui' to avoid assigning raw-material intake role to mid-chain steps.
+          const kw = nameToConfigCode(it.processName);
+          if (idx === 0) {
+            // 首道始终是 xiuyou (领料), regardless of keyword match
+            code = 'xiuyou';
+          } else {
+            // Non-first: use keyword match only if it is NOT xiuyou, else 'chaoshui'
+            code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';
+          }
         }
-        return { code: code as string, order: it.processOrder, label: it.processName };
+        return { code, order: it.processOrder, label: it.processName };
       })
-      .filter((p): p is ProcEntry => !!p.code && !!PROCESS_SHEET_CONFIG[p.code])
-      .sort((a, b) => a.order - b.order);
+      // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
+      // Filter only truly missing config entries (should not happen, but defensive).
+      .filter((p): p is ProcEntry => !!PROCESS_SHEET_CONFIG[p.code]);
 
     if (mapped.length >= 1) PROCESSES.value = mapped;
   } catch (e) {
