@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
@@ -1576,6 +1577,380 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
         return toSettlementResponse(settlement, warnings);
+    }
+
+    // ==================== Phase 2A: 报工→核算自动化 (核对结单预填) ====================
+
+    /** 数量差异预填阈值: |计划-实际|/计划 ≤ 5% 视为"无显著差异", 自动填原因; 超则留空让人选。 */
+    private static final BigDecimal SETTLEMENT_VARIANCE_THRESHOLD = new BigDecimal("0.05");
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        List<ProductionSettlementPrefillResponse.Issue> issues = new ArrayList<>();
+
+        // 1) 取本计划全部非取消批次的逐道 YIELD 报工 (按 processOrder, createdAt 已排序)
+        List<ProductionBatch> batches = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        List<ProductionReport> allReports = new ArrayList<>();
+        if (batches != null) {
+            for (ProductionBatch b : batches) {
+                if (b == null || b.getId() == null || b.getStatus() == ProductionBatchStatus.CANCELLED) {
+                    continue;
+                }
+                List<ProductionReport> reports = productionReportRepository
+                        .findYieldReportsByBatch(factoryId, b.getId());
+                if (reports != null) {
+                    allReports.addAll(reports);
+                }
+            }
+        }
+
+        if (allReports.isEmpty()) {
+            // 无任何报工 → 不臆造, 返回空预填 + 明确 issue 让人手填 (诚实空态)
+            issues.add(issue("NO_YIELD_REPORTS",
+                    "该计划暂无逐道报工记录, 无法自动预填; 请手工录入实际产量、领用与人效后结单。",
+                    "actualFinishedQuantity"));
+            return buildPrefillResponse(emptyPrefill(plan), issues);
+        }
+
+        // 2) actualFinishedQuantity ← 末道 (最大 processOrder) 报工的产出量汇总
+        BigDecimal actualFinished = deriveLastStepOutput(allReports);
+        if (actualFinished == null || actualFinished.compareTo(BigDecimal.ZERO) <= 0) {
+            issues.add(issue("FINISHED_OUTPUT_MISSING",
+                    "末道工序产出量缺失或为 0, 无法自动带入实际成品产量; 请在产出核对处手工填写。",
+                    "actualFinishedQuantity"));
+            actualFinished = null;
+        }
+
+        // 3) rawMaterialConsumptions ← 各道 materialBatchRefs 聚合 (按 materialBatchId 求和)
+        List<ProductionSettlementRequest.ConsumptionLine> rawLines =
+                deriveRawConsumptions(factoryId, plan, allReports, issues);
+
+        // 4) laborSegments ← 各道 laborSegments / 单一工时汇总
+        List<ProductionSettlementRequest.LaborSegment> laborSegments = deriveLaborSegments(allReports);
+        String laborDeferredReason = null;
+        if (laborSegments.isEmpty()) {
+            // derive 不出工时 → 不臆造分钟数, 留空 + 默认延期原因让人确认/补录 (满足 settle 校验)。
+            // INFO 级: 已给合法延期原因, 不阻塞提交; 仅提醒可补录。
+            laborDeferredReason = "工时稍后补录";
+            issues.add(infoIssue("LABOR_MISSING",
+                    "报工中未带可用工时段, 已默认置为“工时稍后补录”; 如需计入人效请手工补录工时/人数。",
+                    "laborSegments"));
+        }
+
+        // 5) quantityVarianceReason ← 阈值内自动填, 超阈值留空 + issue
+        BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
+        String varianceReason = null;
+        if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal diff = actualFinished.subtract(planned).abs();
+            BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
+            if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
+                varianceReason = "无显著差异";
+            } else if (actualFinished.compareTo(planned) > 0) {
+                // settle 校验: 实际 > 计划 必须有超产原因; 留空让人选 (对齐前端差异原因下拉)
+                issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
+                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
+                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        "quantityVarianceReason"));
+            }
+            // 实际 < 计划 且超阈值: settle 不强制原因, 不阻塞, 不标 issue (留空合法)
+        }
+
+        // 6) 材料领用为空 → 不能自动臆造原因, 标 issue (settle 要求至少一行或 materialVarianceReason)
+        if (rawLines.isEmpty()) {
+            issues.add(issue("MATERIAL_CONSUMPTION_EMPTY",
+                    "报工中未找到可用原料批次领用记录, 无法自动带入实际领用; 请手工录入原料/半成品领用, 或选择物料差异原因。",
+                    "rawMaterialConsumptions"));
+        }
+
+        // semiFinishedConsumptions: 默认留空。本计划 WIP 是计划内部自产自耗 (不进官方半成品领用扣减)。
+        // 仅"跨计划领用外部既有半成品库存"才填 — 该信息不在 YIELD 报工里可靠 derive, 故留空 + INFO 提示让人确认。
+        // INFO 级不阻塞一键确认 (绝大多数计划无跨计划半成品领用)。
+        issues.add(infoIssue("SEMI_FINISHED_CONFIRM",
+                "如本次生产领用了其他计划产出的外部半成品库存, 请在“半成品实际领用”处手工添加; 本计划内部自产自耗的中间品无需在此填写。",
+                "semiFinishedConsumptions"));
+
+        ProductionSettlementRequest prefill = ProductionSettlementRequest.builder()
+                .idempotencyKey(null) // 前端生成, 防呆 Rule 4 (打开 dialog 一次性生成)
+                .actualFinishedQuantity(actualFinished)
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .quantityUnit(null) // ProductionPlan 无单位字段; 前端提交时从行数据(unit/quantityUnit)补
+                .quantityVarianceReason(varianceReason)
+                .laborDeferredReason(laborDeferredReason)
+                .rawMaterialConsumptions(rawLines)
+                .semiFinishedConsumptions(new ArrayList<>())
+                .auxiliaryConsumptions(new ArrayList<>())
+                .laborSegments(laborSegments)
+                .build();
+
+        return buildPrefillResponse(prefill, issues);
+    }
+
+    /** 末道工序产出量: 取最大 processOrder 的全部报工, 汇总其 outputQuantity。 */
+    private BigDecimal deriveLastStepOutput(List<ProductionReport> reports) {
+        Integer maxOrder = null;
+        for (ProductionReport r : reports) {
+            Integer order = r.getProcessOrder();
+            if (order != null && (maxOrder == null || order > maxOrder)) {
+                maxOrder = maxOrder == null ? order : Math.max(maxOrder, order);
+            }
+        }
+        BigDecimal sum = null;
+        for (ProductionReport r : reports) {
+            // maxOrder 为 null (报工无 processOrder) → 退化为汇总全部 outputQuantity
+            boolean inLastStep = maxOrder == null
+                    ? true
+                    : maxOrder.equals(r.getProcessOrder());
+            if (!inLastStep) {
+                continue;
+            }
+            BigDecimal out = r.getOutputQuantity();
+            if (out != null) {
+                sum = sum == null ? out : sum.add(out);
+            }
+        }
+        return sum;
+    }
+
+    /**
+     * 从各道报工的 materialBatchRefs 聚合原料领用 (按 materialBatchId 求和)。
+     * <p>materialBatchRefs JSON 元素: {"materialBatchId": Long, "quantity": Number, "unit": String|null}。
+     * <p>每个 batch 必须仍存在 + 在原料仓 + 在当前 BOM + 可用量足够, 否则不臆造该行 (settle 会拒),
+     * 而是<b>留空 + 标 issue</b> 让人核对补录 (宁可少填不可瞎填)。
+     */
+    private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptions(
+            String factoryId, ProductionPlan plan, List<ProductionReport> reports,
+            List<ProductionSettlementPrefillResponse.Issue> issues) {
+        // 聚合: materialBatchId(String) → 累计数量
+        Map<String, BigDecimal> qtyByBatch = new LinkedHashMap<>();
+        Map<String, String> unitByBatch = new LinkedHashMap<>();
+        for (ProductionReport r : reports) {
+            List<Map<String, Object>> refs = r.getMaterialBatchRefs();
+            if (refs == null) {
+                continue;
+            }
+            for (Map<String, Object> ref : refs) {
+                if (ref == null) {
+                    continue;
+                }
+                String batchId = asString(ref.get("materialBatchId"));
+                BigDecimal qty = asBigDecimal(ref.get("quantity"));
+                if (isBlank(batchId) || qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                qtyByBatch.merge(batchId, qty, BigDecimal::add);
+                String unit = asString(ref.get("unit"));
+                if (unit != null && !unitByBatch.containsKey(batchId)) {
+                    unitByBatch.put(batchId, unit);
+                }
+            }
+        }
+
+        List<ProductionSettlementRequest.ConsumptionLine> lines = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> e : qtyByBatch.entrySet()) {
+            String batchId = e.getKey();
+            BigDecimal qty = e.getValue();
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+            if (batch == null) {
+                issues.add(issue("RAW_BATCH_NOT_FOUND",
+                        "报工记录引用的原料批次 " + batchId + " 已不存在, 未自动带入; 请手工核对该料领用。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+            if (available.compareTo(qty) < 0) {
+                // 报工领用量 > 当前可用 (批次已被部分消耗/标 USED_UP): 不臆造, 让人核对
+                issues.add(issue("RAW_BATCH_INSUFFICIENT",
+                        "原料批次 " + safeBatchRef(batch) + " 报工领用 " + stripTrailing(qty)
+                                + " 超过当前可用量 " + stripTrailing(available)
+                                + ", 未自动带入该行; 请人工核对实际领用批次/数量。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            // 不在此预填阶段强校验 BOM/原料仓 (settle 时会校验); 但若已知不在原料仓, 提示让人换批次
+            ProductionSettlementRequest.ConsumptionLine line = ProductionSettlementRequest.ConsumptionLine.builder()
+                    .materialBatchId(batchId)
+                    .materialTypeId(trimToNull(batch.getMaterialTypeId()))
+                    .batchNumber(trimToNull(batch.getBatchNumber()))
+                    .quantity(qty)
+                    .unit(firstNonBlank(unitByBatch.get(batchId), batch.getQuantityUnit()))
+                    .warehouseId(trimToNull(batch.getWarehouseId()))
+                    .note("自动带入自逐道报工")
+                    .build();
+            lines.add(line);
+        }
+        return lines;
+    }
+
+    /**
+     * 从各道报工聚合工时段。优先用 report.laborSegments (多时段×人数);
+     * 缺失时回退到单一 totalWorkMinutes + totalWorkers。derive 不出任何工时 → 返回空列表。
+     */
+    private List<ProductionSettlementRequest.LaborSegment> deriveLaborSegments(List<ProductionReport> reports) {
+        List<ProductionSettlementRequest.LaborSegment> segments = new ArrayList<>();
+        for (ProductionReport r : reports) {
+            String workType = trimToNull(r.getProcessCategory());
+            List<Map<String, Object>> raw = r.getLaborSegments();
+            boolean addedFromRaw = false;
+            if (raw != null) {
+                for (Map<String, Object> seg : raw) {
+                    if (seg == null) {
+                        continue;
+                    }
+                    Integer minutes = deriveSegmentMinutes(seg);
+                    if (minutes == null || minutes <= 0) {
+                        continue;
+                    }
+                    Integer headcount = asInteger(seg.get("headcount"));
+                    segments.add(ProductionSettlementRequest.LaborSegment.builder()
+                            .workType(firstNonBlank(workType, "逐道报工"))
+                            .minutes(minutes)
+                            .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                            .note(asString(seg.get("note")))
+                            .build());
+                    addedFromRaw = true;
+                }
+            }
+            if (!addedFromRaw) {
+                Integer minutes = r.getTotalWorkMinutes();
+                if (minutes != null && minutes > 0) {
+                    Integer headcount = r.getTotalWorkers();
+                    segments.add(ProductionSettlementRequest.LaborSegment.builder()
+                            .workType(firstNonBlank(workType, "逐道报工"))
+                            .minutes(minutes)
+                            .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                            .build());
+                }
+            }
+        }
+        return segments;
+    }
+
+    /** 工时段分钟: 直接读 minutes, 否则按 startTime/endTime 差值 (HH:mm) 计算。无法算 → null。 */
+    private Integer deriveSegmentMinutes(Map<String, Object> seg) {
+        Integer minutes = asInteger(seg.get("minutes"));
+        if (minutes != null) {
+            return minutes;
+        }
+        String start = asString(seg.get("startTime"));
+        String end = asString(seg.get("endTime"));
+        if (start == null || end == null) {
+            return null;
+        }
+        try {
+            java.time.LocalTime s = java.time.LocalTime.parse(start);
+            java.time.LocalTime e = java.time.LocalTime.parse(end);
+            long mins = java.time.Duration.between(s, e).toMinutes();
+            return mins > 0 ? (int) mins : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private ProductionSettlementRequest emptyPrefill(ProductionPlan plan) {
+        return ProductionSettlementRequest.builder()
+                .idempotencyKey(null)
+                .actualFinishedQuantity(null)
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .quantityUnit(null) // ProductionPlan 无单位字段; 前端提交时从行数据(unit/quantityUnit)补
+                .rawMaterialConsumptions(new ArrayList<>())
+                .semiFinishedConsumptions(new ArrayList<>())
+                .auxiliaryConsumptions(new ArrayList<>())
+                .laborSegments(new ArrayList<>())
+                .build();
+    }
+
+    private ProductionSettlementPrefillResponse buildPrefillResponse(
+            ProductionSettlementRequest prefill,
+            List<ProductionSettlementPrefillResponse.Issue> issues) {
+        // clean 只看 BLOCKER 级 — INFO 级提示 (如跨计划半成品确认) 不阻塞一键确认
+        boolean clean = issues.stream()
+                .noneMatch(i -> i.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER);
+        return ProductionSettlementPrefillResponse.builder()
+                .prefill(prefill)
+                .audit(ProductionSettlementPrefillResponse.Audit.builder()
+                        .clean(clean)
+                        .issues(issues)
+                        .build())
+                .build();
+    }
+
+    /** BLOCKER 级 issue (令 clean=false, 阻塞一键确认)。 */
+    private ProductionSettlementPrefillResponse.Issue issue(String code, String message, String field) {
+        return ProductionSettlementPrefillResponse.Issue.builder()
+                .code(code).message(message).field(field)
+                .severity(ProductionSettlementPrefillResponse.Severity.BLOCKER).build();
+    }
+
+    /** INFO 级 issue (仅提示, 不阻塞一键确认)。 */
+    private ProductionSettlementPrefillResponse.Issue infoIssue(String code, String message, String field) {
+        return ProductionSettlementPrefillResponse.Issue.builder()
+                .code(code).message(message).field(field)
+                .severity(ProductionSettlementPrefillResponse.Severity.INFO).build();
+    }
+
+    private String safeBatchRef(MaterialBatch batch) {
+        if (batch == null) {
+            return "?";
+        }
+        return !isBlank(batch.getBatchNumber()) ? batch.getBatchNumber() : String.valueOf(batch.getId());
+    }
+
+    private String firstNonBlank(String a, String b) {
+        if (!isBlank(a)) {
+            return a.trim();
+        }
+        return trimToNull(b);
+    }
+
+    private String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private BigDecimal asBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (value instanceof Number n) {
+            return new BigDecimal(n.toString());
+        }
+        try {
+            return new BigDecimal(String.valueOf(value).trim());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private Integer asInteger(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return (int) Math.round(Double.parseDouble(String.valueOf(value).trim()));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private String stripTrailing(BigDecimal value) {
+        if (value == null) {
+            return "0";
+        }
+        return value.stripTrailingZeros().toPlainString();
     }
 
     @Override

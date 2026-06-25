@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
@@ -475,6 +476,24 @@ public class ProductionPlanController {
 
         ProductionSettlementResponse response = productionPlanService.getProductionSettlement(factoryId, planId);
         return ApiResponse.success("生产结单状态", response);
+    }
+
+    /**
+     * Phase 2A (报工→核算自动化): 从逐道报工 derive 出核对结单预填表单 + 审计。
+     * 只读, 不扣库存; 前端核对结单 dialog 打开时调用, 一键带入省去二次手敲。
+     */
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/{planId}/settlement-prefill")
+    @Operation(summary = "核对结单自动预填", description = "六扇门: 从逐道报工 derive 预填表单+审计, 文员核对后一键确认(仍人工确认才扣库存)")
+    public ApiResponse<ProductionSettlementPrefillResponse> getSettlementPrefill(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId) {
+
+        ProductionSettlementPrefillResponse response = productionPlanService.getSettlementPrefill(factoryId, planId);
+        return ApiResponse.success("核对结单预填", response);
     }
 
     @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
