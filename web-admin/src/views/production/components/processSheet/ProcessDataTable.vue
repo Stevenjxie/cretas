@@ -549,7 +549,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
 async function handleSave(row: SheetRow) {
   const reason = saveDisabledReason(row);
   if (reason) {
-    ElMessage({ message: reason, type: 'warning', duration: 0, showClose: true });
+    // 防呆 4位一体: type:error (非 warning) + sticky (duration:0) + showClose + next-action 明示
+    ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
     return;
   }
   row.saving = true;
@@ -735,6 +736,10 @@ onMounted(() => {
                   <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次</span>
                 </template>
               </el-select>
+              <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
+              <span v-if="!row.rawBatchId" style="display:block;margin-top:3px;font-size:11px;color:#f56c6c">
+                请先选择原料批次，再保存此行
+              </span>
             </div>
             <div class="sp-card-field">
               <label class="sp-card-label">出库重量(kg)</label>
@@ -1048,6 +1053,10 @@ onMounted(() => {
                       <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次</span>
                     </template>
                   </el-select>
+                  <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
+                  <div v-if="!row.rawBatchId" style="margin-top:2px;font-size:11px;color:#f56c6c;white-space:nowrap">
+                    请先选择原料批次
+                  </div>
                 </td>
                 <td class="sp-td sp-td-num">
                   <el-input-number
