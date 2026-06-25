@@ -34,9 +34,9 @@ import static org.mockito.Mockito.when;
  * SP-C Task 2 — 工时单价从 factory_cost_settings 读取 (resolveLaborRate).
  *
  * <p>用例1: 配置 ¥30/工时 → rate=30, 无 warning.
- * <p>用例2: 未配置 → 回退 LABOR_RATE_DEFAULT(¥26) + warnings 含"工时单价未配置".
- * <p>用例3: laborHourlyRate 为 null → 也触发 fallback + warning.
- * <p>用例4: costSettingsRepository null (老测试 @InjectMocks 场景) → ¥26 不 NPE.
+ * <p>用例2: 未配置 → 回退 ¥0 + warnings 含"工时单价未配置".
+ * <p>用例3: laborHourlyRate 为 null → 也触发 fallback(¥0) + warning.
+ * <p>用例4: costSettingsRepository null (老测试 @InjectMocks 场景) → LABOR_RATE_DEFAULT(¥26) 不 NPE.
  * <p>用例5: 配置 ¥30, 60min×2人 → laborCost = 60 (集成回归: SP-B1 ¥26×2×1h = 52 不变).
  */
 @ExtendWith(MockitoExtension.class)
@@ -84,7 +84,7 @@ class LaborRateConfigTest {
     }
 
     @Test
-    @DisplayName("用例2: 未配置 → 回退 ¥26, warnings 含'工时单价未配置'")
+    @DisplayName("用例2: 未配置 → 回退 ¥0, warnings 含'工时单价未配置'")
     void unconfigured_fallsBackToDefault_withWarning() throws Exception {
         injectObjectMapper();
         when(costSettingsRepo.findByFactoryId(FACTORY)).thenReturn(Optional.empty());
@@ -92,12 +92,12 @@ class LaborRateConfigTest {
         List<String> warnings = new ArrayList<>();
         BigDecimal rate = service.resolveLaborRate(FACTORY, warnings);
 
-        assertThat(rate).isEqualByComparingTo("26");
+        assertThat(rate).isEqualByComparingTo("0");
         assertThat(warnings).anyMatch(w -> w.contains("工时单价未配置"));
     }
 
     @Test
-    @DisplayName("用例2b: laborHourlyRate 为 null → 也触发 fallback + warning")
+    @DisplayName("用例2b: laborHourlyRate 为 null → 也触发 fallback(¥0) + warning")
     void nullRate_fallsBackToDefault_withWarning() throws Exception {
         injectObjectMapper();
         FactoryCostSettings cfg = new FactoryCostSettings();
@@ -108,7 +108,7 @@ class LaborRateConfigTest {
         List<String> warnings = new ArrayList<>();
         BigDecimal rate = service.resolveLaborRate(FACTORY, warnings);
 
-        assertThat(rate).isEqualByComparingTo("26");
+        assertThat(rate).isEqualByComparingTo("0");
         assertThat(warnings).anyMatch(w -> w.contains("工时单价未配置"));
     }
 

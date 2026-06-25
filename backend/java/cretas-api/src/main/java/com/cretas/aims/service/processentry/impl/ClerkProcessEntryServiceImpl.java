@@ -762,8 +762,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 .map(FactoryCostSettings::getLaborHourlyRate)
                 .filter(r -> r != null && r.signum() > 0)
                 .orElseGet(() -> {
-                    warnings.add("工时单价未配置, 暂用默认 ¥" + LABOR_RATE_DEFAULT + "/工时, 请在工厂成本设置中配置");
-                    return LABOR_RATE_DEFAULT;
+                    warnings.add("工时单价未配置, 本批人工成本按0计入, 如需计入请在工厂成本设置中配置工时单价");
+                    return BigDecimal.ZERO;
                 });
     }
 
