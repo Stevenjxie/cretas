@@ -4,6 +4,7 @@ import lombok.*;
 import jakarta.persistence.*;
 import io.hypersistence.utils.hibernate.type.json.JsonType;
 import org.hibernate.annotations.Type;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +76,19 @@ public class ProductWorkProcess {
     /** 该工序辅料分摊方式 BY_OUTPUT/FIXED_RATIO; 报工未传 auxAllocMethod 时继承 (AUDIT-004) */
     @Column(name = "aux_alloc_method", length = 20)
     private String auxAllocMethod;
+
+    // ── 段2(B) 辅料标准单价双锚点投料-产出对账 (抓多投/误差) ──────────────────────
+    /** 标准出成率 (配方率, 小数 0.85=85%); 投料-产出对账基准 (实际报工率 vs 标准 → 抓多投/误差) */
+    @Column(name = "standard_yield_rate", precision = 8, scale = 4)
+    private BigDecimal standardYieldRate;
+
+    /** 辅料标准单价 (元/kg); 离线按配方算好, 非实时 BOM; 未配=null 视为 0 不崩 */
+    @Column(name = "aux_unit_price", precision = 12, scale = 4)
+    private BigDecimal auxUnitPrice;
+
+    /** 元/kg 乘哪侧 kg: INPUT|OUTPUT (保水工序 output>input 必须显式) */
+    @Column(name = "aux_basis", length = 10)
+    private String auxBasis;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
