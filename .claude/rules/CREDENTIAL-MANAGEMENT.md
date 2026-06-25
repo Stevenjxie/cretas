@@ -10,10 +10,10 @@
 
 | 变量 | 用途 | 示例 |
 |------|------|------|
-| `DB_PASSWORD` | 主数据库 (cretas_db) 密码 | `cretas123` |
-| `SMARTBI_DB_PASSWORD` | SmartBI 数据库 (smartbi_db) 密码 | `smartbi_secure_password_2025` |
+| `DB_PASSWORD` | 主数据库 (cretas_db) 密码 | 见 `db-credentials.md` (gitignored) |
+| `SMARTBI_DB_PASSWORD` | SmartBI 数据库 (smartbi_db) 密码 | 见 `db-credentials.md` (gitignored) |
 | `JWT_SECRET` | JWT 签名密钥 | 随机长字符串 |
-| `IFLYTEK_APPID` | 讯飞语音 AppID | `f1017f5d` |
+| `IFLYTEK_APPID` | 讯飞语音 AppID | 见 `db-credentials.md` (gitignored) |
 | `IFLYTEK_API_KEY` | 讯飞语音 API Key | - |
 | `IFLYTEK_API_SECRET` | 讯飞语音 API Secret | - |
 | `ALIBABA_ACCESSKEY_ID` | 阿里云 OSS AccessKey | - |
@@ -23,10 +23,10 @@
 
 | 变量 | 值 |
 |------|-----|
-| `DB_PASSWORD` | `cretas_pass` |
-| `POSTGRES_SMARTBI_PASSWORD` | `smartbi_secure_password_2025` |
+| `DB_PASSWORD` | 见 `db-credentials.md` (gitignored) |
+| `POSTGRES_SMARTBI_PASSWORD` | 见 `db-credentials.md` (gitignored) |
 
-**注意**: `smartbi_secure_password_2025` 是 smartbi_db (test) 和 smartbi_prod_db (prod) 的统一密码。
+**注意**: SmartBI 统一密码同时用于 smartbi_db (test) 和 smartbi_prod_db (prod)。真值见 `db-credentials.md` (gitignored, 本地+服务器可见)。
 来源: 服务器 `/www/wwwroot/cretas/.env.prod`。旧值 `smartbi_pass` 已废弃 (2026-04-25 修正)。
 
 ### Python 服务

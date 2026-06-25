@@ -19,7 +19,7 @@ import httpx
 from PIL import Image
 from pathlib import Path
 
-API_KEY = "sk-e02592efaa6246d2b113a0ef8edaca4a"
+API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 MODEL_FAST = "qwen-vl-plus-latest"    # Level 1 快扫

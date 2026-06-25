@@ -5,7 +5,7 @@
 # ⚠️  COST-SAFETY NOTICE (2026-06-11 billing incident):
 #   All model codes in this script MUST be on the respective account's free allowlist.
 #   See: reference_dashscope_free_model_allowlist in project memory / ACTIVE.md
-#   AK rotation: 2026-06-11 (A: LTAI5tH5D4iAWka5XAHN88bo, B: LTAI5t6VXdoVgEzSn3jVyRBo)
+#   AK rotation: 2026-06-11 (AccessKey IDs 见 .claude/rules/aliyun-credentials.md, 不入 git)
 #   FREE replacement for qwen3-max-*/qwen-max/qwen-plus: qwen3.7-max-2026-06-08
 #   FREE VL replacement: qwen3-vl-plus-2025-12-19
 
