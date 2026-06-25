@@ -1471,24 +1471,47 @@ public class YieldReportServiceImpl implements YieldReportService {
                 if (name != null) processNameByTask.put(tid, name);
             });
         }
+        // 双出成率: 从 BatchYieldDTO steps 按 workProcessTaskId 匹配 stepYieldRate / cumulativeYieldRate。
+        // getYield 已含 standardGramsPerUnit 折算 + calculateBatchYield 二次 pass 填 cumulativeYieldRate。
+        // 查不到 step → null (诚实, 不臆造)。失败不影响 WIP 列表主功能。
+        Map<Long, StepYieldDTO> stepByTaskId = new HashMap<>();
+        try {
+            BatchYieldDTO batchYieldForRates = getYield(factoryId, batchId);
+            if (batchYieldForRates != null && batchYieldForRates.getSteps() != null) {
+                for (StepYieldDTO step : batchYieldForRates.getSteps()) {
+                    if (step.getWorkProcessTaskId() != null) {
+                        stepByTaskId.put(step.getWorkProcessTaskId(), step);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("listWip: getYield failed for batchId={}, dual yield rates will be null: {}",
+                    batchId, ex.getMessage());
+        }
+
         return wips.stream()
                 .sorted((a, b) -> {
                     int ao = a.getProcessOrder() == null ? Integer.MAX_VALUE : a.getProcessOrder();
                     int bo = b.getProcessOrder() == null ? Integer.MAX_VALUE : b.getProcessOrder();
                     return Integer.compare(ao, bo);
                 })
-                .map(w -> WipRowDTO.builder()
-                        .intermediateBatchNo(w.getIntermediateBatchNo())
-                        .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
-                        .processOrder(w.getProcessOrder())
-                        .processName(processNameByTask.get(w.getSourceWorkProcessTaskId()))
-                        .productTypeId(w.getProductTypeId())
-                        .producedQuantity(w.getProducedQuantity())
-                        .consumedQuantity(w.getConsumedQuantity())
-                        .availableQuantity(w.getAvailableQuantity())
-                        .unit(w.getUnit())
-                        .status(w.getStatus())
-                        .build())
+                .map(w -> {
+                    StepYieldDTO step = stepByTaskId.get(w.getSourceWorkProcessTaskId());
+                    return WipRowDTO.builder()
+                            .intermediateBatchNo(w.getIntermediateBatchNo())
+                            .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
+                            .processOrder(w.getProcessOrder())
+                            .processName(processNameByTask.get(w.getSourceWorkProcessTaskId()))
+                            .productTypeId(w.getProductTypeId())
+                            .producedQuantity(w.getProducedQuantity())
+                            .consumedQuantity(w.getConsumedQuantity())
+                            .availableQuantity(w.getAvailableQuantity())
+                            .unit(w.getUnit())
+                            .status(w.getStatus())
+                            .stepYieldRate(step != null ? step.getYieldRate() : null)
+                            .cumulativeYieldRate(step != null ? step.getCumulativeYieldRate() : null)
+                            .build();
+                })
                 .collect(Collectors.toList());
     }
 

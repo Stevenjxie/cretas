@@ -1214,6 +1214,17 @@ function goToReversalList() {
                 </span>
               </template>
             </el-table-column>
+            <!-- 段1: 双出成率 — 对上工序 / 对原料 (单位不可比 → "—", 诚实留空) -->
+            <el-table-column label="对上工序" width="110" align="right">
+              <template #default="{ row }">
+                {{ row.stepYieldRate != null ? (Number(row.stepYieldRate) * 100).toFixed(1) + '%' : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="对原料" width="110" align="right">
+              <template #default="{ row }">
+                {{ row.cumulativeYieldRate != null ? (Number(row.cumulativeYieldRate) * 100).toFixed(1) + '%' : '—' }}
+              </template>
+            </el-table-column>
             <el-table-column label="状态" width="100" align="center">
               <template #default="{ row }">
                 <el-tag :type="getWipStatusType(row.status)" size="small">{{ getWipStatusText(row.status) }}</el-tag>

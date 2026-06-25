@@ -29,6 +29,12 @@ public class StepYieldDTO {
     private BigDecimal carryover;        // 上道产出 − 本道投入 (>0 结转)
     /** A7 越界告警: null=未配区间/在区间内; 否则 "BELOW_MIN"/"ABOVE_MAX" */
     private String yieldAlert;
+    /**
+     * 对原料累计出成率 = 本道产出(折首道单位) / 首道投入量 × 100 (小数形式, 如 0.8000 = 80%)。
+     * 跨单位且无 standardGramsPerUnit 折算系数时为 null (不臆造)。
+     * 首道 processOrder 最小的道 step, 其两个率相等 (stepYieldRate == cumulativeYieldRate)。
+     */
+    private BigDecimal cumulativeYieldRate;
     /** P1-3 (G4): Σ 本道各次报工工时(分钟); 全 null → null (B3 效率指标用) */
     private Integer totalWorkMinutes;
     /** P1-3 (G4): Σ 本道各次报工人数; 全 null → null (本道人次, 单道通常≈实际人数) */

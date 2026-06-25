@@ -655,4 +655,99 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getTotalCost()).isEqualByComparingTo("3200.00");  // = 材料 only
         assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.5400");  // 270/500
     }
+
+    // ── 段1: 双出成率 (F006 需求) ─────────────────────────────────────────────
+
+    /**
+     * 线性 3-step 链: 每道与上道单位相同 (kg→kg→kg→kg)。
+     * 首投 100kg → 道1产 90 → 道2产 80 → 道3产 70。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("段1: 线性链 stepYieldRate + cumulativeYieldRate (3道 kg→kg)")
+    void dualYield_linearChain_sameUnit_correctRates() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "100", "kg", "90", "kg"),
+                rpt(2, 2, "90",  "kg", "80", "kg"),
+                rpt(3, 3, "80",  "kg", "70", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        assertThat(dto.getSteps()).hasSize(3);
+
+        java.util.List<com.cretas.aims.dto.yield.StepYieldDTO> steps = dto.getSteps().stream()
+                .sorted(java.util.Comparator.comparingInt(com.cretas.aims.dto.yield.StepYieldDTO::getProcessOrder))
+                .collect(java.util.stream.Collectors.toList());
+
+        // stepYieldRate (对上工序)
+        assertThat(steps.get(0).getYieldRate()).isEqualByComparingTo("0.9000");
+        assertThat(steps.get(1).getYieldRate()).isEqualByComparingTo("0.8889");
+        assertThat(steps.get(2).getYieldRate()).isEqualByComparingTo("0.8750");
+
+        // cumulativeYieldRate (对原料 firstInput=100)
+        assertThat(steps.get(0).getCumulativeYieldRate()).isEqualByComparingTo("0.9000");
+        assertThat(steps.get(1).getCumulativeYieldRate()).isEqualByComparingTo("0.8000");
+        assertThat(steps.get(2).getCumulativeYieldRate()).isEqualByComparingTo("0.7000");
+    }
+
+    /** 首道两率相等规则: 首道 stepYieldRate == cumulativeYieldRate。 */
+    @Test
+    @org.junit.jupiter.api.DisplayName("段1: 首道 stepYieldRate == cumulativeYieldRate")
+    void dualYield_firstStep_bothRatesEqual() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "90", "kg", "80", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        com.cretas.aims.dto.yield.StepYieldDTO step = dto.getSteps().get(0);
+        assertThat(step.getYieldRate()).isNotNull();
+        assertThat(step.getCumulativeYieldRate()).isNotNull();
+        assertThat(step.getYieldRate()).isEqualByComparingTo(step.getCumulativeYieldRate());
+    }
+
+    /** 跨单位 + 无折算系数 → 两率均 null (不臆造)。 */
+    @Test
+    @org.junit.jupiter.api.DisplayName("段1: 跨单位无 gramsPerUnit → 两率均 null")
+    void dualYield_crossUnit_noGramsPerUnit_bothRatesNull() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "100", "kg", "500", "盒")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        com.cretas.aims.dto.yield.StepYieldDTO step = dto.getSteps().get(0);
+        assertThat(step.getYieldRate()).isNull();
+        assertThat(step.getCumulativeYieldRate()).isNull();
+    }
+
+    /** firstInput ≤ 0 → cumulativeYieldRate 全道 null (防除零)。 */
+    @Test
+    @org.junit.jupiter.api.DisplayName("段1: firstInput=0 → cumulativeYieldRate 全道 null")
+    void dualYield_zeroFirstInput_cumulativeIsNull() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "0", "kg", "80", "kg"),
+                rpt(2, 2, "80", "kg", "70", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        for (com.cretas.aims.dto.yield.StepYieldDTO step : dto.getSteps()) {
+            assertThat(step.getCumulativeYieldRate())
+                    .as("firstInput=0 → null, processOrder=" + step.getProcessOrder())
+                    .isNull();
+        }
+    }
+
+    /**
+     * F006 验证案例: 道1=腌制 100kg→90kg, 道2=焯水 90kg→80kg。
+     * 焯水道: 对上工序 = 80/90 = 0.8889; 对原料 = 80/100 = 0.8000。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("段1: F006 焯水道 — 对上工序=88.9%, 对原料=80%")
+    void dualYield_f006_scaldingStep_validation() {
+        List<ProductionReport> reports = List.of(
+                rpt(1, 1, "100", "kg", "90", "kg"),
+                rpt(2, 2, "90",  "kg", "80", "kg")
+        );
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+        java.util.List<com.cretas.aims.dto.yield.StepYieldDTO> steps = dto.getSteps().stream()
+                .sorted(java.util.Comparator.comparingInt(com.cretas.aims.dto.yield.StepYieldDTO::getProcessOrder))
+                .collect(java.util.stream.Collectors.toList());
+        com.cretas.aims.dto.yield.StepYieldDTO scalding = steps.get(1);
+        assertThat(scalding.getYieldRate()).isEqualByComparingTo("0.8889");
+        assertThat(scalding.getCumulativeYieldRate()).isEqualByComparingTo("0.8000");
+    }
 }
