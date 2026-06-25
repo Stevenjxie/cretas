@@ -5,6 +5,7 @@ import { getProductWorkProcesses } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
+import YieldCardTable from './YieldCardTable.vue';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -167,6 +168,9 @@ const loading = ref(false);
 const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({});
 const initialRowsMap = ref<Record<string, ProcessSheetRowView[]>>({});
 const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable> | null>>({});
+// F006 双出成率总览 (全工序汇总卡 — 张权需求: 一眼看全链对上工序/对原料率)
+const yieldCardRef = ref<InstanceType<typeof YieldCardTable> | null>(null);
+const yieldOverviewActive = ref<string[]>(['yield']);
 
 // -------------------------------------------------------------------------
 // Load all data on mount
@@ -220,6 +224,8 @@ async function onRowSaved(savedProc: ProcEntry) {
   );
   // Also trigger the InventoryTable component's refresh if in view (keyed by procKey)
   inventoryTableRefs.value[procKey(savedProc)]?.refresh?.();
+  // F006 双出成率总览: 保存后刷新全工序汇总卡 (出成率随录入更新)
+  yieldCardRef.value?.refresh?.();
 }
 
 // Helper: get upstream inventory items for a given process (keyed by unique procKey)
@@ -253,6 +259,16 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
         @change="onViewModeChange"
       />
     </div>
+
+    <!-- F006 双出成率总览 — 全工序汇总 (对上工序 / 对原料), 默认展开, 可折叠腾空间 -->
+    <el-collapse v-model="yieldOverviewActive" style="flex-shrink:0;margin-bottom:8px">
+      <el-collapse-item name="yield">
+        <template #title>
+          <span style="font-size:12px;font-weight:600;color:#606266">双出成率总览 — 全工序（对上工序 / 对原料）</span>
+        </template>
+        <YieldCardTable ref="yieldCardRef" :factory-id="factoryId" :plan-id="planId" />
+      </el-collapse-item>
+    </el-collapse>
 
     <!-- Tabs -->
     <el-tabs v-model="activeTab" style="flex:1;overflow:hidden;display:flex;flex-direction:column" tab-position="top">

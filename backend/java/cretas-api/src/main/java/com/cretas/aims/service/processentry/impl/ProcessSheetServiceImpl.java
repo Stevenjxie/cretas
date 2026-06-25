@@ -17,13 +17,21 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -38,6 +46,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,6 +55,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * SP-F Task 1.5 — 逐工序电子表格单行增量服务实现 (新建路径)。
@@ -74,6 +85,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final ProductionPlanRepository productionPlanRepository;
     private final ProcessSheetRowChangeLogRepository changeLogRepo;
     private final ObjectMapper objectMapper;
+    // F006 双出成率 扩展依赖
+    private final SemiFinishedInventoryRepository wipRepo;
+    private final WorkProcessTaskRepository taskRepo;
+    private final WorkProcessRepository processRepo;
+    private final ProductTypeRepository productTypeRepo;
 
     @Override
     @Transactional
@@ -365,15 +381,212 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal remaining = produced.subtract(used);
             String status = remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE";
 
-            result.add(new ProcessSheetInventoryItem(
-                    row.getBatchNumber(),
-                    produced,
-                    used,
-                    remaining,
-                    status,
-                    nz(wip.getUnitPrice())));
+            result.add(ProcessSheetInventoryItem.builder()
+                    .batchNumber(row.getBatchNumber())
+                    .produced(produced)
+                    .used(used)
+                    .remaining(remaining)
+                    .status(status)
+                    .unitPrice(nz(wip.getUnitPrice()))
+                    .build());
         }
         return result;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // F006 双出成率: 计划级 WIP 库存卡 (getInventoryYieldCard)
+    // ─────────────────────────────────────────────────────────────
+
+    private static final BigDecimal YIELD_SCALE_BD = new BigDecimal("0.0001"); // scale 4
+    private static final int YIELD_SCALE = 4;
+
+    @Override
+    public List<ProcessSheetInventoryItem> getInventoryYieldCard(String factoryId, String planId) {
+        // 1. 获取该计划所有生产批次
+        List<ProductionBatch> batches = productionBatchRepo
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        if (batches.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<Long> batchIds = batches.stream().map(ProductionBatch::getId).toList();
+
+        // 2. 获取所有批次的 SemiFinishedInventory 行 (已按 batchId 组)
+        List<SemiFinishedInventory> allWips = new ArrayList<>();
+        for (Long bid : batchIds) {
+            allWips.addAll(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, bid));
+        }
+        if (allWips.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // 3. 按 processOrder 升序排列 (null processOrder 排最后)
+        allWips.sort(Comparator.comparingInt(w -> w.getProcessOrder() == null ? Integer.MAX_VALUE : w.getProcessOrder()));
+
+        // 4. 回填 processName: taskId → workProcessId → processName
+        Map<Long, String> processNameByTaskId = resolveProcessNames(factoryId, allWips);
+
+        // 5. 获取每个批次的首道 YIELD 报工 inputQuantity (用于 step1 的 stepYieldRate 分母)
+        //    key = batchId, value = Σ inputQuantity of processOrder=min YIELD reports
+        Map<Long, BigDecimal> firstStepInputByBatch = resolveFirstStepInputPerBatch(factoryId, batchIds);
+
+        // 6. 构建输出: 按顺序处理 WIP 行, 维护"上一道产出"作为当道 step 投入
+        //    注意: 同一 batchId 的 WIP 行形成链; 跨批次则各自独立链
+        //    设计简化: 若 planId 只有 1 个 batch, 最干净; 多 batch 时各 batch 独立链
+        Map<Long, BigDecimal> prevOutputByBatch = new HashMap<>();
+        Map<Long, String> prevUnitByBatch = new HashMap<>();
+
+        // 7. 获取折算系数 (从 ProductType.gramsPerUnit) — 取最后道有 productTypeId 的 WIP 的 gramsPerUnit
+        //    注: 同一计划通常只有一个产品类型
+        BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, allWips);
+        String firstStepUnit = allWips.isEmpty() ? null : allWips.get(0).getUnit();
+
+        List<ProcessSheetInventoryItem> result = new ArrayList<>();
+        for (SemiFinishedInventory wip : allWips) {
+            BigDecimal produced = nz(wip.getProducedQuantity());
+            BigDecimal consumed = nz(wip.getConsumedQuantity());
+            BigDecimal available = nz(wip.getAvailableQuantity());
+            String unit = wip.getUnit();
+            Long batchId = wip.getBatchId();
+
+            // stepYieldRate: 投入来源
+            BigDecimal stepInput;
+            if (!prevOutputByBatch.containsKey(batchId)) {
+                // 首道: 投入来自 ProductionReport.inputQuantity (原料投入)
+                stepInput = firstStepInputByBatch.get(batchId);
+            } else {
+                // 后续道: 投入 = 上一道 producedQuantity
+                stepInput = prevOutputByBatch.get(batchId);
+            }
+
+            BigDecimal stepYieldRate = null;
+            if (stepInput != null && stepInput.compareTo(BigDecimal.ZERO) > 0) {
+                stepYieldRate = produced
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(stepInput, YIELD_SCALE, RoundingMode.HALF_UP);
+            }
+
+            // cumulativeYieldRate: 首道投入 (最小 processOrder WIP 的 stepInput)
+            BigDecimal firstInput = firstStepInputByBatch.get(batchId);
+            BigDecimal cumulativeYieldRate = null;
+            if (firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
+                // 折算: 若当前道单位 != 首道单位, 尝试折算
+                BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstStepUnit, gramsPerUnit);
+                if (producedConverted != null) {
+                    cumulativeYieldRate = producedConverted
+                            .multiply(BigDecimal.valueOf(100))
+                            .divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
+                }
+            }
+
+            // 更新"上一道输出"
+            prevOutputByBatch.put(batchId, produced);
+            prevUnitByBatch.put(batchId, unit);
+
+            String processName = processNameByTaskId.get(wip.getSourceWorkProcessTaskId());
+
+            result.add(ProcessSheetInventoryItem.builder()
+                    .batchNumber(wip.getIntermediateBatchNo())
+                    .produced(produced)
+                    .used(consumed)
+                    .remaining(available)
+                    .status(wip.getStatus())
+                    .unitPrice(wip.getUnitCost())
+                    .processOrder(wip.getProcessOrder())
+                    .processName(processName)
+                    .unit(unit)
+                    .stepYieldRate(stepYieldRate)
+                    .cumulativeYieldRate(cumulativeYieldRate)
+                    .build());
+        }
+        return result;
+    }
+
+    /**
+     * 解析每个批次首道工序 YIELD 报工的原料投入量 (Σ inputQuantity, processOrder = min).
+     * key = batchId, value = 首道 Σ inputQuantity (null = 无报工).
+     */
+    private Map<Long, BigDecimal> resolveFirstStepInputPerBatch(String factoryId, List<Long> batchIds) {
+        Map<Long, BigDecimal> result = new HashMap<>();
+        for (Long batchId : batchIds) {
+            List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+            if (reports.isEmpty()) {
+                result.put(batchId, null);
+                continue;
+            }
+            // 找最小 processOrder
+            int minOrder = reports.stream()
+                    .mapToInt(r -> r.getProcessOrder() == null ? 0 : r.getProcessOrder())
+                    .min().orElse(0);
+            BigDecimal sumInput = reports.stream()
+                    .filter(r -> (r.getProcessOrder() == null ? 0 : r.getProcessOrder()) == minOrder)
+                    .map(r -> r.getInputQuantity() == null ? BigDecimal.ZERO : r.getInputQuantity())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            result.put(batchId, sumInput.compareTo(BigDecimal.ZERO) == 0 ? null : sumInput);
+        }
+        return result;
+    }
+
+    /** 回填 taskId → processName (避 N+1 查询). */
+    private Map<Long, String> resolveProcessNames(String factoryId,
+                                                   List<SemiFinishedInventory> wips) {
+        Set<Long> taskIds = wips.stream()
+                .map(SemiFinishedInventory::getSourceWorkProcessTaskId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (taskIds.isEmpty()) {
+            return new HashMap<>();
+        }
+        Map<Long, String> taskToProcessId = taskRepo.findByFactoryIdAndIdIn(factoryId, taskIds)
+                .stream()
+                .filter(t -> t.getWorkProcessId() != null)
+                .collect(Collectors.toMap(WorkProcessTask::getId, WorkProcessTask::getWorkProcessId, (a, b) -> a));
+        Map<String, String> pidToName = processRepo.findAllById(new java.util.HashSet<>(taskToProcessId.values()))
+                .stream()
+                .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+        Map<Long, String> out = new HashMap<>();
+        taskToProcessId.forEach((tid, pid) -> {
+            String name = pidToName.get(pid);
+            if (name != null) out.put(tid, name);
+        });
+        return out;
+    }
+
+    /**
+     * 解析折算系数 gramsPerUnit (g/份): 取末道有 productTypeId 的 WIP 的 ProductType.gramsPerUnit.
+     * null = 无法折算 (同单位无需折算; 或跨单位无系数).
+     */
+    private BigDecimal resolveGramsPerUnit(String factoryId, List<SemiFinishedInventory> wips) {
+        // 从末道往前找有 productTypeId 的行
+        for (int i = wips.size() - 1; i >= 0; i--) {
+            String ptId = wips.get(i).getProductTypeId();
+            if (ptId != null) {
+                return productTypeRepo.findById(ptId)
+                        .map(pt -> pt.getGramsPerUnit())
+                        .orElse(null);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 将 producedQty 折算为首道单位.
+     * 同单位: 直接返回 produced.
+     * 跨单位 (份/盒 → kg): produced × gramsPerUnit / 1000.
+     * gramsPerUnit 为 null: 返回 null (无法折算, cumulativeYieldRate 留 null).
+     */
+    private BigDecimal convertToFirstStepUnit(BigDecimal produced, String currentUnit,
+                                               String firstUnit, BigDecimal gramsPerUnit) {
+        if (produced == null) return BigDecimal.ZERO;
+        if (currentUnit == null || firstUnit == null || currentUnit.equals(firstUnit)) {
+            return produced;
+        }
+        // 跨单位: 需要 gramsPerUnit
+        if (gramsPerUnit == null || gramsPerUnit.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        // 份/盒 → kg: qty × gramsPerUnit / 1000
+        return produced.multiply(gramsPerUnit)
+                .divide(BigDecimal.valueOf(1000), YIELD_SCALE, RoundingMode.HALF_UP);
     }
 
     // ─────────────────────────────────────────────────────────────
