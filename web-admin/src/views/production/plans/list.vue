@@ -832,6 +832,50 @@ const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
 // 幂等 key 在打开弹框时一次性生成，重试提交复用同一 key (防呆 Rule 4)
 const settlementIdempotencyKey = ref('');
+
+// ===== Phase 2A: 核对结单自动预填 (报工→核算自动化) =====
+type SettlementIssueSeverity = 'BLOCKER' | 'INFO';
+interface SettlementPrefillIssue {
+  code: string;
+  message: string;
+  field?: string | null;
+  severity?: SettlementIssueSeverity;
+}
+interface SettlementPrefillResponse {
+  prefill: {
+    actualFinishedQuantity?: number | null;
+    actualSemiFinishedQuantity?: number | null;
+    quantityVarianceReason?: string | null;
+    rawMaterialConsumptions?: Array<{ materialBatchId?: string | null; quantity?: number | null; note?: string | null }> | null;
+    laborSegments?: Array<{ minutes?: number | null; headcount?: number | null }> | null;
+  } | null;
+  audit: { clean: boolean; issues: SettlementPrefillIssue[] } | null;
+}
+const settlementPrefillLoading = ref(false);
+const settlementPrefillIssues = ref<SettlementPrefillIssue[]>([]);
+const settlementPrefillApplied = ref(false);
+// 后端审计 clean (只看 BLOCKER); 未带入数据时 false
+const settlementPrefillCleanFromServer = ref(false);
+// 阻塞级问题 (令一键确认禁用 + 顶部 warning)
+const settlementBlockerIssues = computed(
+  () => settlementPrefillIssues.value.filter((i) => (i.severity ?? 'BLOCKER') === 'BLOCKER'),
+);
+// 提示级问题 (仅展示, 不阻塞)
+const settlementInfoIssues = computed(
+  () => settlementPrefillIssues.value.filter((i) => i.severity === 'INFO'),
+);
+// 审计通过 (后端 clean=true + 应用了预填 + 现有表单校验也无阻塞 → 顶部绿色"一键确认"提示)。
+// 叠加 completeSubmitDisabledReason 是因为本 dialog 始终要求工时分钟>0 (无 laborDeferredReason UI),
+// 报工 derive 不出工时时仍需人补分钟, 故不显示误导性的"可一键确认"绿条。
+const settlementPrefillClean = computed(
+  () => settlementPrefillApplied.value
+    && settlementPrefillCleanFromServer.value
+    && completeSubmitDisabledReason.value === '',
+);
+// 某字段是否被预填审计标记为待人工补全 (BLOCKER 级才高亮)
+function settlementFieldHasIssue(field: string): boolean {
+  return settlementBlockerIssues.value.some((i) => i.field === field);
+}
 const materialBatchListLoading = ref(false);
 const materialBatchOptions = ref<MaterialBatchOption[]>([]);
 const rawWarehouseId = ref('');
@@ -1072,6 +1116,110 @@ function buildWipConsumptionPayload() {
   });
 }
 
+/**
+ * Phase 2A: 从逐道报工 derive 出预填表单 + 审计, 灌入 completeForm。
+ * 必须在 loadSettlementInventoryOptions 之后调用 — 原料预填行只接受已加载到可用批次列表里的 batch,
+ * 否则丢弃并提示让人核对 (宁可少填不可瞎填, 不臆造库存)。
+ */
+async function applySettlementPrefill(row: TableRow) {
+  settlementPrefillApplied.value = false;
+  settlementPrefillIssues.value = [];
+  settlementPrefillCleanFromServer.value = false;
+  if (!factoryId.value) return;
+  settlementPrefillLoading.value = true;
+  try {
+    const res = await get<SettlementPrefillResponse>(
+      `/${factoryId.value}/production-plans/${row.id}/settlement-prefill`,
+    );
+    if (!res.success || !res.data) {
+      // 预填失败不阻塞结单 — 退回手填, 给出提示 (BLOCKER, 让人确认手填)
+      settlementPrefillIssues.value = [{
+        code: 'PREFILL_LOAD_FAILED',
+        message: res.message || '自动预填加载失败，请手工录入结单数据。',
+        severity: 'BLOCKER',
+      }];
+      return;
+    }
+    const issues = res.data.audit?.issues ?? [];
+    const prefill = res.data.prefill;
+    const carriedIssues: SettlementPrefillIssue[] = [...issues];
+    let serverClean = res.data.audit?.clean ?? false;
+
+    if (prefill) {
+      // 实际产量 (derive 不出时留空, 用户手填)
+      if (prefill.actualFinishedQuantity != null) {
+        completeForm.value.actualQuantity = Number(prefill.actualFinishedQuantity);
+      }
+      if (prefill.actualSemiFinishedQuantity != null) {
+        completeForm.value.semiFinishedOutputQuantity = Number(prefill.actualSemiFinishedQuantity);
+      }
+      // 差异原因 (自动"无显著差异"或留空)
+      if (prefill.quantityVarianceReason) {
+        const matched = SETTLEMENT_VARIANCE_REASON_OPTIONS.some(
+          (o) => o.value === prefill.quantityVarianceReason,
+        );
+        if (matched) {
+          completeForm.value.varianceReason = prefill.quantityVarianceReason;
+        } else {
+          completeForm.value.varianceReason = '其他';
+          completeForm.value.otherVarianceReason = prefill.quantityVarianceReason;
+        }
+      }
+      // 原料领用: 仅带入已加载到可用批次列表的 batch, 其余丢弃 + 提示
+      const rawLines = prefill.rawMaterialConsumptions ?? [];
+      let droppedRaw = 0;
+      completeForm.value.rawMaterialConsumptions = [];
+      for (const line of rawLines) {
+        const batchId = line.materialBatchId ? String(line.materialBatchId) : '';
+        const qty = Number(line.quantity || 0);
+        const batch = batchId ? selectedMaterialBatch(batchId) : null;
+        if (!batch || qty <= 0 || qty > materialBatchAvailable(batch)) {
+          droppedRaw += 1;
+          continue;
+        }
+        completeForm.value.rawMaterialConsumptions.push({
+          materialBatchId: batchId,
+          quantity: qty,
+          note: line.note || '自动带入自逐道报工',
+        });
+      }
+      if (droppedRaw > 0) {
+        carriedIssues.push({
+          code: 'RAW_LINE_NOT_LOADABLE',
+          message: `有 ${droppedRaw} 条报工原料领用因批次不在当前可用列表(已消耗/换仓/不在BOM)未自动带入，请手工核对原料领用。`,
+          field: 'rawMaterialConsumptions',
+          severity: 'BLOCKER',
+        });
+        serverClean = false; // 前端丢弃了原料行 → 必须人工核对, 不能一键确认
+      }
+      // 人效: 汇总工时/人数 (后端各段已 derive; 前端最小字段只取合计)
+      const segs = prefill.laborSegments ?? [];
+      if (segs.length > 0) {
+        let totalMinutes = 0;
+        let maxHeadcount = 0;
+        for (const s of segs) {
+          totalMinutes += Number(s.minutes || 0);
+          maxHeadcount = Math.max(maxHeadcount, Number(s.headcount || 0));
+        }
+        if (totalMinutes > 0) completeForm.value.workMinutes = totalMinutes;
+        if (maxHeadcount > 0) completeForm.value.workerCount = maxHeadcount;
+      }
+    }
+    settlementPrefillIssues.value = carriedIssues;
+    settlementPrefillCleanFromServer.value = serverClean;
+    settlementPrefillApplied.value = true;
+  } catch (error: unknown) {
+    settlementPrefillIssues.value = [{
+      code: 'PREFILL_ERROR',
+      message: '自动预填加载异常，请手工录入结单数据。',
+      severity: 'BLOCKER',
+    }];
+    console.error('[结单预填失败]', error);
+  } finally {
+    settlementPrefillLoading.value = false;
+  }
+}
+
 async function handleComplete(row: TableRow) {
   if (actionLoading.value) return;
   completeRow.value = row;
@@ -1088,8 +1236,13 @@ async function handleComplete(row: TableRow) {
     varianceReason: '',
     otherVarianceReason: '',
   };
+  settlementPrefillApplied.value = false;
+  settlementPrefillIssues.value = [];
+  settlementPrefillCleanFromServer.value = false;
   completeDialogVisible.value = true;
+  // 先加载可用批次/WIP, 再用报工 derive 出的预填灌入 (预填依赖已加载的批次列表做校验)
   await loadSettlementInventoryOptions(row);
+  await applySettlementPrefill(row);
 }
 
 async function submitComplete() {
@@ -2549,6 +2702,57 @@ function handleAiFill(params: TableRow) {
           :closable="false"
           style="margin-bottom: 12px"
         />
+        <!-- Phase 2A: 报工自动预填审计 -->
+        <el-alert
+          v-if="settlementPrefillLoading"
+          title="正在按逐道报工自动带入结单数据…"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-else-if="settlementPrefillClean"
+          title="审计通过，已自动带入逐道报工数据，请核对后一键确认提交。"
+          type="success"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-else-if="settlementBlockerIssues.length > 0"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        >
+          <template #title>
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              部分数据需人工核对补全（共 {{ settlementBlockerIssues.length }} 项），补全后才能提交：
+            </div>
+            <ul style="margin: 0; padding-left: 18px;">
+              <li v-for="(it, idx) in settlementBlockerIssues" :key="idx" style="line-height: 1.6;">
+                {{ it.message }}
+              </li>
+            </ul>
+          </template>
+        </el-alert>
+        <!-- INFO 级提示 (不阻塞一键确认; 如跨计划半成品确认) -->
+        <el-alert
+          v-if="settlementPrefillApplied && settlementInfoIssues.length > 0"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        >
+          <template #title>
+            <ul style="margin: 0; padding-left: 18px;">
+              <li v-for="(it, idx) in settlementInfoIssues" :key="idx" style="line-height: 1.6;">
+                {{ it.message }}
+              </li>
+            </ul>
+          </template>
+        </el-alert>
         <div class="settlement-context">
           <div>
             <div class="settlement-context-label">计划单号</div>
@@ -2635,7 +2839,16 @@ function handleAiFill(params: TableRow) {
           style="margin-bottom: 12px"
         />
         <div class="settlement-line-header">
-          <span>原料/辅料实际领用</span>
+          <span>
+            原料/辅料实际领用
+            <el-tag
+              v-if="settlementFieldHasIssue('rawMaterialConsumptions')"
+              type="warning"
+              size="small"
+              effect="light"
+              style="margin-left: 6px"
+            >需人工补全</el-tag>
+          </span>
           <el-button size="small" :icon="Plus" @click="addRawConsumptionLine">增加原料行</el-button>
         </div>
         <div v-if="materialBatchOptions.length === 0 && !materialBatchListLoading" class="settlement-empty">
@@ -2715,7 +2928,16 @@ function handleAiFill(params: TableRow) {
           <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
         </div>
 
-        <el-divider content-position="left">工时/人效最小字段</el-divider>
+        <el-divider content-position="left">
+          工时/人效最小字段
+          <el-tag
+            v-if="settlementFieldHasIssue('laborSegments')"
+            type="warning"
+            size="small"
+            effect="light"
+            style="margin-left: 6px"
+          >需人工补全</el-tag>
+        </el-divider>
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="人数">

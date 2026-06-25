@@ -6,6 +6,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
@@ -136,6 +137,15 @@ public interface ProductionPlanService {
 
     ProductionSettlementResponse settleProduction(String factoryId, String planId,
                                                   ProductionSettlementRequest request, Long settledBy);
+
+    /**
+     * Phase 2A (报工→核算自动化): 从该计划已录的逐道报工 derive 出预填的核对结单表单 + 审计。
+     *
+     * <p>只读, 不触发任何库存扣减 — 供前端核对结单 dialog 一次性带入, 省去文员二次手敲。
+     * 真扣库存仍由文员核对后调 {@link #settleProduction} 才发生。
+     * derive 宁可少填不可瞎填: 拿不准的字段留空并在 audit.issues 标出让人补。
+     */
+    ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId);
 
     ProductionSettlementResponse getProductionSettlement(String factoryId, String planId);
 
