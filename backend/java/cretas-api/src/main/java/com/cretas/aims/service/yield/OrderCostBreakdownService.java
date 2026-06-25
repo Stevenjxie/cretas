@@ -100,6 +100,8 @@ public class OrderCostBreakdownService {
         LinkedHashMap<String, BigDecimal> packagingAcc = new LinkedHashMap<>();
         // AUDIT-004 辅料按锅分摊明细 (按 锅号 去重)
         LinkedHashMap<String, OrderCostBreakdownDTO.AuxiliaryAllocation> auxAllocAcc = new LinkedHashMap<>();
+        // ★ 严格审计 2026-06-25: 上游 WIP 链传播来的副产回收 (本批自身副产已由 byproductAcc 计入)
+        BigDecimal upstreamByproductCredit = BigDecimal.ZERO;
 
         for (ProductionBatch b : batches) {
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
@@ -184,6 +186,7 @@ public class OrderCostBreakdownService {
                 BigDecimal[] up = aggregateUpstreamLaborSeasoning(factoryId, c, 1, chainVisited);
                 labor = labor.add(up[0]);
                 seasoning = seasoning.add(up[1]);
+                upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
             }
         }
 
@@ -197,7 +200,8 @@ public class OrderCostBreakdownService {
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
         List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
-        BigDecimal byproductCredit = byproducts.stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal byproductCredit = byproducts.stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(upstreamByproductCredit);   // ★ 加上游 WIP 链传播来的副产回收 (严格审计 2026-06-25)
         BigDecimal netTotal = total.subtract(byproductCredit);
         BigDecimal netPerBox = boxCount > 0 ? netTotal.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
@@ -342,7 +346,7 @@ public class OrderCostBreakdownService {
      */
     private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
                                                          int depth, java.util.Set<Long> visited) {
-        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO};
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         if (c.getBatchId() == null || depth >= MAX_DEPTH) {
             return zero;
         }
@@ -358,21 +362,24 @@ public class OrderCostBreakdownService {
         BigDecimal[] self = batchLaborSeasoning(factoryId, upstreamBatchId);
         BigDecimal labor = self[0];
         BigDecimal seasoning = self[1];
-        // 再递归该上游批的消耗 → 更上游的 人工/调料
+        BigDecimal byproductCredit = self[2];   // ★ 副产回收沿 WIP 链传播 (严格审计 2026-06-25)
+        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产
         for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
             BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
             labor = labor.add(r[0]);
             seasoning = seasoning.add(r[1]);
+            byproductCredit = byproductCredit.add(r[2]);
         }
-        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料 × consumedQty/upstreamReceiptQty。
+        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产 × consumedQty/upstreamReceiptQty。
         BigDecimal consumedQty = nz(c.getQuantity());
         BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
         if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
             labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
             seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
-        return new BigDecimal[]{labor, seasoning};
+        return new BigDecimal[]{labor, seasoning, byproductCredit};
     }
 
     /**
@@ -385,13 +392,17 @@ public class OrderCostBreakdownService {
     private BigDecimal[] batchLaborSeasoning(String factoryId, Long batchId) {
         BatchYieldDTO y = yieldReportService.getYield(factoryId, batchId);
         if (y == null) {
-            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO};
+            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         }
         BigDecimal labor = nz(y.getTotalLaborCost());
         BigDecimal seasoning = BigDecimal.ZERO;
+        // ★ 严格审计 2026-06-25: 同时归集本批副产回收 (qty×unitPrice), 供上游 WIP 链传播
+        // (多批链场景: 副产在上游半成品批回收, 之前不传播到成品批 byproductCredit → 回收额丢失)。
+        java.util.LinkedHashMap<String, ByproductLine> bpAcc = new java.util.LinkedHashMap<>();
         List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
         for (int i = 0; i < steps.size(); i++) {
             StepYieldDTO step = steps.get(i);
+            accumulateByproducts(bpAcc, step.getByproducts());   // 副产不依赖 materialCost, 先于下方 null-check
             BigDecimal m = step.getMaterialCost();
             if (m == null) {
                 continue;
@@ -410,7 +421,8 @@ public class OrderCostBreakdownService {
             }
             seasoning = seasoning.add(contribution);
         }
-        return new BigDecimal[]{labor, seasoning};
+        BigDecimal byproductCredit = bpAcc.values().stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new BigDecimal[]{labor, seasoning, byproductCredit};
     }
 
     /**
