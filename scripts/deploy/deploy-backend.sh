@@ -990,6 +990,21 @@ deploy_jar() {
 
             echo "   当前 active: $ACTIVE_COLOR ($ACTIVE_PORT) → 切换到: $IDLE_COLOR ($IDLE_PORT)"
 
+            # [BG 0/4] 内存预检 (2026-06-25): Blue-Green 峰值同时跑新旧两个 prod 实例 (~2×2.5GB)。
+            # 47 是 14GB 共享机, 若 test 实例 (Xmx1500m) 同时在跑, idle 实例启动可能 OOM 崩溃 (实测).
+            # 可用内存不足时临时停 test 腾内存, [BG 4/4] 停旧 active 后自动恢复。
+            TEST_STOPPED_FOR_MEM=0
+            AVAIL_MB=$(ssh $SERVER "free -m | awk '/^Mem:/{print \$7}'" 2>/dev/null)
+            if [ -n "$AVAIL_MB" ] && [ "$AVAIL_MB" -lt 3500 ]; then
+                echo "   [BG 0/4] ⚠️  可用内存 ${AVAIL_MB}MB < 3500MB → 临时停 cretas-backend-test 腾内存"
+                if ssh $SERVER "systemctl is-active cretas-backend-test 2>/dev/null" | grep -q '^active'; then
+                    ssh $SERVER "systemctl stop cretas-backend-test" 2>/dev/null && TEST_STOPPED_FOR_MEM=1 \
+                        && echo "   [BG 0/4] ✓ 已停 test (部署完自动恢复)"
+                fi
+            else
+                echo "   [BG 0/4] 内存预检 OK (可用 ${AVAIL_MB:-?}MB)"
+            fi
+
             # [BG 1/4] 启动 idle service (它会读取刚部署的新 jar)
             echo "   [BG 1/4] 启动 $IDLE_COLOR ($IDLE_SERVICE)..."
             if ! ssh $SERVER "systemctl restart $IDLE_SERVICE"; then
@@ -1093,6 +1108,13 @@ deploy_jar() {
             echo "   [BG 4/4] 停旧 active ($ACTIVE_COLOR $ACTIVE_SERVICE), 5s 优雅等待..."
             sleep 5
             ssh $SERVER "systemctl stop $ACTIVE_SERVICE" || true
+
+            # [BG 0/4 恢复] 旧 active 已停, 内存释放 → 恢复之前为腾内存停掉的 test 实例
+            if [ "$TEST_STOPPED_FOR_MEM" = "1" ]; then
+                ssh $SERVER "systemctl start cretas-backend-test" 2>/dev/null \
+                    && echo "   [BG] ✓ 已恢复 cretas-backend-test (之前为腾内存临时停)" \
+                    || echo "   [BG] ⚠️  恢复 cretas-backend-test 失败, 请手动 systemctl start cretas-backend-test"
+            fi
 
             # [BG 5/5] Systemd 收尾 (v5.2):
             # - stop 后 SIGTERM 可能把旧 active 标记为 'failed' (status=143), 清理之
