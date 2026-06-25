@@ -354,6 +354,9 @@ export interface WipRowItem {
   availableQuantity: number | null;        // 余额 = produced − consumed
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  // 段1: 双出成率 (单位不可比 → null; 首道两率相等)
+  stepYieldRate: number | null;            // 对上工序出成率 (小数, 如 0.8889 = 88.89%)
+  cumulativeYieldRate: number | null;      // 对原料累计出成率 (小数)
 }
 
 // mirror backend dto/yield/BatchYieldDTO.java (单元 F 聚合用到的子集)

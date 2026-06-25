@@ -62,4 +62,18 @@ public class WipRowDTO {
      * C3: 生产批次 ID (工厂级视图回填; 批次级视图留 null 因已在路径参数中)。
      */
     private Long batchId;
+
+    // ── 双出成率 (段1: F006 需求) ──────────────────────────────────────────────
+
+    /**
+     * 对上工序出成率 = 本道产出 / 本道投入 (小数形式, 如 0.8889 = 88.89%)。
+     * 镜像 StepYieldDTO.yieldRate。单位不可比 → null (不臆造)。
+     */
+    private BigDecimal stepYieldRate;
+
+    /**
+     * 对原料累计出成率 = 本道产出(折首道单位) / 首道投入量 (小数形式)。
+     * 镜像 StepYieldDTO.cumulativeYieldRate。跨单位无折算 → null。
+     */
+    private BigDecimal cumulativeYieldRate;
 }

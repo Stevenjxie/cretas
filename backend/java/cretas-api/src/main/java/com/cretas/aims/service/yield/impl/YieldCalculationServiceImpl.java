@@ -313,6 +313,31 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 s.getTotalInput() != null && s.getTotalInput().compareTo(BigDecimal.ZERO) > 0
                         && s.getTotalOutput() != null && s.getTotalOutput().compareTo(BigDecimal.ZERO) > 0);
 
+        // 双出成率 — 逐道累计出成率 (对原料): stepOutput(折首道单位) / firstInput
+        // 规则: firstInput ≤ 0 或折算失败 → null (不臆造). 首道两率相等 (stepYield == cumulative).
+        if (canComputeCumulative && firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
+            String firstInputUnit = first.getInputUnit();
+            for (StepYieldDTO step : steps) {
+                BigDecimal stepOut = step.getTotalOutput();
+                if (stepOut == null) {
+                    step.setCumulativeYieldRate(null);
+                    continue;
+                }
+                String stepOutUnit = step.getOutputUnit();
+                boolean stepSameUnit = firstInputUnit != null && firstInputUnit.equals(stepOutUnit);
+                if (stepSameUnit) {
+                    step.setCumulativeYieldRate(stepOut.divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP));
+                } else if (standardGramsPerUnit != null) {
+                    // 跨单位折算: stepOut(份/盒) × gramsPerUnit / 1000 → kg
+                    BigDecimal stepOutInFirstUnit = stepOut.multiply(standardGramsPerUnit)
+                            .divide(new BigDecimal("1000"), YIELD_SCALE, RoundingMode.HALF_UP);
+                    step.setCumulativeYieldRate(stepOutInFirstUnit.divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP));
+                } else {
+                    step.setCumulativeYieldRate(null); // 跨单位且无折算系数 — 诚实留空
+                }
+            }
+        }
+
         // P1-3 (G4): 整批工时 = Σ steps (全 null → null, 任一非 null 则求和)
         // Q1: 整批人数 = MAX steps (同班工人参与多道工序, SUM 虚高 N 倍; 取峰值与 step 级 MAX headcount 同语义)
         Integer batchMinutes = steps.stream().map(StepYieldDTO::getTotalWorkMinutes)
