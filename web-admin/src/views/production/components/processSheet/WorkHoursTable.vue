@@ -65,12 +65,12 @@ function updateSeg(idx: number, field: keyof LaborSegment, value: string | numbe
           {{ segDurationH(row).toFixed(2) }}
         </template>
       </el-table-column>
-      <el-table-column label="人数" width="90">
+      <el-table-column label="人数" width="120">
         <template #default="{ row, $index }">
           <el-input-number
             :model-value="row.workerCount"
             @update:model-value="(v: number) => updateSeg($index, 'workerCount', v)"
-            :min="1" :precision="0" style="width:76px"
+            :min="1" :precision="0" controls-position="right" style="width:100px"
           />
         </template>
       </el-table-column>
