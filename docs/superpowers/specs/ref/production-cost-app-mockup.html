@@ -1,0 +1,3382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生产成本核算系统 - V3.0</title>
+<style>
+/* ========== Reset & Base ========== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; font-size: 14px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
+::-webkit-scrollbar-track { background: #f1f1f1; }
+
+/* ========== Top Navigation ========== */
+.top-nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 100%);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  color: #fff;
+}
+.nav-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 24px; max-width: 1600px; margin: 0 auto;
+}
+.nav-title { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+.nav-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.nav-tab {
+  padding: 8px 18px; border-radius: 6px 6px 0 0; cursor: pointer;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
+  border-bottom: none; color: rgba(255,255,255,0.8); font-size: 13px;
+  transition: all 0.2s; user-select: none; white-space: nowrap;
+}
+.nav-tab:hover { background: rgba(255,255,255,0.2); color: #fff; }
+.nav-tab.active { background: #fff; color: #1a3a5c; font-weight: 600; border-color: #ddd; }
+.nav-tab.summary-tab { background: rgba(255,193,7,0.2); border-color: rgba(255,193,7,0.4); }
+.nav-tab.summary-tab:hover { background: rgba(255,193,7,0.35); }
+.nav-tab.summary-tab.active { background: #fff; color: #f57c00; }
+
+/* ========== Process Flow Bar ========== */
+.flow-bar {
+  background: #fff; border-top: 1px solid #e0e0e0; padding: 0 24px;
+  max-width: 1600px; margin: 0 auto;
+}
+.flow-steps {
+  display: flex; align-items: center; padding: 12px 0; gap: 0;
+}
+.flow-step {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 6px 14px; border-radius: 20px; transition: all 0.2s;
+  font-size: 13px; color: #999; white-space: nowrap;
+}
+.flow-step .step-num {
+  width: 26px; height: 26px; border-radius: 50%; display: flex;
+  align-items: center; justify-content: center; font-size: 12px;
+  font-weight: 600; border: 2px solid #ddd; color: #999; transition: all 0.2s;
+}
+.flow-step.active .step-num { background: #2c5f8a; border-color: #2c5f8a; color: #fff; }
+.flow-step.active { color: #2c5f8a; font-weight: 600; }
+.flow-step.done .step-num { background: #4caf50; border-color: #4caf50; color: #fff; }
+.flow-step.done { color: #4caf50; }
+.flow-arrow { color: #ccc; font-size: 16px; margin: 0 4px; }
+
+/* ========== Main Content ========== */
+.main-content {
+  margin-top: 110px; padding: 20px 24px; max-width: 1600px; margin-left: auto; margin-right: auto;
+}
+.page { display: none; }
+.page.active { display: block; }
+
+/* ========== Section Cards ========== */
+.section-card {
+  background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  margin-bottom: 20px; overflow: hidden;
+}
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; background: #fafbfc; border-bottom: 1px solid #eee;
+}
+.section-title { font-size: 15px; font-weight: 600; color: #1a3a5c; }
+.section-desc { font-size: 12px; color: #888; margin-left: 12px; }
+.section-body { padding: 16px 20px; }
+
+/* ========== Buttons ========== */
+.btn {
+  padding: 6px 16px; border-radius: 4px; border: 1px solid #d0d0d0;
+  background: #fff; cursor: pointer; font-size: 13px; transition: all 0.15s;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.btn:hover { border-color: #2c5f8a; color: #2c5f8a; }
+.btn-primary { background: #2c5f8a; color: #fff; border-color: #2c5f8a; }
+.btn-primary:hover { background: #1a4a70; }
+.btn-danger { color: #e53935; border-color: #e53935; }
+.btn-danger:hover { background: #e53935; color: #fff; }
+.btn-success { background: #4caf50; color: #fff; border-color: #4caf50; }
+.btn-success:hover { background: #388e3c; }
+.btn-warning { background: #ff9800; color: #fff; border-color: #ff9800; }
+.btn-warning:hover { background: #f57c00; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-xs { padding: 2px 6px; font-size: 11px; }
+
+/* ========== Tables ========== */
+.data-table-wrap { overflow-x: auto; }
+.data-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.data-table th {
+  background: #f5f7fa; padding: 10px 12px; text-align: left;
+  font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0;
+  white-space: nowrap; position: sticky; top: 0;
+}
+.data-table td {
+  padding: 8px 12px; border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+.data-table tbody tr:nth-child(even) { background: #fafbfc; }
+.data-table tbody tr:hover { background: #e8f0fe; }
+.data-table tbody tr.depleted { background: #f5f5f5; color: #bbb; }
+.data-table tbody tr.depleted td { color: #bbb; }
+
+/* ========== Form Inputs ========== */
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], select, textarea {
+  padding: 6px 10px; border: 1px solid #d0d0d0; border-radius: 4px;
+  font-size: 13px; transition: border-color 0.2s; background: #fff;
+  min-width: 100px;
+}
+input:focus, select:focus, textarea:focus { border-color: #2c5f8a; outline: none; box-shadow: 0 0 0 2px rgba(44,95,138,0.15); }
+input.auto-field { background: #f0f7ff; color: #1565c0; font-weight: 500; }
+input[readonly] { background: #f5f5f5; cursor: default; }
+.col-auto { min-width: 90px; }
+
+/* ========== Custom Dropdown ========== */
+.dropdown-wrap { position: relative; display: inline-block; }
+.dropdown-trigger {
+  padding: 6px 10px; border: 1px solid #d0d0d0; border-radius: 4px;
+  background: #fff; cursor: pointer; min-width: 180px; font-size: 13px;
+  display: flex; align-items: center; justify-content: space-between;
+  user-select: none;
+}
+.dropdown-trigger:hover { border-color: #2c5f8a; }
+.dropdown-trigger .arrow { font-size: 10px; color: #999; }
+.dropdown-panel {
+  position: absolute; top: 100%; left: 0; z-index: 999;
+  background: #fff; border: 1px solid #ddd; border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15); min-width: 360px;
+  display: none; max-height: 320px;
+}
+.dropdown-panel.open { display: block; }
+.dropdown-search {
+  padding: 8px 12px; border-bottom: 1px solid #eee;
+}
+.dropdown-search input {
+  width: 100%; padding: 7px 10px; border: 1px solid #ddd;
+  border-radius: 4px; font-size: 13px;
+}
+.dropdown-list { max-height: 260px; overflow-y: auto; }
+.dropdown-item {
+  padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f5f5f5;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; transition: background 0.15s;
+}
+.dropdown-item:hover { background: #e8f0fe; }
+.dropdown-item.selected { background: #e3f2fd; }
+.dropdown-item .batch-name { font-weight: 500; color: #333; }
+.dropdown-item .batch-info { font-size: 12px; color: #888; }
+.dropdown-item .batch-remain { font-weight: 600; color: #2c5f8a; }
+.dropdown-item.depleted-item { opacity: 0.5; pointer-events: none; }
+.dropdown-empty { padding: 20px; text-align: center; color: #999; font-size: 13px; }
+.dropdown-filter { padding: 6px 12px; border-bottom: 1px solid #eee; }
+.dropdown-filter select { width: 100%; min-width: auto; }
+
+/* ========== Inventory Table ========== */
+.inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.inv-table th {
+  background: #f5f7fa; padding: 10px 14px; text-align: left;
+  font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0;
+}
+.inv-table td { padding: 8px 14px; border-bottom: 1px solid #f0f0f0; }
+.inv-table tbody tr:nth-child(even) { background: #fafbfc; }
+.inv-table tbody tr:hover { background: #e8f0fe; }
+.inv-table tbody tr.depleted { background: #f5f5f5; color: #bbb; }
+.status-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 12px;
+  font-size: 12px; font-weight: 500;
+}
+.status-badge.active { background: #e8f5e9; color: #2e7d32; }
+.status-badge.depleted { background: #f5f5f5; color: #999; }
+.status-badge.pending { background: #fff3e0; color: #e65100; }
+.status-badge.inprogress { background: #e3f2fd; color: #1565c0; }
+.status-badge.completed { background: #e8f5e9; color: #2e7d32; }
+
+/* ========== Summary Page ========== */
+.summary-card {
+  background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  padding: 20px; margin-bottom: 20px;
+}
+.summary-card h3 { color: #1a3a5c; margin-bottom: 16px; font-size: 16px; }
+
+/* ========== Cost Analysis ========== */
+.cost-section { margin-bottom: 24px; }
+.cost-section h4 { color: #1a3a5c; margin-bottom: 12px; font-size: 14px; }
+
+/* ========== Search Filter ========== */
+.search-box {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+}
+.search-box input {
+  padding: 7px 12px; border: 1px solid #d0d0d0; border-radius: 4px;
+  font-size: 13px; width: 240px;
+}
+
+/* ========== Operation Records ========== */
+.op-record-card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 20px; overflow: hidden; }
+.op-record-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: #f8f9fa; border-bottom: 1px solid #eee; cursor: pointer; user-select: none; }
+.op-record-header:hover { background: #f0f1f3; }
+.op-record-title { font-size: 15px; font-weight: 600; color: #1a3a5c; display: flex; align-items: center; gap: 8px; }
+.op-record-toggle { font-size: 12px; color: #888; transition: transform 0.2s; }
+.op-record-toggle.open { transform: rotate(180deg); }
+.op-record-body { padding: 0 20px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; }
+.op-record-body.open { max-height: 2000px; padding: 16px 20px; }
+.op-record-timeline { position: relative; padding-left: 24px; }
+.op-record-timeline::before { content: ''; position: absolute; left: 8px; top: 4px; bottom: 4px; width: 2px; background: #e0e0e0; }
+.op-record-item { position: relative; margin-bottom: 16px; padding: 10px 14px; background: #fafbfc; border-radius: 6px; border: 1px solid #eee; }
+.op-record-item:last-child { margin-bottom: 0; }
+.op-record-item::before { content: ''; position: absolute; left: -20px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: #2c5f8a; border: 2px solid #fff; box-shadow: 0 0 0 2px #2c5f8a; }
+.op-record-item.op-delete::before { background: #e53935; box-shadow: 0 0 0 2px #e53935; }
+.op-record-item.op-modify::before { background: #ff9800; box-shadow: 0 0 0 2px #ff9800; }
+.op-record-time { font-size: 12px; color: #999; margin-bottom: 4px; }
+.op-record-action { font-size: 13px; color: #333; }
+.op-record-action .op-tag { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-right: 6px; }
+.op-tag-save { background: #e8f5e9; color: #2e7d32; }
+.op-tag-modify { background: #fff3e0; color: #e65100; }
+.op-tag-delete { background: #ffebee; color: #c62828; }
+.op-tag-create { background: #e3f2fd; color: #1565c0; }
+.op-record-detail { font-size: 12px; color: #666; margin-top: 4px; line-height: 1.6; }
+.op-record-detail .field-change { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 6px; background: #f5f5f5; border-radius: 3px; font-family: monospace; font-size: 11px; }
+.op-record-empty { text-align: center; color: #bbb; padding: 20px; font-size: 13px; }
+
+/* ========== System Log ========== */
+.sys-log-page { padding: 0; }
+.sys-log-filter { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.sys-log-filter select, .sys-log-filter input { padding: 6px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+.sys-log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sys-log-table th { background: #f5f6f8; padding: 10px 12px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0; white-space: nowrap; }
+.sys-log-table td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+.sys-log-table tr:hover td { background: #fafbfc; }
+.sys-log-type { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.sys-log-type.create { background: #e3f2fd; color: #1565c0; }
+.sys-log-type.save { background: #e8f5e9; color: #2e7d32; }
+.sys-log-type.modify { background: #fff3e0; color: #e65100; }
+.sys-log-type.delete { background: #ffebee; color: #c62828; }
+.sys-log-type.order { background: #f3e5f5; color: #7b1fa2; }
+.sys-log-detail-cell { max-width: 400px; word-break: break-all; font-size: 12px; color: #666; }
+
+/* ========== Modal ========== */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 2000;
+  display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: #fff; border-radius: 8px; width: 520px; max-width: 90%;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;
+}
+.modal-header {
+  padding: 16px 20px; border-bottom: 1px solid #eee;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-header h3 { font-size: 16px; color: #1a3a5c; }
+.modal-close { cursor: pointer; font-size: 20px; color: #999; }
+.modal-close:hover { color: #333; }
+.modal-body { padding: 20px; }
+.modal-footer {
+  padding: 14px 20px; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 10px;
+}
+.form-row { margin-bottom: 16px; }
+.form-row label { display: block; margin-bottom: 6px; font-weight: 500; color: #555; font-size: 13px; }
+.form-row input, .form-row select, .form-row textarea { width: 100%; }
+.form-row textarea { min-height: 60px; resize: vertical; }
+
+/* ========== Order Info Bar ========== */
+.order-info-bar {
+  background: linear-gradient(135deg, #e3f2fd 0%, #f0f7ff 100%);
+  border: 1px solid #bbdefb; border-radius: 8px;
+  padding: 14px 20px; margin-bottom: 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+}
+.order-info-bar .info-item { display: flex; align-items: center; gap: 6px; }
+.order-info-bar .info-label { color: #666; font-size: 13px; }
+.order-info-bar .info-value { color: #1a3a5c; font-weight: 600; font-size: 14px; }
+
+/* ========== Upstream Sources ========== */
+.upstream-sources { margin-top: 6px; padding: 8px; background: #f8f9fa; border-radius: 4px; }
+.upstream-source-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.upstream-source-row:last-child { margin-bottom: 0; }
+.upstream-source-row .source-label { font-size: 12px; color: #666; min-width: 70px; }
+.upstream-source-row .source-weight { width: 90px; }
+
+/* ========== Work Hours Card ========== */
+.work-hours-card {
+  background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  margin-bottom: 20px; overflow: hidden;
+}
+.work-hours-card .section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; background: #fafbfc; border-bottom: 1px solid #eee;
+}
+.work-hours-card .section-body { padding: 16px 20px; }
+.wh-total-bar {
+  padding: 10px 16px; background: #f0f7ff; border-top: 1px solid #e0e0e0;
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+}
+.wh-total-bar .wh-total-label { font-size: 13px; color: #555; }
+.wh-total-bar .wh-total-value { font-size: 15px; font-weight: 700; color: #1a3a5c; }
+
+/* ========== Enter Production Modal ========== */
+.epm-info-block {
+  background: #f8f9fa; border-radius: 6px; padding: 14px 16px; margin-bottom: 16px;
+}
+.epm-info-row { display: flex; margin-bottom: 8px; font-size: 13px; }
+.epm-info-row:last-child { margin-bottom: 0; }
+.epm-info-label { color: #666; min-width: 80px; }
+.epm-info-value { color: #1a3a5c; font-weight: 600; }
+.epm-process-flow {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  font-size: 13px; color: #555;
+}
+.epm-process-flow .epm-arrow { color: #999; margin: 0 2px; }
+.epm-option-row { margin-bottom: 12px; }
+.epm-option-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.epm-option-row input[type="radio"] { cursor: pointer; }
+.epm-select-wrap { margin-left: 24px; margin-top: 6px; }
+
+/* ========== Responsive ========== */
+@media (max-width: 1200px) {
+  .nav-bar { flex-direction: column; gap: 8px; }
+  .nav-tabs { justify-content: center; }
+}
+@media (max-width: 768px) {
+  .flow-steps { flex-wrap: wrap; }
+  .nav-tab { padding: 6px 12px; font-size: 12px; }
+}
+
+/* ========== Print ========== */
+@media print {
+  .top-nav, .flow-bar, .btn { display: none !important; }
+  .main-content { margin-top: 0; }
+}
+</style>
+</head>
+<body>
+
+<!-- ========== Top Navigation ========== -->
+<div class="top-nav">
+  <div class="nav-bar">
+    <div class="nav-title">生产成本核算系统 - V3.0</div>
+    <div class="nav-tabs" id="navTabs">
+      <div class="nav-tab active" data-page="orders">订单管理</div>
+      <div class="nav-tab" data-page="xiuyou">修油</div>
+      <div class="nav-tab" data-page="gunrou">滚揉</div>
+      <div class="nav-tab" data-page="chaoshui">焯水</div>
+      <div class="nav-tab" data-page="qushetou">去舌苔</div>
+      <div class="nav-tab" data-page="shuzhi">熟制</div>
+      <div class="nav-tab" data-page="qidiao">气调</div>
+      <div class="nav-tab summary-tab" data-page="summary">汇总</div>
+      <div class="nav-tab summary-tab" data-page="cost">成本分析</div>
+    </div>
+  </div>
+  <div class="flow-bar" id="flowBar" style="display:none;">
+    <div class="flow-steps" id="flowSteps">
+      <div class="flow-step" data-page="xiuyou"><span class="step-num">1</span>修油</div>
+      <span class="flow-arrow">&#10132;</span>
+      <div class="flow-step" data-page="gunrou"><span class="step-num">2</span>滚揉</div>
+      <span class="flow-arrow">&#10132;</span>
+      <div class="flow-step" data-page="chaoshui"><span class="step-num">3</span>焯水</div>
+      <span class="flow-arrow">&#10132;</span>
+      <div class="flow-step" data-page="qushetou"><span class="step-num">4</span>去舌苔</div>
+      <span class="flow-arrow">&#10132;</span>
+      <div class="flow-step" data-page="shuzhi"><span class="step-num">5</span>熟制</div>
+      <span class="flow-arrow">&#10132;</span>
+      <div class="flow-step" data-page="qidiao"><span class="step-num">6</span>气调</div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Main Content ========== -->
+<div class="main-content">
+
+<!-- ==================== PAGE: 订单管理 ==================== -->
+<div class="page active" id="page-orders">
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">订单列表</span>
+        <span class="section-desc">管理所有生产订单</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="openOrderModal()">+ 新建订单</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" id="orderSearch" placeholder="搜索订单号、产品名称..." oninput="renderOrders()">
+      </div>
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-orders">
+          <thead>
+            <tr>
+              <th>订单号</th><th>产品名称</th><th>原料重量(kg)</th><th>订单日期</th><th>状态</th><th>备注</th><th style="width:220px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 修油 ==================== -->
+<div class="page" id="page-xiuyou">
+  <div class="order-info-bar" id="orderInfo-xiuyou">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">修油工序 - 数据录入</span>
+        <span class="section-desc">原料出库、修油产出、副产物记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('xiuyou')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('xiuyou')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-xiuyou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>出库日期</th><th>原料批次</th><th>出库重量(kg)</th>
+              <th>生产日期</th><th>产出数量(kg)</th><th>肥油(kg)</th>
+              <th>投料重量(kg)</th><th>出成率(%)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-xiuyou">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">修油工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('xiuyou')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-xiuyou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-xiuyou">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">修油 - 半成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('xiuyou', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-xiuyou">
+          <thead><tr><th>批次号</th><th>所属订单</th><th>产出总量(kg)</th><th>已使用量(kg)</th><th>剩余量(kg)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-xiuyou">
+    <div class="op-record-header" onclick="toggleOpRecord('xiuyou')">
+      <span class="op-record-title">&#128336; 修油工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-xiuyou">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-xiuyou">
+      <div class="op-record-timeline" id="oprecord-timeline-xiuyou">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 滚揉 ==================== -->
+<div class="page" id="page-gunrou">
+  <div class="order-info-bar" id="orderInfo-gunrou">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId-gr">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product-gr">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight-gr">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status-gr">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">滚揉工序 - 数据录入</span>
+        <span class="section-desc">选择修油批次进行滚揉加工</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('gunrou')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('gunrou')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-gunrou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>修油批次</th><th>滚揉批次</th><th>滚揉日期</th>
+              <th>滚揉前(kg)</th><th>滚揉后(kg)</th><th>出成率(%)</th>
+              <th>焯水用量(kg)</th><th>剩余量(kg)</th>
+              <th>总工时(h)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-gunrou">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">滚揉工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('gunrou')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-gunrou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-gunrou">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">滚揉 - 半成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('gunrou', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-gunrou">
+          <thead><tr><th>批次号</th><th>所属订单</th><th>产出总量(kg)</th><th>已使用量(kg)</th><th>剩余量(kg)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-gunrou">
+    <div class="op-record-header" onclick="toggleOpRecord('gunrou')">
+      <span class="op-record-title">&#128336; 滚揉工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-gunrou">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-gunrou">
+      <div class="op-record-timeline" id="oprecord-timeline-gunrou">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 焯水 ==================== -->
+<div class="page" id="page-chaoshui">
+  <div class="order-info-bar" id="orderInfo-chaoshui">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId-cs">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product-cs">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight-cs">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status-cs">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">焯水工序 - 数据录入</span>
+        <span class="section-desc">选择滚揉批次进行焯水加工</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('chaoshui')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('chaoshui')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-chaoshui">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>滚揉批次</th><th>焯水批次</th><th>焯水日期</th>
+              <th>焯水前(kg)</th><th>焯水后(kg)</th><th>出成率(%)</th>
+              <th>下游用量(kg)</th><th>剩余量(kg)</th>
+              <th>总工时(h)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-chaoshui">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">焯水工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('chaoshui')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-chaoshui">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-chaoshui">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">焯水 - 半成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('chaoshui', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-chaoshui">
+          <thead><tr><th>批次号</th><th>所属订单</th><th>产出总量(kg)</th><th>已使用量(kg)</th><th>剩余量(kg)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-chaoshui">
+    <div class="op-record-header" onclick="toggleOpRecord('chaoshui')">
+      <span class="op-record-title">&#128336; 焯水工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-chaoshui">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-chaoshui">
+      <div class="op-record-timeline" id="oprecord-timeline-chaoshui">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 去舌苔 ==================== -->
+<div class="page" id="page-qushetou">
+  <div class="order-info-bar" id="orderInfo-qushetou">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId-qst">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product-qst">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight-qst">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status-qst">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">去舌苔工序 - 数据录入</span>
+        <span class="section-desc">选择焯水批次进行去舌苔加工</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('qushetou')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('qushetou')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-qushetou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>焯水批次</th><th>舌苔批次</th><th>日期</th>
+              <th>碎肉(kg)</th><th>产出(kg)</th><th>投入(kg)</th>
+              <th>熟制用量(kg)</th><th>剩余(kg)</th><th>出成率(%)</th>
+              <th>总工时(h)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-qushetou">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">去舌苔工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('qushetou')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-qushetou">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-qushetou">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">去舌苔 - 半成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('qushetou', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-qushetou">
+          <thead><tr><th>批次号</th><th>所属订单</th><th>产出总量(kg)</th><th>已使用量(kg)</th><th>剩余量(kg)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-qushetou">
+    <div class="op-record-header" onclick="toggleOpRecord('qushetou')">
+      <span class="op-record-title">&#128336; 去舌苔工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-qushetou">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-qushetou">
+      <div class="op-record-timeline" id="oprecord-timeline-qushetou">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 熟制 ==================== -->
+<div class="page" id="page-shuzhi">
+  <div class="order-info-bar" id="orderInfo-shuzhi">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId-sz">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product-sz">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight-sz">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status-sz">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">熟制工序 - 数据录入</span>
+        <span class="section-desc">选择去舌苔批次进行熟制加工</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('shuzhi')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('shuzhi')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-shuzhi">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>舌苔批次</th><th>熟制批次</th><th>日期</th>
+              <th>投入(kg)</th><th>产出(kg)</th><th>出成率(%)</th>
+              <th>已使用(kg)</th><th>剩余(kg)</th>
+              <th>总工时(h)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-shuzhi">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">熟制工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('shuzhi')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-shuzhi">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-shuzhi">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">熟制 - 半成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('shuzhi', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-shuzhi">
+          <thead><tr><th>批次号</th><th>所属订单</th><th>产出总量(kg)</th><th>已使用量(kg)</th><th>剩余量(kg)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-shuzhi">
+    <div class="op-record-header" onclick="toggleOpRecord('shuzhi')">
+      <span class="op-record-title">&#128336; 熟制工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-shuzhi">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-shuzhi">
+      <div class="op-record-timeline" id="oprecord-timeline-shuzhi">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 气调 ==================== -->
+<div class="page" id="page-qidiao">
+  <div class="order-info-bar" id="orderInfo-qidiao">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div class="info-item"><span class="info-label">当前订单:</span><span class="info-value" id="oi-orderId-qd">-</span></div>
+      <div class="info-item"><span class="info-label">产品:</span><span class="info-value" id="oi-product-qd">-</span></div>
+      <div class="info-item"><span class="info-label">原料重量:</span><span class="info-value" id="oi-rawWeight-qd">-</span></div>
+      <div class="info-item"><span class="info-label">状态:</span><span class="info-value" id="oi-status-qd">-</span></div>
+    </div>
+    <button class="btn btn-sm" onclick="backToOrders()">返回订单列表</button>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">气调工序 - 数据录入</span>
+        <span class="section-desc">选择熟制批次进行气调包装</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addRow('qidiao')">+ 添加行</button>
+        <button class="btn btn-success" onclick="saveData('qidiao')">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="table-qidiao">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>熟制批次</th><th>订单批次</th><th>生产日期</th>
+              <th>入库(盒)</th><th>留样(盒)</th><th>剩余(盒)</th><th>领用(盒)</th>
+              <th>实际生产(盒)</th><th>成品重(kg)</th><th>料头(kg)</th><th>总重量(kg)</th>
+              <th>使用重量(kg)</th><th>出成率(%)</th>
+              <th>单盒克重(g)</th>
+              <th>员工单价(元/h)</th><th>总工时(h)</th><th>每盒人工费(元)</th>
+              <th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="work-hours-card" id="wh-card-qidiao">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">气调工序 - 工时记录</span>
+        <span class="section-desc">支持多组人、多个时间段记录</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addWorkHourRow('qidiao')">+ 添加工时记录</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="data-table-wrap">
+        <table class="data-table" id="wh-table-qidiao">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>开始时间</th><th>结束时间</th><th>时长(h)</th>
+              <th>人数</th><th>小计工时(h)</th><th>备注</th><th style="width:60px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="wh-total-bar">
+      <span class="wh-total-label">总工时:</span>
+      <span class="wh-total-value" id="wh-total-qidiao">0.00 h</span>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <span class="section-title">气调 - 成品库存</span>
+    </div>
+    <div class="section-body">
+      <div class="search-box">
+        <input type="text" placeholder="搜索批次号..." oninput="filterInventory('qidiao', this.value)">
+      </div>
+      <div class="data-table-wrap">
+        <table class="inv-table" id="inv-qidiao">
+          <thead><tr><th>订单批次</th><th>所属订单</th><th>实际生产(盒)</th><th>入库(盒)</th><th>留样(盒)</th><th>剩余(盒)</th><th>领用(盒)</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="op-record-card" id="oprecord-qidiao">
+    <div class="op-record-header" onclick="toggleOpRecord('qidiao')">
+      <span class="op-record-title">&#128336; 气调工序 - 操作记录</span>
+      <span class="op-record-toggle" id="oprecord-toggle-qidiao">&#9660;</span>
+    </div>
+    <div class="op-record-body" id="oprecord-body-qidiao">
+      <div class="op-record-timeline" id="oprecord-timeline-qidiao">
+        <div class="op-record-empty">暂无操作记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 汇总 ==================== -->
+<div class="page" id="page-summary">
+  <div class="summary-card">
+    <h3>订单成本汇总</h3>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:13px;color:#555;margin-right:8px;">选择订单:</label>
+      <select id="summaryOrderSelect" onchange="refreshSummary()" style="min-width:200px;">
+        <option value="">全部订单</option>
+      </select>
+      <button class="btn btn-primary" onclick="refreshSummary()" style="margin-left:12px;">刷新汇总</button>
+      <button class="btn" onclick="exportSummaryCSV()">导出CSV</button>
+    </div>
+    <div id="summaryContent"></div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 成本分析 ==================== -->
+<div class="page" id="page-cost">
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">成本分析</span>
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addSeasoningRow()">+ 添加调料</button>
+        <button class="btn btn-primary" onclick="addPackagingRow()">+ 添加包装</button>
+        <button class="btn btn-success" onclick="saveCostData()">保存</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="cost-section">
+        <h4>调料配方表</h4>
+        <div class="data-table-wrap">
+          <table class="data-table" id="table-seasoning">
+            <thead>
+              <tr><th style="width:40px">#</th><th>工序</th><th>原料名称</th><th>用量(g)</th><th>单价(元/kg)</th><th>成本(元)</th><th style="width:60px">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="cost-section">
+        <h4>包装成本表</h4>
+        <div class="data-table-wrap">
+          <table class="data-table" id="table-packaging">
+            <thead>
+              <tr><th style="width:40px">#</th><th>材料</th><th>规格</th><th>单价(元)</th><th>合计(元)</th><th style="width:60px">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="cost-section">
+        <h4>单盒成本测算</h4>
+        <div id="costCalcResult" style="padding:12px;background:#f5f7fa;border-radius:6px;font-size:14px;">
+          <p>调料总成本: <strong id="totalSeasoningCost">0.00</strong> 元</p>
+          <p>包装总成本: <strong id="totalPackagingCost">0.00</strong> 元</p>
+          <p>每盒调料成本: <strong id="perBoxSeasoning">0.00</strong> 元</p>
+          <p>每盒包装成本: <strong id="perBoxPackaging">0.00</strong> 元</p>
+          <p style="font-size:16px;color:#1a3a5c;margin-top:8px;">每盒总成本(不含人工): <strong id="perBoxTotalCost">0.00</strong> 元</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: 系统日志 ==================== -->
+<div class="page" id="page-syslog">
+  <div class="section-card">
+    <div class="section-header">
+      <div style="display:flex;align-items:center;">
+        <span class="section-title">&#128220; 系统操作日志</span>
+        <span class="section-desc">记录所有订单和工序的操作历史</span>
+      </div>
+      <div>
+        <button class="btn btn-danger btn-sm" onclick="clearSystemLogs()">清空日志</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="sys-log-filter">
+        <select id="syslog-type-filter" onchange="renderSystemLogs()">
+          <option value="">全部类型</option>
+          <option value="create">新建</option>
+          <option value="save">保存</option>
+          <option value="modify">修改</option>
+          <option value="delete">删除</option>
+          <option value="order">订单操作</option>
+        </select>
+        <select id="syslog-order-filter" onchange="renderSystemLogs()">
+          <option value="">全部订单</option>
+        </select>
+        <select id="syslog-process-filter" onchange="renderSystemLogs()">
+          <option value="">全部工序</option>
+          <option value="xiuyou">修油</option>
+          <option value="gunrou">滚揉</option>
+          <option value="chaoshui">焯水</option>
+          <option value="qushetou">去舌苔</option>
+          <option value="shuzhi">熟制</option>
+          <option value="qidiao">气调</option>
+        </select>
+        <input type="text" id="syslog-search" placeholder="搜索操作内容..." oninput="renderSystemLogs()">
+      </div>
+      <div class="data-table-wrap" style="max-height:600px;overflow-y:auto;">
+        <table class="sys-log-table" id="table-syslog">
+          <thead>
+            <tr>
+              <th style="width:160px">时间</th>
+              <th style="width:80px">类型</th>
+              <th style="width:130px">订单号</th>
+              <th style="width:80px">工序</th>
+              <th>操作内容</th>
+              <th style="width:200px">变更详情</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- end main-content -->
+
+<!-- ========== New Order Modal ========== -->
+<div class="modal-overlay" id="orderModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>新建订单</h3>
+      <span class="modal-close" onclick="closeOrderModal()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label>产品名称</label>
+        <select id="modalProduct">
+          <option value="猪舌">猪舌</option>
+          <option value="和牛牛腱">和牛牛腱</option>
+          <option value="猪大骨">猪大骨</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>原料重量 (kg)</label>
+        <input type="number" id="modalRawWeight" step="0.01" min="0" placeholder="请输入原料重量">
+      </div>
+      <div class="form-row">
+        <label>订单日期</label>
+        <input type="date" id="modalOrderDate">
+      </div>
+      <div class="form-row">
+        <label>备注</label>
+        <textarea id="modalRemark" placeholder="可选填"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeOrderModal()">取消</button>
+      <button class="btn btn-primary" onclick="confirmNewOrder()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Enter Production Modal ========== -->
+<div class="modal-overlay" id="enterProductionModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>进入生产</h3>
+      <span class="modal-close" onclick="closeEnterProductionModal()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div class="epm-info-block">
+        <div class="epm-info-row">
+          <span class="epm-info-label">订单号:</span>
+          <span class="epm-info-value" id="epm-orderId">-</span>
+        </div>
+        <div class="epm-info-row">
+          <span class="epm-info-label">产品:</span>
+          <span class="epm-info-value" id="epm-product">-</span>
+        </div>
+        <div class="epm-info-row">
+          <span class="epm-info-label">原料重量:</span>
+          <span class="epm-info-value" id="epm-rawWeight">-</span>
+        </div>
+        <div class="epm-info-row">
+          <span class="epm-info-label">工艺:</span>
+          <span class="epm-info-value" id="epm-processFlow">-</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeEnterProductionModal()">取消</button>
+      <button class="btn btn-primary" onclick="confirmEnterProduction()">确定进入</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== Global State ==========
+const ALL_PROCESSES = ['xiuyou','gunrou','chaoshui','qushetou','shuzhi','qidiao'];
+const PROCESS_NAMES = {xiuyou:'修油',gunrou:'滚揉',chaoshui:'焯水',qushetou:'去舌苔',shuzhi:'熟制',qidiao:'气调'};
+const UPSTREAM = {gunrou:'xiuyou',chaoshui:'gunrou',qushetou:'chaoshui',shuzhi:'qushetou',qidiao:'shuzhi'};
+const UPSTREAM_LABEL = {gunrou:'修油',chaoshui:'滚揉',qushetou:'焯水',shuzhi:'舌苔',qidiao:'熟制'};
+const PRODUCT_PROCESSES = {
+  '猪舌': ['xiuyou','gunrou','chaoshui','qushetou','shuzhi','qidiao'],
+  '和牛牛腱': ['xiuyou','gunrou','chaoshui','shuzhi','qidiao'],
+  '猪大骨': ['xiuyou','gunrou','chaoshui','shuzhi','qidiao']
+};
+const PRODUCT_ABBR = {'猪舌':'HS','和牛牛腱':'NH','猪大骨':'DG'};
+const PROCESS_ABBR = {xiuyou:'XY', gunrou:'GR', chaoshui:'CS', qushetou:'ST', shuzhi:'SZ', qidiao:'QD'};
+
+let appData = {
+  orders: [],
+  currentOrderId: null,
+  products: [
+    {id:'pig_tongue', name:'猪舌', processes:['xiuyou','gunrou','chaoshui','qushetou','shuzhi','qidiao']},
+    {id:'wagyu_tendon', name:'和牛牛腱', processes:['xiuyou','gunrou','chaoshui','shuzhi','qidiao']},
+    {id:'pork_bone', name:'猪大骨', processes:['xiuyou','gunrou','chaoshui','shuzhi','qidiao']}
+  ],
+  seasoning: [],
+  packaging: [],
+  inventory: {
+    xiuyou: {}, gunrou: {}, chaoshui: {}, qushetou: {}, shuzhi: {}, qidiao: {}
+  },
+  systemLogs: []
+};
+
+let currentEnterProductionOrderId = null;
+
+// ========== Data Persistence with Migration ==========
+function loadAllData() {
+  try {
+    const saved = localStorage.getItem('productionCostApp_v3');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      appData = Object.assign({}, appData, parsed);
+      // Ensure inventory object exists
+      if (!appData.inventory) appData.inventory = {xiuyou:{},gunrou:{},chaoshui:{},qushetou:{},shuzhi:{},qidiao:{}};
+      // Ensure systemLogs exists
+      if (!appData.systemLogs) appData.systemLogs = [];
+      // Ensure workHours and opRecords exist for each order
+      appData.orders.forEach(order => {
+        if (!order.workHours) order.workHours = {};
+        if (!order.opRecords) order.opRecords = {};
+        ALL_PROCESSES.forEach(p => {
+          if (!order.workHours[p]) order.workHours[p] = [];
+          if (!order.opRecords[p]) order.opRecords[p] = [];
+        });
+      });
+      return;
+    }
+    // Try migrate from v2
+    const v2 = localStorage.getItem('productionCostApp_v2');
+    if (v2) {
+      const old = JSON.parse(v2);
+      migrateFromV2(old);
+      saveAllData();
+      showToast('数据已从V2版本迁移');
+      return;
+    }
+  } catch(e) { console.error('Load error:', e); }
+}
+
+function migrateFromV2(old) {
+  const orderId = 'ORD-' + formatDate(new Date()) + '-001';
+  const order = {
+    id: orderId,
+    productName: '猪舌',
+    rawWeight: 0,
+    orderDate: formatDate(new Date()),
+    remark: '从V2迁移的数据',
+    status: '生产中',
+    createdAt: Date.now(),
+    productionData: {
+      xiuyou: [], gunrou: [], chaoshui: [], qushetou: [], shuzhi: [], qidiao: []
+    },
+    workHours: {
+      xiuyou: [], gunrou: [], chaoshui: [], qushetou: [], shuzhi: [], qidiao: []
+    }
+  };
+  ALL_PROCESSES.forEach(p => {
+    if (old[p] && Array.isArray(old[p])) {
+      order.productionData[p] = old[p].map(row => {
+        if (row.upstreamBatch && UPSTREAM[p]) {
+          const upstreamWeight = parseFloat(row.before || row.input || row.usedWeight || 0) || 0;
+          row.upstreamSources = [{batch: row.upstreamBatch, weight: upstreamWeight}];
+        }
+        return row;
+      });
+    }
+  });
+  // Only use xiuyou outWeight sum if rawWeight wasn't set from the order
+  if (!order.rawWeight || order.rawWeight === 0) {
+    const xyData = order.productionData.xiuyou || [];
+    let totalRaw = 0;
+    xyData.forEach(r => { totalRaw += parseFloat(r.outWeight) || 0; });
+    order.rawWeight = totalRaw;
+  }
+
+  appData.orders = [order];
+  appData.currentOrderId = orderId;
+  appData.seasoning = old.seasoning || [];
+  appData.packaging = old.packaging || [];
+}
+
+function saveAllData() {
+  try {
+    localStorage.setItem('productionCostApp_v3', JSON.stringify(appData));
+  } catch(e) { console.error('Save error:', e); }
+}
+
+function saveData(process) {
+  const order = getCurrentOrder();
+  if (!order) return;
+
+  // Snapshot old data before saving for change detection
+  const oldData = JSON.stringify(order.productionData[process] || []);
+  const oldWHData = JSON.stringify(order.workHours[process] || []);
+
+  collectTableData(process);
+  collectWorkHours(process);
+
+  const newData = JSON.stringify(order.productionData[process] || []);
+  const newWHData = JSON.stringify(order.workHours[process] || []);
+
+  // Detect changes and build change detail
+  const changes = detectChanges(oldData, newData, process);
+  const whChanges = detectChanges(oldWHData, newWHData, process, true);
+
+  const hasDataChanges = oldData !== newData;
+  const hasWHChanges = oldWHData !== newWHData;
+  const isFirstSave = oldData === '[]' && newData !== '[]';
+
+  let logType = 'save';
+  let logAction = '保存数据';
+  let logDetail = '';
+
+  if (isFirstSave) {
+    logType = 'create';
+    logAction = '首次提交数据';
+    logDetail = changes;
+  } else if (hasDataChanges || hasWHChanges) {
+    logType = 'modify';
+    logAction = '修改数据';
+    const parts = [];
+    if (changes) parts.push(changes);
+    if (whChanges) parts.push('工时: ' + whChanges);
+    logDetail = parts.join(' | ');
+  } else {
+    logDetail = '无变更';
+  }
+
+  // Write operation record for this process
+  const record = {
+    id: Date.now(),
+    time: new Date().toISOString(),
+    type: logType,
+    action: logAction,
+    detail: logDetail,
+    data: JSON.parse(newData),
+    workHours: JSON.parse(newWHData)
+  };
+  if (!order.opRecords) order.opRecords = {};
+  if (!order.opRecords[process]) order.opRecords[process] = [];
+  order.opRecords[process].push(record);
+
+  // Write system log
+  addSystemLog({
+    type: logType,
+    orderId: order.id,
+    process: process,
+    action: logAction,
+    detail: logDetail
+  });
+
+  saveAllData();
+  renderInventory(process);
+  renderOpRecord(process);
+  showToast('数据已保存');
+}
+
+// ========== Toast ==========
+function showToast(msg) {
+  let t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;top:120px;right:30px;background:#4caf50;color:#fff;padding:10px 24px;border-radius:6px;z-index:9999;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.2);transition:opacity 0.3s;';
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2000);
+}
+
+// ========== Change Detection ==========
+function detectChanges(oldJson, newJson, process, isWorkHours) {
+  if (oldJson === newJson) return '';
+  try {
+    const oldArr = JSON.parse(oldJson);
+    const newArr = JSON.parse(newJson);
+    const fieldNames = isWorkHours
+      ? { startTime: '开始时间', endTime: '结束时间', duration: '时长', workers: '人数', remark: '备注' }
+      : getFieldLabels(process);
+    const diffs = [];
+    // Compare row by row
+    const maxLen = Math.max(oldArr.length, newArr.length);
+    for (let i = 0; i < maxLen; i++) {
+      const oldRow = oldArr[i] || {};
+      const newRow = newArr[i] || {};
+      const rowLabel = isWorkHours ? '工时记录' : (fieldNames.batch ? newRow.batch || newRow.rawBatch || ('第' + (i+1) + '行') : ('第' + (i+1) + '行'));
+      if (!oldArr[i]) {
+        diffs.push('+' + rowLabel + ' 新增');
+        continue;
+      }
+      if (!newArr[i]) {
+        diffs.push('-' + rowLabel + ' 删除');
+        continue;
+      }
+      const fieldDiffs = [];
+      Object.keys(newRow).forEach(key => {
+        if (key === 'upstreamSources' || key === 'rowId') return;
+        const oldVal = String(oldRow[key] || '');
+        const newVal = String(newRow[key] || '');
+        if (oldVal !== newVal) {
+          const label = fieldNames[key] || key;
+          fieldDiffs.push(label + ': ' + oldVal + ' → ' + newVal);
+        }
+      });
+      // Check deleted keys
+      Object.keys(oldRow).forEach(key => {
+        if (key === 'upstreamSources' || key === 'rowId') return;
+        if (!(key in newRow)) {
+          const label = fieldNames[key] || key;
+          fieldDiffs.push(label + ': ' + oldRow[key] + ' → (删除)');
+        }
+      });
+      if (fieldDiffs.length > 0) {
+        diffs.push(rowLabel + ': ' + fieldDiffs.join(', '));
+      }
+    }
+    return diffs.length > 0 ? diffs.join('; ') : '数据结构变更';
+  } catch(e) {
+    return '数据已更新';
+  }
+}
+
+function getFieldLabels(process) {
+  const labels = {
+    xiuyou: { outDate: '出库日期', rawBatch: '原料批次', outWeight: '出库重量', prodDate: '生产日期', output: '产出数量', fatOil: '肥油', feedWeight: '投料重量', yieldRate: '出成率' },
+    gunrou: { upstreamBatch: '修油批次', batch: '滚揉批次', date: '滚揉日期', before: '滚揉前', after: '滚揉后', yieldRate: '出成率', downstreamUse: '焯水用量', remain: '剩余量', totalHours: '总工时' },
+    chaoshui: { upstreamBatch: '滚揉批次', batch: '焯水批次', date: '焯水日期', before: '焯水前', after: '焯水后', yieldRate: '出成率', downstreamUse: '下游用量', remain: '剩余量', totalHours: '总工时' },
+    qushetou: { upstreamBatch: '焯水批次', batch: '舌苔批次', date: '日期', scrap: '碎肉', output: '产出', input: '投入', downstreamUse: '熟制用量', remain: '剩余', yieldRate: '出成率', totalHours: '总工时' },
+    shuzhi: { upstreamBatch: '舌苔批次', batch: '熟制批次', date: '日期', input: '投入', output: '产出', yieldRate: '出成率', downstreamUse: '已使用', remain: '剩余', totalHours: '总工时' },
+    qidiao: { upstreamBatch: '熟制批次', batch: '订单批次', prodDate: '生产日期', storage: '入库', sample: '留样', remain: '剩余', claim: '领用', actualProd: '实际生产', productWeight: '成品重', trimmings: '料头', totalWeight: '总重量', usedWeight: '使用重量', yieldRate: '出成率', weightPerBox: '单盒克重', workerPrice: '员工单价', totalHours: '总工时', laborPerBox: '每盒人工费' }
+  };
+  return labels[process] || {};
+}
+
+// ========== System Log ==========
+function addSystemLog(entry) {
+  if (!appData.systemLogs) appData.systemLogs = [];
+  appData.systemLogs.push({
+    id: Date.now() + '_' + Math.random().toString(36).substr(2,5),
+    time: new Date().toISOString(),
+    type: entry.type || 'save',
+    orderId: entry.orderId || '',
+    process: entry.process || '',
+    action: entry.action || '',
+    detail: entry.detail || ''
+  });
+  // Keep max 500 logs
+  if (appData.systemLogs.length > 500) {
+    appData.systemLogs = appData.systemLogs.slice(-500);
+  }
+}
+
+function renderSystemLogs() {
+  const tbody = document.querySelector('#table-syslog tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const typeFilter = document.getElementById('syslog-type-filter')?.value || '';
+  const orderFilter = document.getElementById('syslog-order-filter')?.value || '';
+  const processFilter = document.getElementById('syslog-process-filter')?.value || '';
+  const searchFilter = (document.getElementById('syslog-search')?.value || '').toLowerCase();
+
+  // Update order filter options
+  const orderSelect = document.getElementById('syslog-order-filter');
+  const currentVal = orderSelect.value;
+  const orderIds = [...new Set(appData.systemLogs.map(l => l.orderId).filter(Boolean))];
+  orderSelect.innerHTML = '<option value="">全部订单</option>' + orderIds.map(id => `<option value="${id}">${id}</option>`).join('');
+  orderSelect.value = currentVal;
+
+  let logs = (appData.systemLogs || []).slice().reverse();
+
+  if (typeFilter) logs = logs.filter(l => l.type === typeFilter);
+  if (orderFilter) logs = logs.filter(l => l.orderId === orderFilter);
+  if (processFilter) logs = logs.filter(l => l.process === processFilter);
+  if (searchFilter) logs = logs.filter(l =>
+    (l.action || '').toLowerCase().includes(searchFilter) ||
+    (l.detail || '').toLowerCase().includes(searchFilter) ||
+    (l.orderId || '').toLowerCase().includes(searchFilter)
+  );
+
+  if (logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:30px;">暂无日志记录</td></tr>';
+    return;
+  }
+
+  const typeLabels = { create: '新建', save: '保存', modify: '修改', delete: '删除', order: '订单' };
+  const processLabels = { xiuyou: '修油', gunrou: '滚揉', chaoshui: '焯水', qushetou: '去舌苔', shuzhi: '熟制', qidiao: '气调' };
+
+  logs.forEach(log => {
+    const tr = document.createElement('tr');
+    const timeStr = log.time ? new Date(log.time).toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '-';
+    tr.innerHTML = `
+      <td>${timeStr}</td>
+      <td><span class="sys-log-type ${log.type}">${typeLabels[log.type] || log.type}</span></td>
+      <td>${log.orderId || '-'}</td>
+      <td>${processLabels[log.process] || log.process || '-'}</td>
+      <td>${log.action || '-'}</td>
+      <td class="sys-log-detail-cell">${log.detail || '-'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function clearSystemLogs() {
+  if (!confirm('确定清空所有系统日志？此操作不可恢复。')) return;
+  appData.systemLogs = [];
+  saveAllData();
+  renderSystemLogs();
+  showToast('系统日志已清空');
+}
+
+// ========== Operation Record (per process) ==========
+function toggleOpRecord(process) {
+  const body = document.getElementById('oprecord-body-' + process);
+  const toggle = document.getElementById('oprecord-toggle-' + process);
+  if (!body || !toggle) return;
+  body.classList.toggle('open');
+  toggle.classList.toggle('open');
+}
+
+function renderOpRecord(process) {
+  const order = getCurrentOrder();
+  if (!order) return;
+  const records = (order.opRecords && order.opRecords[process]) || [];
+  const timeline = document.getElementById('oprecord-timeline-' + process);
+  if (!timeline) return;
+
+  if (records.length === 0) {
+    timeline.innerHTML = '<div class="op-record-empty">暂无操作记录</div>';
+    return;
+  }
+
+  timeline.innerHTML = '';
+  // Show records in reverse order (newest first)
+  records.slice().reverse().forEach(rec => {
+    const item = document.createElement('div');
+    let cssClass = 'op-record-item';
+    if (rec.type === 'modify') cssClass += ' op-modify';
+    if (rec.type === 'delete') cssClass += ' op-delete';
+    item.className = cssClass;
+
+    const timeStr = rec.time ? new Date(rec.time).toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '-';
+
+    let tagClass = 'op-tag-save';
+    let tagText = '保存';
+    if (rec.type === 'create') { tagClass = 'op-tag-create'; tagText = '新建'; }
+    if (rec.type === 'modify') { tagClass = 'op-tag-modify'; tagText = '修改'; }
+    if (rec.type === 'delete') { tagClass = 'op-tag-delete'; tagText = '删除'; }
+
+    let detailHtml = '';
+    if (rec.detail && rec.detail !== '无变更') {
+      // Parse detail and format as field-change badges
+      const parts = rec.detail.split('; ');
+      detailHtml = '<div class="op-record-detail">' + parts.map(p => '<span class="field-change">' + escapeHtml(p) + '</span>').join('') + '</div>';
+    }
+
+    item.innerHTML = `
+      <div class="op-record-time">${timeStr}</div>
+      <div class="op-record-action"><span class="op-tag ${tagClass}">${tagText}</span>${escapeHtml(rec.action || '')}</div>
+      ${detailHtml}
+    `;
+    timeline.appendChild(item);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ========== Product-aware helpers ==========
+function getOrderProcesses(order) {
+  if (!order) return ALL_PROCESSES;
+  return PRODUCT_PROCESSES[order.productName] || ALL_PROCESSES;
+}
+
+function getCurrentOrderProcesses() {
+  return getOrderProcesses(getCurrentOrder());
+}
+
+// ========== Dynamic UI Generation ==========
+function rebuildNavTabs() {
+  const navTabs = document.getElementById('navTabs');
+  navTabs.innerHTML = '';
+  const pages = [
+    {page:'orders', label:'订单管理', cls:''},
+    {page:'xiuyou', label:'修油', cls:''},
+    {page:'gunrou', label:'滚揉', cls:''},
+    {page:'chaoshui', label:'焯水', cls:''},
+    {page:'qushetou', label:'去舌苔', cls:''},
+    {page:'shuzhi', label:'熟制', cls:''},
+    {page:'qidiao', label:'气调', cls:''},
+    {page:'summary', label:'汇总', cls:'summary-tab'},
+    {page:'cost', label:'成本分析', cls:'summary-tab'},
+    {page:'syslog', label:'系统日志', cls:'', style:'background:rgba(244,67,54,0.15);border-color:rgba(244,67,54,0.3);'}
+  ];
+  pages.forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'nav-tab' + (p.cls ? ' ' + p.cls : '');
+    div.dataset.page = p.page;
+    div.textContent = p.label;
+    if (p.style) div.style.cssText = p.style;
+    if (p.page === 'orders') div.classList.add('active');
+    navTabs.appendChild(div);
+  });
+}
+
+function rebuildFlowBar() {
+  const order = getCurrentOrder();
+  const processes = getOrderProcesses(order);
+  const flowSteps = document.getElementById('flowSteps');
+  flowSteps.innerHTML = '';
+  processes.forEach((p, idx) => {
+    const stepDiv = document.createElement('div');
+    stepDiv.className = 'flow-step';
+    stepDiv.dataset.page = p;
+    stepDiv.innerHTML = `<span class="step-num">${idx+1}</span>${PROCESS_NAMES[p]}`;
+    flowSteps.appendChild(stepDiv);
+    if (idx < processes.length - 1) {
+      const arrow = document.createElement('span');
+      arrow.className = 'flow-arrow';
+      arrow.innerHTML = '&#10132;';
+      flowSteps.appendChild(arrow);
+    }
+  });
+}
+
+function updateNavVisibility() {
+  const order = getCurrentOrder();
+  const processes = getOrderProcesses(order);
+  document.querySelectorAll('.nav-tab').forEach(tab => {
+    const page = tab.dataset.page;
+    if (ALL_PROCESSES.includes(page)) {
+      tab.style.display = processes.includes(page) ? '' : 'none';
+    }
+  });
+}
+
+// ========== Navigation ==========
+function switchPage(pageId) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.flow-step').forEach(s => { s.classList.remove('active','done'); });
+
+  const page = document.getElementById('page-' + pageId);
+  if (page) page.classList.add('active');
+
+  const tab = document.querySelector(`.nav-tab[data-page="${pageId}"]`);
+  if (tab) tab.classList.add('active');
+
+  const step = document.querySelector(`.flow-step[data-page="${pageId}"]`);
+  if (step) step.classList.add('active');
+
+  const flowBar = document.getElementById('flowBar');
+  const order = getCurrentOrder();
+  const processes = getOrderProcesses(order);
+  if (processes.includes(pageId)) {
+    flowBar.style.display = 'block';
+    const idx = processes.indexOf(pageId);
+    processes.forEach((p, i) => {
+      if (i < idx) {
+        const s = document.querySelector(`.flow-step[data-page="${p}"]`);
+        if (s) s.classList.add('done');
+      }
+    });
+  } else {
+    flowBar.style.display = 'none';
+  }
+
+  if (processes.includes(pageId)) {
+    renderTable(pageId);
+    renderInventory(pageId);
+    updateOrderInfoBar(pageId);
+    renderWorkHours(pageId);
+    renderOpRecord(pageId);
+  }
+  if (pageId === 'summary') { populateSummaryOrderSelect(); refreshSummary(); }
+  if (pageId === 'cost') { renderSeasoning(); renderPackaging(); calcCost(); }
+  if (pageId === 'orders') renderOrders();
+  if (pageId === 'syslog') renderSystemLogs();
+}
+
+document.getElementById('navTabs').addEventListener('click', e => {
+  const tab = e.target.closest('.nav-tab');
+  if (tab) switchPage(tab.dataset.page);
+});
+document.getElementById('flowSteps').addEventListener('click', e => {
+  const step = e.target.closest('.flow-step');
+  if (step) switchPage(step.dataset.page);
+});
+
+// ========== Order Management ==========
+function formatDate(d) {
+  const date = new Date(d);
+  const y = date.getFullYear();
+  const m = String(date.getMonth()+1).padStart(2,'0');
+  const day = String(date.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function generateOrderId() {
+  const date = formatDate(new Date());
+  const existing = appData.orders.filter(o => o.id.startsWith('ORD-' + date.replace(/-/g,'')));
+  const seq = String(existing.length + 1).padStart(3,'0');
+  return `ORD-${date.replace(/-/g,'')}-${seq}`;
+}
+
+function generateBatch(productName) {
+  const abbr = PRODUCT_ABBR[productName] || 'XX';
+  const date = formatDate(new Date()).replace(/-/g,'').slice(2);
+  const processData = getCurrentProcessData('xiuyou');
+  const seq = String(processData.length + 1).padStart(3,'0');
+  return `${abbr}-${date}-${seq}`;
+}
+
+function generateProcessBatch(process) {
+  const abbr = PROCESS_ABBR[process] || 'XX';
+  const date = formatDate(new Date()).replace(/-/g,'').slice(2);
+  const processData = getCurrentProcessData(process);
+  // Find max sequence from existing batches for this process
+  let maxSeq = 0;
+  processData.forEach(row => {
+    const batch = row.batch || '';
+    const match = batch.match(new RegExp('^' + abbr + '-' + date + '-(\\d{3})$'));
+    if (match) {
+      const seq = parseInt(match[1], 10);
+      if (seq > maxSeq) maxSeq = seq;
+    }
+  });
+  const seq = String(maxSeq + 1).padStart(3, '0');
+  return `${abbr}-${date}-${seq}`;
+}
+
+function openOrderModal() {
+  document.getElementById('modalProduct').value = '猪舌';
+  document.getElementById('modalRawWeight').value = '';
+  document.getElementById('modalOrderDate').value = formatDate(new Date());
+  document.getElementById('modalRemark').value = '';
+  document.getElementById('orderModal').classList.add('open');
+}
+
+function closeOrderModal() {
+  document.getElementById('orderModal').classList.remove('open');
+}
+
+function confirmNewOrder() {
+  const productName = document.getElementById('modalProduct').value;
+  const rawWeight = parseFloat(document.getElementById('modalRawWeight').value) || 0;
+  const orderDate = document.getElementById('modalOrderDate').value || formatDate(new Date());
+  const remark = document.getElementById('modalRemark').value;
+
+  if (rawWeight <= 0) {
+    alert('请输入原料重量');
+    return;
+  }
+
+  // Ensure new order has empty productionData and workHours
+  const emptyProductionData = {};
+  ALL_PROCESSES.forEach(p => { emptyProductionData[p] = []; });
+  const emptyWorkHours = {};
+  ALL_PROCESSES.forEach(p => { emptyWorkHours[p] = []; });
+
+  const order = {
+    id: generateOrderId(),
+    productName,
+    rawWeight,
+    orderDate,
+    remark,
+    status: '待生产',
+    createdAt: Date.now(),
+    productionData: emptyProductionData,
+    workHours: emptyWorkHours,
+    opRecords: {}
+  };
+  ALL_PROCESSES.forEach(p => { order.opRecords[p] = []; });
+
+  appData.orders.push(order);
+  appData.currentOrderId = order.id;
+
+  addSystemLog({ type: 'order', orderId: order.id, action: '新建订单', detail: productName + ' ' + rawWeight + 'kg' });
+
+  saveAllData();
+  closeOrderModal();
+  renderOrders();
+  // Auto enter production with modal
+  openEnterProductionModal(order.id);
+}
+
+function renderOrders() {
+  const tbody = document.querySelector('#table-orders tbody');
+  const keyword = document.getElementById('orderSearch')?.value?.toLowerCase() || '';
+  tbody.innerHTML = '';
+
+  const filtered = appData.orders.filter(o => {
+    return !keyword || o.id.toLowerCase().includes(keyword) || o.productName.toLowerCase().includes(keyword);
+  }).sort((a,b) => b.createdAt - a.createdAt);
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px;">暂无订单</td></tr>';
+    return;
+  }
+
+  filtered.forEach(order => {
+    const tr = document.createElement('tr');
+    const statusClass = order.status === '待生产' ? 'pending' : order.status === '生产中' ? 'inprogress' : 'completed';
+    tr.innerHTML = `
+      <td>${order.id}</td>
+      <td>${order.productName}</td>
+      <td>${order.rawWeight}</td>
+      <td>${order.orderDate}</td>
+      <td><span class="status-badge ${statusClass}">${order.status}</span></td>
+      <td>${order.remark || '-'}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="openEnterProductionModal('${order.id}')">进入生产</button>
+        <button class="btn btn-sm" onclick="viewOrderCost('${order.id}')">查看成本</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteOrder('${order.id}')">删除</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ========== Enter Production Modal ==========
+function openEnterProductionModal(orderId) {
+  currentEnterProductionOrderId = orderId;
+  const order = appData.orders.find(o => o.id === orderId);
+  if (!order) return;
+
+  document.getElementById('epm-orderId').textContent = order.id;
+  document.getElementById('epm-product').textContent = order.productName;
+  document.getElementById('epm-rawWeight').textContent = order.rawWeight + 'kg';
+
+  const processes = getOrderProcesses(order);
+  const processNames = processes.map(p => PROCESS_NAMES[p]);
+  document.getElementById('epm-processFlow').textContent = processNames.join(' → ');
+
+  document.getElementById('enterProductionModal').classList.add('open');
+}
+
+function closeEnterProductionModal() {
+  document.getElementById('enterProductionModal').classList.remove('open');
+  currentEnterProductionOrderId = null;
+}
+
+function confirmEnterProduction() {
+  if (!currentEnterProductionOrderId) return;
+  const order = appData.orders.find(o => o.id === currentEnterProductionOrderId);
+  if (!order) return;
+
+  order.status = '生产中';
+  appData.currentOrderId = order.id;
+
+  addSystemLog({ type: 'order', orderId: order.id, action: '进入生产', detail: order.productName + ' ' + order.rawWeight + 'kg' });
+
+  // Auto-add initial row for first process if empty
+  const processes = getOrderProcesses(order);
+  const firstProcess = processes[0];
+  if (firstProcess === 'xiuyou') {
+    const xyData = order.productionData?.xiuyou || [];
+    if (xyData.length === 0) {
+      // Create empty production data structure if needed
+      if (!order.productionData) order.productionData = {};
+      ALL_PROCESSES.forEach(p => { if (!order.productionData[p]) order.productionData[p] = []; });
+      // Add a placeholder row - renderTable will auto-fill from order
+      order.productionData.xiuyou = [{}];
+    }
+  }
+
+  saveAllData();
+  renderOrders();
+
+  const targetPage = processes[0];
+
+  rebuildFlowBar();
+  updateNavVisibility();
+  closeEnterProductionModal();
+  switchPage(targetPage);
+  showToast('已进入生产：' + PROCESS_NAMES[targetPage]);
+}
+
+function viewOrderCost(orderId) {
+  appData.currentOrderId = orderId;
+  populateSummaryOrderSelect();
+  document.getElementById('summaryOrderSelect').value = orderId;
+  switchPage('summary');
+}
+
+function deleteOrder(orderId) {
+  const order = appData.orders.find(o => o.id === orderId);
+  if (!order) return;
+  if (!confirm('确定删除订单 ' + orderId + '？该订单的所有生产数据将被清空。')) return;
+
+  // Subtract this order's production data from global inventory
+  ALL_PROCESSES.forEach(process => {
+    const data = order.productionData?.[process] || [];
+    data.forEach(row => {
+      const batch = row.batch || row.rawBatch || '';
+      if (!batch) return;
+      // Inventory is recalculated dynamically from all orders, so removing the order
+      // from appData.orders is sufficient. No manual inventory subtraction needed.
+    });
+  });
+
+  appData.orders = appData.orders.filter(o => o.id !== orderId);
+  if (appData.currentOrderId === orderId) {
+    appData.currentOrderId = null;
+  }
+
+  addSystemLog({ type: 'delete', orderId: orderId, action: '删除订单', detail: order.productName + ' ' + order.rawWeight + 'kg' });
+
+  saveAllData();
+  renderOrders();
+  showToast('订单已删除');
+}
+
+function backToOrders() {
+  switchPage('orders');
+}
+
+function getCurrentOrder() {
+  if (!appData.currentOrderId) return null;
+  return appData.orders.find(o => o.id === appData.currentOrderId) || null;
+}
+
+function getCurrentProcessData(process) {
+  const order = getCurrentOrder();
+  if (order && order.productionData && order.productionData[process]) {
+    return order.productionData[process];
+  }
+  return [];
+}
+
+function setCurrentProcessData(process, data) {
+  const order = getCurrentOrder();
+  if (order) {
+    if (!order.productionData) order.productionData = {};
+    order.productionData[process] = data;
+  }
+}
+
+function getCurrentWorkHours(process) {
+  const order = getCurrentOrder();
+  if (order && order.workHours && order.workHours[process]) {
+    return order.workHours[process];
+  }
+  return [];
+}
+
+function setCurrentWorkHours(process, data) {
+  const order = getCurrentOrder();
+  if (order) {
+    if (!order.workHours) order.workHours = {};
+    order.workHours[process] = data;
+  }
+}
+
+function updateOrderInfoBar(process) {
+  const order = getCurrentOrder();
+  const suffix = process === 'xiuyou' ? '' : '-' + process;
+  const ids = ['oi-orderId'+suffix, 'oi-product'+suffix, 'oi-rawWeight'+suffix, 'oi-status'+suffix];
+  const vals = order ? [order.id, order.productName, order.rawWeight + 'kg', order.status] : ['-', '-', '-', '-'];
+  ids.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = vals[i];
+  });
+}
+
+// ========== Row Templates ==========
+function getFields(process) {
+  const fields = {
+    xiuyou: [
+      {key:'outDate',type:'readonly',label:'出库日期'},
+      {key:'rawBatch',type:'readonly',label:'原料批次'},
+      {key:'outWeight',type:'readonly',label:'出库重量'},
+      {key:'prodDate',type:'date',label:'生产日期'},
+      {key:'output',type:'number',label:'产出数量'},
+      {key:'fatOil',type:'number',label:'肥油'},
+      {key:'feedWeight',type:'auto',label:'投料重量'},
+      {key:'yieldRate',type:'auto',label:'出成率'}
+    ],
+    gunrou: [
+      {key:'upstreamBatch',type:'dropdown',label:'修油批次',upstream:'xiuyou',upstreamLabel:'修油'},
+      {key:'batch',type:'text',label:'滚揉批次'},
+      {key:'date',type:'date',label:'滚揉日期'},
+      {key:'before',type:'number',label:'滚揉前'},
+      {key:'after',type:'number',label:'滚揉后'},
+      {key:'yieldRate',type:'auto',label:'出成率'},
+      {key:'downstreamUse',type:'number',label:'焯水用量'},
+      {key:'remain',type:'auto',label:'剩余量'},
+      {key:'totalHours',type:'auto',label:'总工时'}
+    ],
+    chaoshui: [
+      {key:'upstreamBatch',type:'dropdown',label:'滚揉批次',upstream:'gunrou',upstreamLabel:'滚揉'},
+      {key:'batch',type:'text',label:'焯水批次'},
+      {key:'date',type:'date',label:'焯水日期'},
+      {key:'before',type:'number',label:'焯水前'},
+      {key:'after',type:'number',label:'焯水后'},
+      {key:'yieldRate',type:'auto',label:'出成率'},
+      {key:'downstreamUse',type:'number',label:'下游用量'},
+      {key:'remain',type:'auto',label:'剩余量'},
+      {key:'totalHours',type:'auto',label:'总工时'}
+    ],
+    qushetou: [
+      {key:'upstreamBatch',type:'dropdown',label:'焯水批次',upstream:'chaoshui',upstreamLabel:'焯水'},
+      {key:'batch',type:'text',label:'舌苔批次'},
+      {key:'date',type:'date',label:'日期'},
+      {key:'scrap',type:'number',label:'碎肉'},
+      {key:'output',type:'number',label:'产出'},
+      {key:'input',type:'auto',label:'投入'},
+      {key:'downstreamUse',type:'number',label:'熟制用量'},
+      {key:'remain',type:'auto',label:'剩余'},
+      {key:'yieldRate',type:'auto',label:'出成率'},
+      {key:'totalHours',type:'auto',label:'总工时'}
+    ],
+    shuzhi: [
+      {key:'upstreamBatch',type:'dropdown',label:'舌苔批次',upstream:'qushetou',upstreamLabel:'舌苔'},
+      {key:'batch',type:'text',label:'熟制批次'},
+      {key:'date',type:'date',label:'日期'},
+      {key:'input',type:'number',label:'投入'},
+      {key:'output',type:'number',label:'产出'},
+      {key:'yieldRate',type:'auto',label:'出成率'},
+      {key:'downstreamUse',type:'number',label:'已使用'},
+      {key:'remain',type:'auto',label:'剩余'},
+      {key:'totalHours',type:'auto',label:'总工时'}
+    ],
+    qidiao: [
+      {key:'upstreamBatch',type:'dropdown',label:'熟制批次',upstream:'shuzhi',upstreamLabel:'熟制'},
+      {key:'batch',type:'text',label:'订单批次'},
+      {key:'date',type:'date',label:'生产日期'},
+      {key:'storage',type:'number',label:'入库'},
+      {key:'sample',type:'number',label:'留样'},
+      {key:'remain',type:'number',label:'剩余'},
+      {key:'claim',type:'number',label:'领用'},
+      {key:'actualProd',type:'auto',label:'实际生产'},
+      {key:'productWeight',type:'number',label:'成品重'},
+      {key:'trimmings',type:'number',label:'料头'},
+      {key:'totalWeight',type:'auto',label:'总重量'},
+      {key:'usedWeight',type:'number',label:'使用重量'},
+      {key:'yieldRate',type:'auto',label:'出成率'},
+      {key:'boxWeight',type:'number',label:'单盒克重'},
+      {key:'workerPrice',type:'number',label:'员工单价'},
+      {key:'totalHours',type:'number',label:'总工时'},
+      {key:'laborPerBox',type:'auto',label:'每盒人工费'}
+    ]
+  };
+  return fields[process] || [];
+}
+
+// ========== Add Row ==========
+function addRow(process) {
+  const table = document.getElementById('table-' + process);
+  const tbody = table.querySelector('tbody');
+  const rowCount = tbody.querySelectorAll('tr').length;
+  const fields = getFields(process);
+  const tr = document.createElement('tr');
+  tr.dataset.rowId = Date.now() + '_' + Math.random().toString(36).substr(2,5);
+
+  let tdNum = document.createElement('td');
+  tdNum.textContent = rowCount + 1;
+  tr.appendChild(tdNum);
+
+  fields.forEach(f => {
+    const td = document.createElement('td');
+    if (f.type === 'dropdown') {
+      const wrap = document.createElement('div');
+      wrap.className = 'dropdown-wrap';
+      const trigger = document.createElement('div');
+      trigger.className = 'dropdown-trigger';
+      trigger.innerHTML = '<span class="dd-text" style="color:#999;">请选择' + f.label + '</span><span class="arrow">&#9660;</span>';
+      const panel = document.createElement('div');
+      panel.className = 'dropdown-panel';
+      panel.innerHTML = '<div class="dropdown-search"><input type="text" placeholder="搜索批次..."></div><div class="dropdown-filter"><select class="order-filter"><option value="">全部订单</option></select></div><div class="dropdown-list"></div>';
+      wrap.appendChild(trigger);
+      wrap.appendChild(panel);
+      td.appendChild(wrap);
+
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        panel.classList.toggle('open');
+        if (panel.classList.contains('open')) {
+          populateDropdown(panel, f.upstream, f.upstreamLabel, trigger, tr);
+          panel.querySelector('.dropdown-search input').focus();
+        }
+      });
+      panel.querySelector('.dropdown-search input').addEventListener('input', function() {
+        filterDropdownItems(panel, this.value);
+      });
+      panel.querySelector('.dropdown-search input').addEventListener('click', e => e.stopPropagation());
+      panel.querySelector('.order-filter').addEventListener('change', function() {
+        populateDropdown(panel, f.upstream, f.upstreamLabel, trigger, tr, this.value);
+      });
+      panel.querySelector('.order-filter').addEventListener('click', e => e.stopPropagation());
+      panel.addEventListener('click', e => e.stopPropagation());
+    } else if (f.type === 'auto') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'auto-field';
+      inp.readOnly = true;
+      inp.dataset.field = f.key;
+      inp.dataset.auto = 'true';
+      td.appendChild(inp);
+    } else if (f.type === 'readonly') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.readOnly = true;
+      inp.dataset.field = f.key;
+      inp.style.background = '#f5f5f5';
+      inp.style.cursor = 'default';
+      td.appendChild(inp);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = f.type;
+      inp.dataset.field = f.key;
+      if (f.type === 'number') { inp.step = '0.01'; inp.min = '0'; }
+      td.appendChild(inp);
+    }
+    tr.appendChild(td);
+  });
+
+  if (process !== 'xiuyou' && UPSTREAM[process]) {
+    const tdSources = document.createElement('td');
+    tdSources.style.display = 'none';
+    tdSources.dataset.upstreamSources = 'true';
+    tr.appendChild(tdSources);
+  }
+
+  let tdDel = document.createElement('td');
+  const delBtn = document.createElement('button');
+  delBtn.className = 'btn btn-danger btn-sm';
+  delBtn.textContent = '删除';
+  delBtn.addEventListener('click', () => {
+    if (confirm('确定删除此行？')) {
+      tr.remove();
+      renumberRows(process);
+    }
+  });
+  tdDel.appendChild(delBtn);
+  tr.appendChild(tdDel);
+
+  tbody.appendChild(tr);
+
+  // Default values for xiuyou (first process)
+  if (process === 'xiuyou') {
+    const order = getCurrentOrder();
+    const rawBatchInp = tr.querySelector('input[data-field="rawBatch"]');
+    const outWeightInp = tr.querySelector('input[data-field="outWeight"]');
+    const outDateInp = tr.querySelector('input[data-field="outDate"]');
+    const prodDateInp = tr.querySelector('input[data-field="prodDate"]');
+    if (rawBatchInp && !rawBatchInp.value) {
+      rawBatchInp.value = generateBatch(order ? order.productName : '猪舌');
+    }
+    if (outWeightInp && order) {
+      outWeightInp.value = order.rawWeight;
+    }
+    if (outDateInp && order) {
+      outDateInp.value = order.orderDate || formatDate(new Date());
+    }
+    if (prodDateInp && !prodDateInp.value) prodDateInp.value = formatDate(new Date());
+  } else {
+    // Auto-generate batch for other processes
+    const batchInp = tr.querySelector('input[data-field="batch"]');
+    if (batchInp && !batchInp.value) {
+      batchInp.value = generateProcessBatch(process);
+    }
+    const dateInp = tr.querySelector('input[data-field="date"]');
+    if (dateInp && !dateInp.value) dateInp.value = formatDate(new Date());
+  }
+
+  attachAutoCalcListeners(tr, process);
+}
+
+function renumberRows(process) {
+  const tbody = document.getElementById('table-' + process).querySelector('tbody');
+  tbody.querySelectorAll('tr').forEach((tr, i) => {
+    tr.querySelector('td:first-child').textContent = i + 1;
+  });
+}
+
+// ========== Work Hours ==========
+function addWorkHourRow(process) {
+  const table = document.getElementById('wh-table-' + process);
+  const tbody = table.querySelector('tbody');
+  const rowCount = tbody.querySelectorAll('tr').length;
+  const tr = document.createElement('tr');
+  tr.dataset.whId = Date.now() + '_' + Math.random().toString(36).substr(2,5);
+
+  tr.innerHTML = `
+    <td>${rowCount + 1}</td>
+    <td><input type="time" data-wh="startTime"></td>
+    <td><input type="time" data-wh="endTime"></td>
+    <td><input type="text" data-wh="duration" class="auto-field" readonly></td>
+    <td><input type="number" data-wh="workers" step="1" min="0" style="min-width:60px;"></td>
+    <td><input type="text" data-wh="subtotal" class="auto-field" readonly></td>
+    <td><input type="text" data-wh="remark" style="min-width:100px;"></td>
+    <td><button class="btn btn-danger btn-sm" onclick="deleteWorkHourRow('${process}', this)">删除</button></td>
+  `;
+  tbody.appendChild(tr);
+
+  tr.querySelectorAll('input[data-wh]').forEach(inp => {
+    inp.addEventListener('input', () => calcWorkHourRow(tr, process));
+    inp.addEventListener('change', () => calcWorkHourRow(tr, process));
+  });
+}
+
+function deleteWorkHourRow(process, btn) {
+  const tr = btn.closest('tr');
+  if (tr) {
+    tr.remove();
+    renumberWorkHourRows(process);
+    updateWorkHourTotal(process);
+  }
+}
+
+function renumberWorkHourRows(process) {
+  const tbody = document.getElementById('wh-table-' + process).querySelector('tbody');
+  tbody.querySelectorAll('tr').forEach((tr, i) => {
+    tr.querySelector('td:first-child').textContent = i + 1;
+  });
+}
+
+function calcWorkHourRow(tr, process) {
+  const startTime = tr.querySelector('input[data-wh="startTime"]')?.value || '';
+  const endTime = tr.querySelector('input[data-wh="endTime"]')?.value || '';
+  const workers = parseFloat(tr.querySelector('input[data-wh="workers"]')?.value) || 0;
+
+  let duration = 0;
+  if (startTime && endTime) {
+    duration = calcTimeDiff(startTime, endTime);
+  }
+
+  const durationInp = tr.querySelector('input[data-wh="duration"]');
+  if (durationInp) durationInp.value = duration.toFixed(2);
+
+  const subtotal = duration * workers;
+  const subtotalInp = tr.querySelector('input[data-wh="subtotal"]');
+  if (subtotalInp) subtotalInp.value = subtotal.toFixed(2);
+
+  updateWorkHourTotal(process);
+
+  // Also update the production table's totalHours auto field
+  const totalHours = getWorkHourTotal(process);
+  const prodTable = document.getElementById('table-' + process);
+  if (prodTable) {
+    prodTable.querySelectorAll('input[data-field="totalHours"]').forEach(inp => {
+      inp.value = totalHours.toFixed(2);
+    });
+  }
+}
+
+function getWorkHourTotal(process) {
+  const tbody = document.getElementById('wh-table-' + process)?.querySelector('tbody');
+  if (!tbody) return 0;
+  let total = 0;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const sub = parseFloat(tr.querySelector('input[data-wh="subtotal"]')?.value) || 0;
+    total += sub;
+  });
+  return total;
+}
+
+function updateWorkHourTotal(process) {
+  const total = getWorkHourTotal(process);
+  const el = document.getElementById('wh-total-' + process);
+  if (el) el.textContent = total.toFixed(2) + ' h';
+}
+
+function renderWorkHours(process) {
+  const data = getCurrentWorkHours(process);
+  const table = document.getElementById('wh-table-' + process);
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+
+  data.forEach((rowData, idx) => {
+    addWorkHourRow(process);
+    const tr = tbody.querySelectorAll('tr')[idx];
+    if (!tr) return;
+    Object.keys(rowData).forEach(k => {
+      const inp = tr.querySelector(`input[data-wh="${k}"]`);
+      if (inp) inp.value = rowData[k];
+    });
+    calcWorkHourRow(tr, process);
+  });
+  updateWorkHourTotal(process);
+}
+
+function collectWorkHours(process) {
+  const table = document.getElementById('wh-table-' + process);
+  const tbody = table.querySelector('tbody');
+  const rows = [];
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const rowData = {};
+    tr.querySelectorAll('input[data-wh]').forEach(inp => {
+      rowData[inp.dataset.wh] = inp.value;
+    });
+    rows.push(rowData);
+  });
+  setCurrentWorkHours(process, rows);
+}
+
+// ========== Custom Dropdown ==========
+function closeAllDropdowns() {
+  document.querySelectorAll('.dropdown-panel.open').forEach(p => p.classList.remove('open'));
+}
+document.addEventListener('click', () => closeAllDropdowns());
+
+function getGlobalInventory(process) {
+  const inventory = {};
+  appData.orders.forEach(order => {
+    const data = order.productionData?.[process] || [];
+    data.forEach(row => {
+      const batch = row.batch || row.rawBatch || '';
+      if (!batch) return;
+      const output = getOutputField(process, row);
+      if (!inventory[batch]) {
+        inventory[batch] = { batch, total: 0, used: 0, orderId: order.id, orderName: order.id };
+      }
+      inventory[batch].total += output;
+      inventory[batch].used += getUsedAmount(process, batch);
+    });
+  });
+  return Object.values(inventory);
+}
+
+function getOutputField(process, row) {
+  switch(process) {
+    case 'xiuyou': return parseFloat(row.output) || 0;
+    case 'gunrou': return parseFloat(row.after) || 0;
+    case 'chaoshui': return parseFloat(row.after) || 0;
+    case 'qushetou': return parseFloat(row.output) || 0;
+    case 'shuzhi': return parseFloat(row.output) || 0;
+    case 'qidiao': return parseFloat(row.actualProd) || 0;
+    default: return 0;
+  }
+}
+
+function getUsedAmount(process, batch) {
+  const downstreamMap = {
+    xiuyou: 'gunrou',
+    gunrou: 'chaoshui',
+    chaoshui: 'qushetou',
+    qushetou: 'shuzhi',
+    shuzhi: 'qidiao'
+  };
+  const downstream = downstreamMap[process];
+  if (!downstream) return 0;
+
+  let used = 0;
+  appData.orders.forEach(order => {
+    const downData = order.productionData?.[downstream] || [];
+    downData.forEach(row => {
+      if (row.upstreamSources && Array.isArray(row.upstreamSources)) {
+        row.upstreamSources.forEach(src => {
+          if (src.batch === batch) {
+            used += parseFloat(src.weight) || 0;
+          }
+        });
+      } else if (row.upstreamBatch === batch) {
+        if (downstream === 'qidiao') {
+          used += parseFloat(row.usedWeight) || 0;
+        } else {
+          used += parseFloat(row.before) || 0;
+        }
+      }
+    });
+  });
+  return used;
+}
+
+function populateDropdown(panel, upstream, upstreamLabel, trigger, row, orderFilter) {
+  const list = panel.querySelector('.dropdown-list');
+  const orderSelect = panel.querySelector('.order-filter');
+  const inventory = getGlobalInventory(upstream);
+  list.innerHTML = '';
+
+  const existingOpts = Array.from(orderSelect.options).map(o => o.value);
+  const orderIds = [...new Set(inventory.map(i => i.orderId))];
+  orderIds.forEach(oid => {
+    if (!existingOpts.includes(oid)) {
+      const opt = document.createElement('option');
+      opt.value = oid;
+      opt.textContent = oid;
+      orderSelect.appendChild(opt);
+    }
+  });
+
+  const filtered = orderFilter ? inventory.filter(i => i.orderId === orderFilter) : inventory;
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="dropdown-empty">暂无可用批次</div>';
+    return;
+  }
+
+  filtered.forEach(item => {
+    const remain = item.total - item.used;
+    const div = document.createElement('div');
+    div.className = 'dropdown-item' + (remain <= 0 ? ' depleted-item' : '');
+    div.innerHTML = `
+      <div>
+        <div class="batch-name">${upstreamLabel}批次: ${item.batch}</div>
+        <div class="batch-info">产出: ${item.total.toFixed(1)}kg | 所属: ${item.orderId}</div>
+      </div>
+      <div class="batch-remain">剩余: ${remain.toFixed(1)}kg</div>
+    `;
+    if (remain > 0) {
+      div.addEventListener('click', () => {
+        trigger.querySelector('.dd-text').textContent = item.batch;
+        trigger.querySelector('.dd-text').style.color = '#333';
+        trigger.dataset.selectedBatch = item.batch;
+        panel.classList.remove('open');
+        const beforeInp = row.querySelector('input[data-field="before"]') || row.querySelector('input[data-field="input"]') || row.querySelector('input[data-field="usedWeight"]');
+        const weight = beforeInp ? (parseFloat(beforeInp.value) || remain) : remain;
+        setUpstreamSources(row, [{batch: item.batch, weight: Math.min(weight, remain)}]);
+        trigger.dispatchEvent(new Event('change'));
+      });
+    }
+    list.appendChild(div);
+  });
+}
+
+function filterDropdownItems(panel, keyword) {
+  const items = panel.querySelectorAll('.dropdown-item');
+  const kw = keyword.toLowerCase();
+  items.forEach(item => {
+    const text = item.textContent.toLowerCase();
+    item.style.display = text.includes(kw) ? '' : 'none';
+  });
+}
+
+// ========== Upstream Sources Management ==========
+function setUpstreamSources(tr, sources) {
+  const td = tr.querySelector('td[data-upstream-sources="true"]');
+  if (!td) return;
+  td.innerHTML = '';
+  const container = document.createElement('div');
+  container.className = 'upstream-sources';
+
+  sources.forEach((src, idx) => {
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'upstream-source-row';
+    rowDiv.innerHTML = `
+      <span class="source-label">来源${idx+1}:</span>
+      <span style="font-weight:500;">${src.batch}</span>
+      <input type="number" class="source-weight" step="0.01" min="0" value="${src.weight}" data-batch="${src.batch}" style="width:80px;">
+      <span style="font-size:12px;color:#666;">kg</span>
+      ${idx > 0 ? '<button class="btn btn-danger btn-xs" onclick="removeUpstreamSource(this)">×</button>' : ''}
+    `;
+    container.appendChild(rowDiv);
+  });
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn btn-sm';
+  addBtn.textContent = '+ 添加来源批次';
+  addBtn.style.marginTop = '6px';
+  addBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openAddSourceDropdown(tr, container);
+  });
+  container.appendChild(addBtn);
+
+  td.appendChild(container);
+}
+
+function openAddSourceDropdown(tr, container) {
+  const table = tr.closest('table');
+  const process = table.id.replace('table-', '');
+  const upstream = UPSTREAM[process];
+  if (!upstream) return;
+
+  const existingSources = getUpstreamSources(tr);
+  const existingBatches = existingSources.map(s => s.batch);
+  const inventory = getGlobalInventory(upstream).filter(i => !existingBatches.includes(i.batch) && (i.total - i.used) > 0);
+
+  if (inventory.length === 0) {
+    showToast('没有可用的额外批次');
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'dropdown-wrap';
+  wrap.style.position = 'relative';
+  const panel = document.createElement('div');
+  panel.className = 'dropdown-panel open';
+  panel.style.display = 'block';
+  panel.style.position = 'absolute';
+  panel.style.zIndex = '1000';
+  panel.innerHTML = '<div class="dropdown-list"></div>';
+
+  const list = panel.querySelector('.dropdown-list');
+  inventory.forEach(item => {
+    const remain = item.total - item.used;
+    const div = document.createElement('div');
+    div.className = 'dropdown-item';
+    div.innerHTML = `
+      <div>
+        <div class="batch-name">批次: ${item.batch}</div>
+        <div class="batch-info">所属: ${item.orderId}</div>
+      </div>
+      <div class="batch-remain">剩余: ${remain.toFixed(1)}kg</div>
+    `;
+    div.addEventListener('click', () => {
+      const newSources = [...existingSources, {batch: item.batch, weight: 0}];
+      setUpstreamSources(tr, newSources);
+      panel.remove();
+      calcRow(tr, process);
+    });
+    list.appendChild(div);
+  });
+
+  wrap.appendChild(panel);
+  container.appendChild(wrap);
+
+  const closeHandler = (e) => {
+    if (!wrap.contains(e.target)) {
+      panel.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 10);
+}
+
+function removeUpstreamSource(btn) {
+  const rowDiv = btn.closest('.upstream-source-row');
+  if (rowDiv) rowDiv.remove();
+}
+
+function getUpstreamSources(tr) {
+  const sources = [];
+  tr.querySelectorAll('.upstream-source-row').forEach(rowDiv => {
+    const batch = rowDiv.querySelector('.source-weight')?.dataset.batch;
+    const weight = parseFloat(rowDiv.querySelector('.source-weight')?.value) || 0;
+    if (batch) sources.push({batch, weight});
+  });
+  return sources;
+}
+
+// ========== Auto Calculations ==========
+function attachAutoCalcListeners(tr, process) {
+  const inputs = tr.querySelectorAll('input[data-field]');
+  inputs.forEach(inp => {
+    if (inp.dataset.auto === 'true') return;
+    const events = ['input','change'];
+    events.forEach(evt => inp.addEventListener(evt, () => calcRow(tr, process)));
+  });
+  const trigger = tr.querySelector('.dropdown-trigger');
+  if (trigger) {
+    trigger.addEventListener('change', () => calcRow(tr, process));
+  }
+  tr.querySelectorAll('.upstream-source-row input').forEach(inp => {
+    inp.addEventListener('input', () => calcRow(tr, process));
+  });
+}
+
+function calcRow(tr, process) {
+  const getVal = (key) => {
+    const inp = tr.querySelector(`input[data-field="${key}"]`);
+    if (inp) return parseFloat(inp.value) || 0;
+    const trigger = tr.querySelector('.dropdown-trigger');
+    if (trigger && trigger.dataset.selectedBatch && key === 'upstreamBatch') {
+      return trigger.dataset.selectedBatch;
+    }
+    return 0;
+  };
+  const setVal = (key, val) => {
+    const inp = tr.querySelector(`input[data-field="${key}"]`);
+    if (inp) inp.value = val;
+  };
+  const getStr = (key) => {
+    const inp = tr.querySelector(`input[data-field="${key}"]`);
+    return inp ? inp.value : '';
+  };
+
+  const sources = getUpstreamSources(tr);
+  const totalSourceWeight = sources.reduce((sum, s) => sum + s.weight, 0);
+
+  switch(process) {
+    case 'xiuyou': {
+      const outW = getVal('outWeight');
+      const output = getVal('output');
+      setVal('feedWeight', output);
+      setVal('yieldRate', outW > 0 ? ((output / outW) * 100).toFixed(2) : '0.00');
+      break;
+    }
+    case 'gunrou': {
+      const before = totalSourceWeight || getVal('before');
+      const after = getVal('after');
+      const dsUse = getVal('downstreamUse');
+      setVal('before', before.toFixed(2));
+      setVal('yieldRate', before > 0 ? ((after / before) * 100).toFixed(2) : '0.00');
+      setVal('remain', (after - dsUse).toFixed(2));
+      break;
+    }
+    case 'chaoshui': {
+      const before = totalSourceWeight || getVal('before');
+      const after = getVal('after');
+      const dsUse = getVal('downstreamUse');
+      setVal('before', before.toFixed(2));
+      setVal('yieldRate', before > 0 ? ((after / before) * 100).toFixed(2) : '0.00');
+      setVal('remain', (after - dsUse).toFixed(2));
+      break;
+    }
+    case 'qushetou': {
+      const scrap = getVal('scrap');
+      const output = getVal('output');
+      const dsUse = getVal('downstreamUse');
+      const input = scrap + output;
+      setVal('input', input.toFixed(2));
+      setVal('yieldRate', input > 0 ? ((output / input) * 100).toFixed(2) : '0.00');
+      setVal('remain', (output - dsUse).toFixed(2));
+      break;
+    }
+    case 'shuzhi': {
+      const input = totalSourceWeight || getVal('input');
+      const output = getVal('output');
+      const dsUse = getVal('downstreamUse');
+      setVal('input', input.toFixed(2));
+      setVal('yieldRate', input > 0 ? ((output / input) * 100).toFixed(2) : '0.00');
+      setVal('remain', (output - dsUse).toFixed(2));
+      break;
+    }
+    case 'qidiao': {
+      const storage = getVal('storage');
+      const sample = getVal('sample');
+      const remain = getVal('remain');
+      const claim = getVal('claim');
+      const actualProd = storage + sample + remain + claim;
+      setVal('actualProd', actualProd);
+      const productWeight = getVal('productWeight');
+      const trimmings = getVal('trimmings');
+      setVal('totalWeight', (productWeight + trimmings).toFixed(2));
+      const usedWeight = totalSourceWeight || getVal('usedWeight');
+      setVal('usedWeight', usedWeight.toFixed(2));
+      setVal('yieldRate', usedWeight > 0 ? ((productWeight / usedWeight) * 100).toFixed(2) : '0.00');
+      const workerPrice = getVal('workerPrice');
+      const totalHours = getVal('totalHours');
+      setVal('laborPerBox', actualProd > 0 ? ((workerPrice * totalHours) / actualProd).toFixed(4) : '0.0000');
+      break;
+    }
+  }
+
+  // Update totalHours from work hours card
+  const totalHours = getWorkHourTotal(process);
+  const thInp = tr.querySelector('input[data-field="totalHours"]');
+  if (thInp && thInp.dataset.auto === 'true') {
+    thInp.value = totalHours.toFixed(2);
+  }
+}
+
+function calcTimeDiff(startTime, endTime) {
+  const [sh, sm] = startTime.split(':').map(Number);
+  const [eh, em] = endTime.split(':').map(Number);
+  let diff = (eh * 60 + em - sh * 60 - sm) / 60;
+  if (diff < 0) diff += 24;
+  return diff;
+}
+
+// ========== Collect Table Data ==========
+function collectTableData(process) {
+  const table = document.getElementById('table-' + process);
+  const tbody = table.querySelector('tbody');
+  const rows = [];
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const rowData = {};
+    const inputs = tr.querySelectorAll('input[data-field]');
+    inputs.forEach(inp => {
+      rowData[inp.dataset.field] = inp.value;
+    });
+    const trigger = tr.querySelector('.dropdown-trigger');
+    if (trigger) {
+      rowData.upstreamBatch = trigger.dataset.selectedBatch || '';
+    }
+    const sources = getUpstreamSources(tr);
+    if (sources.length > 0) {
+      rowData.upstreamSources = sources;
+    }
+    rows.push(rowData);
+  });
+  setCurrentProcessData(process, rows);
+}
+
+// ========== Render Table from Data ==========
+function renderTable(process) {
+  const data = getCurrentProcessData(process);
+  const table = document.getElementById('table-' + process);
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+
+  data.forEach((rowData, idx) => {
+    addRow(process);
+    const tr = tbody.querySelectorAll('tr')[idx];
+    if (!tr) return;
+
+    const inputs = tr.querySelectorAll('input[data-field]');
+    inputs.forEach(inp => {
+      if (rowData[inp.dataset.field] !== undefined) {
+        // For xiuyou, never overwrite readonly auto-generated fields from order
+        if (process === 'xiuyou' && ['outDate','rawBatch','outWeight'].includes(inp.dataset.field)) return;
+        inp.value = rowData[inp.dataset.field];
+      }
+    });
+    const trigger = tr.querySelector('.dropdown-trigger');
+    if (trigger && rowData.upstreamBatch) {
+      trigger.querySelector('.dd-text').textContent = rowData.upstreamBatch;
+      trigger.querySelector('.dd-text').style.color = '#333';
+      trigger.dataset.selectedBatch = rowData.upstreamBatch;
+    }
+    if (rowData.upstreamSources && rowData.upstreamSources.length > 0) {
+      setUpstreamSources(tr, rowData.upstreamSources);
+    } else if (rowData.upstreamBatch && process !== 'xiuyou') {
+      const weight = parseFloat(rowData.before || rowData.input || rowData.usedWeight || 0) || 0;
+      setUpstreamSources(tr, [{batch: rowData.upstreamBatch, weight}]);
+    }
+    calcRow(tr, process);
+  });
+}
+
+// ========== Inventory ==========
+function renderInventory(process) {
+  collectTableData(process);
+  collectWorkHours(process);
+  saveAllData();
+
+  const table = document.getElementById('inv-' + process);
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+
+  let inventory = [];
+  if (process === 'qidiao') {
+    appData.orders.forEach(order => {
+      const data = order.productionData?.[process] || [];
+      data.forEach(row => {
+        const batch = row.batch || '';
+        if (!batch) return;
+        const actual = parseFloat(row.actualProd) || 0;
+        const storage = parseFloat(row.storage) || 0;
+        const sample = parseFloat(row.sample) || 0;
+        const remain = parseFloat(row.remain) || 0;
+        const claim = parseFloat(row.claim) || 0;
+        inventory.push({
+          batch, total: actual, storage, sample, remain, claim,
+          used: storage + sample + claim,
+          remaining: remain,
+          orderId: order.id
+        });
+      });
+    });
+  } else {
+    inventory = getGlobalInventory(process).map(item => ({
+      batch: item.batch,
+      total: item.total,
+      used: item.used,
+      remaining: item.total - item.used,
+      orderId: item.orderId
+    }));
+  }
+
+  if (inventory.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px;">暂无库存数据</td></tr>';
+    return;
+  }
+
+  inventory.forEach(item => {
+    const tr = document.createElement('tr');
+    if (process === 'qidiao') {
+      const remaining = item.remaining;
+      const depleted = remaining <= 0;
+      if (depleted) tr.className = 'depleted';
+      tr.innerHTML = `
+        <td>${item.batch}</td>
+        <td>${item.orderId}</td>
+        <td>${item.total}</td>
+        <td>${item.storage}</td>
+        <td>${item.sample}</td>
+        <td>${item.remaining}</td>
+        <td>${item.claim}</td>
+        <td><span class="status-badge ${depleted ? 'depleted' : 'active'}">${depleted ? '已用完' : '在库'}</span></td>
+      `;
+    } else {
+      const remaining = item.remaining;
+      const depleted = remaining <= 0;
+      if (depleted) tr.className = 'depleted';
+      tr.innerHTML = `
+        <td>${item.batch}</td>
+        <td>${item.orderId}</td>
+        <td>${item.total.toFixed(1)}</td>
+        <td>${item.used.toFixed(1)}</td>
+        <td>${remaining.toFixed(1)}</td>
+        <td><span class="status-badge ${depleted ? 'depleted' : 'active'}">${depleted ? '已用完' : '在库'}</span></td>
+      `;
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+function filterInventory(process, keyword) {
+  const table = document.getElementById('inv-' + process);
+  const tbody = table.querySelector('tbody');
+  const rows = tbody.querySelectorAll('tr');
+  const kw = keyword.toLowerCase();
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    row.style.display = text.includes(kw) ? '' : 'none';
+  });
+}
+
+// ========== Cost Tracing ==========
+function traceBatchCost(process, batch) {
+  let row = null;
+  let order = null;
+  appData.orders.forEach(o => {
+    const data = o.productionData?.[process] || [];
+    const found = data.find(r => (r.batch || r.rawBatch) === batch);
+    if (found) { row = found; order = o; }
+  });
+  if (!row) return null;
+
+  const result = {
+    batch,
+    process,
+    orderId: order.id,
+    output: getOutputField(process, row),
+    laborHours: parseFloat(row.totalHours) || 0,
+    laborCost: 0,
+    materialCost: 0,
+    upstreamCosts: []
+  };
+
+  if (process === 'qidiao') {
+    const workerPrice = parseFloat(row.workerPrice) || 0;
+    result.laborCost = result.laborHours * workerPrice;
+  }
+
+  if (process === 'xiuyou') {
+    const outWeight = parseFloat(row.outWeight) || 0;
+    result.materialCost = 0;
+  } else {
+    const sources = row.upstreamSources || [];
+    if (sources.length === 0 && row.upstreamBatch) {
+      sources.push({batch: row.upstreamBatch, weight: parseFloat(row.before || row.input || row.usedWeight || 0) || 0});
+    }
+    sources.forEach(src => {
+      const upstreamCost = traceBatchCost(UPSTREAM[process], src.batch);
+      if (upstreamCost) {
+        const ratio = src.weight / upstreamCost.output;
+        result.upstreamCosts.push({
+          batch: src.batch,
+          weight: src.weight,
+          ratio: ratio,
+          materialCost: upstreamCost.materialCost * ratio,
+          laborCost: upstreamCost.laborCost * ratio,
+          subCosts: upstreamCost.upstreamCosts.map(c => ({
+            process: c.process,
+            batch: c.batch,
+            cost: c.materialCost * ratio + c.laborCost * ratio
+          }))
+        });
+      }
+    });
+  }
+
+  return result;
+}
+
+function calculateOrderCost(orderId) {
+  const order = appData.orders.find(o => o.id === orderId);
+  if (!order) return null;
+
+  const qidiaoData = order.productionData?.qidiao || [];
+  if (qidiaoData.length === 0) return null;
+
+  const batches = [];
+  qidiaoData.forEach(qd => {
+    const batch = qd.batch || '';
+    if (!batch) return;
+    const cost = traceBatchCost('qidiao', batch);
+    if (cost) batches.push(cost);
+  });
+
+  const totalSeasoning = (appData.seasoning || []).reduce((sum, s) => {
+    const amount = parseFloat(s.amount) || 0;
+    const price = parseFloat(s.price) || 0;
+    return sum + (amount / 1000) * price;
+  }, 0);
+  const totalPackaging = (appData.packaging || []).reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+
+  let totalBoxes = 0;
+  qidiaoData.forEach(qd => { totalBoxes += parseFloat(qd.actualProd) || 0; });
+
+  const perBoxSeasoning = totalBoxes > 0 ? totalSeasoning / totalBoxes : 0;
+  const perBoxPackaging = totalBoxes > 0 ? totalPackaging / totalBoxes : 0;
+
+  return {
+    order,
+    batches,
+    totalSeasoning,
+    totalPackaging,
+    perBoxSeasoning,
+    perBoxPackaging,
+    totalBoxes
+  };
+}
+
+// ========== Summary ==========
+function populateSummaryOrderSelect() {
+  const select = document.getElementById('summaryOrderSelect');
+  const currentVal = select.value;
+  select.innerHTML = '<option value="">全部订单</option>';
+  appData.orders.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = o.id + ' - ' + o.productName;
+    select.appendChild(opt);
+  });
+  if (currentVal) select.value = currentVal;
+}
+
+function refreshSummary() {
+  collectTableData('qidiao');
+  collectWorkHours('qidiao');
+  saveAllData();
+
+  const orderId = document.getElementById('summaryOrderSelect').value;
+  const container = document.getElementById('summaryContent');
+  container.innerHTML = '';
+
+  const ordersToSummarize = orderId
+    ? appData.orders.filter(o => o.id === orderId)
+    : appData.orders;
+
+  if (ordersToSummarize.length === 0) {
+    container.innerHTML = '<p style="color:#999;padding:20px;">暂无订单数据</p>';
+    return;
+  }
+
+  ordersToSummarize.forEach(order => {
+    const costData = calculateOrderCost(order.id);
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+
+    let html = `<h3>订单: ${order.id} | ${order.productName} | 原料: ${order.rawWeight}kg | 状态: ${order.status}</h3>`;
+
+    const qidiaoData = order.productionData?.qidiao || [];
+    if (qidiaoData.length === 0) {
+      html += '<p style="color:#999;">暂无气调数据</p>';
+      card.innerHTML = html;
+      container.appendChild(card);
+      return;
+    }
+
+    const processes = getOrderProcesses(order);
+    const hasQushetou = processes.includes('qushetou');
+
+    html += '<div class="data-table-wrap"><table class="data-table"><thead><tr>';
+    html += '<th>订单批次</th><th>实际生产(盒)</th><th>单盒克重(g)</th>';
+    html += '<th>修油出成率</th><th>滚揉出成率</th><th>焯水出成率</th>';
+    if (hasQushetou) html += '<th>去舌苔出成率</th>';
+    html += '<th>熟制出成率</th><th>气调出成率</th>';
+    html += '<th>订单出成率</th><th>每盒人工费(元)</th>';
+    html += '</tr></thead><tbody>';
+
+    qidiaoData.forEach(qd => {
+      const yields = traceYields(qd, order);
+      const actualProd = parseFloat(qd.actualProd) || 0;
+      const boxWeight = parseFloat(qd.boxWeight) || 0;
+      const laborPerBox = parseFloat(qd.laborPerBox) || 0;
+      html += `<tr>
+        <td>${qd.batch || '-'}</td>
+        <td>${actualProd}</td>
+        <td>${boxWeight}</td>
+        <td>${yields.xiuyou}%</td>
+        <td>${yields.gunrou}%</td>
+        <td>${yields.chaoshui}%</td>`;
+      if (hasQushetou) html += `<td>${yields.qushetou}%</td>`;
+      html += `<td>${yields.shuzhi}%</td>
+        <td>${yields.qidiao}%</td>
+        <td style="font-weight:600;color:#1a3a5c;">${yields.total}%</td>
+        <td>${laborPerBox}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+
+    if (costData && costData.batches.length > 0) {
+      html += '<h4 style="margin-top:20px;color:#1a3a5c;">成本追溯明细</h4>';
+      html += '<div class="data-table-wrap"><table class="data-table"><thead><tr>';
+      html += '<th>订单批次</th><th>原料成本</th><th>修油人工</th><th>滚揉人工</th><th>焯水人工</th>';
+      if (hasQushetou) html += '<th>去舌苔人工</th>';
+      html += '<th>熟制人工</th><th>气调人工</th>';
+      html += '<th>调料成本</th><th>包装成本</th><th>总成本</th><th>单盒总成本</th>';
+      html += '</tr></thead><tbody>';
+
+      costData.batches.forEach(batchCost => {
+        const qdRow = qidiaoData.find(q => q.batch === batchCost.batch);
+        const actualProd = parseFloat(qdRow?.actualProd) || 0;
+
+        const processCosts = {
+          xiuyou: 0, gunrou: 0, chaoshui: 0, qushetou: 0, shuzhi: 0, qidiao: 0
+        };
+
+        function accumulateCosts(cost) {
+          processCosts[cost.process] += cost.laborCost;
+          cost.upstreamCosts.forEach(uc => {
+            accumulateCostsFromUpstream(uc);
+          });
+        }
+
+        function accumulateCostsFromUpstream(uc) {
+          if (uc.subCosts) {
+            uc.subCosts.forEach(sc => {
+              processCosts[sc.process] = (processCosts[sc.process] || 0) + sc.cost;
+            });
+          }
+        }
+
+        accumulateCosts(batchCost);
+
+        const totalCost = batchCost.materialCost + batchCost.laborCost +
+          processCosts.xiuyou + processCosts.gunrou + processCosts.chaoshui +
+          processCosts.qushetou + processCosts.shuzhi + processCosts.qidiao +
+          costData.perBoxSeasoning * actualProd + costData.perBoxPackaging * actualProd;
+
+        html += `<tr>
+          <td>${batchCost.batch}</td>
+          <td>${batchCost.materialCost.toFixed(2)}</td>
+          <td>${processCosts.xiuyou.toFixed(2)}</td>
+          <td>${processCosts.gunrou.toFixed(2)}</td>
+          <td>${processCosts.chaoshui.toFixed(2)}</td>`;
+        if (hasQushetou) html += `<td>${processCosts.qushetou.toFixed(2)}</td>`;
+        html += `<td>${processCosts.shuzhi.toFixed(2)}</td>
+          <td>${processCosts.qidiao.toFixed(2)}</td>
+          <td>${(costData.perBoxSeasoning * actualProd).toFixed(2)}</td>
+          <td>${(costData.perBoxPackaging * actualProd).toFixed(2)}</td>
+          <td style="font-weight:600;">${totalCost.toFixed(2)}</td>
+          <td style="font-weight:600;color:#1a3a5c;">${actualProd > 0 ? (totalCost / actualProd).toFixed(4) : '0.0000'}</td>
+        </tr>`;
+      });
+
+      html += '</tbody></table></div>';
+    }
+
+    card.innerHTML = html;
+    container.appendChild(card);
+  });
+}
+
+function traceYields(qd, order) {
+  const processes = getOrderProcesses(order);
+  const hasQushetou = processes.includes('qushetou');
+  const yields = { xiuyou:'-', gunrou:'-', chaoshui:'-', qushetou:'-', shuzhi:'-', qidiao:'-', total:'-' };
+  const upstreamBatch_qd = qd.upstreamBatch || '';
+
+  const usedW = parseFloat(qd.usedWeight) || 0;
+  const prodW = parseFloat(qd.productWeight) || 0;
+  if (usedW > 0) yields.qidiao = ((prodW / usedW) * 100).toFixed(2);
+
+  const shuzhiRow = findUpstreamRow('shuzhi', upstreamBatch_qd);
+  if (shuzhiRow) {
+    const inp = parseFloat(shuzhiRow.input) || 0;
+    const out = parseFloat(shuzhiRow.output) || 0;
+    if (inp > 0) yields.shuzhi = ((out / inp) * 100).toFixed(2);
+
+    const upstream_s = shuzhiRow.upstreamBatch || '';
+    if (hasQushetou) {
+      const qstRow = findUpstreamRow('qushetou', upstream_s);
+      if (qstRow) {
+        const inp2 = parseFloat(qstRow.input) || 0;
+        const out2 = parseFloat(qstRow.output) || 0;
+        if (inp2 > 0) yields.qushetou = ((out2 / inp2) * 100).toFixed(2);
+
+        const upstream_c = qstRow.upstreamBatch || '';
+        const csRow = findUpstreamRow('chaoshui', upstream_c);
+        if (csRow) {
+          const bef = parseFloat(csRow.before) || 0;
+          const aft = parseFloat(csRow.after) || 0;
+          if (bef > 0) yields.chaoshui = ((aft / bef) * 100).toFixed(2);
+
+          const upstream_g = csRow.upstreamBatch || '';
+          const grRow = findUpstreamRow('gunrou', upstream_g);
+          if (grRow) {
+            const bef2 = parseFloat(grRow.before) || 0;
+            const aft2 = parseFloat(grRow.after) || 0;
+            if (bef2 > 0) yields.gunrou = ((aft2 / bef2) * 100).toFixed(2);
+
+            const upstream_x = grRow.upstreamBatch || '';
+            const xyRow = findUpstreamRow('xiuyou', upstream_x);
+            if (xyRow) {
+              const outW = parseFloat(xyRow.outWeight) || 0;
+              const output = parseFloat(xyRow.output) || 0;
+              if (outW > 0) yields.xiuyou = ((output / outW) * 100).toFixed(2);
+            }
+          }
+        }
+      }
+    } else {
+      const csRow = findUpstreamRow('chaoshui', upstream_s);
+      if (csRow) {
+        const bef = parseFloat(csRow.before) || 0;
+        const aft = parseFloat(csRow.after) || 0;
+        if (bef > 0) yields.chaoshui = ((aft / bef) * 100).toFixed(2);
+
+        const upstream_g = csRow.upstreamBatch || '';
+        const grRow = findUpstreamRow('gunrou', upstream_g);
+        if (grRow) {
+          const bef2 = parseFloat(grRow.before) || 0;
+          const aft2 = parseFloat(grRow.after) || 0;
+          if (bef2 > 0) yields.gunrou = ((aft2 / bef2) * 100).toFixed(2);
+
+          const upstream_x = grRow.upstreamBatch || '';
+          const xyRow = findUpstreamRow('xiuyou', upstream_x);
+          if (xyRow) {
+            const outW = parseFloat(xyRow.outWeight) || 0;
+            const output = parseFloat(xyRow.output) || 0;
+            if (outW > 0) yields.xiuyou = ((output / outW) * 100).toFixed(2);
+          }
+        }
+      }
+    }
+
+    const vals = [];
+    vals.push(yields.xiuyou);
+    vals.push(yields.gunrou);
+    vals.push(yields.chaoshui);
+    if (hasQushetou) vals.push(yields.qushetou);
+    vals.push(yields.shuzhi);
+    vals.push(yields.qidiao);
+
+    let total = 1;
+    let allValid = true;
+    vals.forEach(v => {
+      if (v === '-') { allValid = false; return; }
+      total *= (parseFloat(v) / 100);
+    });
+    yields.total = allValid ? (total * 100).toFixed(2) : '-';
+  }
+
+  return yields;
+}
+
+function findUpstreamRow(process, batch) {
+  for (const o of appData.orders) {
+    const data = o.productionData?.[process] || [];
+    const row = data.find(r => r.batch === batch);
+    if (row) return row;
+  }
+  return null;
+}
+
+function exportSummaryCSV() {
+    const orderId = document.getElementById('summaryOrderSelect').value;
+    const ordersToExport = orderId
+      ? appData.orders.filter(o => o.id === orderId)
+      : appData.orders;
+
+    let csv = '\uFEFF订单号,产品,原料重量,订单日期,状态,订单批次,实际生产,单盒克重,修油出成率,滚揉出成率,焯水出成率,';
+    csv += '去舌苔出成率,熟制出成率,气调出成率,订单出成率,每盒人工费\n';
+
+    ordersToExport.forEach(order => {
+      const processes = getOrderProcesses(order);
+      const hasQushetou = processes.includes('qushetou');
+      const qidiaoData = order.productionData?.qidiao || [];
+      qidiaoData.forEach(qd => {
+        const yields = traceYields(qd, order);
+        csv += `${order.id},${order.productName},${order.rawWeight},${order.orderDate},${order.status},`;
+        csv += `${qd.batch || ''},${qd.actualProd || 0},${qd.boxWeight || 0},`;
+        csv += `${yields.xiuyou},${yields.gunrou},${yields.chaoshui},`;
+        csv += `${hasQushetou ? yields.qushetou : '-'},`;
+        csv += `${yields.shuzhi},${yields.qidiao},${yields.total},${qd.laborPerBox || 0}\n`;
+      });
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = '生产成本汇总_' + new Date().toISOString().slice(0,10) + '.csv';
+    link.click();
+    showToast('CSV已导出');
+  }
+
+  // ========== Cost Analysis ==========
+  function addSeasoningRow() {
+    const table = document.getElementById('table-seasoning');
+    const tbody = table.querySelector('tbody');
+    const rowCount = tbody.querySelectorAll('tr').length;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${rowCount + 1}</td>
+      <td><input type="text" data-field="process" style="min-width:80px;"></td>
+      <td><input type="text" data-field="name" style="min-width:120px;"></td>
+      <td><input type="number" data-field="amount" step="0.1" min="0" style="min-width:80px;"></td>
+      <td><input type="number" data-field="price" step="0.01" min="0" style="min-width:90px;"></td>
+      <td><input type="text" data-field="cost" class="auto-field" readonly style="min-width:80px;"></td>
+      <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove();renumberCostRows('seasoning');calcCost();">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+    attachCostCalcListeners(tr);
+  }
+
+  function addPackagingRow() {
+    const table = document.getElementById('table-packaging');
+    const tbody = table.querySelector('tbody');
+    const rowCount = tbody.querySelectorAll('tr').length;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${rowCount + 1}</td>
+      <td><input type="text" data-field="material" style="min-width:120px;"></td>
+      <td><input type="text" data-field="spec" style="min-width:120px;"></td>
+      <td><input type="number" data-field="price" step="0.01" min="0" style="min-width:90px;"></td>
+      <td><input type="number" data-field="total" step="0.01" min="0" style="min-width:90px;"></td>
+      <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove();renumberCostRows('packaging');calcCost();">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+    attachCostCalcListeners(tr);
+  }
+
+  function renumberCostRows(type) {
+    const table = document.getElementById('table-' + type);
+    table.querySelectorAll('tbody tr').forEach((tr, i) => {
+      tr.querySelector('td:first-child').textContent = i + 1;
+    });
+  }
+
+  function attachCostCalcListeners(tr) {
+    tr.querySelectorAll('input[data-field]').forEach(inp => {
+      if (inp.dataset.auto === 'true') return;
+      inp.addEventListener('input', () => calcCost());
+    });
+  }
+
+  function calcCost() {
+    let totalSeasoning = 0;
+    document.querySelectorAll('#table-seasoning tbody tr').forEach(tr => {
+      const amount = parseFloat(tr.querySelector('[data-field="amount"]')?.value) || 0;
+      const price = parseFloat(tr.querySelector('[data-field="price"]')?.value) || 0;
+      const cost = (amount / 1000) * price;
+      const costInput = tr.querySelector('[data-field="cost"]');
+      if (costInput) costInput.value = cost.toFixed(4);
+      totalSeasoning += cost;
+    });
+
+    let totalPackaging = 0;
+    document.querySelectorAll('#table-packaging tbody tr').forEach(tr => {
+      const total = parseFloat(tr.querySelector('[data-field="total"]')?.value) || 0;
+      totalPackaging += total;
+    });
+
+    let actualBoxes = 100;
+    appData.orders.forEach(o => {
+      const qd = o.productionData?.qidiao || [];
+      if (qd.length > 0) {
+        actualBoxes = parseFloat(qd[qd.length-1].actualProd) || actualBoxes;
+      }
+    });
+
+    document.getElementById('totalSeasoningCost').textContent = totalSeasoning.toFixed(2);
+    document.getElementById('totalPackagingCost').textContent = totalPackaging.toFixed(2);
+    document.getElementById('perBoxSeasoning').textContent = actualBoxes > 0 ? (totalSeasoning / actualBoxes).toFixed(4) : '0.00';
+    document.getElementById('perBoxPackaging').textContent = actualBoxes > 0 ? (totalPackaging / actualBoxes).toFixed(4) : '0.00';
+    document.getElementById('perBoxTotalCost').textContent = actualBoxes > 0 ? ((totalSeasoning + totalPackaging) / actualBoxes).toFixed(4) : '0.00';
+  }
+
+  function renderSeasoning() {
+    const table = document.getElementById('table-seasoning');
+    const tbody = table.querySelector('tbody');
+    tbody.innerHTML = '';
+    (appData.seasoning || []).forEach((row, i) => {
+      addSeasoningRow();
+      const tr = tbody.querySelectorAll('tr')[i];
+      if (!tr) return;
+      Object.keys(row).forEach(k => {
+        const inp = tr.querySelector(`[data-field="${k}"]`);
+        if (inp) inp.value = row[k];
+      });
+    });
+    calcCost();
+  }
+
+  function renderPackaging() {
+    const table = document.getElementById('table-packaging');
+    const tbody = table.querySelector('tbody');
+    tbody.innerHTML = '';
+    (appData.packaging || []).forEach((row, i) => {
+      addPackagingRow();
+      const tr = tbody.querySelectorAll('tr')[i];
+      if (!tr) return;
+      Object.keys(row).forEach(k => {
+        const inp = tr.querySelector(`[data-field="${k}"]`);
+        if (inp) inp.value = row[k];
+      });
+    });
+    calcCost();
+  }
+
+  function saveCostData() {
+    const seasoning = [];
+    document.querySelectorAll('#table-seasoning tbody tr').forEach(tr => {
+      const row = {};
+      tr.querySelectorAll('input[data-field]').forEach(inp => {
+        row[inp.dataset.field] = inp.value;
+      });
+      seasoning.push(row);
+    });
+    appData.seasoning = seasoning;
+
+    const packaging = [];
+    document.querySelectorAll('#table-packaging tbody tr').forEach(tr => {
+      const row = {};
+      tr.querySelectorAll('input[data-field]').forEach(inp => {
+        row[inp.dataset.field] = inp.value;
+      });
+      packaging.push(row);
+    });
+    appData.packaging = packaging;
+
+    saveAllData();
+    calcCost();
+    showToast('成本数据已保存');
+  }
+
+  // ========== Initialization ==========
+  function init() {
+    loadAllData();
+
+    // Repair: ensure orders have correct rawWeight from xiuyou data if corrupted
+    if (appData.orders) {
+      appData.orders.forEach(order => {
+        if (order.productionData) {
+          const xyData = order.productionData.xiuyou || [];
+          if (xyData.length > 0) {
+            // Use the first xiuyou row's outWeight as rawWeight if it's reasonable
+            const firstOutWeight = parseFloat(xyData[0]?.outWeight) || 0;
+            if (firstOutWeight > 0 && (!order.rawWeight || order.rawWeight === 0)) {
+              order.rawWeight = firstOutWeight;
+            }
+          }
+        }
+      });
+      saveAllData();
+    }
+
+    rebuildNavTabs();
+    rebuildFlowBar();
+
+    ALL_PROCESSES.forEach(p => {
+      renderTable(p);
+      renderInventory(p);
+      renderWorkHours(p);
+    });
+
+    switchPage('orders');
+  }
+
+  init();
+</script>
+
+</body>
+</html>
