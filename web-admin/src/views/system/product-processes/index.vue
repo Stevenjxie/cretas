@@ -738,8 +738,15 @@ const costDialogVisible = ref(false);
 const costSaving = ref(false);
 const costEditId = ref<number | null>(null);
 const costEditName = ref('');
-const costForm = ref<{ defaultCostCategory: string; auxAllocMethod: string; packagingTemplate: Array<{ name: string; cost: number | null }> }>({
+const costForm = ref<{
+  defaultCostCategory: string; auxAllocMethod: string;
+  packagingTemplate: Array<{ name: string; cost: number | null }>;
+  standardYieldPct: number | null;   // 段2(B) 标准出成率, UI 用百分比 (85=85%), 保存折回小数
+  auxUnitPrice: number | null;       // 段2(B) 辅料单价 元/kg
+  auxBasis: string;                  // 段2(B) INPUT|OUTPUT
+}>({
   defaultCostCategory: '', auxAllocMethod: '', packagingTemplate: [],
+  standardYieldPct: null, auxUnitPrice: null, auxBasis: '',
 });
 
 function openCostConfig(item: any) {
@@ -751,6 +758,9 @@ function openCostConfig(item: any) {
     packagingTemplate: Array.isArray(item.packagingTemplate)
       ? item.packagingTemplate.map((p: any) => ({ name: p.name, cost: Number(p.cost) }))
       : [],
+    standardYieldPct: item.standardYieldRate != null ? Number(item.standardYieldRate) * 100 : null,
+    auxUnitPrice: item.auxUnitPrice != null ? Number(item.auxUnitPrice) : null,
+    auxBasis: item.auxBasis || '',
   };
   costDialogVisible.value = true;
 }
@@ -768,6 +778,10 @@ async function saveCostConfig() {
     const payload: Record<string, unknown> = { packagingTemplate: pkg };
     if (costForm.value.defaultCostCategory) payload.defaultCostCategory = costForm.value.defaultCostCategory;
     if (costForm.value.auxAllocMethod) payload.auxAllocMethod = costForm.value.auxAllocMethod;
+    // 段2(B): 标准率 UI 百分比 → 小数 (0.85); 辅料单价/基准
+    if (costForm.value.standardYieldPct != null) payload.standardYieldRate = costForm.value.standardYieldPct / 100;
+    if (costForm.value.auxUnitPrice != null) payload.auxUnitPrice = costForm.value.auxUnitPrice;
+    if (costForm.value.auxBasis) payload.auxBasis = costForm.value.auxBasis;
     await updateProductWorkProcess(factoryId.value, costEditId.value, payload as Partial<ProductWorkProcessItem>);
     ElMessage.success('成本配置已保存 (报工将自动继承)');
     costDialogVisible.value = false;
@@ -1022,6 +1036,24 @@ async function saveCostConfig() {
             <el-option label="按产出量 BY_OUTPUT" value="BY_OUTPUT" />
             <el-option label="固定比例 FIXED_RATIO" value="FIXED_RATIO" />
           </el-select>
+        </el-form-item>
+        <el-divider content-position="left" style="margin: 4px 0 12px">辅料标准单价对账 (抓多投/误差)</el-divider>
+        <el-form-item label="标准出成率">
+          <el-input-number v-model="costForm.standardYieldPct" :min="0" :max="300" :precision="2"
+            controls-position="right" placeholder="如 85 = 85%" style="width: 200px" />
+          <span style="margin-left: 8px; color: #909399; font-size: 12px">% (配方率, 投料对账基准; 保水工序可 &gt;100)</span>
+        </el-form-item>
+        <el-form-item label="辅料单价">
+          <el-input-number v-model="costForm.auxUnitPrice" :min="0" :precision="4"
+            controls-position="right" placeholder="元/kg" style="width: 200px" />
+          <span style="margin-left: 8px; color: #909399; font-size: 12px">元/kg (离线按配方算好; 不填按 0 计)</span>
+        </el-form-item>
+        <el-form-item label="单价基准">
+          <el-select v-model="costForm.auxBasis" clearable placeholder="不设置 (默认按投入侧)" style="width: 200px">
+            <el-option label="投入侧 INPUT" value="INPUT" />
+            <el-option label="产出侧 OUTPUT" value="OUTPUT" />
+          </el-select>
+          <span style="margin-left: 8px; color: #909399; font-size: 12px">元/kg 乘投入还是产出侧 kg (保水工序须选)</span>
         </el-form-item>
         <el-form-item label="包装明细模板">
           <div style="width: 100%">

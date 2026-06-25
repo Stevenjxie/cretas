@@ -70,6 +70,9 @@ public class ProductWorkProcessDTO {
     private String defaultCostCategory;           // CALC-003 默认成本类别
     private java.util.List<java.util.Map<String, Object>> packagingTemplate;  // AUDIT-002 默认包装明细模板 [{name,cost}]
     private String auxAllocMethod;                 // AUDIT-004 辅料分摊方式 BY_OUTPUT/FIXED_RATIO
+    private java.math.BigDecimal standardYieldRate; // 段2(B) 标准出成率 (配方率, 0.85=85%); 投料-产出对账基准
+    private java.math.BigDecimal auxUnitPrice;      // 段2(B) 辅料标准单价 元/kg; null 视为 0 不崩
+    private String auxBasis;                         // 段2(B) 元/kg 乘哪侧 INPUT|OUTPUT (保水工序必须显式)
 
     // Read-only fields populated from joined WorkProcess
     private String processName;

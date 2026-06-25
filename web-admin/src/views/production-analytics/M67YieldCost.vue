@@ -159,6 +159,74 @@
         </el-col>
       </el-row>
 
+      <!-- 段2(B) 辅料标准单价对账: 标准应投 vs 实际投料 → 多投/误差 -->
+      <el-card v-if="recon" shadow="never" class="mb">
+        <template #header>
+          <b>辅料标准单价对账</b>
+          <span class="hint">标准配方率反推「应投」 vs 实际报工 → 抓多投 / 误差 / 浪费 (预警阈值 {{ reconThresholdPct }}%)</span>
+        </template>
+
+        <!-- WARN 预警 (常驻, 含 next-action — 防呆四位一体) -->
+        <el-alert v-for="iss in reconWarns" :key="iss.code" :title="iss.message" type="warning"
+                  show-icon :closable="false" class="recon-warn" />
+
+        <!-- 投料对账 (原料 kg) -->
+        <div v-if="recon.standardFirstInput != null" class="recon-feed">
+          <div class="rf-item"><span class="rf-label">标准应投</span><span class="rf-val">{{ num(recon.standardFirstInput) }} {{ recon.firstInputUnit }}</span></div>
+          <div class="rf-sep">→</div>
+          <div class="rf-item"><span class="rf-label">实际投料</span><span class="rf-val">{{ num(recon.actualFirstInput) }} {{ recon.firstInputUnit }}</span></div>
+          <div class="rf-sep">=</div>
+          <div class="rf-item">
+            <span class="rf-label">多投 / 误差</span>
+            <span class="rf-val" :class="recon.overFeedAlert ? 'over-bad' : 'over-ok'">
+              {{ (recon.overFeed ?? 0) >= 0 ? '+' : '' }}{{ num(recon.overFeed) }} {{ recon.firstInputUnit }}
+              <span v-if="recon.overFeedRate != null" class="rf-rate">({{ reconRate(recon.overFeedRate) }})</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- 辅料成本 3 栏: 标准 / 实际 / 多投 -->
+        <div v-if="recon.actualAuxCostTotal != null || recon.standardAuxCostTotal != null" class="recon-aux">
+          <div class="ra-col">
+            <div class="ra-t">标准辅料</div>
+            <div class="ra-v">{{ reconMoney(recon.standardAuxCostTotal) }}</div>
+            <div class="ra-pu">{{ reconMoney(recon.standardAuxCostPerUnit) }}/份</div>
+          </div>
+          <div class="ra-col">
+            <div class="ra-t">实际辅料</div>
+            <div class="ra-v">{{ reconMoney(recon.actualAuxCostTotal) }}</div>
+            <div class="ra-pu">{{ reconMoney(recon.actualAuxCostPerUnit) }}/份</div>
+          </div>
+          <div class="ra-col" :class="recon.auxAlert ? 'ra-over' : ''">
+            <div class="ra-t">多投差异</div>
+            <div class="ra-v" :class="overCellClass(recon.auxOverCostTotal)">{{ reconMoney(recon.auxOverCostTotal) }}</div>
+            <div class="ra-pu">{{ reconMoney(recon.auxOverCostPerUnit) }}/份<span v-if="recon.auxOverRate != null"> ({{ reconRate(recon.auxOverRate) }})</span></div>
+          </div>
+        </div>
+
+        <!-- 逐工序对账明细 -->
+        <table v-if="recon.steps && recon.steps.length" class="recon-tbl">
+          <thead><tr><th>工序</th><th>标准率</th><th>实际率</th><th>标准kg</th><th>实际kg</th><th>标准辅料</th><th>实际辅料</th><th>多投</th></tr></thead>
+          <tbody>
+            <tr v-for="st in recon.steps" :key="st.processOrder">
+              <td>{{ st.processName || ('工序' + st.processOrder) }}</td>
+              <td>{{ reconRate(st.standardYieldRate) }}</td>
+              <td>{{ reconRate(st.actualYieldRate) }}</td>
+              <td>{{ num(st.standardKg) }}</td>
+              <td>{{ num(st.actualKg) }}</td>
+              <td>{{ reconMoney(st.standardAuxCost) }}</td>
+              <td>{{ reconMoney(st.actualAuxCost) }}</td>
+              <td :class="overCellClass(st.auxOverCost)">{{ reconMoney(st.auxOverCost) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- INFO 提示 (诚实留空原因 + next-action) -->
+        <div v-if="reconInfos.length" class="recon-info">
+          <div v-for="iss in reconInfos" :key="iss.code" class="ri-line">· {{ iss.message }}</div>
+        </div>
+      </el-card>
+
       <!-- 批次溯源桑基图 -->
       <el-card shadow="never" class="mb">
         <template #header><b>批次溯源 (原料 → 各道工序 → 成品, 宽度=物料重量kg)</b></template>
@@ -225,6 +293,26 @@ interface CostBreakdown {
   sampleRetainCount?: number; wasteQuantity?: number; sellableBoxCount?: number; sellablePerBoxCost?: number;
   packagingDetail?: PackagingItem[]; auxiliaryAllocations?: AuxAllocation[];
   sources?: CostSource[];
+}
+/** 段2(B): 辅料标准单价双锚点对账 (CostReconcileResult) */
+interface ReconStep {
+  processOrder?: number; processName?: string;
+  standardYieldRate?: number; actualYieldRate?: number;
+  auxBasis?: string; auxUnitPrice?: number;
+  standardKg?: number; actualKg?: number;
+  standardAuxCost?: number; actualAuxCost?: number; auxOverCost?: number;
+  configured?: boolean; hasAuxPrice?: boolean;
+}
+interface ReconIssue { code?: string; message?: string; severity?: string }
+interface CostReconcile {
+  standardFirstInput?: number; actualFirstInput?: number; firstInputUnit?: string;
+  overFeed?: number; overFeedRate?: number; overFeedAlert?: boolean;
+  portionCount?: number;
+  standardAuxCostTotal?: number; actualAuxCostTotal?: number; auxOverCostTotal?: number;
+  auxOverRate?: number; auxAlert?: boolean;
+  standardAuxCostPerUnit?: number; actualAuxCostPerUnit?: number; auxOverCostPerUnit?: number;
+  threshold?: number; standardComplete?: boolean; linear?: boolean;
+  steps?: ReconStep[]; issues?: ReconIssue[];
 }
 interface YieldSummary {
   orderId: string; overallYieldRate?: number;
@@ -336,6 +424,7 @@ const sankeyEl = ref<HTMLElement | null>(null);
 const mixEl = ref<HTMLElement | null>(null);
 const mixRels = ref<MixRel[]>([]);
 const cb = ref<CostBreakdown | null>(null);   // 后端单一权威成本拆分 (谱系遍历)
+const recon = ref<CostReconcile | null>(null);   // 段2(B) 辅料标准单价对账
 const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = 真混批
 let chart: any = null;
 let mixChart: any = null;
@@ -497,6 +586,29 @@ async function loadCostBreakdown() {
   } catch { /* 无成本拆分 → 混批卡不显示 */ }
 }
 
+// 段2(B): 辅料标准单价双锚点对账 (标准应投 vs 实际投料 → 多投/误差)。
+// 端点按批次号 (BatchYieldDTO 同源逐道报工 + 标准配方率)。订单模式下若已选完工批次,
+// onBatchSelect 已填 batchNumber → 仍可对账; 纯订单手输 (无批次号) → 跳过 (对账是批次级)。
+async function loadReconcile() {
+  recon.value = null;
+  const fid = factoryId.value;
+  if (!fid || !batchNumber.value) return;
+  try {
+    const resp = await get<CostReconcile>(`/${fid}/production/batches/${batchNumber.value}/aux-cost-reconcile`);
+    if (resp.success && resp.data) {
+      recon.value = resp.data;
+    }
+  } catch { /* 对账失败不阻塞主页面 */ }
+}
+
+// 对账展示辅助
+const reconWarns = computed<ReconIssue[]>(() => (recon.value?.issues || []).filter((i) => i.severity === 'WARN'));
+const reconInfos = computed<ReconIssue[]>(() => (recon.value?.issues || []).filter((i) => i.severity !== 'WARN'));
+const reconThresholdPct = computed(() => (recon.value?.threshold != null ? (recon.value.threshold * 100).toFixed(0) : '5'));
+const reconMoney = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+const reconRate = (r?: number | null) => (r == null ? '—' : (r * 100).toFixed(1) + '%');
+const overCellClass = (v?: number | null) => (v == null ? '' : (v > 0 ? 'over-bad' : (v < 0 ? 'over-credit' : '')));
+
 // 成本拆分: 按实测投料量×单价 (异质成本下 成本占比 ≠ 重量占比, 正是 Excel 糊平均的盲区)
 const mixCostSplit = computed(() => {
   const rows = mixRels.value.filter(r => r.totalCost != null);
@@ -578,6 +690,7 @@ async function load() {
       }
     }
     await loadCostBreakdown();
+    await loadReconcile();
     await nextTick();
     renderSankey();
     renderMix();
@@ -671,4 +784,28 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .batch-time { font-size: 12px; color: #909399; }
 .badge-settled { background: #f0f9eb; color: #529b2e; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
 .badge-unsettled { background: #fef9f0; color: #b88230; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+
+/* 段2(B) 辅料标准单价对账 */
+.recon-warn { margin-bottom: 10px; }
+.recon-feed { display: flex; align-items: center; gap: 14px; padding: 10px 14px; background: #f4f8fb; border-radius: 6px; margin-bottom: 12px; }
+.rf-item { display: flex; flex-direction: column; gap: 2px; }
+.rf-label { font-size: 12px; color: #909399; }
+.rf-val { font-size: 18px; font-weight: 700; color: #303133; }
+.rf-rate { font-size: 13px; font-weight: 600; margin-left: 4px; }
+.rf-sep { font-size: 18px; color: #c0c4cc; }
+.over-ok { color: #67c23a; }
+.over-bad { color: #f56c6c; }
+.over-credit { color: #67c23a; }
+.recon-aux { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+.ra-col { padding: 10px 14px; background: #f9fafc; border-radius: 6px; text-align: center; border: 1px solid #ebeef5; }
+.ra-col.ra-over { background: #fef0f0; border-color: #fbc4c4; }
+.ra-t { font-size: 12px; color: #909399; margin-bottom: 4px; }
+.ra-v { font-size: 20px; font-weight: 700; color: #303133; }
+.ra-pu { font-size: 12px; color: #909399; margin-top: 2px; }
+.recon-tbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+.recon-tbl th, .recon-tbl td { border: 1px solid #ebeef5; padding: 6px 10px; text-align: right; }
+.recon-tbl th:first-child, .recon-tbl td:first-child { text-align: left; }
+.recon-tbl thead th { background: #f5f7fa; color: #606266; font-weight: 600; }
+.recon-info { margin-top: 6px; padding: 8px 12px; background: #f4f6fa; border-radius: 6px; }
+.ri-line { font-size: 12px; color: #606266; line-height: 1.7; }
 </style>

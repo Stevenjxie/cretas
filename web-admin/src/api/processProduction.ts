@@ -229,6 +229,12 @@ export interface ProductWorkProcessItem {
   packagingTemplate?: Array<{ name: string; cost: number }> | null;
   /** 工序辅料分摊方式 BY_OUTPUT/FIXED_RATIO; 报工自动继承。 */
   auxAllocMethod?: string | null;
+  /** 段2(B) 标准出成率 (配方率, 0.85=85%); 投料-产出对账基准 (实际报工率 vs 标准 → 抓多投/误差)。 */
+  standardYieldRate?: number | null;
+  /** 段2(B) 辅料标准单价 (元/kg); 离线按配方算好, 非实时 BOM; 未配=null 视为 0 不崩。 */
+  auxUnitPrice?: number | null;
+  /** 段2(B) 元/kg 乘哪侧 kg: INPUT(投入侧)|OUTPUT(产出侧); 保水工序 output>input 必须显式。 */
+  auxBasis?: string | null;
 }
 
 export interface RecommendedWorkProcess {

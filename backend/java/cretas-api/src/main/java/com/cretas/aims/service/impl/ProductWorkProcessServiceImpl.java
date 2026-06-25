@@ -80,6 +80,10 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .defaultCostCategory(dto.getDefaultCostCategory())
                 .packagingTemplate(dto.getPackagingTemplate())
                 .auxAllocMethod(dto.getAuxAllocMethod())
+                // 段2(B) 辅料对账配置 (标准率/辅料单价/基准)
+                .standardYieldRate(dto.getStandardYieldRate())
+                .auxUnitPrice(dto.getAuxUnitPrice())
+                .auxBasis(dto.getAuxBasis())
                 .build();
 
         ProductWorkProcess saved = repository.save(entity);
@@ -150,6 +154,10 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getDefaultCostCategory() != null) entity.setDefaultCostCategory(dto.getDefaultCostCategory());
         if (dto.getPackagingTemplate() != null) entity.setPackagingTemplate(dto.getPackagingTemplate());
         if (dto.getAuxAllocMethod() != null) entity.setAuxAllocMethod(dto.getAuxAllocMethod());
+        // 段2(B) 辅料对账配置 partial update: null → no-change; 非 null → set
+        if (dto.getStandardYieldRate() != null) entity.setStandardYieldRate(dto.getStandardYieldRate());
+        if (dto.getAuxUnitPrice() != null) entity.setAuxUnitPrice(dto.getAuxUnitPrice());
+        if (dto.getAuxBasis() != null) entity.setAuxBasis(dto.getAuxBasis());
 
         // T121: if assigneeWorkerIds provided, they govern responsible_worker_id + join table.
         List<Long> assignees = dto.getAssigneeWorkerIds();
@@ -226,6 +234,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .defaultCostCategory(entity.getDefaultCostCategory())
                 .packagingTemplate(entity.getPackagingTemplate())
                 .auxAllocMethod(entity.getAuxAllocMethod())
+                .standardYieldRate(entity.getStandardYieldRate())
+                .auxUnitPrice(entity.getAuxUnitPrice())
+                .auxBasis(entity.getAuxBasis())
                 .createdAt(entity.getCreatedAt());
 
         if (wp != null) {
