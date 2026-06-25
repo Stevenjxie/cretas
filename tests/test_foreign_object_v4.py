@@ -22,7 +22,7 @@ import re
 import httpx
 from PIL import Image
 
-API_KEY = "sk-e02592efaa6246d2b113a0ef8edaca4a"
+API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 MODEL = "qwen-vl-max-latest"
 

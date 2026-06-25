@@ -205,8 +205,8 @@ aliyun:
 # AI服务配置 (阿里云DashScope - 使用OpenAI兼容模式)
 ai:
   deepseek:
-    # DashScope API密钥 (与backend-ai-chat服务共用)
-    api-key: sk-da3b827e6a00404a8bc869296f8690bc
+    # DashScope API密钥 (与backend-ai-chat服务共用) — 从环境变量注入, 禁止硬编码 (2026-06-25 key轮换+泄露根治)
+    api-key: ${DASHSCOPE_API_KEY:}
     # DashScope OpenAI兼容模式接口地址 (代码会自动添加 /v1/chat/completions)
     base-url: https://dashscope.aliyuncs.com/compatible-mode
     # 使用免费额度模型 (was: qwen-turbo-latest)

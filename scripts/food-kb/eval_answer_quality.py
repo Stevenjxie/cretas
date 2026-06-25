@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """
 RAG 回答质量评估 — LLM-as-Judge + 规则幻觉检测
@@ -27,7 +28,7 @@ logger = logging.getLogger("eval_answer_quality")
 # ---------------------------------------------------------------------------
 LLM_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 LLM_MODEL = "qwen3.7-max-2026-06-08"  # free quota ⚠️ (qwen-max is PAID — billing incident 2026-06-11)
-FALLBACK_API_KEY = "sk-da3b827e6a00404a8bc869296f8690bc"
+FALLBACK_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 
 DIMENSION_WEIGHTS = {
     "accuracy": 0.40, "hallucination": 0.20, "completeness": 0.20,
