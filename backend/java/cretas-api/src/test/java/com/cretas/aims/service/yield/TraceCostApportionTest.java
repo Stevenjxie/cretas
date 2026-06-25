@@ -233,4 +233,44 @@ class TraceCostApportionTest {
                 .as("显式消耗 0kg 的上游源应贡献 ¥0, 不应兜底为全量父成本 ¥600 (Edge G)")
                 .isEqualByComparingTo("0.00");
     }
+
+    @Test
+    @DisplayName("严格审计 2026-06-25: 上游半成品批的副产回收沿 WIP 链传播到成品批 byproductCredit")
+    void upstreamByproductCredit_propagates() {
+        /*
+         * 父 WIP 批(prod batch 100, 产出100kg)有副产: 肥油 10kg @¥8 = ¥80 回收。
+         * 下游成品批(batch 1)全量消耗 100kg → 父副产回收应传播: byproductCredit = ¥80。
+         * 修前: aggregateUpstreamLaborSeasoning 只传 labor/seasoning, 不传副产 → byproductCredit=0 (回收丢失)。
+         */
+        MaterialConsumption parentRaw = cons("MB-RAW", "100", "600");
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(100L, F))
+                .thenReturn(List.of(parentRaw));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-RAW", F))
+                .thenReturn(Optional.of(leafMb("MB-RAW")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WIP", F))
+                .thenReturn(Optional.of(wipMb("MB-WIP", 100L, "100")));
+
+        // 父批 getYield: 一道带副产 肥油 10kg @8
+        java.util.Map<String, Object> bp = new java.util.HashMap<>();
+        bp.put("name", "肥油");
+        bp.put("quantity", new BigDecimal("10"));
+        bp.put("unit", "kg");
+        bp.put("unitPrice", new BigDecimal("8"));
+        when(yieldReportService.getYield(F, 100L))
+                .thenReturn(BatchYieldDTO.builder()
+                        .totalLaborCost(BigDecimal.ZERO)
+                        .steps(List.of(StepYieldDTO.builder().processOrder(1)
+                                .byproducts(List.of(bp)).build()))
+                        .build());
+
+        // 下游成品批全量消耗父 WIP 100kg
+        MaterialConsumption consume = cons("MB-WIP", "100", "600");
+        stubSingleBatch(1L, List.of(consume));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getByproductCredit())
+                .as("上游父批副产回收 ¥80 应沿链传播到成品批 byproductCredit")
+                .isEqualByComparingTo("80.00");
+    }
 }
