@@ -1,0 +1,73 @@
+{
+  "06-sales-orders-list": {
+    "status": "PASS",
+    "description": "销售订单列表 — 已通过上次审计，保留不动"
+  },
+  "06b-finance-review": {
+    "status": "PASS",
+    "description": "财务审核页 — 已通过上次审计，保留不动"
+  },
+  "01-sku-list": {
+    "status": "PASS",
+    "description": "产品列表页 /system/products — 红框圈「新增产品」按钮(右上角绿色)"
+  },
+  "01b-sku-create-form": {
+    "status": "PASS",
+    "description": "新建产品弹窗打开 — 红框精确框住表单字段主体区域(产品名称/产品大类/规格型号等输入行), 弹窗标题「新建产品」在红框上方; 二次审计重拍(v4)",
+    "self_check": "红框在表单输入字段上而非标题栏 — PASS"
+  },
+  "02-product-coding-config": {
+    "status": "PASS",
+    "description": "编码规则字典 /system/encoding-rules — 红框圈「新建规则」按钮; 表格显示生产计划/销售订单编码规则"
+  },
+  "03-workprocess-bom-page": {
+    "status": "PASS",
+    "description": "产品-工序配置页 — 红框圈「生成草稿」工序触发按钮(AI辅助配工序后点此生成)"
+  },
+  "03b-production-main": {
+    "status": "PASS",
+    "description": "产品-工序配置页 — 红框圈右上角「保存」按钮(工序绑定提交)"
+  },
+  "04-material-dictionary": {
+    "status": "PASS",
+    "description": "原料类型字典 /warehouse/material-types — 红框圈「单位」列头"
+  },
+  "05-bom-list": {
+    "status": "PASS",
+    "description": "BOM配方管理页 /production/bom — 红框精确圈住「创建配方」按钮(BOM配方管理区块右上角蓝色按钮); 二次审计重拍(v4)",
+    "self_check": "红框在「+创建配方」按钮上而非BOM成本数值区 — PASS"
+  },
+  "05b-bom-yield-rate": {
+    "status": "PASS",
+    "description": "创建配方头弹窗 — 红框圈「整体出成率%」输入框本身"
+  },
+  "07-production-plans": {
+    "status": "PASS",
+    "description": "生产计划页 /production/plans — 红框圈「新建计划」按钮(右上角)"
+  },
+  "08-transfer-list": {
+    "status": "PASS",
+    "description": "调拨管理页 /transfer/list — 红框圈「手动新建调拨单」按钮"
+  },
+  "08b-transfer-create-form": {
+    "status": "PASS",
+    "description": "手动新建调拨单弹窗打开 — 红框圈「调出仓库」字段"
+  },
+  "09-production-batches": {
+    "status": "PASS",
+    "description": "生产批次列表 — 红框圈第一行「查看/编辑/更多」操作按钮组"
+  },
+  "09b-batch-detail": {
+    "status": "PASS",
+    "description": "批次详情工序明细 — 红框圈「工序报工入口」区块，显示领料报工/产出报工待开工入口"
+  },
+  "10-production-complete": {
+    "status": "PASS",
+    "description": "批次DEMO-690-2PT-B1「✓ 2/2道全部报完」完成状态 — 红框精确圈住「完工入库」蓝色主按钮，红字标注「点击完工入库，填实际产出数量，成品入成品库」；test环境batch 1917两道工序全完成后截取",
+    "self_check": "①批次详情页 ②「完工入库」按钮真实出现 ③红框准确圈住 ④清晰 — PASS"
+  },
+  "10b-inventory-confirm": {
+    "status": "PASS",
+    "description": "成品库存页 /sales/finished-goods — 红框圈第一条成品记录行"
+  }
+}
