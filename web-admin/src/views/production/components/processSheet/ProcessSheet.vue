@@ -171,16 +171,19 @@ const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable
 // F006 双出成率总览 (全工序汇总卡 — 张权需求: 一眼看全链对上工序/对原料率)
 const yieldCardRef = ref<InstanceType<typeof YieldCardTable> | null>(null);
 const yieldOverviewActive = ref<string[]>(['yield']);
+let loadAllSeq = 0;
 
 // -------------------------------------------------------------------------
 // Load all data on mount
 // -------------------------------------------------------------------------
 async function loadAll() {
   if (!props.factoryId || !props.planId) return;
+  const seq = ++loadAllSeq;
   loading.value = true;
   try {
     // G0: 先解析本产品工序链 (动态), 再加载各道库存/行
     await resolveProcesses();
+    if (seq !== loadAllSeq) return;
     if (!PROCESSES.value.some((p) => procKey(p) === activeTab.value)) {
       activeTab.value = PROCESSES.value[0] ? procKey(PROCESSES.value[0]) : procKey(FALLBACK_PROCESSES[0]);
     }
@@ -193,20 +196,23 @@ async function loadAll() {
           getInventory(props.factoryId, props.planId, proc.code, proc.order),
           getRows(props.factoryId, props.planId, proc.code, proc.order),
         ]);
+        if (seq !== loadAllSeq) return;
         inventoryMap.value[procKey(proc)] = invResp.data || [];
         initialRowsMap.value[procKey(proc)] = rowsResp.data || [];
       })
     );
   } catch (e) {
+    if (seq !== loadAllSeq) return;
     console.error('[ProcessSheet] loadAll error', e);
   } finally {
-    loading.value = false;
+    if (seq === loadAllSeq) loading.value = false;
   }
 }
 
 watch(
   () => [props.factoryId, props.planId, props.productTypeId],
   () => {
+    loadAllSeq++;
     inventoryMap.value = {};
     initialRowsMap.value = {};
     inventoryTableRefs.value = {};

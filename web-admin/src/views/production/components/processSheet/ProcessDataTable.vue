@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock } from '@element-plus/icons-vue';
 import {
@@ -86,6 +86,7 @@ const isQidiao = computed(() => props.processCode === 'qidiao');
 // -------------------------------------------------------------------------
 const rawBatchOptions = ref<RawMaterialBatchOption[]>([]);
 const rawBatchLoading = ref(false);
+let rawBatchLoadSeq = 0;
 
 function extractRawBatches(
   data: RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] } | null | undefined,
@@ -122,14 +123,17 @@ function rawBatchLabel(batch: RawMaterialBatchOption): string {
 
 async function loadRawBatches() {
   if (!isXiuYou.value || !props.factoryId) return;
+  const seq = ++rawBatchLoadSeq;
   rawBatchLoading.value = true;
   try {
     const resp = await getAvailableRawBatches(props.factoryId);
+    if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = extractRawBatches(resp.data).filter((b) => rawBatchAvailable(b) > 0);
   } catch {
+    if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = [];
   } finally {
-    rawBatchLoading.value = false;
+    if (seq === rawBatchLoadSeq) rawBatchLoading.value = false;
   }
 }
 
@@ -267,16 +271,27 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
 // initialRows prop arrives.  Without a watch, rows was set ONCE at setup()
 // time when initialRows was still [] (the fetch hadn't returned yet).
 const rows = ref<SheetRow[]>([]);
+const rowScopeKey = computed(() =>
+  `${props.factoryId}|${props.planId}|${props.productTypeId}|${props.processCode}|${props.processOrder}`,
+);
+let lastRowScopeKey = '';
 
 // Re-hydrate saved rows whenever the parent delivers them.
 // Guard: only apply when rows is still in its initial-load state (all
 // UNSAVED rows means no user edits yet), so we don't clobber a row the
 // user has already started filling in after the sheet was opened.
 watch(
-  () => props.initialRows,
-  (incoming) => {
-    // If the user has already added unsaved rows, don't overwrite them.
-    // Only hydrate on the first non-empty delivery (initial load).
+  () => [rowScopeKey.value, props.initialRows] as const,
+  ([scopeKey, incoming]) => {
+    if (scopeKey !== lastRowScopeKey) {
+      lastRowScopeKey = scopeKey;
+      rows.value = (incoming ?? []).map(hydrateRow);
+      return;
+    }
+
+    // Same plan/process: if the user has already added unsaved rows, don't overwrite them.
+    // This keeps in-progress edits safe while still clearing rows when the drawer is reused
+    // for another plan/process.
     const hasUserEdits = rows.value.some((r) => r.rowStatus === 'UNSAVED');
     if (hasUserEdits && rows.value.length > 0) return;
     rows.value = (incoming ?? []).map(hydrateRow);
@@ -660,12 +675,16 @@ function onPotCountChange(row: SheetRow, val: number) {
   row.potRawKgs = Array.from({ length: val }, (_, i) => row.potRawKgs[i] ?? null);
 }
 
-// -------------------------------------------------------------------------
-// Lifecycle
-// -------------------------------------------------------------------------
-onMounted(() => {
-  if (isXiuYou.value) loadRawBatches();
-});
+watch(
+  () => [props.factoryId, props.processCode] as const,
+  () => {
+    rawBatchOptions.value = [];
+    rawBatchLoadSeq++;
+    rawBatchLoading.value = false;
+    if (isXiuYou.value) void loadRawBatches();
+  },
+  { immediate: true },
+);
 </script>
 
 <template>

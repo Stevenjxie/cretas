@@ -12,17 +12,21 @@ const props = defineProps<{
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
+let refreshSeq = 0;
 
 async function refresh() {
   if (!props.factoryId || !props.planId) return;
+  const seq = ++refreshSeq;
   loading.value = true;
   try {
     const resp = await getInventory(props.factoryId, props.planId, props.processCode, props.processOrder);
+    if (seq !== refreshSeq) return;
     rows.value = resp.data || [];
   } catch {
+    if (seq !== refreshSeq) return;
     rows.value = [];
   } finally {
-    loading.value = false;
+    if (seq === refreshSeq) loading.value = false;
   }
 }
 

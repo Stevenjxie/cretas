@@ -19,6 +19,7 @@ const props = defineProps<{
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
+let refreshSeq = 0;
 
 function fmtRate(v: number | null | undefined): string {
   if (v == null) return '—';
@@ -44,14 +45,17 @@ function rateColor(v: number | null | undefined): string {
 
 async function refresh() {
   if (!props.factoryId || !props.planId) return;
+  const seq = ++refreshSeq;
   loading.value = true;
   try {
     const resp = await getInventoryYieldCard(props.factoryId, props.planId);
+    if (seq !== refreshSeq) return;
     rows.value = resp.data || [];
   } catch {
+    if (seq !== refreshSeq) return;
     rows.value = [];
   } finally {
-    loading.value = false;
+    if (seq === refreshSeq) loading.value = false;
   }
 }
 
