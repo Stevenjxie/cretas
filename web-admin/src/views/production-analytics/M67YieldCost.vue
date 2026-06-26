@@ -51,11 +51,12 @@
     <template v-if="data">
       <!-- 3 核心数 + 盒数 -->
       <div class="kpis">
-        <KPICard title="整批出成率" :value="pct(data.overallYieldRate)" unit="%" format="number" :precision="1"
-                 icon="TrendCharts" :target-value="60" subtitle="成品净重 ÷ 原料投入" />
+        <KPICard title="整批出成率" :value="overallYieldKpi.value" :unit="overallYieldKpi.unit" format="number" :precision="1"
+                 icon="TrendCharts" :target-value="overallYieldKpi.targetValue" :subtitle="overallYieldKpi.subtitle"
+                 :status="overallYieldKpi.status" />
         <KPICard title="单盒成本" :value="perBox(totalCostClosed)" unit="元/盒" format="currency" :precision="2"
-                 icon="Coin" subtitle="含上游混批 traced 原料成本 ÷ 盒数" />
-        <KPICard title="单盒人工" :value="perBox(cb?.laborCost ?? data.totalLaborCost)" unit="元/盒" format="currency" :precision="2"
+                 icon="Coin" :subtitle="singleBoxCostSubtitle" />
+        <KPICard title="单盒人工" :value="perBox(laborCostClosed)" unit="元/盒" format="currency" :precision="2"
                  icon="User" subtitle="总人工 ÷ 盒数" />
         <KPICard title="产出盒数" :value="boxCount" unit="盒" format="number" :precision="0"
                  icon="Box" :subtitle="`末道产出 ${num(data.totalLastOutput)} ${data.lastOutputUnit || 'kg'}`" />
@@ -65,28 +66,32 @@
         <!-- 逐道出成率 -->
         <el-col :span="14">
           <el-card shadow="never">
-            <template #header><b>逐道出成率 · 人工</b><span class="hint">投入 → 产出 (注水增重 &gt;100% 正常) · 每道人工成本</span></template>
-            <div v-for="(s, idx) in steps" :key="s.processOrder" class="step">
+            <template #header><b>逐道出成率 · 工序汇总</b><span class="hint">按工序聚合重复报工; 成本以右侧整批口径为准</span></template>
+            <div class="step-summary-strip">
+              <span>报工明细 {{ steps.length }} 条</span>
+              <span>工序组 {{ groupedSteps.length }} 个</span>
+              <span v-if="hasUnallocatedStepCost">人工 / 设备 / 其他未按本道分摊</span>
+            </div>
+            <div v-for="g in groupedSteps" :key="g.key" class="step">
               <div class="step-top">
-                <span class="pname">{{ stepName(s) }}</span>
-                <span class="qty">{{ num(s.totalInput) }} → {{ num(s.totalOutput) }} {{ s.outputUnit || 'kg' }}</span>
-                <span v-if="s.laborCost != null && s.laborCost > 0" class="step-labor">人工 ¥{{ s.laborCost.toFixed(2) }}</span>
-                <span class="yr" :class="yieldClass(s.yieldRate)">{{ s.yieldRate == null ? '—' : (s.yieldRate * 100).toFixed(1) + '%' }}</span>
+                <span class="pname">{{ g.processName }}</span>
+                <el-tag v-if="g.count > 1" size="small" effect="plain">{{ g.count }} 条</el-tag>
+                <span class="qty">{{ num(g.totalInput) }} → {{ num(g.totalOutput) }} {{ g.outputUnit || 'kg' }}</span>
+                <span class="yr" :class="yieldClass(g.avgYieldRate)">{{ g.avgYieldRate == null ? '—' : (g.avgYieldRate * 100).toFixed(1) + '%' }}</span>
               </div>
-              <el-progress :percentage="barPct(s.yieldRate)" :status="yieldStatus(s.yieldRate)" :stroke-width="12" :show-text="false" />
+              <el-progress :percentage="barPct(g.avgYieldRate)" :status="yieldStatus(g.avgYieldRate)" :stroke-width="12" :show-text="false" />
               <!-- 逐工序完整成本: 原料摊首道 · 包装摊末道 -->
               <div class="step-cost">
-                <template v-if="stepFullCostValue(s, idx, steps) !== null">
+                <template v-if="g.costValue !== null">
                   <span class="sc-full">
-                    本道完整成本 ¥{{ stepFullCostValue(s, idx, steps)!.toFixed(2) }}
-                    <span v-if="idx === 0" class="sc-tag">(含原料)</span>
-                    <span v-if="idx === steps.length - 1" class="sc-tag">(含包装)</span>
+                    本组归集成本 ¥{{ g.costValue.toFixed(2) }}
+                    <span v-for="tag in g.costTags" :key="tag" class="sc-tag">({{ tag }})</span>
                   </span>
-                  <span v-if="stepPerBoxValue(stepFullCostValue(s, idx, steps)) !== null" class="sc-perbox">
-                    每盒 ¥{{ stepPerBoxValue(stepFullCostValue(s, idx, steps))!.toFixed(4) }}
+                  <span v-if="stepPerBoxValue(g.costValue) !== null" class="sc-perbox">
+                    每盒 ¥{{ stepPerBoxValue(g.costValue)!.toFixed(4) }}
                   </span>
                 </template>
-                <span v-else class="sc-masked">成本需价格权限</span>
+                <span v-else class="sc-masked">{{ g.costReason }}</span>
               </div>
             </div>
           </el-card>
@@ -95,13 +100,13 @@
         <!-- 单盒成本拆解 -->
         <el-col :span="10">
           <el-card shadow="never">
-            <template #header><b>单盒成本拆解</b><span class="hint">原料=上游混批 traced 成本之和 (闭环)</span></template>
+            <template #header><b>单盒成本拆解</b><span class="hint">{{ costBreakdownHint }}</span></template>
             <div class="total-box">¥{{ perBox(totalCostClosed).toFixed(2) }}<span>/盒</span></div>
             <div v-for="c in costBreakdown" :key="c.name" class="cost-row">
               <span class="cdot" :style="{ background: c.color }"></span>
               <span class="cname">{{ c.name }}</span>
               <el-progress :percentage="c.share" :color="c.color" :stroke-width="14" style="flex:1" />
-              <span class="cval">¥{{ c.perBox.toFixed(2) }}</span>
+              <span class="cval">{{ money2(c.perBox) }}</span>
             </div>
 
             <!-- 包装明细 4 拆 (膜/气体/标签/其他) — AUDIT-002 -->
@@ -109,7 +114,7 @@
               <div class="pkg-title">包装明细<span v-if="packagingTotal > 0"> (合计 ¥{{ packagingTotal.toFixed(2) }})</span></div>
               <div v-for="p in packagingDetail" :key="p.name" class="pkg-row">
                 <span class="pkg-name">{{ p.name }}</span>
-                <span class="pkg-cost">{{ p.cost != null ? '¥' + Number(p.cost).toFixed(2) : '需价格权限' }}</span>
+                <span class="pkg-cost">{{ p.cost != null ? money2(Number(p.cost)) : '需价格权限' }}</span>
                 <span v-if="p.cost != null" class="pkg-perbox">¥{{ (Number(p.cost) / (boxCount || 1)).toFixed(3) }}/盒</span>
               </div>
             </div>
@@ -245,13 +250,13 @@
         <div v-if="mixCostSplit.hasCost" class="mix-cost">
           <div class="mix-cost-title">混批成本拆分 — 按实测投料量 × 各自单价精确归集 (合计 ¥{{ mixCostSplit.totalCost.toFixed(2) }})</div>
           <table class="mix-tbl">
-            <thead><tr><th>上游来源</th><th>投料量</th><th>单价</th><th>成本</th><th>重量占比</th><th>成本占比</th></tr></thead>
+            <thead><tr><th>上游来源</th><th>投料量</th><th>单价</th><th>成本</th><th>数量占比</th><th>成本占比</th></tr></thead>
             <tbody>
-              <tr v-for="row in mixCostSplit.rows" :key="row.name">
+              <tr v-for="row in mixCostSplit.rows" :key="row.key">
                 <td>{{ row.name }}</td>
-                <td>{{ row.qty }} kg</td>
-                <td>¥{{ Number(row.unitPrice).toFixed(2) }}/kg</td>
-                <td>¥{{ Number(row.cost).toFixed(2) }}</td>
+                <td>{{ row.qty }} {{ row.unit || '' }}</td>
+                <td>¥{{ Number(row.unitPrice).toFixed(2) }}/{{ row.unit || '单位' }}</td>
+                <td>{{ money2(row.cost) }}</td>
                 <td>{{ row.weightShare }}%</td>
                 <td :class="{ hl: row.costShare !== row.weightShare }">{{ row.costShare }}%</td>
               </tr>
@@ -281,7 +286,24 @@ interface Step {
   totalInput?: number; totalOutput?: number; outputUnit?: string;
   yieldRate?: number; laborCost?: number; materialCost?: number;
 }
-interface MixRel { batchNumber?: string; batchId?: string; quantity?: number; unitPrice?: number; totalCost?: number; sourceType?: string }
+interface StepGroup {
+  key: string;
+  processOrder: number;
+  processName: string;
+  count: number;
+  totalInput: number;
+  totalOutput: number;
+  outputUnit?: string;
+  avgYieldRate: number | null;
+  costValue: number | null;
+  costTags: string[];
+  costReason: string;
+}
+interface MixRel {
+  batchNumber?: string; batchId?: string; quantity?: number; unit?: string; unitPrice?: number; totalCost?: number;
+  weightSharePct?: number; costSharePct?: number; sourceType?: string;
+}
+interface SankeyNode { name: string; displayName: string; itemStyle?: { color: string } }
 interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
 interface ByproductLine { name?: string; quantity?: number; unit?: string; unitPrice?: number; value?: number }
 interface PackagingItem { name?: string; cost?: number }
@@ -293,6 +315,14 @@ interface CostBreakdown {
   sampleRetainCount?: number; wasteQuantity?: number; sellableBoxCount?: number; sellablePerBoxCost?: number;
   packagingDetail?: PackagingItem[]; auxiliaryAllocations?: AuxAllocation[];
   sources?: CostSource[];
+}
+interface EnhancedCostAnalysis {
+  totalMaterialCost?: number; totalLaborCost?: number; totalEquipmentCost?: number; totalOtherCost?: number;
+  totalCost?: number; unitCost?: number;
+  costSummary?: { otherCost?: number; totalCost?: number };
+  costBreakdown?: {
+    rawMaterialCost?: number; laborCost?: number; equipmentCost?: number; otherCost?: number; totalCost?: number;
+  };
 }
 /** 段2(B): 辅料标准单价双锚点对账 (CostReconcileResult) */
 interface ReconStep {
@@ -424,6 +454,7 @@ const sankeyEl = ref<HTMLElement | null>(null);
 const mixEl = ref<HTMLElement | null>(null);
 const mixRels = ref<MixRel[]>([]);
 const cb = ref<CostBreakdown | null>(null);   // 后端单一权威成本拆分 (谱系遍历)
+const enhancedCost = ref<EnhancedCostAnalysis | null>(null);
 const recon = ref<CostReconcile | null>(null);   // 段2(B) 辅料标准单价对账
 const hasMix = computed(() => mixRels.value.length > 1); // >1 上游批次 = 真混批
 let chart: any = null;
@@ -437,7 +468,60 @@ const steps = computed<Step[]>(() => {
   const b = data.value?.batches?.[0];
   return (b?.steps || []).slice().sort((a, c) => (a.processOrder || 0) - (c.processOrder || 0));
 });
+const hasUnallocatedStepCost = computed(() => {
+  if (!enhancedCost.value) return false;
+  return laborCostClosed.value > 0 || equipmentCostClosed.value > 0 || totalCostClosed.value > rawMaterialCostClosed.value;
+});
+const groupedSteps = computed<StepGroup[]>(() => {
+  const all = steps.value;
+  const groups = new Map<string, { processOrder: number; processName: string; outputUnit?: string; items: Array<{ step: Step; index: number }> }>();
+
+  all.forEach((step, index) => {
+    const processName = stepName(step);
+    const key = `${step.processOrder}-${processName}-${step.outputUnit || ''}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push({ step, index });
+    } else {
+      groups.set(key, {
+        processOrder: step.processOrder,
+        processName,
+        outputUnit: step.outputUnit,
+        items: [{ step, index }],
+      });
+    }
+  });
+
+  return Array.from(groups.entries()).map(([key, group]) => {
+    const yields = group.items.map(({ step }) => step.yieldRate).filter((v): v is number => v != null);
+    const costValues = group.items
+      .map(({ step, index }) => stepFullCostValue(step, index, all))
+      .filter((v): v is number => v != null);
+    const costTags = new Set<string>();
+    group.items.forEach(({ index }) => {
+      if (index === 0 && cb.value?.rawMaterialCost != null) costTags.add('含原料');
+      if (index === all.length - 1 && cb.value?.packagingCost != null) costTags.add('含包装');
+    });
+
+    return {
+      key,
+      processOrder: group.processOrder,
+      processName: group.processName,
+      count: group.items.length,
+      totalInput: group.items.reduce((sum, item) => sum + Number(item.step.totalInput || 0), 0),
+      totalOutput: group.items.reduce((sum, item) => sum + Number(item.step.totalOutput || 0), 0),
+      outputUnit: group.outputUnit,
+      avgYieldRate: yields.length ? yields.reduce((sum, val) => sum + val, 0) / yields.length : null,
+      costValue: costValues.length ? costValues.reduce((sum, val) => sum + val, 0) : null,
+      costTags: Array.from(costTags),
+      costReason: stepCostUnavailableReason(),
+    };
+  });
+});
+const isBoxUnit = (unit?: string | null) => ['box', '盒'].includes((unit || '').trim().toLowerCase());
 const boxCount = computed(() => {
+  const actualOut = data.value?.totalLastOutput;
+  if (actualOut != null && isBoxUnit(data.value?.lastOutputUnit)) return Number(actualOut);
   if (cb.value?.boxCount) return cb.value.boxCount;   // 权威: 后端 Σ批次盒数
   const out = data.value?.totalLastOutput;
   if (out == null || !gramsPerBox.value) return 0;
@@ -447,6 +531,43 @@ const boxCount = computed(() => {
 const num = (v?: number | null) => (v == null ? '—' : Number(v).toFixed(1));
 const pct = (v?: number | null) => (v == null ? 0 : v * 100);
 const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / boxCount.value);
+const money2 = (v?: number | null) => {
+  if (v == null) return '—';
+  const n = Number(v);
+  if (n > 0 && n < 0.005) return '<¥0.01';
+  return `¥${n.toFixed(2)}`;
+};
+
+const hasOverallYieldUnitIssue = computed(() => {
+  const issueText = (recon.value?.issues || []).map(i => i.message || '').join(' ');
+  if (issueText.includes('跨单位') || issueText.includes('克重') || issueText.includes('unit') || issueText.includes('gramsPerUnit')) {
+    return true;
+  }
+
+  const hasInputAndOutput = Number(data.value?.totalFirstInput || 0) > 0 && Number(data.value?.totalLastOutput || 0) > 0;
+  const lastUnit = (data.value?.lastOutputUnit || '').toLowerCase();
+  return hasInputAndOutput && data.value?.overallYieldRate === 0 && !!lastUnit && lastUnit !== 'kg';
+});
+
+const overallYieldKpi = computed(() => {
+  if (hasOverallYieldUnitIssue.value) {
+    return {
+      value: '不可折算',
+      unit: '',
+      subtitle: '首道投入与末道产出单位不同，先配置产品标准克重',
+      status: 'warning' as const,
+      targetValue: undefined,
+    };
+  }
+
+  return {
+    value: pct(data.value?.overallYieldRate),
+    unit: '%',
+    subtitle: '成品净重 ÷ 原料投入',
+    status: 'default' as const,
+    targetValue: 60,
+  };
+});
 
 /**
  * 计算每道工序的完整成本:
@@ -460,6 +581,11 @@ const perBox = (v?: number | null) => (v == null || !boxCount.value ? 0 : v / bo
 function stepFullCostValue(s: Step, index: number, allSteps: Step[]): number | null {
   const cbVal = cb.value;
   if (cbVal?.priceMasked) return null;
+  const hasDirectStepCost = s.laborCost != null || s.materialCost != null;
+  const hasRawCost = index === 0 && cbVal?.rawMaterialCost != null;
+  const hasPackagingCost = index === allSteps.length - 1 && cbVal?.packagingCost != null;
+  if (!hasDirectStepCost && !hasRawCost && !hasPackagingCost) return null;
+
   const base = (s.laborCost ?? 0) + (s.materialCost ?? 0);
   let full = base;
   if (index === 0) {
@@ -473,6 +599,12 @@ function stepFullCostValue(s: Step, index: number, allSteps: Step[]): number | n
   return full;
 }
 
+function stepCostUnavailableReason(): string {
+  if (cb.value?.priceMasked) return '成本需价格权限';
+  if (hasUnallocatedStepCost.value) return '本批人工 / 设备 / 其他在右侧汇总，未按本道分摊';
+  return '本道暂无成本归集';
+}
+
 function stepPerBoxValue(fullCost: number | null): number | null {
   if (fullCost == null || !boxCount.value) return null;
   return fullCost / boxCount.value;
@@ -480,7 +612,46 @@ function stepPerBoxValue(fullCost: number | null): number | null {
 
 // 成本全部以后端单一权威服务 cb 为准 (谱系遍历 + 上游成本回溯); 缺失时回退订单聚合
 const upstreamCost = computed(() => Number(cb.value?.rawMaterialCost ?? mixRels.value.reduce((s, r) => s + Number(r.totalCost || 0), 0)));
-const totalCostClosed = computed(() => Number(cb.value?.totalCost ?? (Number(data.value?.totalCost || 0) + upstreamCost.value)));
+const enhancedBreakdown = computed(() => enhancedCost.value?.costBreakdown);
+const enhancedRawMaterialCost = computed(() => Number(enhancedBreakdown.value?.rawMaterialCost ?? enhancedCost.value?.totalMaterialCost ?? 0));
+const rawMaterialCostClosed = computed(() => Number(cb.value?.rawMaterialCost ?? enhancedBreakdown.value?.rawMaterialCost ?? enhancedCost.value?.totalMaterialCost ?? upstreamCost.value));
+const seasoningCostClosed = computed(() => Number(cb.value?.seasoningCost ?? 0));
+const packagingCostClosed = computed(() => Number(cb.value?.packagingCost ?? 0));
+const laborCostClosed = computed(() => Number(enhancedBreakdown.value?.laborCost ?? enhancedCost.value?.totalLaborCost ?? cb.value?.laborCost ?? data.value?.totalLaborCost ?? 0));
+const equipmentCostClosed = computed(() => Number(enhancedBreakdown.value?.equipmentCost ?? enhancedCost.value?.totalEquipmentCost ?? 0));
+const otherCostClosed = computed(() => {
+  const explicitOther = enhancedBreakdown.value?.otherCost ?? enhancedCost.value?.totalOtherCost ?? enhancedCost.value?.costSummary?.otherCost;
+  if (explicitOther != null) return Number(explicitOther);
+
+  const enhancedTotal = enhancedBreakdown.value?.totalCost ?? enhancedCost.value?.totalCost ?? enhancedCost.value?.costSummary?.totalCost;
+  if (enhancedTotal != null) {
+    return Math.max(0, Number(enhancedTotal) - enhancedRawMaterialCost.value - laborCostClosed.value - equipmentCostClosed.value);
+  }
+
+  const fallbackTotal = cb.value?.totalCost ?? data.value?.totalCost;
+  if (fallbackTotal != null) {
+    return Math.max(0, Number(fallbackTotal) - rawMaterialCostClosed.value - seasoningCostClosed.value - packagingCostClosed.value - laborCostClosed.value);
+  }
+
+  return 0;
+});
+const totalCostClosed = computed(() => {
+  if (enhancedCost.value || cb.value) {
+    return rawMaterialCostClosed.value
+      + seasoningCostClosed.value
+      + packagingCostClosed.value
+      + laborCostClosed.value
+      + equipmentCostClosed.value
+      + otherCostClosed.value;
+  }
+  return Number(data.value?.totalCost || 0) + upstreamCost.value;
+});
+const singleBoxCostSubtitle = computed(() => enhancedCost.value
+  ? '闭环总成本 ÷ 实际产出盒数'
+  : '含上游混批 traced 原料成本 ÷ 盒数');
+const costBreakdownHint = computed(() => enhancedCost.value
+  ? '闭环总成本 = traced 原料 + 工序辅料 + 包材 + 人工 + 设备 + 其他'
+  : '原料=上游混批 traced 成本之和 (闭环)');
 
 // 副产回收 (肥油/料头等可变现副产物冲减成本); 价格脱敏时 value/credit/net 为 null
 const byproducts = computed<ByproductLine[]>(() => cb.value?.byproducts || []);
@@ -519,6 +690,25 @@ const yieldClass = (y?: number | null) => {
 
 const costBreakdown = computed(() => {
   const d = data.value; if (!d && !cb.value) return [];
+  if (enhancedCost.value || enhancedBreakdown.value) {
+    const total = totalCostClosed.value || 1;
+    const bc = boxCount.value || 1;
+    const rawMat = rawMaterialCostClosed.value;
+    const seasoning = seasoningCostClosed.value;
+    const packaging = packagingCostClosed.value;
+    const labor = laborCostClosed.value;
+    const equipment = equipmentCostClosed.value;
+    const other = otherCostClosed.value;
+    const rows = [
+      { name: '原料', amount: rawMat, color: '#5470c6' },
+      { name: '辅料/调料', amount: seasoning, color: '#ee6666' },
+      { name: '包材', amount: packaging, color: '#9a60b4' },
+      { name: '人工', amount: labor, color: '#91cc75' },
+      { name: '设备', amount: equipment, color: '#73c0de' },
+      { name: '其他', amount: other, color: '#fac858' },
+    ].filter((r) => r.amount > 0);
+    return rows.map((r) => ({ ...r, share: Math.round((r.amount / total) * 100), perBox: r.amount / bc }));
+  }
   const st = steps.value;
   // 全部以后端权威 cb 为准; cb 缺失时回退订单聚合/报告
   const labor = Number(cb.value?.laborCost ?? d?.totalLaborCost ?? 0);
@@ -537,25 +727,31 @@ const costBreakdown = computed(() => {
 });
 
 function renderSankey() {
-  if (!sankeyEl.value || !steps.value.length) return;
+  if (!sankeyEl.value || !groupedSteps.value.length) return;
   if (!chart) chart = echarts.init(sankeyEl.value);
-  const st = steps.value;
-  const nodes: { name: string }[] = [{ name: '原料' }];
-  st.forEach((s) => nodes.push({ name: stepName(s) }));
+  const st = groupedSteps.value;
+  const nodes: SankeyNode[] = [{ name: 'raw-input', displayName: '原料' }];
+  const nodeLabel = new Map<string, string>([['raw-input', '原料']]);
+  st.forEach((s, index) => {
+    const name = `step-group-${index}-${s.processOrder}-${s.processName}`;
+    const displayName = s.processName;
+    nodes.push({ name, displayName });
+    nodeLabel.set(name, displayName);
+  });
   const links: { source: string; target: string; value: number }[] = [];
-  let prev = '原料';
-  st.forEach((s) => {
-    const cur = stepName(s);
+  let prev = 'raw-input';
+  st.forEach((s, index) => {
+    const cur = `step-group-${index}-${s.processOrder}-${s.processName}`;
     links.push({ source: prev, target: cur, value: Number(s.totalInput || 0) });
     prev = cur;
   });
   chart.setOption({
-    tooltip: { trigger: 'item', formatter: (p: any) => p.dataType === 'edge' ? `${p.data.source} → ${p.data.target}: ${p.data.value} kg` : p.name },
+    tooltip: { trigger: 'item', formatter: (p: any) => p.dataType === 'edge' ? `${nodeLabel.get(p.data.source) || p.data.source} → ${nodeLabel.get(p.data.target) || p.data.target}: ${p.data.value} kg` : (p.data?.displayName || p.name) },
     series: [{
       type: 'sankey', left: 20, right: 120, top: 20, bottom: 20,
       emphasis: { focus: 'adjacency' },
       lineStyle: { color: 'gradient', opacity: 0.5 },
-      label: { fontSize: 12 },
+      label: { fontSize: 12, formatter: (p: any) => p.data?.displayName || p.name },
       data: nodes, links,
     }],
   });
@@ -580,10 +776,24 @@ async function loadCostBreakdown() {
       cb.value = resp.data;
       mixRels.value = (resp.data.sources || []).map(s => ({
         batchNumber: s.batchName, batchId: s.batchId, quantity: s.quantity,
-        unitPrice: s.unitPrice, totalCost: s.cost,
+        unit: s.unit, unitPrice: s.unitPrice, totalCost: s.cost,
+        weightSharePct: s.weightSharePct, costSharePct: s.costSharePct,
       }));
     }
   } catch { /* 无成本拆分 → 混批卡不显示 */ }
+}
+
+async function loadEnhancedBatchCost() {
+  enhancedCost.value = null;
+  const fid = factoryId.value;
+  const batchId = data.value?.batches?.[0]?.batchId;
+  if (!fid || !batchId) return;
+  try {
+    const resp = await get<EnhancedCostAnalysis>(`/${fid}/processing/batches/${batchId}/cost-analysis/enhanced`);
+    if (resp.success && resp.data) {
+      enhancedCost.value = resp.data;
+    }
+  } catch { /* 增强成本失败时回退 cost-breakdown 口径 */ }
 }
 
 // 段2(B): 辅料标准单价双锚点对账 (标准应投 vs 实际投料 → 多投/误差)。
@@ -617,13 +827,15 @@ const mixCostSplit = computed(() => {
   return {
     hasCost: rows.length > 0,
     totalCost,
-    rows: mixRels.value.map(r => ({
+    rows: mixRels.value.map((r, index) => ({
+      key: `${r.batchId || r.batchNumber || 'upstream'}-${index}`,
       name: r.batchNumber || r.batchId || '上游',
       qty: Number(r.quantity || 0),
+      unit: r.unit,
       unitPrice: r.unitPrice,
       cost: r.totalCost,
-      weightShare: Math.round((Number(r.quantity || 0) / totalQty) * 1000) / 10,
-      costShare: totalCost ? Math.round((Number(r.totalCost || 0) / totalCost) * 1000) / 10 : null,
+      weightShare: r.weightSharePct != null ? Number(r.weightSharePct) : Math.round((Number(r.quantity || 0) / totalQty) * 1000) / 10,
+      costShare: r.costSharePct != null ? Number(r.costSharePct) : (totalCost ? Math.round((Number(r.totalCost || 0) / totalCost) * 1000) / 10 : null),
     })),
   };
 });
@@ -690,6 +902,7 @@ async function load() {
       }
     }
     await loadCostBreakdown();
+    await loadEnhancedBatchCost();
     await loadReconcile();
     await nextTick();
     renderSankey();
@@ -740,9 +953,22 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .mix-tbl th:first-child, .mix-tbl td:first-child { text-align: left; }
 .mix-tbl thead th { background: #f5f7fa; color: #606266; font-weight: 600; }
 .mix-tbl td.hl { color: #e6a23c; font-weight: 700; }
+.step-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #606266;
+  font-size: 12px;
+}
+.step-summary-strip span {
+  padding: 3px 8px;
+  background: #f4f6fa;
+  border-radius: 4px;
+}
 .step { margin-bottom: 14px; }
-.step-top { display: flex; align-items: center; margin-bottom: 4px; }
-.pname { font-weight: 600; width: 64px; }
+.step-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.pname { font-weight: 600; min-width: 160px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qty { color: #606266; font-size: 13px; flex: 1; }
 .step-labor { color: #e6a23c; font-size: 12px; margin-right: 10px; white-space: nowrap; }
 .yr { font-weight: 700; }

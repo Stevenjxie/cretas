@@ -68,14 +68,15 @@ public class CostReconcileService {
         List<StepYieldDTO> steps = new ArrayList<>(actualSteps);
         steps.sort(Comparator.comparingInt(s -> s.getProcessOrder() == null ? 0 : s.getProcessOrder()));
 
-        Map<Integer, ProductWorkProcess> cfgByOrder = new HashMap<>();
+        Map<Integer, List<ProductWorkProcess>> cfgsByOrder = new HashMap<>();
         if (configs != null) {
             for (ProductWorkProcess c : configs) {
                 if (c != null && c.getProcessOrder() != null) {
-                    cfgByOrder.put(c.getProcessOrder(), c);
+                    cfgsByOrder.computeIfAbsent(c.getProcessOrder(), ignored -> new ArrayList<>()).add(c);
                 }
             }
         }
+        List<ProductWorkProcess> matchedConfigs = matchConfigsByStepOrder(steps, cfgsByOrder);
 
         StepYieldDTO first = steps.get(0);
         StepYieldDTO last = steps.get(steps.size() - 1);
@@ -87,8 +88,8 @@ public class CostReconcileService {
         // ── 标准链完整性: 每道实际工序都必须有 standardYieldRate (>0), 否则 Π 偏 → 不报假超产 ──
         boolean standardComplete = true;
         BigDecimal product = BigDecimal.ONE;   // Π(standardYieldRate); multiply 精确, 不中途 round
-        for (StepYieldDTO s : steps) {
-            ProductWorkProcess c = cfgByOrder.get(orderOf(s));
+        for (int i = 0; i < steps.size(); i++) {
+            ProductWorkProcess c = matchedConfigs.get(i);
             BigDecimal r = c != null ? c.getStandardYieldRate() : null;
             if (r == null || r.compareTo(BigDecimal.ZERO) <= 0) {
                 standardComplete = false;
@@ -134,14 +135,14 @@ public class CostReconcileService {
         }
 
         // ── 逐工序标准 kg (从 standardFirstInput 正向走链); 仅 standardComplete 有效 ──
-        Map<Integer, BigDecimal[]> stdKgByOrder = new HashMap<>();   // [input, output]
+        Map<Integer, BigDecimal[]> stdKgByStepIndex = new HashMap<>();   // [input, output]
         if (standardComplete && standardFirstInput != null) {
             BigDecimal walkInput = standardFirstInput;
-            for (StepYieldDTO s : steps) {
-                ProductWorkProcess c = cfgByOrder.get(orderOf(s));
+            for (int i = 0; i < steps.size(); i++) {
+                ProductWorkProcess c = matchedConfigs.get(i);
                 BigDecimal r = c.getStandardYieldRate();   // standardComplete → 必非 null
                 BigDecimal walkOutput = walkInput.multiply(r).setScale(KG_SCALE, RoundingMode.HALF_UP);
-                stdKgByOrder.put(orderOf(s),
+                stdKgByStepIndex.put(i,
                         new BigDecimal[]{walkInput.setScale(KG_SCALE, RoundingMode.HALF_UP), walkOutput});
                 walkInput = walkOutput;
             }
@@ -151,8 +152,9 @@ public class CostReconcileService {
         List<StepReconcile> stepResults = new ArrayList<>();
         BigDecimal stdAuxTotal = null;
         BigDecimal actAuxTotal = null;
-        for (StepYieldDTO s : steps) {
-            ProductWorkProcess c = cfgByOrder.get(orderOf(s));
+        for (int i = 0; i < steps.size(); i++) {
+            StepYieldDTO s = steps.get(i);
+            ProductWorkProcess c = matchedConfigs.get(i);
             BigDecimal rate = c != null ? c.getStandardYieldRate() : null;
             BigDecimal price = c != null ? c.getAuxUnitPrice() : null;
             String basisRaw = c != null ? c.getAuxBasis() : null;
@@ -164,7 +166,7 @@ public class CostReconcileService {
             BigDecimal actKg = output
                     ? foldToMass(s.getTotalOutput(), s.getOutputUnit(), firstInputUnit, gramsPerUnit)
                     : foldToMass(s.getTotalInput(), s.getInputUnit(), firstInputUnit, gramsPerUnit);
-            BigDecimal[] sk = stdKgByOrder.get(orderOf(s));
+            BigDecimal[] sk = stdKgByStepIndex.get(i);
             BigDecimal stdKgStep = sk == null ? null : (output ? sk[1] : sk[0]);
 
             BigDecimal stepStdAux = null;
@@ -276,6 +278,25 @@ public class CostReconcileService {
 
     private static int orderOf(StepYieldDTO s) {
         return s.getProcessOrder() == null ? 0 : s.getProcessOrder();
+    }
+
+    private static List<ProductWorkProcess> matchConfigsByStepOrder(
+            List<StepYieldDTO> steps,
+            Map<Integer, List<ProductWorkProcess>> cfgsByOrder) {
+        Map<Integer, Integer> cursors = new HashMap<>();
+        List<ProductWorkProcess> matched = new ArrayList<>(steps.size());
+        for (StepYieldDTO step : steps) {
+            int order = orderOf(step);
+            List<ProductWorkProcess> candidates = cfgsByOrder.get(order);
+            if (candidates == null || candidates.isEmpty()) {
+                matched.add(null);
+                continue;
+            }
+            int cursor = cursors.getOrDefault(order, 0);
+            matched.add(candidates.get(cursor % candidates.size()));
+            cursors.put(order, cursor + 1);
+        }
+        return matched;
     }
 
     /**

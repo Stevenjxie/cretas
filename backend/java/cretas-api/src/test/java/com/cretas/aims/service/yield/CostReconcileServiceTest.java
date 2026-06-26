@@ -128,6 +128,28 @@ class CostReconcileServiceTest {
         assertEquals("OUTPUT", r.getSteps().get(0).getAuxBasis());
     }
 
+    // ── 4.1. 同 processOrder 混工序: 配置不能互相覆盖 ──
+    @Test
+    void duplicateProcessOrder_matchesConfigsSequentially() {
+        List<StepYieldDTO> steps = List.of(
+                step(1, "热制", "10", "10", "kg", "kg"),
+                step(1, "混合", "10", "10", "kg", "kg"),
+                step(1, "热制", "10", "10", "kg", "kg"),
+                step(1, "混合", "10", "10", "kg", "kg"));
+        List<ProductWorkProcess> cfgs = List.of(
+                cfg(1, "1.0", "2.0", "OUTPUT"),
+                cfg(1, "1.0", null, null));
+
+        CostReconcileResult r = svc.reconcile(steps, cfgs, null, new BigDecimal("40"), null);
+
+        assertEquals(0, new BigDecimal("40.00").compareTo(r.getActualAuxCostTotal()));
+        assertEquals(0, new BigDecimal("1.00").compareTo(r.getActualAuxCostPerUnit()));
+        assertEquals(0, new BigDecimal("20.00").compareTo(r.getSteps().get(0).getActualAuxCost()));
+        assertFalse(r.getSteps().get(1).isHasAuxPrice());
+        assertEquals(0, new BigDecimal("20.00").compareTo(r.getSteps().get(2).getActualAuxCost()));
+        assertFalse(r.getSteps().get(3).isHasAuxPrice());
+    }
+
     // ── 5. 工序无辅料单价 → 按 0 不崩 + NO_AUX_PRICE ──
     @Test
     void noAuxPrice_zeroNotCrash() {

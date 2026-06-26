@@ -25,9 +25,25 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
      * String 前缀命名空间避免 taskId 与 processOrder 数值碰撞。
      */
     private static String groupKey(ProductionReport r) {
-        return r.getWorkProcessTaskId() != null
-                ? "task-" + r.getWorkProcessTaskId()
-                : "ord-" + (r.getProcessOrder() == null ? 0 : r.getProcessOrder());
+        if (r.getWorkProcessTaskId() != null) {
+            return "task-" + r.getWorkProcessTaskId();
+        }
+        String clerkStepKey = customString(r, "processEntryStepKey");
+        if (clerkStepKey != null && !clerkStepKey.isBlank()) {
+            return "clerk-step-" + clerkStepKey;
+        }
+        return "ord-" + (r.getProcessOrder() == null ? 0 : r.getProcessOrder());
+    }
+
+    private static String customString(ProductionReport r, String key) {
+        if (r.getCustomFields() == null) return null;
+        Object value = r.getCustomFields().get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private static String customProcessName(ProductionReport r) {
+        String name = customString(r, "processEntryProcessName");
+        return name == null || name.isBlank() ? null : name;
     }
 
     @Override
@@ -237,6 +253,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             steps.add(StepYieldDTO.builder()
                     .workProcessTaskId(head.getWorkProcessTaskId())
                     .processOrder(head.getProcessOrder())
+                    .processName(customProcessName(head))
                     .totalInput(totalInput)
                     .totalOutput(totalOutput)
                     .inputUnit(inUnit)

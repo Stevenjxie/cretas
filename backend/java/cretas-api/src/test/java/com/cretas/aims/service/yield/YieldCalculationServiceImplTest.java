@@ -36,6 +36,57 @@ class YieldCalculationServiceImplTest {
                 .build();
     }
 
+    private ProductionReport rptNullTaskStep(int order, String processName, String category,
+                                             String in, String out,
+                                             String laborCost, String materialCost) {
+        String key = order + "|" + processName + "|" + (category == null ? "" : category);
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(null).processOrder(order)
+                .inputQuantity(in == null ? null : new BigDecimal(in)).inputUnit("kg")
+                .outputQuantity(out == null ? null : new BigDecimal(out)).outputUnit("kg")
+                .laborCost(laborCost == null ? null : new BigDecimal(laborCost))
+                .materialCost(materialCost == null ? null : new BigDecimal(materialCost))
+                .customFields(Map.of(
+                        "processEntryStepKey", key,
+                        "processEntryProcessName", processName))
+                .build();
+    }
+
+    @Test
+    void clerkNullTask_sameProcessOrderWithStepKey_splitsDistinctSteps() {
+        List<ProductionReport> reports = List.of(
+                rptNullTaskStep(1, "heat", "AUXILIARY", "100", "90", null, null),
+                rptNullTaskStep(1, "mix", "OTHER", "90", "88", null, null));
+
+        List<StepYieldDTO> steps = svc.calculateSteps(reports);
+
+        assertThat(steps).hasSize(2);
+        assertThat(steps).extracting(StepYieldDTO::getProcessName)
+                .containsExactly("heat", "mix");
+        assertThat(steps.get(0).getTotalInput()).isEqualByComparingTo("100");
+        assertThat(steps.get(1).getTotalInput()).isEqualByComparingTo("90");
+    }
+
+    @Test
+    void clerkNullTask_sameStepKeyAggregatesCostRows() {
+        List<ProductionReport> reports = List.of(
+                rptNullTaskStep(1, "heat", "AUXILIARY", "100", "90", null, null),
+                rptNullTaskStep(1, "heat", "AUXILIARY", null, null, "20.00", null),
+                rptNullTaskStep(1, "heat", "AUXILIARY", null, null, null, "5.00"));
+
+        List<StepYieldDTO> steps = svc.calculateSteps(reports);
+
+        assertThat(steps).hasSize(1);
+        StepYieldDTO step = steps.get(0);
+        assertThat(step.getProcessName()).isEqualTo("heat");
+        assertThat(step.getTotalInput()).isEqualByComparingTo("100");
+        assertThat(step.getTotalOutput()).isEqualByComparingTo("90");
+        assertThat(step.getLaborCost()).isEqualByComparingTo("20.00");
+        assertThat(step.getMaterialCost()).isEqualByComparingTo("5.00");
+        assertThat(step.getStepCost()).isEqualByComparingTo("25.00");
+    }
+
     @Test
     void p1_clerkNullTaskReports_splitByProcessOrder_notCollapsed() {
         // 文员逐道录入 (taskId=null) 3 道 → 应按 processOrder 拆成 3 个 step (非塌缩成 1)
