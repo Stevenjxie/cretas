@@ -557,6 +557,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setProcessOrder(st.getProcessOrder());
         report.setOutputQuantity(st.getOutputQuantity());
         report.setInputQuantity(st.getInputQuantity());
+        report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
     }
 
@@ -585,6 +586,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setProcessOrder(st.getProcessOrder());
         report.setOutputQuantity(st.getOutputQuantity());
         report.setInputQuantity(st.getInputQuantity());
+        report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
     }
 
@@ -618,6 +620,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setReportMode(ReportMode.MODE_1);
         report.setReportDate(resolveReportDate(st));
         report.setProcessOrder(st.getProcessOrder());
+        report.setCustomFields(processEntryCustomFields(st));
         // ⛔ 不设 output/input: YieldCalculationServiceImpl.getYield 对同 task(文员录入 task=null
         // → 全批一组) Σ 所有 report 的 output/input (L115/L123)。本辅助报工只承载副产/留样/包装明细
         // (getYield L160-179 独立读取, 不依赖 output), 设 output 会与 seasoning/labor 报工的 output
@@ -633,6 +636,28 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */
+    private Map<String, Object> processEntryCustomFields(StepEntry st) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("processEntryStepKey", processEntryStepKey(st));
+        if (st.getProcessName() != null && !st.getProcessName().isBlank()) {
+            fields.put("processEntryProcessName", st.getProcessName());
+        }
+        if (st.getProcessCategory() != null && !st.getProcessCategory().isBlank()) {
+            fields.put("processEntryProcessCategory", st.getProcessCategory());
+        }
+        return fields;
+    }
+
+    private String processEntryStepKey(StepEntry st) {
+        return (st.getProcessOrder() == null ? 0 : st.getProcessOrder())
+                + "|" + safeKeyPart(st.getProcessName())
+                + "|" + safeKeyPart(st.getProcessCategory());
+    }
+
+    private String safeKeyPart(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     private List<Map<String, Object>> toByproductMaps(List<ProcessChainEntryRequest.Byproduct> bps) {
         if (bps == null || bps.isEmpty()) return null;
         List<Map<String, Object>> result = new ArrayList<>();

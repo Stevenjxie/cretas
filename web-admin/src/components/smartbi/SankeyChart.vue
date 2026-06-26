@@ -167,8 +167,19 @@ const chartOptions = computed<EChartsOption>(() => {
 
   const { inflow, outflow, inflowCount, outflowCount } = nodeFlowMap.value;
 
+  const dedupedNodes = Array.from(props.nodes.reduce((map, node) => {
+    const existing = map.get(node.name);
+    if (existing) {
+      existing.value = (existing.value || 0) + (node.value || 0);
+      existing.depth = existing.depth ?? node.depth;
+      return map;
+    }
+    map.set(node.name, { ...node });
+    return map;
+  }, new Map<string, SankeyNode>()).values());
+
   // Build colored nodes
-  const coloredNodes = props.nodes.map((n) => ({
+  const coloredNodes = dedupedNodes.map((n) => ({
     name: n.name,
     value: n.value,
     depth: n.depth,
