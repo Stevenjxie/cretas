@@ -9,7 +9,7 @@
  *
  * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
  */
-import { ref, onMounted } from 'vue';
+import { ref, watch } from 'vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
 
 const props = defineProps<{
@@ -55,7 +55,11 @@ async function refresh() {
   }
 }
 
-onMounted(refresh);
+watch(
+  () => [props.factoryId, props.planId],
+  () => { void refresh(); },
+  { immediate: true },
+);
 defineExpose({ refresh });
 </script>
 

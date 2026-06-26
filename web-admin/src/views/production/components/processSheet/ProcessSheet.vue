@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { getInventory, getRows, type ProcessSheetInventoryItem, type ProcessSheetRowView } from '@/api/processSheet';
 import { getProductWorkProcesses } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
@@ -204,7 +204,16 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll);
+watch(
+  () => [props.factoryId, props.planId, props.productTypeId],
+  () => {
+    inventoryMap.value = {};
+    initialRowsMap.value = {};
+    inventoryTableRefs.value = {};
+    void loadAll();
+  },
+  { immediate: true },
+);
 
 // -------------------------------------------------------------------------
 // After a row is saved: refresh inventory of this process + active tab inventory table

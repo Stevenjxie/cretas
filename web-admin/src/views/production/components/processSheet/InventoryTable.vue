@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, watch } from 'vue';
 import { getInventory, type ProcessSheetInventoryItem } from '@/api/processSheet';
 
 const props = defineProps<{
@@ -26,7 +26,11 @@ async function refresh() {
   }
 }
 
-onMounted(refresh);
+watch(
+  () => [props.factoryId, props.planId, props.processCode, props.processOrder],
+  () => { void refresh(); },
+  { immediate: true },
+);
 defineExpose({ refresh });
 </script>
 
