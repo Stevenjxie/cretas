@@ -78,6 +78,13 @@ public class YieldReportServiceImpl implements YieldReportService {
     /** 守恒软校验阈值: |balance| / input > 15% → 告警 (非阻塞) */
     private static final BigDecimal BALANCE_WARN_THRESHOLD = new BigDecimal("0.15");
 
+    private record BatchCloseReadiness(
+            boolean ready,
+            String message,
+            int incompleteTaskCount,
+            List<String> incompleteTaskSummary) {
+    }
+
     private final ProductionReportRepository reportRepo;
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository processRepo;
@@ -1220,6 +1227,42 @@ public class YieldReportServiceImpl implements YieldReportService {
         return out;
     }
 
+    private BatchCloseReadiness batchCloseReadiness(String factoryId, Long batchId, BatchYieldDTO batchYield) {
+        List<WorkProcessTask> tasks = Optional.ofNullable(
+                taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId)
+        ).orElse(List.of());
+        if (!tasks.isEmpty()) {
+            List<WorkProcessTask> incompleteTasks = tasks.stream()
+                    .filter(task -> task.getStatus() != WorkProcessTask.Status.COMPLETED
+                            && task.getStatus() != WorkProcessTask.Status.SKIPPED
+                            && task.getStatus() != WorkProcessTask.Status.CANCELLED)
+                    .toList();
+            if (!incompleteTasks.isEmpty()) {
+                List<String> summary = incompleteTasks.stream()
+                        .limit(5)
+                        .map(task -> String.format("%s/%s/%s",
+                                task.getProductTypeId(),
+                                task.getProcessOrder(),
+                                task.getStatus()))
+                        .toList();
+                return new BatchCloseReadiness(
+                        false,
+                        String.format("还有 %d 个SKU/工序未完成，今日结清已保存，但不能关单",
+                                incompleteTasks.size()),
+                        incompleteTasks.size(),
+                        summary);
+            }
+        }
+        if (!Boolean.TRUE.equals(batchYield.getComplete())) {
+            return new BatchCloseReadiness(
+                    false,
+                    "逐道报工未全部完成，今日结清已保存，但不能关单",
+                    0,
+                    List.of());
+        }
+        return new BatchCloseReadiness(true, null, 0, List.of());
+    }
+
     /**
      * A2b: 将 List<MaterialBatchRef> 转为 List<Map<String,Object>> 用于 jsonb 序列化.
      * null/empty → null (backward-compatible: 仓管员不填则无自动结清路径).
@@ -1742,6 +1785,17 @@ public class YieldReportServiceImpl implements YieldReportService {
         String completeError = null;
         if (triggerComplete && batchYield.getLastStepOutput() != null
                 && batchYield.getLastStepOutput().compareTo(BigDecimal.ZERO) > 0) {
+            BatchCloseReadiness readiness = batchCloseReadiness(factoryId, batchId, batchYield);
+            if (!readiness.ready()) {
+                completeError = readiness.message();
+                out.put("incompleteTaskCount", readiness.incompleteTaskCount());
+                out.put("incompleteTaskSummary", readiness.incompleteTaskSummary());
+                log.warn("[完工入库] settle-day 触发完工跳过 (结清已成功不回滚): batch={} reason={}",
+                        batchId, completeError);
+                out.put("completed", false);
+                out.put("completeError", completeError);
+                return out;
+            }
             // P1-1: 完工前预校验批次状态. completeProduction 仅允许 IN_PROGRESS/PAUSED, 否则抛 409
             // → 会污染本结清事务(settled 标记随回滚丢失). 先查状态, 仅可完工才调, 否则 completed=false
             // + completeError 透传前端(诚实提示"批次未开始生产"), 不抛异常.

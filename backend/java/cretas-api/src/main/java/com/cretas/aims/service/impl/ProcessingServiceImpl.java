@@ -1133,21 +1133,36 @@ public class ProcessingServiceImpl implements ProcessingService {
         for (MaterialConsumption consumption : consumptions) {
             Map<String, Object> materialDetail = new HashMap<>();
             MaterialBatch materialBatch = consumption.getBatch();
+            BigDecimal quantity = consumption.getQuantity() != null ? consumption.getQuantity() : BigDecimal.ZERO;
+            BigDecimal unitPrice = consumption.getUnitPrice();
+            if (unitPrice == null && materialBatch != null) {
+                unitPrice = materialBatch.getUnitPrice();
+            }
+            BigDecimal cost = consumption.getTotalCost();
+            if (cost == null && unitPrice != null) {
+                cost = quantity.multiply(unitPrice);
+            }
+            if (cost == null) {
+                cost = BigDecimal.ZERO;
+            }
+            if (materialBatch == null) {
+                materialBatch = new MaterialBatch();
+                materialBatch.setBatchNumber(consumption.getBatchId());
+                materialBatch.setUnitPrice(unitPrice);
+            }
 
             materialDetail.put("consumptionId", consumption.getId());
-            materialDetail.put("batchNumber", materialBatch.getBatchNumber());
+            materialDetail.put("batchNumber", materialBatch != null ? materialBatch.getBatchNumber() : consumption.getBatchId());
 
             // 获取原材料名称（通过materialType关联）
             String materialName = materialBatch.getMaterialType() != null ?
                 materialBatch.getMaterialType().getName() : "未知原材料";
             materialDetail.put("materialName", materialName);
 
-            materialDetail.put("quantity", consumption.getQuantity());
-            materialDetail.put("unit", materialBatch.getQuantityUnit());
-            materialDetail.put("unitPrice", materialBatch.getUnitPrice());
+            materialDetail.put("quantity", quantity);
+            materialDetail.put("unit", materialBatch != null ? materialBatch.getQuantityUnit() : null);
+            materialDetail.put("unitPrice", unitPrice);
 
-            // 计算此次消耗成本
-            BigDecimal cost = consumption.getQuantity().multiply(materialBatch.getUnitPrice());
             materialDetail.put("cost", cost);
             totalMaterialCost = totalMaterialCost.add(cost);
 
@@ -1171,6 +1186,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             materialDetail.put("consumedAt", consumption.getConsumedAt());
 
             materialDetails.add(materialDetail);
+        }
+
+        if (materialDetails.isEmpty() && batch.getMaterialCost() != null) {
+            totalMaterialCost = batch.getMaterialCost();
+            Map<String, Object> materialSummary = new HashMap<>();
+            materialSummary.put("cost", totalMaterialCost);
+            materialSummary.put("note", "from batch summary cost");
+            materialDetails.add(materialSummary);
         }
 
         analysis.put("materialConsumptions", materialDetails);
@@ -1230,6 +1253,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             }
 
             equipmentDetails.add(equipmentDetail);
+        }
+
+        if (equipmentDetails.isEmpty() && batch.getEquipmentCost() != null) {
+            totalEquipmentCost = batch.getEquipmentCost();
+            Map<String, Object> equipmentSummary = new HashMap<>();
+            equipmentSummary.put("cost", totalEquipmentCost);
+            equipmentSummary.put("note", "from batch summary cost");
+            equipmentDetails.add(equipmentSummary);
         }
 
         analysis.put("equipmentUsages", equipmentDetails);
@@ -1498,7 +1529,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 原材料过期风险
         for (MaterialConsumption consumption : consumptions) {
             MaterialBatch mb = consumption.getBatch();
-            if (mb.getExpireDate() != null && mb.getExpireDate().isBefore(LocalDate.now().plusDays(7))) {
+            if (mb != null && mb.getExpireDate() != null && mb.getExpireDate().isBefore(LocalDate.now().plusDays(7))) {
                 String matName = mb.getMaterialType() != null ?
                     mb.getMaterialType().getName() : "未知原材料";
                 risks.add("原材料 " + matName + " 批次 " + mb.getBatchNumber() + " 即将过期");
