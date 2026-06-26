@@ -895,6 +895,8 @@ async function load() {
     if (isBatch) {
       const resp = await get<BatchYieldDTO>(`/${fid}/production/batches/${key}/yield-summary`);
       if (resp.success && resp.data) {
+        selectedBatchKey.value = resp.data.batchNumber || key;
+        batchNumber.value = resp.data.batchNumber || key;
         data.value = normalizeBatchYield(resp.data);
       } else {
         error.value = resp.message || '加载失败';
@@ -938,6 +940,7 @@ onMounted(() => {
     loadFinishedBatches();
     queryMode.value = 'batch';
     batchNumber.value = qBatchNumber;
+    selectedBatchKey.value = qBatchNumber;
     load();
   } else {
     loadFinishedBatches(true);
