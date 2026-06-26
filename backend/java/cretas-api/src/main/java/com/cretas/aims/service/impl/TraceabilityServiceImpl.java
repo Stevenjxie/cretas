@@ -1,17 +1,21 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.EncodingRuleService;
 import com.cretas.aims.service.TraceabilityService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -38,7 +42,9 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     private final FactoryRepository factoryRepository;
     private final SupplierRepository supplierRepository;
     private final CustomerRepository customerRepository;
+    private final ProcessSheetRowRepository processSheetRowRepository;
     private final EncodingRuleService encodingRuleService;
+    private final ObjectMapper objectMapper;
 
     /** 溯源码实体类型标识 */
     private static final String TRACE_CODE_ENTITY_TYPE = "TRACE_CODE";
@@ -109,6 +115,14 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         List<ProcessingStageRecord> stageRecords = processingStageRecordRepository
                 .findByProductionBatchIdOrderByStageOrderAsc(batch.getId());
         List<TraceabilityDTO.ProcessingStageInfo> processingStages = buildProcessingStageInfoList(stageRecords);
+        List<TraceabilityDTO.ProcessingStageInfo> sheetStages = buildProcessSheetStageInfoList(factoryId, batch);
+        if (!sheetStages.isEmpty()) {
+            processingStages = new ArrayList<>(processingStages);
+            processingStages.addAll(sheetStages);
+            processingStages.sort(Comparator.comparing(
+                    TraceabilityDTO.ProcessingStageInfo::getStageOrder,
+                    Comparator.nullsLast(Integer::compareTo)));
+        }
 
         // 5. 获取质检记录
         List<QualityInspection> inspections = qualityInspectionRepository
@@ -326,6 +340,134 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     }
 
     /**
+     * Process-sheet rows are the source of truth for clerk cross-batch entry.
+     * Legacy ProcessingStageRecord is often empty for those rows, so full trace
+     * must expose the row lineage here or mixed-batch traceability looks blank.
+     */
+    private List<TraceabilityDTO.ProcessingStageInfo> buildProcessSheetStageInfoList(String factoryId, ProductionBatch batch) {
+        if (batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
+            return List.of();
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, batch.getProductionPlanId());
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream()
+                .map(this::toProcessSheetStage)
+                .filter(Objects::nonNull)
+                .filter(s -> isTargetProductStage(s.payload, batch) || Objects.equals(s.row.getBatchNumber(), batch.getBatchNumber()))
+                .sorted(Comparator.comparing(
+                        s -> s.row.getProcessOrder(),
+                        Comparator.nullsLast(Integer::compareTo)))
+                .map(s -> TraceabilityDTO.ProcessingStageInfo.builder()
+                        .stageType("PROCESS_SHEET")
+                        .stageName(stringValue(s.payload.get("processName"),
+                                s.row.getProcessCode() == null ? "process-sheet" : s.row.getProcessCode()))
+                        .stageOrder(s.row.getProcessOrder())
+                        .startTime(parseProcessDate(s.payload.get("processDate")))
+                        .inputWeight(doubleValue(s.payload.get("inputQuantity")))
+                        .outputWeight(doubleValue(s.payload.get("outputQuantity")))
+                        .lossRate(calcLossRate(s.payload.get("inputQuantity"), s.payload.get("outputQuantity")))
+                        .passRate(null)
+                        .operatorName(buildSourceSummary(s.payload))
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    private ProcessSheetStage toProcessSheetStage(ProcessSheetRow row) {
+        if (row.getRowPayload() == null || row.getRowPayload().isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(
+                    row.getRowPayload(),
+                    new TypeReference<Map<String, Object>>() {});
+            return new ProcessSheetStage(row, payload);
+        } catch (Exception e) {
+            log.warn("Failed to parse process sheet row payload for traceability: rowId={}", row.getId(), e);
+            return null;
+        }
+    }
+
+    private boolean isTargetProductStage(Map<String, Object> payload, ProductionBatch batch) {
+        Object productTypeId = payload.get("productTypeId");
+        return productTypeId != null && Objects.equals(String.valueOf(productTypeId), batch.getProductTypeId());
+    }
+
+    private LocalDateTime parseProcessDate(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(String.valueOf(value)).atStartOfDay();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Double doubleValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Double calcLossRate(Object inputValue, Object outputValue) {
+        Double input = doubleValue(inputValue);
+        Double output = doubleValue(outputValue);
+        if (input == null || input == 0 || output == null) {
+            return null;
+        }
+        return (input - output) / input;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String buildSourceSummary(Map<String, Object> payload) {
+        Object upstream = payload.get("upstreamSources");
+        if (upstream instanceof List<?> list && !list.isEmpty()) {
+            return "sources: " + list.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> {
+                        Map<String, Object> m = (Map<String, Object>) item;
+                        String batch = stringValue(m.get("sourceBatchNumber"), "?");
+                        Object qty = m.get("feedQuantityKg");
+                        return qty == null ? batch : batch + "(" + qty + "kg)";
+                    })
+                    .collect(Collectors.joining(", "));
+        }
+        Object raws = payload.get("rawMaterialInputs");
+        if (raws instanceof List<?> list && !list.isEmpty()) {
+            return "raw inputs: " + list.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> {
+                        Map<String, Object> m = (Map<String, Object>) item;
+                        String batch = stringValue(m.get("materialBatchId"), "?");
+                        Object qty = m.get("quantity");
+                        return qty == null ? batch : batch + "(" + qty + "kg)";
+                    })
+                    .collect(Collectors.joining(", "));
+        }
+        return null;
+    }
+
+    private String stringValue(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String s = String.valueOf(value);
+        return s.isBlank() ? fallback : s;
+    }
+
+    private record ProcessSheetStage(ProcessSheetRow row, Map<String, Object> payload) {}
+
+    /**
      * 构建质检信息列表
      * N+1 修复：使用批量查询 + Map 替代循环中的单独查询
      */
@@ -520,4 +662,3 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         }
     }
 }
-
