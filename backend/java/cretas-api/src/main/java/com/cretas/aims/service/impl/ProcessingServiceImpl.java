@@ -1370,11 +1370,14 @@ public class ProcessingServiceImpl implements ProcessingService {
         analysis.put("qualityInspectionCount", qualityDetails.size());
 
         // 计算平均合格率
-        if (!inspections.isEmpty()) {
-            BigDecimal avgPassRate = inspections.stream()
-                .map(QualityInspection::getPassRate)
+        List<BigDecimal> validPassRates = inspections.stream()
+            .map(QualityInspection::getPassRate)
+            .filter(Objects::nonNull)
+            .toList();
+        if (!validPassRates.isEmpty()) {
+            BigDecimal avgPassRate = validPassRates.stream()
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(new BigDecimal(inspections.size()), 2, RoundingMode.HALF_UP);
+                .divide(new BigDecimal(validPassRates.size()), 2, RoundingMode.HALF_UP);
             analysis.put("averagePassRate", avgPassRate);
         }
 

@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.repository.BatchEquipmentUsageRepository;
 import com.cretas.aims.repository.BatchWorkSessionRepository;
 import com.cretas.aims.repository.EquipmentAlertRepository;
@@ -40,6 +41,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -77,7 +79,7 @@ class ProcessingServiceImplEnhancedCostAnalysisTest {
     void commonStubs() {
         when(equipmentRepository.findByIdIn(any())).thenReturn(List.of());
         when(batchWorkSessionRepository.findByBatchId(BATCH_ID)).thenReturn(List.of());
-        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(BATCH_ID), any()))
+        lenient().when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(BATCH_ID), any()))
                 .thenReturn(new PageImpl<>(List.of()));
         when(processingStageRecordService.getByBatchIdWithComparison(FACTORY, BATCH_ID)).thenReturn(List.of());
     }
@@ -136,6 +138,34 @@ class ProcessingServiceImplEnhancedCostAnalysisTest {
         List<Map<String, Object>> materialConsumptions = (List<Map<String, Object>>) result.get("materialConsumptions");
         assertThat(materialConsumptions).hasSize(1);
         assertThat(materialConsumptions.get(0).get("batchNumber")).isEqualTo("MB-MISSING");
+    }
+
+    @Test
+    @DisplayName("enhanced cost skips quality inspections with null pass rate")
+    void enhancedCost_skipsQualityInspectionWithoutPassRate() {
+        ProductionBatch batch = batch();
+        batch.setLaborCost(BigDecimal.ZERO);
+        batch.setOtherCost(BigDecimal.ZERO);
+
+        QualityInspection pendingInspection = new QualityInspection();
+        pendingInspection.setId("QI-PENDING");
+        pendingInspection.setFactoryId(FACTORY);
+        pendingInspection.setProductionBatchId(BATCH_ID);
+        pendingInspection.setSampleSize(new BigDecimal("10.00"));
+        pendingInspection.setPassCount(BigDecimal.ZERO);
+        pendingInspection.setFailCount(BigDecimal.ZERO);
+        pendingInspection.setPassRate(null);
+
+        when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.of(batch));
+        when(materialConsumptionRepository.findByProductionBatchId(BATCH_ID)).thenReturn(List.of());
+        when(batchEquipmentUsageRepository.findByBatchId(BATCH_ID)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(BATCH_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(pendingInspection)));
+
+        Map<String, Object> result = service.getEnhancedBatchCostAnalysis(FACTORY, BATCH_ID.toString());
+
+        assertThat(result.get("qualityInspections")).asList().hasSize(1);
+        assertThat(result).doesNotContainKey("averagePassRate");
     }
 
     private ProductionBatch batch() {
