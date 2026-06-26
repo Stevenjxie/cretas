@@ -18,6 +18,7 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const batchId = computed(() => route.params.id as string);
+const canWrite = computed(() => permissionStore.canWrite('production'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // Issue #760: detail 页消费 ?mode=edit query
@@ -84,8 +85,7 @@ async function loadData() {
       timeline.value = timelineRes.value.data || [];
     }
 
-    if (yieldRes.status === 'fulfilled' && yieldRes.value.success
-        && yieldRes.value.data?.steps?.length > 0) {
+    if (yieldRes.status === 'fulfilled' && yieldRes.value.success && yieldRes.value.data) {
       yieldData.value = yieldRes.value.data;
     } else {
       yieldData.value = null;
@@ -236,6 +236,19 @@ function formatRateDash(rate: unknown) {
 // 单元 F: 本批次是否挂在某生产计划 (有 productionPlanId 才能解析订单)
 const hasOrderContext = computed(() => !!batch.value?.productionPlanId);
 
+function formatYieldPercent(rate: unknown) {
+  if (rate === null || rate === undefined) return '—';
+  const n = Number(rate);
+  return isNaN(n) ? '—' : (n * 100).toFixed(2) + '%';
+}
+
+function formatQtyWithUnit(value: unknown, unit?: string | null) {
+  if (value === null || value === undefined) return '—';
+  const n = Number(value);
+  if (isNaN(n)) return '—';
+  return `${n.toLocaleString('zh-CN')} ${unit || ''}`.trim();
+}
+
 /**
  * 单元 F (F006 REQ-21 "以订单的模式呈现"): 打开"本订单整体出成率"弹窗。
  * 链路: batch.productionPlanId → GET 生产计划 (取 sourceOrderId) → GET 订单出成率聚合。
@@ -277,6 +290,7 @@ async function openOrderYield() {
 
 // 单元3: 有 YIELD 数据时用末道产出回填"实际产量"
 const hasYield = computed(() => !!yieldData.value?.steps?.length);
+const hasYieldSnapshot = computed(() => !!yieldData.value);
 const displayActualQuantity = computed(() =>
   hasYield.value ? yieldData.value.lastStepOutput : batch.value?.actualQuantity);
 const displayActualUnit = computed(() =>
@@ -297,6 +311,18 @@ const cumulativeDisplay = computed(() => {
 
 // G8 Wave 4 (C): 进行中标注 — 在制半成品未计入成品, 出成率偏低且会变 (cumulativeYieldRate 仍是 A 完工口径)
 const yieldInProgress = computed(() => yieldData.value?.inProgress === true);
+const currentYieldRate = computed(() =>
+  yieldData.value?.asOfYieldRate ?? yieldData.value?.cumulativeYieldRate ?? null);
+const currentFirstInput = computed(() =>
+  yieldData.value?.firstStepInput ?? yieldData.value?.firstInputQuantity ?? null);
+const currentFirstInputUnit = computed(() =>
+  yieldData.value?.firstStepInputUnit ?? yieldData.value?.firstInputUnit ?? '');
+const currentLastOutput = computed(() =>
+  yieldData.value?.lastStepOutput ?? yieldData.value?.finalOutputQuantity ?? null);
+const currentLastOutputUnit = computed(() =>
+  yieldData.value?.lastStepOutputUnit ?? yieldData.value?.finalOutputUnit ?? '');
+const isRollingYield = computed(() =>
+  yieldData.value?.inProgress === true || yieldData.value?.complete === false);
 const wipInProgressText = computed(() => {
   const yd = yieldData.value;
   if (!yd?.inProgress) return '';
@@ -714,6 +740,62 @@ function goToReversalList() {
           <div class="kpi-value">{{ unitCostDisplay }}</div>
         </div>
       </div>
+
+      <el-card
+        v-if="hasYieldSnapshot"
+        shadow="never"
+        class="current-yield-card"
+        data-testid="web-batch-detail-yield-card"
+      >
+        <div class="current-yield-header">
+          <div>
+            <div class="current-yield-title">当前出成率</div>
+            <div class="current-yield-subtitle">
+              {{ batch.productName || batch.productType || '-' }} · {{ batch.batchNumber }}
+            </div>
+          </div>
+          <el-tag :type="isRollingYield ? 'warning' : 'success'" effect="plain">
+            {{ isRollingYield ? '滚动中参考' : '最终值' }}
+          </el-tag>
+        </div>
+
+        <div class="current-yield-rate" data-testid="web-batch-detail-yield-rate">
+          {{ formatYieldPercent(currentYieldRate) }}
+        </div>
+        <div class="current-yield-formula" data-testid="web-batch-detail-yield-formula">
+          已录末道产出 ÷ 已录首道投入
+        </div>
+
+        <div class="current-yield-metrics">
+          <div class="current-yield-metric">
+            <span class="metric-label">首道投入</span>
+            <strong>{{ formatQtyWithUnit(currentFirstInput, currentFirstInputUnit) }}</strong>
+          </div>
+          <div class="current-yield-metric">
+            <span class="metric-label">末道产出</span>
+            <strong>{{ formatQtyWithUnit(currentLastOutput, currentLastOutputUnit) }}</strong>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="isRollingYield"
+          class="current-yield-hint"
+          data-testid="web-batch-detail-yield-open-hint"
+          title="未关单也会显示当前出成率；滚动订单继续报工后这里会更新，完工入库后才锁定最终值。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+        <el-alert
+          v-else
+          class="current-yield-hint"
+          data-testid="web-batch-detail-yield-locked-note"
+          title="批次已完工，出成率已锁定为最终值。"
+          type="success"
+          :closable="false"
+          show-icon
+        />
+      </el-card>
 
       <!-- Detail Sections -->
       <div class="detail-grid">
@@ -1667,6 +1749,79 @@ function goToReversalList() {
     color: var(--text-color-secondary, #909399);
     margin-top: 4px;
   }
+}
+
+.current-yield-card {
+  margin-bottom: 20px;
+
+  :deep(.el-card__body) {
+    padding: 18px 20px;
+  }
+}
+
+.current-yield-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.current-yield-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-color-primary, #303133);
+}
+
+.current-yield-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-color-secondary, #606266);
+}
+
+.current-yield-rate {
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 800;
+  color: #e8732e;
+  margin-top: 6px;
+}
+
+.current-yield-formula {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-color-secondary, #606266);
+}
+
+.current-yield-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.current-yield-metric {
+  min-height: 62px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  .metric-label {
+    font-size: 12px;
+    color: var(--text-color-secondary, #909399);
+  }
+
+  strong {
+    font-size: 15px;
+    color: var(--text-color-primary, #303133);
+  }
+}
+
+.current-yield-hint {
+  margin-top: 14px;
 }
 
 .detail-grid {

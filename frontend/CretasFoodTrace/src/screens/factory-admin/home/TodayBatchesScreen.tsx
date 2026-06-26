@@ -87,6 +87,7 @@ export function TodayBatchesScreen() {
 
   const renderBatchItem = ({ item }: { item: ProcessingBatch }) => (
     <TouchableOpacity
+      testID={`today-batches-card-${item.id}`}
       style={styles.batchCard}
       onPress={() => navigation.navigate('BatchDetail', { batchId: String(item.id) })}
       activeOpacity={0.7}
@@ -118,7 +119,7 @@ export function TodayBatchesScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView testID="today-batches-screen" style={styles.container}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#667eea" />
           <Text style={styles.loadingText}>{t('loading')}</Text>
@@ -128,7 +129,7 @@ export function TodayBatchesScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView testID="today-batches-screen" style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -136,7 +137,7 @@ export function TodayBatchesScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t('todayBatches.title')}</Text>
         <View style={styles.headerRight}>
-          <Text style={styles.batchCount}>{batches.length} {t('todayBatches.batchUnit')}</Text>
+          <Text testID="today-batches-count" style={styles.batchCount}>{batches.length} {t('todayBatches.batchUnit')}</Text>
         </View>
       </View>
 

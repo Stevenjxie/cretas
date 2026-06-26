@@ -8,7 +8,7 @@ import { ProcessingScreenProps } from '../../types/navigation';
 import { BatchStatusBadge, BatchStatus } from '../../components/processing';
 import { processingApiClient, ProcessingBatch } from '../../services/api/processingApiClient';
 import { materialConsumptionApiClient, MaterialConsumption, BatchConsumptionSummary } from '../../services/api/materialConsumptionApiClient';
-import { yieldReportApi } from '../../services/api/yieldReportApi';
+import { BatchYieldDTO, yieldReportApi } from '../../services/api/yieldReportApi';
 import { handleError } from '../../utils/errorHandler';
 import { displayProductName } from '../../utils/formatters';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
@@ -39,6 +39,8 @@ export default function BatchDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [qualityMenuVisible, setQualityMenuVisible] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
+  const [yieldData, setYieldData] = useState<BatchYieldDTO | null>(null);
+  const [yieldLoadFailed, setYieldLoadFailed] = useState(false);
 
   // 角色判断
   const currentRole = useAuthStore(state => state.getUserRole());
@@ -90,9 +92,25 @@ export default function BatchDetailScreen() {
     try {
       setLoading(true);
       setError(null);
-      const response = await processingApiClient.getBatchById(batchId);
-      const result = response.data;
+      setYieldLoadFailed(false);
+      const [batchResponse, yieldResponse] = await Promise.allSettled([
+        processingApiClient.getBatchById(batchId),
+        yieldReportApi.getYield(Number(batchId)),
+      ]);
+
+      if (batchResponse.status === 'rejected') {
+        throw batchResponse.reason;
+      }
+
+      const result = batchResponse.value.data;
       setBatch(result as ExtendedBatch);
+
+      if (yieldResponse.status === 'fulfilled' && yieldResponse.value.success) {
+        setYieldData(yieldResponse.value.data);
+      } else {
+        setYieldData(null);
+        setYieldLoadFailed(true);
+      }
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       setError({
@@ -100,6 +118,7 @@ export default function BatchDetailScreen() {
         canRetry: true,
       });
       setBatch(null);
+      setYieldData(null);
     } finally {
       setLoading(false);
     }
@@ -199,6 +218,18 @@ export default function BatchDetailScreen() {
   };
 
   const formatCurrency = (amount: number) => `¥${amount.toFixed(2)}`;
+
+  const formatYieldRate = (rate?: number | null) => (
+    rate == null ? '—' : `${(rate * 100).toFixed(2)}%`
+  );
+
+  const formatQuantity = (quantity?: number | null, unit?: string | null) => {
+    if (quantity == null) return '—';
+    return `${quantity} ${unit ?? ''}`.trim();
+  };
+
+  const currentYieldRate = yieldData?.asOfYieldRate ?? yieldData?.cumulativeYieldRate ?? null;
+  const isRollingYield = yieldData?.inProgress === true || yieldData?.complete === false;
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -479,6 +510,61 @@ export default function BatchDetailScreen() {
           )}
         </NeoCard>
 
+        <NeoCard style={styles.card} padding="m" testID="batch-detail-yield-card">
+          <View style={styles.yieldHeader}>
+            <View style={styles.yieldTitleWrap}>
+              <Text variant="titleMedium" style={styles.sectionTitle}>当前出成率</Text>
+              <Text style={styles.yieldSubTitle}>
+                {displayProductName(batch.productType, t('batchList.labels.pending'))} · {batch.batchNumber}
+              </Text>
+            </View>
+            <StatusBadge
+              status={isRollingYield ? '滚动中参考' : '最终值'}
+              variant={isRollingYield ? 'warning' : 'success'}
+            />
+          </View>
+
+          {yieldLoadFailed ? (
+            <View style={styles.yieldUnavailable} testID="batch-detail-yield-error">
+              <Text style={styles.yieldUnavailableText}>出成率暂时加载失败，请下拉刷新重试。</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.yieldRateValue} testID="batch-detail-yield-rate">
+                {formatYieldRate(currentYieldRate)}
+              </Text>
+              <Text style={styles.yieldFormula} testID="batch-detail-yield-formula">
+                已录末道产出 ÷ 已录首道投入
+              </Text>
+
+              <View style={styles.yieldMetricRow}>
+                <View style={styles.yieldMetricItem}>
+                  <Text style={styles.label}>首道投入</Text>
+                  <Text style={styles.value}>
+                    {formatQuantity(yieldData?.firstStepInput, yieldData?.firstStepInputUnit)}
+                  </Text>
+                </View>
+                <View style={styles.yieldMetricItem}>
+                  <Text style={styles.label}>末道产出</Text>
+                  <Text style={[styles.value, yieldData?.lastStepOutput != null ? styles.highlight : {}]}>
+                    {formatQuantity(yieldData?.lastStepOutput, yieldData?.lastStepOutputUnit)}
+                  </Text>
+                </View>
+              </View>
+
+              {isRollingYield ? (
+                <Text style={styles.yieldHint} testID="batch-detail-yield-open-hint">
+                  未关单也会显示当前出成率；滚动订单继续报工后这里会更新，完工入库后才锁定最终值。
+                </Text>
+              ) : (
+                <Text style={styles.yieldLockedNote} testID="batch-detail-yield-locked-note">
+                  批次已完工，出成率已锁定为最终值。
+                </Text>
+              )}
+            </>
+          )}
+        </NeoCard>
+
         {/* Materials */}
         {batch.rawMaterials && batch.rawMaterials.length > 0 && (
           <NeoCard style={styles.card} padding="m">
@@ -515,6 +601,7 @@ export default function BatchDetailScreen() {
                 style={styles.actionButton}
                 onPress={() => navigation.navigate('CostAnalysisDashboard', { batchId: batch.id.toString() })}
                 icon="cash"
+                testID="batch-detail-cost-analysis-btn"
             >
                 成本分析
             </NeoButton>
@@ -669,6 +756,70 @@ const styles = StyleSheet.create({
   errorText: {
       color: theme.colors.error,
       marginBottom: 16,
+  },
+  yieldHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: 12,
+      marginBottom: 12,
+  },
+  yieldTitleWrap: {
+      flex: 1,
+  },
+  yieldSubTitle: {
+      fontSize: 13,
+      color: theme.colors.onSurfaceVariant,
+      marginTop: -10,
+  },
+  yieldRateValue: {
+      fontSize: 28,
+      fontWeight: '700',
+      color: '#E8732E',
+      marginTop: 2,
+  },
+  yieldFormula: {
+      fontSize: 12,
+      color: theme.colors.onSurfaceVariant,
+      marginTop: 2,
+      marginBottom: 12,
+  },
+  yieldMetricRow: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 4,
+  },
+  yieldMetricItem: {
+      flex: 1,
+      backgroundColor: theme.colors.surfaceVariant,
+      borderRadius: 8,
+      padding: 12,
+      minHeight: 64,
+  },
+  yieldHint: {
+      fontSize: 13,
+      color: '#E6A23C',
+      backgroundColor: '#FDF6EC',
+      borderRadius: 8,
+      padding: 12,
+      marginTop: 12,
+      lineHeight: 18,
+  },
+  yieldLockedNote: {
+      fontSize: 13,
+      color: theme.custom.colors.success,
+      marginTop: 12,
+      lineHeight: 18,
+  },
+  yieldUnavailable: {
+      backgroundColor: theme.colors.errorContainer,
+      borderRadius: 8,
+      padding: 12,
+  },
+  yieldUnavailableText: {
+      color: theme.colors.onErrorContainer,
+      fontSize: 13,
+      lineHeight: 18,
   },
   // Tab styles
   tabBar: {
