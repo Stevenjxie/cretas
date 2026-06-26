@@ -89,7 +89,11 @@ async function login(page) {
     const inputs = page.locator('.login-form input');
     await inputs.nth(0).fill(USERNAME);
     await inputs.nth(1).fill(PASSWORD);
-    await page.locator('.login-button').click();
+    const button = page.locator('.login-button').last();
+    await button.waitFor({ state: 'visible', timeout: 10000 });
+    await button.click({ timeout: 10000 }).catch(async () => {
+      await inputs.nth(1).press('Enter');
+    });
     await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(1000);
 

@@ -51,6 +51,7 @@ const RUN_LIVE = process.env.E2E_RUN_LIVE === '1';
 const DISCOVER_FIXTURES = process.env.E2E_DISCOVER_FIXTURES !== '0';
 const SCENARIO_TARGET = Math.max(100, Number.parseInt(process.env.E2E_SCENARIO_COUNT || '100', 10));
 const LIVE_LIMIT = Math.min(SCENARIO_TARGET, Number.parseInt(process.env.E2E_LIVE_SCENARIO_COUNT || '1', 10));
+const SCENARIO_IDS = splitEnv('E2E_SCENARIO_IDS');
 const FETCH_TIMEOUT_MS = Number.parseInt(process.env.E2E_FETCH_TIMEOUT_MS || '15000', 10);
 const PLAYWRIGHT_ARGS = [
   '--lang=zh-CN',
@@ -70,6 +71,9 @@ const apiContract = [
   { key: 'planStart', method: 'POST', path: '/api/mobile/{factoryId}/production-plans/{planId}/start', depthGate: 'deep' },
   { key: 'batchCreate', method: 'POST', path: '/api/mobile/{factoryId}/processing/batches', depthGate: 'deep' },
   { key: 'batchStart', method: 'POST', path: '/api/mobile/{factoryId}/processing/batches/{batchId}/start', depthGate: 'deep' },
+  { key: 'materialBatchDiscovery', method: 'GET', path: '/api/mobile/{factoryId}/material-batches/status/AVAILABLE', depthGate: 'deep' },
+  { key: 'materialConsumption', method: 'POST', path: '/api/mobile/{factoryId}/processing/batches/{batchId}/material-consumption', depthGate: 'deep' },
+  { key: 'materialConsumptionReadback', method: 'GET', path: '/api/mobile/{factoryId}/processing/material-consumptions/batch/{batchId}', depthGate: 'deep' },
   { key: 'spawnTasks', method: 'POST', path: '/api/mobile/{factoryId}/production/batches/{batchId}/spawn-tasks', depthGate: 'deep' },
   { key: 'taskList', method: 'GET', path: '/api/mobile/{factoryId}/production/batches/{batchId}/work-process-tasks', depthGate: 'deep' },
   { key: 'yieldLimit', method: 'GET', path: '/api/mobile/{factoryId}/production/batches/{batchId}/yield/limits', depthGate: 'medium' },
@@ -275,6 +279,7 @@ function requiredLiveConfig() {
     password: process.env.E2E_PASSWORD || '',
     productTypeIds,
     customerIds,
+    materialBatchIds: splitEnv('E2E_MATERIAL_BATCH_IDS'),
     supervisorId: process.env.E2E_SUPERVISOR_ID || '',
     missing: [
       !process.env.E2E_USERNAME ? 'E2E_USERNAME' : null,
@@ -352,12 +357,14 @@ async function discoverLiveFixtures(config, token, auth) {
     productTypes: null,
     configuredProductTypes: null,
     customers: null,
+    materialBatches: null,
     supervisor: null,
   };
   const resolved = {
     ...config,
     productTypeIds: [...config.productTypeIds],
     customerIds: [...config.customerIds],
+    materialBatchIds: [...config.materialBatchIds],
     supervisorId: config.supervisorId,
   };
 
@@ -427,6 +434,32 @@ async function discoverLiveFixtures(config, token, auth) {
     };
   }
 
+  if (resolved.materialBatchIds.length < 5) {
+    const result = await fetchJson(`/api/mobile/${FACTORY_ID}/material-batches/status/AVAILABLE`, {}, token);
+    const candidates = normalizeDataArray(result.body)
+      .filter((item) => {
+        const quantity = Number(item?.remainingQuantity ?? item?.currentQuantity ?? item?.receiptQuantity ?? 0);
+        return item && item.id != null && quantity > 0;
+      })
+      .map((item) => ({
+        id: String(item.id),
+        batchNumber: item.batchNumber || '',
+        materialName: item.materialName || '',
+        remainingQuantity: Number(item.remainingQuantity ?? item.currentQuantity ?? item.receiptQuantity ?? 0),
+      }));
+    resolved.materialBatchIds = [...new Set([...resolved.materialBatchIds, ...candidates.map((item) => item.id)])].slice(
+      0,
+      Math.max(5, resolved.materialBatchIds.length),
+    );
+    discovered.materialBatches = {
+      ok: result.ok,
+      status: result.status,
+      found: candidates.length,
+      selected: resolved.materialBatchIds.length,
+      sample: candidates.slice(0, 5),
+    };
+  }
+
   return { config: resolved, discovered };
 }
 
@@ -434,6 +467,7 @@ function liveFixtureBlockers(config) {
   return [
     config.productTypeIds.length < 1 ? 'E2E_PRODUCT_TYPE_IDS or discovered product types' : null,
     config.customerIds.length < 1 ? 'E2E_CUSTOMER_IDS or discovered active customers' : null,
+    config.materialBatchIds.length < 1 ? 'E2E_MATERIAL_BATCH_IDS or discovered available material batches' : null,
     !config.supervisorId ? 'E2E_SUPERVISOR_ID or login userId' : null,
   ].filter(Boolean);
 }
@@ -545,6 +579,19 @@ function outputReportPayloadForTask(task, scenario, stepIndex) {
   };
 }
 
+function scenarioMaterialConsumptions(scenario, config, scenarioIndex) {
+  const available = config.materialBatchIds || [];
+  const count = Math.max(1, Math.min(scenario.rawBatchCount, available.length));
+  const ids = [];
+  for (let i = 0; i < count; i += 1) {
+    ids.push(available[(scenarioIndex + i) % available.length]);
+  }
+  return [...new Set(ids)].map((materialBatchId, index) => ({
+    materialBatchId,
+    quantity: Number((0.03 + index * 0.01).toFixed(2)),
+  }));
+}
+
 async function runApiDeepScenario(scenario, config, token, scenarioIndex) {
   const evidence = { scenarioId: scenario.id, apiSteps: [] };
   const addStep = (key, result, extra = {}) => {
@@ -588,6 +635,29 @@ async function runApiDeepScenario(scenario, config, token, scenarioIndex) {
   result = await fetchJson(`${endpoint('/api/mobile/{factoryId}/processing/batches/{batchId}/start', { batchId })}?supervisorId=${encodeURIComponent(config.supervisorId)}`, { method: 'POST' }, token);
   addStep('batchStart', result, { batchId });
   if (!result.ok) return { status: 'BLOCKED', reason: 'batchStart failed', evidence };
+
+  const materialConsumptions = scenarioMaterialConsumptions(scenario, config, scenarioIndex);
+  if (scenario.rawBatchCount > 1 && materialConsumptions.length < scenario.rawBatchCount) {
+    return { status: 'BLOCKED', reason: `not enough available material batches for rawBatchCount=${scenario.rawBatchCount}`, evidence };
+  }
+  result = await fetchJson(endpoint('/api/mobile/{factoryId}/processing/batches/{batchId}/material-consumption', { batchId }), {
+    method: 'POST',
+    body: JSON.stringify(materialConsumptions),
+  }, token);
+  addStep('materialConsumption', result, { batchId, request: materialConsumptions });
+  if (!result.ok) return { status: 'BLOCKED', reason: 'material consumption write failed', evidence };
+
+  result = await fetchJson(endpoint('/api/mobile/{factoryId}/processing/material-consumptions/batch/{batchId}', { batchId }), {}, token);
+  const consumptionRows = normalizeDataArray(result.body);
+  addStep('materialConsumptionReadback', result, {
+    batchId,
+    expectedRows: materialConsumptions.length,
+    actualRows: consumptionRows.length,
+    materialBatchIds: materialConsumptions.map((item) => item.materialBatchId),
+  });
+  if (!result.ok || consumptionRows.length < materialConsumptions.length) {
+    return { status: 'FAIL', reason: 'material consumption readback missing rows', evidence };
+  }
 
   const spawnPayload = {
     productTypeId: batchPayload.productTypeId,
@@ -676,6 +746,8 @@ async function runApiDeepScenario(scenario, config, token, scenarioIndex) {
     totalCostEnhanced: enhancedCostData.costBreakdown.totalCost,
     totalCostSimpleCents: simpleTotalCents,
     totalCostEnhancedCents: enhancedTotalCents,
+    materialConsumptionRows: consumptionRows.length,
+    materialBatchIds: materialConsumptions.map((item) => item.materialBatchId),
   };
   return { status: 'PASS', reason: null, evidence };
 }
@@ -776,6 +848,9 @@ async function writeResult(summary) {
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
   const scenarios = buildScenarios(SCENARIO_TARGET);
+  const liveScenarios = SCENARIO_IDS.length > 0
+    ? SCENARIO_IDS.map((id) => scenarios.find((scenario) => scenario.id === id)).filter(Boolean)
+    : scenarios.slice(0, LIVE_LIMIT);
   const coverage = summarizeCoverage(scenarios);
   const coverageCheck = validateCoverage(coverage);
   const mathResults = scenarios.map((scenario) => ({ scenarioId: scenario.id, ...validateScenarioMath(scenario) }));
@@ -825,6 +900,7 @@ async function main() {
     discovered: fixtureResolution.discovered,
     productTypeIdCount: liveConfig.productTypeIds.length,
     customerIdCount: liveConfig.customerIds.length,
+    materialBatchIdCount: liveConfig.materialBatchIds.length,
     supervisorConfigured: Boolean(liveConfig.supervisorId),
   });
 
@@ -837,7 +913,7 @@ async function main() {
 
   const liveResults = [];
   if (liveBlockers.length === 0) {
-    for (const [index, scenario] of scenarios.slice(0, LIVE_LIMIT).entries()) {
+    for (const [index, scenario] of liveScenarios.entries()) {
       const result = await runApiDeepScenario(scenario, liveConfig, auth.token, index);
       liveResults.push({ scenarioId: scenario.id, ...result });
       record('api-deep-scenario', result.status, { message: `${scenario.id} ${result.reason || 'deep chain passed'}`, evidence: result.evidence });
@@ -862,7 +938,8 @@ async function main() {
   const passedLive = liveResults.filter((item) => item.status === 'PASS').length;
   const failedLive = liveResults.filter((item) => item.status === 'FAIL').length;
   const blockedLive = liveResults.filter((item) => item.status === 'BLOCKED').length;
-  const liveReady = liveBlockers.length === 0 && passedLive === LIVE_LIMIT;
+  const expectedLiveCount = liveScenarios.length;
+  const liveReady = liveBlockers.length === 0 && passedLive === expectedLiveCount;
   const coverageFailures = coverageCheck.status === 'PASS' ? [] : coverageCheck.issues;
   const deliveryStatus = mathFailures.length > 0 || coverageFailures.length > 0 || failedLive > 0
     ? 'failed'
@@ -896,11 +973,11 @@ async function main() {
     apiContract,
     routeAuditTargets,
     specTotal: scenarios.length,
-    effectiveTotal: liveReady ? LIVE_LIMIT : 0,
+    effectiveTotal: liveReady ? expectedLiveCount : 0,
     actualExecuted: liveResults.length,
     actualPass: passedLive,
     actualFail: failedLive + mathFailures.length,
-    actualBlocked: liveReady ? 0 : scenarios.length - passedLive - failedLive,
+    actualBlocked: liveReady ? 0 : expectedLiveCount - passedLive - failedLive,
     depthBreakdown: {
       smoke: ui.reachable ? 1 : 0,
       medium: 0,
@@ -921,9 +998,11 @@ async function main() {
       runLive: RUN_LIVE,
       discoverFixtures: DISCOVER_FIXTURES,
       liveLimit: LIVE_LIMIT,
+      liveScenarioIds: liveScenarios.map((scenario) => scenario.id),
       missing: liveBlockers,
       productTypeIdCount: liveConfig.productTypeIds.length,
       customerIdCount: liveConfig.customerIds.length,
+      materialBatchIdCount: liveConfig.materialBatchIds.length,
       supervisorConfigured: Boolean(liveConfig.supervisorId),
       usernameConfigured: Boolean(liveConfig.username),
       passwordConfigured: Boolean(liveConfig.password),
