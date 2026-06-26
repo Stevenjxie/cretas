@@ -12,7 +12,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.AssertTrue;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -29,6 +29,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -62,12 +64,16 @@ public class WorkProcessTaskController {
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "生产批次ID") Long batchId,
             @RequestBody @Valid SpawnTasksRequest request) {
-        log.info("Spawn 工序任务: factoryId={}, batchId={}, productTypeId={}",
-                factoryId, batchId, request.getProductTypeId());
+        List<String> productTypeIds = request.effectiveProductTypeIds();
+        log.info("Spawn 工序任务: factoryId={}, batchId={}, productTypeIds={}",
+                factoryId, batchId, productTypeIds);
         // Fable 审计修复 (问题2): 走计划模式感知的 spawn, 与计划转批次主路径一致 — skip=true 的计划补 spawn 时
         // 生成两点哨兵任务 (而非旧的恒逐道), 避免补 spawn 与计划模式矛盾。
-        return ApiResponse.success(
-                service.spawnTasksForBatch(factoryId, batchId, request.getProductTypeId()));
+        List<WorkProcessTaskDTO> tasks = new ArrayList<>();
+        for (String productTypeId : productTypeIds) {
+            tasks.addAll(service.spawnTasksForBatch(factoryId, batchId, productTypeId));
+        }
+        return ApiResponse.success(tasks);
     }
 
     /**
@@ -191,7 +197,27 @@ public class WorkProcessTaskController {
 
     @lombok.Data
     public static class SpawnTasksRequest {
-        @NotBlank(message = "productTypeId 不能为空")
         private String productTypeId;
+        private List<String> productTypeIds;
+
+        @AssertTrue(message = "productTypeId/productTypeIds 不能同时为空")
+        public boolean hasProductType() {
+            return !effectiveProductTypeIds().isEmpty();
+        }
+
+        public List<String> effectiveProductTypeIds() {
+            LinkedHashSet<String> ids = new LinkedHashSet<>();
+            if (productTypeId != null && !productTypeId.isBlank()) {
+                ids.add(productTypeId);
+            }
+            if (productTypeIds != null) {
+                for (String id : productTypeIds) {
+                    if (id != null && !id.isBlank()) {
+                        ids.add(id);
+                    }
+                }
+            }
+            return new ArrayList<>(ids);
+        }
     }
 }

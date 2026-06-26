@@ -30,6 +30,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -306,7 +308,7 @@ class WorkProcessTaskServiceImplTest {
                 .processName("包装")
                 .build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId))
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId))
                 .thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
@@ -340,6 +342,41 @@ class WorkProcessTaskServiceImplTest {
                 "template2 responsibleWorkerId=null → task2.assignedTo 应为 null");
     }
 
+    @Test
+    @DisplayName("spawnTasks: 同一批次已存在其他 SKU 任务时仍允许当前 SKU spawn")
+    void spawnTasks_allowsAnotherSkuInSameBatch() {
+        String productTypeId = "PT-MIX-B";
+        Long batchId = 999L;
+        ProductWorkProcess template = ProductWorkProcess.builder()
+                .id(12L)
+                .factoryId(FACTORY_ID)
+                .productTypeId(productTypeId)
+                .workProcessId("wp-mix-b")
+                .processOrder(1)
+                .isActive(true)
+                .reportingRequired(true)
+                .build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(
+                FACTORY_ID, batchId, productTypeId)).thenReturn(false);
+        when(productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
+                .thenReturn(List.of(template));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<WorkProcessTask>> captor = ArgumentCaptor.forClass(List.class);
+        when(taskRepository.saveAll(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.spawnTasks(FACTORY_ID, batchId, productTypeId);
+
+        List<WorkProcessTask> saved = captor.getValue();
+        assertEquals(1, saved.size());
+        assertEquals(productTypeId, saved.get(0).getProductTypeId());
+        verify(taskRepository, never()).existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId);
+    }
+
     // ==================== Wave2: 可配置报工粒度 (reportingRequired) ====================
 
     @Test
@@ -358,7 +395,7 @@ class WorkProcessTaskServiceImplTest {
                 .workProcessId("wp-r2").processOrder(2).isActive(true)
                 .reportingRequired(null).build();   // 老行无字段 → 视为 true
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(t1, t2));
@@ -403,7 +440,7 @@ class WorkProcessTaskServiceImplTest {
                 .workProcessId("wp-output").processOrder(5).isActive(true)
                 .reportingRequired(true).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(pickup, cut, blanch, pack, output));
@@ -444,7 +481,7 @@ class WorkProcessTaskServiceImplTest {
                 .workProcessId("wp-y").processOrder(2).isActive(true)
                 .reportingRequired(false).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(a, b));
@@ -475,7 +512,7 @@ class WorkProcessTaskServiceImplTest {
                 .id(52L).factoryId(FACTORY_ID).productTypeId(productTypeId)
                 .workProcessId("wp-c").processOrder(3).isActive(true).reportingRequired(true).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2, p3));
@@ -512,7 +549,7 @@ class WorkProcessTaskServiceImplTest {
         String productTypeId = "PT-NOPROC";
         Long batchId = 6002L;
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of());   // 产品没配任何工序
@@ -550,7 +587,7 @@ class WorkProcessTaskServiceImplTest {
                 .id(61L).factoryId(FACTORY_ID).productTypeId(productTypeId)
                 .workProcessId("wp-2").processOrder(2).isActive(true).reportingRequired(true).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2));
@@ -583,7 +620,7 @@ class WorkProcessTaskServiceImplTest {
                 .id(70L).factoryId(FACTORY_ID).productTypeId(productTypeId)
                 .workProcessId("wp-l1").processOrder(1).isActive(true).reportingRequired(true).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
@@ -609,7 +646,7 @@ class WorkProcessTaskServiceImplTest {
         Long headId = 901L;   // 领料责任人
         Long tailId = 902L;   // 产出责任人
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of());
@@ -640,7 +677,7 @@ class WorkProcessTaskServiceImplTest {
                 .id(80L).factoryId(FACTORY_ID).productTypeId(productTypeId)
                 .workProcessId("wp-n1").processOrder(1).isActive(true).reportingRequired(true).build();
 
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
@@ -938,7 +975,7 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, planId)));
         when(productionPlanRepository.findById(planId))
                 .thenReturn(Optional.of(plan(planId, Boolean.TRUE, 900L)));
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         lenient().when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
@@ -981,7 +1018,7 @@ class WorkProcessTaskServiceImplTest {
                 .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, planId)));
         when(productionPlanRepository.findById(planId))
                 .thenReturn(Optional.of(plan(planId, Boolean.FALSE, 901L)));
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2));
@@ -1016,7 +1053,7 @@ class WorkProcessTaskServiceImplTest {
         // 批次无 productionPlanId
         when(productionBatchRepository.findById(batchId))
                 .thenReturn(Optional.of(batchLinkedToPlan(batchId, productTypeId, null)));
-        when(taskRepository.existsByFactoryIdAndProductionBatchId(FACTORY_ID, batchId)).thenReturn(false);
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));

@@ -41,6 +41,12 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
      */
     boolean existsByFactoryIdAndProductionBatchId(String factoryId, Long productionBatchId);
 
+    /**
+     * 检查某批次下某个 SKU 是否已 spawn 过工序任务.
+     */
+    boolean existsByFactoryIdAndProductionBatchIdAndProductTypeId(
+            String factoryId, Long productionBatchId, String productTypeId);
+
     /** 批量按 id 取任务 (audit YIELD-4: enrich processName 避免 N+1). */
     List<WorkProcessTask> findByFactoryIdAndIdIn(String factoryId, Collection<Long> ids);
 
