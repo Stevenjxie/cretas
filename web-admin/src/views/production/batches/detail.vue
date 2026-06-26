@@ -39,6 +39,7 @@ const attachmentRefreshKey = ref(0);
 // returns the consumption rows for this batch's production plan.
 const consumptions = ref<TableRow[]>([]);
 const yieldData = ref<any | null>(null);
+const batchCost = ref<any | null>(null);
 // G6/G7 Wave 4: 半成品库存 (WIP) — 每道工序中间品存量 (产出/已领/余额/状态)
 const wipRows = ref<WipRowItem[]>([]);
 
@@ -75,7 +76,7 @@ async function loadData() {
       batch.value = batchRes.value.data;
       // Once we know productionBatchId (= batchId), load consumption records.
       // Endpoint path uses productionBatchId param name; for batches, batchId === productionBatchId.
-      await loadConsumptions();
+      await Promise.allSettled([loadConsumptions(), loadBatchCost()]);
     } else {
       ElMessage.error('加载批次详情失败');
     }
@@ -121,6 +122,20 @@ async function loadConsumptions() {
     }
   } catch {
     // Interceptor shows toast. Consumption block gracefully hides via v-if length check.
+  }
+}
+
+async function loadBatchCost() {
+  if (!factoryId.value || !batch.value?.batchNumber) {
+    batchCost.value = null;
+    return;
+  }
+  try {
+    const batchNumber = encodeURIComponent(String(batch.value.batchNumber));
+    const res = await get(`/${factoryId.value}/production/batches/${batchNumber}/cost-breakdown`);
+    batchCost.value = res.success && res.data?.hasData !== false ? res.data : null;
+  } catch {
+    batchCost.value = null;
   }
 }
 
@@ -523,8 +538,18 @@ const isCrossUnit = computed(() => {
 });
 const efficiencyDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
-const unitCostDisplay = computed(() =>
-  isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost));
+const closedLoopCost = computed(() => batchCost.value?.hasData === true ? batchCost.value : null);
+const displayMaterialCost = computed(() => closedLoopCost.value?.rawMaterialCost ?? batch.value?.materialCost);
+const displayLaborCost = computed(() => closedLoopCost.value?.laborCost ?? batch.value?.laborCost);
+const displayEquipmentCost = computed(() => closedLoopCost.value?.equipmentCost ?? batch.value?.equipmentCost);
+const displayOtherCost = computed(() => closedLoopCost.value?.otherCost ?? batch.value?.otherCost);
+const displayTotalCost = computed(() => closedLoopCost.value?.totalCost ?? batch.value?.totalCost);
+const displayUnitCost = computed(() => closedLoopCost.value?.perBoxCost ?? batch.value?.unitCost);
+const displayCostUnit = computed(() => batch.value?.unit || displayActualUnit.value || '');
+const unitCostDisplay = computed(() => {
+  if (closedLoopCost.value) return formatCost(displayUnitCost.value);
+  return isCrossUnit.value ? '跨单位不可比' : formatCost(batch.value?.unitCost);
+});
 
 // T140: 工序任务 helpers
 function getTaskStatusText(status: string): string {
@@ -781,17 +806,21 @@ function goToReversalList() {
             <span class="section-title">成本明细</span>
           </template>
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="原料成本">{{ formatCost(batch.materialCost) }}</el-descriptions-item>
-            <el-descriptions-item label="人工成本">{{ formatCost(batch.laborCost) }}</el-descriptions-item>
-            <el-descriptions-item label="设备成本">{{ formatCost(batch.equipmentCost) }}</el-descriptions-item>
-            <el-descriptions-item label="其他成本">{{ formatCost(batch.otherCost) }}</el-descriptions-item>
+            <el-descriptions-item label="原料成本">{{ formatCost(displayMaterialCost) }}</el-descriptions-item>
+            <el-descriptions-item label="人工成本">{{ formatCost(displayLaborCost) }}</el-descriptions-item>
+            <el-descriptions-item v-if="closedLoopCost" label="辅料/调料">{{ formatCost(closedLoopCost.seasoningCost) }}</el-descriptions-item>
+            <el-descriptions-item v-if="closedLoopCost" label="包材成本">{{ formatCost(closedLoopCost.packagingCost) }}</el-descriptions-item>
+            <el-descriptions-item label="设备成本">{{ formatCost(displayEquipmentCost) }}</el-descriptions-item>
+            <el-descriptions-item label="其他成本">{{ formatCost(displayOtherCost) }}</el-descriptions-item>
             <el-descriptions-item label="总成本">
-              <span class="cost-total">{{ formatCost(batch.totalCost) }}</span>
+              <span class="cost-total">{{ formatCost(displayTotalCost) }}</span>
             </el-descriptions-item>
             <el-descriptions-item label="单位成本">
-              <template v-if="isCrossUnit">跨单位不可比</template>
-              <template v-else>{{ formatCost(batch.unitCost) }}/{{ batch.unit }}</template>
+              <template v-if="!closedLoopCost && isCrossUnit">跨单位不可比</template>
+              <template v-else>{{ formatCost(displayUnitCost) }}/{{ displayCostUnit }}</template>
             </el-descriptions-item>
+            <el-descriptions-item v-if="closedLoopCost" label="副产物抵扣">{{ formatCost(closedLoopCost.byproductCredit) }}</el-descriptions-item>
+            <el-descriptions-item v-if="closedLoopCost" label="可售单位成本">{{ formatCost(closedLoopCost.sellablePerBoxCost) }}/{{ displayCostUnit }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
