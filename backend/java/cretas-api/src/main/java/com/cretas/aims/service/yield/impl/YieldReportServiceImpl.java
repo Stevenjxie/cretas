@@ -1765,7 +1765,10 @@ public class YieldReportServiceImpl implements YieldReportService {
                 req.getProcessName(),
                 req.getInputQuantity(),
                 output,
-                unit);
+                unit,
+                convertByproducts(req.getByproducts()),
+                req.getSampleRetainQuantity(),
+                req.getPackagingDetail());
     }
 
     private ProcessSheetRowRequest deserializeProcessSheetPayload(String json) {
@@ -1798,7 +1801,20 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .yieldRate(stepYield)
                 .unitComparable(true)
                 .cumulativeYieldRate(cumulative)
+                .byproducts(row.byproducts())
+                .sampleRetainQuantity(row.sampleRetainQuantity())
+                .packagingDetail(row.packagingDetail())
                 .build();
+    }
+
+    private List<Map<String, Object>> convertByproducts(
+            List<com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct> byproducts) {
+        if (byproducts == null || byproducts.isEmpty()) {
+            return null;
+        }
+        return byproducts.stream()
+                .map(item -> objectMapper.convertValue(item, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}))
+                .toList();
     }
 
     private BigDecimal calculateCumulativeYieldRate(BigDecimal firstInput, String firstUnit,
@@ -1856,7 +1872,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             String processName,
             BigDecimal inputQuantity,
             BigDecimal outputQuantity,
-            String unit) {
+            String unit,
+            List<Map<String, Object>> byproducts,
+            Integer sampleRetainQuantity,
+            List<Map<String, Object>> packagingDetail) {
     }
 
     /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */

@@ -8,6 +8,7 @@ import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
@@ -650,6 +651,9 @@ class YieldReportServiceImplTest {
         assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
                 .containsExactly("炖水", "分切/包装");
         assertThat(dto.getSteps().get(1).getYieldRate()).isEqualByComparingTo("8.0000");
+        assertThat(dto.getSteps().get(1).getPackagingDetail()).hasSize(2);
+        assertThat(dto.getSteps().get(1).getByproducts()).hasSize(1);
+        assertThat(dto.getSteps().get(1).getSampleRetainQuantity()).isEqualTo(5);
     }
 
     private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
@@ -665,6 +669,19 @@ class YieldReportServiceImplTest {
         req.setOutputQuantity(new BigDecimal(output));
         req.setUnit(unit);
         req.setFinished("盒".equals(unit));
+        if (req.isFinished()) {
+            ProcessChainEntryRequest.Byproduct byproduct = new ProcessChainEntryRequest.Byproduct();
+            byproduct.setName("料头");
+            byproduct.setQuantity(new BigDecimal("2"));
+            byproduct.setUnit("kg");
+            byproduct.setUnitPrice(new BigDecimal("3"));
+            req.setByproducts(List.of(byproduct));
+            req.setSampleRetainQuantity(5);
+            req.setPackagingDetail(List.of(
+                    Map.of("name", "膜", "cost", 40),
+                    Map.of("name", "气体", "cost", 35)
+            ));
+        }
 
         ProcessSheetRow row = new ProcessSheetRow();
         row.setId(id);
