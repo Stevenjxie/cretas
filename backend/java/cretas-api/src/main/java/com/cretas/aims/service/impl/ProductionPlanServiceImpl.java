@@ -2083,6 +2083,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             settlement.setPostingMessage("仓库已确认实收并生成成品库存");
         }
         productionSettlementRepository.save(settlement);
+        int completedBatchCount = markReceiptProductionBatchesCompleted(factoryId, planId, settlement);
 
         List<String> warnings = new ArrayList<>();
         if (needsTransitLedger) {
@@ -2090,7 +2091,53 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         } else if (withinTolerance) {
             warnings.add("差异在称重容差内, 本次不生成中转挂账");
         }
+        if (completedBatchCount > 0) {
+            warnings.add("已同步 " + completedBatchCount + " 个逐道报工成品批次为已完工, 可进入成品出厂核算");
+        }
         return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(), warnings);
+    }
+
+    private int markReceiptProductionBatchesCompleted(String factoryId, String planId, ProductionSettlement settlement) {
+        List<ProductionBatch> batches = productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        if (batches == null || batches.isEmpty()) {
+            return 0;
+        }
+        int changed = 0;
+        LocalDateTime completedAt = LocalDateTime.now();
+        for (ProductionBatch batch : batches) {
+            if (batch == null || batch.getId() == null) {
+                continue;
+            }
+            if ("CLERK_WIP".equals(batch.getBatchType())) {
+                continue;
+            }
+            if (batch.getStatus() == ProductionBatchStatus.COMPLETED
+                    || batch.getStatus() == ProductionBatchStatus.CANCELLED) {
+                continue;
+            }
+            BigDecimal actualQuantity = zeroIfNull(batch.getQuantity());
+            if (actualQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+                actualQuantity = zeroIfNull(batch.getActualQuantity());
+            }
+            if (actualQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+                actualQuantity = zeroIfNull(settlement.getActualFinishedQuantity());
+            }
+            batch.setStatus(ProductionBatchStatus.COMPLETED);
+            if (batch.getEndTime() == null) {
+                batch.setEndTime(completedAt);
+            }
+            batch.setActualQuantity(actualQuantity);
+            if (batch.getGoodQuantity() == null || batch.getGoodQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+                batch.setGoodQuantity(actualQuantity);
+            }
+            if (batch.getDefectQuantity() == null) {
+                batch.setDefectQuantity(BigDecimal.ZERO);
+            }
+            batch.calculateMetrics();
+            productionBatchRepository.save(batch);
+            changed++;
+        }
+        return changed;
     }
 
     @Override

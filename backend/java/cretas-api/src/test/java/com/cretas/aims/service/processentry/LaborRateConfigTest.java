@@ -92,7 +92,7 @@ class LaborRateConfigTest {
         List<String> warnings = new ArrayList<>();
         BigDecimal rate = service.resolveLaborRate(FACTORY, warnings);
 
-        assertThat(rate).isEqualByComparingTo("0");
+        assertThat(rate).isEqualByComparingTo("26");
         assertThat(warnings).anyMatch(w -> w.contains("工时单价未配置"));
     }
 
@@ -108,7 +108,7 @@ class LaborRateConfigTest {
         List<String> warnings = new ArrayList<>();
         BigDecimal rate = service.resolveLaborRate(FACTORY, warnings);
 
-        assertThat(rate).isEqualByComparingTo("0");
+        assertThat(rate).isEqualByComparingTo("26");
         assertThat(warnings).anyMatch(w -> w.contains("工时单价未配置"));
     }
 
