@@ -1374,6 +1374,119 @@ class YieldReportServiceImplTest {
         verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
     }
 
+    @Test
+    void settleDay_triggerComplete_incompleteWorkProcessTask_skipsComplete_settlesStill() {
+        ProductionReport unsettled = ProductionReport.builder()
+                .workProcessTaskId(80L).processOrder(1).productTypeId("SKU-A")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .settled(false)
+                .build();
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(80L).processOrder(1).productTypeId("SKU-A")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        WorkProcessTask doneTask = task(80L, 1, "WP-A");
+        doneTask.setProductionBatchId(14L);
+        doneTask.setProductTypeId("SKU-A");
+        doneTask.setStatus(WorkProcessTask.Status.COMPLETED);
+        WorkProcessTask openTask = task(81L, 1, "WP-B");
+        openTask.setProductionBatchId(14L);
+        openTask.setProductTypeId("SKU-B");
+        openTask.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(14L), any())).thenReturn(List.of(unsettled));
+        when(reportRepo.findYieldReportsByBatch("F006", 14L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(doneTask));
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc("F006", 14L))
+                .thenReturn(List.of(doneTask, openTask));
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 14L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("completeError")).asString().contains("SKU");
+        assertThat(out.get("incompleteTaskCount")).isEqualTo(1);
+        assertThat((List<?>) out.get("incompleteTaskSummary")).hasSize(1);
+        assertThat(unsettled.getSettled()).isTrue();
+        verify(reportRepo).saveAll(any());
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void settleDay_triggerComplete_incompleteYieldData_skipsComplete_settlesStill() {
+        ProductionReport unsettled = ProductionReport.builder()
+                .workProcessTaskId(82L).processOrder(1).productTypeId("SKU-A")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .settled(false)
+                .build();
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(82L).processOrder(1).productTypeId("SKU-A")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        WorkProcessTask doneTask = task(82L, 1, "WP-A");
+        doneTask.setProductionBatchId(15L);
+        doneTask.setProductTypeId("SKU-A");
+        doneTask.setStatus(WorkProcessTask.Status.COMPLETED);
+
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(15L), any())).thenReturn(List.of(unsettled));
+        when(reportRepo.findYieldReportsByBatch("F006", 15L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(doneTask));
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc("F006", 15L))
+                .thenReturn(List.of(doneTask));
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        Map<String, Object> out = svc.settleDay("F006", 15L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(false);
+        assertThat(out.get("completeError")).isNotNull();
+        assertThat(out.get("incompleteTaskCount")).isEqualTo(0);
+        assertThat(unsettled.getSettled()).isTrue();
+        verify(reportRepo).saveAll(any());
+        verify(processingService, never()).completeProduction(anyString(), anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void settleDay_triggerComplete_cancelledSkuTask_allowsCloseWhenRemainingRouteComplete() {
+        ProductionReport r1 = ProductionReport.builder()
+                .workProcessTaskId(83L).processOrder(1).productTypeId("SKU-A")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("80")).outputUnit("kg")
+                .build();
+        WorkProcessTask doneTask = task(83L, 1, "WP-A");
+        doneTask.setProductionBatchId(16L);
+        doneTask.setProductTypeId("SKU-A");
+        doneTask.setStatus(WorkProcessTask.Status.COMPLETED);
+        WorkProcessTask stoppedSkuTask = task(84L, 1, "WP-B");
+        stoppedSkuTask.setProductionBatchId(16L);
+        stoppedSkuTask.setProductTypeId("SKU-B");
+        stoppedSkuTask.setStatus(WorkProcessTask.Status.CANCELLED);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+
+        when(reportRepo.findUnsettledYieldReports(eq("F006"), eq(16L), any())).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByBatch("F006", 16L)).thenReturn(List.of(r1));
+        when(productTypeRepo.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(doneTask));
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc("F006", 16L))
+                .thenReturn(List.of(doneTask, stoppedSkuTask));
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(productionBatchRepo.findByIdAndFactoryId(16L, "F006")).thenReturn(Optional.of(batch));
+        when(processingService.completeProduction(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductionBatch());
+
+        Map<String, Object> out = svc.settleDay("F006", 16L, 5L, null, true);
+
+        assertThat(out.get("completed")).isEqualTo(true);
+        assertThat(out.get("completeError")).isNull();
+        assertThat(out.get("incompleteTaskCount")).isNull();
+        verify(processingService).completeProduction(eq("F006"), eq("16"),
+                eq(new BigDecimal("80")), eq(new BigDecimal("80")), eq(BigDecimal.ZERO), eq("kg"));
+    }
+
     // ── P1-1: 完工入库 + 回填生产计划 ─────────────────────────────────────────────
 
     @Test
