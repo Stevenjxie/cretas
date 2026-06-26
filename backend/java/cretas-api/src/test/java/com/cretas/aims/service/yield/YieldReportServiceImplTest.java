@@ -8,10 +8,12 @@ import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -25,6 +27,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
@@ -76,6 +79,7 @@ class YieldReportServiceImplTest {
     private WipInventoryService wipInventoryService;
     private ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
     private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
+    private ProcessSheetRowRepository processSheetRowRepository;
     private YieldReportServiceImpl svc;
 
     @BeforeEach
@@ -97,6 +101,7 @@ class YieldReportServiceImplTest {
         wipInventoryService = mock(WipInventoryService.class);
         pwpAssigneeRepository = mock(ProductWorkProcessAssigneeRepository.class);
         productWorkProcessRepository = mock(com.cretas.aims.repository.ProductWorkProcessRepository.class);
+        processSheetRowRepository = mock(ProcessSheetRowRepository.class);
         // default: 任务无 productWorkProcessId → 不查; 显式测继承的用例单独 stub
         when(productWorkProcessRepository.findByFactoryIdAndId(anyString(), any())).thenReturn(Optional.empty());
         // default: no source WIP found (向后兼容旧测试: sourceWipNo=null 不查 WIP)
@@ -110,10 +115,12 @@ class YieldReportServiceImplTest {
         when(recipeRepo.findActiveByFactoryIdAndWorkProcessId(anyString(), anyString())).thenReturn(List.of());
         // T121: default — no multi-assignees (向后兼容: 旧测试任务 productWorkProcessId=null, 不进 multi-assignee guard)
         when(pwpAssigneeRepository.findByProductWorkProcessId(any())).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(anyString(), anyString())).thenReturn(List.of());
         svc = new YieldReportServiceImpl(reportRepo, taskRepo, processRepo, calcSvc, processingService,
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo, wipInventoryService,
-                pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService());
+                pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService(),
+                processSheetRowRepository);
     }
 
     private WorkProcessTask task(long id, int order, String wpId) {
@@ -599,6 +606,78 @@ class YieldReportServiceImplTest {
 
         assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
                 .containsExactly("处理", "滚揉");
+    }
+
+    @Test
+    void getYield_enrichesFinalBatchSummaryFromProcessSheetRows() throws Exception {
+        when(reportRepo.findYieldReportsByBatch("F006", 777L)).thenReturn(List.of());
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        ProductionBatch finalBatch = ProductionBatch.builder()
+                .id(777L)
+                .factoryId("F006")
+                .batchNumber("CLK-B-20260627-51923")
+                .productionPlanId("PLAN-MIX")
+                .productTypeId("PT-PORK-A")
+                .actualQuantity(new BigDecimal("400"))
+                .quantity(new BigDecimal("400"))
+                .unit("盒")
+                .status(ProductionBatchStatus.COMPLETED)
+                .build();
+        when(productionBatchRepo.findByIdAndFactoryId(777L, "F006")).thenReturn(Optional.of(finalBatch));
+
+        ProductType productType = new ProductType();
+        productType.setId("PT-PORK-A");
+        productType.setFactoryId("F006");
+        productType.setGramsPerUnit(new BigDecimal("120"));
+        when(productTypeRepo.findByIdAndFactoryId("PT-PORK-A", "F006")).thenReturn(Optional.of(productType));
+
+        when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-MIX")).thenReturn(List.of(
+                sheetRow(1L, 100L, "PLAN-MIX", "PT-OTHER", 1, "别的SKU", "10", "10", "kg"),
+                sheetRow(2L, 200L, "PLAN-MIX", "PT-PORK-A", 1, "炖水", "50", "52", "kg"),
+                sheetRow(3L, 777L, "PLAN-MIX", "PT-PORK-A", 2, "分切/包装", "50", "400", "盒")
+        ));
+
+        BatchYieldDTO dto = svc.getYield("F006", 777L);
+
+        assertThat(dto.getBatchNumber()).isEqualTo("CLK-B-20260627-51923");
+        assertThat(dto.getFirstStepInput()).isEqualByComparingTo("50");
+        assertThat(dto.getFirstStepInputUnit()).isEqualTo("kg");
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("400");
+        assertThat(dto.getLastStepOutputUnit()).isEqualTo("盒");
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.9600");
+        assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
+                .containsExactly("炖水", "分切/包装");
+        assertThat(dto.getSteps().get(1).getYieldRate()).isEqualByComparingTo("8.0000");
+    }
+
+    private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
+                                     int processOrder, String processName, String input,
+                                     String output, String unit) throws Exception {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId("row-" + id);
+        req.setProcessCode("process-" + processOrder);
+        req.setProcessOrder(processOrder);
+        req.setProcessName(processName);
+        req.setProductTypeId(productTypeId);
+        req.setInputQuantity(new BigDecimal(input));
+        req.setOutputQuantity(new BigDecimal(output));
+        req.setUnit(unit);
+        req.setFinished("盒".equals(unit));
+
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setId(id);
+        row.setFactoryId("F006");
+        row.setPlanId(planId);
+        row.setProcessCode(req.getProcessCode());
+        row.setProcessOrder(processOrder);
+        row.setClientRowId(req.getClientRowId());
+        row.setBatchId(batchId);
+        row.setBatchNumber(batchId == null ? null : "B-" + batchId);
+        row.setRowStatus("SAVED");
+        row.setRowPayload(objectMapper.writeValueAsString(req));
+        return row;
     }
 
     // ── A2b: recordMaterialInput 写 material_batch_refs ──────────────────────────
@@ -3867,7 +3946,7 @@ class YieldReportServiceImplTest {
                 factorySettingsRepo, materialBatchRepo, productTypeRepo, productionBatchRepo,
                 productionPlanRepo, wipRepo, lineageEdgeRepo, objectMapper, recipeRepo,
                 wipInventoryService, pwpAssigneeRepository, productWorkProcessRepository,
-                new com.cretas.aims.service.yield.CostReconcileService());
+                new com.cretas.aims.service.yield.CostReconcileService(), processSheetRowRepository);
         ReflectionTestUtils.setField(svcWithValidator, "backdateWindowValidator", validator);
 
         MaterialInputRequest req = new MaterialInputRequest();

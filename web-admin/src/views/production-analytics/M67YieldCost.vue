@@ -624,7 +624,7 @@ const enhancedRawMaterialCost = computed(() => Number(enhancedBreakdown.value?.r
 const rawMaterialCostClosed = computed(() => Number(cb.value?.rawMaterialCost ?? enhancedBreakdown.value?.rawMaterialCost ?? enhancedCost.value?.totalMaterialCost ?? upstreamCost.value));
 const seasoningCostClosed = computed(() => Number(cb.value?.seasoningCost ?? 0));
 const packagingCostClosed = computed(() => Number(cb.value?.packagingCost ?? 0));
-const laborCostClosed = computed(() => Number(enhancedBreakdown.value?.laborCost ?? enhancedCost.value?.totalLaborCost ?? cb.value?.laborCost ?? data.value?.totalLaborCost ?? 0));
+const laborCostClosed = computed(() => Number(cb.value?.laborCost ?? enhancedBreakdown.value?.laborCost ?? enhancedCost.value?.totalLaborCost ?? data.value?.totalLaborCost ?? 0));
 const equipmentCostClosed = computed(() => Number(enhancedBreakdown.value?.equipmentCost ?? enhancedCost.value?.totalEquipmentCost ?? 0));
 const otherCostClosed = computed(() => {
   const explicitOther = enhancedBreakdown.value?.otherCost ?? enhancedCost.value?.totalOtherCost ?? enhancedCost.value?.costSummary?.otherCost;
@@ -643,6 +643,9 @@ const otherCostClosed = computed(() => {
   return 0;
 });
 const totalCostClosed = computed(() => {
+  if (cb.value?.totalCost != null) {
+    return Number(cb.value.totalCost);
+  }
   if (enhancedCost.value || cb.value) {
     return rawMaterialCostClosed.value
       + seasoningCostClosed.value

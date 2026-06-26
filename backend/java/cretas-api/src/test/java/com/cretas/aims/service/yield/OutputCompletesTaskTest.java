@@ -11,6 +11,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
@@ -86,7 +87,8 @@ class OutputCompletesTaskTest {
                 new ObjectMapper(),
                 recipeRepo, wipInventoryService, pwpAssigneeRepository,
                 mock(com.cretas.aims.repository.ProductWorkProcessRepository.class),
-                new com.cretas.aims.service.yield.CostReconcileService()
+                new com.cretas.aims.service.yield.CostReconcileService(),
+                mock(ProcessSheetRowRepository.class)
         );
     }
 

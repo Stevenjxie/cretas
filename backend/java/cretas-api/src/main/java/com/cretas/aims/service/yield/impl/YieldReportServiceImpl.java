@@ -9,6 +9,7 @@ import com.cretas.aims.dto.yield.OrderYieldSummaryDTO;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.dto.yield.YieldLimitsDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
@@ -19,6 +20,7 @@ import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
@@ -27,6 +29,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.recipe.ProcessMaterialRecipe;
@@ -41,6 +44,7 @@ import com.cretas.aims.service.yield.YieldCalculationService;
 import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.utils.ReportAuthGuard;
 import com.cretas.aims.util.BackdateWindowValidator;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -103,6 +107,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     private final ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
     private final com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepository;
     private final CostReconcileService costReconcileService;
+    private final ProcessSheetRowRepository processSheetRowRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
@@ -1356,6 +1361,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
         BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
         enrichProcessNames(factoryId, batchId, dto);
+        enrichFromProcessSheetRows(factoryId, batchId, dto);
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
@@ -1674,6 +1680,183 @@ public class YieldReportServiceImpl implements YieldReportService {
         return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
                 .map(pt -> pt.getGramsPerUnit())
                 .orElse(null);
+    }
+
+    /**
+     * Clerk process-sheet rows are the source of truth for mixed-SKU / mixed-step entry.
+     * A finished batch may only have a sparse final ProductionReport, so the summary API
+     * must fill units and cumulative yield from the saved sheet rows for the same plan/SKU.
+     */
+    private void enrichFromProcessSheetRows(String factoryId, Long batchId, BatchYieldDTO dto) {
+        if (batchId == null || dto == null) {
+            return;
+        }
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        if (batch == null || batch.getProductionPlanId() == null || batch.getProductTypeId() == null) {
+            return;
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository
+                .findByFactoryIdAndPlanId(factoryId, batch.getProductionPlanId());
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+
+        List<SheetYieldRow> sheetRows = rows.stream()
+                .map(row -> toSheetYieldRow(row, batch))
+                .filter(Objects::nonNull)
+                .filter(row -> Objects.equals(row.productTypeId(), batch.getProductTypeId()))
+                .sorted((a, b) -> {
+                    int orderCompare = Integer.compare(orderOrMax(a.processOrder()), orderOrMax(b.processOrder()));
+                    if (orderCompare != 0) return orderCompare;
+                    return Long.compare(idOrMax(a.rowId()), idOrMax(b.rowId()));
+                })
+                .toList();
+        if (sheetRows.isEmpty()) {
+            return;
+        }
+
+        SheetYieldRow first = sheetRows.stream()
+                .filter(row -> positive(row.inputQuantity()))
+                .findFirst()
+                .orElse(null);
+        SheetYieldRow target = sheetRows.stream()
+                .filter(row -> Objects.equals(row.batchId(), batchId))
+                .findFirst()
+                .orElse(sheetRows.get(sheetRows.size() - 1));
+
+        dto.setBatchId(batch.getId());
+        dto.setBatchNumber(batch.getBatchNumber());
+        if (first != null) {
+            dto.setFirstStepInput(first.inputQuantity());
+            dto.setFirstStepInputUnit(first.unit());
+        }
+        dto.setLastStepOutput(target.outputQuantity());
+        dto.setLastStepOutputUnit(target.unit());
+
+        BigDecimal gramsPerUnit = productTypeRepository.findByIdAndFactoryId(batch.getProductTypeId(), factoryId)
+                .map(ProductType::getGramsPerUnit)
+                .orElse(null);
+        BigDecimal cumulative = first == null ? null
+                : calculateCumulativeYieldRate(first.inputQuantity(), first.unit(),
+                        target.outputQuantity(), target.unit(), gramsPerUnit);
+        dto.setCumulativeYieldRate(cumulative);
+        dto.setSteps(sheetRows.stream()
+                .map(row -> toStepYield(row, first, gramsPerUnit))
+                .toList());
+        dto.setComplete(sheetRows.stream()
+                .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
+    }
+
+    private SheetYieldRow toSheetYieldRow(ProcessSheetRow row, ProductionBatch targetBatch) {
+        ProcessSheetRowRequest req = deserializeProcessSheetPayload(row.getRowPayload());
+        if (req == null) {
+            return null;
+        }
+        boolean isTargetBatch = Objects.equals(row.getBatchId(), targetBatch.getId());
+        BigDecimal output = firstPositiveOrNull(req.getOutputQuantity(),
+                isTargetBatch ? targetBatch.getActualQuantity() : null,
+                isTargetBatch ? targetBatch.getQuantity() : null);
+        String unit = req.getUnit() != null ? req.getUnit() : (isTargetBatch ? targetBatch.getUnit() : null);
+        return new SheetYieldRow(
+                row.getId(),
+                row.getBatchId(),
+                req.getProductTypeId(),
+                req.getProcessOrder(),
+                req.getProcessName(),
+                req.getInputQuantity(),
+                output,
+                unit);
+    }
+
+    private ProcessSheetRowRequest deserializeProcessSheetPayload(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, ProcessSheetRowRequest.class);
+        } catch (JsonProcessingException e) {
+            log.warn("process sheet row payload deserialize failed while enriching yield summary: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private StepYieldDTO toStepYield(SheetYieldRow row, SheetYieldRow first, BigDecimal gramsPerUnit) {
+        BigDecimal stepYield = null;
+        if (positive(row.inputQuantity()) && row.outputQuantity() != null) {
+            stepYield = row.outputQuantity().divide(row.inputQuantity(), 4, RoundingMode.HALF_UP);
+        }
+        BigDecimal cumulative = first == null ? null
+                : calculateCumulativeYieldRate(first.inputQuantity(), first.unit(),
+                        row.outputQuantity(), row.unit(), gramsPerUnit);
+        return StepYieldDTO.builder()
+                .processOrder(row.processOrder())
+                .processName(row.processName())
+                .totalInput(row.inputQuantity())
+                .totalOutput(row.outputQuantity())
+                .inputUnit(row.unit())
+                .outputUnit(row.unit())
+                .yieldRate(stepYield)
+                .unitComparable(true)
+                .cumulativeYieldRate(cumulative)
+                .build();
+    }
+
+    private BigDecimal calculateCumulativeYieldRate(BigDecimal firstInput, String firstUnit,
+                                                     BigDecimal output, String outputUnit,
+                                                     BigDecimal gramsPerUnit) {
+        if (!positive(firstInput) || output == null) {
+            return null;
+        }
+        BigDecimal converted = convertToFirstStepUnit(output, outputUnit, firstUnit, gramsPerUnit);
+        if (converted == null) {
+            return null;
+        }
+        return converted.divide(firstInput, 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal convertToFirstStepUnit(BigDecimal output, String outputUnit,
+                                               String firstUnit, BigDecimal gramsPerUnit) {
+        if (output == null) return null;
+        if (outputUnit == null || firstUnit == null || outputUnit.equals(firstUnit)) {
+            return output;
+        }
+        if (gramsPerUnit == null || gramsPerUnit.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        return output.multiply(gramsPerUnit)
+                .divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal firstPositiveOrNull(BigDecimal... values) {
+        for (BigDecimal value : values) {
+            if (positive(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private boolean positive(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    private int orderOrMax(Integer value) {
+        return value == null ? Integer.MAX_VALUE : value;
+    }
+
+    private long idOrMax(Long value) {
+        return value == null ? Long.MAX_VALUE : value;
+    }
+
+    private record SheetYieldRow(
+            Long rowId,
+            Long batchId,
+            String productTypeId,
+            Integer processOrder,
+            String processName,
+            BigDecimal inputQuantity,
+            BigDecimal outputQuantity,
+            String unit) {
     }
 
     /** audit YIELD-4: 批量查 task→work_process→processName 回填 steps (避免 N+1). 查不到留 null, 前端 fallback. */
