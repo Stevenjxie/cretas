@@ -1,10 +1,13 @@
 package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
@@ -118,6 +121,72 @@ class ProcessSheetYieldCardTest {
         r.setInputQuantity(new BigDecimal(inputQty));
         r.setOutputQuantity(new BigDecimal("0"));
         return r;
+    }
+
+    private ProcessSheetRow sheetRow(int order, long batchId, String batchNumber) {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(FACTORY);
+        row.setPlanId(PLAN_ID);
+        row.setProcessCode(order == 1 ? "xiuyou" : "chaoshui");
+        row.setProcessOrder(order);
+        row.setClientRowId("row-" + order);
+        row.setBatchId(batchId);
+        row.setBatchNumber(batchNumber);
+        row.setRowStatus("SAVED");
+        row.setRowPayload("payload-" + order);
+        return row;
+    }
+
+    private ProcessSheetRowRequest sheetPayload(String input, String output) {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setProductTypeId("PT-001");
+        req.setInputQuantity(new BigDecimal(input));
+        req.setOutputQuantity(new BigDecimal(output));
+        req.setUnit("kg");
+        return req;
+    }
+
+    private MaterialBatch materialWip(long batchId, String batchNumber, String receipt, String unitPrice) {
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId("wip-" + batchId);
+        mb.setFactoryId(FACTORY);
+        mb.setBatchNumber("WIP-" + batchNumber);
+        mb.setSourceDocType("PRODUCTION_BATCH");
+        mb.setSourceDocId(String.valueOf(batchId));
+        mb.setReceiptQuantity(new BigDecimal(receipt));
+        mb.setQuantityUnit("kg");
+        mb.setUsedQuantity(BigDecimal.ZERO);
+        mb.setReservedQuantity(BigDecimal.ZERO);
+        mb.setUnitPrice(new BigDecimal(unitPrice));
+        return mb;
+    }
+
+    @Test
+    @DisplayName("YIELD-CARD-0: process-sheet rows without productionPlanId still render saved WIP")
+    void processSheetRows_withoutProductionPlanId_renderYieldCard() throws Exception {
+        ProcessSheetRow row1 = sheetRow(1, 9108L, "CLK-W-1");
+        ProcessSheetRow row2 = sheetRow(2, 9110L, "CLK-W-2");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row1, row2));
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class))
+                .thenReturn(sheetPayload("100", "95"));
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class))
+                .thenReturn(sheetPayload("95", "85"));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9108"))
+                .thenReturn(Optional.of(materialWip(9108L, "CLK-W-1", "95", "33.68")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9110"))
+                .thenReturn(Optional.of(materialWip(9110L, "CLK-W-2", "85", "35.66")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getBatchNumber()).isEqualTo("CLK-W-1");
+        assertThat(result.get(0).getStepYieldRate()).isEqualByComparingTo("95.0000");
+        assertThat(result.get(1).getBatchNumber()).isEqualTo("CLK-W-2");
+        assertThat(result.get(1).getStepYieldRate()).isEqualByComparingTo("89.4737");
+        assertThat(result.get(1).getCumulativeYieldRate()).isEqualByComparingTo("85.0000");
     }
 
     // ─────────────────────────────────────────────────────────────

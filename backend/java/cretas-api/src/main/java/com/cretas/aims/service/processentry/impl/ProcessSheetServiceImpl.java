@@ -402,6 +402,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     @Override
     public List<ProcessSheetInventoryItem> getInventoryYieldCard(String factoryId, String planId) {
+        List<ProcessSheetRow> sheetRows = rowRepo.findByFactoryIdAndPlanId(factoryId, planId);
+        if (sheetRows != null && !sheetRows.isEmpty()) {
+            return getInventoryYieldCardFromProcessSheetRows(factoryId, sheetRows);
+        }
+
         // 1. 获取该计划所有生产批次
         List<ProductionBatch> batches = productionBatchRepo
                 .findByFactoryIdAndProductionPlanId(factoryId, planId);
@@ -499,6 +504,105 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .build());
         }
         return result;
+    }
+
+    /**
+     * Clerk process-sheet rows materialize WIP as MaterialBatch(sourceDoc=PRODUCTION_BATCH).
+     * They do not write SemiFinishedInventory and their CLERK_WIP ProductionBatch rows
+     * intentionally have no productionPlanId, so the yield card must use process_sheet_rows
+     * as the plan-scoped source of truth.
+     */
+    private List<ProcessSheetInventoryItem> getInventoryYieldCardFromProcessSheetRows(
+            String factoryId, List<ProcessSheetRow> sheetRows) {
+        List<ProcessSheetRow> savedRows = sheetRows.stream()
+                .filter(r -> r.getBatchId() != null)
+                .sorted(Comparator
+                        .comparing((ProcessSheetRow r) -> r.getProcessOrder() == null ? Integer.MAX_VALUE : r.getProcessOrder()))
+                .toList();
+        if (savedRows.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        Map<String, BigDecimal> firstInputByProductType = new HashMap<>();
+        Map<String, String> firstUnitByProductType = new HashMap<>();
+        Map<String, BigDecimal> gramsPerUnitByProductType = new HashMap<>();
+        for (ProcessSheetRow row : savedRows) {
+            ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
+            if (req == null) continue;
+            String productTypeId = req.getProductTypeId();
+            if (productTypeId == null || firstInputByProductType.containsKey(productTypeId)) continue;
+            BigDecimal input = req.getInputQuantity();
+            if (input != null && input.compareTo(BigDecimal.ZERO) > 0) {
+                firstInputByProductType.put(productTypeId, input);
+                firstUnitByProductType.put(productTypeId, req.getUnit());
+                gramsPerUnitByProductType.put(productTypeId, productTypeRepo.findById(productTypeId)
+                        .map(pt -> pt.getGramsPerUnit())
+                        .orElse(null));
+            }
+        }
+
+        List<ProcessSheetInventoryItem> result = new ArrayList<>();
+        for (ProcessSheetRow row : savedRows) {
+            ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
+            if (req == null) continue;
+
+            Optional<MaterialBatch> wipOpt = materialBatchRepo
+                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                            factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
+            if (wipOpt.isEmpty()) continue;
+
+            MaterialBatch wip = wipOpt.get();
+            BigDecimal produced = nz(wip.getReceiptQuantity());
+            BigDecimal used = consumptionRepo
+                    .findByFactoryIdAndBatchId(factoryId, wip.getId())
+                    .stream()
+                    .map(c -> nz(c.getQuantity()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal remaining = produced.subtract(used);
+            String status = remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE";
+
+            BigDecimal input = req.getInputQuantity();
+            BigDecimal stepYieldRate = null;
+            if (input != null && input.compareTo(BigDecimal.ZERO) > 0) {
+                stepYieldRate = produced
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(input, YIELD_SCALE, RoundingMode.HALF_UP);
+            }
+
+            String productTypeId = req.getProductTypeId();
+            BigDecimal firstInput = productTypeId == null ? null : firstInputByProductType.get(productTypeId);
+            String firstUnit = productTypeId == null ? null : firstUnitByProductType.get(productTypeId);
+            BigDecimal gramsPerUnit = productTypeId == null ? null : gramsPerUnitByProductType.get(productTypeId);
+            String unit = req.getUnit() != null ? req.getUnit() : wip.getQuantityUnit();
+            BigDecimal cumulativeYieldRate = null;
+            if (firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstUnit, gramsPerUnit);
+                if (producedConverted != null) {
+                    cumulativeYieldRate = producedConverted
+                            .multiply(BigDecimal.valueOf(100))
+                            .divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
+                }
+            }
+
+            result.add(ProcessSheetInventoryItem.builder()
+                    .batchNumber(row.getBatchNumber())
+                    .produced(produced)
+                    .used(used)
+                    .remaining(remaining)
+                    .status(status)
+                    .unitPrice(nz(wip.getUnitPrice()))
+                    .processOrder(row.getProcessOrder())
+                    .processName(req.getProcessName() != null ? req.getProcessName() : fallbackProcessName(row))
+                    .unit(unit)
+                    .stepYieldRate(stepYieldRate)
+                    .cumulativeYieldRate(cumulativeYieldRate)
+                    .build());
+        }
+        return result;
+    }
+
+    private String fallbackProcessName(ProcessSheetRow row) {
+        return row.getProcessOrder() == null ? row.getProcessCode() : "工序" + row.getProcessOrder();
     }
 
     /**
