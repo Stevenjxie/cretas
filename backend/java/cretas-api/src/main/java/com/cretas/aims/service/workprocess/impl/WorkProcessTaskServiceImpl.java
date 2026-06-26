@@ -183,9 +183,12 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                     .withHint("生产批次必须先绑定产品类型才能 spawn 工序任务");
         }
 
-        if (taskRepository.existsByFactoryIdAndProductionBatchId(factoryId, productionBatchId)) {
+        if (taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(
+                factoryId, productionBatchId, productTypeId)) {
             log.info("批次 {} 工序任务已 spawn, 跳过", productionBatchId);
-            return listByBatch(factoryId, productionBatchId);
+            return listByBatch(factoryId, productionBatchId).stream()
+                    .filter(task -> productTypeId.equals(task.getProductTypeId()))
+                    .collect(Collectors.toList());
         }
 
         List<ProductWorkProcess> templates = productWorkProcessRepository
