@@ -115,8 +115,9 @@ export interface ProcessSheetInventoryItem {
   produced: number;
   used: number;
   remaining: number;
-  status: 'ACTIVE' | 'DEPLETED';
-  unitPrice: number;
+  status: 'ACTIVE' | 'DEPLETED' | 'COMPLETED';
+  unitPrice?: number | null;
+  rowTotalCost?: number | null;
   // F006 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null)
   /** 链内工序序号 */
   processOrder?: number | null;

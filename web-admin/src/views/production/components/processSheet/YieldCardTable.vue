@@ -36,6 +36,11 @@ function fmtPrice(v: number | null | undefined): string {
   return v.toFixed(2);
 }
 
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return '¥' + Number(v).toFixed(2);
+}
+
 function rateColor(v: number | null | undefined): string {
   if (v == null) return '';
   if (v >= 90) return '#67c23a';
@@ -100,6 +105,11 @@ defineExpose({ refresh });
         </span>
       </template>
     </el-table-column>
+    <el-table-column label="分摊成本" width="100" align="right">
+      <template #default="{ row }">
+        {{ fmtMoney(row.rowTotalCost) }}
+      </template>
+    </el-table-column>
     <el-table-column label="单价(¥)" width="86" align="right">
       <template #default="{ row }">
         {{ fmtPrice(row.unitPrice) }}
@@ -121,8 +131,8 @@ defineExpose({ refresh });
     </el-table-column>
     <el-table-column prop="status" label="状态" width="72" align="center">
       <template #default="{ row }">
-        <el-tag :type="row.status === 'ACTIVE' ? 'success' : 'info'" size="small">
-          {{ row.status === 'ACTIVE' ? '可用' : '耗尽' }}
+        <el-tag :type="row.status === 'ACTIVE' ? 'success' : (row.status === 'COMPLETED' ? 'primary' : 'info')" size="small">
+          {{ row.status === 'ACTIVE' ? '可用' : (row.status === 'COMPLETED' ? '成品' : '耗尽') }}
         </el-tag>
       </template>
     </el-table-column>

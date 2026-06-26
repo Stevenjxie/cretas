@@ -398,7 +398,7 @@ function fmtTime(iso?: string): string {
   return `${mm}-${dd} ${hh}:${min}`;
 }
 
-async function loadFinishedBatches() {
+async function loadFinishedBatches(autoSelectLatest = false) {
   const fid = factoryId.value;
   if (!fid) return;
   batchesLoading.value = true;
@@ -406,6 +406,13 @@ async function loadFinishedBatches() {
     const resp = await get<FinishedBatch[]>(`/${fid}/production/batches/finished`);
     if (resp.success && Array.isArray(resp.data)) {
       finishedBatches.value = resp.data;
+      if (autoSelectLatest && !selectedBatchKey.value && !batchNumber.value && !orderId.value) {
+        const latest = resp.data.find((b) => !b.settled) || resp.data[0];
+        if (latest?.batchNumber) {
+          selectedBatchKey.value = latest.batchNumber;
+          onBatchSelect(latest.batchNumber);
+        }
+      }
     }
   } catch {
     // 列表加载失败不影响手动输入
@@ -917,19 +924,20 @@ async function load() {
 const onResize = () => { chart?.resize(); mixChart?.resize(); };
 onMounted(() => {
   window.addEventListener('resize', onResize);
-  loadFinishedBatches();
   const qOrderId = route.query.orderId as string | undefined;
   const qBatchNumber = route.query.batchNumber as string | undefined;
   if (qOrderId) {
+    loadFinishedBatches();
     queryMode.value = 'order';
     orderId.value = qOrderId;
     load();
   } else if (qBatchNumber) {
+    loadFinishedBatches();
     queryMode.value = 'batch';
     batchNumber.value = qBatchNumber;
     load();
   } else {
-    load();
+    loadFinishedBatches(true);
   }
 });
 onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.dispose(); mixChart?.dispose(); });

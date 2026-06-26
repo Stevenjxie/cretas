@@ -496,6 +496,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .remaining(available)
                     .status(wip.getStatus())
                     .unitPrice(wip.getUnitCost())
+                    .rowTotalCost(wip.getUnitCost() == null || produced == null ? null : wip.getUnitCost().multiply(produced))
                     .processOrder(wip.getProcessOrder())
                     .processName(processName)
                     .unit(unit)
@@ -522,6 +523,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (savedRows.isEmpty()) {
             return new ArrayList<>();
         }
+        Map<Long, ProductionBatch> productionBatchById = productionBatchRepo.findAllById(
+                        savedRows.stream().map(ProcessSheetRow::getBatchId).toList())
+                .stream()
+                .collect(Collectors.toMap(ProductionBatch::getId, b -> b, (a, b) -> a));
 
         Map<String, BigDecimal> firstInputByProductType = new HashMap<>();
         Map<String, String> firstUnitByProductType = new HashMap<>();
@@ -549,17 +554,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             Optional<MaterialBatch> wipOpt = materialBatchRepo
                     .findByFactoryIdAndSourceDocTypeAndSourceDocId(
                             factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
-            if (wipOpt.isEmpty()) continue;
-
-            MaterialBatch wip = wipOpt.get();
-            BigDecimal produced = nz(wip.getReceiptQuantity());
-            BigDecimal used = consumptionRepo
+            MaterialBatch wip = wipOpt.orElse(null);
+            ProductionBatch productionBatch = productionBatchById.get(row.getBatchId());
+            BigDecimal produced = firstPositive(
+                    wip == null ? null : wip.getReceiptQuantity(),
+                    req.getOutputQuantity(),
+                    productionBatch == null ? null : productionBatch.getActualQuantity(),
+                    productionBatch == null ? null : productionBatch.getQuantity());
+            BigDecimal used = wip == null ? BigDecimal.ZERO : consumptionRepo
                     .findByFactoryIdAndBatchId(factoryId, wip.getId())
                     .stream()
                     .map(c -> nz(c.getQuantity()))
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal remaining = produced.subtract(used);
-            String status = remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE";
+            String status = wip == null && req.isFinished()
+                    ? "COMPLETED"
+                    : (remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE");
 
             BigDecimal input = req.getInputQuantity();
             BigDecimal stepYieldRate = null;
@@ -573,15 +583,26 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal firstInput = productTypeId == null ? null : firstInputByProductType.get(productTypeId);
             String firstUnit = productTypeId == null ? null : firstUnitByProductType.get(productTypeId);
             BigDecimal gramsPerUnit = productTypeId == null ? null : gramsPerUnitByProductType.get(productTypeId);
-            String unit = req.getUnit() != null ? req.getUnit() : wip.getQuantityUnit();
+            String unit = req.getUnit() != null
+                    ? req.getUnit()
+                    : (wip != null ? wip.getQuantityUnit() : (productionBatch == null ? null : productionBatch.getUnit()));
             BigDecimal cumulativeYieldRate = null;
             if (firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstUnit, gramsPerUnit);
                 if (producedConverted != null) {
                     cumulativeYieldRate = producedConverted
                             .multiply(BigDecimal.valueOf(100))
-                            .divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
+                        .divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
                 }
+            }
+            BigDecimal rowTotalCost = firstPositiveOrNull(
+                    productionBatch == null ? null : productionBatch.getTotalCost(),
+                    wip == null || wip.getUnitPrice() == null ? null : wip.getUnitPrice().multiply(produced));
+            BigDecimal unitPrice = firstPositiveOrNull(
+                    wip == null ? null : wip.getUnitPrice(),
+                    productionBatch == null ? null : productionBatch.getUnitCost());
+            if (unitPrice == null && rowTotalCost != null && produced.compareTo(BigDecimal.ZERO) > 0) {
+                unitPrice = rowTotalCost.divide(produced, 4, RoundingMode.HALF_UP);
             }
 
             result.add(ProcessSheetInventoryItem.builder()
@@ -590,7 +611,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .used(used)
                     .remaining(remaining)
                     .status(status)
-                    .unitPrice(nz(wip.getUnitPrice()))
+                    .unitPrice(unitPrice)
+                    .rowTotalCost(rowTotalCost)
                     .processOrder(row.getProcessOrder())
                     .processName(req.getProcessName() != null ? req.getProcessName() : fallbackProcessName(row))
                     .unit(unit)
@@ -599,6 +621,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .build());
         }
         return result;
+    }
+
+    private BigDecimal firstPositive(BigDecimal... values) {
+        BigDecimal value = firstPositiveOrNull(values);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private BigDecimal firstPositiveOrNull(BigDecimal... values) {
+        for (BigDecimal value : values) {
+            if (value != null && value.compareTo(BigDecimal.ZERO) > 0) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String fallbackProcessName(ProcessSheetRow row) {

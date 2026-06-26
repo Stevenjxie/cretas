@@ -41,6 +41,8 @@ public class ProcessSheetInventoryItem {
     /** WIP 批次单价 (unitCost, 单位成本) */
     private BigDecimal unitPrice;
 
+    private BigDecimal rowTotalCost;
+
     // ── 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null) ──
 
     /** 链内工序序 (SemiFinishedInventory.processOrder) */
