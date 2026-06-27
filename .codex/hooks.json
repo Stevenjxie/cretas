@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\Steve\\my-prototype-logistics\\.codex\\hooks\\ux-advisory.js'"
+          }
+        ]
+      }
+    ]
+  }
+}

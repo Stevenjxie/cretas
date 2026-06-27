@@ -1,0 +1,15 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_CODE_MAX_OUTPUT_TOKENS = "32000"
+MAX_THINKING_TOKENS = "16000"
+
+[mcp_servers.playwright-test]
+command = "cmd"
+args = [
+    "/c",
+    "npx",
+    "playwright",
+    "run-test-mcp-server",
+]
