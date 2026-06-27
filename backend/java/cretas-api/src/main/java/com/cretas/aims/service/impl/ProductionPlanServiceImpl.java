@@ -15,11 +15,14 @@ import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
@@ -77,6 +80,7 @@ import java.util.stream.Collectors;
 @Service
 public class ProductionPlanServiceImpl implements ProductionPlanService {
     private static final Logger log = LoggerFactory.getLogger(ProductionPlanServiceImpl.class);
+    private static final ObjectMapper PROCESS_SHEET_ROW_MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductionBatchRepository productionBatchRepository;
@@ -240,6 +244,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionReportRepository productionReportRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProcessSheetRowRepository processSheetRowRepository;
 
     /**
      * R2 (2026-06-14 v2): 报工整单撤回服务 (恢复 WIP/原料/FGB/工序任务 + 反冲成本)。
@@ -1628,6 +1635,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         if (allReports.isEmpty()) {
+            ProductionSettlementPrefillResponse sheetPrefill =
+                    deriveSettlementPrefillFromProcessSheetRows(factoryId, plan, batches);
+            if (sheetPrefill != null) {
+                return sheetPrefill;
+            }
             // 无任何报工 → 不臆造, 返回空预填 + 明确 issue 让人手填 (诚实空态)
             issues.add(issue("NO_YIELD_REPORTS",
                     "该计划暂无逐道报工记录, 无法自动预填; 请手工录入实际产量、领用与人效后结单。",
@@ -1713,6 +1725,256 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .build();
 
         return buildPrefillResponse(prefill, issues);
+    }
+
+    private ProductionSettlementPrefillResponse deriveSettlementPrefillFromProcessSheetRows(
+            String factoryId, ProductionPlan plan, List<ProductionBatch> batches) {
+        if (processSheetRowRepository == null || plan == null || isBlank(plan.getId())) {
+            return null;
+        }
+
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+
+        List<ProductionSettlementPrefillResponse.Issue> issues = new ArrayList<>();
+        List<ParsedProcessSheetRow> parsedRows = new ArrayList<>();
+        for (ProcessSheetRow row : rows) {
+            if (!isUsableProcessSheetRow(row)) {
+                continue;
+            }
+            ProcessSheetRowRequest request = parseProcessSheetRowPayload(row, issues);
+            if (request != null) {
+                parsedRows.add(new ParsedProcessSheetRow(row, request));
+            }
+        }
+        if (parsedRows.isEmpty()) {
+            return issues.isEmpty() ? null : buildPrefillResponse(emptyPrefill(plan), issues);
+        }
+        parsedRows.sort(Comparator
+                .comparing((ParsedProcessSheetRow r) -> r.request().getProcessOrder(),
+                        Comparator.nullsLast(Integer::compareTo))
+                .thenComparing(r -> r.row().getCreatedAt(), Comparator.nullsLast(LocalDateTime::compareTo))
+                .thenComparing(r -> r.row().getId(), Comparator.nullsLast(Long::compareTo)));
+
+        BigDecimal actualFinished = deriveTerminalProcessSheetOutput(parsedRows);
+        if (actualFinished == null || actualFinished.compareTo(BigDecimal.ZERO) <= 0) {
+            issues.add(issue("FINISHED_OUTPUT_MISSING",
+                    "逐道电子表格末道产出量缺失或为 0, 无法自动带入实际成品产量; 请在产出核对处手工填写。",
+                    "actualFinishedQuantity"));
+            actualFinished = null;
+        }
+
+        List<ProductionSettlementRequest.ConsumptionLine> rawLines =
+                deriveRawConsumptionsFromProcessSheetRows(factoryId, parsedRows, issues);
+
+        List<ProductionSettlementRequest.LaborSegment> laborSegments =
+                deriveLaborSegmentsFromProcessSheetRows(parsedRows);
+        String laborDeferredReason = null;
+        if (laborSegments.isEmpty()) {
+            laborDeferredReason = "工时稍后补录";
+            issues.add(infoIssue("LABOR_MISSING",
+                    "逐道电子表格中未带可用工时段, 已默认置为“工时稍后补录”; 如需计入人效请手工补录工时和人数。",
+                    "laborSegments"));
+        }
+
+        BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
+        boolean crossUnit = isCrossUnitPlan(batches);
+        String varianceReason = null;
+        if (crossUnit) {
+            issues.add(infoIssue("QUANTITY_UNIT_CROSS",
+                    "末道产出单位与计划单位不同, 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    "quantityVarianceReason"));
+        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal diff = actualFinished.subtract(planned).abs();
+            BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
+            if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
+                varianceReason = "无显著差异";
+            } else if (actualFinished.compareTo(planned) > 0) {
+                issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
+                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
+                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        "quantityVarianceReason"));
+            }
+        }
+
+        if (rawLines.isEmpty()) {
+            issues.add(issue("MATERIAL_CONSUMPTION_EMPTY",
+                    "逐道电子表格中未找到可用原料批次领用记录, 无法自动带入实际领用; 请手工录入原料/半成品领用或选择物料差异原因。",
+                    "rawMaterialConsumptions"));
+        }
+
+        issues.add(infoIssue("SEMI_FINISHED_CONFIRM",
+                "如本次生产领用了其他计划产出的外部半成品库存, 请在“半成品实际领用”处手工添加; 本计划内部自产自耗的中间品无需在此填写。",
+                "semiFinishedConsumptions"));
+
+        ProductionSettlementRequest prefill = ProductionSettlementRequest.builder()
+                .idempotencyKey(null)
+                .actualFinishedQuantity(actualFinished)
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .quantityUnit(null)
+                .quantityVarianceReason(varianceReason)
+                .laborDeferredReason(laborDeferredReason)
+                .rawMaterialConsumptions(rawLines)
+                .semiFinishedConsumptions(new ArrayList<>())
+                .auxiliaryConsumptions(new ArrayList<>())
+                .laborSegments(laborSegments)
+                .build();
+        return buildPrefillResponse(prefill, issues);
+    }
+
+    private boolean isUsableProcessSheetRow(ProcessSheetRow row) {
+        if (row == null || isBlank(row.getRowPayload())) {
+            return false;
+        }
+        String status = trimToNull(row.getRowStatus());
+        return status == null || "SAVED".equals(status) || "SUBMITTED".equals(status);
+    }
+
+    private ProcessSheetRowRequest parseProcessSheetRowPayload(ProcessSheetRow row,
+            List<ProductionSettlementPrefillResponse.Issue> issues) {
+        try {
+            return PROCESS_SHEET_ROW_MAPPER.readValue(row.getRowPayload(), ProcessSheetRowRequest.class);
+        } catch (Exception ex) {
+            issues.add(issue("PROCESS_SHEET_PAYLOAD_INVALID",
+                    "逐道电子表格行 " + row.getClientRowId() + " 的报工内容无法解析, 请重新保存该行后再结单。",
+                    "processSheetRows"));
+            return null;
+        }
+    }
+
+    private BigDecimal deriveTerminalProcessSheetOutput(List<ParsedProcessSheetRow> rows) {
+        Set<String> consumedBatchNumbers = rows.stream()
+                .flatMap(r -> Optional.ofNullable(r.request().getUpstreamSources()).orElseGet(ArrayList::new).stream())
+                .map(ProcessSheetRowRequest.UpstreamRef::getSourceBatchNumber)
+                .filter(s -> !isBlank(s))
+                .collect(Collectors.toSet());
+
+        BigDecimal terminalSum = null;
+        for (ParsedProcessSheetRow parsed : rows) {
+            ProcessSheetRow row = parsed.row();
+            ProcessSheetRowRequest req = parsed.request();
+            BigDecimal output = req.getOutputQuantity();
+            if (output == null || output.compareTo(BigDecimal.ZERO) <= 0 || isBlank(row.getBatchNumber())) {
+                continue;
+            }
+            if (consumedBatchNumbers.contains(row.getBatchNumber())) {
+                continue;
+            }
+            terminalSum = terminalSum == null ? output : terminalSum.add(output);
+        }
+        if (terminalSum != null) {
+            return terminalSum;
+        }
+
+        Integer maxOrder = rows.stream()
+                .map(r -> r.request().getProcessOrder())
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(null);
+        BigDecimal maxOrderSum = null;
+        for (ParsedProcessSheetRow parsed : rows) {
+            ProcessSheetRowRequest req = parsed.request();
+            boolean inLastStep = maxOrder == null || maxOrder.equals(req.getProcessOrder());
+            BigDecimal output = req.getOutputQuantity();
+            if (inLastStep && output != null && output.compareTo(BigDecimal.ZERO) > 0) {
+                maxOrderSum = maxOrderSum == null ? output : maxOrderSum.add(output);
+            }
+        }
+        return maxOrderSum;
+    }
+
+    private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptionsFromProcessSheetRows(
+            String factoryId, List<ParsedProcessSheetRow> rows,
+            List<ProductionSettlementPrefillResponse.Issue> issues) {
+        Map<String, BigDecimal> qtyByBatch = new LinkedHashMap<>();
+        for (ParsedProcessSheetRow parsed : rows) {
+            List<ProcessSheetRowRequest.RawInput> rawInputs = parsed.request().getRawMaterialInputs();
+            if (rawInputs == null) {
+                continue;
+            }
+            for (ProcessSheetRowRequest.RawInput input : rawInputs) {
+                if (input == null || isBlank(input.getMaterialBatchId())
+                        || input.getQuantity() == null || input.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                qtyByBatch.merge(input.getMaterialBatchId(), input.getQuantity(), BigDecimal::add);
+            }
+        }
+
+        List<ProductionSettlementRequest.ConsumptionLine> lines = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> e : qtyByBatch.entrySet()) {
+            String batchId = e.getKey();
+            BigDecimal qty = e.getValue();
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+            if (batch == null) {
+                issues.add(issue("RAW_BATCH_NOT_FOUND",
+                        "逐道电子表格引用的原料批次 " + batchId + " 已不存在, 未自动带入; 请手工核对该料领用。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+            if (available.compareTo(qty) < 0) {
+                issues.add(issue("RAW_BATCH_INSUFFICIENT",
+                        "原料批次 " + safeBatchRef(batch) + " 逐道领用 " + stripTrailing(qty)
+                                + " 超过当前可用量 " + stripTrailing(available)
+                                + ", 未自动带入该行; 请人工核对实际领用批次和数量。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            lines.add(ProductionSettlementRequest.ConsumptionLine.builder()
+                    .materialBatchId(batchId)
+                    .materialTypeId(trimToNull(batch.getMaterialTypeId()))
+                    .batchNumber(trimToNull(batch.getBatchNumber()))
+                    .quantity(qty)
+                    .unit(firstNonBlank(batch.getQuantityUnit(), "kg"))
+                    .warehouseId(trimToNull(batch.getWarehouseId()))
+                    .note("自动带入自逐道电子表格")
+                    .build());
+        }
+        return lines;
+    }
+
+    private List<ProductionSettlementRequest.LaborSegment> deriveLaborSegmentsFromProcessSheetRows(
+            List<ParsedProcessSheetRow> rows) {
+        List<ProductionSettlementRequest.LaborSegment> segments = new ArrayList<>();
+        for (ParsedProcessSheetRow parsed : rows) {
+            List<com.cretas.aims.dto.processentry.LaborSegment> raw = parsed.request().getLaborSegments();
+            if (raw == null) {
+                continue;
+            }
+            for (com.cretas.aims.dto.processentry.LaborSegment seg : raw) {
+                Integer minutes = deriveSegmentMinutes(seg);
+                if (minutes == null || minutes <= 0) {
+                    continue;
+                }
+                Integer headcount = seg.getWorkerCount();
+                segments.add(ProductionSettlementRequest.LaborSegment.builder()
+                        .workType(firstNonBlank(parsed.request().getProcessName(), parsed.request().getProcessCode(), "逐道电子表格"))
+                        .minutes(minutes)
+                        .headcount(headcount != null && headcount > 0 ? headcount : 1)
+                        .build());
+            }
+        }
+        return segments;
+    }
+
+    private Integer deriveSegmentMinutes(com.cretas.aims.dto.processentry.LaborSegment seg) {
+        if (seg == null || isBlank(seg.getStartTime()) || isBlank(seg.getEndTime())) {
+            return null;
+        }
+        try {
+            java.time.LocalTime start = java.time.LocalTime.parse(seg.getStartTime());
+            java.time.LocalTime end = java.time.LocalTime.parse(seg.getEndTime());
+            long minutes = java.time.Duration.between(start, end).toMinutes();
+            return minutes > 0 ? (int) minutes : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private record ParsedProcessSheetRow(ProcessSheetRow row, ProcessSheetRowRequest request) {
     }
 
     /** 末道工序产出量: 取最大 processOrder 的全部报工, 汇总其 outputQuantity。 */
@@ -2784,25 +3046,35 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * "SECONDARY 只开工扣 WIP 无报工" (→ 反冲 WIP 直接取消) vs "已有报工" (→ 导向报工撤回流)。
      */
     private boolean hasYieldReports(String factoryId, ProductionPlan plan) {
-        if (productionReportRepository == null) {
-            return false; // 单测无注入 → 无法证明有报工, 走安全路径 (该路径由有注入的测试覆盖)
+        if (productionReportRepository != null) {
+            List<ProductionBatch> batches = productionBatchRepository
+                    .findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+            if (batches != null) {
+                for (ProductionBatch b : batches) {
+                    if (b.getId() == null || b.getStatus() == ProductionBatchStatus.CANCELLED) {
+                        continue;
+                    }
+                    List<ProductionReport> yields = productionReportRepository
+                            .findYieldReportsByBatch(factoryId, b.getId());
+                    if (yields != null && !yields.isEmpty()) {
+                        return true;
+                    }
+                }
+            }
         }
-        List<ProductionBatch> batches = productionBatchRepository
-                .findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
-        if (batches == null) {
+        return hasMaterializedProcessSheetRows(factoryId, plan.getId());
+    }
+
+    private boolean hasMaterializedProcessSheetRows(String factoryId, String planId) {
+        if (processSheetRowRepository == null || isBlank(planId)) {
             return false;
         }
-        for (ProductionBatch b : batches) {
-            if (b.getId() == null || b.getStatus() == ProductionBatchStatus.CANCELLED) {
-                continue;
-            }
-            List<ProductionReport> yields = productionReportRepository
-                    .findYieldReportsByBatch(factoryId, b.getId());
-            if (yields != null && !yields.isEmpty()) {
-                return true;
-            }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        if (rows == null || rows.isEmpty()) {
+            return false;
         }
-        return false;
+        return rows.stream().anyMatch(row -> isUsableProcessSheetRow(row)
+                && (row.getBatchId() != null || !isBlank(row.getBatchNumber())));
     }
 
     /**

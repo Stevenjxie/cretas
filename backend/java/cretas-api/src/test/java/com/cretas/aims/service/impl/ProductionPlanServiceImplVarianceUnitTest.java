@@ -5,9 +5,13 @@ import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
@@ -19,6 +23,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -46,6 +51,14 @@ class ProductionPlanServiceImplVarianceUnitTest {
     private ProductionPlanServiceImpl newService(ProductionPlanRepository planRepo,
                                                  ProductionBatchRepository batchRepo,
                                                  ProductionReportRepository reportRepo) throws Exception {
+        return newService(planRepo, batchRepo, reportRepo, null, null);
+    }
+
+    private ProductionPlanServiceImpl newService(ProductionPlanRepository planRepo,
+                                                 ProductionBatchRepository batchRepo,
+                                                 ProductionReportRepository reportRepo,
+                                                 MaterialBatchRepository materialRepo,
+                                                 ProcessSheetRowRepository sheetRowRepo) throws Exception {
         Constructor<?> ctor = null;
         for (Constructor<?> c : ProductionPlanServiceImpl.class.getDeclaredConstructors()) {
             if (ctor == null || c.getParameterCount() > ctor.getParameterCount()) ctor = c;
@@ -56,10 +69,14 @@ class ProductionPlanServiceImplVarianceUnitTest {
         for (int i = 0; i < types.length; i++) {
             if (types[i] == ProductionPlanRepository.class) args[i] = planRepo;
             else if (types[i] == ProductionBatchRepository.class) args[i] = batchRepo;
+            else if (types[i] == MaterialBatchRepository.class) args[i] = materialRepo;
             else args[i] = null;
         }
         ProductionPlanServiceImpl svc = (ProductionPlanServiceImpl) ctor.newInstance(args);
         inject(svc, "productionReportRepository", reportRepo);
+        if (sheetRowRepo != null) {
+            inject(svc, "processSheetRowRepository", sheetRowRepo);
+        }
         return svc;
     }
 
@@ -100,6 +117,34 @@ class ProductionPlanServiceImplVarianceUnitTest {
         return r;
     }
 
+    private MaterialBatch materialBatch(String id, String batchNumber, String qty) {
+        MaterialBatch b = new MaterialBatch();
+        b.setId(id);
+        b.setFactoryId(FACTORY);
+        b.setBatchNumber(batchNumber);
+        b.setMaterialTypeId("MAT-" + id);
+        b.setWarehouseId("WH-LOG");
+        b.setReceiptQuantity(new BigDecimal(qty));
+        b.setUsedQuantity(BigDecimal.ZERO);
+        b.setQuantityUnit("kg");
+        return b;
+    }
+
+    private ProcessSheetRow sheetRow(long id, int order, String batchNumber, String payload) {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setId(id);
+        row.setFactoryId(FACTORY);
+        row.setPlanId(PLAN);
+        row.setProcessCode("P" + order);
+        row.setProcessOrder(order);
+        row.setClientRowId("R" + id);
+        row.setBatchNumber(batchNumber);
+        row.setRowStatus("SAVED");
+        row.setRowPayload(payload);
+        row.setCreatedAt(LocalDateTime.of(2026, 6, 27, 8, 0).plusMinutes(id));
+        return row;
+    }
+
     private boolean hasIssue(ProductionSettlementPrefillResponse resp, String code) {
         return resp.getAudit().getIssues().stream().anyMatch(i -> code.equals(i.getCode()));
     }
@@ -117,6 +162,13 @@ class ProductionPlanServiceImplVarianceUnitTest {
         } catch (Exception e) {
             return e;
         }
+    }
+
+    private boolean callHasYieldReports(ProductionPlanServiceImpl svc, ProductionPlan p) throws Exception {
+        Method m = ProductionPlanServiceImpl.class.getDeclaredMethod(
+                "hasYieldReports", String.class, ProductionPlan.class);
+        m.setAccessible(true);
+        return (boolean) m.invoke(svc, FACTORY, p);
     }
 
     private ProductionSettlementRequest req(BigDecimal finished) {
@@ -160,6 +212,72 @@ class ProductionPlanServiceImplVarianceUnitTest {
         ProductionSettlementPrefillResponse resp = svc.getSettlementPrefill(FACTORY, PLAN);
 
         assertThat(hasIssue(resp, OVER_PLAN_ISSUE)).as("同单位真超产应报").isTrue();
+    }
+
+    @Test
+    @DisplayName("process sheet rows fallback: prefill reads terminal output and raw inputs")
+    void prefill_processSheetRowsFallback_readsOutputAndMaterials() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        ProductionReportRepository reportRepo = mock(ProductionReportRepository.class);
+        MaterialBatchRepository materialRepo = mock(MaterialBatchRepository.class);
+        ProcessSheetRowRepository sheetRepo = mock(ProcessSheetRowRepository.class);
+
+        when(planRepo.findByIdAndFactoryId(PLAN, FACTORY)).thenReturn(Optional.of(plan(new BigDecimal("1.10"))));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN)).thenReturn(List.of());
+        when(sheetRepo.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of(
+                sheetRow(1, 1, "WIP-A", """
+                        {"clientRowId":"R1","processCode":"xiuyou","processOrder":1,"processName":"修油","productTypeId":"SKU-A","batchNumber":"WIP-A","outputQuantity":0.80,"unit":"kg","rawMaterialInputs":[{"materialBatchId":"RAW-1","quantity":1.00}],"laborSegments":[{"startTime":"08:00","endTime":"09:00","workerCount":2}]}
+                        """),
+                sheetRow(2, 1, "WIP-B", """
+                        {"clientRowId":"R2","processCode":"xiuyou","processOrder":1,"processName":"修油","productTypeId":"SKU-B","batchNumber":"WIP-B","outputQuantity":0.50,"unit":"kg","rawMaterialInputs":[{"materialBatchId":"RAW-2","quantity":0.60}]}
+                        """),
+                sheetRow(3, 2, "WIP-C", """
+                        {"clientRowId":"R3","processCode":"shuzhi","processOrder":2,"processName":"熟制","productTypeId":"SKU-A","batchNumber":"WIP-C","outputQuantity":1.10,"unit":"kg","upstreamSources":[{"sourceBatchNumber":"WIP-A","feedQuantityKg":0.70},{"sourceBatchNumber":"WIP-B","feedQuantityKg":0.40}]}
+                        """)
+        ));
+        when(materialRepo.findByIdAndFactoryId("RAW-1", FACTORY))
+                .thenReturn(Optional.of(materialBatch("RAW-1", "MB-1", "10")));
+        when(materialRepo.findByIdAndFactoryId("RAW-2", FACTORY))
+                .thenReturn(Optional.of(materialBatch("RAW-2", "MB-2", "10")));
+
+        ProductionPlanServiceImpl svc = newService(planRepo, batchRepo, reportRepo, materialRepo, sheetRepo);
+
+        ProductionSettlementPrefillResponse resp = svc.getSettlementPrefill(FACTORY, PLAN);
+
+        assertThat(resp.getAudit().isClean()).isTrue();
+        assertThat(hasIssue(resp, "NO_YIELD_REPORTS")).isFalse();
+        assertThat(resp.getPrefill().getActualFinishedQuantity()).isEqualByComparingTo("1.10");
+        assertThat(resp.getPrefill().getRawMaterialConsumptions()).hasSize(2);
+        assertThat(resp.getPrefill().getRawMaterialConsumptions())
+                .extracting(ProductionSettlementRequest.ConsumptionLine::getMaterialBatchId)
+                .containsExactly("RAW-1", "RAW-2");
+        assertThat(resp.getPrefill().getRawMaterialConsumptions().get(0).getQuantity()).isEqualByComparingTo("1.00");
+        assertThat(resp.getPrefill().getRawMaterialConsumptions().get(1).getQuantity()).isEqualByComparingTo("0.60");
+        assertThat(resp.getPrefill().getLaborSegments()).hasSize(1);
+        assertThat(resp.getPrefill().getLaborSegments().get(0).getMinutes()).isEqualTo(60);
+        assertThat(resp.getPrefill().getLaborSegments().get(0).getHeadcount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("process sheet rows count as production data for cancel guard")
+    void hasYieldReports_processSheetRowsFallback_blocksEmptyCancelPath() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        ProductionReportRepository reportRepo = mock(ProductionReportRepository.class);
+        ProcessSheetRowRepository sheetRepo = mock(ProcessSheetRowRepository.class);
+        ProductionBatch productionBatch = batch(null, "kg");
+
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN)).thenReturn(List.of(productionBatch));
+        when(reportRepo.findYieldReportsByBatch(FACTORY, BATCH)).thenReturn(List.of());
+        when(sheetRepo.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of(
+                sheetRow(11, 1, "WIP-CANCEL-GUARD", """
+                        {"clientRowId":"R11","processCode":"xiuyou","processOrder":1,"productTypeId":"SKU-A","batchNumber":"WIP-CANCEL-GUARD","outputQuantity":0.80,"unit":"kg"}
+                        """)
+        ));
+        ProductionPlanServiceImpl svc = newService(planRepo, batchRepo, reportRepo, null, sheetRepo);
+
+        assertThat(callHasYieldReports(svc, plan(new BigDecimal("1.00")))).isTrue();
     }
 
     // ===================== SETTLE validate =====================
