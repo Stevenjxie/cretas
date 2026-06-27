@@ -1,13 +1,6 @@
 ---
 name: e2e-native
 description: Cretas React Native 原生 E2E 测试。使用 Maestro 执行原生 UI 测试，涵盖 testID 扫描注入、Maestro YAML 生成、多角色测试流执行、测试报告。
-allowed-tools:
-  - Bash
-  - Read
-  - Edit
-  - Write
-  - Glob
-  - Grep
 ---
 
 # React Native 原生 E2E 测试

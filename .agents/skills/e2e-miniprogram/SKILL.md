@@ -1,13 +1,6 @@
 ---
 name: e2e-miniprogram
 description: 微信小程序 E2E 自动化测试。通过 miniprogram-automator 连接微信开发者工具，执行页面导航、元素交互、数据验证等 E2E 测试。覆盖 MallCenter 小程序 43 个页面。
-allowed-tools:
-  - Bash
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
 ---
 
 # 微信小程序 E2E 自动化测试

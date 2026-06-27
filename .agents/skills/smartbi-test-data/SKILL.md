@@ -1,11 +1,6 @@
 ---
 name: smartbi-test-data
 description: SmartBI 测试数据生成与管理。一键生成工厂报表、餐饮报表、边界用例、压力测试 Excel。支持选择性生成和数据验证。
-allowed-tools:
-  - Bash
-  - Read
-  - Glob
-  - Grep
 ---
 
 # SmartBI 测试数据生成

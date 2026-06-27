@@ -1,11 +1,6 @@
 ---
 name: integration-testing
 description: 运行后端和前端集成测试，检查 API 和 UI 交互。包含 E2E 测试执行、结果分析、失败诊断。使用此 Skill 来验证系统功能完整性，运行端到端测试，或调试集成问题。
-allowed-tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
 ---
 
 # 集成测试 Skill

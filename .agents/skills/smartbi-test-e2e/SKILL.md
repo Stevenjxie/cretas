@@ -1,21 +1,6 @@
 ---
 name: smartbi-test-e2e
 description: SmartBI E2E 上传测试。将生成的测试 Excel 通过浏览器上传到 SmartBI，验证完整流程：SSE 解析 → 图表生成 → KPI → AI 分析。使用 Playwright MCP 浏览器交互。
-allowed-tools:
-  - Bash
-  - Read
-  - Glob
-  - Grep
-  - mcp__plugin_playwright_playwright__browser_navigate
-  - mcp__plugin_playwright_playwright__browser_snapshot
-  - mcp__plugin_playwright_playwright__browser_click
-  - mcp__plugin_playwright_playwright__browser_type
-  - mcp__plugin_playwright_playwright__browser_fill_form
-  - mcp__plugin_playwright_playwright__browser_file_upload
-  - mcp__plugin_playwright_playwright__browser_wait_for
-  - mcp__plugin_playwright_playwright__browser_take_screenshot
-  - mcp__plugin_playwright_playwright__browser_evaluate
-  - mcp__plugin_playwright_playwright__browser_console_messages
 ---
 
 # SmartBI E2E 上传测试

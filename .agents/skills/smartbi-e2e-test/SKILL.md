@@ -1,11 +1,6 @@
 ---
 name: smartbi-e2e-test
 description: SmartBI Chrome 自动化测试工具。使用 Playwright 进行 E2E 测试，支持 Ralph Loop 持续循环测试。适用于 SmartBI 功能验证、图表渲染检查、AI 问答测试。
-allowed-tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
 ---
 
 # SmartBI E2E 自动化测试 Skill

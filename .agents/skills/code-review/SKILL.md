@@ -1,11 +1,6 @@
 ---
 name: code-review
 description: 审查代码质量、性能、安全性和设计模式。检查项目特定的反模式（降级处理、错误处理、类型安全）。使用此 Skill 来审查 PR、优化代码、或检查 TypeScript 类型安全性。
-allowed-tools:
-  - Read
-  - Grep
-  - Glob
-  - Bash
 ---
 
 # 代码审查 Skill

@@ -1,11 +1,6 @@
 ---
 name: field-consistency-check
 description: 检查前后端字段名一致性。自动比较后端 Entity 与前端 Interface 的所有字段，发现缺失或不一致的字段。使用此 Skill 确保数据模型统一。
-allowed-tools:
-  - Read
-  - Grep
-  - Glob
-  - Bash
 ---
 
 # 字段一致性检查 Skill

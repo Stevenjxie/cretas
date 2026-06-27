@@ -1,11 +1,6 @@
 ---
 name: debug-assistant
 description: 调试辅助工具。快速诊断后端、前端和数据库问题。适用于 API 失败、日志分析、服务健康检查等场景。
-allowed-tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
 ---
 
 # 调试辅助 Skill

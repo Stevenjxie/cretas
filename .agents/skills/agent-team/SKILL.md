@@ -1,15 +1,6 @@
 ---
 name: agent-team
-description: 编排多角色 Agent Team 深度研究工作流（研究员×2-3并行 + 浏览器探索 → 分析师 → 批评者 → 整合者 → 自愈验证）。融合 Playwright Test Agents 的 Planner/Healer 模式。适用于技术调研、方案对比、竞品分析、UI/UX 评估等任务。使用 /agent-team <研究主题> 触发。
-allowed-tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
-  - WebSearch
-  - WebFetch
-  - Write
-  - Task
+description: 编排多角色 Agent Team 深度研究工作流（研究员×2-3并行 + 浏览器探索 → 分析师 → 批评者 → 整合者 → 自愈验证）。融合 Playwright Test Agents 的 Planner/Healer 模式。适用于技术调研、方案对比、竞品分析、UI/UX 评估等任务。使用 /agent-team 加研究主题触发。
 ---
 
 # Agent Team — Deep Research Workflow

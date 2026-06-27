@@ -1,22 +1,16 @@
 ---
 name: rules-maintenance
-description: 检查和更新 Claude Rules 内容。包括格式检查、统计数据同步、过时内容清理。使用 /rules-cleanup 或 /rules-update 调用。
-allowed-tools:
-  - Bash
-  - Read
-  - Glob
-  - Grep
-  - Edit
+description: 检查和更新 Codex Rules 内容。包括格式检查、统计数据同步、过时内容清理。Use when maintaining .codex/rules, .codex/memory, project AGENTS.md rule references, or migrating legacy .claude/rules into Codex-compatible rules.
 ---
 
 # Rules 维护 Skill
 
-维护 `.claude/rules/` 目录中的规则文件。
+维护 `.codex/rules/` 目录中的规则文件。`.claude/rules/` 可作为历史来源读取，但 Codex 的可引用规则应落在 `.codex/rules/`。
 
 ## Rules 目录
 
 ```
-.claude/rules/
+.codex/rules/
 ```
 
 ## 检查步骤
@@ -35,7 +29,7 @@ allowed-tools:
 
 ### 2. Rules 格式检查
 
-对 `.claude/rules/` 中每个 `.md` 文件检查:
+对 `.codex/rules/` 中每个 `.md` 文件检查:
 
 - [ ] 包含 `**最后更新**` 日期标记
 - [ ] 内容与当前代码库一致
@@ -54,8 +48,8 @@ allowed-tools:
 
 ### 4. MEMORY.md 检查
 
-同时检查 auto memory 文件是否需要更新:
-- 路径: `.claude/projects/C--Users-Steve-my-prototype-logistics/memory/MEMORY.md`
+同时检查 Codex memory 文件是否需要更新:
+- 路径: `.codex/memory/MEMORY.md`
 - 确保不超过 200 行限制
 - 过时信息应移入主题文件或删除
 
