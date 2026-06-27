@@ -108,6 +108,9 @@ _archived/
 .claude/rules/*-credentials.md
 .claude/rules/*-keys.md
 .claude/rules/aliyun-credentials.md
+.codex/rules/*-credentials.md
+.codex/rules/*-keys.md
+.codex/rules/aliyun-credentials.md
 
 # APK 文件（太大，使用 Git LFS 或单独管理）
 *.apk
