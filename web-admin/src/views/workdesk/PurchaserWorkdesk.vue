@@ -395,7 +395,7 @@
             </div>
             <div v-else>
               <p v-if="procurementDialog.preview.nextActionUrl" class="preview-line">
-                <el-link type="primary" @click="gotoPreviewNextAction(procurementDialog.preview.nextActionUrl)">
+                <el-link type="primary" underline="hover" @click="gotoPreviewNextAction(procurementDialog.preview.nextActionUrl)">
                   前往: {{ procurementDialog.preview.nextActionUrl }}
                 </el-link>
               </p>
@@ -483,6 +483,7 @@ interface RequisitionPreview {
 interface ExecuteResponse {
   intentRecognized?: boolean;
   intentCode?: string;
+  intentName?: string;
   status?: string;
   message?: string;
   formattedText?: string;

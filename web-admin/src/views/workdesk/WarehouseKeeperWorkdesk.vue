@@ -562,6 +562,7 @@ interface ScanTask {
 interface ExecuteResponse {
   intentRecognized?: boolean;
   intentCode?: string;
+  intentName?: string;
   status?: string;
   message?: string;
   formattedText?: string;

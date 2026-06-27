@@ -97,7 +97,10 @@ async function loadAll(): Promise<void> {
         throw err;
       }
     }
-    factories.value = resp.factories;
+    factories.value = resp.factories.map((f) => ({
+      ...f,
+      factoryName: f.factoryName || f.factoryId,
+    }));
     // Load detailed status for each factory in parallel
     await Promise.allSettled(
       resp.factories.map(async (f) => {

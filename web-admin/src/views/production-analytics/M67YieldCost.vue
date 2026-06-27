@@ -556,7 +556,13 @@ const hasOverallYieldUnitIssue = computed(() => {
   return hasInputAndOutput && data.value?.overallYieldRate === 0 && !!lastUnit && lastUnit !== 'kg';
 });
 
-const overallYieldKpi = computed(() => {
+const overallYieldKpi = computed<{
+  value: string | number;
+  unit: string;
+  subtitle: string;
+  status: 'warning' | 'default';
+  targetValue: number | undefined;
+}>(() => {
   if (hasOverallYieldUnitIssue.value) {
     return {
       value: '不可折算',

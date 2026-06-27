@@ -19,21 +19,26 @@ import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 // -------------------------------------------------------------------------
 // Props & emits
 // -------------------------------------------------------------------------
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   factoryId: string;
   planId: string;
   processCode: string;
   processOrder: number;
   productTypeId: string;
   /** WIP inventory items from the upstream process (for dropdown + remaining calc) */
-  upstreamItems: ProcessSheetInventoryItem[];
+  upstreamItems?: ProcessSheetInventoryItem[];
   /** WIP inventory items for THIS process (for grid 剩余 column on saved rows) */
   ownInventoryItems?: ProcessSheetInventoryItem[];
   /** Existing saved rows loaded from backend on mount */
-  initialRows: ProcessSheetRowView[];
+  initialRows?: ProcessSheetRowView[];
   /** Layout mode toggled in the drawer header. Default: 'grid'. */
   viewMode?: 'grid' | 'card';
-}>();
+}>(), {
+  upstreamItems: () => [],
+  ownInventoryItems: () => [],
+  initialRows: () => [],
+  viewMode: 'grid',
+});
 const emit = defineEmits<{
   (e: 'row-saved'): void;
 }>();
@@ -229,14 +234,15 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
     row.fields['usedWeight'] = p.inputQuantity ?? null;
     // outputQuantity = actualProd (盒数); restored from payload into auto-calc fields
-    row.fields['storage']       = (p as Record<string, unknown>)['storage']       as number ?? null;
-    row.fields['sample']        = (p as Record<string, unknown>)['sample']        as number ?? null;
-    row.fields['remainBox']     = (p as Record<string, unknown>)['remainBox']     as number ?? null;
-    row.fields['claim']         = (p as Record<string, unknown>)['claim']         as number ?? null;
-    row.fields['productWeight'] = (p as Record<string, unknown>)['productWeight'] as number ?? null;
-    row.fields['trimmings']     = (p as Record<string, unknown>)['trimmings']     as number ?? null;
-    row.fields['boxWeight']     = (p as Record<string, unknown>)['boxWeight']     as number ?? null;
-    row.fields['workerPrice']   = (p as Record<string, unknown>)['workerPrice']   as number ?? null;
+    const payloadFields = p as unknown as Record<string, unknown>;
+    row.fields['storage']       = payloadFields['storage']       as number ?? null;
+    row.fields['sample']        = payloadFields['sample']        as number ?? null;
+    row.fields['remainBox']     = payloadFields['remainBox']     as number ?? null;
+    row.fields['claim']         = payloadFields['claim']         as number ?? null;
+    row.fields['productWeight'] = payloadFields['productWeight'] as number ?? null;
+    row.fields['trimmings']     = payloadFields['trimmings']     as number ?? null;
+    row.fields['boxWeight']     = payloadFields['boxWeight']     as number ?? null;
+    row.fields['workerPrice']   = payloadFields['workerPrice']   as number ?? null;
   }
   row.laborSegments = (p.laborSegments ?? []).map((s) => ({ ...s }));
 
@@ -277,6 +283,10 @@ const rowScopeKey = computed(() =>
 );
 let lastRowScopeKey = '';
 
+function normalizeInitialRows(value: ProcessSheetRowView[] | null | undefined): ProcessSheetRowView[] {
+  return Array.isArray(value) ? value : [];
+}
+
 // Re-hydrate saved rows whenever the parent delivers them.
 // Guard: only apply when rows is still in its initial-load state (all
 // UNSAVED rows means no user edits yet), so we don't clobber a row the
@@ -284,9 +294,10 @@ let lastRowScopeKey = '';
 watch(
   () => [rowScopeKey.value, props.initialRows] as const,
   ([scopeKey, incoming]) => {
+    const normalizedIncoming = normalizeInitialRows(incoming);
     if (scopeKey !== lastRowScopeKey) {
       lastRowScopeKey = scopeKey;
-      rows.value = (incoming ?? []).map(hydrateRow);
+      rows.value = normalizedIncoming.map(hydrateRow);
       return;
     }
 
@@ -295,7 +306,7 @@ watch(
     // for another plan/process.
     const hasUserEdits = rows.value.some((r) => r.rowStatus === 'UNSAVED');
     if (hasUserEdits && rows.value.length > 0) return;
-    rows.value = (incoming ?? []).map(hydrateRow);
+    rows.value = normalizedIncoming.map(hydrateRow);
   },
   { immediate: true, deep: false },
 );

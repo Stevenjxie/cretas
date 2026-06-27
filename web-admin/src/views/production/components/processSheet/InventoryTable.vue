@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
+const errorMessage = ref('');
 let refreshSeq = 0;
 
 async function refresh() {
@@ -22,9 +23,11 @@ async function refresh() {
     const resp = await getInventory(props.factoryId, props.planId, props.processCode, props.processOrder);
     if (seq !== refreshSeq) return;
     rows.value = resp.data || [];
+    errorMessage.value = '';
   } catch {
     if (seq !== refreshSeq) return;
     rows.value = [];
+    errorMessage.value = '半成品库存加载失败，请刷新重试。';
   } finally {
     if (seq === refreshSeq) loading.value = false;
   }
@@ -39,7 +42,26 @@ defineExpose({ refresh });
 </script>
 
 <template>
-  <el-table :data="rows" v-loading="loading" size="small" border style="width:100%">
+  <el-alert
+    v-if="errorMessage"
+    type="error"
+    show-icon
+    :closable="false"
+    style="margin-bottom:8px"
+  >
+    <template #default>
+      <span>{{ errorMessage }}</span>
+      <el-button link type="primary" size="small" @click="refresh">刷新重试</el-button>
+    </template>
+  </el-alert>
+  <el-table
+    :data="rows"
+    v-loading="loading"
+    size="small"
+    border
+    empty-text="暂无半成品库存记录"
+    style="width:100%"
+  >
     <el-table-column prop="batchNumber" label="批次号" min-width="160" />
     <el-table-column prop="produced" label="产出(kg)" width="90" align="right" />
     <el-table-column prop="used" label="已用(kg)" width="90" align="right" />
@@ -63,7 +85,7 @@ defineExpose({ refresh });
       </template>
     </el-table-column>
   </el-table>
-  <div v-if="rows.length === 0 && !loading" style="text-align:center;color:#909399;padding:12px;font-size:12px">
-    暂无半成品库存
+  <div v-if="rows.length === 0 && !loading && !errorMessage" style="text-align:center;color:#909399;padding:12px;font-size:12px">
+    暂无半成品库存；保存当前工序有效产出后会生成批次库存。
   </div>
 </template>

@@ -97,7 +97,7 @@ async function submitQuickPurchaseOrder(row: QuickPurchaseOrderRow): Promise<voi
     purchaseType: row.purchaseType || 'NORMAL',
     expectedDate: row.expectedDate || null,
     remark: row.remark || '',
-    items: [],
+    items: [] as unknown[],
   };
   const res = await post(`/${factoryId.value}/purchase/orders`, payload);
   if (!res?.success) {
@@ -243,7 +243,7 @@ async function submitBatchPurchaseOrders(orders: Array<{ supplierId: string; pur
       purchaseType: order.purchaseType || 'NORMAL',
       expectedDate: order.expectedDate || null,
       remark: order.remark || '',
-      items: [],
+      items: [] as unknown[],
     };
     const res = await post(`/${factoryId.value}/purchase/orders`, payload);
     if (res?.success) created.push(String(res.data?.orderNumber || res.data?.id || ''));
@@ -270,7 +270,7 @@ const returnDialogItems = computed(() => {
   return (row.items as TableRow[]).map((it) => ({
     id: it.id,
     materialTypeId: it.materialTypeId ? String(it.materialTypeId) : null,
-    productTypeId: null,
+    productTypeId: null as string | null,
     itemName: String(it.materialName || it.itemName || '-'),
     unitPrice: Number(it.unitPrice) || 0,
     // For procurement, cap return at ordered quantity (no per-line received-qty

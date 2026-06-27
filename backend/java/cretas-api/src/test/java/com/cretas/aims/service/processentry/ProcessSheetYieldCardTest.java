@@ -189,6 +189,144 @@ class ProcessSheetYieldCardTest {
         assertThat(result.get(1).getCumulativeYieldRate()).isEqualByComparingTo("85.0000");
     }
 
+    @Test
+    @DisplayName("YIELD-CARD-0B: partial upstream WIP consumption inherits raw-equivalent quantity by consumed ratio")
+    void processSheetRows_partialUpstreamConsumption_usesInheritedRawEquivalent() throws Exception {
+        ProcessSheetRow rollingRow = sheetRow(3, 9201L, "CLK-W-ROLL");
+        rollingRow.setProcessCode("gunrou");
+        ProcessSheetRow blanchRow = sheetRow(4, 9202L, "CLK-W-BLANCH");
+        blanchRow.setProcessCode("chaoshui");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rollingRow, blanchRow));
+
+        ProcessSheetRowRequest rollingPayload = sheetPayload("1440", "1571.19");
+        rollingPayload.setProcessName("滚揉");
+
+        ProcessSheetRowRequest blanchPayload = sheetPayload("765.19", "604.5");
+        blanchPayload.setProcessName("焯水");
+        ProcessSheetRowRequest.UpstreamRef upstream = new ProcessSheetRowRequest.UpstreamRef();
+        upstream.setSourceBatchNumber("CLK-W-ROLL");
+        upstream.setFeedQuantityKg(new BigDecimal("765.19"));
+        blanchPayload.setUpstreamSources(List.of(upstream));
+
+        when(objectMapper.readValue("payload-3", ProcessSheetRowRequest.class)).thenReturn(rollingPayload);
+        when(objectMapper.readValue("payload-4", ProcessSheetRowRequest.class)).thenReturn(blanchPayload);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9201"))
+                .thenReturn(Optional.of(materialWip(9201L, "CLK-W-ROLL", "1571.19", "20")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9202"))
+                .thenReturn(Optional.of(materialWip(9202L, "CLK-W-BLANCH", "604.5", "25")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(2);
+        ProcessSheetInventoryItem blanch = result.get(1);
+        assertThat(blanch.getSourceBatchNumber()).isEqualTo("CLK-W-ROLL");
+        assertThat(blanch.getFeedQuantity()).isEqualByComparingTo("765.19");
+        assertThat(blanch.getSourceProducedQuantity()).isEqualByComparingTo("1571.19");
+        assertThat(blanch.getSourceConsumedRatio()).isEqualByComparingTo("48.7013");
+        assertThat(blanch.getInheritedRawEquivalentQuantity()).isEqualByComparingTo("701.2988");
+        assertThat(blanch.getInputQuantity()).isEqualByComparingTo("765.19");
+        assertThat(blanch.getStepYieldRate()).isEqualByComparingTo("79.0000");
+        assertThat(blanch.getCumulativeYieldRate()).isEqualByComparingTo("86.1972");
+    }
+
+    @Test
+    @DisplayName("YIELD-CARD-0C: same SKU multi-batch mixing keeps each source row's own raw input")
+    void processSheetRows_sameSkuMultiBatchMixing_keepsEachSourceRawInput() throws Exception {
+        ProcessSheetRow sourceA = sheetRow(1, 9301L, "CLK-W-A");
+        ProcessSheetRow sourceB = sheetRow(1, 9302L, "CLK-W-B");
+        ProcessSheetRow mixed = sheetRow(2, 9303L, "CLK-W-MIX");
+        mixed.setProcessCode("hunhe");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(sourceA, sourceB, mixed));
+
+        ProcessSheetRowRequest sourceAPayload = sheetPayload("100", "90");
+        sourceAPayload.setProcessName("source-a");
+        ProcessSheetRowRequest sourceBPayload = sheetPayload("50", "45");
+        sourceBPayload.setProcessName("source-b");
+        ProcessSheetRowRequest mixedPayload = sheetPayload("90", "80");
+        mixedPayload.setProcessName("mix");
+        ProcessSheetRowRequest.UpstreamRef upstreamA = new ProcessSheetRowRequest.UpstreamRef();
+        upstreamA.setSourceBatchNumber("CLK-W-A");
+        upstreamA.setFeedQuantityKg(new BigDecimal("45"));
+        ProcessSheetRowRequest.UpstreamRef upstreamB = new ProcessSheetRowRequest.UpstreamRef();
+        upstreamB.setSourceBatchNumber("CLK-W-B");
+        upstreamB.setFeedQuantityKg(new BigDecimal("45"));
+        mixedPayload.setUpstreamSources(List.of(upstreamA, upstreamB));
+
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class))
+                .thenReturn(sourceAPayload)
+                .thenReturn(sourceBPayload);
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class)).thenReturn(mixedPayload);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9301"))
+                .thenReturn(Optional.of(materialWip(9301L, "CLK-W-A", "90", "10")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9302"))
+                .thenReturn(Optional.of(materialWip(9302L, "CLK-W-B", "45", "20")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9303"))
+                .thenReturn(Optional.of(materialWip(9303L, "CLK-W-MIX", "80", "25")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(3);
+        assertThat(result.get(0).getInheritedRawEquivalentQuantity()).isEqualByComparingTo("100");
+        assertThat(result.get(1).getInheritedRawEquivalentQuantity()).isEqualByComparingTo("50");
+
+        ProcessSheetInventoryItem mix = result.get(2);
+        assertThat(mix.getSourceBatchNumber()).isEqualTo("CLK-W-A, CLK-W-B");
+        assertThat(mix.getFeedQuantity()).isEqualByComparingTo("90");
+        assertThat(mix.getSourceProducedQuantity()).isEqualByComparingTo("135");
+        assertThat(mix.getSourceConsumedRatio()).isEqualByComparingTo("66.6667");
+        assertThat(mix.getInheritedRawEquivalentQuantity()).isEqualByComparingTo("100.0000");
+        assertThat(mix.getInheritedCost()).isEqualByComparingTo("1350.0000");
+        assertThat(mix.getCumulativeYieldRate()).isEqualByComparingTo("80.0000");
+        assertThat(mix.getSourceBreakdowns()).hasSize(2);
+        assertThat(mix.getSourceBreakdowns().get(0).getInheritedRawEquivalentQuantity())
+                .isEqualByComparingTo("50.0000");
+        assertThat(mix.getSourceBreakdowns().get(1).getInheritedRawEquivalentQuantity())
+                .isEqualByComparingTo("50.0000");
+    }
+
+    @Test
+    @DisplayName("YIELD-CARD-0D: missing upstream source does not fabricate inherited raw or cumulative yield")
+    void processSheetRows_missingUpstreamSource_doesNotFabricateYield() throws Exception {
+        ProcessSheetRow row = sheetRow(2, 9401L, "CLK-W-MISSING-SOURCE");
+        row.setProcessCode("hunhe");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row));
+
+        ProcessSheetRowRequest payload = sheetPayload("30", "25");
+        payload.setProcessName("mix");
+        ProcessSheetRowRequest.UpstreamRef upstream = new ProcessSheetRowRequest.UpstreamRef();
+        upstream.setSourceBatchNumber("CLK-W-NOT-FOUND");
+        upstream.setFeedQuantityKg(new BigDecimal("30"));
+        payload.setUpstreamSources(List.of(upstream));
+
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class)).thenReturn(payload);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9401"))
+                .thenReturn(Optional.of(materialWip(9401L, "CLK-W-MISSING-SOURCE", "25", "25")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(1);
+        ProcessSheetInventoryItem item = result.get(0);
+        assertThat(item.getStepYieldRate()).isEqualByComparingTo("83.3333");
+        assertThat(item.getSourceBatchNumber()).isNull();
+        assertThat(item.getFeedQuantity()).isNull();
+        assertThat(item.getSourceConsumedRatio()).isNull();
+        assertThat(item.getInheritedRawEquivalentQuantity()).isNull();
+        assertThat(item.getCumulativeYieldRate()).isNull();
+        assertThat(item.getSourceBreakdowns()).isNull();
+    }
+
     // ─────────────────────────────────────────────────────────────
     // YIELD-CARD-1: 线性三道 (拆包100→修油90→焯水80)
     // ─────────────────────────────────────────────────────────────

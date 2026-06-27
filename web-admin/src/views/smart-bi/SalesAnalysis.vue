@@ -388,7 +388,7 @@ function salesExplorationChartMeta(chart: ExplorationChart): ChartWithMeta | nul
   if (EXOTIC_CHART_TYPES_SALES.has(ct)) return null;
   if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
 
-  const c = chart.config as Record<string, unknown>;
+  const c = chart.config as unknown as Record<string, unknown>;
   let xData: string[] = [];
   let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
 

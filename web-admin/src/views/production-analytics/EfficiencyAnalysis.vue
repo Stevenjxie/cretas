@@ -359,7 +359,7 @@ const { insight: effHoursInsight, loading: effHoursInsightLoading } = useChartIn
         title: '产品工时分布',
         meta: { xDim: 'category', yMetric: 'quantity', aggregation: 'sum', domain: 'factory' },
         config: {
-          xAxis: { data: data.map(d => d.product_name) },
+          xAxis: { data: data.map(d => String(d.product_name || '')) },
           series: [{ type: 'bar', data: data.map(d => d.total_minutes) }],
         },
       },

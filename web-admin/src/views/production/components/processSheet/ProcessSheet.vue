@@ -197,8 +197,8 @@ async function loadAll() {
           getRows(props.factoryId, props.planId, proc.code, proc.order),
         ]);
         if (seq !== loadAllSeq) return;
-        inventoryMap.value[procKey(proc)] = invResp.data || [];
-        initialRowsMap.value[procKey(proc)] = rowsResp.data || [];
+        inventoryMap.value[procKey(proc)] = Array.isArray(invResp.data) ? invResp.data : [];
+        initialRowsMap.value[procKey(proc)] = Array.isArray(rowsResp.data) ? rowsResp.data : [];
       })
     );
   } catch (e) {
@@ -307,7 +307,7 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
             :own-inventory-items="inventoryMap[procKey(proc)]"
-            :initial-rows="initialRowsMap[procKey(proc)]"
+            :initial-rows="initialRowsMap[procKey(proc)] || []"
             :view-mode="viewMode"
             @row-saved="onRowSaved(proc)"
           />

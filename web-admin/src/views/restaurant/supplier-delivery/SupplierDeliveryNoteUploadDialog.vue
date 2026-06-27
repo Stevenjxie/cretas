@@ -31,7 +31,7 @@
         <!-- Rule 5: 供应商列表为空 → 跳供应商管理 -->
         <div v-if="suppliers.length === 0" class="empty-hint">
           还未添加供应商，
-          <el-link type="primary" @click="goSupplierMgmt">前往供应商管理</el-link>
+          <el-link type="primary" underline="hover" @click="goSupplierMgmt">前往供应商管理</el-link>
         </div>
       </el-form-item>
       <el-form-item label="送货日期" required>

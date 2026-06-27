@@ -488,7 +488,7 @@ async function onDelete(row: CommissionRule) {
     '确认删除此提成规则? (软删除, 不影响历史业绩)',
     '删除确认',
     { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-  ).catch(() => null).then(async confirmed => {
+  ).catch((): null => null).then(async (confirmed: unknown): Promise<void> => {
     if (!confirmed) return
     if (!row.id) return
     await deleteRule(props.factoryId, row.id)

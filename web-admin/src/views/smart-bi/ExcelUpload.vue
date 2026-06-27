@@ -182,6 +182,12 @@ const targetFieldOptions = computed(() => {
   }));
 });
 
+const visiblePreviewHeaders = computed(() =>
+  parseResult.value.headers.filter((header) =>
+    canViewPrice.value || getColumnTypeBadge(header).label !== '楼',
+  ),
+);
+
 // ==================== 字段类型检测与确认 ====================
 
 type FieldTypeName = '文本' | '数字' | '日期' | '百分比' | '金额';
@@ -985,8 +991,7 @@ function getColumnTypeBadge(header: string): { label: string; type: 'info' | 'su
               class="enhanced-preview-table"
             >
               <el-table-column
-                v-for="header in parseResult.headers"
-                v-if="canViewPrice || getColumnTypeBadge(header).label !== '¥'"
+                v-for="header in visiblePreviewHeaders"
                 :key="header"
                 :prop="header"
                 min-width="120"

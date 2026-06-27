@@ -207,7 +207,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="关联退货单" :span="2">
             <template v-if="currentRow.returnOrderId">
-              <el-link type="primary" @click="goToReturns">采购退货单（点击前往审批）</el-link>
+              <el-link type="primary" underline="hover" @click="goToReturns">采购退货单（点击前往审批）</el-link>
               <span class="text-muted" style="margin-left: 8px">待财务审批</span>
             </template>
             <span v-else class="text-muted">—</span>

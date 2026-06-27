@@ -43,6 +43,8 @@ export interface EngineeringChangeNotice {
   rejectionReason?: string;
   /** notify_roles JSON array. */
   notifyRoles?: string[];
+  fromVersion?: number | string | null;
+  toVersion?: number | string | null;
   changeContext?: Record<string, unknown>;
   createdAt?: string;
   updatedAt?: string;

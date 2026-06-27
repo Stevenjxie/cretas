@@ -507,7 +507,7 @@ function explorationChartInsightMeta(chart: ExplorationChart): ChartWithMeta | n
     ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const }
     : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'finance' as const };
 
-  const c = chart.config as Record<string, unknown>;
+  const c = chart.config as unknown as Record<string, unknown>;
   let xData: string[] = [];
   let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
 

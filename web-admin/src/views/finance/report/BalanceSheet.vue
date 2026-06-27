@@ -42,7 +42,7 @@
         </template>
         <template #default>
           建议先完成期间结账以确保数据稳定:
-          <el-link type="primary" @click="goToPeriodClose">前往期间结账</el-link>
+          <el-link type="primary" underline="hover" @click="goToPeriodClose">前往期间结账</el-link>
         </template>
       </el-alert>
 

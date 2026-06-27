@@ -24,6 +24,12 @@ interface IndicatorResultData {
   trend?: Array<{ periodStart?: string; value?: number }>;
 }
 
+interface IndicatorIntentData {
+  status?: string;
+  message?: string;
+  resultData?: IndicatorResultData | { data?: IndicatorResultData };
+}
+
 const loading = ref(false);
 const errorMessage = ref('');
 const currentValue = ref<string>('');
@@ -59,7 +65,7 @@ const queryIndicator = async () => {
   errorMessage.value = '';
   try {
     const sessionId = `indicator-card-${props.indicatorCode}-${Date.now()}`;
-    const resp: { data?: Record<string, unknown> } = await request.post(
+    const resp: { data?: IndicatorIntentData } = await request.post(
       `/${props.factoryId}/ai-intents/execute`,
       {
         userInput: `查询指标 ${props.indicatorCode}`,
@@ -70,13 +76,16 @@ const queryIndicator = async () => {
       },
     );
     // request wrapper unwraps { code, data: { ... } } — resp.data IS the inner data
-    const data = (resp.data || resp) as Record<string, unknown>;
+    const data = (resp.data || resp) as IndicatorIntentData;
     if (data.status !== 'SUCCESS') {
       currentValue.value = '暂无数据';
       message.value = data.message || '';
       return;
     }
-    const result: IndicatorResultData = (data.resultData?.data || data.resultData || {}) as IndicatorResultData;
+    const rawResult = data.resultData;
+    const result: IndicatorResultData = rawResult && typeof rawResult === 'object' && 'data' in rawResult
+      ? (rawResult as { data?: IndicatorResultData }).data ?? {}
+      : (rawResult as IndicatorResultData | undefined) ?? {};
     if (result.currentValue !== null && result.currentValue !== undefined) {
       const numVal = typeof result.currentValue === 'number'
         ? result.currentValue

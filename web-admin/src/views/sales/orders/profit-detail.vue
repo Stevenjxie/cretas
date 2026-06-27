@@ -164,8 +164,8 @@ async function loadProfitDetail() {
 async function loadOrderNumber() {
   if (!factoryId.value || !orderId.value) return;
   try {
-    const data = await get<{ orderNumber?: string }>(`/${factoryId.value}/sales/orders/${orderId.value}`);
-    orderNumber.value = data?.orderNumber ?? null;
+    const resp = await get<{ orderNumber?: string }>(`/${factoryId.value}/sales/orders/${orderId.value}`);
+    orderNumber.value = resp.data?.orderNumber ?? null;
   } catch {
     // 非关键路径 — 主表格已能渲染. 静默失败.
   }

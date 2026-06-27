@@ -145,7 +145,7 @@ async function loadHistory() {
       bomVersionApi.getHistory(factoryId.value, inputBomRecipeId.value),
       bomVersionApi
         .getCurrent(factoryId.value, inputBomRecipeId.value)
-        .catch(() => ({ success: false, data: null })),
+        .catch(() => ({ success: false, data: null as BomVersion | null })),
     ]);
     if (hist.success) versions.value = hist.data ?? [];
     currentVersion.value = cur.success ? (cur.data as BomVersion) : null;

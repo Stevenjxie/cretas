@@ -486,11 +486,7 @@ function showStickyError(message: string) {
     (options: { message: string; type: 'error' | 'warning'; duration: number; showClose: boolean }): void;
     error?: (message: string) => void;
   };
-  if (typeof messenger === 'function') {
-    messenger({ message, type: 'error', duration: 0, showClose: true });
-  } else {
-    messenger.error?.(message);
-  }
+  messenger({ message, type: 'error', duration: 0, showClose: true });
 }
 
 function showStickyWarning(message: string) {
@@ -498,11 +494,7 @@ function showStickyWarning(message: string) {
     (options: { message: string; type: 'error' | 'warning'; duration: number; showClose: boolean }): void;
     warning?: (message: string) => void;
   };
-  if (typeof messenger === 'function') {
-    messenger({ message, type: 'warning', duration: 0, showClose: true });
-  } else {
-    messenger.warning?.(message);
-  }
+  messenger({ message, type: 'warning', duration: 0, showClose: true });
 }
 </script>
 

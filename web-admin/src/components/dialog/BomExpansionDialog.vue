@@ -62,7 +62,7 @@ const props = withDefaults(
   {
     title: 'BOM 展开新建',
     entityLabel: '单据',
-    childrenFactory: () => [],
+    childrenFactory: () => [] as C[],
     maxChildren: 100,
   }
 );
@@ -72,8 +72,8 @@ const emit = defineEmits<{
   (e: 'submitted', parent: P, children: C[]): void;
 }>();
 
-const parent = ref<P>(props.parentFactory() as unknown as P);
-const children = ref<C[]>([]);
+const parent = ref<Record<string, any>>(props.parentFactory() as Record<string, any>);
+const children = ref<Record<string, any>[]>([]);
 const selectedTemplateId = ref<string>('');
 const expanding = ref(false);
 const submitting = ref(false);
@@ -88,8 +88,8 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      parent.value = props.parentFactory() as unknown as P;
-      children.value = (props.childrenFactory?.() || []) as C[];
+      parent.value = props.parentFactory() as Record<string, any>;
+      children.value = (props.childrenFactory?.() || []) as Record<string, any>[];
       selectedTemplateId.value = '';
     }
   },
@@ -103,7 +103,7 @@ async function onTemplateChange(templateId: string): Promise<void> {
   }
   expanding.value = true;
   try {
-    const expanded = await props.expandTemplate(templateId, parent.value);
+    const expanded = await props.expandTemplate(templateId, parent.value as P);
     if (!Array.isArray(expanded) || expanded.length === 0) {
       ElMessage.warning('该模板暂未配置 BOM 明细');
       children.value = [];
@@ -111,9 +111,9 @@ async function onTemplateChange(templateId: string): Promise<void> {
     }
     if (expanded.length > props.maxChildren) {
       ElMessage.warning(`模板含 ${expanded.length} 项明细，超过上限 ${props.maxChildren}，已截取前 ${props.maxChildren} 项`);
-      children.value = expanded.slice(0, props.maxChildren) as C[];
+      children.value = expanded.slice(0, props.maxChildren) as Record<string, any>[];
     } else {
-      children.value = expanded as C[];
+      children.value = expanded as Record<string, any>[];
     }
     ElMessage.success(`已展开 ${children.value.length} 项明细`);
   } catch (e: unknown) {
@@ -151,8 +151,8 @@ async function handleSubmit(): Promise<void> {
   }
   submitting.value = true;
   try {
-    await props.submit(parent.value, children.value);
-    emit('submitted', parent.value, children.value);
+    await props.submit(parent.value as P, children.value as C[]);
+    emit('submitted', parent.value as P, children.value as C[]);
     emit('update:modelValue', false);
     ElMessage.success(`成功创建 ${props.entityLabel}（含 ${children.value.length} 项明细）`);
   } catch (e: unknown) {

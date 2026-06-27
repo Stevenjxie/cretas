@@ -7,13 +7,13 @@
  *
  * 与 smartBIRedirects (smartbi.ts) 的 `(to) => ({path, query})` 同模式。
  */
-import type { LocationQuery } from 'vue-router';
+import type { LocationQuery, LocationQueryRaw } from 'vue-router';
 
 export const ANALYSIS_HUB_PATH = '/smart-bi/analysis-hub';
 
 export interface RedirectTarget {
   path: string;
-  query: Record<string, unknown>;
+  query: LocationQueryRaw;
 }
 
 /**
@@ -25,7 +25,7 @@ export function buildHubRedirect(
   tab?: string | null,
   sub?: string | null,
 ): RedirectTarget {
-  const query: Record<string, unknown> = { ...to.query };
+  const query: LocationQueryRaw = { ...to.query };
   if (tab) query.tab = tab;
   if (sub) query.sub = sub;
   return { path: ANALYSIS_HUB_PATH, query };

@@ -55,7 +55,7 @@
               <el-table-column prop="remark" label="说明" min-width="180" />
               <el-table-column label="送货照片" width="100">
                 <template #default="{ row: line }">
-                  <el-link v-if="line.photoOssUrl" :href="line.photoOssUrl" target="_blank" type="primary">查看</el-link>
+                  <el-link v-if="line.photoOssUrl" :href="line.photoOssUrl" target="_blank" type="primary" underline="hover">查看</el-link>
                   <span v-else>—</span>
                 </template>
               </el-table-column>

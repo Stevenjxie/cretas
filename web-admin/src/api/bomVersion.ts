@@ -57,6 +57,7 @@ export interface ApproveBomVersionRequest {
 export interface RejectBomVersionRequest {
   approverId: number;
   rejectionReason: string;
+  ecnReasonDetail?: string;
 }
 
 /** Sprint 6 W4-C — ECN reason 枚举 (mirror of Java EngineeringChangeNotice.EcnReason). */

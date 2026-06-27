@@ -5,7 +5,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
-import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { formatDateTime } from '@/utils/dateFormat';
 import type { TableRow } from '@/types/api';
 
 /**
@@ -133,7 +133,7 @@ function formatQuantity(row: TableRow): string {
         min-width="180"
       >
         <template #default="{ row }">
-          {{ formatDateTimeCell(row.lastUsedAt) }}
+          {{ formatDateTime(row.lastUsedAt) }}
         </template>
       </el-table-column>
     </el-table>

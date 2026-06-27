@@ -259,7 +259,7 @@ const kpiKind = ref<'revenue' | 'bill_count'>('revenue');
 const yearTargetValue = ref<number | null>(null);
 const monthlyTargets = ref<Record<string, number | null>>(
   Object.fromEntries(
-    Array.from({ length: 12 }, (_, i) => [
+    Array.from({ length: 12 }, (_, i): [string, number | null] => [
       `${new Date().getFullYear()}-${String(i + 1).padStart(2, '0')}`,
       null,
     ]),

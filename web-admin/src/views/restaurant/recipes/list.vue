@@ -262,7 +262,7 @@
           标记为"非菜品"(噪音) ({{ selectedUnmatched.length }})
         </el-button>
         <span style="font-size: 12px; color: #909399; flex: 1">
- 绑定完成后点 <el-link type="primary" href="/restaurant/analytics/gross-margin" :underline="false">毛利分析页 立即同步</el-link> 刷新覆盖率.
+ 绑定完成后点 <el-link type="primary" href="/restaurant/analytics/gross-margin" underline="never">毛利分析页 立即同步</el-link> 刷新覆盖率.
           "非菜品"的条目 (如 打包盒/餐具/广告词) 会从覆盖率分母中剔除.
         </span>
       </div>
@@ -448,7 +448,7 @@
         >
           <template #title>
             部分食材未配单价，食材总成本不完整。
-            <el-link type="primary" href="/warehouse/material-types" :underline="false" style="vertical-align: baseline">
+            <el-link type="primary" href="/warehouse/material-types" underline="never" style="vertical-align: baseline">
               去原料管理补充单价
             </el-link>
           </template>
@@ -1340,7 +1340,7 @@ watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); } });
 </script>
 
 <style scoped lang="scss">
-@import '../restaurant-shared.scss';
+@use '../restaurant-shared.scss';
 
 .cost-card-header {
   .cc-title { font-size: 16px; font-weight: 600; }

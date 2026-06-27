@@ -81,6 +81,8 @@ async function handleAiFill(params: Record<string, unknown>) {
     plannedQuantity: Number(params.plannedQuantity || 0) || null,
     unit: String(params.unit || 'kg'),
     notes: String(params.notes || ''),
+    isTrial: false,
+    trialSampleId: '',
   };
 
   if (!matched && productName) {

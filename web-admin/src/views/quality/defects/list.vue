@@ -245,7 +245,7 @@ onMounted(load);
     <el-table v-loading="loading" :data="rows" stripe empty-text="暂无不良记录" style="width: 100%">
       <el-table-column label="缺陷类型" min-width="120">
         <template #default="{ row }">
-          <el-tag>{{ DEFECT_TYPE_LABELS[row.defectType] || row.defectType }}</el-tag>
+          <el-tag>{{ DEFECT_TYPE_LABELS[String(row.defectType) as DefectType] || row.defectType }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="quantity" label="数量" min-width="100" align="right" />
@@ -256,7 +256,7 @@ onMounted(load);
       </el-table-column>
       <el-table-column label="状态" width="110" align="center">
         <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ DEFECT_STATUS_LABELS[row.status] || row.status }}</el-tag>
+          <el-tag :type="statusTagType(row.status)">{{ DEFECT_STATUS_LABELS[String(row.status) as DefectStatus] || row.status }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="登记时间" min-width="160" />

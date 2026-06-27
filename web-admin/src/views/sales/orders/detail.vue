@@ -1407,7 +1407,7 @@ async function handleQuickPayFull() {
                   <el-button v-if="row.status === 'REQUESTED' && canWrite" type="success" link size="small" @click="handleApproveInvoice(row.id)">通过</el-button>
                   <el-button v-if="row.status === 'REQUESTED' && canWrite" type="danger" link size="small" @click="handleRejectInvoice(row.id)">驳回</el-button>
                   <el-button v-if="row.status === 'APPROVED' && canWrite" type="primary" link size="small" @click="openIssueDialog(row.id)">上传发票</el-button>
-                  <el-link v-if="row.invoicePdfUrl" :href="row.invoicePdfUrl" target="_blank" type="primary" :download="row.invoiceFileName || ''">
+                  <el-link v-if="row.invoicePdfUrl" :href="row.invoicePdfUrl" target="_blank" type="primary" underline="hover" :download="row.invoiceFileName || ''">
                     下载{{ row.invoiceFileName ? ` (${row.invoiceFileName})` : '' }}
                   </el-link>
                 </template>

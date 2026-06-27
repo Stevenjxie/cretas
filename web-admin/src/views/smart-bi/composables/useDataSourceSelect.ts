@@ -32,8 +32,9 @@ export function isPartFile(d: Pick<UploadHistoryItem, 'fileName' | 'originalFile
 }
 
 /** 上传时间戳 (ms), 兼容多种字段命名; 缺失返回 0. */
-function ts(d: Record<string, unknown>): number {
-  const t = (d.createdAt || d.created_at || d.uploadTime || d.upload_time) as string | undefined;
+function ts(d: UploadHistoryItem): number {
+  const row = d as unknown as Record<string, unknown>;
+  const t = (row.createdAt || row.created_at || row.uploadTime || row.upload_time) as string | undefined;
   return t ? new Date(t).getTime() : 0;
 }
 

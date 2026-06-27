@@ -40,7 +40,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { testRule, RULE_TYPE_LABELS, type WorkflowRuleDTO } from '@/api/workflowRule'
-import type { ApiData } from '@/types/api'
+import type { ApiResponse } from '@/types/api'
 
 const props = defineProps<{
   visible: boolean
@@ -80,7 +80,7 @@ async function onTest() {
   }
   testing.value = true
   try {
-    const resp = (await testRule(props.factoryId, props.rule.id, ctx)) as unknown as ApiData<{
+    const resp = (await testRule(props.factoryId, props.rule.id, ctx)) as unknown as ApiResponse<{
       result: boolean
       expression: string
       ruleType: string

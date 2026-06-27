@@ -202,7 +202,7 @@ function onEdit(row: PurchaseOrderApprovalRule) {
 
 async function onSave() {
   if (!editingRule.value) return
-  await formRef.value?.validate().catch(() => null)
+  await formRef.value?.validate().catch((): null => null)
   try {
     if (editingRule.value.id) {
       // Update

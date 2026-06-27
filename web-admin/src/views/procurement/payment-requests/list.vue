@@ -366,7 +366,7 @@ const factoryId = computed(() => authStore.factoryId)
 const canWrite = computed(() => permStore.canWrite('procurement'))
 
 // 角色判断：财务审批和出纳付款需要特定角色
-const userRole = computed(() => authStore.role)
+const userRole = computed(() => authStore.currentRole)
 const isFinanceManager = computed(() =>
   ['factory_super_admin', 'platform_admin', 'finance_manager'].includes(userRole.value || '')
 )

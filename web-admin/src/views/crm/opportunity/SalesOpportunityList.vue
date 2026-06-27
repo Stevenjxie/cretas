@@ -65,7 +65,7 @@
       >
         <el-table-column prop="title" label="商机标题" min-width="220">
           <template #default="{ row }">
-            <el-link type="primary" @click="openEdit(row)">{{ row.title }}</el-link>
+            <el-link type="primary" underline="hover" @click="openEdit(row)">{{ row.title }}</el-link>
           </template>
         </el-table-column>
         <el-table-column label="客户" width="180">

@@ -80,8 +80,9 @@ export function attachMetaToCharts(
   charts: Array<{ chartType: string; title: string; xField?: string; meta?: ChartMeta | null }>,
   plans: Array<{ xField?: string; yFields?: string[]; chartType?: string; title?: string }>,
   monthlyColumns: string[],
-  dataInfo: string,
+  dataInfo: unknown,
 ): void {
+  const dataInfoText = typeof dataInfo === 'string' ? dataInfo : JSON.stringify(dataInfo ?? '');
   // Build lookup maps for efficient matching
   const planByTitle = new Map<string, typeof plans[number]>();
   const planByXField = new Map<string, typeof plans[number]>();
@@ -98,7 +99,7 @@ export function attachMetaToCharts(
       // Minimal synthetic plan from the chart itself (retry-replaced charts)
       { xField: chart.xField, yFields: [], chartType: chart.chartType, title: chart.title };
 
-    chart.meta = deriveChartMeta(plan, monthlyColumns, dataInfo);
+    chart.meta = deriveChartMeta(plan, monthlyColumns, dataInfoText);
   }
 }
 
@@ -1079,6 +1080,7 @@ import {
   formatMonthLabel,
   extractTextContext,
   detectAndPrefixSubTables,
+  renameMeaninglessColumns,
 } from './data-utils';
 
 // ==================== Chart Plan Builder ====================
@@ -1515,7 +1517,6 @@ async function _doEnrichSheetAnalysis(
 
     // 2. Clean column names
     t0 = performance.now();
-    const { renameMeaninglessColumns } = await import('./data-utils');
     const renamedData = renameMeaninglessColumns(rawData);
     tick('rename', t0);
 

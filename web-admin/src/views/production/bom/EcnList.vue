@@ -213,9 +213,9 @@ async function reject() {
     {
       confirmButtonText: '拒绝',
       cancelButtonText: '取消',
-      inputValidator: (v) => (v && v.trim().length > 0) || '原因不能为空',
+      inputValidator: (v: string): boolean | string => (v && v.trim().length > 0) || '原因不能为空',
     },
-  ).catch(() => null);
+  ).catch((): null => null);
   if (!reason) return;
   try {
     const r = await ecnApi.reject(

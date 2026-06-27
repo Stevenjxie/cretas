@@ -98,8 +98,8 @@ async function send() {
       role: 'assistant',
       content: data.reply,
       timestamp: Date.now(),
-      diffPreview: data.diffs?.map((d: any) => ({
-        type: d.type, path: d.tool, before: null, after: d.params,
+      diffPreview: data.diffs?.map((d: any): ConfigDiff => ({
+        type: d.type as ConfigDiff['type'], path: String(d.tool ?? ''), before: null, after: d.params,
         description: d.description,
       })),
     })

@@ -213,7 +213,7 @@ async function submitBomSalesOrder(parent: BomSalesOrderParent, children: BomSal
     remark: parent.remark || '',
     shippingIncluded: false,
     shippingFee: 0,
-    extraFees: [],
+    extraFees: [] as unknown[],
     items: children.map((c) => ({
       productId: c.productId,
       productName: c.productName,
@@ -297,8 +297,8 @@ async function submitBatchOrders(orders: Array<{ customerId: string; salesperson
       remark: order.remark || '',
       shippingIncluded: false,
       shippingFee: 0,
-      extraFees: [],
-      items: [],
+      extraFees: [] as unknown[],
+      items: [] as unknown[],
       customFields: {},
     };
     const res = await post(`/${factoryId.value}/sales/orders`, payload);
@@ -1039,7 +1039,7 @@ async function handleCreate() {
     // caller handles it — but this catch was empty. Now: surface message + reload list
     // so user knows what's happening.
     // Per fool-proof-design.md Rule 4 (写操作幂等防重复) + 4 位一体 (d): 必含 next action.
-    const err = e as { status?: number; message?: string; response?: { data?: { message?: string; actionHint?: string } } };
+    const err = e as { status?: number; message?: string; response?: { status?: number; data?: { message?: string; actionHint?: string } } };
     const status = err.status || err.response?.status;
     if (status === 409) {
       const msg = err.message || err.response?.data?.message || '同客户/同日期/同明细已有订单 (5 分钟防重) — 请刷新列表查看, 或修改任意字段重试';

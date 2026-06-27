@@ -511,5 +511,5 @@ watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); loadOperato
 </script>
 
 <style scoped lang="scss">
-@import '../restaurant-shared.scss';
+@use '../restaurant-shared.scss';
 </style>

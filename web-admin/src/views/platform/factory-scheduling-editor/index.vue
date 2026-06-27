@@ -88,7 +88,7 @@
               <el-switch
                 v-if="isBooleanField(field)"
                 :model-value="getValue(field) as boolean"
-                @update:model-value="(v) => setValue(field, v)"
+                @update:model-value="(v: boolean) => setValue(field, v)"
               />
               <!-- Weight fields → slider 0-1 -->
               <div v-else-if="isWeightField(field as keyof FactorySchedulingConfig)" class="weight-input">

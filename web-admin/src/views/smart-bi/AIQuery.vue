@@ -2152,7 +2152,7 @@ function handleKeydown(event: KeyboardEvent) {
                 >
                   <el-link
                     type="info"
-                    :underline="false"
+                    underline="never"
                     class="depth-toggle"
                     @click="message.depthExpanded = !message.depthExpanded"
                   >

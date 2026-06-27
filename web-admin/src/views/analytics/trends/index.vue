@@ -753,9 +753,9 @@ onUnmounted(() => {
     >
       <template #title>
         暂无生产数据 — 本页展示「生产批次」汇总的产量/良品率/成本趋势。请在
-        <el-link type="primary" href="/production/batches" :underline="false">生产管理 → 批次</el-link>
+        <el-link type="primary" href="/production/batches" underline="never">生产管理 → 批次</el-link>
         录入批次后自动生成。若需查看「POS/销售数据」趋势（如营业额、订单量），请前往
-        <el-link type="primary" href="/smart-bi/query" :underline="false">智能BI → AI 问答</el-link>
+        <el-link type="primary" href="/smart-bi/query" underline="never">智能BI → AI 问答</el-link>
         询问「近 N 天营业额趋势」。
       </template>
     </el-alert>
@@ -809,7 +809,7 @@ onUnmounted(() => {
             <p style="margin: 0 0 8px;">暂无 POS 营收趋势数据</p>
             <p style="margin: 0; color: #909399; font-size: 13px;">
               请在
-              <el-link type="primary" href="/smart-bi/upload" :underline="false">智能BI → 上传</el-link>
+              <el-link type="primary" href="/smart-bi/upload" underline="never">智能BI → 上传</el-link>
               导入门店流水(POS/销售)数据后,本页自动生成营收趋势。
             </p>
           </template>

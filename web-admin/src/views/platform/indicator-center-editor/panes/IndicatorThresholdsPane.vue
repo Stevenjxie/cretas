@@ -20,13 +20,13 @@
         <el-table-column label="级别" width="120">
           <template #default="{ row }">
             <el-tag :type="levelTagType(row.alertLevel)" effect="dark">
-              {{ ALERT_LEVEL_LABELS[row.alertLevel] }}
+              {{ ALERT_LEVEL_LABELS[String(row.alertLevel) as AlertLevel] }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="比较" width="80">
           <template #default="{ row }">
-            <code>{{ THRESHOLD_OPERATOR_LABELS[row.operator] }}</code>
+            <code>{{ THRESHOLD_OPERATOR_LABELS[String(row.operator) as ThresholdOperator] }}</code>
           </template>
         </el-table-column>
         <el-table-column label="阈值" min-width="120">
@@ -72,6 +72,7 @@ import {
   type IndicatorDetail,
   type IndicatorThreshold,
   type AlertLevel,
+  type ThresholdOperator,
   ALERT_LEVEL_LABELS,
   THRESHOLD_OPERATOR_LABELS,
 } from '@/api/canvasIndicators'

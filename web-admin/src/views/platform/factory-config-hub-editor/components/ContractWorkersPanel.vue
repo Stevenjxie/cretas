@@ -141,7 +141,7 @@ async function onConvert(row: TempWorker) {
     `确认将员工 ${row.workerId} 转为正式工?`,
     '转正确认',
     { type: 'warning' },
-  ).catch(() => null).then(async confirmed => {
+  ).catch((): null => null).then(async (confirmed: unknown): Promise<void> => {
     if (!confirmed) return
     if (!row.id) return
     try {

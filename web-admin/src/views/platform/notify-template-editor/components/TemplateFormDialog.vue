@@ -119,7 +119,7 @@
         <div class="preview-label">发送结果:</div>
         <el-table :data="lastTestSendResults" size="small" stripe>
           <el-table-column prop="channel" label="渠道" width="140">
-            <template #default="{ row }">{{ NotifyChannelLabels[row.channel] || row.channel }}</template>
+            <template #default="{ row }">{{ NotifyChannelLabels[String(row.channel) as NotifyChannel] || row.channel }}</template>
           </el-table-column>
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">

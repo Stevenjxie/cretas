@@ -100,6 +100,13 @@ export type PrintElement =
   | TextElement | FieldElement | TableElement | QrElement
   | BarcodeElement | ImageElement | StampElement;
 
+export type PrintElementDraft =
+  PrintElement extends infer E
+    ? E extends PrintElement
+      ? Omit<E, 'id'>
+      : never
+    : never;
+
 export type Orientation = 'portrait' | 'landscape';
 
 export interface PrintCanvas {

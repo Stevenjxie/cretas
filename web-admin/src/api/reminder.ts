@@ -4,6 +4,7 @@
  * 对应后端 ReminderController. Base: /api/mobile/{factoryId}/reminders.
  */
 import request from './request';
+import type { ApiResponse } from '@/types/api';
 
 export type ReminderType = 'PAYMENT_DUE';
 
@@ -52,7 +53,7 @@ export function listReminders(params: {
   page?: number;
   size?: number;
   factoryId?: string;
-}): Promise<{ success: boolean; data: ReminderPage }> {
+}): Promise<ApiResponse<ReminderPage>> {
   const q = new URLSearchParams();
   if (params.status) q.set('status', params.status);
   q.set('page', String(params.page ?? 0));

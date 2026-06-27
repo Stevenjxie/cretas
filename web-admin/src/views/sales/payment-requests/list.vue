@@ -423,7 +423,7 @@ const factoryId = computed(() => authStore.factoryId)
 // 销售付款由 sales:read_write 发起
 const canSalesWrite = computed(() => permStore.canWrite('sales'))
 
-const userRole = computed(() => authStore.role)
+const userRole = computed(() => authStore.currentRole)
 const isFinanceManager = computed(() =>
   ['factory_super_admin', 'platform_admin', 'finance_manager'].includes(userRole.value || '')
 )

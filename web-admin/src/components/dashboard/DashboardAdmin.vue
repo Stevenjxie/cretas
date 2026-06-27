@@ -369,7 +369,7 @@ function navigateTo(route: string) {
 </template>
 
 <style lang="scss" scoped>
-@import './dashboard-shared.scss';
+@use './dashboard-shared.scss';
 
 .dashboard-admin {
   min-height: calc(100vh - 144px);

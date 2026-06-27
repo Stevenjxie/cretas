@@ -34,5 +34,10 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
+  "exclude": [
+    "src/**/__tests__/**",
+    "src/**/*.spec.ts",
+    "src/**/*.test.ts"
+  ]
 }

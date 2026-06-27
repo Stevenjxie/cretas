@@ -2276,7 +2276,7 @@ onBeforeUnmount(() => {
 
         <!-- No data -->
         <template v-else>
-          <SmartBIEmptyState message="该图表暂无数据，请检查数据源" />
+          <SmartBIEmptyState type="no-data" message="该图表暂无数据，请检查数据源" />
         </template>
       </main>
     </div>

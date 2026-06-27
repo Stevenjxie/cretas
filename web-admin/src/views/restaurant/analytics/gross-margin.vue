@@ -259,7 +259,7 @@ function marginRateTag(rate: number) {
           </div>
         </div>
         <div v-if="totals.coverageRev < coverageTarget" class="coverage-hint">
- 按 POS 营收从高到低录配方, 建议优先录营收 top {{ suggestedTopN }} 的未录菜品, 即可达 {{ (coverageTarget * 100).toFixed(0) }}% 目标. <el-link type="primary" :underline="false" href="/restaurant/recipes">去配方管理</el-link>
+ 按 POS 营收从高到低录配方, 建议优先录营收 top {{ suggestedTopN }} 的未录菜品, 即可达 {{ (coverageTarget * 100).toFixed(0) }}% 目标. <el-link type="primary" underline="never" href="/restaurant/recipes">去配方管理</el-link>
         </div>
       </el-card>
 

@@ -110,6 +110,15 @@ export interface ProcessSheetRowResult {
  * getInventory (per-process) 只填基础 6 字段; getInventoryYieldCard (plan-wide)
  * 额外填充双出成率扩展字段 (processOrder / processName / unit / stepYieldRate / cumulativeYieldRate).
  */
+export interface ProcessSheetInventorySourceBreakdown {
+  sourceBatchNumber?: string | null;
+  feedQuantity?: number | null;
+  sourceProducedQuantity?: number | null;
+  sourceConsumedRatio?: number | null;
+  inheritedRawEquivalentQuantity?: number | null;
+  inheritedCost?: number | null;
+}
+
 export interface ProcessSheetInventoryItem {
   batchNumber: string;
   produced: number;
@@ -118,6 +127,15 @@ export interface ProcessSheetInventoryItem {
   status: 'ACTIVE' | 'DEPLETED' | 'COMPLETED';
   unitPrice?: number | null;
   rowTotalCost?: number | null;
+  inputQuantity?: number | null;
+  sourceBatchNumber?: string | null;
+  feedQuantity?: number | null;
+  sourceProducedQuantity?: number | null;
+  sourceConsumedRatio?: number | null;
+  inheritedRawEquivalentQuantity?: number | null;
+  inheritedCost?: number | null;
+  addedCost?: number | null;
+  sourceBreakdowns?: ProcessSheetInventorySourceBreakdown[] | null;
   // F006 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null)
   /** 链内工序序号 */
   processOrder?: number | null;

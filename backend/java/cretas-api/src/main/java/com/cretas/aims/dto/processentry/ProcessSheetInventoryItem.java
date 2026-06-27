@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * SP-F Task 2.1 / F006 双出成率: 逐工序电子表格 WIP 在制品库存视图 (单行, 对应一道工序的一个批次)。
@@ -43,6 +44,24 @@ public class ProcessSheetInventoryItem {
 
     private BigDecimal rowTotalCost;
 
+    private BigDecimal inputQuantity;
+
+    private String sourceBatchNumber;
+
+    private BigDecimal feedQuantity;
+
+    private BigDecimal sourceProducedQuantity;
+
+    private BigDecimal sourceConsumedRatio;
+
+    private BigDecimal inheritedRawEquivalentQuantity;
+
+    private BigDecimal inheritedCost;
+
+    private BigDecimal addedCost;
+
+    private List<SourceBreakdown> sourceBreakdowns;
+
     // ── 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null) ──
 
     /** 链内工序序 (SemiFinishedInventory.processOrder) */
@@ -65,4 +84,17 @@ public class ProcessSheetInventoryItem {
      * null 条件: 跨单位且无 standardGramsPerUnit 折算系数 / 首道投入 &le; 0.
      */
     private BigDecimal cumulativeYieldRate;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SourceBreakdown {
+        private String sourceBatchNumber;
+        private BigDecimal feedQuantity;
+        private BigDecimal sourceProducedQuantity;
+        private BigDecimal sourceConsumedRatio;
+        private BigDecimal inheritedRawEquivalentQuantity;
+        private BigDecimal inheritedCost;
+    }
 }

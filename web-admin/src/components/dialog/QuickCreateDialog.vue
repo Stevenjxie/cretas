@@ -53,7 +53,7 @@ const emit = defineEmits<{
   (e: 'submitted', row: T, total: number): void;
 }>();
 
-const formData = ref<T>(props.rowFactory() as unknown as T);
+const formData = ref<Record<string, any>>(props.rowFactory() as Record<string, any>);
 const submitting = ref(false);
 const sessionCount = ref(0);
 const firstInputRef = ref<HTMLInputElement | null>(null);
@@ -62,7 +62,7 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      formData.value = props.rowFactory() as unknown as T;
+      formData.value = props.rowFactory() as Record<string, any>;
       sessionCount.value = 0;
       void nextTick(() => {
         firstInputRef.value?.focus?.();
@@ -77,7 +77,7 @@ const canSubmit = computed(() => {
   if (remainingSlots.value <= 0) return false;
   return props.fields.every((f) => {
     if (!f.required) return true;
-    const v = formData.value[f.prop];
+    const v = formData.value[String(f.prop)];
     return v !== undefined && v !== null && v !== '';
   });
 });
@@ -86,11 +86,11 @@ async function handleSubmit(): Promise<void> {
   if (!canSubmit.value || submitting.value) return;
   submitting.value = true;
   try {
-    await props.submit(formData.value);
+    await props.submit(formData.value as T);
     sessionCount.value += 1;
-    emit('submitted', formData.value, sessionCount.value);
+    emit('submitted', formData.value as T, sessionCount.value);
     ElMessage.success(`已创建第 ${sessionCount.value} 条，继续录入或点击完成关闭`);
-    formData.value = props.rowFactory() as unknown as T;
+    formData.value = props.rowFactory() as Record<string, any>;
     await nextTick();
     firstInputRef.value?.focus?.();
   } catch (e: unknown) {
@@ -157,7 +157,7 @@ function onEnterSubmit(e: KeyboardEvent): void {
         <el-input
           v-else
           :ref="(el: unknown) => { if (idx === 0) firstInputRef = el as HTMLInputElement; }"
-          v-model="formData[field.prop]"
+          v-model="formData[String(field.prop)]"
           :placeholder="field.placeholder || `请输入${field.label}`"
           clearable
         />

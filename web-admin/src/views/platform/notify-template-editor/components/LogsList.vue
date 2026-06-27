@@ -58,7 +58,7 @@
       <el-table-column prop="recipientUserId" label="收件用户 ID" min-width="120" />
       <el-table-column label="渠道" min-width="120">
         <template #default="{ row }">
-          <el-tag size="small">{{ NotifyChannelLabels[row.channel] || row.channel }}</el-tag>
+          <el-tag size="small">{{ NotifyChannelLabels[String(row.channel) as NotifyChannel] || row.channel }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="状态" min-width="100">

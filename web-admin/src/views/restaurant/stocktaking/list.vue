@@ -428,5 +428,5 @@ watch(factoryId, (val) => { if (val) { loadData(); loadStatistics(); } });
 </script>
 
 <style scoped lang="scss">
-@import '../restaurant-shared.scss';
+@use '../restaurant-shared.scss';
 </style>

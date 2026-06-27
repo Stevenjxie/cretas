@@ -40,7 +40,7 @@ const returnDialogItems = computed(() => {
       id: String(row.id),
       // Shipment doesn't carry productTypeId in the list response; we send
       // null + itemName so backend records the return line by name.
-      materialTypeId: null,
+      materialTypeId: null as string | null,
       productTypeId: row.productTypeId ? String(row.productTypeId) : null,
       itemName: String(row.productName || '-'),
       unitPrice: Number(row.unitPrice) || 0,

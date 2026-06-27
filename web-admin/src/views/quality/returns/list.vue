@@ -238,7 +238,7 @@ onMounted(load);
       <el-table-column label="退回类型" min-width="130">
         <template #default="{ row }">
           <el-tag :type="row.targetType === 'SUPPLIER' ? '' : 'warning'">
-            {{ RETURN_TARGET_LABELS[row.targetType] }}
+            {{ RETURN_TARGET_LABELS[String(row.targetType) as QualityReturnTargetType] }}
           </el-tag>
         </template>
       </el-table-column>
@@ -250,7 +250,7 @@ onMounted(load);
       <el-table-column prop="reason" label="原因" min-width="160" show-overflow-tooltip />
       <el-table-column label="状态" width="110" align="center">
         <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ RETURN_STATUS_LABELS[row.status] || row.status }}</el-tag>
+          <el-tag :type="statusTagType(row.status)">{{ RETURN_STATUS_LABELS[String(row.status) as QualityReturnStatus] || row.status }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="shippingTrackingNo" label="物流单号" min-width="140">

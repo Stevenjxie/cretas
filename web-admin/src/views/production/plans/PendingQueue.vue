@@ -262,7 +262,7 @@ function goToPlanList() {
       border
       style="width: 100%"
       :row-class-name="
-        ({ row }) => {
+        ({ row }: { row: { plannedDate?: string } }) => {
           const u = getDateUrgency(row.plannedDate);
           if (u === 'overdue') return 'row-overdue';
           if (u === 'urgent') return 'row-urgent';

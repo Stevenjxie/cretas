@@ -72,7 +72,7 @@ function onPassChange(v: number | null | undefined) {
   } else if (sample == null && fail != null) {
     dialogForm.value.sampleSize = pass + Number(fail);
   } else if (sample != null && fail != null) {
-    if (lastEdited.value !== 'sample') {
+    if ((lastEdited.value as 'sample' | 'pass' | 'fail' | null) !== 'sample') {
       dialogForm.value.sampleSize = pass + Number(fail);
     }
   }
@@ -89,7 +89,7 @@ function onFailChange(v: number | null | undefined) {
   } else if (sample == null && pass != null) {
     dialogForm.value.sampleSize = Number(pass) + fail;
   } else if (sample != null && pass != null) {
-    if (lastEdited.value !== 'sample') {
+    if ((lastEdited.value as 'sample' | 'pass' | 'fail' | null) !== 'sample') {
       dialogForm.value.sampleSize = Number(pass) + fail;
     }
   }

@@ -65,7 +65,7 @@ import {
   type WorkflowRuleExpression,
 } from '@/api/workflowRule'
 import type { ApprovalWorkflowNode } from '@/api/approvalWorkflow'
-import type { ApiData } from '@/types/api'
+import type { ApiResponse } from '@/types/api'
 import RuleEditor from './RuleEditor.vue'
 import RuleTestModal from './RuleTestModal.vue'
 
@@ -101,7 +101,7 @@ async function loadRules() {
       props.factoryId,
       props.workflowId,
       props.nodeId,
-    )) as unknown as ApiData<WorkflowRuleDTO[]>
+    )) as unknown as ApiResponse<WorkflowRuleDTO[]>
     if (resp.success && resp.data) {
       rules.value = resp.data
     }
@@ -178,7 +178,7 @@ async function saveAll() {
         description: r.description,
       }
       if (r.id.startsWith('pending-')) {
-        const resp = (await createRule(props.factoryId, payload)) as unknown as ApiData<WorkflowRuleDTO>
+        const resp = (await createRule(props.factoryId, payload)) as unknown as ApiResponse<WorkflowRuleDTO>
         if (resp.success && resp.data) {
           r.id = resp.data.id
         }

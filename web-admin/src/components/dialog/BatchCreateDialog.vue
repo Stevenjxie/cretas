@@ -44,14 +44,14 @@ const emit = defineEmits<{
   (e: 'submitted', rows: T[]): void;
 }>();
 
-const rows = ref<T[]>([]);
+const rows = ref<Record<string, any>[]>([]);
 const submitting = ref(false);
 
 watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      rows.value = Array.from({ length: props.initialRows }, () => props.rowFactory());
+      rows.value = Array.from({ length: props.initialRows }, () => props.rowFactory() as Record<string, any>);
     }
   },
   { immediate: true }
@@ -69,7 +69,10 @@ function removeRow(idx: number): void {
 
 async function handleSubmit(): Promise<void> {
   const validRows = rows.value.filter((r) =>
-    props.columns.some((c) => c.required ? r[c.prop] != null && r[c.prop] !== '' : true)
+    props.columns.some((c) => {
+      const key = String(c.prop);
+      return c.required ? r[key] != null && r[key] !== '' : true;
+    })
   );
   if (!validRows.length) {
     ElMessage.warning('请至少填写一行');
@@ -119,7 +122,7 @@ function close(): void {
             :row="row"
             :index="$index"
           />
-          <el-input v-else v-model="row[col.prop]" size="small" />
+          <el-input v-else v-model="row[String(col.prop)]" size="small" />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="80" fixed="right">

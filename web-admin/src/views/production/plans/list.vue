@@ -1983,11 +1983,13 @@ function handleAiFill(params: TableRow) {
     sourceCustomerName: String(params.sourceCustomerName || ''),
     processName: String(params.processName || ''),
     batchDate: String(params.batchDate || today),
-    sourceType: 'MANUAL',
+    sourceType: 'MANUAL' as 'MANUAL' | 'CUSTOMER_ORDER' | 'AI_FORECAST' | 'SAFETY_STOCK',
     sourceOrderId: '',
     sourceOrderItemId: '',
-    extraSourceOrderIds: [],
+    sourceOrderItemIds: [] as string[],
+    extraSourceOrderIds: [] as string[],
     customFields: {} as TableRow,
+    skipProcessReporting: true as boolean | null,
   };
   dialogVisible.value = true;
 }
@@ -2572,12 +2574,6 @@ function handleAiFill(params: TableRow) {
               :value="item.id"
             />
           </el-select>
-          <div
-            v-if="planForm.sourceType === 'CUSTOMER_ORDER'"
-            style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
-          >
-            来源为销售订单时，产品类型由所选订单行自动确定，不可手动更改
-          </div>
         </el-form-item>
         <el-form-item label="客户名称">
           <el-input v-model="planForm.sourceCustomerName" placeholder="选择产品后自动填充，也可手动输入" />
@@ -2615,7 +2611,7 @@ function handleAiFill(params: TableRow) {
           <template v-else-if="productWorkProcessList.length === 0">
             <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
               该产品未配置工序，后端将自动走两点报工。如需逐道，请先到
-              <el-link type="primary" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工序配置</el-link>
+              <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工序配置</el-link>
               中配置工序。
             </span>
           </template>

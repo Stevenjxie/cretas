@@ -3,9 +3,10 @@
  * 统一处理请求拦截、响应拦截、错误处理
  * 注意：不在顶层导入 element-plus，避免循环依赖
  */
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
+import type { User } from '@/types/auth';
 
 // 动态导入 ElMessage，避免循环依赖
 // Apr 18 2026 UX 优化: error 类 toast 默认 3s 闪过对业务流程错误 (库存不足/并发冲突/
@@ -104,8 +105,35 @@ const showRichError = async (
   return showMessage(message, 'error');
 };
 
+type KeepResponseConfig<D = unknown> = AxiosRequestConfig<D> & { _keepResponse: true };
+type ResponseEnvelope = { success: boolean; data?: unknown; message?: string; code?: string | number };
+type RequestResult<T> = T extends ResponseEnvelope ? T : ApiResponse<T>;
+
+type UnwrappedAxiosInstance = Omit<AxiosInstance,
+  'request' | 'get' | 'delete' | 'head' | 'options' | 'post' | 'put' | 'patch'
+> & {
+  <T = ApiData, D = unknown>(config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  <T = ApiData, R = RequestResult<T>, D = unknown>(config: AxiosRequestConfig<D>): Promise<R>;
+  request<T = ApiData, D = unknown>(config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  request<T = ApiData, R = RequestResult<T>, D = unknown>(config: AxiosRequestConfig<D>): Promise<R>;
+  get<T = ApiData, D = unknown>(url: string, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  get<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
+  delete<T = ApiData, D = unknown>(url: string, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  delete<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
+  head<T = ApiData, D = unknown>(url: string, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  head<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
+  options<T = ApiData, D = unknown>(url: string, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  options<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
+  post<T = ApiData, D = unknown>(url: string, data: D | undefined, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  post<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R>;
+  put<T = ApiData, D = unknown>(url: string, data: D | undefined, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  put<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R>;
+  patch<T = ApiData, D = unknown>(url: string, data: D | undefined, config: KeepResponseConfig<D>): Promise<AxiosResponse<T>>;
+  patch<T = ApiData, R = RequestResult<T>, D = unknown>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R>;
+};
+
 // 创建 axios 实例
-const request: AxiosInstance = axios.create({
+const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/mobile',
   // P0-8 (Apr 20): 30s→120s default. Big-data analysis (12K+ rows enrich / LLM insights)
   // exceed 30s, cascading abort. Per-call 600s overrides stay for upload/confirm.
@@ -115,7 +143,7 @@ const request: AxiosInstance = axios.create({
     'Content-Type': 'application/json',
     'X-Client-Type': 'web' // Tells backend to use cookie-based auth
   }
-});
+}) as UnwrappedAxiosInstance;
 
 // 延迟获取 router（避免循环依赖）
 const getRouter = async () => {
@@ -429,7 +457,7 @@ request.interceptors.response.use(
       try {
         const { useAuthStore } = await import('@/store/modules/auth');
         const { canAccessModule } = await import('@/utils/permission');
-        const authUser = useAuthStore().user;
+        const authUser = useAuthStore().user as User | null;
         const canConfig = canAccessModule(authUser, 'warehouse');
         const { ElMessageBox } = await import('element-plus');
         if (canConfig) {

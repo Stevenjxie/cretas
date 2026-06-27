@@ -54,7 +54,7 @@ const router = useRouter();
  ️ 如果你想录入的是<strong>{{ other }}</strong>，请到
         <el-link
           type="primary"
-          :underline="false"
+          underline="never"
           style="font-weight: 600"
           @click="router.push(otherPath)"
         >{{ otherName }}</el-link>

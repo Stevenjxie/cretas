@@ -176,7 +176,7 @@
 
 <script setup lang="ts">
 import { markRaw, ref, computed, onMounted } from 'vue'
-import { VueFlow, type Connection, type Node, type Edge } from '@vue-flow/core'
+import { VueFlow, type Connection, type Node, type Edge, type NodeTypesObject } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { Download, Plus, Upload, View, VideoPlay } from '@element-plus/icons-vue'
@@ -331,7 +331,7 @@ const nodeTypes = {
   join: markRaw(JoinNode),
   notify: markRaw(NotifyNode),
   end: markRaw(EndNode),
-}
+} as unknown as NodeTypesObject
 
 /** Default config per node type — used when dragging from palette. */
 function defaultConfigFor(type: NodeType): Record<string, unknown> {
@@ -815,7 +815,7 @@ onMounted(async () => {
     // Sprint 6 W3-B: 并行触发 metadata + 旧 enum endpoint (旧 endpoint 仍 ping 一下保 backwards compat)
     await Promise.all([
       loadDecisionTypeMetadata(),
-      getDecisionTypes(factoryId.value).catch(() => undefined),
+      getDecisionTypes(factoryId.value).catch((): undefined => undefined),
     ])
     await refreshWorkflowList()
   } catch (e) {

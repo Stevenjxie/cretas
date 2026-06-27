@@ -9,7 +9,7 @@
  *
  * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
  */
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
 
 const props = defineProps<{
@@ -19,15 +19,25 @@ const props = defineProps<{
 
 const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
+const errorMessage = ref('');
 let refreshSeq = 0;
+
+const missingYieldCount = computed(() =>
+  rows.value.filter((row) => row.cumulativeYieldRate == null).length,
+);
+
+const missingCostCount = computed(() =>
+  rows.value.filter((row) => row.rowTotalCost == null || row.unitPrice == null).length,
+);
 
 function fmtRate(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toFixed(2) + '%';
 }
 
-function fmtQty(v: number | null | undefined): string {
+function fmtQty(v: number | null | undefined, digits?: number): string {
   if (v == null) return '—';
+  if (digits != null) return Number(v).toFixed(digits);
   return String(v);
 }
 
@@ -52,6 +62,7 @@ async function refresh() {
   if (!props.factoryId || !props.planId) return;
   const seq = ++refreshSeq;
   loading.value = true;
+  errorMessage.value = '';
   try {
     const resp = await getInventoryYieldCard(props.factoryId, props.planId);
     if (seq !== refreshSeq) return;
@@ -59,6 +70,7 @@ async function refresh() {
   } catch {
     if (seq !== refreshSeq) return;
     rows.value = [];
+    errorMessage.value = '出成率数据加载失败，请刷新重试。';
   } finally {
     if (seq === refreshSeq) loading.value = false;
   }
@@ -73,21 +85,87 @@ defineExpose({ refresh });
 </script>
 
 <template>
+  <el-alert
+    v-if="errorMessage"
+    type="error"
+    show-icon
+    :closable="false"
+    class="yield-card-error"
+  >
+    <template #title>
+      出成率数据加载失败
+    </template>
+    <template #default>
+      <span>{{ errorMessage }}</span>
+      <el-button link type="primary" size="small" @click="refresh">刷新重试</el-button>
+    </template>
+  </el-alert>
+  <div v-if="missingYieldCount > 0 || missingCostCount > 0" class="yield-card-warnings">
+    <el-alert
+      v-if="missingYieldCount > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="yield-card-warning"
+    >
+      <template #title>
+        有 {{ missingYieldCount }} 行累计出成率未显示
+      </template>
+      <template #default>
+        检查来源批次、原料投入或 SKU 标准克重配置；未确认来源时系统不会硬算百分比。
+      </template>
+    </el-alert>
+    <el-alert
+      v-if="missingCostCount > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="yield-card-warning"
+    >
+      <template #title>
+        有 {{ missingCostCount }} 行成本未显示
+      </template>
+      <template #default>
+        检查来源半成品单价、工序成本或成品成本结算数据。
+      </template>
+    </el-alert>
+  </div>
   <el-table
     :data="rows"
     v-loading="loading"
     size="small"
     border
+    empty-text="暂无半成品库存记录"
     style="width: 100%"
     :row-class-name="() => ''"
   >
     <el-table-column prop="processOrder" label="序" width="48" align="center" />
-    <el-table-column prop="processName" label="工序" min-width="90">
+    <el-table-column prop="processName" label="工序" min-width="90" show-overflow-tooltip>
       <template #default="{ row }">
         {{ row.processName || '—' }}
       </template>
     </el-table-column>
-    <el-table-column prop="batchNumber" label="批次号" min-width="150" />
+    <el-table-column prop="batchNumber" label="批次号" min-width="150" show-overflow-tooltip />
+    <el-table-column label="来源批次" min-width="140" show-overflow-tooltip>
+      <template #default="{ row }">
+        {{ row.sourceBatchNumber || '—' }}
+      </template>
+    </el-table-column>
+    <el-table-column label="领用(kg)" width="92" align="right">
+      <template #default="{ row }">
+        {{ fmtQty(row.feedQuantity) }}
+      </template>
+    </el-table-column>
+    <el-table-column label="领用占比" width="92" align="right">
+      <template #default="{ row }">
+        {{ fmtRate(row.sourceConsumedRatio) }}
+      </template>
+    </el-table-column>
+    <el-table-column label="继承原料(kg)" width="116" align="right">
+      <template #default="{ row }">
+        {{ fmtQty(row.inheritedRawEquivalentQuantity, 2) }}
+      </template>
+    </el-table-column>
     <el-table-column label="产出" width="80" align="right">
       <template #default="{ row }">
         {{ fmtQty(row.produced) }}{{ row.unit ? ' ' + row.unit : '' }}
@@ -137,10 +215,31 @@ defineExpose({ refresh });
       </template>
     </el-table-column>
   </el-table>
-  <div
-    v-if="rows.length === 0 && !loading"
-    style="text-align: center; color: #909399; padding: 12px; font-size: 12px"
-  >
-    暂无半成品库存记录
+  <div v-if="rows.length === 0 && !loading && !errorMessage" class="yield-card-empty-hint">
+    暂无半成品库存；保存任一工序有效产出后会生成全工序出成率汇总。
   </div>
 </template>
+
+<style scoped>
+.yield-card-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.yield-card-error {
+  margin-bottom: 8px;
+}
+
+.yield-card-warning {
+  --el-alert-padding: 6px 10px;
+}
+
+.yield-card-empty-hint {
+  color: #909399;
+  font-size: 12px;
+  padding: 10px 0;
+  text-align: center;
+}
+</style>

@@ -315,7 +315,7 @@ async function handleTest(rule: WorkflowRule): Promise<void> {
         }
       },
     },
-  ).catch(() => null);
+  ).catch((): null => null);
 
   if (!mockContextStr) return;
   try {

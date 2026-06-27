@@ -222,7 +222,7 @@ function renderProductBar() {
       tooltip: {
         trigger: 'axis',
         confine: true,
-        formatter: (params: Array<{ name: string; value: number }>) => {
+        formatter: (params: Array<{ name: string; value: number; dataIndex?: number }>) => {
           const p = prods[params[0]?.dataIndex ?? 0];
           if (!p) return '';
           return `${p.productTypeId}<br/>

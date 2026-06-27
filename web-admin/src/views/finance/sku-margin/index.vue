@@ -444,9 +444,9 @@ const { insight: skuMarginInsight, loading: skuMarginInsightLoading } = useChart
           <div style="color: #606266; font-size: 13px; line-height: 1.6;">
             为避免误导,毛利率明细暂不展示估算数据。后端 SKU 毛利率聚合接口接入后将自动展示真实数据。
             如需手工查看, 请前往
-            <el-link type="primary" @click="$router.push('/finance/costs')">财务成本</el-link>
+            <el-link type="primary" underline="hover" @click="$router.push('/finance/costs')">财务成本</el-link>
             或
-            <el-link type="primary" @click="$router.push('/smart-bi/finance')">SmartBI 财务分析</el-link>。
+            <el-link type="primary" underline="hover" @click="$router.push('/smart-bi/finance')">SmartBI 财务分析</el-link>。
           </div>
         </template>
       </el-alert>

@@ -169,7 +169,7 @@ async function applyDiff(diff: CanvasDiff): Promise<void> {
 
   applying.value = true;
   try {
-    await aiApplyDiffs(props.factoryId, [diff]);
+    await aiApplyDiffs(props.factoryId, [diff as unknown as Record<string, unknown>]);
     ElMessage.success('工序变更已应用');
     emit('applied');
   } catch (e) {

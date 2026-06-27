@@ -44,6 +44,7 @@ export interface SupplierDeliveryNoteDto {
   status: 'DRAFT' | 'CONFIRMED' | 'REJECTED';
   postingStatus?: DeliveryPostingStatus | null;
   receiveRecordId?: string | null;
+  warehouseId?: string | null;
   postedAt?: string | null;
   postedBy?: string | null;
   postingError?: string | null;

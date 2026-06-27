@@ -4,6 +4,7 @@ import type {
   PrintTemplateSchema,
   ElementType,
   PrintEntityType,
+  PrintElementDraft,
 } from '../utils/printSchemaTypes'
 import { emptySchema } from '../utils/printSchemaTypes'
 import { generateElementId, clampToCanvas, snapToGrid } from '../utils/a4Coords'
@@ -46,7 +47,7 @@ export function usePrintEditor() {
     dirty.value = false
   }
 
-  function addElement(partial: Omit<PrintElement, 'id'>): PrintElement {
+  function addElement(partial: PrintElementDraft): PrintElement {
     const id = generateElementId()
     const el = { ...partial, id } as PrintElement
     schema.value.elements.push(el)
@@ -132,7 +133,7 @@ export type PrintEditorState = ReturnType<typeof usePrintEditor>
  * ElementPalette onto the canvas. Coordinates are relative to drop point;
  * sensible default sizes per element type.
  */
-export function createDefaultElement(type: ElementType, x: number, y: number): Omit<PrintElement, 'id'> {
+export function createDefaultElement(type: ElementType, x: number, y: number): PrintElementDraft {
   switch (type) {
     case 'text':
       return { type, x, y, text: '示例文本', fontSize: 12, color: '#1f2937' }

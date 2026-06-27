@@ -523,6 +523,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (savedRows.isEmpty()) {
             return new ArrayList<>();
         }
+        Map<Long, ProcessSheetRowRequest> requestByBatchId = new HashMap<>();
         Map<Long, ProductionBatch> productionBatchById = productionBatchRepo.findAllById(
                         savedRows.stream().map(ProcessSheetRow::getBatchId).toList())
                 .stream()
@@ -531,11 +532,17 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         Map<String, BigDecimal> firstInputByProductType = new HashMap<>();
         Map<String, String> firstUnitByProductType = new HashMap<>();
         Map<String, BigDecimal> gramsPerUnitByProductType = new HashMap<>();
+        Map<String, Integer> minProcessOrderByProductType = new HashMap<>();
         for (ProcessSheetRow row : savedRows) {
             ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
             if (req == null) continue;
+            requestByBatchId.put(row.getBatchId(), req);
             String productTypeId = req.getProductTypeId();
-            if (productTypeId == null || firstInputByProductType.containsKey(productTypeId)) continue;
+            if (productTypeId == null) continue;
+            if (row.getProcessOrder() != null) {
+                minProcessOrderByProductType.merge(productTypeId, row.getProcessOrder(), Math::min);
+            }
+            if (firstInputByProductType.containsKey(productTypeId)) continue;
             BigDecimal input = req.getInputQuantity();
             if (input != null && input.compareTo(BigDecimal.ZERO) > 0) {
                 firstInputByProductType.put(productTypeId, input);
@@ -547,8 +554,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         List<ProcessSheetInventoryItem> result = new ArrayList<>();
+        Map<String, ProcessSheetRowProvenance> provenanceByBatchNumber = new LinkedHashMap<>();
         for (ProcessSheetRow row : savedRows) {
-            ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
+            ProcessSheetRowRequest req = requestByBatchId.get(row.getBatchId());
             if (req == null) continue;
 
             Optional<MaterialBatch> wipOpt = materialBatchRepo
@@ -586,15 +594,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String unit = req.getUnit() != null
                     ? req.getUnit()
                     : (wip != null ? wip.getQuantityUnit() : (productionBatch == null ? null : productionBatch.getUnit()));
-            BigDecimal cumulativeYieldRate = null;
-            if (firstInput != null && firstInput.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstUnit, gramsPerUnit);
-                if (producedConverted != null) {
-                    cumulativeYieldRate = producedConverted
-                            .multiply(BigDecimal.valueOf(100))
-                        .divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
-                }
-            }
             BigDecimal rowTotalCost = firstPositiveOrNull(
                     productionBatch == null ? null : productionBatch.getTotalCost(),
                     wip == null || wip.getUnitPrice() == null ? null : wip.getUnitPrice().multiply(produced));
@@ -604,6 +603,27 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (unitPrice == null && rowTotalCost != null && produced.compareTo(BigDecimal.ZERO) > 0) {
                 unitPrice = rowTotalCost.divide(produced, 4, RoundingMode.HALF_UP);
             }
+            BigDecimal rawEquivalentInput = isFirstProcessSheetRow(row, productTypeId, minProcessOrderByProductType)
+                    ? input
+                    : firstInput;
+            ProcessSheetRowProvenance rowProvenance = resolveSheetRowProvenance(
+                    req, rawEquivalentInput, provenanceByBatchNumber);
+
+            BigDecimal cumulativeDenominator = firstPositiveOrNull(
+                    rowProvenance.inheritedRawEquivalentQuantity,
+                    hasUpstreamSources(req) ? null : firstInput);
+            BigDecimal cumulativeYieldRate = null;
+            if (cumulativeDenominator != null && cumulativeDenominator.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstUnit, gramsPerUnit);
+                if (producedConverted != null) {
+                    cumulativeYieldRate = producedConverted
+                            .multiply(BigDecimal.valueOf(100))
+                            .divide(cumulativeDenominator, YIELD_SCALE, RoundingMode.HALF_UP);
+                }
+            }
+            BigDecimal addedCost = rowTotalCost != null && rowProvenance.inheritedCost != null
+                    ? rowTotalCost.subtract(rowProvenance.inheritedCost)
+                    : null;
 
             result.add(ProcessSheetInventoryItem.builder()
                     .batchNumber(row.getBatchNumber())
@@ -613,14 +633,176 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .status(status)
                     .unitPrice(unitPrice)
                     .rowTotalCost(rowTotalCost)
+                    .inputQuantity(input)
+                    .sourceBatchNumber(rowProvenance.sourceBatchNumber)
+                    .feedQuantity(rowProvenance.feedQuantity)
+                    .sourceProducedQuantity(rowProvenance.sourceProducedQuantity)
+                    .sourceConsumedRatio(rowProvenance.sourceConsumedRatio)
+                    .inheritedRawEquivalentQuantity(rowProvenance.inheritedRawEquivalentQuantity)
+                    .inheritedCost(rowProvenance.inheritedCost)
+                    .addedCost(addedCost)
+                    .sourceBreakdowns(rowProvenance.sourceBreakdowns)
                     .processOrder(row.getProcessOrder())
                     .processName(req.getProcessName() != null ? req.getProcessName() : fallbackProcessName(row))
                     .unit(unit)
                     .stepYieldRate(stepYieldRate)
                     .cumulativeYieldRate(cumulativeYieldRate)
                     .build());
+            if (row.getBatchNumber() != null) {
+                provenanceByBatchNumber.put(row.getBatchNumber(), new ProcessSheetRowProvenance(
+                        row.getBatchNumber(),
+                        produced,
+                        null,
+                        null,
+                        null,
+                        rowProvenance.inheritedRawEquivalentQuantity,
+                        rowTotalCost,
+                        unitPrice,
+                        null,
+                        null));
+            }
         }
         return result;
+    }
+
+    private boolean isFirstProcessSheetRow(
+            ProcessSheetRow row,
+            String productTypeId,
+            Map<String, Integer> minProcessOrderByProductType) {
+        if (productTypeId == null) {
+            return true;
+        }
+        Integer minOrder = minProcessOrderByProductType.get(productTypeId);
+        if (minOrder == null) {
+            return true;
+        }
+        return row.getProcessOrder() != null && row.getProcessOrder().equals(minOrder);
+    }
+
+    private ProcessSheetRowProvenance resolveSheetRowProvenance(
+            ProcessSheetRowRequest req,
+            BigDecimal firstInput,
+            Map<String, ProcessSheetRowProvenance> provenanceByBatchNumber) {
+        if (!hasUpstreamSources(req)) {
+            return new ProcessSheetRowProvenance(
+                    null, null, null, null, null, firstInput, null, null, null, null);
+        }
+
+        List<ProcessSheetInventoryItem.SourceBreakdown> sourceBreakdowns = new ArrayList<>();
+        List<String> sourceBatchNumbers = new ArrayList<>();
+        BigDecimal totalFeed = BigDecimal.ZERO;
+        BigDecimal totalSourceProduced = BigDecimal.ZERO;
+        BigDecimal totalInheritedRaw = BigDecimal.ZERO;
+        BigDecimal totalInheritedCost = BigDecimal.ZERO;
+        boolean hasInheritedRaw = false;
+        boolean hasInheritedCost = false;
+
+        for (ProcessSheetRowRequest.UpstreamRef upstream : req.getUpstreamSources()) {
+            String sourceBatchNumber = upstream.getSourceBatchNumber();
+            BigDecimal feedQuantity = nz(upstream.getFeedQuantityKg());
+            ProcessSheetRowProvenance source = provenanceByBatchNumber.get(sourceBatchNumber);
+            if (source == null || source.produced == null || source.produced.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+
+            BigDecimal consumedRatio = feedQuantity
+                    .multiply(BigDecimal.valueOf(100))
+                    .divide(source.produced, YIELD_SCALE, RoundingMode.HALF_UP);
+            BigDecimal inheritedRaw = null;
+            if (source.inheritedRawEquivalentQuantity != null
+                    && source.inheritedRawEquivalentQuantity.compareTo(BigDecimal.ZERO) > 0) {
+                inheritedRaw = source.inheritedRawEquivalentQuantity
+                        .multiply(feedQuantity)
+                        .divide(source.produced, YIELD_SCALE, RoundingMode.HALF_UP);
+                totalInheritedRaw = totalInheritedRaw.add(inheritedRaw);
+                hasInheritedRaw = true;
+            }
+
+            BigDecimal inheritedCost = resolveInheritedSourceCost(source, feedQuantity);
+            if (inheritedCost != null) {
+                totalInheritedCost = totalInheritedCost.add(inheritedCost);
+                hasInheritedCost = true;
+            }
+
+            sourceBatchNumbers.add(sourceBatchNumber);
+            totalFeed = totalFeed.add(feedQuantity);
+            totalSourceProduced = totalSourceProduced.add(source.produced);
+            sourceBreakdowns.add(ProcessSheetInventoryItem.SourceBreakdown.builder()
+                    .sourceBatchNumber(sourceBatchNumber)
+                    .feedQuantity(feedQuantity)
+                    .sourceProducedQuantity(source.produced)
+                    .sourceConsumedRatio(consumedRatio)
+                    .inheritedRawEquivalentQuantity(inheritedRaw)
+                    .inheritedCost(inheritedCost)
+                    .build());
+        }
+
+        BigDecimal aggregateConsumedRatio = totalSourceProduced.compareTo(BigDecimal.ZERO) > 0
+                ? totalFeed.multiply(BigDecimal.valueOf(100))
+                        .divide(totalSourceProduced, YIELD_SCALE, RoundingMode.HALF_UP)
+                : null;
+        return new ProcessSheetRowProvenance(
+                sourceBatchNumbers.isEmpty() ? null : String.join(", ", sourceBatchNumbers),
+                null,
+                totalFeed.compareTo(BigDecimal.ZERO) > 0 ? totalFeed : null,
+                totalSourceProduced.compareTo(BigDecimal.ZERO) > 0 ? totalSourceProduced : null,
+                aggregateConsumedRatio,
+                hasInheritedRaw ? totalInheritedRaw : null,
+                null,
+                null,
+                hasInheritedCost ? totalInheritedCost : null,
+                sourceBreakdowns.isEmpty() ? null : sourceBreakdowns);
+    }
+
+    private BigDecimal resolveInheritedSourceCost(ProcessSheetRowProvenance source, BigDecimal feedQuantity) {
+        if (source.unitPrice != null) {
+            return source.unitPrice.multiply(feedQuantity);
+        }
+        if (source.rowTotalCost != null && source.produced != null && source.produced.compareTo(BigDecimal.ZERO) > 0) {
+            return source.rowTotalCost.multiply(feedQuantity)
+                    .divide(source.produced, 4, RoundingMode.HALF_UP);
+        }
+        return null;
+    }
+
+    private boolean hasUpstreamSources(ProcessSheetRowRequest req) {
+        return req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+    }
+
+    private static class ProcessSheetRowProvenance {
+        private final String sourceBatchNumber;
+        private final BigDecimal produced;
+        private final BigDecimal feedQuantity;
+        private final BigDecimal sourceProducedQuantity;
+        private final BigDecimal sourceConsumedRatio;
+        private final BigDecimal inheritedRawEquivalentQuantity;
+        private final BigDecimal rowTotalCost;
+        private final BigDecimal unitPrice;
+        private final BigDecimal inheritedCost;
+        private final List<ProcessSheetInventoryItem.SourceBreakdown> sourceBreakdowns;
+
+        private ProcessSheetRowProvenance(
+                String sourceBatchNumber,
+                BigDecimal produced,
+                BigDecimal feedQuantity,
+                BigDecimal sourceProducedQuantity,
+                BigDecimal sourceConsumedRatio,
+                BigDecimal inheritedRawEquivalentQuantity,
+                BigDecimal rowTotalCost,
+                BigDecimal unitPrice,
+                BigDecimal inheritedCost,
+                List<ProcessSheetInventoryItem.SourceBreakdown> sourceBreakdowns) {
+            this.sourceBatchNumber = sourceBatchNumber;
+            this.produced = produced;
+            this.feedQuantity = feedQuantity;
+            this.sourceProducedQuantity = sourceProducedQuantity;
+            this.sourceConsumedRatio = sourceConsumedRatio;
+            this.inheritedRawEquivalentQuantity = inheritedRawEquivalentQuantity;
+            this.rowTotalCost = rowTotalCost;
+            this.unitPrice = unitPrice;
+            this.inheritedCost = inheritedCost;
+            this.sourceBreakdowns = sourceBreakdowns;
+        }
     }
 
     private BigDecimal firstPositive(BigDecimal... values) {

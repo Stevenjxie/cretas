@@ -81,7 +81,7 @@
             <p>未检出价格异常</p>
             <p class="muted">
               价格异常依赖供应商进价历史。请先在
-              <el-link type="primary" @click="goSupplierDelivery">供应商进货录入</el-link>
+              <el-link type="primary" underline="hover" @click="goSupplierDelivery">供应商进货录入</el-link>
               录入/确认送货单，积累进价后再检测。
             </p>
           </div>

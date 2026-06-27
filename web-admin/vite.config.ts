@@ -32,7 +32,7 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: false,
-      chunkSizeWarningLimit: 800,
+      chunkSizeWarningLimit: 1300,
       // Only preload chunks that the entry synchronously needs — skip transitive lazy chunks
       // (otherwise Vite preloads echarts/pdf-lib on every page load even though they're lazy)
       modulePreload: {

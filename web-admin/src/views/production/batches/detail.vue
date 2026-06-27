@@ -19,6 +19,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const batchId = computed(() => route.params.id as string);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canWrite = computed(() => permissionStore.canWrite('production'));
 
 // Issue #760: detail 页消费 ?mode=edit query
 // 编辑 button (PR #755) 跳转时带 ?mode=edit, 本页据此切换 readonly vs editable.

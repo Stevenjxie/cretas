@@ -774,7 +774,7 @@ onUnmounted(() => {
         :data="fieldTableData"
         stripe
         :max-height="480"
-        :row-class-name="({ row }: { row: Record<string, unknown> }) => isFieldClickable(row) ? 'clickable-row' : ''"
+        :row-class-name="({ row }: { row: { completeness: number } }) => isFieldClickable(row) ? 'clickable-row' : ''"
         @row-click="handleFieldRowClick"
       >
         <el-table-column prop="field" label="字段" min-width="180">

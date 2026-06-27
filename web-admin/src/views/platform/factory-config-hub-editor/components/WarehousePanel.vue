@@ -31,7 +31,7 @@
       <el-table-column prop="name" label="仓库名称" min-width="140" />
       <el-table-column prop="type" label="仓库类型" width="140">
         <template #default="{ row }">
-          {{ WAREHOUSE_TYPE_LABELS[row.type as WarehouseType] || row.type }}
+          {{ WAREHOUSE_TYPE_LABELS[String(row.type) as WarehouseType] || row.type }}
         </template>
       </el-table-column>
       <el-table-column prop="isActive" label="状态" width="90">
@@ -106,7 +106,7 @@
             <el-table-column prop="name" />
             <el-table-column width="120">
               <template #default="{ row }">
-                <el-text type="info" size="small">{{ WAREHOUSE_TYPE_LABELS[row.type] }}</el-text>
+                <el-text type="info" size="small">{{ WAREHOUSE_TYPE_LABELS[String(row.type) as WarehouseType] }}</el-text>
               </template>
             </el-table-column>
           </el-table>
@@ -134,7 +134,7 @@
                 v-model="customSelected[typeKey as WarehouseType]"
                 :disabled="templateMode !== 'custom'"
               >
-                <span class="type-label">{{ WAREHOUSE_TYPE_LABELS[typeKey as WarehouseType] }}</span>
+                <span class="type-label">{{ WAREHOUSE_TYPE_LABELS[String(typeKey) as WarehouseType] }}</span>
               </el-checkbox>
               <template v-if="customSelected[typeKey as WarehouseType] && templateMode === 'custom'">
                 <el-input

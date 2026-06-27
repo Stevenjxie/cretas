@@ -62,7 +62,7 @@ export interface ChartWithMeta {
   meta?: ChartMeta | null;
   config?: {
     xAxis?: { data?: string[] };
-    series?: Array<{ type?: string; data?: unknown[] }>;
+    series?: Array<{ name?: string; type?: string; data?: unknown[] }>;
     [key: string]: unknown;
   };
 }
