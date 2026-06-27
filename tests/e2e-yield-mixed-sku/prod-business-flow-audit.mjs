@@ -177,6 +177,8 @@ async function main() {
     || candidates.find((c) => c.processes.some((p) => /熟|气调|包装/.test(String(p.processName || ''))))
     || candidates[0];
   const secondProduct = candidates.find((c) => String(c.product.id) !== String(rich.product.id)) || rich;
+  const p1 = String(rich.product.id);
+  const p2 = String(secondProduct.product.id || rich.product.id);
   const chain = rich.processes.slice(0, 4).map((it, index) => ({
     order: index + 1,
     configuredOrder: Number(it.processOrder || index + 1),
@@ -194,18 +196,31 @@ async function main() {
   if (!rawWarehouse?.id) {
     throw new Error('No WH-LOG/RAW/LOGISTICS warehouse was found for raw material selection');
   }
-  const rawResp = await api('GET', `/${FACTORY_ID}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(rawWarehouse.id)}&size=200`);
-  const rawBatches = contentArray(rawResp)
-    .map((b) => ({
-      id: String(b.id || ''),
-      batchNumber: b.batchNumber || b.materialBatchNumber || b.batchNo || b.id,
-      materialName: b.materialName || b.materialTypeName || b.name,
-      warehouseId: b.warehouseId || rawWarehouse.id,
-      currentQuantity: num(b.currentQuantity ?? b.availableQuantity ?? b.quantity),
-      unitPrice: num(b.unitPrice ?? b.price),
-    }))
-    .filter((b) => b.id && (b.currentQuantity == null || b.currentQuantity > 0.5));
-  if (rawBatches.length < 2) throw new Error(`Need at least 2 available raw material batches, found ${rawBatches.length}`);
+  async function loadRawBatchesForProduct(productTypeId) {
+    const rawResp = await api(
+      'GET',
+      `/${FACTORY_ID}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(rawWarehouse.id)}&productTypeId=${encodeURIComponent(productTypeId)}&size=200`,
+    );
+    return contentArray(rawResp)
+      .map((b) => ({
+        id: String(b.id || ''),
+        productTypeId,
+        batchNumber: b.batchNumber || b.materialBatchNumber || b.batchNo || b.id,
+        materialName: b.materialName || b.materialTypeName || b.name,
+        warehouseId: b.warehouseId || rawWarehouse.id,
+        currentQuantity: num(b.currentQuantity ?? b.availableQuantity ?? b.quantity),
+        unitPrice: num(b.unitPrice ?? b.price),
+      }))
+      .filter((b) => b.id && (b.currentQuantity == null || b.currentQuantity > 0.5));
+  }
+  const rawBatchesP1 = await loadRawBatchesForProduct(p1);
+  const rawBatchesP2 = p2 === p1 ? rawBatchesP1 : await loadRawBatchesForProduct(p2);
+  const r1 = rawBatchesP1[0];
+  const r2 = rawBatchesP2.find((b) => b.id !== r1?.id) || rawBatchesP2[0];
+  if (!r1 || !r2) {
+    throw new Error(`Need raw material batches for both mixed SKUs; ${p1}=${rawBatchesP1.length}, ${p2}=${rawBatchesP2.length}`);
+  }
+  const rawBatches = [r1, r2];
 
   const plan = await api('POST', `/${FACTORY_ID}/production-plans`, {
     productTypeId: String(rich.product.id),
@@ -246,10 +261,6 @@ async function main() {
     return result;
   }
 
-  const p1 = String(rich.product.id);
-  const p2 = String(secondProduct.product.id || rich.product.id);
-  const r1 = rawBatches[0];
-  const r2 = rawBatches[1];
   const first = chain[0];
   const mid = chain[1];
   const cook = chain.find((p) => p.code === 'shuzhi') || chain[2];

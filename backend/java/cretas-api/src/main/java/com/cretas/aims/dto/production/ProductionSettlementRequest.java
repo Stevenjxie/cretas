@@ -61,6 +61,12 @@ public class ProductionSettlementRequest {
     public static class ConsumptionLine {
         private String materialBatchId;
         private Long semiFinishedInventoryId;
+        /**
+         * Optional row-level SKU/product type context.
+         * Process-sheet prefill uses this for mixed-SKU plans so BOM validation
+         * is performed against the SKU that actually consumed the material.
+         */
+        private String productTypeId;
         private String materialTypeId;
         private String batchNumber;
 

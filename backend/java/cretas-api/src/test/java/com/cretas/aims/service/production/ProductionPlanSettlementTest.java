@@ -254,6 +254,49 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("混 SKU 逐道预填原料按行级产品 BOM 校验")
+    void settleProduction_mixedSkuRawLineUsesLineProductTypeBom() {
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setMaterialTypeId("RM-2");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-mixed")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBomFor("PT-1", "bom-1", "RM-1");
+        stubCurrentBomFor("PT-2", "bom-2", "RM-2");
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-mixed")
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .laborDeferredReason("工时稍后补录")
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-1")
+                        .productTypeId("PT-2")
+                        .quantity(new BigDecimal("12"))
+                        .unit("kg")
+                        .build()))
+                .build();
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
+
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+    }
+
+    @Test
     @DisplayName("同一幂等键重复提交返回原结单")
     void settleProduction_sameIdempotency_returnsExistingSettlement() {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
@@ -490,24 +533,28 @@ class ProductionPlanSettlementTest {
     }
 
     private void stubCurrentBom(String materialTypeId) {
+        stubCurrentBomFor("PT-1", "bom-1", materialTypeId);
+    }
+
+    private void stubCurrentBomFor(String productTypeId, String recipeId, String materialTypeId) {
         BomRecipe recipe = BomRecipe.builder()
-                .id("bom-1")
+                .id(recipeId)
                 .factoryId(FACTORY_ID)
-                .recipeCode("BOM-001")
-                .productTypeId("PT-1")
+                .recipeCode("BOM-" + productTypeId)
+                .productTypeId(productTypeId)
                 .productName("Product")
                 .outputQuantityPerUnit(BigDecimal.ONE)
                 .build();
         BomRecipeItem item = BomRecipeItem.builder()
-                .recipeId("bom-1")
+                .recipeId(recipeId)
                 .factoryId(FACTORY_ID)
                 .materialTypeId(materialTypeId)
                 .standardQuantity(BigDecimal.ONE)
                 .unit("kg")
                 .build();
-        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, "PT-1"))
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, productTypeId))
                 .thenReturn(Optional.of(recipe));
-        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("bom-1"))
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
                 .thenReturn(List.of(item));
     }
 

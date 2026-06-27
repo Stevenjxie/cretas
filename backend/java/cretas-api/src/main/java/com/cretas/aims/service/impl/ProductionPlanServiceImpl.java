@@ -1888,24 +1888,32 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptionsFromProcessSheetRows(
             String factoryId, List<ParsedProcessSheetRow> rows,
             List<ProductionSettlementPrefillResponse.Issue> issues) {
-        Map<String, BigDecimal> qtyByBatch = new LinkedHashMap<>();
+        Map<String, BigDecimal> qtyByBatchAndProduct = new LinkedHashMap<>();
+        Map<String, String> batchIdByKey = new LinkedHashMap<>();
+        Map<String, String> productTypeIdByKey = new LinkedHashMap<>();
         for (ParsedProcessSheetRow parsed : rows) {
             List<ProcessSheetRowRequest.RawInput> rawInputs = parsed.request().getRawMaterialInputs();
             if (rawInputs == null) {
                 continue;
             }
+            String productTypeId = trimToNull(parsed.request().getProductTypeId());
             for (ProcessSheetRowRequest.RawInput input : rawInputs) {
                 if (input == null || isBlank(input.getMaterialBatchId())
                         || input.getQuantity() == null || input.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
                     continue;
                 }
-                qtyByBatch.merge(input.getMaterialBatchId(), input.getQuantity(), BigDecimal::add);
+                String batchId = input.getMaterialBatchId();
+                String key = batchId + "\u0000" + firstNonBlank(productTypeId, "");
+                batchIdByKey.putIfAbsent(key, batchId);
+                productTypeIdByKey.putIfAbsent(key, productTypeId);
+                qtyByBatchAndProduct.merge(key, input.getQuantity(), BigDecimal::add);
             }
         }
 
         List<ProductionSettlementRequest.ConsumptionLine> lines = new ArrayList<>();
-        for (Map.Entry<String, BigDecimal> e : qtyByBatch.entrySet()) {
-            String batchId = e.getKey();
+        for (Map.Entry<String, BigDecimal> e : qtyByBatchAndProduct.entrySet()) {
+            String batchId = batchIdByKey.get(e.getKey());
+            String productTypeId = productTypeIdByKey.get(e.getKey());
             BigDecimal qty = e.getValue();
             MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
             if (batch == null) {
@@ -1925,6 +1933,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
             lines.add(ProductionSettlementRequest.ConsumptionLine.builder()
                     .materialBatchId(batchId)
+                    .productTypeId(productTypeId)
                     .materialTypeId(trimToNull(batch.getMaterialTypeId()))
                     .batchNumber(trimToNull(batch.getBatchNumber()))
                     .quantity(qty)
@@ -2547,7 +2556,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
-        ensureMaterialBatchAllowedForSettlement(factoryId, plan, batch, "实际领用");
+        ensureMaterialBatchAllowedForSettlement(factoryId, plan, line.getProductTypeId(), batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
         if (line.getBatchNumber() == null) {
@@ -2567,6 +2576,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private void ensureMaterialBatchAllowedForSettlement(String factoryId,
                                                          ProductionPlan plan,
+                                                         String productTypeIdOverride,
                                                          MaterialBatch batch,
                                                          String hintTarget) {
         if (warehouseResolver == null) {
@@ -2587,12 +2597,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget(hintTarget);
         }
 
-        if (plan == null || isBlank(plan.getProductTypeId())
-                || bomRecipeRepository == null || bomRecipeItemRepository == null) {
+        String productTypeId = firstNonBlank(productTypeIdOverride, plan != null ? plan.getProductTypeId() : null);
+        if (isBlank(productTypeId) || bomRecipeRepository == null || bomRecipeItemRepository == null) {
             return;
         }
         Optional<BomRecipe> recipe = bomRecipeRepository
-                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, plan.getProductTypeId());
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
         if (recipe.isEmpty()) {
             throw new BusinessException(409, "该产品没有当前 BOM，不能直接核对原料领用")
                     .withCode("PRODUCTION_BOM_REQUIRED")
@@ -2650,7 +2660,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
-        ensureMaterialBatchAllowedForSettlement(factoryId, null, batch, "实际领用");
+        ensureMaterialBatchAllowedForSettlement(factoryId, null, null, batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 

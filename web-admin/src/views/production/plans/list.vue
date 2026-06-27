@@ -762,6 +762,7 @@ function onEntrySubmitted() { loadData(); }
 // ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
 interface SettlementRawConsumptionForm {
   materialBatchId: string;
+  productTypeId?: string | null;
   quantity: number;
   note: string;
 }
@@ -846,7 +847,12 @@ interface SettlementPrefillResponse {
     actualFinishedQuantity?: number | null;
     actualSemiFinishedQuantity?: number | null;
     quantityVarianceReason?: string | null;
-    rawMaterialConsumptions?: Array<{ materialBatchId?: string | null; quantity?: number | null; note?: string | null }> | null;
+    rawMaterialConsumptions?: Array<{
+      materialBatchId?: string | null;
+      productTypeId?: string | null;
+      quantity?: number | null;
+      note?: string | null;
+    }> | null;
     laborSegments?: Array<{ minutes?: number | null; headcount?: number | null }> | null;
   } | null;
   audit: { clean: boolean; issues: SettlementPrefillIssue[] } | null;
@@ -1064,7 +1070,7 @@ async function loadSettlementInventoryOptions(row: TableRow) {
       get<unknown>(`/${factoryId.value}/material-batches/status/AVAILABLE`, {
         params: {
           warehouseId,
-          ...(row.productTypeId ? { productTypeId: String(row.productTypeId) } : {}),
+          size: 200,
         },
       }),
       listAvailableWip(factoryId.value),
@@ -1093,6 +1099,7 @@ function buildRawConsumptionPayload() {
     const batch = selectedMaterialBatch(line.materialBatchId);
     return {
       materialBatchId: line.materialBatchId,
+      productTypeId: line.productTypeId || null,
       materialTypeId: batch?.materialTypeId || null,
       batchNumber: batch?.batchNumber || null,
       quantity: line.quantity,
@@ -1179,6 +1186,7 @@ async function applySettlementPrefill(row: TableRow) {
         }
         completeForm.value.rawMaterialConsumptions.push({
           materialBatchId: batchId,
+          productTypeId: line.productTypeId ? String(line.productTypeId) : null,
           quantity: qty,
           note: line.note || '自动带入自逐道报工',
         });
