@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aliyun Operations"
+  short_description: "Cretas production server operations"
+  default_prompt: "Use $aliyun-operations to diagnose Cretas production service health safely."

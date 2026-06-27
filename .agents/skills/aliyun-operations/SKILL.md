@@ -1,153 +1,156 @@
 ---
 name: aliyun-operations
-description: 阿里云服务器运维操作。包括ECS实例管理、安全组配置、服务状态查看、日志排查。适用于服务器管理、端口开放、故障排查等任务。
-allowed-tools:
-  - Bash
-  - Read
-  - Write
-  - Grep
-  - Glob
+description: Cretas Alibaba Cloud operations runbook. Use when managing or diagnosing Cretas production servers on Aliyun, including SSH access, service health checks, systemd restarts, Java/Python logs, Nginx gateway routing, security group whitelist changes, and the 47/139 server topology.
 ---
 
-# 阿里云运维操作 Skill
+# Cretas Aliyun Operations
 
-## 服务器架构
+Use this skill for Cretas production operations on Alibaba Cloud. Treat production commands as live operations: prefer read-only checks first, state the target host, and avoid changing security group or restarting services unless the user asks or the diagnosis clearly requires it.
 
-| 服务器 | IP | 配置 | 用途 | 状态 |
-|--------|-----|------|------|------|
-| **新服务器 (主)** | `47.100.235.168` | 8C/16GB/100GB | Java + Python + Web | 运行中 |
-| **旧服务器** | `139.196.165.140` | 4C/8GB/40GB | Nginx 反代 + 静态文件 | 仅代理 |
+## Topology
 
-### 新服务器 (47.100.235.168)
+| Server | IP | Role |
+| --- | --- | --- |
+| Primary | `47.100.235.168` | Java `10010`, Python `8083`, PostgreSQL `5432`, Redis `6379` |
+| Gateway | `139.196.165.140` | Nginx reverse proxy `80/443`, web-admin, showcase |
 
-| 项目 | 值 |
-|------|-----|
-| SSH | `ssh root@47.100.235.168` |
-| 宝塔面板 | `https://47.100.235.168:8888/658e3b15` |
-| 宝塔用户 | `user` / `baotaiWQ3PUc` |
-| 系统 | Alibaba Cloud Linux 3 |
-| 到期 | 2027-02-10 |
-
-### 旧服务器 (139.196.165.140)
-
-| 项目 | 值 |
-|------|-----|
-| SSH | `ssh root@139.196.165.140` |
-| 宝塔面板 | `https://139.196.165.140:17400` |
-| 用途 | Nginx 反代到新服务器，托管 web-admin 静态文件 |
-
----
-
-## 服务端口 (新服务器)
-
-| 服务 | 端口 | 进程 | 路径 |
-|------|------|------|------|
-| Java 后端 | 10010 | `aims-0.0.1-SNAPSHOT.jar` | `/www/wwwroot/cretas/` |
-| Python 服务 | 8083 | `uvicorn main:app` | `/www/wwwroot/cretas/code/backend/python/` |
-| PostgreSQL | 5432 | `postgresql` | 本机 |
-| Redis | 6379 | `redis-server` | 本机 |
-| Web 前端 | 8088 | Nginx | `/www/wwwroot/web-admin/` |
-| 宝塔面板 | 8888 | `bt` | - |
-
----
-
-## 常用运维命令
-
-### 服务状态
+SSH:
 
 ```bash
-# 查看所有 Java/Python 进程
-ssh root@47.100.235.168 "ps aux | grep -E 'java|uvicorn' | grep -v grep"
+ssh root@47.100.235.168
+ssh root@139.196.165.140
+```
 
-# 健康检查
-curl -s http://47.100.235.168:10010/api/mobile/health   # Java
-curl -s http://47.100.235.168:8083/health                # Python
-curl -s -o /dev/null -w "%{http_code}" http://47.100.235.168:8088/  # Web
+## Critical Network Rule
 
-# 端口监听
+Since 2026-04-11 Phase 3, public access to backend ports `10010`, `10011`, `8083`, and `8084` is closed. These ports are only allowed from the Nginx gateway security source `139.196.165.140/32`.
+
+Implications:
+
+- A developer machine connecting directly to `47.100.235.168:10010` should time out. This is expected and is not evidence of backend failure.
+- `139.196.165.140:10010` should not work because the 139 server does not run the Java backend.
+- Run health checks on the 47 server itself, or use an SSH tunnel.
+
+Developer access through tunnel:
+
+```bash
+ssh -L 10010:localhost:10010 root@47.100.235.168
+# then browse or curl http://localhost:10010
+```
+
+## Production Services
+
+Production service management is systemd-based. Do not assume legacy `restart.sh` behavior unless using the explicit prod command below.
+
+```bash
+systemctl status cretas-backend cretas-python cretas-embedding
+systemctl restart cretas-backend
+systemctl restart cretas-python
+journalctl -u cretas-backend -f
+
+# Restart all prod services in dependency order.
+bash /www/wwwroot/cretas/restart.sh prod
+```
+
+Common remote form:
+
+```bash
+ssh root@47.100.235.168 "systemctl status cretas-backend --no-pager"
+ssh root@47.100.235.168 "systemctl restart cretas-backend"
+```
+
+## Health Checks
+
+Run these from the 47 server because backend ports are not publicly open.
+
+```bash
+ssh root@47.100.235.168 "curl -s http://localhost:10010/api/mobile/health"
+ssh root@47.100.235.168 "curl -s http://localhost:8083/health"
 ssh root@47.100.235.168 "ss -tlnp | grep -E '10010|8083|5432|6379'"
-
-# 磁盘和内存
-ssh root@47.100.235.168 "df -h && echo '---' && free -h"
+ssh root@47.100.235.168 "df -h && free -h"
 ```
 
-### 日志查看
+Gateway-side checks:
 
 ```bash
-# Java 后端
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/cretas-backend.log"
-
-# Python 服务
-ssh root@47.100.235.168 "tail -100 /www/wwwroot/cretas/code/backend/python/python-services.log"
-
-# Nginx 访问/错误
-ssh root@47.100.235.168 "tail -50 /www/wwwlogs/47.100.235.168.log"
-ssh root@47.100.235.168 "tail -50 /www/wwwlogs/47.100.235.168.error.log"
+ssh root@139.196.165.140 "nginx -t && systemctl status nginx --no-pager"
+ssh root@139.196.165.140 "ss -tlnp | grep -E ':80|:443'"
 ```
 
-### 服务重启
+## Logs
+
+Java prod:
 
 ```bash
-# 重启全部 (Java + Python)
-ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh"
-
-# 仅重启 Nginx
-ssh root@47.100.235.168 "systemctl restart nginx"
-
-# 重启 PostgreSQL
-ssh root@47.100.235.168 "systemctl restart postgresql"
+ssh root@47.100.235.168 "journalctl -u cretas-backend -n 200 --no-pager"
+ssh root@47.100.235.168 "tail -n 200 /www/wwwroot/cretas/cretas-prod.log"
 ```
 
----
-
-## 安全组管理
+Python prod:
 
 ```bash
-# 新服务器 AccessKey
-export ALIBABA_CLOUD_ACCESS_KEY_ID=<REDACTED-AK-SEE-LOCAL-CREDENTIAL-FILE>
-export ALIBABA_CLOUD_ACCESS_KEY_SECRET=<REDACTED-SECRET-SEE-LOCAL-CREDENTIAL-FILE>
-
-# 查看安全组规则
-aliyun ecs DescribeSecurityGroupAttribute --RegionId cn-shanghai --SecurityGroupId <sg-id>
-
-# 开放端口
-aliyun ecs AuthorizeSecurityGroup --RegionId cn-shanghai \
-  --SecurityGroupId <sg-id> --IpProtocol tcp \
-  --PortRange 8083/8083 --SourceCidrIp 0.0.0.0/0
+ssh root@47.100.235.168 "journalctl -u cretas-python -n 200 --no-pager"
+ssh root@47.100.235.168 "tail -n 200 /www/wwwroot/cretas/python-prod.log"
 ```
 
-已开放端口: `10010`, `8083`, `8088`, `8888`, `22`
+## Security Group Whitelist
 
----
+Use Aliyun account A for the 47 ECS security group.
 
-## 数据库
-
-### PostgreSQL (新服务器)
-
-| 数据库 | 用户 | 用途 |
-|--------|------|------|
-| cretas_db | cretas_user | 主应用数据 |
-| smartbi_db | smartbi_user | SmartBI 数据 |
+Configuration:
 
 ```bash
-# 连接
-ssh root@47.100.235.168 "sudo -u postgres psql cretas_db"
-
-# 查看表
-ssh root@47.100.235.168 "sudo -u postgres psql cretas_db -c '\dt'"
-
-# 备份
-ssh root@47.100.235.168 "sudo -u postgres pg_dump cretas_db > /tmp/cretas_backup_$(date +%Y%m%d).sql"
+export ALIYUN_CRETAS_REGION="cn-shanghai"
+export ALIYUN_CRETAS_SG="sg-uf64n0hcl8w37d34zfmy"
+export ALIBABA_CLOUD_ACCESS_KEY_ID="$ALIYUN_CRETAS_AK"
+export ALIBABA_CLOUD_ACCESS_KEY_SECRET="$ALIYUN_CRETAS_SK"
 ```
 
----
+Do not write real AK/SK values into tracked repository files. Use environment variables, a local secret store, or the credentials already supplied by the current secure harness.
 
-## 故障排查
+Temporarily allow the current developer IP to reach Java `10010` directly:
 
-| 症状 | 排查步骤 |
-|------|----------|
-| Java 无法启动 | 1. 检查端口占用 `ss -tlnp \| grep 10010` → 2. 检查日志 `tail -50 cretas-backend.log` → 3. 检查环境变量 `env \| grep DB_` |
-| Python 502 | 1. 检查进程 `ps aux \| grep uvicorn` → 2. 检查日志 `tail -50 python-services.log` → 3. 检查端口 `ss -tlnp \| grep 8083` |
-| 前端白屏 | 1. 检查 Nginx `nginx -t` → 2. 检查 dist 文件 `ls /www/wwwroot/web-admin/index.html` → 3. 检查 Nginx 日志 |
-| DB 连接失败 | 1. 检查 PG 状态 `systemctl status postgresql` → 2. 检查 pg_hba.conf → 3. 检查密码环境变量 |
-| 磁盘满 | `du -sh /www/wwwroot/cretas/logs/* \| sort -rh \| head` → 清理旧日志和备份 |
+```bash
+MY_IP="$(curl -s https://ifconfig.me)"
+aliyun ecs AuthorizeSecurityGroup \
+  --access-key-id "$ALIBABA_CLOUD_ACCESS_KEY_ID" \
+  --access-key-secret "$ALIBABA_CLOUD_ACCESS_KEY_SECRET" \
+  --region "$ALIYUN_CRETAS_REGION" \
+  --SecurityGroupId "$ALIYUN_CRETAS_SG" \
+  --IpProtocol tcp \
+  --PortRange "10010/10010" \
+  --SourceCidrIp "$MY_IP/32" \
+  --Priority 1 \
+  --Description "dev access"
+```
+
+Remove the temporary whitelist after use:
+
+```bash
+aliyun ecs RevokeSecurityGroup \
+  --access-key-id "$ALIBABA_CLOUD_ACCESS_KEY_ID" \
+  --access-key-secret "$ALIBABA_CLOUD_ACCESS_KEY_SECRET" \
+  --region "$ALIYUN_CRETAS_REGION" \
+  --SecurityGroupId "$ALIYUN_CRETAS_SG" \
+  --IpProtocol tcp \
+  --PortRange "10010/10010" \
+  --SourceCidrIp "$MY_IP/32"
+```
+
+Inspect all security group rules:
+
+```bash
+aliyun ecs DescribeSecurityGroupAttribute \
+  --access-key-id "$ALIBABA_CLOUD_ACCESS_KEY_ID" \
+  --access-key-secret "$ALIBABA_CLOUD_ACCESS_KEY_SECRET" \
+  --region "$ALIYUN_CRETAS_REGION" \
+  --SecurityGroupId "$ALIYUN_CRETAS_SG"
+```
+
+## Diagnosis Rules
+
+- If direct local access to `47.100.235.168:10010` times out, first remember the security group rule; verify with server-local `curl` before restarting anything.
+- If gateway traffic fails, check 139 Nginx first, then connectivity from 139 to 47.
+- If Java health fails on localhost, inspect `cretas-backend` systemd status and `journalctl` before restarting.
+- If Python health fails on localhost, inspect `cretas-python` logs and port `8083`.
+- Keep 10010/10011/8083/8084 closed to `0.0.0.0/0`; temporary developer whitelists must be `/32` and removed after use.
