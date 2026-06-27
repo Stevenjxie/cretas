@@ -14,6 +14,7 @@ import {
 } from '@/api/processSheet';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
+import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 
 // -------------------------------------------------------------------------
 // Props & emits
@@ -388,13 +389,23 @@ function calcYieldByProductWeight(row: SheetRow): number | null {
   return Math.round((productWeight / usedWeight) * 10000) / 100;
 }
 
-/** 每盒人工费(元) = workerPrice × totalHours / actualProd */
+/** Per-box labor preview = worker-hours * hourly rate * box kg / allocated kg. */
 function calcLaborPerBox(row: SheetRow): number | null {
-  const workerPrice = (row.fields['workerPrice'] as number) ?? 0;
-  const totalH = calcTotalHours(row);
-  const actualProd = calcSumBoxes(row);
-  if (!actualProd || !workerPrice) return null;
-  return Math.round((workerPrice * totalH / actualProd) * 10000) / 10000;
+  const productWeight = (row.fields['productWeight'] as number) ?? 0;
+  const totalWeight = calcSumWeight(row);
+  const actualBoxes = calcSumBoxes(row);
+  const boxWeightGrams = (row.fields['boxWeight'] as number) ?? null;
+  const estimatedWeightFromBoxes = boxWeightGrams && actualBoxes
+    ? (boxWeightGrams / 1000) * actualBoxes
+    : null;
+
+  return calculateLaborPerBox({
+    hourlyRate: (row.fields['workerPrice'] as number) ?? null,
+    totalHours: calcTotalHours(row),
+    boxWeightGrams,
+    allocationWeightKg: productWeight || totalWeight || estimatedWeightFromBoxes,
+    actualBoxes,
+  });
 }
 
 function upstreamWarning(row: SheetRow): string | null {
