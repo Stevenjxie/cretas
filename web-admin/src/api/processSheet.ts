@@ -296,6 +296,7 @@ export interface RawMaterialBatchOption {
   batchNumber: string | null;
   materialName: string | null;
   materialTypeName: string | null;
+  warehouseId?: string | null;
   currentQuantity: number | string | null;
   quantity: number | string | null;
   quantityUnit: string | null;
@@ -307,9 +308,10 @@ export interface RawMaterialBatchOption {
 
 export function getAvailableRawBatches(
   factoryId: string,
+  params: { warehouseId?: string; productTypeId?: string } = {},
 ): Promise<ApiResponse<RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] }>> {
   return get<RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] }>(
     `/${factoryId}/material-batches/status/AVAILABLE`,
-    { params: { size: 200 } },
+    { params: { size: 200, ...params } },
   );
 }

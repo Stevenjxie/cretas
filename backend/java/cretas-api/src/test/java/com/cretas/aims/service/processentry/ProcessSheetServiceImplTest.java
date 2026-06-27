@@ -10,6 +10,8 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
@@ -24,6 +26,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,6 +104,9 @@ class ProcessSheetServiceImplTest {
     @Autowired
     private RecipeIngredientRepository ingredientRepo;
 
+    @Autowired
+    private FactoryWarehouseRepository warehouseRepo;
+
     private static final String FACTORY_ID = "PSF-FACTORY";
     private static final String OTHER_FACTORY_ID = "PSF-OTHER";
     private static final String PRODUCT_TYPE_ID = "PSF-PTYPE-001";
@@ -111,6 +117,7 @@ class ProcessSheetServiceImplTest {
     private Long operatorId;
     private String planId;
     private String rawBatchId;
+    private String rawWarehouseId;
 
     @BeforeEach
     void setUp() {
@@ -124,6 +131,16 @@ class ProcessSheetServiceImplTest {
         user.setIsActive(true);
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
+
+        FactoryWarehouse rawWarehouse = new FactoryWarehouse();
+        rawWarehouseId = "PSF-WH-LOG-" + UUID.randomUUID().toString().substring(0, 8);
+        rawWarehouse.setId(rawWarehouseId);
+        rawWarehouse.setFactoryId(FACTORY_ID);
+        rawWarehouse.setCode("WH-LOG");
+        rawWarehouse.setName("测试物流仓");
+        rawWarehouse.setType(WarehouseType.LOGISTICS);
+        rawWarehouse.setIsActive(true);
+        warehouseRepo.saveAndFlush(rawWarehouse);
 
         // Plan (belongs to FACTORY_ID)
         planId = "PSF-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
@@ -148,7 +165,7 @@ class ProcessSheetServiceImplTest {
         raw.setFactoryId(FACTORY_ID);
         raw.setBatchNumber("PSF-RAW-" + System.currentTimeMillis() % 100000);
         raw.setMaterialTypeId(RAW_MATERIAL_TYPE_ID);
-        raw.setWarehouseId("WH-PSF-001");
+        raw.setWarehouseId(rawWarehouseId);
         raw.setReceiptQuantity(new BigDecimal("100.00"));
         raw.setQuantityUnit("kg");
         raw.setUsedQuantity(BigDecimal.ZERO);

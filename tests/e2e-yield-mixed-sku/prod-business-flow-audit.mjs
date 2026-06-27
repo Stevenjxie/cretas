@@ -77,6 +77,11 @@ function pickProductName(p) {
   return p.name || p.productName || p.typeName || p.displayName || p.code || p.id;
 }
 
+function pickRawWarehouse(warehouses) {
+  return warehouses.find((w) => w.code === 'WH-LOG' && w.isActive !== false)
+    || warehouses.find((w) => ['RAW', 'LOGISTICS'].includes(String(w.type || '')) && w.isActive !== false);
+}
+
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launchPersistentContext(PROFILE_DIR, {
@@ -184,12 +189,18 @@ async function main() {
   chain[0].code = 'xiuyou';
   if (!chain.slice(2).some((p) => p.code === 'shuzhi')) chain[2].code = 'shuzhi';
 
-  const rawResp = await api('GET', `/${FACTORY_ID}/material-batches/status/AVAILABLE?size=200`);
+  const warehouses = contentArray(await api('GET', `/${FACTORY_ID}/factory/warehouses`));
+  const rawWarehouse = pickRawWarehouse(warehouses);
+  if (!rawWarehouse?.id) {
+    throw new Error('No WH-LOG/RAW/LOGISTICS warehouse was found for raw material selection');
+  }
+  const rawResp = await api('GET', `/${FACTORY_ID}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(rawWarehouse.id)}&size=200`);
   const rawBatches = contentArray(rawResp)
     .map((b) => ({
       id: String(b.id || ''),
       batchNumber: b.batchNumber || b.materialBatchNumber || b.batchNo || b.id,
       materialName: b.materialName || b.materialTypeName || b.name,
+      warehouseId: b.warehouseId || rawWarehouse.id,
       currentQuantity: num(b.currentQuantity ?? b.availableQuantity ?? b.quantity),
       unitPrice: num(b.unitPrice ?? b.price),
     }))
@@ -425,6 +436,7 @@ async function main() {
       product: { id: p1, name: pickProductName(rich.product) },
       secondProduct: { id: p2, name: pickProductName(secondProduct.product) },
       chain,
+      rawWarehouse,
       rawBatches: [r1, r2],
     },
     createdRows: Object.fromEntries(rowMap.entries()),

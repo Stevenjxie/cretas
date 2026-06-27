@@ -32,6 +32,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -39,6 +40,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -90,6 +92,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository processRepo;
     private final ProductTypeRepository productTypeRepo;
+
+    @Autowired(required = false)
+    private WarehouseResolver warehouseResolver;
 
     @Override
     @Transactional
@@ -1116,6 +1121,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
+                ensureRawMaterialWarehouse(factoryId, rawMb);
                 edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
             }
         }
@@ -1141,6 +1147,26 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         return edges;
+    }
+
+    private void ensureRawMaterialWarehouse(String factoryId, MaterialBatch rawMb) {
+        if (warehouseResolver == null) {
+            return;
+        }
+        String rawWarehouseId = warehouseResolver.resolveLogisticsId(factoryId);
+        if (rawWarehouseId == null || rawWarehouseId.isBlank()) {
+            throw new BusinessException(500, "未配置原料仓/物流仓，不能保存生产领料")
+                    .withCode("PRODUCTION_RAW_WAREHOUSE_NOT_CONFIGURED")
+                    .withHint("请先维护工厂仓库配置")
+                    .withHintTarget("原料批次");
+        }
+        String batchWarehouseId = rawMb != null ? rawMb.getWarehouseId() : null;
+        if (batchWarehouseId == null || batchWarehouseId.isBlank() || !rawWarehouseId.equals(batchWarehouseId)) {
+            throw new BusinessException(409, "生产逐道报工原料只能从原料仓/物流仓领用，不能从其他仓库扣减")
+                    .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")
+                    .withHint("请重新选择原料仓/物流仓批次后再保存")
+                    .withHintTarget("原料批次");
+        }
     }
 
     /**

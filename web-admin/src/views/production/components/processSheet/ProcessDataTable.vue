@@ -12,6 +12,7 @@ import {
   type ProcessSheetRowHistoryView,
   type RawMaterialBatchOption,
 } from '@/api/processSheet';
+import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
 import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
@@ -92,6 +93,7 @@ const isQidiao = computed(() => props.processCode === 'qidiao');
 // -------------------------------------------------------------------------
 const rawBatchOptions = ref<RawMaterialBatchOption[]>([]);
 const rawBatchLoading = ref(false);
+const rawWarehouseId = ref('');
 let rawBatchLoadSeq = 0;
 
 function extractRawBatches(
@@ -127,17 +129,44 @@ function rawBatchLabel(batch: RawMaterialBatchOption): string {
   return `${name} | ${batch.batchNumber || batch.id} | 余${qty}${unit}${price}`;
 }
 
+function pickRawWarehouse(warehouses: FactoryWarehouse[]): FactoryWarehouse | undefined {
+  return warehouses.find((w) => w.code === 'WH-LOG' && w.isActive !== false)
+    ?? warehouses.find((w) => (w.type === 'RAW' || w.type === 'LOGISTICS') && w.isActive !== false);
+}
+
+async function ensureRawWarehouseId(): Promise<string | null> {
+  if (rawWarehouseId.value) return rawWarehouseId.value;
+  const resp = await listWarehouses(props.factoryId);
+  const warehouses = Array.isArray(resp.data) ? resp.data : [];
+  const rawWarehouse = pickRawWarehouse(warehouses);
+  if (!rawWarehouse?.id) {
+    ElMessage.error('未配置原料仓/物流仓，无法加载原料批次');
+    return null;
+  }
+  rawWarehouseId.value = rawWarehouse.id;
+  return rawWarehouse.id;
+}
+
 async function loadRawBatches() {
   if (!isXiuYou.value || !props.factoryId) return;
   const seq = ++rawBatchLoadSeq;
   rawBatchLoading.value = true;
   try {
-    const resp = await getAvailableRawBatches(props.factoryId);
+    const warehouseId = await ensureRawWarehouseId();
+    if (!warehouseId) {
+      rawBatchOptions.value = [];
+      return;
+    }
+    const resp = await getAvailableRawBatches(props.factoryId, {
+      warehouseId,
+      productTypeId: props.productTypeId,
+    });
     if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = extractRawBatches(resp.data).filter((b) => rawBatchAvailable(b) > 0);
-  } catch {
+  } catch (err) {
     if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = [];
+    ElMessage.error(err instanceof Error ? err.message : '原料批次加载失败');
   } finally {
     if (seq === rawBatchLoadSeq) rawBatchLoading.value = false;
   }
@@ -698,9 +727,10 @@ function onPotCountChange(row: SheetRow, val: number) {
 }
 
 watch(
-  () => [props.factoryId, props.processCode] as const,
+  () => [props.factoryId, props.processCode, props.productTypeId] as const,
   () => {
     rawBatchOptions.value = [];
+    rawWarehouseId.value = '';
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
     if (isXiuYou.value) void loadRawBatches();
