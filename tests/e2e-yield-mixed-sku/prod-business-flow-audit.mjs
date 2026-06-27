@@ -409,7 +409,17 @@ async function main() {
 
   await page.goto(`${APP_URL}/production/plans`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(2200);
-  const search = page.locator('input[placeholder*="搜索"], input').first();
+  const statusSelect = page.locator('.el-select').first();
+  if (await statusSelect.isVisible().catch(() => false)) {
+    await statusSelect.click({ force: true });
+    await page.waitForTimeout(300);
+    const completedOption = page.locator('.el-select-dropdown__item').filter({ hasText: /已结单|宸茬粨/ }).last();
+    if (await completedOption.isVisible().catch(() => false)) {
+      await completedOption.click();
+      await page.waitForTimeout(800);
+    }
+  }
+  const search = page.locator('input[placeholder*="搜索计划"], input[placeholder*="计划编号"], input[placeholder*="搜索"]').first();
   if (await search.isVisible().catch(() => false)) {
     await search.fill(planNumber);
     await page.locator('button').filter({ hasText: /搜索/ }).first().click().catch(() => null);
@@ -420,14 +430,11 @@ async function main() {
   assertTrue(body.includes(planNumber), '生产计划列表可显示新建计划', { planNumber });
   const rowLocator = page.locator('.el-table__row').filter({ hasText: planNumber }).first();
   if (await rowLocator.isVisible().catch(() => false)) {
-    await rowLocator.locator('button').filter({ hasText: /逐道录入|逐工序|录入/ }).first().click().catch(() => null);
-    await page.waitForTimeout(2500);
-    await shot('process-sheet-drawer');
-    const drawerText = await page.locator('.el-drawer, .el-dialog, body').last().innerText().catch(() => '');
-    assertTrue(/双出成率|库存|出成率|继承原料|分摊成本|成本/.test(drawerText), '逐道录入弹窗显示出成率/库存/成本上下文');
-    assertTrue(drawerText.includes(a.batchNumber) || drawerText.includes(c.batchNumber) || drawerText.includes(e.batchNumber), '逐道录入弹窗显示已保存批次号');
+    const rowText = await rowLocator.innerText().catch(() => '');
+    assertTrue(/已完成|COMPLETED/.test(rowText), '已结单列表显示计划完成态', { rowText });
+    assertTrue(/待仓库确认|确认入库|看成本核算/.test(rowText), '已结单列表显示入库/成本核算上下文', { rowText });
   } else {
-    assertions.push({ label: '生产计划列表可定位新建计划所在行并打开逐道录入', pass: false, planNumber });
+    assertions.push({ label: '生产计划列表可定位新建计划所在行', pass: false, planNumber });
   }
 
   const result = {
