@@ -244,8 +244,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 1. 建 ProductionBatch (IN_PROGRESS — 文员录入意味着生产已完成)
         ProductionBatch batch = createProductionBatch(ctx, steps);
 
+        BigDecimal batchMaterialCost = BigDecimal.ZERO;
+        BigDecimal batchLaborCost = BigDecimal.ZERO;
         BigDecimal batchTotalCost = BigDecimal.ZERO;
         int consumptionsWritten = 0;
+        BigDecimal firstInputQty = firstPositiveInput(steps);
 
         // 2. 写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    ⛔ 不访问任何 in-memory map —— edges 是唯一上游输入.
@@ -257,6 +260,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), batch.getId(),
                     src.getId(), src.getMaterialTypeId(),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
+            batchMaterialCost = batchMaterialCost.add(edgeCost);
             batchTotalCost = batchTotalCost.add(edgeCost);
             consumptionsWritten++;
         }
@@ -273,6 +277,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), batch.getId(), st, seasoningCost, ctx.getUserId());
+                    batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
             } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
@@ -289,6 +294,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
                     ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
                     : computeLaborCost(st, ctx.getLaborRate());
+            batchLaborCost = batchLaborCost.add(laborCost);
             batchTotalCost = batchTotalCost.add(laborCost);
             // SP-F ①a: 人工写一条 ProductionReport(costCategory=LABOR), 让 OrderCostBreakdownService
             // 经 getYield → totalLaborCost 读取。否则人工只折进 WIP unitPrice, 成本拆分里 laborCost=0。
@@ -319,6 +325,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
                     lastOutputQty, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
         }
+        applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty);
 
         return new MaterializedBatch(batch.getId(), batch.getBatchNumber(),
                 wipMbId, batchTotalCost, consumptionsWritten);
@@ -335,8 +342,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     public MaterializedBatch rematerializeInPlace(MaterializeContext ctx, Long existingBatchId,
                                                   String existingWipMbId, List<StepEntry> steps,
                                                   List<ResolvedEdge> edges, List<String> warnings) {
+        BigDecimal batchMaterialCost = BigDecimal.ZERO;
+        BigDecimal batchLaborCost = BigDecimal.ZERO;
         BigDecimal batchTotalCost = BigDecimal.ZERO;
         int consumptionsWritten = 0;
+        BigDecimal firstInputQty = firstPositiveInput(steps);
 
         // 1. 重写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    与 materializeBatch 同算式 (setScale(2,HALF_UP)), 写入 existingBatchId.
@@ -348,6 +358,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), existingBatchId,
                     src.getId(), src.getMaterialTypeId(),
                     qty, unitPrice, edgeCost, e.getSourceType(), ctx.getUserId());
+            batchMaterialCost = batchMaterialCost.add(edgeCost);
             batchTotalCost = batchTotalCost.add(edgeCost);
             consumptionsWritten++;
         }
@@ -359,6 +370,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), existingBatchId, st, seasoningCost, ctx.getUserId());
+                    batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
             } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
@@ -370,6 +382,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
                     ? computeLaborCost(st.getLaborSegments(), ctx.getLaborRate())
                     : computeLaborCost(st, ctx.getLaborRate());
+            batchLaborCost = batchLaborCost.add(laborCost);
             batchTotalCost = batchTotalCost.add(laborCost);
             // SP-F ①a: 重物化也写人工 ProductionReport (镜像 materializeBatch)。
             // caller 已软删旧报工 (含旧人工行), 这里重新写入保持 getYield 可读。
@@ -409,6 +422,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (lastOutputQty.signum() > 0) {
             pb.setQuantity(lastOutputQty);
         }
+        applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty);
         batchRepo.save(pb);
 
         return new MaterializedBatch(existingBatchId, pb.getBatchNumber(),
@@ -463,6 +477,42 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         batch.setCreatedAt(LocalDateTime.now());
 
         return batchRepo.save(batch);
+    }
+
+    private BigDecimal firstPositiveInput(List<StepEntry> steps) {
+        if (steps == null) {
+            return BigDecimal.ZERO;
+        }
+        return steps.stream()
+                .map(StepEntry::getInputQuantity)
+                .filter(q -> q != null && q.signum() > 0)
+                .findFirst()
+                .orElse(BigDecimal.ZERO);
+    }
+
+    private void applyBatchCostSummary(ProductionBatch batch,
+                                       BigDecimal materialCost,
+                                       BigDecimal laborCost,
+                                       BigDecimal totalCost,
+                                       BigDecimal inputQty,
+                                       BigDecimal outputQty) {
+        BigDecimal material = nz(materialCost);
+        BigDecimal labor = nz(laborCost);
+        BigDecimal total = nz(totalCost);
+        batch.setMaterialCost(material.setScale(2, RoundingMode.HALF_UP));
+        batch.setLaborCost(labor.signum() > 0 ? labor.setScale(2, RoundingMode.HALF_UP) : null);
+        batch.setTotalCost(total.setScale(2, RoundingMode.HALF_UP));
+        if (outputQty != null && outputQty.signum() > 0) {
+            batch.setUnitCost(total.divide(outputQty, 4, RoundingMode.HALF_UP));
+        } else {
+            batch.setUnitCost(null);
+        }
+        if (inputQty != null && inputQty.signum() > 0 && outputQty != null) {
+            batch.setYieldRate(outputQty.multiply(new BigDecimal("100"))
+                    .divide(inputQty, 2, RoundingMode.HALF_UP));
+        } else {
+            batch.setYieldRate(null);
+        }
     }
 
     private String generateBatchNumber(String factoryId, boolean finished) {

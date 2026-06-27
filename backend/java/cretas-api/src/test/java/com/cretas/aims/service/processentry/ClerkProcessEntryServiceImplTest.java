@@ -592,6 +592,18 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(cap.getValue().getBatchType())
                 .as("finished batch batchType must be REGULAR")
                 .isEqualTo("REGULAR");
+        assertThat(cap.getValue().getMaterialCost())
+                .as("ProductionBatch materialCost should mirror materialized consumption cost")
+                .isEqualByComparingTo("50.00");
+        assertThat(cap.getValue().getTotalCost())
+                .as("ProductionBatch totalCost should not remain blank after materialization")
+                .isEqualByComparingTo("50.00");
+        assertThat(cap.getValue().getUnitCost())
+                .as("unitCost = totalCost / outputQuantity")
+                .isEqualByComparingTo("6.2500");
+        assertThat(cap.getValue().getYieldRate())
+                .as("yieldRate = outputQuantity / inputQuantity * 100")
+                .isEqualByComparingTo("80.00");
     }
 
     /**
