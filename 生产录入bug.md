@@ -538,3 +538,14 @@ web-admin：
 - **HEADED 核对**:打开「看成本核算」页(`/production-analytics/yield-cost`,M67YieldCost),切批次号模式输入批次刷新 → 页面渲染的总成本数字 == API。客户在成本页看到的金额准确。
 
 至此成本准确性三段闭环:逐道出成率卡 per-批分摊成本(三方对账 oracle==API==DOM)→ 批次 cost-analysis API 一致 → 成本核算页 headed 渲染一致。
+
+### 15. 人工成本真值核对 + 缺配置不伪装0(headed)
+
+测试:`tests/e2e-yield-mixed-sku/headed-labor-cost.mjs`(headed prod F006,9 断言全过)
+
+补上成本准确性链上唯一没被真数字验证过的一段 —— **人工成本**(此前所有测试人工都是缺配置/0):
+- headed 在逐道录入填工时段(08:00-10:00=2h × 2人 = 4 工时,WorkHoursTable 实时算"合计工时 4.00 h")。
+- **人工成本真值**:首道批 rowTotalCost = **114 = 原料(单价10×1.0) + 人工(104)**;laborCost = 4 工时 × 26 元 = **104**,精确对上。
+- **防呆 缺配置不伪装0**:F006 未配 `factory_cost_settings.laborHourlyRate` → 后端**显式 warning**「工时单价未配置, 本批人工成本按默认 26 元/工时计入; 如需覆盖请在工厂成本设置中配置」+ 用默认 26 计入,**不静默按 0**。符合「缺配置不应伪装成 0」原则。
+
+注:`?productionPlanId=` query 过滤被后端忽略(同 material-batches 的 productTypeId),会返回跨计划批次 —— 测试改用 plan-scoped path 端点(`/production-plans/{id}/process-sheet/inventory/yield-card`)取本计划批,绕开该坑。
