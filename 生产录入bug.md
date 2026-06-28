@@ -424,3 +424,70 @@ web-admin：
 - 缺来源不应继续安静结算。
 - 成本核算页应显示“缺失原因”和“需要补什么配置”。
 
+---
+
+## 2026-06-28 续：成本 scale 修复 + UI 三方对账 + 包材模型核实
+
+### 9. 出成率卡成本 addedCost 出现负数/亚分级舍入噪音
+
+相关提交：`ca1746df6 fix: scale-2 inherited cost in process-sheet yield card`（已上线 prod `v20260628_105937`）
+
+现象：
+
+- 逐道出成率卡里，某些工序“新增成本(addedCost)”出现负数（如 `-0.0006`）或微小噪音（如 `+0.0046`，而该工序其实没有新增成本）。
+- 这会污染“0 成本排查”——分不清“合法的 0 新增”和“舍入噪音”。
+
+根因：
+
+- 展示侧 `inheritedCost` 按全精度重算（`source.unitPrice × feed`），但 `rowTotalCost` 取自持久化的 `productionBatch.totalCost`（已 `setScale(2)`）。
+- 两者**混标度相减** `addedCost = rowTotalCost - inheritedCost` → 亚分级残差，可正可负。
+- 持久化侧 `ClerkProcessEntryServiceImpl.materializeBatch` 对**每条消耗边**都 `edgeCost = unitPrice.multiply(feedKg).setScale(2, HALF_UP)`，展示侧没对齐。
+
+修复：
+
+- `resolveInheritedSourceCost` 对每个来源 `...multiply(feed).setScale(2, HALF_UP)`，逐边镜像持久化口径。
+- rowTotalCost 回退路径（`wip.unitPrice × produced`）也 `setScale(2)`。
+- 结果：`inheritedCost` 与持久化消耗成本逐边相等，`addedCost = 真实新增成本(人工/调料)`，恒 ≥ 0，`继承成本 ≤ 行总成本` 恒成立。
+- 回归用例：`ProcessSheetYieldCardTest` YIELD-CARD-0D（复刻 `10.67 × 0.18 = 1.9206 → 1.92`）。
+
+口径铁律（新增）：
+
+- **任何“展示侧重算成本”必须逐边镜像持久化的 `setScale` 口径**（scale + RoundingMode + 在哪步 round）。
+- 钱按“分”(scale-2) 记账 + 零漂移不可兼得；亚分级舍入是固有代价，关键是**两侧口径一致**。
+
+### 10. UI 层深度 E2E（三方对账：oracle == API == 渲染 DOM）
+
+测试脚本：`tests/e2e-yield-mixed-sku/ui-render-deep-audit.mjs`（headed prod F006）
+
+- 补上 API-only 测试看不到的前端显示 bug（#1 漏字段 / #7 结单弹窗丢混 SKU 行）。
+- 每个出成率/成本数字做三方对账：第一性 oracle == 出成率卡 API == 渲染 DOM 文本。
+- 结单通过**真实 UI**提交（填工时→点提交），验证混 SKU 行端到端不丢。
+- 含成本干净度断言（addedCost 非负/无亚分噪音，继承≤行总）。
+- 74 断言全过；末道混来源 E：77.656 ≈ 77.6583 ≈ 77.66% 三方一致。
+
+### 11. 包材模型核实（按数量 + 配比÷损耗，纯配置不写代码）
+
+客户张权确认真实规则：**包材按数量(个/卷/米)入库，不按重量；用量 = 固定值(配比) + 损耗**。
+
+- 系统已支持，且全是配置：
+  - 包材库存单位 = 计数单位（吸塑盒 = 件；`pcs/个/件/只` 经 `MaterialUomConverter` 归一，互通不报“无法换算”）。
+  - BOM(`bom_items`) 包材行：`standardQuantity`(配比) + `yieldRate`(出成率/损耗) + `materialCategory=PACKAGING`。
+  - 用量 = `计划数 × 配比 ÷ (出成率/100)`，物料建议/领料自动算。
+- 实测：吸塑盒 `1000 × 1 ÷ 0.995 = 1005.025 件`，单位“件”，无“无法换算”。测试：`tests/e2e-yield-mixed-sku/packaging-bom-flow-audit.mjs`（12 断言全过）。
+- “无法换算”报错的**真因**：脏的 kg WIP 半成品批被错挂在吸塑盒物料 id 下（WIP 按设计继承原料 id，而吸塑盒批次曾被放进原料仓当原料投产）→ 已清理。
+- 注意：**两套 BOM 系统并存** —— `bom_items`(物料建议/领料/成本真源，UI BOM 编辑写这套) vs `bom_recipes`(版本化 R&D 层)。配运行时 BOM 用 `bom_items`。
+- 注意：每盒净含量(`ProductType.gramsPerUnit`)是**产品侧**字段（气调报 kg → 盒数折算），与包材自重无关；张权确认包材自重很多“不知道”，也不需要。
+
+### 部署记录（2026-06-28）
+
+```text
+后端版本: v20260628_105937 (提交 ca1746df6, blue-green green:10020, 5/5 health)
+范围: 仅成本 scale 修复（展示侧只读，不动持久化/结单/写流程）
+```
+
+### 数据订正（事故 + 复原）
+
+- 误判“F006 配方重复冗余”→ 实测 prod DB：唯一索引 `uk_br_product_current` 已生效，全租户 0 重复，不是问题。
+- 误判根因：`GET /bom/recipes?productTypeId=X` 的过滤被后端**静默忽略**（同 material-batches），把工厂全部配方当成一个产品的多版本。
+- 连带：据此误判的清理脚本错误归档 15 个不同产品配方 → 已用 prod DB 事务复原（15 ACTIVE / 1 ARCHIVED，dupcheck 0）。生产无影响（advisory/领料/成本走 bom_items）。
+
