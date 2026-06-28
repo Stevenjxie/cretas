@@ -294,6 +294,59 @@ class ProcessSheetYieldCardTest {
     }
 
     @Test
+    @DisplayName("YIELD-CARD-0D: 继承成本逐边 scale-2, addedCost 不出现负数/亚分级舍入噪音 (回归: 1.92 vs 1.9206)")
+    void processSheetRows_inheritedCostScale2_addedCostNoSubCentNoise() throws Exception {
+        // 复刻 prod F006 真实场景: 上游 A 单价 10.67, 本道 C 消耗 0.18 → 10.67×0.18 = 1.9206.
+        // 修复前: inheritedCost 留全精度 1.9206, rowTotalCost = 1.92 (scale-2),
+        //         addedCost = 1.92 - 1.9206 = -0.0006 (负数 + 亚分级噪音, 污染"0成本排查").
+        // 修复后: inheritedCost 逐边 setScale(2)=1.92, addedCost = 0.00.
+        ProcessSheetRow sourceA = sheetRow(1, 9501L, "CLK-W-DA");
+        ProcessSheetRow midC = sheetRow(2, 9502L, "CLK-W-DC");
+        midC.setProcessCode("chaoshui");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(sourceA, midC));
+
+        ProcessSheetRowRequest sourceAPayload = sheetPayload("0.32", "0.30");
+        sourceAPayload.setProcessName("xiuyou-a");
+        ProcessSheetRowRequest midCPayload = sheetPayload("0.18", "0.16");
+        midCPayload.setProcessName("chaoshui-c");
+        ProcessSheetRowRequest.UpstreamRef upstreamA = new ProcessSheetRowRequest.UpstreamRef();
+        upstreamA.setSourceBatchNumber("CLK-W-DA");
+        upstreamA.setFeedQuantityKg(new BigDecimal("0.18"));
+        midCPayload.setUpstreamSources(List.of(upstreamA));
+
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class)).thenReturn(sourceAPayload);
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class)).thenReturn(midCPayload);
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9501"))
+                .thenReturn(Optional.of(materialWip(9501L, "CLK-W-DA", "0.30", "10.67")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9502"))
+                .thenReturn(Optional.of(materialWip(9502L, "CLK-W-DC", "0.16", "12")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(2);
+        ProcessSheetInventoryItem c = result.get(1);
+        assertThat(c.getBatchNumber()).isEqualTo("CLK-W-DC");
+        // 逐边 scale-2: 10.67 × 0.18 = 1.9206 → 1.92 (与持久化 edgeCost setScale(2) 对齐)
+        assertThat(c.getInheritedCost()).isEqualByComparingTo("1.92");
+        assertThat(c.getRowTotalCost()).isEqualByComparingTo("1.92");
+        // 继承成本永不超过行总成本
+        assertThat(c.getInheritedCost().compareTo(c.getRowTotalCost()))
+                .as("inheritedCost <= rowTotalCost")
+                .isLessThanOrEqualTo(0);
+        // addedCost 恒非负, 且无亚分级噪音 (本道无新增成本 → 0.00, 修复前为 -0.0006)
+        assertThat(c.getAddedCost())
+                .as("addedCost 不出现负数/舍入噪音")
+                .isEqualByComparingTo("0");
+        assertThat(c.getAddedCost().signum()).isGreaterThanOrEqualTo(0);
+        assertThat(c.getSourceBreakdowns()).hasSize(1);
+        assertThat(c.getSourceBreakdowns().get(0).getInheritedCost()).isEqualByComparingTo("1.92");
+    }
+
+    @Test
     @DisplayName("YIELD-CARD-0D: missing upstream source does not fabricate inherited raw or cumulative yield")
     void processSheetRows_missingUpstreamSource_doesNotFabricateYield() throws Exception {
         ProcessSheetRow row = sheetRow(2, 9401L, "CLK-W-MISSING-SOURCE");

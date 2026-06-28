@@ -599,9 +599,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String unit = req.getUnit() != null
                     ? req.getUnit()
                     : (wip != null ? wip.getQuantityUnit() : (productionBatch == null ? null : productionBatch.getUnit()));
+            // rowTotalCost 优先取持久化 productionBatch.totalCost (已 setScale(2));
+            // 回退路径 wip.unitPrice × produced 也 setScale(2), 保证参与 addedCost 相减的
+            // rowTotalCost 始终为 scale-2, 与 inheritedCost(逐边 scale-2) 同标度, addedCost 无噪音.
             BigDecimal rowTotalCost = firstPositiveOrNull(
                     productionBatch == null ? null : productionBatch.getTotalCost(),
-                    wip == null || wip.getUnitPrice() == null ? null : wip.getUnitPrice().multiply(produced));
+                    wip == null || wip.getUnitPrice() == null ? null
+                            : wip.getUnitPrice().multiply(produced).setScale(2, RoundingMode.HALF_UP));
             BigDecimal unitPrice = firstPositiveOrNull(
                     wip == null ? null : wip.getUnitPrice(),
                     productionBatch == null ? null : productionBatch.getUnitCost());
@@ -760,12 +764,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     private BigDecimal resolveInheritedSourceCost(ProcessSheetRowProvenance source, BigDecimal feedQuantity) {
+        // 必须与 ClerkProcessEntryServiceImpl.materializeBatch 的消耗边成本口径逐边对齐:
+        //   edgeCost = unitPrice.multiply(feedKg).setScale(2, HALF_UP)
+        // 持久化侧每条消耗边都 setScale(2), 而本展示侧若保留全精度, 会导致
+        // inheritedCost(全精度) 与 rowTotalCost(=Σ scale-2 边成本, scale-2) 混标度相减,
+        // addedCost 出现负数/亚分级舍入噪音 (e.g. 1.92 - 1.9206 = -0.0006), 污染"0成本排查".
+        // 这里逐边 setScale(2, HALF_UP) → inheritedCost 与持久化消耗成本逐边相等,
+        // addedCost = rowTotalCost - inheritedCost 即真实新增成本(人工/调料), 恒 >= 0, 无噪音.
         if (source.unitPrice != null) {
-            return source.unitPrice.multiply(feedQuantity);
+            return source.unitPrice.multiply(feedQuantity).setScale(2, RoundingMode.HALF_UP);
         }
         if (source.rowTotalCost != null && source.produced != null && source.produced.compareTo(BigDecimal.ZERO) > 0) {
             return source.rowTotalCost.multiply(feedQuantity)
-                    .divide(source.produced, 4, RoundingMode.HALF_UP);
+                    .divide(source.produced, 2, RoundingMode.HALF_UP);
         }
         return null;
     }
