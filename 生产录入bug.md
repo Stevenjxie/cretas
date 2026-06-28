@@ -430,7 +430,7 @@ web-admin：
 
 ### 9. 出成率卡成本 addedCost 出现负数/亚分级舍入噪音
 
-相关提交：`ca1746df6 fix: scale-2 inherited cost in process-sheet yield card`（已上线 prod `v20260628_105937`）
+相关提交：`b9ee3955a fix: scale-2 inherited cost in process-sheet yield card`（经 merge commit `ca1746df6` 入 main，已上线 prod `v20260628_105937`）
 
 现象：
 

@@ -85,7 +85,7 @@ async function main() {
     const hasMix = procs.findIndex((p) => /熟|卤|煮/.test(String(p.processName || '')));
     const hasFin = procs.findIndex((p) => /气调|包装|分切|装盒/.test(String(p.processName || '')));
     if (procs.length >= 6 && hasMix > 0 && hasFin > hasMix) {
-      const batches = arr(await apiGet(`/${FACTORY}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(rawWh.id)}&productTypeId=${encodeURIComponent(id)}&size=50`)).filter((b) => num(b.currentQuantity ?? b.quantity) > 1 && !/^WIP-|^CLK-/.test(String(b.batchNumber || '')));
+      const batches = arr(await apiGet(`/${FACTORY}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(rawWh.id)}&productTypeId=${encodeURIComponent(id)}&size=50`)).filter((b) => num(b.currentQuantity ?? b.quantity) > 1 && !/^WIP-|^CLK-/.test(String(b.batchNumber || '')) && !/件|个|只|pcs|pc$/i.test(String(b.quantityUnit || b.unit || ''))); // 排除计数单位包材
       if (batches.length >= 2) { pick = { id, name: pr.name, procs, batches, mixIdx: hasMix, finIdx: hasFin }; break; }
     }
   }

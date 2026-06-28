@@ -101,7 +101,8 @@ async function main() {
     const raw = whs.find((w) => w.code === 'WH-LOG') || whs.find((w) => ['RAW', 'LOGISTICS'].includes(String(w.type)));
     if (!raw?.id) continue;
     const batches = arr(await api(`/${FACTORY}/material-batches/status/AVAILABLE?warehouseId=${encodeURIComponent(raw.id)}&productTypeId=${encodeURIComponent(id)}&size=50`))
-      .filter((b) => num(b.currentQuantity ?? b.quantity) > 1 && !String(b.batchNumber || '').startsWith('WIP-') && !String(b.batchNumber || '').startsWith('CLK-'));
+      .filter((b) => num(b.currentQuantity ?? b.quantity) > 1 && !String(b.batchNumber || '').startsWith('WIP-') && !String(b.batchNumber || '').startsWith('CLK-')
+        && !/件|个|只|pcs|pc$/i.test(String(b.quantityUnit || b.unit || ''))); // 排除计数单位包材(避免把吸塑盒当原料投产污染)
     const cook = procs.find((p) => /熟|气调|包装|卤|煮/.test(String(p.processName || '')));
     if (batches.length >= 2 && procs.length >= 2) { pick = { product: pr, id, name: pr.name || pr.productName, procs, batches, cook }; break; }
   }

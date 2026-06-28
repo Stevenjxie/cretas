@@ -169,7 +169,9 @@ async function main() {
       id: String(b.id || ''), batchNumber: b.batchNumber || b.id,
       currentQuantity: num(b.currentQuantity ?? b.availableQuantity ?? b.quantity),
       unitPrice: num(b.unitPrice ?? b.price),
-    })).filter((b) => b.id && (b.currentQuantity == null || b.currentQuantity > 0.5));
+      unit: String(b.quantityUnit || b.unit || ''),
+    })).filter((b) => b.id && (b.currentQuantity == null || b.currentQuantity > 0.5)
+      && !/件|个|只|pcs|pc$/i.test(b.unit)); // 排除计数单位包材(避免把吸塑盒当原料投产)
   }
   const rb1 = await rawBatches(p1);
   const rb2 = p2 === p1 ? rb1 : await rawBatches(p2);
