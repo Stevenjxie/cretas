@@ -514,3 +514,17 @@ web-admin：
 - 抽屉标题审计为测试选择器误取(匹配到另一"AI 创建"抽屉);真实逐道录入抽屉标题含品名,非产品缺陷。
 
 **审计总结:生产录入 + 结单流程对照 fool-proof-design.md 五条(Rule 1 预先边界 / Rule 2 上下文 / Rule 3 约束选择 / Rule 4 幂等 / 缺配置不伪装 0)全部满足,无 actionable 缺口。**
+
+### 13. 复杂边界深度测试:结单超产差异 + 幂等(LIVE 验证)
+
+测试:`tests/e2e-yield-mixed-sku/headed-settlement-edge.mjs`(headed prod F006,11 断言全过)
+
+故意把计划 plannedQuantity 设很小(0.05),逐道录入产出 0.13(> 计划)→ 触发超产路径,headed 验证:
+- **Rule 1 预先边界 ✓(LIVE)**:结单弹窗实际产量 > 计划 → 实时弹超产预警 alert。
+- **Rule 3 约束选择 ✓(LIVE)**:差异原因渲染为 el-select 标准下拉,选「其他」→ 显必填补充 textarea。(此前全链审计的 ⚠ 是假阴性,这里 LIVE 坐实合规。)
+- **Rule 4 幂等 ✓**:同一 idempotencyKey 重复提交结单 → 返回同一 COMPLETED 结果,未重复过账;回读 postingStatus 仍 PENDING_WAREHOUSE_RECEIPT 稳定。
+- **新发现(好的防呆)**:后端**API 层也强制**超产原因 —— 缺 `quantityVarianceReason` 时返 `409 实际产量超过计划产量, 必须选择超产原因`,不止前端拦。字段名:`ProductionSettlementRequest.quantityVarianceReason`(+ `quantityVarianceNote` 补充)。
+
+### 测试自身的坑(回归抓到)
+
+深度测试的原料批次发现用了被忽略的 `productTypeId` 过滤(同 material-batches list bug)→ 误把吸塑盒(件)包材批当原料投产,WIP 继承吸塑盒物料 id → 重新污染包材"无法换算"。已在所有 headed 测试加计数单位排除(`!/件|个|只|pcs/`),只取重量单位原料,避免再污染。
