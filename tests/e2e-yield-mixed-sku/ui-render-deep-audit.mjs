@@ -236,6 +236,19 @@ async function main() {
   }
   assert(Array.isArray(cards.E?.sourceBreakdowns) && cards.E.sourceBreakdowns.length === 2, 'E 混来源两个来源拆分', { n: cards.E?.sourceBreakdowns?.length });
 
+  // 1b) COST CLEANLINESS (verifies the scale-2 inheritedCost fix is LIVE):
+  //   addedCost 不出现负数/亚分级噪音, 继承成本 <= 行总成本, 成本均为 scale-2.
+  function scale2Clean(v) { return v == null || Math.abs(Number(v) - Math.round(Number(v) * 100) / 100) < 1e-9; }
+  for (const row of yc) {
+    const added = num(row.addedCost), inh = num(row.inheritedCost), rtc = num(row.rowTotalCost);
+    if (added != null) {
+      assert(added >= -0.0001, `成本修复: ${row.batchNumber} addedCost 非负(无负舍入噪音)`, { addedCost: added });
+      assert(scale2Clean(added), `成本修复: ${row.batchNumber} addedCost 为 scale-2(无亚分级噪音)`, { addedCost: added });
+    }
+    if (inh != null) assert(scale2Clean(inh), `成本修复: ${row.batchNumber} inheritedCost 为 scale-2`, { inheritedCost: inh });
+    if (inh != null && rtc != null) assert(inh <= rtc + 0.0001, `成本修复: ${row.batchNumber} 继承成本<=行总成本`, { inheritedCost: inh, rowTotalCost: rtc });
+  }
+
   // ---- HEADED UI readback: open 逐道录入 drawer, read rendered yield card ----
   await page.goto(`${APP_URL}/production/plans`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(2500);
@@ -309,8 +322,7 @@ async function main() {
 
   const dialog = page.locator('.settlement-dialog').first();
   const dialogEl = (await dialog.count()) ? dialog : page.locator('.el-dialog').filter({ hasText: /核对结单|结单/ }).first();
-  // actual finished qty prefill
-  const actualQtyText = await dialogEl.locator('.settlement-context-value, .el-input-number input').allInnerTexts().catch(() => []);
+  // settlement context prefill
   const ctxValues = await dialogEl.locator('.settlement-context-value').allInnerTexts().catch(() => []);
   assert(ctxValues.some((t) => t.includes(planNumber)), '结单弹窗上下文显示计划单号(防呆 Rule2)', { ctxValues });
   // mixed-SKU raw rows preserved (#7): expect >= 2 raw consumption rows
