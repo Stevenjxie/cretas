@@ -127,3 +127,21 @@
 4. Task C 撤回(需先 grep 撤回端点存在性)。
 
 B、C 都有"功能是否存在"的前置判定 —— 若后端无该能力,如实记录"by design 不支持/暂无",不硬造测试(per verify-first)。
+
+---
+
+## VERIFY-FIRST 结论(2026-06-28 调研,改写 B/C)
+
+调研后端坐实 4 点(代码证据):
+1. **产品创建 = 模态 el-dialog**(`system/products/index.vue:1250`,新增产品 → 字段 name/code/unit/category/**标准克重 gramsPerUnit**/装箱换算,确定提交)。模态内 el-select teleport → 用 selectByKeyboard 退路。
+2. **BOM 配置 = 模态 el-dialog**(`production/bom/index.vue:1766`,添加 → materialCategory/materialTypeId/standardQuantity/yieldRate/unit,确定 → POST `/bom/items`)。
+3. **上游 WIP 是 plan-scoped**(`ProcessSheetServiceImpl.getInventory:355` 按 `planId` 过滤)→ **跨计划领用 by-design 不支持**。
+4. **生产侧无"直接撤回结单"端点** —— 只有 `/request-cancel`(PRODUCTION_REVERSAL 审批流)+ `/warehouse-receipt`(确认入库,PENDING_WAREHOUSE_RECEIPT 的正向下一步)。
+
+### Task B 改写 → 半成品 plan-scope 隔离(负向正确性)
+跨计划领用既然 by-design 不支持,改测**隔离正确性**:计划 A 产 WIP_A,计划 B 的上游下拉**不应**出现 WIP_A(只见自己计划的)。headed 验证 B 的 upstream dropdown 不含 WIP_A 批次号 → 确认 plan-scope 隔离对(防串料)。
+
+### Task C 改写 → 结单后正向流 + 撤回审批
+直接撤回不存在,改测真实存在的两条:
+- **C1 仓库确认入库**(`/warehouse-receipt`):结单 COMPLETED+PENDING_WAREHOUSE_RECEIPT → headed 确认入库 → 成品入库 + **实收差异走中转挂账**(§6.12)。验证差异核对防呆。
+- **C2 撤回审批请求**(`/request-cancel`):headed 申请撤回 → 触发 PRODUCTION_REVERSAL 审批流(不直接红冲)。验证它是审批流而非直接撤回(防呆:高风险操作走审批)。
