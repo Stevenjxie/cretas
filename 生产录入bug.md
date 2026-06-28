@@ -528,3 +528,13 @@ web-admin：
 ### 测试自身的坑(回归抓到)
 
 深度测试的原料批次发现用了被忽略的 `productTypeId` 过滤(同 material-batches list bug)→ 误把吸塑盒(件)包材批当原料投产,WIP 继承吸塑盒物料 id → 重新污染包材"无法换算"。已在所有 headed 测试加计数单位排除(`!/件|个|只|pcs/`),只取重量单位原料,避免再污染。
+
+### 14. 成本核算页数字 headed 核对(成本准确性闭环)
+
+测试:`tests/e2e-yield-mixed-sku/headed-cost-accounting.mjs`(headed prod F006,8 断言全过)
+
+把成本准确性核到客户看到的最后一页(成本核算页):
+- **成本 API 内部一致**:`processing/batches/{id}/cost-analysis` 与 `/enhanced` 的 totalCost 相等(production-cost-live-chain 不变量);分桶(料+工+设备+其他)求和 == total;unitCost == total/数量。
+- **HEADED 核对**:打开「看成本核算」页(`/production-analytics/yield-cost`,M67YieldCost),切批次号模式输入批次刷新 → 页面渲染的总成本数字 == API。客户在成本页看到的金额准确。
+
+至此成本准确性三段闭环:逐道出成率卡 per-批分摊成本(三方对账 oracle==API==DOM)→ 批次 cost-analysis API 一致 → 成本核算页 headed 渲染一致。
