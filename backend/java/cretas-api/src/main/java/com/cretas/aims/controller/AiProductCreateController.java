@@ -69,7 +69,9 @@ public class AiProductCreateController {
                     : executor.execute(toolCall, context);
             @SuppressWarnings("unchecked")
             Map<String, Object> parsed = MAPPER.readValue(result, Map.class);
-            return ApiResponse.success(parsed);
+            // 工具 buildSuccessResult 再包一层 {data:{实际结果}}; 解包内层, 让前端读 response.data.* 即可
+            Object inner = parsed.get("data");
+            return ApiResponse.success(inner instanceof Map ? inner : parsed);
         } catch (BusinessException be) {
             throw be;
         } catch (Exception e) {
