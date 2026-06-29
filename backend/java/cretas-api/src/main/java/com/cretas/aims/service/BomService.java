@@ -52,6 +52,17 @@ public interface BomService {
     List<BomItem> saveBomItems(List<BomItem> bomItems);
 
     /**
+     * BOM 批量导入: 逐行校验 (materialTypeId 缺则按 materialName 模糊匹配原料类型),
+     * <b>任一行失败则整批不入库</b> (原子), 返回每行 ok/error 结果。
+     *
+     * @param factoryId 工厂ID
+     * @param request   {productTypeId, items[]}
+     * @return 每行结果 + inserted/failed 计数
+     */
+    com.cretas.aims.dto.bom.BomBatchImportResult batchImportBomItems(
+            String factoryId, com.cretas.aims.dto.bom.BomBatchImportRequest request);
+
+    /**
      * 删除BOM项目
      *
      * @param id BOM项目ID

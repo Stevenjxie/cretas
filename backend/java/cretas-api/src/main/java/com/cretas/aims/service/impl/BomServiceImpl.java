@@ -252,6 +252,91 @@ public class BomServiceImpl implements BomService {
 
     @Override
     @Transactional
+    public com.cretas.aims.dto.bom.BomBatchImportResult batchImportBomItems(
+            String factoryId, com.cretas.aims.dto.bom.BomBatchImportRequest request) {
+        String productTypeId = request.getProductTypeId();
+        List<com.cretas.aims.dto.bom.BomBatchImportRequest.Row> rows = request.getItems();
+        if (productTypeId == null || productTypeId.isBlank()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "productTypeId 不可为空");
+        }
+        if (rows == null || rows.isEmpty()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "导入明细不可为空");
+        }
+        List<com.cretas.aims.entity.RawMaterialType> types = rawMaterialTypeRepository.findByFactoryId(factoryId);
+
+        List<BomItem> toInsert = new ArrayList<>();
+        List<com.cretas.aims.dto.bom.BomBatchImportResult.RowResult> results = new ArrayList<>();
+        boolean anyError = false;
+        int idx = 0;
+        for (com.cretas.aims.dto.bom.BomBatchImportRequest.Row r : rows) {
+            idx++;
+            try {
+                String mtId = r.getMaterialTypeId();
+                String matName = r.getMaterialName();
+                if (mtId == null || mtId.isBlank()) {
+                    final String mn = matName;
+                    if (mn == null || mn.isBlank()) {
+                        throw new com.cretas.aims.exception.BusinessException(400, "物料名与物料类型ID 至少填一个");
+                    }
+                    List<com.cretas.aims.entity.RawMaterialType> exact = types.stream()
+                            .filter(t -> mn.equals(t.getName())).collect(Collectors.toList());
+                    List<com.cretas.aims.entity.RawMaterialType> matches = !exact.isEmpty() ? exact
+                            : types.stream().filter(t -> t.getName() != null
+                                    && (t.getName().contains(mn) || mn.contains(t.getName())))
+                              .collect(Collectors.toList());
+                    if (matches.isEmpty()) {
+                        throw new com.cretas.aims.exception.BusinessException(400,
+                                "物料 '" + mn + "' 匹配不到原料类型, 请先建该原料类型或填 materialTypeId");
+                    }
+                    if (matches.size() > 1) {
+                        throw new com.cretas.aims.exception.BusinessException(400,
+                                "物料 '" + mn + "' 匹配到多个原料类型(" + matches.size() + "), 请填明确 materialTypeId");
+                    }
+                    mtId = matches.get(0).getId();
+                    if (matName == null || matName.isBlank()) matName = matches.get(0).getName();
+                }
+                if (r.getStandardQuantity() == null || r.getStandardQuantity().signum() <= 0) {
+                    throw new com.cretas.aims.exception.BusinessException(400, "成品含量 (standardQuantity) 必须 > 0");
+                }
+                String cat = (r.getMaterialCategory() == null || r.getMaterialCategory().isBlank())
+                        ? "RAW" : r.getMaterialCategory().trim().toUpperCase();
+                if (!java.util.Set.of("RAW", "AUXILIARY", "PACKAGING").contains(cat)) {
+                    throw new com.cretas.aims.exception.BusinessException(400,
+                            "物料类别须为 RAW/AUXILIARY/PACKAGING (当前: " + cat + ")");
+                }
+                String unit = (r.getUnit() == null || r.getUnit().isBlank())
+                        ? ("PACKAGING".equals(cat) ? "pcs" : "g") : r.getUnit().trim();
+                BomItem item = BomItem.builder()
+                        .productTypeId(productTypeId)
+                        .materialTypeId(mtId)
+                        .materialName(matName)
+                        .standardQuantity(r.getStandardQuantity())
+                        .yieldRate(r.getYieldRate())
+                        .unit(unit)
+                        .materialCategory(cat)
+                        .sortOrder(idx - 1)
+                        .build();
+                item.setFactoryId(factoryId);
+                toInsert.add(item);
+                results.add(new com.cretas.aims.dto.bom.BomBatchImportResult.RowResult(idx, true, null, mtId, matName));
+            } catch (Exception e) {
+                anyError = true;
+                results.add(new com.cretas.aims.dto.bom.BomBatchImportResult.RowResult(
+                        idx, false, e.getMessage(), null, r.getMaterialName()));
+            }
+        }
+        if (anyError) {
+            int failed = (int) results.stream().filter(x -> !x.isOk()).count();
+            log.warn("[BOM-IMPORT] factory={} product={} 校验失败 {} 行, 整批不入库", factoryId, productTypeId, failed);
+            return new com.cretas.aims.dto.bom.BomBatchImportResult(0, failed, results);
+        }
+        saveBomItems(toInsert);
+        log.info("[BOM-IMPORT] factory={} product={} 导入 {} 行", factoryId, productTypeId, toInsert.size());
+        return new com.cretas.aims.dto.bom.BomBatchImportResult(toInsert.size(), 0, results);
+    }
+
+    @Override
+    @Transactional
     public void deleteBomItem(Long id) {
         log.info("删除BOM项目: id={}", id);
         BomItem bomItem = bomItemRepository.findById(id)

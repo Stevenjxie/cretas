@@ -78,4 +78,16 @@ public class ProductWorkProcessController {
         service.batchSort(factoryId, request.getItems());
         return ApiResponse.success();
     }
+
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/copy-chain")
+    @Operation(summary = "从源产品一键复制整条工序链到目标产品 (目标已有工序链则 409)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public ApiResponse<java.util.Map<String, Object>> copyChain(
+            @PathVariable String factoryId,
+            @RequestParam @Parameter(description = "源产品ID") String sourceProductId,
+            @RequestParam @Parameter(description = "目标产品ID") String targetProductId) {
+        int copied = service.copyChain(factoryId, sourceProductId, targetProductId);
+        return ApiResponse.success(java.util.Map.of("copiedCount", copied));
+    }
 }

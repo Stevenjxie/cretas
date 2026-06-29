@@ -214,6 +214,50 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         }
     }
 
+    @Override
+    @Transactional
+    public int copyChain(String factoryId, String sourceProductId, String targetProductId) {
+        if (sourceProductId == null || targetProductId == null || sourceProductId.equals(targetProductId)) {
+            throw new BusinessException(400, "源产品与目标产品必须是两个不同的产品");
+        }
+        List<ProductWorkProcess> source = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, sourceProductId);
+        if (source.isEmpty()) {
+            throw new BusinessException(400, "源产品没有工序链可复制, 请先给源产品配置工序");
+        }
+        List<ProductWorkProcess> existing = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
+        if (!existing.isEmpty()) {
+            throw new BusinessException(409, "目标产品已有 " + existing.size() + " 道工序, 复制前请先清空目标工序链")
+                    .withHint("如需覆盖, 请先删除目标产品现有工序再复制");
+        }
+        int copied = 0;
+        for (ProductWorkProcess src : source) {
+            ProductWorkProcess entity = ProductWorkProcess.builder()
+                    .factoryId(factoryId)
+                    .productTypeId(targetProductId)
+                    .workProcessId(src.getWorkProcessId())
+                    .processOrder(src.getProcessOrder())
+                    .unitOverride(src.getUnitOverride())
+                    .estimatedMinutesOverride(src.getEstimatedMinutesOverride())
+                    // 防呆: 不复制人员指派 (各产品班组不同) — responsibleWorkerId/assignees 留空, 由用户另配
+                    .responsibleWorkerId(null)
+                    .reportingRequired(src.getReportingRequired())
+                    .defaultCostCategory(src.getDefaultCostCategory())
+                    .packagingTemplate(src.getPackagingTemplate())
+                    .auxAllocMethod(src.getAuxAllocMethod())
+                    .standardYieldRate(src.getStandardYieldRate())
+                    .auxUnitPrice(src.getAuxUnitPrice())
+                    .auxBasis(src.getAuxBasis())
+                    .build();
+            repository.save(entity);
+            copied++;
+        }
+        log.info("[COPY-CHAIN] factory={} {} -> {} copied {} processes (assignees not copied)",
+                factoryId, sourceProductId, targetProductId, copied);
+        return copied;
+    }
+
     /** Legacy overload — called from batchSort / delete (no assignee enrichment needed). */
     private ProductWorkProcessDTO toDTO(ProductWorkProcess entity, WorkProcess wp) {
         return toDTO(entity, wp, List.of());

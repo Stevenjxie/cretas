@@ -134,6 +134,17 @@ public class BomController {
     }
 
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PostMapping("/items/batch-import")
+    @Operation(summary = "BOM 批量导入 (Excel→JSON; 逐行校验, 任一行失败整批不入库)")
+    public ApiResponse<com.cretas.aims.dto.bom.BomBatchImportResult> batchImportBomItems(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @Valid @RequestBody com.cretas.aims.dto.bom.BomBatchImportRequest request) {
+        log.info("Batch importing BOM items: factoryId={}, productTypeId={}, rows={}",
+                factoryId, request.getProductTypeId(), request.getItems() == null ? 0 : request.getItems().size());
+        return ApiResponse.success(bomService.batchImportBomItems(factoryId, request));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/items/{id}")
     @Operation(summary = "更新BOM物料")
     public ApiResponse<BomItem> updateBomItem(
