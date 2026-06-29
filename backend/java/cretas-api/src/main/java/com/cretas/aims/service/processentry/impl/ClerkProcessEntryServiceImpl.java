@@ -378,9 +378,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
             } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
+                // 2026-06-29 修(审计补): rematerializeInPlace 路径 — 首版 fix 漏改的孪生 (审计抓到)。
+                //   同 materializeBatch: 只对熟制/调味道警告, 否则 re-save 时每个有上游的中间道误报。
                 String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
-                warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
-                        "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
+                if (processName != null && processName.matches(".*(熟|卤|煮|腌|注射|入味|调味).*")) {
+                    warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
+                            "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
+                }
             }
 
             BigDecimal laborCost = (st.getLaborSegments() != null && !st.getLaborSegments().isEmpty())
