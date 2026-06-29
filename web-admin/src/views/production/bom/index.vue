@@ -1449,6 +1449,15 @@ interface AdjustPreviewRow {
   [k: string]: unknown;
 }
 
+interface AdjustSeasoningRow {
+  name: string;
+  section: string;
+  dosagePerKgG: number | null;
+  priceSource1: number | null;
+  _changed: boolean;
+  [k: string]: unknown;
+}
+
 interface AdjustPreviewResult {
   status: string;
   message: string;
@@ -1459,6 +1468,7 @@ interface AdjustPreviewResult {
     newValue: unknown;
   };
   bomTable?: AdjustPreviewRow[];
+  seasoningTable?: AdjustSeasoningRow[];
 }
 
 const adjustDialogVisible = ref(false);
@@ -2601,6 +2611,30 @@ async function handleAdjustConfirm() {
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="单位" width="60" align="center" />
+        </el-table>
+        <el-table
+          v-if="adjustPreviewResult.seasoningTable && adjustPreviewResult.seasoningTable.length > 0"
+          :data="adjustPreviewResult.seasoningTable"
+          stripe
+          border
+          size="small"
+          style="width: 100%"
+          :row-class-name="({ row }: { row: AdjustSeasoningRow }) => row._changed ? 'adjust-changed-row' : ''"
+        >
+          <el-table-column prop="name" label="调料名称" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="section" label="段" width="90" align="center" />
+          <el-table-column label="每kg用量(g)" width="110" align="right">
+            <template #default="{ row }">
+              <span v-if="row.dosagePerKgG != null">{{ Number(row.dosagePerKgG).toFixed(2) }}</span>
+              <span v-else class="text-secondary">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="单价" width="80" align="right">
+            <template #default="{ row }">
+              <span v-if="row.priceSource1 != null">{{ Number(row.priceSource1).toFixed(2) }}</span>
+              <span v-else class="text-secondary">—</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 
