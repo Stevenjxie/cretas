@@ -518,7 +518,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .remaining(available)
                     .status(wip.getStatus())
                     .unitPrice(wip.getUnitCost())
-                    .rowTotalCost(wip.getUnitCost() == null || produced == null ? null : wip.getUnitCost().multiply(produced))
+                    .rowTotalCost(wip.getUnitCost() == null || produced == null ? null
+                            : wip.getUnitCost().multiply(produced).setScale(2, RoundingMode.HALF_UP)) // §9 口径铁律: 展示侧镜像持久化 scale-2, 防亚分噪音(1.9206→1.92)
                     .processOrder(wip.getProcessOrder())
                     .processName(processName)
                     .unit(unit)
