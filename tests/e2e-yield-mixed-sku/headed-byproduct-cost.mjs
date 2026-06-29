@@ -102,20 +102,30 @@ try {
   ok(!!bpBatch, '副产道产出批', { bpBatch });
   const oracleCredit = BP_QTY * BP_PRICE; // 2.00
 
-  // 探测成本端点的副产回收字段
-  let foundCredit = null, foundLabor = null, endpointUsed = null;
+  // 拉成本拆分端点 (完整成本模型: 分桶 + 副产冲减 + 净成本)
+  let cb = null, endpointUsed = null;
   for (const ep of [`/${FACTORY}/production/batches/${encodeURIComponent(bpBatch)}/cost-breakdown`, `/${FACTORY}/processing/batches/${encodeURIComponent(bpBatch)}/cost-breakdown`]) {
     const r = await api('GET', ep).catch(() => null);
-    if (r && typeof r === 'object') {
-      const credit = num(r.byproductCredit ?? r.byproductRecovery ?? r.costSummary?.byproductCredit);
-      const labor = num(r.laborCost ?? r.totalLaborCost ?? r.costBreakdown?.laborCost);
-      if (credit != null || labor != null) { foundCredit = credit; foundLabor = labor; endpointUsed = ep; break; }
-    }
+    if (r && typeof r === 'object' && (r.byproductCredit != null || r.totalCost != null)) { cb = r; endpointUsed = ep; break; }
   }
-  console.log('cost endpoint:', endpointUsed, '| byproductCredit:', foundCredit, '| laborCost:', foundLabor);
-  if (foundCredit != null) approx(foundCredit, oracleCredit, 0.02, `副产回收 == 数量×单价 (${BP_QTY}×${BP_PRICE})`);
-  else ok(false, '成本端点未暴露 byproductCredit (需确认正确端点)', { endpointUsed });
-  if (foundLabor != null) ok(foundLabor > 0, '人工成本>0 (填了工时段, 之前为空)', { laborCost: foundLabor });
+  ok(!!cb, '取到成本拆分端点', { endpointUsed });
+  if (cb) {
+    const credit = num(cb.byproductCredit), labor = num(cb.laborCost), total = num(cb.totalCost), net = num(cb.netTotalCost);
+    console.log('cost-breakdown:', JSON.stringify({ total, raw: cb.rawMaterialCost, labor, seasoning: cb.seasoningCost, packaging: cb.packagingCost, credit, net }));
+    // ① 副产回收 = 数量×单价 (肥油/料头变现冲减, 之前为空)
+    approx(credit, oracleCredit, 0.02, `副产回收 == 数量×单价 (${BP_QTY}×${BP_PRICE}=${oracleCredit})`);
+    // ② 人工成本>0 (填了工时段, 之前为空)
+    ok(labor != null && labor > 0, '人工成本>0 (填了工时段, 之前为空)', { laborCost: labor });
+    // ③ 总成本 = 料+工+调+包 各分桶之和 (完整成本等式)
+    const compSum = (num(cb.rawMaterialCost) ?? 0) + (num(cb.laborCost) ?? 0) + (num(cb.seasoningCost) ?? 0) + (num(cb.packagingCost) ?? 0);
+    approx(compSum, total, 0.02, '总成本 = 料+工+调+包 分桶之和');
+    // ④ 净成本 = 总成本 - 副产回收 (副产真冲减)
+    if (net != null && credit != null) approx(net, total - credit, 0.02, '净成本 = 总成本 - 副产回收');
+    // ⑤ 副产明细 value = 数量×单价
+    const bp0 = (cb.byproducts || [])[0];
+    if (bp0) approx(num(bp0.value), num(bp0.quantity) * num(bp0.unitPrice), 0.02, '副产明细 value = 数量×单价');
+  }
+  const foundCredit = cb ? num(cb.byproductCredit) : null, foundLabor = cb ? num(cb.laborCost) : null;
 
   const fails = asserts.filter((a) => !a.pass);
   const status = fails.length === 0 ? 'PASS' : (fails.length <= 2 ? 'PARTIAL' : 'FAIL');
