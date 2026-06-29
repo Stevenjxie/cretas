@@ -70,6 +70,14 @@ async function saveRow(procName, selectText, feed, output, captureDisabled) {
   await row.locator('button').filter({ hasText: '保存' }).first().click();
   const saved = await helpers.waitSaved();
   if (/工时单价未配置|默认\s*26/.test(saved.toast)) fp('缺配置不伪装0', `保存 warning: "${saved.toast.slice(0, 40)}"`, '✓ 缺工时单价显式提示, 非静默0');
+  // UX 硬规则(吸取教训): 非熟制道不该报"未识别为调味步骤"调料警告 — 过度触发是 bug
+  const isCook = /熟|卤|煮|腌|注射|入味|调味/.test(procName);
+  if (/未识别为调味|调料成本未计入/.test(saved.toast) && !isCook) {
+    ok(false, `非熟制道(${procName}) 误报调料警告(过度触发)`, { toast: saved.toast.slice(0, 50) });
+  }
+  // UX 硬规则: 捕获错误 toast (如"该行已存在/并发提交"), 不被成功 toast 掩盖
+  const errToast = await page.locator('.el-message--error:visible').first().innerText().catch(() => '');
+  if (errToast && /已存在|并发|失败|错误/.test(errToast)) ok(false, `保存期出现错误 toast(${procName})`, { err: errToast.slice(0, 50) });
   if (!saved.saved) throw new Error(`save failed (${procName}): ${saved.toast}`);
   await page.waitForTimeout(1200);
   return saved;
@@ -119,6 +127,8 @@ try {
       await saveRow(proc.processName, sel, feed, output, i === 0);
       const card = await ycByOrder(planId, proc.processOrder);
       if (!card) { ok(false, `SKU${s + 1} ${proc.processName} 出成卡回读`, {}); break; }
+      // UX 硬规则(吸取教训): 出成率卡"工序"列必须是真实工序名, 不能是"工序N"
+      ok(!/^工序\d+$/.test(String(card.processName || '')), `SKU${s + 1} ${proc.processName} 出成卡显示真实工序名`, { got: card.processName });
       prevBatch = card.batchNumber;
       // oracle
       const stepYieldOracle = round4((output / feed) * 100);
