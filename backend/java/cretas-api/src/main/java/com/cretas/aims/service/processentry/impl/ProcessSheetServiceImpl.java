@@ -551,6 +551,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .stream()
                 .collect(Collectors.toMap(ProductionBatch::getId, b -> b, (a, b) -> a));
 
+        // 兜底真实工序名 (按 productTypeId → order → 真实名): req 未存 processName 时, 避免显示"工序N"
+        Map<String, Map<Integer, String>> nameByOrderByProduct = new HashMap<>();
         Map<String, BigDecimal> firstInputByProductType = new HashMap<>();
         Map<String, String> firstUnitByProductType = new HashMap<>();
         Map<String, BigDecimal> gramsPerUnitByProductType = new HashMap<>();
@@ -561,6 +563,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             requestByBatchId.put(row.getBatchId(), req);
             String productTypeId = req.getProductTypeId();
             if (productTypeId == null) continue;
+            nameByOrderByProduct.computeIfAbsent(productTypeId, pid -> resolveProcessNamesByOrder(factoryId, pid));
             if (row.getProcessOrder() != null) {
                 minProcessOrderByProductType.merge(productTypeId, row.getProcessOrder(), Math::min);
             }
@@ -669,7 +672,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .addedCost(addedCost)
                     .sourceBreakdowns(rowProvenance.sourceBreakdowns)
                     .processOrder(row.getProcessOrder())
-                    .processName(req.getProcessName() != null ? req.getProcessName() : fallbackProcessName(row))
+                    .processName(resolveRowProcessName(req, row, nameByOrderByProduct))
                     .unit(unit)
                     .stepYieldRate(stepYieldRate)
                     .cumulativeYieldRate(cumulativeYieldRate)
@@ -854,6 +857,27 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     private String fallbackProcessName(ProcessSheetRow row) {
         return row.getProcessOrder() == null ? row.getProcessCode() : "工序" + row.getProcessOrder();
+    }
+
+    /**
+     * 出成率卡行的工序名: req 存了名就用; 否则按 productTypeId+order 反查真实名 (拆包/修油/熟制…);
+     * 都取不到才退到 "工序N"。避免逐道录入未存 processName 时整列显示乱码工序名。
+     */
+    private String resolveRowProcessName(ProcessSheetRowRequest req, ProcessSheetRow row,
+                                         Map<String, Map<Integer, String>> nameByOrderByProduct) {
+        if (req != null && req.getProcessName() != null && !req.getProcessName().isBlank()) {
+            return req.getProcessName();
+        }
+        if (req != null && req.getProductTypeId() != null && row.getProcessOrder() != null) {
+            Map<Integer, String> byOrder = nameByOrderByProduct.get(req.getProductTypeId());
+            if (byOrder != null) {
+                String name = byOrder.get(row.getProcessOrder());
+                if (name != null) {
+                    return name;
+                }
+            }
+        }
+        return fallbackProcessName(row);
     }
 
     /**
