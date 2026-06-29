@@ -549,3 +549,21 @@ web-admin：
 - **防呆 缺配置不伪装0**:F006 未配 `factory_cost_settings.laborHourlyRate` → 后端**显式 warning**「工时单价未配置, 本批人工成本按默认 26 元/工时计入; 如需覆盖请在工厂成本设置中配置」+ 用默认 26 计入,**不静默按 0**。符合「缺配置不应伪装成 0」原则。
 
 注:`?productionPlanId=` query 过滤被后端忽略(同 material-batches 的 productTypeId),会返回跨计划批次 —— 测试改用 plan-scoped path 端点(`/production-plans/{id}/process-sheet/inventory/yield-card`)取本计划批,绕开该坑。
+
+### 16. 成本配置缺口审计(人工单价 UI + 调料配方)—— 两个真实产品缺口
+
+延续 §15 人工成本核对,审计"配置入口是否存在",发现两个**真实缺口**:
+
+#### 16.1 工时单价(人工)无配置 UI/API —— 防呆 Rule 5 dead-end
+- §15 的 warning 说"如需覆盖请在**工厂成本设置**中配置工时单价"。
+- 实查:后端**没有任何**写入 `factory_cost_settings.laborHourlyRate` 的路径(无 save / 无 `@PostMapping` / 无 service),前端**没有**「工厂成本设置」页(只有逐道录入 grid)。
+- 结论:**warning 指向一个不存在的配置入口**(防呆 Rule 5 dead-end —— "缺配置告诉去配,但没地方配")。工时单价只能直接改 DB,F006 admin 无法自助配置 → 人工成本永远按默认 26。
+- 建议:① 加「工厂成本设置」页(laborHourlyRate CRUD),或 ② 改 warning 不再指向不存在的页(诚实)。
+
+#### 16.2 F006 全部产品零 调料配方 —— 调料成本普遍未计入
+- 实查 `/bom/recipes/by-product/{id}/seasoning`:8 个卤味产品(含真客户 叮咚好食光轻卤门腔猪舌 / 卤猪蹄)**全部 seasoning items = 0**,无注射/熟制调料明细。
+- 含义:`computeSeasoningCost` 对所有 F006 产品走 缺配置分支 → 调料成本恒计 ¥0 + warning「未设置调料配方,调料成本暂记0;请在 生产→BOM配方→调料配方 tab 设置」(缺配置不伪装0 ✓ 防呆对)。
+- 但代价:**整个 F006 的卤味成本里调料这块是缺的**(只有原料+人工+设备,没有调料/辅料)。真利润核算会偏高。
+- 要核"调料成本真值"必须**先 headed 配一个 调料配方**(创建配方→调料配方 tab),F006 现在没有可复用的 → 见下方 Codex brief。
+
+**至此成本准确性结论**:原料/人工/分摊/继承/cost-analysis/成本页 全部核过且准确;调料成本因 F006 无配方而普遍缺失(防呆正确报 0+warning,但数据不完整);工时单价无自助配置入口(dead-end)。
