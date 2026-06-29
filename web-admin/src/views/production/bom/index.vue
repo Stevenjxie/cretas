@@ -1433,6 +1433,125 @@ async function submitImport() {
     importSubmitting.value = false;
   }
 }
+
+// =========================================================================
+// 对话微调 (Conversational BOM Tweak)
+// =========================================================================
+
+interface AdjustPreviewRow {
+  materialName: string;
+  standardQuantity: number;
+  yieldRate: number | null;
+  unitPrice: number | null;
+  materialCategory: string;
+  unit: string;
+  _changed: boolean;
+  [k: string]: unknown;
+}
+
+interface AdjustPreviewResult {
+  status: string;
+  message: string;
+  change?: {
+    material: string;
+    field: string;
+    oldValue: unknown;
+    newValue: unknown;
+  };
+  bomTable?: AdjustPreviewRow[];
+}
+
+const adjustDialogVisible = ref(false);
+const adjustInstruction = ref('');
+const adjustPreviewLoading = ref(false);
+const adjustConfirmLoading = ref(false);
+const adjustPreviewResult = ref<AdjustPreviewResult | null>(null);
+
+const adjustConfirmEnabled = computed(
+  () => adjustPreviewResult.value?.status === 'PREVIEW',
+);
+
+function handleOpenAdjustDialog() {
+  if (!selectedProductTypeId.value) {
+    ElMessage.warning('请先选择产品');
+    return;
+  }
+  adjustInstruction.value = '';
+  adjustPreviewResult.value = null;
+  adjustDialogVisible.value = true;
+}
+
+async function handleAdjustPreview() {
+  if (!factoryId.value || !selectedProductTypeId.value) return;
+  const instruction = adjustInstruction.value.trim();
+  if (!instruction) {
+    ElMessage.warning('请输入微调指令');
+    return;
+  }
+  adjustPreviewLoading.value = true;
+  adjustPreviewResult.value = null;
+  try {
+    const res = await post(`/${factoryId.value}/bom/adjust/preview`, {
+      productTypeId: selectedProductTypeId.value,
+      instruction,
+    });
+    if (res.success && res.data) {
+      const data = res.data as AdjustPreviewResult;
+      if (data.status !== 'PREVIEW') {
+        ElMessage.warning(data.message || '预览失败，请检查指令');
+      } else {
+        adjustPreviewResult.value = data;
+      }
+    } else {
+      ElMessage.warning(res.message || '预览失败，请检查指令');
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      const msg =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '预览失败，请稍后重试';
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    adjustPreviewLoading.value = false;
+  }
+}
+
+async function handleAdjustConfirm() {
+  if (!factoryId.value || !selectedProductTypeId.value || !adjustConfirmEnabled.value) return;
+  adjustConfirmLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/bom/adjust`, {
+      productTypeId: selectedProductTypeId.value,
+      instruction: adjustInstruction.value.trim(),
+    });
+    if (res.success) {
+      ElMessage.success(
+        (res.data as { message?: string } | null)?.message
+          || res.message
+          || '微调已应用',
+      );
+      adjustDialogVisible.value = false;
+      adjustInstruction.value = '';
+      adjustPreviewResult.value = null;
+      await loadBomItems();
+      await loadCostSummary();
+    } else {
+      ElMessage({ message: res.message || '微调失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      const msg =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '微调失败，请稍后重试';
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    adjustConfirmLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1499,6 +1618,13 @@ async function submitImport() {
             style="margin-left: 12px;"
             @click="handleOpenRecalcPreview"
           >一键重算出成率</el-button>
+          <el-button
+            v-if="canWrite"
+            type="warning"
+            style="margin-left: 12px;"
+            :disabled="!selectedProductTypeId"
+            @click="handleOpenAdjustDialog"
+          >对话微调</el-button>
         </div>
         <div v-if="canViewPrice" class="header-right">
           <el-card class="cost-summary-card" shadow="never">
@@ -2405,6 +2531,89 @@ async function submitImport() {
         </el-button>
       </template>
     </el-drawer>
+
+    <!-- 对话微调 Dialog -->
+    <el-dialog
+      v-model="adjustDialogVisible"
+      title="对话微调 BOM"
+      width="700px"
+      :destroy-on-close="true"
+    >
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 13px; color: #606266; margin-bottom: 8px;">
+          当前产品：<strong>{{ selectedProductName }}</strong>
+        </div>
+        <el-input
+          v-model="adjustInstruction"
+          type="textarea"
+          :rows="3"
+          placeholder="例: 把冷冻猪舌用量改成120 / 猪舌损耗改成90% / 冷冻猪舌单价改成12"
+          maxlength="500"
+          show-word-limit
+          :disabled="adjustPreviewLoading || adjustConfirmLoading"
+        />
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <el-button
+            type="primary"
+            :loading="adjustPreviewLoading"
+            :disabled="!adjustInstruction.trim() || adjustConfirmLoading"
+            @click="handleAdjustPreview"
+          >预览</el-button>
+        </div>
+      </div>
+
+      <!-- Preview result -->
+      <div v-if="adjustPreviewResult">
+        <el-alert
+          type="success"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px;"
+        >
+          <template #title>{{ adjustPreviewResult.message }}</template>
+        </el-alert>
+        <el-table
+          v-if="adjustPreviewResult.bomTable && adjustPreviewResult.bomTable.length > 0"
+          :data="adjustPreviewResult.bomTable"
+          stripe
+          border
+          size="small"
+          style="width: 100%"
+          :row-class-name="({ row }: { row: AdjustPreviewRow }) => row._changed ? 'adjust-changed-row' : ''"
+        >
+          <el-table-column prop="materialName" label="物料名称" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="materialCategory" label="类型" width="80" align="center" />
+          <el-table-column label="成品含量" width="100" align="right">
+            <template #default="{ row }">
+              {{ Number(row.standardQuantity).toFixed(4) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="出成率%" width="90" align="right">
+            <template #default="{ row }">
+              <span v-if="row.yieldRate != null">{{ Number(row.yieldRate).toFixed(2) }}%</span>
+              <el-tag v-else type="warning" size="small" disable-transitions>待评估</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="单价" width="80" align="right">
+            <template #default="{ row }">
+              <span v-if="row.unitPrice != null">{{ Number(row.unitPrice).toFixed(2) }}</span>
+              <span v-else class="text-secondary">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="unit" label="单位" width="60" align="center" />
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="adjustDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="adjustConfirmLoading"
+          :disabled="!adjustConfirmEnabled"
+          @click="handleAdjustConfirm"
+        >确认微调</el-button>
+      </template>
+    </el-dialog>
   </div>
   </CanvasAwareWrapper>
 </template>
@@ -2750,6 +2959,16 @@ async function submitImport() {
 
   td {
     background-color: #fef0f0 !important;
+  }
+}
+
+/* 对话微调: 已变更行高亮 (green tint) */
+:deep(.adjust-changed-row) {
+  background-color: #f0f9eb !important;
+  font-weight: 600;
+
+  td {
+    background-color: #f0f9eb !important;
   }
 }
 </style>
