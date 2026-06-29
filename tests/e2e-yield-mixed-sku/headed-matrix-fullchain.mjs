@@ -161,15 +161,21 @@ async function runSku(s) {
     await fillNum(mixSec.locator('.el-input-number').first(), 0.1).catch(() => null);
     const nums = row.locator('.el-input-number');
     const cnt = await nums.count();
-    if (cnt >= 1) await fillNum(nums.nth(0), 5).catch(() => null);
-    if (cnt >= 5) await fillNum(nums.nth(4), 0.09).catch(() => null);
-    if (cnt >= 7) await fillNum(nums.nth(6), 0.1).catch(() => null);
+    if (cnt >= 1) await fillNum(nums.nth(0), 5).catch(() => null);   // 入库(盒)
+    if (cnt >= 2) await fillNum(nums.nth(1), 1).catch(() => null);   // 留样(盒) — 之前为空, 填 1 测可售模型
+    if (cnt >= 5) await fillNum(nums.nth(4), 0.09).catch(() => null); // 成品重
+    if (cnt >= 7) await fillNum(nums.nth(6), 0.1).catch(() => null);  // 使用重量
     await shot(`sku${s + 1}-finished`);
     await row.locator('button').filter({ hasText: '保存' }).first().click();
     const w = await waitSaved(); finSaved = w.saved;
     await page.waitForTimeout(1500);
   }
   ok(finSaved, `SKU${s + 1} 气调 成品批(盒数)`, {});
+
+  // 方向4 深化(审计补): 已在气调 UI 录入留样(盒). 气调成品批不在 plan yield-card(止于熟制),
+  //   此链不直接定位成品批号 → 留样/可售单盒成本模型的【数值断言】在 headed-matrix-cost-page.mjs 的
+  //   真实 CLK-B 成品批上做(可售盒数=盒数-留样 / 可售单盒成本=净成本/可售盒数 / 单盒毛=总成本/盒数)。
+  //   此处仅确认气调录入成功(已断言), 不静默假装验证。
 
   // 结单 (API prefill + settle)
   let settled = false, finishedBatchId = null;

@@ -70,6 +70,18 @@ try {
     const ratioSum = (num(simple.materialCostRatio) ?? 0) + (num(simple.laborCostRatio) ?? 0) + (num(simple.equipmentCostRatio) ?? 0) + (num(simple.otherCostRatio) ?? 0);
     if (sTotal > 0) approx(ratioSum, 100, 0.6, `${tag} 成本占比和 ≈ 100%`);
 
+    // 留样/可售单盒成本模型 (审计补 — sellable/sample/packaging 之前 0 覆盖)
+    if (isRealClk(b)) {
+      const cb = await api('GET', `/${FACTORY}/production/batches/${encodeURIComponent(b.batchNumber)}/cost-breakdown`).catch(() => null);
+      if (cb && num(cb.boxCount) > 0) {
+        const box = num(cb.boxCount), sample = num(cb.sampleRetainCount) ?? 0, sellable = num(cb.sellableBoxCount);
+        const total = num(cb.totalCost), net = num(cb.netTotalCost), perBox = num(cb.perBoxCost), sellPerBox = num(cb.sellablePerBoxCost);
+        if (sellable != null) approx(sellable, box - sample, 0.01, `${tag} 可售盒数 = 盒数 - 留样`);
+        if (perBox != null && total != null) approx(perBox, total / box, Math.max(0.01, total * 0.02), `${tag} 单盒毛成本 = 总成本/盒数`);
+        if (sellPerBox != null && net != null && sellable > 0) approx(sellPerBox, net / sellable, Math.max(0.01, net * 0.02), `${tag} 可售单盒成本 = 净成本/可售盒数`);
+      }
+    }
+
     let domTotal = null, domOk = null;
     if (isRealClk(b) && domVerified < DOM_N) {
       domVerified++;
