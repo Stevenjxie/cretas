@@ -283,9 +283,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             } else if (st.getUpstreamSources() != null && !st.getUpstreamSources().isEmpty()) {
                 // SP-D Fix 3: 混锅/熟制工序未被识别为调料步骤时给出警告
                 // 防止 processCategory=SEASONING 未配置或 potCount 缺失导致调料成本静默丢失 (计入¥0).
+                // 2026-06-29 修: 只对"看起来像熟制/调味"的工序(名含 熟/卤/煮/腌/注射/入味/调味)警告,
+                //   否则每个有上游的中间道(修油/滚揉/焯水)都误报"调料成本未计入", 满屏噪音且误导。
                 String processName = st.getProcessName() != null ? st.getProcessName() : ("工序" + st.getProcessOrder());
-                warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
-                        "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
+                if (processName != null && processName.matches(".*(熟|卤|煮|腌|注射|入味|调味).*")) {
+                    warnings.add("工序「" + processName + "」有上游来源但未识别为调味步骤" +
+                            "(缺 processCategory=SEASONING 或锅数)，调料成本未计入 — 请配置工序成本类别");
+                }
             }
 
             // 3b. 人工成本 (不写 MaterialConsumption，直接计入批次总成本)

@@ -28,6 +28,8 @@ import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -91,6 +93,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final SemiFinishedInventoryRepository wipRepo;
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository processRepo;
+    private final ProductWorkProcessRepository productWorkProcessRepo;
     private final ProductTypeRepository productTypeRepo;
 
     @Autowired(required = false)
@@ -434,6 +437,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 4. 回填 processName: taskId → workProcessId → processName
         Map<Long, String> processNameByTaskId = resolveProcessNames(factoryId, allWips);
+        // 4b. 兜底图: WIP 未关联 task 时按 processOrder 反查真实工序名 (避免显示"工序N")
+        String anyProductTypeId = allWips.stream()
+                .map(SemiFinishedInventory::getProductTypeId)
+                .filter(Objects::nonNull)
+                .findFirst().orElse(null);
+        Map<Integer, String> processNameByOrder = resolveProcessNamesByOrder(factoryId, anyProductTypeId);
 
         // 5. 获取每个批次的首道 YIELD 报工 inputQuantity (用于 step1 的 stepYieldRate 分母)
         //    key = batchId, value = Σ inputQuantity of processOrder=min YIELD reports
@@ -493,6 +502,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             prevUnitByBatch.put(batchId, unit);
 
             String processName = processNameByTaskId.get(wip.getSourceWorkProcessTaskId());
+            if (processName == null && wip.getProcessOrder() != null) {
+                processName = processNameByOrder.get(wip.getProcessOrder()); // 兜底真实名, 否则前端显示"工序N"
+            }
 
             result.add(ProcessSheetInventoryItem.builder()
                     .batchNumber(wip.getIntermediateBatchNo())
@@ -886,6 +898,38 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String name = pidToName.get(pid);
             if (name != null) out.put(tid, name);
         });
+        return out;
+    }
+
+    /**
+     * 兜底: processOrder → 真实工序名 (来自 product-work-process 链).
+     * 当 WIP 未关联 WorkProcessTask (如复制工序链新建的 SKU) 时, taskId→name 取不到, 出成率卡会显示"工序N";
+     * 用本图按 processOrder 反查真实工序名 (拆包/修油/熟制…), 避免乱码工序名。
+     */
+    private Map<Integer, String> resolveProcessNamesByOrder(String factoryId, String productTypeId) {
+        if (productTypeId == null) {
+            return new HashMap<>();
+        }
+        List<ProductWorkProcess> pwps =
+                productWorkProcessRepo.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
+        if (pwps.isEmpty()) {
+            return new HashMap<>();
+        }
+        Set<String> wpIds = pwps.stream()
+                .map(ProductWorkProcess::getWorkProcessId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<String, String> wpName = processRepo.findAllById(wpIds).stream()
+                .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+        Map<Integer, String> out = new HashMap<>();
+        for (ProductWorkProcess pwp : pwps) {
+            if (pwp.getProcessOrder() != null && pwp.getWorkProcessId() != null) {
+                String name = wpName.get(pwp.getWorkProcessId());
+                if (name != null) {
+                    out.put(pwp.getProcessOrder(), name);
+                }
+            }
+        }
         return out;
     }
 
