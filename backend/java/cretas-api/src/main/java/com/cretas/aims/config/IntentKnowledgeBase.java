@@ -3673,9 +3673,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("添加订单", "ORDER_LIST");
         phraseToIntentMapping.put("录入订单", "ORDER_LIST");
         phraseToIntentMapping.put("创建订单", "ORDER_LIST");
-        phraseToIntentMapping.put("添加产品信息", "MATERIAL_BATCH_CREATE");
-        phraseToIntentMapping.put("添加产品", "MATERIAL_BATCH_CREATE");
-        phraseToIntentMapping.put("新建产品", "MATERIAL_BATCH_CREATE");
+        // 产品创建短语 → PRODUCT_CREATE_FLYWHEEL (绑 product_create 工具, 飞轮衔接)。
+        // 此前无 product-create 意图, 误指向 MATERIAL_BATCH_CREATE(原料入库); 2026-06-29 修正为产品创建。
+        // 短语匹配(0.96)优先于 keyword, 故"新建产品"不再被 PRODUCT_UPDATE 的裸"产品"关键词抢。
+        phraseToIntentMapping.put("添加产品信息", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("添加产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("新建产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("新增产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("创建产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("建产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("建一个产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("建个产品", "PRODUCT_CREATE_FLYWHEEL");
+        phraseToIntentMapping.put("新建一个产品", "PRODUCT_CREATE_FLYWHEEL");
         phraseToIntentMapping.put("创建工单", "PROCESSING_BATCH_CREATE");
         phraseToIntentMapping.put("新建工单", "PROCESSING_BATCH_CREATE");
         phraseToIntentMapping.put("添加工单", "PROCESSING_BATCH_CREATE");
