@@ -117,6 +117,12 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (customer != null) {
             dto.setRelatedCustomer(customer);
         }
+        // created_by 是 NOT NULL: 普通 controller 路径由其自身从 token 填 dto.createdBy;
+        // 工具路径必须从 context.userId 显式设置, 否则 product_types.created_by 违反 NOT NULL 约束。
+        Object uid = context == null ? null : context.get("userId");
+        if (uid instanceof Number) {
+            dto.setCreatedBy(((Number) uid).longValue());
+        }
         ProductTypeDTO created = productTypeService.createProductType(factoryId, dto);
 
         // 2. 飞轮继承: 自动复制最相似产品的工序链 (大框架)
