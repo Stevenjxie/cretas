@@ -97,6 +97,17 @@ try {
   ok(saved.saved, `副产工序(${bpProc.processName})保存`, { toast: saved.toast.slice(0, 40) });
   await page.waitForTimeout(1500);
 
+  // ---- 审计补: re-save(编辑) 路径 — rematerializeInPlace 不该对非熟制道误报调料警告 ----
+  //   (独立审计抓到: 首版守卫只加到 materializeBatch, 漏了 re-save 路径; 编辑测试此前从未跑过)
+  await gotoTab(bpProc.processName); await page.waitForTimeout(800);
+  const reRow = activePane().locator('table.sp-grid tbody tr.sp-tr').last();
+  await fillNum(reRow.locator('.el-input-number').nth(1), 0.82).catch(() => null); // 微调产出 → 触发 rematerializeInPlace
+  await reRow.locator('button').filter({ hasText: '保存' }).first().click();
+  const resave = await waitSaved();
+  ok(resave.saved, `${bpProc.processName} re-save(编辑)成功`, {});
+  ok(!/未识别为调味|调料成本未计入/.test(resave.toast), `re-save 非熟制道无误报调料警告 (审计修验证)`, { toast: resave.toast.slice(0, 50) });
+  await page.waitForTimeout(1500);
+
   // ---- 验证: 副产回收 + labor 进入成本 ----
   const bpBatch = (await ycByOrder(planId, bpProc.processOrder))[0]?.batchNumber;
   ok(!!bpBatch, '副产道产出批', { bpBatch });
@@ -124,6 +135,9 @@ try {
     // ⑤ 副产明细 value = 数量×单价
     const bp0 = (cb.byproducts || [])[0];
     if (bp0) approx(num(bp0.value), num(bp0.quantity) * num(bp0.unitPrice), 0.02, '副产明细 value = 数量×单价');
+    // ⑥ 混批溯源 cost-share 和 ≈ 100% (审计补: sources[] 之前从未断言)
+    const srcs = cb.sources || [];
+    if (srcs.length) { const shareSum = srcs.reduce((s, x) => s + (num(x.costSharePct) ?? 0), 0); approx(shareSum, 100, 0.6, '溯源成本占比和 ≈ 100%'); }
   }
   const foundCredit = cb ? num(cb.byproductCredit) : null, foundLabor = cb ? num(cb.laborCost) : null;
 
