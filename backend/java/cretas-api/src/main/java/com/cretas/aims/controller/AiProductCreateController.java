@@ -6,9 +6,11 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.utils.JwtUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -31,22 +33,26 @@ import java.util.Map;
 public class AiProductCreateController {
 
     private final ToolRegistry toolRegistry;
+    private final JwtUtil jwtUtil;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @PostMapping("/preview")
     @Operation(summary = "预览飞轮建产品计划(最相似产品 + 继承工序链 + BOM/调料建议), 只读不落库")
-    public ApiResponse<Object> preview(@PathVariable String factoryId, @RequestBody Map<String, Object> body) {
-        return invoke(factoryId, body, true);
+    public ApiResponse<Object> preview(@PathVariable String factoryId, @RequestBody Map<String, Object> body,
+                                       HttpServletRequest request) {
+        return invoke(factoryId, body, true, request);
     }
 
     @RequirePermission({"production:read_write", "system:read_write"})
     @PostMapping
     @Operation(summary = "执行: 建产品 + 飞轮自动继承相似产品工序链(大框架)")
-    public ApiResponse<Object> create(@PathVariable String factoryId, @RequestBody Map<String, Object> body) {
-        return invoke(factoryId, body, false);
+    public ApiResponse<Object> create(@PathVariable String factoryId, @RequestBody Map<String, Object> body,
+                                      HttpServletRequest request) {
+        return invoke(factoryId, body, false, request);
     }
 
-    private ApiResponse<Object> invoke(String factoryId, Map<String, Object> body, boolean preview) {
+    private ApiResponse<Object> invoke(String factoryId, Map<String, Object> body, boolean preview,
+                                       HttpServletRequest request) {
         ToolExecutor executor = toolRegistry.getExecutor("product_create")
                 .orElseThrow(() -> new BusinessException(500, "product_create 工具未注册"));
         try {
@@ -56,6 +62,8 @@ public class AiProductCreateController {
                     MAPPER.writeValueAsString(body));
             Map<String, Object> context = new HashMap<>();
             context.put("factoryId", factoryId);
+            // AbstractTool.validateContext 要求 context 同时含 factoryId + userId
+            context.put("userId", extractUserId(request));
             String result = preview
                     ? executor.preview(toolCall, context)
                     : executor.execute(toolCall, context);
@@ -68,5 +76,18 @@ public class AiProductCreateController {
             log.error("[AI-PRODUCT-CREATE] {} 失败: {}", preview ? "preview" : "create", e.getMessage(), e);
             throw new BusinessException(500, "AI 建产品失败, 请稍后重试");
         }
+    }
+
+    /** 从 Authorization 头解析 userId (validateContext 必需; 解析失败返 null 不阻断只读 preview)。 */
+    private Long extractUserId(HttpServletRequest request) {
+        String auth = request.getHeader("Authorization");
+        if (auth != null && auth.startsWith("Bearer ")) {
+            try {
+                return jwtUtil.getUserIdFromToken(auth.substring(7));
+            } catch (Exception ignore) {
+                return null;
+            }
+        }
+        return null;
     }
 }

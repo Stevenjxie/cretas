@@ -1093,6 +1093,108 @@ function handleAiFill(params: TableRow) {
   refreshCodePreview();
   fetchSuggest(); // 立即按 AI 给的名称补充装箱等历史记忆
 }
+
+// ==================== AI 智能建产品 (飞轮衔接) ====================
+
+interface AiProductPreviewBomRow {
+  materialName: string;
+  standardQuantity: number;
+  yieldRate: number;
+  materialCategory: string;
+  unit: string;
+}
+
+interface AiProductPreviewSeasoningRow {
+  name: string;
+  section: string;
+  dosagePerKgG: number;
+}
+
+interface AiProductPreviewData {
+  status: string;
+  productName: string;
+  inheritFromProduct: string | null;
+  suggestedProcessChain: string[];
+  suggestedBom: AiProductPreviewBomRow[];
+  suggestedSeasoning: AiProductPreviewSeasoningRow[];
+  message: string;
+}
+
+const aiProductDialogVisible = ref(false);
+const aiProductPreviewing = ref(false);
+const aiProductCreating = ref(false);
+const aiProductPreview = ref<AiProductPreviewData | null>(null);
+
+const aiProductForm = reactive({
+  productName: '',
+  unit: '',
+  specification: '',
+  customerName: '',
+  inheritFrom: '',
+});
+
+function resetAiProductDialog() {
+  aiProductForm.productName = '';
+  aiProductForm.unit = '';
+  aiProductForm.specification = '';
+  aiProductForm.customerName = '';
+  aiProductForm.inheritFrom = '';
+  aiProductPreview.value = null;
+}
+
+function buildAiProductBody(): Record<string, string> {
+  const body: Record<string, string> = { productName: aiProductForm.productName.trim() };
+  if (aiProductForm.unit.trim()) body.unit = aiProductForm.unit.trim();
+  if (aiProductForm.specification.trim()) body.specification = aiProductForm.specification.trim();
+  if (aiProductForm.customerName.trim()) body.customerName = aiProductForm.customerName.trim();
+  if (aiProductForm.inheritFrom.trim()) body.inheritFrom = aiProductForm.inheritFrom.trim();
+  return body;
+}
+
+async function handleAiProductPreview() {
+  if (!aiProductForm.productName.trim()) {
+    ElMessage.warning('请输入产品名称');
+    return;
+  }
+  if (!factoryId.value) return;
+  aiProductPreviewing.value = true;
+  aiProductPreview.value = null;
+  try {
+    const res = await post<AiProductPreviewData>(
+      `/${factoryId.value}/ai-product-create/preview`,
+      buildAiProductBody()
+    );
+    if (res.success && res.data) {
+      aiProductPreview.value = res.data;
+    } else {
+      ElMessage({ message: res.message || '预览失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    handleCatchError(e, '预览失败');
+  } finally {
+    aiProductPreviewing.value = false;
+  }
+}
+
+async function handleAiProductCreate() {
+  if (!factoryId.value) return;
+  aiProductCreating.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/ai-product-create`, buildAiProductBody());
+    if (res.success) {
+      ElMessage.success((res.data as { message?: string })?.message || '产品已创建');
+      aiProductDialogVisible.value = false;
+      resetAiProductDialog();
+      await loadData();
+    } else {
+      ElMessage({ message: res.message || '创建失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    handleCatchError(e, '创建失败');
+  } finally {
+    aiProductCreating.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1124,6 +1226,9 @@ function handleAiFill(params: TableRow) {
                 SKU组装
               </el-button>
             </el-tooltip>
+            <el-button v-if="canWrite" type="warning" :icon="ChatDotRound" @click="aiProductDialogVisible = true; resetAiProductDialog()">
+              AI 智能建产品
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">
               新增产品
             </el-button>
@@ -1575,6 +1680,119 @@ function handleAiFill(params: TableRow) {
       </template>
     </el-dialog>
 
+    <!-- AI 智能建产品 (飞轮衔接) -->
+    <el-dialog
+      v-model="aiProductDialogVisible"
+      title="AI 智能建产品 (飞轮衔接)"
+      width="700px"
+      :close-on-click-modal="false"
+      @closed="resetAiProductDialog"
+    >
+      <el-form :model="aiProductForm" label-width="100px">
+        <el-form-item label="产品名称" required>
+          <el-input v-model="aiProductForm.productName" placeholder="请输入产品名称（必填）" clearable />
+        </el-form-item>
+        <el-form-item label="单位">
+          <el-input v-model="aiProductForm.unit" placeholder="如 盒、份、kg（可选）" clearable />
+        </el-form-item>
+        <el-form-item label="规格">
+          <el-input v-model="aiProductForm.specification" placeholder="如 120g/盒（可选）" clearable />
+        </el-form-item>
+        <el-form-item label="关联客户">
+          <el-input v-model="aiProductForm.customerName" placeholder="客户名称（可选）" clearable />
+        </el-form-item>
+        <el-form-item label="参照产品">
+          <el-input v-model="aiProductForm.inheritFrom" placeholder="参照产品名，飞轮按此继承工序链（可选）" clearable />
+        </el-form-item>
+      </el-form>
+
+      <div style="margin-bottom: 16px;">
+        <el-button type="info" :loading="aiProductPreviewing" @click="handleAiProductPreview">
+          预览飞轮方案
+        </el-button>
+      </div>
+
+      <!-- 预览结果 -->
+      <template v-if="aiProductPreview">
+        <el-alert
+          :title="aiProductPreview.message"
+          type="success"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px;"
+        />
+
+        <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 13px; color: #606266; flex-shrink: 0;">最相似产品:</span>
+          <el-tag v-if="aiProductPreview.inheritFromProduct" type="success">
+            {{ aiProductPreview.inheritFromProduct }}
+          </el-tag>
+          <span v-else style="font-size: 13px; color: #909399;">飞轮未找到相似产品，工序需手动配</span>
+        </div>
+
+        <template v-if="aiProductPreview.suggestedProcessChain.length > 0">
+          <div class="ai-section-title">将自动继承的工序链（大框架）</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px;">
+            <el-tag
+              v-for="(proc, idx) in aiProductPreview.suggestedProcessChain"
+              :key="idx"
+              type="primary"
+            >
+              {{ idx + 1 }}. {{ proc }}
+            </el-tag>
+          </div>
+        </template>
+
+        <template v-if="aiProductPreview.suggestedBom.length > 0">
+          <div class="ai-section-title">BOM 建议（细节请自行调）</div>
+          <el-table
+            :data="aiProductPreview.suggestedBom"
+            size="small"
+            border
+            stripe
+            style="width: 100%; margin-bottom: 14px;"
+          >
+            <el-table-column prop="materialName" label="原料名" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="materialCategory" label="分类" width="90" align="center" />
+            <el-table-column prop="standardQuantity" label="标准用量" width="90" align="center" />
+            <el-table-column label="出成率" width="80" align="center">
+              <template #default="{ row }">
+                {{ row.yieldRate != null ? (row.yieldRate * 100).toFixed(1) + '%' : '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="unit" label="单位" width="60" align="center" />
+          </el-table>
+        </template>
+
+        <template v-if="aiProductPreview.suggestedSeasoning.length > 0">
+          <div class="ai-section-title">调料配方建议</div>
+          <el-table
+            :data="aiProductPreview.suggestedSeasoning"
+            size="small"
+            border
+            stripe
+            style="width: 100%; margin-bottom: 14px;"
+          >
+            <el-table-column prop="name" label="调料名" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="section" label="工序段" width="110" />
+            <el-table-column prop="dosagePerKgG" label="用量 (g/kg)" width="100" align="center" />
+          </el-table>
+        </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="aiProductDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="aiProductCreating"
+          :disabled="!aiProductPreview"
+          @click="handleAiProductCreate"
+        >
+          确认建产品
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- AI 对话录入 -->
     <AiEntryDrawer
       v-model="aiEntryVisible"
@@ -1935,5 +2153,13 @@ function handleAiFill(params: TableRow) {
       color: #909399;
     }
   }
+}
+
+/* AI 智能建产品 dialog 内部标题 */
+.ai-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 6px;
 }
 </style>
