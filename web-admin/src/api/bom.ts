@@ -341,3 +341,44 @@ export const bomSeasoningApi = {
       null,
     ),
 };
+
+// =========================================================================
+// BOM Batch Import — Excel 导入原辅料行
+// Endpoint: POST /{factoryId}/bom/items/batch-import
+// =========================================================================
+
+/** One row sent to the batch-import endpoint */
+export interface BomImportRow {
+  materialName?: string;
+  materialTypeId?: string;
+  materialCategory?: string;
+  standardQuantity: number;
+  yieldRate?: number | null;
+  unit?: string;
+}
+
+/** Per-row result returned by the backend */
+export interface BomImportRowResult {
+  row: number;
+  ok: boolean;
+  error?: string;
+  resolvedMaterialTypeId?: string;
+  materialName?: string;
+}
+
+/** Top-level response from the batch-import endpoint */
+export interface BomBatchImportResult {
+  inserted: number;
+  failed: number;
+  rows: BomImportRowResult[];
+}
+
+export const batchImportBomItems = (
+  factoryId: string,
+  productTypeId: string,
+  items: BomImportRow[],
+) =>
+  post<BomBatchImportResult>(`/${factoryId}/bom/items/batch-import`, {
+    productTypeId,
+    items,
+  });

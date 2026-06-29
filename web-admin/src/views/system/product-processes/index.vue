@@ -66,6 +66,46 @@ const dirty = ref(false);
 // saving in progress
 const saving = ref(false);
 
+// ─────────────────────────────────────────────
+// 从产品复制工序链
+// ─────────────────────────────────────────────
+const copyChainDialogVisible = ref(false);
+const copyChainSourceId = ref('');
+const copyChainLoading = ref(false);
+
+/** Products available as copy source (excludes current target) */
+const copySourceProducts = computed(() =>
+  products.value.filter(p => p.id !== selectedProductId.value)
+);
+
+function openCopyChainDialog() {
+  copyChainSourceId.value = '';
+  copyChainDialogVisible.value = true;
+}
+
+async function confirmCopyChain() {
+  if (!copyChainSourceId.value || !selectedProductId.value || !factoryId.value) return;
+  copyChainLoading.value = true;
+  try {
+    const { post } = await import('@/api/request');
+    const res = await post<{ copiedCount: number }>(
+      `/${factoryId.value}/product-work-processes/copy-chain?sourceProductId=${copyChainSourceId.value}&targetProductId=${selectedProductId.value}`,
+      {}
+    );
+    if (res.success) {
+      ElMessage.success(`已复制 ${res.data?.copiedCount ?? 0} 道工序`);
+      copyChainDialogVisible.value = false;
+      await loadLinkedProcesses();
+    } else {
+      ElMessage.error(res.message || '复制失败');
+    }
+  } catch (e) {
+    handleCatchError(e, '复制工序链失败');
+  } finally {
+    copyChainLoading.value = false;
+  }
+}
+
 // Pending ops to flush on save
 interface PendingAdd { type: 'add'; wp: WorkProcessItem }
 interface PendingRemove { type: 'remove'; serverId: number }
@@ -827,6 +867,11 @@ async function saveCostConfig() {
               保存
             </el-button>
           </template>
+          <el-button
+            v-if="selectedProductId && canWrite"
+            :disabled="copyChainLoading"
+            @click="openCopyChainDialog"
+          >从产品复制工序链</el-button>
           <el-button :icon="Refresh" @click="handleRefresh" />
         </div>
       </div>
@@ -1079,6 +1124,51 @@ async function saveCostConfig() {
       <template #footer>
         <el-button @click="costDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="costSaving" @click="saveCostConfig">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 从产品复制工序链 dialog -->
+    <el-dialog
+      v-model="copyChainDialogVisible"
+      title="从产品复制工序链"
+      width="420px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="90px">
+        <el-form-item label="目标产品">
+          <el-tag>{{ selectedProductName }}</el-tag>
+        </el-form-item>
+        <el-form-item label="复制来源">
+          <el-select
+            v-model="copyChainSourceId"
+            placeholder="选择源产品"
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="p in copySourceProducts"
+              :key="p.id"
+              :label="p.name"
+              :value="p.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-top: 4px"
+        title="目标产品工序链须为空才可复制。若已有工序，后端将提示请先清空目标工序链。"
+      />
+      <template #footer>
+        <el-button @click="copyChainDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!copyChainSourceId"
+          :loading="copyChainLoading"
+          @click="confirmCopyChain"
+        >确认复制</el-button>
       </template>
     </el-dialog>
   </div>

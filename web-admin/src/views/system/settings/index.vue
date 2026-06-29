@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, put } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Setting, Bell, Lock, Monitor } from '@element-plus/icons-vue';
+import { Setting, Bell, Lock, Monitor, Coin } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -43,6 +43,9 @@ const securitySettings = ref({
   maxLoginAttempts: 5
 });
 
+// 成本设置
+const laborHourlyRate = ref<number | null>(null);
+
 // 系统状态
 const systemStatus = ref({
   version: '1.0.0',
@@ -54,6 +57,7 @@ const systemStatus = ref({
 onMounted(() => {
   loadSettings();
   loadSystemStatus();
+  loadCostSettings();
 });
 
 async function loadSettings() {
@@ -147,6 +151,42 @@ async function saveSecuritySettings() {
     const response = await put(`/${factoryId.value}/settings/security`, securitySettings.value);
     if (response.success) {
       ElMessage.success('安全设置已保存');
+    } else {
+      ElMessage.error(response.message || '保存失败');
+    }
+  } catch (error) {
+    // Interceptor shows specific toast; dedupe fallback
+    console.error('[失败]', error);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function loadCostSettings() {
+  if (!factoryId.value) return;
+  try {
+    const response = await get(`/${factoryId.value}/config/cost-settings`);
+    if (response.success && response.data) {
+      laborHourlyRate.value = response.data.laborHourlyRate ?? null;
+    } else if (response.success === false) {
+      ElMessage.error(response.message || '加载成本设置失败');
+    }
+  } catch {
+    // Use defaults — cost settings may not be initialized yet
+  }
+}
+
+async function saveCostSettings() {
+  if (!factoryId.value) return;
+
+  saving.value = true;
+  try {
+    const response = await put(`/${factoryId.value}/config/cost-settings`, {
+      laborHourlyRate: laborHourlyRate.value
+    });
+    if (response.success) {
+      ElMessage.success('工时单价已保存');
+      await loadCostSettings();
     } else {
       ElMessage.error(response.message || '保存失败');
     }
@@ -337,6 +377,39 @@ async function saveSecuritySettings() {
                 {{ systemStatus.databaseSize || '-' }}
               </el-descriptions-item>
             </el-descriptions>
+          </div>
+        </el-tab-pane>
+
+        <!-- 成本设置 -->
+        <el-tab-pane name="cost">
+          <template #label>
+            <span class="tab-label">
+              <el-icon><Coin /></el-icon>
+              成本设置
+            </span>
+          </template>
+
+          <div class="settings-section">
+            <el-form label-width="160px" style="max-width: 600px">
+              <el-form-item label="工时单价 (¥/工时)">
+                <el-input-number
+                  v-model="laborHourlyRate"
+                  :min="0.01"
+                  :precision="2"
+                  :controls="true"
+                  placeholder="按默认 26"
+                  style="width: 200px"
+                />
+                <div v-if="laborHourlyRate === null" class="form-tip" style="margin-left: 0; margin-top: 6px; display: block">
+                  未配置时按默认 ¥26/工时计入人工成本
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="saving" @click="saveCostSettings" :disabled="!canWrite">
+                  保存设置
+                </el-button>
+              </el-form-item>
+            </el-form>
           </div>
         </el-tab-pane>
       </el-tabs>

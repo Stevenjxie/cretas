@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { bomYieldEstimateApi, bomRecipeApi } from '@/api/bom';
+import { bomYieldEstimateApi, bomRecipeApi, batchImportBomItems } from '@/api/bom';
 import type {
   YieldEstimateResponse,
   RecalculatePreviewRow,
@@ -14,8 +14,10 @@ import type {
   BomRecipeItemPayload,
   CreateBomRecipeRequest,
   UpdateBomRecipeRequest,
+  BomImportRow,
 } from '@/api/bom';
 import { isAxiosError } from 'axios';
+import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete, Download, Refresh, MagicStick, InfoFilled } from '@element-plus/icons-vue';
 import BomChangeLog from './BomChangeLog.vue'
@@ -1272,6 +1274,165 @@ function refreshData() {
   loadCostSummary();
   loadBomRecipes();
 }
+
+// ========== Excel 导入 ==========
+interface ParsedImportRow {
+  materialName: string;
+  materialCategory: string;
+  standardQuantity: number;
+  yieldRate: number | null;
+  unit: string;
+  _ok?: boolean;
+  _error?: string;
+}
+
+const importFileInputRef = ref<HTMLInputElement | null>(null);
+const importDialogVisible = ref(false);
+const importSubmitting = ref(false);
+const importPreviewRows = ref<ParsedImportRow[]>([]);
+
+function downloadBomTemplate() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['物料名', '物料类别(RAW/AUXILIARY/PACKAGING)', '成品含量', '出成率%', '单位'],
+    ['示例: 猪蹄', 'RAW', 200, 61, 'g'],
+    ['示例: 辅料A', 'AUXILIARY', 5, 95, 'g'],
+    ['示例: 包装袋', 'PACKAGING', 1, '', 'pcs'],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'BOM模板');
+  XLSX.writeFile(wb, 'BOM导入模板.xlsx');
+}
+
+function handleImportClick() {
+  if (!selectedProductTypeId.value) {
+    ElMessage.warning('请先选择产品');
+    return;
+  }
+  importPreviewRows.value = [];
+  importFileInputRef.value?.click();
+}
+
+function handleFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  // Reset so the same file can be re-selected
+  input.value = '';
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const raw = e.target?.result;
+      const wb = XLSX.read(raw, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+
+      if (jsonRows.length === 0) {
+        ElMessage.warning('Excel 文件没有数据行，请检查格式');
+        return;
+      }
+
+      const parsed: ParsedImportRow[] = jsonRows
+        .map((r) => {
+          const materialName = String(
+            r['物料名'] ?? r['物料名称'] ?? '',
+          ).trim();
+          const categoryRaw = String(
+            r['物料类别(RAW/AUXILIARY/PACKAGING)'] ?? r['物料类别'] ?? 'RAW',
+          ).trim().toUpperCase();
+          const materialCategory =
+            categoryRaw === 'AUXILIARY' || categoryRaw === '辅料' ? 'AUXILIARY'
+            : categoryRaw === 'PACKAGING' || categoryRaw === '包材' ? 'PACKAGING'
+            : 'RAW';
+          const standardQuantity = Number(r['成品含量'] ?? 0);
+          const yieldRateRaw = r['出成率%'] ?? r['出成率'];
+          const yieldRate =
+            yieldRateRaw === '' || yieldRateRaw == null
+              ? null
+              : Number(yieldRateRaw);
+          const unit = String(r['单位'] ?? 'g').trim() || 'g';
+          return { materialName, materialCategory, standardQuantity, yieldRate, unit };
+        })
+        .filter((r) => r.materialName.length > 0 && r.standardQuantity > 0);
+
+      if (parsed.length === 0) {
+        ElMessage.warning('未解析到有效行（物料名必填，成品含量必须大于 0）');
+        return;
+      }
+
+      importPreviewRows.value = parsed;
+      importDialogVisible.value = true;
+    } catch {
+      ElMessage({
+        message: '解析 Excel 文件失败，请检查文件格式',
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+
+async function submitImport() {
+  if (!factoryId.value || !selectedProductTypeId.value) return;
+  importSubmitting.value = true;
+  try {
+    const items: BomImportRow[] = importPreviewRows.value.map((r) => ({
+      materialName: r.materialName,
+      materialCategory: r.materialCategory,
+      standardQuantity: r.standardQuantity,
+      yieldRate: r.yieldRate,
+      unit: r.unit,
+    }));
+    const res = await batchImportBomItems(factoryId.value, selectedProductTypeId.value, items);
+    if (res.success && res.data) {
+      const { inserted, failed, rows } = res.data;
+      if (failed > 0) {
+        // Reset result flags then apply per-row errors
+        importPreviewRows.value.forEach((r) => {
+          r._ok = undefined;
+          r._error = undefined;
+        });
+        rows.forEach((result, idx) => {
+          const target = importPreviewRows.value[idx];
+          if (target) {
+            target._ok = result.ok;
+            target._error = result.error;
+          }
+        });
+        ElMessage({
+          message: `${failed} 行校验失败，整批未导入，请修正后重试`,
+          type: 'warning',
+          duration: 0,
+          showClose: true,
+        });
+      } else {
+        ElMessage.success(`成功导入 ${inserted} 行`);
+        importDialogVisible.value = false;
+        await loadBomItems();
+        await loadCostSummary();
+      }
+    } else {
+      ElMessage({
+        message: res.message || '导入失败',
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) {
+      const msg =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '导入失败，请稍后重试';
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    importSubmitting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1498,6 +1659,13 @@ function refreshData() {
                 添加
               </el-button>
               <el-button size="small" :icon="Download" @click="exportToExcel('material')">导出</el-button>
+              <el-button
+                v-if="canWrite"
+                size="small"
+                :disabled="!selectedProductTypeId"
+                @click="handleImportClick"
+              >Excel 导入</el-button>
+              <el-button size="small" @click="downloadBomTemplate">下载模板</el-button>
             </div>
           </div>
         </template>
@@ -2079,6 +2247,75 @@ function refreshData() {
       </template>
     </el-dialog>
 
+    <!-- Hidden file input for Excel import -->
+    <input
+      ref="importFileInputRef"
+      type="file"
+      accept=".xlsx,.xls"
+      style="display: none"
+      @change="handleFileSelected"
+    />
+
+    <!-- Excel 导入预览对话框 -->
+    <el-dialog
+      v-model="importDialogVisible"
+      title="Excel 导入 BOM 原辅料 — 预览"
+      width="800px"
+      :destroy-on-close="true"
+    >
+      <div class="import-hint">
+        共解析 <strong>{{ importPreviewRows.length }}</strong> 行，请确认数据后点击「确认导入」。
+        整批校验通过才入库；任一行失败则整批不入库，错误行标红提示。
+      </div>
+      <el-table
+        :data="importPreviewRows"
+        stripe
+        border
+        size="small"
+        style="width: 100%"
+        :row-class-name="({ row }: { row: ParsedImportRow }) => row._ok === false ? 'import-error-row' : ''"
+      >
+        <el-table-column type="index" label="行" width="50" align="center" />
+        <el-table-column prop="materialName" label="物料名" min-width="130" show-overflow-tooltip />
+        <el-table-column prop="materialCategory" label="物料类别" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="row.materialCategory === 'RAW' ? '' : row.materialCategory === 'PACKAGING' ? 'warning' : 'info'"
+              size="small"
+              disable-transitions
+            >{{ row.materialCategory }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="standardQuantity" label="成品含量" width="100" align="right" />
+        <el-table-column label="出成率%" width="90" align="right">
+          <template #default="{ row }">
+            <span v-if="row.yieldRate != null">{{ row.yieldRate }}</span>
+            <el-tag v-else type="warning" size="small" disable-transitions>待评估</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="unit" label="单位" width="70" align="center" />
+        <el-table-column label="校验结果" width="160" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="row._ok === false"
+              type="danger"
+              size="small"
+              disable-transitions
+              style="white-space: normal; height: auto; line-height: 1.4"
+            >{{ row._error || '校验失败' }}</el-tag>
+            <el-tag v-else-if="row._ok === true" type="success" size="small" disable-transitions>成功</el-tag>
+            <span v-else class="text-secondary">待提交</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importSubmitting" @click="submitImport">
+          确认导入
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- BOM Change Log Drawer (P1-9) -->
     <BomChangeLog v-model:visible="changeLogVisible" :factory-id="factoryId" :product-type-id="selectedProductTypeId" />
 
@@ -2498,5 +2735,21 @@ function refreshData() {
 .text-secondary {
   color: #c0c4cc;
   font-size: 12px;
+}
+
+/* Excel 导入预览对话框 */
+.import-hint {
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+:deep(.import-error-row) {
+  background-color: #fef0f0 !important;
+
+  td {
+    background-color: #fef0f0 !important;
+  }
 }
 </style>
