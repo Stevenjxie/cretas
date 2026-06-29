@@ -160,6 +160,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             other.setIsCurrent(false);
             recipeRepo.save(other);
         }
+        // 原子性修复: 显式 flush 把旧版本 is_current=false 先落库, 再设新版本 current。
+        // 否则同一 @Transactional 内 Hibernate 提交时 flush 顺序不确定, 可能先把新版本
+        // is_current=true 落库再清旧版本, 瞬时存在两个 is_current=true → 撞 partial-unique
+        // uk_br_product_current → DataIntegrityViolation (flush-order flaky: 多数情况偶然成功,
+        // 偶发激活 409 "数据已存在"; 2026-06-29 补录调料配方时在猪舌产品复现)。
+        recipeRepo.flush();
 
         recipe.setStatus(BomRecipe.Status.ACTIVE);
         recipe.setIsCurrent(true);
