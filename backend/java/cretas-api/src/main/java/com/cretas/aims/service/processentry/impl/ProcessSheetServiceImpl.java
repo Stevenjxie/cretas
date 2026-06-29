@@ -438,10 +438,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 4. 回填 processName: taskId → workProcessId → processName
         Map<Long, String> processNameByTaskId = resolveProcessNames(factoryId, allWips);
         // 4b. 兜底图: WIP 未关联 task 时按 processOrder 反查真实工序名 (避免显示"工序N")
-        String anyProductTypeId = allWips.stream()
-                .map(SemiFinishedInventory::getProductTypeId)
+        //     productTypeId 优先取自批次(可靠); WIP 上可能为 null (逐道录入未回填) → 否则兜底图取不到
+        String anyProductTypeId = batches.stream()
+                .map(ProductionBatch::getProductTypeId)
                 .filter(Objects::nonNull)
-                .findFirst().orElse(null);
+                .findFirst()
+                .orElseGet(() -> allWips.stream()
+                        .map(SemiFinishedInventory::getProductTypeId)
+                        .filter(Objects::nonNull)
+                        .findFirst().orElse(null));
         Map<Integer, String> processNameByOrder = resolveProcessNamesByOrder(factoryId, anyProductTypeId);
 
         // 5. 获取每个批次的首道 YIELD 报工 inputQuantity (用于 step1 的 stepYieldRate 分母)
