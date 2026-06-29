@@ -1,11 +1,15 @@
 package com.cretas.aims.ai.tool.impl.bom;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.dto.bom.BomSeasoningResponse;
+import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.BomService;
+import com.cretas.aims.service.bom.BomRecipeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -40,6 +44,8 @@ public class BomAdjustTool extends AbstractBusinessTool {
     private ProductTypeRepository productTypeRepository;
     @Autowired
     private BomService bomService;
+    @Autowired
+    private BomRecipeService bomRecipeService;
 
     @Override
     public String getToolName() {
@@ -48,8 +54,9 @@ public class BomAdjustTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "对话式微调产品 BOM 原料: 改某原料的 用量/损耗/单价。例: '把冷冻猪舌用量改成120'、'猪舌损耗改成90%'、" +
-                "'冷冻猪舌单价改成12'。返回更新后的 BOM 表。仅 BOM 原辅料/包材; 调料配方微调暂不支持。";
+        return "对话式微调产品配方: 改某原料(BOM)或调料的 用量/损耗/单价。例: '把冷冻猪舌用量改成120'、" +
+                "'猪舌损耗改成90%'、'卤料包单价改成20'、'盐用量改成12'。BOM 原辅料/包材支持 用量/损耗/单价; " +
+                "调料配方支持 用量(每kg用量)/单价。返回更新后的配方表。";
     }
 
     @Override
@@ -73,15 +80,15 @@ public class BomAdjustTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params, Map<String, Object> context) {
-        return run(factoryId, params, true);
+        return run(factoryId, params, context, true);
     }
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) {
-        return run(factoryId, params, false);
+        return run(factoryId, params, context, false);
     }
 
-    private Map<String, Object> run(String factoryId, Map<String, Object> params, boolean preview) {
+    private Map<String, Object> run(String factoryId, Map<String, Object> params, Map<String, Object> context, boolean preview) {
         String instruction = getString(params, "instruction");
         if (instruction == null || instruction.isBlank()) {
             throw new BusinessException(400, "请给出微调指令, 如 '把冷冻猪舌用量改成120'");
@@ -119,7 +126,8 @@ public class BomAdjustTool extends AbstractBusinessTool {
             }
         }
         if (matches.isEmpty()) {
-            throw new BusinessException(400, "BOM 里找不到原料 '" + name + "' (注: 调料如卤料包/盐在调料配方里, 暂不支持对话微调)");
+            // BOM 原料里没有 → 试调料配方 (卤料包/盐 等)
+            return adjustSeasoning(factoryId, productTypeId, name, fieldWord, field, value, context, preview);
         }
         if (matches.size() > 1) {
             throw new BusinessException(400, "原料 '" + name + "' 匹配到多条, 请说更具体的原料名");
@@ -195,6 +203,109 @@ public class BomAdjustTool extends AbstractBusinessTool {
             if (isTarget && previewField != null) {
                 row.put(previewField, previewValue); // 预览覆盖显示新值
             }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /**
+     * 调料配方微调: 改某调料的 用量(每kg用量 dosagePerKgG) 或 单价(priceSource1)。
+     * 调料配方是版本化的: 当前 ACTIVE → clone 出 DRAFT → 全量替换调料(改目标项) → activate(原子换 current)。
+     */
+    private Map<String, Object> adjustSeasoning(String factoryId, String productTypeId, String name,
+                                                String fieldWord, String field, BigDecimal value,
+                                                Map<String, Object> context, boolean preview) {
+        if ("yieldRate".equals(field)) {
+            throw new BusinessException(400, "调料没有损耗字段, 只能改 用量(每kg用量) 或 单价");
+        }
+        boolean isDosage = "standardQuantity".equals(field); // 用量→dosagePerKgG; 单价→priceSource1
+        BomSeasoningResponse sea = bomRecipeService.getSeasoningByProduct(factoryId, productTypeId)
+                .orElseThrow(() -> new BusinessException(400, "BOM 原料和调料配方里都找不到 '" + name + "'"));
+        List<BomSeasoningItem> items = sea.getSeasoningItems() == null ? new ArrayList<>() : sea.getSeasoningItems();
+        List<BomSeasoningItem> matched = new ArrayList<>();
+        for (BomSeasoningItem it : items) {
+            String n = it.getName() == null ? "" : it.getName();
+            if (n.contains(name) || name.contains(n)) {
+                matched.add(it);
+            }
+        }
+        if (matched.isEmpty()) {
+            throw new BusinessException(400, "BOM 原料和调料配方里都找不到 '" + name + "'");
+        }
+        if (matched.size() > 1) {
+            throw new BusinessException(400, "调料 '" + name + "' 匹配到多条, 请说更具体的调料名");
+        }
+        BomSeasoningItem target = matched.get(0);
+        BigDecimal oldVal = isDosage ? target.getDosagePerKgG() : target.getPriceSource1();
+
+        Map<String, Object> change = new LinkedHashMap<>();
+        change.put("material", target.getName());
+        change.put("field", fieldWord);
+        change.put("oldValue", oldVal);
+        change.put("newValue", value);
+
+        if (!preview) {
+            // 全量替换请求: 复制现有锅序参数 + 所有调料项, 改目标项的字段
+            BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
+            req.setCookingPotBaseKg(sea.getCookingPotBaseKg());
+            req.setSubsequentPotRatio(sea.getSubsequentPotRatio());
+            req.setInjectionRate(sea.getInjectionRate());
+            List<BomSeasoningSaveRequest.SeasoningItemDTO> dtos = new ArrayList<>();
+            for (BomSeasoningItem it : items) {
+                BomSeasoningSaveRequest.SeasoningItemDTO d = new BomSeasoningSaveRequest.SeasoningItemDTO();
+                d.setSection(it.getSection());
+                d.setSeq(it.getSeq());
+                d.setName(it.getName());
+                boolean isTarget = target.getName().equals(it.getName());
+                d.setDosagePerKgG(isTarget && isDosage ? value : it.getDosagePerKgG());
+                d.setPriceSource1(isTarget && !isDosage ? value : it.getPriceSource1());
+                d.setPriceSource2(it.getPriceSource2());
+                d.setCountInSeasoning(it.getCountInSeasoning());
+                d.setRemark(it.getRemark());
+                dtos.add(d);
+            }
+            req.setSeasoningItems(dtos);
+
+            // 版本流: ACTIVE → clone DRAFT → saveSeasoning(仅 DRAFT) → activate(原子换 current)
+            String recipeId = sea.getBomRecipeId();
+            boolean wasActive = sea.getStatus() != null && "ACTIVE".equals(sea.getStatus().name());
+            String draftId = recipeId;
+            if (wasActive) {
+                draftId = bomRecipeService.cloneRecipe(factoryId, recipeId).getId();
+            }
+            bomRecipeService.saveSeasoning(factoryId, draftId, req);
+            if (wasActive) {
+                Object uid = context == null ? null : context.get("userId");
+                Long userId = uid instanceof Number ? ((Number) uid).longValue() : null;
+                bomRecipeService.activateRecipe(factoryId, draftId, userId);
+            }
+            log.info("[SEASONING-ADJUST] factory={} product={} {} {} {}→{}", factoryId, productTypeId,
+                    target.getName(), fieldWord, oldVal, value);
+            sea = bomRecipeService.getSeasoningByProduct(factoryId, productTypeId).orElse(sea);
+            items = sea.getSeasoningItems() == null ? new ArrayList<>() : sea.getSeasoningItems();
+        }
+
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("status", preview ? "PREVIEW" : "DONE");
+        r.put("change", change);
+        r.put("seasoningTable", seasoningToTable(items, preview ? target.getName() : null, isDosage, value));
+        r.put("message", preview
+                ? "将把调料「" + target.getName() + "」的" + fieldWord + "由 " + oldVal + " 改为 " + value
+                : "已把调料「" + target.getName() + "」的" + fieldWord + "改为 " + value);
+        return r;
+    }
+
+    private List<Map<String, Object>> seasoningToTable(List<BomSeasoningItem> items, String previewTargetName,
+                                                       boolean isDosage, BigDecimal previewValue) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (BomSeasoningItem it : items) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", it.getName());
+            row.put("section", it.getSection());
+            boolean isTarget = previewTargetName != null && previewTargetName.equals(it.getName());
+            row.put("dosagePerKgG", isTarget && isDosage ? previewValue : it.getDosagePerKgG());
+            row.put("priceSource1", isTarget && !isDosage ? previewValue : it.getPriceSource1());
+            row.put("_changed", isTarget);
             rows.add(row);
         }
         return rows;

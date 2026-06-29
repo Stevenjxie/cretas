@@ -93,6 +93,11 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             // 脱敏处理：只返回经过安全检查的消息
             String safeMessage = sanitizeErrorMessage(e.getMessage());
             return buildErrorResult("参数验证失败: " + safeMessage);
+        } catch (com.cretas.aims.exception.BusinessException e) {
+            // BusinessException 消息本就面向用户(GlobalExceptionHandler 也直接展示), 不脱敏,
+            // 让工具的友好提示(如"找不到原料 X"/"匹配到多条")透传给用户, 而非笼统"操作执行失败"。
+            log.warn("业务规则: {}", e.getMessage());
+            return buildErrorResult(e.getMessage());
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             // 脱敏处理：不暴露具体异常信息
@@ -243,6 +248,10 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             log.warn("⚠️  预览参数验证失败: {}", e.getMessage());
             String safeMessage = sanitizeErrorMessage(e.getMessage());
             return buildErrorResult("参数验证失败: " + safeMessage);
+        } catch (com.cretas.aims.exception.BusinessException e) {
+            // 同 execute(): BusinessException 友好提示透传, 不脱敏
+            log.warn("业务规则(预览): {}", e.getMessage());
+            return buildErrorResult(e.getMessage());
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             return buildSanitizedErrorResult(e);
