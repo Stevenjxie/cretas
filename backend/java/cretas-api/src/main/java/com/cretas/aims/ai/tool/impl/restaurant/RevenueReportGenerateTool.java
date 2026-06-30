@@ -145,7 +145,7 @@ public class RevenueReportGenerateTool extends AbstractBusinessTool {
 
         // 3. Call Python.
         String endpoint = "/api/smartbi/" + factoryId + "/revenue-report/prepare";
-        Map<String, Object> response = pythonClient.callRevenueReport(endpoint, request);
+        Map<String, Object> response = pythonClient.callRevenueReport(endpoint, request, getUserRole(context));
 
         if (response == null) {
             return buildSimpleResult("收入管理报表生成失败：Python 服务不可用", null);

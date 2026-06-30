@@ -13,6 +13,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -32,6 +33,10 @@ class RevenueReportGenerateToolTest {
         Field field = RevenueReportGenerateTool.class.getDeclaredField("pythonClient");
         field.setAccessible(true);
         field.set(tool, mockClient);
+    }
+
+    private static Map<String, Object> context() {
+        return Map.of("userRole", "restaurant_manager");
     }
 
     // ─── Static metadata ────────────────────────────────────────────────
@@ -76,7 +81,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void successPathReturnsMessageAndDownloadUrl() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -93,7 +98,7 @@ class RevenueReportGenerateToolTest {
         Map<String, Object> result = tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
 
         String message = (String) result.get("message");
@@ -111,7 +116,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void successWithCacheHitMentionsCacheInMessage() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -125,7 +130,7 @@ class RevenueReportGenerateToolTest {
         Map<String, Object> result = tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
         assertTrue(((String) result.get("message")).contains("缓存命中"));
     }
@@ -134,7 +139,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void buildsFactoryScopedEndpointPath() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -146,11 +151,11 @@ class RevenueReportGenerateToolTest {
         tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
 
         ArgumentCaptor<String> endpoint = ArgumentCaptor.forClass(String.class);
-        verify(mockClient).callRevenueReport(endpoint.capture(), anyMap());
+        verify(mockClient).callRevenueReport(endpoint.capture(), anyMap(), anyString());
         assertEquals(
             "/api/smartbi/R_QINGHUAJIAO_REAL/revenue-report/prepare",
             endpoint.getValue()
@@ -158,8 +163,28 @@ class RevenueReportGenerateToolTest {
     }
 
     @Test
+    void forwardsUserRoleToPythonClient() throws Exception {
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+            .thenReturn(Map.of(
+                "success", true,
+                "data", Map.of(
+                    "download_url", "/x",
+                    "summary", Map.of("store_count", 1, "file_size_bytes", 1, "cache_hit", false)
+                )
+            ));
+
+        tool.doExecute(
+            "R_QINGHUAJIAO_REAL",
+            Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
+            Map.of("userRole", "restaurant_manager")
+        );
+
+        verify(mockClient).callRevenueReport(anyString(), anyMap(), eq("restaurant_manager"));
+    }
+
+    @Test
     void normalizesMealPeriodsBeforeForwarding() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -175,11 +200,11 @@ class RevenueReportGenerateToolTest {
                 "date_to", "2025-10-07",
                 "meal_periods", List.of("下午茶", "夜宵")
             ),
-            Map.of()
+            context()
         );
 
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
-        verify(mockClient).callRevenueReport(anyString(), payload.capture());
+        verify(mockClient).callRevenueReport(anyString(), payload.capture(), anyString());
         @SuppressWarnings("unchecked")
         List<String> sent = (List<String>) payload.getValue().get("meal_periods");
         // 下午茶 → 午市, 夜宵 → 晚市
@@ -188,7 +213,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void emptyStoreNamesPassedThrough() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -200,11 +225,11 @@ class RevenueReportGenerateToolTest {
         tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
 
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
-        verify(mockClient).callRevenueReport(anyString(), payload.capture());
+        verify(mockClient).callRevenueReport(anyString(), payload.capture(), anyString());
         assertEquals(Collections.emptyList(), payload.getValue().get("store_names"));
     }
 
@@ -219,34 +244,34 @@ class RevenueReportGenerateToolTest {
                 "date_to", "2025-10-07",
                 "meal_periods", List.of("夜市") // not in MealPeriodNormalizer MAP
             ),
-            Map.of()
+            context()
         );
         assertTrue(((String) result.get("message")).contains("班次参数错误"));
         // No Python call when normalization fails up front.
-        verify(mockClient, never()).callRevenueReport(anyString(), anyMap());
+        verify(mockClient, never()).callRevenueReport(anyString(), anyMap(), anyString());
     }
 
     @Test
     void pythonUnavailableReturnsServiceError() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap())).thenReturn(null);
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString())).thenReturn(null);
 
         Map<String, Object> result = tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
         assertTrue(((String) result.get("message")).contains("Python 服务不可用"));
     }
 
     @Test
     void pythonSuccessFalseReturnsErrorMessage() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
             .thenReturn(Map.of("success", false, "error", "factory 不存在"));
 
         Map<String, Object> result = tool.doExecute(
             "R_QINGHUAJIAO_REAL",
             Map.of("date_from", "2025-10-01", "date_to", "2025-10-07"),
-            Map.of()
+            context()
         );
         String msg = (String) result.get("message");
         assertTrue(msg.contains("生成失败"));

@@ -2026,6 +2026,10 @@ public class PythonSmartBIClient {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> callRevenueReport(String fullEndpoint, Map<String, Object> request) {
+        return callRevenueReport(fullEndpoint, request, null);
+    }
+
+    public Map<String, Object> callRevenueReport(String fullEndpoint, Map<String, Object> request, String userRole) {
         if (!config.isEnabled()) {
             log.debug("Python SmartBI 服务未启用，跳过收入管理报表调用");
             return null;
@@ -2035,10 +2039,13 @@ public class PythonSmartBIClient {
         log.info("调用收入管理报表: url={}, keys={}", url, request.keySet());
 
         try {
-            Request httpRequest = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(url)
-                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)))
-                    .build();
+                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
+            if (userRole != null && !userRole.isBlank()) {
+                requestBuilder.header("X-User-Role", userRole);
+            }
+            Request httpRequest = requestBuilder.build();
             return executeWithRetry(httpRequest, Map.class);
         } catch (IOException | PythonServiceUnavailableException e) {
             log.error("收入管理报表调用失败: endpoint={}, error={}", fullEndpoint, e.getMessage());
