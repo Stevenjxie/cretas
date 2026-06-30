@@ -37,13 +37,14 @@
       Props are reactive. When the `chart` prop changes, the source getter re-fires
       and the watcher inside useChartInsight re-evaluates insight state.
   -->
-  <ChartInsight :insight="insight" :loading="loading" :depth="depth" />
+  <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId" />
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import ChartInsight from './ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
-import type { ChartWithMeta, UserPermissions } from './chartInsight';
+import type { ChartWithMeta, InsightResult, UserPermissions } from './chartInsight';
 
 const props = withDefaults(
   defineProps<{
@@ -104,4 +105,45 @@ const { insight, loading } = useChartInsight(
     autoTier2: props.autoTier2 !== false,
   },
 );
+
+const displayInsight = computed(() => localizeInsight(insight.value, props.chart));
+
+function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null): InsightResult | null {
+  if (!raw || !chart) return raw;
+  const context = insightContext(chart);
+  const apply = (value?: string) => {
+    if (!value) return value;
+    return value
+      .replace(/第(\d+)项/g, `${context.noun}$1`)
+      .replace(/项目(\d+)/g, `${context.noun}$1`)
+      .replace(/少数门店或少数菜品/g, `少数${context.noun}或关键环节`)
+      .replace(/门店或菜品/g, context.noun)
+      .replace(/供给、价格、曝光和执行/g, context.action)
+      .replace(/整体效率/g, context.efficiency);
+  };
+  return {
+    ...raw,
+    finding: apply(raw.finding) || raw.finding,
+    implication: apply(raw.implication),
+    suggestion: apply(raw.suggestion),
+  };
+}
+
+function insightContext(chart: ChartWithMeta) {
+  const title = chart.title || '';
+  const xDim = chart.meta?.xDim;
+  if (/评价|口碑|点评|美团|差评|星级|好评/.test(title)) {
+    if (xDim === 'store') {
+      return { noun: '门店评价', action: '评分、差评占比、回复和服务体验', efficiency: '口碑管理效率' };
+    }
+    if (xDim === 'channel') {
+      return { noun: '评价平台', action: '平台结构、回复率和曝光质量', efficiency: '口碑运营效率' };
+    }
+    return { noun: '评价标签', action: '口味、服务、环境和回复处理', efficiency: '口碑管理效率' };
+  }
+  if (chart.meta?.domain === 'restaurant') {
+    return { noun: '餐饮项目', action: '门店、菜品、渠道和执行', efficiency: '经营管理效率' };
+  }
+  return { noun: '项目', action: '结构、执行和数据录入', efficiency: '整体效率' };
+}
 </script>

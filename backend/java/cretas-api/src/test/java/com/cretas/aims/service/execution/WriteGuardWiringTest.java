@@ -227,6 +227,33 @@ class WriteGuardWiringTest {
                 .executeWithTool(any(), anyString(), any(), any(), anyLong(), anyString(), any());
     }
 
+    @Test
+    @DisplayName("收入管理报表生成是非破坏性报表产物生成，不应被 _GENERATE 写保护误拦")
+    void revenueReportGenerate_isNotBlockedByGenerateSuffix() {
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("REVENUE_REPORT_GENERATE")
+                .intentName("生成收入管理报表")
+                .intentCategory("RESTAURANT")
+                .sensitivityLevel("LOW")
+                .requiresApproval(false)
+                .toolName("revenue_report_generate")
+                .build();
+        stubIntent(intent);
+        stubDispatchReturns();
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .intentCode(intent.getIntentCode())
+                .userInput("本月收入管理报表")
+                .build();
+
+        IntentExecuteResponse response =
+                orchestrator.executeWithExplicitIntent(FACTORY, request, USER_ID, ROLE);
+
+        assertThat(response.getStatus()).isNotEqualTo("WRITE_CONFIRM_REQUIRED");
+        verify(toolDispatchService, times(1))
+                .executeWithTool(any(), anyString(), any(), any(), anyLong(), anyString(), any());
+    }
+
     // ================= (d) previewOnly write → not blocked =================
 
     @Test

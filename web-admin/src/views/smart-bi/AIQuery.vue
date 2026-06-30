@@ -137,6 +137,76 @@ const EXOTIC_CHART_TYPES_AIQUERY = new Set(['scatter', 'waterfall', 'radar', 'he
  * message.chartConfig.option: ECharts option with xAxis.data and series[].data
  * Context: AI chat may serve factory or restaurant tenants — use 'factory' as safe domain default.
  */
+function chartOptionTitle(opt: Record<string, unknown>, fallback = ''): string {
+  const title = opt['title'];
+  if (title && typeof title === 'object') {
+    return String((title as Record<string, unknown>)['text'] ?? fallback);
+  }
+  return fallback;
+}
+
+function extractChartLabels(opt: Record<string, unknown>, chartType: string): string[] {
+  const xAxis = opt['xAxis'];
+  if (xAxis && typeof xAxis === 'object' && Array.isArray((xAxis as Record<string, unknown>)['data'])) {
+    return ((xAxis as Record<string, unknown>)['data'] as unknown[]).map((item) => String(item));
+  }
+  if (chartType === 'pie' && Array.isArray(opt['series'])) {
+    const series = opt['series'] as Array<Record<string, unknown>>;
+    const data = Array.isArray(series[0]?.data) ? series[0].data as unknown[] : [];
+    return data.map((item, index) => {
+      if (item && typeof item === 'object' && 'name' in item) {
+        return String((item as { name?: unknown }).name ?? `项目${index + 1}`);
+      }
+      return `项目${index + 1}`;
+    });
+  }
+  return [];
+}
+
+function inferAiChartMeta(
+  chartType: string,
+  title: string,
+  content = '',
+): NonNullable<ChartWithMeta['meta']> {
+  const text = `${title} ${content}`;
+  const isReview = /评价|口碑|差评|星级|服务分|环境分|好评|低星|点评|美团/.test(text);
+  const isRevenue = /收入|营收|营业额|销售额|堂食|外卖|客单/.test(text);
+  const xDim = chartType === 'line'
+    ? 'time'
+    : /平台|点评|美团/.test(text)
+      ? 'channel'
+      : /门店|店/.test(text)
+        ? 'store'
+        : /菜品|口味|标签|好评词|差评词/.test(text)
+          ? 'product'
+          : 'category';
+  const yMetric = /占比|率/.test(text)
+    ? 'pct'
+    : isReview
+      ? 'count'
+      : isRevenue
+        ? 'revenue'
+        : 'quantity';
+  return {
+    xDim,
+    yMetric,
+    aggregation: /平均|均值/.test(text) ? 'avg' : 'sum',
+    domain: isReview || isRevenue ? 'restaurant' : 'factory',
+  };
+}
+
+function normalizeSeriesData(
+  opt: Record<string, unknown>,
+  chartType: string,
+): Array<{ name?: string; type?: string; data?: unknown[] }> {
+  if (!Array.isArray(opt['series'])) return [];
+  return (opt['series'] as Array<Record<string, unknown>>).map(s => ({
+    name: typeof s['name'] === 'string' ? s['name'] : undefined,
+    type: typeof s['type'] === 'string' ? s['type'] : chartType,
+    data: Array.isArray(s['data']) ? s['data'] : [],
+  }));
+}
+
 function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   const cfg = msg.chartConfig;
   if (!cfg || !cfg.option) return null;
@@ -145,28 +215,14 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
 
   const opt = cfg.option as Record<string, unknown>;
-  let xData: string[] = [];
-  if (opt['xAxis'] && Array.isArray((opt['xAxis'] as Record<string, unknown>)['data'])) {
-    xData = ((opt['xAxis'] as Record<string, unknown>)['data']) as string[];
-  }
-
-  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
-  if (Array.isArray(opt['series'])) {
-    seriesData = (opt['series'] as Array<Record<string, unknown>>).map(s => ({
-      type: typeof s['type'] === 'string' ? s['type'] : ct,
-      data: Array.isArray(s['data']) ? s['data'] : [],
-    }));
-  }
-
-  const meta = ct === 'line'
-    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const }
-    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const };
+  const title = chartOptionTitle(opt, cfg.title ?? '');
+  const xData = extractChartLabels(opt, ct);
+  const seriesData = normalizeSeriesData(opt, ct);
+  const meta = inferAiChartMeta(ct, title, msg.content);
 
   return {
     chartType: ct,
-    title: typeof opt['title'] === 'object' && opt['title'] !== null
-      ? String((opt['title'] as Record<string, unknown>)['text'] ?? '')
-      : undefined,
+    title,
     meta,
     config: { xAxis: { data: xData }, series: seriesData },
   };
@@ -183,25 +239,14 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
   if (ct !== 'bar' && ct !== 'line' && ct !== 'pie') return null;
 
   const opt = cfg.option;
-  let xData: string[] = [];
-  if (opt['xAxis'] && Array.isArray((opt['xAxis'] as Record<string, unknown>)['data'])) {
-    xData = ((opt['xAxis'] as Record<string, unknown>)['data']) as string[];
-  }
-
-  let seriesData: Array<{ type?: string; data?: unknown[] }> = [];
-  if (Array.isArray(opt['series'])) {
-    seriesData = (opt['series'] as Array<Record<string, unknown>>).map(s => ({
-      type: typeof s['type'] === 'string' ? s['type'] : ct,
-      data: Array.isArray(s['data']) ? s['data'] : [],
-    }));
-  }
-
-  const meta = ct === 'line'
-    ? { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const }
-    : { xDim: 'category' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'factory' as const };
+  const title = chartOptionTitle(opt, cfg.title ?? '');
+  const xData = extractChartLabels(opt, ct);
+  const seriesData = normalizeSeriesData(opt, ct);
+  const meta = inferAiChartMeta(ct, title);
 
   return {
     chartType: ct,
+    title,
     meta,
     config: { xAxis: { data: xData }, series: seriesData },
   };
@@ -1129,6 +1174,17 @@ async function tryJavaIntentChat(
 
     if (res.status === 'NEED_MORE_INFO' || res.status === 'CONVERSATION_CONTINUE') {
       msg.content = res.message || res.formattedText || '请补充信息后继续。';
+      msg.loading = false;
+      return 'handled';
+    }
+
+    if (
+      res.status === 'WRITE_CONFIRM_REQUIRED' ||
+      res.status === 'TOOL_DISABLED' ||
+      res.status === 'PERMISSION_DENIED' ||
+      res.status === 'ERROR'
+    ) {
+      msg.content = res.message || res.formattedText || '该意图已识别，但暂时无法执行。';
       msg.loading = false;
       return 'handled';
     }

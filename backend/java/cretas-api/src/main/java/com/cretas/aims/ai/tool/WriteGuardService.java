@@ -42,6 +42,8 @@ public class WriteGuardService {
             // starts with SPLIT_ among all getToolName() literals — no read-style over-match.
             "SPLIT_");
 
+    private static final Set<String> NON_DESTRUCTIVE_GENERATE_NAMES = Set.of("REVENUE_REPORT_GENERATE");
+
     public boolean isWriteAction(ToolExecutor.ActionType t) {
         return t == ToolExecutor.ActionType.WRITE
                 || t == ToolExecutor.ActionType.UPDATE
@@ -67,6 +69,7 @@ public class WriteGuardService {
     public boolean hasWriteSuffix(String intentCode) {
         if (intentCode == null) return false;
         String upper = intentCode.toUpperCase();
+        if (NON_DESTRUCTIVE_GENERATE_NAMES.contains(upper)) return false;
         if (upper.contains("CLOCK_IN") || upper.contains("CLOCK_OUT")) return true;
         for (String suffix : WRITE_SUFFIXES) {
             if (upper.contains(suffix)) return true;
