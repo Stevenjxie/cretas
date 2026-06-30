@@ -648,3 +648,16 @@ web-admin：
 5. **配调料配方铁律**:`saveSeasoning` 仅 DRAFT → 已有 ACTIVE 配方必须 clone→saveSeasoning→activate。
 6. **测试自身坑**:原料批被前序测试耗尽 → 下拉 available>0 过滤后空;取库存最多的批避开(§13 重现)。
 7. **审计结论也要 verify-first**:独立审计夸大过 cost-page 工序N(其实 enrichProcessNames 已兜底);核实才没白改。
+
+## 2026-06-30 续:跨天 + 混批 + 调料 组合深度 E2E(§21 调料 fix 抗组合验证)
+
+### 22. 组合不变量验证 —— 调料成本在"跨天 + 真混锅"下仍精确(无 bug,正向确认)
+
+测试:`tests/e2e-yield-mixed-sku/headed-crossday-mixbatch-seasoning.mjs`(纯-headed,prod F006,23/23 PASS)。
+
+- **动机**:§21 调料 fix 让调料成本能流入,但现有测试有盲区——matrix-fullchain 做了熟制混锅(2 上游)却只断言 `seasoningCost>0`(非精确值),且从不把混锅录在与上游 WIP 不同的日子;seasoning-cost 验了精确 oracle 但熟制只消耗 1 上游(非混锅);crossday-cost 验了跨天但单批单上游(无混锅无调料)。三者交集(multibatch 自己点名的"真混锅在链尾,需单独扩展")无人覆盖。
+- **判别性不变量(verify-first 自 `ClerkProcessEntryServiceImpl.computeSeasoningCost` + `buildPotRawKgs` + `RecipeCostCalculator`)**:逐道录入熟制道无 potCount → `buildPotRawKgs=[st.inputQuantity]`(单锅)→ `cookingTotal = inputQuantity × cookPerKg × 1`。混锅时 inputQuantity = Σ来源批投料。∴ **seasoningCost == cookPerKg ×(feedA+feedB)**,与日期无关、只看混锅总投料(非单源、非产出)。`resolveReportDate(st)=st.processDate` → 跨天各行 processDate 独立回读。
+- **场景**:建 6 道链 SKU + 配 COOKING 调料(50g/kg×20=`cookPerKg=1.0`)→ 首道 2 原料批分录 day-2/day-1(跨天 + 混批起源)→ 中间道流转 2 批 → 熟制 day0 真混锅消耗 2 上游(feedA=0.22,feedB=0.11 故意不等分)。
+- **断言(三方 + 强判别)**:① 调料 `cost-breakdown.seasoningCost == cookPerKg×mixIn`(0.33,精确)② **NOT 单源**(≠0.22)③ **按投料非产出**(mixIn 0.33≠mixOut 0.30,actual=0.33)④ yield-card `addedCost≈调料 oracle`(三方旁证)⑤ 2 源分摊(`sourceBreakdowns` 2 条,继承成本 0.10 vs 1.92 **非对称**证明真异源血缘,占比和≈100%)⑥ 原料桶>0(2 源均流入)⑦ 跨天 processDate 回读 == 录入历史日(首道 day-2/day-1,混锅 day0,**调料不串日**)⑧ 无误报"未设置调料配方"warning⑨ DOM 渲染熟制 tab。
+- **结论**:**无 bug**——§21 调料 fix 在最难组合(跨天领用 + 真混锅 + 调料)下成本仍精确,六桶组合互不干扰。正向确认(depth-first-e2e Rule 8 同根因 sweep 仅 found-bug 时触发,此轮 0 bug)。
+- **测试坑**:`plannedDate` 不能回填过去(400"计划日期不能是过去")→ 跨天必须靠**各行 processDate** 回填,plan 仍今天建(crossday-cost 同 pattern);中间道转发量需大(forward ~85% 余量)否则熟制道投料钳到 0.02 floor → mixIn≈mixOut 致 oracle 判别力弱。
