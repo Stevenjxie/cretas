@@ -273,10 +273,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 通过 yieldReportService.getYield → steps[i].materialCost 读取。
             // 禁止写 SEASONING_VIRTUAL MaterialConsumption：traceCost() 只递归真实 MaterialBatch，
             // 虚拟占位符会误入 raw 成本桶导致分桶错乱。
+            // 同道产出/投入只能由一条报工承载 (见 writeLaborReport): 调料报工已写 output 时, 人工报工不再写。
+            boolean stepOutputWrittenBySeasoning = false;
             if (isSeasoningStep(st)) {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), batch.getId(), st, seasoningCost, ctx.getUserId());
+                    stepOutputWrittenBySeasoning = true;
                     batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
@@ -302,8 +305,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             batchTotalCost = batchTotalCost.add(laborCost);
             // SP-F ①a: 人工写一条 ProductionReport(costCategory=LABOR), 让 OrderCostBreakdownService
             // 经 getYield → totalLaborCost 读取。否则人工只折进 WIP unitPrice, 成本拆分里 laborCost=0。
+            // carryQuantities: 调料报工没写 output 时由人工报工承载 (纯人工道); 已写则 false (防 2× 双计)。
             if (laborCost.signum() > 0) {
-                writeLaborReport(ctx.getFactoryId(), batch.getId(), st, laborCost, ctx.getUserId());
+                writeLaborReport(ctx.getFactoryId(), batch.getId(), st, laborCost, ctx.getUserId(),
+                        !stepOutputWrittenBySeasoning);
             }
 
             // SP-G G3a: 副产物/留样/包装明细 写 YIELD 报工，让 YieldCalculationServiceImpl.getYield
@@ -370,10 +375,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 2. 调料 + 人工 + 产出量 —— 逐工序计算 (镜像 materializeBatch).
         BigDecimal lastOutputQty = BigDecimal.ZERO;
         for (StepEntry st : steps) {
+            // 同道产出/投入只能由一条报工承载 (镜像 materializeBatch): 调料报工已写 output 时人工报工不再写。
+            boolean stepOutputWrittenBySeasoning = false;
             if (isSeasoningStep(st)) {
                 BigDecimal seasoningCost = computeSeasoningCost(ctx.getFactoryId(), ctx.getProductTypeId(), st, warnings);
                 if (seasoningCost.signum() > 0) {
                     writeSeasoningReport(ctx.getFactoryId(), existingBatchId, st, seasoningCost, ctx.getUserId());
+                    stepOutputWrittenBySeasoning = true;
                     batchMaterialCost = batchMaterialCost.add(seasoningCost);
                     batchTotalCost = batchTotalCost.add(seasoningCost);
                 }
@@ -394,8 +402,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             batchTotalCost = batchTotalCost.add(laborCost);
             // SP-F ①a: 重物化也写人工 ProductionReport (镜像 materializeBatch)。
             // caller 已软删旧报工 (含旧人工行), 这里重新写入保持 getYield 可读。
+            // carryQuantities: 同 materializeBatch — 调料报工已写 output 则 false, 防同道 2× 双计。
             if (laborCost.signum() > 0) {
-                writeLaborReport(ctx.getFactoryId(), existingBatchId, st, laborCost, ctx.getUserId());
+                writeLaborReport(ctx.getFactoryId(), existingBatchId, st, laborCost, ctx.getUserId(),
+                        !stepOutputWrittenBySeasoning);
             }
 
             // SP-G G3a: 重物化也写副产物/留样/包装明细 (镜像 materializeBatch)。
@@ -631,7 +641,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 全部人工/调料报工归一组, totalLaborCost Σ 全组 laborCost, 正确。
      */
     private void writeLaborReport(String factoryId, Long productionBatchId,
-                                   StepEntry st, BigDecimal laborCost, Long operatorId) {
+                                   StepEntry st, BigDecimal laborCost, Long operatorId,
+                                   boolean carryQuantities) {
         ProductionReport report = new ProductionReport();
         report.setFactoryId(factoryId);
         report.setBatchId(productionBatchId);
@@ -642,8 +653,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setCostCategory("LABOR");
         report.setLaborCost(laborCost);
         report.setProcessOrder(st.getProcessOrder());
-        report.setOutputQuantity(st.getOutputQuantity());
-        report.setInputQuantity(st.getInputQuantity());
+        // 2026-06-30: 产出/投入只能由本道**一条**报工承载。同道既有调料(SEASONING)又有人工时,
+        // 产出/投入已由 writeSeasoningReport 写入 → 这里必须留 null, 否则
+        // YieldCalculationServiceImpl.calculateSteps 同组 Σ 两条 output/input (L144/L152) →
+        // 该道 getYield totalOutput/totalInput 虚高 2× (与 writeYieldAuxReport L682-685 同一防呆)。
+        // carryQuantities=false 仅当本道已写调料报工; 纯人工道 (无调料报工) 仍 true, 产出由人工报工承载。
+        if (carryQuantities) {
+            report.setOutputQuantity(st.getOutputQuantity());
+            report.setInputQuantity(st.getInputQuantity());
+        }
         report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
     }
