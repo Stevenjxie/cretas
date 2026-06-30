@@ -49,4 +49,22 @@ class ProductionSummaryServiceTest {
         assertThat(dto.getTotalRawInput()).isEqualByComparingTo("5.0");
         assertThat(dto.getTotalFinishedOutput()).isEqualByComparingTo("2.0");
     }
+
+    @Test
+    void realYield_subtractsRemainingFoldedBackToRaw() {
+        // 首道投入 10; 第2道(WIP)剩余 0.9, cumulativeYieldRate=90% → 折回原料 = 0.9/0.9 = 1.0
+        // 成品 8.0; 真实出成率 = 8.0 / (10 − 1.0) * 100 = 88.89%
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
+                item(1, "IN_PROGRESS", new java.math.BigDecimal("10.0"), new java.math.BigDecimal("9.0"), new java.math.BigDecimal("0"), null),
+                item(2, "IN_PROGRESS", null, new java.math.BigDecimal("0.9"), new java.math.BigDecimal("0.9"), new java.math.BigDecimal("90")),
+                item(3, "COMPLETED", null, new java.math.BigDecimal("8.0"), new java.math.BigDecimal("0"), new java.math.BigDecimal("80"))
+        ));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(java.util.List.of(clkB(new java.math.BigDecimal("8.0"))));
+
+        ProductionSummaryDTO dto = service.computeSummary("F006", "P1", false);
+
+        assertThat(dto.getRemainingSemiRawEquiv()).isEqualByComparingTo("1.0");
+        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("88.89");
+    }
 }

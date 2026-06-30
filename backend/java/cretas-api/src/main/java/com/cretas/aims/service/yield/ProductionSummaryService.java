@@ -38,12 +38,36 @@ public class ProductionSummaryService {
                 .map(b -> nz(b.getQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        BigDecimal remainingSemiRawEquiv = foldRemainingToRawEquiv(items, minOrder);
+        BigDecimal denom = totalRawInput.subtract(remainingSemiRawEquiv);
+        BigDecimal realYield = denom.signum() > 0
+                ? totalFinishedOutput.multiply(new BigDecimal("100"))
+                    .divide(denom, 2, java.math.RoundingMode.HALF_UP)
+                : null;
+
         return ProductionSummaryDTO.builder()
                 .planId(planId)
                 .totalRawInput(totalRawInput)
                 .totalFinishedOutput(totalFinishedOutput)
+                .remainingSemiRawEquiv(remainingSemiRawEquiv)
+                .realYieldRate(realYield)
                 .priceMasked(maskPrice)
                 .build();
+    }
+
+    /** 方案 R: 剩余 WIP(非成品行)按 cumulativeYieldRate 折回首道原料当量。
+     *  折回原料 = remaining ÷ (cumulativeYieldRate/100)。成品行(COMPLETED)与首道行不计。 */
+    private BigDecimal foldRemainingToRawEquiv(java.util.List<ProcessSheetInventoryItem> items, int minOrder) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (ProcessSheetInventoryItem i : items) {
+            if ("COMPLETED".equals(i.getStatus())) continue;
+            if (i.getProcessOrder() != null && i.getProcessOrder().intValue() == minOrder) continue;
+            BigDecimal rem = nz(i.getRemaining());
+            BigDecimal cum = i.getCumulativeYieldRate();
+            if (rem.signum() <= 0 || cum == null || cum.signum() <= 0) continue;
+            sum = sum.add(rem.multiply(new BigDecimal("100")).divide(cum, 4, java.math.RoundingMode.HALF_UP));
+        }
+        return sum.setScale(4, java.math.RoundingMode.HALF_UP);
     }
 
     private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
