@@ -21,6 +21,18 @@ class AmapWeatherRequest(BaseModel):
     geo_scope: str = "local"
 
 
+class TencentDensityRequest(BaseModel):
+    location: str = Field(..., description="longitude,latitude")
+    keywords: str = Field(..., description="restaurant category or keyword")
+    radius: int = Field(default=3000, ge=100, le=50000)
+    geo_scope: str = "local"
+
+
+class TencentWeatherRequest(BaseModel):
+    city_adcode: str = Field(..., description="Tencent district/city adcode")
+    geo_scope: str = "local"
+
+
 def _ok(data, message: str = "OK"):
     return {"success": True, "data": data, "message": message}
 
@@ -91,6 +103,38 @@ async def collect_amap_density(body: AmapDensityRequest, request: Request):
 async def collect_amap_weather(body: AmapWeatherRequest, request: Request):
     _internal_only(request)
     result = await service.collect_amap_weather(
+        city_adcode=body.city_adcode,
+        geo_scope=body.geo_scope,
+    )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/tencent-density")
+async def collect_tencent_density(body: TencentDensityRequest, request: Request):
+    _internal_only(request)
+    result = await service.collect_tencent_density(
+        location=body.location,
+        keywords=body.keywords,
+        radius=body.radius,
+        geo_scope=body.geo_scope,
+    )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/tencent-weather")
+async def collect_tencent_weather(body: TencentWeatherRequest, request: Request):
+    _internal_only(request)
+    result = await service.collect_tencent_weather(
         city_adcode=body.city_adcode,
         geo_scope=body.geo_scope,
     )

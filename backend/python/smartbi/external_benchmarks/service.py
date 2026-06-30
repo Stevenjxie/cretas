@@ -15,6 +15,8 @@ from .collectors import (
     IndustryReportSeedCollector,
     MoaWholesalePriceCollector,
     NbsCateringStatsCollector,
+    TencentPlaceCollector,
+    TencentWeatherCollector,
     redact_sensitive_url,
 )
 from .sources import source_rows
@@ -114,6 +116,14 @@ class ExternalBenchmarkService:
         except ValueError:
             logger.warning("Invalid AMAP_DAILY_QUERY_BUDGET=%r, using 800", raw)
             return 800
+
+    def tencent_map_daily_budget(self) -> int:
+        raw = os.getenv("TENCENT_MAP_DAILY_QUERY_BUDGET", "1600")
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            logger.warning("Invalid TENCENT_MAP_DAILY_QUERY_BUDGET=%r, using 1600", raw)
+            return 1600
 
     async def seed_sources(self) -> int:
         pool = await get_pg_pool()
@@ -307,6 +317,70 @@ class ExternalBenchmarkService:
                 source_code="amap_weather",
                 status="error",
                 error_message=f"Amap weather collection failed: {exc}",
+            )
+        result.rows_upserted = await self.upsert_observations(result.observations)
+        await self.record_job_run(result)
+        return result
+
+    async def collect_tencent_density(self, *, location: str, keywords: str, radius: int = 3000, geo_scope: str = "local") -> CollectorResult:
+        await self.seed_catalog()
+        daily_budget = self.tencent_map_daily_budget()
+        used_today = await self.get_today_source_runs("tencent_map_place_search")
+        if daily_budget <= 0 or used_today >= daily_budget:
+            result = CollectorResult(
+                source_code="tencent_map_place_search",
+                status="skipped",
+                error_message=(
+                    f"Tencent map daily budget exhausted: used={used_today}, "
+                    f"budget={daily_budget}. Place collection will resume tomorrow."
+                ),
+                raw_payload={"used_today": used_today, "daily_budget": daily_budget},
+            )
+            await self.record_job_run(result)
+            return result
+        try:
+            result = await TencentPlaceCollector().collect_density(
+                location=location,
+                keywords=keywords,
+                radius=radius,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="tencent_map_place_search",
+                status="error",
+                error_message=f"Tencent place collection failed: {exc}",
+            )
+        result.rows_upserted = await self.upsert_observations(result.observations)
+        await self.record_job_run(result)
+        return result
+
+    async def collect_tencent_weather(self, *, city_adcode: str, geo_scope: str = "local") -> CollectorResult:
+        await self.seed_catalog()
+        daily_budget = self.tencent_map_daily_budget()
+        used_today = await self.get_today_source_runs("tencent_map_weather")
+        if daily_budget <= 0 or used_today >= daily_budget:
+            result = CollectorResult(
+                source_code="tencent_map_weather",
+                status="skipped",
+                error_message=(
+                    f"Tencent map daily budget exhausted: used={used_today}, "
+                    f"budget={daily_budget}. Weather collection will resume tomorrow."
+                ),
+                raw_payload={"used_today": used_today, "daily_budget": daily_budget},
+            )
+            await self.record_job_run(result)
+            return result
+        try:
+            result = await TencentWeatherCollector().collect_live(
+                city_adcode=city_adcode,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="tencent_map_weather",
+                status="error",
+                error_message=f"Tencent weather collection failed: {exc}",
             )
         result.rows_upserted = await self.upsert_observations(result.observations)
         await self.record_job_run(result)

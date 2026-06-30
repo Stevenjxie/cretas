@@ -675,6 +675,222 @@ class AmapWeatherCollector:
         )
 
 
+class TencentPlaceCollector:
+    source_code = "tencent_map_place_search"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[httpx.AsyncClient] = None):
+        self.api_key = api_key if api_key is not None else os.getenv("TENCENT_MAP_KEY")
+        self.client = client
+
+    @staticmethod
+    def build_nearby_url(*, api_key: str, location: str, keywords: str, radius: int = 3000) -> str:
+        lat_lng = _lonlat_to_tencent_latlng(location)
+        params = {
+            "key": api_key,
+            "keyword": keywords,
+            "boundary": f"nearby({lat_lng},{radius})",
+            "page_size": "20",
+            "page_index": "1",
+            "orderby": "_distance",
+        }
+        return f"https://apis.map.qq.com/ws/place/v1/search?{urlencode(params)}"
+
+    async def collect_density(
+        self,
+        *,
+        location: str,
+        keywords: str,
+        radius: int = 3000,
+        geo_scope: str = "local",
+    ) -> CollectorResult:
+        if not self.api_key:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="skipped",
+                error_message="TENCENT_MAP_KEY is not configured; official Tencent place collection skipped.",
+            )
+        url = self.build_nearby_url(
+            api_key=self.api_key,
+            location=location,
+            keywords=keywords,
+            radius=radius,
+        )
+        assert_source_allowed_for_collection(self.source_code, url)
+        close_client = False
+        client = self.client
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+            close_client = True
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            if close_client:
+                await client.aclose()
+
+        if int(payload.get("status", -1)) != 0:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Tencent place API error: {payload.get('message') or payload.get('status') or 'unknown'}",
+                raw_payload={"status": payload.get("status"), "message": payload.get("message")},
+            )
+
+        count = int(payload.get("count") or 0)
+        observations = [ExternalObservation(
+            source_code=self.source_code,
+            metric_code="poi_competitor_count",
+            metric_name="Nearby competitor POI count",
+            metric_value=float(count),
+            metric_unit="count",
+            geo_scope=geo_scope,
+            category_scope=keywords,
+            period_start=date.today(),
+            period_end=date.today(),
+            confidence_score=0.72,
+            confidence_label="public_signal",
+            source_url="https://lbs.qq.com/webservice_v1/guide-search.html",
+            source_title="Tencent Location Service place search API",
+            dimension={"location": location, "radius_m": radius, "keywords": keywords, "provider": "tencent"},
+            raw_payload={
+                "status": payload.get("status"),
+                "message": payload.get("message"),
+                "count": payload.get("count"),
+                "returned_poi_count": len(payload.get("data") or []),
+            },
+        )]
+
+        ratings: List[float] = []
+        costs: List[float] = []
+        for poi in payload.get("data") or []:
+            if not isinstance(poi, dict):
+                continue
+            rating = _safe_float(poi.get("_distance"))  # kept as distance signal if no rating exists
+            avg_price = _safe_float(poi.get("avg_price") or poi.get("price"))
+            if avg_price is not None and avg_price > 0:
+                costs.append(avg_price)
+            if rating is not None and rating >= 0:
+                # Tencent place search reliably returns distance; this is not a score.
+                pass
+
+        if costs:
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code="poi_avg_public_cost",
+                metric_name="Nearby POI average public cost",
+                metric_value=round(sum(costs) / len(costs), 4),
+                metric_unit="CNY_per_person",
+                geo_scope=geo_scope,
+                category_scope=keywords,
+                period_start=date.today(),
+                period_end=date.today(),
+                confidence_score=0.60,
+                confidence_label="public_signal",
+                source_url="https://lbs.qq.com/webservice_v1/guide-search.html",
+                source_title="Tencent Location Service place search API",
+                dimension={"location": location, "radius_m": radius, "keywords": keywords, "sample_count": len(costs), "provider": "tencent"},
+                raw_payload={"sample_count": len(costs)},
+            ))
+
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success",
+            observations=observations,
+            request_url=redact_sensitive_url(url),
+        )
+
+
+class TencentWeatherCollector:
+    source_code = "tencent_map_weather"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[httpx.AsyncClient] = None):
+        self.api_key = api_key if api_key is not None else os.getenv("TENCENT_MAP_KEY")
+        self.client = client
+
+    @staticmethod
+    def build_weather_url(*, api_key: str, city_adcode: str) -> str:
+        params = {"key": api_key, "adcode": city_adcode}
+        return f"https://apis.map.qq.com/ws/weather/v1/?{urlencode(params)}"
+
+    async def collect_live(self, *, city_adcode: str, geo_scope: str = "local") -> CollectorResult:
+        if not self.api_key:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="skipped",
+                error_message="TENCENT_MAP_KEY is not configured; official Tencent weather collection skipped.",
+            )
+        url = self.build_weather_url(api_key=self.api_key, city_adcode=city_adcode)
+        assert_source_allowed_for_collection(self.source_code, url)
+        close_client = False
+        client = self.client
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+            close_client = True
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            if close_client:
+                await client.aclose()
+
+        if int(payload.get("status", -1)) != 0:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Tencent weather API error: {payload.get('message') or payload.get('status') or 'unknown'}",
+                raw_payload={"status": payload.get("status"), "message": payload.get("message")},
+            )
+
+        result = payload.get("result") or {}
+        realtime = result.get("realtime") or result.get("now") or {}
+        report_dt = _parse_amap_report_date(realtime.get("update_time") or result.get("update_time"))
+        period = report_dt.date()
+        common_dimension = {
+            "adcode": city_adcode,
+            "weather": realtime.get("weather") or realtime.get("condition"),
+            "winddirection": realtime.get("wind_direction") or realtime.get("wind_dir"),
+            "source_kind": "official_weather",
+            "provider": "tencent",
+        }
+        metric_values = [
+            ("weather_temperature", "Live weather temperature", _safe_float(realtime.get("temperature") or realtime.get("temp")), "celsius"),
+            ("weather_humidity", "Live weather humidity", _safe_float(realtime.get("humidity")), "pct"),
+            ("weather_windpower", "Live weather wind power", _first_number(realtime.get("wind_power") or realtime.get("wind_scale")), "level"),
+        ]
+        observations: List[ExternalObservation] = []
+        for metric_code, metric_name, value, unit in metric_values:
+            if value is None:
+                continue
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code=metric_code,
+                metric_name=metric_name,
+                metric_value=value,
+                metric_unit=unit,
+                geo_scope=geo_scope,
+                category_scope="trade_area_context",
+                period_start=period,
+                period_end=period,
+                confidence_score=0.88,
+                confidence_label="public_signal",
+                source_url="https://lbs.qq.com/service/webService/webServiceGuide/weatherinfo",
+                source_title="Tencent Location Service weather API",
+                dimension=common_dimension,
+                raw_payload={"update_time": realtime.get("update_time") or result.get("update_time")},
+            ))
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success" if observations else "empty",
+            observations=observations,
+            request_url=redact_sensitive_url(url),
+            raw_payload={"observation_count": len(observations)},
+        )
+
+
 def _safe_float(value: Any) -> Optional[float]:
     if value in (None, "", []):
         return None
@@ -699,3 +915,12 @@ def _parse_amap_report_date(value: Any) -> datetime:
             except ValueError:
                 pass
     return datetime.now(timezone.utc)
+
+
+def _lonlat_to_tencent_latlng(location: str) -> str:
+    parts = [p.strip() for p in location.split(",")]
+    if len(parts) != 2:
+        raise ValueError("location must be 'longitude,latitude'")
+    lng = float(parts[0])
+    lat = float(parts[1])
+    return f"{lat:.6f},{lng:.6f}"

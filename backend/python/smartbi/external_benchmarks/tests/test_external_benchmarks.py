@@ -6,6 +6,8 @@ from smartbi.external_benchmarks.collectors import (
     AmapPoiCollector,
     AmapWeatherCollector,
     IndustryReportSeedCollector,
+    TencentPlaceCollector,
+    TencentWeatherCollector,
     parse_moa_wholesale_text,
     parse_nbs_catering_text,
     redact_sensitive_url,
@@ -78,6 +80,38 @@ def test_amap_weather_url_can_be_redacted():
     assert "city=310000" in url
     assert "secret-key" not in redact_sensitive_url(url)
     assert "key=<redacted>" in redact_sensitive_url(url)
+
+
+def test_tencent_place_url_uses_nearby_boundary_and_can_be_redacted():
+    url = TencentPlaceCollector.build_nearby_url(
+        api_key="secret-key",
+        location="121.4737,31.2304",
+        keywords="hotpot",
+    )
+
+    assert "place/v1/search" in url
+    assert "boundary=nearby%2831.230400%2C121.473700%2C3000%29" in url
+    assert "page_size=20" in url
+    assert "page_index=1" in url
+    assert "secret-key" not in redact_sensitive_url(url)
+    assert "key=<redacted>" in redact_sensitive_url(url)
+
+
+def test_tencent_weather_url_can_be_redacted():
+    url = TencentWeatherCollector.build_weather_url(
+        api_key="secret-key",
+        city_adcode="310000",
+    )
+
+    assert "weather/v1" in url
+    assert "adcode=310000" in url
+    assert "secret-key" not in redact_sensitive_url(url)
+    assert "key=<redacted>" in redact_sensitive_url(url)
+
+
+def test_tencent_daily_budget_defaults_to_place_search_headroom(monkeypatch):
+    monkeypatch.delenv("TENCENT_MAP_DAILY_QUERY_BUDGET", raising=False)
+    assert ExternalBenchmarkService().tencent_map_daily_budget() == 1600
 
 
 def test_moa_wholesale_parser_extracts_daily_indexes_and_ingredient_prices():
