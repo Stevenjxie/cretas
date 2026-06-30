@@ -100,6 +100,7 @@ from .sections.review_analysis import ReviewAnalysisHandler
 from .sections.store_pnl_one_pager import StorePnlOnePagerHandler
 from .sections.stored_value import StoredValueHandler
 from .sections.temporal_comparison import TemporalComparisonHandler
+from .sections.advanced_traffic_persona import AdvancedTrafficPersonaHandler
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ class RestaurantAnalyzerV2:
         self._multi_store_handler = MultiStoreComparisonHandler()
         self._calibration_handler = CalibrationHistoryHandler()
         self._bom_layer_status_handler = BomLayerStatusHandler()
+        self._advanced_traffic_persona_handler = AdvancedTrafficPersonaHandler()
 
     # ── P3.5B F5: expense account tree ─────────────────
 
@@ -395,6 +397,12 @@ class RestaurantAnalyzerV2:
             except Exception as e:
                 logger.warning(f"Failed to auto-load reviews from DB: {e}")
 
+        if pos_df is not None and revenue_col not in pos_df.columns:
+            for alias in ("实收额", "实收金额", "销售金额", "营业额"):
+                if alias in pos_df.columns:
+                    revenue_col = alias
+                    break
+
         # ── Build the per-section request template ──
         # Each handler gets the same factory/sub_sector/store metadata; the
         # `params` dict carries section-specific inputs (POS DataFrame,
@@ -411,6 +419,9 @@ class RestaurantAnalyzerV2:
             "reviews": reviews,
             "members": members,
             "use_llm": use_llm_reviews,
+            "city": "上海",
+            "business_district": "人民广场",
+            "mall_name": None,
         }
 
         def _make_req(extra: Optional[dict[str, Any]] = None) -> SectionRequest:
@@ -749,6 +760,20 @@ class RestaurantAnalyzerV2:
         # self._build_bom_layer_status() inspects the outer analyzer's state
         # correctly. See TODO(P2): refactor handlers to accept state via context.
         report["sections"]["bomLayerStatus"] = self._build_bom_layer_status()
+
+        traffic_resp = self._advanced_traffic_persona_handler.compute(
+            _make_req(),
+            context,
+        )
+        if traffic_resp.status == SectionStatus.OK:
+            traffic_section = traffic_resp.data
+            report["sections"]["advancedTrafficPersona"] = traffic_section
+            headline = traffic_section.get("analysis", {}).get("headline")
+            if headline:
+                report["executiveSummary"].append(f"高级客流画像: {headline}")
+        else:
+            for w in traffic_resp.warnings:
+                report["warnings"].append(f"高级客流画像生成失败: {w}")
 
         # ─── 总结统计 ───
         report["summary"] = {

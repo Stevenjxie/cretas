@@ -467,6 +467,59 @@ export interface MultiStoreComparison {
   recommendations: string[];
 }
 
+// Premium demo module: external traffic/persona data requires extra enablement.
+export interface AdvancedTrafficPersonaProvider {
+  provider: string;
+  accessMode?: string;
+  bestUse?: string;
+  availableFields?: string[];
+}
+
+export interface AdvancedTrafficPersonaRecommendation {
+  priority: string;
+  action: string;
+  why?: string;
+  metricTrigger?: string;
+  expectedImpact?: string;
+}
+
+export interface AdvancedTrafficPersona {
+  moduleName: string;
+  requiresEnablement: boolean;
+  demoMode: boolean;
+  dataNote: string;
+  storeContext: {
+    storeName: string;
+    city: string;
+    businessDistrict: string;
+    mallName: string;
+    subSector: string;
+    period: string;
+  };
+  enablement: {
+    status: string;
+    scope: string;
+    requirements: string[];
+    priceHint?: Record<string, string>;
+  };
+  providers: AdvancedTrafficPersonaProvider[];
+  fieldCatalog: Array<{
+    key: string;
+    label: string;
+    providerCoverage: string[];
+    demoValue: unknown;
+    businessQuestion: string;
+  }>;
+  simulatedMetrics: Record<string, number>;
+  analysis: {
+    headline: string;
+    comparisonNarrative: string[];
+    risks: string[];
+    opportunities: string[];
+    recommendations: AdvancedTrafficPersonaRecommendation[];
+  };
+}
+
 // W6.5 — Cross-Chain Benchmark
 export interface ChainProfile {
   name: string;
@@ -536,6 +589,8 @@ export interface V2UnifiedReport {
     calibrationHistory?: CalibrationHistoryReport;
     // W6.4
     multiStoreComparison?: MultiStoreComparison;
+    // Premium demo / extra enablement
+    advancedTrafficPersona?: AdvancedTrafficPersona;
   };
   warnings: string[];
   executiveSummary: string[];

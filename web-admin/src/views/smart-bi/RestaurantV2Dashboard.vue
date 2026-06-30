@@ -54,11 +54,13 @@ import {
   type CalibrationHistoryReport,
   // W6.4 types
   type MultiStoreComparison,
+  type AdvancedTrafficPersona,
 } from '@/api/smartbi/restaurant-v2';
 import BomIngestDialog from './BomIngestDialog.vue';
 import TemplateGrid from './components/TemplateGrid.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
+import AdvancedTrafficPersonaCard from './components/chat/cards/AdvancedTrafficPersonaCard.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -463,6 +465,9 @@ const memberRfm = computed<MemberRfm | undefined>(
 );
 const multiStoreComparison = computed<MultiStoreComparison | undefined>(
   () => report.value?.sections?.multiStoreComparison
+);
+const advancedTrafficPersona = computed<AdvancedTrafficPersona | undefined>(
+  () => report.value?.sections?.advancedTrafficPersona
 );
 
 // W6 — Review collection stats (separate API call)
@@ -1095,6 +1100,17 @@ function formatCurrency(v?: number): string {
       </el-card>
 
       <!-- Financial Metrics 卡片 -->
+      <el-card v-if="advancedTrafficPersona" class="section-card advanced-traffic-section" shadow="hover">
+        <template #header>
+          <div class="section-title">
+            <el-icon color="#409EFF"><DataAnalysis /></el-icon>
+            <span>高级客流画像分析</span>
+            <el-tag size="small" type="warning">需额外开通</el-tag>
+          </div>
+        </template>
+        <AdvancedTrafficPersonaCard :data="advancedTrafficPersona" />
+      </el-card>
+
       <el-card v-if="financialMetrics" class="section-card" shadow="hover">
         <template #header>
           <div class="section-title">
@@ -2143,6 +2159,10 @@ function formatCurrency(v?: number): string {
 
 .section-card {
   margin-bottom: 16px;
+}
+
+.advanced-traffic-section {
+  border-top: 3px solid #409eff;
 }
 
 .section-title {

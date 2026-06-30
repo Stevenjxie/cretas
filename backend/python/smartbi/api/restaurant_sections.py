@@ -76,6 +76,9 @@ from smartbi.services.restaurant.sections.piecework_calc import PieceworkCalcHan
 from smartbi.services.restaurant.sections.performance_eval import PerformanceEvalHandler
 from smartbi.services.restaurant.sections.store_kpi_dashboard import StoreKpiDashboardHandler
 from smartbi.services.restaurant.sections.value_summary import ValueSummaryHandler
+from smartbi.services.restaurant.sections.advanced_traffic_persona import (
+    AdvancedTrafficPersonaHandler,
+)
 
 logger = logging.getLogger(__name__)
 _cache = SectionCache(ttl_seconds=300)
@@ -101,6 +104,7 @@ SECTION_DATA_KIND = {
     "review_analysis": "reviews",
     "review_competitive": "reviews",
     "sales_plan_tracking": "sales_summary",
+    "advanced_traffic_persona": "none",
     # Everything else defaults to "pos" (set in compute_section)
 }
 
@@ -143,6 +147,7 @@ HANDLERS = {
     "performance_eval": PerformanceEvalHandler(),
     "store_kpi_dashboard": StoreKpiDashboardHandler(),
     "value_summary": ValueSummaryHandler(),
+    "advanced_traffic_persona": AdvancedTrafficPersonaHandler(),
 }
 
 
@@ -203,7 +208,7 @@ def compute_section(
     context: dict[str, Any] = {}
     data_kind = SECTION_DATA_KIND.get(section_name, "pos")
     auto_resolve_meta: dict[str, Any] = {"triggered": False, "reason": "not_attempted", "dataKind": data_kind}
-    if not body.upload_id and not body.params.get("pos_df"):
+    if data_kind != "none" and not body.upload_id and not body.params.get("pos_df"):
         auto_resolve_meta["triggered"] = True
         try:
             from smartbi.database import get_db
