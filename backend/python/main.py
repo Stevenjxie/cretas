@@ -76,6 +76,7 @@ from smartbi.api import (  # noqa: E402
     financial_ratios,
     supplier_price,
     price_anomaly,
+    external_benchmarks,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
 from smartbi.api import restaurant_value  # noqa: E402  (#56 价值可视化回馈回路, 2026-06-04)
@@ -461,6 +462,37 @@ async def lifespan(app: FastAPI):
                 logger.info("[follower] narrative_cache pruner skipped (leader handles)")
         except Exception as e:
             logger.warning(f"[startup] narrative_cache pruner init failed: {e}")
+
+    # External restaurant benchmark refresh. Disabled by default because it
+    # calls public websites/APIs; enable only after source review and quota setup.
+    _external_benchmark_task = None
+    if os.getenv("SMARTBI_EXTERNAL_BENCHMARKS_ENABLED", "false").lower() in ("1", "true", "yes"):
+        try:
+            import asyncio as _asyncio
+            from smartbi.external_benchmarks.service import service as _external_benchmark_service
+
+            async def _refresh_external_benchmarks_forever():
+                await _asyncio.sleep(45)
+                interval_s = int(os.getenv("SMARTBI_EXTERNAL_BENCHMARK_REFRESH_SECONDS", "86400"))
+                while True:
+                    try:
+                        for source_code in ("industry_report_seed", "nbs_catering_retail"):
+                            result = await _external_benchmark_service.collect_and_store(source_code)
+                            logger.info(
+                                f"[external-benchmarks] {source_code} status={result.status} "
+                                f"rows={result.rows_upserted}"
+                            )
+                    except Exception as ex:
+                        logger.warning(f"[external-benchmarks] refresh failed: {ex}")
+                    await _asyncio.sleep(max(3600, interval_s))
+
+            if _is_leader:
+                _external_benchmark_task = _asyncio.create_task(_refresh_external_benchmarks_forever())
+                logger.info("[leader] external benchmark refresh armed")
+            else:
+                logger.info("[follower] external benchmark refresh skipped (leader handles)")
+        except Exception as e:
+            logger.warning(f"[startup] external benchmark refresh init failed: {e}")
 
     # Apr 24 2026 Plan C Phase 6: hourly restaurant ops ETL for all RESTAURANT
     # factories. Keeps Gold fresh without user intervention. First run 30s
@@ -991,6 +1023,7 @@ app.include_router(yoy.router, prefix="/api/smartbi", tags=["YoY Comparison"])
 app.include_router(statistical.router, prefix="/api/statistical", tags=["Statistical Analysis"])
 app.include_router(analysis_cache.router, prefix="/api/smartbi", tags=["Analysis Cache"])
 app.include_router(benchmark.router, prefix="/api/smartbi", tags=["Industry Benchmark"])
+app.include_router(external_benchmarks.router, prefix="/api/smartbi", tags=["External Benchmarks"])
 app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance Extract"])
 app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
 app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
