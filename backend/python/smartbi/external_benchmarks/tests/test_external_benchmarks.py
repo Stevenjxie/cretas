@@ -5,6 +5,8 @@ import pytest
 from smartbi.external_benchmarks.collectors import (
     AmapPoiCollector,
     AmapWeatherCollector,
+    BaiduPlaceCollector,
+    BaiduWeatherCollector,
     IndustryReportSeedCollector,
     TencentPlaceCollector,
     TencentWeatherCollector,
@@ -173,6 +175,95 @@ async def test_tencent_weather_collector_parses_realtime_list_infos():
 def test_tencent_daily_budget_defaults_to_place_search_headroom(monkeypatch):
     monkeypatch.delenv("TENCENT_MAP_DAILY_QUERY_BUDGET", raising=False)
     assert ExternalBenchmarkService().tencent_map_daily_budget() == 1600
+
+
+def test_baidu_place_url_converts_location_and_can_be_redacted():
+    url = BaiduPlaceCollector.build_nearby_url(
+        api_key="secret-key",
+        location="121.4737,31.2304",
+        keywords="hotpot",
+        radius=1000,
+    )
+
+    assert "place/v2/search" in url
+    assert "query=hotpot" in url
+    assert "location=31.230400%2C121.473700" in url
+    assert "radius=1000" in url
+    assert "scope=2" in url
+    assert "secret-key" not in redact_sensitive_url(url)
+    assert "ak=<redacted>" in redact_sensitive_url(url)
+
+
+@pytest.mark.asyncio
+async def test_baidu_place_collector_parses_density_rating_and_cost():
+    payload = {
+        "status": 0,
+        "message": "ok",
+        "total": 37,
+        "results": [
+            {"detail_info": {"overall_rating": "4.7", "price": "91"}},
+            {"detail_info": {"overall_rating": "4.3", "price": "72"}},
+            {"detail_info": {"overall_rating": "0", "price": ""}},
+        ],
+    }
+
+    result = await BaiduPlaceCollector(
+        api_key="secret-key",
+        client=_FakeAsyncClient(payload),
+    ).collect_density(
+        location="121.4737,31.2304",
+        keywords="hotpot",
+        radius=1000,
+        geo_scope="Shanghai core trade area",
+    )
+
+    by_code = {obs.metric_code: obs for obs in result.observations}
+    assert result.status == "success"
+    assert by_code["poi_competitor_count"].metric_value == 37.0
+    assert by_code["poi_avg_public_rating"].metric_value == 4.5
+    assert by_code["poi_avg_public_cost"].metric_value == 81.5
+    assert by_code["poi_competitor_count"].dimension["provider"] == "baidu"
+
+
+@pytest.mark.asyncio
+async def test_baidu_weather_collector_parses_now_payload():
+    payload = {
+        "status": 200,
+        "result": {
+            "address": {
+                "province": "Shanghai",
+                "city": "Shanghai",
+                "name": "Huangpu",
+                "id": "310101",
+            },
+            "now": {
+                "temp": 28,
+                "rh": 82,
+                "wind_class": "2\u7ea7",
+                "wind_dir": "East",
+                "text": "Cloudy",
+                "uptime": "20260701090000",
+            },
+        },
+    }
+
+    result = await BaiduWeatherCollector(
+        api_key="secret-key",
+        client=_FakeAsyncClient(payload),
+    ).collect_live(district_id="310101", geo_scope="Shanghai Huangpu")
+
+    by_code = {obs.metric_code: obs for obs in result.observations}
+    assert result.status == "success"
+    assert by_code["weather_temperature"].metric_value == 28.0
+    assert by_code["weather_humidity"].metric_value == 82.0
+    assert by_code["weather_windpower"].metric_value == 2.0
+    assert by_code["weather_temperature"].period_start.isoformat() == "2026-07-01"
+    assert by_code["weather_temperature"].dimension["provider"] == "baidu"
+
+
+def test_baidu_daily_budget_defaults_to_place_search_headroom(monkeypatch):
+    monkeypatch.delenv("BAIDU_MAP_DAILY_QUERY_BUDGET", raising=False)
+    assert ExternalBenchmarkService().baidu_map_daily_budget() == 1600
 
 
 def test_moa_wholesale_parser_extracts_daily_indexes_and_ingredient_prices():

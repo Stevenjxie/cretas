@@ -17,7 +17,7 @@ from .sources import assert_source_allowed_for_collection
 
 
 def redact_sensitive_url(url: str) -> str:
-    return re.sub(r"([?&](?:key|sig)=)[^&]+", r"\1<redacted>", url, flags=re.I)
+    return re.sub(r"([?&](?:key|ak|sig)=)[^&]+", r"\1<redacted>", url, flags=re.I)
 
 
 @dataclass(frozen=True)
@@ -902,6 +902,272 @@ class TencentWeatherCollector:
         )
 
 
+class BaiduPlaceCollector:
+    source_code = "baidu_map_place_search"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[httpx.AsyncClient] = None):
+        self.api_key = api_key if api_key is not None else os.getenv("BAIDU_MAP_AK")
+        self.client = client
+
+    @staticmethod
+    def build_nearby_url(*, api_key: str, location: str, keywords: str, radius: int = 3000) -> str:
+        params = {
+            "ak": api_key,
+            "query": keywords,
+            "location": _lonlat_to_baidu_latlng(location),
+            "radius": str(radius),
+            "output": "json",
+            "scope": "2",
+            "page_size": "20",
+            "page_num": "0",
+        }
+        return f"https://api.map.baidu.com/place/v2/search?{urlencode(params)}"
+
+    async def collect_density(
+        self,
+        *,
+        location: str,
+        keywords: str,
+        radius: int = 3000,
+        geo_scope: str = "local",
+    ) -> CollectorResult:
+        if not self.api_key:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="skipped",
+                error_message="BAIDU_MAP_AK is not configured; official Baidu place collection skipped.",
+            )
+        url = self.build_nearby_url(
+            api_key=self.api_key,
+            location=location,
+            keywords=keywords,
+            radius=radius,
+        )
+        assert_source_allowed_for_collection(self.source_code, url)
+        close_client = False
+        client = self.client
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+            close_client = True
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            if close_client:
+                await client.aclose()
+
+        if int(payload.get("status", -1)) != 0:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Baidu place API error: {payload.get('message') or payload.get('status') or 'unknown'}",
+                raw_payload={"status": payload.get("status"), "message": payload.get("message")},
+            )
+
+        count = int(payload.get("total") or len(payload.get("results") or []))
+        observations = [ExternalObservation(
+            source_code=self.source_code,
+            metric_code="poi_competitor_count",
+            metric_name="Nearby competitor POI count",
+            metric_value=float(count),
+            metric_unit="count",
+            geo_scope=geo_scope,
+            category_scope=keywords,
+            period_start=date.today(),
+            period_end=date.today(),
+            confidence_score=0.72,
+            confidence_label="public_signal",
+            source_url="https://lbsyun.baidu.com/docs/webapi?title=placev2/guide/webservice-placeapi",
+            source_title="Baidu Maps official Place API",
+            dimension={"location": location, "radius_m": radius, "keywords": keywords, "provider": "baidu"},
+            raw_payload={
+                "status": payload.get("status"),
+                "message": payload.get("message"),
+                "total": payload.get("total"),
+                "returned_poi_count": len(payload.get("results") or []),
+            },
+        )]
+
+        ratings: List[float] = []
+        costs: List[float] = []
+        for poi in payload.get("results") or []:
+            if not isinstance(poi, dict):
+                continue
+            detail = poi.get("detail_info") if isinstance(poi.get("detail_info"), dict) else {}
+            rating = _safe_float(detail.get("overall_rating") or detail.get("overall_score"))
+            cost = _safe_float(detail.get("price") or detail.get("avg_price") or detail.get("cost"))
+            if rating is not None and rating > 0:
+                ratings.append(rating)
+            if cost is not None and cost > 0:
+                costs.append(cost)
+
+        if ratings:
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code="poi_avg_public_rating",
+                metric_name="Nearby POI average public rating",
+                metric_value=round(sum(ratings) / len(ratings), 4),
+                metric_unit="score",
+                geo_scope=geo_scope,
+                category_scope=keywords,
+                period_start=date.today(),
+                period_end=date.today(),
+                confidence_score=0.68,
+                confidence_label="public_signal",
+                source_url="https://lbsyun.baidu.com/docs/webapi?title=placev2/guide/webservice-placeapi",
+                source_title="Baidu Maps official Place API",
+                dimension={"location": location, "radius_m": radius, "keywords": keywords, "sample_count": len(ratings), "provider": "baidu"},
+                raw_payload={"sample_count": len(ratings)},
+            ))
+        if costs:
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code="poi_avg_public_cost",
+                metric_name="Nearby POI average public cost",
+                metric_value=round(sum(costs) / len(costs), 4),
+                metric_unit="CNY_per_person",
+                geo_scope=geo_scope,
+                category_scope=keywords,
+                period_start=date.today(),
+                period_end=date.today(),
+                confidence_score=0.62,
+                confidence_label="public_signal",
+                source_url="https://lbsyun.baidu.com/docs/webapi?title=placev2/guide/webservice-placeapi",
+                source_title="Baidu Maps official Place API",
+                dimension={"location": location, "radius_m": radius, "keywords": keywords, "sample_count": len(costs), "provider": "baidu"},
+                raw_payload={"sample_count": len(costs)},
+            ))
+
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success",
+            observations=observations,
+            request_url=redact_sensitive_url(url),
+        )
+
+
+class BaiduWeatherCollector:
+    source_code = "baidu_map_weather"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[httpx.AsyncClient] = None):
+        self.api_key = api_key if api_key is not None else os.getenv("BAIDU_MAP_AK")
+        self.client = client
+
+    @staticmethod
+    def build_weather_url(*, api_key: str, district_id: Optional[str] = None, location: Optional[str] = None) -> str:
+        params = {
+            "ak": api_key,
+            "data_type": "all",
+            "output": "json",
+        }
+        if district_id:
+            params["district_id"] = district_id
+        elif location:
+            params["location"] = location
+            params["coordtype"] = "gcj02"
+        else:
+            raise ValueError("district_id or location is required")
+        return f"https://api.map.baidu.com/weather/v1/?{urlencode(params)}"
+
+    async def collect_live(
+        self,
+        *,
+        district_id: Optional[str] = None,
+        location: Optional[str] = None,
+        geo_scope: str = "local",
+    ) -> CollectorResult:
+        if not self.api_key:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="skipped",
+                error_message="BAIDU_MAP_AK is not configured; official Baidu weather collection skipped.",
+            )
+        url = self.build_weather_url(api_key=self.api_key, district_id=district_id, location=location)
+        assert_source_allowed_for_collection(self.source_code, url)
+        close_client = False
+        client = self.client
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+            close_client = True
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            if close_client:
+                await client.aclose()
+
+        status = int(payload.get("status", -1))
+        if status not in {0, 200}:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Baidu weather API error: {payload.get('message') or payload.get('status') or 'unknown'}",
+                raw_payload={"status": payload.get("status"), "message": payload.get("message")},
+            )
+
+        result = payload.get("result") or {}
+        now = result.get("now") or {}
+        if not isinstance(now, dict) or not now:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="empty",
+                request_url=redact_sensitive_url(url),
+                raw_payload={"status": payload.get("status"), "message": payload.get("message")},
+            )
+        address = result.get("address") if isinstance(result.get("address"), dict) else {}
+        report_dt = _parse_baidu_report_date(now.get("uptime"))
+        period = report_dt.date()
+        common_dimension = {
+            "adcode": address.get("id") or district_id,
+            "province": address.get("province"),
+            "city": address.get("city"),
+            "district": address.get("name"),
+            "weather": now.get("text"),
+            "winddirection": now.get("wind_dir"),
+            "source_kind": "official_weather",
+            "provider": "baidu",
+        }
+        metric_values = [
+            ("weather_temperature", "Live weather temperature", _safe_float(now.get("temp")), "celsius"),
+            ("weather_humidity", "Live weather humidity", _safe_float(now.get("rh")), "pct"),
+            ("weather_windpower", "Live weather wind power", _first_number(now.get("wind_class")), "level"),
+            ("weather_precipitation_1h", "Live one-hour precipitation", _safe_float(now.get("prec_1h")), "mm"),
+            ("weather_aqi", "Live weather AQI", _safe_float(now.get("aqi")), "index"),
+        ]
+        observations: List[ExternalObservation] = []
+        for metric_code, metric_name, value, unit in metric_values:
+            if value is None or value == 999999:
+                continue
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code=metric_code,
+                metric_name=metric_name,
+                metric_value=value,
+                metric_unit=unit,
+                geo_scope=geo_scope,
+                category_scope="trade_area_context",
+                period_start=period,
+                period_end=period,
+                confidence_score=0.88,
+                confidence_label="public_signal",
+                source_url="https://lbsyun.baidu.com/docs/webapi?title=weatherinquiry/weather/base",
+                source_title="Baidu Maps official weather API",
+                dimension=common_dimension,
+                raw_payload={"uptime": now.get("uptime")},
+            ))
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success" if observations else "empty",
+            observations=observations,
+            request_url=redact_sensitive_url(url),
+            raw_payload={"observation_count": len(observations)},
+        )
+
+
 def _safe_float(value: Any) -> Optional[float]:
     if value in (None, "", []):
         return None
@@ -922,12 +1188,16 @@ def _first_number(value: Any) -> Optional[float]:
 
 def _parse_amap_report_date(value: Any) -> datetime:
     if isinstance(value, str):
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y%m%d%H%M%S"):
             try:
                 return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
     return datetime.now(timezone.utc)
+
+
+def _parse_baidu_report_date(value: Any) -> datetime:
+    return _parse_amap_report_date(value)
 
 
 def _lonlat_to_tencent_latlng(location: str) -> str:
@@ -937,3 +1207,7 @@ def _lonlat_to_tencent_latlng(location: str) -> str:
     lng = float(parts[0])
     lat = float(parts[1])
     return f"{lat:.6f},{lng:.6f}"
+
+
+def _lonlat_to_baidu_latlng(location: str) -> str:
+    return _lonlat_to_tencent_latlng(location)

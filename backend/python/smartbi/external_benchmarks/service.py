@@ -10,6 +10,8 @@ from smartbi.config import get_pg_pool
 from .collectors import (
     AmapPoiCollector,
     AmapWeatherCollector,
+    BaiduPlaceCollector,
+    BaiduWeatherCollector,
     CollectorResult,
     ExternalObservation,
     IndustryReportSeedCollector,
@@ -123,6 +125,14 @@ class ExternalBenchmarkService:
             return max(0, int(raw))
         except ValueError:
             logger.warning("Invalid TENCENT_MAP_DAILY_QUERY_BUDGET=%r, using 1600", raw)
+            return 1600
+
+    def baidu_map_daily_budget(self) -> int:
+        raw = os.getenv("BAIDU_MAP_DAILY_QUERY_BUDGET", "1600")
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            logger.warning("Invalid BAIDU_MAP_DAILY_QUERY_BUDGET=%r, using 1600", raw)
             return 1600
 
     async def seed_sources(self) -> int:
@@ -381,6 +391,77 @@ class ExternalBenchmarkService:
                 source_code="tencent_map_weather",
                 status="error",
                 error_message=f"Tencent weather collection failed: {exc}",
+            )
+        result.rows_upserted = await self.upsert_observations(result.observations)
+        await self.record_job_run(result)
+        return result
+
+    async def collect_baidu_density(self, *, location: str, keywords: str, radius: int = 3000, geo_scope: str = "local") -> CollectorResult:
+        await self.seed_catalog()
+        daily_budget = self.baidu_map_daily_budget()
+        used_today = await self.get_today_source_runs("baidu_map_place_search")
+        if daily_budget <= 0 or used_today >= daily_budget:
+            result = CollectorResult(
+                source_code="baidu_map_place_search",
+                status="skipped",
+                error_message=(
+                    f"Baidu map daily budget exhausted: used={used_today}, "
+                    f"budget={daily_budget}. Place collection will resume tomorrow."
+                ),
+                raw_payload={"used_today": used_today, "daily_budget": daily_budget},
+            )
+            await self.record_job_run(result)
+            return result
+        try:
+            result = await BaiduPlaceCollector().collect_density(
+                location=location,
+                keywords=keywords,
+                radius=radius,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="baidu_map_place_search",
+                status="error",
+                error_message=f"Baidu place collection failed: {exc}",
+            )
+        result.rows_upserted = await self.upsert_observations(result.observations)
+        await self.record_job_run(result)
+        return result
+
+    async def collect_baidu_weather(
+        self,
+        *,
+        district_id: Optional[str] = None,
+        location: Optional[str] = None,
+        geo_scope: str = "local",
+    ) -> CollectorResult:
+        await self.seed_catalog()
+        daily_budget = self.baidu_map_daily_budget()
+        used_today = await self.get_today_source_runs("baidu_map_weather")
+        if daily_budget <= 0 or used_today >= daily_budget:
+            result = CollectorResult(
+                source_code="baidu_map_weather",
+                status="skipped",
+                error_message=(
+                    f"Baidu map daily budget exhausted: used={used_today}, "
+                    f"budget={daily_budget}. Weather collection will resume tomorrow."
+                ),
+                raw_payload={"used_today": used_today, "daily_budget": daily_budget},
+            )
+            await self.record_job_run(result)
+            return result
+        try:
+            result = await BaiduWeatherCollector().collect_live(
+                district_id=district_id,
+                location=location,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="baidu_map_weather",
+                status="error",
+                error_message=f"Baidu weather collection failed: {exc}",
             )
         result.rows_upserted = await self.upsert_observations(result.observations)
         await self.record_job_run(result)

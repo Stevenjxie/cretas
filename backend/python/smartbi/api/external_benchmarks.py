@@ -33,6 +33,19 @@ class TencentWeatherRequest(BaseModel):
     geo_scope: str = "local"
 
 
+class BaiduDensityRequest(BaseModel):
+    location: str = Field(..., description="longitude,latitude")
+    keywords: str = Field(..., description="restaurant category or keyword")
+    radius: int = Field(default=3000, ge=100, le=50000)
+    geo_scope: str = "local"
+
+
+class BaiduWeatherRequest(BaseModel):
+    district_id: str | None = Field(default=None, description="Baidu district id")
+    location: str | None = Field(default=None, description="longitude,latitude")
+    geo_scope: str = "local"
+
+
 def _ok(data, message: str = "OK"):
     return {"success": True, "data": data, "message": message}
 
@@ -136,6 +149,41 @@ async def collect_tencent_weather(body: TencentWeatherRequest, request: Request)
     _internal_only(request)
     result = await service.collect_tencent_weather(
         city_adcode=body.city_adcode,
+        geo_scope=body.geo_scope,
+    )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/baidu-density")
+async def collect_baidu_density(body: BaiduDensityRequest, request: Request):
+    _internal_only(request)
+    result = await service.collect_baidu_density(
+        location=body.location,
+        keywords=body.keywords,
+        radius=body.radius,
+        geo_scope=body.geo_scope,
+    )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/baidu-weather")
+async def collect_baidu_weather(body: BaiduWeatherRequest, request: Request):
+    _internal_only(request)
+    if not body.district_id and not body.location:
+        raise HTTPException(status_code=400, detail="district_id or location is required")
+    result = await service.collect_baidu_weather(
+        district_id=body.district_id,
+        location=body.location,
         geo_scope=body.geo_scope,
     )
     return _ok({
