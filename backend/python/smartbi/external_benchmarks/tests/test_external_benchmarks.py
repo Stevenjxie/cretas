@@ -17,6 +17,27 @@ from smartbi.external_benchmarks.sources import assert_source_allowed_for_collec
 from smartbi.external_benchmarks.taxonomy import CATEGORY_PROFILES, CHANNEL_PROFILES, TRADE_AREA_PROFILES, profile_rows
 
 
+class _JsonResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeAsyncClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.request_url = ""
+
+    async def get(self, url):
+        self.request_url = url
+        return _JsonResponse(self.payload)
+
+
 def test_nbs_parser_extracts_catering_income_and_yoy():
     text = "2026年1-5月，餐饮收入23488亿元，增长3.1%。5月份，餐饮收入4605亿元，增长0.6%。"
 
@@ -107,6 +128,46 @@ def test_tencent_weather_url_can_be_redacted():
     assert "adcode=310000" in url
     assert "secret-key" not in redact_sensitive_url(url)
     assert "key=<redacted>" in redact_sensitive_url(url)
+
+
+@pytest.mark.asyncio
+async def test_tencent_weather_collector_parses_realtime_list_infos():
+    payload = {
+        "status": 0,
+        "message": "Success",
+        "result": {
+            "realtime": [
+                {
+                    "province": "Shanghai",
+                    "city": "Shanghai",
+                    "district": "Shanghai",
+                    "adcode": 310000,
+                    "update_time": "2026-07-01 00:40",
+                    "infos": {
+                        "temperature": 25,
+                        "humidity": 95,
+                        "weather": "Overcast",
+                        "wind_direction": "North",
+                        "wind_power": "\u65e0\u98ce",
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await TencentWeatherCollector(
+        api_key="secret-key",
+        client=_FakeAsyncClient(payload),
+    ).collect_live(city_adcode="310000")
+
+    by_code = {obs.metric_code: obs for obs in result.observations}
+    assert result.status == "success"
+    assert by_code["weather_temperature"].metric_value == 25.0
+    assert by_code["weather_humidity"].metric_value == 95.0
+    assert by_code["weather_windpower"].metric_value == 0.0
+    assert by_code["weather_temperature"].period_start.isoformat() == "2026-07-01"
+    assert by_code["weather_temperature"].dimension["adcode"] == 310000
+    assert by_code["weather_temperature"].dimension["provider"] == "tencent"
 
 
 def test_tencent_daily_budget_defaults_to_place_search_headroom(monkeypatch):

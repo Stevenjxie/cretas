@@ -846,20 +846,31 @@ class TencentWeatherCollector:
             )
 
         result = payload.get("result") or {}
-        realtime = result.get("realtime") or result.get("now") or {}
-        report_dt = _parse_amap_report_date(realtime.get("update_time") or result.get("update_time"))
+        realtime_payload = result.get("realtime") or result.get("now") or {}
+        if isinstance(realtime_payload, list):
+            realtime = next((item for item in realtime_payload if isinstance(item, dict)), {})
+        elif isinstance(realtime_payload, dict):
+            realtime = realtime_payload
+        else:
+            realtime = {}
+        infos = realtime.get("infos") if isinstance(realtime.get("infos"), dict) else {}
+        weather_values = {**realtime, **infos}
+        report_dt = _parse_amap_report_date(weather_values.get("update_time") or result.get("update_time"))
         period = report_dt.date()
         common_dimension = {
-            "adcode": city_adcode,
-            "weather": realtime.get("weather") or realtime.get("condition"),
-            "winddirection": realtime.get("wind_direction") or realtime.get("wind_dir"),
+            "adcode": realtime.get("adcode") or city_adcode,
+            "province": realtime.get("province"),
+            "city": realtime.get("city"),
+            "district": realtime.get("district"),
+            "weather": weather_values.get("weather") or weather_values.get("condition"),
+            "winddirection": weather_values.get("wind_direction") or weather_values.get("wind_dir"),
             "source_kind": "official_weather",
             "provider": "tencent",
         }
         metric_values = [
-            ("weather_temperature", "Live weather temperature", _safe_float(realtime.get("temperature") or realtime.get("temp")), "celsius"),
-            ("weather_humidity", "Live weather humidity", _safe_float(realtime.get("humidity")), "pct"),
-            ("weather_windpower", "Live weather wind power", _first_number(realtime.get("wind_power") or realtime.get("wind_scale")), "level"),
+            ("weather_temperature", "Live weather temperature", _safe_float(weather_values.get("temperature") or weather_values.get("temp")), "celsius"),
+            ("weather_humidity", "Live weather humidity", _safe_float(weather_values.get("humidity")), "pct"),
+            ("weather_windpower", "Live weather wind power", _first_number(weather_values.get("wind_power") or weather_values.get("wind_scale")), "level"),
         ]
         observations: List[ExternalObservation] = []
         for metric_code, metric_name, value, unit in metric_values:
@@ -880,7 +891,7 @@ class TencentWeatherCollector:
                 source_url="https://lbs.qq.com/service/webService/webServiceGuide/weatherinfo",
                 source_title="Tencent Location Service weather API",
                 dimension=common_dimension,
-                raw_payload={"update_time": realtime.get("update_time") or result.get("update_time")},
+                raw_payload={"update_time": weather_values.get("update_time") or result.get("update_time")},
             ))
         return CollectorResult(
             source_code=self.source_code,
@@ -903,6 +914,8 @@ def _safe_float(value: Any) -> Optional[float]:
 def _first_number(value: Any) -> Optional[float]:
     if value in (None, "", []):
         return None
+    if isinstance(value, str) and value.strip() in {"\u65e0\u98ce", "\u65e0\u98ce\u7ea7"}:
+        return 0.0
     match = re.search(r"\d+(?:\.\d+)?", str(value))
     return float(match.group(0)) if match else None
 
