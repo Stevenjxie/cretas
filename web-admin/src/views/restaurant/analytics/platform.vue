@@ -218,6 +218,34 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
           <el-col :xs="8" :sm="6"><div class="mini-card warn"><span>低星(≤3)</span><b>{{ vm.summary.lowStarCount.toLocaleString() }}</b></div></el-col>
         </el-row>
 
+        <el-card shadow="hover" class="section-card benchmark-section" v-if="vm.benchmarkCards.length">
+          <template #header>
+            <div class="section-title">多维对标分析：不只看店内，还看平台、连锁、产品、商圈和成本</div>
+          </template>
+          <div class="benchmark-grid">
+            <div
+              v-for="card in vm.benchmarkCards"
+              :key="card.title"
+              class="benchmark-card"
+              :class="{ 'benchmark-card--pending': card.status === 'needs-data' }"
+            >
+              <div class="benchmark-card__top">
+                <strong>{{ card.title }}</strong>
+                <el-tag size="small" :type="card.status === 'ready' ? 'success' : 'warning'" effect="plain">
+                  {{ card.status === 'ready' ? '已接入' : '待接入' }}
+                </el-tag>
+              </div>
+              <div class="benchmark-card__scope">{{ card.scope }}</div>
+              <p class="benchmark-card__headline">{{ card.headline }}</p>
+              <p class="benchmark-card__detail">{{ card.detail }}</p>
+              <p class="benchmark-card__action">{{ card.action }}</p>
+            </div>
+          </div>
+          <div class="benchmark-source-note">
+            当前已接入项来自租户内真实评价聚合和大众点评/美团导出；商圈、同菜系、采购成本等外部基准需要通过商家后台、开放平台、授权导出或合规第三方数据接入后再给真实排名。
+          </div>
+        </el-card>
+
         <!-- Platform comparison -->
         <el-card shadow="hover" class="section-card" v-if="vm.platforms.length">
           <template #header><div class="section-title"><el-icon><ChatLineSquare /></el-icon> 平台评价量对比 (柱顶为平均星级)</div></template>
@@ -308,6 +336,56 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
 
 .section-card { margin-top: 16px; }
 .section-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.benchmark-card {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-blank);
+}
+.benchmark-card--pending {
+  background: var(--el-fill-color-lighter);
+}
+.benchmark-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.benchmark-card__scope {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.benchmark-card__headline {
+  margin: 10px 0 6px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--el-text-color-primary);
+}
+.benchmark-card__detail,
+.benchmark-card__action {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--el-text-color-regular);
+}
+.benchmark-card__action {
+  color: var(--el-color-primary);
+}
+.benchmark-source-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--el-border-color);
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 .tag-cloud { display: flex; flex-wrap: wrap; gap: 10px; }
 .good-tag { font-size: 13px; padding: 6px 12px; }

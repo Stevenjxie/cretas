@@ -65,6 +65,10 @@ describe('buildPlatformReviewVM (WS3 #3)', () => {
     expect(vm.storeRanking).toHaveLength(2)
     expect(vm.storeRanking[0].store).toBe('大融城店')
     expect(vm.trend).toHaveLength(2)
+    expect(vm.benchmarkCards.length).toBeGreaterThanOrEqual(6)
+    expect(vm.benchmarkCards.some((c) => c.title === '连锁内门店对标' && c.status === 'ready')).toBe(true)
+    expect(vm.benchmarkCards.some((c) => c.title === '商圈 / 同菜系外部对标' && c.status === 'needs-data')).toBe(true)
+    expect(vm.benchmarkCards.some((c) => c.title === '采购 / 成本 / 毛利对标' && c.status === 'needs-data')).toBe(true)
   })
 
   it('no summary → isEmpty true (honest empty for non-qhj tenant)', () => {
@@ -73,6 +77,7 @@ describe('buildPlatformReviewVM (WS3 #3)', () => {
     expect(vm.totalReviews).toBe(0)
     expect(vm.scoreCards).toEqual([])
     expect(vm.platforms).toEqual([])
+    expect(vm.benchmarkCards).toEqual([])
   })
 
   it('summary with totalReviews=0 → isEmpty true', () => {
@@ -121,5 +126,6 @@ describe('buildPlatformReviewVM (WS3 #3)', () => {
     expect(vm.goodTags).toEqual([])
     expect(vm.storeRanking).toEqual([])
     expect(vm.trend).toEqual([])
+    expect(vm.benchmarkCards.map((c) => c.status)).toEqual(['needs-data', 'needs-data'])
   })
 })
