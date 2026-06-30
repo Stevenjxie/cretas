@@ -385,8 +385,168 @@ CHANNEL_PROFILES: List[SegmentProfile] = [
 ]
 
 
+TRADE_AREA_PROFILES: List[SegmentProfile] = [
+    SegmentProfile(
+        profile_code="office_district",
+        profile_type="trade_area",
+        display_name="Office district",
+        description="Workday lunch/dinner, speed, repeat and price-band discipline driven.",
+        dimension_weights={
+            "weekday_lunch_peak": 0.20,
+            "speed_requirement": 0.18,
+            "repeat_frequency": 0.18,
+            "price_band_fit": 0.16,
+            "delivery_capture": 0.14,
+            "competitor_density": 0.14,
+        },
+        external_signal_plan=[
+            "Amap office-building and same-category POI density",
+            "Internal weekday lunch peak, repeat and delivery metrics",
+        ],
+        analysis_questions=[
+            "Is workday lunch limited by speed, price band, or nearby category density?",
+            "Does dinner demand exist or should labor/menu focus on lunch and delivery?",
+        ],
+        action_templates=[
+            "Use fast, stable lunch SKUs before adding broad menu variety.",
+            "Benchmark office stores by weekday seat-hour or delivery-hour gross profit.",
+        ],
+    ),
+    SegmentProfile(
+        profile_code="community",
+        profile_type="trade_area",
+        display_name="Community / residential",
+        description="Neighborhood repeat, family dinner, private-domain retention and stable weekday demand driven.",
+        dimension_weights={
+            "neighborhood_repeat": 0.22,
+            "family_dinner_fit": 0.16,
+            "private_domain": 0.18,
+            "weekday_stability": 0.16,
+            "delivery_capture": 0.12,
+            "price_trust": 0.16,
+        },
+        external_signal_plan=[
+            "Amap residential/community POI context and local competitor density",
+            "Internal repeat, stored-value/member and dinner-period metrics",
+        ],
+        analysis_questions=[
+            "Is the store building repeatable neighborhood demand or relying on one-time platform traffic?",
+            "Do family dinner SKUs protect gross margin and review stability?",
+        ],
+        action_templates=[
+            "Prioritize retention and family bundles over aggressive new-customer discounts.",
+            "Use weekday dinner stability as the health baseline.",
+        ],
+    ),
+    SegmentProfile(
+        profile_code="shopping_mall",
+        profile_type="trade_area",
+        display_name="Shopping mall",
+        description="Mall traffic conversion, rent pressure, weekend peak and same-floor competition driven.",
+        dimension_weights={
+            "rent_to_sales": 0.20,
+            "weekend_peak_capture": 0.18,
+            "mall_category_cluster": 0.18,
+            "ticket_band_fit": 0.14,
+            "queue_conversion": 0.14,
+            "brand_exposure": 0.16,
+        },
+        external_signal_plan=[
+            "Amap mall and same-category POI density",
+            "Internal rent-to-sales, weekend peak and queue conversion",
+        ],
+        analysis_questions=[
+            "Does mall traffic convert for this category and ticket band?",
+            "Is rent pressure offset by weekend peak and brand exposure?",
+        ],
+        action_templates=[
+            "Do not treat mall traffic as free demand; evaluate rent-to-sales and peak capture together.",
+            "Use same-mall category density before increasing promotion spend.",
+        ],
+    ),
+    SegmentProfile(
+        profile_code="nightlife",
+        profile_type="trade_area",
+        display_name="Nightlife / late-night district",
+        description="Late-night traffic, alcohol attachment, environment and labor-hour ROI driven.",
+        dimension_weights={
+            "late_night_traffic": 0.22,
+            "alcohol_attach": 0.16,
+            "labor_hour_roi": 0.18,
+            "environment_risk": 0.16,
+            "safety_compliance": 0.12,
+            "competitor_density": 0.16,
+        },
+        external_signal_plan=[
+            "Amap nightlife/bar/BBQ cluster density",
+            "Internal late-night revenue, labor and review/environment signals",
+        ],
+        analysis_questions=[
+            "Does late-night operation create incremental gross profit after labor and spoilage?",
+            "Are environment/noise/safety issues becoming repeat-risk indicators?",
+        ],
+        action_templates=[
+            "Keep late-night hours only where marginal gross profit by hour is positive.",
+            "Treat environment complaints as commercial risk signals.",
+        ],
+    ),
+    SegmentProfile(
+        profile_code="tourist_transport",
+        profile_type="trade_area",
+        display_name="Tourist / transport hub",
+        description="Transient traffic, speed, review-risk and price-trust driven.",
+        dimension_weights={
+            "transient_traffic": 0.18,
+            "speed_requirement": 0.18,
+            "review_risk": 0.18,
+            "price_trust": 0.16,
+            "standardization": 0.16,
+            "refund_complaint": 0.14,
+        },
+        external_signal_plan=[
+            "Amap tourist/transport hub POI context",
+            "Internal complaint, refund, speed and review trend metrics",
+        ],
+        analysis_questions=[
+            "Is one-time traffic hiding weak reputation or operational inconsistency?",
+            "Does the price band trigger complaint risk for transient customers?",
+        ],
+        action_templates=[
+            "Prioritize standardization and transparent pricing over complex upsell.",
+            "Use complaint rate as a primary risk KPI.",
+        ],
+    ),
+    SegmentProfile(
+        profile_code="campus",
+        profile_type="trade_area",
+        display_name="Campus",
+        description="Price sensitivity, speed, delivery and package value driven.",
+        dimension_weights={
+            "price_sensitivity": 0.22,
+            "speed_requirement": 0.18,
+            "delivery_capture": 0.18,
+            "package_value": 0.16,
+            "repeat_frequency": 0.14,
+            "peak_concentration": 0.12,
+        },
+        external_signal_plan=[
+            "Amap campus and nearby food POI density",
+            "Internal price-band, delivery and peak concentration metrics",
+        ],
+        analysis_questions=[
+            "Is the price band fit for student demand without destroying margin?",
+            "Can peak concentration be handled with fewer, faster SKUs?",
+        ],
+        action_templates=[
+            "Use controlled-value packages instead of broad discounts.",
+            "Design campus menus around speed and repeat.",
+        ],
+    ),
+]
+
+
 def profile_rows() -> Iterable[dict]:
-    for profile in [*CATEGORY_PROFILES, *CHANNEL_PROFILES]:
+    for profile in [*CATEGORY_PROFILES, *CHANNEL_PROFILES, *TRADE_AREA_PROFILES]:
         yield {
             "profile_code": profile.profile_code,
             "profile_type": profile.profile_type,
@@ -401,5 +561,8 @@ def profile_rows() -> Iterable[dict]:
 
 
 def profiles_by_type(profile_type: str) -> List[SegmentProfile]:
-    return [profile for profile in [*CATEGORY_PROFILES, *CHANNEL_PROFILES] if profile.profile_type == profile_type]
-
+    return [
+        profile
+        for profile in [*CATEGORY_PROFILES, *CHANNEL_PROFILES, *TRADE_AREA_PROFILES]
+        if profile.profile_type == profile_type
+    ]

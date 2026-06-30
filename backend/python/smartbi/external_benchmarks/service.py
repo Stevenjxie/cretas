@@ -7,7 +7,15 @@ from typing import List, Optional
 
 from smartbi.config import get_pg_pool
 
-from .collectors import AmapPoiCollector, CollectorResult, ExternalObservation, IndustryReportSeedCollector, NbsCateringStatsCollector, redact_sensitive_url
+from .collectors import (
+    AmapPoiCollector,
+    CollectorResult,
+    ExternalObservation,
+    IndustryReportSeedCollector,
+    MoaWholesalePriceCollector,
+    NbsCateringStatsCollector,
+    redact_sensitive_url,
+)
 from .sources import source_rows
 from .taxonomy import profile_rows
 
@@ -231,6 +239,8 @@ class ExternalBenchmarkService:
             result = await NbsCateringStatsCollector().collect()
         elif source_code == "industry_report_seed":
             result = IndustryReportSeedCollector().collect()
+        elif source_code == "moa_wholesale_price_daily":
+            result = await MoaWholesalePriceCollector().collect()
         else:
             raise ValueError(f"Unsupported collector source_code={source_code}")
         result.rows_upserted = await self.upsert_observations(result.observations)

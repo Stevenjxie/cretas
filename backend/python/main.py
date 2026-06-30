@@ -476,7 +476,11 @@ async def lifespan(app: FastAPI):
                 interval_s = int(os.getenv("SMARTBI_EXTERNAL_BENCHMARK_REFRESH_SECONDS", "86400"))
                 while True:
                     try:
-                        for source_code in ("industry_report_seed", "nbs_catering_retail"):
+                        for source_code in (
+                            "industry_report_seed",
+                            "nbs_catering_retail",
+                            "moa_wholesale_price_daily",
+                        ):
                             result = await _external_benchmark_service.collect_and_store(source_code)
                             logger.info(
                                 f"[external-benchmarks] {source_code} status={result.status} "

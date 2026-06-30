@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from html import unescape
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import httpx
 
@@ -180,6 +180,177 @@ class NbsCateringStatsCollector:
         )
 
 
+def _clean_cn_number_spacing(text: str) -> str:
+    return re.sub(r"(?<=\d)\s+(?=\d)", "", text)
+
+
+def _parse_change_pct(text: str) -> Optional[float]:
+    if "持平" in text:
+        return 0.0
+    match = re.search(r"(?:上升|增长|上涨|下降)(\d+(?:\.\d+)?)%", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    if "下降" in text:
+        return -value
+    return value
+
+
+def _parse_change_points(text: str) -> Optional[float]:
+    if "持平" in text:
+        return 0.0
+    match = re.search(r"(?:上升|增长|上涨|下降)\s*(\d+(?:\.\d+)?)\s*个点", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    if "下降" in text:
+        return -value
+    return value
+
+
+def parse_moa_wholesale_text(
+    text: str,
+    *,
+    source_url: str,
+    source_title: str,
+    fallback_year: int,
+) -> List[ExternalObservation]:
+    normalized = _clean_cn_number_spacing(re.sub(r"\s+", " ", text)).strip()
+    date_match = re.search(r"日期[:：]\s*(20\d{2})-(\d{2})-(\d{2})", normalized)
+    if date_match:
+        report_date = date(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+    else:
+        title_date = re.search(r"(\d{1,2})月(\d{1,2})日", source_title)
+        if not title_date:
+            return []
+        report_date = date(fallback_year, int(title_date.group(1)), int(title_date.group(2)))
+
+    observations: List[ExternalObservation] = []
+    index_patterns = [
+        (
+            "agri_wholesale_200_index",
+            "Agricultural wholesale price 200 index",
+            r"农产品批发价格200指数\s*[”\"]?\s*为\s*(\d+(?:\.\d+)?)",
+        ),
+        (
+            "basket_product_index",
+            "Basket product wholesale price index",
+            r"菜篮子\s*[”\"]?\s*产品批发价格指数\s*为\s*(\d+(?:\.\d+)?)",
+        ),
+    ]
+    for metric_code, metric_name, pattern in index_patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        window = normalized[match.start(): match.start() + 80]
+        observations.append(ExternalObservation(
+            source_code="moa_wholesale_price_daily",
+            metric_code=metric_code,
+            metric_name=metric_name,
+            metric_value=float(match.group(1)),
+            metric_unit="index_point",
+            period_start=report_date,
+            period_end=report_date,
+            confidence_score=0.98,
+            confidence_label="official",
+            source_url=source_url,
+            source_title=source_title,
+            category_scope="ingredient_cost",
+            dimension={"source_kind": "official_daily_monitor"},
+            raw_payload={"daily_change_points": _parse_change_points(window)},
+        ))
+
+    ingredient_aliases = {
+        "猪肉": ("pork", "Pork wholesale average price"),
+        "牛肉": ("beef", "Beef wholesale average price"),
+        "羊肉": ("mutton", "Mutton wholesale average price"),
+        "鸡蛋": ("egg", "Egg wholesale average price"),
+        "白条鸡": ("whole_chicken", "Whole chicken wholesale average price"),
+        "重点监测的28种蔬菜平均价格": ("vegetable_28_avg", "28 monitored vegetables average wholesale price"),
+        "重点监测的6种水果平均价格": ("fruit_6_avg", "6 monitored fruits average wholesale price"),
+        "鲫鱼": ("crucian_carp", "Crucian carp wholesale average price"),
+        "鲤鱼": ("carp", "Carp wholesale average price"),
+        "白鲢鱼": ("silver_carp", "Silver carp wholesale average price"),
+        "大带鱼": ("large_hairtail", "Large hairtail wholesale average price"),
+    }
+    name_pattern = "|".join(re.escape(name) for name in sorted(ingredient_aliases, key=len, reverse=True))
+    for match in re.finditer(rf"({name_pattern})(?:平均价格)?为?(\d+(?:\.\d+)?)元/公斤(?:，([^。；;]*?))?(?:；|。|$)", normalized):
+        cn_name = match.group(1)
+        ingredient_code, metric_name = ingredient_aliases[cn_name]
+        change_text = match.group(3) or ""
+        observations.append(ExternalObservation(
+            source_code="moa_wholesale_price_daily",
+            metric_code="ingredient_wholesale_price",
+            metric_name=metric_name,
+            metric_value=float(match.group(2)),
+            metric_unit="CNY_per_kg",
+            period_start=report_date,
+            period_end=report_date,
+            confidence_score=0.98,
+            confidence_label="official",
+            source_url=source_url,
+            source_title=source_title,
+            category_scope="ingredient_cost",
+            dimension={
+                "ingredient_code": ingredient_code,
+                "ingredient_name": cn_name,
+                "source_kind": "official_daily_monitor",
+            },
+            raw_payload={"daily_change_pct": _parse_change_pct(change_text)},
+        ))
+    return observations
+
+
+class MoaWholesalePriceCollector:
+    source_code = "moa_wholesale_price_daily"
+
+    def __init__(self, index_url: str = "https://scs.moa.gov.cn/"):
+        self.index_url = index_url
+
+    async def collect(self) -> CollectorResult:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            assert_source_allowed_for_collection(self.source_code, self.index_url)
+            index_response = await client.get(self.index_url)
+            index_response.raise_for_status()
+            latest_url = self._find_latest_article_url(index_response.text)
+            if not latest_url:
+                return CollectorResult(
+                    source_code=self.source_code,
+                    status="empty",
+                    request_url=self.index_url,
+                    error_message="No MOA wholesale price article link found.",
+                )
+            assert_source_allowed_for_collection(self.source_code, latest_url)
+            article_response = await client.get(latest_url)
+            article_response.raise_for_status()
+
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", article_response.text, flags=re.I | re.S)
+        h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", article_response.text, flags=re.I | re.S)
+        title = _plain_text_from_html((h1_match or title_match).group(1)) if (h1_match or title_match) else latest_url
+        fallback_year_match = re.search(r"/(20\d{2})\d{2}/", latest_url)
+        fallback_year = int(fallback_year_match.group(1)) if fallback_year_match else datetime.now().year
+        observations = parse_moa_wholesale_text(
+            _plain_text_from_html(article_response.text),
+            source_url=latest_url,
+            source_title=title,
+            fallback_year=fallback_year,
+        )
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success" if observations else "empty",
+            observations=observations,
+            request_url=latest_url,
+            raw_payload={"observation_count": len(observations)},
+        )
+
+    def _find_latest_article_url(self, html: str) -> Optional[str]:
+        for match in re.finditer(r"<a\b[^>]*href=[\"'](?P<href>[^\"']+)[\"'][^>]*>(?P<label>.*?)</a>", html, flags=re.I | re.S):
+            label = _plain_text_from_html(match.group("label"))
+            if "农产品批发价格200指数" in label:
+                return urljoin(self.index_url, match.group("href"))
+        return None
+
+
 class IndustryReportSeedCollector:
     source_code = "industry_report_seed"
 
@@ -275,7 +446,7 @@ class AmapPoiCollector:
             "radius": str(radius),
             "offset": "25",
             "page": "1",
-            "extensions": "base",
+            "extensions": "all",
         }
         query = urlencode(params)
         return f"https://restapi.amap.com/v3/place/around?{query}"
@@ -316,7 +487,7 @@ class AmapPoiCollector:
             )
 
         count = int(payload.get("count") or 0)
-        observation = ExternalObservation(
+        observations = [ExternalObservation(
             source_code=self.source_code,
             metric_code="poi_competitor_count",
             metric_name="Nearby competitor POI count",
@@ -331,11 +502,75 @@ class AmapPoiCollector:
             source_url="https://lbs.amap.com/api/webservice/guide/api/search",
             source_title="Amap official POI search API",
             dimension={"location": location, "radius_m": radius, "keywords": keywords},
-            raw_payload={"status": payload.get("status"), "info": payload.get("info"), "count": payload.get("count")},
-        )
+            raw_payload={
+                "status": payload.get("status"),
+                "info": payload.get("info"),
+                "count": payload.get("count"),
+                "returned_poi_count": len(payload.get("pois") or []),
+            },
+        )]
+
+        ratings: List[float] = []
+        costs: List[float] = []
+        for poi in payload.get("pois") or []:
+            biz_ext = poi.get("biz_ext") if isinstance(poi, dict) else None
+            if not isinstance(biz_ext, dict):
+                continue
+            rating = _safe_float(biz_ext.get("rating"))
+            cost = _safe_float(biz_ext.get("cost"))
+            if rating is not None and rating > 0:
+                ratings.append(rating)
+            if cost is not None and cost > 0:
+                costs.append(cost)
+
+        if ratings:
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code="poi_avg_public_rating",
+                metric_name="Nearby POI average public rating",
+                metric_value=round(sum(ratings) / len(ratings), 4),
+                metric_unit="score",
+                geo_scope=geo_scope,
+                category_scope=keywords,
+                period_start=date.today(),
+                period_end=date.today(),
+                confidence_score=0.68,
+                confidence_label="public_signal",
+                source_url="https://lbs.amap.com/api/webservice/guide/api/search",
+                source_title="Amap official POI search API",
+                dimension={"location": location, "radius_m": radius, "keywords": keywords, "sample_count": len(ratings)},
+                raw_payload={"sample_count": len(ratings)},
+            ))
+        if costs:
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code="poi_avg_public_cost",
+                metric_name="Nearby POI average public cost",
+                metric_value=round(sum(costs) / len(costs), 4),
+                metric_unit="CNY_per_person",
+                geo_scope=geo_scope,
+                category_scope=keywords,
+                period_start=date.today(),
+                period_end=date.today(),
+                confidence_score=0.62,
+                confidence_label="public_signal",
+                source_url="https://lbs.amap.com/api/webservice/guide/api/search",
+                source_title="Amap official POI search API",
+                dimension={"location": location, "radius_m": radius, "keywords": keywords, "sample_count": len(costs)},
+                raw_payload={"sample_count": len(costs)},
+            ))
         return CollectorResult(
             source_code=self.source_code,
             status="success",
-            observations=[observation],
+            observations=observations,
             request_url=redact_sensitive_url(url),
         )
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value in (None, "", []):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
