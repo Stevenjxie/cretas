@@ -23,6 +23,8 @@ import {
   getProductionSettlement,
   confirmProductionWarehouseReceipt,
   clearProductionTransitLedger,
+  interimSettle,
+  stopProduction,
 } from '@/api/productionPlan';
 import type {
   ProductionPlanMaterialAdvisory,
@@ -263,6 +265,8 @@ const planForm = ref({
   customFields: {} as TableRow,
   // Wave2 六扇门: 免工序报工开关 (null→后端默认 true, 新建默认 true = 两点报工)
   skipProcessReporting: true as boolean | null,
+  // Phase 2 库存生产模式: BY_ORDER (销售订单生产, 默认) | BY_STOCK (库存生产)
+  productionMode: 'BY_ORDER' as 'BY_ORDER' | 'BY_STOCK',
 });
 const productTypes = ref<TableRow[]>([]);
 const bomProcesses = ref<string[]>([]);
@@ -619,6 +623,8 @@ function handleCreate() {
     // Fable 审计修复 (问题1 — 多租户安全): 默认值取工厂配置 (F006=true 两点 / 其他=false 逐道),
     // 不再全系统硬编码 true。产品加载后若 0 工序仍自动锁定为 true (loadBomProcesses)。
     skipProcessReporting: skipReportingFactoryDefault.value,
+    // Phase 2: 默认销售订单生产
+    productionMode: 'BY_ORDER' as 'BY_ORDER' | 'BY_STOCK',
   };
   productWorkProcessList.value = [];
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
@@ -678,6 +684,7 @@ async function submitPlan() {
         assignedSupervisorId: planForm.value.assignedSupervisorId || undefined,
         notes: planForm.value.notes || undefined,
         skipProcessReporting: planForm.value.skipProcessReporting,
+        productionMode: planForm.value.productionMode,
       };
       const response = await post(`/${factoryId.value}/production-plans/batch-from-so`, payload);
       if (response.success) {
@@ -1687,6 +1694,62 @@ async function handleCopyPlan(row: TableRow): Promise<void> {
   }
 }
 
+// ==================== Phase 2: BY_STOCK 小结 / 停产 ====================
+// 逐行 loading state，防止双击（防呆 Rule 4）
+const interimSettleLoadingId = ref<string | null>(null);
+const stopProductionLoadingId = ref<string | null>(null);
+
+async function handleInterimSettle(row: TableRow) {
+  const planId = String(row.id);
+  if (interimSettleLoadingId.value) return;
+  interimSettleLoadingId.value = planId;
+  try {
+    const res = await interimSettle(factoryId.value, planId);
+    if (res.success) {
+      ElMessage.success(res.data?.message as string || res.message || '已小结，计划继续挂起');
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '小结失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const errMsg = (e as any)?.response?.data?.message || '小结失败';
+    ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    interimSettleLoadingId.value = null;
+  }
+}
+
+async function handleStopProduction(row: TableRow) {
+  const planId = String(row.id);
+  const planLabel = String(row.planName || row.planNumber || planId);
+  try {
+    await ElMessageBox.confirm(
+      `停产「${planLabel}」(${row.planNumber})?停产后计划关闭，不可再小结。`,
+      '确认停产',
+      { type: 'warning', confirmButtonText: '停产', cancelButtonText: '取消' }
+    );
+  } catch {
+    return; // 用户取消
+  }
+  if (stopProductionLoadingId.value) return;
+  stopProductionLoadingId.value = planId;
+  try {
+    const res = await stopProduction(factoryId.value, planId);
+    if (res.success) {
+      ElMessage.success(res.data?.message as string || res.message || '已停产，计划已关闭');
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '停产失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const errMsg = (e as any)?.response?.data?.message || '停产失败';
+    ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    stopProductionLoadingId.value = null;
+  }
+}
+// ==================== /Phase 2 BY_STOCK ====================
+
 async function handleCreateBatch(row: TableRow) {
   if (actionLoading.value) return;
   try {
@@ -2252,8 +2315,9 @@ function handleAiFill(params: TableRow) {
         <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看</el-button>
+            <!-- BY_ORDER 结单 (原逻辑不变) -->
             <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status)"
+              v-if="canWrite && isUnfinishedStatus(row.status) && row.productionMode !== 'BY_STOCK'"
               type="primary"
               size="small"
               :icon="CircleCheck"
@@ -2261,6 +2325,28 @@ function handleAiFill(params: TableRow) {
               title="PC 文员核对实际产量、领用和工时后结单"
               @click="handleComplete(row)"
             >核对结单</el-button>
+            <!-- Phase 2: BY_STOCK 小结 (替换结单, 计划继续挂起) -->
+            <el-button
+              v-if="canWrite && isUnfinishedStatus(row.status) && row.productionMode === 'BY_STOCK'"
+              type="primary"
+              size="small"
+              :icon="CircleCheck"
+              :disabled="interimSettleLoadingId === String(row.id)"
+              :loading="interimSettleLoadingId === String(row.id)"
+              title="增量入库成品并扣料，计划继续开放，可多次小结"
+              @click="handleInterimSettle(row)"
+            >小结</el-button>
+            <!-- Phase 2: BY_STOCK 停产 (关闭计划) -->
+            <el-button
+              v-if="canWrite && isUnfinishedStatus(row.status) && row.productionMode === 'BY_STOCK'"
+              type="danger"
+              size="small"
+              link
+              :disabled="stopProductionLoadingId === String(row.id)"
+              :loading="stopProductionLoadingId === String(row.id)"
+              title="停产后计划关闭，不可再小结"
+              @click="handleStopProduction(row)"
+            >停产</el-button>
             <el-button
               v-if="canWrite && isUnfinishedStatus(row.status)"
               type="success"
@@ -2492,6 +2578,19 @@ function handleAiFill(params: TableRow) {
             style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
           >
             存货生产将走完整报工流程，完工后自动入库成品批次，无需关联销售订单
+          </div>
+        </el-form-item>
+        <!-- Phase 2: 生产模式选择 -->
+        <el-form-item label="生产模式" required>
+          <el-radio-group v-model="planForm.productionMode">
+            <el-radio label="BY_ORDER">销售订单生产</el-radio>
+            <el-radio label="BY_STOCK">库存生产</el-radio>
+          </el-radio-group>
+          <div
+            v-if="planForm.productionMode === 'BY_STOCK'"
+            style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
+          >
+            库存生产可多次小结（增量入库），完成后手动停产关闭计划
           </div>
         </el-form-item>
         <el-form-item v-if="planForm.sourceType === 'CUSTOMER_ORDER'" label="销售订单" required>
