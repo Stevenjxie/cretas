@@ -30,4 +30,10 @@ public class ProcessSheetRowView {
 
     /** 原始录入数据 (从 row_payload JSON 反序列化)，可回填前端表单。 */
     private ProcessSheetRowRequest payload;
+
+    /**
+     * BY_STOCK 小结时间戳 (Task 3)。
+     * null = 未小结 (可编辑); 非 null = 已小结转结到批次 (前端折叠为已小结区块，只读显示)。
+     */
+    private java.time.LocalDateTime interimSettledAt;
 }

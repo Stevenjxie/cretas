@@ -1048,7 +1048,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         row.getBatchId(),
                         row.getRowStatus(),
                         row.getBatchId() != null,
-                        deserializePayload(row.getRowPayload())))
+                        deserializePayload(row.getRowPayload()),
+                        row.getInterimSettledAt()))
                 .toList();
     }
 

@@ -52,6 +52,8 @@ interface SheetRow {
   clientRowId: string;
   batchNumber: string | null;
   rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
+  /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
+  interimSettledAt: string | null;
   saving: boolean;
   deleting: boolean;
   /** Generic per-process scalar fields: date / number / daterange ([start,end]) values keyed by ColDef.key */
@@ -199,6 +201,7 @@ function blankRow(): SheetRow {
     clientRowId: genClientRowId(props.processCode),
     batchNumber: null,
     rowStatus: 'UNSAVED',
+    interimSettledAt: null,
     saving: false,
     deleting: false,
     fields: { ...daterangeDefaults },
@@ -220,6 +223,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.clientRowId = view.clientRowId;
   row.batchNumber = view.batchNumber;
   row.rowStatus = view.rowStatus;
+  row.interimSettledAt = view.interimSettledAt ?? null;
 
   if (isXiuYou.value) {
     row.rawBatchId = p.rawMaterialInputs?.[0]?.materialBatchId ?? '';
@@ -343,6 +347,52 @@ watch(
 
 function addRow() {
   rows.value.push(blankRow());
+}
+
+// -------------------------------------------------------------------------
+// 已小结行折叠 (BY_STOCK 小结后转结到批次，计划保持开放)
+// -------------------------------------------------------------------------
+
+/** 已小结 (interimSettledAt != null): 只读，默认折叠。 */
+const settledRows = computed(() => rows.value.filter((r) => r.interimSettledAt != null));
+/** 未小结 (interimSettledAt == null): 正常可编辑。 */
+const activeRows  = computed(() => rows.value.filter((r) => r.interimSettledAt == null));
+
+/** 已小结区块展开状态 (默认折叠 → 操作员看到干净的录入界面)。 */
+const settledExpanded = ref(false);
+
+/** 格式化小结时间 (ISO-8601 → "YYYY-MM-DD HH:mm")。 */
+function formatSettledAt(iso: string | null): string {
+  if (!iso) return '';
+  return iso.replace('T', ' ').slice(0, 16);
+}
+
+/**
+ * 已小结行的产出摘要 (单行文字)。
+ * 按工序类型提取最关键的一个数字给操作员一眼看清楚。
+ */
+function settledRowSummary(row: SheetRow): string {
+  if (isXiuYou.value) {
+    const out = row.fields['output'];
+    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+  }
+  if (isSingleUpstream.value) {
+    const after = row.fields['after'];
+    return after != null ? `产出 ${Number(after).toFixed(2)} kg` : '—';
+  }
+  if (isQuSheTou.value) {
+    const out = row.fields['output'];
+    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+  }
+  if (isShuZhi.value) {
+    const out = row.fields['output'];
+    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+  }
+  if (isQidiao.value) {
+    const n = calcSumBoxes(row);
+    return `实产 ${n} 盒`;
+  }
+  return '—';
 }
 
 // -------------------------------------------------------------------------
@@ -859,7 +909,35 @@ watch(
          visual wrapper. Expandable labor / mix sections rendered inline.
          ==================================================================== -->
     <template v-if="viewMode === 'card'">
-      <div v-for="(row, ri) in rows" :key="row.clientRowId" class="sp-card"
+
+      <!-- ====== 已小结区块 (默认折叠，点击展开只读历史行) ====== -->
+      <div v-if="settledRows.length > 0" class="sp-settled-section">
+        <div class="sp-settled-header" @click="settledExpanded = !settledExpanded">
+          <el-icon style="margin-right:4px"><component :is="settledExpanded ? ArrowDown : ArrowRight" /></el-icon>
+          <span>已小结 {{ settledRows.length }} 道（已转结到生产批次，计划保持开放）</span>
+          <el-tag type="info" size="small" style="margin-left:8px">只读</el-tag>
+        </div>
+        <template v-if="settledExpanded">
+          <div v-for="row in settledRows" :key="row.clientRowId" class="sp-card sp-card-settled">
+            <div class="sp-card-header">
+              <el-tag type="info" size="small" style="white-space:nowrap">已小结</el-tag>
+              <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+              <span class="sp-settled-summary">{{ settledRowSummary(row) }}</span>
+              <span v-if="row.interimSettledAt" class="sp-settled-ts">
+                小结于 {{ formatSettledAt(row.interimSettledAt) }}
+              </span>
+              <div style="flex:1" />
+              <el-button
+                v-if="hasHistory(row)"
+                link size="small" :icon="Clock"
+                title="操作记录"
+                @click="openHistory(row)" />
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div v-for="(row, ri) in activeRows" :key="row.clientRowId" class="sp-card"
            :class="{ 'sp-card-saved': row.rowStatus === 'SAVED', 'sp-card-draft': row.rowStatus === 'DRAFT' }">
 
         <!-- Card header: row index + status tag + batch + warning + actions -->
@@ -1206,8 +1284,48 @@ watch(
           </tr>
         </thead>
 
+        <!-- ================================================================
+             已小结区块 (BY_STOCK 小结后已转结行，默认折叠，只读显示)
+             ================================================================ -->
+        <tbody v-if="settledRows.length > 0">
+          <!-- Banner row: 折叠/展开控制 -->
+          <tr class="sp-settled-banner">
+            <td :colspan="999">
+              <el-button link size="small" @click="settledExpanded = !settledExpanded"
+                         style="font-size:12px;padding:2px 4px">
+                <el-icon style="margin-right:4px"><component :is="settledExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                已小结 {{ settledRows.length }} 道（已转结到生产批次，计划保持开放）
+              </el-button>
+            </td>
+          </tr>
+          <!-- Settled rows: compact read-only -->
+          <template v-if="settledExpanded">
+            <tr v-for="row in settledRows" :key="row.clientRowId" class="sp-tr sp-tr-settled">
+              <td class="sp-td sp-td-status">
+                <el-tag type="info" size="small" style="white-space:nowrap">已小结</el-tag>
+              </td>
+              <td class="sp-td" style="color:#606266;font-size:12px">
+                {{ settledRowSummary(row) }}
+              </td>
+              <td class="sp-td sp-td-batch">
+                <span class="sp-readonly sp-batch-num">{{ row.batchNumber || '—' }}</span>
+              </td>
+              <td class="sp-td" style="font-size:11px;color:#c0c4cc;white-space:nowrap">
+                {{ formatSettledAt(row.interimSettledAt) }}
+              </td>
+              <td class="sp-td sp-td-actions" :colspan="999">
+                <el-button
+                  v-if="hasHistory(row)"
+                  link size="small" :icon="Clock"
+                  title="操作记录"
+                  @click="openHistory(row)" />
+              </td>
+            </tr>
+          </template>
+        </tbody>
+
         <tbody>
-          <template v-for="(row, ri) in rows" :key="row.clientRowId">
+          <template v-for="(row, ri) in activeRows" :key="row.clientRowId">
             <!-- ============================================================
                  Main data row
                  ============================================================ -->
@@ -1725,6 +1843,69 @@ watch(
   color: #409eff;
   font-size: 11px;
   word-break: break-all;
+}
+
+/* -------------------------------------------------------------------------
+   已小结区块
+   ------------------------------------------------------------------------- */
+
+/* Grid: 已小结 banner row */
+.sp-settled-banner td {
+  background: #f0f4ff;
+  border: 1px solid #dcdfe6;
+  border-left: 3px solid #909399;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #606266;
+}
+
+/* Grid: 已小结 compact rows */
+.sp-tr-settled td {
+  background: #fafbfd;
+  color: #909399;
+  font-style: italic;
+}
+.sp-tr-settled .sp-td-batch {
+  color: #a0a8b8;
+}
+
+/* Card: 已小结 collapsible section */
+.sp-settled-section {
+  margin-bottom: 10px;
+  border: 1px solid #dcdfe6;
+  border-left: 3px solid #909399;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sp-settled-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f0f4ff;
+  font-size: 12px;
+  color: #606266;
+  cursor: pointer;
+  user-select: none;
+}
+.sp-settled-header:hover {
+  background: #e8edf8;
+}
+.sp-card-settled {
+  border-color: #c0c4cc;
+  background: #fafbfd;
+}
+.sp-card-settled .sp-card-header {
+  background: #f5f5f7;
+}
+.sp-settled-summary {
+  font-size: 12px;
+  color: #606266;
+  margin-left: 8px;
+}
+.sp-settled-ts {
+  font-size: 11px;
+  color: #c0c4cc;
+  margin-left: 8px;
 }
 
 /* -------------------------------------------------------------------------

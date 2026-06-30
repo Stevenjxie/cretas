@@ -202,6 +202,11 @@ export interface ProcessSheetRowView {
   materialized: boolean;
   /** 原始录入 payload (row_payload JSON 原样回读) */
   payload: ProcessSheetRowRequest;
+  /**
+   * BY_STOCK 小结时间戳 (ISO-8601 字符串)。
+   * null = 未小结 (可编辑); 非 null = 已小结转结到批次 (前端折叠只读)。
+   */
+  interimSettledAt: string | null;
 }
 
 // =========================================================================
