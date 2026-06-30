@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from smartbi.config import get_pg_pool
 
-from .collectors import AmapPoiCollector, CollectorResult, ExternalObservation, IndustryReportSeedCollector, NbsCateringStatsCollector
+from .collectors import AmapPoiCollector, CollectorResult, ExternalObservation, IndustryReportSeedCollector, NbsCateringStatsCollector, redact_sensitive_url
 from .sources import source_rows
 from .taxonomy import profile_rows
 
@@ -205,7 +205,7 @@ class ExternalBenchmarkService:
                 result.status,
                 result.rows_upserted,
                 result.error_message,
-                result.request_url,
+                redact_sensitive_url(result.request_url),
                 result.raw_payload,
             )
 
@@ -220,7 +220,7 @@ class ExternalBenchmarkService:
                   FROM external_benchmark_job_run
                  WHERE source_code = $1
                    AND started_at >= date_trunc('day', now())
-                   AND status IN ('success', 'empty')
+                   AND status IN ('success', 'empty', 'error')
                 """,
                 source_code,
             ) or 0)
@@ -253,12 +253,19 @@ class ExternalBenchmarkService:
             )
             await self.record_job_run(result)
             return result
-        result = await AmapPoiCollector().collect_density(
-            location=location,
-            keywords=keywords,
-            radius=radius,
-            geo_scope=geo_scope,
-        )
+        try:
+            result = await AmapPoiCollector().collect_density(
+                location=location,
+                keywords=keywords,
+                radius=radius,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="amap_poi_search",
+                status="error",
+                error_message=f"Amap collection failed: {exc}",
+            )
         result.rows_upserted = await self.upsert_observations(result.observations)
         await self.record_job_run(result)
         return result

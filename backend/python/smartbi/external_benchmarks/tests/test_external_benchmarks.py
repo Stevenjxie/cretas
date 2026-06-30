@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from smartbi.external_benchmarks.collectors import AmapPoiCollector, IndustryReportSeedCollector, parse_nbs_catering_text
+from smartbi.external_benchmarks.collectors import AmapPoiCollector, IndustryReportSeedCollector, parse_nbs_catering_text, redact_sensitive_url
 from smartbi.external_benchmarks.service import ExternalBenchmarkService
 from smartbi.external_benchmarks.sources import assert_source_allowed_for_collection
 from smartbi.external_benchmarks.taxonomy import CATEGORY_PROFILES, CHANNEL_PROFILES, profile_rows
@@ -44,6 +44,21 @@ async def test_amap_collector_skips_without_api_key():
     assert result.status == "skipped"
     assert result.observations == []
     assert "AMAP_API_KEY" in result.error_message
+
+
+def test_amap_url_uses_official_pagination_params_and_can_be_redacted():
+    url = AmapPoiCollector.build_around_url(
+        api_key="secret-key",
+        location="121.4737,31.2304",
+        keywords="hotpot",
+    )
+
+    assert "offset=25" in url
+    assert "page=1" in url
+    assert "page_size" not in url
+    assert "page_num" not in url
+    assert "secret-key" not in redact_sensitive_url(url)
+    assert "key=<redacted>" in redact_sensitive_url(url)
 
 
 def test_industry_seed_has_official_and_report_benchmarks():

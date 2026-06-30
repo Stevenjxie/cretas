@@ -16,6 +16,10 @@ import httpx
 from .sources import assert_source_allowed_for_collection
 
 
+def redact_sensitive_url(url: str) -> str:
+    return re.sub(r"([?&](?:key|sig)=)[^&]+", r"\1<redacted>", url, flags=re.I)
+
+
 @dataclass(frozen=True)
 class ExternalObservation:
     source_code: str
@@ -269,8 +273,8 @@ class AmapPoiCollector:
             "location": location,
             "keywords": keywords,
             "radius": str(radius),
-            "page_size": "25",
-            "page_num": "1",
+            "offset": "25",
+            "page": "1",
             "extensions": "base",
         }
         query = urlencode(params)
@@ -298,6 +302,19 @@ class AmapPoiCollector:
             if close_client:
                 await client.aclose()
 
+        if str(payload.get("status")) != "1":
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Amap API error: {payload.get('info') or payload.get('infocode') or 'unknown'}",
+                raw_payload={
+                    "status": payload.get("status"),
+                    "info": payload.get("info"),
+                    "infocode": payload.get("infocode"),
+                },
+            )
+
         count = int(payload.get("count") or 0)
         observation = ExternalObservation(
             source_code=self.source_code,
@@ -316,4 +333,9 @@ class AmapPoiCollector:
             dimension={"location": location, "radius_m": radius, "keywords": keywords},
             raw_payload={"status": payload.get("status"), "info": payload.get("info"), "count": payload.get("count")},
         )
-        return CollectorResult(source_code=self.source_code, status="success", observations=[observation], request_url=url)
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success",
+            observations=[observation],
+            request_url=redact_sensitive_url(url),
+        )

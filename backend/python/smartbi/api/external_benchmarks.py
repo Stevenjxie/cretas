@@ -65,21 +65,6 @@ async def list_observations(
     ))
 
 
-@router.post("/external-benchmarks/collect/{source_code}")
-async def collect_source(source_code: str, request: Request):
-    _internal_only(request)
-    try:
-        result = await service.collect_and_store(source_code)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _ok({
-        "sourceCode": result.source_code,
-        "status": result.status,
-        "rowsUpserted": result.rows_upserted,
-        "errorMessage": result.error_message,
-    })
-
-
 @router.post("/external-benchmarks/collect/amap-density")
 async def collect_amap_density(body: AmapDensityRequest, request: Request):
     _internal_only(request)
@@ -89,6 +74,21 @@ async def collect_amap_density(body: AmapDensityRequest, request: Request):
         radius=body.radius,
         geo_scope=body.geo_scope,
     )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/{source_code}")
+async def collect_source(source_code: str, request: Request):
+    _internal_only(request)
+    try:
+        result = await service.collect_and_store(source_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _ok({
         "sourceCode": result.source_code,
         "status": result.status,
