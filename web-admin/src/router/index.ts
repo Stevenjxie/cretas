@@ -1683,11 +1683,11 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '目标管理', module: 'restaurant' }
           },
           {
-            // IA v2: 平台口碑 (原 经营与平台分析, 明标需接平台数据)
+            // IA v2: 大众点评口碑 (原 经营与平台分析, 明标需接平台数据)
             path: 'analytics/platform',
             name: 'RestaurantPlatform',
             component: () => import('@/views/restaurant/analytics/platform.vue'),
-            meta: { requiresAuth: true, title: '平台口碑', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '大众点评口碑', module: 'restaurant' }
           },
           {
             // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)

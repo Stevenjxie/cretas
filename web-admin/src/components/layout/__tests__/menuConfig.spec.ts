@@ -232,15 +232,16 @@ describe('menuConfig — 餐饮运营组 3 层重组 (Task 1)', () => {
     expect(p).not.toContain('/restaurant/analytics/gross-margin');
   });
 
-  it('点评改名平台口碑 → /analytics/platform (无旧 dianping)', () => {
+  it('点评口碑显性入口 → /analytics/platform (无旧 dianping)', () => {
     const p = paths();
     expect(p).toContain('/restaurant/analytics/platform');
     expect(p).not.toContain('/restaurant/analytics/dianping');
     const platform = group().children!.find((c) => c.path === '/restaurant/analytics/platform')!;
+    expect(platform.title).toBe('大众点评口碑');
     expect(platform.icon).toBeTruthy();
   });
 
-  it('深度分析段含 菜品分析/门店对比/平台口碑; 日常录入段含 配方/领料/损耗/盘点; 数据与系统段含 数据完整度/ETL', () => {
+  it('深度分析段含 菜品分析/门店对比/大众点评口碑; 日常录入段含 配方/领料/损耗/盘点; 数据与系统段含 数据完整度/ETL', () => {
     const p = paths();
     for (const x of [
       '/restaurant/analytics/dishes', '/restaurant/analytics/stores', '/restaurant/analytics/platform',

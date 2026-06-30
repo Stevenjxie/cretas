@@ -243,7 +243,7 @@ const rawMenuConfig: MenuItem[] = [
   {
     // UX 2026-06-02 IA v2: 餐饮组重组为 3 层 (深度分析/日常录入/数据与系统)。
     // 运营总览移除 (Excel 浏览器病症); 经营驾驶舱复用「数据与分析」组 /smart-bi/dashboard
-    // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评改名平台口碑。
+    // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评口碑保留显性入口。
     // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
     path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'dashboard',
     roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
@@ -257,7 +257,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'] },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/platform', title: '平台口碑', icon: 'ChatDotRound', module: 'restaurant' },
+      { path: '/restaurant/analytics/platform', title: '大众点评口碑', icon: 'ChatDotRound', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',

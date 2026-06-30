@@ -54,7 +54,7 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
   RESTAURANT: [
     '/workdesk', '/sales/finished-goods',
     '/smart-bi/health-report', '/analytics/alert-dashboard',
-    '/restaurant/analytics/role-kpi', '/restaurant/analytics/platform',
+    '/restaurant/analytics/role-kpi',
     '/restaurant/data-completeness', '/restaurant/admin/etl-status', '/restaurant/admin/name-resolution',
     '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
     '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',

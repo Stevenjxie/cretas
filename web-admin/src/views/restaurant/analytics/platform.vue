@@ -172,7 +172,7 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">平台口碑分析</span>
+            <span class="page-title">平台口碑分析（大众点评）</span>
             <el-tag v-if="!vm.isEmpty" size="small" type="info">
               来源: 大众点评 / 美团 导出，共 {{ vm.totalReviews.toLocaleString() }} 条点评
             </el-tag>
