@@ -472,7 +472,7 @@ public class ProductionPlanController {
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/interim-settle")
-    @Operation(summary = "库存生产小结", description = "BY_STOCK 永续生产: 对自上次小结以来的增量分批入库(半成品/成品)+实时扣减原料, 会话幂等, 不关闭计划")
+    @Operation(summary = "存货生产小结", description = "存货生产 (sourceType=SAFETY_STOCK): 对自上次小结以来的增量分批入库(半成品/成品)+实时扣减原料, 会话幂等, 不关闭计划")
     public ApiResponse<Map<String, Object>> interimSettle(
             @Parameter(description = "工厂ID", required = true, example = "F006")
             @PathVariable @NotBlank String factoryId,
@@ -487,7 +487,7 @@ public class ProductionPlanController {
     }
 
     /**
-     * 停产 — BY_STOCK 库存永续计划关闭
+     * 停产 — 存货生产 (SAFETY_STOCK) 计划关闭
      *
      * <p>纯状态关闭 (→ COMPLETED), 不扣料、不发 BatchCompletedEvent。
      * 配合小结 (interim-settle) 使用: 小结已逐批扣料+入库, 停产只关闭计划。
@@ -495,7 +495,7 @@ public class ProductionPlanController {
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/stop-production")
-    @Operation(summary = "停产", description = "BY_STOCK 库存永续计划: 纯状态关闭 (COMPLETED), 不扣料不发事件, 配合小结使用")
+    @Operation(summary = "停产", description = "存货生产 (sourceType=SAFETY_STOCK): 纯状态关闭 (COMPLETED), 不扣料不发事件, 配合小结使用")
     public ApiResponse<Void> stopProduction(
             @Parameter(description = "工厂ID", required = true, example = "F006")
             @PathVariable @NotBlank String factoryId,

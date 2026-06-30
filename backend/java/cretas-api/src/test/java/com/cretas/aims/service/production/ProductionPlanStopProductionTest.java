@@ -1,7 +1,7 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.enums.ProductionMode;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -43,10 +43,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * G3b 停产单元测试 — 验证 BY_STOCK 计划停产是纯状态关闭:
+ * G3b 停产单元测试 — 验证存货生产 (SAFETY_STOCK) 计划停产是纯状态关闭:
  * 无 BatchCompletedEvent 发布、无批次查询、无物料扣减。
  */
-@DisplayName("ProductionPlan 停产 (G3b BY_STOCK 纯状态关闭)")
+@DisplayName("ProductionPlan 停产 (G3b 存货生产纯状态关闭)")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class ProductionPlanStopProductionTest {
@@ -96,7 +96,7 @@ class ProductionPlanStopProductionTest {
         p.setProductTypeId("PT-1");
         p.setPlannedQuantity(new BigDecimal("1000"));
         p.setStatus(ProductionPlanStatus.IN_PROGRESS);
-        p.setProductionMode(ProductionMode.BY_STOCK);
+        p.setSourceType(PlanSourceType.SAFETY_STOCK);
         p.setCreatedBy(1L);
         return p;
     }
@@ -104,7 +104,7 @@ class ProductionPlanStopProductionTest {
     // ─── tests ───────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("BY_STOCK 计划停产 → COMPLETED, endTime 已设, repo.save 被调用")
+    @DisplayName("存货生产 (SAFETY_STOCK) 计划停产 → COMPLETED, endTime 已设, repo.save 被调用")
     void stopProduction_byStock_setsCompletedAndSaves() {
         ProductionPlan plan = byStockPlan();
         plan.setStartTime(LocalDateTime.now().minusHours(2));
@@ -155,10 +155,10 @@ class ProductionPlanStopProductionTest {
     }
 
     @Test
-    @DisplayName("BY_ORDER 计划停产 → BusinessException(400)")
+    @DisplayName("非存货生产 (非 SAFETY_STOCK) 计划停产 → BusinessException(400)")
     void stopProduction_byOrder_throws400() {
         ProductionPlan plan = byStockPlan();
-        plan.setProductionMode(ProductionMode.BY_ORDER);
+        plan.setSourceType(PlanSourceType.CUSTOMER_ORDER);
 
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
@@ -167,7 +167,7 @@ class ProductionPlanStopProductionTest {
                 () -> service.stopProduction(FACTORY_ID, PLAN_ID));
 
         assertEquals(400, ex.getCode(), "非库存业态应抛 400");
-        assertTrue(ex.getMessage().contains("仅库存生产计划可停产"));
+        assertTrue(ex.getMessage().contains("仅存货生产计划可停产"));
         verify(productionPlanRepository, never()).save(any());
         verify(applicationEventPublisher, never()).publishEvent(any());
     }

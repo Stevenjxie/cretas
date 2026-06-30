@@ -249,21 +249,18 @@ export function getProductionSummary(factoryId: string, planId: string) {
   return get<ProductionSummaryDTO>(`/${factoryId}/production-plans/${planId}/production-summary`)
 }
 
-/** Phase 2 库存生产模式字段 */
-export type ProductionMode = 'BY_ORDER' | 'BY_STOCK'
-
-/** 生产计划基础 DTO (Phase 2: 包含 productionMode) */
+/** 生产计划基础 DTO */
 export interface ProductionPlanBase {
   id: string
   planNumber: string
-  productionMode?: ProductionMode
   status?: string
   planName?: string
+  sourceType?: string
   [key: string]: unknown
 }
 
 /**
- * 小结 (BY_STOCK 计划专用): 增量入库成品 + 扣料, 计划继续挂起
+ * 小结 (存货生产 SAFETY_STOCK 计划专用): 增量入库成品 + 扣料, 计划继续挂起
  * POST /{factoryId}/production-plans/{planId}/interim-settle
  */
 export function interimSettle(factoryId: string, planId: string) {
@@ -271,7 +268,7 @@ export function interimSettle(factoryId: string, planId: string) {
 }
 
 /**
- * 停产 (BY_STOCK 计划专用): 关闭 BY_STOCK 计划, 不可再小结
+ * 停产 (存货生产 SAFETY_STOCK 计划专用): 关闭计划, 不可再小结
  * POST /{factoryId}/production-plans/{planId}/stop-production
  */
 export function stopProduction(factoryId: string, planId: string) {

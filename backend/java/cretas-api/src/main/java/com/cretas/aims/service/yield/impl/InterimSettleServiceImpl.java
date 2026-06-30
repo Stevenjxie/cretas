@@ -7,7 +7,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.entity.enums.ProductionMode;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -79,10 +79,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     public Map<String, Object> interimSettle(String factoryId, String planId, Long userId) {
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
-        if (plan.getProductionMode() != ProductionMode.BY_STOCK) {
-            throw new BusinessException(400, "仅库存(永续)生产计划可小结, 当前计划模式: "
-                    + plan.getProductionMode())
-                    .withHint("销售订单生产计划请走「结单」")
+        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
+            throw new BusinessException(400, "仅存货生产计划可小结, 当前来源类型: "
+                    + plan.getSourceType())
+                    .withHint("非存货生产计划请走「结单」")
                     .withHintTarget("小结");
         }
 

@@ -2,7 +2,6 @@ package com.cretas.aims.dto.production;
 
 import com.cretas.aims.entity.enums.MixedBatchType;
 import com.cretas.aims.entity.enums.PlanSourceType;
-import com.cretas.aims.entity.enums.ProductionMode;
 import com.cretas.aims.entity.enums.ProductionPlanType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -165,12 +164,4 @@ public class CreateProductionPlanRequest {
     @Schema(description = "Canvas 动态字段值 (Round 9 Fix)")
     private Map<String, Object> customFields;
 
-    // ======= 生产业态 =======
-
-    /**
-     * 生产业态: BY_ORDER 销售订单生产 (默认) / BY_STOCK 库存(永续)生产。
-     * 不传或传 null 时默认 BY_ORDER（向后兼容）。
-     */
-    @Schema(description = "生产业态: BY_ORDER 销售订单生产(默认) / BY_STOCK 库存(永续)生产")
-    private String productionMode;
 }

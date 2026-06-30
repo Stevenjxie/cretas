@@ -279,11 +279,4 @@ public class ProductionPlanDTO {
     @Schema(description = "产品类型名称")
     private String productTypeName;
 
-    // ======= 生产业态 =======
-
-    /**
-     * 生产业态: BY_ORDER 销售订单生产 (默认) / BY_STOCK 库存(永续)生产。
-     */
-    @Schema(description = "生产业态: BY_ORDER 销售订单生产(默认) / BY_STOCK 库存(永续)生产")
-    private String productionMode;
 }

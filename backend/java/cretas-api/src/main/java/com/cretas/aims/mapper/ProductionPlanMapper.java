@@ -4,7 +4,6 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
-import com.cretas.aims.entity.enums.ProductionMode;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -114,11 +113,6 @@ public class ProductionPlanMapper {
         dto.setRelatedOrders(parseRelatedOrders(plan.getRelatedOrders()));
         dto.setSkipProcessReporting(plan.getSkipProcessReporting());
 
-        // 生产业态
-        dto.setProductionMode(plan.getProductionMode() != null
-                ? plan.getProductionMode().name()
-                : ProductionMode.BY_ORDER.name());
-
         // 设置强制插单审批字段
         dto.setIsForceInserted(plan.getIsForceInserted());
         dto.setRequiresApproval(plan.getRequiresApproval());
@@ -213,9 +207,6 @@ public class ProductionPlanMapper {
         plan.setSkipProcessReporting(request.getSkipProcessReporting() != null
                 ? request.getSkipProcessReporting()
                 : Boolean.FALSE);
-
-        // 生产业态 — 用 fromString 安全解析; null/blank/非法 → BY_ORDER (向后兼容)
-        plan.setProductionMode(ProductionMode.fromString(request.getProductionMode()));
 
         // 计算CR值
         if (request.getEstimatedWorkDays() != null && request.getExpectedCompletionDate() != null) {

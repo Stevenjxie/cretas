@@ -6,7 +6,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.enums.ProductionMode;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -100,7 +100,7 @@ class InterimSettleServiceTest {
         plan.setFactoryId(FACTORY);
         plan.setPlanNumber("PP-001");
         plan.setProductTypeId(PRODUCT_TYPE);
-        plan.setProductionMode(ProductionMode.BY_STOCK);
+        plan.setSourceType(PlanSourceType.SAFETY_STOCK);
         when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
 
         // 小结记录"持久化"模拟: saveAndFlush 累积; findTop 返最大 seq; findAllAsc 返全部
@@ -130,17 +130,17 @@ class InterimSettleServiceTest {
     }
 
     @Test
-    @DisplayName("非 BY_STOCK 计划调小结 → 400")
+    @DisplayName("非存货生产 (SAFETY_STOCK) 计划调小结 → 400")
     void rejectsNonStockPlan() {
         ProductionPlan byOrder = new ProductionPlan();
         byOrder.setId(PLAN_ID);
         byOrder.setFactoryId(FACTORY);
-        byOrder.setProductionMode(ProductionMode.BY_ORDER);
+        byOrder.setSourceType(PlanSourceType.CUSTOMER_ORDER);
         when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(byOrder));
 
         assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 1L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("仅库存");
+                .hasMessageContaining("仅存货生产计划可小结");
     }
 
     @Test

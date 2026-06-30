@@ -26,7 +26,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
-import com.cretas.aims.entity.enums.ProductionMode;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -4034,8 +4033,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public void stopProduction(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-        if (plan.getProductionMode() != ProductionMode.BY_STOCK) {
-            throw new BusinessException(400, "仅库存生产计划可停产");
+        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
+            throw new BusinessException(400, "仅存货生产计划可停产");
         }
         plan.setStatus(ProductionPlanStatus.COMPLETED);
         plan.setEndTime(LocalDateTime.now());
@@ -4043,7 +4042,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setStartTime(LocalDateTime.now());
         }
         productionPlanRepository.save(plan);
-        log.info("停产 (BY_STOCK 纯状态关闭, 无扣料无事件): factoryId={}, planId={}", factoryId, planId);
+        log.info("停产 (存货生产纯状态关闭, 无扣料无事件): factoryId={}, planId={}", factoryId, planId);
         // NO completeProduction, NO settleProduction, NO BatchCompletedEvent, NO consumption posting.
     }
 }
