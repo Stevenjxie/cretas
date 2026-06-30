@@ -621,10 +621,18 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     if status_code == 429:
         # ZhipuAI / DeepSeek may use 429 for quota/rate. Treat as fallback trigger.
         return True
-    if status_code == 402 and "Insufficient Balance" in body_text:
+    if status_code == 402 and (
+        "Insufficient Balance" in body_text
+        or "FREE_QUOTA_EXHAUSTED" in body_text
+    ):
         # DeepSeek-official balance-0 returns 402 with body "Insufficient
-        # Balance". Structurally identical to other quota exhaustion — fall
-        # through with WARNING instead of generic ERROR (issue #581).
+        # Balance". Tencent TokenHub returns 402 with body "endpoint is
+        # inactive: FREE_QUOTA_EXHAUSTED" once its 90-day free trial is
+        # consumed (probe 2026-06-30: deepseek-v4-pro/flash, glm-5.1,
+        # qwen3.5-flash all 402). Both are structurally identical to other
+        # quota exhaustion ($0, free trial stopped) — classify as quota so the
+        # caller (a) marks the (account,model) quota-skip cache for QUOTA_SKIP_TTL
+        # instead of re-probing every request, and (b) logs WARNING not ERROR.
         return True
     return False
 

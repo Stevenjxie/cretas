@@ -358,6 +358,16 @@ def test_402_insufficient_balance_is_quota_exhausted():
     assert is_q(402, "Insufficient Balance")
 
 
+def test_402_tencent_free_quota_exhausted_is_quota_exhausted():
+    """Tencent TokenHub returns 402 with body 'endpoint is inactive:
+    FREE_QUOTA_EXHAUSTED' once the 90-day free trial is consumed (probe
+    2026-06-30). Must be classified as quota so the router marks the quota-skip
+    cache + logs WARNING instead of re-probing every request as a generic ERROR."""
+    is_q = llm_router._is_quota_exhausted
+    assert is_q(402, '{"error":{"message":"endpoint is inactive: FREE_QUOTA_EXHAUSTED","code":"401008"}}')
+    assert is_q(402, "FREE_QUOTA_EXHAUSTED")
+
+
 def test_402_other_cases_not_quota_exhausted():
     is_q = llm_router._is_quota_exhausted
     assert not is_q(402, "Payment Required")
