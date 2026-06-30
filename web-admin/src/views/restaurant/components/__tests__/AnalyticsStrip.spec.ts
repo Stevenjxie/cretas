@@ -57,4 +57,36 @@ describe('AnalyticsStrip', () => {
       expect(options.factoryId()).toBe('DEMO_REST');
     }
   });
+
+  it('uses operational metrics for chart insights instead of hard-coded revenue/store', () => {
+    shallowMount(AnalyticsStrip, {
+      props: {
+        rows: [
+          { stocktakingDate: '2026-06-01', differenceQuantity: -3, rawMaterialTypeId: 'fish' },
+          { stocktakingDate: '2026-06-02', differenceQuantity: -1, rawMaterialTypeId: 'fish' },
+          { stocktakingDate: '2026-06-03', differenceQuantity: 2, rawMaterialTypeId: 'pepper' },
+        ],
+        dateField: 'stocktakingDate',
+        valueField: 'differenceQuantity',
+        categoryField: 'rawMaterialTypeId',
+        insightYMetric: 'quantity',
+        rankByAbsoluteValue: true,
+      },
+      global: {
+        stubs: {
+          'el-row': true,
+          'el-col': true,
+          'el-icon': true,
+          ChartInsight: true,
+        },
+      },
+    });
+
+    const trendSource = (useChartInsightCalls[0] as unknown[])[0] as () => { chart: { meta: { xDim: string; yMetric: string } } };
+    const rankingSource = (useChartInsightCalls[1] as unknown[])[0] as () => { chart: { meta: { xDim: string; yMetric: string }; config: { series: Array<{ data: number[] }> } } };
+
+    expect(trendSource().chart.meta).toMatchObject({ xDim: 'time', yMetric: 'quantity' });
+    expect(rankingSource().chart.meta).toMatchObject({ xDim: 'category', yMetric: 'quantity' });
+    expect(rankingSource().chart.config.series[0].data).toEqual([4, 2]);
+  });
 });

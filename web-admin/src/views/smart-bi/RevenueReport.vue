@@ -85,8 +85,8 @@ const uploadPurposeOptions = [
   {
     value: 'review-data',
     title: '顾客评价/平台口碑',
-    desc: '大众点评、美团评价、评分、评论文本等口碑数据。',
-    action: '前往数据完整度查看缺口',
+    desc: '大众点评、美团评价、评分、评论文本等口碑数据；demo 已内置 19,845 条口碑样本。',
+    action: '前往大众点评口碑分析',
   },
 ] as const;
 
@@ -262,7 +262,7 @@ async function confirmUploadPurpose() {
   }
   if (uploadPurpose.value === 'review-data') {
     uploadPurposeDialogVisible.value = false;
-    await router.push('/restaurant/data-completeness');
+    await router.push('/restaurant/analytics/platform');
     return;
   }
   uploadPurposeDialogVisible.value = false;
@@ -516,6 +516,18 @@ function showStickyWarning(message: string) {
       <ul class="analysis-card__list">
         <li v-for="item in revenueAnalysisBullets" :key="item">{{ item }}</li>
       </ul>
+    </section>
+
+    <section class="review-entry">
+      <div>
+        <div class="review-entry__title">顾客评价与大众点评口碑</div>
+        <div class="review-entry__desc">
+          demo 已接入大众点评 / 美团评价样本，可查看平台评价量、好评关键词、门店口碑排名和评价趋势。
+        </div>
+      </div>
+      <el-button type="primary" plain @click="router.push('/restaurant/analytics/platform')">
+        查看大众点评口碑
+      </el-button>
     </section>
 
     <!-- Stale-data warning banner (spec §11.4) -->
@@ -925,6 +937,38 @@ function showStickyWarning(message: string) {
 
 .analysis-card__list li + li {
   margin-top: 4px;
+}
+
+.review-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.review-entry__title {
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.review-entry__desc {
+  margin-top: 4px;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .review-entry {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .card {

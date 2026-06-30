@@ -11,7 +11,7 @@
           <div class="chart-body" :id="`chart-trend-${uid}`" v-if="chartData.trend.length > 0"></div>
           <div v-else class="chart-empty">暂无足够数据绘制趋势</div>
           <!-- U6: useChartInsight — TREND insight -->
-          <ChartInsight :insight="trendInsight" :loading="trendInsightLoading" depth="detailed" />
+          <ChartInsight :insight="localizedTrendInsight" :loading="trendInsightLoading" :factory-id="factoryId" depth="detailed" />
         </div>
       </el-col>
       <el-col :xs="24" :sm="12">
@@ -24,7 +24,7 @@
           <div class="chart-body" :id="`chart-ranking-${uid}`" v-if="chartData.ranking.length > 0"></div>
           <div v-else class="chart-empty">暂无排行数据</div>
           <!-- U6: useChartInsight — RANKING insight -->
-          <ChartInsight :insight="rankingInsight" :loading="rankingInsightLoading" depth="detailed" />
+          <ChartInsight :insight="localizedRankingInsight" :loading="rankingInsightLoading" :factory-id="factoryId" depth="detailed" />
         </div>
       </el-col>
     </el-row>
@@ -38,6 +38,7 @@ import echarts from '@/utils/echarts';
 import { useChartInsight } from '@/composables/useChartInsight';
 import { useFactoryId } from '@/composables/useFactoryId';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import type { ChartMeta, InsightResult } from '@/views/smart-bi/components/chartInsight';
 
 interface TrendPoint { date: string; value: number }
 interface RankingItem { name: string; value: number }
@@ -60,6 +61,10 @@ const props = defineProps<{
   valueUnit?: string;   // '元' or '单' etc
   isCurrency?: boolean;
   topN?: number;
+  insightYMetric?: ChartMeta['yMetric'];
+  insightAggregation?: ChartMeta['aggregation'];
+  insightDomain?: ChartMeta['domain'];
+  rankByAbsoluteValue?: boolean;
 }>();
 
 const factoryId = useFactoryId();
@@ -93,7 +98,8 @@ const chartData = computed(() => {
     const cat = String(r[catField] ?? '未分类');
     if (!cat) continue;
     const v = valueField ? Number(r[valueField]) || 0 : 1;
-    byCat.set(cat, (byCat.get(cat) || 0) + v);
+    const rankingValue = props.rankByAbsoluteValue ? Math.abs(v) : v;
+    byCat.set(cat, (byCat.get(cat) || 0) + rankingValue);
   }
   const ranking: RankingItem[] = Array.from(byCat.entries())
     .sort((a, b) => b[1] - a[1])
@@ -124,6 +130,8 @@ function renderTrend() {
   if (!el || chartData.value.trend.length === 0) return;
   if (!trendChart) trendChart = echarts.init(el);
   const t = chartData.value.trend;
+  const values = t.map(p => p.value);
+  const hasNegative = values.some(v => v < 0);
   trendChart.setOption({
     tooltip: {
       trigger: 'axis', confine: true,
@@ -143,7 +151,8 @@ function renderTrend() {
       axisLabel: { interval: t.length > 14 ? 'auto' : 0, fontSize: 11 },
     },
     yAxis: {
-      type: 'value', min: 0,
+      type: 'value',
+      min: hasNegative ? 'dataMin' : 0,
       axisLabel: {
         formatter: (v: number) => props.isCurrency
           ? (v >= 1e4 ? (v / 1e4).toFixed(1) + '万' : String(Math.round(v)))
@@ -169,6 +178,8 @@ function renderRanking() {
   if (!el || chartData.value.ranking.length === 0) return;
   if (!rankingChart) rankingChart = echarts.init(el);
   const r = chartData.value.ranking.slice().reverse();  // bar chart bottom-up
+  const values = r.map(i => i.value);
+  const hasNegative = values.some(v => v < 0);
   rankingChart.setOption({
     tooltip: {
       trigger: 'axis', confine: true,
@@ -184,6 +195,7 @@ function renderRanking() {
     grid: { left: 110, right: 30, top: 10, bottom: 30 },
     xAxis: {
       type: 'value',
+      min: hasNegative ? 'dataMin' : 0,
       axisLabel: {
         formatter: (v: number) => props.isCurrency
           ? (v >= 1e4 ? (v / 1e4).toFixed(1) + '万' : String(Math.round(v)))
@@ -219,7 +231,12 @@ const trendInsightSource = () => {
   return {
     chart: {
       chartType: 'LINE',
-      meta: { xDim: 'time' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'restaurant' as const },
+      meta: {
+        xDim: 'time' as const,
+        yMetric: props.insightYMetric || (props.isCurrency ? 'cost' : 'quantity'),
+        aggregation: props.insightAggregation || 'sum',
+        domain: props.insightDomain || 'restaurant',
+      },
       config: {
         xAxis: { data: t.map((p) => p.date) },
         series: [{ type: 'line', data: t.map((p) => p.value) }],
@@ -235,7 +252,12 @@ const rankingInsightSource = () => {
   return {
     chart: {
       chartType: 'BAR',
-      meta: { xDim: 'store' as const, yMetric: 'revenue' as const, aggregation: 'sum' as const, domain: 'restaurant' as const },
+      meta: {
+        xDim: 'category' as const,
+        yMetric: props.insightYMetric || (props.isCurrency ? 'cost' : 'quantity'),
+        aggregation: props.insightAggregation || 'sum',
+        domain: props.insightDomain || 'restaurant',
+      },
       config: {
         xAxis: { data: r.map((i) => i.name) },
         series: [{ type: 'bar', data: r.map((i) => i.value) }],
@@ -255,6 +277,55 @@ const { insight: rankingInsight, loading: rankingInsightLoading } = useChartInsi
   () => ({ canViewFinance: false }),
   { factoryId: () => factoryId.value, autoTier2: true },
 );
+
+const metricName = computed(() => {
+  const title = props.trendTitle || '';
+  if (title.includes('领料')) return '领料数量';
+  if (title.includes('盘点')) return '盘点差异';
+  if (title.includes('损耗')) return '损耗金额';
+  if (title.includes('配方')) return '配方用量';
+  return props.isCurrency ? '金额' : '数量';
+});
+
+const categoryContext = computed(() => {
+  const title = `${props.rankingTitle || ''} ${props.categoryField || ''}`;
+  if (/rawMaterial|食材|物料/.test(title)) return { noun: '食材', action: '领用、保管、盘点执行' };
+  if (/损耗|wastage|type/.test(title)) return { noun: '损耗类型', action: '报损原因、责任环节、复盘动作' };
+  if (/product|菜品/.test(title)) return { noun: '菜品', action: '供给、价格、曝光和执行' };
+  return { noun: '项目', action: '结构、执行、数据录入' };
+});
+
+function localizeInsight(insight: InsightResult | null, kind: 'trend' | 'ranking'): InsightResult | null {
+  if (!insight) return null;
+  const context = categoryContext.value;
+  const apply = (value?: string) => {
+    if (!value) return value;
+    let text = value;
+    if (kind === 'trend') {
+      text = text
+        .replace(/数量/g, metricName.value)
+        .replace(/活动、门店或库存动作/g, '班次、食材批次或库存动作');
+    }
+    if (kind === 'ranking') {
+      text = text
+        .replace(/少数门店或少数菜品/g, `少数${context.noun}或关键环节`)
+        .replace(/门店或菜品/g, context.noun)
+        .replace(/供给、价格、曝光和执行/g, context.action)
+        .replace(/整体效率/g, '库存与成本管理效率')
+        .replace(/差距差距/g, '差距');
+    }
+    return text;
+  };
+  return {
+    ...insight,
+    finding: apply(insight.finding) || insight.finding,
+    implication: apply(insight.implication),
+    suggestion: apply(insight.suggestion),
+  };
+}
+
+const localizedTrendInsight = computed(() => localizeInsight(trendInsight.value, 'trend'));
+const localizedRankingInsight = computed(() => localizeInsight(rankingInsight.value, 'ranking'));
 
 watch(chartData, () => { nextTick(() => { renderTrend(); renderRanking(); }); }, { deep: true, immediate: true });
 

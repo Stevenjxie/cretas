@@ -54,6 +54,7 @@
         ranking-title="食材盘亏/盈 Top 10"
         value-unit="kg"
         :top-n="10"
+        :rank-by-absolute-value="true"
       />
 
       <div class="search-bar" role="search" aria-label="盘点记录筛选">
