@@ -12,6 +12,24 @@
 
 ---
 
+## ⚠️ Phase 1 已部分上线 + 一个 P0 后续(2026-06-30 headed 验证抓到)
+
+**已上线**:Task 1-6 + 方案A 已合并 main(`be9cbf657`,foldless,半成品独立)。⚠️ **但 prod 当前跑的是 R 代码**(`v20260630_210151`,带折算)—— 因为 A 改动我**合并前漏 push**(交付失误),merge 用了旧远端分支。功能附加/opt-in,无客户自动影响。**下次部署从 main(A)重部即修。**
+
+### P0 后续:真实总出成率必须按「成品重」而非「盒数」(headed 在真实数据抓到)
+- **现状 bug**:`总产出成品` 用 `ProductionBatch.quantity`,该批是 **5 盒**;`总投入` 是 **kg** → 真实出成率 = 盒/kg = 无意义(实测 277%/323%,>100%)。
+- **客户澄清(2026-06-30)**:最后一步(气调)投入+产出都填,**产出按包材规格 + 录入成品重(kg)**,出成率**按重量**算。
+- **数据源已确认**:成品重 = 前端 `row.fields['productWeight']`,**已持久化进 row_payload**(`ProcessDataTable.vue:604-607` "Persist numeric fields into payload JSON")。即 `process_sheet_rows` 的 payload 里有 `productWeight`(kg);另有 `usedWeight`(使用重量 kg)。气调步前端已有 `出成率=productWeight/usedWeight×100`(`calcYieldByProductWeight`)。老测试计划没填 productWeight(只录了盒数)所以为 null。
+- **正确实现(设计已钉死,执行无歧义)**:
+  1. `ProductionSummaryService` 读末道(finished/`status=COMPLETED`)行的 `payload.productWeight`,`总产出成品重量 = Σ productWeight`(kg)。读 row payload 用 `ProcessSheetService.getRows(factoryId, planId, process, processOrder)`(返回 `ProcessSheetRowView`,含 payload)—— 执行者确认 getRows 怎么拿全末道行 + productWeight 字段(payload map key `productWeight`)。
+  2. DTO:加 `totalFinishedWeight`(kg)+ 保留 `totalFinishedOutput`(盒,展示用)+ `finishedUnit`。`realYieldRate = totalRawInput>0 && totalFinishedWeight>0 ? totalFinishedWeight×100/totalRawInput(scale2 HALF_UP) : null`。
+  3. **单位守卫(绝不显示错数)**:`totalFinishedWeight` 为 0/未录 → `realYieldRate=null` + DTO 带 `yieldNote="成品重量未录入,无法按重量算出成率"`。前端 realYieldRate 为 null 时显示该 note,不显示 % 或 0。
+  4. 前端弹窗:展示 总产出成品(盒)+ 成品总重(kg)+ 真实出成率(或 note)。
+- **验证必须用干净计划**:老测试计划 (a) productWeight 未录、(b) cumYield 列爆到 37500%(脏数据)。需建/找一个**末道录了成品重**的干净计划做 headed 三方验证(yield = 成品重/原料重,如 0.7/1.0=70% 量级,<100% 合理)。
+- **部署**:连同 A 一起从干净 worktree 部署 backend+frontend(prod==main==正确),再 headed 验。
+
+---
+
 ## ⚠️ 一个业务规则必须先和客户确认(阻塞 Task 3)
 
 **剩余半成品"折算"口径** —— 客户原话"半成品折成多少成品或原料,扣掉以后算真实出成率"(转录 line 39)。两种等价 formula,需客户拍板:
