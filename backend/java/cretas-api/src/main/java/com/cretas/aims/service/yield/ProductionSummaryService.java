@@ -45,12 +45,32 @@ public class ProductionSummaryService {
                     .divide(denom, 2, java.math.RoundingMode.HALF_UP)
                 : null;
 
+        BigDecimal totalCost = null;
+        if (!maskPrice) {
+            totalCost = planBatches.stream()
+                    .filter(b -> "REGULAR".equals(b.getBatchType()) && b.getBatchNumber() != null)
+                    .map(b -> orderCostBreakdownService.computeByBatch(factoryId, b.getBatchNumber(), false))
+                    .filter(java.util.Objects::nonNull)
+                    .map(cb -> nz(cb.getTotalCost()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+
+        java.util.List<ProductionSummaryDTO.BatchLine> lines = items.stream()
+                .map(i -> ProductionSummaryDTO.BatchLine.builder()
+                        .batchNumber(i.getBatchNumber()).processOrder(i.getProcessOrder())
+                        .processName(i.getProcessName()).produced(i.getProduced())
+                        .remaining(i.getRemaining()).status(i.getStatus())
+                        .cumulativeYieldRate(i.getCumulativeYieldRate()).build())
+                .toList();
+
         return ProductionSummaryDTO.builder()
                 .planId(planId)
                 .totalRawInput(totalRawInput)
                 .totalFinishedOutput(totalFinishedOutput)
                 .remainingSemiRawEquiv(remainingSemiRawEquiv)
                 .realYieldRate(realYield)
+                .totalCost(totalCost)
+                .batches(lines)
                 .priceMasked(maskPrice)
                 .build();
     }

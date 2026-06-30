@@ -1,6 +1,7 @@
 package com.cretas.aims.service.yield;
 
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.dto.yield.ProductionSummaryDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -14,6 +15,10 @@ import java.math.BigDecimal;
 import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 
 @ExtendWith(MockitoExtension.class)
 class ProductionSummaryServiceTest {
@@ -48,6 +53,35 @@ class ProductionSummaryServiceTest {
 
         assertThat(dto.getTotalRawInput()).isEqualByComparingTo("5.0");
         assertThat(dto.getTotalFinishedOutput()).isEqualByComparingTo("2.0");
+    }
+
+    @Test
+    void totalCost_sumsComputeByBatch() {
+        // maskPrice=false: totalCost should sum two batches (100 + 50 = 150)
+        OrderCostBreakdownDTO cb1 = OrderCostBreakdownDTO.builder().totalCost(new BigDecimal("100")).build();
+        OrderCostBreakdownDTO cb2 = OrderCostBreakdownDTO.builder().totalCost(new BigDecimal("50")).build();
+        ProductionBatch b1 = clkB(new BigDecimal("1")); b1.setBatchNumber("CLK-B-1");
+        ProductionBatch b2 = clkB(new BigDecimal("1")); b2.setBatchNumber("CLK-B-2");
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(List.of());
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(List.of(b1, b2));
+        when(orderCostBreakdownService.computeByBatch("F006", "CLK-B-1", false)).thenReturn(cb1);
+        when(orderCostBreakdownService.computeByBatch("F006", "CLK-B-2", false)).thenReturn(cb2);
+
+        assertThat(service.computeSummary("F006", "P1", false).getTotalCost())
+                .isEqualByComparingTo("150");
+    }
+
+    @Test
+    void totalCost_nullWhenMaskPrice() {
+        // maskPrice=true: totalCost must be null and computeByBatch must NOT be called
+        ProductionBatch b1 = clkB(new BigDecimal("1")); b1.setBatchNumber("CLK-B-1");
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(List.of());
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(List.of(b1));
+
+        assertThat(service.computeSummary("F006", "P1", true).getTotalCost()).isNull();
+        verify(orderCostBreakdownService, never()).computeByBatch(anyString(), anyString(), anyBoolean());
     }
 
     @Test
