@@ -138,7 +138,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
 
         // 5. 映射单个 StepEntry
-        StepEntry step = buildStepEntry(req);
+        StepEntry step = buildStepEntry(factoryId, req);
 
         // 7. 物化
         MaterializeContext ctx = new MaterializeContext(
@@ -208,7 +208,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
             String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
-            StepEntry step = buildStepEntry(req);
+            StepEntry step = buildStepEntry(factoryId, req);
             MaterializeContext ctx = new MaterializeContext(
                     factoryId,
                     req.isFinished() ? planId : null,
@@ -257,7 +257,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
         reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
         String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
-        StepEntry step = buildStepEntry(req);
+        StepEntry step = buildStepEntry(factoryId, req);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
                 req.isFinished() ? planId : null,
@@ -1281,15 +1281,23 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // Request → StepEntry mapping
     // ─────────────────────────────────────────────────────────────
 
-    private StepEntry buildStepEntry(ProcessSheetRowRequest req) {
+    private StepEntry buildStepEntry(String factoryId, ProcessSheetRowRequest req) {
         StepEntry st = new StepEntry();
         st.setProcessOrder(req.getProcessOrder());
-        st.setProcessName(req.getProcessName());
+        // 解析真实工序名: req 未带时(前端不传)按 productTypeId+order 反查 product-work-process,
+        // 否则 StepEntry.processName 恒 null → 调味道按名识别失效 (调料成本不流入)。
+        String name = req.getProcessName();
+        if ((name == null || name.isBlank()) && req.getProductTypeId() != null && req.getProcessOrder() != null) {
+            name = resolveProcessNamesByOrder(factoryId, req.getProductTypeId()).get(req.getProcessOrder());
+        }
+        st.setProcessName(name);
         st.setProcessDate(req.getProcessDate());  // 跨天: 该工序实际操作日 → 报工日期
-        // isSeasoningStep 决定: seasoningStep=true → processCategory=SEASONING;
-        // 否则设非空非 SEASONING 值, 关闭 (processCategory==null && potCount!=null) 的启发式回退,
-        // 避免普通带锅工序被误判为调味。
-        st.setProcessCategory(req.isSeasoningStep() ? "SEASONING" : "NORMAL");
+        // processCategory=SEASONING 决定调料成本是否计入。三个来源: ① 前端显式 isSeasoningStep
+        // ② 工序名是熟制/卤制/注射等调味道(与 isSeasoningStep 警告同正则) —— F006 熟制道 processCategory
+        // 是'加工'且 grid 无 potCount, 不按名识别则调料成本结构性恒 0。无配方时仍 0+warning, 故安全。
+        boolean seasoning = req.isSeasoningStep()
+                || (name != null && name.matches(".*(熟|卤|煮|腌|注射|入味|调味).*"));
+        st.setProcessCategory(seasoning ? "SEASONING" : "NORMAL");
         st.setInputQuantity(req.getInputQuantity());
         st.setOutputQuantity(req.getOutputQuantity());
         st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
