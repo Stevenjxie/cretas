@@ -106,3 +106,68 @@ async def test_factory_age_formula_for_new_factory():
     # Edge cases
     assert _coverage_window_days(0) == 1
     assert _coverage_window_days(1) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_module_stats_uses_gold_sales_and_dynamic_reviews():
+    """DEMO-style data can live in gold/raw tables, not only upload names.
+
+    POS completeness should count agg_daily rows. Review completeness should
+    fall back from empty restaurant_reviews to smart_bi_dynamic_data upload rows.
+    """
+    from smartbi.api.restaurant_completeness import _fetch_module_stats
+
+    class _Tx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Acquire:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            return self.conn
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Conn:
+        def __init__(self, source: str):
+            self.source = source
+
+        def transaction(self):
+            return _Tx()
+
+        async def execute(self, *_args, **_kwargs):
+            return None
+
+        async def fetchrow(self, sql: str, *_args):
+            if "FROM agg_daily" in sql:
+                return {"cnt": 42, "last_upd": "2026-06-16"}
+            if "FROM restaurant_reviews" in sql:
+                return {"cnt": 0, "last_upd": None}
+            if "FROM smart_bi_dynamic_data" in sql:
+                return {"cnt": 19845, "last_upd": "2026-06-30 12:27:50"}
+            return {"cnt": 0, "last_upd": None}
+
+    class _Pool:
+        def __init__(self, source: str):
+            self.conn = _Conn(source)
+
+        def acquire(self):
+            return _Acquire(self.conn)
+
+    stats = await _fetch_module_stats(
+        "DEMO_REST",
+        30,
+        cretas_pool=_Pool("cretas"),
+        smartbi_pool=_Pool("smartbi"),
+    )
+
+    assert stats["pos_sales"]["count"] == 42
+    assert stats["pos_sales"]["last_updated"] == "2026-06-16"
+    assert stats["review"]["count"] == 19845
+    assert stats["review"]["last_updated"] == "2026-06-30 12:27:50"

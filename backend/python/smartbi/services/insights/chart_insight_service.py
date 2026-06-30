@@ -114,6 +114,110 @@ class InsightResult:
 # Signature computation (spec §2.1)
 # ---------------------------------------------------------------------------
 
+def _fmt_pct(v: float) -> str:
+    return f"{v:.1f}%"
+
+
+def _fmt_plain_number(v: float) -> str:
+    if abs(v) >= 10000:
+        return f"{v / 10000:.1f}万"
+    if abs(v) >= 1000:
+        return f"{v:,.0f}"
+    return f"{v:.1f}".rstrip("0").rstrip(".")
+
+
+def _metric_label(ctx: ChartInsightContext) -> str:
+    mapping = {
+        "revenue": "营业额",
+        "margin": "利润",
+        "profit": "利润",
+        "cost": "成本",
+        "quantity": "数量",
+        "count": "数量",
+        "pct": "占比",
+    }
+    return mapping.get((ctx.y_metric or "").lower(), "指标")
+
+
+def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
+    values = [float(v) for v in (ctx.series_values or []) if v is not None]
+    labels = [str(v) for v in (ctx.series_labels or [])]
+    if len(values) < 2:
+        return None
+
+    input_hash = compute_input_hash(_corpus_input_text(ctx))
+    metric = _metric_label(ctx)
+    chart_type = (ctx.chart_type or "").upper()
+    x_dim = (ctx.x_dim or "").lower()
+    total = sum(values)
+
+    if x_dim == "time" and len(values) >= 2:
+        first = values[0]
+        last = values[-1]
+        if first == 0:
+            change_text = "首尾变化明显，但首期为 0，先看最近几个点是否连续改善"
+        else:
+            pct = (last - first) / abs(first) * 100
+            direction = "升了" if pct > 0 else "降了" if pct < 0 else "基本持平"
+            change_text = f"从开头到最后，{metric}{direction}{_fmt_pct(abs(pct))}"
+        peak_idx = max(range(len(values)), key=lambda i: values[i])
+        low_idx = min(range(len(values)), key=lambda i: values[i])
+        peak_label = labels[peak_idx] if peak_idx < len(labels) else f"第{peak_idx + 1}项"
+        low_label = labels[low_idx] if low_idx < len(labels) else f"第{low_idx + 1}项"
+        return InsightResult(
+            finding=f"{change_text}，最高点在{peak_label}，最低点在{low_label}。",
+            implication="这说明问题不只看单个点，要看最近几期是不是同方向变化。",
+            suggestion="建议先排查最高点和最低点对应的活动、门店或库存动作，再看最近 3 个点是否持续走高或走低。",
+            source="template",
+            tier=2,
+            input_hash=input_hash,
+        )
+
+    if chart_type in {"BAR", "RANKING"} or x_dim in {"store", "product", "category"}:
+        order = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+        top_i = order[0]
+        bot_i = order[-1]
+        top = values[top_i]
+        bot = values[bot_i]
+        top_label = labels[top_i] if top_i < len(labels) else f"第{top_i + 1}项"
+        bot_label = labels[bot_i] if bot_i < len(labels) else f"第{bot_i + 1}项"
+        top_share = top / total * 100 if total > 0 else 0
+        ratio_text = f"{top / bot:.1f}倍" if bot > 0 else "差距很大"
+        return InsightResult(
+            finding=f"{top_label}排第一，占整体{_fmt_pct(top_share)}；末位是{bot_label}，头尾大约差{ratio_text}。",
+            implication="如果第一名占比过高，经营会更依赖少数门店或少数菜品；如果尾部长期偏低，就会拖慢整体效率。",
+            suggestion="建议把第一名当作参考样本，但重点排查末位的供给、价格、曝光和执行问题，先做一轮小范围调整再复看排名。",
+            source="template",
+            tier=2,
+            input_hash=input_hash,
+        )
+
+    if chart_type == "PIE" or x_dim in {"channel", "platform"}:
+        order = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+        top_i = order[0]
+        top = values[top_i]
+        top_label = labels[top_i] if top_i < len(labels) else f"第{top_i + 1}项"
+        top_share = top / total * 100 if total > 0 else 0
+        tail_share = 100 - top_share if total > 0 else 0
+        return InsightResult(
+            finding=f"{top_label}是最大来源，占整体{_fmt_pct(top_share)}，其余部分合计约{_fmt_pct(tail_share)}。",
+            implication="这类占比图重点看结构是否过度集中，过度集中会让整体表现更容易被单一渠道波动影响。",
+            suggestion="建议保住最大来源的稳定性，同时挑第二、第三来源做提升动作，避免只靠一个渠道或平台。",
+            source="template",
+            tier=2,
+            input_hash=input_hash,
+        )
+
+    return InsightResult(
+        finding=f"这张图有 {len(values)} 个数据点，最高值是{_fmt_plain_number(max(values))}，最低值是{_fmt_plain_number(min(values))}。",
+        implication="高低差已经足够明显，适合先找差异最大的维度。",
+        suggestion="建议先按最高和最低两组做对比，确认是客流、价格、库存还是执行动作导致差异。",
+        source="template",
+        tier=2,
+        input_hash=input_hash,
+    )
+
+
 def compute_signature(ctx: ChartInsightContext) -> str:
     """SHA256 of the canonical pipe-delimited feature string.
 
@@ -718,6 +822,50 @@ class ChartInsightService:
             series_labels=ctx.series_labels,
         )
 
+        # Demo/common-chart flywheel: serve accepted corpus rows or deterministic
+        # templates before any LLM budget gate. This keeps demo chart narration useful
+        # even when teacher-model budget is blocked, and repeat calls become cache hits.
+        input_text = _corpus_input_text(resolved_ctx)
+        input_hash = compute_input_hash(input_text)
+        if resolved_ctx.factory_id == "DEMO_REST" or os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1":
+            cache_result = await self._read_corpus_cache(input_hash)
+            if cache_result is not None:
+                cached_teacher_output, cached_row_hash = cache_result
+                cached_obj = _extract_json_object(cached_teacher_output)
+                if cached_obj is not None:
+                    return InsightResult(
+                        finding=cached_obj.get("finding"),
+                        implication=cached_obj.get("implication"),
+                        suggestion=cached_obj.get("suggestion"),
+                        source="cache",
+                        tier=2,
+                        input_hash=cached_row_hash,
+                    )
+
+            deterministic = _deterministic_insight(resolved_ctx)
+            if deterministic is not None:
+                await persist_distillation_sample(
+                    self._pool,
+                    source="chart_insight",
+                    task_type="insights",
+                    input_text=input_text,
+                    teacher_output=json.dumps({
+                        "finding": deterministic.finding,
+                        "implication": deterministic.implication,
+                        "suggestion": deterministic.suggestion,
+                    }, ensure_ascii=False),
+                    business_type=_map_domain(resolved_ctx.domain),
+                    factory_id=resolved_ctx.factory_id,
+                    system_prompt="deterministic chart insight",
+                    teacher_model="deterministic-template",
+                    quality=4,
+                    metadata={
+                        "permission_tier": resolved_ctx.permission_tier,
+                        "gate": "deterministic-pre-budget",
+                    },
+                )
+                return deterministic
+
         # budget_tracker None → fail-closed
         if self._budget_tracker is None:
             logger.warning(
@@ -779,6 +927,34 @@ class ChartInsightService:
                         tier=2,
                         input_hash=cached_row_hash,  # G4: expose for feedback
                     )
+
+        deterministic = (
+            _deterministic_insight(resolved_ctx)
+            if resolved_ctx.factory_id == "DEMO_REST" or os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
+            else None
+        )
+        if deterministic is not None:
+            await persist_distillation_sample(
+                self._pool,
+                source="chart_insight",
+                task_type="insights",
+                input_text=input_text,
+                teacher_output=json.dumps({
+                    "finding": deterministic.finding,
+                    "implication": deterministic.implication,
+                    "suggestion": deterministic.suggestion,
+                }, ensure_ascii=False),
+                business_type=_map_domain(resolved_ctx.domain),
+                factory_id=resolved_ctx.factory_id,
+                system_prompt="deterministic chart insight",
+                teacher_model="deterministic-template",
+                quality=4,
+                metadata={
+                    "permission_tier": resolved_ctx.permission_tier,
+                    "gate": "deterministic",
+                },
+            )
+            return deterministic
 
         # LLM call: returns structured {claims, finding, implication, suggestion} or None
         llm_obj = await self._call_llm(resolved_ctx)

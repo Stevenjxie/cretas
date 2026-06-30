@@ -12,6 +12,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -74,6 +75,7 @@ class ProcessSheetYieldCardTest {
     @Mock private SemiFinishedInventoryRepository wipRepo;
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository processRepo;
+    @Mock private ProductWorkProcessRepository productWorkProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
 
     private ProcessSheetServiceImpl service;
@@ -83,7 +85,8 @@ class ProcessSheetYieldCardTest {
         service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
-                objectMapper, wipRepo, taskRepo, processRepo, productTypeRepo);
+                objectMapper, wipRepo, taskRepo, processRepo,
+                productWorkProcessRepo, productTypeRepo);
     }
 
     // ─────────────────────────────────────────────────────────────

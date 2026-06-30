@@ -260,6 +260,23 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         String userInput = request.getUserInput();
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+            IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
+            if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
+                AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
+                log.info("[RestaurantOpsGoldRoute] Pre-bypass phrase shortcut: input='{}', intentCode={}",
+                        userInput, phraseIntent.getIntentCode());
+                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
+                        .userInput(userInput)
+                        .intentCode(phraseIntent.getIntentCode())
+                        .sessionId(request.getSessionId())
+                        .enableThinking(request.getEnableThinking())
+                        .thinkingBudget(request.getThinkingBudget())
+                        .context(request.getContext())
+                        .build();
+                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+            }
+        }
         if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
@@ -920,20 +937,27 @@ public class IntentExecutionOrchestrator {
     private IntentMatchResult tryOrchestratorPhraseShortcut(String userInput, String factoryId) {
         try {
             String normalized = userInput.toLowerCase().trim();
-            // resolveBusinessDomain returns "RESTAURANT" or "FACTORY". Fail-soft: if config
-            // service hiccups, treat as FACTORY (the default in matchPhrase signature).
-            String businessDomain = null;
-            try {
-                businessDomain = aiIntentService.getAllIntents(factoryId).stream()
-                        .findFirst()
-                        .map(i -> i.getIntentCategory())
-                        .orElse(null);
-                // Prefer the explicit IntentKnowledgeBase routing.
-                // matchPhrase(input, "RESTAURANT") falls back to commonPhraseMapping if no
-                // restaurant-specific hit; matchPhrase(input, "FACTORY") goes the other way.
-                businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
-            } catch (Exception ignored) {
-                businessDomain = (factoryId != null && factoryId.startsWith("RES_")) ? "RESTAURANT" : "FACTORY";
+            String businessDomain = resolvePhraseBusinessDomain(factoryId);
+
+            Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
+            if (restaurantOpsMatch.isPresent()) {
+                String matchedCode = restaurantOpsMatch.get();
+                Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+                if (intentOpt.isPresent()) {
+                    AIIntentConfig phraseIntent = intentOpt.get();
+                    log.info("[RestaurantOpsGoldRoute] Orchestrator deterministic route: input='{}', intentCode={}, domain={}",
+                            userInput, matchedCode, businessDomain);
+                    return IntentMatchResult.builder()
+                            .userInput(userInput)
+                            .bestMatch(phraseIntent)
+                            .confidence(0.98)
+                            .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
+                            .isStrongSignal(true)
+                            .requiresConfirmation(false)
+                            .build();
+                }
+                log.debug("[RestaurantOpsGoldRoute] matched {} but intent not configured for factory {} — falling through",
+                        matchedCode, factoryId);
             }
 
             Optional<String> phraseMatch = knowledgeBase.matchPhrase(normalized, businessDomain);
@@ -964,6 +988,129 @@ public class IntentExecutionOrchestrator {
             log.debug("[Round7-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
             return null;
         }
+    }
+
+    private IntentMatchResult tryRestaurantOpsPhraseShortcut(String userInput, String factoryId) {
+        try {
+            String normalized = userInput.toLowerCase().trim();
+            String businessDomain = resolvePhraseBusinessDomain(factoryId);
+            Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
+            if (restaurantOpsMatch.isEmpty()) {
+                return null;
+            }
+            String matchedCode = restaurantOpsMatch.get();
+            Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+            if (intentOpt.isEmpty()) {
+                log.debug("[RestaurantOpsGoldRoute] matched {} but intent not configured for factory {} — falling through",
+                        matchedCode, factoryId);
+                return null;
+            }
+            return IntentMatchResult.builder()
+                    .userInput(userInput)
+                    .bestMatch(intentOpt.get())
+                    .confidence(0.98)
+                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
+                    .isStrongSignal(true)
+                    .requiresConfirmation(false)
+                    .build();
+        } catch (Exception e) {
+            log.debug("[RestaurantOpsGoldRoute] shortcut failed (fall through): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String resolvePhraseBusinessDomain(String factoryId) {
+        // Prefer explicit restaurant IDs over metadata because DEMO_REST is the dedicated
+        // passwordless restaurant demo and must not be downgraded by stale factory metadata.
+        if (isRestaurantFactoryId(factoryId)) {
+            return "RESTAURANT";
+        }
+        String businessDomain = resolveFactoryDomainSafe(factoryId);
+        return businessDomain == null || businessDomain.isBlank() ? "FACTORY" : businessDomain;
+    }
+
+    Optional<String> matchRestaurantOpsIntent(String normalizedInput, String businessDomain) {
+        if (!"RESTAURANT".equalsIgnoreCase(businessDomain) || normalizedInput == null || normalizedInput.isBlank()) {
+            return Optional.empty();
+        }
+        String q = normalizedInput
+                .replaceAll("\\s+", "")
+                .replace('，', ',')
+                .replace('？', '?');
+
+        if (containsAny(q, "周末", "周中", "工作日")
+                && containsAny(q, "对比", "比较", "差异", "营业额", "营收", "销售额", "销售")) {
+            return Optional.of("RESTAURANT_WEEKDAY_WEEKEND");
+        }
+
+        if (containsAny(q, "月", "月份")
+                && containsAny(q, "营收", "营业额", "销售额", "销售")
+                && containsAny(q, "最高", "最多", "峰值", "为什么", "原因")) {
+            return Optional.of("RESTAURANT_PEAK_MONTH");
+        }
+
+        if (containsAny(q, "慢销", "滞销", "卖得慢", "不好卖")
+                && containsAny(q, "菜", "菜品", "产品", "处理", "优化", "哪些")) {
+            return Optional.of("RESTAURANT_DISH_SLOW");
+        }
+
+        if (containsAny(q, "盘亏", "库存差异", "库存异常", "缺货", "短缺")
+                || (containsAny(q, "库存", "食材") && containsAny(q, "亏", "异常", "不足", "短缺"))) {
+            return Optional.of("RESTAURANT_OPS_STOCK_SHORTAGE");
+        }
+
+        if (containsAny(q, "损耗", "报损", "浪费", "损耗率")
+                || (containsAny(q, "原因占比", "原因分布") && containsAny(q, "食材", "菜品", "门店"))) {
+            return Optional.of("RESTAURANT_OPS_WASTAGE_TOP");
+        }
+
+        if (containsAny(q, "领料", "用料", "食材用得多", "原料用量", "领用")
+                || (containsAny(q, "食材", "原料") && containsAny(q, "趋势", "用得多", "用量", "成本趋势"))) {
+            return Optional.of("RESTAURANT_OPS_REQUISITION_TREND");
+        }
+
+        if (containsAny(q, "门店毛利", "门店利润", "各店毛利")
+                || (containsAny(q, "门店", "店", "分店", "店铺", "哪家")
+                && containsAny(q, "毛利", "毛利率", "利润", "赚钱", "最赚", "净赚"))) {
+            return Optional.of("RESTAURANT_OPS_STORE_MARGIN");
+        }
+
+        if (containsAny(q, "毛利", "利润率", "毛利率")
+                && containsAny(q, "菜", "菜品", "产品", "哪些", "排名", "最高", "最低")) {
+            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
+        }
+
+        if (containsAny(q, "配方成本", "菜品成本", "单品成本", "成本结构")
+                || (containsAny(q, "菜", "菜品") && containsAny(q, "成本", "核算"))) {
+            return Optional.of("RESTAURANT_OPS_RECIPE_COST");
+        }
+
+        if (containsAny(q, "营收趋势", "销售趋势", "营业额趋势", "订单趋势", "客单价趋势")) {
+            return Optional.of("RESTAURANT_OPS_TREND_ANALYSIS");
+        }
+
+        if (containsAny(q, "营收", "营业额", "销售额", "销售", "客单价", "订单")
+                && containsAny(q, "表现", "怎么样", "情况", "整体", "总", "汇总", "多少", "分析")) {
+            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+        }
+
+        return Optional.empty();
+    }
+
+    private boolean isRestaurantFactoryId(String factoryId) {
+        return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+    }
+
+    private boolean containsAny(String input, String... terms) {
+        if (input == null || terms == null) {
+            return false;
+        }
+        for (String term : terms) {
+            if (term != null && !term.isBlank() && input.contains(term)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ==================== 分析流程 ====================

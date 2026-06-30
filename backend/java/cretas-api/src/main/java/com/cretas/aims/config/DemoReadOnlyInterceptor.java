@@ -44,7 +44,9 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
             "/ai/",          // AI
             "/chat",         // chat
             "/analysis",     // 分析
+            "/chart-insight", // chart insight read-only POST
             "/reports/",     // 报表查询
+            "/list-summary/", // 列表底部合计/一表一分析上下文 (读性质 POST)
             "/dashboard",    // 仪表盘查询
             "/query",        // 查询
             "/statistics",   // 统计

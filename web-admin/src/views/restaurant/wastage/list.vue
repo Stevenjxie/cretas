@@ -127,7 +127,7 @@
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"
-        @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前损耗记录${formatSummaryForAI(footerSummary)}`, duration: 8000, showClose: true })"
+        @ai-analyze="handleFooterAiAnalyze"
       />
 
       <div class="pagination-wrapper">
@@ -231,7 +231,7 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
-import { formatSummaryForAI } from '@/utils/aiSummaryContext';
+import { buildSummaryAnalysis } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 
 const wastageTypeMap: Record<string, string> = {
@@ -384,6 +384,23 @@ async function loadData() {
 const router = useRouter();
 function handleAiAnalyze() {
   router.push({ path: '/smart-bi/query', query: { q: '最近30天损耗最多的食材和类型占比' } });
+}
+
+function handleFooterAiAnalyze() {
+  const analysis = buildSummaryAnalysis(footerSummary.value, {
+    subject: '损耗记录',
+    filter: {
+      status: filterStatus.value || undefined,
+      type: filterType.value || undefined,
+      startDate: filterDateRange.value?.[0],
+      endDate: filterDateRange.value?.[1],
+    },
+    note: '本分析由当前表合计确定性生成，可作为 SmartBI 深挖问题的输入。',
+  });
+  ElMessageBox.alert(analysis.text, '一表一分析', {
+    confirmButtonText: '知道了',
+    customClass: 'summary-analysis-dialog',
+  });
 }
 
 function handleSearch() { pagination.value.page = 1; loadData(); }

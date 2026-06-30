@@ -2021,10 +2021,10 @@ function handleKeydown(event: KeyboardEvent) {
             :inactive-action-icon="Cpu"
           />
         </el-tooltip>
+        <el-button :icon="Delete" @click="handleClearHistory">清空对话</el-button>
         <el-tooltip content="开新会话: 下一句问题不引用前文上下文,但当前对话记录保留可见" placement="bottom">
           <el-button :icon="ChatRound" @click="handleNewTopic">新话题</el-button>
         </el-tooltip>
-        <el-button :icon="Delete" @click="handleClearHistory">清空对话</el-button>
       </div>
     </div>
 

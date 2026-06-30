@@ -33,17 +33,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { resolveDemoRedirect, resolveDemoTenant, type DemoTenant } from './demoRoute';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const loading = ref(false);
 const error = ref('');
 const loadingLabel = ref('');
 
-async function enter(tenant: 'factory' | 'rest') {
+function currentDemoQuery(): Record<string, unknown> {
+  const searchQuery = Object.fromEntries(new URLSearchParams(window.location.search));
+  return { ...searchQuery, ...route.query };
+}
+
+async function enter(tenant: DemoTenant, redirectTo = '/dashboard') {
   error.value = '';
   loadingLabel.value = tenant === 'factory' ? '工厂演示' : '餐饮演示';
   loading.value = true;
@@ -53,7 +60,7 @@ async function enter(tenant: 'factory' | 'rest') {
     const ok = await authStore.demoLogin(tenant);
     if (ok) {
       // replace: 防止用户后退又回到 /demo
-      router.replace('/dashboard');
+      router.replace(redirectTo);
     } else {
       error.value = '演示加载失败，请重试';
       loading.value = false;
@@ -64,6 +71,14 @@ async function enter(tenant: 'factory' | 'rest') {
     loading.value = false;
   }
 }
+
+onMounted(() => {
+  const query = currentDemoQuery();
+  const tenant = resolveDemoTenant(query);
+  if (tenant) {
+    void enter(tenant, resolveDemoRedirect(query));
+  }
+});
 </script>
 
 <style scoped>

@@ -631,7 +631,7 @@ watch(factoryId, (id) => {
 // P3: AI 探索顶层 tab (传 Excel 分析 / 问数据 AI)。与 sheet 级 activeTab 互不相干。
 const route = useRoute();
 const topTab = ref(resolveTopTab(route.query));
-watch(() => route.query.tab, () => { topTab.value = resolveTopTab(route.query); });
+watch(() => route.query, () => { topTab.value = resolveTopTab(route.query); });
 const echartsThemeName = computed(() => appStore.theme === 'dark' ? 'cretas-dark' : 'cretas');
 const permissionStore = usePermissionStore();
 const canUpload = computed(() => permissionStore.canWrite('analytics'));

@@ -1267,4 +1267,62 @@ public class GoldFinanceClient {
             return rows;
         }
     }
+
+    /**
+     * Ask Python's restaurant-ops Gold router through the same general-analysis
+     * endpoint used by SmartBI chat. This keeps Java intent execution on the
+     * curated Python templates instead of falling back to dynamic tool planning.
+     */
+    public Map<String, Object> fetchRestaurantOpsAnalysis(
+            String factoryId,
+            String question,
+            String sessionId
+    ) throws IOException {
+        requireFactory(factoryId);
+        if (question == null || question.trim().isEmpty()) {
+            throw new IllegalArgumentException("question required");
+        }
+
+        java.util.Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+        bodyMap.put("query", question);
+        bodyMap.put("table_type", "restaurant_ops");
+        bodyMap.put("session_id", sessionId != null ? sessionId : "java-restaurant-ops");
+        bodyMap.put("enable_thinking", false);
+        String json = objectMapper.writeValueAsString(bodyMap);
+
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(config.getUrl() + "/api/chat/general-analysis")
+                .post(RequestBody.create(json, JSON_MEDIA))
+                .addHeader("Content-Type", "application/json");
+        if (!internalSecret.isEmpty()) {
+            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+            reqBuilder.addHeader("X-Factory-Id", factoryId);
+            String userRole = currentUserRole();
+            if (userRole != null && !userRole.isEmpty()) {
+                reqBuilder.addHeader("X-User-Role", userRole);
+            }
+        }
+        Request req = reqBuilder.build();
+
+        long t0 = System.currentTimeMillis();
+        try (Response resp = http.newCall(req).execute()) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (!resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                throw new IOException(
+                        "Restaurant ops analysis HTTP " + resp.code() + " in " + elapsed
+                                + "ms: " + body);
+            }
+            String body = resp.body() != null ? resp.body().string() : "{}";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+            log.debug("Restaurant ops analysis factory={} charts={} in {}ms",
+                    factoryId,
+                    parsed.get("charts") instanceof java.util.List<?>
+                            ? ((java.util.List<?>) parsed.get("charts")).size()
+                            : 0,
+                    elapsed);
+            return parsed;
+        }
+    }
 }

@@ -22,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -616,7 +617,7 @@ public class DynamicToolSelectionService {
             String status = hasError ? "PARTIAL_SUCCESS" : "SUCCESS";
             String message = hasError
                     ? "部分工具执行失败: " + errorMsgs.toString()
-                    : selectedTools.getToolChainDescription();
+                    : buildDynamicToolUserMessage(successData, intent, selectedTools);
 
             return IntentExecuteResponse.builder()
                     .intentRecognized(true)
@@ -650,6 +651,82 @@ public class DynamicToolSelectionService {
      * generic "暂不支持此类型的意图执行: RESTAURANT_OPS". Mirrors
      * {@link ToolDispatchService#buildNoToolResponse(AIIntentConfig)}.
      */
+    private String buildDynamicToolUserMessage(Map<String, Object> successData,
+                                               AIIntentConfig intent,
+                                               ToolRouterService.SelectedTools selectedTools) {
+        String extracted = extractUserMessage(successData);
+        if (extracted != null && !extracted.isBlank() && !isRouterInternalMessage(extracted)) {
+            return extracted;
+        }
+        String chainDescription = selectedTools != null ? selectedTools.getToolChainDescription() : null;
+        if (chainDescription != null && !chainDescription.isBlank()
+                && !isRouterInternalMessage(chainDescription)) {
+            return chainDescription;
+        }
+        String name = intent != null && intent.getIntentName() != null && !intent.getIntentName().isBlank()
+                ? intent.getIntentName()
+                : intent != null ? intent.getIntentCode() : "查询";
+        return "已完成「" + name + "」查询，关键结果见下方数据。建议结合排名、异常项和最近变化一起判断。";
+    }
+
+    private String extractUserMessage(Object value) {
+        return extractUserMessage(value, true);
+    }
+
+    private String extractUserMessage(Object value, boolean allowScalar) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return allowScalar ? text : null;
+        }
+        if (value instanceof Map<?, ?> map) {
+            for (String key : List.of("message", "answer", "answerText", "answer_text", "summary", "text")) {
+                Object candidate = map.get(key);
+                if (candidate instanceof String text && !text.isBlank()) {
+                    return text;
+                }
+            }
+            for (Object child : map.values()) {
+                String found = extractUserMessage(child, false);
+                if (found != null && !found.isBlank()) {
+                    return found;
+                }
+            }
+        } else if (value instanceof Iterable<?> items) {
+            for (Object child : items) {
+                String found = extractUserMessage(child, false);
+                if (found != null && !found.isBlank()) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isRouterInternalMessage(String message) {
+        if (message == null) {
+            return false;
+        }
+        String normalized = message.trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("fallback selection based on similarity")
+                || normalized.contains("fallback: highest similarity")
+                || normalized.contains("tool chain selected by llm")
+                || normalized.contains("no tools available")
+                || normalized.contains("单一工具")
+                || normalized.contains("即可满足")
+                || normalized.contains("覆盖用户需求")
+                || normalized.contains("调用餐厅经营分析工具")
+                || normalized.contains("通过餐厅经营分析工具")
+                || normalized.contains("单工具")
+                || normalized.contains("使用餐厅经营分析工具")
+                || normalized.contains("餐厅经营分析工具")
+                || normalized.contains("工具直接调用")
+                || normalized.contains("无需多步骤")
+                || normalized.contains("无需多工具")
+                || normalized.contains("restaurant_");
+    }
+
     private IntentExecuteResponse buildNoToolResponse(AIIntentConfig intent) {
         String intentName = intent.getIntentName() != null ? intent.getIntentName()
                 : intent.getIntentCode();
