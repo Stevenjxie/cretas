@@ -340,7 +340,7 @@ describe('ChartInsightProvider', () => {
     expect(text).not.toContain('\u5c11\u6570\u95e8\u5e97\u6216\u5c11\u6570\u83dc\u54c1');
   });
 
-  it('does not double-localize restaurant project labels', async () => {
+  it('localizes restaurant store charts as store labels, not restaurant project labels', async () => {
     const chart: ChartWithMeta = {
       title: '\u9910\u996e\u7ecf\u8425\u5206\u6790',
       chartType: 'bar',
@@ -351,7 +351,7 @@ describe('ChartInsightProvider', () => {
       },
     };
     mockBuildChartInsight.mockReturnValue({
-      finding: '\u9910\u996e\u9879\u76ee3\u6392\u7b2c\u4e00',
+      finding: '\u9910\u996e\u9910\u996e\u9879\u76ee3\u6392\u7b2c\u4e00\uff1b\u672b\u4f4d\u662f\u9910\u996e\u9879\u76ee20',
       source: 'rules',
       tier: 1,
     } as InsightResult);
@@ -367,7 +367,10 @@ describe('ChartInsightProvider', () => {
     await nextTick();
 
     const text = wrapper.text();
-    expect(text).toContain('\u9910\u996e\u9879\u76ee3');
+    expect(text).toContain('\u95e8\u5e973');
+    expect(text).toContain('\u95e8\u5e9720');
+    expect(text).not.toContain('\u9879\u76ee3');
+    expect(text).not.toContain('\u9879\u76ee20');
     expect(text).not.toContain('\u9910\u996e\u9910\u996e\u9879\u76ee3');
   });
 });

@@ -114,7 +114,10 @@ function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null)
   const apply = (value?: string) => {
     if (!value) return value;
     const replaceLooseProject = (text: string) =>
-      text.replace(/(^|[^\u4e00-\u9fa5])项目(\d+)/g, `$1${context.noun}$2`);
+      text
+        .replace(/餐饮餐饮项目(\d+)/g, `${context.noun}$1`)
+        .replace(/餐饮项目(\d+)/g, `${context.noun}$1`)
+        .replace(/(^|[^\u4e00-\u9fa5])项目(\d+)/g, `$1${context.noun}$2`);
     return replaceLooseProject(value)
       .replace(/第(\d+)项/g, `${context.noun}$1`)
       .replace(/少数门店或少数菜品/g, `少数${context.noun}或关键环节`)
@@ -149,6 +152,18 @@ function insightContext(chart: ChartWithMeta) {
     return { noun: '评价分项', action: '评分、低星占比、回复和服务体验', efficiency: '口碑管理效率' };
   }
   if (chart.meta?.domain === 'restaurant') {
+    if (xDim === 'store') {
+      return { noun: '门店', action: '门店客流、客单价、渠道结构和班次执行', efficiency: '门店经营效率' };
+    }
+    if (xDim === 'product') {
+      return { noun: '菜品', action: '菜品结构、价格带、出品稳定性和曝光', efficiency: '菜品经营效率' };
+    }
+    if (xDim === 'channel') {
+      return { noun: '渠道', action: '堂食外卖结构、平台活动、客单价和履约', efficiency: '渠道经营效率' };
+    }
+    if (xDim === 'meal_period' || xDim === 'period' || xDim === 'time') {
+      return { noun: '时段', action: '午市晚市客流、排班、出餐速度和活动节奏', efficiency: '时段经营效率' };
+    }
     return { noun: '经营分项', action: '门店、菜品、渠道和执行', efficiency: '经营管理效率' };
   }
   return { noun: '项目', action: '结构、执行和数据录入', efficiency: '整体效率' };
