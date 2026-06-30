@@ -137,6 +137,14 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
     List<MaterialConsumption> findByProductionBatchIdAndSourceType(Long productionBatchId, String sourceType);
 
     /**
+     * Task 3 (小结 Service): 查询某生产计划下尚未被小结的消耗行。
+     * {@code interimSettledAt IS NULL} = 待处理; 已有值的行已被之前某次小结计入，跳过。
+     * Factory-scoped 防跨租户。
+     */
+    List<MaterialConsumption> findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(
+            String productionPlanId, String factoryId);
+
+    /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
      * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
      */

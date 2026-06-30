@@ -70,6 +70,14 @@ public class MaterialConsumption extends BaseEntity {
     @Column(name = "source_type", length = 20)
     private String sourceType;
 
+    /**
+     * 标记本消耗行已被哪次小结 (interim settlement) 处理。
+     * NULL = 尚未小结 (待扣减)；非 NULL = 已计入某次小结，不可重复扣减。
+     * Task 3 (小结 Service) 在原子事务内批量设置此字段 + 写 production_interim_settlement 行。
+     */
+    @Column(name = "interim_settled_at")
+    private LocalDateTime interimSettledAt;
+
     // 关联关系 (使用 @JsonIgnore 防止循环引用)
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
