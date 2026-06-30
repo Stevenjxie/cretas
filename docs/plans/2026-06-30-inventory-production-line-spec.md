@@ -46,21 +46,28 @@
 - **前端**:计划列表/详情加"阅读汇总/产出汇总"入口 → 展示总量+真实出成率+各批明细(防呆:数字清晰、批次可点进)。
 - **🔒**: 低(只读聚合,不改写库/成本/历史)。可独立先 ship —— **这是客户最想先看到的东西**。
 
-### Phase 2 — R2-A 桥接 + G3 小结(核心,共生)
-**G3 小结** = 逐道录入会话级 `POST /production-plans/{planId}/process-sheet/interim-settle`:
-1. **入库**(R2-A 桥接):本次会话产出的半成品 → upsert `SemiFinishedInventory`(`WipInventoryServiceImpl.upsertProducedWip` 复用,或新 `postClerkOutput` 不依赖 WorkProcessTask),成本 = 逐道录入算的 WIP 单价;成品 → `createFinishedGoodsFromReceipt`(`:2777` 复用)建 FinishedGoodsBatch。
-2. **实质扣减**:对本会话 `MaterialConsumption` 行驱动 `postMaterialBatchConsumption`(`:2668`)真扣 usedQuantity,**打 `postedToInventory` 标志**。
-3. **不关计划**:**不** setStatus(COMPLETED)、**不** 触发单结单 409 守卫;`ProductionSettlement`(或新 `ProductionInterimSettlement`)keyed per-session 累积。
-- **依赖**:G2 永续模式(否则第 2 次小结撞单结单守卫)。
-- **🔒**: 高(写库+扣减+成本,多租户)。必独立 review + 部署后 headed 验证(复用本 session 成本测试模式)。
+### Phase 2 — 库存生产核心:G2 模式 + R2-A 桥接 + G3 小结/停产(共生,一起发)
+> G2(productionMode)、R2-A(桥接)、G3(小结)三者**互相依赖必须同发**:小结只对 BY_STOCK,BY_STOCK 永续靠小结分批入库,小结入库靠 R2-A 桥接。
 
-### Phase 3 — G2 永续计划模式
-- `ProductionPlan` 加新字段 `productionMode(BY_ORDER / BY_STOCK)`(**新字段**,不复用已重载的 planType/sourceType/planSourceType)。Flyway migration。
-- BY_STOCK:小结(Phase 2)允许多次(uniqueness per-session);settle/小结后保持 `IN_PROGRESS`;加显式"停产"转换(唯一到 COMPLETED 的路径)。
-- 前端:建计划时选业态(库存生产/订单生产);库存生产计划列表标识"永续挂起"。
-- **🔒**: 中(生命周期+状态机)。
+**G2 模式(前置)**:`ProductionPlan` 加新字段 `productionMode(BY_ORDER / BY_STOCK)`(**新字段**,不复用已重载的 planType/sourceType/planSourceType)。Flyway migration。建计划时选业态;BY_STOCK 计划列表标"永续挂起",小结/停产按钮仅 BY_STOCK 出现。
 
-### Phase 4 — G1 审核入库 + G4 半成品起步(后续)
+
+#### 🆕 UX 按钮模型(Steve 2026-06-30 细化)—— 库存生产专属,替代结单
+**小结只有库存生产(BY_STOCK)才有**;销售订单生产(BY_ORDER)保持现有结单不变。
+- **库存生产:把现有"结单"按钮换成"小结"**。点"小结"**不关闭计划/批次**,而是走小结录入 + **实时扣减**(每次小结即时扣消耗),计划保持挂起。可重复。
+- **库存生产另加一个单独"停产/结单"按钮**:最后不做这个品了才点 → 计划真正 COMPLETED(库存已被各次小结实时扣完,这步主要是关闭+最终对账)。
+- 位置:小结放逐道录入抽屉内的保存/收尾处,**或**直接替换计划列表上库存生产计划的"结单"按钮(客户倾向后者:"直接代替结单")。两者择一/并存,以 productionMode 门控。
+
+**G3 小结** = 库存生产会话级 `POST /production-plans/{planId}/process-sheet/interim-settle`(仅 BY_STOCK 可调):
+1. **入库**(R2-A 桥接):本次会话产出半成品 → upsert `SemiFinishedInventory`(`upsertProducedWip` 复用 / 新 `postClerkOutput`),成本=逐道录入 WIP 单价;成品 → `createFinishedGoodsFromReceipt`(`:2777` 复用)。
+2. **实时扣减**(客户原话"实时去扣取"):对本会话 `MaterialConsumption` 行即时驱动 `postMaterialBatchConsumption`(`:2668`)真扣 usedQuantity,**打 `postedToInventory` 标志**(防最终结单重复扣)。
+3. **不关计划**:**不** setStatus(COMPLETED)、**不** 触发单结单 409;per-session 累积。
+**G3b 停产/最终结单** = `POST /production-plans/{planId}/stop-production`(仅 BY_STOCK):置 COMPLETED;校验各次小结已扣完;不再重复扣(postedToInventory 已标)。
+- **依赖**:G2 永续模式 + productionMode 门控(小结/停产仅 BY_STOCK 出现)。
+- **防呆**(fool-proof Rule):小结 dialog 带 context(本次产出半成品/成品+将扣原料明细)+ 幂等(per-session,重复点不重复扣)+ 实时反馈扣减结果;停产 dialog 二次确认("停产后该品计划关闭,不可再录入")。
+- **🔒**: 高(写库+扣减+成本+生命周期,多租户)。必独立 review + 部署后 headed 验证(三方对账)。
+
+### Phase 3 — G1 审核入库 + G4 半成品起步(后续)
 - **G1 审核**:SemiFinishedInventory/FinishedGoodsBatch 加待审核态;小结入库置 PENDING,审核通过置 AVAILABLE。客户要"即便需要审核"。
 - **G4 半成品起步**:`ProcessSheetRowRequest.UpstreamRef` 加 `semiFinishedInventoryId`;`resolveEdges`(`:1199`)加分支从 `semi_finished_inventory` 解析+扣减(复用乐观锁);前端来源下拉增"半成品库"数据源;`resolveProcesses` 加"半成品起步"档(不强制 index0=修油)。让 SECONDARY 计划进逐道录入时预置 WIP 来源。
 - **🔒**: 中-高。
