@@ -157,7 +157,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             }
         }
 
-        // ── ② SFI OUT: 未结道消耗了前序小结已入库的半成品 → 出库扣减 ──
+        // ── ② SFI OUT: 未结道消耗半成品库存 → 出库扣减 ──
+        //   两类来源:
+        //   (A) SFI 投料 (semiFinished=true, 半成品直接产成品): sourceBatchNumber 即常驻 SFI 的
+        //       intermediateBatchNo → 直接 consumeClerkSemi(srcBatchNo)。不依赖 priorStocked,
+        //       因为该 SFI 可能来自其它计划 / 文员直接入库 (本计划前序小结未必含它)。
+        //   (B) 本计划前序小结已入库的半成品 (priorStocked, semiFinished=false): 经 per-(plan,productType)
+        //       运行余额行锚 semiAnchor 出库 (跨小结 小结1→小结2 半成品流, 行为不变)。
+        //   consumeClerkSemi 守卫 not-below-zero (行缺失 no-op / 超扣 clamp), 两类共用同一守卫。
         BigDecimal semiOutQuantity = BigDecimal.ZERO;
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.getUpstreamSources() == null) {
@@ -165,6 +172,16 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
                 String srcBatchNo = ref.getSourceBatchNumber();
+                BigDecimal feed = nz(ref.getFeedQuantityKg());
+                // (A) SFI 投料: 按 intermediateBatchNo 直接扣减常驻 SFI 库存。
+                if (ref.isSemiFinished()) {
+                    if (srcBatchNo != null && feed.signum() > 0) {
+                        wipInventoryService.consumeClerkSemi(factoryId, srcBatchNo, feed);
+                        semiOutQuantity = semiOutQuantity.add(feed);
+                    }
+                    continue; // SFI 投料不走 priorStocked anchor 路径 (避免重复扣减)
+                }
+                // (B) 前序小结已入库的半成品 → anchor 出库。
                 if (srcBatchNo == null || !priorStocked.contains(srcBatchNo)) {
                     continue; // 只对前序已入库的半成品出库
                 }
@@ -172,7 +189,6 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 if (srcProductType == null) {
                     srcProductType = ur.req.getProductTypeId(); // 链内单品回退
                 }
-                BigDecimal feed = nz(ref.getFeedQuantityKg());
                 if (feed.signum() > 0) {
                     wipInventoryService.consumeClerkSemi(factoryId,
                             semiAnchor(planId, srcProductType), feed);

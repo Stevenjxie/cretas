@@ -1236,6 +1236,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 混锅上游边 (SEMI_FINISHED) — 经持久化 batchNumber 解析上游 WIP MaterialBatch
         if (req.getUpstreamSources() != null) {
             for (ProcessSheetRowRequest.UpstreamRef ur : req.getUpstreamSources()) {
+                // 半成品库存(SFI)投料 (半成品直接产成品): 不解析为 in-plan WIP MaterialBatch,
+                //   不写 MaterialConsumption (material_consumptions.batch_id NOT NULL 只能持 MaterialBatch id,
+                //   SFI 无对应 MaterialBatch)。投料随 row_payload 持久化, SFI 扣减在小结时经
+                //   consumeClerkSemi(intermediateBatchNo) 完成 (见 InterimSettleServiceImpl ② SFI OUT)。
+                //   inputQuantity 仍由 buildStepEntry 记录, 出成率计算不受影响。
+                if (ur.isSemiFinished()) {
+                    continue;
+                }
                 ProductionBatch pb = productionBatchRepo
                         .findByFactoryIdAndBatchNumber(factoryId, ur.getSourceBatchNumber())
                         .orElseThrow(() -> new BusinessException(409,
@@ -1296,7 +1304,27 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 return e.getSourceBatch().getMaterialTypeId();
             }
         }
+        // 半成品库存(SFI)投料 (半成品直接产成品): SFI 只有 productType 维度, 无 raw_material_types FK,
+        //   且 SFI 边已在 resolveEdges 跳过 → 无 RAW/in-plan-SEMI 边可派生 materialTypeId。
+        //   成品道 (气调) 不物化 WIP MaterialBatch (materializeBatch 仅 !finished 时建 WIP), 此返回值不被使用
+        //   → 返回 null (诚实, 无 raw lineage)。非成品道需产出 WIP 批 (material_type_id NOT NULL), 此时无 raw
+        //   维度无法物化 → 保留明确 400, 而非让 createWipMaterialBatch 撞 NOT NULL 抛裸 500。
+        if (hasSemiFinishedUpstream(req)) {
+            if (req.isFinished()) {
+                return null;
+            }
+            throw new BusinessException(400,
+                    "半成品库存(SFI)投料仅支持直接产成品(气调成品道); 中间道若产半成品需至少一条原料/在制来源以确定物料类型")
+                    .withHint("请在该道补一条原料或在制半成品来源, 或将本道设为成品道")
+                    .withHintTarget(req.getProcessCode());
+        }
         throw new BusinessException(400, "无法确定原料类型，无法物化批次");
+    }
+
+    /** 该行是否含 SFI(半成品库存)投料来源 (semiFinished=true)。 */
+    private boolean hasSemiFinishedUpstream(ProcessSheetRowRequest req) {
+        return req.getUpstreamSources() != null
+                && req.getUpstreamSources().stream().anyMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
     }
 
     // ─────────────────────────────────────────────────────────────

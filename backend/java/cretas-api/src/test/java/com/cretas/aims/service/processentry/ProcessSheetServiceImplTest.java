@@ -377,6 +377,83 @@ class ProcessSheetServiceImplTest {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // SFI feedstock (半成品库存可作逐道录入投料来源)
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SFI-1: 混批 原料+SFI半成品投料 → 仅 RAW consumption 落库, SFI 投料不写 MaterialConsumption")
+    void saveRow_rawPlusSfiFeed_onlyRawConsumptionWritten() {
+        ProcessSheetRowRequest req = baseReq("row-raw-sfi", "shuzhi", 2, "90");
+        req.setInputQuantity(new BigDecimal("120"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-1", "20");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).isTrue();
+        // 仅 1 条 RAW 消耗边 — SFI 投料 (semiFinished=true) 不写 MaterialConsumption
+        List<MaterialConsumption> cons = consumptionRepo.findByProductionBatchId(result.getBatchId());
+        assertThat(cons).as("仅 RAW; SFI 投料不写消耗边").hasSize(1);
+        assertThat(cons.get(0).getSourceType()).isEqualTo("RAW_MATERIAL");
+        assertThat(cons.get(0).getBatchId()).isEqualTo(rawBatchId);
+        // 无任何 SEMI_FINISHED 消耗边 (SFI 不解析为 in-plan WIP)
+        assertThat(cons).noneMatch(c -> "SEMI_FINISHED".equals(c.getSourceType()));
+        // WIP materialTypeId 来自 raw (SFI 不参与派生)
+        MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
+        assertThat(wip.getMaterialTypeId()).isEqualTo(RAW_MATERIAL_TYPE_ID);
+        // 行 payload 持久化 semiFinished 标记 (跨保存往返 → 小结时 consumeClerkSemi 可识别)
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        UpstreamRef persisted = views.get(0).getPayload().getUpstreamSources().get(0);
+        assertThat(persisted.getSourceBatchNumber()).isEqualTo("SFI-STANDING-1");
+        assertThat(persisted.isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-2: 半成品直接产成品 — 成品道仅 SFI 投料 → 物化(无 WIP/无消耗边), resolveRawMaterialTypeId 不抛 400")
+    void saveRow_finishedSfiOnly_materializesWithNoConsumption() {
+        ProcessSheetRowRequest req = baseReq("row-sfi-finished", "qidiao", 5, "50");
+        req.setFinished(true);
+        req.setInputQuantity(new BigDecimal("60"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-2", "60");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).as("成品道 output>0 → materialized").isTrue();
+        assertThat(result.getBatchId()).isNotNull();
+        // 无消耗边 (SFI 投料不写 MaterialConsumption; 无 raw 来源)
+        assertThat(consumptionRepo.findByProductionBatchId(result.getBatchId()))
+                .as("成品道仅 SFI 投料 → 0 消耗边").isEmpty();
+        // 成品道不物化 WIP MaterialBatch (materializeBatch 仅 !finished 时建 WIP)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())))
+                .as("成品道无 WIP").isEmpty();
+        // payload round-trip 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "qidiao", 5);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getPayload().getUpstreamSources().get(0).isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-3: 中间道(非成品)仅 SFI 投料 + output>0 → 400 (无 raw 维度无法物化 WIP, 非裸 500)")
+    void saveRow_nonFinishedSfiOnly_throws400() {
+        ProcessSheetRowRequest req = baseReq("row-sfi-mid", "shuzhi", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-3", "50");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // SP-F Task 1.6 — re-save (update-in-place) path
     // ─────────────────────────────────────────────────────────────
 

@@ -102,5 +102,22 @@ public class ProcessSheetRowRequest {
         private String sourceBatchNumber;
         @NotNull
         private BigDecimal feedQuantityKg;
+
+        /**
+         * 半成品库存(SFI)投料 (半成品直接产成品)。
+         *
+         * <p>true 时 {@code sourceBatchNumber} 指向常驻半成品库存
+         * ({@link com.cretas.aims.entity.SemiFinishedInventory#getIntermediateBatchNo()}),
+         * 而非本计划内的在制 WIP MaterialBatch。语义:
+         * <ul>
+         *   <li><b>保存</b>: 不解析为 in-plan WIP MaterialBatch, 不写 MaterialConsumption
+         *       (material_consumptions.batch_id NOT NULL 只能持 MaterialBatch id, SFI 无对应行)。
+         *       仍随 row_payload 持久化, 跨保存往返。</li>
+         *   <li><b>小结</b>: 经 {@code WipInventoryService.consumeClerkSemi(intermediateBatchNo, feedQuantityKg)}
+         *       从常驻 SFI 余额扣减 (不依赖本计划前序小结的 priorStocked)。</li>
+         * </ul>
+         * 默认 false (普通 in-plan 在制 WIP 引用, 行为不变)。
+         */
+        private boolean semiFinished;
     }
 }

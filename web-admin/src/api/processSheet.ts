@@ -33,6 +33,12 @@ export interface RawInput {
 export interface UpstreamRef {
   sourceBatchNumber: string;
   feedQuantityKg: number;
+  /**
+   * 半成品库存(SFI)投料 (半成品直接产成品)。true 时 sourceBatchNumber 指向常驻半成品库存
+   * (SemiFinishedInventory.intermediateBatchNo), 后端保存不写 MaterialConsumption,
+   * 小结时经 consumeClerkSemi 扣减常驻 SFI。默认 false (普通 in-plan 在制 WIP 引用)。
+   */
+  semiFinished?: boolean;
 }
 
 /**
@@ -314,4 +320,38 @@ export function getAvailableRawBatches(
     `/${factoryId}/material-batches/status/AVAILABLE`,
     { params: { size: 200, ...params } },
   );
+}
+
+// =========================================================================
+// 半成品库存 (SFI) — 逐道录入混锅可选常驻半成品作投料来源 (半成品直接产成品)
+// =========================================================================
+
+/**
+ * 工厂级半成品重量库存项 (mirrors WipRowDTO from /semi-finished/inventory).
+ * 仅重量字段, 不含成本 (后端 C3 视图刻意不暴露 unitCost)。
+ */
+export interface SemiFinishedStockItem {
+  intermediateBatchNo: string;
+  sourceWorkProcessTaskId?: number | null;
+  processOrder?: number | null;
+  processName?: string | null;
+  productTypeId?: string | null;
+  producedQuantity?: number | null;
+  consumedQuantity?: number | null;
+  availableQuantity: number;
+  unit?: string | null;
+  status?: string | null;
+  productTypeName?: string | null;
+  batchId?: number | null;
+}
+
+/**
+ * 工厂级半成品重量库存快照 (全状态; 调用方按 availableQuantity>0 过滤可投料项)。
+ * GET /{factoryId}/semi-finished/inventory
+ * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
+ */
+export function getSemiFinishedInventory(
+  factoryId: string,
+): Promise<ApiResponse<SemiFinishedStockItem[]>> {
+  return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`);
 }

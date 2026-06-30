@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock } from '@element-plus/icons-vue';
 import {
-  saveRow, deleteRow, getAvailableRawBatches, getRowHistory,
+  saveRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
   type ProcessSheetInventoryItem,
   type LaborSegment,
   type UpstreamRef,
@@ -11,6 +11,7 @@ import {
   type ProcessSheetRowRequest,
   type ProcessSheetRowHistoryView,
   type RawMaterialBatchOption,
+  type SemiFinishedStockItem,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
@@ -727,6 +728,69 @@ function removeUpstreamSource(row: SheetRow, idx: number) {
 }
 
 // -------------------------------------------------------------------------
+// 半成品库存 (SFI) 投料来源 — 混锅可选常驻半成品 (半成品直接产成品)
+// 仅 熟制 / 气调 (多来源混锅) 工序提供 SFI 选项; 其余工序不加载。
+// -------------------------------------------------------------------------
+const sfiOptions = ref<SemiFinishedStockItem[]>([]);
+const sfiLoading = ref(false);
+let sfiLoadSeq = 0;
+
+/** 当前可投料的 SFI intermediateBatchNo 集合 (用于选择时判定 semiFinished 标记)。 */
+const sfiBatchNoSet = computed(
+  () => new Set(sfiOptions.value.map((s) => s.intermediateBatchNo)),
+);
+
+/** 是否多来源混锅工序 (熟制 / 气调) — 这两道才提供 SFI 投料选项。 */
+const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
+
+function sfiAvailable(item: SemiFinishedStockItem): number {
+  return Number(item.availableQuantity ?? 0) || 0;
+}
+
+/** 半成品库存选项标签: "半成品: {品名} | {批次} | 余{available}{unit}"。 */
+function sfiLabel(item: SemiFinishedStockItem): string {
+  const name = item.productTypeName || item.processName || '半成品';
+  const unit = item.unit || 'kg';
+  return `半成品: ${name} | ${item.intermediateBatchNo} | 余${sfiAvailable(item)}${unit}`;
+}
+
+async function loadSfiOptions() {
+  if (!isMultiSource.value || !props.factoryId) return;
+  const seq = ++sfiLoadSeq;
+  sfiLoading.value = true;
+  try {
+    const resp = await getSemiFinishedInventory(props.factoryId);
+    if (seq !== sfiLoadSeq) return;
+    const all = Array.isArray(resp.data) ? resp.data : [];
+    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0);
+  } catch (err) {
+    if (seq !== sfiLoadSeq) return;
+    sfiOptions.value = [];
+    // 非阻断: SFI 投料是增量能力, 加载失败仅丢失该选项, 不影响 in-plan 在制 WIP 投料。
+    ElMessage({ message: err instanceof Error ? err.message : '半成品库存加载失败', type: 'warning', duration: 3000 });
+  } finally {
+    if (seq === sfiLoadSeq) sfiLoading.value = false;
+  }
+}
+
+/**
+ * 用户在混锅来源下拉改选后: 若选中的是常驻半成品库存 (SFI) 则置 semiFinished=true,
+ * 否则 (in-plan 在制 WIP) 置 false。后端据此决定保存时是否写消耗边 + 小结时是否 consumeClerkSemi。
+ */
+function onUpstreamSourceChange(src: UpstreamRef) {
+  src.semiFinished = sfiBatchNoSet.value.has(src.sourceBatchNumber);
+}
+
+/** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI)。 */
+function srcRemainingLabel(src: UpstreamRef): string {
+  const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
+  if (wip) return `余${wip.remaining}kg`;
+  const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
+  if (sfi) return `半成品余${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+  return '';
+}
+
+// -------------------------------------------------------------------------
 // 熟制: pot helpers
 // -------------------------------------------------------------------------
 function onPotCountChange(row: SheetRow, val: number) {
@@ -742,6 +806,11 @@ watch(
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
     if (isXiuYou.value) void loadRawBatches();
+    // 混锅工序 (熟制/气调) 加载常驻半成品库存供 SFI 投料下拉
+    sfiOptions.value = [];
+    sfiLoadSeq++;
+    sfiLoading.value = false;
+    if (isMultiSource.value) void loadSfiOptions();
   },
   { immediate: true },
 );
@@ -886,12 +955,23 @@ watch(
                 <el-select
                   v-model="src.sourceBatchNumber"
                   :placeholder="isShuZhi ? '选焯水批次' : '选熟制批次'" filterable clearable
+                  :loading="sfiLoading"
+                  @change="onUpstreamSourceChange(src)"
                   style="width:220px" size="small">
-                  <el-option
-                    v-for="item in upstreamItems" :key="item.batchNumber"
-                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                    :value="item.batchNumber"
-                    :disabled="item.remaining <= 0" />
+                  <el-option-group label="本计划在制半成品">
+                    <el-option
+                      v-for="item in upstreamItems" :key="item.batchNumber"
+                      :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                      :value="item.batchNumber"
+                      :disabled="item.remaining <= 0" />
+                  </el-option-group>
+                  <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                    <el-option
+                      v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                      :label="sfiLabel(s)"
+                      :value="s.intermediateBatchNo"
+                      :disabled="sfiAvailable(s) <= 0" />
+                  </el-option-group>
                 </el-select>
                 <el-input-number
                   v-model="src.feedQuantityKg"
@@ -900,7 +980,7 @@ watch(
                   controls-position="right"
                   size="small" style="width:120px" />
                 <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                  {{ (() => { const inv = upstreamItems.find(b => b.batchNumber === src.sourceBatchNumber); return inv ? `余${inv.remaining}kg` : ''; })() }}
+                  {{ srcRemainingLabel(src) }}
                 </span>
                 <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
               </div>
@@ -1350,12 +1430,23 @@ watch(
                     <el-select
                       v-model="src.sourceBatchNumber"
                       placeholder="选焯水批次" filterable clearable
+                      :loading="sfiLoading"
+                      @change="onUpstreamSourceChange(src)"
                       style="width:220px" size="small">
-                      <el-option
-                        v-for="item in upstreamItems" :key="item.batchNumber"
-                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                        :value="item.batchNumber"
-                        :disabled="item.remaining <= 0" />
+                      <el-option-group label="本计划在制半成品">
+                        <el-option
+                          v-for="item in upstreamItems" :key="item.batchNumber"
+                          :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                          :value="item.batchNumber"
+                          :disabled="item.remaining <= 0" />
+                      </el-option-group>
+                      <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                        <el-option
+                          v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                          :label="sfiLabel(s)"
+                          :value="s.intermediateBatchNo"
+                          :disabled="sfiAvailable(s) <= 0" />
+                      </el-option-group>
                     </el-select>
                     <el-input-number
                       v-model="src.feedQuantityKg"
@@ -1364,7 +1455,7 @@ watch(
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                      {{ (() => { const inv = upstreamItems.find(b => b.batchNumber === src.sourceBatchNumber); return inv ? `余${inv.remaining}kg` : ''; })() }}
+                      {{ srcRemainingLabel(src) }}
                     </span>
                     <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
                   </div>
@@ -1413,12 +1504,23 @@ watch(
                     <el-select
                       v-model="src.sourceBatchNumber"
                       placeholder="选熟制批次" filterable clearable
+                      :loading="sfiLoading"
+                      @change="onUpstreamSourceChange(src)"
                       style="width:220px" size="small">
-                      <el-option
-                        v-for="item in upstreamItems" :key="item.batchNumber"
-                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                        :value="item.batchNumber"
-                        :disabled="item.remaining <= 0" />
+                      <el-option-group label="本计划在制半成品">
+                        <el-option
+                          v-for="item in upstreamItems" :key="item.batchNumber"
+                          :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                          :value="item.batchNumber"
+                          :disabled="item.remaining <= 0" />
+                      </el-option-group>
+                      <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                        <el-option
+                          v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                          :label="sfiLabel(s)"
+                          :value="s.intermediateBatchNo"
+                          :disabled="sfiAvailable(s) <= 0" />
+                      </el-option-group>
                     </el-select>
                     <el-input-number
                       v-model="src.feedQuantityKg"
@@ -1427,7 +1529,7 @@ watch(
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
-                      {{ (() => { const inv = upstreamItems.find(b => b.batchNumber === src.sourceBatchNumber); return inv ? `余${inv.remaining}kg` : ''; })() }}
+                      {{ srcRemainingLabel(src) }}
                     </span>
                     <el-button link type="danger" :icon="Delete" @click="removeUpstreamSource(row, si)" />
                   </div>

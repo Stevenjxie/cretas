@@ -253,6 +253,60 @@ class InterimSettleServiceTest {
         verify(finishedGoodsBatchRepository, times(1)).save(any());
     }
 
+    @Test
+    @DisplayName("SFI 投料(半成品直接产成品): 成品道吃常驻 SFI → consumeClerkSemi(intermediateBatchNo) 直扣 + FG; 不走 priorStocked anchor")
+    void sfiFeedstockDrawsDownStandingSemiAndCreatesFg() {
+        // 成品道 (CLK-B-X, finished) 吃一笔常驻半成品库存 "SFI-STANDING-1" feed 30 (无任何前序小结 → 非 priorStocked)。
+        // productWeight 6kg → FG 入库; SFI 直接按 intermediateBatchNo 扣减 (不经 per-(plan,pt) anchor)。
+        ProcessSheetRow rX = row(20L, 1, "CLK-B-X", reqFinished(1, "CLK-B-X", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamSemi("SFI-STANDING-1", "30")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // SFI OUT: 直接按 SFI 的 intermediateBatchNo 扣减 (而非 semiAnchor "CLK-SEMI-...")
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemi(eq(FACTORY), eq("SFI-STANDING-1"), eq(new BigDecimal("30")));
+        // 确认不曾用 anchor 形式扣减 (semiAnchor 前缀 "CLK-SEMI-")
+        verify(wipInventoryService, never())
+                .consumeClerkSemi(eq(FACTORY), org.mockito.ArgumentMatchers.startsWith("CLK-SEMI-"),
+                        any());
+        assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("30"));
+
+        // 成品道 → FG 入库 (productWeight 6kg)
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
+        assertThat(fgCap.getValue().getUnit()).isEqualTo("kg");
+
+        // 成品道不入 SFI (postClerkOutput 不被调用)
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        // 行已打戳
+        assertThat(rX.getInterimSettledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("SFI 投料幂等: 已结成品道重复小结 → 不再二次 consumeClerkSemi")
+    void sfiFeedstockIdempotentOnResettle() {
+        ProcessSheetRow rX = row(21L, 1, "CLK-B-Y", reqFinished(1, "CLK-B-Y", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamSemi("SFI-STANDING-2", "25")));
+        // 小结1 该行未结; 小结2 已被打戳 (同一行实例跨调用复用)
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(rX))
+                .thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 仅小结1 扣减一次, 小结2 该行已结跳过 (产出侧 interim_settled_at 戳幂等)
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemi(eq(FACTORY), eq("SFI-STANDING-2"), eq(new BigDecimal("25")));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Builders
     // ─────────────────────────────────────────────────────────────
@@ -302,6 +356,15 @@ class InterimSettleServiceTest {
         UpstreamRef ref = new UpstreamRef();
         ref.setSourceBatchNumber(sourceBatchNumber);
         ref.setFeedQuantityKg(new BigDecimal(feedKg));
+        return List.of(ref);
+    }
+
+    /** SFI 投料来源 (半成品直接产成品): sourceBatchNumber = 常驻 SFI 的 intermediateBatchNo, semiFinished=true。 */
+    private List<UpstreamRef> upstreamSemi(String intermediateBatchNo, String feedKg) {
+        UpstreamRef ref = new UpstreamRef();
+        ref.setSourceBatchNumber(intermediateBatchNo);
+        ref.setFeedQuantityKg(new BigDecimal(feedKg));
+        ref.setSemiFinished(true);
         return List.of(ref);
     }
 
