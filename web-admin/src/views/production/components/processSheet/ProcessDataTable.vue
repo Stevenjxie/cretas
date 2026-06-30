@@ -634,7 +634,15 @@ async function handleSave(row: SheetRow) {
     emit('row-saved');
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : '保存失败';
-    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    // 并发双提交/慢响应重试: 行已被首个请求保存成功(后端 409 + 回滚 loser), 幂等当成功处理,
+    // 不给用户看错误 (fool-proof Rule 4 幂等防重复)。刷新本行状态即可。
+    if (/该行已存在|并发提交/.test(msg)) {
+      row.rowStatus = 'SAVED';
+      ElMessage.success('已保存');
+      emit('row-saved');
+    } else {
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    }
   } finally {
     row.saving = false;
   }
@@ -769,7 +777,7 @@ watch(
           <el-button
             type="primary" size="small" :icon="Check"
             :loading="row.saving"
-            :disabled="!!saveDisabledReason(row)"
+            :disabled="!!saveDisabledReason(row) || row.saving"
             :title="saveDisabledReason(row) || '保存此行'"
             @click="handleSave(row)"
             style="padding:3px 8px">保存</el-button>
