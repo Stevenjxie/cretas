@@ -137,8 +137,12 @@ ALTER TABLE material_consumptions ADD COLUMN IF NOT EXISTS interim_settled_at TI
 ## Task 3 — 🔒 G3 小结核心:postClerkOutput + createFinishedGoodsForInterim + 会话幂等扣减 + 端点
 
 > 最高风险 task(三账一事务写 + 幂等 + 多租户)。diff 必经独立 code-reviewer(Rule 8)。每个写都 factory-scoped + 锁序(MaterialBatch findByIdAndFactoryIdForUpdate;SFI findForUpdate...;@Version)。
+>
+> **🔑 入库口径决定(Steve 2026-06-30 拍板:选项 A)**:小结时 **成品道产出 → 成品库(FG)**;**最后一道 WIP 产出(如熟制成品,未装盒的)→ 半成品库(SFI)**;同时扣原料。每次小结只入"自上次小结后新产出"的增量(按 process_sheet_rows 行 `interim_settled_at` 标记幂等)。半成品库反映当前在制可用半成品,支撑「半成品直接产成品」(Phase 3)。
+>
+> **⚠️ 待 Opus 仔细设计的难点(本 task 由 Opus 写 / Opus subagent + 独立 review,不是 Sonnet tube)**:**SFI 跨小结的 in/out**。小结#1 把道3(熟制)产出入 SFI;小结#2 的道4 消耗道3 那批半成品 → SFI 必须**出库扣减**(不只是 in),否则 SFI 半成品余额只增不减虚高。设计要点:① process_sheet_rows 加 `interim_settled_at` 标记(同 material_consumptions),小结只处理未结行;② 哪些行 → SFI in:该小结批内 max-processOrder 的**非成品**道产出;③ SFI out:某道 upstreamSources 指向"已入 SFI 的上游半成品"时,该道消耗从 SFI 扣减(需确认 WipInventoryServiceImpl 有无 task-free SFI 出库底层 applyMovingAverageOut,无则建);④ 成品道(finished==true)产出 → FG(用 productWeight 成品重)。**动手前先写一个集成测试场景固化预期**(小结1 入半成品 → 小结2 消耗该半成品 → SFI 余额正确升降),再实现。下面 Step 1-8 是骨架。
 
-**Files:** Modify `WipInventoryServiceImpl`(+postClerkOutput);Create `InterimSettleService`+Impl;Modify `ProductionPlanController`(+interim-settle);Test `InterimSettleServiceTest`(@SpringBootTest 或 mock + 一个 @DataJpaTest 验扣减幂等)。
+**Files:** Modify `WipInventoryServiceImpl`(+postClerkOutput +SFI out);Create `InterimSettleService`+Impl;Modify `ProductionPlanController`(+interim-settle);加 `process_sheet_rows.interim_settled_at` 迁移;Test `InterimSettleServiceTest`(@SpringBootTest 或 mock + 一个 @DataJpaTest 验扣减幂等 + 跨小结 SFI 升降)。
 
 - [ ] **Step 1: postClerkOutput(task-free SFI upsert)** in `WipInventoryServiceImpl`
 ```java
