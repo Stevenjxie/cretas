@@ -130,4 +130,27 @@ public interface WipInventoryService {
      * @param qty                 本次出库量 (≤0 → no-op)
      */
     void consumeClerkSemi(String factoryId, String intermediateBatchNo, BigDecimal qty);
+
+    /**
+     * G3 小结半成品出库 (SFI OUT) — <b>严格版</b>，用于 SFI 投料 (半成品直接产成品)。
+     *
+     * <p>与 {@link #consumeClerkSemi} 的容忍 (行缺失 no-op / 超扣 clamp) 不同, 本方法对
+     * <b>常驻半成品库存</b> 的出库 <b>失败即抛 (禁止降级)</b>:
+     * <ul>
+     *   <li>SFI 行不存在 → 抛 {@code BusinessException(409, SFI_NOT_FOUND)} (拒绝 phantom 出库)。</li>
+     *   <li>出库量超过可用 (qty &gt; available) → 抛 {@code BusinessException(409, SFI_INSUFFICIENT)}
+     *       (拒绝超扣 → 防 phantom/不足库存生产成品)。</li>
+     * </ul>
+     * 成功时按 {@code consumedQuantity += qty; availableQuantity = produced - consumed} 扣减,
+     * available≤0 → DEPLETED, 并返回 <b>实际出库量</b> (= {@code qty}, 因不足即抛, 永不少扣)。
+     *
+     * <p>容忍版 {@link #consumeClerkSemi} 仍保留给 <b>计划内前序小结半成品</b> 的 anchor 出库
+     * (那里的 not-below-zero 是有意双保险, 与 SFI IN 净结余会计互为校验)。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo 常驻 SFI 批次号 (= {@link SemiFinishedInventory#getIntermediateBatchNo()})
+     * @param qty                 本次出库量 (≤0 → 返回 0, 不扣)
+     * @return 实际出库量 (= qty; 不足/缺失即抛, 故永不少于请求量)
+     */
+    BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
 }

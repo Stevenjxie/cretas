@@ -470,6 +470,50 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 factoryId, intermediateBatchNo, qty, sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
     }
 
+    /**
+     * G3 小结半成品出库 (SFI OUT) — 严格版 (SFI 投料, 禁止降级)。见接口 Javadoc。
+     *
+     * <p>{@code findForUpdate} 悲观行锁 → 校验存在 + 足量 → 扣减。缺失/不足 <b>抛</b> (不 no-op/clamp)。
+     */
+    @Override
+    @Transactional
+    public BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty) {
+        if (qty == null || qty.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElseThrow(() -> new BusinessException(409, "半成品库存不存在: " + intermediateBatchNo)
+                        .withCode("SFI_NOT_FOUND")
+                        .withHint("请重新选择仍有库存的半成品批次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(intermediateBatchNo));
+        BigDecimal produced = nz(sfi.getProducedQuantity());
+        BigDecimal consumed = nz(sfi.getConsumedQuantity());
+        BigDecimal available = produced.subtract(consumed);
+        if (qty.compareTo(available) > 0) {
+            // 禁止降级: 不足即抛 (不 clamp), 防 phantom/不足库存生产成品。
+            throw new BusinessException(409, "半成品库存不足: " + intermediateBatchNo
+                    + " 余" + available.stripTrailingZeros().toPlainString()
+                    + " 需" + qty.stripTrailingZeros().toPlainString())
+                    .withCode("SFI_INSUFFICIENT")
+                    .withHint("请减少投料量或选择其他半成品批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
+        }
+        BigDecimal newConsumed = consumed.add(qty);
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(produced.subtract(newConsumed));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        }
+        wipRepo.save(sfi);
+        log.info("[wip] consumeClerkSemiStrict SFI OUT: factory={}, batchNo={}, qty={}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, qty, sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return qty;
+    }
+
     private void markWipPosted(ProductionReport report) {
         Map<String, Object> fields = report.getCustomFields();
         if (fields == null) {

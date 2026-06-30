@@ -467,6 +467,14 @@ function upstreamWarning(row: SheetRow): string | null {
   if (isShuZhi.value || isQidiao.value) {
     const warnings: string[] = [];
     for (const src of row.upstreamSources) {
+      if (src.semiFinished) {
+        // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量 (此前漏检 → 超投无提示)。
+        const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
+        if (sfi && src.feedQuantityKg > sfiAvailable(sfi)) {
+          warnings.push(`${src.sourceBatchNumber} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`);
+        }
+        continue;
+      }
       const inv = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
       if (inv && src.feedQuantityKg > inv.remaining) {
         warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}kg`);
@@ -735,13 +743,16 @@ const sfiOptions = ref<SemiFinishedStockItem[]>([]);
 const sfiLoading = ref(false);
 let sfiLoadSeq = 0;
 
-/** 当前可投料的 SFI intermediateBatchNo 集合 (用于选择时判定 semiFinished 标记)。 */
-const sfiBatchNoSet = computed(
-  () => new Set(sfiOptions.value.map((s) => s.intermediateBatchNo)),
-);
-
 /** 是否多来源混锅工序 (熟制 / 气调) — 这两道才提供 SFI 投料选项。 */
 const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
+
+// 下拉选项用「类型::批次号」复合值, 让来源类型由选中的 OPTION 显式携带, 而非按字符串值反查
+// (规避 in-plan WIP 批号与 SFI 批号偶然相同时的 WIP↔SFI 误判)。
+const SRC_WIP = 'wip';
+const SRC_SFI = 'sfi';
+function srcKey(kind: string, batchNo: string): string {
+  return `${kind}::${batchNo}`;
+}
 
 function sfiAvailable(item: SemiFinishedStockItem): number {
   return Number(item.availableQuantity ?? 0) || 0;
@@ -774,11 +785,34 @@ async function loadSfiOptions() {
 }
 
 /**
- * 用户在混锅来源下拉改选后: 若选中的是常驻半成品库存 (SFI) 则置 semiFinished=true,
- * 否则 (in-plan 在制 WIP) 置 false。后端据此决定保存时是否写消耗边 + 小结时是否 consumeClerkSemi。
+ * 当前来源行的复合下拉值 (从已存的 src 反推, 供 :model-value 显示选中项)。
+ * semiFinished 标记由 src 自身携带 (保存往返保留), 不按字符串值反查 → 无 WIP↔SFI 碰撞。
  */
-function onUpstreamSourceChange(src: UpstreamRef) {
-  src.semiFinished = sfiBatchNoSet.value.has(src.sourceBatchNumber);
+function srcSelectKey(src: UpstreamRef): string {
+  if (!src.sourceBatchNumber) return '';
+  return srcKey(src.semiFinished ? SRC_SFI : SRC_WIP, src.sourceBatchNumber);
+}
+
+/**
+ * 用户在混锅来源下拉改选后: 由选中 OPTION 的复合值「类型::批次号」显式拆出来源类型与批次号,
+ * 据此置 sourceBatchNumber + semiFinished。后端据 semiFinished 决定保存时是否写消耗边 +
+ * 小结时走严格 SFI 出库 (consumeClerkSemiStrict) 还是 in-plan 在制 WIP 边。
+ */
+function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
+  if (!key) {
+    src.sourceBatchNumber = '';
+    src.semiFinished = false;
+    return;
+  }
+  const sep = key.indexOf('::');
+  if (sep < 0) {
+    // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
+    src.sourceBatchNumber = key;
+    src.semiFinished = false;
+    return;
+  }
+  src.semiFinished = key.slice(0, sep) === SRC_SFI;
+  src.sourceBatchNumber = key.slice(sep + 2);
 }
 
 /** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI)。 */
@@ -953,23 +987,23 @@ watch(
               <div v-for="(src, si) in row.upstreamSources" :key="si"
                    style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
                 <el-select
-                  v-model="src.sourceBatchNumber"
+                  :model-value="srcSelectKey(src)"
+                  @change="(v: string) => onUpstreamSelect(src, v)"
                   :placeholder="isShuZhi ? '选焯水批次' : '选熟制批次'" filterable clearable
                   :loading="sfiLoading"
-                  @change="onUpstreamSourceChange(src)"
                   style="width:220px" size="small">
                   <el-option-group label="本计划在制半成品">
                     <el-option
                       v-for="item in upstreamItems" :key="item.batchNumber"
                       :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                      :value="item.batchNumber"
+                      :value="srcKey(SRC_WIP, item.batchNumber)"
                       :disabled="item.remaining <= 0" />
                   </el-option-group>
                   <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
                     <el-option
                       v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
                       :label="sfiLabel(s)"
-                      :value="s.intermediateBatchNo"
+                      :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                       :disabled="sfiAvailable(s) <= 0" />
                   </el-option-group>
                 </el-select>
@@ -1428,23 +1462,23 @@ watch(
                   <div v-for="(src, si) in row.upstreamSources" :key="si"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                     <el-select
-                      v-model="src.sourceBatchNumber"
+                      :model-value="srcSelectKey(src)"
+                      @change="(v: string) => onUpstreamSelect(src, v)"
                       placeholder="选焯水批次" filterable clearable
                       :loading="sfiLoading"
-                      @change="onUpstreamSourceChange(src)"
                       style="width:220px" size="small">
                       <el-option-group label="本计划在制半成品">
                         <el-option
                           v-for="item in upstreamItems" :key="item.batchNumber"
                           :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                          :value="item.batchNumber"
+                          :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
                       <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
                         <el-option
                           v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
                           :label="sfiLabel(s)"
-                          :value="s.intermediateBatchNo"
+                          :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
                       </el-option-group>
                     </el-select>
@@ -1502,23 +1536,23 @@ watch(
                   <div v-for="(src, si) in row.upstreamSources" :key="si"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                     <el-select
-                      v-model="src.sourceBatchNumber"
+                      :model-value="srcSelectKey(src)"
+                      @change="(v: string) => onUpstreamSelect(src, v)"
                       placeholder="选熟制批次" filterable clearable
                       :loading="sfiLoading"
-                      @change="onUpstreamSourceChange(src)"
                       style="width:220px" size="small">
                       <el-option-group label="本计划在制半成品">
                         <el-option
                           v-for="item in upstreamItems" :key="item.batchNumber"
                           :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                          :value="item.batchNumber"
+                          :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
                       <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
                         <el-option
                           v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
                           :label="sfiLabel(s)"
-                          :value="s.intermediateBatchNo"
+                          :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
                       </el-option-group>
                     </el-select>

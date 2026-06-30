@@ -150,6 +150,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 continue;
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
+                // SFI 投料 (semiFinished=true) 引用的是常驻外部半成品库存, 不是本小结的瞬态在制产出
+                // → 不纳入"同小结内被下游投入"统计 (否则若外部 SFI 批号偶然与本计划在制批号相同会污染净结余)。
+                if (ref.isSemiFinished()) {
+                    continue;
+                }
                 String src = ref.getSourceBatchNumber();
                 if (src != null && unsettledBatchNumbers.contains(src)) {
                     withinSessionFeedByBatchNo.merge(src, nz(ref.getFeedQuantityKg()), BigDecimal::add);
@@ -158,13 +163,15 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
 
         // ── ② SFI OUT: 未结道消耗半成品库存 → 出库扣减 ──
-        //   两类来源:
+        //   两类来源, 不同失败语义:
         //   (A) SFI 投料 (semiFinished=true, 半成品直接产成品): sourceBatchNumber 即常驻 SFI 的
-        //       intermediateBatchNo → 直接 consumeClerkSemi(srcBatchNo)。不依赖 priorStocked,
-        //       因为该 SFI 可能来自其它计划 / 文员直接入库 (本计划前序小结未必含它)。
+        //       intermediateBatchNo → consumeClerkSemiStrict(srcBatchNo) 严格扣减 (缺失/不足即抛,
+        //       禁止降级 → 防 phantom/不足库存生产成品)。不依赖 priorStocked, 因为该 SFI 可能来自
+        //       其它计划 / 文员直接入库。semiOutQuantity 累计的是 strict 返回的 *实际出库量*
+        //       (= feed, 因不足即抛), summary 永不虚高。
         //   (B) 本计划前序小结已入库的半成品 (priorStocked, semiFinished=false): 经 per-(plan,productType)
-        //       运行余额行锚 semiAnchor 出库 (跨小结 小结1→小结2 半成品流, 行为不变)。
-        //   consumeClerkSemi 守卫 not-below-zero (行缺失 no-op / 超扣 clamp), 两类共用同一守卫。
+        //       运行余额行锚 semiAnchor 出库, 沿用 consumeClerkSemi 的 not-below-zero 容忍 (行缺失 no-op /
+        //       超扣 clamp) —— 这是与 SFI IN 净结余会计互校的有意双保险, 不改 (行为不变)。
         BigDecimal semiOutQuantity = BigDecimal.ZERO;
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.getUpstreamSources() == null) {
@@ -173,15 +180,16 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
                 String srcBatchNo = ref.getSourceBatchNumber();
                 BigDecimal feed = nz(ref.getFeedQuantityKg());
-                // (A) SFI 投料: 按 intermediateBatchNo 直接扣减常驻 SFI 库存。
+                // (A) SFI 投料: 严格扣减常驻 SFI 库存 (缺失/不足即抛, 整事务回滚 → 不产 phantom FG)。
                 if (ref.isSemiFinished()) {
                     if (srcBatchNo != null && feed.signum() > 0) {
-                        wipInventoryService.consumeClerkSemi(factoryId, srcBatchNo, feed);
-                        semiOutQuantity = semiOutQuantity.add(feed);
+                        BigDecimal drawn = wipInventoryService
+                                .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
+                        semiOutQuantity = semiOutQuantity.add(nz(drawn)); // 实际出库量, 非 pre-clamp feed
                     }
                     continue; // SFI 投料不走 priorStocked anchor 路径 (避免重复扣减)
                 }
-                // (B) 前序小结已入库的半成品 → anchor 出库。
+                // (B) 前序小结已入库的半成品 → anchor 出库 (容忍版, 双保险)。
                 if (srcBatchNo == null || !priorStocked.contains(srcBatchNo)) {
                     continue; // 只对前序已入库的半成品出库
                 }

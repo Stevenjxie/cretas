@@ -1239,9 +1239,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 // 半成品库存(SFI)投料 (半成品直接产成品): 不解析为 in-plan WIP MaterialBatch,
                 //   不写 MaterialConsumption (material_consumptions.batch_id NOT NULL 只能持 MaterialBatch id,
                 //   SFI 无对应 MaterialBatch)。投料随 row_payload 持久化, SFI 扣减在小结时经
-                //   consumeClerkSemi(intermediateBatchNo) 完成 (见 InterimSettleServiceImpl ② SFI OUT)。
+                //   consumeClerkSemiStrict(intermediateBatchNo) 完成 (见 InterimSettleServiceImpl ② SFI OUT)。
                 //   inputQuantity 仍由 buildStepEntry 记录, 出成率计算不受影响。
                 if (ur.isSemiFinished()) {
+                    // 禁止降级 + 防呆: SFI 引用必须指向真实存在的常驻半成品库存行 (factory-scoped 🔒),
+                    //   否则保存即 loud-fail —— 不留到小结才静默 no-op 产 phantom 成品。
+                    wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                                    factoryId, ur.getSourceBatchNumber())
+                            .orElseThrow(() -> new BusinessException(409,
+                                    "半成品库存不存在: " + ur.getSourceBatchNumber())
+                                    .withCode("SFI_NOT_FOUND")
+                                    .withHint("请重新选择仍有库存的半成品批次")
+                                    .withSeverity("BLOCKING")
+                                    .withHintTarget(req.getProcessCode()));
                     continue;
                 }
                 ProductionBatch pb = productionBatchRepo

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.wip;
 
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -16,6 +17,7 @@ import java.math.BigDecimal;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -109,6 +111,60 @@ class WipClerkOutputTest {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.empty());
         service.consumeClerkSemi(FACTORY, ANCHOR, new BigDecimal("50"));
+        verify(wipRepo, never()).save(any());
+    }
+
+    // ── 严格版 consumeClerkSemiStrict (SFI 投料, 禁止降级) ──
+
+    @Test
+    @DisplayName("consumeClerkSemiStrict: 足量 → 扣减 + 返回实际出库量 (= qty)")
+    void consumeClerkSemiStrictDrawsDownAndReturnsQty() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("60"));
+        row.setAvailableQuantity(new BigDecimal("60"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("40"));
+        assertThat(drawn).isEqualByComparingTo("40");
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("40");
+        assertThat(row.getAvailableQuantity()).isEqualByComparingTo("20");
+    }
+
+    @Test
+    @DisplayName("consumeClerkSemiStrict: 行缺失 → 抛 SFI_NOT_FOUND (不 no-op)")
+    void consumeClerkSemiStrictMissingThrows() {
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("50")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NOT_FOUND");
+                    assertThat(ex.getMessage()).contains("半成品库存不存在");
+                });
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("consumeClerkSemiStrict: 不足 → 抛 SFI_INSUFFICIENT (不 clamp), 不改库存")
+    void consumeClerkSemiStrictInsufficientThrows() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("60"));
+        row.setConsumedQuantity(new BigDecimal("40"));
+        row.setAvailableQuantity(new BigDecimal("20"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("30")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_INSUFFICIENT");
+                    assertThat(ex.getMessage()).contains("不足");
+                });
+        // 未扣减 (抛前不改)
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("40");
         verify(wipRepo, never()).save(any());
     }
 }

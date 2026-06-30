@@ -9,6 +9,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
@@ -25,6 +26,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
@@ -106,6 +108,9 @@ class ProcessSheetServiceImplTest {
 
     @Autowired
     private FactoryWarehouseRepository warehouseRepo;
+
+    @Autowired
+    private SemiFinishedInventoryRepository sfiRepo;
 
     private static final String FACTORY_ID = "PSF-FACTORY";
     private static final String OTHER_FACTORY_ID = "PSF-OTHER";
@@ -193,6 +198,20 @@ class ProcessSheetServiceImplTest {
         u.setSourceBatchNumber(batchNumber);
         u.setFeedQuantityKg(new BigDecimal(feedKg));
         return u;
+    }
+
+    /** 种一行常驻半成品库存 (SFI), 供 SFI 投料存在性校验通过。 */
+    private void seedSfi(String intermediateBatchNo, String available) {
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(intermediateBatchNo)
+                .productTypeId(PRODUCT_TYPE_ID)
+                .producedQuantity(new BigDecimal(available))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal(available))
+                .unit("kg")
+                .build();
+        sfiRepo.saveAndFlush(sfi);
     }
 
     private ProcessSheetRowRequest baseReq(String clientRowId, String processCode,
@@ -383,6 +402,7 @@ class ProcessSheetServiceImplTest {
     @Test
     @DisplayName("SFI-1: 混批 原料+SFI半成品投料 → 仅 RAW consumption 落库, SFI 投料不写 MaterialConsumption")
     void saveRow_rawPlusSfiFeed_onlyRawConsumptionWritten() {
+        seedSfi("SFI-STANDING-1", "50");   // 保存需 SFI 真实存在 (loud-fail 存在性校验)
         ProcessSheetRowRequest req = baseReq("row-raw-sfi", "shuzhi", 2, "90");
         req.setInputQuantity(new BigDecimal("120"));
         req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
@@ -415,6 +435,7 @@ class ProcessSheetServiceImplTest {
     @Test
     @DisplayName("SFI-2: 半成品直接产成品 — 成品道仅 SFI 投料 → 物化(无 WIP/无消耗边), resolveRawMaterialTypeId 不抛 400")
     void saveRow_finishedSfiOnly_materializesWithNoConsumption() {
+        seedSfi("SFI-STANDING-2", "100");   // 保存需 SFI 真实存在
         ProcessSheetRowRequest req = baseReq("row-sfi-finished", "qidiao", 5, "50");
         req.setFinished(true);
         req.setInputQuantity(new BigDecimal("60"));
@@ -442,6 +463,7 @@ class ProcessSheetServiceImplTest {
     @Test
     @DisplayName("SFI-3: 中间道(非成品)仅 SFI 投料 + output>0 → 400 (无 raw 维度无法物化 WIP, 非裸 500)")
     void saveRow_nonFinishedSfiOnly_throws400() {
+        seedSfi("SFI-STANDING-3", "50");   // 存在性通过 → 才到 resolveRawMaterialTypeId 抛 400
         ProcessSheetRowRequest req = baseReq("row-sfi-mid", "shuzhi", 2, "40");
         req.setInputQuantity(new BigDecimal("50"));
         UpstreamRef sfi = upstreamRef("SFI-STANDING-3", "50");
@@ -451,6 +473,25 @@ class ProcessSheetServiceImplTest {
         assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+    }
+
+    @Test
+    @DisplayName("SFI-4: 引用不存在的半成品库存 batchNo → 保存即 409 (loud-fail, 禁止降级 — 不留到小结产 phantom)")
+    void saveRow_sfiNonexistent_throws409AtSave() {
+        ProcessSheetRowRequest req = baseReq("row-sfi-missing", "qidiao", 5, "50");
+        req.setFinished(true);
+        req.setInputQuantity(new BigDecimal("60"));
+        UpstreamRef sfi = upstreamRef("SFI-NOPE-XYZ", "60");   // 未 seed → 不存在
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NOT_FOUND");
+                    assertThat(ex.getMessage()).contains("半成品库存不存在");
+                });
     }
 
     // ─────────────────────────────────────────────────────────────

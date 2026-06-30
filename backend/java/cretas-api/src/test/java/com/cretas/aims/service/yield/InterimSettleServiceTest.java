@@ -127,6 +127,9 @@ class InterimSettleServiceTest {
                 .thenReturn(Optional.empty());
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        // SFI 投料严格扣减: 默认成功返回请求量 (= 实际出库量); 个别测试覆写为抛 (不足/缺失)。
+        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
     }
 
     @Test
@@ -266,13 +269,12 @@ class InterimSettleServiceTest {
 
         Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
 
-        // SFI OUT: 直接按 SFI 的 intermediateBatchNo 扣减 (而非 semiAnchor "CLK-SEMI-...")
+        // SFI OUT: 严格扣减 (consumeClerkSemiStrict), 直接按 SFI 的 intermediateBatchNo (非 semiAnchor)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemi(eq(FACTORY), eq("SFI-STANDING-1"), eq(new BigDecimal("30")));
-        // 确认不曾用 anchor 形式扣减 (semiAnchor 前缀 "CLK-SEMI-")
-        verify(wipInventoryService, never())
-                .consumeClerkSemi(eq(FACTORY), org.mockito.ArgumentMatchers.startsWith("CLK-SEMI-"),
-                        any());
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STANDING-1"), eq(new BigDecimal("30")));
+        // SFI 投料绝不走容忍版 consumeClerkSemi (那条留给 priorStocked anchor 路径)
+        verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
+        // summary.semiOutQuantity = strict 返回的实际出库量 (= 30, 永不虚高)
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("30"));
 
         // 成品道 → FG 入库 (productWeight 6kg)
@@ -304,7 +306,26 @@ class InterimSettleServiceTest {
 
         // 仅小结1 扣减一次, 小结2 该行已结跳过 (产出侧 interim_settled_at 戳幂等)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemi(eq(FACTORY), eq("SFI-STANDING-2"), eq(new BigDecimal("25")));
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STANDING-2"), eq(new BigDecimal("25")));
+    }
+
+    @Test
+    @DisplayName("SFI 投料不足: 小结时 consumeClerkSemiStrict 抛 → 整个小结 loud-fail, 不产 phantom FG")
+    void sfiFeedstockInsufficientThrowsLoud() {
+        ProcessSheetRow rX = row(23L, 1, "CLK-B-Z", reqFinished(1, "CLK-B-Z", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamSemi("SFI-LOW-1", "100")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 库存不足 → strict 抛 (禁止降级)
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY), eq("SFI-LOW-1"), eq(new BigDecimal("100"))))
+                .thenThrow(new BusinessException(409, "半成品库存不足: SFI-LOW-1 余30 需100")
+                        .withCode("SFI_INSUFFICIENT"));
+
+        // 小结整体抛 → @Transactional 回滚 → 不会静默产 phantom FG
+        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("半成品库存不足");
     }
 
     // ─────────────────────────────────────────────────────────────
