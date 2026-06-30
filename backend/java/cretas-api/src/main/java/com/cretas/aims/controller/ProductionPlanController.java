@@ -18,6 +18,8 @@ import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
+import com.cretas.aims.dto.yield.ProductionSummaryDTO;
+import com.cretas.aims.service.yield.ProductionSummaryService;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -75,6 +77,7 @@ public class ProductionPlanController {
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
     private final ProductionTransitLedgerRepository transitLedgerRepository;
+    private final ProductionSummaryService productionSummaryService;
 
     /**
      * 创建生产计划
@@ -494,6 +497,26 @@ public class ProductionPlanController {
 
         ProductionSettlementPrefillResponse response = productionPlanService.getSettlementPrefill(factoryId, planId);
         return ApiResponse.success("核对结单预填", response);
+    }
+
+    /**
+     * 库存生产阅读汇总 — 按生产计划聚合出成率、成本六桶、副产品等核心指标。
+     *
+     * <p>价格字段按 procurement:price:view 权限脱敏，与 cost-breakdown 端点策略一致。
+     * <p>只读，不修改任何库存或计划状态。
+     */
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/{planId}/production-summary")
+    @Operation(summary = "库存生产阅读汇总", description = "按计划聚合出成率/成本六桶/副产品; 价格按 procurement:price:view 脱敏")
+    public ApiResponse<ProductionSummaryDTO> getProductionSummary(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
+        return ApiResponse.success(productionSummaryService.computeSummary(factoryId, planId, maskPrice));
     }
 
     @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})

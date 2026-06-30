@@ -206,3 +206,40 @@ export function listTransitLedgers(factoryId: string, status?: string) {
     status ? { params: { status } } : undefined,
   )
 }
+
+/** 生产汇总 — 批次层面的统计行 */
+export interface ProductionSummaryBatch {
+  batchNumber: string
+  processOrder: number
+  processName: string
+  produced: number
+  remaining: number
+  status: string
+  cumulativeYieldRate: number | null
+}
+
+/**
+ * 生产计划阅读汇总 DTO
+ * GET /api/mobile/{factoryId}/production-plans/{planId}/production-summary
+ */
+export interface ProductionSummaryDTO {
+  planId: string
+  planNumber: string
+  productTypeId: string
+  productName: string
+  totalRawInput: number
+  totalFinishedOutput: number
+  remainingSemiRawEquiv: number
+  realYieldRate: number
+  totalCost: number | null
+  priceMasked: boolean
+  batches: ProductionSummaryBatch[]
+}
+
+/**
+ * 查询生产计划阅读汇总 (总投入原料 / 产出 / 剩余半成品折回原料当量 / 真实出成率 / 成本)
+ * GET /api/mobile/{factoryId}/production-plans/{planId}/production-summary
+ */
+export function getProductionSummary(factoryId: string, planId: string) {
+  return get<ProductionSummaryDTO>(`/${factoryId}/production-plans/${planId}/production-summary`)
+}

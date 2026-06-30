@@ -53,6 +53,7 @@ import {
   planStatusClass,
 } from './statusVisuals';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
+import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -833,6 +834,19 @@ const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
 // 幂等 key 在打开弹框时一次性生成，重试提交复用同一 key (防呆 Rule 4)
 const settlementIdempotencyKey = ref('');
+
+// ===== 阅读汇总 dialog =====
+const summaryDialogVisible = ref(false);
+const summaryPlanId = ref('');
+const summaryPlanNumber = ref('');
+const summaryProductName = ref('');
+function handleOpenSummary(row: TableRow) {
+  summaryPlanId.value = String(row.id || '');
+  summaryPlanNumber.value = String(row.planNumber || '');
+  summaryProductName.value = String(row.productName || row.productTypeName || '');
+  summaryDialogVisible.value = true;
+}
+// ===== /阅读汇总 =====
 
 // ===== Phase 2A: 核对结单自动预填 (报工→核算自动化) =====
 type SettlementIssueSeverity = 'BLOCKER' | 'INFO';
@@ -2333,6 +2347,13 @@ function handleAiFill(params: TableRow) {
               title="查看该批次的出成率与成本核算"
               @click="router.push({ path: '/production-analytics/yield-cost', query: { orderId: row.sourceOrderId } })"
             >看成本核算</el-button>
+            <el-button
+              type="info"
+              link
+              size="small"
+              title="查看该生产计划的汇总：总投入原料 / 产出成品 / 真实出成率 / 总成本"
+              @click="handleOpenSummary(row)"
+            >阅读汇总</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
@@ -3376,6 +3397,15 @@ function handleAiFill(params: TableRow) {
         @submitted="onEntrySubmitted"
       />
     </el-drawer>
+
+    <!-- 阅读汇总弹窗 -->
+    <ProductionSummaryDialog
+      v-model="summaryDialogVisible"
+      :factory-id="String(factoryId)"
+      :plan-id="summaryPlanId"
+      :plan-number="summaryPlanNumber"
+      :product-name="summaryProductName"
+    />
   </div>
   </CanvasAwareWrapper>
 </template>

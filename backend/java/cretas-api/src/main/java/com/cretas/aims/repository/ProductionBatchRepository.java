@@ -48,9 +48,13 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     Page<ProductionBatch> findByFactoryId(@Param("factoryId") String factoryId, Pageable pageable);
 
     /**
-     * 根据状态分页查找
+     * 根据状态分页查找 (排除 CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径统一).
+     * SP-D Fix 1b: 有状态过滤时同样不展示文员录入产生的中间 WIP 批次, 避免切换状态筛选时行为不一致.
      */
-    Page<ProductionBatch> findByFactoryIdAndStatus(String factoryId, ProductionBatchStatus status, Pageable pageable);
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.status = :status " +
+           "AND p.batchType <> 'CLERK_WIP'")
+    Page<ProductionBatch> findByFactoryIdAndStatus(@Param("factoryId") String factoryId,
+            @Param("status") ProductionBatchStatus status, Pageable pageable);
 
     /**
      * SP10: 按试制标记分页查找 (中报价试制批次下拉)
