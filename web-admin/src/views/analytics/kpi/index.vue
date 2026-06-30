@@ -198,7 +198,9 @@ async function loadRestaurantKpi() {
       restaurantKpi.value.marginProfit = margin.totalGrossProfit || 0;
     }
   } catch (e) {
-    console.error('[kpi-dashboard] restaurant kpi load failed:', e);
+    if (import.meta.env.DEV) {
+      console.warn('[kpi-dashboard] restaurant kpi load failed:', e);
+    }
   } finally {
     loading.value = false;
   }

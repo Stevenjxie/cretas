@@ -36,6 +36,12 @@ const router = useRouter();
 const activeTab = ref<'generate' | 'audit'>('generate');
 const tenantLabel = computed(() => authStore.factoryId || '餐饮门店');
 
+const revenueAnalysisBullets = [
+  '建议先用“全部历史”一键生成，把门店营收、同比 / 环比、堂食外卖占比和客单人数放在同一张表里看；不要只看总营收，要先找“营收高但客单价低”或“外卖占比高但毛利承压”的门店。',
+  '关注同比和环比同时下滑的门店：先排查日期范围、班次和门店数据是否完整，再拆到午市 / 晚市，看是客流减少、客单下降，还是平台活动把折扣吃掉了。',
+  '下载报表命中缓存时，不会重复触发重计算或 LLM 分析，适合经营会反复复盘；如果 Gold 数据延迟，页面会直接提示最新物化时间，避免拿旧数做决策。',
+];
+
 // ─── Stores list (loaded once at mount) ───────────────────────────────
 const stores = ref<StoreEntry[]>([]);
 const storesLoading = ref(false);
@@ -505,6 +511,13 @@ function showStickyWarning(message: string) {
       {{ tenantLabel }} — 同比 / 环比 / 堂食外卖占比 / 客单人数分析
       </p>
 
+    <section class="analysis-card">
+      <div class="analysis-card__title">经营解读</div>
+      <ul class="analysis-card__list">
+        <li v-for="item in revenueAnalysisBullets" :key="item">{{ item }}</li>
+      </ul>
+    </section>
+
     <!-- Stale-data warning banner (spec §11.4) -->
     <el-alert
       v-if="previewSummary?.is_stale || lastDownloadInfo?.isStale"
@@ -884,6 +897,34 @@ function showStickyWarning(message: string) {
   color: #86909c;
   margin: 0 0 24px;
   font-size: 14px;
+}
+
+.analysis-card {
+  margin: 0 0 16px;
+  padding: 16px 18px;
+  border: 1px solid #d7e3f6;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.analysis-card__title {
+  margin-bottom: 8px;
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.analysis-card__list {
+  margin: 0;
+  padding-left: 18px;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.analysis-card__list li + li {
+  margin-top: 4px;
 }
 
 .card {

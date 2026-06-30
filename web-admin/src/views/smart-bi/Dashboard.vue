@@ -1102,7 +1102,9 @@ async function loadLLMInsights() {
     }
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
-    console.warn('LLM insights load failed (non-critical):', e);
+    if (import.meta.env.DEV) {
+      console.warn('LLM insights load failed (non-critical):', e);
+    }
   } finally {
     clearTimeout(longRunTimer);
     insightsLoading.value = false;

@@ -41,12 +41,16 @@ vi.mock('@/api/smartbi/revenue-report', () => ({
 // ── Mock element-plus message popups (no DOM toast in jsdom) ──
 const elMessageError = vi.fn();
 const elMessageSuccess = vi.fn();
+const elMessageFn = vi.fn();
 vi.mock('element-plus', () => ({
-  ElMessage: {
-    error: (...a: unknown[]) => elMessageError(...a),
-    success: (...a: unknown[]) => elMessageSuccess(...a),
-    warning: vi.fn(),
-  },
+  ElMessage: Object.assign(
+    (...a: unknown[]) => elMessageFn(...a),
+    {
+      error: (...a: unknown[]) => elMessageError(...a),
+      success: (...a: unknown[]) => elMessageSuccess(...a),
+      warning: vi.fn(),
+    },
+  ),
   ElAlert: { template: '<div class="el-alert"><slot /></div>' },
 }));
 
@@ -88,6 +92,7 @@ describe('RevenueReport — 一键生成默认表头报表 (WS5 #13)', () => {
   beforeEach(() => {
     mockGetGoldDataRange.mockReset();
     mockGenerateAndDownload.mockReset();
+    elMessageFn.mockReset();
     elMessageError.mockReset();
     elMessageSuccess.mockReset();
     // onMounted calls these; keep them inert.
@@ -113,6 +118,16 @@ describe('RevenueReport — 一键生成默认表头报表 (WS5 #13)', () => {
     await flushPromises();
     const btn = findOneClickButton(wrapper);
     expect(btn).toBeTruthy();
+  });
+
+  it('renders a constructive business analysis guide above report generation', async () => {
+    const wrapper = mount(RevenueReport, { global: { stubs: globalStubs } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('经营解读');
+    expect(wrapper.text()).toContain('门店营收');
+    expect(wrapper.text()).toContain('同比');
+    expect(wrapper.text()).toContain('缓存');
   });
 
   it('one-click uses all-history range + all stores + all meal periods, no pre-fill needed', async () => {
@@ -167,8 +182,8 @@ describe('RevenueReport — 一键生成默认表头报表 (WS5 #13)', () => {
     await flushPromises();
 
     expect(mockGenerateAndDownload).not.toHaveBeenCalled();
-    expect(elMessageError).toHaveBeenCalled();
-    expect(String(elMessageError.mock.calls[0][0])).toContain('gold probe boom');
+    expect(elMessageFn).toHaveBeenCalled();
+    expect(String(elMessageFn.mock.calls[0][0].message)).toContain('gold probe boom');
   });
 
   it('honest error when gold range has no data (null minDate)', async () => {
@@ -187,6 +202,6 @@ describe('RevenueReport — 一键生成默认表头报表 (WS5 #13)', () => {
     await flushPromises();
 
     expect(mockGenerateAndDownload).not.toHaveBeenCalled();
-    expect(elMessageError).toHaveBeenCalled();
+    expect(elMessageFn).toHaveBeenCalled();
   });
 });
