@@ -567,3 +567,84 @@ web-admin：
 - 要核"调料成本真值"必须**先 headed 配一个 调料配方**(创建配方→调料配方 tab),F006 现在没有可复用的 → 见下方 Codex brief。
 
 **至此成本准确性结论**:原料/人工/分摊/继承/cost-analysis/成本页 全部核过且准确;调料成本因 F006 无配方而普遍缺失(防呆正确报 0+warning,但数据不完整);工时单价无自助配置入口(dead-end)。
+
+---
+
+## 2026-06-29/30 续:UX 显示 bug + 两套 BOM 断链 + 调料成本结构性恒 0 + 完整成本模型闭环
+
+> 背景:大矩阵深测(出成率/成本三方精确 53/53 全绿)后,Steve 一眼在 UI 看出测试漏的真 bug;随后重审本文档 + 从最初配置(AI建产品)到生产全链深测,抓出更深的结构性问题。
+
+### 17. 出成率卡「工序」列显示"工序0/工序1"而非真实工序名
+
+相关提交:`44b51d9df`(yield-card)+ 后续 row-based builder
+
+- 现象:出成率卡工序列显示 `工序0/工序1/工序2`(generic),而非 拆包/修油/熟制。
+- 根因:有 process-sheet 行的计划走 `getInventoryYieldCardFromProcessSheetRows`(row-based),`req.getProcessName()` 前端不传为 null → `fallbackProcessName`="工序"+order。
+- 注意**两个 builder**:WIP-based(`getInventoryYieldCard`)+ row-based。先错改了只在无行时走的 WIP-based → 没生效;改对 row-based 才行(`resolveRowProcessName` 按 productTypeId+order 反查 product-work-process 真实名)。
+- **教训:同功能两条 path,改前先确认走哪个 builder,别假设。**
+
+### 18. 调料警告过度触发(每个中间道乱报)+ 漏改孪生
+
+相关提交:`a44dddde5`(materializeBatch)+ `5b49c3623`(rematerializeInPlace,审计补)
+
+- 现象:`ClerkProcessEntryServiceImpl` 对**每个**有上游的非调味道(修油/滚揉/焯水)都报「未识别为调味步骤…调料成本未计入」→ 满屏噪音误导。
+- 修:加工序名正则守卫(只 熟/卤/煮/腌/注射/入味/调味 道报)。
+- **漏改孪生(独立审计抓到)**:`Edit replace_all` 因两处 warning 块注释不同,只匹配带注释的 `materializeBatch`,**漏了 `rematerializeInPlace`(re-save 路径)**。后果:文员**编辑重存**中间道时仍误报。
+- **教训:`replace_all` 只匹配字面相同串,注释/空白差异会漏 sibling;改"同逻辑两处"必须分别 grep 确认。**
+
+### 19. §9 口径铁律孪生:inventory-list rowTotalCost 未 setScale-2
+
+相关提交:`4f4d80eba`(独立审计 doc vs code 抓到)
+
+- §9 修了出成卡 inheritedCost 的 scale-2 镜像,但 WIP-based builder(`ProcessSheetServiceImpl:521`)的 inventory-list `rowTotalCost = unitCost × produced` **没 setScale(2)** → 展示侧亚分噪音(1.9206 而非 1.92)。补 setScale-2。
+
+### 20. 两套 BOM 系统断链:配 BOM 的新产品首道原料下拉恒为空 → 无法生产
+
+相关提交:`644858c3d`(config→production 深测 + 审计抓到)
+
+- 现象:用 AI建产品/BOM编辑器/批量导入 配好 BOM 的**新产品**,逐道录入首道选原料时下拉**恒为空**,根本无法生产。
+- 根因(**两套 BOM 系统断链**):首道原料下拉数据源 `getMaterialBatchesByStatus` 的 productTypeId BOM-membership 过滤**只查 bom_recipes**(R&D 配方),但 BOM 编辑器/批量导入/对话微调 都写 **bom_items**(运行时 BOM)→ 新品(只有 bom_items 无配方)被过滤掉所有原料批。
+- 修:并集两套 BOM 系统的原料类型(bom_recipes ∪ bom_items)。existing 配方产品行为不变。验证:0→7 选项可生产。
+- **教训:`bom_items`(运行时,编辑器/导入/对话微调写)vs `bom_recipes`(R&D 配方)并存,凡按"产品 BOM"过滤/读取都要认两套。**
+
+### 21. 调料成本结构性恒 0(配了调料配方也不流入)⭐ 最深
+
+相关提交:`6fe0688fd`(isSeasoningStep 按名)+ `5e2581fca`(buildStepEntry 解析名 + processCategory)
+
+- 现象:即便给产品配了调料配方(卤料包/盐),生产时 `seasoningCost` 仍恒 0。
+- 根因**三连**:① F006 熟制(卤制)道 `processCategory='加工'`(非 SEASONING)② 熟制 grid **无 potCount/锅数字段** ③ StepEntry.processName 来自 req(前端不传)恒 null → `isSeasoningStep`(=SEASONING || potCount || 按名)**三条件全 false** → `computeSeasoningCost` 根本不跑。
+- 修:① `isSeasoningStep` 按工序名(熟/卤/煮/腌/注射/入味/调味)识别 ② `buildStepEntry` 按 productTypeId+order 反查真实工序名并据名设 `processCategory=SEASONING`。无配方时仍 0+warning(安全)。
+- 验证:配 卤料包 50g/kg×20元=1元/kg COOKING → 熟制道 `seasoningCost=0.04`(=1元/kg × 投料量,**投料-based**)。**之前恒 0,现按配方流入。**
+
+### 调料成本基准(投料 vs 出成)—— Steve 问的设计决策
+
+- **消耗/成本 = 投料量(injectionRawKg,默认,保持)** —— 物理正确:卤制按下锅肉量加料,下料时不知出成。`RecipeCostCalculator` 即 `dosage_g/1000 × max(单价1,单价2) × 投料量kg`。
+- **系统已支持两套**:`auxBasis`(`CostReconcileService:160`,INPUT 默认 / OUTPUT 可配,成品后处理调料用)。
+- **比较已有**:`aux-cost-reconcile`(标准应投 = 标准出成率反推 × 投料,vs 实际 → 多投/误差)。
+- **单盒分摊按出成**:`cost-breakdown.perBoxCost = 总成本 / 出成盒数`。
+- 结论:**分层非二选一**;消耗按投料(更准),分摊按出成,对账两端比。默认投料是对的。
+
+### 完整成本模型闭环(六桶 + 三方,全 headed 验证)
+
+权威端点:`/{f}/production/batches/{bn}/cost-breakdown`(分桶+副产+净+可售+混批溯源)+ `/aux-cost-reconcile`(标准vs实际多投)。均 @PriceSensitive 脱敏。
+
+| 桶 | 不变量 | 测试 |
+|---|---|---|
+| 原料 | 单价×投入 | headed-config-to-production |
+| 人工 | 工时×人数×配置单价(非默认26,§16.1 UI 接通) | config-to-production / labor-cost |
+| 调料 | dosage×投料量(投料-based,配方驱动) | matrix-fullchain(§21 验证) |
+| 副产 | 回收=数量×单价;净=总−副产 | headed-byproduct-cost |
+| 可售/留样 | 可售盒=盒−留样;可售单盒=净/可售盒;单盒毛=总/盒 | headed-matrix-cost-page |
+| 辅料对账 | 多投=实际−标准;率=多投/标准;非同源 | headed-aux-reconcile |
+
+**新增成本准确性结论(2026-06-30)**:原料/人工/调料/副产/留样/辅料对账**六桶全部能按配置流进生产并三方对账**;§16 两个 dead-end(工时单价 UI / 调料配方)已修;调料成本结构性恒 0 已根治。
+
+### 重要工程教训(本轮)
+
+1. **同功能两条 builder/path**:工序名(yield-card/cost-page)、调料警告(materialize/rematerialize)—— 改一处必搜另一处。
+2. **`replace_all` 漏孪生**:注释/空白差异会让它只匹配一处,必须分别 grep 确认。
+3. **两套 BOM 系统**:bom_items(运行时)vs bom_recipes(R&D),凡按产品 BOM 过滤/读取都要认两套。
+4. **headed 测试断言"用户看到的"**:显示名/警告文案/error toast,不只验数字。数字对≠UX 友好。
+5. **配调料配方铁律**:`saveSeasoning` 仅 DRAFT → 已有 ACTIVE 配方必须 clone→saveSeasoning→activate。
+6. **测试自身坑**:原料批被前序测试耗尽 → 下拉 available>0 过滤后空;取库存最多的批避开(§13 重现)。
+7. **审计结论也要 verify-first**:独立审计夸大过 cost-page 工序N(其实 enrichProcessNames 已兜底);核实才没白改。
