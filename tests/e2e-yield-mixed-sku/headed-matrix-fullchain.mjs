@@ -32,6 +32,25 @@ async function runSku(s) {
   console.log(`\n========== SKU ${s + 1}/${N} (克重 ${grams}) ==========`);
   const setup = await setupSkuAndBom(page, { namePrefix: `FCM-${grams}`, gramsPerUnit: grams, api, shot, minProcesses: 6 });
   const procs = setup.processes;
+  // 配调料配方 (seasoning fix 验证): COOKING 卤料包 50g/kg × 20元 = 1元/kg。
+  //   saveSeasoning 仅 DRAFT → 已有 ACTIVE 配方需 clone→save→activate (复用版本流)。
+  const curSea = await api('GET', `/${FACTORY}/bom/recipes/by-product/${encodeURIComponent(setup.productTypeId)}/seasoning`).catch(() => null);
+  let recipeId = curSea?.bomRecipeId;
+  const wasActive = recipeId && String(curSea?.status) === 'ACTIVE';
+  let saveTarget = recipeId;
+  if (wasActive) {
+    saveTarget = (await api('POST', `/${FACTORY}/bom/recipes/${recipeId}/clone`).catch(() => null))?.id || recipeId;
+  } else if (!recipeId) {
+    const recipeMt = (arr(await api('GET', `/${FACTORY}/bom/items/${encodeURIComponent(setup.productTypeId)}`))[0] || {}).materialTypeId;
+    saveTarget = recipeMt ? (await api('POST', `/${FACTORY}/bom/recipes`, { productTypeId: setup.productTypeId, outputQuantityPerUnit: grams, outputUnit: 'g', overallYieldRate: 90, sourceType: 'MANUAL', items: [{ materialTypeId: recipeMt, standardQuantity: 1, materialCategory: 'RAW', unit: 'kg' }] }).catch(() => null))?.id : null;
+  }
+  if (saveTarget) {
+    await api('PUT', `/${FACTORY}/bom/recipes/${saveTarget}/seasoning`, { cookingPotBaseKg: 100, subsequentPotRatio: 0.8, seasoningItems: [{ section: 'COOKING', seq: 1, name: '卤料包', dosagePerKgG: 50, priceSource1: 20, countInSeasoning: true }] }).catch(() => null);
+    if (wasActive && saveTarget !== recipeId) await api('POST', `/${FACTORY}/bom/recipes/${saveTarget}/activate`).catch(() => null);
+  }
+  const seaCheck = await api('GET', `/${FACTORY}/bom/recipes/by-product/${encodeURIComponent(setup.productTypeId)}/seasoning`).catch(() => null);
+  const recipeId2 = arr(seaCheck?.seasoningItems).length > 0;
+  ok(recipeId2, `SKU${s + 1} 配调料配方(卤料包 50g/kg×20=1元/kg COOKING)持久化`, { items: arr(seaCheck?.seasoningItems).map((i) => i.name).join('/') });
   const mixIdx = procs.findIndex((p) => /熟|卤|煮/.test(String(p.processName || '')));
   const finIdx = procs.findIndex((p) => /气调|包装|分切|装盒/.test(String(p.processName || '')));
   ok(mixIdx > 0 && finIdx > mixIdx, `SKU${s + 1} 链含 熟制(${procs[mixIdx]?.processName}) + 气调(${procs[finIdx]?.processName})`, { chain: procs.map((p) => p.processName).join('→') });
@@ -140,6 +159,13 @@ async function runSku(s) {
     if (mixCard) {
       approx(num(mixCard.stepYieldRate), r2((mixOut / mixIn) * 100), 1.0, `SKU${s + 1} 混锅 对上出成率 API≈oracle`);
       ok(num(mixCard.inheritedCost) != null && num(mixCard.inheritedCost) > 0, `SKU${s + 1} 混锅 继承成本>0(2源分摊)`, { inheritedCost: mixCard.inheritedCost, sources: (mixCard.sourceBreakdowns || []).length });
+    }
+    // 调料成本验证 (seasoning fix): 熟制道按名识别为调味 → 配方调料成本(投料-based)流入
+    if (mixBatch && recipeId2) {
+      const mixCb = await api('GET', `/${FACTORY}/production/batches/${encodeURIComponent(mixBatch)}/cost-breakdown`).catch(() => null);
+      const seas = mixCb ? num(mixCb.seasoningCost) : null;
+      console.log(`SKU${s + 1} 熟制 seasoningCost:`, seas, '| total:', mixCb?.totalCost);
+      ok(seas != null && seas > 0, `SKU${s + 1} 熟制道调料成本>0 (配方按投料流入, fix 验证)`, { seasoningCost: seas });
     }
   }
 
