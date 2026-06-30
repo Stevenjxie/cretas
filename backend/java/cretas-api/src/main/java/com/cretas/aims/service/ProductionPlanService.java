@@ -288,4 +288,15 @@ public interface ProductionPlanService {
      * @return DTO with conversion info (含产品名称等关联字段)
      */
     ProductionPlanDTO toPlanDTO(com.cretas.aims.entity.ProductionPlan plan);
+
+    /**
+     * 停产 (BY_STOCK 库存永续计划专用): 纯状态关闭，不扣料、不发 BatchCompletedEvent。
+     *
+     * <p>小结 (interimSettle) 已逐批扣减原料并分批入库；停产只将计划置为 COMPLETED，
+     * 不再触发任何物料消耗或成品创建动作，避免双重扣减。
+     *
+     * @throws com.cretas.aims.exception.ResourceNotFoundException 计划不存在
+     * @throws com.cretas.aims.exception.BusinessException(400)    非 BY_STOCK 计划禁止调用
+     */
+    void stopProduction(String factoryId, String planId);
 }

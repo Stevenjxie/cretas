@@ -486,6 +486,27 @@ public class ProductionPlanController {
         return ApiResponse.success("小结已提交", summary);
     }
 
+    /**
+     * 停产 — BY_STOCK 库存永续计划关闭
+     *
+     * <p>纯状态关闭 (→ COMPLETED), 不扣料、不发 BatchCompletedEvent。
+     * 配合小结 (interim-settle) 使用: 小结已逐批扣料+入库, 停产只关闭计划。
+     */
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/stop-production")
+    @Operation(summary = "停产", description = "BY_STOCK 库存永续计划: 纯状态关闭 (COMPLETED), 不扣料不发事件, 配合小结使用")
+    public ApiResponse<Void> stopProduction(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId) {
+
+        log.info("停产: factoryId={}, planId={}", factoryId, planId);
+        productionPlanService.stopProduction(factoryId, planId);
+        return ApiResponse.success("已停产", null);
+    }
+
     @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
     @RequireModule("production_plan")
     @GetMapping("/{planId}/settlement")
