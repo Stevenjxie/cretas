@@ -99,14 +99,17 @@ async function runSku(s) {
   ok(firstSaved === 2, `SKU${s + 1} 首道 2 原料批`, { firstSaved });
   fp('Rule1-预先边界', `SKU${s + 1} 首道未选批次 保存禁用提示`, sawDisabled ? '✓ 事前禁用' : '⚠ 未观察到');
 
-  // 中间道流转 2 批 (到 熟制前)
+  // 中间道流转 2 批 (到 熟制前); 六桶: 第一个中间道第一批 加 副产 + 工时段
   let prev = (await ycByOrder(planId, procs[0].processOrder)).map((x) => ({ bn: x.batchNumber, rem: num(x.remaining) ?? 0.3 })).filter((x) => x.bn);
+  let bpStepBatch = null; // 副产+工时 那道产出批 (六桶验证)
   for (let i = 1; i < mixIdx; i++) {
     const proc = procs[i];
     if (!(await gotoTab(proc.processName))) break;
     await page.waitForTimeout(800);
     let saved = 0;
-    for (const up of prev.slice(0, 2)) {
+    const ups = prev.slice(0, 2);
+    for (let k = 0; k < ups.length; k++) {
+      const up = ups[k];
       const p = activePane();
       await p.locator('button').filter({ hasText: /新增行/ }).first().click().catch(() => null);
       await page.waitForTimeout(700);
@@ -115,11 +118,24 @@ async function runSku(s) {
       await selectByText(row.locator('.el-select').first(), up.bn).catch(() => null);
       const nums = row.locator('.el-input-number');
       await fillNum(nums.nth(0), feed); await fillNum(nums.nth(1), out);
+      // 六桶: 第一个中间道(修油等, 有副产列)第一批 → 副产 + 工时段
+      if (i === 1 && k === 0) {
+        await fillNum(nums.nth(2), 0.05).catch(() => null);  // 副产(kg)
+        await fillNum(nums.nth(3), 4).catch(() => null);     // 副产回收单价 → credit=0.2
+        await row.locator('button').filter({ hasText: /h.*段|工时|0\.0h/ }).first().click().catch(() => null);
+        await page.waitForTimeout(500);
+        const laborSec = p.locator('.sp-tr-expand, .sp-expand-section').last();
+        await laborSec.locator('button').filter({ hasText: /工时段|\+/ }).first().click().catch(() => null);
+        await page.waitForTimeout(400);
+        const tIn = laborSec.locator('.el-date-editor input, input[placeholder="开始"], input[placeholder="结束"]');
+        if (await tIn.count() >= 2) { await tIn.nth(0).fill('08:00').catch(() => null); await tIn.nth(1).fill('09:00').catch(() => null); const wc = laborSec.locator('.el-input-number input').last(); await wc.fill('2').catch(() => null); await wc.press('Tab').catch(() => null); }
+      }
       await row.locator('button').filter({ hasText: '保存' }).first().click();
       const w = await waitSaved(); if (w.saved) saved++;
       await page.waitForTimeout(1100);
     }
     prev = (await ycByOrder(planId, proc.processOrder)).map((x) => ({ bn: x.batchNumber, rem: num(x.remaining) ?? 0.3 })).filter((x) => x.bn);
+    if (i === 1) bpStepBatch = prev[0]?.bn || null;
     if (prev.length < 2) { ok(false, `SKU${s + 1} 中间道(${proc.processName}) 维持 2 批`, { count: prev.length }); break; }
   }
 
@@ -166,6 +182,17 @@ async function runSku(s) {
       const seas = mixCb ? num(mixCb.seasoningCost) : null;
       console.log(`SKU${s + 1} 熟制 seasoningCost:`, seas, '| total:', mixCb?.totalCost);
       ok(seas != null && seas > 0, `SKU${s + 1} 熟制道调料成本>0 (配方按投料流入, fix 验证)`, { seasoningCost: seas });
+    }
+  }
+
+  // 六桶齐发: 修油道(副产+工时) 批核 byproductCredit + laborCost; 熟制道核 seasoning(上方已核)
+  if (bpStepBatch) {
+    const bpCb = await api('GET', `/${FACTORY}/production/batches/${encodeURIComponent(bpStepBatch)}/cost-breakdown`).catch(() => null);
+    if (bpCb) {
+      console.log(`SKU${s + 1} 修油道 cost-breakdown:`, JSON.stringify({ raw: bpCb.rawMaterialCost, labor: bpCb.laborCost, byproduct: bpCb.byproductCredit, net: bpCb.netTotalCost, total: bpCb.totalCost }));
+      ok(num(bpCb.laborCost) > 0, `SKU${s + 1} 六桶·人工>0(修油道填工时)`, { laborCost: bpCb.laborCost });
+      ok(num(bpCb.byproductCredit) > 0, `SKU${s + 1} 六桶·副产回收>0(修油道填副产)`, { byproductCredit: bpCb.byproductCredit });
+      ok(num(bpCb.netTotalCost) != null, `SKU${s + 1} 六桶·净成本=总−副产`, { net: bpCb.netTotalCost });
     }
   }
 
