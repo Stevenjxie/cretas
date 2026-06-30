@@ -219,8 +219,12 @@ async function runSku(s) {
     if (cnt >= 5) await fillNum(nums.nth(4), 0.09).catch(() => null); // 成品重
     if (cnt >= 7) await fillNum(nums.nth(6), 0.1).catch(() => null);  // 使用重量
     await shot(`sku${s + 1}-finished`);
+    const dis = await row.locator('button').filter({ hasText: '保存' }).first().getAttribute('title').catch(() => null);
+    const inlineErr = await p.locator('.sp-tr .el-form-item__error:visible, .cell-error:visible').allInnerTexts().catch(() => []);
+    console.log(`气调 保存 disabled title="${dis}" | 列数=${cnt} | inline=${JSON.stringify(inlineErr).slice(0, 120)}`);
     await row.locator('button').filter({ hasText: '保存' }).first().click();
     const w = await waitSaved(); finSaved = w.saved;
+    console.log(`气调 保存 toast="${w.toast.slice(0, 120)}"`);
     await page.waitForTimeout(1500);
   }
   ok(finSaved, `SKU${s + 1} 气调 成品批(盒数)`, {});
