@@ -377,6 +377,99 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         wipRepo.saveAndFlush(placeholder);
     }
 
+    // ==================== G3 小结 (interim-settle) — task-free SFI in/out ====================
+
+    /**
+     * G3 小结半成品入库 (SFI IN) — 见接口 Javadoc。
+     *
+     * <p>ensure-row-then-lock (复用 W8 BUG-SP1-NEW-ROW 并发安全范式): {@code findForUpdate} 拿悲观写锁;
+     * 不存在 → REQUIRES_NEW 子事务建 0 量占位行 (撞 unique 约束 catch 幂等) → 重 {@code findForUpdate} 拿锁;
+     * 单一 {@link #applyMovingAverageIn} 累加路径 (诚实 null 成本)。
+     */
+    @Override
+    @Transactional
+    public void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                                BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                                List<Map<String, Object>> materialBatchRefs) {
+        if (inQty == null || inQty.signum() <= 0) {
+            return;
+        }
+        if (wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .isEmpty()) {
+            SemiFinishedInventory placeholder = SemiFinishedInventory.builder()
+                    .factoryId(factoryId)
+                    .intermediateBatchNo(intermediateBatchNo)
+                    .productTypeId(productTypeId)
+                    .unit(unit)
+                    .producedQuantity(BigDecimal.ZERO)
+                    .consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(BigDecimal.ZERO)
+                    .accumulatedCost(null)
+                    .unitCost(null)
+                    .status(SemiFinishedInventory.Status.AVAILABLE)
+                    .build();
+            try {
+                if (self != null) {
+                    self.commitEmptySemiRow(placeholder);
+                } else {
+                    commitEmptySemiRow(placeholder);
+                }
+            } catch (DataIntegrityViolationException dup) {
+                // 并发竞争输掉 insert race → 对方已建好同行, 目标 (行存在) 已达成 → 安全继续
+                log.info("[wip] postClerkOutput new-row race for intermediateBatchNo={}: row already created by concurrent tx",
+                        intermediateBatchNo);
+            }
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElseThrow(() -> new IllegalStateException("SFI row missing after create: " + intermediateBatchNo));
+        BigDecimal totalCost = inUnitCost == null ? null : inUnitCost.multiply(inQty);
+        applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, unit, materialBatchRefs);
+        wipRepo.save(sfi);
+        log.info("[wip] postClerkOutput SFI IN: factory={}, batchNo={}, inQty={}, newProduced={}, available={}",
+                factoryId, intermediateBatchNo, inQty, sfi.getProducedQuantity(), sfi.getAvailableQuantity());
+    }
+
+    /**
+     * G3 小结半成品出库 (SFI OUT) — 见接口 Javadoc。
+     *
+     * <p>{@code findForUpdate} 悲观行锁 → {@code consumedQuantity += qty} →
+     * {@code availableQuantity = produced - consumed}。守卫 not-below-zero (行缺失 no-op / 超扣 clamp)。
+     */
+    @Override
+    @Transactional
+    public void consumeClerkSemi(String factoryId, String intermediateBatchNo, BigDecimal qty) {
+        if (qty == null || qty.signum() <= 0) {
+            return;
+        }
+        java.util.Optional<SemiFinishedInventory> opt = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo);
+        if (opt.isEmpty()) {
+            // 守卫: 无 SFI 行 = 没有库存可扣 (该半成品未曾入库) → no-op, 不建负行不报错。
+            log.warn("[wip] consumeClerkSemi: no SFI row for batchNo={} (factory={}) — skip (nothing stocked)",
+                    intermediateBatchNo, factoryId);
+            return;
+        }
+        SemiFinishedInventory sfi = opt.get();
+        BigDecimal produced = nz(sfi.getProducedQuantity());
+        BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).add(qty);
+        if (newConsumed.compareTo(produced) > 0) {
+            // 守卫 not-below-zero: 超扣 clamp 到 produced (available 不为负)。诚实告警, 不静默吞。
+            log.warn("[wip] consumeClerkSemi over-draw: batchNo={}, attemptConsumed={} > produced={} — clamping",
+                    intermediateBatchNo, newConsumed, produced);
+            newConsumed = produced;
+        }
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(produced.subtract(newConsumed));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        }
+        wipRepo.save(sfi);
+        log.info("[wip] consumeClerkSemi SFI OUT: factory={}, batchNo={}, qty={}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, qty, sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+    }
+
     private void markWipPosted(ProductionReport report) {
         Map<String, Object> fields = report.getCustomFields();
         if (fields == null) {

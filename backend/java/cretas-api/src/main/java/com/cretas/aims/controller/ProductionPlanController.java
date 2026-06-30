@@ -29,6 +29,7 @@ import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.orchestration.ProductionWorkflowOrchestrator;
+import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.utils.TokenUtils;
 import com.cretas.aims.entity.ProductionBatch;
@@ -73,6 +74,7 @@ public class ProductionPlanController {
     private final ProductionPlanService productionPlanService;
     private final MobileService mobileService;
     private final ProductionPlanRepository planRepository;
+    private final InterimSettleService interimSettleService;
     private final ProductionWorkflowOrchestrator workflowOrchestrator;
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
@@ -465,6 +467,23 @@ public class ProductionPlanController {
         ProductionSettlementResponse response =
                 productionPlanService.settleProduction(factoryId, planId, request, userId);
         return ApiResponse.success("生产结单已提交", response);
+    }
+
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/interim-settle")
+    @Operation(summary = "库存生产小结", description = "BY_STOCK 永续生产: 对自上次小结以来的增量分批入库(半成品/成品)+实时扣减原料, 会话幂等, 不关闭计划")
+    public ApiResponse<Map<String, Object>> interimSettle(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        log.info("库存生产小结: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        Map<String, Object> summary = interimSettleService.interimSettle(factoryId, planId, userId);
+        return ApiResponse.success("小结已提交", summary);
     }
 
     @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})

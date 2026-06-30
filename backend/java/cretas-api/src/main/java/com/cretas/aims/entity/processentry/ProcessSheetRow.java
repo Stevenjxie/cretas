@@ -65,4 +65,17 @@ public class ProcessSheetRow extends BaseEntity {
 
     @Column(name = "row_status", nullable = false)
     private String rowStatus = "SAVED";
+
+    /**
+     * BY_STOCK 小结 (interim-settle) 产出过账标记 (Task 3 / V20261027_21)。
+     *
+     * <p>NULL = 待小结 (本行产出尚未过账到 SFI 半成品库 / FG 成品库);
+     * 非 NULL = 已计入某次小结，不可重复过账。
+     *
+     * <p>小结只处理 {@code interim_settled_at IS NULL} 的行，处理后打戳 ——
+     * 与 {@link com.cretas.aims.entity.MaterialConsumption#getInterimSettledAt()} (扣减侧)
+     * 对称，构成产出侧幂等。重复点击小结找不到未结行 → 0 过账 (天然幂等)。
+     */
+    @Column(name = "interim_settled_at")
+    private java.time.LocalDateTime interimSettledAt;
 }

@@ -90,4 +90,44 @@ public interface WipInventoryService {
      * @return WIP 重量视图 DTO 列表，含 productTypeName 回填 (批次级视图留 null)
      */
     List<WipRowDTO> listWipByFactory(String factoryId);
+
+    // ==================== G3 小结 (interim-settle) — task-free SFI in/out ====================
+
+    /**
+     * G3 小结半成品入库 (SFI IN) — task-free，逐道录入路径专用。
+     *
+     * <p>与 {@link #postApprovedOutput} 不同: 不依赖 {@link WorkProcessTask} / WorkProcess 基础设施。
+     * 直接 upsert {@link SemiFinishedInventory} 运行余额行 (锚 = {@code intermediateBatchNo}),
+     * 多次小结对同一半成品 moving-average 累加 (不每次新建行)。
+     *
+     * <p>必须在调用方 {@code @Transactional} 内执行。{@code findForUpdate} 悲观行锁串行化累加。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo SFI 运行余额行锚 (per-(plan,productType): {@code CLK-SEMI-{planId8}-{productTypeId8}})
+     * @param productTypeId       产品类型 (冗余溯源, 占位行字段)
+     * @param inQty               本次入库量 (≤0 → no-op)
+     * @param unit                单位
+     * @param inUnitCost          本次入库单位成本 (诚实 null: 无成本数据时传 null, 不假成 0)
+     * @param materialBatchRefs   溯源 (可空)
+     */
+    void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                         BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                         List<java.util.Map<String, Object>> materialBatchRefs);
+
+    /**
+     * G3 小结半成品出库 (SFI OUT) — task-free，{@link #postClerkOutput} 的逆向。
+     *
+     * <p>当某次小结的某道消耗了 <b>前序小结已入库的</b>半成品 (跨小结 in/out 闭环) 时调用:
+     * {@code consumedQuantity += qty; availableQuantity = produced - consumed}。
+     * 防止 SFI 半成品余额只增不减虚高。
+     *
+     * <p>守卫 not-below-zero: SFI 行不存在 → no-op (无库存可扣, 不报错不建负行);
+     * 扣减量超过 produced → clamp 到 produced (available 不为负)。
+     * available≤0 → 状态置 DEPLETED。必须在调用方 {@code @Transactional} 内执行。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo SFI 运行余额行锚 (= 入库时同一锚)
+     * @param qty                 本次出库量 (≤0 → no-op)
+     */
+    void consumeClerkSemi(String factoryId, String intermediateBatchNo, BigDecimal qty);
 }
