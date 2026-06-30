@@ -737,8 +737,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
 
     private boolean isSeasoningStep(StepEntry st) {
-        return "SEASONING".equals(st.getProcessCategory()) ||
-               (st.getProcessCategory() == null && st.getPotCount() != null);
+        if ("SEASONING".equals(st.getProcessCategory())) {
+            return true;
+        }
+        if (st.getProcessCategory() == null && st.getPotCount() != null) {
+            return true;
+        }
+        // 2026-06-30: 熟制/卤制/注射等道按工序名识别为调味道 (与"未识别为调味"警告同正则)。
+        //   实测 F006 熟制道 processCategory='加工' 且熟制 grid 无 potCount 字段 → 此前 isSeasoningStep
+        //   恒 false → 调料成本结构性恒 0 (配了调料配方也不流入)。按名识别后让配方调料成本自动流入,
+        //   无需每个 熟制 process 手动配 processCategory=SEASONING。
+        //   安全: 无配方时 computeSeasoningCost 仍返 0 + warning (无成本变化);
+        //   buildPotRawKgs 单锅=整批投入 → dosage×投料量 (投料-based) 计算正确。
+        String pn = st.getProcessName();
+        return pn != null && pn.matches(".*(熟|卤|煮|腌|注射|入味|调味).*");
     }
 
     /**
