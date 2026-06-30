@@ -677,6 +677,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .unit(unit)
                     .stepYieldRate(stepYieldRate)
                     .cumulativeYieldRate(cumulativeYieldRate)
+                    .productWeight(req.getProductWeight())
                     .build());
             if (row.getBatchNumber() != null) {
                 provenanceByBatchNumber.put(row.getBatchNumber(), new ProcessSheetRowProvenance(

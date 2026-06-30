@@ -83,6 +83,9 @@ public class ProcessSheetRowRequest {
     /** 包装明细 [{name,cost}] (膜/气体/标签/其他)。 */
     private List<Map<String, Object>> packagingDetail;
 
+    /** 成品重(kg) — 气调/末道录入, 用于按重量算真实出成率 (frontend fields['productWeight']) */
+    private java.math.BigDecimal productWeight;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {

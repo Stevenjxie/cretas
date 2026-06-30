@@ -229,8 +229,13 @@ export interface ProductionSummaryDTO {
   productName: string
   totalRawInput: number
   totalFinishedOutput: number
+  /** 成品总重(kg) — 末道行录入 productWeight 的 Σ; 未录时 null */
+  totalFinishedWeight: number | null
   remainingSemiFinished: number
-  realYieldRate: number
+  /** 真实总出成率(%) — weight-based; 成品重未录时 null */
+  realYieldRate: number | null
+  /** 成品重量未录入时的提示文字; realYieldRate 为 null 时填充 */
+  yieldNote: string | null
   totalCost: number | null
   priceMasked: boolean
   batches: ProductionSummaryBatch[]

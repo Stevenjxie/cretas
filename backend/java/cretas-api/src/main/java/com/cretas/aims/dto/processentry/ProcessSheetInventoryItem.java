@@ -85,6 +85,9 @@ public class ProcessSheetInventoryItem {
      */
     private BigDecimal cumulativeYieldRate;
 
+    /** 成品重(kg) — 仅末道(finished)行有值; 来自该行 productWeight。 */
+    private BigDecimal productWeight;
+
     @Data
     @Builder
     @NoArgsConstructor

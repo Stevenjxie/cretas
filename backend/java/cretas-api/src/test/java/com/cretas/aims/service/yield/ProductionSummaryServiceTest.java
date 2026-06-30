@@ -29,9 +29,16 @@ class ProductionSummaryServiceTest {
 
     private ProcessSheetInventoryItem item(int order, String status, BigDecimal input,
                                            BigDecimal produced, BigDecimal remaining, BigDecimal cumYield) {
+        return item(order, status, input, produced, remaining, cumYield, null);
+    }
+
+    private ProcessSheetInventoryItem item(int order, String status, BigDecimal input,
+                                           BigDecimal produced, BigDecimal remaining, BigDecimal cumYield,
+                                           BigDecimal productWeight) {
         ProcessSheetInventoryItem i = new ProcessSheetInventoryItem();
         i.setProcessOrder(order); i.setStatus(status); i.setInputQuantity(input);
         i.setProduced(produced); i.setRemaining(remaining); i.setCumulativeYieldRate(cumYield);
+        i.setProductWeight(productWeight);
         return i;
     }
 
@@ -85,13 +92,14 @@ class ProductionSummaryServiceTest {
     }
 
     @org.junit.jupiter.api.Test
-    void realYield_isFinishedOverRawInput_andRemainingSemiIsRawSum() {
-        // 首道投入 10; 第2道(在制)剩余 0.9 (半成品本身); 成品 8.0
-        // 真实出成率 = 8.0 / 10 * 100 = 80.00%; 剩余半成品 = 0.9 (不折算)
+    void realYield_isFinishedWeightOverRawInput_andRemainingSemiIsRawSum() {
+        // 首道投入 10 kg; 第2道(在制)剩余 0.9 kg (半成品本身); 成品 productWeight=0.7 kg
+        // 真实出成率 = 0.7 / 10 * 100 = 7.00%; 剩余半成品 = 0.9 (不折算)
         when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
                 item(1, "ACTIVE", new java.math.BigDecimal("10.0"), new java.math.BigDecimal("9.0"), new java.math.BigDecimal("0"), null),
                 item(2, "ACTIVE", null, new java.math.BigDecimal("0.9"), new java.math.BigDecimal("0.9"), new java.math.BigDecimal("90")),
-                item(3, "COMPLETED", null, new java.math.BigDecimal("8.0"), new java.math.BigDecimal("0"), new java.math.BigDecimal("80"))
+                item(3, "COMPLETED", null, new java.math.BigDecimal("8.0"), new java.math.BigDecimal("0"), new java.math.BigDecimal("80"),
+                        new java.math.BigDecimal("0.7"))
         ));
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
                 .thenReturn(java.util.List.of(clkB(new java.math.BigDecimal("8.0"))));
@@ -100,6 +108,27 @@ class ProductionSummaryServiceTest {
 
         // non-COMPLETED rows: row1 remaining=0, row2 remaining=0.9 → sum=0.9
         assertThat(dto.getRemainingSemiFinished()).isEqualByComparingTo("0.9");
-        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("80.00");
+        // weight-based: 0.7 * 100 / 10.0 = 7.00
+        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("7.00");
+        assertThat(dto.getTotalFinishedWeight()).isEqualByComparingTo("0.7");
+        assertThat(dto.getYieldNote()).isNull();
+    }
+
+    @org.junit.jupiter.api.Test
+    void realYield_nullWhenProductWeightNotRecorded_andYieldNoteSet() {
+        // COMPLETED 行无 productWeight → realYieldRate null, yieldNote 有提示
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
+                item(1, "ACTIVE", new java.math.BigDecimal("10.0"), new java.math.BigDecimal("9.0"), new java.math.BigDecimal("0"), null),
+                item(2, "COMPLETED", null, new java.math.BigDecimal("8.0"), new java.math.BigDecimal("0"), new java.math.BigDecimal("80"))
+                // productWeight not set → null
+        ));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(java.util.List.of(clkB(new java.math.BigDecimal("8.0"))));
+
+        ProductionSummaryDTO dto = service.computeSummary("F006", "P1", false);
+
+        assertThat(dto.getRealYieldRate()).isNull();
+        assertThat(dto.getTotalFinishedWeight()).isNull();
+        assertThat(dto.getYieldNote()).isNotNull().contains("成品重量未录入");
     }
 }

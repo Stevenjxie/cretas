@@ -44,11 +44,21 @@ public class ProductionSummaryService {
                 .map(i -> nz(i.getRemaining()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        // 真实总出成率(方案A) = 总产出成品 ÷ 总投入原料 × 100, 半成品不折进
-        BigDecimal realYield = totalRawInput.signum() > 0
-                ? totalFinishedOutput.multiply(new BigDecimal("100"))
-                    .divide(totalRawInput, 2, java.math.RoundingMode.HALF_UP)
-                : null;
+        // 成品重(kg) = Σ 末道(finished/COMPLETED)行 productWeight。盒数 totalFinishedOutput 保留作展示。
+        BigDecimal totalFinishedWeight = items.stream()
+                .filter(i -> "COMPLETED".equals(i.getStatus()))
+                .map(i -> nz(i.getProductWeight()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 真实出成率 = 成品重 ÷ 原料投入重 × 100 (单位守卫: 成品重未录 → null + note, 绝不显错数)
+        BigDecimal realYield = null;
+        String yieldNote = null;
+        if (totalFinishedWeight.signum() > 0 && totalRawInput.signum() > 0) {
+            realYield = totalFinishedWeight.multiply(new BigDecimal("100"))
+                    .divide(totalRawInput, 2, java.math.RoundingMode.HALF_UP);
+        } else if (totalRawInput.signum() > 0) {
+            yieldNote = "成品重量未录入,无法按重量算真实出成率";
+        }
 
         BigDecimal totalCost = null;
         if (!maskPrice) {
@@ -72,8 +82,10 @@ public class ProductionSummaryService {
                 .planId(planId)
                 .totalRawInput(totalRawInput)
                 .totalFinishedOutput(totalFinishedOutput)
+                .totalFinishedWeight(totalFinishedWeight.signum() > 0 ? totalFinishedWeight : null)
                 .remainingSemiFinished(remainingSemiFinished)
                 .realYieldRate(realYield)
+                .yieldNote(yieldNote)
                 .totalCost(totalCost)
                 .batches(lines)
                 .priceMasked(maskPrice)

@@ -139,9 +139,16 @@ function hasProcessData(): boolean {
                 {{ summary.totalRawInput.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) }} kg
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="总产出成品（kg）" :span="1">
+            <el-descriptions-item label="总产出成品（盒）" :span="1">
               <span style="font-size: 15px; font-weight: 600;">
-                {{ summary.totalFinishedOutput.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) }} kg
+                {{ summary.totalFinishedOutput.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item label="成品总重（kg）" :span="1">
+              <span style="font-size: 15px; font-weight: 600;">
+                {{ summary.totalFinishedWeight != null
+                  ? summary.totalFinishedWeight.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) + ' kg'
+                  : '—' }}
               </span>
             </el-descriptions-item>
             <el-descriptions-item label="剩余半成品（kg）" :span="1">
@@ -149,13 +156,16 @@ function hasProcessData(): boolean {
             </el-descriptions-item>
             <el-descriptions-item label="真实总出成率" :span="1">
               <span
+                v-if="summary.realYieldRate != null"
                 style="font-size: 16px; font-weight: 700;"
                 :style="{
                   color: summary.realYieldRate >= 80 ? '#67c23a' : summary.realYieldRate >= 60 ? '#e6a23c' : '#f56c6c'
                 }"
               >
-                <!-- Fix 1: formatYieldRate no longer multiplies by 100 -->
                 {{ formatYieldRate(summary.realYieldRate) }}
+              </span>
+              <span v-else style="color: #909399; font-size: 13px;">
+                {{ summary.yieldNote || '—' }}
               </span>
             </el-descriptions-item>
             <el-descriptions-item label="总成本" :span="2">
