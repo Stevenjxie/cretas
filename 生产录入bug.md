@@ -661,3 +661,18 @@ web-admin：
 - **断言(三方 + 强判别)**:① 调料 `cost-breakdown.seasoningCost == cookPerKg×mixIn`(0.33,精确)② **NOT 单源**(≠0.22)③ **按投料非产出**(mixIn 0.33≠mixOut 0.30,actual=0.33)④ yield-card `addedCost≈调料 oracle`(三方旁证)⑤ 2 源分摊(`sourceBreakdowns` 2 条,继承成本 0.10 vs 1.92 **非对称**证明真异源血缘,占比和≈100%)⑥ 原料桶>0(2 源均流入)⑦ 跨天 processDate 回读 == 录入历史日(首道 day-2/day-1,混锅 day0,**调料不串日**)⑧ 无误报"未设置调料配方"warning⑨ DOM 渲染熟制 tab。
 - **结论**:**无 bug**——§21 调料 fix 在最难组合(跨天领用 + 真混锅 + 调料)下成本仍精确,六桶组合互不干扰。正向确认(depth-first-e2e Rule 8 同根因 sweep 仅 found-bug 时触发,此轮 0 bug)。
 - **测试坑**:`plannedDate` 不能回填过去(400"计划日期不能是过去")→ 跨天必须靠**各行 processDate** 回填,plan 仍今天建(crossday-cost 同 pattern);中间道转发量需大(forward ~85% 余量)否则熟制道投料钳到 0.02 floor → mixIn≈mixOut 致 oracle 判别力弱。
+
+## 2026-06-30 续:多桶同道深测 → 抓到 getYield 产出/投入虚高 2× 真 bug(已修+部署)
+
+### 23. ⭐同道 labor+seasoning 双写 output → getYield totalOutput/totalInput 虚高 2×
+
+相关提交:fix `4ab0568ae`(后端 v20260630_132507)+ test `headed-samestep-labor-seasoning.mjs`
+
+- **发现路径**:独立审计(Explore agent)抓到「同道多桶」未覆盖 + getYield 双写风险 → 写深测坐实。
+- **根因(verify-first 自 `ClerkProcessEntryServiceImpl` + `YieldCalculationServiceImpl`)**:同一道既有调料又有人工时,`writeSeasoningReport`(:616)与 `writeLaborReport`(:645)**都**写 `outputQuantity/inputQuantity`;`calculateSteps` 同组(同 `processEntryStepKey`)Σ 全部 report 的 output/input(L144/L152)→ 该道 `getYield` totalOutput/totalInput = 真实 ×2。`writeYieldAuxReport`(:682-685)早已注释「设 output 会与 seasoning/labor 报工重复累加」并留 null,但**没防 seasoning+labor 这对自身**。
+- **实测(深测)**:熟制道 调料+人工 → getYield totalOutput=0.46(真实 0.23)、totalInput=0.52(真实 0.26),**精确 2×**。**成本桶不受影响**(seasoning 读 materialCost、labor 读 laborCost,非 output;cost-breakdown 仍正确)→ 只 `yield-summary` API 产出/投入翻倍。
+- **修(两 twin)**:产出/投入只能由本道**一条**报工承载。`writeLaborReport` 加 `carryQuantities` 参数;`materializeBatch`+`rematerializeInPlace` 各加 `stepOutputWrittenBySeasoning` 标志(仅在调料报工**实际写入**时置 true,no-recipe seasoningCost==0 不置)→ labor `carryQuantities=!stepOutputWrittenBySeasoning`。纯人工道仍由人工报工承载,单桶配置零回归。**独立 review 判 SOUND**(exactly-once 五场景全覆盖)。
+- **验证(prod 部署后)**:同测试 getYield totalOutput=0.23(==真实,非 2×)全 PASS;回归 crossday(seasoning-only)PASS、matrix-fullchain 11/12(1 fail 为无关气调幂等 flake)、labor-only labor=112 正确(labor-cost.mjs 期望 26 是 §16.1 配 28 后的 stale 测试,非本 fix)。
+- **副产同道覆盖(Steve 提醒补)**:修油道 副产+人工 同道 → byproductCredit=0.2(=0.05×4)、labor=56、净=总−副产、getYield output=0.69(==真实,**aux 报工不带 output 故不双计**)。证 aux+labor 共存不双写;熟制批 cost-breakdown.laborCost=84.2=本道 56+上游修油 56 按比例传播(`aggregateUpstreamLaborSeasoning` 正确),本道 OWN 人工经 addedCost 隔离精确。
+- **已知相邻(pre-existing,本轮不扩 scope,reviewer §6 提)**:① 跨步骤 group-key 碰撞(两步 `(processOrder,processName,processCategory)` 相同 → getYield 仍合并 Σ);② 调料名道 seasoningCost==0 且无人工但有产出 → 0 条带 output 报工 → 该道 getYield output 丢失(非 2×,是 0)。两者本 fix 未引入,留观察。
+- **教训**:① getYield 同组 Σ output,**一道只能一条报工带 output**(aux 已防,seasoning/labor 这对此前漏防)。② 多桶同道是最常见真实配置(熟制既人工又调料、修油既副产又人工),必须显式测「桶各自正确 + getYield 不双计」,别再每个测试都把桶分散到不同道规避。③ 加上游人工后 cost-breakdown.laborCost 含传播,断言本道 OWN 人工要用 yield-card addedCost 隔离,别用整批 laborCost。
