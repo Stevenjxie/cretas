@@ -7513,6 +7513,21 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("应付供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
         restaurantPhraseMapping.put("欠供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
 
+        // Restaurant demo review routes: keep public-review questions out of sales/factory fallbacks.
+        restaurantPhraseMapping.put("\u5927\u4f17\u70b9\u8bc4\u53e3\u7891\u600e\u4e48\u6837", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("\u5927\u4f17\u70b9\u8bc4\u8bc4\u4ef7\u600e\u4e48\u6837", "RESTAURANT_REVIEW_SUMMARY");
+        restaurantPhraseMapping.put("\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u54ea\u4e9b\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u83dc\u54c1\u53e3\u7891\u6700\u597d\u7684\u662f\u54ea\u4e9b", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u54ea\u51e0\u4e2a\u83dc\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u54ea\u4e9b\u83dc\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
+        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u6539\u5584\u5efa\u8bae", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
+        restaurantPhraseMapping.put("\u5dee\u8bc4\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
+
         log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
 
         // ========== v32: 业态隔离 — 公共短语映射（两种业态共享） ==========

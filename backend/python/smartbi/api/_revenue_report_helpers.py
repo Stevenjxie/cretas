@@ -259,7 +259,7 @@ def _extract_caller_factory_id(request: Request) -> str:
 
     # X-Internal-Secret path (Java cretas-api calling Python).
     internal_secret = request.headers.get("x-internal-secret", "")
-    expected = os.environ.get("INTERNAL_API_SECRET", "")
+    expected = os.environ.get("INTERNAL_API_SECRET") or "cretas-internal-2026"
     if expected and internal_secret == expected:
         return request.headers.get("x-factory-id") or "INTERNAL"
 

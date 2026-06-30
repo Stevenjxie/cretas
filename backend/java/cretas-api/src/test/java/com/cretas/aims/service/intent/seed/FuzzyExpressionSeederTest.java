@@ -119,6 +119,22 @@ class FuzzyExpressionSeederTest {
     }
 
     // 便捷的 any() for SourceType (避免 import 冲突)
+    @Test
+    @DisplayName("restaurant review demo natural phrases are seeded to review intents")
+    void restaurantReviewDemoPhrasesAreSeededToReviewIntents() {
+        assertThat(FuzzyExpressionSeeder.SEEDS.get("RESTAURANT_REVIEW_SUMMARY"))
+                .contains("\u5927\u4f17\u70b9\u8bc4\u53e3\u7891\u600e\u4e48\u6837");
+        assertThat(FuzzyExpressionSeeder.SEEDS.get("RESTAURANT_REVIEW_GOOD_TAGS"))
+                .contains("\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d",
+                        "\u54ea\u4e9b\u83dc\u53e3\u7891\u6700\u597d",
+                        "\u83dc\u54c1\u53e3\u7891\u6700\u597d\u7684\u662f\u54ea\u4e9b");
+        assertThat(FuzzyExpressionSeeder.SEEDS.get("RESTAURANT_REVIEW_COMPLAINT"))
+                .contains("\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584",
+                        "\u4f4e\u661f\u8bc4\u4ef7\u600e\u4e48\u6539\u5584",
+                        "\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584",
+                        "\u5dee\u8bc4\u6539\u5584\u5efa\u8bae");
+    }
+
     private static <T> T any() {
         return org.mockito.ArgumentMatchers.any();
     }

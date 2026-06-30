@@ -36,6 +36,27 @@ def test_prefix_is_factory_scoped():
     )
 
 
+def test_internal_default_secret_enforces_url_factory_when_env_missing(monkeypatch):
+    """Java internal calls omit Authorization and use the historical default secret."""
+    from starlette.requests import Request
+    from smartbi.api._revenue_report_helpers import _enforce_factory_match
+
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/smartbi/DEMO_REST/revenue-report/prepare",
+        "headers": [(b"x-internal-secret", b"cretas-internal-2026")],
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "scheme": "http",
+    }
+    request = Request(scope)
+
+    assert _enforce_factory_match("DEMO_REST", request) == "DEMO_REST"
+
+
 # ─── Functional tests ───────────────────────────────────────────────────
 
 def _mk_app_with_router():

@@ -267,3 +267,24 @@ def test_out_of_scope_keeps_old_envelope(client, path):
         "message": "Missing or invalid Authorization header",
         "code": "UNAUTHORIZED",
     }
+
+
+def test_default_internal_secret_allows_java_to_python_call_when_env_missing(monkeypatch):
+    """Java PythonSmartBIClient sends the historical default when env is absent."""
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
+    app = FastAPI()
+    app.add_middleware(JWTAuthMiddleware, jwt_secret="test-secret-32-bytes-padding-here", enabled=True)
+
+    @app.post("/api/smartbi/{factory_id}/revenue-report/prepare")
+    async def _internal_probe(factory_id: str):
+        return {"ok": True, "factory_id": factory_id}
+
+    local_client = TestClient(app)
+    response = local_client.post(
+        "/api/smartbi/DEMO_REST/revenue-report/prepare",
+        headers={"X-Internal-Secret": "cretas-internal-2026"},
+        json={},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "factory_id": "DEMO_REST"}

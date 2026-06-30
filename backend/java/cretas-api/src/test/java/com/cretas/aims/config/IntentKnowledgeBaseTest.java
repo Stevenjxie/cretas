@@ -328,4 +328,15 @@ class IntentKnowledgeBaseTest {
         assertEquals("RESTAURANT_STORE_REVENUE_RANK",
                 kb.matchPhrase("人均消费", "RESTAURANT").orElse("NONE"));
     }
+
+    @Test
+    @DisplayName("Restaurant review demo phrases route to review intents, not sales or factory analysis")
+    void restaurantReviewDemoPhrasesRouteToReviewIntents() {
+        assertEquals("RESTAURANT_REVIEW_SUMMARY",
+                kb.matchPhrase("\u5927\u4f17\u70b9\u8bc4\u53e3\u7891\u600e\u4e48\u6837", "RESTAURANT").orElse("NONE"));
+        assertEquals("RESTAURANT_REVIEW_GOOD_TAGS",
+                kb.matchPhrase("\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT").orElse("NONE"));
+        assertEquals("RESTAURANT_REVIEW_COMPLAINT",
+                kb.matchPhrase("\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT").orElse("NONE"));
+    }
 }

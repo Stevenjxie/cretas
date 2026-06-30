@@ -304,4 +304,70 @@ describe('ChartInsightProvider', () => {
     // Tier2 never fired (both Tier1 hits)
     expect(mockFetchTier2Insight).not.toHaveBeenCalled();
   });
+
+  it('localizes public-review product charts as dish reputation, not generic projects', async () => {
+    const chart: ChartWithMeta = {
+      title: '\u5927\u4f17\u70b9\u8bc4\u83dc\u54c1\u53e3\u7891',
+      chartType: 'bar',
+      meta: { xDim: 'product', yMetric: 'review_count', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: ['A', 'B', 'C'] },
+        series: [{ type: 'bar', data: [300, 200, 100] }],
+      },
+    };
+    mockBuildChartInsight.mockReturnValue({
+      finding: '\u9879\u76ee3\u6392\u7b2c\u4e00\uff0c\u5360\u6574\u4f5325.0%\uff1b\u672b\u4f4d\u662f\u9879\u76ee1',
+      implication: '\u5c11\u6570\u95e8\u5e97\u6216\u5c11\u6570\u83dc\u54c1\u62c9\u5f00\u5dee\u8ddd\u3002',
+      suggestion: '\u56f4\u7ed5\u4f9b\u7ed9\u3001\u4ef7\u683c\u3001\u66dd\u5149\u548c\u6267\u884c\u590d\u76d8\u3002',
+      source: 'rules',
+      tier: 1,
+    } as InsightResult);
+
+    const wrapper = mount(ChartInsightProvider, {
+      props: { chart, perms: NO_FINANCE_PERMS, depth: 'detailed' },
+      global: { stubs: elStubs },
+    });
+
+    await vi.runAllTimersAsync();
+    await nextTick();
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('\u83dc\u54c1\u53e3\u78913');
+    expect(text).toContain('\u8bc4\u5206\u3001\u4f4e\u661f\u5360\u6bd4\u3001\u56de\u590d\u548c\u670d\u52a1\u4f53\u9a8c');
+    expect(text).not.toContain('\u9879\u76ee3');
+    expect(text).not.toContain('\u5c11\u6570\u95e8\u5e97\u6216\u5c11\u6570\u83dc\u54c1');
+  });
+
+  it('does not double-localize restaurant project labels', async () => {
+    const chart: ChartWithMeta = {
+      title: '\u9910\u996e\u7ecf\u8425\u5206\u6790',
+      chartType: 'bar',
+      meta: { xDim: 'store', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+      config: {
+        xAxis: { data: ['A', 'B', 'C'] },
+        series: [{ type: 'bar', data: [300, 200, 100] }],
+      },
+    };
+    mockBuildChartInsight.mockReturnValue({
+      finding: '\u9910\u996e\u9879\u76ee3\u6392\u7b2c\u4e00',
+      source: 'rules',
+      tier: 1,
+    } as InsightResult);
+
+    const wrapper = mount(ChartInsightProvider, {
+      props: { chart, perms: NO_FINANCE_PERMS },
+      global: { stubs: elStubs },
+    });
+
+    await vi.runAllTimersAsync();
+    await nextTick();
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('\u9910\u996e\u9879\u76ee3');
+    expect(text).not.toContain('\u9910\u996e\u9910\u996e\u9879\u76ee3');
+  });
 });

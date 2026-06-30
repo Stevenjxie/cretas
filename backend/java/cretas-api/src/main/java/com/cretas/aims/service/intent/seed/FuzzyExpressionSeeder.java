@@ -162,7 +162,30 @@ public class FuzzyExpressionSeeder implements ApplicationRunner {
                 "营收趋势", "月度趋势", "营收趋势分析", "月度营收趋势",
                 "销售额的月度变化趋势", "销售趋势分析", "营收的增长和下降趋势"));
 
+        appendSeedPhrases(m, "RESTAURANT_REVIEW_SUMMARY", List.of(
+                "\u5927\u4f17\u70b9\u8bc4\u53e3\u7891\u600e\u4e48\u6837"));
+        appendSeedPhrases(m, "RESTAURANT_REVIEW_GOOD_TAGS", List.of(
+                "\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d",
+                "\u54ea\u4e9b\u83dc\u53e3\u7891\u6700\u597d",
+                "\u83dc\u54c1\u53e3\u7891\u6700\u597d\u7684\u662f\u54ea\u4e9b"));
+        appendSeedPhrases(m, "RESTAURANT_REVIEW_COMPLAINT", List.of(
+                "\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584",
+                "\u4f4e\u661f\u8bc4\u4ef7\u600e\u4e48\u6539\u5584",
+                "\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584",
+                "\u5dee\u8bc4\u6539\u5584\u5efa\u8bae"));
+
         return m;
+    }
+
+    private static void appendSeedPhrases(Map<String, List<String>> seeds, String intentCode, List<String> additions) {
+        List<String> existing = seeds.get(intentCode);
+        if (existing == null) {
+            seeds.put(intentCode, additions);
+            return;
+        }
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(existing);
+        merged.addAll(additions);
+        seeds.put(intentCode, List.copyOf(merged));
     }
 
     @Override
