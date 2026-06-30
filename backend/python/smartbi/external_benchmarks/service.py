@@ -9,6 +9,7 @@ from smartbi.config import get_pg_pool
 
 from .collectors import (
     AmapPoiCollector,
+    AmapWeatherCollector,
     CollectorResult,
     ExternalObservation,
     IndustryReportSeedCollector,
@@ -275,6 +276,37 @@ class ExternalBenchmarkService:
                 source_code="amap_poi_search",
                 status="error",
                 error_message=f"Amap collection failed: {exc}",
+            )
+        result.rows_upserted = await self.upsert_observations(result.observations)
+        await self.record_job_run(result)
+        return result
+
+    async def collect_amap_weather(self, *, city_adcode: str, geo_scope: str = "local") -> CollectorResult:
+        await self.seed_catalog()
+        daily_budget = self.amap_daily_budget()
+        used_today = await self.get_today_source_runs("amap_weather")
+        if daily_budget <= 0 or used_today >= daily_budget:
+            result = CollectorResult(
+                source_code="amap_weather",
+                status="skipped",
+                error_message=(
+                    f"Amap daily budget exhausted: used={used_today}, "
+                    f"budget={daily_budget}. Weather collection will resume tomorrow."
+                ),
+                raw_payload={"used_today": used_today, "daily_budget": daily_budget},
+            )
+            await self.record_job_run(result)
+            return result
+        try:
+            result = await AmapWeatherCollector().collect_live(
+                city_adcode=city_adcode,
+                geo_scope=geo_scope,
+            )
+        except Exception as exc:
+            result = CollectorResult(
+                source_code="amap_weather",
+                status="error",
+                error_message=f"Amap weather collection failed: {exc}",
             )
         result.rows_upserted = await self.upsert_observations(result.observations)
         await self.record_job_run(result)

@@ -567,6 +567,114 @@ class AmapPoiCollector:
         )
 
 
+class AmapWeatherCollector:
+    source_code = "amap_weather"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[httpx.AsyncClient] = None):
+        self.api_key = api_key if api_key is not None else os.getenv("AMAP_API_KEY")
+        self.client = client
+
+    @staticmethod
+    def build_weather_url(*, api_key: str, city_adcode: str, extensions: str = "base") -> str:
+        params = {
+            "key": api_key,
+            "city": city_adcode,
+            "extensions": extensions,
+            "output": "JSON",
+        }
+        return f"https://restapi.amap.com/v3/weather/weatherInfo?{urlencode(params)}"
+
+    async def collect_live(self, *, city_adcode: str, geo_scope: str = "local") -> CollectorResult:
+        if not self.api_key:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="skipped",
+                error_message="AMAP_API_KEY is not configured; official weather collection skipped.",
+            )
+        url = self.build_weather_url(api_key=self.api_key, city_adcode=city_adcode)
+        assert_source_allowed_for_collection(self.source_code, url)
+        close_client = False
+        client = self.client
+        if client is None:
+            client = httpx.AsyncClient(timeout=10.0)
+            close_client = True
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            if close_client:
+                await client.aclose()
+
+        if str(payload.get("status")) != "1":
+            return CollectorResult(
+                source_code=self.source_code,
+                status="error",
+                request_url=redact_sensitive_url(url),
+                error_message=f"Amap weather API error: {payload.get('info') or payload.get('infocode') or 'unknown'}",
+                raw_payload={
+                    "status": payload.get("status"),
+                    "info": payload.get("info"),
+                    "infocode": payload.get("infocode"),
+                },
+            )
+        lives = payload.get("lives") or []
+        if not lives:
+            return CollectorResult(
+                source_code=self.source_code,
+                status="empty",
+                request_url=redact_sensitive_url(url),
+                raw_payload={"status": payload.get("status"), "info": payload.get("info"), "count": payload.get("count")},
+            )
+        live = lives[0]
+        report_dt = _parse_amap_report_date(live.get("reporttime"))
+        period = report_dt.date()
+        common_dimension = {
+            "adcode": live.get("adcode") or city_adcode,
+            "province": live.get("province"),
+            "city": live.get("city"),
+            "weather": live.get("weather"),
+            "winddirection": live.get("winddirection"),
+            "source_kind": "official_weather",
+        }
+        observations: List[ExternalObservation] = []
+        temperature = _safe_float(live.get("temperature"))
+        humidity = _safe_float(live.get("humidity"))
+        wind_power = _first_number(live.get("windpower"))
+        metric_values = [
+            ("weather_temperature", "Live weather temperature", temperature, "celsius"),
+            ("weather_humidity", "Live weather humidity", humidity, "pct"),
+            ("weather_windpower", "Live weather wind power", wind_power, "level"),
+        ]
+        for metric_code, metric_name, value, unit in metric_values:
+            if value is None:
+                continue
+            observations.append(ExternalObservation(
+                source_code=self.source_code,
+                metric_code=metric_code,
+                metric_name=metric_name,
+                metric_value=value,
+                metric_unit=unit,
+                geo_scope=geo_scope,
+                category_scope="trade_area_context",
+                period_start=period,
+                period_end=period,
+                confidence_score=0.90,
+                confidence_label="public_signal",
+                source_url="https://lbs.amap.com/api/webservice/guide/api/weatherinfo",
+                source_title="Amap official weather API",
+                dimension=common_dimension,
+                raw_payload={"reporttime": live.get("reporttime")},
+            ))
+        return CollectorResult(
+            source_code=self.source_code,
+            status="success" if observations else "empty",
+            observations=observations,
+            request_url=redact_sensitive_url(url),
+            raw_payload={"observation_count": len(observations)},
+        )
+
+
 def _safe_float(value: Any) -> Optional[float]:
     if value in (None, "", []):
         return None
@@ -574,3 +682,20 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_number(value: Any) -> Optional[float]:
+    if value in (None, "", []):
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", str(value))
+    return float(match.group(0)) if match else None
+
+
+def _parse_amap_report_date(value: Any) -> datetime:
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+    return datetime.now(timezone.utc)

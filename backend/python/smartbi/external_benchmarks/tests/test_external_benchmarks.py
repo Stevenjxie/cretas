@@ -4,6 +4,7 @@ import pytest
 
 from smartbi.external_benchmarks.collectors import (
     AmapPoiCollector,
+    AmapWeatherCollector,
     IndustryReportSeedCollector,
     parse_moa_wholesale_text,
     parse_nbs_catering_text,
@@ -63,6 +64,18 @@ def test_amap_url_uses_official_pagination_params_and_can_be_redacted():
     assert "page=1" in url
     assert "page_size" not in url
     assert "page_num" not in url
+    assert "secret-key" not in redact_sensitive_url(url)
+    assert "key=<redacted>" in redact_sensitive_url(url)
+
+
+def test_amap_weather_url_can_be_redacted():
+    url = AmapWeatherCollector.build_weather_url(
+        api_key="secret-key",
+        city_adcode="310000",
+    )
+
+    assert "weatherInfo" in url
+    assert "city=310000" in url
     assert "secret-key" not in redact_sensitive_url(url)
     assert "key=<redacted>" in redact_sensitive_url(url)
 

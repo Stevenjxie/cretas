@@ -16,6 +16,11 @@ class AmapDensityRequest(BaseModel):
     geo_scope: str = "local"
 
 
+class AmapWeatherRequest(BaseModel):
+    city_adcode: str = Field(..., description="Amap city/district adcode")
+    geo_scope: str = "local"
+
+
 def _ok(data, message: str = "OK"):
     return {"success": True, "data": data, "message": message}
 
@@ -72,6 +77,21 @@ async def collect_amap_density(body: AmapDensityRequest, request: Request):
         location=body.location,
         keywords=body.keywords,
         radius=body.radius,
+        geo_scope=body.geo_scope,
+    )
+    return _ok({
+        "sourceCode": result.source_code,
+        "status": result.status,
+        "rowsUpserted": result.rows_upserted,
+        "errorMessage": result.error_message,
+    })
+
+
+@router.post("/external-benchmarks/collect/amap-weather")
+async def collect_amap_weather(body: AmapWeatherRequest, request: Request):
+    _internal_only(request)
+    result = await service.collect_amap_weather(
+        city_adcode=body.city_adcode,
         geo_scope=body.geo_scope,
     )
     return _ok({
