@@ -2,6 +2,7 @@ package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.MixedBatchType;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.enums.ProductionMode;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
 import com.cretas.aims.security.PriceSensitive;
@@ -156,6 +157,16 @@ public class ProductionPlan extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "source_type", length = 30)
     private PlanSourceType sourceType = PlanSourceType.MANUAL;
+
+    // ==================== 生产业态字段 ====================
+
+    /**
+     * 生产业态: BY_ORDER 销售订单生产 (默认) / BY_STOCK 库存(永续)生产.
+     * <p>V20261027_19 新增列。缺省 BY_ORDER 保持向后兼容。</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "production_mode", length = 30)
+    private ProductionMode productionMode = ProductionMode.BY_ORDER;
 
     // ==================== SP2 二次加工字段 ====================
 
