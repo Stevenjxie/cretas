@@ -84,13 +84,13 @@ class ProductionSummaryServiceTest {
         verify(orderCostBreakdownService, never()).computeByBatch(anyString(), anyString(), anyBoolean());
     }
 
-    @Test
-    void realYield_subtractsRemainingFoldedBackToRaw() {
-        // 首道投入 10; 第2道(WIP)剩余 0.9, cumulativeYieldRate=90% → 折回原料 = 0.9/0.9 = 1.0
-        // 成品 8.0; 真实出成率 = 8.0 / (10 − 1.0) * 100 = 88.89%
+    @org.junit.jupiter.api.Test
+    void realYield_isFinishedOverRawInput_andRemainingSemiIsRawSum() {
+        // 首道投入 10; 第2道(在制)剩余 0.9 (半成品本身); 成品 8.0
+        // 真实出成率 = 8.0 / 10 * 100 = 80.00%; 剩余半成品 = 0.9 (不折算)
         when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
-                item(1, "IN_PROGRESS", new java.math.BigDecimal("10.0"), new java.math.BigDecimal("9.0"), new java.math.BigDecimal("0"), null),
-                item(2, "IN_PROGRESS", null, new java.math.BigDecimal("0.9"), new java.math.BigDecimal("0.9"), new java.math.BigDecimal("90")),
+                item(1, "ACTIVE", new java.math.BigDecimal("10.0"), new java.math.BigDecimal("9.0"), new java.math.BigDecimal("0"), null),
+                item(2, "ACTIVE", null, new java.math.BigDecimal("0.9"), new java.math.BigDecimal("0.9"), new java.math.BigDecimal("90")),
                 item(3, "COMPLETED", null, new java.math.BigDecimal("8.0"), new java.math.BigDecimal("0"), new java.math.BigDecimal("80"))
         ));
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
@@ -98,7 +98,8 @@ class ProductionSummaryServiceTest {
 
         ProductionSummaryDTO dto = service.computeSummary("F006", "P1", false);
 
-        assertThat(dto.getRemainingSemiRawEquiv()).isEqualByComparingTo("1.0");
-        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("88.89");
+        // non-COMPLETED rows: row1 remaining=0, row2 remaining=0.9 → sum=0.9
+        assertThat(dto.getRemainingSemiFinished()).isEqualByComparingTo("0.9");
+        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("80.00");
     }
 }

@@ -229,7 +229,7 @@ export interface ProductionSummaryDTO {
   productName: string
   totalRawInput: number
   totalFinishedOutput: number
-  remainingSemiRawEquiv: number
+  remainingSemiFinished: number
   realYieldRate: number
   totalCost: number | null
   priceMasked: boolean

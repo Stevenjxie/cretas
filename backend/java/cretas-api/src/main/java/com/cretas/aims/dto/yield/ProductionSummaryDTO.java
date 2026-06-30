@@ -14,7 +14,7 @@ public class ProductionSummaryDTO {
     private String productName;
     private BigDecimal totalRawInput;
     private BigDecimal totalFinishedOutput;
-    private BigDecimal remainingSemiRawEquiv;
+    private BigDecimal remainingSemiFinished;
     private BigDecimal realYieldRate;
     private BigDecimal totalCost;
     private boolean priceMasked;

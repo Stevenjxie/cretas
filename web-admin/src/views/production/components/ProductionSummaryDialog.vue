@@ -144,8 +144,8 @@ function hasProcessData(): boolean {
                 {{ summary.totalFinishedOutput.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) }} kg
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="剩余半成品折原料当量（kg）" :span="1">
-              {{ summary.remainingSemiRawEquiv.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) }} kg
+            <el-descriptions-item label="剩余半成品（kg）" :span="1">
+              {{ summary.remainingSemiFinished.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) }} kg
             </el-descriptions-item>
             <el-descriptions-item label="真实总出成率" :span="1">
               <span

@@ -38,11 +38,16 @@ public class ProductionSummaryService {
                 .map(b -> nz(b.getQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal remainingSemiRawEquiv = foldRemainingToRawEquiv(items, minOrder);
-        BigDecimal denom = totalRawInput.subtract(remainingSemiRawEquiv);
-        BigDecimal realYield = denom.signum() > 0
+        // 剩余半成品 = Σ 在制(非成品)道的剩余量, 按 kg 半成品本身展示(不折算)
+        BigDecimal remainingSemiFinished = items.stream()
+                .filter(i -> !"COMPLETED".equals(i.getStatus()))
+                .map(i -> nz(i.getRemaining()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 真实总出成率(方案A) = 总产出成品 ÷ 总投入原料 × 100, 半成品不折进
+        BigDecimal realYield = totalRawInput.signum() > 0
                 ? totalFinishedOutput.multiply(new BigDecimal("100"))
-                    .divide(denom, 2, java.math.RoundingMode.HALF_UP)
+                    .divide(totalRawInput, 2, java.math.RoundingMode.HALF_UP)
                 : null;
 
         BigDecimal totalCost = null;
@@ -67,27 +72,12 @@ public class ProductionSummaryService {
                 .planId(planId)
                 .totalRawInput(totalRawInput)
                 .totalFinishedOutput(totalFinishedOutput)
-                .remainingSemiRawEquiv(remainingSemiRawEquiv)
+                .remainingSemiFinished(remainingSemiFinished)
                 .realYieldRate(realYield)
                 .totalCost(totalCost)
                 .batches(lines)
                 .priceMasked(maskPrice)
                 .build();
-    }
-
-    /** 方案 R: 剩余 WIP(非成品行)按 cumulativeYieldRate 折回首道原料当量。
-     *  折回原料 = remaining ÷ (cumulativeYieldRate/100)。成品行(COMPLETED)与首道行不计。 */
-    private BigDecimal foldRemainingToRawEquiv(java.util.List<ProcessSheetInventoryItem> items, int minOrder) {
-        BigDecimal sum = BigDecimal.ZERO;
-        for (ProcessSheetInventoryItem i : items) {
-            if ("COMPLETED".equals(i.getStatus())) continue;
-            if (i.getProcessOrder() != null && i.getProcessOrder().intValue() == minOrder) continue;
-            BigDecimal rem = nz(i.getRemaining());
-            BigDecimal cum = i.getCumulativeYieldRate();
-            if (rem.signum() <= 0 || cum == null || cum.signum() <= 0) continue;
-            sum = sum.add(rem.multiply(new BigDecimal("100")).divide(cum, 4, java.math.RoundingMode.HALF_UP));
-        }
-        return sum.setScale(4, java.math.RoundingMode.HALF_UP);
     }
 
     private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
