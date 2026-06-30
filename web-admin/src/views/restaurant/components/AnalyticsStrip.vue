@@ -36,6 +36,7 @@ import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { TrendCharts, DataAnalysis } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { useChartInsight } from '@/composables/useChartInsight';
+import { useFactoryId } from '@/composables/useFactoryId';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 
 interface TrendPoint { date: string; value: number }
@@ -60,6 +61,8 @@ const props = defineProps<{
   isCurrency?: boolean;
   topN?: number;
 }>();
+
+const factoryId = useFactoryId();
 
 // Generate a unique DOM id so multiple strips on same page don't collide
 const uid = Math.random().toString(36).slice(2, 10);
@@ -244,13 +247,13 @@ const rankingInsightSource = () => {
 const { insight: trendInsight, loading: trendInsightLoading } = useChartInsight(
   trendInsightSource,
   () => ({ canViewFinance: false }),
-  { factoryId: () => '', autoTier2: true },
+  { factoryId: () => factoryId.value, autoTier2: true },
 );
 
 const { insight: rankingInsight, loading: rankingInsightLoading } = useChartInsight(
   rankingInsightSource,
   () => ({ canViewFinance: false }),
-  { factoryId: () => '', autoTier2: true },
+  { factoryId: () => factoryId.value, autoTier2: true },
 );
 
 watch(chartData, () => { nextTick(() => { renderTrend(); renderRanking(); }); }, { deep: true, immediate: true });

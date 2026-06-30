@@ -257,7 +257,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'] },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/platform', title: '平台口碑', icon: '', module: 'restaurant' },
+      { path: '/restaurant/analytics/platform', title: '平台口碑', icon: 'ChatDotRound', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',

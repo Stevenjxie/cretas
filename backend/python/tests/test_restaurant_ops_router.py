@@ -55,6 +55,9 @@ LEGITIMATE_TRIGGERS = [
     ("增长趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
     ("营业额走势", "RESTAURANT_OPS_TREND_ANALYSIS"),
     ("最近是增长还是下降", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("总营收和客单价表现怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("整体销售情况怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("门店销售对比，哪家最值得复制", "RESTAURANT_OPS_SALES_SUMMARY"),
 ]
 
 # Queries that MUST NOT match any ops template (ambiguous or unrelated to ops)

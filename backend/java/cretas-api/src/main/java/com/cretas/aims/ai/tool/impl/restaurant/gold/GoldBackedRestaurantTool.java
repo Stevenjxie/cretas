@@ -161,8 +161,52 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             return emptyResult;
         }
 
-        // 4. Format and return
-        return format(g);
+        // 4. Format and return. The restaurant demo is used by operators who need
+        // next actions, not just rankings, so keep every Gold answer actionable.
+        return ensureActionableMessage(format(g));
+    }
+
+    private Map<String, Object> ensureActionableMessage(Map<String, Object> result) {
+        if (result == null) {
+            return null;
+        }
+        Object msgObj = result.get("message");
+        if (!(msgObj instanceof String message) || message.isBlank()) {
+            return result;
+        }
+        if (containsActionAdvice(message)) {
+            return result;
+        }
+        String advice = defaultAdviceForTool();
+        result.put("message", message + "\n\n建议：" + advice);
+        result.putIfAbsent("actionAdvice", advice);
+        return result;
+    }
+
+    private boolean containsActionAdvice(String message) {
+        return message.contains("建议") || message.contains("优先") || message.contains("复盘")
+                || message.contains("关注") || message.contains("排查") || message.contains("试点")
+                || message.contains("控制") || message.contains("调整");
+    }
+
+    private String defaultAdviceForTool() {
+        String tool = getToolName();
+        if ("restaurant_dish_bestseller_gold".equals(tool)) {
+            return "把第一名菜品作为主推款保留曝光，同时复盘 Top5 是否都有完整配方成本；对高销量但低毛利的菜先查份量、售价和套餐折扣。";
+        }
+        if ("restaurant_store_revenue_rank_gold".equals(tool)) {
+            return "先对比第一名和末位门店的客单价、订单数、折扣和菜品结构，把可复制动作从第一名门店做小范围试点。";
+        }
+        if ("restaurant_discount_usage_gold".equals(tool)) {
+            return "优先核查优惠金额最高的活动是否带来新增订单和毛利；对高补贴低客单的券先限量或改门槛，再观察一周。";
+        }
+        if ("restaurant_order_type_mix_gold".equals(tool)) {
+            return "分别看堂食和外卖的客单价、毛利和差评标签；外卖占比高时先查包装、出餐时长和平台抽佣，堂食占比高时优化翻台与套餐引导。";
+        }
+        if (tool != null && tool.contains("review")) {
+            return "先把低星评价和高频差评标签按门店拆开，优先处理服务、环境、口味里分数最低的一项，并在一周后复查评分变化。";
+        }
+        return "先定位排名最高和最低的项目差异，再按门店、菜品、时段拆分验证原因，做一轮小范围调整后复盘指标变化。";
     }
 
     // =========================================================================

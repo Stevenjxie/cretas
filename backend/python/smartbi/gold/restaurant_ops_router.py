@@ -99,6 +99,17 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     # require the explicit trend/comparison vocabulary 同比 / 环比 / 趋势 / 增长 /
     # 下降 / 月度变化 / 走势 instead.
     (
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        [["营收", "营业额", "销售额", "销售情况", "客单价", "平均每单", "订单", "单量"],
+         ["表现", "怎么样", "多少", "情况", "总", "整体"]],
+    ),
+    (
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        [["门店", "店", "分店", "店铺", "哪家"],
+         ["销售", "营收", "营业额", "业绩", "订单", "单量"],
+         ["对比", "比较", "排名", "最好", "最值得复制", "复制", "标杆", "表现"]],
+    ),
+    (
         "RESTAURANT_OPS_TREND_ANALYSIS",
         [["同比", "环比", "趋势", "增长", "下降", "月度变化", "走势"]],
     ),
@@ -171,6 +182,11 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "营业额走势",
         "近期增长还是下降",
     ],
+    "RESTAURANT_OPS_SALES_SUMMARY": [
+        "总营收和客单价表现怎么样",
+        "整体销售情况怎么样",
+        "订单数和平均每单表现如何",
+    ],
 }
 
 
@@ -198,6 +214,16 @@ class OpsAnswer:
     charts: List[Dict[str, Any]]
     kpis: List[Dict[str, Any]]
     meta: Dict[str, Any]
+
+
+def _date_text(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> str:
+    if start_date and end_date:
+        return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
+    return f"最近 {requested_days} 天"
 
 
 async def resolve_wastage_top(
@@ -260,7 +286,11 @@ async def resolve_wastage_top(
         f"近 {days} 天损耗总览:\n"
         f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, 损失 ¥{total['total_cost']:.2f}\n"
         f"- 损耗类型分布: {type_summary}\n\n"
-        f"Top {len(top_rows)} 损耗食材 (按数量):\n{top_list_text}"
+        f"Top {len(top_rows)} 损耗食材 (按数量):\n{top_list_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
+        f"  2. 对 Top 损耗食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
+        f"  3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
     )
 
     charts = []
@@ -336,7 +366,11 @@ async def resolve_stock_shortage(
     answer = (
         f"近 {days} 天盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏总量 {total['shortage']:.2f}, 盘盈总量 {total['surplus']:.2f}\n\n"
-        f"Top {len(rows)} 盘亏食材:\n{top_text}"
+        f"Top {len(rows)} 盘亏食材:\n{top_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
+        f"  2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
+        f"  3. 对调料类盘亏优先检查称量标准和容器换算，减少账实口径不一致。"
     )
     charts = []
     if rows:
@@ -476,7 +510,11 @@ async def resolve_requisition_trend(
     answer = (
         f"近 {days} 天领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 ¥{total_cost:.2f}, {len(trend)} 天有活动\n\n"
-        f"Top {len(top)} 领用食材:\n{top_text}"
+        f"Top {len(top)} 领用食材:\n{top_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 把 Top 领用食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
+        f"  2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"
+        f"  3. 对成本占比高的食材设置日领用上限，超过上限需店长复核。"
     )
     charts = [{
         "chartType": "line",
@@ -526,21 +564,37 @@ async def resolve_gross_margin(
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
 
-        # Step 1: POS sales aggregated per dish (past N days)
-        # Use fact_pos_transaction.date to filter time window.
+        # Step 1: POS sales aggregated per dish. Anchor the window to the
+        # latest transaction that can be joined to dim_product; demo datasets
+        # can have sparse tail transactions with empty product_id.
         pos_rows = await conn.fetch(
             """
+            WITH anchor AS (
+                SELECT MAX(t2.date) AS end_date
+                  FROM fact_pos_item i2
+                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                  JOIN dim_product p2
+                    ON p2.product_id = i2.product_id
+                   AND p2.factory_id = i2.factory_id
+                 WHERE i2.factory_id = $1
+                   AND t2.factory_id = $1
+            )
             SELECT p.product_id, p.name AS dish_name, p.normalized_name,
                    SUM(i.qty)::float AS total_qty,
                    SUM(i.amount)::float AS total_revenue,
-                   COUNT(DISTINCT i.transaction_id)::int AS bills
+                   COUNT(DISTINCT i.transaction_id)::int AS bills,
+                   MIN(t.date) AS window_start,
+                   MAX(t.date) AS window_end
               FROM fact_pos_item i
               JOIN fact_pos_transaction t ON t.id = i.transaction_id
               JOIN dim_product p ON p.product_id = i.product_id
+              CROSS JOIN anchor
              WHERE i.factory_id = $1
                AND t.factory_id = $1
-               AND t.date >= CURRENT_DATE - ($2::int)
                AND p.factory_id = $1
+               AND anchor.end_date IS NOT NULL
+               AND t.date >= anchor.end_date - ($2::int)
+               AND t.date <= anchor.end_date
              GROUP BY p.product_id, p.name, p.normalized_name
              ORDER BY total_revenue DESC NULLS LAST
             """,
@@ -559,6 +613,10 @@ async def resolve_gross_margin(
             charts=[], kpis=[],
             meta={"window_days": days, "no_pos_data": True},
         )
+
+    window_start = min((r["window_start"] for r in pos_rows if r["window_start"]), default=None)
+    window_end = max((r["window_end"] for r in pos_rows if r["window_end"]), default=None)
+    window_label = _actual_window_text(window_start, window_end, days)
 
     # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
     # P0-2: alias lets merchants bind POS name → any product_type, handles the
@@ -640,6 +698,10 @@ async def resolve_gross_margin(
     total_rev_with_cost = sum(e["revenue"] for e in with_cost)
     total_profit = sum(e["gross_profit"] for e in with_cost)
     avg_margin = total_profit / total_rev_with_cost if total_rev_with_cost > 0 else 0
+    low_margin = sorted(
+        [e for e in enriched if e["has_cost"] and e["revenue"] >= 1000],
+        key=lambda x: x["margin_rate"],
+    )[:3]
 
     top_text = "\n".join([
         f"  {i+1}. {e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['food_cost_unit'] * e['qty']:.2f} / "
@@ -670,6 +732,26 @@ async def resolve_gross_margin(
         ],
     }]
 
+    charts[0]["title"] = f"Top {len(top_slice)} 毛利菜品 ({window_label})"
+    charts[0]["series"][0]["name"] = "营收"
+    charts[0]["series"][1]["name"] = "毛利"
+
+    low_margin_text = "\n".join([
+        f"  - {e['name']}: 毛利率 {e['margin_rate'] * 100:.1f}%, 营收 ¥{e['revenue']:,.2f}"
+        for e in low_margin
+    ]) or "  - 暂无明显低毛利菜品。"
+    answer = (
+        f"菜品毛利分析（{window_label}）\n"
+        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_margin * 100:.1f}%\n"
+        f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据；缺成本菜品不纳入毛利率均值，避免虚高。\n\n"
+        f"Top {len(top_slice)} 毛利菜品（按绝对毛利）:\n{top_text}\n\n"
+        f"需要关注的低毛利菜品:\n{low_margin_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
+        f"  2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
+        f"  3. 对缺成本菜品补齐配方和最近进价，否则单表排行会误判真实利润。{missing_note}"
+    )
+
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
         title=f"菜品毛利分析 (近{days}天)",
@@ -683,8 +765,11 @@ async def resolve_gross_margin(
         ],
         meta={
             "window_days": days, "top_n": top_n,
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
             "missing_cost_count": missing_cost_count,
             "total_dishes": len(enriched),
+            "low_margin_dishes": [e["name"] for e in low_margin],
         },
     )
 
@@ -702,17 +787,63 @@ async def resolve_store_margin(
         # cost correctly (dish-level food_cost × qty sold at each store).
         store_dish_rows = await conn.fetch(
             """
+            WITH anchor AS (
+                SELECT MAX(t2.date) AS end_date
+                  FROM fact_pos_item i2
+                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                  JOIN dim_product p2
+                    ON p2.product_id = i2.product_id
+                   AND p2.factory_id = i2.factory_id
+                  JOIN (
+                    SELECT DISTINCT store_id
+                      FROM agg_daily
+                     WHERE factory_id = $1
+                    UNION
+                    SELECT DISTINCT store_id
+                      FROM fact_pos_transaction
+                     WHERE factory_id = $1
+                       AND NOT EXISTS (
+                         SELECT 1 FROM agg_daily WHERE factory_id = $1
+                       )
+                  ) scope ON scope.store_id = t2.store_id
+                  JOIN dim_store s2
+                    ON s2.store_id = t2.store_id
+                   AND s2.factory_id = t2.factory_id
+                 WHERE i2.factory_id = $1
+                   AND t2.factory_id = $1
+            )
             SELECT s.store_id, s.name AS store_name,
                    p.name AS dish_name, p.normalized_name,
                    SUM(i.qty)::float AS qty,
                    SUM(i.amount)::float AS revenue,
-                   COUNT(DISTINCT i.transaction_id)::int AS bills
+                   COUNT(DISTINCT i.transaction_id)::int AS bills,
+                   MIN(t.date) AS window_start,
+                   MAX(t.date) AS window_end
               FROM fact_pos_item i
               JOIN fact_pos_transaction t ON t.id = i.transaction_id
-              JOIN dim_product p ON p.product_id = i.product_id
-              JOIN dim_store s ON s.store_id = t.store_id
+              JOIN dim_product p
+                ON p.product_id = i.product_id
+               AND p.factory_id = i.factory_id
+              JOIN (
+                SELECT DISTINCT store_id
+                  FROM agg_daily
+                 WHERE factory_id = $1
+                UNION
+                SELECT DISTINCT store_id
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM agg_daily WHERE factory_id = $1
+                   )
+              ) scope ON scope.store_id = t.store_id
+              JOIN dim_store s
+                ON s.store_id = t.store_id
+               AND s.factory_id = t.factory_id
+              CROSS JOIN anchor
              WHERE i.factory_id = $1 AND t.factory_id = $1
-               AND t.date >= CURRENT_DATE - ($2::int)
+               AND anchor.end_date IS NOT NULL
+               AND t.date >= anchor.end_date - ($2::int)
+               AND t.date <= anchor.end_date
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
             factory_id, days,
@@ -726,6 +857,10 @@ async def resolve_store_margin(
             charts=[], kpis=[],
             meta={"window_days": days, "no_pos_data": True},
         )
+
+    window_start = min((r["window_start"] for r in store_dish_rows if r["window_start"]), default=None)
+    window_end = max((r["window_end"] for r in store_dish_rows if r["window_end"]), default=None)
+    window_label = _actual_window_text(window_start, window_end, days)
 
     # Lookup cretas product_types + dim_product_alias (P0-2) + agg_product_cost for food cost.
     dish_names = list({r["normalized_name"] for r in store_dish_rows})
@@ -830,6 +965,26 @@ async def resolve_store_margin(
         ],
     }]
 
+    weak_store_text = ""
+    if len(store_list) > 1:
+        weakest = sorted(store_list, key=lambda s: s["margin_rate"])[0]
+        weak_store_text = (
+            f"\n需要复盘的门店: {weakest['name']} 毛利率 {weakest['margin_rate'] * 100:.1f}%, "
+            f"先查低毛利菜品占比、套餐折扣和损耗领料是否偏高。"
+        )
+    answer = (
+        f"门店毛利对比（{window_label}，{len(store_list)} 家店）\n"
+        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_rate * 100:.1f}%\n\n"
+        f"Top {len(top_slice)} 毛利门店:\n{top_text}{weak_store_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
+        f"  2. 对毛利率低但营收不低的门店，优先查折扣、赠品和后厨出品标准，避免销售越多利润越薄。\n"
+        f"  3. 对菜品成本覆盖率低的门店，先补齐配方成本再做绩效排序。"
+    )
+    charts[0]["title"] = f"Top {len(top_slice)} 毛利门店 ({window_label})"
+    charts[0]["series"][0]["name"] = "营收"
+    charts[0]["series"][1]["name"] = "毛利"
+
     return OpsAnswer(
         code="RESTAURANT_OPS_STORE_MARGIN",
         title=f"门店毛利对比 (近{days}天)",
@@ -843,6 +998,8 @@ async def resolve_store_margin(
         ],
         meta={
             "window_days": days, "store_count": len(store_list),
+            "window_start": _date_text(window_start) if window_start else None,
+            "window_end": _date_text(window_end) if window_end else None,
             "totalRevenue": total_rev, "totalRevenueWithCost": total_rev_with_cost,
             "totalProfit": total_profit, "avgRate": avg_rate,
             "stores": [
@@ -854,6 +1011,105 @@ async def resolve_store_margin(
                  "dishesWithCost": s["dishes_with_cost"], "totalDishes": s["dishes"]}
                 for s in store_list
             ],
+        },
+    )
+
+
+async def resolve_sales_summary(
+    smartbi_pool, factory_id: str, *, role: Optional[str] = None,
+) -> OpsAnswer:
+    from smartbi.gold.queries import finance_summary, store_comparison
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    can_see_money = bool(role) and role in PRICE_VIEW_ROLES
+    summary = await finance_summary(smartbi_pool, factory_id, (None, None), top_n_stores=5)
+    stores_data = await store_comparison(smartbi_pool, factory_id, (None, None))
+    stores = stores_data.get("stores") or []
+    weak_stores = stores_data.get("weakStores") or []
+
+    total_revenue = float(summary.get("total_revenue") or 0.0)
+    bill_count = int(summary.get("bill_count") or 0)
+    avg_bill = summary.get("avg_bill_value")
+    day_count = int(summary.get("day_count") or 0)
+    store_count = int(summary.get("store_count") or 0)
+    top_stores = summary.get("top_stores") or []
+
+    def _money(v: Optional[float]) -> str:
+        if not can_see_money:
+            return "***"
+        if v is None:
+            return "暂无"
+        return f"¥{float(v):,.2f}"
+
+    if bill_count <= 0:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_SALES_SUMMARY",
+            title="经营销售概览",
+            answer_text=(
+                "现在还没有可用的 POS 营收和订单数据。建议先确认营业流水已经进入 Gold 层，"
+                "再看总营收、平均每单和门店差异。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={"no_data": True},
+        )
+
+    top_line = ""
+    if top_stores:
+        top = top_stores[0]
+        top_line = f"表现最强的是{top['store_name']}，订单数 {top['bill_count']} 单。"
+        if can_see_money:
+            top_line = f"表现最强的是{top['store_name']}，营收 {_money(top['revenue'])}，订单数 {top['bill_count']} 单。"
+
+    weak_line = ""
+    if weak_stores:
+        weak_line = f"低于中位水平的门店有 {len(weak_stores)} 家，先看{weak_stores[0]}。"
+
+    avg_text = _money(float(avg_bill)) if avg_bill is not None else "暂无"
+    answer = (
+        f"整体经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
+        f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
+        f"{top_line}{weak_line}"
+        "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
+        "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+    )
+
+    chart_stores = top_stores[:5]
+    charts = [{
+        "chartType": "bar",
+        "title": "门店营收 Top 5" if can_see_money else "门店订单 Top 5",
+        "xAxis": {"data": [s["store_name"] for s in chart_stores]},
+        "series": [{
+            "name": "营收" if can_see_money else "订单数",
+            "type": "bar",
+            "data": [
+                (float(s["revenue"]) if can_see_money else int(s["bill_count"]))
+                for s in chart_stores
+            ],
+        }],
+    }] if chart_stores else []
+
+    kpis = [
+        {"title": "订单数", "value": f"{bill_count:,}", "rawValue": bill_count},
+        {"title": "总营收", "value": _money(total_revenue) if can_see_money else None,
+         "rawValue": total_revenue if can_see_money else None},
+        {"title": "平均每单", "value": avg_text if can_see_money else None,
+         "rawValue": float(avg_bill) if can_see_money and avg_bill is not None else None},
+        {"title": "门店数", "value": store_count, "rawValue": store_count},
+    ]
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_SALES_SUMMARY",
+        title="经营销售概览",
+        answer_text=answer,
+        charts=charts,
+        kpis=kpis,
+        meta={
+            "day_count": day_count,
+            "store_count": store_count,
+            "weak_stores": weak_stores,
+            "price_view": can_see_money,
+            "store_comparison_count": len(stores),
         },
     )
 
@@ -982,6 +1238,10 @@ async def resolve_trend_analysis(
         f"- 营收最高月: {peak['month']} ({_money(peak['revenue'])})\n"
         f"- 营收最低月: {trough['month']} ({_money(trough['revenue'])})\n"
         f"{overall_line}{yoy_line}{mom_line}{ww_line}"
+        f"\n建议动作:\n"
+        f"  1. 先把最高月和最低月按门店、渠道、折扣三层拆开，找出增长来自客流、客单价还是活动补贴。\n"
+        f"  2. 如果最新月下滑，优先确认是否为未完结月份；若已完结，再复盘低于中位数门店和高折扣渠道。\n"
+        f"  3. 周末与工作日差异不大时，重点做时段活动而不是整天打折，避免折扣侵蚀毛利。\n"
         f"\n各月营收:\n{month_list_text}"
     )
 
@@ -1030,6 +1290,7 @@ _RESOLVERS = {
     "RESTAURANT_OPS_REQUISITION_TREND": resolve_requisition_trend,
     "RESTAURANT_OPS_GROSS_MARGIN": resolve_gross_margin,
     "RESTAURANT_OPS_STORE_MARGIN": resolve_store_margin,
+    "RESTAURANT_OPS_SALES_SUMMARY": resolve_sales_summary,
     "RESTAURANT_OPS_TREND_ANALYSIS": resolve_trend_analysis,
 }
 

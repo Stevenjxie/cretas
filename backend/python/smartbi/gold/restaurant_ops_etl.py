@@ -317,7 +317,9 @@ async def sync_fact_requisition(
                 ingredient_ids, types, statuses, requested_qtys, actual_qtys,
                 units, est_costs, requested_bys, approved_bys, approved_ats, notes,
             )
-    # Fill in est_cost from a separate UPDATE (one row scan, easier to reason about)
+    # Recompute est_cost from the current dim_ingredient price on every run.
+    # Demo data corrections can fix unit_price after fact rows already exist;
+    # leaving non-null stale est_cost in place would keep polluting aggregates.
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
             await _set_tenant(dst, factory_id)
@@ -330,7 +332,6 @@ async def sync_fact_requisition(
                    AND r.ingredient_id = i.ingredient_id
                    AND r.requested_qty IS NOT NULL
                    AND i.unit_price IS NOT NULL
-                   AND r.est_cost IS NULL
                 """,
                 factory_id,
             )

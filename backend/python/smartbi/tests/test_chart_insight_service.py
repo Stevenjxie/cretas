@@ -232,6 +232,29 @@ class TestChartInsightService:
         assert result is None
         svc._call_llm.assert_not_called()
 
+    async def test_demo_rest_common_chart_uses_deterministic_template_before_llm(self):
+        ctx = _make_context(
+            factory_id="DEMO_REST",
+            chart_type="BAR",
+            x_dim="store",
+            y_metric="cost",
+            series_values=[120, 80, 40],
+            series_labels=["A店", "B店", "C店"],
+        )
+        svc = self._make_service(llm_response=None)
+
+        with patch(
+            "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
+            new=AsyncMock(),
+        ) as persist_mock:
+            result = await svc.get_insight(ctx, caller_role="restaurant_manager")
+
+        assert result is not None
+        assert result.source == "template"
+        assert "建议" in result.suggestion
+        svc._call_llm.assert_not_called()
+        persist_mock.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # RBAC tests

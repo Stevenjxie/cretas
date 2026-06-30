@@ -944,6 +944,106 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         return GeneralAnalysisResponse(**cached)
 
     try:
+        query = request.effective_query
+        factory_id_hdr = (
+            getattr(http_request.state, 'factory_id', None)
+            if hasattr(http_request, 'state') else None
+        )
+        if query and factory_id_hdr:
+            try:
+                from smartbi.gold.restaurant_ops_router import (
+                    match_restaurant_ops, resolve_by_code
+                )
+                from smartbi.config import get_pg_pool as _get_pool
+                ops_code = match_restaurant_ops(query)
+                if ops_code:
+                    pool = await _get_pool()
+                    if pool:
+                        role_hdr = (
+                            getattr(http_request.state, 'role', None)
+                            if hasattr(http_request, 'state') else None
+                        )
+                        ops_answer = await resolve_by_code(
+                            ops_code, pool, factory_id_hdr, role=role_hdr,
+                        )
+                        if ops_answer:
+                            response = GeneralAnalysisResponse(
+                                success=True,
+                                answer=ops_answer.answer_text,
+                                aiAnalysis=ops_answer.answer_text,
+                                sessionId=request.session_id,
+                                thinkingEnabled=request.enable_thinking,
+                                insights=[],
+                                charts=ops_answer.charts,
+                                processing_time_ms=int((time.time() - start_time) * 1000),
+                            )
+                            _chat_cache_set(cache_key, response.dict())
+                            return response
+            except Exception as ops_err:
+                logger.warning(f"[general_analysis] restaurant ops fast path failed: {ops_err}")
+
+            if any(k in query for k in ("评价", "口碑", "点评", "美团", "平台")):
+                try:
+                    from smartbi.config import get_pg_pool as _get_pool
+                    from smartbi.gold.review_queries import (
+                        review_summary, review_platform, review_complaints,
+                    )
+                    pool = await _get_pool()
+                    if pool:
+                        summary = await review_summary(pool, factory_id_hdr)
+                        platforms = await review_platform(pool, factory_id_hdr)
+                        complaints = await review_complaints(pool, factory_id_hdr, top_n=3)
+                        if summary.get("connected"):
+                            platform_rows = platforms.get("platforms") or []
+                            low_count = int(summary.get("low_star_count") or 0)
+                            total_reviews = int(summary.get("total_reviews") or 0)
+                            avg_star = float(summary.get("avg_star") or 0)
+                            worst_platform = min(
+                                platform_rows,
+                                key=lambda r: float(r.get("avg_star") or 99),
+                            ) if platform_rows else None
+                            complaint_rows = complaints.get("categories") or []
+                            complaint_text = (
+                                f"差评里最该先看的类型是{complaint_rows[0].get('category')}。"
+                                if complaint_rows else "差评类型样本不多，先看低星原文。"
+                            )
+                            platform_text = (
+                                f"{worst_platform.get('platform')}评分相对低一些，平均{float(worst_platform.get('avg_star') or 0):.2f}分。"
+                                if worst_platform else "平台拆分数据暂时不完整。"
+                            )
+                            answer = (
+                                f"平台评价总体不差，去重后共有 {total_reviews:,} 条评价，平均星级 {avg_star:.2f} 分；"
+                                f"但低星评价有 {low_count:,} 条，不能只看平均分。"
+                                f"{platform_text}{complaint_text}"
+                                "建议：先把低星评价按门店和投诉类型分派到负责人，优先处理服务慢、出品不稳、环境类高频问题；"
+                                "同时盯住评分相对低的平台，避免单个平台拖累整体口碑。"
+                            )
+                            charts = [{
+                                "chartType": "bar",
+                                "title": "平台评价量与评分",
+                                "xAxis": {"data": [r.get("platform") for r in platform_rows[:6]]},
+                                "series": [
+                                    {"name": "评价量", "type": "bar",
+                                     "data": [int(r.get("review_count") or 0) for r in platform_rows[:6]]},
+                                    {"name": "平均星级", "type": "line",
+                                     "data": [float(r.get("avg_star") or 0) for r in platform_rows[:6]]},
+                                ],
+                            }] if platform_rows else []
+                            response = GeneralAnalysisResponse(
+                                success=True,
+                                answer=answer,
+                                aiAnalysis=answer,
+                                sessionId=request.session_id,
+                                thinkingEnabled=request.enable_thinking,
+                                insights=[],
+                                charts=charts,
+                                processing_time_ms=int((time.time() - start_time) * 1000),
+                            )
+                            _chat_cache_set(cache_key, response.dict())
+                            return response
+                except Exception as review_err:
+                    logger.warning(f"[general_analysis] review fast path failed: {review_err}")
+
         # Get data from request, cache, or latest upload
         data = request.data
         if not data and request.sheet_id:

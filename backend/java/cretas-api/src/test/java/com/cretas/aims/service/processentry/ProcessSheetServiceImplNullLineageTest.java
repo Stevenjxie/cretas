@@ -9,6 +9,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
@@ -65,6 +66,7 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private SemiFinishedInventoryRepository wipRepo;
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository processRepo;
+    @Mock private ProductWorkProcessRepository productWorkProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
 
     @Test
@@ -73,7 +75,8 @@ class ProcessSheetServiceImplNullLineageTest {
         ProcessSheetServiceImpl service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
-                new ObjectMapper(), wipRepo, taskRepo, processRepo, productTypeRepo);
+                new ObjectMapper(), wipRepo, taskRepo, processRepo,
+                productWorkProcessRepo, productTypeRepo);
 
         // plan belongs to factory
         ProductionPlan plan = new ProductionPlan();

@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,6 +81,40 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
     }
 
     // ==================== tryExplicitSkillRouteForIntent — WORKDESK Skill 命中 ====================
+
+    @Test
+    void convertDynamicToolResult_doesNotExposeRouterFallbackDescription() throws Exception {
+        Method method = DynamicToolSelectionService.class.getDeclaredMethod(
+                "convertDynamicToolResultToResponse",
+                Object.class,
+                AIIntentConfig.class,
+                ToolRouterService.SelectedTools.class);
+        method.setAccessible(true);
+
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_WASTAGE_SUMMARY")
+                .intentName("损耗汇总")
+                .intentCategory("RESTAURANT")
+                .build();
+        ToolRouterService.SelectedTools selected = ToolRouterService.SelectedTools.builder()
+                .tools(List.of(ToolRouterService.SelectedTools.SelectedTool.builder()
+                        .toolName("restaurant_wastage_summary")
+                        .order(1)
+                        .build()))
+                .executionOrder(ToolRouterService.SelectedTools.ExecutionOrder.SEQUENTIAL)
+                .toolChainDescription("Fallback selection based on similarity")
+                .build();
+        Map<String, Object> result = Map.of(
+                "restaurant_wastage_summary",
+                Map.of("损耗记录数", 12, "说明", "本月损耗集中在备菜环节"));
+
+        IntentExecuteResponse response = (IntentExecuteResponse) method.invoke(service, result, intent, selected);
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getMessage()).doesNotContain("Fallback selection");
+        assertThat(response.getMessage()).contains("损耗汇总");
+        assertThat(response.getMessage()).contains("建议");
+    }
 
     @Test
     void tryExplicitSkillRouteForIntent_workdeskSkillRegistered_executesSkillAndReturnsResponse() {

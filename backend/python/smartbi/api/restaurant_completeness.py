@@ -222,8 +222,50 @@ async def _fetch_module_stats(
             )
             stats[module_id] = {"count": 0, "last_updated": None}
 
-    # ── 1. POS sales: detect by file_name ILIKE pattern in smartbi_db ──────
+    # ── 1. POS sales: prefer real gold/raw sales rows, then uploads ────────
     async def _pos_sales() -> Dict[str, Any]:
+        try:
+            async with smartbi_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        SELECT
+                            COUNT(*)              AS cnt,
+                            MAX(date)::text       AS last_upd
+                        FROM agg_daily
+                        WHERE factory_id = $1
+                          AND date >= CURRENT_DATE - ($2 || ' days')::interval
+                        """,
+                        factory_id,
+                        str(window_days),
+                    )
+            if row and (row["cnt"] or 0) > 0:
+                return {"count": row["cnt"] or 0, "last_updated": row["last_upd"]}
+        except Exception as exc:
+            logger.debug(f"[completeness] pos_sales agg_daily fallback: {exc}")
+
+        try:
+            async with cretas_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT
+                        COUNT(*)                AS cnt,
+                        MAX(order_date)::text   AS last_upd
+                    FROM smart_bi_sales_data
+                    WHERE factory_id = $1
+                      AND order_date >= CURRENT_DATE - ($2 || ' days')::interval
+                    """,
+                    factory_id,
+                    str(window_days),
+                )
+            if row and (row["cnt"] or 0) > 0:
+                return {"count": row["cnt"] or 0, "last_updated": row["last_upd"]}
+        except Exception as exc:
+            logger.debug(f"[completeness] pos_sales raw sales fallback: {exc}")
+
         try:
             async with smartbi_pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -357,9 +399,40 @@ async def _fetch_module_stats(
                         factory_id,
                         str(window_days),
                     )
-            return {"count": row["cnt"] or 0, "last_updated": row["last_upd"]}
+            if row and (row["cnt"] or 0) > 0:
+                return {"count": row["cnt"] or 0, "last_updated": row["last_upd"]}
         except Exception as exc:
             logger.debug(f"[completeness] review fallback: {exc}")
+
+        # Gold review analytics are currently served from smart_bi_dynamic_data
+        # (大众点评 upload). Use upload created_at for freshness because review
+        # business dates can be historical while the demo corpus is newly seeded.
+        try:
+            async with smartbi_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        SELECT
+                            COUNT(*)                  AS cnt,
+                            MAX(created_at)::text     AS last_upd
+                        FROM smart_bi_dynamic_data
+                        WHERE factory_id = $1
+                          AND created_at >= NOW() - ($2 || ' days')::interval
+                          AND (
+                              row_data ? '评价ID'
+                              OR row_data ? '星级分'
+                              OR row_data ? '评价时间'
+                          )
+                        """,
+                        factory_id,
+                        str(window_days),
+                    )
+            return {"count": row["cnt"] or 0, "last_updated": row["last_upd"]}
+        except Exception as exc:
+            logger.debug(f"[completeness] review dynamic fallback: {exc}")
             return {"count": 0, "last_updated": None}
 
     # Run all 6 concurrently
