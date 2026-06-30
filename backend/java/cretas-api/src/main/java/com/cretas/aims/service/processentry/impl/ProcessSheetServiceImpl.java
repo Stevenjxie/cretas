@@ -188,6 +188,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private ProcessSheetRowResult resaveRow(String factoryId, String planId,
                                             ProcessSheetRowRequest req, Long userId,
                                             ProcessSheetRow existing) {
+        // 🔒 G3 防双扣: 已小结入库的行不可直接编辑。
+        // 否则 CASE B2 会软删旧消耗边 + 重建 interim_settled_at=NULL 的新边 (下次小结再次扣减原料,
+        // 原扣减从未反冲 → usedQuantity 超扣), 且行仍带戳 → 更正后的产出永不重新过账。
+        // 必须在任何软删/重物化 (消耗边/报工/WIP) 之前拦截, 避免部分变更。
+        // 完整 反冲-重过账 (撤销小结) 属 Phase 3, 当前阶段先阻断。
+        if (existing.getInterimSettledAt() != null) {
+            throw new BusinessException(409, "该行已小结入库,不可直接修改;如需更正请走撤销小结(功能开发中)")
+                    .withCode("ROW_INTERIM_SETTLED")
+                    .withHint("已小结入库的工序行不可编辑,请通过撤销小结更正")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(req.getProcessCode());
+        }
+
         List<String> warnings = new ArrayList<>();
 
         // SP-G P3: 捕获变更前 payload (在任何 updateRowInPlace 之前), 供 UPDATE diff 审计。
@@ -302,6 +315,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         for (ProcessSheetRow row : rows) {
+            // 🔒 G3 防双扣 (同 resaveRow): 已小结入库的行不可删除。删除会逆向物化(软删已扣减的消耗边)
+            // 而原料 usedQuantity 扣减从未反冲 → 账面超扣。完整撤销小结属 Phase 3。
+            if (row.getInterimSettledAt() != null) {
+                throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
+                        .withCode("ROW_INTERIM_SETTLED")
+                        .withHint("已小结入库的工序行不可删除,请通过撤销小结更正")
+                        .withSeverity("BLOCKING");
+            }
             if (row.getBatchId() != null) {
                 // 查既有 WIP 产出批
                 Optional<MaterialBatch> wipOpt = materialBatchRepo

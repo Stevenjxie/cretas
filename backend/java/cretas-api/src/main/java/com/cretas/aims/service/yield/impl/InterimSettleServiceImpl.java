@@ -24,6 +24,7 @@ import com.cretas.aims.service.yield.InterimSettleService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -140,16 +141,18 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             }
         }
 
-        // 同次小结内被下游消耗的 batchNumber (= 瞬态中间产出, 不入 SFI)
-        Set<String> consumedWithinSession = new HashSet<>();
+        // 同次小结内每个 batchNumber 被下游投入的累计量 (= 瞬态部分)。
+        // SFI IN 只入"净结余 = 本道产出 − 同小结内被下游投入的量": 全消耗→净0不入(瞬态);
+        // 部分消耗(产出60被投40)→净20入库(残留半成品), 不再整道误判瞬态而漏入。
+        Map<String, BigDecimal> withinSessionFeedByBatchNo = new HashMap<>();
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.getUpstreamSources() == null) {
                 continue;
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
-                if (ref.getSourceBatchNumber() != null
-                        && unsettledBatchNumbers.contains(ref.getSourceBatchNumber())) {
-                    consumedWithinSession.add(ref.getSourceBatchNumber());
+                String src = ref.getSourceBatchNumber();
+                if (src != null && unsettledBatchNumbers.contains(src)) {
+                    withinSessionFeedByBatchNo.merge(src, nz(ref.getFeedQuantityKg()), BigDecimal::add);
                 }
             }
         }
@@ -186,18 +189,17 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 continue; // 成品道走 FG, 不入 SFI
             }
             String batchNo = ur.row.getBatchNumber();
-            if (consumedWithinSession.contains(batchNo)) {
-                continue; // 瞬态中间产出: 同小结内被下游消耗 → 不入库 (防双重入库)
-            }
             BigDecimal outQty = nz(ur.req.getOutputQuantity());
-            if (outQty.signum() <= 0) {
-                continue;
+            BigDecimal withinFeed = withinSessionFeedByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal net = outQty.subtract(withinFeed); // 净结余 = 产出 − 同小结内被下游投入
+            if (net.signum() <= 0) {
+                continue; // 全部被同小结下游消耗 → 瞬态在制, 不入库 (防双重入库)
             }
             wipInventoryService.postClerkOutput(factoryId,
                     semiAnchor(planId, ur.req.getProductTypeId()), ur.req.getProductTypeId(),
-                    outQty, ur.req.getUnit(), null, null);
+                    net, ur.req.getUnit(), null, null);
             semiInBatchNumbers.add(batchNo);
-            semiInQuantity = semiInQuantity.add(outQty);
+            semiInQuantity = semiInQuantity.add(net);
         }
 
         // ── ④ FG: 未结成品道产出 (优先成品重 productWeight) → 成品库 ──
@@ -245,7 +247,15 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 .postedBy(userId)
                 .summary(summary)
                 .build();
-        settlementRepository.save(settlement);
+        try {
+            // saveAndFlush: 让 uk_interim_plan_seq 唯一约束冲突在此同步抛出 (而非延迟到事务提交边界),
+            // 使并发小结的 loser 得到友好 409 而非裸 500。整事务回滚 (数据安全)。
+            settlementRepository.saveAndFlush(settlement);
+        } catch (DataIntegrityViolationException dup) {
+            throw new BusinessException(409, "小结并发提交,请稍后重试")
+                    .withCode("INTERIM_SETTLE_CONCURRENT")
+                    .withHint("另一笔小结正在提交,请稍后重试");
+        }
 
         log.info("[interim-settle] factory={}, plan={}, seq={}: deducted {} consumptions ({}); "
                         + "SFI in {} ({}), SFI out {}, FG {} ({})",
@@ -272,7 +282,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         // 幂等防护 (产出行标记已防重, 此处为 batchNumber 撞号二次保险)
         return finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(plan.getFactoryId(), batchNumber)
                 .orElseGet(() -> {
-                    ProductType productType = productTypeRepository.findById(productTypeId).orElse(null);
+                    ProductType productType = productTypeRepository
+                            .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
                     FinishedGoodsBatch batch = new FinishedGoodsBatch();
                     batch.setFactoryId(plan.getFactoryId());
                     batch.setBatchNumber(batchNumber);

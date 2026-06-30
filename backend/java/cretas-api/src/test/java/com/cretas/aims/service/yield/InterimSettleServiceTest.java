@@ -103,8 +103,8 @@ class InterimSettleServiceTest {
         plan.setProductionMode(ProductionMode.BY_STOCK);
         when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
 
-        // 小结记录"持久化"模拟: save 累积; findTop 返最大 seq; findAllAsc 返全部
-        when(settlementRepository.save(any(ProductionInterimSettlement.class)))
+        // 小结记录"持久化"模拟: saveAndFlush 累积; findTop 返最大 seq; findAllAsc 返全部
+        when(settlementRepository.saveAndFlush(any(ProductionInterimSettlement.class)))
                 .thenAnswer(inv -> {
                     savedSettlements.add(inv.getArgument(0));
                     return inv.getArgument(0);
@@ -121,7 +121,7 @@ class InterimSettleServiceTest {
         when(rowRepository.save(any(ProcessSheetRow.class))).thenAnswer(inv -> inv.getArgument(0));
         when(consumptionRepository.save(any(MaterialConsumption.class))).thenAnswer(inv -> inv.getArgument(0));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productTypeRepository.findById(any())).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId(any(), eq(FACTORY))).thenReturn(Optional.empty());
         when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn("WH-WKS");
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(eq(FACTORY), any()))
                 .thenReturn(Optional.empty());
@@ -226,6 +226,31 @@ class InterimSettleServiceTest {
         verify(finishedGoodsBatchRepository, times(1)).save(any());
         // RB1 未被再次扣减
         assertThat(rb1.getUsedQuantity()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    @DisplayName("部分被同小结消耗: 终点产出60, 同小结下游投40 → SFI IN 净20 (不漏入残留)")
+    void partialWithinSessionNetStock() {
+        // 道A(CLK-W-A, output 60) + 道B(CLK-B-A, finished, feed 40 from A) 同一小结
+        ProcessSheetRow rA = row(10L, 1, "CLK-W-A", reqNonFinished(1, "CLK-W-A", new BigDecimal("60"), null));
+        ProcessSheetRow rB = row(11L, 2, "CLK-B-A", reqFinished(2, "CLK-B-A", new BigDecimal("50"),
+                null, upstream("CLK-W-A", "40")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rA, rB));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 道A 净结余 = 60 − 40(同小结投B) = 20 → SFI IN 20 (而非整道判瞬态漏入)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("20")), any(), eq(null), eq(null));
+        assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("20"));
+        @SuppressWarnings("unchecked")
+        List<String> semiIn = (List<String>) s.get("semiInBatchNumbers");
+        assertThat(semiIn).containsExactly("CLK-W-A");
+        // 道B 是成品 → FG, 不入 SFI; CLK-W-A 非前序入库 → 无 SFI OUT
+        verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
+        verify(finishedGoodsBatchRepository, times(1)).save(any());
     }
 
     // ─────────────────────────────────────────────────────────────
