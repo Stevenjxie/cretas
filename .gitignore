@@ -282,3 +282,5 @@ data/imports/_index.json
 
 # 客户真实生产数据 (不提交)
 六扇门工厂数据/
+产品信息_*.xlsx
+产品信息_*.zip
