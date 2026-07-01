@@ -647,6 +647,106 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Layer 3 — per-SLOT param profile (injected into every payload).
+# Biggest lever: enable_thinking=false on fast slots. qwen3.5+/3.7 default thinking
+# ON → wastes 10-20x latency + 1200-3561 reasoning tokens/call (measured on
+# qwen3.7-max: 16.5s→1.1s, qwen3.5-flash: 11.6s→0.6s). thinking-only models can't
+# toggle (skipped). json_object (CHART/MAPPER) needs enable_thinking=false + "json"
+# in the prompt + no max_tokens (truncation = parse fail).
+# ═══════════════════════════════════════════════════════════════════════════
+_ALIYUN_ACCOUNTS: frozenset = frozenset({
+    "aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
+})
+
+_SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
+    SLOT.CHAT:      {"enable_thinking": False},
+    SLOT.INSIGHTS:  {"enable_thinking": False},
+    SLOT.CHART:     {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
+    SLOT.MAPPER:    {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
+    SLOT.REASONING: {"enable_thinking": True},
+    SLOT.VL:        {"enable_thinking": False},
+    SLOT.REVIEW:    {"enable_thinking": False},
+}
+
+
+def _payload_mentions_json(payload: Dict[str, Any]) -> bool:
+    """True if any message content mentions 'json' — required before enabling
+    response_format:json_object (DashScope 400s otherwise: 'messages must contain
+    the word json')."""
+    for m in (payload.get("messages") or []):
+        c = m.get("content")
+        if isinstance(c, str) and "json" in c.lower():
+            return True
+        if isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and "json" in str(part.get("text", "")).lower():
+                    return True
+    return False
+
+
+def _apply_slot_params(slot: SLOT, account: str, model: str,
+                       payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the SLOT's param profile to a per-call payload (model already set).
+    Returns a new dict. Provider-aware: enable_thinking is a DashScope param → only
+    for aliyun + hybrid (non-thinking-only) models."""
+    prof = _SLOT_PARAMS.get(slot) or {}
+    p = {**payload}
+    is_aliyun = account in _ALIYUN_ACCOUNTS
+    if "enable_thinking" in prof and is_aliyun and model not in _THINKING_ONLY:
+        p["enable_thinking"] = prof["enable_thinking"]
+        p.setdefault("enable_search", False)  # web-search off (latency/nondeterminism)
+    # json_object only when the prompt already mentions "json" (else 400) — avoids
+    # breaking callers whose CHART/MAPPER prompt lacks the keyword.
+    if prof.get("json") and _payload_mentions_json(p):
+        p["response_format"] = {"type": "json_object"}
+        p.pop("max_tokens", None)
+        p.pop("max_completion_tokens", None)
+    if "temperature" in prof:
+        p["temperature"] = prof["temperature"]
+    if "seed" in prof and is_aliyun:
+        p.setdefault("seed", prof["seed"])
+    return p
+
+
+# ── Layer 4 — outcome validation (highest-value: router was quality-blind, any 200
+# accepted → empty/garbage reached users with no fallback). Validate per-slot; on
+# failure fall to the next chain entry.
+_MIN_TEXT_LEN = 8  # INSIGHTS/REVIEW floor — shorter than this = likely garbage/refusal
+
+
+def _extract_content(body_json: Dict[str, Any]) -> str:
+    """Pull assistant content from an OpenAI-compatible response, defensively."""
+    try:
+        msg = (body_json.get("choices") or [{}])[0].get("message") or {}
+        return (msg.get("content") or "").strip()
+    except Exception:
+        return ""
+
+
+def _validate_output(slot: SLOT, content: str) -> Optional[str]:
+    """Return an invalidity reason (→ fall to next model) or None if the output is
+    acceptable for this slot. Cheap, deterministic — the free half of a FrugalGPT
+    cascade (reject garbage + retry, no expensive judge)."""
+    if not content or not content.strip():
+        return "empty"
+    if slot in (SLOT.CHART, SLOT.MAPPER):
+        s = content.strip()
+        if s.startswith("```"):  # strip markdown fences some models add
+            s = s.strip("`")
+            if s[:4].lower() == "json":
+                s = s[4:]
+        s = s.strip()
+        try:
+            json.loads(s)
+        except Exception:
+            return "bad_json"
+    elif slot in (SLOT.INSIGHTS, SLOT.REVIEW):
+        if len(content.strip()) < _MIN_TEXT_LEN:
+            return "too_short"
+    return None
+
+
 def _provider_config(account: str) -> Tuple[str, str]:
     """Return (base_url, api_key) for a provider account."""
     mapping = {
@@ -730,12 +830,15 @@ DEFAULT_CHAIN: List[str] = [
 
 
 def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
-    """Detect 免费额度用完即停 / rate-limit / quota-exceeded from response."""
+    """Detect a FREE-GRANT exhaustion (→ long 6h quota-skip until monthly reset).
+
+    ⚠️ 429 is DELIBERATELY NOT here (gap-audit correctness fix). A 429 is a TRANSIENT
+    burst rate-limit, not a spent monthly free grant — treating it as quota-exhausted
+    sidelined a healthy quota-rich model for 6h on a load spike. 429 now falls through
+    the 'other errors' path → circuit-breaker SHORT cooldown (CB_COOLDOWN) only, no 6h
+    quota-skip. Only 403 FreeTierOnly / 402 grant-exhaustion warrant the long skip."""
     if status_code == 403:
         return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
-    if status_code == 429:
-        # ZhipuAI / DeepSeek may use 429 for quota/rate. Treat as fallback trigger.
-        return True
     if status_code == 402 and (
         "Insufficient Balance" in body_text
         or "FREE_QUOTA_EXHAUSTED" in body_text
@@ -834,7 +937,10 @@ async def call_chain(
             logger.debug(f"[llm_router] {account}: no API key, skip")
             continue
 
-        req_payload = _normalize_payload_for_provider({**payload, "model": model}, account)
+        req_payload = _apply_slot_params(
+            slot, account, model,
+            _normalize_payload_for_provider({**payload, "model": model}, account),
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -859,9 +965,20 @@ async def call_chain(
             body_text = resp.text  # may trigger aread() internally
 
             if 200 <= resp.status_code < 300:
+                body_json = resp.json()
+                # Layer 4 — outcome validation: a 2xx with empty / garbage / invalid-
+                # JSON body is NOT success. Fall to the next chain entry instead of
+                # handing garbage to the caller (do NOT record CB success on bad output).
+                invalid = _validate_output(slot, _extract_content(body_json))
+                if invalid:
+                    logger.warning(
+                        f"[llm_router] slot={slot.value} {account}/{model} output "
+                        f"invalid ({invalid}) — falling back"
+                    )
+                    errors.append(f"{account}/{model}: invalid_{invalid}")
+                    continue
                 _cb_record_success(cb_key)
                 _quota_record_success(cb_key)
-                body_json = resp.json()
                 _log_cache_and_record_budget(slot.value, account, model, body_json)
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
                 return body_json
@@ -1004,7 +1121,10 @@ async def call_chain_stream(
             logger.debug(f"[llm_router_stream] {account}: no API key, skip")
             continue
 
-        req_payload = _normalize_payload_for_provider({**payload, "model": model}, account)
+        req_payload = _apply_slot_params(
+            slot, account, model,
+            _normalize_payload_for_provider({**payload, "model": model}, account),
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

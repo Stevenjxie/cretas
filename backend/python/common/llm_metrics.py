@@ -86,17 +86,27 @@ _enabled: bool = False
 
 
 def _guess_provider(host: str, authorization_header: Optional[str] = None) -> str:
-    """Guess provider account. For DashScope, distinguish accounts A vs B by API key prefix."""
+    """Guess provider account for usage attribution.
+
+    Layer-5 fix (2026-07-01): previously only aliyun_a/b were keyed → aliyun_c (the
+    freshest account, now in the pool) collapsed into the generic 'dashscope' bucket,
+    so smart_bi_llm_usage could not tell C's burn/latency/errors apart. tencent
+    (TokenHub) shares no host with dashscope but was also unattributed. Both fixed."""
     h = host.lower()
+    # Tencent TokenHub — OpenAI-compatible, its own host.
+    if "tokenhub" in h or "tencentmaas" in h:
+        return "tencent"
     if "dashscope" in h or "aliyuncs" in h or "bailian" in h:
-        # Distinguish aliyun_a vs aliyun_b by API key
+        # Distinguish aliyun_a / _b / _c by API key.
         if authorization_header:
             import os
             key = authorization_header.replace("Bearer ", "").strip()
-            if key == os.getenv("LLM_ALIYUN_B_API_KEY", "___unset_b___"):
+            if key and key == os.getenv("LLM_ALIYUN_C_API_KEY", "___unset_c___"):
+                return "aliyun_c"
+            if key and key == os.getenv("LLM_ALIYUN_B_API_KEY", "___unset_b___"):
                 return "aliyun_b"
-            if key == os.getenv("LLM_ALIYUN_A_API_KEY", "___unset_a___") or \
-               key == os.getenv("LLM_API_KEY", "___unset_legacy___"):
+            if key and (key == os.getenv("LLM_ALIYUN_A_API_KEY", "___unset_a___") or
+                        key == os.getenv("LLM_API_KEY", "___unset_legacy___")):
                 return "aliyun_a"
         return "dashscope"  # default when key doesn't match known accounts
     if "deepseek" in h:
