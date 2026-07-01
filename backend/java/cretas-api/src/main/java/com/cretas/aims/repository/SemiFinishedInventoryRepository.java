@@ -52,6 +52,17 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     List<SemiFinishedInventory> findByFactoryIdAndBatchIdAndStatusAndDeletedAtIsNull(
             String factoryId, Long batchId, String status);
 
+    /**
+     * 工厂级某状态的全部 WIP 行 (半成品盘点发起时快照 AVAILABLE 行)。
+     * 按工序序、创建时间正序排列, 便于盘点录入界面稳定展示。
+     */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId "
+            + "AND w.status = :status AND w.deletedAt IS NULL "
+            + "ORDER BY w.processOrder ASC, w.createdAt ASC")
+    List<SemiFinishedInventory> findByFactoryIdAndStatusForStocktake(
+            @Param("factoryId") String factoryId,
+            @Param("status") String status);
+
     /** 某工序任务产出的 WIP 行 (一道任务一笔 WIP 行)。 */
     List<SemiFinishedInventory> findByFactoryIdAndSourceWorkProcessTaskIdAndDeletedAtIsNull(
             String factoryId, Long sourceWorkProcessTaskId);

@@ -414,6 +414,13 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/semi-finished/list.vue'),
             meta: { requiresAuth: true, title: '半成品重量库存', module: 'warehouse' }
           },
+          // 半成品盘点 (SP7 式 + 审批) — 半成品 WIP 周期盘点校准, 复用 INVENTORY_ADJUSTMENT 审批
+          {
+            path: 'semi-finished-stocktakes',
+            name: 'WarehouseSemiFinishedStocktakes',
+            component: () => import('@/views/warehouse/semi-finished-stocktakes/index.vue'),
+            meta: { requiresAuth: true, title: '半成品盘点', module: 'warehouse' }
+          },
           // SP7 F11 #738 盐化仓独立扣量记录 + 独立报表 (对客户代加工)
           {
             path: 'salted-deductions',
