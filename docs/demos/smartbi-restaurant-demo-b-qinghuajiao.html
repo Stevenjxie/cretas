@@ -221,6 +221,104 @@ body::before {
   margin-bottom: 28px;
 }
 
+/* ============ PREMIUM TRAFFIC PERSONA ============ */
+.traffic-intel {
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr;
+  gap: 34px;
+  align-items: stretch;
+}
+.traffic-panel {
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  padding: 26px;
+  position: relative;
+}
+.traffic-panel::after {
+  content: "需额外开通";
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--burgundy);
+  border: 1px solid currentColor;
+  padding: 4px 8px;
+}
+.traffic-kicker {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 14px;
+}
+.traffic-headline {
+  font-family: var(--serif);
+  font-size: 28px;
+  line-height: 1.15;
+  font-weight: 800;
+  max-width: 420px;
+}
+.traffic-headline em { color: var(--forest); font-style: italic; }
+.traffic-note {
+  margin-top: 18px;
+  font-family: var(--serif-cn);
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--ink-soft);
+}
+.traffic-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.traffic-metric {
+  border: 1px solid var(--rule);
+  background: var(--cream);
+  padding: 18px 14px;
+  min-height: 112px;
+}
+.traffic-metric strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 28px;
+  line-height: 1;
+  color: var(--forest);
+  margin-bottom: 10px;
+}
+.traffic-metric span {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.traffic-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.traffic-action {
+  border-left: 4px solid var(--gold);
+  background: var(--paper);
+  padding: 16px 18px;
+}
+.traffic-action strong {
+  display: block;
+  font-family: var(--serif-cn);
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.traffic-action p {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+
 /* ============ 3-COL FEATURE GRID (菜单精简) ============ */
 .feature-3 {
   display: grid;
@@ -1169,6 +1267,64 @@ body::before {
           <div class="rating-point mid"><div class="rating-month">M-3</div><div class="rating-val">4.68</div><div class="rating-delta">&minus;0.14</div></div>
           <div class="rating-point mid"><div class="rating-month">M-2</div><div class="rating-val">4.51</div><div class="rating-delta">&minus;0.17</div></div>
           <div class="rating-point low"><div class="rating-month">M-1</div><div class="rating-val">4.30</div><div class="rating-delta">&minus;0.21</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PREMIUM TRAFFIC PERSONA ============ -->
+  <section class="section">
+    <div class="section-label">
+      <div class="section-num">P</div>
+      <div class="section-titles">
+        <div class="section-kicker">高级模块 · TRAFFIC PERSONA · DEMO SIMULATION</div>
+        <h2 class="section-title">百货商圈<em>客流画像模拟</em></h2>
+      </div>
+    </div>
+    <div class="section-hr"></div>
+
+    <div class="traffic-intel">
+      <div class="traffic-panel">
+        <div class="traffic-kicker">Tencent / Baidu / Amap Enablement</div>
+        <div class="traffic-headline">第一百货有<em>高客流转化机会</em>，大丸百货需要先解释外部客流断点。</div>
+        <p class="traffic-note">
+          当前为 demo 模拟字段，用来展示接入腾讯位置大数据、百度慧眼或高德商业位置数据后的分析形态。真实上线需要客户门店授权、供应商商务开通和聚合数据合规审查，不展示个人轨迹。
+        </p>
+      </div>
+
+      <div>
+        <div class="traffic-metrics">
+          <div class="traffic-metric">
+            <strong>21,800</strong>
+            <span>人民广场日均路过客流</span>
+          </div>
+          <div class="traffic-metric">
+            <strong>3.8%</strong>
+            <span>第一百货估算捕获率</span>
+          </div>
+          <div class="traffic-metric">
+            <strong>0.67</strong>
+            <span>同商圈竞品重叠指数</span>
+          </div>
+          <div class="traffic-metric">
+            <strong>74m</strong>
+            <span>百货餐饮层平均停留</span>
+          </div>
+        </div>
+
+        <div class="traffic-actions">
+          <div class="traffic-action">
+            <strong>第一百货店：午市快转化</strong>
+            <p>办公客占比模拟 46%，建议把 68-88 元工作日套餐和 30 分钟出餐承诺放到午市主入口。</p>
+          </div>
+          <div class="traffic-action">
+            <strong>大丸百货店：查外部断点</strong>
+            <p>若商场总客流未降但本店下滑，优先查餐饮楼层动线、同层新竞品和等位体验，而不是只降价。</p>
+          </div>
+          <div class="traffic-action">
+            <strong>连锁调度：按商圈分流</strong>
+            <p>周末提升模拟 1.36x，可把人民广场满载时段导流到近店，并同步调整备货阈值。</p>
+          </div>
         </div>
       </div>
     </div>

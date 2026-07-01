@@ -23,6 +23,7 @@ import ShiftAnalysisCard from './cards/ShiftAnalysisCard.vue';
 import PieceworkCalcCard from './cards/PieceworkCalcCard.vue';
 import PerformanceEvalCard from './cards/PerformanceEvalCard.vue';
 import StoreKpiDashboardCard from './cards/StoreKpiDashboardCard.vue';
+import AdvancedTrafficPersonaCard from './cards/AdvancedTrafficPersonaCard.vue';
 
 const props = defineProps<{
   section: SectionPayload;
@@ -52,6 +53,7 @@ const CARD_MAP: Record<string, unknown> = {
   piecework_calc: PieceworkCalcCard,
   performance_eval: PerformanceEvalCard,
   store_kpi_dashboard: StoreKpiDashboardCard,
+  advanced_traffic_persona: AdvancedTrafficPersonaCard,
 };
 
 const resolvedCard = computed(() => {

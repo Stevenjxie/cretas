@@ -315,6 +315,64 @@ body::before {
 }
 .rank-row .val.burgundy { color: var(--burgundy); }
 
+/* Premium traffic persona */
+.traffic-card {
+  margin-top: 12px;
+  border: 1px solid var(--ink);
+  background: var(--cream);
+  padding: 16px;
+}
+.traffic-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.traffic-card-title {
+  font-family: var(--serif-cn);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.traffic-card-tag {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--burgundy);
+  border: 1px solid currentColor;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+.traffic-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.traffic-cell {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  padding: 10px;
+}
+.traffic-cell strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 22px;
+  line-height: 1;
+  color: var(--forest);
+  margin-bottom: 6px;
+}
+.traffic-cell span {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+.traffic-card p {
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 /* Trend spark */
 .spark-block {
   margin-top: 12px;
@@ -917,6 +975,31 @@ const turns = [
         </div>
       </div>
       <p style="margin-top: 14px;">系统的推断: 这不是单一事件(比如一次食品安全), 而是<em>渐进式客流流失</em>. 最可能的三个原因: <strong>(1) 物业楼层调整</strong> / <strong>(2) 周边新开竞品</strong> / <strong>(3) 地铁停车动线变化</strong>. 现场督导建议从这三个方向切入.</p>
+    `
+  },
+  {
+    role: 'user',
+    text: '如果接腾讯、百度、高德那类外部客流画像, 对百货商圈还能分析到什么?'
+  },
+  {
+    role: 'ai',
+    label: 'PREMIUM TRAFFIC PERSONA · 百货商圈模拟',
+    html: `
+      <p>这属于<strong>高级模块</strong>, 真实启用需要客户门店授权和供应商商务开通. 但用 demo 模拟字段可以看到它能补上内部 POS 看不到的部分: <em>门口有多少人、谁经过、为什么没进店、同商圈竞品在抢哪类客</em>.</p>
+      <div class="traffic-card">
+        <div class="traffic-card-head">
+          <div class="traffic-card-title">人民广场 / 第一百货 / 大丸百货 · 聚合客流画像</div>
+          <div class="traffic-card-tag">需额外开通</div>
+        </div>
+        <div class="traffic-grid">
+          <div class="traffic-cell"><strong>21,800</strong><span>日均路过客流</span></div>
+          <div class="traffic-cell"><strong>3.8%</strong><span>第一百货捕获率</span></div>
+          <div class="traffic-cell"><strong>0.67</strong><span>竞品重叠指数</span></div>
+          <div class="traffic-cell"><strong>74m</strong><span>餐饮层停留</span></div>
+        </div>
+        <p><strong>第一百货店</strong>的机会是午市办公客转化: 办公客模拟占比 46%, 应推 68-88 元快出餐套餐. <strong>大丸百货店</strong>的问题要先验证商场总客流是否同步下滑; 如果商场没降而本店降, 重点查餐饮楼层动线、新竞品和等位体验, 不应先打折。</p>
+      </div>
+      <p style="margin-top: 12px;">所以外部数据不是替代 POS, 而是解释 POS 的边界: POS 只能告诉我们<em>成交后的结果</em>, 客流画像能解释<em>没成交的机会和商圈天花板</em>.</p>
     `
   },
   {

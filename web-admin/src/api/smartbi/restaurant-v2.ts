@@ -467,6 +467,149 @@ export interface MultiStoreComparison {
   recommendations: string[];
 }
 
+// Premium demo module: external traffic/persona data requires extra enablement.
+export interface AdvancedTrafficPersonaProvider {
+  provider: string;
+  accessMode?: string;
+  bestUse?: string;
+  availableFields?: string[];
+}
+
+export interface AdvancedTrafficPersonaRecommendation {
+  priority: string;
+  action: string;
+  why?: string;
+  metricTrigger?: string;
+  expectedImpact?: string;
+}
+
+export interface AdvancedTrafficPersonaPlainAnalysis {
+  bottomLine: string;
+  whatItMeans: string[];
+  whyWeThinkSo: string[];
+}
+
+export interface AdvancedTrafficPersonaSolutionStep {
+  step: string;
+  action: string;
+  owner: string;
+  expectedOutcome: string;
+}
+
+export interface AdvancedTrafficPersonaDataSufficiency {
+  isEnoughForRealDecision: boolean;
+  plainVerdict: string;
+  why: string[];
+  whatCanBeDecidedNow: string[];
+  whatCannotBeDecidedYet: string[];
+}
+
+export interface AdvancedTrafficPersonaNeededEvidence {
+  name: string;
+  whyNeeded: string;
+  sourceType: string;
+  priority: string;
+  publicAvailability: string;
+  sourceUrl?: string;
+}
+
+export interface AdvancedTrafficPersonaAdviceRule {
+  situation: string;
+  plainDiagnosis: string;
+  bossAction: string;
+  decisionRule: string;
+  neededData: string[];
+  sourceBasis: string[];
+}
+
+export interface AdvancedTrafficPersonaExternalSignalStatus {
+  source: string;
+  keyRequired: boolean;
+  envVars: string[];
+  status: string;
+  refreshCadence: string;
+  bestUse: string;
+  officialUrl?: string | null;
+}
+
+export interface AdvancedTrafficPersonaExternalSignal {
+  type: string;
+  source: string;
+  severity: string;
+  title: string;
+  plainImpact: string;
+  actionHint: string;
+}
+
+export interface AdvancedTrafficPersonaExternalSignalPipelineStep {
+  source: string;
+  productionStatus: string;
+  refreshCadence: string;
+  storesOneApiCall: boolean;
+  whatItWrites: string[];
+}
+
+export interface AdvancedTrafficPersonaExternalSignalPipeline {
+  defaultMode: string;
+  whyNotOnPageLoad: string;
+  dailyBudgetEnv: Record<string, string>;
+  steps: AdvancedTrafficPersonaExternalSignalPipelineStep[];
+}
+
+export interface AdvancedTrafficPersonaExternalSignals {
+  moduleName: string;
+  purpose: string;
+  sourceStatuses: AdvancedTrafficPersonaExternalSignalStatus[];
+  signals: AdvancedTrafficPersonaExternalSignal[];
+  collectionPipeline?: AdvancedTrafficPersonaExternalSignalPipeline;
+  plainConclusion: string;
+  bossActions: string[];
+  dataNeededForProduction: string[];
+}
+
+export interface AdvancedTrafficPersona {
+  moduleName: string;
+  requiresEnablement: boolean;
+  demoMode: boolean;
+  dataNote: string;
+  storeContext: {
+    storeName: string;
+    city: string;
+    businessDistrict: string;
+    mallName: string;
+    subSector: string;
+    period: string;
+  };
+  enablement: {
+    status: string;
+    scope: string;
+    requirements: string[];
+    priceHint?: Record<string, string>;
+  };
+  providers: AdvancedTrafficPersonaProvider[];
+  fieldCatalog: Array<{
+    key: string;
+    label: string;
+    providerCoverage: string[];
+    demoValue: unknown;
+    businessQuestion: string;
+  }>;
+  simulatedMetrics: Record<string, number>;
+  plainLanguageAnalysis?: AdvancedTrafficPersonaPlainAnalysis;
+  solutionPlan?: AdvancedTrafficPersonaSolutionStep[];
+  dataSufficiency?: AdvancedTrafficPersonaDataSufficiency;
+  neededEvidence?: AdvancedTrafficPersonaNeededEvidence[];
+  adviceKnowledgeBase?: AdvancedTrafficPersonaAdviceRule[];
+  externalSignals?: AdvancedTrafficPersonaExternalSignals;
+  analysis: {
+    headline: string;
+    comparisonNarrative: string[];
+    risks: string[];
+    opportunities: string[];
+    recommendations: AdvancedTrafficPersonaRecommendation[];
+  };
+}
+
 // W6.5 — Cross-Chain Benchmark
 export interface ChainProfile {
   name: string;
@@ -536,6 +679,8 @@ export interface V2UnifiedReport {
     calibrationHistory?: CalibrationHistoryReport;
     // W6.4
     multiStoreComparison?: MultiStoreComparison;
+    // Premium demo / extra enablement
+    advancedTrafficPersona?: AdvancedTrafficPersona;
   };
   warnings: string[];
   executiveSummary: string[];

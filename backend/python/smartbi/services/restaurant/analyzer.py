@@ -100,6 +100,7 @@ from .sections.review_analysis import ReviewAnalysisHandler
 from .sections.store_pnl_one_pager import StorePnlOnePagerHandler
 from .sections.stored_value import StoredValueHandler
 from .sections.temporal_comparison import TemporalComparisonHandler
+from .sections.advanced_traffic_persona import AdvancedTrafficPersonaHandler
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ class RestaurantAnalyzerV2:
         self._multi_store_handler = MultiStoreComparisonHandler()
         self._calibration_handler = CalibrationHistoryHandler()
         self._bom_layer_status_handler = BomLayerStatusHandler()
+        self._advanced_traffic_persona_handler = AdvancedTrafficPersonaHandler()
 
     # ── P3.5B F5: expense account tree ─────────────────
 
@@ -317,6 +319,40 @@ class RestaurantAnalyzerV2:
                 )
             self._expense_tree_cache = load_tree_from_yaml(yaml_path)
         return self._expense_tree_cache
+
+    @staticmethod
+    def _infer_traffic_location_context(store_name: Optional[str]) -> dict[str, Optional[str]]:
+        """Infer demo mall/business-district context from common restaurant store names."""
+        name = store_name or ""
+        context: dict[str, Optional[str]] = {
+            "city": "上海",
+            "business_district": "人民广场",
+            "mall_name": None,
+        }
+
+        if "义乌" in name:
+            context["city"] = "义乌"
+            context["business_district"] = "稠城商圈"
+        elif "苏州" in name:
+            context["city"] = "苏州"
+            context["business_district"] = "核心商圈"
+        elif "南通" in name:
+            context["city"] = "南通"
+            context["business_district"] = "核心商圈"
+
+        mall_rules = [
+            ("第一百货", "人民广场", "第一百货商业中心"),
+            ("大丸百货", "南京东路", "大丸百货"),
+            ("大丸", "南京东路", "大丸百货"),
+        ]
+        for token, district, mall_name in mall_rules:
+            if token in name:
+                context["city"] = "上海"
+                context["business_district"] = district
+                context["mall_name"] = mall_name
+                break
+
+        return context
 
     # ── 主入口 ─────────────────────────────────────────
 
@@ -395,10 +431,17 @@ class RestaurantAnalyzerV2:
             except Exception as e:
                 logger.warning(f"Failed to auto-load reviews from DB: {e}")
 
+        if pos_df is not None and revenue_col not in pos_df.columns:
+            for alias in ("实收额", "实收金额", "销售金额", "营业额"):
+                if alias in pos_df.columns:
+                    revenue_col = alias
+                    break
+
         # ── Build the per-section request template ──
         # Each handler gets the same factory/sub_sector/store metadata; the
         # `params` dict carries section-specific inputs (POS DataFrame,
         # financial data, column overrides, etc).
+        traffic_context = self._infer_traffic_location_context(store_name)
         base_params: dict[str, Any] = {
             "pos_df": pos_df,
             "financial_data": financial_data,
@@ -411,6 +454,9 @@ class RestaurantAnalyzerV2:
             "reviews": reviews,
             "members": members,
             "use_llm": use_llm_reviews,
+            "city": traffic_context["city"],
+            "business_district": traffic_context["business_district"],
+            "mall_name": traffic_context["mall_name"],
         }
 
         def _make_req(extra: Optional[dict[str, Any]] = None) -> SectionRequest:
@@ -749,6 +795,20 @@ class RestaurantAnalyzerV2:
         # self._build_bom_layer_status() inspects the outer analyzer's state
         # correctly. See TODO(P2): refactor handlers to accept state via context.
         report["sections"]["bomLayerStatus"] = self._build_bom_layer_status()
+
+        traffic_resp = self._advanced_traffic_persona_handler.compute(
+            _make_req(),
+            context,
+        )
+        if traffic_resp.status == SectionStatus.OK:
+            traffic_section = traffic_resp.data
+            report["sections"]["advancedTrafficPersona"] = traffic_section
+            headline = traffic_section.get("analysis", {}).get("headline")
+            if headline:
+                report["executiveSummary"].append(f"高级客流画像: {headline}")
+        else:
+            for w in traffic_resp.warnings:
+                report["warnings"].append(f"高级客流画像生成失败: {w}")
 
         # ─── 总结统计 ───
         report["summary"] = {

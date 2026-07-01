@@ -505,3 +505,20 @@ def test_f8_default_margin_spec_uses_prepaid_mode():
     # Default mode = PREPAID, 7.07% = critical (after QW1 threshold adjustment)
     assert sv_section.get("mode") == "PREPAID"
     assert sv_section.get("severity") == "critical"
+
+
+def test_advanced_traffic_persona_infers_department_store_context():
+    """V2 advanced traffic module should use mall context for department-store demos."""
+    from smartbi.services.restaurant.analyzer import RestaurantAnalyzerV2
+
+    analyzer = RestaurantAnalyzerV2(factory_id="F-TEST", sub_sector="火锅")
+    report = analyzer.analyze(
+        financial_data={"current": {"revenue": 731048, "food_cost": 307040}},
+        store_name="青花椒第一百货店",
+        period="2026-Q4",
+    )
+
+    traffic = report["sections"]["advancedTrafficPersona"]
+    assert traffic["storeContext"]["businessDistrict"] == "人民广场"
+    assert traffic["storeContext"]["mallName"] == "第一百货商业中心"
+    assert "第一百货商业中心" in traffic["analysis"]["headline"]
