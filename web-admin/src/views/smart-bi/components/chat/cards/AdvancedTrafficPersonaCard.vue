@@ -51,6 +51,34 @@ interface AdviceRule {
   sourceBasis: string[];
 }
 
+interface ExternalSignalStatus {
+  source: string;
+  keyRequired: boolean;
+  envVars: string[];
+  status: string;
+  refreshCadence: string;
+  bestUse: string;
+}
+
+interface ExternalSignal {
+  type: string;
+  source: string;
+  severity: string;
+  title: string;
+  plainImpact: string;
+  actionHint: string;
+}
+
+interface ExternalSignals {
+  moduleName: string;
+  purpose: string;
+  sourceStatuses: ExternalSignalStatus[];
+  signals: ExternalSignal[];
+  plainConclusion: string;
+  bossActions: string[];
+  dataNeededForProduction: string[];
+}
+
 interface AdvancedTrafficPersonaData {
   moduleName?: string;
   dataNote?: string;
@@ -64,6 +92,7 @@ interface AdvancedTrafficPersonaData {
   dataSufficiency?: DataSufficiency;
   neededEvidence?: NeededEvidence[];
   adviceKnowledgeBase?: AdviceRule[];
+  externalSignals?: ExternalSignals;
   analysis?: {
     headline?: string;
     recommendations?: Recommendation[];
@@ -80,6 +109,7 @@ const solutionPlan = computed(() => payload.value.solutionPlan ?? []);
 const dataSufficiency = computed(() => payload.value.dataSufficiency);
 const neededEvidence = computed(() => payload.value.neededEvidence ?? []);
 const adviceKnowledgeBase = computed(() => payload.value.adviceKnowledgeBase ?? []);
+const externalSignals = computed(() => payload.value.externalSignals);
 const statusLabel = computed(() => payload.value.enablement?.status ?? '需额外开通');
 </script>
 
@@ -183,6 +213,38 @@ const statusLabel = computed(() => payload.value.enablement?.status ?? '需额�
       </div>
     </div>
 
+    <div v-if="externalSignals" class="external-section">
+      <div class="section-label">{{ externalSignals.moduleName }}</div>
+      <div class="external-conclusion">{{ externalSignals.plainConclusion }}</div>
+
+      <div class="source-grid">
+        <div
+          v-for="source in externalSignals.sourceStatuses"
+          :key="source.source"
+          class="source-cell"
+        >
+          <div class="source-head">
+            <strong>{{ source.source }}</strong>
+            <span>{{ source.status }}</span>
+          </div>
+          <p>{{ source.bestUse }}</p>
+          <small>{{ source.keyRequired ? `需要 ${source.envVars.join(' / ')}` : '不需要 Key' }} · {{ source.refreshCadence }}</small>
+        </div>
+      </div>
+
+      <div class="signal-list">
+        <div
+          v-for="signal in externalSignals.signals"
+          :key="`${signal.type}-${signal.source}`"
+          class="signal-row"
+        >
+          <strong>{{ signal.title }}</strong>
+          <p>{{ signal.plainImpact }}</p>
+          <small>{{ signal.actionHint }}</small>
+        </div>
+      </div>
+    </div>
+
     <div v-if="providers.length" class="provider-section">
       <div class="section-label">可开通的数据来源</div>
       <div class="provider-grid">
@@ -269,6 +331,7 @@ h4 {
 .sufficiency-section,
 .evidence-section,
 .knowledge-section,
+.external-section,
 .provider-section,
 .recommendations {
   margin-top: 12px;
@@ -282,7 +345,8 @@ h4 {
 }
 
 .bottom-line,
-.sufficiency-verdict {
+.sufficiency-verdict,
+.external-conclusion {
   padding: 12px;
   border-radius: 6px;
   background: #eef6ff;
@@ -303,6 +367,8 @@ h4 {
 .solution-row,
 .evidence-row,
 .knowledge-row,
+.source-cell,
+.signal-row,
 .provider-cell {
   padding: 10px;
   border: 1px solid #e5e7eb;
@@ -314,6 +380,8 @@ h4 {
 .solution-row strong,
 .evidence-head strong,
 .knowledge-row strong,
+.source-head strong,
+.signal-row strong,
 .provider-name,
 .recommendation-row strong {
   display: block;
@@ -331,6 +399,8 @@ li,
 .solution-row p,
 .evidence-row p,
 .knowledge-row p,
+.source-cell p,
+.signal-row p,
 .provider-use,
 .recommendation-row p {
   color: #64748b;
@@ -403,6 +473,40 @@ li,
   gap: 10px;
 }
 
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.source-head span {
+  flex-shrink: 0;
+  color: #047857;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-cell small,
+.signal-row small {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.signal-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .recommendation-row {
   display: grid;
   grid-template-columns: 42px 1fr;
@@ -425,6 +529,7 @@ li,
 
 @media (max-width: 900px) {
   .plain-grid,
+  .source-grid,
   .provider-grid {
     grid-template-columns: 1fr;
   }

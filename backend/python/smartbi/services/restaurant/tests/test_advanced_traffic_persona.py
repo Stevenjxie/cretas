@@ -35,7 +35,13 @@ def test_advanced_traffic_persona_demo_contract() -> None:
     assert data["storeContext"]["businessDistrict"] == "人民广场"
 
     provider_names = {provider["provider"] for provider in data["providers"]}
-    assert {"腾讯位置大数据", "百度慧眼/百度地图", "高德/商业位置数据"}.issubset(provider_names)
+    assert {
+        "腾讯位置大数据",
+        "百度慧眼/百度地图",
+        "高德/商业位置数据",
+        "和风天气",
+        "大麦开放平台",
+    }.issubset(provider_names)
 
     field_keys = {field["key"] for field in data["fieldCatalog"]}
     assert {
@@ -61,9 +67,14 @@ def test_advanced_traffic_persona_demo_contract() -> None:
     assert "足够做 demo" in data["dataSufficiency"]["plainVerdict"]
     assert any("餐饮连锁化" in item["name"] for item in data["neededEvidence"])
     assert any("腾讯" in item["name"] or "百度" in item["name"] for item in data["neededEvidence"])
+    assert any("和风天气" in item["name"] for item in data["neededEvidence"])
     assert len(data["adviceKnowledgeBase"]) >= 5
     assert all(item["sourceBasis"] for item in data["adviceKnowledgeBase"])
     assert any("先暂停大额折扣" in item["bossAction"] for item in data["adviceKnowledgeBase"])
+    assert any("突然暴涨" in item["situation"] for item in data["adviceKnowledgeBase"])
+    assert data["externalSignals"]["moduleName"] == "外部原因解释器"
+    signal_sources = {item["source"] for item in data["externalSignals"]["sourceStatuses"]}
+    assert {"和风天气", "大麦开放平台", "中国节假日/调休", "商场活动采集"}.issubset(signal_sources)
     assert "模拟" in data["dataNote"]
 
 

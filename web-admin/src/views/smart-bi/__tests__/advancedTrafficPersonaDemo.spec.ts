@@ -18,8 +18,11 @@ describe('advanced traffic persona demo data', () => {
     expect(resolved.dataSufficiency.isEnoughForRealDecision).toBe(false);
     expect(resolved.dataSufficiency.plainVerdict).toContain('足够做 demo');
     expect(resolved.neededEvidence.some((item) => item.name.includes('白皮书'))).toBe(true);
-    expect(resolved.adviceKnowledgeBase ?? []).toHaveLength(5);
+    expect(resolved.neededEvidence.some((item) => item.name.includes('和风天气'))).toBe(true);
+    expect(resolved.adviceKnowledgeBase ?? []).toHaveLength(6);
     expect(resolved.adviceKnowledgeBase?.some((item) => item.bossAction.includes('先暂停大额折扣'))).toBe(true);
+    expect(resolved.externalSignals?.moduleName).toBe('外部原因解释器');
+    expect(resolved.externalSignals?.sourceStatuses.some((item) => item.source === '商场活动采集')).toBe(true);
   });
 
   it('prefers analyzer output after a V2 report exists', () => {

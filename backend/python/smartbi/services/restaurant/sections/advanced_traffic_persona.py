@@ -10,6 +10,10 @@ data contract, so the UI must present this as an extra enablement module.
 import time
 from typing import Any
 
+from smartbi.services.restaurant.external_signal_sources import (
+    ExternalSignalRequest,
+    RestaurantExternalSignalService,
+)
 from smartbi.services.restaurant.sections.base import (
     AbstractSectionHandler,
     SectionRequest,
@@ -43,6 +47,14 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
         estimated_visits = int(params.get("estimated_store_visits") or 828)
         competitor_overlap_index = float(params.get("competitor_overlap_index") or 0.67)
         consumption_power_index = int(params.get("consumption_power_index") or 116)
+        external_signals = RestaurantExternalSignalService().build_context(
+            ExternalSignalRequest(
+                city=city,
+                business_district=business_district,
+                mall_name=str(mall_name) if mall_name else None,
+                target_date=str(params.get("target_date") or request.period or "2026-07-01"),
+            )
+        )
 
         plain_language_analysis = {
             "bottomLine": (
@@ -148,6 +160,14 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
                 "priority": "P0",
                 "publicAvailability": "客户授权后可获得。",
             },
+            {
+                "name": "和风天气、大麦活动、节假日与商场活动源",
+                "whyNeeded": "解释某天突然暴涨或暴跌是不是外部天气、演出、展会、节假日或商场活动导致。",
+                "sourceType": "开放 API + 半自动采集",
+                "priority": "P0",
+                "publicAvailability": "和风和大麦需要注册 Key；节假日可直接结构化；商场活动通常需要配置官网/公众号/小程序活动源。",
+                "sourceUrl": "https://dev.qweather.com/docs/api/",
+            },
         ]
 
         advice_knowledge_base = [
@@ -204,6 +224,19 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
                 "sourceBasis": [
                     "高德 POI 搜索：用于判断供给侧竞品密度和变化",
                     "行业白皮书/平台报告：用于校准品类竞争、价格带和连锁化趋势",
+                ],
+            },
+            {
+                "situation": "某一天销售或客流突然暴涨",
+                "plainDiagnosis": "这不一定是门店运营突然变好，可能是节假日、演唱会散场、商场活动、极端天气前后造成的外部流量。",
+                "bossAction": "先给当天打外部原因标签，再复盘会员沉淀、点评引导、备货和排班，不要直接把当天结果外推到下周。",
+                "decisionRule": "如果当天命中节假日、周边活动、商场活动或天气异常，增长先按外部机会处理，再评估门店是否接住机会。",
+                "neededData": ["节假日/调休", "和风天气", "大麦周边活动", "商场活动页", "当天排队和备货记录"],
+                "sourceBasis": [
+                    "和风天气：小时级天气、预警和极端天气解释",
+                    "大麦开放平台：周边演出、体育、亲子、展览活动解释",
+                    "国务院节假日通知：节假日和调休解释",
+                    "商场活动采集：IP 展、市集、快闪、会员日解释",
                 ],
             },
         ]
@@ -316,6 +349,30 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
                         "route_arrival_time",
                     ],
                 },
+                {
+                    "provider": "和风天气",
+                    "accessMode": "注册 Key 后接入",
+                    "bestUse": "按小时天气、空气质量、灾害预警解释堂食、外卖、排队和临时客流变化",
+                    "availableFields": [
+                        "weather_now",
+                        "hourly_forecast",
+                        "weather_warning",
+                        "air_quality",
+                        "precipitation",
+                    ],
+                },
+                {
+                    "provider": "大麦开放平台",
+                    "accessMode": "注册 AppKey/AppSecret 后接入",
+                    "bestUse": "识别门店周边演唱会、体育、展览、亲子活动带来的临时客流",
+                    "availableFields": [
+                        "event_category",
+                        "event_time",
+                        "venue_name",
+                        "city_name",
+                        "ticket_status",
+                    ],
+                },
             ],
             "fieldCatalog": [
                 {
@@ -393,6 +450,7 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
             "dataSufficiency": data_sufficiency,
             "neededEvidence": needed_evidence,
             "adviceKnowledgeBase": advice_knowledge_base,
+            "externalSignals": external_signals,
             "analysis": {
                 "headline": (
                     f"{business_district}{'/' + str(mall_name) if mall_name else ''}"

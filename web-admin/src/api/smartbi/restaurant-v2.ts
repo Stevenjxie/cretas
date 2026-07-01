@@ -522,6 +522,35 @@ export interface AdvancedTrafficPersonaAdviceRule {
   sourceBasis: string[];
 }
 
+export interface AdvancedTrafficPersonaExternalSignalStatus {
+  source: string;
+  keyRequired: boolean;
+  envVars: string[];
+  status: string;
+  refreshCadence: string;
+  bestUse: string;
+  officialUrl?: string | null;
+}
+
+export interface AdvancedTrafficPersonaExternalSignal {
+  type: string;
+  source: string;
+  severity: string;
+  title: string;
+  plainImpact: string;
+  actionHint: string;
+}
+
+export interface AdvancedTrafficPersonaExternalSignals {
+  moduleName: string;
+  purpose: string;
+  sourceStatuses: AdvancedTrafficPersonaExternalSignalStatus[];
+  signals: AdvancedTrafficPersonaExternalSignal[];
+  plainConclusion: string;
+  bossActions: string[];
+  dataNeededForProduction: string[];
+}
+
 export interface AdvancedTrafficPersona {
   moduleName: string;
   requiresEnablement: boolean;
@@ -555,6 +584,7 @@ export interface AdvancedTrafficPersona {
   dataSufficiency?: AdvancedTrafficPersonaDataSufficiency;
   neededEvidence?: AdvancedTrafficPersonaNeededEvidence[];
   adviceKnowledgeBase?: AdvancedTrafficPersonaAdviceRule[];
+  externalSignals?: AdvancedTrafficPersonaExternalSignals;
   analysis: {
     headline: string;
     comparisonNarrative: string[];

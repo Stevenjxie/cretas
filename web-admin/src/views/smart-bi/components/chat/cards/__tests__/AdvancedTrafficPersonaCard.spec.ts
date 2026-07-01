@@ -84,6 +84,65 @@ const SAMPLE = {
       sourceBasis: ['腾讯商场客留大数据', '百度慧眼'],
     },
   ],
+  externalSignals: {
+    moduleName: '外部原因解释器',
+    purpose: '解释某天销售异常是不是天气、节假日、周边活动或商场活动导致。',
+    sourceStatuses: [
+      {
+        source: '和风天气',
+        keyRequired: true,
+        envVars: ['QWEATHER_API_KEY'],
+        status: '待配置',
+        refreshCadence: '小时级',
+        bestUse: '解释雨天、高温和灾害预警。',
+      },
+      {
+        source: '大麦开放平台',
+        keyRequired: true,
+        envVars: ['DAMAI_APP_KEY', 'DAMAI_APP_SECRET'],
+        status: '待配置',
+        refreshCadence: '日更',
+        bestUse: '识别附近演出活动。',
+      },
+      {
+        source: '中国节假日/调休',
+        keyRequired: false,
+        envVars: [],
+        status: '可直接使用',
+        refreshCadence: '年度更新',
+        bestUse: '解释节假日和补班日。',
+      },
+      {
+        source: '商场活动采集',
+        keyRequired: false,
+        envVars: ['MALL_ACTIVITY_FEED_URLS'],
+        status: '可先半自动接入',
+        refreshCadence: '日更',
+        bestUse: '采集商场活动页。',
+      },
+    ],
+    signals: [
+      {
+        type: 'weather',
+        source: '和风天气',
+        severity: 'medium',
+        title: '天气影响待接入',
+        plainImpact: '雨天会影响堂食和排队意愿。',
+        actionHint: '配置 QWEATHER_API_KEY 后自动解释。',
+      },
+      {
+        type: 'mall_activity',
+        source: '商场活动采集',
+        severity: 'medium',
+        title: '商场活动源待配置',
+        plainImpact: '商场 IP 展会影响客流。',
+        actionHint: '先配置商场活动页。',
+      },
+    ],
+    plainConclusion: '当天销售或客流异常不能只看门店内部。',
+    bossActions: ['不要把短期增长直接外推到下周。'],
+    dataNeededForProduction: ['QWEATHER_API_KEY', 'DAMAI_APP_KEY'],
+  },
   decisionScores: [
     {
       key: 'capture_gap',
@@ -137,6 +196,11 @@ describe('AdvancedTrafficPersonaCard', () => {
     expect(wrapper.text()).toContain('餐饮连锁化发展白皮书');
     expect(wrapper.text()).toContain('建议依据库');
     expect(wrapper.text()).toContain('先暂停大额折扣');
+    expect(wrapper.text()).toContain('外部原因解释器');
+    expect(wrapper.text()).toContain('和风天气');
+    expect(wrapper.text()).toContain('QWEATHER_API_KEY');
+    expect(wrapper.text()).toContain('大麦开放平台');
+    expect(wrapper.text()).toContain('商场活动源待配置');
     expect(wrapper.text()).not.toContain('诊断评分');
     expect(wrapper.text()).not.toContain('捕获率 +0.4pp');
   });
