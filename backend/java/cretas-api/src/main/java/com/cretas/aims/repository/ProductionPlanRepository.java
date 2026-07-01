@@ -61,6 +61,12 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     List<ProductionPlan> findByFactoryId(String factoryId);
 
     /**
+     * 按 id 前缀查计划 (①d 复用半成品前段血缘: SFI 锚 {@code CLK-SEMI-{planId8}-...} 只留 planId 前 8 位,
+     * 需按前缀反查生产它的来源计划)。唯一命中才用于前段接续, 多命中=歧义 → 诚实不接。
+     */
+    List<ProductionPlan> findByFactoryIdAndIdStartingWith(String factoryId, String idPrefix);
+
+    /**
      * 查找工厂的生产计划（分页）
      */
     Page<ProductionPlan> findByFactoryId(String factoryId, Pageable pageable);
