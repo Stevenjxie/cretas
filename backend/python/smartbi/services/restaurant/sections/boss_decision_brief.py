@@ -66,6 +66,13 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "mallName": mall,
             },
             "finalAnswer": self._final_answer(readiness, decisions),
+            "ownerDecisionPage": self._owner_decision_page(
+                store_name=str(store_name),
+                readiness=readiness,
+                decisions=decisions,
+                params=params,
+                sections=sections,
+            ),
             "ownerDecisionNow": decisions["ownerDecisionNow"],
             "decisionCards": decisions["decisionCards"],
             "sourceDecisionMap": self._source_decision_map(readiness),
@@ -527,6 +534,292 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         )
 
     @staticmethod
+    def _owner_decision_page(
+        store_name: str,
+        readiness: dict[str, Any],
+        decisions: dict[str, Any],
+        params: dict[str, Any],
+        sections: dict[str, Any],
+    ) -> dict[str, Any]:
+        pos = params.get("pos_summary") or {}
+        menu = params.get("menu_summary") or sections.get("menuEngineering") or sections.get("menu_engineering") or {}
+        review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
+        if not isinstance(pos, dict):
+            pos = {}
+        if not isinstance(menu, dict):
+            menu = {}
+        if not isinstance(review, dict):
+            review = {}
+
+        headline = BossDecisionBriefHandler._owner_headline(store_name, pos, menu, review)
+        actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness)
+        return {
+            "title": "老板决策页",
+            "headline": headline,
+            "plainDiagnosis": BossDecisionBriefHandler._plain_diagnosis(pos, menu, review),
+            "doFirst": actions["doFirst"],
+            "doNotDo": actions["doNotDo"],
+            "decisionPlan": {
+                "today": decisions.get("ownerDecisionNow", {}).get("today"),
+                "thisWeek": actions["thisWeek"],
+                "thisMonth": decisions.get("ownerDecisionNow", {}).get("thisMonth"),
+            },
+            "expectedImpact": BossDecisionBriefHandler._expected_impact(pos),
+            "keyEvidence": BossDecisionBriefHandler._owner_key_evidence(pos, menu, review),
+            "analysisDimensions": BossDecisionBriefHandler._analysis_dimensions(readiness, pos, menu, review, sections),
+            "dataStillMissing": BossDecisionBriefHandler._data_gap(readiness),
+        }
+
+    @staticmethod
+    def _owner_headline(store_name: str, pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> str:
+        weekday_weekend = pos.get("weekdayWeekend") or {}
+        if isinstance(weekday_weekend, dict):
+            gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
+            if gap_pct is not None and gap_pct >= 30:
+                return (
+                    f"{store_name} 不是先看全店打折，优先解决工作日承接。"
+                    f"周末日均比工作日高 {round(gap_pct, 1)}%，说明周末需求能接住，周一到周四要补客流和加购。"
+                )
+
+        chain_rank = pos.get("chainRank") or {}
+        if isinstance(chain_rank, dict):
+            revenue_rank = BossDecisionBriefHandler._safe_int(chain_rank.get("revenueRank"))
+            daily_rank = BossDecisionBriefHandler._safe_int(chain_rank.get("dailyRank"))
+            store_count = BossDecisionBriefHandler._safe_int(chain_rank.get("storeCount"))
+            if revenue_rank and daily_rank and store_count and daily_rank < revenue_rank:
+                return (
+                    f"{store_name} 总额排名不靠前，但日均能力更强："
+                    f"总额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}。"
+                    "先别按总额误判门店，应该看开业天数、工作日和商场动线。"
+                )
+
+        top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
+        positive_dishes = BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or [])
+        if top_products and positive_dishes:
+            return (
+                f"{store_name} 的主线是用 {top_products[0]} 做入口，"
+                f"再用点评认可的 {positive_dishes[0]} 做加购和复购。"
+            )
+        return f"{store_name} 需要把 POS、点评、菜品、外部信号和成本闭环放在同一页看，先定动作再看图表。"
+
+    @staticmethod
+    def _plain_diagnosis(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> str:
+        parts: list[str] = []
+        weekly = pos.get("weeklyTrend") or []
+        if isinstance(weekly, list) and weekly:
+            last = weekly[-1]
+            if isinstance(last, dict):
+                wow_revenue = BossDecisionBriefHandler._safe_float(last.get("wowRevenuePct"))
+                wow_orders = BossDecisionBriefHandler._safe_float(last.get("wowOrdersPct"))
+                aov = BossDecisionBriefHandler._safe_float(last.get("aov"))
+                if wow_revenue is not None and wow_orders is not None:
+                    parts.append(
+                        f"最近一周营收环比 {round(wow_revenue, 1)}%，订单环比 {round(wow_orders, 1)}%"
+                        + (f"，客单约 {round(aov, 2)} 元" if aov is not None else "")
+                    )
+
+        dayparts = pos.get("daypartRevenue") or []
+        top_daypart = BossDecisionBriefHandler._top_named_share(dayparts, ("name", "daypart"))
+        if top_daypart:
+            parts.append(f"{top_daypart['name']}贡献约 {top_daypart['sharePercent']}%，排班和备货要优先围绕这个时段")
+
+        customer_segment = BossDecisionBriefHandler._top_named_share(
+            pos.get("customerSegments") or pos.get("topGuestSegments") or [],
+            ("segment", "name"),
+        )
+        if customer_segment:
+            parts.append(f"核心桌型/客群是 {customer_segment['name']}，贡献约 {customer_segment['sharePercent']}%")
+
+        channel = BossDecisionBriefHandler._top_named_share(pos.get("channelGroups") or [], ("channel", "name"))
+        if channel:
+            parts.append(f"最大渠道是 {channel['name']}，贡献约 {channel['sharePercent']}%，渠道动作要优先服务这个入口")
+
+        top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
+        if top_products:
+            parts.append(f"菜品入口先看 {top_products[0]}，但要和点评风险一起判断，不能只看销量")
+
+        themes = BossDecisionBriefHandler._theme_names(review.get("negativeThemes") or [])
+        if themes:
+            parts.append(f"点评风险集中在 {'、'.join(themes[:3])}，本周先改最集中的一个体验问题")
+
+        return "；".join(parts) or "当前数据足够做经营方向判断，但还需要日级订单、点评原文、BOM 和月盘点才能做利润闭环。"
+
+    @staticmethod
+    def _owner_action_items(
+        pos: dict[str, Any],
+        menu: dict[str, Any],
+        review: dict[str, Any],
+        readiness: dict[str, Any],
+    ) -> dict[str, list[str]]:
+        do_first: list[str] = []
+        do_not_do = ["不要先做全店打折，先判断问题是客流、转化、菜品、体验还是成本。"]
+
+        weekday_weekend = pos.get("weekdayWeekend") or {}
+        if isinstance(weekday_weekend, dict):
+            gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
+            if gap_pct is not None and gap_pct >= 30:
+                do_first.append("周一到周四先做轻套餐和门口/团购页导流，把工作日空档补起来。")
+
+        top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
+        basket_pairs = menu.get("basketPairs") or menu.get("topPairs") or []
+        pair_names = BossDecisionBriefHandler._pair_names(basket_pairs)
+        if top_products:
+            if pair_names:
+                do_first.append(f"用 {top_products[0]} 做入口，固定搭配 {pair_names[0]}，不要让服务员临场随便推荐。")
+            else:
+                do_first.append(f"把 {top_products[0]} 放到菜单首屏、团购页和服务员话术里，先用爆品带加购。")
+
+        negative_dishes = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
+        if negative_dishes:
+            do_first.append(f"厨师长本周抽查 {'、'.join(negative_dishes[:3])}，先稳出品再放大投放。")
+            do_not_do.append(f"不要盲目加推 {'、'.join(negative_dishes[:3])}，这些菜点评里有不稳定信号。")
+
+        channel = BossDecisionBriefHandler._top_named_share(pos.get("channelGroups") or [], ("channel", "name"))
+        if channel:
+            do_first.append(f"优先优化 {channel['name']} 的团购页、套餐名、评价回复和主图，因为它是当前最大入口。")
+
+        if not BossDecisionBriefHandler._has_source(readiness, "月盘点/库存/BOM"):
+            do_not_do.append("没有月盘点、采购和 BOM 前，不要承诺毛利改善金额，也不要把利润问题全归因到销售。")
+
+        if not do_first:
+            do_first.append("先补近 90 天订单明细和点评原文，把周趋势、时段、桌型、菜品和差评原因合到一页。")
+
+        return {
+            "doFirst": do_first[:5],
+            "doNotDo": do_not_do[:4],
+            "thisWeek": [
+                do_first[0],
+                "每天复盘一次订单数、客单、差评关键词和主推菜转化，不等月底才看报表。",
+            ],
+        }
+
+    @staticmethod
+    def _expected_impact(pos: dict[str, Any]) -> dict[str, str]:
+        aov = (
+            BossDecisionBriefHandler._safe_float(pos.get("aov"))
+            or BossDecisionBriefHandler._safe_float(pos.get("avgOrderRevenue"))
+            or BossDecisionBriefHandler._safe_float(pos.get("averageOrderValue"))
+        )
+        if aov:
+            weekly_uplift = round(aov * 10 * 5, 0)
+            return {
+                "plainText": (
+                    f"保守看，工作日每天多接 10 单，按当前客单约 {round(aov, 2)} 元，"
+                    f"一周可多约 {int(weekly_uplift)} 元营收。"
+                ),
+                "caveat": "这是营收机会估算，不是利润承诺；利润还要等 BOM、采购、损耗和人工排班闭环。",
+            }
+        return {
+            "plainText": "当前缺少可用客单，暂不估算金额，只给动作优先级。",
+            "caveat": "补齐订单明细后，可按每日多接单数直接估算周营收机会。",
+        }
+
+    @staticmethod
+    def _owner_key_evidence(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> list[str]:
+        evidence: list[str] = []
+        orders = pos.get("orders")
+        revenue = pos.get("revenue") or pos.get("periodRevenue")
+        customers = pos.get("customers")
+        if orders and revenue:
+            evidence.append(f"POS: {orders} 单，实收/收入约 {revenue}" + (f"，客流 {customers}" if customers else ""))
+
+        weekday_weekend = pos.get("weekdayWeekend") or {}
+        if isinstance(weekday_weekend, dict):
+            weekday = BossDecisionBriefHandler._safe_float(weekday_weekend.get("weekdayAvgDailyRevenue"))
+            weekend = BossDecisionBriefHandler._safe_float(weekday_weekend.get("weekendAvgDailyRevenue"))
+            gap = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
+            if weekday is not None and weekend is not None and gap is not None:
+                evidence.append(f"工作日日均 {round(weekday, 2)}，周末日均 {round(weekend, 2)}，周末高 {round(gap, 1)}%")
+
+        chain_rank = pos.get("chainRank") or {}
+        if isinstance(chain_rank, dict):
+            revenue_rank = chain_rank.get("revenueRank")
+            daily_rank = chain_rank.get("dailyRank")
+            store_count = chain_rank.get("storeCount")
+            if revenue_rank and daily_rank and store_count:
+                evidence.append(f"连锁对比: 总额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}")
+
+        top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
+        if top_products:
+            evidence.append(f"菜品入口: {'、'.join(top_products[:3])}")
+
+        positive = BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or [])
+        negative = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
+        if positive:
+            evidence.append(f"点评认可: {'、'.join(positive[:3])}")
+        if negative:
+            evidence.append(f"点评风险: {'、'.join(negative[:3])}")
+        return evidence or ["当前证据不足，先补 POS、点评、菜品和外部信号。"]
+
+    @staticmethod
+    def _analysis_dimensions(
+        readiness: dict[str, Any],
+        pos: dict[str, Any],
+        menu: dict[str, Any],
+        review: dict[str, Any],
+        sections: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        return [
+            BossDecisionBriefHandler._dimension(
+                "营收趋势",
+                "看日/周/月变化，判断问题是短期波动还是持续下滑。",
+                "已接周趋势，可做周环比。" if pos.get("weeklyTrend") else "缺连续日级订单时，只能看汇总，无法解释哪天掉了。",
+                "补近 90 天日订单，固定输出最近 4 周环比。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "时段结构",
+                "判断午市、晚市、低峰分别该怎么排班、备货和促销。",
+                "已接时段收入。" if pos.get("daypartRevenue") else "缺开单时间聚合，无法判断午晚市哪个时段弱。",
+                "按小时聚合订单、营收、客流和客单。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "桌型/人数结构",
+                "判断该推单人餐、双人餐还是多人聚餐套餐。",
+                "已接桌型/客群结构。" if (pos.get("customerSegments") or pos.get("topGuestSegments")) else "缺人数结构，套餐建议容易拍脑袋。",
+                "按客流人数聚合订单、营收和客单。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "菜品结构",
+                "判断引流菜、加购菜、风险菜、低动销菜分别怎么处理。",
+                "已接菜品销量。" if menu.get("topProducts") else "缺 SKU 明细时无法做菜单工程。",
+                "补菜品销量、售价、成本、搭配关系。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "顾客评价",
+                "判断顾客不满意在服务、出品、环境、价格还是排队。",
+                "已接点评主题。" if (review.get("negativeThemes") or review.get("positiveDishMentions")) else "缺评论原文时只能猜体验问题。",
+                "继续拉点评/美团/抖音评论原文和低分原因。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "渠道结构",
+                "判断美团点评、抖音、微信、会员、商场券各自该承担什么任务。",
+                "已接渠道贡献。" if pos.get("channelGroups") else "缺渠道拆分时无法判断预算该投哪里。",
+                "按渠道聚合订单、券核销、实收和复购。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "连锁对比",
+                "判断是单店执行问题，还是商圈/区域/品牌共性。",
+                "已接连锁排名。" if pos.get("chainRank") else "缺同品牌门店对比，容易误罚单店。",
+                "补同城同品牌同周期门店数据。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "利润闭环",
+                "判断利润漏在采购、BOM、报损、赠品、盘点差异还是菜品结构。",
+                "已有成本/盘点入口。" if BossDecisionBriefHandler._has_source(readiness, "月盘点/库存/BOM") else "缺 BOM、采购和月盘点，不能承诺利润改善金额。",
+                "补采购入库、月底盘点、理论耗用/BOM、报损赠品。",
+            ),
+        ]
+
+    @staticmethod
+    def _dimension(name: str, question: str, current: str, next_step: str) -> dict[str, str]:
+        return {
+            "dimension": name,
+            "bossQuestion": question,
+            "currentFinding": current,
+            "nextStep": next_step,
+        }
+
+    @staticmethod
     def _cross_platform_comparison(
         readiness: dict[str, Any],
         params: dict[str, Any],
@@ -664,6 +957,56 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             return int(float(value))
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _top_named_share(items: Any, name_keys: tuple[str, ...]) -> dict[str, Any] | None:
+        if not isinstance(items, list):
+            return None
+        best: dict[str, Any] | None = None
+        best_share = -1.0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = next((item.get(key) for key in name_keys if item.get(key)), None)
+            share = BossDecisionBriefHandler._safe_float(item.get("share"))
+            if share is None:
+                share = BossDecisionBriefHandler._safe_float(item.get("revenueShare"))
+            if name is None or share is None:
+                continue
+            if share > best_share:
+                best = {"name": str(name), "share": share, "sharePercent": round(share * 100, 1)}
+                best_share = share
+        return best
+
+    @staticmethod
+    def _pair_names(items: Any) -> list[str]:
+        if not isinstance(items, list):
+            return []
+        names: list[str] = []
+        for item in items:
+            if isinstance(item, dict):
+                pair = item.get("pair") or item.get("name")
+                if pair:
+                    names.append(str(pair))
+                    continue
+                left = item.get("left") or item.get("a") or item.get("productA")
+                right = item.get("right") or item.get("b") or item.get("productB")
+                if left and right:
+                    names.append(f"{left}+{right}")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                names.append(f"{item[0]}+{item[1]}")
+            elif isinstance(item, str):
+                names.append(item)
+        return [name for name in names if name.strip()]
 
     @staticmethod
     def _source_decision_map(readiness: dict[str, Any]) -> list[dict[str, Any]]:
