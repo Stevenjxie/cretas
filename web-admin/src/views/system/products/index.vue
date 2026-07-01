@@ -128,7 +128,8 @@ const PRODUCT_CATEGORIES = [
   { value: 'RAW_MATERIAL', label: '原料' },
   { value: 'PACKAGING', label: '包辅材' },
   { value: 'SEASONING', label: '调味品' },
-  { value: 'CUSTOMER_MATERIAL', label: '客户自带原料加工' }
+  { value: 'CUSTOMER_MATERIAL', label: '客户自带原料加工' },
+  { value: 'CONTRACT_MANUFACTURING', label: '纯代工' }
 ] as const;
 
 type ProductCategory = typeof PRODUCT_CATEGORIES[number]['value'];

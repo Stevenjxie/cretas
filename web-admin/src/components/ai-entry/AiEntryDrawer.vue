@@ -151,6 +151,7 @@ function formatPreviewValue(key: string, value: unknown): string {
     const map: Record<string, string> = {
       FINISHED_PRODUCT: '成品', RAW_MATERIAL: '原料', PACKAGING: '包辅材',
       SEASONING: '调味品', CUSTOMER_MATERIAL: '客户自带原料加工',
+      CONTRACT_MANUFACTURING: '纯代工',
     };
     return map[String(value)] || String(value);
   }
