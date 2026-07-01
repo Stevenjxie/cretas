@@ -4,10 +4,12 @@ import com.cretas.aims.dto.factory.CreateSemiFinishedStocktakeRequest;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeDTO;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeItemUpdateDTO;
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.factory.SemiFinishedStocktake;
 import com.cretas.aims.entity.factory.SemiFinishedStocktakeItem;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -15,11 +17,11 @@ import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.factory.SemiFinishedStocktakeItemRepository;
 import com.cretas.aims.repository.factory.SemiFinishedStocktakeRepository;
 import com.cretas.aims.service.factory.SemiFinishedStocktakeService;
+import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -64,18 +66,26 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     private final SemiFinishedStocktakeItemRepository stocktakeItemRepo;
     private final SemiFinishedInventoryRepository sfiRepo;
     private final SemiFinishedInventoryTransactionRepository sfiTxnRepo;
+    /** 盘点差异财务过账 (盘盈=收入/盘亏=损耗); prod 必注入 (禁止降级不做过账)。 */
+    private final VoucherService voucherService;
 
     /** SP12: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
 
-    /**
-     * 月底约束: >=threshold 日才允许发起盘点。
-     * prod 默认 29 (月底); test env 可设 1 以跳过限制便于 E2E。
-     * 与 SP7 仓库盘点共用同一策略键。
-     */
-    @Value("${cretas.stocktake.month-end-threshold:29}")
-    private int monthEndThreshold;
+    // -------------------------------------------------------
+    // 盘点差异财务凭证 科目 (China GAAP, 复用 seed V20260701_02 + ExpenseVoucherGenerator 损耗 pattern)
+    //   盘盈 (surplus): 借 1405 库存商品 / 贷 6301 营业外收入          (客户张权模型: 盘盈=收入)
+    //   盘亏 (shortage): 借 6602.01 管理费用-损耗 / 贷 1405 库存商品   (镜像 WastageRecord 损耗过账; 盘亏=损耗)
+    // -------------------------------------------------------
+    private static final String SUBJECT_INVENTORY_CODE = "1405";
+    private static final String SUBJECT_INVENTORY_NAME = "库存商品";
+    private static final String SUBJECT_SURPLUS_INCOME_CODE = "6301";
+    private static final String SUBJECT_SURPLUS_INCOME_NAME = "营业外收入";
+    private static final String SUBJECT_SHORTAGE_LOSS_CODE = "6602.01";
+    private static final String SUBJECT_SHORTAGE_LOSS_NAME = "管理费用-损耗";
+    /** 凭证来源业务类型 (与 stocktakeId 组成 uk_voucher_source_business 幂等键)。 */
+    private static final String VOUCHER_SOURCE_TYPE = "SEMI_FINISHED_STOCKTAKE";
 
     // -------------------------------------------------------
     // 审批角色 (镜像 SP7 STOCKTAKE_APPROVAL_ROLES = INVENTORY_ADJUSTMENT 审批角色)
@@ -89,22 +99,14 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     @Override
     @Transactional
     public SemiFinishedStocktakeDTO initiate(String factoryId, CreateSemiFinishedStocktakeRequest req, Long userId) {
-        // 月底约束
-        LocalDate today = LocalDate.now();
-        if (today.getDayOfMonth() < monthEndThreshold) {
-            LocalDate nextAllowedDate = today.withDayOfMonth(monthEndThreshold);
-            throw new BusinessException(409,
-                    "半成品盘点任务只能在月底（" + monthEndThreshold + "日后）发起，当前是 " + today +
-                    "，下次可发起日期: " + nextAllowedDate)
-                    .withHint("等到 " + monthEndThreshold + " 日再发起");
-        }
-
-        // 防重复发起 (同工厂同月份已有未完成盘点)
-        long existing = stocktakeRepo.countActiveStocktakeForMonth(factoryId, req.getPeriodMonth());
+        // 张权要求: 盘点任意时间可发起 (周复盘 / 月复盘皆可) — 已去除月底(threshold)日期限制。
+        // 唯一去重: 同工厂同时只允许一个未完成(非终态)盘点, 上一个生效(APPLIED)/驳回(REJECTED)后即可再发起。
+        long existing = stocktakeRepo.countActiveStocktake(factoryId);
         if (existing > 0) {
             throw new BusinessException(409,
-                    "本月已有进行中的半成品盘点任务，请完成或拒绝后再发起")
-                    .withCode("DUPLICATE_STOCKTAKE");
+                    "已有进行中的半成品盘点，请先完成或取消后再发起")
+                    .withCode("DUPLICATE_STOCKTAKE")
+                    .withHint("请前往盘点列表完成或驳回进行中的盘点");
         }
 
         SemiFinishedStocktake stocktake = new SemiFinishedStocktake();
@@ -240,6 +242,13 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
         }
         assertStatus(stocktake, SemiFinishedStocktake.Status.APPROVED, "生效");
 
+        // 盘点差异财务过账累计 (盘盈=收入/盘亏=损耗)。逐行按 delta × unitCost 估值,
+        // 净盘盈总额进收入侧, 净盘亏总额进损耗侧 (同一张凭证内两侧独立, 不互相净额抵销)。
+        BigDecimal surplusValue = BigDecimal.ZERO;   // Σ 盘盈行 value (正)
+        BigDecimal shortageValue = BigDecimal.ZERO;  // Σ |盘亏行 value| (正)
+        int uncostedCount = 0;                       // unitCost=null 无法估值的差异行 (排除出凭证)
+        int valuedCount = 0;
+
         for (SemiFinishedStocktakeItem item : stocktake.getItems()) {
             if (item.getDifferenceQty() == null
                     || item.getDifferenceQty().compareTo(BigDecimal.ZERO) == 0) {
@@ -268,6 +277,12 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             if (newAvail.signum() < 0) {
                 newAvail = BigDecimal.ZERO; // 防呆 not-below-zero
             }
+            // realizedDelta = 实际发生的余量变化 (clamp 后)。盘盈/未触底盘亏 == delta;
+            //   盘亏 |delta|>currentAvail (并发耗尽) 时 clamp 到 0 → realizedDelta = −currentAvail (< |delta|)。
+            //   台账 ADJUST 流水 + 盘盈/盘亏凭证 都用 realizedDelta, 保证三者 (库存变动/流水/凭证) 一致,
+            //   不按未真实发生的 raw delta 高估损耗 (禁止降级: 记账必须等于实际发生)。
+            //   不变式 balanceAfter(newAvail) == balanceBefore(currentAvail) + realizedDelta 也因此成立。
+            BigDecimal realizedDelta = newAvail.subtract(currentAvail);
             // 🔴 Fix 1 (禁止降级, 保住凭证+成本不变式): 只动 adjustmentQuantity, 让
             //   produced − consumed + adjustment == newAvail; producedQuantity/consumedQuantity/
             //   accumulatedCost/unitCost 全部不动 (它们喂 VoucherExportServiceImpl 半成品入库/发出
@@ -287,23 +302,45 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             }
             sfiRepo.save(sfi); // @Version 乐观锁并发保护 (produced/consumed/成本 未改动)
 
-            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负 = 真实 delta; 纯数量校准, 不改成本口径)
+            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负 = 实际发生的 realizedDelta; 纯数量校准, 不改成本口径)
             SemiFinishedInventoryTransaction txn = SemiFinishedInventoryTransaction.builder()
                     .factoryId(factoryId)
                     .semiFinishedId(sfi.getId())
                     .txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
                     .sourceType(SemiFinishedInventoryTransaction.SourceType.STOCKTAKE)
                     .sourceRef(stocktakeId)
-                    .quantity(delta)                       // 可正可负 = actualQty − systemQty
+                    .quantity(realizedDelta)               // 实际余量变化 (clamp 后; balanceAfter=before+quantity)
                     .unitCostAtTxn(sfi.getUnitCost())      // 均价快照 (诚实 null 传播, 未改动)
                     .balanceAfter(newAvail)
                     .balanceCostAfter(sfi.getUnitCost())
                     .operatorId(userId)
                     .build();
             sfiTxnRepo.save(txn);
-            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} delta={} newAvailable={} adjustment={}",
-                    factoryId, item.getIntermediateBatchNo(), delta, newAvail, newAdjustment);
+            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} realizedDelta={} (rawDelta={}) newAvailable={} adjustment={}",
+                    factoryId, item.getIntermediateBatchNo(), realizedDelta, delta, newAvail, newAdjustment);
+
+            // 差异估值 (禁止降级/诚实 null): unitCost=null (未计成本半成品) 无法估值 →
+            //   排除出财务凭证 (数量已调整), 绝不臆造价值。value = realizedDelta × unitCost
+            //   (按实际发生的余量变化估值, 盘亏超可用量 clamp 时不高估损耗)。
+            BigDecimal unitCost = sfi.getUnitCost();
+            if (unitCost == null) {
+                uncostedCount++;
+                log.warn("半成品盘点 apply: SFI unitCost=null 未计成本, 差异行排除出财务凭证 (数量仍调整) "
+                        + "factoryId={} batchNo={} realizedDelta={}", factoryId, item.getIntermediateBatchNo(), realizedDelta);
+            } else {
+                BigDecimal itemValue = realizedDelta.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+                valuedCount++;
+                if (itemValue.signum() > 0) {
+                    surplusValue = surplusValue.add(itemValue);
+                } else if (itemValue.signum() < 0) {
+                    shortageValue = shortageValue.add(itemValue.negate());
+                }
+            }
         }
+
+        // 财务过账: 盘盈=收入 / 盘亏=损耗 (与库存调整同一 @Transactional — 过账失败则整个 apply 回滚,
+        // 绝不留下"库存已调但凭证未过"的不一致态)。全部差异行未计成本 → 不过账凭证 (仅 warn)。
+        postVarianceVoucher(stocktake, factoryId, surplusValue, shortageValue, valuedCount, uncostedCount, userId);
 
         stocktake.setStatus(SemiFinishedStocktake.Status.APPLIED);
         stocktake.setAppliedAt(LocalDateTime.now());
@@ -423,6 +460,61 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     // -------------------------------------------------------
     // private helpers
     // -------------------------------------------------------
+
+    /**
+     * 过账盘点差异财务凭证 (盘盈=收入 / 盘亏=损耗)。
+     *
+     * <p>科目 (China GAAP): 盘盈 借 1405 库存商品 / 贷 6301 营业外收入;
+     * 盘亏 借 6602.01 管理费用-损耗 / 贷 1405 库存商品 (镜像 WastageRecord 损耗过账)。
+     * 同一次 apply 若既有盘盈又有盘亏, 合并进一张凭证 (两侧独立入账, 库存侧收入侧损耗侧各自 gross,
+     * 不做净额抵销 — 不同 SKU 的盈亏分属不同科目, 净额抵销会错记收入/费用)。
+     *
+     * <p>{@code createManual} 直建 POSTED 凭证并共用本 apply 的 @Transactional:
+     * 借贷不平/DB 失败 → 抛异常 → 整个 apply 回滚。凭证经 (SEMI_FINISHED_STOCKTAKE, stocktakeId)
+     * 唯一约束幂等 (apply 本身已 APPLIED 状态 + @Version 防重, 唯一约束是兜底)。
+     * 该路径刻意绕过期间结账 gate (mirrors 结转损益/红冲系统凭证 — 盘点校准须能过账, 不被锁定期间阻断)。
+     *
+     * @param valuedCount   已估值差异行数 (unitCost 非 null)
+     * @param uncostedCount 未计成本被排除行数 (unitCost=null)
+     */
+    private void postVarianceVoucher(SemiFinishedStocktake stocktake, String factoryId,
+            BigDecimal surplusValue, BigDecimal shortageValue,
+            int valuedCount, int uncostedCount, Long userId) {
+        boolean hasSurplus = surplusValue.signum() > 0;
+        boolean hasShortage = shortageValue.signum() > 0;
+        if (!hasSurplus && !hasShortage) {
+            // 无可估值差异: 全 MATCH / 全被排除 (uncosted) / 估值净额均为 0 → 不过账凭证
+            if (uncostedCount > 0) {
+                log.warn("半成品盘点 apply: 全部差异行未计成本(unitCost=null), 不过账财务凭证 "
+                        + "stocktakeNo={} uncosted={}", stocktake.getStocktakeNo(), uncostedCount);
+            }
+            return;
+        }
+
+        List<VoucherEntrySpec> entries = new ArrayList<>();
+        String no = stocktake.getStocktakeNo();
+        if (hasSurplus) {
+            // 盘盈: 借 库存商品 / 贷 营业外收入
+            entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                    surplusValue, null, "半成品盘盈 " + no));
+            entries.add(new VoucherEntrySpec(SUBJECT_SURPLUS_INCOME_CODE, SUBJECT_SURPLUS_INCOME_NAME,
+                    null, surplusValue, "半成品盘盈收益 " + no));
+        }
+        if (hasShortage) {
+            // 盘亏: 借 管理费用-损耗 / 贷 库存商品
+            entries.add(new VoucherEntrySpec(SUBJECT_SHORTAGE_LOSS_CODE, SUBJECT_SHORTAGE_LOSS_NAME,
+                    shortageValue, null, "半成品盘亏损耗 " + no));
+            entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                    null, shortageValue, "半成品盘亏库存减少 " + no));
+        }
+
+        String summary = no + " 半成品盘点"
+                + (hasSurplus ? "盘盈" : "") + (hasShortage ? "盘亏" : "") + "差异凭证";
+        voucherService.createManual(factoryId, VoucherType.INVENTORY_STOCKTAKE,
+                LocalDate.now(), entries, VOUCHER_SOURCE_TYPE, stocktake.getId(), summary, userId);
+        log.info("半成品盘点 apply: 已过账差异凭证 stocktakeNo={} 盘盈={} 盘亏={} valued={} uncosted={}",
+                no, surplusValue, shortageValue, valuedCount, uncostedCount);
+    }
 
     private void assertApprovalRole(String requestRole) {
         String normalized = requestRole == null ? "" : requestRole.toLowerCase();

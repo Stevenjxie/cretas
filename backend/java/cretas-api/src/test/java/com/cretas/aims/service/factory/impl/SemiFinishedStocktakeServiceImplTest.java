@@ -2,8 +2,10 @@ package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.dto.factory.CreateSemiFinishedStocktakeRequest;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeItemUpdateDTO;
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.SemiFinishedStocktake;
 import com.cretas.aims.entity.factory.SemiFinishedStocktakeItem;
 import com.cretas.aims.exception.BusinessException;
@@ -11,6 +13,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.factory.SemiFinishedStocktakeItemRepository;
 import com.cretas.aims.repository.factory.SemiFinishedStocktakeRepository;
+import com.cretas.aims.service.voucher.VoucherService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,10 +21,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -31,6 +32,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -58,6 +60,7 @@ class SemiFinishedStocktakeServiceImplTest {
     @Mock private SemiFinishedStocktakeItemRepository stocktakeItemRepo;
     @Mock private SemiFinishedInventoryRepository sfiRepo;
     @Mock private SemiFinishedInventoryTransactionRepository sfiTxnRepo;
+    @Mock private VoucherService voucherService;
 
     @InjectMocks private SemiFinishedStocktakeServiceImpl service;
 
@@ -65,39 +68,14 @@ class SemiFinishedStocktakeServiceImplTest {
     private static final String OTHER_FACTORY = "F999";
     private static final Long USER_ID = 42L;
     private static final String BATCH_NO = "SEMI-2026-0001";
+    private static final String BATCH_NO_2 = "SEMI-2026-0002";
 
     // -------------------------------------------------------
-    // 1. 月底约束
+    // 1. 任意时间可发起 (去月底限制) + 快照 AVAILABLE 半成品行
     // -------------------------------------------------------
     @Test
-    @DisplayName("T1: threshold=29 时 day<29 → 409 含下次可发起日期; day>=29 放行")
-    void initiate_threshold29_monthEndGuard() {
-        ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
-        CreateSemiFinishedStocktakeRequest req = new CreateSemiFinishedStocktakeRequest();
-        req.setPeriodMonth("2026-06");
-
-        int todayDay = LocalDateTime.now().getDayOfMonth();
-        if (todayDay >= 29) {
-            when(stocktakeRepo.countActiveStocktakeForMonth(any(), any())).thenReturn(0L);
-            when(sfiRepo.findByFactoryIdAndStatusForStocktake(any(), any())).thenReturn(Collections.emptyList());
-            when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-            service.initiate(FACTORY_ID, req, USER_ID);
-            return;
-        }
-        assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> {
-                    BusinessException be = (BusinessException) ex;
-                    assertThat(be.getCode()).isEqualTo(409);
-                    assertThat(be.getMessage()).contains("月底");
-                    assertThat(be.getMessage()).contains("下次可发起日期");
-                });
-    }
-
-    @Test
-    @DisplayName("T1b: threshold=1 → 放行, 快照 AVAILABLE 半成品行 (systemQty=availableQuantity)")
-    void initiate_threshold1_snapshotsAvailableRows() {
-        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+    @DisplayName("T1: 任意日期(含月初1号)均可发起 — 无月底限制; 快照 AVAILABLE 行 systemQty=availableQuantity")
+    void initiate_anyTime_noMonthEndBlock_snapshotsAvailableRows() {
         CreateSemiFinishedStocktakeRequest req = new CreateSemiFinishedStocktakeRequest();
         req.setPeriodMonth("2026-06");
 
@@ -108,11 +86,12 @@ class SemiFinishedStocktakeServiceImplTest {
                 .availableQuantity(new BigDecimal("40.00")).status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
 
-        when(stocktakeRepo.countActiveStocktakeForMonth(any(), any())).thenReturn(0L);
+        when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(0L);
         when(sfiRepo.findByFactoryIdAndStatusForStocktake(FACTORY_ID, SemiFinishedInventory.Status.AVAILABLE))
                 .thenReturn(List.of(sfi));
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
+        // 无论今天几号都放行 (删除了 monthEndThreshold 逻辑)
         var dto = service.initiate(FACTORY_ID, req, USER_ID);
 
         ArgumentCaptor<SemiFinishedStocktake> captor = ArgumentCaptor.forClass(SemiFinishedStocktake.class);
@@ -127,19 +106,36 @@ class SemiFinishedStocktakeServiceImplTest {
     }
 
     // -------------------------------------------------------
-    // 2. duplicate check
+    // 2. 进行中去重 (唯一 guard) — 允许同月多次 (周复盘)
     // -------------------------------------------------------
     @Test
-    @DisplayName("T2: 同工厂同月已有活跃盘点 → 409")
-    void initiate_duplicate_throws409() {
-        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+    @DisplayName("T2: 同工厂已有进行中(非终态)盘点 → 409 '已有进行中'")
+    void initiate_inProgress_throws409() {
         CreateSemiFinishedStocktakeRequest req = new CreateSemiFinishedStocktakeRequest();
         req.setPeriodMonth("2026-06");
-        when(stocktakeRepo.countActiveStocktakeForMonth(eq(FACTORY_ID), any())).thenReturn(1L);
+        when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(1L);
 
         assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("已有进行中");
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("已有进行中");
+                });
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("T2b: 上一个盘点已终态(APPLIED/REJECTED) → countActiveStocktake=0 → 放行 (支持周复盘节奏)")
+    void initiate_priorTerminal_allowsNew() {
+        CreateSemiFinishedStocktakeRequest req = new CreateSemiFinishedStocktakeRequest();
+        req.setPeriodMonth("2026-06");
+        when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(0L);
+        when(sfiRepo.findByFactoryIdAndStatusForStocktake(any(), any())).thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        var dto = service.initiate(FACTORY_ID, req, USER_ID);
+        assertThat(dto.getStocktakeNo()).startsWith("SFST-");
     }
 
     // -------------------------------------------------------
@@ -372,6 +368,244 @@ class SemiFinishedStocktakeServiceImplTest {
 
         // ADJUST 流水恰好一次 (状态守卫 + @Version 兜真并发)
         verify(sfiTxnRepo, times(1)).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 6.5 apply 财务过账 (盘盈=收入 / 盘亏=损耗)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("TV1: net 盘亏 (costed) → 过账盘亏损耗凭证 借6602.01管理费用-损耗/贷1405库存商品, value=Σ|diff×unitCost|")
+    void apply_netShortage_postsLossVoucher() {
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("30.0000"));
+        item.setDifferenceQty(new BigDecimal("-10.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("40.00")).unitCost(new BigDecimal("12.5000"))
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> entriesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), entriesCaptor.capture(), eq("SEMI_FINISHED_STOCKTAKE"), eq(st.getId()),
+                anyString(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = entriesCaptor.getValue();
+        assertThat(entries).hasSize(2);
+        // 借 6602.01 管理费用-损耗 = 125.00 (= |−10 × 12.5|)
+        assertThat(entries.get(0).subjectCode()).isEqualTo("6602.01");
+        assertThat(entries.get(0).subjectName()).isEqualTo("管理费用-损耗");
+        assertThat(entries.get(0).debit().compareTo(new BigDecimal("125.00"))).isEqualTo(0);
+        assertThat(entries.get(0).credit()).isNull();
+        // 贷 1405 库存商品 = 125.00
+        assertThat(entries.get(1).subjectCode()).isEqualTo("1405");
+        assertThat(entries.get(1).subjectName()).isEqualTo("库存商品");
+        assertThat(entries.get(1).credit().compareTo(new BigDecimal("125.00"))).isEqualTo(0);
+        assertThat(entries.get(1).debit()).isNull();
+    }
+
+    @Test
+    @DisplayName("TV2: net 盘盈 (costed) → 过账盘盈收入凭证 借1405库存商品/贷6301营业外收入")
+    void apply_netSurplus_postsIncomeVoucher() {
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("48.0000"));
+        item.setDifferenceQty(new BigDecimal("8.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SURPLUS);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("40.00")).unitCost(new BigDecimal("10.0000"))
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> entriesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), entriesCaptor.capture(), eq("SEMI_FINISHED_STOCKTAKE"), eq(st.getId()),
+                anyString(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = entriesCaptor.getValue();
+        assertThat(entries).hasSize(2);
+        // 借 1405 库存商品 = 80.00 (= 8 × 10)
+        assertThat(entries.get(0).subjectCode()).isEqualTo("1405");
+        assertThat(entries.get(0).subjectName()).isEqualTo("库存商品");
+        assertThat(entries.get(0).debit().compareTo(new BigDecimal("80.00"))).isEqualTo(0);
+        assertThat(entries.get(0).credit()).isNull();
+        // 贷 6301 营业外收入 = 80.00
+        assertThat(entries.get(1).subjectCode()).isEqualTo("6301");
+        assertThat(entries.get(1).subjectName()).isEqualTo("营业外收入");
+        assertThat(entries.get(1).credit().compareTo(new BigDecimal("80.00"))).isEqualTo(0);
+        assertThat(entries.get(1).debit()).isNull();
+    }
+
+    @Test
+    @DisplayName("TV3: 未计成本(unitCost=null)差异行 — 排除出凭证但数量仍调整; 与已计成本行混合 → 凭证仅含已计成本")
+    void apply_uncostedItem_excludedFromVoucher_butQtyStillAdjusted() {
+        // item1: 已计成本盘亏 diff −4, unitCost 5 → 损耗 20.00
+        SemiFinishedStocktakeItem costed = buildItem("40.0000");
+        costed.setActualQty(new BigDecimal("36.0000"));
+        costed.setDifferenceQty(new BigDecimal("-4.0000"));
+        costed.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        // item2: 未计成本 (unitCost=null) 盘亏 diff −3 → 排除出凭证, 但数量仍调整
+        SemiFinishedStocktakeItem uncosted = new SemiFinishedStocktakeItem();
+        uncosted.setId(UUID.randomUUID().toString());
+        uncosted.setSemiFinishedId(101L);
+        uncosted.setIntermediateBatchNo(BATCH_NO_2);
+        uncosted.setSystemQty(new BigDecimal("20.0000"));
+        uncosted.setActualQty(new BigDecimal("17.0000"));
+        uncosted.setDifferenceQty(new BigDecimal("-3.0000"));
+        uncosted.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, costed, uncosted);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        SemiFinishedInventory sfiCosted = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("40.00")).unitCost(new BigDecimal("5.0000"))
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        SemiFinishedInventory sfiUncosted = SemiFinishedInventory.builder()
+                .id(101L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO_2)
+                .producedQuantity(new BigDecimal("20.00")).consumedQuantity(new BigDecimal("0.00"))
+                .availableQuantity(new BigDecimal("20.00")).unitCost(null)  // 未计成本
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfiCosted));
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO_2))
+                .thenReturn(Optional.of(sfiUncosted));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        // 两行数量都调整 (库存 save + ADJUST 流水 各 2 次) — 未计成本行数量不受影响
+        verify(sfiRepo, times(2)).save(any());
+        verify(sfiTxnRepo, times(2)).save(any());
+
+        // 凭证仅含已计成本盘亏 20.00 (未计成本行被排除, 绝不臆造价值)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> entriesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), entriesCaptor.capture(), eq("SEMI_FINISHED_STOCKTAKE"), eq(st.getId()),
+                anyString(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = entriesCaptor.getValue();
+        assertThat(entries).hasSize(2);
+        assertThat(entries.get(0).subjectCode()).isEqualTo("6602.01");
+        assertThat(entries.get(0).debit().compareTo(new BigDecimal("20.00"))).isEqualTo(0);
+        assertThat(entries.get(1).subjectCode()).isEqualTo("1405");
+        assertThat(entries.get(1).credit().compareTo(new BigDecimal("20.00"))).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("TV4: 全部差异行未计成本 → 不过账凭证 (仅 warn), 但数量仍全部调整")
+    void apply_allUncosted_noVoucher_butQtyAdjusted() {
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("35.0000"));
+        item.setDifferenceQty(new BigDecimal("-5.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("40.00")).unitCost(null)  // 未计成本
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        // 数量仍调整 (库存 save + ADJUST 流水)
+        verify(sfiRepo).save(any());
+        verify(sfiTxnRepo).save(any());
+        // 无可估值差异 → 不过账凭证
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("TV5: 盘亏 |delta|>currentAvail (并发耗尽 → 重读余量已低于快照) — clamp 到 0; "
+            + "ADJUST txn 与凭证按 realizedDelta(=−currentAvail) 过账, 不高估损耗, 借=贷平")
+    void apply_shortageExceedsAvail_booksRealizedDelta_notRawDelta() {
+        // 快照 systemQty=40, 仓管点数 5 → delta = −35 (盘亏 35)
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("5.0000"));
+        item.setDifferenceQty(new BigDecimal("-35.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        // 审批期间被并发领用耗尽: 重读时 available 只剩 20 (< |delta|=35)。unitCost=8。
+        //   currentAvail=20, delta=−35 → newAvail=max(0, 20−35)=0 → realizedDelta = 0−20 = −20。
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("60.00")).consumedQuantity(new BigDecimal("40.00"))
+                .availableQuantity(new BigDecimal("20.00")).unitCost(new BigDecimal("8.0000"))
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        // 库存 clamp 到 0 → DEPLETED
+        ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        verify(sfiRepo).save(sfiCaptor.capture());
+        assertThat(sfiCaptor.getValue().getAvailableQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+        assertThat(sfiCaptor.getValue().getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+
+        // ADJUST txn 按 realizedDelta=−20 (NOT raw −35); 台账不变式 balanceAfter=balanceBefore+quantity
+        ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(sfiTxnRepo).save(txnCaptor.capture());
+        assertThat(txnCaptor.getValue().getQuantity().compareTo(new BigDecimal("-20.00"))).isEqualTo(0);
+        assertThat(txnCaptor.getValue().getBalanceAfter().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+
+        // 凭证按 realizedDelta 估值: 盘亏 = |−20 × 8| = 160.00 (NOT |−35 × 8| = 280) → 不高估损耗
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> entriesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), entriesCaptor.capture(), eq("SEMI_FINISHED_STOCKTAKE"), eq(st.getId()),
+                anyString(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = entriesCaptor.getValue();
+        assertThat(entries).hasSize(2);
+        assertThat(entries.get(0).subjectCode()).isEqualTo("6602.01");
+        assertThat(entries.get(0).debit().compareTo(new BigDecimal("160.00"))).isEqualTo(0);
+        assertThat(entries.get(1).subjectCode()).isEqualTo("1405");
+        assertThat(entries.get(1).credit().compareTo(new BigDecimal("160.00"))).isEqualTo(0);
+        // 借=贷平
+        assertThat(entries.get(0).debit().compareTo(entries.get(1).credit())).isEqualTo(0);
     }
 
     // -------------------------------------------------------
