@@ -24,6 +24,7 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -144,7 +145,21 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
         }
         stocktake.setItems(items);
 
-        SemiFinishedStocktake saved = stocktakeRepo.save(stocktake);
+        // Belt-and-suspenders: 上面的 countActiveStocktake 预检存在 TOCTOU 窗口 (两个并发
+        // initiate 都读到 0)。DB 层 partial unique index uk_sf_stocktake_one_active
+        // (V20261027_27, 谓词 status NOT IN(APPLIED,REJECTED) AND deleted_at IS NULL)
+        // 是最终兜底。saveAndFlush 让 INSERT 在本方法事务内同步执行, 竞态输家在此命中唯一索引
+        // → DataIntegrityViolationException, 转成与预检完全一致的友好 409 (而非裸 500)。
+        SemiFinishedStocktake saved;
+        try {
+            saved = stocktakeRepo.saveAndFlush(stocktake);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("半成品盘点: 并发发起命中「一厂一进行中」唯一索引, factoryId={} → 转 409", factoryId, e);
+            throw new BusinessException(409,
+                    "已有进行中的半成品盘点，请先完成或取消后再发起")
+                    .withCode("DUPLICATE_STOCKTAKE")
+                    .withHint("请前往盘点列表完成或驳回进行中的盘点");
+        }
         log.info("半成品盘点: 任务已创建 factoryId={} stocktakeNo={} itemCount={}",
                 factoryId, saved.getStocktakeNo(), items.size());
         SemiFinishedStocktakeDTO dto = SemiFinishedStocktakeDTO.from(saved);

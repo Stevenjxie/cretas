@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -89,13 +90,13 @@ class SemiFinishedStocktakeServiceImplTest {
         when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(0L);
         when(sfiRepo.findByFactoryIdAndStatusForStocktake(FACTORY_ID, SemiFinishedInventory.Status.AVAILABLE))
                 .thenReturn(List.of(sfi));
-        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // 无论今天几号都放行 (删除了 monthEndThreshold 逻辑)
         var dto = service.initiate(FACTORY_ID, req, USER_ID);
 
         ArgumentCaptor<SemiFinishedStocktake> captor = ArgumentCaptor.forClass(SemiFinishedStocktake.class);
-        verify(stocktakeRepo).save(captor.capture());
+        verify(stocktakeRepo).saveAndFlush(captor.capture());
         SemiFinishedStocktake saved = captor.getValue();
         assertThat(saved.getItems()).hasSize(1);
         SemiFinishedStocktakeItem item = saved.getItems().get(0);
@@ -122,7 +123,7 @@ class SemiFinishedStocktakeServiceImplTest {
                     assertThat(be.getCode()).isEqualTo(409);
                     assertThat(be.getMessage()).contains("已有进行中");
                 });
-        verify(stocktakeRepo, never()).save(any());
+        verify(stocktakeRepo, never()).saveAndFlush(any());
     }
 
     @Test
@@ -132,10 +133,34 @@ class SemiFinishedStocktakeServiceImplTest {
         req.setPeriodMonth("2026-06");
         when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(0L);
         when(sfiRepo.findByFactoryIdAndStatusForStocktake(any(), any())).thenReturn(Collections.emptyList());
-        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
         var dto = service.initiate(FACTORY_ID, req, USER_ID);
         assertThat(dto.getStocktakeNo()).startsWith("SFST-");
+    }
+
+    @Test
+    @DisplayName("T2c: 竞态输家 — 预检读到 0 通过, 但 DB「一厂一进行中」唯一索引在 saveAndFlush 触发 " +
+            "DataIntegrityViolationException → 转与预检一致的友好 409 (非裸 500)")
+    void initiate_dbUniqueIndexRace_translatesTo409() {
+        CreateSemiFinishedStocktakeRequest req = new CreateSemiFinishedStocktakeRequest();
+        req.setPeriodMonth("2026-06");
+        // 竞态: 两个并发 initiate 都读到 countActiveStocktake=0 (TOCTOU 窗口)
+        when(stocktakeRepo.countActiveStocktake(FACTORY_ID)).thenReturn(0L);
+        when(sfiRepo.findByFactoryIdAndStatusForStocktake(any(), any())).thenReturn(Collections.emptyList());
+        // 输家 INSERT 命中 partial unique index uk_sf_stocktake_one_active
+        when(stocktakeRepo.saveAndFlush(any()))
+                .thenThrow(new DataIntegrityViolationException(
+                        "ERROR: duplicate key value violates unique constraint \"uk_sf_stocktake_one_active\""));
+
+        assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("已有进行中");
+                    assertThat(be.getErrorCode()).isEqualTo("DUPLICATE_STOCKTAKE");
+                });
     }
 
     // -------------------------------------------------------
