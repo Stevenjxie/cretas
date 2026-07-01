@@ -447,6 +447,8 @@ def test_mall_collection_uses_public_nanjing_road_demo_feeds_without_env() -> No
     )
 
     assert "https://www.sh.chinanews.com.cn/yule/2026-06-27/147398.shtml" in urls
+    assert "https://whlyj.sh.gov.cn/cysc/20260511/579b1241c56a484c9afda02051aa6b9d.html" in urls
+    assert "https://www.neccsh.com/cecsh/exhibitioninfo/exhibitionlist.jspx" in urls
     assert "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html" in urls
 
 
@@ -525,9 +527,82 @@ def test_collect_mall_activity_feeds_crawls_single_public_wechat_article() -> No
     assert result["status"] == "collected"
     assert result["events"][0]["title"] == "今天10点！南京路线上消费券准时开抢！！！"
     assert result["events"][0]["dateText"] == "2月6日-2月8日"
+    assert result["events"][0]["sourceType"] == "wechat_public_article"
     assert result["events"][0]["targetRelevance"] == "active"
     assert result["sources"][0]["status"] == "parsed_direct_public_article"
     assert [call["url"] for call in client.calls] == ["https://mp.weixin.qq.com/s/abc123"]
+
+
+def test_collect_mall_activity_feeds_can_use_public_article_image_ocr() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mp.weixin.qq.com/s/poster": """
+                <html>
+                  <head><title>南京路线上消费券准时开抢</title></head>
+                  <body>
+                    <div id="js_content">
+                      <p>活动详情见下方海报。</p>
+                      <img data-src="https://mmbiz.qpic.cn/activity-poster.jpg" />
+                    </div>
+                  </body>
+                </html>
+            """,
+            "https://mmbiz.qpic.cn/activity-poster.jpg": "fake-image-bytes",
+        }
+    )
+
+    def fake_ocr(image_bytes: bytes, image_url: str) -> str:
+        assert image_url == "https://mmbiz.qpic.cn/activity-poster.jpg"
+        assert image_bytes
+        return "使用时间：2026年2月6日-2026年2月8日 第一百货商业中心参与"
+
+    service = RestaurantExternalSignalService(http_client=client, ocr_client=fake_ocr)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路",
+            mall_name="第一百货商业中心",
+            target_date="2026-02-06",
+        ),
+        feed_urls=["https://mp.weixin.qq.com/s/poster"],
+    )
+
+    assert result["status"] == "collected"
+    assert result["events"][0]["dateText"] == "2月6日-2月8日"
+    assert result["events"][0]["targetRelevance"] == "active"
+    assert result["events"][0]["ocrTextCount"] == 1
+    assert result["events"][0]["ocrExcerpt"].startswith("使用时间")
+    assert [call["url"] for call in client.calls] == [
+        "https://mp.weixin.qq.com/s/poster",
+        "https://mmbiz.qpic.cn/activity-poster.jpg",
+    ]
+
+
+def test_collect_mall_activity_feeds_parses_iso_date_ranges() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://necc.example/robots.txt": "User-agent: *\nAllow: /\n",
+            "https://necc.example/events": """
+                <html>
+                  <head><title>国家会展中心展会排期</title></head>
+                  <body>
+                    <p>2026中国国际模具技术和设备展览会</p>
+                    <p>2026-07-01 - 2026-07-04 3H、4.1H、NH</p>
+                  </body>
+                </html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(city="上海", business_district="人民广场", target_date="2026-07-01"),
+        feed_urls=["https://necc.example/events"],
+    )
+
+    assert result["events"][0]["dateText"] == "7月1日-7月4日"
+    assert result["events"][0]["targetRelevance"] == "active"
 
 
 def test_collect_mall_activity_feeds_rejects_wechat_history_crawling() -> None:
