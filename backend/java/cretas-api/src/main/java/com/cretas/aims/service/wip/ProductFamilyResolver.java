@@ -40,8 +40,13 @@ import java.util.stream.Collectors;
  *       在其 {@code materialCategory=RAW} 明细里取<b>用量最大</b>的一项 (并列取 sortOrder 最小),
  *       其 {@code materialTypeId} 即族键。</li>
  *   <li><b>兜底 名称字典 (以原料为名)</b>: BOM 缺失/无 RAW 项时, 用产品名 (优先 baseProductName,
- *       次 name) 去匹配 {@code raw_material_types} 中 {@code category=原料} 的名称, 取<b>最长匹配</b>
- *       (最具体) 的原料 id 作族键。处理无 BOM 的导入产品。</li>
+ *       次 name) 去匹配 {@code raw_material_types} 中的<b>主材类名称</b>, 取<b>最长匹配</b>
+ *       (最具体) 的原料 id 作族键。处理无 BOM 的导入产品。
+ *       <p><b>主材类 = 排除法</b> (不硬编码单一 category): 真实工厂 category 命名各异 ——
+ *       F006 主料肉是 {@code 肉类} (如 冻猪蹄), LIUSHANMEN 是 {@code 主材} (62 行, 根本没有 {@code 原料} 类)。
+ *       故字典 = 该工厂全部 raw_material_types <b>剔除明确的辅料类</b>
+ *       ({@code 调味料/调味品/添加剂/包材/包辅材}); 其余 (原料/主材/肉类/未分类 …) 均作主材候选。
+ *       这样 F006 的 肉类 与 LIUSHANMEN 的 主材 均可匹配, 且未来新增主材 category 自动生效。</li>
  *   <li><b>都识别不出</b> → 返回族键缺失 (map 中无此 key)。调用方据此<b>宽松放行</b>
  *       (不隐藏可能合法复用的项), 见 {@code WipInventoryServiceImpl} 过滤逻辑。</li>
  * </ol>
@@ -67,8 +72,19 @@ public class ProductFamilyResolver {
     private final ProductTypeRepository productTypeRepo;
     private final RawMaterialTypeRepository rawMaterialTypeRepo;
 
-    /** {@code raw_material_types.category} 中"原料"档 (vs 调味品/包材) — 名称字典只匹配真原料。 */
-    private static final String RAW_MATERIAL_CATEGORY = "原料";
+    /**
+     * 名称字典的<b>排除法</b> — 明确的辅料/包材类 category, 这些<b>不</b>作为产品族信号。
+     * 其余全部 category (原料/主材/肉类/未分类 …) 均作主材候选, 从而 F006(肉类) + LIUSHANMEN(主材) 都可匹配。
+     * (若硬编码单一 "原料" 则真实工厂全部落空 → 回退失效, 见 class javadoc。)
+     */
+    private static final Set<String> AUXILIARY_CATEGORIES = Set.of(
+            "调味料", "调味品", "添加剂", "包材", "包辅材");
+    /**
+     * 名称匹配前剥离的前导存储/状态限定词 (真实主材名带 冻/鲜 前缀, 成品名不带)。
+     * <b>顺序敏感</b>: 长前缀在前 (速冻/冷冻/冷鲜 先于 冻/鲜), 命中即返回不继续。
+     */
+    private static final List<String> STORAGE_QUALIFIER_PREFIXES = List.of(
+            "速冻", "冷冻", "冷鲜", "冻", "鲜", "生", "熟");
     /** BOM 明细 {@code materialCategory} 的原料档 (vs AUXILIARY/PACKAGING)。 */
     private static final String BOM_RAW_CATEGORY = "RAW";
     /** 族键前缀 — 键空间 = raw_material_types.id (BOM主料 与 名称字典 落同一 id 空间, 故可比较)。 */
@@ -98,7 +114,7 @@ public class ProductFamilyResolver {
         Map<String, ProductType> ptMap = new HashMap<>();
         productTypeRepo.findByIdIn(ids).forEach(pt -> ptMap.put(pt.getId(), pt));
 
-        // 原料字典延迟加载 (仅当有产品走名称兜底时才查一次)。
+        // 主材字典延迟加载 (仅当有产品走名称兜底时才查一次)。
         List<RawMaterialType> rawDict = null;
         boolean rawDictLoaded = false;
 
@@ -106,7 +122,7 @@ public class ProductFamilyResolver {
             String family = deriveFromBom(factoryId, ptId);
             if (family == null) {
                 if (!rawDictLoaded) {
-                    rawDict = rawMaterialTypeRepo.findByFactoryIdAndCategory(factoryId, RAW_MATERIAL_CATEGORY);
+                    rawDict = loadMainMaterialDict(factoryId);
                     rawDictLoaded = true;
                 }
                 family = deriveFromName(ptMap.get(ptId), rawDict);
@@ -157,7 +173,27 @@ public class ProductFamilyResolver {
     }
 
     /**
-     * 兜底信号: 产品名 (优先 baseProductName) 匹配原料字典, 取最长匹配的原料 id。
+     * 加载该工厂的<b>主材字典</b> — 全部 raw_material_types 剔除明确辅料类 ({@link #AUXILIARY_CATEGORIES})。
+     * category 为 null/未分类的行<b>保留</b>作主材候选 (宁可匹配, 不因缺分类而误排)。
+     */
+    private List<RawMaterialType> loadMainMaterialDict(String factoryId) {
+        return rawMaterialTypeRepo.findByFactoryId(factoryId).stream()
+                .filter(r -> !isAuxiliaryCategory(r.getCategory()))
+                .collect(Collectors.toList());
+    }
+
+    /** 是否明确的辅料/包材类 category (null/未列出 → 视为主材候选, 返 false)。 */
+    private boolean isAuxiliaryCategory(String category) {
+        return category != null && AUXILIARY_CATEGORIES.contains(category.trim());
+    }
+
+    /**
+     * 兜底信号: 产品名 (优先 baseProductName) 匹配主材字典, 取最长匹配的原料 id。
+     *
+     * <p>匹配用原料名的<b>核心词</b> (剥离前导存储/状态限定词, 见 {@link #coreName}):
+     * 真实数据里主材常带存储前缀 (F006 主料是 {@code 冻猪蹄}), 而成品名是 {@code 卤猪蹄} —— 直接
+     * substring 会漏 ({@code "卤猪蹄".contains("冻猪蹄") == false})。剥前缀后 {@code 冻猪蹄→猪蹄},
+     * {@code "卤猪蹄".contains("猪蹄") == true}。最长匹配按<b>核心词</b>长度比较 (牛肉 胜 牛)。
      *
      * @return {@code "RM:" + rawMaterialTypeId}, 无匹配返 {@code null}。
      */
@@ -173,15 +209,36 @@ public class ProductFamilyResolver {
         RawMaterialType best = null;
         int bestLen = 0;
         for (RawMaterialType raw : rawDict) {
-            String rn = raw.getName();
-            if (rn == null || rn.isBlank() || raw.getId() == null) {
+            if (raw.getId() == null) {
                 continue;
             }
-            if (productName.contains(rn) && rn.length() > bestLen) {
+            String core = coreName(raw.getName());
+            if (core.isEmpty()) {
+                continue;
+            }
+            if (productName.contains(core) && core.length() > bestLen) {
                 best = raw;
-                bestLen = rn.length();
+                bestLen = core.length();
             }
         }
         return best == null ? null : FAMILY_PREFIX + best.getId();
+    }
+
+    /**
+     * 原料名 → 匹配核心词: 剥离前导存储/状态限定词 (冻/速冻/冷冻/冷鲜/鲜/生/熟)。
+     * 仅在剥离后仍剩 ≥2 字符时才剥 (避免把 "生鱼"→"鱼" 之类过度剥成噪音, 且防单字误配)。
+     * 无前缀 / 剥后过短 → 原样返回。
+     */
+    private String coreName(String rawName) {
+        if (rawName == null) {
+            return "";
+        }
+        String s = rawName.trim();
+        for (String q : STORAGE_QUALIFIER_PREFIXES) {
+            if (s.length() > q.length() + 1 && s.startsWith(q)) {
+                return s.substring(q.length());
+            }
+        }
+        return s;
     }
 }

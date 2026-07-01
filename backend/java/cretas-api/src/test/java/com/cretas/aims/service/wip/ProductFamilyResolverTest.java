@@ -73,10 +73,14 @@ class ProductFamilyResolverTest {
     }
 
     private RawMaterialType raw(String id, String name) {
+        return raw(id, name, "原料");
+    }
+
+    private RawMaterialType raw(String id, String name, String category) {
         RawMaterialType r = new RawMaterialType();
         r.setId(id);
         r.setName(name);
-        r.setCategory("原料");
+        r.setCategory(category);
         r.setFactoryId(FACTORY_ID);
         r.setCode("RC-" + id);
         r.setUnit("kg");
@@ -183,10 +187,22 @@ class ProductFamilyResolverTest {
             mockBom("PT-Y", "R-Y",
                     item(1L, "RM-SALT", "AUXILIARY", new BigDecimal("5"), 1));
             when(productTypeRepo.findByIdIn(anyCollection())).thenReturn(List.of(pt("PT-Y", "卤猪蹄", "卤猪蹄")));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-ZHUTI", "猪蹄")));
 
             assertThat(resolver.resolveFamily(FACTORY_ID, "PT-Y")).isEqualTo("RM:RM-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("BOM主料优先于名称 — BOM主料指向 RM-A, 产品名却像 RM-B → 取 RM-A (名称不查)")
+        void bomPrimary_precedesName() {
+            mockBom("PT-P", "R-P",
+                    item(1L, "RM-A", "RAW", new BigDecimal("300"), 1));
+            // 产品名"卤猪蹄"若走名称会命中 RM-B(猪蹄), 但 BOM主料 RM-A 优先, 名称字典根本不查。
+            when(productTypeRepo.findByIdIn(anyCollection())).thenReturn(List.of(pt("PT-P", "卤猪蹄", "卤猪蹄")));
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-P")).isEqualTo("RM:RM-A");
+            verify(rawMaterialTypeRepo, never()).findByFactoryId(any(String.class));
         }
     }
 
@@ -202,10 +218,78 @@ class ProductFamilyResolverTest {
             mockNoBom("PT-IMP");
             when(productTypeRepo.findByIdIn(anyCollection()))
                     .thenReturn(List.of(pt("PT-IMP", "好食光卤猪蹄200g", "好食光卤猪蹄")));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-ZHUTI", "猪蹄"), raw("RM-NIUROU", "牛肉")));
 
             assertThat(resolver.resolveFamily(FACTORY_ID, "PT-IMP")).isEqualTo("RM:RM-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("★ 真实数据 F006: 主料肉 category=肉类 (非'原料') 仍可匹配 (冻猪蹄)")
+        void f006_matchesRouLeiCategory() {
+            mockNoBom("PT-F006");
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-F006", "卤猪蹄", "卤猪蹄")));
+            // F006 真实: 主料肉在 肉类, 辅料在 调味料 —— 硬编码'原料'会全落空。
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(
+                    raw("RM-ZHUTI", "冻猪蹄", "肉类"),
+                    raw("RM-SALT", "食盐", "调味料")));
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-F006")).isEqualTo("RM:RM-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("★ 真实数据 LIUSHANMEN: 主材 category=主材 (根本无'原料'类) 仍可匹配")
+        void liushanmen_matchesZhuCaiCategory() {
+            mockNoBom("PT-LSM");
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-LSM", "叮咚好食光卤猪蹄", "卤猪蹄")));
+            // LIUSHANMEN 真实: 主材 62 行在 主材 类, 无 原料 类 —— 硬编码'原料'会全落空。
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(
+                    raw("RM-ZHUTI", "猪蹄", "主材"),
+                    raw("RM-JIANG", "生抽", "调味品")));
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-LSM")).isEqualTo("RM:RM-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("辅料类 (调味料/添加剂/包材) 不作族信号 — 即使产品名含调料名也不匹配")
+        void auxiliaryCategories_notFamilySignal() {
+            mockNoBom("PT-AUX");
+            // 产品名"香辣猪蹄"含"辣椒"(调味料)+"猪蹄"(肉类)。辣椒是辅料 → 只应匹配主材"猪蹄"。
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-AUX", "香辣猪蹄", "香辣猪蹄")));
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(
+                    raw("RM-CHILI", "辣椒", "调味料"),     // 辅料 → 剔除
+                    raw("RM-ADD", "防腐剂", "添加剂"),      // 辅料 → 剔除
+                    raw("RM-BOX", "包装盒", "包材"),        // 辅料 → 剔除
+                    raw("RM-ZHUTI", "猪蹄", "肉类")));      // 主材 → 匹配
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-AUX")).isEqualTo("RM:RM-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("纯辅料匹配 (无主材命中) → 族键缺失 (调料名不构成族)")
+        void onlyAuxiliaryMatch_noFamily() {
+            mockNoBom("PT-ONLYAUX");
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ONLYAUX", "五香辣椒", "五香辣椒")));
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(
+                    raw("RM-CHILI", "辣椒", "调味料")));   // 唯一命中是辅料 → 剔除后无匹配
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-ONLYAUX")).isNull();
+        }
+
+        @Test
+        @DisplayName("category 为 null (未分类) 的主材仍作候选 (宁可匹配, 不因缺分类误排)")
+        void nullCategoryRaw_stillCandidate() {
+            mockNoBom("PT-NULLCAT");
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-NULLCAT", "卤猪蹄", "卤猪蹄")));
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID)).thenReturn(List.of(
+                    raw("RM-ZHUTI", "猪蹄", null)));       // 未分类 → 保留作候选
+
+            assertThat(resolver.resolveFamily(FACTORY_ID, "PT-NULLCAT")).isEqualTo("RM:RM-ZHUTI");
         }
 
         @Test
@@ -214,7 +298,7 @@ class ProductFamilyResolverTest {
             mockNoBom("PT-N");
             when(productTypeRepo.findByIdIn(anyCollection()))
                     .thenReturn(List.of(pt("PT-N", "酱牛肉", "酱牛肉")));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-NIU", "牛"), raw("RM-NIUROU", "牛肉")));
 
             assertThat(resolver.resolveFamily(FACTORY_ID, "PT-N")).isEqualTo("RM:RM-NIUROU");
@@ -226,7 +310,7 @@ class ProductFamilyResolverTest {
             mockNoBom("PT-Z");
             ProductType p = pt("PT-Z", "卤牛肉", null); // baseProductName null
             when(productTypeRepo.findByIdIn(anyCollection())).thenReturn(List.of(p));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-NIUROU", "牛肉")));
 
             assertThat(resolver.resolveFamily(FACTORY_ID, "PT-Z")).isEqualTo("RM:RM-NIUROU");
@@ -242,7 +326,7 @@ class ProductFamilyResolverTest {
             when(productTypeRepo.findByIdIn(anyCollection())).thenReturn(List.of(
                     pt("PT-BOM", "卤猪蹄", "卤猪蹄"),
                     pt("PT-NAME", "椒麻猪蹄", "椒麻猪蹄")));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-ZHUTI", "猪蹄")));
 
             Map<String, String> fam = resolver.resolveFamilies(FACTORY_ID, List.of("PT-BOM", "PT-NAME"));
@@ -265,7 +349,7 @@ class ProductFamilyResolverTest {
             mockNoBom("PT-UNK");
             when(productTypeRepo.findByIdIn(anyCollection()))
                     .thenReturn(List.of(pt("PT-UNK", "神秘产品", "神秘产品")));
-            when(rawMaterialTypeRepo.findByFactoryIdAndCategory(FACTORY_ID, "原料"))
+            when(rawMaterialTypeRepo.findByFactoryId(FACTORY_ID))
                     .thenReturn(List.of(raw("RM-ZHUTI", "猪蹄")));
 
             Map<String, String> fam = resolver.resolveFamilies(FACTORY_ID, List.of("PT-UNK"));
@@ -293,7 +377,7 @@ class ProductFamilyResolverTest {
 
             resolver.resolveFamilies(FACTORY_ID, List.of("PT-A"));
 
-            verify(rawMaterialTypeRepo, never()).findByFactoryIdAndCategory(any(), any());
+            verify(rawMaterialTypeRepo, never()).findByFactoryId(any(String.class));
         }
 
         @Test
