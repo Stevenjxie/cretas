@@ -1,12 +1,15 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
+import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.inventory.impl.FinishedGoodsFeedServiceImpl;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import org.junit.jupiter.api.BeforeEach;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -49,12 +52,14 @@ class FinishedGoodsFeedServiceTest {
 
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private ProductFamilyResolver productFamilyResolver;
+    @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
     private FinishedGoodsFeedServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new FinishedGoodsFeedServiceImpl(finishedGoodsBatchRepository, productFamilyResolver);
+        service = new FinishedGoodsFeedServiceImpl(
+                finishedGoodsBatchRepository, productFamilyResolver, finishedGoodsAdjustmentLogRepository);
     }
 
     @Test
@@ -112,43 +117,90 @@ class FinishedGoodsFeedServiceTest {
     }
 
     @Test
-    @DisplayName("严格扣减成功: shippedQuantity += qty → 可用量下降, 返回实际扣减量")
-    void consumeStrictSucceedsAndDeducts() {
-        FinishedGoodsBatch b = fg("FG-A", PT_PIG, "50");     // available = 50
+    @DisplayName("🔴 严格扣减成功: 减 producedQuantity (不动 shippedQuantity) + 写 PRODUCTION_FEED 调整日志; available 正确下降")
+    void consumeStrictReducesProducedNotShippedAndLogs() {
+        FinishedGoodsBatch b = fg("FG-A", PT_PIG, "50");     // produced=50, shipped=0 → available=50
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-A"))
                 .thenReturn(Optional.of(b));
 
-        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("30"));
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("30"), "kg");
 
         assertThat(drawn).isEqualByComparingTo("30");
-        assertThat(b.getShippedQuantity()).isEqualByComparingTo("30");
+        // 🔴 shippedQuantity 绝不动 (避免被 VoucherExportServiceImpl 误当"成品发出"按售价计入)
+        assertThat(b.getShippedQuantity()).isEqualByComparingTo("0");
+        // 减 producedQuantity → available 随之下降
+        assertThat(b.getProducedQuantity()).isEqualByComparingTo("20");
         assertThat(b.getAvailableQuantity()).isEqualByComparingTo("20");
         verify(finishedGoodsBatchRepository).save(b);
+        // 调整日志留痕: referenceType=PRODUCTION_FEED, 负数变更, before/after=produced
+        ArgumentCaptor<FinishedGoodsAdjustmentLog> logCap = ArgumentCaptor.forClass(FinishedGoodsAdjustmentLog.class);
+        verify(finishedGoodsAdjustmentLogRepository).save(logCap.capture());
+        FinishedGoodsAdjustmentLog logRow = logCap.getValue();
+        assertThat(logRow.getReferenceType()).isEqualTo("PRODUCTION_FEED");
+        assertThat(logRow.getAdjustmentQuantity()).isEqualByComparingTo("-30");
+        assertThat(logRow.getBeforeProduced()).isEqualByComparingTo("50");
+        assertThat(logRow.getAfterProduced()).isEqualByComparingTo("20");
     }
 
     @Test
-    @DisplayName("严格扣减 loud-fail: 批次不存在 → FG_NOT_FOUND (禁止降级)")
+    @DisplayName("严格扣减 loud-fail: 批次不存在 → FG_NOT_FOUND (禁止降级, 不写日志)")
     void consumeStrictNotFoundThrows() {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-MISSING"))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-MISSING", new BigDecimal("10")))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-MISSING", new BigDecimal("10"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("成品库存不存在");
         verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(finishedGoodsAdjustmentLogRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("严格扣减 loud-fail: 库存不足 (qty>available) → FG_INSUFFICIENT (不 clamp)")
+    @DisplayName("严格扣减 loud-fail: 库存不足 (qty>available) → FG_INSUFFICIENT (不 clamp, 不改 produced/不写日志)")
     void consumeStrictInsufficientThrows() {
         FinishedGoodsBatch b = fg("FG-A", PT_PIG, "30");     // available = 30
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-A"))
                 .thenReturn(Optional.of(b));
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("100")))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("100"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("成品库存不足");
+        assertThat(b.getProducedQuantity()).isEqualByComparingTo("30");   // 未改
         verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(finishedGoodsAdjustmentLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🟠 单位不一致 loud-fail: FG 批次 盒 + 投料 kg → FG_UNIT_MISMATCH (禁止降级, 不误扣)")
+    void consumeStrictUnitMismatchThrows() {
+        FinishedGoodsBatch b = fg("FG-BOX", PT_PIG, "50");
+        b.setUnit("盒");                                       // 气调成品按盒计量
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-BOX"))
+                .thenReturn(Optional.of(b));
+
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-BOX", new BigDecimal("10"), "kg"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("单位")
+                .hasMessageContaining("不一致");
+        // 不误扣: produced/shipped 均不动, 不写日志
+        assertThat(b.getProducedQuantity()).isEqualByComparingTo("50");
+        assertThat(b.getShippedQuantity()).isEqualByComparingTo("0");
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(finishedGoodsAdjustmentLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("单位一致 (both kg) → 正常扣减 (不被单位守卫误伤)")
+    void consumeStrictSameUnitOk() {
+        FinishedGoodsBatch b = fg("FG-KG", PT_PIG, "50");    // unit "kg"
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-KG"))
+                .thenReturn(Optional.of(b));
+
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-KG", new BigDecimal("10"), "kg");
+
+        assertThat(drawn).isEqualByComparingTo("10");
+        assertThat(b.getProducedQuantity()).isEqualByComparingTo("40");
+        verify(finishedGoodsAdjustmentLogRepository).save(any());
     }
 
     @Test

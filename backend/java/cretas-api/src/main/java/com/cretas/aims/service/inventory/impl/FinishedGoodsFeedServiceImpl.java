@@ -1,8 +1,10 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
+import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
@@ -31,6 +33,11 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     /** 产品族自动识别 (以原料为主) — FG 防呆过滤的"同族"信号来源, 与 SFI 过滤共用同一识别器。 */
     private final ProductFamilyResolver productFamilyResolver;
+    /** 成品投料扣减留痕 (referenceType=PRODUCTION_FEED); 对齐报损 SCRAP 的 producedQuantity 调整审计。 */
+    private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
+
+    /** ①c 成品投料扣减的调整来源标记 (审计口径, 区别于 SCRAP 报损 / 手工 adjust)。 */
+    private static final String REF_PRODUCTION_FEED = "PRODUCTION_FEED";
 
     @Override
     @Transactional(readOnly = true)
@@ -79,7 +86,7 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
 
     @Override
     @Transactional
-    public BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty) {
+    public BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit) {
         if (qty == null || qty.signum() <= 0) {
             return BigDecimal.ZERO;
         }
@@ -90,6 +97,20 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .withHint("请重新选择仍有库存的成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(batchNumber));
+
+        // 🟠 单位不一致 loud-fail (禁止降级): 气调成品常按 盒/托 计量, 逐道投料量为 kg。若 FG 批次 unit 与投料
+        //   feedUnit 不同, 无安全换算 → 直接拒绝 (不 kg↔盒 误扣 counter / 污染批次)。两侧非空且不等即抛。
+        String fgUnit = fg.getUnit();
+        if (feedUnit != null && !feedUnit.isBlank() && fgUnit != null && !fgUnit.isBlank()
+                && !fgUnit.trim().equalsIgnoreCase(feedUnit.trim())) {
+            throw new BusinessException(409, "成品批次单位(" + fgUnit + ")与投料单位(" + feedUnit
+                    + ")不一致，无法直接投料")
+                    .withCode("FG_UNIT_MISMATCH")
+                    .withHint("请选择与本道投料单位一致的成品批次，或改用相同计量单位的库存")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(batchNumber);
+        }
+
         BigDecimal available = fg.getAvailableQuantity();
         if (qty.compareTo(available) > 0) {
             // 禁止降级: 不足即抛 (不 clamp), 防 phantom/不足库存生产。
@@ -101,15 +122,33 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(batchNumber);
         }
-        // 物理出库口径 (mirror deductFinishedGoodsInventory): shippedQuantity += qty → 可用量下降。
-        BigDecimal shipped = fg.getShippedQuantity() != null ? fg.getShippedQuantity() : BigDecimal.ZERO;
-        fg.setShippedQuantity(shipped.add(qty));
+
+        // 🔴 扣减口径 = 减 producedQuantity (对齐报损 SCRAP, 绝不动 shippedQuantity → 不虚增发货/销售/COGS)。
+        //   available = produced − shipped − reserved, 减 produced 即正确降 available。写调整日志留痕审计。
+        BigDecimal beforeProduced = fg.getProducedQuantity() != null ? fg.getProducedQuantity() : BigDecimal.ZERO;
+        BigDecimal afterProduced = beforeProduced.subtract(qty);
+
+        FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
+                .factoryId(fg.getFactoryId())
+                .batchId(fg.getId())
+                .adjustmentQuantity(qty.negate())       // 负数 = 扣减
+                .beforeProduced(beforeProduced)
+                .afterProduced(afterProduced)
+                .reason("生产投料领用 (逐道小结) " + qty.stripTrailingZeros().toPlainString()
+                        + (fgUnit != null ? fgUnit : ""))
+                .referenceType(REF_PRODUCTION_FEED)
+                .build();
+        finishedGoodsAdjustmentLogRepository.save(logEntry);
+
+        fg.setProducedQuantity(afterProduced);
         if (fg.isDepleted()) {
             fg.setStatus(FinishedGoodsBatch.Status.DEPLETED);
         }
         finishedGoodsBatchRepository.save(fg);
-        log.info("[fg-feed] consumeForFeedStrict FG OUT: factory={}, batchNo={}, qty={}, shipped={}, available={}",
-                factoryId, batchNumber, qty, fg.getShippedQuantity(), fg.getAvailableQuantity());
+        log.info("[fg-feed] consumeForFeedStrict FG OUT (减produced): factory={}, batchNo={}, qty={}, "
+                        + "beforeProduced={}, afterProduced={}, shipped(不动)={}, available={}",
+                factoryId, batchNumber, qty, beforeProduced, afterProduced, fg.getShippedQuantity(),
+                fg.getAvailableQuantity());
         return qty;
     }
 

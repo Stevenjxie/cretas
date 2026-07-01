@@ -35,20 +35,30 @@ public interface FinishedGoodsFeedService {
     /**
      * 小结严格扣减成品批次 (FG 投料, 禁止降级)。镜像 {@code WipInventoryService.consumeClerkSemiStrict}。
      *
+     * <p>🔴 <b>扣减口径 = 减 {@code producedQuantity} (对齐成品报损 SCRAP 惯例, 绝不动 shippedQuantity)</b>:
+     * production-feed 是<b>生产领用</b>, 不是<b>销售发货</b>。若加 {@code shippedQuantity} 会被
+     * {@code VoucherExportServiceImpl} 误当"成品发出"按<b>售价</b>计入数量金额账/收发存 → 污染发货/销售/COGS 口径
+     * (与 {@code DisposalRecordService} 成品报损同类问题, 那里也刻意减 producedQuantity)。故本方法减
+     * {@code producedQuantity} 并写 {@link com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog}
+     * ({@code referenceType="PRODUCTION_FEED"}) 留痕。可用量 = produced − shipped − reserved, 减 produced
+     * 即正确降 available, 且不虚增发货。
+     *
      * <ul>
      *   <li>批次不存在 (factory-scoped) → 抛 {@code BusinessException(409, FG_NOT_FOUND)}。</li>
+     *   <li><b>单位不一致</b> (FG 批次 unit 与投料 {@code feedUnit} 不同, 无安全换算) → 抛
+     *       {@code BusinessException(409, FG_UNIT_MISMATCH)} (禁止降级: 不 kg↔盒 误扣)。</li>
      *   <li>扣减量超过可用量 (qty &gt; available) → 抛 {@code BusinessException(409, FG_INSUFFICIENT)} (拒绝超扣, 防 phantom)。</li>
      * </ul>
-     * 成功时按 {@code shippedQuantity += qty} 减少可用量 (mirror {@code deductFinishedGoodsInventory} 物理出库口径),
-     * 可用量 ≤ 0 → 状态置 DEPLETED, 返回<b>实际扣减量</b> (= qty, 不足即抛故永不少扣)。
-     * 悲观行锁串行化并发扣减。必须在调用方 {@code @Transactional} 内执行。
+     * 成功时 {@code producedQuantity -= qty} (available 随之下降), 可用量 ≤ 0 → DEPLETED, 返回<b>实际扣减量</b>
+     * (= qty, 不足即抛故永不少扣)。悲观行锁串行化并发扣减。必须在调用方 {@code @Transactional} 内执行。
      *
      * @param factoryId   工厂 ID (factory-scoped 🔒)
      * @param batchNumber 成品批次号 (= {@code FinishedGoodsBatch.batchNumber})
      * @param qty         本次投料扣减量 (≤0 → 返回 0, 不扣)
-     * @return 实际扣减量 (= qty; 不足/缺失即抛)
+     * @param feedUnit    投料计量单位 (逐道投料量为 kg → 传 "kg"); 与 FG 批次 unit 比对, 不一致即 loud-fail
+     * @return 实际扣减量 (= qty; 不足/缺失/单位不一致即抛)
      */
-    BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty);
+    BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit);
 
     /**
      * 读成品批次的单位成本 {@code unitCost} — 成本传导基准 (FG 投料下游道算本道产出成本时用)。

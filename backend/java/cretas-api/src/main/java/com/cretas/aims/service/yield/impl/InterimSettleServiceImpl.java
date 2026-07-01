@@ -208,8 +208,9 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 //   整事务回滚 → 禁止降级, 不产 phantom)。不走 SFI/priorStocked anchor 路径。
                 if (ref.isFinishedGoods()) {
                     if (srcBatchNo != null && feed.signum() > 0) {
+                        // 投料量 feedQuantityKg 语义为 kg → 传 "kg"; 与 FG 批次 unit(盒/托) 不一致则 loud-fail。
                         BigDecimal drawn = finishedGoodsFeedService
-                                .consumeForFeedStrict(factoryId, srcBatchNo, feed);
+                                .consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
                         finishedGoodsOutQuantity = finishedGoodsOutQuantity.add(nz(drawn));
                     }
                     continue;
