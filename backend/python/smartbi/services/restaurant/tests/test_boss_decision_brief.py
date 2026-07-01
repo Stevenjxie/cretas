@@ -63,7 +63,7 @@ def test_boss_decision_brief_turns_sources_into_owner_actions() -> None:
     assert data["moduleName"] == "老板最终决策简报"
     assert "先不要" in data["finalAnswer"]
     assert "不是看分数" in data["finalAnswer"]
-    assert data["ownerDecisionPage"]["title"] == "老板决策页"
+    assert data["ownerDecisionPage"]["title"] == "老板今天先看这个"
     assert data["ownerDecisionNow"]["today"].startswith("今天只做异常归因")
     assert data["ownerDecisionNow"]["thisMonth"].startswith("月底用月盘点")
 
@@ -109,7 +109,7 @@ def test_boss_decision_brief_is_honest_when_data_is_missing() -> None:
     assert data["dataReadiness"]["enoughForHardRoiPromise"] is False
     assert any("缺 月盘点" in gap for gap in data["dataGapForRealOperation"])
     assert any(item["source"] == "POS/订单" for item in data["nextDataToAskCustomer"])
-    assert data["ownerDecisionPage"]["expectedImpact"]["plainText"].startswith("当前缺少可用客单")
+    assert data["ownerDecisionPage"]["expectedImpact"]["plainText"].startswith("现在缺少客单数据")
 
 
 def test_boss_decision_brief_names_actual_dishes_from_menu_summary() -> None:
@@ -271,19 +271,22 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
 
     page = response.data["ownerDecisionPage"]
 
-    assert "工作日承接" in page["headline"]
+    assert "先别急着全店打折" in page["headline"]
+    assert "差在周一到周四" in page["headline"]
     assert "80.6%" in page["headline"]
-    assert "最近一周营收环比 10.5%" in page["plainDiagnosis"]
-    assert "晚市贡献约 60.0%" in page["plainDiagnosis"]
+    assert "最近一周营收比上周多 10.5%" in page["plainDiagnosis"]
+    assert "主要靠晚市" in page["plainDiagnosis"]
     assert "2人桌" in page["plainDiagnosis"]
     assert "美团/大众点评" in page["plainDiagnosis"]
     assert any("周一到周四" in action for action in page["doFirst"])
     assert any("手作冰豆花" in action for action in page["doFirst"])
-    assert any("不要盲目加推" in action for action in page["doNotDo"])
-    assert "一周可多约 11478 元营收" in page["expectedImpact"]["plainText"]
-    assert any("工作日日均 15801.98" in evidence for evidence in page["keyEvidence"])
-    assert any(item["dimension"] == "渠道结构" and "已接渠道贡献" in item["currentFinding"] for item in page["analysisDimensions"])
-    assert any(item["dimension"] == "利润闭环" and "缺 BOM" in item["currentFinding"] for item in page["analysisDimensions"])
+    assert any("不要先猛推" in action for action in page["doNotDo"])
+    assert any("每天只盯 4 个数" in action for action in page["decisionPlan"]["thisWeek"])
+    assert "一周大约多卖 11478 元" in page["expectedImpact"]["plainText"]
+    assert any("工作日每天约 15801.98" in evidence for evidence in page["keyEvidence"])
+    assert any(item["dimension"] == "渠道结构" and "已经能看渠道贡献" in item["currentFinding"] for item in page["analysisDimensions"])
+    assert any(item["dimension"] == "利润闭环" and "还缺 BOM" in item["currentFinding"] for item in page["analysisDimensions"])
+    assert any("不能承诺利润能省多少" in gap for gap in page["missingDataInPlainWords"])
 
 
 def test_boss_decision_brief_registered_in_section_router() -> None:

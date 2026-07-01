@@ -554,7 +554,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         headline = BossDecisionBriefHandler._owner_headline(store_name, pos, menu, review)
         actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness)
         return {
-            "title": "老板决策页",
+            "title": "老板今天先看这个",
             "headline": headline,
             "plainDiagnosis": BossDecisionBriefHandler._plain_diagnosis(pos, menu, review),
             "doFirst": actions["doFirst"],
@@ -568,6 +568,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             "keyEvidence": BossDecisionBriefHandler._owner_key_evidence(pos, menu, review),
             "analysisDimensions": BossDecisionBriefHandler._analysis_dimensions(readiness, pos, menu, review, sections),
             "dataStillMissing": BossDecisionBriefHandler._data_gap(readiness),
+            "missingDataInPlainWords": BossDecisionBriefHandler._missing_data_plain(readiness),
         }
 
     @staticmethod
@@ -577,8 +578,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
             if gap_pct is not None and gap_pct >= 30:
                 return (
-                    f"{store_name} 不是先看全店打折，优先解决工作日承接。"
-                    f"周末日均比工作日高 {round(gap_pct, 1)}%，说明周末需求能接住，周一到周四要补客流和加购。"
+                    f"{store_name} 先别急着全店打折。周末不是主要问题，差在周一到周四。"
+                    f"周末每天比工作日多卖 {round(gap_pct, 1)}%，先把工作日补起来。"
                 )
 
         chain_rank = pos.get("chainRank") or {}
@@ -588,61 +589,63 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             store_count = BossDecisionBriefHandler._safe_int(chain_rank.get("storeCount"))
             if revenue_rank and daily_rank and store_count and daily_rank < revenue_rank:
                 return (
-                    f"{store_name} 总额排名不靠前，但日均能力更强："
-                    f"总额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}。"
-                    "先别按总额误判门店，应该看开业天数、工作日和商场动线。"
+                    f"{store_name} 别只看总销售额。总额第 {revenue_rank}/{store_count}，"
+                    f"但每天能卖到第 {daily_rank}/{store_count}。"
+                    "这类店要先看工作日、商场人流和开业天数，别急着判定门店不行。"
                 )
 
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         positive_dishes = BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or [])
         if top_products and positive_dishes:
             return (
-                f"{store_name} 的主线是用 {top_products[0]} 做入口，"
-                f"再用点评认可的 {positive_dishes[0]} 做加购和复购。"
+                f"{store_name} 先围绕一道菜打透。用 {top_products[0]} 拉人进来，"
+                f"再用顾客已经认可的 {positive_dishes[0]} 做加购和复购。"
             )
-        return f"{store_name} 需要把 POS、点评、菜品、外部信号和成本闭环放在同一页看，先定动作再看图表。"
+        return f"{store_name} 先把订单、点评、菜品、商场活动和成本放一起看。老板要先知道该做什么，不是先看一堆图。"
 
     @staticmethod
     def _plain_diagnosis(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> str:
         parts: list[str] = []
         weekly = pos.get("weeklyTrend") or []
         if isinstance(weekly, list) and weekly:
-            last = weekly[-1]
+            last = BossDecisionBriefHandler._latest_complete_week(weekly)
             if isinstance(last, dict):
                 wow_revenue = BossDecisionBriefHandler._safe_float(last.get("wowRevenuePct"))
                 wow_orders = BossDecisionBriefHandler._safe_float(last.get("wowOrdersPct"))
                 aov = BossDecisionBriefHandler._safe_float(last.get("aov"))
                 if wow_revenue is not None and wow_orders is not None:
+                    revenue_phrase = BossDecisionBriefHandler._change_phrase(wow_revenue)
+                    orders_phrase = BossDecisionBriefHandler._change_phrase(wow_orders)
                     parts.append(
-                        f"最近一周营收环比 {round(wow_revenue, 1)}%，订单环比 {round(wow_orders, 1)}%"
+                        f"最近一周营收比上周{revenue_phrase}，订单{orders_phrase}"
                         + (f"，客单约 {round(aov, 2)} 元" if aov is not None else "")
                     )
 
         dayparts = pos.get("daypartRevenue") or []
         top_daypart = BossDecisionBriefHandler._top_named_share(dayparts, ("name", "daypart"))
         if top_daypart:
-            parts.append(f"{top_daypart['name']}贡献约 {top_daypart['sharePercent']}%，排班和备货要优先围绕这个时段")
+            parts.append(f"主要靠{top_daypart['name']}，它占 {top_daypart['sharePercent']}%。排班、备货先围绕这个时段")
 
         customer_segment = BossDecisionBriefHandler._top_named_share(
             pos.get("customerSegments") or pos.get("topGuestSegments") or [],
             ("segment", "name"),
         )
         if customer_segment:
-            parts.append(f"核心桌型/客群是 {customer_segment['name']}，贡献约 {customer_segment['sharePercent']}%")
+            parts.append(f"主要客人是 {customer_segment['name']}，占 {customer_segment['sharePercent']}%。套餐别先按多人聚餐去想")
 
         channel = BossDecisionBriefHandler._top_named_share(pos.get("channelGroups") or [], ("channel", "name"))
         if channel:
-            parts.append(f"最大渠道是 {channel['name']}，贡献约 {channel['sharePercent']}%，渠道动作要优先服务这个入口")
+            parts.append(f"主要从 {channel['name']} 来，占 {channel['sharePercent']}%。先改这个入口的展示和套餐")
 
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         if top_products:
-            parts.append(f"菜品入口先看 {top_products[0]}，但要和点评风险一起判断，不能只看销量")
+            parts.append(f"最该盯的菜是 {top_products[0]}。销量高不代表一定能猛推，还要看差评有没有点名")
 
         themes = BossDecisionBriefHandler._theme_names(review.get("negativeThemes") or [])
         if themes:
-            parts.append(f"点评风险集中在 {'、'.join(themes[:3])}，本周先改最集中的一个体验问题")
+            parts.append(f"差评主要在说：{'、'.join(themes[:3])}。本周先抓最集中的一个问题")
 
-        return "；".join(parts) or "当前数据足够做经营方向判断，但还需要日级订单、点评原文、BOM 和月盘点才能做利润闭环。"
+        return "。".join(parts) or "现在可以先判断经营方向，但还不能承诺能多赚多少钱。还需要每天订单、评论原文、菜品成本和月盘点。"
 
     @staticmethod
     def _owner_action_items(
@@ -652,44 +655,44 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         readiness: dict[str, Any],
     ) -> dict[str, list[str]]:
         do_first: list[str] = []
-        do_not_do = ["不要先做全店打折，先判断问题是客流、转化、菜品、体验还是成本。"]
+        do_not_do = ["不要一上来就全店打折。先看清楚到底是没人来、来了不买、菜不稳，还是成本漏了。"]
 
         weekday_weekend = pos.get("weekdayWeekend") or {}
         if isinstance(weekday_weekend, dict):
             gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
             if gap_pct is not None and gap_pct >= 30:
-                do_first.append("周一到周四先做轻套餐和门口/团购页导流，把工作日空档补起来。")
+                do_first.append("周一到周四先补客流：上双人鱼锅小套餐，门口物料和团购页都指向这个套餐。")
 
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         basket_pairs = menu.get("basketPairs") or menu.get("topPairs") or []
         pair_names = BossDecisionBriefHandler._pair_names(basket_pairs)
         if top_products:
             if pair_names:
-                do_first.append(f"用 {top_products[0]} 做入口，固定搭配 {pair_names[0]}，不要让服务员临场随便推荐。")
+                do_first.append(f"主推 {top_products[0]}，旁边固定带 {pair_names[0]}。不要让服务员现场随便想推荐语。")
             else:
-                do_first.append(f"把 {top_products[0]} 放到菜单首屏、团购页和服务员话术里，先用爆品带加购。")
+                do_first.append(f"把 {top_products[0]} 放到菜单首屏、团购页和服务员话术里，先用它带动加购。")
 
         negative_dishes = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
         if negative_dishes:
-            do_first.append(f"厨师长本周抽查 {'、'.join(negative_dishes[:3])}，先稳出品再放大投放。")
-            do_not_do.append(f"不要盲目加推 {'、'.join(negative_dishes[:3])}，这些菜点评里有不稳定信号。")
+            do_first.append(f"厨师长本周先抽查 {'、'.join(negative_dishes[:3])}。确认出品稳定，再加大推广。")
+            do_not_do.append(f"不要先猛推 {'、'.join(negative_dishes[:3])}。这些菜在评论里已经有不稳定信号。")
 
         channel = BossDecisionBriefHandler._top_named_share(pos.get("channelGroups") or [], ("channel", "name"))
         if channel:
-            do_first.append(f"优先优化 {channel['name']} 的团购页、套餐名、评价回复和主图，因为它是当前最大入口。")
+            do_first.append(f"先改 {channel['name']}：团购页、套餐名、主图、差评回复。因为它现在是最大来客入口。")
 
         if not BossDecisionBriefHandler._has_source(readiness, "月盘点/库存/BOM"):
-            do_not_do.append("没有月盘点、采购和 BOM 前，不要承诺毛利改善金额，也不要把利润问题全归因到销售。")
+            do_not_do.append("没有采购、BOM 和月盘点前，不要承诺能省多少钱，也不要把利润问题全怪到销售。")
 
         if not do_first:
-            do_first.append("先补近 90 天订单明细和点评原文，把周趋势、时段、桌型、菜品和差评原因合到一页。")
+            do_first.append("先补近 90 天订单明细和评论原文。先搞清楚哪天弱、哪个时段弱、哪道菜有问题。")
 
         return {
             "doFirst": do_first[:5],
             "doNotDo": do_not_do[:4],
             "thisWeek": [
                 do_first[0],
-                "每天复盘一次订单数、客单、差评关键词和主推菜转化，不等月底才看报表。",
+                "每天只盯 4 个数：订单数、客单、差评关键词、主推菜卖了多少。不要等月底才发现问题。",
             ],
         }
 
@@ -704,14 +707,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             weekly_uplift = round(aov * 10 * 5, 0)
             return {
                 "plainText": (
-                    f"保守看，工作日每天多接 10 单，按当前客单约 {round(aov, 2)} 元，"
-                    f"一周可多约 {int(weekly_uplift)} 元营收。"
+                    f"如果周一到周五每天多 10 单，按现在客单约 {round(aov, 2)} 元算，"
+                    f"一周大约多卖 {int(weekly_uplift)} 元。"
                 ),
-                "caveat": "这是营收机会估算，不是利润承诺；利润还要等 BOM、采购、损耗和人工排班闭环。",
+                "caveat": "这是营收机会，不是利润承诺。利润还要看菜品成本、采购价、损耗和排班。",
             }
         return {
-            "plainText": "当前缺少可用客单，暂不估算金额，只给动作优先级。",
-            "caveat": "补齐订单明细后，可按每日多接单数直接估算周营收机会。",
+            "plainText": "现在缺少客单数据，先不估金额。先给老板排动作顺序。",
+            "caveat": "补齐订单明细后，就可以按每天多几单来估一周能多卖多少钱。",
         }
 
     @staticmethod
@@ -721,7 +724,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         revenue = pos.get("revenue") or pos.get("periodRevenue")
         customers = pos.get("customers")
         if orders and revenue:
-            evidence.append(f"POS: {orders} 单，实收/收入约 {revenue}" + (f"，客流 {customers}" if customers else ""))
+            evidence.append(f"订单: {orders} 单，收入约 {revenue}" + (f"，到店/用餐人数 {customers}" if customers else ""))
 
         weekday_weekend = pos.get("weekdayWeekend") or {}
         if isinstance(weekday_weekend, dict):
@@ -729,7 +732,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             weekend = BossDecisionBriefHandler._safe_float(weekday_weekend.get("weekendAvgDailyRevenue"))
             gap = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
             if weekday is not None and weekend is not None and gap is not None:
-                evidence.append(f"工作日日均 {round(weekday, 2)}，周末日均 {round(weekend, 2)}，周末高 {round(gap, 1)}%")
+                evidence.append(f"工作日每天约 {round(weekday, 2)}，周末每天约 {round(weekend, 2)}，周末高 {round(gap, 1)}%")
 
         chain_rank = pos.get("chainRank") or {}
         if isinstance(chain_rank, dict):
@@ -737,19 +740,19 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             daily_rank = chain_rank.get("dailyRank")
             store_count = chain_rank.get("storeCount")
             if revenue_rank and daily_rank and store_count:
-                evidence.append(f"连锁对比: 总额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}")
+                evidence.append(f"连锁里: 总销售额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}")
 
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         if top_products:
-            evidence.append(f"菜品入口: {'、'.join(top_products[:3])}")
+            evidence.append(f"主推候选菜: {'、'.join(top_products[:3])}")
 
         positive = BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or [])
         negative = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
         if positive:
-            evidence.append(f"点评认可: {'、'.join(positive[:3])}")
+            evidence.append(f"顾客夸得多: {'、'.join(positive[:3])}")
         if negative:
-            evidence.append(f"点评风险: {'、'.join(negative[:3])}")
-        return evidence or ["当前证据不足，先补 POS、点评、菜品和外部信号。"]
+            evidence.append(f"顾客吐槽过: {'、'.join(negative[:3])}")
+        return evidence or ["现在证据还不够。先补订单、评论、菜品和商场活动。"]
 
     @staticmethod
     def _analysis_dimensions(
@@ -762,51 +765,51 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         return [
             BossDecisionBriefHandler._dimension(
                 "营收趋势",
-                "看日/周/月变化，判断问题是短期波动还是持续下滑。",
-                "已接周趋势，可做周环比。" if pos.get("weeklyTrend") else "缺连续日级订单时，只能看汇总，无法解释哪天掉了。",
-                "补近 90 天日订单，固定输出最近 4 周环比。",
+                "最近是变好还是变差？是偶尔一天差，还是连续几周差？",
+                "已经能看周变化。" if pos.get("weeklyTrend") else "现在只能看总数，还不知道具体是哪天掉了。",
+                "补近 90 天每天订单，固定看最近 4 周。",
             ),
             BossDecisionBriefHandler._dimension(
                 "时段结构",
-                "判断午市、晚市、低峰分别该怎么排班、备货和促销。",
-                "已接时段收入。" if pos.get("daypartRevenue") else "缺开单时间聚合，无法判断午晚市哪个时段弱。",
-                "按小时聚合订单、营收、客流和客单。",
+                "午市弱还是晚市弱？低峰要不要做套餐？",
+                "已经能看各时段收入。" if pos.get("daypartRevenue") else "还不知道订单发生在几点，所以看不出午市还是晚市弱。",
+                "按小时看订单、营收、客流和客单。",
             ),
             BossDecisionBriefHandler._dimension(
                 "桌型/人数结构",
-                "判断该推单人餐、双人餐还是多人聚餐套餐。",
-                "已接桌型/客群结构。" if (pos.get("customerSegments") or pos.get("topGuestSegments")) else "缺人数结构，套餐建议容易拍脑袋。",
-                "按客流人数聚合订单、营收和客单。",
+                "主要是一个人吃、两个人吃，还是多人聚餐？",
+                "已经能看主要客群。" if (pos.get("customerSegments") or pos.get("topGuestSegments")) else "还缺人数结构，套餐建议容易拍脑袋。",
+                "按用餐人数看订单、营收和客单。",
             ),
             BossDecisionBriefHandler._dimension(
                 "菜品结构",
-                "判断引流菜、加购菜、风险菜、低动销菜分别怎么处理。",
-                "已接菜品销量。" if menu.get("topProducts") else "缺 SKU 明细时无法做菜单工程。",
-                "补菜品销量、售价、成本、搭配关系。",
+                "该主推什么？哪些菜能带加购？哪些菜先别推？",
+                "已经能看菜品销量。" if menu.get("topProducts") else "还缺菜品明细，看不出该推哪道菜。",
+                "补每道菜的销量、售价、成本和搭配关系。",
             ),
             BossDecisionBriefHandler._dimension(
                 "顾客评价",
-                "判断顾客不满意在服务、出品、环境、价格还是排队。",
-                "已接点评主题。" if (review.get("negativeThemes") or review.get("positiveDishMentions")) else "缺评论原文时只能猜体验问题。",
+                "顾客到底在夸什么、骂什么？骂的是菜、服务、环境还是价格？",
+                "已经能看评论主题。" if (review.get("negativeThemes") or review.get("positiveDishMentions")) else "还缺评论原文，只能猜体验问题。",
                 "继续拉点评/美团/抖音评论原文和低分原因。",
             ),
             BossDecisionBriefHandler._dimension(
                 "渠道结构",
-                "判断美团点评、抖音、微信、会员、商场券各自该承担什么任务。",
-                "已接渠道贡献。" if pos.get("channelGroups") else "缺渠道拆分时无法判断预算该投哪里。",
-                "按渠道聚合订单、券核销、实收和复购。",
+                "钱主要从美团、点评、抖音、微信还是商场券来？预算该先花在哪？",
+                "已经能看渠道贡献。" if pos.get("channelGroups") else "还缺渠道拆分，看不出预算该投哪里。",
+                "按渠道看订单、券核销、实收和复购。",
             ),
             BossDecisionBriefHandler._dimension(
                 "连锁对比",
-                "判断是单店执行问题，还是商圈/区域/品牌共性。",
-                "已接连锁排名。" if pos.get("chainRank") else "缺同品牌门店对比，容易误罚单店。",
-                "补同城同品牌同周期门店数据。",
+                "这是这家店的问题，还是商圈、城市、品牌一起变差？",
+                "已经能看连锁排名。" if pos.get("chainRank") else "还缺同品牌门店对比，容易误判单店。",
+                "补同城、同品牌、同周期门店数据。",
             ),
             BossDecisionBriefHandler._dimension(
                 "利润闭环",
-                "判断利润漏在采购、BOM、报损、赠品、盘点差异还是菜品结构。",
-                "已有成本/盘点入口。" if BossDecisionBriefHandler._has_source(readiness, "月盘点/库存/BOM") else "缺 BOM、采购和月盘点，不能承诺利润改善金额。",
-                "补采购入库、月底盘点、理论耗用/BOM、报损赠品。",
+                "钱有没有漏在采购、损耗、赠品、盘点差异或菜品结构里？",
+                "已经有成本/盘点入口。" if BossDecisionBriefHandler._has_source(readiness, "月盘点/库存/BOM") else "还缺 BOM、采购和月盘点，所以现在不能承诺能多赚多少钱。",
+                "补采购入库、月底盘点、理论耗用/BOM、报损和赠品。",
             ),
         ]
 
@@ -968,6 +971,28 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             return None
 
     @staticmethod
+    def _change_phrase(value: float) -> str:
+        rounded = round(abs(value), 1)
+        if value > 0:
+            return f"多 {rounded}%"
+        if value < 0:
+            return f"少 {rounded}%"
+        return "基本持平"
+
+    @staticmethod
+    def _latest_complete_week(weekly: list[Any]) -> dict[str, Any] | None:
+        for item in reversed(weekly):
+            if not isinstance(item, dict):
+                continue
+            if item.get("isComplete") is False:
+                continue
+            days = BossDecisionBriefHandler._safe_int(item.get("days") or item.get("dayCount"))
+            if days is not None and days < 7:
+                continue
+            return item
+        return next((item for item in reversed(weekly) if isinstance(item, dict)), None)
+
+    @staticmethod
     def _top_named_share(items: Any, name_keys: tuple[str, ...]) -> dict[str, Any] | None:
         if not isinstance(items, list):
             return None
@@ -1056,6 +1081,23 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             if not item.get("available"):
                 gaps.append(f"缺 {item['source']}: {item['decisionUse']}")
         return gaps or ["当前核心数据足够进入试点复盘；下一步补齐外部真实客流后再做精确 ROI。"]
+
+    @staticmethod
+    def _missing_data_plain(readiness: dict[str, Any]) -> list[str]:
+        missing = [str(item.get("source")) for item in readiness.get("sources", []) if not item.get("available")]
+        if not missing:
+            return ["关键数据已经够做试点复盘。下一步接真实客流后，可以把活动和到店人数算得更准。"]
+
+        plain_map = {
+            "POS/订单": "还缺每天订单明细，所以只能看大方向，不能准确说是哪天、哪个时段掉了。",
+            "月盘点/库存/BOM": "还缺采购、BOM 和盘点，所以现在只能讲营收动作，不能承诺利润能省多少。",
+            "财务/P&L": "还缺完整损益表，所以不能把平台费、人力、房租一起算进利润。",
+            "大众点评/顾客评价": "还缺评论原文，所以只能看到销售表现，看不到顾客为什么不买单。",
+            "菜品/POS SKU": "还缺菜品明细，所以不能准确判断该主推哪道菜、下掉哪道菜。",
+            "外部活动/天气/商圈": "还缺商场活动、天气和周边事件，所以某天突然好或差，还不能判断是不是外部原因。",
+            "连锁门店对比": "还缺其他门店对比，所以不能判断是这家店的问题，还是整个区域都这样。",
+        }
+        return [plain_map.get(source, f"还缺 {source}，这部分会影响判断准确度。") for source in missing[:5]]
 
     @staticmethod
     def _next_data_to_ask(readiness: dict[str, Any]) -> list[dict[str, str]]:
