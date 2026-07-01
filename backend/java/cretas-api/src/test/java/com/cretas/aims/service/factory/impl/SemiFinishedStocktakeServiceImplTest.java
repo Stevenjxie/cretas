@@ -251,6 +251,15 @@ class SemiFinishedStocktakeServiceImplTest {
         assertThat(saved.getUnitCost().compareTo(new BigDecimal("12.5000"))).isEqualTo(0);
         assertThat(saved.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
 
+        // 🔴 成本传导 item(d): 在手 VALUE = availableQuantity × unitCost 随盘亏自动下降 (40×12.5=500 → 30×12.5=375);
+        //   而 accumulatedCost (=producedQuantity×unitCost 口径, 625) 保持不变 (历史入库值, 非在手价值)。
+        //   → 消费者以 available×unitCost 估在手价值即正确反映盘亏; 直接读 accumulatedCost 会高估 (over-value)。
+        BigDecimal onHandValue = saved.getAvailableQuantity().multiply(saved.getUnitCost());
+        assertThat(onHandValue.compareTo(new BigDecimal("375.0000"))).isEqualTo(0);   // 盘亏后在手价值下降
+        assertThat(saved.getAccumulatedCost().compareTo(new BigDecimal("375.00"))).isNotEqualTo(0); // ≠ 在手价值
+        assertThat(saved.getProducedQuantity().multiply(saved.getUnitCost())
+                .compareTo(new BigDecimal("625.0000"))).isEqualTo(0); // produced×unitCost 不变 (盘亏不动 produced)
+
         // stocktake → APPLIED
         ArgumentCaptor<SemiFinishedStocktake> stCaptor = ArgumentCaptor.forClass(SemiFinishedStocktake.class);
         verify(stocktakeRepo, atLeastOnce()).save(stCaptor.capture());

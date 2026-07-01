@@ -903,6 +903,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      *
      * <p>public, 供测试及未来 ProcessSheetServiceImpl 调用。
      */
+    @Override
     public BigDecimal computeLaborCost(List<LaborSegment> segs, BigDecimal rate) {
         if (segs == null || segs.isEmpty()) return BigDecimal.ZERO;
         BigDecimal hours = segs.stream()

@@ -97,6 +97,16 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
+    /**
+     * G3 成本传导 — 成品单位成本 (库存生产小结写入)。
+     *
+     * <p>= (本道 ProductionBatch.totalCost[原料+调料+人工] + Σ SFI 投料 feedKg × 输入 SFI.unitCost) / 入库量。
+     * 🔴 诚实 null: 任一投入成本未知 (SFI 投料 unitCost 为 null / 无批次成本) → null (不伪造 ¥0)。
+     * 区别于 {@link #unitPrice} (售价, 来自 product_types 主数据)。
+     */
+    @Column(name = "unit_cost", precision = 15, scale = 4)
+    private BigDecimal unitCost;
+
     /** 生产日期 */
     @Column(name = "production_date")
     private LocalDate productionDate;
