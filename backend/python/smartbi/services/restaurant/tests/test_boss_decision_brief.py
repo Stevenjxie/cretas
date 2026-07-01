@@ -237,9 +237,12 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
                 },
                 "menu_summary": {
                     "topProducts": [
-                        {"name": "特色青花椒鱼[活鱼现做]", "revenue": 237060},
-                        {"name": "特色青花椒鱼[活鱼手工去刺]", "revenue": 154368},
-                        {"name": "乌蒙山干锅牛肉2-3人餐", "revenue": 132861},
+                        {"name": "特色青花椒鱼[活鱼现做]", "revenue": 237060, "soldQty": 1030, "foodCost": 92800},
+                        {"name": "特色青花椒鱼[活鱼手工去刺]", "revenue": 154368, "soldQty": 612, "foodCost": 64835},
+                        {"name": "乌蒙山干锅牛肉2-3人餐", "revenue": 132861, "soldQty": 481, "foodCost": 70416},
+                    ],
+                    "products": [
+                        {"name": "手作冰豆花", "revenue": 27880, "soldQty": 697, "foodCost": 6970},
                     ],
                     "basketPairs": [
                         {"left": "特色青花椒鱼[活鱼现做]", "right": "手作冰豆花", "orders": 697},
@@ -278,8 +281,15 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
     assert "主要靠晚市" in page["plainDiagnosis"]
     assert "2人桌" in page["plainDiagnosis"]
     assert "美团/大众点评" in page["plainDiagnosis"]
+    assert page["packageRecommendations"]["status"] == "ready"
+    top_package = page["packageRecommendations"]["candidates"][0]
+    assert top_package["name"] == "特色青花椒鱼[活鱼现做] + 手作冰豆花"
+    assert top_package["estimatedPackagePrice"] > top_package["estimatedFoodCost"]
+    assert top_package["grossMarginPct"] > 50
+    assert top_package["scoreBreakdown"]["margin"] is not None
     assert any("周一到周四" in action for action in page["doFirst"])
     assert any("手作冰豆花" in action for action in page["doFirst"])
+    assert any("估算毛利率" in action for action in page["doFirst"])
     assert any("不要先猛推" in action for action in page["doNotDo"])
     assert any("每天只盯 4 个数" in action for action in page["decisionPlan"]["thisWeek"])
     assert "一周大约多卖 11478 元" in page["expectedImpact"]["plainText"]

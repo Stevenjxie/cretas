@@ -551,12 +551,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         if not isinstance(review, dict):
             review = {}
 
+        package_recommendations = BossDecisionBriefHandler._package_recommendations(pos, menu, review)
         headline = BossDecisionBriefHandler._owner_headline(store_name, pos, menu, review)
-        actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness)
+        actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness, package_recommendations)
         return {
             "title": "老板今天先看这个",
             "headline": headline,
             "plainDiagnosis": BossDecisionBriefHandler._plain_diagnosis(pos, menu, review),
+            "packageRecommendations": package_recommendations,
             "doFirst": actions["doFirst"],
             "doNotDo": actions["doNotDo"],
             "decisionPlan": {
@@ -648,20 +650,148 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         return "。".join(parts) or "现在可以先判断经营方向，但还不能承诺能多赚多少钱。还需要每天订单、评论原文、菜品成本和月盘点。"
 
     @staticmethod
+    def _package_recommendations(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+        metrics = BossDecisionBriefHandler._menu_item_metrics(menu)
+        pairs = BossDecisionBriefHandler._package_pairs(menu)
+        positive_names = set(BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or []))
+        negative_names = set(BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or []))
+        two_person_share = BossDecisionBriefHandler._segment_share(pos, ("2人桌", "双人", "2人", "二人"))
+
+        if not metrics:
+            return {
+                "status": "needs_menu_data",
+                "methodology": "先拿菜品销量、售价、成本和搭配关系，再算小套餐。",
+                "candidates": [],
+                "dataNeeded": ["菜品销量", "菜品售价或收入", "菜品成本/BOM", "一起购买的搭配记录"],
+            }
+
+        max_revenue = max((item.get("revenue") or 0.0 for item in metrics.values()), default=0.0) or 1.0
+        max_pair_orders = max((pair.get("orders") or 0.0 for pair in pairs), default=0.0) or 1.0
+        candidates: list[dict[str, Any]] = []
+
+        candidate_pairs = pairs or BossDecisionBriefHandler._fallback_package_pairs(metrics)
+        for pair in candidate_pairs:
+            names = [name for name in pair.get("items", []) if name in metrics]
+            if len(names) < 2:
+                continue
+
+            item_metrics = [metrics[name] for name in names]
+            package_price = sum(item.get("unitRevenue") or 0.0 for item in item_metrics)
+            food_cost = sum(item.get("unitFoodCost") or 0.0 for item in item_metrics)
+            has_full_cost = all(item.get("hasCost") for item in item_metrics)
+            if package_price <= 0:
+                continue
+
+            gross_profit = package_price - food_cost if has_full_cost else None
+            gross_margin_pct = (gross_profit / package_price * 100) if gross_profit is not None else None
+            margin_component = max(0.0, min((gross_margin_pct or 0.0) / 70.0, 1.0))
+            sales_component = min(sum((item.get("revenue") or 0.0) for item in item_metrics) / (max_revenue * 2), 1.0)
+            pair_component = min((pair.get("orders") or 0.0) / max_pair_orders, 1.0) if pairs else 0.35
+            positive_hits = sum(1 for name in names if BossDecisionBriefHandler._name_hits(name, positive_names))
+            negative_hits = sum(1 for name in names if BossDecisionBriefHandler._name_hits(name, negative_names))
+            review_component = max(0.0, min(0.5 + positive_hits * 0.25 - negative_hits * 0.25, 1.0))
+            segment_component = 1.0 if two_person_share >= 0.35 else 0.5
+
+            if has_full_cost:
+                score = (
+                    margin_component * 35
+                    + sales_component * 25
+                    + pair_component * 20
+                    + review_component * 15
+                    + segment_component * 5
+                )
+                status = "ready"
+            else:
+                score = sales_component * 40 + pair_component * 30 + review_component * 20 + segment_component * 10
+                status = "needs_cost_data"
+
+            reasons = [
+                f"这组菜历史上有搭配记录 {int(pair.get('orders') or 0)} 次" if pair.get("orders") else "这组菜由热卖菜和适配加购菜组成",
+                f"当前 2 人桌占比约 {round(two_person_share * 100, 1)}%，适合做小套餐" if two_person_share else "适合先用小份组合测试工作日",
+            ]
+            if gross_margin_pct is not None:
+                reasons.append(f"按现有成本估算，套餐毛利率约 {round(gross_margin_pct, 1)}%")
+            else:
+                reasons.append("还缺完整菜品成本，所以只能先排候选，不能承诺毛利")
+            if positive_hits:
+                reasons.append("点评里有顾客认可，适合放到团购页做卖点")
+            if negative_hits:
+                reasons.append("但评论里也有风险点，推广前要先抽查出品稳定性")
+
+            candidates.append({
+                "name": " + ".join(names),
+                "items": names,
+                "estimatedPackagePrice": round(package_price, 2),
+                "estimatedFoodCost": round(food_cost, 2) if has_full_cost else None,
+                "estimatedGrossProfit": round(gross_profit, 2) if gross_profit is not None else None,
+                "grossMarginPct": round(gross_margin_pct, 1) if gross_margin_pct is not None else None,
+                "score": round(score, 1),
+                "status": status,
+                "scoreBreakdown": {
+                    "margin": round(margin_component * 35, 1) if has_full_cost else None,
+                    "sales": round(sales_component * (25 if has_full_cost else 40), 1),
+                    "pairing": round(pair_component * (20 if has_full_cost else 30), 1),
+                    "review": round(review_component * (15 if has_full_cost else 20), 1),
+                    "twoPersonFit": round(segment_component * (5 if has_full_cost else 10), 1),
+                },
+                "reason": "；".join(reasons),
+                "caution": "先小范围 A/B 测 7 天，不要全店强推。" if negative_hits else "先在工作日低峰和团购页测试 7 天。",
+            })
+
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        has_ready = any(item["status"] == "ready" for item in candidates)
+        return {
+            "status": "ready" if has_ready else "needs_cost_data",
+            "methodology": (
+                "有成本时按毛利35%、销量25%、搭配20%、点评15%、2人桌适配5%排序；"
+                "没成本时只按销量、搭配、点评和桌型先排候选，不承诺毛利。"
+            ),
+            "candidates": candidates[:3],
+            "dataNeeded": [] if has_ready else ["菜品 BOM/单位成本", "采购价", "套餐实际折扣价", "7 天套餐核销和复购"],
+        }
+
+    @staticmethod
+    def _top_package_action(package_recommendations: dict[str, Any] | None) -> str | None:
+        if not isinstance(package_recommendations, dict):
+            return None
+        candidates = package_recommendations.get("candidates") or []
+        if not candidates:
+            return None
+        best = candidates[0]
+        name = best.get("name")
+        if not name:
+            return None
+        margin = best.get("grossMarginPct")
+        if margin is not None:
+            return (
+                f"周一到周四先测这个小套餐：{name}。"
+                f"估算毛利率约 {margin}%，综合分 {best.get('score')}，先在团购页和门口物料测 7 天。"
+            )
+        return (
+            f"周一到周四先把 {name} 作为小套餐候选。"
+            "但现在还缺菜品成本，先别承诺毛利，补 BOM 后再决定是否正式推广。"
+        )
+
+    @staticmethod
     def _owner_action_items(
         pos: dict[str, Any],
         menu: dict[str, Any],
         review: dict[str, Any],
         readiness: dict[str, Any],
+        package_recommendations: dict[str, Any] | None = None,
     ) -> dict[str, list[str]]:
         do_first: list[str] = []
         do_not_do = ["不要一上来就全店打折。先看清楚到底是没人来、来了不买、菜不稳，还是成本漏了。"]
 
+        top_package = BossDecisionBriefHandler._top_package_action(package_recommendations)
         weekday_weekend = pos.get("weekdayWeekend") or {}
         if isinstance(weekday_weekend, dict):
             gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
             if gap_pct is not None and gap_pct >= 30:
-                do_first.append("周一到周四先补客流：上双人鱼锅小套餐，门口物料和团购页都指向这个套餐。")
+                if top_package:
+                    do_first.append(top_package)
+                else:
+                    do_first.append("周一到周四先补客流：先生成小套餐候选，拿到菜品成本后再决定推哪一个，别直接拍脑袋上套餐。")
 
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         basket_pairs = menu.get("basketPairs") or menu.get("topPairs") or []
@@ -911,6 +1041,130 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "decisionUse": "决定是抓单店执行，还是做区域活动、商圈资源和门店分流。",
             },
         ]
+
+    @staticmethod
+    def _menu_item_metrics(menu: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        if not isinstance(menu, dict):
+            return {}
+        buckets = [
+            menu.get("classifications"),
+            menu.get("topProducts"),
+            menu.get("products"),
+            menu.get("items"),
+            menu.get("allProducts"),
+        ]
+        quadrants = menu.get("quadrants")
+        if isinstance(quadrants, dict):
+            buckets.extend(quadrants.values())
+
+        metrics: dict[str, dict[str, Any]] = {}
+        for bucket in buckets:
+            if not isinstance(bucket, list):
+                continue
+            for item in bucket:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name") or item.get("dish") or item.get("product") or item.get("skuName")
+                if not name:
+                    continue
+                text = str(name).strip()
+                if not text:
+                    continue
+
+                revenue = BossDecisionBriefHandler._first_float(
+                    item,
+                    ("revenue", "sales", "amount", "grossSales", "netSales", "实收", "销售额"),
+                )
+                sold_qty = BossDecisionBriefHandler._first_float(
+                    item,
+                    ("soldQty", "sold_qty", "qty", "quantity", "orders", "count", "销量", "数量"),
+                )
+                food_cost = BossDecisionBriefHandler._first_float(
+                    item,
+                    ("foodCost", "food_cost", "cost", "ingredientCost", "bomCost", "totalCost", "食材成本", "成本"),
+                )
+                price = BossDecisionBriefHandler._first_float(
+                    item,
+                    ("price", "unitPrice", "salePrice", "avgPrice", "售价", "单价"),
+                )
+                unit_revenue = price or ((revenue / sold_qty) if revenue is not None and sold_qty else None)
+                unit_food_cost = (food_cost / sold_qty) if food_cost is not None and sold_qty else BossDecisionBriefHandler._first_float(
+                    item,
+                    ("unitFoodCost", "unitCost", "unitIngredientCost", "单位成本"),
+                )
+
+                previous = metrics.get(text, {})
+                metrics[text] = {
+                    "name": text,
+                    "revenue": max(revenue or 0.0, previous.get("revenue") or 0.0),
+                    "soldQty": max(sold_qty or 0.0, previous.get("soldQty") or 0.0),
+                    "foodCost": food_cost if food_cost is not None else previous.get("foodCost"),
+                    "unitRevenue": unit_revenue or previous.get("unitRevenue") or 0.0,
+                    "unitFoodCost": unit_food_cost if unit_food_cost is not None else previous.get("unitFoodCost"),
+                    "hasCost": unit_food_cost is not None or bool(previous.get("hasCost")),
+                }
+        return metrics
+
+    @staticmethod
+    def _package_pairs(menu: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_pairs = []
+        for key in ("basketPairs", "topPairs", "pairs", "coPurchasePairs"):
+            value = menu.get(key) if isinstance(menu, dict) else None
+            if isinstance(value, list):
+                raw_pairs.extend(value)
+
+        pairs: list[dict[str, Any]] = []
+        for item in raw_pairs:
+            if isinstance(item, dict):
+                pair = item.get("items")
+                if isinstance(pair, list):
+                    names = [str(name).strip() for name in pair if str(name).strip()]
+                else:
+                    left = item.get("left") or item.get("a") or item.get("productA") or item.get("main")
+                    right = item.get("right") or item.get("b") or item.get("productB") or item.get("addon")
+                    names = [str(name).strip() for name in (left, right) if name and str(name).strip()]
+                orders = BossDecisionBriefHandler._first_float(item, ("orders", "count", "support", "frequency", "次数"))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                names = [str(item[0]).strip(), str(item[1]).strip()]
+                orders = BossDecisionBriefHandler._safe_float(item[2]) if len(item) >= 3 else None
+            else:
+                continue
+            if len(names) >= 2:
+                pairs.append({"items": names[:2], "orders": orders or 0.0})
+        return pairs
+
+    @staticmethod
+    def _fallback_package_pairs(metrics: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        items = sorted(metrics.values(), key=lambda item: item.get("revenue") or 0.0, reverse=True)
+        if len(items) < 2:
+            return []
+        lead = items[0]["name"]
+        return [{"items": [lead, item["name"]], "orders": 0.0} for item in items[1:4]]
+
+    @staticmethod
+    def _segment_share(pos: dict[str, Any], tokens: tuple[str, ...]) -> float:
+        segments = pos.get("customerSegments") or pos.get("topGuestSegments") or []
+        if not isinstance(segments, list):
+            return 0.0
+        for item in segments:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("segment") or item.get("name") or "")
+            if any(token in name for token in tokens):
+                return BossDecisionBriefHandler._safe_float(item.get("share") or item.get("revenueShare")) or 0.0
+        return 0.0
+
+    @staticmethod
+    def _name_hits(name: str, names: set[str]) -> bool:
+        return any(name in candidate or candidate in name for candidate in names)
+
+    @staticmethod
+    def _first_float(item: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            value = BossDecisionBriefHandler._safe_float(item.get(key))
+            if value is not None:
+                return value
+        return None
 
     @staticmethod
     def _item_names(items: Any) -> list[str]:
