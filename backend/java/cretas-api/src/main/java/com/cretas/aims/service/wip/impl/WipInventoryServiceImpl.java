@@ -19,6 +19,7 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,6 +53,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductTypeRepository productTypeRepo;
+    /** 产品族自动识别 (以原料为主) — SFI 防呆过滤的"同族"信号来源, 就地识别零手填. */
+    private final ProductFamilyResolver productFamilyResolver;
     /** SP3: 成本更新事件发布 — 异步回填+预警. */
     private final ApplicationEventPublisher eventPublisher;
 
@@ -993,20 +996,48 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
 
         // 防呆过滤 (可选) — 逐道 SFI 投料下拉收窄可选半成品:
-        //   同类: productTypeId 非空 → 仅同产品半成品 (猪蹄计划不显牛肉); null productTypeId 行严格排除。
-        //   阶段: maxProcessOrder 非空 → 仅更早阶段 (processOrder < max, 防回锅); null processOrder 行严格排除。
-        // 两者皆 null → 全量 (向后兼容)。见接口 javadoc 说明信号来源。
-        final boolean filterType = productTypeId != null && !productTypeId.isBlank();
+        //   阶段: maxProcessOrder 非空 → 仅更早阶段 (processOrder < max, 防回锅); null processOrder 行严格排除 (不变)。
+        //   同族: productTypeId 非空 → 解析为"产品族"(以原料为主自动识别), 仅同族半成品 (猪蹄不显牛肉)。
+        //         注意: 参数名仍是 productTypeId (前端传当前计划产品), 内部解析成族键再比较 —— 不是按 productTypeId 精确匹配。
+        //         07-01 客户澄清: 熟制前半成品在同产品族内通用 (卤猪蹄/椒麻猪蹄/猪蹄冠 共用"猪蹄"半成品),
+        //         按 productTypeId 精确过滤会误藏这个通用半成品; 故必须按族过滤 (见 ProductFamilyResolver)。
+        // 两参数皆 null → 全量 (向后兼容)。
+        final boolean filterFamily = productTypeId != null && !productTypeId.isBlank();
         final boolean filterStage = maxProcessOrder != null;
-        if (filterType || filterStage) {
+
+        // 1) 阶段过滤 (先做, 无 repo, 且缩小待识别族的产品集)。null processOrder 严格排除 (防回锅, 不变)。
+        if (filterStage) {
             rows = rows.stream()
-                    .filter(w -> !filterType || productTypeId.equals(w.getProductTypeId()))
-                    .filter(w -> !filterStage
-                            || (w.getProcessOrder() != null && w.getProcessOrder() < maxProcessOrder))
+                    .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() < maxProcessOrder)
                     .collect(Collectors.toList());
             if (rows.isEmpty()) {
                 return List.of();
             }
+        }
+
+        // 2) 同族过滤: 解析当前计划产品 + 所有候选半成品产品 → 族键, 保留同族。
+        //    宁缺勿藏 (诚实, 不过度收窄): 仅排除"族已知且与计划族不同"的行 —— 族未知的候选一律放行
+        //    (不隐藏可能合法复用的项); 计划族本身识别不出 → 无从比较, 全放行 (只按阶段过滤)。
+        if (filterFamily) {
+            Set<String> ptForFamily = rows.stream()
+                    .map(SemiFinishedInventory::getProductTypeId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .collect(Collectors.toSet());
+            ptForFamily.add(productTypeId);
+            Map<String, String> familyMap = productFamilyResolver.resolveFamilies(factoryId, ptForFamily);
+            String planFamily = familyMap.get(productTypeId);
+            if (planFamily != null) {
+                rows = rows.stream()
+                        .filter(w -> {
+                            String f = w.getProductTypeId() == null ? null : familyMap.get(w.getProductTypeId());
+                            return f == null || f.equals(planFamily);   // 族未知放行; 族相同保留; 族不同(牛肉)排除
+                        })
+                        .collect(Collectors.toList());
+                if (rows.isEmpty()) {
+                    return List.of();
+                }
+            }
+            // planFamily == null → 计划族识别不出, 不按族过滤 (务实: 不因缺族信息清空可选项)。
         }
 
         // 批量取 productType 名称 — 避免 N+1

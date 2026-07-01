@@ -25,9 +25,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -60,6 +63,7 @@ class WipInventoryServiceWeightViewTest {
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository workProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private ProductFamilyResolver productFamilyResolver;
     @Mock private ApplicationEventPublisher eventPublisher;
 
     // ==================== Helpers ====================
@@ -204,8 +208,12 @@ class WipInventoryServiceWeightViewTest {
     }
 
     @Nested
-    @DisplayName("防呆过滤 (同类 productTypeId + 阶段 maxProcessOrder)")
+    @DisplayName("防呆过滤 (同族 productTypeId→family + 阶段 maxProcessOrder)")
     class FoolProofFilter {
+
+        // 族键 (raw_material_types.id 空间, 前缀 RM:)。兄弟猪蹄成品共用同一族键。
+        private static final String FAM_ZHUTI = "RM:ZHUTI";
+        private static final String FAM_NIUROU = "RM:NIUROU";
 
         private SemiFinishedInventory rowWithOrder(Long id, String ptId, Integer order) {
             SemiFinishedInventory w = wipRow(id, ptId, 40L,
@@ -214,37 +222,67 @@ class WipInventoryServiceWeightViewTest {
             return w;
         }
 
+        /** 让 resolver 对任意传入集合返回给定的 productTypeId→family 映射。 */
+        private void mockFamilies(Map<String, String> familyMap) {
+            when(productFamilyResolver.resolveFamilies(eq(FACTORY_ID), anyCollection()))
+                    .thenReturn(familyMap);
+        }
+
         @Test
-        @DisplayName("无过滤参数 (null,null) → 全部返回 (向后兼容, 与单参重载一致)")
+        @DisplayName("无过滤参数 (null,null) → 全部返回 (向后兼容, 不调 resolver)")
         void noParams_returnsAll() {
             List<SemiFinishedInventory> rows = List.of(
-                    rowWithOrder(1L, "PT-ZHUTI", 2),
+                    rowWithOrder(1L, "PT-ZHUTI-A", 2),
                     rowWithOrder(2L, "PT-NIUROU", 2));
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(rows);
             when(productTypeRepo.findByIdIn(anyCollection()))
-                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄"), pt("PT-NIUROU", "卤牛肉")));
+                    .thenReturn(List.of(pt("PT-ZHUTI-A", "卤猪蹄"), pt("PT-NIUROU", "卤牛肉")));
 
             assertThat(service.listWipByFactory(FACTORY_ID, null, null)).hasSize(2);
             assertThat(service.listWipByFactory(FACTORY_ID)).hasSize(2);
+            verify(productFamilyResolver, never()).resolveFamilies(anyString(), anyCollection());
         }
 
         @Test
-        @DisplayName("同类 productTypeId → 只返回同产品半成品 (猪蹄计划不显牛肉)")
-        void typeFilter_sameProductOnly() {
+        @DisplayName("★ 两兄弟猪蹄成品同族 → PT-ZHUTI-A 计划能看到 PT-ZHUTI-B 产的半成品 (复用的根本)")
+        void siblingZhuti_seeEachOthersSfi() {
+            // 计划产品 PT-ZHUTI-A; 库存里有兄弟 PT-ZHUTI-B 产出的"猪蹄"半成品 + 一个牛肉半成品。
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
-                    rowWithOrder(1L, "PT-ZHUTI", 2),
-                    rowWithOrder(2L, "PT-NIUROU", 2)));
+                    rowWithOrder(1L, "PT-ZHUTI-B", 2),   // 兄弟猪蹄 → 同族, 应可见
+                    rowWithOrder(2L, "PT-NIUROU", 2)));   // 牛肉 → 异族, 应排除
+            mockFamilies(Map.of(
+                    "PT-ZHUTI-A", FAM_ZHUTI,
+                    "PT-ZHUTI-B", FAM_ZHUTI,
+                    "PT-NIUROU", FAM_NIUROU));
             when(productTypeRepo.findByIdIn(anyCollection()))
-                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+                    .thenReturn(List.of(pt("PT-ZHUTI-B", "椒麻猪蹄")));
 
-            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI-A", null);
 
             assertThat(result).hasSize(1);
-            assertThat(result.get(0).getProductTypeId()).isEqualTo("PT-ZHUTI");
+            assertThat(result.get(0).getProductTypeId()).isEqualTo("PT-ZHUTI-B"); // 兄弟半成品可见
+            assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-1");
         }
 
         @Test
-        @DisplayName("阶段 maxProcessOrder → 只返回更早阶段 (processOrder < max, 防回锅)")
+        @DisplayName("牛肉半成品对猪蹄计划排除 (同族已知且不同)")
+        void niurou_excludedFromZhutiPlan() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-ZHUTI-B", 2),
+                    rowWithOrder(2L, "PT-NIUROU", 2)));
+            mockFamilies(Map.of(
+                    "PT-ZHUTI-A", FAM_ZHUTI, "PT-ZHUTI-B", FAM_ZHUTI, "PT-NIUROU", FAM_NIUROU));
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI-B", "椒麻猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI-A", null);
+
+            assertThat(result).extracting(WipRowDTO::getProductTypeId)
+                    .doesNotContain("PT-NIUROU");
+        }
+
+        @Test
+        @DisplayName("阶段 maxProcessOrder → 只返回更早阶段 (processOrder < max, 防回锅) — 不变")
         void stageFilter_earlierStagesOnly() {
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
                     rowWithOrder(1L, "PT-A", 1),
@@ -258,41 +296,64 @@ class WipInventoryServiceWeightViewTest {
 
             assertThat(result).extracting(WipRowDTO::getProcessOrder)
                     .containsExactlyInAnyOrder(1, 2);
+            verify(productFamilyResolver, never()).resolveFamilies(anyString(), anyCollection());
         }
 
         @Test
-        @DisplayName("同类 + 阶段 组合 → 同产品且更早阶段")
-        void typeAndStage_combined() {
+        @DisplayName("同族 + 阶段 组合 → 同族且更早阶段")
+        void familyAndStage_combined() {
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
-                    rowWithOrder(1L, "PT-ZHUTI", 1),   // ✓ 同类且更早
-                    rowWithOrder(2L, "PT-ZHUTI", 5),   // ✗ 同类但后道
-                    rowWithOrder(3L, "PT-NIUROU", 1))); // ✗ 更早但异类
+                    rowWithOrder(1L, "PT-ZHUTI-B", 1),  // ✓ 同族且更早
+                    rowWithOrder(2L, "PT-ZHUTI-B", 5),  // ✗ 同族但后道 (阶段先滤掉)
+                    rowWithOrder(3L, "PT-NIUROU", 1))); // ✗ 更早但异族
+            mockFamilies(Map.of(
+                    "PT-ZHUTI-A", FAM_ZHUTI, "PT-ZHUTI-B", FAM_ZHUTI, "PT-NIUROU", FAM_NIUROU));
             when(productTypeRepo.findByIdIn(anyCollection()))
-                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+                    .thenReturn(List.of(pt("PT-ZHUTI-B", "椒麻猪蹄")));
 
-            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", 3);
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI-A", 3);
 
             assertThat(result).hasSize(1);
             assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-1");
         }
 
         @Test
-        @DisplayName("null productTypeId 行在同类过滤下严格排除 (防呆宁缺勿滥)")
-        void typeFilter_strictExcludesNullProductType() {
+        @DisplayName("候选族未知 (map 缺 key) → 放行 (宁缺勿藏, 不隐藏可能合法复用的项)")
+        void candidateFamilyUnknown_isKept() {
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
-                    rowWithOrder(1L, null, 2),
-                    rowWithOrder(2L, "PT-ZHUTI", 2)));
+                    rowWithOrder(1L, "PT-ZHUTI-B", 2),  // 同族 → 保留
+                    rowWithOrder(2L, "PT-UNKNOWN", 2),  // 族未知 → 放行 (map 缺 key)
+                    rowWithOrder(3L, "PT-NIUROU", 2))); // 异族 → 排除
+            mockFamilies(Map.of(
+                    "PT-ZHUTI-A", FAM_ZHUTI, "PT-ZHUTI-B", FAM_ZHUTI, "PT-NIUROU", FAM_NIUROU));
+            // PT-UNKNOWN 不在 family map → 视为族未知
             when(productTypeRepo.findByIdIn(anyCollection()))
-                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+                    .thenReturn(List.of(pt("PT-ZHUTI-B", "椒麻猪蹄"), pt("PT-UNKNOWN", "神秘")));
 
-            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI-A", null);
 
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-2");
+            assertThat(result).extracting(WipRowDTO::getProductTypeId)
+                    .containsExactlyInAnyOrder("PT-ZHUTI-B", "PT-UNKNOWN"); // 牛肉排除, 未知放行
         }
 
         @Test
-        @DisplayName("null processOrder 行在阶段过滤下严格排除 (无法确认阶段 → 防回锅)")
+        @DisplayName("计划族识别不出 → 不按族过滤, 全放行 (务实不清空)")
+        void planFamilyUnknown_keepsAll() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-ZHUTI-B", 2),
+                    rowWithOrder(2L, "PT-NIUROU", 2)));
+            // 计划 PT-NEW 不在 family map (无 BOM 无名称匹配) → planFamily null
+            mockFamilies(Map.of("PT-ZHUTI-B", FAM_ZHUTI, "PT-NIUROU", FAM_NIUROU));
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI-B", "椒麻猪蹄"), pt("PT-NIUROU", "卤牛肉")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-NEW", null);
+
+            assertThat(result).hasSize(2); // 无从比较 → 不过度收窄
+        }
+
+        @Test
+        @DisplayName("null processOrder 行在阶段过滤下严格排除 (无法确认阶段 → 防回锅) — 不变")
         void stageFilter_strictExcludesNullProcessOrder() {
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
                     rowWithOrder(1L, "PT-A", null),
@@ -307,12 +368,13 @@ class WipInventoryServiceWeightViewTest {
         }
 
         @Test
-        @DisplayName("过滤后为空 → 返回空 List 且不查 productTypeRepo (短路)")
+        @DisplayName("同族过滤后为空 → 返回空 List 且不查 productTypeRepo (短路)")
         void filteredToEmpty_noProductTypeQuery() {
             when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID))
                     .thenReturn(List.of(rowWithOrder(1L, "PT-NIUROU", 2)));
+            mockFamilies(Map.of("PT-ZHUTI-A", FAM_ZHUTI, "PT-NIUROU", FAM_NIUROU));
 
-            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI-A", null);
 
             assertThat(result).isEmpty();
             verify(productTypeRepo, never()).findByIdIn(anyCollection());

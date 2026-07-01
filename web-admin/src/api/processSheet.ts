@@ -354,7 +354,11 @@ export interface SemiFinishedStockItem {
  * 半成品重量库存查询防呆过滤 (07-01 客户会议需求)。省略字段 → 后端不按该维度过滤。
  */
 export interface SemiFinishedInventoryFilter {
-  /** 同类: 计划产品类型 id → 只列同产品半成品 (猪蹄计划不显牛肉)。 */
+  /**
+   * 同族: 计划产品类型 id → 后端解析成"产品族"(以原料为主自动识别), 只列同族半成品。
+   * 注意不是按 productTypeId 精确匹配: 熟制前半成品在同族内通用 (卤猪蹄/椒麻猪蹄/猪蹄冠共用"猪蹄"半成品),
+   * 猪蹄计划显示所有猪蹄族半成品 (跨兄弟成品), 但不显牛肉。
+   */
   productTypeId?: string;
   /** 阶段: 当前道工序序 → 只列 processOrder 严格小于此值的更早阶段半成品 (防回锅)。 */
   maxProcessOrder?: number;
@@ -365,7 +369,7 @@ export interface SemiFinishedInventoryFilter {
  * GET /{factoryId}/semi-finished/inventory
  * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
  *
- * @param filter 可选防呆过滤 (同类 productTypeId + 阶段 maxProcessOrder)。省略 → 全量快照 (向后兼容)。
+ * @param filter 可选防呆过滤 (同族 productTypeId→family + 阶段 maxProcessOrder)。省略 → 全量快照 (向后兼容)。
  */
 export function getSemiFinishedInventory(
   factoryId: string,
