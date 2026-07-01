@@ -137,8 +137,10 @@ async function resolveProcesses() {
           // treat it as 'chaoshui' to avoid assigning raw-material intake role to mid-chain steps.
           const kw = nameToConfigCode(it.processName);
           if (idx === 0) {
-            // 首道始终是 xiuyou (领料), regardless of keyword match
-            code = 'xiuyou';
+            // 链起步道: 按工序名 ACTUAL archetype 决定录入形态, 不再无条件强制 xiuyou (领料)。
+            // 修油 / 无名称匹配 → 'xiuyou' (原料领料入口); 滚揉/焯水/去舌苔/熟制/气调 → 各自 archetype
+            // (单上游 / 混锅), 使"从滚揉起步选半成品"可行 (链起步道 upstream 空, 仅 SFI 可选)。
+            code = (kw && kw !== 'xiuyou') ? kw : 'xiuyou';
           } else {
             // Non-first: use keyword match only if it is NOT xiuyou, else 'chaoshui'
             code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';

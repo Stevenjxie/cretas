@@ -544,6 +544,42 @@ class ProcessSheetServiceImplTest {
                 });
     }
 
+    @Test
+    @DisplayName("SFI-5 (option F, 单上游道): 滚揉道(非混锅)仅 SFI 投料 + output>0 → SAVED_SFI, 不物化 WIP, batchNumber=SFI 锚 (③=F 对单上游道 process-agnostic — '从滚揉起步选半成品')")
+    void saveRow_singleUpstreamGunrou_sfiOnly_savesToSfiNoWip() {
+        // 客户 07-01: 从滚揉起步选半成品 (链起步单上游道纯 SFI 投料)。滚揉不是混锅道 (熟制/气调),
+        //   但后端 isPureSemiFinishedFed 只看 upstreamSources.semiFinished + 无 rawMaterialInputs,
+        //   完全 process-agnostic → 单上游道同样走 ③=F SAVED_SFI 路径 (镜像 SFI-3 的 shuzhi 版)。
+        seedSfi("SFI-STANDING-GR", "80");
+        ProcessSheetRowRequest req = baseReq("row-sfi-gunrou", "gunrou", 2, "60");
+        req.setInputQuantity(new BigDecimal("80"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-GR", "80");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        // 纯 SFI 单上游道: 不物化 raw-lineage WIP, 产出直接入 SFI (option F)
+        assertThat(result.isMaterialized()).as("纯 SFI 单上游道不物化 WIP").isFalse();
+        assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        // yieldRate 仍算 (60/80*100=75); 成本诚实 null
+        assertThat(result.getYieldRate()).isEqualByComparingTo("75");
+        assertThat(result.getRowTotalCost()).as("SFI 成本诚实 null").isNull();
+
+        // 行持久化: rowStatus=SAVED_SFI, batchNumber=锚, 未物化, payload 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "gunrou", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        assertThat(views.get(0).isMaterialized()).isFalse();
+        assertThat(views.get(0).getBatchNumber()).isEqualTo(expectedAnchor);
+        UpstreamRef persisted = views.get(0).getPayload().getUpstreamSources().get(0);
+        assertThat(persisted.getSourceBatchNumber()).isEqualTo("SFI-STANDING-GR");
+        assertThat(persisted.isSemiFinished()).isTrue();
+    }
+
     // ─────────────────────────────────────────────────────────────
     // SP-F Task 1.6 — re-save (update-in-place) path
     // ─────────────────────────────────────────────────────────────

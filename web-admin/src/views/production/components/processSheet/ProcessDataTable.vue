@@ -62,8 +62,15 @@ interface SheetRow {
   rawBatchId: string;
   /** 修油: out-weight (kg) → rawMaterialInputs[0].quantity */
   rawBatchQty: number | null;
-  /** 焯水: single upstream WIP batch number */
+  /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
   upstreamBatch: string;
+  /**
+   * 焯水/滚揉/去舌苔 单上游: 所选来源是否为常驻半成品库存 (SFI)。
+   * true → upstreamBatch 指向 SemiFinishedInventory.intermediateBatchNo, buildPayload 写
+   * upstreamSources[0].semiFinished=true → 后端走 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
+   * false → in-plan 在制 WIP。链起步道可仅选 SFI (upstreamItems 空)。
+   */
+  upstreamSemiFinished: boolean;
   /** 熟制: multi-source upstream WIP refs */
   upstreamSources: UpstreamRef[];
   /** Multi-segment labor entries */
@@ -208,6 +215,7 @@ function blankRow(): SheetRow {
     rawBatchId: '',
     rawBatchQty: null,
     upstreamBatch: '',
+    upstreamSemiFinished: false,
     upstreamSources: [],
     laborSegments: [],
     potCount: 1,
@@ -239,6 +247,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同 (before → inputQuantity, after → outputQuantity)
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+    row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
     row.fields['before'] = p.inputQuantity ?? null;
     row.fields['after'] = p.outputQuantity ?? null;
     // SP-G G3c: 副产 hydrate (焯水 + 滚揉)
@@ -251,6 +260,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   if (isQuSheTou.value) {
     // 去舌苔: output + scrap → input 反推. inputQuantity = scrap + output.
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+    row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
     row.fields['output'] = p.outputQuantity ?? null;
     // scrap = inputQuantity - outputQuantity (反推恢复, 若无法恢复则留 null)
     const inp = p.inputQuantity ?? null;
@@ -448,6 +458,10 @@ function calcRemaining(row: SheetRow): number | null {
   }
   // Fallback for single-upstream / qushetou unsaved rows: derive from upstream usage.
   if (isSingleUpstream.value || isQuSheTou.value) {
+    if (row.upstreamSemiFinished) {
+      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      return sfi ? sfiAvailable(sfi) : null;
+    }
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     return inv ? inv.remaining : null;
   }
@@ -502,16 +516,27 @@ function calcLaborPerBox(row: SheetRow): number | null {
 function upstreamWarning(row: SheetRow): string | null {
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 用量 = before
+    const usage = (row.fields['before'] as number) ?? 0;
+    if (row.upstreamSemiFinished) {
+      // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量。
+      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      if (sfi && usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+      return null;
+    }
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     if (!inv) return null;
-    const usage = (row.fields['before'] as number) ?? 0;
     if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
   }
   if (isQuSheTou.value) {
     // 去舌苔: 用量 = 投入量 = scrap + output
+    const usage = calcReverseInput(row) ?? 0;
+    if (row.upstreamSemiFinished) {
+      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      if (sfi && usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+      return null;
+    }
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     if (!inv) return null;
-    const usage = calcReverseInput(row) ?? 0;
     if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
   }
   if (isShuZhi.value || isQidiao.value) {
@@ -618,7 +643,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
-    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0 }];
+    // semiFinished: 单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
     base.unit = 'kg';
@@ -633,7 +659,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     const output = (row.fields['output'] as number) ?? 0;
     const scrap = (row.fields['scrap'] as number) ?? 0;
     const inputQty = scrap + output;
-    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty }];
+    // semiFinished: 去舌苔单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished }];
     base.inputQuantity = inputQty;
     base.outputQuantity = output;
     base.unit = 'kg';
@@ -793,8 +820,15 @@ const sfiOptions = ref<SemiFinishedStockItem[]>([]);
 const sfiLoading = ref(false);
 let sfiLoadSeq = 0;
 
-/** 是否多来源混锅工序 (熟制 / 气调) — 这两道才提供 SFI 投料选项。 */
+/** 是否多来源混锅工序 (熟制 / 气调) — 多源混锅提供 SFI 投料选项。 */
 const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
+
+/**
+ * 是否提供「半成品库存(SFI)」投料选项。
+ * 原仅限混锅道 (熟制/气调); 现扩到单上游道 (焯水/滚揉/去舌苔) —— 混批原料可选半成品库存
+ * 不再限混锅道, 支持"从滚揉起步选半成品" (链起步道 upstreamItems 空, 仅 SFI 可选)。
+ */
+const showSfi = computed(() => isMultiSource.value || isSingleUpstream.value || isQuSheTou.value);
 
 // 下拉选项用「类型::批次号」复合值, 让来源类型由选中的 OPTION 显式携带, 而非按字符串值反查
 // (规避 in-plan WIP 批号与 SFI 批号偶然相同时的 WIP↔SFI 误判)。
@@ -816,7 +850,7 @@ function sfiLabel(item: SemiFinishedStockItem): string {
 }
 
 async function loadSfiOptions() {
-  if (!isMultiSource.value || !props.factoryId) return;
+  if (!showSfi.value || !props.factoryId) return;
   const seq = ++sfiLoadSeq;
   sfiLoading.value = true;
   try {
@@ -865,6 +899,36 @@ function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
   src.sourceBatchNumber = key.slice(sep + 2);
 }
 
+// -------------------------------------------------------------------------
+// 单上游道 (焯水/滚揉/去舌苔) — WIP + SFI 复合值选择 (镜像混锅的 wip::/sfi:: 方案)
+// upstreamBatch (单字符串) 无法自身区分 WIP↔SFI, 故 semiFinished 由选中 OPTION 显式携带,
+// 单独存 row.upstreamSemiFinished, 规避 WIP 批号与 SFI 批号偶然相同的误判。
+// -------------------------------------------------------------------------
+
+/** 单上游当前选中的复合下拉值 (从 upstreamBatch + upstreamSemiFinished 反推)。 */
+function singleUpstreamSelectKey(row: SheetRow): string {
+  if (!row.upstreamBatch) return '';
+  return srcKey(row.upstreamSemiFinished ? SRC_SFI : SRC_WIP, row.upstreamBatch);
+}
+
+/** 用户改选单上游: 由复合值「类型::批次号」显式拆出批次号 + semiFinished 标记。 */
+function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
+  if (!key) {
+    row.upstreamBatch = '';
+    row.upstreamSemiFinished = false;
+    return;
+  }
+  const sep = key.indexOf('::');
+  if (sep < 0) {
+    // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
+    row.upstreamBatch = key;
+    row.upstreamSemiFinished = false;
+    return;
+  }
+  row.upstreamSemiFinished = key.slice(0, sep) === SRC_SFI;
+  row.upstreamBatch = key.slice(sep + 2);
+}
+
 /** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI)。 */
 function srcRemainingLabel(src: UpstreamRef): string {
   const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
@@ -890,11 +954,11 @@ watch(
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
     if (isXiuYou.value) void loadRawBatches();
-    // 混锅工序 (熟制/气调) 加载常驻半成品库存供 SFI 投料下拉
+    // 混锅工序 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 加载常驻半成品库存供 SFI 投料下拉
     sfiOptions.value = [];
     sfiLoadSeq++;
     sfiLoading.value = false;
-    if (isMultiSource.value) void loadSfiOptions();
+    if (showSfi.value) void loadSfiOptions();
   },
   { immediate: true },
 );
@@ -1011,38 +1075,60 @@ watch(
             </div>
           </template>
 
-          <!-- 焯水 + 滚揉: single upstream dropdown (结构相同) -->
+          <!-- 焯水 + 滚揉: single upstream dropdown (结构相同) — 含半成品库存(SFI)选项 -->
           <template v-else-if="isSingleUpstream">
             <div class="sp-card-field">
               <label class="sp-card-label">{{ processCode === 'gunrou' ? '修油批次' : '滚揉批次' }}</label>
               <el-select
-                v-model="row.upstreamBatch"
-                :placeholder="processCode === 'gunrou' ? '选修油批次' : '选滚揉批次'"
+                :model-value="singleUpstreamSelectKey(row)"
+                @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                :placeholder="processCode === 'gunrou' ? '选修油批次/半成品' : '选滚揉批次/半成品'"
                 filterable clearable
+                :loading="sfiLoading"
                 style="width:100%" size="small">
-                <el-option
-                  v-for="item in upstreamItems" :key="item.batchNumber"
-                  :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                  :value="item.batchNumber"
-                  :disabled="item.remaining <= 0" />
+                <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                  <el-option
+                    v-for="item in upstreamItems" :key="item.batchNumber"
+                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                    :value="srcKey(SRC_WIP, item.batchNumber)"
+                    :disabled="item.remaining <= 0" />
+                </el-option-group>
+                <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                  <el-option
+                    v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                    :label="sfiLabel(s)"
+                    :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                    :disabled="sfiAvailable(s) <= 0" />
+                </el-option-group>
               </el-select>
             </div>
           </template>
 
-          <!-- 去舌苔: single upstream dropdown -->
+          <!-- 去舌苔: single upstream dropdown — 含半成品库存(SFI)选项 -->
           <template v-else-if="isQuSheTou">
             <div class="sp-card-field">
               <label class="sp-card-label">焯水批次</label>
               <el-select
-                v-model="row.upstreamBatch"
-                placeholder="选焯水批次"
+                :model-value="singleUpstreamSelectKey(row)"
+                @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                placeholder="选焯水批次/半成品"
                 filterable clearable
+                :loading="sfiLoading"
                 style="width:100%" size="small">
-                <el-option
-                  v-for="item in upstreamItems" :key="item.batchNumber"
-                  :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                  :value="item.batchNumber"
-                  :disabled="item.remaining <= 0" />
+                <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                  <el-option
+                    v-for="item in upstreamItems" :key="item.batchNumber"
+                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                    :value="srcKey(SRC_WIP, item.batchNumber)"
+                    :disabled="item.remaining <= 0" />
+                </el-option-group>
+                <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                  <el-option
+                    v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                    :label="sfiLabel(s)"
+                    :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                    :disabled="sfiAvailable(s) <= 0" />
+                </el-option-group>
               </el-select>
             </div>
           </template>
@@ -1378,38 +1464,60 @@ watch(
                 </td>
               </template>
 
-              <!-- ---- 焯水 + 滚揉: single upstream dropdown (结构相同) ---- -->
+              <!-- ---- 焯水 + 滚揉: single upstream dropdown (结构相同) — 含半成品库存(SFI) ---- -->
               <template v-else-if="isSingleUpstream">
                 <td class="sp-td">
                   <el-select
-                    v-model="row.upstreamBatch"
-                    :placeholder="processCode === 'gunrou' ? '选修油批次' : '选滚揉批次'"
+                    :model-value="singleUpstreamSelectKey(row)"
+                    @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                    :placeholder="processCode === 'gunrou' ? '选修油批次/半成品' : '选滚揉批次/半成品'"
                     filterable clearable
+                    :loading="sfiLoading"
                     style="width:200px" size="small">
-                    <el-option
-                      v-for="item in upstreamItems"
-                      :key="item.batchNumber"
-                      :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                      :value="item.batchNumber"
-                      :disabled="item.remaining <= 0" />
+                    <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                      <el-option
+                        v-for="item in upstreamItems"
+                        :key="item.batchNumber"
+                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                        :value="srcKey(SRC_WIP, item.batchNumber)"
+                        :disabled="item.remaining <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                      <el-option
+                        v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                        :label="sfiLabel(s)"
+                        :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                        :disabled="sfiAvailable(s) <= 0" />
+                    </el-option-group>
                   </el-select>
                 </td>
               </template>
 
-              <!-- ---- 去舌苔: single upstream dropdown ---- -->
+              <!-- ---- 去舌苔: single upstream dropdown — 含半成品库存(SFI) ---- -->
               <template v-else-if="isQuSheTou">
                 <td class="sp-td">
                   <el-select
-                    v-model="row.upstreamBatch"
-                    placeholder="选焯水批次"
+                    :model-value="singleUpstreamSelectKey(row)"
+                    @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                    placeholder="选焯水批次/半成品"
                     filterable clearable
+                    :loading="sfiLoading"
                     style="width:200px" size="small">
-                    <el-option
-                      v-for="item in upstreamItems"
-                      :key="item.batchNumber"
-                      :label="`${item.batchNumber} (余${item.remaining}kg)`"
-                      :value="item.batchNumber"
-                      :disabled="item.remaining <= 0" />
+                    <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                      <el-option
+                        v-for="item in upstreamItems"
+                        :key="item.batchNumber"
+                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                        :value="srcKey(SRC_WIP, item.batchNumber)"
+                        :disabled="item.remaining <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                      <el-option
+                        v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                        :label="sfiLabel(s)"
+                        :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                        :disabled="sfiAvailable(s) <= 0" />
+                    </el-option-group>
                   </el-select>
                 </td>
               </template>

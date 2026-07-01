@@ -378,6 +378,35 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("option F (单上游道 process-agnostic): 滚揉道(非混锅) SAVED_SFI 纯 SFI 投料 → 小结产出入 SFI + 输入 SFI 扣减 ('从滚揉起步选半成品')")
+    void pureSfiSingleUpstreamGunrouStepPostsOutputAndDrawsInput() {
+        // 客户 07-01: 从滚揉起步选半成品。滚揉是单上游道 (非熟制/气调混锅), 但 小结 SFI in/out
+        //   只看 rowStatus=SAVED_SFI + upstreamSources.semiFinished, 完全 process-agnostic
+        //   → 单上游道 SAVED_SFI 行与混锅道走同一路径 (镜像 pureSfiMiddleStepPostsOutputAndDrawsInput)。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-IN-GR", "50"));
+        req.setProcessCode("gunrou");                          // 单上游道 (滚揉), 非混锅
+        ProcessSheetRow rM = pureSfiRow(90L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 输入 SFI 严格扣减 (禁止降级)
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-GR"), eq(new BigDecimal("50")));
+        assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
+        // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null));
+        assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
+        // 非成品 → 不进 FG
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        assertThat(rM.getInterimSettledAt()).isNotNull();
+    }
+
+    @Test
     @DisplayName("option F 链: 道A(纯SFI, 小结1 产出入 anchorY) → 道B(小结2 吃 anchorY) → SFI Y 先升 60 后降 60 净平")
     void pureSfiChainAcrossSettlements() {
         // 道A: 非成品纯 SFI (吃常驻 SFI-RAW feed 100), 产出 60 → 入 anchorY (本计划 PT1)。
