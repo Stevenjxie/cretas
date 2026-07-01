@@ -194,7 +194,7 @@ class RestaurantExternalSignalService:
             {
                 "source": "商场活动采集",
                 "keyRequired": False,
-                "envVars": ["MALL_ACTIVITY_FEED_URLS"],
+                "envVars": ["MALL_ACTIVITY_FEED_URLS", "MALL_ACTIVITY_WECHAT_URLS"],
                 "status": "可先半自动接入",
                 "refreshCadence": "日更",
                 "bestUse": "采集商场官网、公众号、小程序活动页，解释 IP 展、市集、会员日、品牌快闪带来的客流波动。",
@@ -209,7 +209,7 @@ class RestaurantExternalSignalService:
         has_damai = bool(
             self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")
         )
-        has_mall_feeds = bool(self._mall_feed_urls())
+        has_mall_feeds = bool(self._configured_activity_urls())
         return {
             "defaultMode": "manual_or_cron",
             "whyNotOnPageLoad": "外部接口有每日额度，demo 页面打开不应自动消耗配额；由后台定时任务或管理员手动触发采集。",
@@ -249,6 +249,7 @@ class RestaurantExternalSignalService:
                     "refreshCadence": "日更",
                     "storesOneApiCall": False,
                     "whatItWrites": ["活动标题", "活动日期", "楼层/场地", "品牌或活动类型"],
+                    "safeCollectionRule": "普通网页放 MALL_ACTIVITY_FEED_URLS；公众号单篇文章放 MALL_ACTIVITY_WECHAT_URLS，不抓公众号历史列表。",
                 },
             ],
         }
@@ -600,6 +601,7 @@ class RestaurantExternalSignalService:
             "DAMAI_APP_KEY": "damai_app_key",
             "DAMAI_APP_SECRET": "damai_app_secret",
             "MALL_ACTIVITY_FEED_URLS": "mall_activity_feed_urls",
+            "MALL_ACTIVITY_WECHAT_URLS": "mall_activity_wechat_urls",
         }.get(key)
         if not settings_key:
             return ""
@@ -739,17 +741,17 @@ class RestaurantExternalSignalService:
         }
 
     def _mall_collection_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
-        feed_urls = self._mall_feed_urls()
+        feed_urls = self._configured_activity_urls()
         mall = request.mall_name or "目标商场"
         if not feed_urls:
             return {
                 "type": "mall_activity",
                 "source": "商场活动采集",
                 "status": "skipped",
-                "reason": "未配置 MALL_ACTIVITY_FEED_URLS。",
+                "reason": "未配置 MALL_ACTIVITY_FEED_URLS 或 MALL_ACTIVITY_WECHAT_URLS。",
                 "budgetCost": 0,
                 "plainImpact": f"{mall} 的活动源还没配置，商场市集、IP 展、会员日只能人工核验。",
-                "actionHint": "先把商场官网活动页、公众号文章列表或小程序活动页 URL 放入配置。",
+                "actionHint": "把商场官网活动页放入 MALL_ACTIVITY_FEED_URLS，把单篇公众号公开文章放入 MALL_ACTIVITY_WECHAT_URLS。",
             }
         crawl_result = self.collect_mall_activity_feeds(request, feed_urls=feed_urls)
         return {
@@ -766,16 +768,35 @@ class RestaurantExternalSignalService:
 
     def _mall_feed_urls(self) -> list[str]:
         raw = self._env_value("MALL_ACTIVITY_FEED_URLS")
-        return [item.strip() for item in re.split(r"[\n,;]+", raw) if item.strip()]
+        return self._split_configured_urls(raw)
+
+    def _mall_wechat_urls(self) -> list[str]:
+        raw = self._env_value("MALL_ACTIVITY_WECHAT_URLS")
+        return self._split_configured_urls(raw)
+
+    def _configured_activity_urls(self) -> list[str]:
+        return self._dedupe_urls([*self._mall_feed_urls(), *self._mall_wechat_urls()])
 
     def _mall_feed_urls_for_request(self, request: ExternalSignalRequest) -> list[str]:
-        configured_urls = self._mall_feed_urls()
+        configured_urls = self._configured_activity_urls()
         if configured_urls:
             return configured_urls
         context = f"{request.city} {request.business_district} {request.mall_name}"
         if any(keyword in context for keyword in ("南京东路", "人民广场", "第一百货", "百联ZX")):
             return PUBLIC_MALL_ACTIVITY_FEEDS["shanghai_nanjing_road"].copy()
         return []
+
+    def _split_configured_urls(self, raw: str) -> list[str]:
+        return [item.strip() for item in re.split(r"[\n,;]+", raw) if item.strip()]
+
+    def _dedupe_urls(self, urls: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            if url not in seen:
+                result.append(url)
+                seen.add(url)
+        return result
 
     def _unsupported_platform_reason(self, raw_url: str) -> str | None:
         parsed = urlparse(raw_url)

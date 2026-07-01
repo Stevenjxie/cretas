@@ -452,6 +452,29 @@ def test_mall_collection_uses_public_nanjing_road_demo_feeds_without_env() -> No
     assert "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html" in urls
 
 
+def test_mall_collection_merges_configured_wechat_article_seeds() -> None:
+    service = RestaurantExternalSignalService(
+        env={
+            "MALL_ACTIVITY_FEED_URLS": "https://mall.example/events",
+            "MALL_ACTIVITY_WECHAT_URLS": "https://mp.weixin.qq.com/s/custom1\nhttps://mp.weixin.qq.com/s/custom2",
+        }
+    )
+
+    urls = service._mall_feed_urls_for_request(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路/人民广场",
+            mall_name="第一百货商业中心",
+        )
+    )
+
+    assert urls == [
+        "https://mall.example/events",
+        "https://mp.weixin.qq.com/s/custom1",
+        "https://mp.weixin.qq.com/s/custom2",
+    ]
+
+
 def test_collect_mall_activity_feeds_decodes_gb18030_public_pages() -> None:
     class GbCrawlerClient:
         def __init__(self) -> None:
