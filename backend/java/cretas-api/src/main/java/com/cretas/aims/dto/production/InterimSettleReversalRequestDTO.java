@@ -25,6 +25,8 @@ public class InterimSettleReversalRequestDTO {
     private String rejectReason;
     private LocalDateTime executedAt;
     private String affectedBatchNumbers;
+    /** 统一审批中心 workflow 实例 ID (可空)。 */
+    private String workflowInstanceId;
 
     public static InterimSettleReversalRequestDTO from(InterimSettleReversalRequest r) {
         InterimSettleReversalRequestDTO dto = new InterimSettleReversalRequestDTO();
@@ -42,6 +44,7 @@ public class InterimSettleReversalRequestDTO {
         dto.setRejectReason(r.getRejectReason());
         dto.setExecutedAt(r.getExecutedAt());
         dto.setAffectedBatchNumbers(r.getAffectedBatchNumbers());
+        dto.setWorkflowInstanceId(r.getWorkflowInstanceId());
         return dto;
     }
 }

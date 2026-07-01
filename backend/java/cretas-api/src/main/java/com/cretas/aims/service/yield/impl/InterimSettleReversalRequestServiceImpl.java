@@ -5,14 +5,18 @@ import com.cretas.aims.entity.InterimSettleReversalRequest;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.InterimSettleReversalRequestRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.yield.InterimSettleReversalRequestService;
 import com.cretas.aims.service.yield.InterimSettleReversalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -30,6 +34,13 @@ import java.util.Set;
  * ({@code finance_manager/factory_super_admin/platform_admin}), 角色经 requestRole 参数校验 (非 SecurityContext)。
  * 审批通过<b>内联</b>调用既有 {@link InterimSettleReversalService#reverseInterimSettle} (与 approve 同事务, REQUIRED):
  * 执行侧下游守卫抛 → 整个 approve 回滚, 申请留在 PENDING_APPROVAL (审批不绕过 guard)。
+ *
+ * <p><b>统一审批中心登记 (镜像半成品盘点做法, 非通用回调引擎)</b>: 申请创建时登记一个
+ * {@code INVENTORY_ADJUSTMENT} workflow 实例 ({@link WorkflowEngineService#startWorkflow}), 让撤销申请
+ * 出现在统一 {@code /workflow/instances} (审批中心) 列表, 与半成品盘点等审批同列。审批/驳回<b>仍走本 service 的
+ * approve/reject</b> (单一审批路径 = 既有安全全保留), 并顺带驱动该实例到终态 ({@link WorkflowEngineService#transitionNode})
+ * 使其离开待审列表 (镜像 {@code PurchaseServiceImpl.approveOrder} — 业务端点驱动 workflow)。
+ * workflowEngine 缺失 / 工厂无 active workflow → 跳过登记 (graceful degradation, 申请仍正常创建/审批)。
  */
 @Slf4j
 @Service
@@ -41,12 +52,22 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
     private final InterimSettleReversalRequestRepository requestRepository;
     private final InterimSettleReversalService reversalService;
 
+    /**
+     * 统一审批中心 workflow 引擎 (optional — 镜像半成品盘点 {@code @Autowired(required=false)} 字段注入,
+     * <b>不改构造器</b> 以保持既有 @InjectMocks / 4-arg 构造单测不破)。null 时跳过登记/推进 (向后兼容)。
+     */
+    @Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
+
     /** 1天时间窗 (小时)。小结 postedAt 起算; 超过即不允许撤销 (走盘点调整)。 */
     private static final long REVERSE_WINDOW_HOURS = 24;
 
     /** 审批角色 (镜像 SP7 / 半成品盘点 STOCKTAKE_APPROVAL_ROLES)。 */
     private static final Set<String> STOCKTAKE_APPROVAL_ROLES = Set.of(
             "finance_manager", "factory_super_admin", "platform_admin");
+
+    /** INVENTORY_ADJUSTMENT workflow moduleCode (与半成品盘点/仓库盘点完全一致, 复用其审批人角色解析)。 */
+    private static final String WORKFLOW_MODULE_CODE = "INVENTORY_ADJUSTMENT";
 
     // ─────────────────────────────────────────────────────────────
     // ① 撤销申请 (request) — 零库存副作用
@@ -110,6 +131,25 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
         InterimSettleReversalRequest saved = requestRepository.save(req);
         log.info("[interim-reverse] 撤销申请已创建 (零副作用): factory={}, plan={}, seq={}, requestId={}, by={}",
                 factoryId, planId, seq, saved.getId(), userId);
+
+        // 登记 INVENTORY_ADJUSTMENT workflow 实例 → 撤销申请进统一审批中心列表 (镜像半成品盘点)。
+        // 零库存副作用: startWorkflow 只建审批实例, 不触碰库存; 逆转仍只在 approve 内联执行。
+        // hasActiveWorkflow 预检 (避免 startWorkflow orElseThrow 触发 Spring rollback-only 陷阱, mirror PurchaseServiceImpl)。
+        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, WORKFLOW_MODULE_CODE)) {
+            ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                    factoryId,
+                    WORKFLOW_MODULE_CODE,
+                    saved.getId(),
+                    Map.of("planId", planId,
+                           "sessionSeq", seq,
+                           "reason", saved.getReason(),
+                           "type", "INTERIM_SETTLE_REVERSAL"),
+                    userId);
+            saved.setWorkflowInstanceId(instance.getId());
+            saved = requestRepository.save(saved);
+            log.info("[interim-reverse] 撤销申请已登记审批中心: requestId={}, workflowInstanceId={}",
+                    saved.getId(), saved.getWorkflowInstanceId());
+        }
         return InterimSettleReversalRequestDTO.from(saved);
     }
 
@@ -139,6 +179,10 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
         InterimSettleReversalRequest saved = requestRepository.save(req);
         log.info("[interim-reverse] 撤销申请已审批+执行: requestId={}, factory={}, plan={}, seq={}, approver={}, affected={}",
                 requestId, factoryId, req.getProductionPlanId(), req.getSessionSeq(), approverId, saved.getAffectedBatchNumbers());
+
+        // 驱动统一审批中心实例到终态 (APPROVE) → 离开待审列表 (镜像 PurchaseServiceImpl 业务端点驱动 workflow)。
+        // 逆转已成功执行在前; 此推进与 approve 同事务原子 (transition 抛 → 全回滚, 自愈于重试)。
+        advanceWorkflow(saved, approverId, requestRole, HistoryAction.APPROVE, "撤销小结审批通过");
         return InterimSettleReversalRequestDTO.from(saved);
     }
 
@@ -159,6 +203,9 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
         InterimSettleReversalRequest saved = requestRepository.save(req);
         log.info("[interim-reverse] 撤销申请已驳回 (零副作用): requestId={}, factory={}, by={}, reason={}",
                 requestId, factoryId, approverId, reason);
+
+        // 驱动统一审批中心实例到终态 (REJECT) → 离开待审列表。零库存副作用不变。
+        advanceWorkflow(saved, approverId, requestRole, HistoryAction.REJECT, "撤销小结驳回");
         return InterimSettleReversalRequestDTO.from(saved);
     }
 
@@ -194,6 +241,29 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
                     .withCode("INTERIM_REVERSE_WINDOW_EXPIRED")
                     .withHint("超时的小结请通过半成品盘点调整库存")
                     .withHintTarget("撤销小结");
+        }
+    }
+
+    /**
+     * 驱动登记的 workflow 实例到终态 (APPROVE/REJECT), 使其离开统一审批中心待审列表。
+     *
+     * <p>null-safe + 幂等: workflowEngine 缺失 / 无 workflowInstanceId → 直接返回 (向后兼容)。
+     * 仅当实例仍 RUNNING 才推进 —— 若实例已被其它路径 (e.g. AI 审批 Tool) 推到终态, 跳过推进 (不抛),
+     * 让本 service 的业务动作 (逆转/驳回) 正常提交 (避免因 workflow 侧竞态回滚已完成的业务)。
+     * 极端竞态 (检查后瞬间被并发推进) → transitionNode 抛 409 → 与本事务一起回滚 (无半状态提交), 重试自愈。
+     */
+    private void advanceWorkflow(InterimSettleReversalRequest req, Long actorId, String actorRole,
+                                 HistoryAction action, String notes) {
+        if (workflowEngine == null || req.getWorkflowInstanceId() == null) {
+            return;
+        }
+        ApprovalWorkflowInstance inst = workflowEngine
+                .getCurrentInstance(req.getFactoryId(), WORKFLOW_MODULE_CODE, req.getId())
+                .orElse(null);
+        if (inst != null && inst.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
+            workflowEngine.transitionNode(req.getWorkflowInstanceId(), actorId, actorRole, action, notes);
+            log.info("[interim-reverse] 审批中心实例已推进: requestId={}, instanceId={}, action={}",
+                    req.getId(), req.getWorkflowInstanceId(), action);
         }
     }
 

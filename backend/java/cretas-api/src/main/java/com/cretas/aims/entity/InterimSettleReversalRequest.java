@@ -91,6 +91,13 @@ public class InterimSettleReversalRequest extends BaseEntity {
     @Column(name = "affected_batch_numbers", columnDefinition = "TEXT")
     private String affectedBatchNumbers;
 
+    /**
+     * 复用 INVENTORY_ADJUSTMENT workflow 实例 ID (镜像半成品盘点 {@code SemiFinishedStocktake.workflowInstanceId})。
+     * 申请创建时登记进统一审批中心列表; 审批/驳回时驱动该实例到终态。可空: 工厂无 active workflow 时不登记 (向后兼容)。
+     */
+    @Column(name = "workflow_instance_id", length = 191)
+    private String workflowInstanceId;
+
     @PrePersist
     void assignId() {
         if (id == null) {
