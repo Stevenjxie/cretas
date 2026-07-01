@@ -68,79 +68,193 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
     "qwen3.5-122b-a10b",      # not on allowlist
 })
 
-# Per-account free-only allowlist (2026-06-11 console audit). aliyun_a (90bc) was
-# the BILLED account: only these SKUs have real free quota; its other ~32 models
-# show "- -" (no free quota = PAID if called, incl qwen3-max-2026-01-23 / glm-5 /
-# deepseek-v4-pro — which ARE free on aliyun_c/b/tencent so can't be globally
-# denylisted). The call path REFUSES any aliyun_a model not in this set (skips to
-# next chain entry) — physical guard against A's paid landmines even on config drift.
-_ACCOUNT_FREE_ONLY: Dict[str, frozenset] = {
-    "aliyun_a": frozenset({
-        "qwen3.7-max-2026-06-08", "qwen3.7-plus", "qwen3.7-plus-2026-05-26",
-        "qwen3.7-max-preview", "qwen3.7-max-2026-05-17", "qwen3.7-max-2026-05-20",
-        "qwen3.5-plus-2026-04-20", "kimi-k2.6", "qwen3.6-27b", "qwen3.6-flash",
-    }),
-    # aliyun_a_deepseek = A 的 key 调 deepseek 类; A 上 deepseek-v4-pro/flash 全 "- -"
-    # (付费) → 空集 = 守卫拒绝该账号上的所有模型 (强制走 tencent 免费 deepseek).
-    "aliyun_a_deepseek": frozenset(),
+# ═══════════════════════════════════════════════════════════════════════════
+# Billing-safe model registry (per-(account, model)) — 2026-07-01 rebuild.
+# Console scrape 2026-06-30/07-01 (aliyun a/b/c), live-probe verified (~40 pairs,
+# 0 mismatch, account identity confirmed). 6-agent audit hardened. Spec:
+# docs/superpowers/specs/2026-07-01-smart-llm-router-spec.md
+#
+# ⛔ SAFETY INVARIANT (billing red-line): a (account, model) is in _SAFE_MODELS
+# IFF its `免费额度用完即停` toggle is 已开启(ON) on THAT account. ON ⇒ upstream
+# returns 403 FreeTierOnly on exhaust/expiry, NEVER a paid 200. The router REFUSES
+# any (account, model) not in this dict. This is the ONLY billing guard that matters
+# (the router cannot detect a paid 200 in the response).
+#
+# ⛔ ON-toggle = SAFETY; expiry date = ORDERING/availability ONLY (orthogonal — never
+# gate safety on the date, never trust the date for billing).
+#
+# ⛔ PER-(account, model): the SAME model has DIFFERENT toggle state per account —
+# deepseek-v4-pro is ON on aliyun_c but 不支持开启(PAID) on aliyun_b; kimi-k2.7-code /
+# qwen3.5-ocr are ON on a/c but 未开启(BILLS) on b. A global model allow/deny is WRONG.
+#
+# Value = free-grant expiry date (own date from console; account bulk-expiry for
+# exhausted-ON models that showed no date; None for tencent/zhipu which have no
+# DashScope expiry — they are billing-safe via their own 用完即停/pool cap).
+# ═══════════════════════════════════════════════════════════════════════════
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 7, 1)
+_REGISTRY_MAX_AGE_DAYS = 21  # staleness fail-safe: WARN + fall to minimal set beyond this
+_FAR_FUTURE = datetime.date(2099, 1, 1)  # tencent/zhipu + missing dates sort last among safe
+
+# Account bulk free-quota expiry (fallback sort-key for exhausted-ON DashScope models
+# whose console row showed no own date). Beijing-time; server is cn-shanghai (CST) so
+# datetime.date.today() aligns with DashScope's reset boundary.
+_BULK_EXPIRY: Dict[str, datetime.date] = {
+    "aliyun_a": datetime.date(2026, 7, 16),
+    "aliyun_b": datetime.date(2026, 7, 16),
+    "aliyun_c": datetime.date(2026, 8, 13),
 }
 
-# Expiry-aware account ordering (2026-06-11 console audit). Free quota is
-# "use-it-or-lose-it": spend the SOONEST-expiring account's quota first while it's
-# valid; an account auto-sinks below fresher ones once its bulk quota expires
-# (so the head SWITCHES automatically at the expiry date — no redeploy needed).
-#   aliyun_b (3177) bulk expires 2026-07-16 → use FIRST until then
-#   aliyun_c (a736) bulk expires 2026-08-13 → 2nd now, HEAD after 07/16
-#   aliyun_a (90bc) consumed                → always last
-# qwen3.7-* SKUs (08/20-09/08) are the long-runway backbone; re-audit before 08/13.
-_ALIYUN_B_EXPIRY = datetime.date(2026, 7, 16)
-_ALIYUN_C_EXPIRY = datetime.date(2026, 8, 13)
+_d = datetime.date
+_SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # ── aliyun_a (90bc) — ONLY the 13 screenshot-confirmed ON models. NO VL/deepseek/
+    #    glm (toggle unknown → could bill). Sooner expiries → used first (use-it-or-lose-it).
+    ("aliyun_a", "qwen3.6-plus-2026-04-02"): _d(2026, 7, 2),
+    ("aliyun_a", "qwen3.6-flash"): _d(2026, 7, 17),
+    ("aliyun_a", "kimi-k2.6"): _d(2026, 7, 21),
+    ("aliyun_a", "qwen3.5-plus-2026-04-20"): _d(2026, 7, 23),
+    ("aliyun_a", "qwen3.6-27b"): _d(2026, 7, 23),
+    ("aliyun_a", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
+    ("aliyun_a", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
+    ("aliyun_a", "qwen3.7-max-preview"): _d(2026, 8, 24),
+    ("aliyun_a", "qwen3.7-plus"): _d(2026, 9, 1),
+    ("aliyun_a", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
+    ("aliyun_a", "qwen3.7-max-2026-06-08"): _d(2026, 9, 8),
+    ("aliyun_a", "kimi-k2.7-code"): _d(2026, 9, 14),  # thinking-only → REASONING slot only
 
-# Only the qwen3.7-* SKUs survive past each account's bulk expiry (their free quota
-# runs to 08/20-09/08). After bulk expiry, an account's OTHER models become "- -"
-# (no free quota = PAID) — exactly how A(90bc) got billed. _is_expired_paid date-gates
-# B (after 07/16) and C (after 08/13) to ONLY these survivors (Fable audit 2026-06-11 #4).
-_QWEN37_SURVIVORS = frozenset({
-    "qwen3.7-max-2026-06-08", "qwen3.7-plus", "qwen3.7-plus-2026-05-26",
-    "qwen3.7-max", "qwen3.7-max-2026-05-17", "qwen3.7-max-2026-05-20",
-    "qwen3.7-max-preview",
+    # ── aliyun_b (3177) — bulk 07/16; premium drained. Curated good ON models.
+    ("aliyun_b", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
+    ("aliyun_b", "qwen3.7-max-preview"): _d(2026, 8, 24),
+    ("aliyun_b", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
+    ("aliyun_b", "qwen3.7-plus"): _d(2026, 9, 1),
+    ("aliyun_b", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
+    ("aliyun_b", "qwen3-max-preview"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3-max-2025-09-23"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3.5-397b-a17b"): _d(2026, 7, 16),
+    ("aliyun_b", "deepseek-v3"): _d(2026, 7, 16),
+    ("aliyun_b", "deepseek-v3.2"): _d(2026, 7, 16),
+    ("aliyun_b", "deepseek-r1"): _d(2026, 7, 16),          # thinking-only
+    ("aliyun_b", "deepseek-r1-0528"): _d(2026, 7, 16),     # thinking-only
+    ("aliyun_b", "glm-5"): _d(2026, 7, 16),
+    ("aliyun_b", "glm-4.7"): _d(2026, 7, 16),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
+    ("aliyun_b", "qwen-turbo"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen-flash"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3-coder-flash"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen-plus-latest"): _d(2026, 7, 16),     # exhausted-ON (403 safe)
+    ("aliyun_b", "qwen3-vl-plus-2025-12-19"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen-vl-max"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3-vl-plus"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3-vl-32b-instruct"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3-vl-flash"): _d(2026, 7, 16),
+    ("aliyun_b", "qwen3.6-flash-2026-04-16"): _d(2026, 7, 17),
+    ("aliyun_b", "kimi-k2.6"): _d(2026, 7, 21),
+    ("aliyun_b", "qwen3.5-plus-2026-04-20"): _d(2026, 7, 23),
+    ("aliyun_b", "qwen3.6-27b"): _d(2026, 7, 23),
+
+    # ── aliyun_c (a736) — bulk 08/13; fullest account, nearly all ON+quota.
+    ("aliyun_c", "qwen3.5-flash"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3.6-flash-2026-04-16"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-coder-flash"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen-plus-latest"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-max-preview"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-max-2025-09-23"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3.7-max-2026-06-08"): _d(2026, 9, 8),
+    ("aliyun_c", "qwen3.7-max"): _d(2026, 8, 20),
+    ("aliyun_c", "qwen3.7-max-2026-05-20"): _d(2026, 8, 20),
+    ("aliyun_c", "qwen3.7-max-preview"): _d(2026, 8, 24),
+    ("aliyun_c", "qwen3.7-max-2026-05-17"): _d(2026, 8, 24),
+    ("aliyun_c", "qwen3.7-plus"): _d(2026, 9, 1),
+    ("aliyun_c", "qwen3.7-plus-2026-05-26"): _d(2026, 9, 1),
+    ("aliyun_c", "deepseek-v3.1"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-v3"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-v3.2"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-v3.2-exp"): _d(2026, 8, 13),
+    ("aliyun_c", "deepseek-r1"): _d(2026, 8, 13),          # thinking-only
+    ("aliyun_c", "deepseek-r1-0528"): _d(2026, 8, 13),     # thinking-only
+    ("aliyun_c", "glm-5"): _d(2026, 8, 13),
+    ("aliyun_c", "glm-5.1"): _d(2026, 8, 13),
+    ("aliyun_c", "glm-5.2"): _d(2026, 9, 15),
+    ("aliyun_c", "glm-4.6"): _d(2026, 8, 13),
+    ("aliyun_c", "glm-4.7"): _d(2026, 8, 13),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
+    ("aliyun_c", "qwen3-vl-plus-2025-12-19"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen-vl-max"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-plus"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-32b-instruct"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-flash-2026-01-22"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-vl-30b-a3b-instruct"): _d(2026, 8, 13),
+    ("aliyun_c", "qwen3-235b-a22b-thinking-2507"): _d(2026, 8, 13),  # thinking-only
+    ("aliyun_c", "kimi-k2.6"): _d(2026, 8, 13),
+    ("aliyun_c", "kimi-k2-thinking"): _d(2026, 8, 13),     # thinking-only
+    ("aliyun_c", "kimi-k2.7-code"): _d(2026, 9, 14),       # thinking-only
+
+    # ── tencent (m00t) TokenHub trial — 用完即停 safe, no DashScope expiry (None).
+    ("tencent", "deepseek-v4-pro"): None,
+    ("tencent", "deepseek-v4-flash"): None,
+    ("tencent", "glm-5.1"): None,
+    ("tencent", "qwen3.5-flash"): None,
+    ("tencent", "kimi-k2.6"): None,
+    ("tencent", "minimax-m2.7"): None,
+    # ── zhipu (uUgu) — model-specific GLM pool, 用完即停 safe (None).
+    ("zhipu", "glm-4.5-air"): None,
+    ("zhipu", "glm-4.6v"): None,  # VL
+}
+
+# Thinking-only models (cannot disable thinking → always reason → slow). Confined to
+# REASONING slot; NEVER placed in fast slots (CHAT/MAPPER/CHART). Param layer also
+# skips enable_thinking=false for these (no-op / unsupported).
+_THINKING_ONLY: frozenset = frozenset({
+    "deepseek-r1", "deepseek-r1-0528", "deepseek-r1-distill-qwen-32b",
+    "qwen3-235b-a22b-thinking-2507", "qwq-plus", "kimi-k2.7-code", "kimi-k2-thinking",
+})
+
+# Minimal hard-coded known-safe fallback set if the registry goes stale (>21d).
+# aliyun_c longest-runway ON models + the never-expiring non-DashScope floor
+# (tencent/zhipu 用完即停) so NO slot — including VL — goes fully dark under staleness.
+# Fail SAFE, not open.
+_MINIMAL_SAFE_SET: frozenset = frozenset({
+    ("aliyun_c", "qwen3.7-max-2026-06-08"),   # 09/08 max
+    ("aliyun_c", "glm-5.2"),                  # 09/15 quality
+    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3.5-flash"),
+    ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3-vl-plus-2025-12-19"),
+    ("tencent", "qwen3.5-flash"), ("zhipu", "glm-4.5-air"),  # text floor
+    ("zhipu", "glm-4.6v"),                    # VL floor (never expires)
 })
 
 
-def _is_expired_paid(account: str, model: str) -> bool:
-    """True if a model's free quota has expired on its account (→ would bill).
-    After B's 07/16 / C's 08/13 bulk expiry, only qwen3.7-* SKUs still have free quota."""
-    today = datetime.date.today()
-    if account == "aliyun_b" and today >= _ALIYUN_B_EXPIRY:
-        return model not in _QWEN37_SURVIVORS
-    if account == "aliyun_c" and today >= _ALIYUN_C_EXPIRY:
-        return model not in _QWEN37_SURVIVORS
-    return False
+def _expiry_of(account: str, model: str) -> datetime.date:
+    """Sort key: the (account, model)'s free-grant expiry; _FAR_FUTURE if unknown/None
+    (tencent/zhipu). Used to order chains soonest-expiry-first WITHIN a quality tier."""
+    exp = _SAFE_MODELS.get((account, model), _FAR_FUTURE)
+    return exp if exp is not None else _FAR_FUTURE
 
 
-def _account_rank(account: str) -> int:
-    """Lower = tried first. Expiry-aware so perishable free quota is spent first
-    and an expired account sinks below fresher ones (head auto-switches at expiry)."""
-    today = datetime.date.today()
-    if account == "aliyun_b":
-        return 0 if today < _ALIYUN_B_EXPIRY else 50      # B first → sink after 07/16
-    if account == "aliyun_c":
-        if today < _ALIYUN_B_EXPIRY:
-            return 10                                     # 2nd now (preserve C runway)
-        return 5 if today < _ALIYUN_C_EXPIRY else 50      # HEAD after 07/16 → sink after 08/13
-    if account == "tencent":
-        return 20
-    if account == "zhipu":
-        return 30
-    if account in ("aliyun_a", "aliyun_a_deepseek"):
-        return 60                                         # consumed account always last
-    return 40
+def _registry_stale(today: Optional[datetime.date] = None) -> bool:
+    """Staleness fail-safe: registry older than _REGISTRY_MAX_AGE_DAYS → caller WARNs
+    and narrows to _MINIMAL_SAFE_SET (fail safe). Toggle states drift in console."""
+    today = today or datetime.date.today()
+    return (today - _REGISTRY_AUDIT_DATE).days > _REGISTRY_MAX_AGE_DAYS
 
 
-def _expiry_aware_sort(chain: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-    """Stable-sort a chain by expiry-aware account rank (preserves each account's
-    internal model order). Auto-switches B↔C head as their free quotas expire."""
-    return sorted(chain, key=lambda am: _account_rank(am[0]))
+def _refuse_reason(account: str, model: str,
+                   today: Optional[datetime.date] = None) -> Optional[str]:
+    """SINGLE billing-safety gate — called from BOTH call_chain and call_chain_stream
+    (streaming historically lacked the expiry gate — this unifies them). Returns a
+    reason string to REFUSE (skip to next chain entry), or None to allow.
+
+    Order: allowlist membership (the safety invariant) → paid-name denylist veto →
+    call-time expiry hard-drop. The expiry drop MUST happen here, not just via sort:
+    an ascending-expiry sort puts the most-expired model at the HEAD (tried first) —
+    refusing at call time is the actual billing guard (billing-audit CRITICAL 1)."""
+    today = today or datetime.date.today()
+    if _registry_stale(today) and (account, model) not in _MINIMAL_SAFE_SET:
+        return "registry_stale"          # fail SAFE: only minimal set until re-audit
+    if (account, model) not in _SAFE_MODELS:
+        return "not_allowlisted"         # not a confirmed-ON model on this account
+    if model in _PAID_MODEL_DENYLIST:
+        return "paid_denylist"           # final veto on known-catastrophic bare names
+    exp = _SAFE_MODELS.get((account, model))
+    if exp is not None and today >= exp:
+        return "expired"                 # free grant lapsed → may bill → hard-drop
+    return None
 
 
 def _log_cache_and_record_budget(slot_value: str, account: str, model: str, body: Dict[str, Any]) -> None:
@@ -451,85 +565,184 @@ def _dedup_chain(pairs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
 # Order: aliyun_c (a736, UNTOUCHED fresh) → aliyun_b (3177, huge free catalog) →
 # tencent (free 用完即停) → zhipu (free 用完即停) → aliyun_a (90bc, partially
 # consumed — LAST, only its tiny remaining-free list, no low-runway SKUs).
+# Shared deep text fallback tail — broadly-capable NON-thinking-only models, EVERY
+# entry ∈ _SAFE_MODELS, authored soonest-expiry-first (use-it-or-lose-it) with a
+# non-DashScope floor (tencent/zhipu) that survives all aliyun bulk expiries.
+# (Fast slots append this; the param layer sets enable_thinking=false so default-ON
+# hybrids here don't waste 10-20x latency/tokens.)
 _TEXT_TAIL: List[Tuple[str, str]] = [
-    # ── 终极 router (2026-06-11 控制台 ground-truth: 额度+过期) ──
-    # aliyun_c (a736) — 最新+过期最晚(bulk 08/13, qwen3.7-* 到 09/08). 链头.
-    ("aliyun_c", "qwen3.7-max-2026-06-08"), ("aliyun_c", "qwen3-max-preview"),
-    ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "qwen3.5-397b-a17b"),
-    ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "deepseek-r1"),
-    ("aliyun_c", "qwen3.5-flash-2026-02-23"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "glm-5"), ("aliyun_c", "glm-4.6"),
-    # aliyun_b (3177) — 满额但 bulk 07/16 较早. 2nd.
-    ("aliyun_b", "qwen3.7-max-2026-06-08"), ("aliyun_b", "qwen3-235b-a22b"),
-    ("aliyun_b", "qwen-flash-2025-07-28"), ("aliyun_b", "qwen3.5-flash-2026-02-23"),
-    ("aliyun_b", "deepseek-v3.1"), ("aliyun_b", "glm-4.6"), ("aliyun_b", "qwen-plus-latest"),
-    # tencent (m00t) TokenHub free 用完即停
-    ("tencent", "deepseek-v4-pro"), ("tencent", "glm-5.1"),
-    ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"),
-    ("tencent", "deepseek-v4-flash"), ("tencent", "minimax-m2.7"),
-    # zhipu (uUgu) free 用完即停
-    ("zhipu", "glm-4.5-air"),
-    # aliyun_a (90bc) — LAST. ⛔仅控制台确认有额度的 SKU(其余 32 个 "- -" = 付费雷, 含
-    # qwen3-max-2026-01-23/glm-5/deepseek-v4-pro). 由 _A_SAFE per-account 守卫双保险.
-    ("aliyun_a", "qwen3.7-max-2026-06-08"), ("aliyun_a", "qwen3.7-plus"),
-    ("aliyun_a", "qwen3.6-27b"), ("aliyun_a", "kimi-k2.6"),
+    # aliyun_a perishable first (07/17-07/23) — burn before it's lost
+    ("aliyun_a", "qwen3.6-flash"), ("aliyun_a", "kimi-k2.6"),
     ("aliyun_a", "qwen3.5-plus-2026-04-20"),
+    # aliyun_b 07/16 bulk (still has quota)
+    ("aliyun_b", "qwen3-max-preview"), ("aliyun_b", "glm-5"),
+    ("aliyun_b", "deepseek-v3.2"), ("aliyun_b", "qwen-flash"),
+    ("aliyun_b", "qwen3.6-flash-2026-04-16"),
+    # aliyun_c 08/13 (fullest) + long runway
+    ("aliyun_c", "qwen-plus-latest"), ("aliyun_c", "qwen3-max-preview"),
+    ("aliyun_c", "glm-5.1"), ("aliyun_c", "qwen3.5-flash"),
+    ("aliyun_c", "deepseek-v3.1"), ("aliyun_c", "qwen3.7-max-2026-06-08"),
+    ("aliyun_c", "glm-5.2"),
+    # non-DashScope floor (independent of aliyun expiries)
+    ("tencent", "qwen3.5-flash"), ("tencent", "kimi-k2.6"), ("zhipu", "glm-4.5-air"),
 ]
 
-# VL-only chain. aliyun_c/b VL 模型控制台确认免费; aliyun_a VL 全 "- -" → 不含.
+# VL-only chain — vision models only (no _TEXT_TAIL). aliyun_a has NO confirmed-ON VL
+# (screenshot didn't cover VL → toggle unknown → excluded to avoid billing).
 _VL_CHAIN: List[Tuple[str, str]] = _dedup_chain([
-    ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),
+    ("aliyun_b", "qwen3-vl-plus-2025-12-19"), ("aliyun_b", "qwen-vl-max"),  # 07/16 perishable
+    ("aliyun_c", "qwen3-vl-plus-2025-12-19"), ("aliyun_c", "qwen-vl-max"),  # 08/13
     ("aliyun_c", "qwen3-vl-plus"), ("aliyun_c", "qwen3-vl-32b-instruct"),
-    ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("aliyun_c", "qwen3-vl-30b-a3b-instruct"),
-    ("aliyun_b", "qwen3-vl-plus-2025-12-19"), ("aliyun_b", "qwen-vl-max"),
-    ("aliyun_b", "qwen3-vl-plus"), ("aliyun_b", "qwen3-vl-32b-instruct"),
-    ("zhipu", "glm-4.6v"),
+    ("aliyun_c", "qwen3-vl-flash-2026-01-22"), ("zhipu", "glm-4.6v"),
 ])
 
-# SLOT_MODELS — 终极 router. 头用 C 上控制台确认有额度的模型(避开 qwen-turbo/bare
-# qwen-flash/bare qwen3.6-flash —— 这些在 a736 上 403 耗尽/不在清单). 质量用最长
-# runway qwen3.7-max-2026-06-08(三账号都 09/08). 快用 dated flash(C 有额度).
+# SLOT_MODELS — capability-tier head (quality-appropriate) + expiry order within tier
+# (soonest-expiry account first) + shared tail. Every (account, model) ∈ _SAFE_MODELS
+# (CI-enforced). thinking-only models (deepseek-r1/qwen3-*-thinking/kimi-k2.7-code)
+# appear ONLY in REASONING. Runtime order is authoritative (no re-sort); _refuse_reason
+# drops expired/unsafe entries so heads auto-switch as free grants lapse.
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {
-    # CHAT — 高频低延迟 → C dated flash 头(48万), B flash 2nd, tencent fast 3rd.
+    # CHAT — 高频低延迟, thinking off → flash/turbo, perishable first.
     SLOT.CHAT: _dedup_chain([
-        ("aliyun_c", "qwen-flash-2025-07-28"), ("aliyun_c", "qwen3.5-flash-2026-02-23"),
-        ("aliyun_b", "qwen-flash-2025-07-28"),
-        ("tencent", "qwen3.5-flash"), ("tencent", "deepseek-v4-flash"),
+        ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen3.6-flash-2026-04-16"),
+        ("aliyun_b", "qwen-flash"), ("aliyun_b", "qwen-turbo"),
+        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
+        ("aliyun_c", "qwen-plus-latest"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
-    # INSIGHTS — 质量 → C 最新 max(09/08), B 2nd, tencent v4-pro 3rd.
+    # INSIGHTS — 质量 (thinking off = fast concise insight, 实测 qwen3.7-max 1.1s).
     SLOT.INSIGHTS: _dedup_chain([
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        ("aliyun_b", "qwen3.7-max-2026-06-08"),
-        ("tencent", "deepseek-v4-pro"),
+        ("aliyun_a", "qwen3.7-max-2026-05-20"), ("aliyun_b", "qwen3.7-max-2026-05-20"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"), ("aliyun_c", "qwen3-max-preview"),
+        ("aliyun_c", "glm-5.2"), ("aliyun_c", "qwen-plus-latest"),
     ] + _TEXT_TAIL),
-    # CHART — compact JSON → C dated flash 头(非推理, C 98.9万), glm 仅后备(避免空content).
+    # CHART — compact JSON (thinking off + json_object) → flash/coder; NO glm-5 head (60s).
     SLOT.CHART: _dedup_chain([
-        ("aliyun_c", "qwen3.5-flash-2026-02-23"), ("aliyun_c", "qwen3.6-flash-2026-04-16"),
-        ("aliyun_b", "qwen3.5-flash-2026-02-23"),
-        ("tencent", "glm-5.1"), ("aliyun_c", "glm-5"), ("aliyun_b", "glm-4.6"),
+        ("aliyun_b", "qwen3.6-flash-2026-04-16"), ("aliyun_b", "qwen-turbo"),
+        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
+        ("aliyun_b", "qwen3-coder-flash"), ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
-    # MAPPER — 字段映射 → C dated flash 头, B flash 2nd, tencent v4-flash 3rd.
+    # MAPPER — 字段映射 JSON (thinking off + json_object) → fast flash/coder.
     SLOT.MAPPER: _dedup_chain([
-        ("aliyun_c", "qwen3.5-flash-2026-02-23"), ("aliyun_b", "qwen-flash-2025-07-28"),
-        ("tencent", "deepseek-v4-flash"),
-        ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_b", "qwen3-235b-a22b"),
+        ("aliyun_a", "qwen3.6-flash"), ("aliyun_b", "qwen-flash"),
+        ("aliyun_c", "qwen3.5-flash"), ("aliyun_c", "qwen3-coder-flash"),
+        ("tencent", "qwen3.5-flash"),
     ] + _TEXT_TAIL),
-    # REASONING — 深度 → C free deepseek/MoE 头, B 2nd, tencent v4-pro 3rd.
+    # REASONING — 深度 (thinking on / thinking-only OK) → deepseek/MoE reasoners.
     SLOT.REASONING: _dedup_chain([
-        ("aliyun_c", "deepseek-v3.1"),
-        ("aliyun_b", "qwen3.5-397b-a17b"),
-        ("tencent", "deepseek-v4-pro"),
-        ("aliyun_c", "qwen3-235b-a22b"), ("aliyun_c", "deepseek-r1"),
+        ("aliyun_c", "deepseek-v3.1"), ("aliyun_b", "deepseek-v3.2"),
+        ("aliyun_c", "deepseek-v3.2"), ("tencent", "deepseek-v4-pro"),
+        ("aliyun_c", "qwen3-235b-a22b-thinking-2507"), ("aliyun_b", "qwen3.5-397b-a17b"),
+        ("aliyun_c", "deepseek-r1"),
     ] + _TEXT_TAIL),
     # VL — 仅视觉链.
     SLOT.VL: _VL_CHAIN,
-    # REVIEW — 中文 critique → C 最新 max 头(09/08), B 2nd, tencent v4-pro 3rd.
+    # REVIEW — 中文 critique 质量 → max/plus + deepseek-v3.2 (实测 concise+complete).
     SLOT.REVIEW: _dedup_chain([
-        ("aliyun_c", "qwen3.7-max-2026-06-08"),
-        ("aliyun_b", "qwen3.7-max-2026-06-08"),
-        ("tencent", "deepseek-v4-pro"),
+        ("aliyun_a", "qwen3.7-max-2026-05-17"), ("aliyun_b", "qwen3-max-2025-09-23"),
+        ("aliyun_c", "qwen3.7-max-2026-06-08"), ("aliyun_c", "qwen3-max-preview"),
+        ("aliyun_c", "deepseek-v3.2"), ("aliyun_c", "glm-5.2"),
     ] + _TEXT_TAIL),
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Layer 3 — per-SLOT param profile (injected into every payload).
+# Biggest lever: enable_thinking=false on fast slots. qwen3.5+/3.7 default thinking
+# ON → wastes 10-20x latency + 1200-3561 reasoning tokens/call (measured on
+# qwen3.7-max: 16.5s→1.1s, qwen3.5-flash: 11.6s→0.6s). thinking-only models can't
+# toggle (skipped). json_object (CHART/MAPPER) needs enable_thinking=false + "json"
+# in the prompt + no max_tokens (truncation = parse fail).
+# ═══════════════════════════════════════════════════════════════════════════
+_ALIYUN_ACCOUNTS: frozenset = frozenset({
+    "aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
+})
+
+_SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
+    SLOT.CHAT:      {"enable_thinking": False},
+    SLOT.INSIGHTS:  {"enable_thinking": False},
+    SLOT.CHART:     {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
+    SLOT.MAPPER:    {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
+    SLOT.REASONING: {"enable_thinking": True},
+    SLOT.VL:        {"enable_thinking": False},
+    SLOT.REVIEW:    {"enable_thinking": False},
+}
+
+
+def _payload_mentions_json(payload: Dict[str, Any]) -> bool:
+    """True if any message content mentions 'json' — required before enabling
+    response_format:json_object (DashScope 400s otherwise: 'messages must contain
+    the word json')."""
+    for m in (payload.get("messages") or []):
+        c = m.get("content")
+        if isinstance(c, str) and "json" in c.lower():
+            return True
+        if isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and "json" in str(part.get("text", "")).lower():
+                    return True
+    return False
+
+
+def _apply_slot_params(slot: SLOT, account: str, model: str,
+                       payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the SLOT's param profile to a per-call payload (model already set).
+    Returns a new dict. Provider-aware: enable_thinking is a DashScope param → only
+    for aliyun + hybrid (non-thinking-only) models."""
+    prof = _SLOT_PARAMS.get(slot) or {}
+    p = {**payload}
+    is_aliyun = account in _ALIYUN_ACCOUNTS
+    if "enable_thinking" in prof and is_aliyun and model not in _THINKING_ONLY:
+        p["enable_thinking"] = prof["enable_thinking"]
+        p.setdefault("enable_search", False)  # web-search off (latency/nondeterminism)
+    # json_object only when the prompt already mentions "json" (else 400) — avoids
+    # breaking callers whose CHART/MAPPER prompt lacks the keyword.
+    if prof.get("json") and _payload_mentions_json(p):
+        p["response_format"] = {"type": "json_object"}
+        p.pop("max_tokens", None)
+        p.pop("max_completion_tokens", None)
+    if "temperature" in prof:
+        p["temperature"] = prof["temperature"]
+    if "seed" in prof and is_aliyun:
+        p.setdefault("seed", prof["seed"])
+    return p
+
+
+# ── Layer 4 — outcome validation (highest-value: router was quality-blind, any 200
+# accepted → empty/garbage reached users with no fallback). Validate per-slot; on
+# failure fall to the next chain entry.
+_MIN_TEXT_LEN = 8  # INSIGHTS/REVIEW floor — shorter than this = likely garbage/refusal
+
+
+def _extract_content(body_json: Dict[str, Any]) -> str:
+    """Pull assistant content from an OpenAI-compatible response, defensively."""
+    try:
+        msg = (body_json.get("choices") or [{}])[0].get("message") or {}
+        return (msg.get("content") or "").strip()
+    except Exception:
+        return ""
+
+
+def _validate_output(slot: SLOT, content: str) -> Optional[str]:
+    """Return an invalidity reason (→ fall to next model) or None if the output is
+    acceptable for this slot. Cheap, deterministic — the free half of a FrugalGPT
+    cascade (reject garbage + retry, no expensive judge)."""
+    if not content or not content.strip():
+        return "empty"
+    if slot in (SLOT.CHART, SLOT.MAPPER):
+        s = content.strip()
+        if s.startswith("```"):  # strip markdown fences some models add
+            s = s.strip("`")
+            if s[:4].lower() == "json":
+                s = s[4:]
+        s = s.strip()
+        try:
+            json.loads(s)
+        except Exception:
+            return "bad_json"
+    elif slot in (SLOT.INSIGHTS, SLOT.REVIEW):
+        if len(content.strip()) < _MIN_TEXT_LEN:
+            return "too_short"
+    return None
 
 
 def _provider_config(account: str) -> Tuple[str, str]:
@@ -615,16 +828,27 @@ DEFAULT_CHAIN: List[str] = [
 
 
 def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
-    """Detect 免费额度用完即停 / rate-limit / quota-exceeded from response."""
+    """Detect a FREE-GRANT exhaustion (→ long 6h quota-skip until monthly reset).
+
+    ⚠️ 429 is DELIBERATELY NOT here (gap-audit correctness fix). A 429 is a TRANSIENT
+    burst rate-limit, not a spent monthly free grant — treating it as quota-exhausted
+    sidelined a healthy quota-rich model for 6h on a load spike. 429 now falls through
+    the 'other errors' path → circuit-breaker SHORT cooldown (CB_COOLDOWN) only, no 6h
+    quota-skip. Only 403 FreeTierOnly / 402 grant-exhaustion warrant the long skip."""
     if status_code == 403:
         return "FreeTierOnly" in body_text or "AllocationQuota" in body_text
-    if status_code == 429:
-        # ZhipuAI / DeepSeek may use 429 for quota/rate. Treat as fallback trigger.
-        return True
-    if status_code == 402 and "Insufficient Balance" in body_text:
+    if status_code == 402 and (
+        "Insufficient Balance" in body_text
+        or "FREE_QUOTA_EXHAUSTED" in body_text
+    ):
         # DeepSeek-official balance-0 returns 402 with body "Insufficient
-        # Balance". Structurally identical to other quota exhaustion — fall
-        # through with WARNING instead of generic ERROR (issue #581).
+        # Balance". Tencent TokenHub returns 402 with body "endpoint is
+        # inactive: FREE_QUOTA_EXHAUSTED" once its 90-day free trial is
+        # consumed (probe 2026-06-30: deepseek-v4-pro/flash, glm-5.1,
+        # qwen3.5-flash all 402). Both are structurally identical to other
+        # quota exhaustion ($0, free trial stopped) — classify as quota so the
+        # caller (a) marks the (account,model) quota-skip cache for QUOTA_SKIP_TTL
+        # instead of re-probing every request, and (b) logs WARNING not ERROR.
         return True
     return False
 
@@ -664,39 +888,25 @@ async def call_chain(
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
-    slot_chain = _expiry_aware_sort(slot_chain)  # 过期感知: B 先(07/16前) → 自动切 C 头
+    # No runtime re-sort: SLOT_MODELS order is authoritative (quality tier + expiry).
+    # _refuse_reason drops expired/unsafe entries so heads auto-switch as grants lapse.
     client = get_llm_http_client()
     errors: List[str] = []
 
     for account, model in slot_chain:
         if not model:
             continue
-        # PAID-model denylist guard (2026-06-11): refuse to bill — skip to next.
-        if model in _PAID_MODEL_DENYLIST:
+        # ⛔ Unified billing-safety gate (allowlist ∧ ¬denylist ∧ ¬expired ∧ ¬stale).
+        # SAME helper in call_chain_stream so the two paths cannot drift. The router
+        # cannot detect a paid 200, so refusing non-ON / expired models here IS the
+        # billing guard.
+        _refuse = _refuse_reason(account, model)
+        if _refuse:
             logger.error(
-                f"[llm_router] slot={slot.value} refusing PAID model {model} "
-                f"(account={account}) — skipping to protect billing"
+                f"[llm_router] slot={slot.value} refusing {account}/{model} "
+                f"({_refuse}) — protecting billing"
             )
-            errors.append(f"{account}/{model}: paid_denylist")
-            continue
-        # Per-account free-only guard (2026-06-11): aliyun_a (90bc) only has free
-        # quota on a few SKUs; refuse any other model on it (would bill silently).
-        _acct_allow = _ACCOUNT_FREE_ONLY.get(account)
-        if _acct_allow is not None and model not in _acct_allow:
-            logger.error(
-                f"[llm_router] slot={slot.value} refusing {model} on {account} "
-                f"(no free quota on this account) — skipping to protect billing"
-            )
-            errors.append(f"{account}/{model}: account_free_only")
-            continue
-        # Expiry date-gate (Fable #4): after B's 07/16 / C's 08/13 bulk expiry, all but
-        # the qwen3.7-* survivors become "- -" (paid). Refuse them (would bill).
-        if _is_expired_paid(account, model):
-            logger.error(
-                f"[llm_router] slot={slot.value} refusing {model} on {account} "
-                f"(free quota expired for this SKU) — skipping to protect billing"
-            )
-            errors.append(f"{account}/{model}: expired_paid")
+            errors.append(f"{account}/{model}: {_refuse}")
             continue
         cb_key = f"{account}/{model}"  # circuit-breaker per (account,model): one
         # model's free-quota 403 must NOT skip other free models on same account
@@ -725,7 +935,10 @@ async def call_chain(
             logger.debug(f"[llm_router] {account}: no API key, skip")
             continue
 
-        req_payload = _normalize_payload_for_provider({**payload, "model": model}, account)
+        req_payload = _apply_slot_params(
+            slot, account, model,
+            _normalize_payload_for_provider({**payload, "model": model}, account),
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -750,9 +963,20 @@ async def call_chain(
             body_text = resp.text  # may trigger aread() internally
 
             if 200 <= resp.status_code < 300:
+                body_json = resp.json()
+                # Layer 4 — outcome validation: a 2xx with empty / garbage / invalid-
+                # JSON body is NOT success. Fall to the next chain entry instead of
+                # handing garbage to the caller (do NOT record CB success on bad output).
+                invalid = _validate_output(slot, _extract_content(body_json))
+                if invalid:
+                    logger.warning(
+                        f"[llm_router] slot={slot.value} {account}/{model} output "
+                        f"invalid ({invalid}) — falling back"
+                    )
+                    errors.append(f"{account}/{model}: invalid_{invalid}")
+                    continue
                 _cb_record_success(cb_key)
                 _quota_record_success(cb_key)
-                body_json = resp.json()
                 _log_cache_and_record_budget(slot.value, account, model, body_json)
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
                 return body_json
@@ -845,7 +1069,7 @@ async def call_chain_stream(
     slot_chain = SLOT_MODELS.get(slot, [])
     if chain is not None:
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
-    slot_chain = _expiry_aware_sort(slot_chain)  # 过期感知: B 先(07/16前) → 自动切 C 头
+    # No runtime re-sort: SLOT_MODELS order authoritative (see call_chain).
     client = get_llm_http_client()
     errors: List[str] = []
     payload = {**payload, "stream": True}
@@ -858,23 +1082,16 @@ async def call_chain_stream(
     for account, model in slot_chain:
         if not model:
             continue
-        # PAID-model denylist guard (2026-06-11): refuse to bill — skip to next.
-        if model in _PAID_MODEL_DENYLIST:
+        # ⛔ Unified billing-safety gate — SAME _refuse_reason as call_chain. This
+        # path historically LACKED the expiry gate (billing-audit CRITICAL 3); now
+        # unified via one helper so the two paths cannot drift.
+        _refuse = _refuse_reason(account, model)
+        if _refuse:
             logger.error(
-                f"[llm_router_stream] slot={slot.value} refusing PAID model {model} "
-                f"(account={account}) — skipping to protect billing"
+                f"[llm_router_stream] slot={slot.value} refusing {account}/{model} "
+                f"({_refuse}) — protecting billing"
             )
-            errors.append(f"{account}/{model}: paid_denylist")
-            continue
-        # Per-account free-only guard (2026-06-11): aliyun_a (90bc) only has free
-        # quota on a few SKUs; refuse any other model on it (would bill silently).
-        _acct_allow = _ACCOUNT_FREE_ONLY.get(account)
-        if _acct_allow is not None and model not in _acct_allow:
-            logger.error(
-                f"[llm_router] slot={slot.value} refusing {model} on {account} "
-                f"(no free quota on this account) — skipping to protect billing"
-            )
-            errors.append(f"{account}/{model}: account_free_only")
+            errors.append(f"{account}/{model}: {_refuse}")
             continue
         cb_key = f"{account}/{model}"  # CB per (account,model), see call_chain
 
@@ -902,7 +1119,10 @@ async def call_chain_stream(
             logger.debug(f"[llm_router_stream] {account}: no API key, skip")
             continue
 
-        req_payload = _normalize_payload_for_provider({**payload, "model": model}, account)
+        req_payload = _apply_slot_params(
+            slot, account, model,
+            _normalize_payload_for_provider({**payload, "model": model}, account),
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
