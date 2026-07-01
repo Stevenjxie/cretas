@@ -739,6 +739,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .unitPrice(unitPrice)
                     .rowTotalCost(rowTotalCost)
                     .inputQuantity(input)
+                    .freshRawInput(sumFreshRawInputs(req))
                     .sourceBatchNumber(rowProvenance.sourceBatchNumber)
                     .feedQuantity(rowProvenance.feedQuantity)
                     .sourceProducedQuantity(rowProvenance.sourceProducedQuantity)
@@ -880,6 +881,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     private boolean hasUpstreamSources(ProcessSheetRowRequest req) {
         return req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+    }
+
+    /**
+     * 本道<b>新鲜原料</b>投入量(kg) = Σ rawMaterialInputs.quantity, 不含 SFI/成品投料 (①d 双计修复)。
+     *
+     * <p>非 null (无领料 → 0), 供出成率分母只计新鲜原料 (被复用半成品前段由 lineage 单独接入, 避免双计)。
+     */
+    private BigDecimal sumFreshRawInputs(ProcessSheetRowRequest req) {
+        if (req == null || req.getRawMaterialInputs() == null) {
+            return BigDecimal.ZERO;
+        }
+        return req.getRawMaterialInputs().stream()
+                .map(ProcessSheetRowRequest.RawInput::getQuantity)
+                .map(ProcessSheetServiceImpl::nz)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private static class ProcessSheetRowProvenance {

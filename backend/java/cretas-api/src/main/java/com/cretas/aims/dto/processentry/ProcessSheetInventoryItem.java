@@ -58,6 +58,21 @@ public class ProcessSheetInventoryItem {
 
     private BigDecimal inputQuantity;
 
+    /**
+     * 本道投入中的<b>新鲜原料</b>部分(kg) = Σ rawMaterialInputs.quantity, <b>不含</b>半成品(SFI)/成品投料。
+     *
+     * <p>与 {@link #inputQuantity} 的区别 (①d 双计修复): 前端对领用半成品/成品的道 (焯水/滚揉/气调成品/混批)
+     * 把 {@code inputQuantity} 设为 feedQuantityKg/usedWeight (= 新鲜原料 + SFI/FG 投料), 而 rawMaterialInputs
+     * 只含真正领料的新鲜原料。出成率分母的"本计划自身原料"必须只算新鲜原料 (SFI 前段由 reusedFrontRaw 血缘接入,
+     * 不能在 inputQuantity 里再计一次 → 否则被复用批次的量双计)。
+     *
+     * <p>正常领料首道 (无投料): rawMaterialInputs 和 == inputQuantity → 本字段 == inputQuantity, 行为不变。
+     * <p>纯 SFI 投料道 (无 rawMaterialInputs): 本字段 = 0。<p>混批 (原料+SFI): 本字段 = 仅原料部分。
+     *
+     * <p>仅逐工序电子表格路径 (getInventoryYieldCardFromProcessSheetRows) 填充; WIP 路径留 null (调用方回退 inputQuantity)。
+     */
+    private BigDecimal freshRawInput;
+
     private String sourceBatchNumber;
 
     private BigDecimal feedQuantity;

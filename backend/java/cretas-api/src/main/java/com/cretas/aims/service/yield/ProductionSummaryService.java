@@ -21,9 +21,17 @@ public class ProductionSummaryService {
     private final ReusedSemiLineageService reusedSemiLineageService;
 
     /**
-     * 计划自身首道原料投入重(kg) = Σ 最小 processOrder 行 inputQuantity。
-     * 提为 public static 供 {@link ReusedSemiLineageService} 反查来源计划前段时同口径复用。
-     * 空/无投入 → BigDecimal.ZERO (调用方自行判 signum)。
+     * 计划自身首道<b>新鲜原料</b>投入重(kg) = Σ 最小 processOrder 行 freshRawInput。
+     *
+     * <p>①d 双计修复: 只计新鲜原料 (rawMaterialInputs), <b>不含</b>半成品(SFI)/成品投料 —— 复用半成品的
+     * 前段原料由 {@link ReusedSemiLineageService} 血缘接入分母; 若这里再按 inputQuantity(=原料+投料) 计一次,
+     * 被复用批次的量会双计 (分母虚高 → 出成率被低估)。
+     *
+     * <p>{@code freshRawInput != null} → 用它 (逐工序电子表格路径已算好新鲜原料, 纯投料道 = 0);
+     * {@code freshRawInput == null} → 回退 inputQuantity (WIP 路径, 该路径不把 SFI 投料记入 inputQuantity, 无双计)。
+     *
+     * <p>正常领料首道 rawMaterialInputs 和 == inputQuantity → 本口径与旧 inputQuantity 口径逐字节一致 (回归不变)。
+     * 提为 public static 供 {@link ReusedSemiLineageService} 反查来源计划前段时同口径复用。空/无投入 → ZERO。
      */
     public static BigDecimal sumFirstProcessRawInput(List<ProcessSheetInventoryItem> items) {
         if (items == null || items.isEmpty()) {
@@ -35,8 +43,7 @@ public class ProductionSummaryService {
                 .min(Comparator.naturalOrder()).orElse(0);
         return items.stream()
                 .filter(i -> i.getProcessOrder() != null && i.getProcessOrder().intValue() == minOrder)
-                .map(ProcessSheetInventoryItem::getInputQuantity)
-                .map(ProductionSummaryService::nz)
+                .map(i -> i.getFreshRawInput() != null ? i.getFreshRawInput() : nz(i.getInputQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
