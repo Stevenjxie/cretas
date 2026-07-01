@@ -27,9 +27,39 @@ const SAMPLE = {
         priority: 'P0',
         action: '把午市做成 45 分钟可完成的工作日套餐。',
         why: '办公客流占比高。',
+        metricTrigger: '办公客群 46%',
+        expectedImpact: '2 周验证',
       },
     ],
   },
+  decisionScores: [
+    {
+      key: 'capture_gap',
+      label: '捕获率缺口',
+      score: 82,
+      maxScore: 100,
+      level: 'high',
+      evidence: '第一百货捕获率仍低于同商圈机会位。',
+      recommendation: '先做午市快转化。',
+    },
+  ],
+  scenarioSimulations: [
+    {
+      name: '捕获率 +0.4pp',
+      assumption: '把午市入口套餐和等位透明度做好。',
+      metricDelta: '约 +87 到店机会/日',
+      operatingImplication: '优先压缩出餐链路。',
+      nextAction: '2 周 A/B 验证。',
+    },
+  ],
+  validationPlan: [
+    {
+      question: '商场总客流是否同步下降？',
+      requiredFields: ['mall_daily_footfall', 'floor_flow_index'],
+      decisionRule: '若商场不降而本店下降，优先查动线和竞品。',
+      owner: '区域运营',
+    },
+  ],
 };
 
 describe('AdvancedTrafficPersonaCard', () => {
@@ -45,5 +75,10 @@ describe('AdvancedTrafficPersonaCard', () => {
     expect(wrapper.text()).toContain('高德');
     expect(wrapper.text()).toContain('午市');
     expect(wrapper.text()).toContain('demo 模拟数据');
+    expect(wrapper.text()).toContain('诊断评分');
+    expect(wrapper.text()).toContain('场景推演');
+    expect(wrapper.text()).toContain('验证计划');
+    expect(wrapper.text()).toContain('捕获率 +0.4pp');
+    expect(wrapper.text()).toContain('商场总客流是否同步下降');
   });
 });

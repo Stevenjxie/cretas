@@ -44,6 +44,98 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
         estimated_visits = int(daily_footfall * capture_rate)
         competitor_overlap_index = float(params.get("competitor_overlap_index") or 0.67)
         consumption_power_index = int(params.get("consumption_power_index") or 116)
+        capture_lift_pp = 0.004
+        incremental_daily_visits = int(daily_footfall * capture_lift_pp)
+        weekly_incremental_visits = incremental_daily_visits * 7
+        weekend_queue_retention = int(estimated_visits * 0.36 * 0.1)
+
+        decision_scores = [
+            {
+                "key": "capture_gap",
+                "label": "捕获率缺口",
+                "name": "捕获率缺口",
+                "score": 82,
+                "maxScore": 100,
+                "level": "high",
+                "evidence": f"日均路过客流 {daily_footfall:,}，当前估算捕获率 {capture_rate * 100:.1f}%。",
+                "recommendation": "先优化午市入口套餐、等位透明和门口导流，而不是直接加座。",
+            },
+            {
+                "key": "competitor_pressure",
+                "label": "竞品压力",
+                "name": "竞品压力",
+                "score": 78,
+                "maxScore": 100,
+                "level": "high",
+                "evidence": f"竞品客群重叠指数 {competitor_overlap_index:.2f}，说明同商圈在抢同一批人。",
+                "recommendation": "投放主张应避开价格战，强调服务确定性、出餐稳定和招牌菜。",
+            },
+            {
+                "key": "dwell_fit",
+                "label": "停留适配",
+                "name": "停留适配",
+                "score": 64,
+                "maxScore": 100,
+                "level": "medium",
+                "evidence": "餐饮层平均停留 74 分钟，适合正餐，但午市办公客停留窗口更短。",
+                "recommendation": "午市做快决策套餐，晚市保留家庭/游客套餐。",
+            },
+            {
+                "key": "supply_readiness",
+                "label": "供应链联动",
+                "name": "供应链联动",
+                "score": 59,
+                "maxScore": 100,
+                "level": "medium",
+                "evidence": "20:00 后外部客流仍高但堂食转化下降，历史销量补货会低估潜在需求。",
+                "recommendation": "把客流峰谷作为备货阈值的外部修正项。",
+            },
+        ]
+
+        scenario_simulations = [
+            {
+                "name": "捕获率 +0.4pp",
+                "assumption": "午市入口套餐、等位透明和点评信任线索同步优化。",
+                "metricDelta": f"约 +{incremental_daily_visits} 到店机会/日，+{weekly_incremental_visits} 到店机会/周。",
+                "operatingImplication": "先压缩点单和出餐链路，再看是否需要增加午市人手。",
+                "nextAction": "选择第一百货店做 2 周 A/B 验证。",
+            },
+            {
+                "name": "周末排队流失 -10%",
+                "assumption": "17:00 前开放候补预约，超过 35 分钟等待导流到同品牌近店。",
+                "metricDelta": f"约保留 {weekend_queue_retention} 个高峰到店机会/日。",
+                "operatingImplication": "减少门口流失，同时把拥堵门店需求留在连锁内部。",
+                "nextAction": "用排队时长、点评等待关键词和跨店券核验。",
+            },
+            {
+                "name": "竞品重叠下降 0.07",
+                "assumption": "投放从通用折扣改成招牌菜稳定性、服务确定性和不踩雷心智。",
+                "metricDelta": "降低同质化价格竞争，优先改善转化质量而非单纯拉客流。",
+                "operatingImplication": "预算从全城曝光转向来源地 Top3 和地图/点评决策入口。",
+                "nextAction": "按黄浦、静安、浦东三个来源地分组看券核销。",
+            },
+        ]
+
+        validation_plan = [
+            {
+                "question": "商场总客流是否同步下降？",
+                "requiredFields": ["mall_daily_footfall", "floor_flow_index", "storefront_passby_flow"],
+                "decisionRule": "如果商场不降而本店下降，优先查楼层动线、竞品新开和等位体验。",
+                "owner": "区域运营",
+            },
+            {
+                "question": "午市客流是办公客还是游客？",
+                "requiredFields": ["hourly_flow_index", "source_area_top3", "weekday_weekend_lift"],
+                "decisionRule": "办公客占比高则推快出餐套餐；游客占比高则强化点评信任和招牌菜。",
+                "owner": "门店运营",
+            },
+            {
+                "question": "客流峰谷是否已经影响备货？",
+                "requiredFields": ["hourly_flow_index", "sku_stockout_rate", "late_day_waste_rate"],
+                "decisionRule": "如果晚市潜在客流高但缺货/尾段浪费并存，调整备货阈值而非只改菜单。",
+                "owner": "供应链",
+            },
+        ]
 
         recommendations = [
             {
@@ -226,6 +318,9 @@ class AdvancedTrafficPersonaHandler(AbstractSectionHandler):
                 "transitAccessibilityIndex": 0.91,
                 "avgDwellMinutes": 74,
             },
+            "decisionScores": decision_scores,
+            "scenarioSimulations": scenario_simulations,
+            "validationPlan": validation_plan,
             "analysis": {
                 "headline": (
                     f"{business_district}{'/' + str(mall_name) if mall_name else ''}"

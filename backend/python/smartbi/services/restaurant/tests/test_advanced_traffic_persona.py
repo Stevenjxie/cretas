@@ -53,6 +53,10 @@ def test_advanced_traffic_persona_demo_contract() -> None:
         "午市" in item["action"] or "排队" in item["action"]
         for item in data["analysis"]["recommendations"]
     )
+    assert len(data["decisionScores"]) >= 4
+    assert all(0 <= item["score"] <= item["maxScore"] for item in data["decisionScores"])
+    assert any("捕获率" in item["name"] for item in data["scenarioSimulations"])
+    assert any("商场总客流" in item["question"] for item in data["validationPlan"])
     assert "模拟" in data["dataNote"]
 
 

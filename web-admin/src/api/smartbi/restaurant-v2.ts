@@ -483,6 +483,32 @@ export interface AdvancedTrafficPersonaRecommendation {
   expectedImpact?: string;
 }
 
+export interface AdvancedTrafficPersonaDecisionScore {
+  key: string;
+  label?: string;
+  name?: string;
+  score: number;
+  maxScore: number;
+  level?: string;
+  evidence: string;
+  recommendation: string;
+}
+
+export interface AdvancedTrafficPersonaScenario {
+  name: string;
+  assumption: string;
+  metricDelta: string;
+  operatingImplication: string;
+  nextAction: string;
+}
+
+export interface AdvancedTrafficPersonaValidationItem {
+  question: string;
+  requiredFields: string[];
+  decisionRule: string;
+  owner?: string;
+}
+
 export interface AdvancedTrafficPersona {
   moduleName: string;
   requiresEnablement: boolean;
@@ -511,6 +537,9 @@ export interface AdvancedTrafficPersona {
     businessQuestion: string;
   }>;
   simulatedMetrics: Record<string, number>;
+  decisionScores?: AdvancedTrafficPersonaDecisionScore[];
+  scenarioSimulations?: AdvancedTrafficPersonaScenario[];
+  validationPlan?: AdvancedTrafficPersonaValidationItem[];
   analysis: {
     headline: string;
     comparisonNarrative: string[];
