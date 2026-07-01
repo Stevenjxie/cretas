@@ -108,7 +108,7 @@ export const PRODUCT_CONFIG: AiEntryConfig = {
 
 必填字段：
 - name: 产品名称
-- productCategory: 产品大类，必须是以下之一：FINISHED_PRODUCT(成品)、RAW_MATERIAL(原料)、PACKAGING(包辅材)、SEASONING(调味品)、CUSTOMER_MATERIAL(客户自带原料加工)
+- productCategory: 产品大类，必须是以下之一：FINISHED_PRODUCT(成品)、RAW_MATERIAL(原料)、PACKAGING(包辅材)、SEASONING(调味品)、CUSTOMER_MATERIAL(客户自带原料加工)、CONTRACT_MANUFACTURING(纯代工)
 - unit: 单位（如 kg、箱、袋、瓶）
 
 可选字段：

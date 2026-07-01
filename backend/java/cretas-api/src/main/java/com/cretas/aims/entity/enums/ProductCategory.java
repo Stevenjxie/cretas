@@ -22,8 +22,10 @@ public final class ProductCategory {
     public static final String PACKAGING = "PACKAGING";
     /** 调味料 */
     public static final String SEASONING = "SEASONING";
-    /** 客供料 */
+    /** 客供料（客户自带原料加工 — 来料加工，工厂只收加工费） */
     public static final String CUSTOMER_MATERIAL = "CUSTOMER_MATERIAL";
+    /** 纯代工（工厂自备原料的代工/OEM — 给客户品牌代生产，有原料成本，区别于客供料来料加工） */
+    public static final String CONTRACT_MANUFACTURING = "CONTRACT_MANUFACTURING";
 
     // ==================== 餐饮扩展 ====================
     /** 菜品（餐饮出品） */
@@ -48,6 +50,7 @@ public final class ProductCategory {
      */
     public static boolean isSellable(String category) {
         return FINISHED_PRODUCT.equals(category) || DISH.equals(category)
-                || COMBO.equals(category) || SEMI_FINISHED.equals(category);
+                || COMBO.equals(category) || SEMI_FINISHED.equals(category)
+                || CONTRACT_MANUFACTURING.equals(category);
     }
 }

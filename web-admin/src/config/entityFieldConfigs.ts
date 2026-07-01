@@ -74,6 +74,7 @@ export const productTypeFields: FieldConfig[] = [
       { label: '包材', value: 'PACKAGING' },
       { label: '调料', value: 'SEASONING' },
       { label: '客供料', value: 'CUSTOMER_MATERIAL' },
+      { label: '纯代工', value: 'CONTRACT_MANUFACTURING' },
     ] },
   { key: 'productCategory', label: '产品大类', type: 'text', group: '基本信息', order: 4 },
   { key: 'specification', label: '规格', type: 'text', group: '基本信息', order: 5, placeholder: '如 200g/盒、1kg/袋' },
