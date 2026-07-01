@@ -347,7 +347,7 @@ export const DEFAULT_ADVANCED_TRAFFIC_PERSONA: AdvancedTrafficPersona = {
       steps: [
         {
           source: '和风天气',
-          productionStatus: 'needs_key_and_location',
+          productionStatus: 'needs_key_host_and_location',
           refreshCadence: '小时级/日更均可',
           storesOneApiCall: true,
           whatItWrites: ['天气现况', '体感温度', '湿度', '风力', '供应商更新时间'],

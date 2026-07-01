@@ -141,7 +141,7 @@ const SAMPLE = {
     ],
     plainConclusion: '当天销售或客流异常不能只看门店内部。',
     bossActions: ['不要把短期增长直接外推到下周。'],
-    dataNeededForProduction: ['QWEATHER_API_KEY', 'DAMAI_APP_KEY'],
+    dataNeededForProduction: ['QWEATHER_API_KEY', 'QWEATHER_API_HOST', 'DAMAI_APP_KEY'],
     collectionPipeline: {
       defaultMode: 'manual_or_cron',
       whyNotOnPageLoad: '外部接口有每日额度，demo 页面打开不应自动消耗配额。',
@@ -152,7 +152,7 @@ const SAMPLE = {
       steps: [
         {
           source: '和风天气',
-          productionStatus: 'needs_key_and_location',
+          productionStatus: 'needs_key_host_and_location',
           refreshCadence: '小时级/日更均可',
           storesOneApiCall: true,
           whatItWrites: ['天气现况', '体感温度'],
