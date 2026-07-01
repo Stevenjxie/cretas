@@ -5,10 +5,12 @@ import com.cretas.aims.dto.factory.SemiFinishedStocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeDTO;
 import com.cretas.aims.dto.factory.SemiFinishedStocktakeItemUpdateDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
+import com.cretas.aims.entity.InterimSettleReversalRequest;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.factory.SemiFinishedStocktake;
 import com.cretas.aims.entity.factory.SemiFinishedStocktakeItem;
+import com.cretas.aims.repository.InterimSettleReversalRequestRepository;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
@@ -72,6 +74,14 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     /** SP12: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    /**
+     * 撤销小结治理告警 (READ-ONLY): 盘点发起/查看时, 从撤销审计查该期间已执行的撤销申请, 在盘点列上标告警点。
+     * optional (required=false) — 不改构造器签名 (不破坏既有 @InjectMocks 单测); null 时跳过告警 (向后兼容)。
+     * 只读撤销审计, 不写撤销/不耦合盘点写路径。
+     */
+    @Autowired(required = false)
+    private InterimSettleReversalRequestRepository reversalRequestRepo;
 
     // -------------------------------------------------------
     // 盘点差异财务凭证 科目 (China GAAP, 复用 seed V20260701_02 + ExpenseVoucherGenerator 损耗 pattern)
@@ -137,7 +147,9 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
         SemiFinishedStocktake saved = stocktakeRepo.save(stocktake);
         log.info("半成品盘点: 任务已创建 factoryId={} stocktakeNo={} itemCount={}",
                 factoryId, saved.getStocktakeNo(), items.size());
-        return SemiFinishedStocktakeDTO.from(saved);
+        SemiFinishedStocktakeDTO dto = SemiFinishedStocktakeDTO.from(saved);
+        enrichReversalWarnings(dto, factoryId, saved.getPeriodMonth());
+        return dto;
     }
 
     @Override
@@ -390,7 +402,71 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     @Override
     public SemiFinishedStocktakeDTO getDetail(String stocktakeId, String factoryId) {
         SemiFinishedStocktake stocktake = findAndValidate(stocktakeId, factoryId);
-        return SemiFinishedStocktakeDTO.from(stocktake);
+        SemiFinishedStocktakeDTO dto = SemiFinishedStocktakeDTO.from(stocktake);
+        enrichReversalWarnings(dto, factoryId, stocktake.getPeriodMonth());
+        return dto;
+    }
+
+    /**
+     * 撤销小结告警 (READ-ONLY on 撤销审计): 在盘点期间已<b>执行</b>的撤销申请所影响的半成品/成品批次上标告警点,
+     * 提示盘点人核实实物 (撤销逆转了系统库存)。repo 未注入 / 期间无撤销 → 无告警 (向后兼容)。
+     */
+    private void enrichReversalWarnings(SemiFinishedStocktakeDTO dto, String factoryId, String periodMonth) {
+        if (reversalRequestRepo == null) {
+            return;
+        }
+        LocalDateTime[] range = resolvePeriodRange(periodMonth);
+        List<InterimSettleReversalRequest> executed = reversalRequestRepo
+                .findByFactoryIdAndStatusAndExecutedAtBetween(factoryId,
+                        InterimSettleReversalRequest.Status.EXECUTED, range[0], range[1]);
+        if (executed.isEmpty()) {
+            return;
+        }
+        List<SemiFinishedStocktakeDTO.ReversalWarning> warnings = new ArrayList<>();
+        DateTimeFormatter md = DateTimeFormatter.ofPattern("M月d日");
+        for (InterimSettleReversalRequest r : executed) {
+            if (r.getAffectedBatchNumbers() == null || r.getAffectedBatchNumbers().isBlank()) {
+                continue;
+            }
+            String when = r.getExecutedAt() != null ? r.getExecutedAt().format(md) : "近期";
+            for (String raw : r.getAffectedBatchNumbers().split(",")) {
+                String batchNo = raw.trim();
+                if (batchNo.isEmpty()) {
+                    continue;
+                }
+                warnings.add(new SemiFinishedStocktakeDTO.ReversalWarning(batchNo,
+                        "批次 " + batchNo + " 于 " + when + " 撤销过小结，请核实实物"));
+            }
+        }
+        if (!warnings.isEmpty()) {
+            dto.setWarnings(warnings);
+        }
+    }
+
+    /** periodMonth → 当月 [00:00, 月末23:59:59]; 解析失败退回当月 (务实, 不清空告警)。 */
+    private LocalDateTime[] resolvePeriodRange(String periodMonth) {
+        YearMonth ym = parseYearMonth(periodMonth);
+        if (ym == null) {
+            ym = YearMonth.now();
+        }
+        return new LocalDateTime[]{ ym.atDay(1).atStartOfDay(), ym.atEndOfMonth().atTime(23, 59, 59) };
+    }
+
+    private YearMonth parseYearMonth(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        String t = s.trim();
+        try {
+            return YearMonth.parse(t, DateTimeFormatter.ofPattern("yyyy-MM"));
+        } catch (Exception ignored) { /* try next */ }
+        try {
+            return YearMonth.parse(t, DateTimeFormatter.ofPattern("yyyyMM"));
+        } catch (Exception ignored) { /* try next */ }
+        try {
+            return YearMonth.parse(t.substring(0, 7)); // "yyyy-MM-dd" → first 7 chars
+        } catch (Exception ignored) { /* give up */ }
+        return null;
     }
 
     @Override

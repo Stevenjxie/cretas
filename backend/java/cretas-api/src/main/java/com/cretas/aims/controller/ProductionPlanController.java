@@ -30,7 +30,10 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.orchestration.ProductionWorkflowOrchestrator;
 import com.cretas.aims.service.yield.InterimSettleService;
-import com.cretas.aims.service.yield.InterimSettleReversalService;
+import com.cretas.aims.service.yield.InterimSettleReversalRequestService;
+import com.cretas.aims.dto.production.InterimSettleReversalRequestDTO;
+import com.cretas.aims.entity.InterimSettleReversalRequest;
+import org.springframework.data.domain.Page;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.utils.TokenUtils;
 import com.cretas.aims.entity.ProductionBatch;
@@ -76,7 +79,7 @@ public class ProductionPlanController {
     private final MobileService mobileService;
     private final ProductionPlanRepository planRepository;
     private final InterimSettleService interimSettleService;
-    private final InterimSettleReversalService interimSettleReversalService;
+    private final InterimSettleReversalRequestService interimSettleReversalRequestService;
     private final ProductionWorkflowOrchestrator workflowOrchestrator;
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
@@ -491,8 +494,8 @@ public class ProductionPlanController {
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/interim-settle/reverse")
-    @Operation(summary = "撤销小结", description = "存货生产 (sourceType=SAFETY_STOCK): 逆转某次小结的半成品/成品入库+还回被扣消耗+清行小结戳, 下游已消耗则 loud-fail 拒绝, 幂等原子。body.sessionSeq 指定次序 (缺省=最近一次)")
-    public ApiResponse<Map<String, Object>> reverseInterimSettle(
+    @Operation(summary = "撤销小结-申请", description = "存货生产 (SAFETY_STOCK): 创建撤销申请 (待审批, 零库存副作用)。1天时间窗内可申请; 需 reason。执行在审批通过时进行。body: {sessionSeq?, reason}")
+    public ApiResponse<InterimSettleReversalRequestDTO> requestReverseInterimSettle(
             @Parameter(description = "工厂ID", required = true, example = "F006")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true)
@@ -502,13 +505,78 @@ public class ProductionPlanController {
 
         Long userId = extractUserId(authorization);
         Integer sessionSeq = null;
-        if (body != null && body.get("sessionSeq") != null) {
-            sessionSeq = Integer.valueOf(String.valueOf(body.get("sessionSeq")));
+        String reason = null;
+        if (body != null) {
+            if (body.get("sessionSeq") != null) {
+                sessionSeq = Integer.valueOf(String.valueOf(body.get("sessionSeq")));
+            }
+            if (body.get("reason") != null) {
+                reason = String.valueOf(body.get("reason"));
+            }
         }
-        log.info("撤销小结: factoryId={}, planId={}, sessionSeq={}, userId={}", factoryId, planId, sessionSeq, userId);
-        Map<String, Object> result = interimSettleReversalService
-                .reverseInterimSettle(factoryId, planId, sessionSeq, userId);
-        return ApiResponse.success("小结已撤销", result);
+        log.info("撤销小结-申请: factoryId={}, planId={}, sessionSeq={}, userId={}", factoryId, planId, sessionSeq, userId);
+        InterimSettleReversalRequestDTO result = interimSettleReversalRequestService
+                .requestReverse(factoryId, planId, sessionSeq, reason, userId);
+        return ApiResponse.success("已提交撤销申请，待审批", result);
+    }
+
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/interim-settle-reversal-requests/{requestId}/approve")
+    @Operation(summary = "撤销小结-审批通过", description = "STOCKTAKE_APPROVAL_ROLES (财务经理/工厂超管) 审批 → 内联执行逆转 (下游已消耗仍 loud-fail)。1天时间窗审批端再校验")
+    public ApiResponse<InterimSettleReversalRequestDTO> approveReversalRequest(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "撤销申请ID", required = true)
+            @PathVariable @NotNull String requestId,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        String role = extractRole(authorization);
+        log.info("撤销小结-审批: factoryId={}, requestId={}, role={}, userId={}", factoryId, requestId, role, userId);
+        InterimSettleReversalRequestDTO result = interimSettleReversalRequestService
+                .approve(requestId, factoryId, userId, role);
+        return ApiResponse.success("撤销申请已审批，小结已撤销", result);
+    }
+
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/interim-settle-reversal-requests/{requestId}/reject")
+    @Operation(summary = "撤销小结-驳回", description = "STOCKTAKE_APPROVAL_ROLES 驳回撤销申请 (零副作用)。body: {reason}")
+    public ApiResponse<InterimSettleReversalRequestDTO> rejectReversalRequest(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "撤销申请ID", required = true)
+            @PathVariable @NotNull String requestId,
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        String role = extractRole(authorization);
+        String reason = body != null ? body.getOrDefault("reason", "") : "";
+        log.info("撤销小结-驳回: factoryId={}, requestId={}, role={}", factoryId, requestId, role);
+        InterimSettleReversalRequestDTO result = interimSettleReversalRequestService
+                .reject(requestId, factoryId, reason, userId, role);
+        return ApiResponse.success("撤销申请已驳回", result);
+    }
+
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/interim-settle-reversal-requests")
+    @Operation(summary = "撤销小结-申请列表", description = "审批中心 + 审计: 工厂级撤销申请列表 (可选 status + planId 过滤)")
+    public ApiResponse<Page<InterimSettleReversalRequestDTO>> listReversalRequests(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) InterimSettleReversalRequest.Status status,
+            @RequestParam(required = false) String planId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        // 注意: 本类 import 的是自定义 dto.common.PageRequest, 故此处全限定 Spring 的 PageRequest。
+        org.springframework.data.domain.Pageable pageable =
+                org.springframework.data.domain.PageRequest.of(page, size);
+        Page<InterimSettleReversalRequestDTO> result = interimSettleReversalRequestService
+                .list(factoryId, status, planId, pageable);
+        return ApiResponse.success(result);
     }
 
     /**
@@ -1177,5 +1245,15 @@ public class ProductionPlanController {
             throw new BusinessException(401, "Authorization header 缺失");
         }
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    /** 撤销小结审批角色 — 从 token 解析 roleCode (FactoryUserRole 枚举名即角色码, e.g. finance_manager)。 */
+    private String extractRole(String authorization) {
+        String token = TokenUtils.extractToken(authorization);
+        if (token == null) {
+            throw new BusinessException(401, "Authorization header 缺失");
+        }
+        var user = mobileService.getUserFromToken(token);
+        return user.getRoleCode() != null ? user.getRoleCode().name() : null;
     }
 }

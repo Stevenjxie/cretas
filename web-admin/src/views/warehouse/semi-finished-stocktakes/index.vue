@@ -152,15 +152,19 @@ const countLoading = ref(false);
 const countItems = ref<Array<{ id: string; batchNo: string; productTypeId: string; unit: string; systemQty: number; actualQty: number | null; notes: string }>>([]);
 const countStocktakeId = ref('');
 const countStocktakeNo = ref('');
+// 撤销小结告警点 (盘点期间被撤销过小结的半成品/成品批次, 提示核实实物)
+const countWarnings = ref<Array<{ batchNo: string; message: string }>>([]);
 
 async function openCountDialog(row: TableRow) {
   countStocktakeId.value = String(row.id);
   countStocktakeNo.value = String(row.stocktakeNo || row.id);
   countLoading.value = true;
   countDialogVisible.value = true;
+  countWarnings.value = [];
   try {
     const res = await get(`/${factoryId.value}/semi-finished-stocktakes/${row.id}`);
     if (res.success && res.data) {
+      countWarnings.value = (res.data.warnings || []) as Array<{ batchNo: string; message: string }>;
       const items = res.data.items || [];
       countItems.value = items.map((item: TableRow) => ({
         id: String(item.id),
@@ -542,6 +546,19 @@ onMounted(() => loadData());
 
     <!-- ──────────────── Count Entry Dialog ──────────────── -->
     <el-dialog v-model="countDialogVisible" :title="`录入实盘数量 — ${countStocktakeNo}`" width="820px">
+      <!-- 撤销小结告警点: 本期间被撤销过小结的半成品/成品批次, 提示核实实物 -->
+      <el-alert
+        v-if="countWarnings.length > 0"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="本期间有撤销过小结的批次，请核实实物："
+        style="margin-bottom: 12px"
+      >
+        <ul style="margin: 4px 0 0; padding-left: 18px;">
+          <li v-for="(w, i) in countWarnings" :key="i">{{ w.message }}</li>
+        </ul>
+      </el-alert>
       <el-alert
         type="info"
         show-icon

@@ -33,6 +33,25 @@ public class SemiFinishedStocktakeDTO {
     private String workflowInstanceId;
     private List<SemiFinishedStocktakeItemDTO> items;
 
+    /**
+     * 撤销小结告警点 (READ-ONLY, 由服务在盘点期间从撤销审计填充): 该期间内被撤销过小结的半成品/成品批次,
+     * 提示盘点人核实实物 (撤销逆转了系统库存, 实物可能已动)。空 = 无撤销告警。
+     */
+    private List<ReversalWarning> warnings;
+
+    @Data
+    public static class ReversalWarning {
+        private String batchNo;
+        private String message;
+
+        public ReversalWarning() {}
+
+        public ReversalWarning(String batchNo, String message) {
+            this.batchNo = batchNo;
+            this.message = message;
+        }
+    }
+
     @Data
     public static class SemiFinishedStocktakeItemDTO {
         private String id;

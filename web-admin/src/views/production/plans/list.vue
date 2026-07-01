@@ -24,7 +24,11 @@ import {
   confirmProductionWarehouseReceipt,
   clearProductionTransitLedger,
   interimSettle,
-  reverseInterimSettle,
+  requestReverseInterimSettle,
+  approveReversalRequest,
+  rejectReversalRequest,
+  listReversalRequests,
+  type InterimSettleReversalRequest,
   stopProduction,
 } from '@/api/productionPlan';
 import type {
@@ -1717,40 +1721,118 @@ async function handleInterimSettle(row: TableRow) {
 }
 
 /**
- * 撤销小结 (最近一次): 误结时逆转该次小结的入库 + 还回消耗, 使逐道行恢复可编辑。
- * 防呆 4-位一体: 二次确认 (带计划名/单号 context) + 后端 message 原样 sticky 显示 (含下游已消耗 blocking 引用)。
+ * 撤销小结-申请 (最近一次): 治理 = 申请→审批→执行。此处仅创建撤销申请 (待审批, 零库存副作用)。
+ * 防呆 4-位一体: prompt 强制填 reason (带计划名/单号 context) + 后端 message 原样 sticky (含超时/下游 blocking 引用)。
  */
 async function handleReverseInterimSettle(row: TableRow) {
   const planId = String(row.id);
   const planLabel = String(row.planName || row.planNumber || planId);
+  let reason = '';
   try {
-    await ElMessageBox.confirm(
-      `撤销「${planLabel}」(${row.planNumber}) 的最近一次小结?将逆转该次小结的半成品/成品入库并还回被扣消耗，误结的逐道行恢复可编辑。若相关半成品/成品已被下游领用或发货，将拒绝撤销。`,
-      '确认撤销小结',
-      { type: 'warning', confirmButtonText: '撤销小结', cancelButtonText: '取消' }
+    const { value } = await ElMessageBox.prompt(
+      `申请撤销「${planLabel}」(${row.planNumber}) 的最近一次小结。撤销需审批，通过后才逆转入库并还回消耗（误结的逐道行恢复可编辑）；仅限小结后24小时内。请填写撤销原因：`,
+      '撤销小结-申请',
+      {
+        type: 'warning',
+        confirmButtonText: '提交申请',
+        cancelButtonText: '取消',
+        inputPlaceholder: '如：产量录错 / 批次选错',
+        inputValidator: (v: string) => (v && v.trim() ? true : '请填写撤销原因'),
+      }
     );
+    reason = (value || '').trim();
   } catch {
     return; // 用户取消
   }
   if (reverseInterimSettleLoadingId.value) return;
   reverseInterimSettleLoadingId.value = planId;
   try {
-    const res = await reverseInterimSettle(factoryId.value, planId);
+    const res = await requestReverseInterimSettle(factoryId.value, planId, reason);
     if (res.success) {
-      const seq = (res.data as Record<string, unknown> | undefined)?.reversedSessionSeq;
-      ElMessage.success(
-        res.message || (seq != null ? `已撤销第 ${seq} 次小结，相关逐道行恢复可编辑` : '已撤销小结')
-      );
+      ElMessage.success(res.message || '已提交撤销申请，待审批');
       loadData();
     } else {
-      // sticky + 后端原样 message (含下游已消耗 blocking 引用)
-      ElMessage({ message: res.message || '撤销小结失败', type: 'error', duration: 0, showClose: true });
+      // sticky + 后端原样 message (含超时 WINDOW_EXPIRED / 下游已消耗 blocking 引用)
+      ElMessage({ message: res.message || '撤销申请失败', type: 'error', duration: 0, showClose: true });
     }
   } catch (e: unknown) {
-    const errMsg = (e as any)?.response?.data?.message || '撤销小结失败';
+    const errMsg = (e as any)?.response?.data?.message || '撤销申请失败';
     ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
   } finally {
     reverseInterimSettleLoadingId.value = null;
+  }
+}
+
+// ==================== 撤销小结审批 (STOCKTAKE_APPROVAL_ROLES) ====================
+const reversalApprovalVisible = ref(false);
+const reversalRequests = ref<InterimSettleReversalRequest[]>([]);
+const reversalApprovalLoading = ref(false);
+const reversalActingId = ref<string | null>(null);
+
+async function openReversalApproval() {
+  reversalApprovalVisible.value = true;
+  await loadReversalRequests();
+}
+
+async function loadReversalRequests() {
+  reversalApprovalLoading.value = true;
+  try {
+    const res = await listReversalRequests(factoryId.value, { status: 'PENDING_APPROVAL', size: 50 });
+    reversalRequests.value = res.success && res.data ? (res.data.content || []) : [];
+  } catch {
+    reversalRequests.value = [];
+  } finally {
+    reversalApprovalLoading.value = false;
+  }
+}
+
+async function handleApproveReversal(reqRow: InterimSettleReversalRequest) {
+  if (reversalActingId.value) return;
+  reversalActingId.value = reqRow.id;
+  try {
+    const res = await approveReversalRequest(factoryId.value, reqRow.id);
+    if (res.success) {
+      ElMessage.success(res.message || '撤销申请已审批，小结已撤销');
+      await loadReversalRequests();
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '审批失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    // 执行侧下游已消耗 / 超时 → sticky 显示后端 blocking message
+    const errMsg = (e as any)?.response?.data?.message || '审批失败';
+    ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    reversalActingId.value = null;
+  }
+}
+
+async function handleRejectReversal(reqRow: InterimSettleReversalRequest) {
+  let reason = '';
+  try {
+    const { value } = await ElMessageBox.prompt('请填写驳回原因：', '驳回撤销申请', {
+      confirmButtonText: '驳回', cancelButtonText: '取消',
+      inputValidator: (v: string) => (v && v.trim() ? true : '请填写驳回原因'),
+    });
+    reason = (value || '').trim();
+  } catch {
+    return;
+  }
+  if (reversalActingId.value) return;
+  reversalActingId.value = reqRow.id;
+  try {
+    const res = await rejectReversalRequest(factoryId.value, reqRow.id, reason);
+    if (res.success) {
+      ElMessage.success(res.message || '撤销申请已驳回');
+      await loadReversalRequests();
+    } else {
+      ElMessage({ message: res.message || '驳回失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const errMsg = (e as any)?.response?.data?.message || '驳回失败';
+    ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    reversalActingId.value = null;
   }
 }
 
@@ -2199,6 +2281,10 @@ function handleAiFill(params: TableRow) {
             <el-button v-if="canWrite" type="warning" :icon="Plus" @click="handleCreateSecondary" style="margin-left: 8px;">
               独立再加工/返工
             </el-button>
+            <el-button v-if="canWrite" type="warning" plain @click="openReversalApproval" style="margin-left: 8px;"
+              title="审批待处理的撤销小结申请（财务经理/工厂超管）">
+              撤销审批
+            </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
               新建计划
             </el-button>
@@ -2371,7 +2457,7 @@ function handleAiFill(params: TableRow) {
               title="增量入库成品并扣料，计划继续开放，可多次小结"
               @click="handleInterimSettle(row)"
             >小结</el-button>
-            <!-- 存货生产 (SAFETY_STOCK) 撤销小结 (逆转最近一次小结, 恢复误结的逐道行) -->
+            <!-- 存货生产 (SAFETY_STOCK) 撤销小结-申请 (申请→审批→执行治理; 此处仅提交申请, 零库存副作用) -->
             <el-button
               v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
               type="warning"
@@ -2379,9 +2465,9 @@ function handleAiFill(params: TableRow) {
               link
               :disabled="reverseInterimSettleLoadingId === String(row.id)"
               :loading="reverseInterimSettleLoadingId === String(row.id)"
-              title="逆转最近一次小结：撤销该次半成品/成品入库并还回被扣消耗，误结的逐道行恢复可编辑（半成品/成品已被下游领用则拒绝）"
+              title="申请撤销最近一次小结（需审批, 通过后才逆转入库+还回消耗）；仅限小结后24小时内，需填原因"
               @click="handleReverseInterimSettle(row)"
-            >撤销小结</el-button>
+            >申请撤销小结</el-button>
             <!-- 存货生产 (SAFETY_STOCK) 停产 (关闭计划) -->
             <el-button
               v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
@@ -3543,6 +3629,30 @@ function handleAiFill(params: TableRow) {
       :plan-number="summaryPlanNumber"
       :product-name="summaryProductName"
     />
+
+    <!-- 撤销小结审批 (STOCKTAKE_APPROVAL_ROLES: 财务经理/工厂超管) -->
+    <el-dialog v-model="reversalApprovalVisible" title="撤销小结审批" width="760px" destroy-on-close>
+      <div style="margin-bottom:8px;color:#909399;font-size:13px;">
+        待审批的撤销小结申请。审批通过将逆转该次小结的入库并还回被扣消耗；若相关半成品/成品已被下游领用/发货，执行时会拒绝（不绕过）。
+      </div>
+      <el-table :data="reversalRequests" v-loading="reversalApprovalLoading" size="small" border>
+        <el-table-column prop="productionPlanId" label="计划" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="sessionSeq" label="小结次序" width="90" align="center" />
+        <el-table-column prop="reason" label="撤销原因" min-width="150" show-overflow-tooltip />
+        <el-table-column prop="requestedAt" label="申请时间" width="160" />
+        <el-table-column label="操作" width="150" align="center">
+          <template #default="{ row }">
+            <el-button type="success" size="small" link
+              :disabled="reversalActingId === row.id" :loading="reversalActingId === row.id"
+              @click="handleApproveReversal(row)">审批通过</el-button>
+            <el-button type="danger" size="small" link
+              :disabled="reversalActingId === row.id"
+              @click="handleRejectReversal(row)">驳回</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>暂无待审批的撤销申请</template>
+      </el-table>
+    </el-dialog>
   </div>
   </CanvasAwareWrapper>
 </template>

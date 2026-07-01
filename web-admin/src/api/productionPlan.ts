@@ -267,16 +267,72 @@ export function interimSettle(factoryId: string, planId: string) {
   return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/interim-settle`)
 }
 
+/** 撤销小结申请/审批记录。 */
+export interface InterimSettleReversalRequest {
+  id: string
+  factoryId: string
+  productionPlanId: string
+  sessionSeq: number
+  settlementPostedAt: string
+  reason: string
+  status: 'PENDING_APPROVAL' | 'EXECUTED' | 'REJECTED'
+  requestedBy?: number
+  requestedAt: string
+  approvedBy?: number
+  approvedAt?: string
+  rejectReason?: string
+  executedAt?: string
+  affectedBatchNumbers?: string
+}
+
 /**
- * 撤销小结 (存货生产 SAFETY_STOCK 计划专用): 逆转某次小结的半成品/成品入库 + 还回被扣消耗 + 清行小结戳,
- *   误结的逐道行恢复可编辑。下游已消耗则 loud-fail 拒绝 (409 SFI_DOWNSTREAM_CONSUMED / FG_DOWNSTREAM_CONSUMED)。
+ * 撤销小结-申请 (存货生产 SAFETY_STOCK): 创建撤销申请 (待审批, 零库存副作用)。
+ *   1天时间窗内可申请; reason 必填。执行在审批通过时进行。
  * POST /{factoryId}/production-plans/{planId}/interim-settle/reverse
- * @param sessionSeq 指定小结次序 (缺省 = 撤销最近一次)
+ * @param reason     撤销原因 (必填)
+ * @param sessionSeq 指定小结次序 (缺省 = 最近一次)
  */
-export function reverseInterimSettle(factoryId: string, planId: string, sessionSeq?: number) {
-  return post<Record<string, unknown>>(
+export function requestReverseInterimSettle(
+  factoryId: string, planId: string, reason: string, sessionSeq?: number
+) {
+  return post<InterimSettleReversalRequest>(
     `/${factoryId}/production-plans/${planId}/interim-settle/reverse`,
-    sessionSeq != null ? { sessionSeq } : {}
+    sessionSeq != null ? { reason, sessionSeq } : { reason }
+  )
+}
+
+/**
+ * 撤销小结-审批通过 (STOCKTAKE_APPROVAL_ROLES): 审批 → 内联执行逆转 (下游已消耗仍 loud-fail)。
+ * POST /{factoryId}/production-plans/interim-settle-reversal-requests/{requestId}/approve
+ */
+export function approveReversalRequest(factoryId: string, requestId: string) {
+  return post<InterimSettleReversalRequest>(
+    `/${factoryId}/production-plans/interim-settle-reversal-requests/${requestId}/approve`
+  )
+}
+
+/**
+ * 撤销小结-驳回 (STOCKTAKE_APPROVAL_ROLES): 关闭申请 (零副作用)。
+ * POST /{factoryId}/production-plans/interim-settle-reversal-requests/{requestId}/reject
+ */
+export function rejectReversalRequest(factoryId: string, requestId: string, reason: string) {
+  return post<InterimSettleReversalRequest>(
+    `/${factoryId}/production-plans/interim-settle-reversal-requests/${requestId}/reject`,
+    { reason }
+  )
+}
+
+/**
+ * 撤销小结-申请列表 (审批中心 + 审计): 工厂级, 可选 status / planId 过滤。
+ * GET /{factoryId}/production-plans/interim-settle-reversal-requests
+ */
+export function listReversalRequests(
+  factoryId: string,
+  params?: { status?: 'PENDING_APPROVAL' | 'EXECUTED' | 'REJECTED'; planId?: string; page?: number; size?: number }
+) {
+  return get<{ content: InterimSettleReversalRequest[]; totalElements: number }>(
+    `/${factoryId}/production-plans/interim-settle-reversal-requests`,
+    { params }
   )
 }
 

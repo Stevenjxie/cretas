@@ -94,6 +94,9 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
                     .withHintTarget("撤销小结");
         }
 
+        // 被逆转影响的半成品/成品批次号 (供治理层快照 → 半成品盘点撤销告警)。
+        java.util.Set<String> affected = new java.util.LinkedHashSet<>();
+
         // ── ① SFI IN un-stock (带下游守卫, 先做 → 下游已消耗即 loud-fail 回滚) ──
         int sfiInReversed = 0;
         for (Map<String, Object> d : asList(reversalDetail.get("sfiIn"))) {
@@ -102,6 +105,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal totalCost = decOrNull(d.get("totalCost"));
             if (anchor != null && qty != null && qty.signum() > 0) {
                 wipInventoryService.reverseClerkOutput(factoryId, anchor, qty, totalCost, userId);
+                affected.add(anchor);
                 sfiInReversed++;
             }
         }
@@ -113,6 +117,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal qty = dec(d.get("qty"));
             if (batchNumber != null && qty != null && qty.signum() > 0) {
                 finishedGoodsFeedService.reverseInterimCreate(factoryId, batchNumber, qty, userId);
+                affected.add(batchNumber);
                 fgCreatedReversed++;
             }
         }
@@ -124,6 +129,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal qty = dec(d.get("qty"));
             if (batchNo != null && qty != null && qty.signum() > 0) {
                 wipInventoryService.restoreClerkSemi(factoryId, batchNo, qty, userId);
+                affected.add(batchNo);
                 sfiOutRestored++;
             }
         }
@@ -132,6 +138,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal qty = dec(d.get("qty"));
             if (anchor != null && qty != null && qty.signum() > 0) {
                 wipInventoryService.restoreClerkSemi(factoryId, anchor, qty, userId);
+                affected.add(anchor);
                 sfiOutRestored++;
             }
         }
@@ -143,6 +150,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal qty = dec(d.get("qty"));
             if (batchNo != null && qty != null && qty.signum() > 0) {
                 finishedGoodsFeedService.restoreForFeed(factoryId, batchNo, qty, userId);
+                affected.add(batchNo);
                 fgFeedRestored++;
             }
         }
@@ -194,6 +202,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         result.put("fgFeedRestored", fgFeedRestored);
         result.put("rawRestored", rawRestored);
         result.put("rowsUnstamped", rowsUnstamped);
+        result.put("affectedBatchNumbers", new java.util.ArrayList<>(affected));  // 供治理层盘点告警快照
 
         log.info("[interim-reverse] factory={}, plan={}, seq={}: SFI-in冲销 {}, FG-create冲销 {}, "
                         + "SFI-out还回 {}, FG-feed还回 {}, 原料还回 {}, 清行戳 {}",
