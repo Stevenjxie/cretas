@@ -23,6 +23,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.InterimSettleServiceImpl;
@@ -86,6 +87,7 @@ class InterimSettleServiceTest {
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private WipInventoryService wipInventoryService;
+    @Mock private FinishedGoodsFeedService finishedGoodsFeedService;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private ProductionBatchRepository batchRepository;
     @Mock private ClerkProcessEntryService clerkProcessEntryService;
@@ -105,7 +107,7 @@ class InterimSettleServiceTest {
         service = new InterimSettleServiceImpl(
                 planRepository, rowRepository, consumptionRepository, materialBatchRepository,
                 settlementRepository, finishedGoodsBatchRepository, productTypeRepository,
-                wipInventoryService, warehouseResolver, objectMapper,
+                wipInventoryService, finishedGoodsFeedService, warehouseResolver, objectMapper,
                 batchRepository, clerkProcessEntryService,
                 productWorkProcessRepository, workProcessRepository);
 
@@ -147,6 +149,9 @@ class InterimSettleServiceTest {
                 .thenAnswer(inv -> inv.getArgument(0));
         // SFI 投料严格扣减: 默认成功返回请求量 (= 实际出库量); 个别测试覆写为抛 (不足/缺失)。
         when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        // ①c FG 投料严格扣减: 默认成功返回请求量; 个别测试覆写为抛 (不足/缺失)。
+        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
     }
 
@@ -344,6 +349,107 @@ class InterimSettleServiceTest {
         assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("半成品库存不足");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // ①c 成品作投料来源 (FG feedstock) — 严格扣减 + 成本传导 + loud-fail
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("①c FG 投料: 成品道吃常驻成品(FG) → consumeForFeedStrict(batchNumber) 直扣 + FG 入库; 不走 SFI/priorStocked 路径")
+    void fgFeedstockDrawsDownFinishedGoodsAndCreatesFg() {
+        // 成品道 (CLK-B-FG, finished) 吃一笔常驻成品库存 "FG-STANDING-1" feed 30。productWeight 6kg → FG 入库。
+        ProcessSheetRow rX = row(120L, 1, "CLK-B-FG", reqFinished(1, "CLK-B-FG", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamFg("FG-STANDING-1", "30")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // FG OUT: 严格扣减 (consumeForFeedStrict), 直接按成品 batchNumber
+        verify(finishedGoodsFeedService, times(1))
+                .consumeForFeedStrict(eq(FACTORY), eq("FG-STANDING-1"), eq(new BigDecimal("30")));
+        // FG 投料绝不走 SFI 路径
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
+        verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
+        // summary.finishedGoodsOutQuantity = strict 返回的实际扣减量 (= 30)
+        assertThat(s.get("finishedGoodsOutQuantity")).isEqualTo(new BigDecimal("30"));
+
+        // 成品道 → FG 入库 (productWeight 6kg)
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
+        // 成品道不入 SFI
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        assertThat(rX.getInterimSettledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("①c FG 投料成本传导: 成品道吃 costed FG(unitCost 20) feed 30 + pb.totalCost 40 → FG.unitCost 含传导成本")
+    void fgFeedstockTransmitsCostToFinishedGoods() {
+        // 成品道 CLK-B-FGC 吃 FG-COSTED (unitCost 20) feed 30, productWeight 10kg。
+        //   pb.totalCost(人工/调料) = 40; FG total = 40 + 30×20(=600) = 640; FG.unitCost = 640/10 = 64。
+        ProcessSheetRow rC = row(121L, 1, "CLK-B-FGC", reqFinished(1, "CLK-B-FGC", new BigDecimal("50"),
+                new BigDecimal("10"), upstreamFg("FG-COSTED", "30")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rC));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(finishedGoodsFeedService.getFeedUnitCost(FACTORY, "FG-COSTED")).thenReturn(new BigDecimal("20"));
+        ProductionBatch pbC = new ProductionBatch();
+        pbC.setId(121L);
+        pbC.setFactoryId(FACTORY);
+        pbC.setTotalCost(new BigDecimal("40.00"));
+        when(batchRepository.findByIdAndFactoryId(121L, FACTORY)).thenReturn(Optional.of(pbC));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        FinishedGoodsBatch fg = fgCap.getValue();
+        assertThat(fg.getUnitCost()).isNotNull();
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("64"); // (40 + 30×20) / 10
+    }
+
+    @Test
+    @DisplayName("①c FG 投料成本诚实null: 输入成品 unitCost=null → 产出 FG.unitCost null (不伪造 ¥0)")
+    void fgFeedstockNullCostPoisonsToNull() {
+        ProcessSheetRow rC = row(122L, 1, "CLK-B-FGN", reqFinished(1, "CLK-B-FGN", new BigDecimal("50"),
+                new BigDecimal("10"), upstreamFg("FG-LEGACY", "30")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rC));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 旧库存成品: unitCost null (未接通成本)
+        when(finishedGoodsFeedService.getFeedUnitCost(FACTORY, "FG-LEGACY")).thenReturn(null);
+        ProductionBatch pbC = new ProductionBatch();
+        pbC.setId(122L);
+        pbC.setFactoryId(FACTORY);
+        pbC.setTotalCost(new BigDecimal("40.00"));
+        when(batchRepository.findByIdAndFactoryId(122L, FACTORY)).thenReturn(Optional.of(pbC));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        // 🔴 诚实 null: 输入成品无成本 → 产出成本未知 (不伪造 ¥0)
+        assertThat(fgCap.getValue().getUnitCost()).isNull();
+    }
+
+    @Test
+    @DisplayName("①c FG 投料不足: 小结时 consumeForFeedStrict 抛 → 整个小结 loud-fail, 不产 phantom FG")
+    void fgFeedstockInsufficientThrowsLoud() {
+        ProcessSheetRow rX = row(123L, 1, "CLK-B-FGL", reqFinished(1, "CLK-B-FGL", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamFg("FG-LOW-1", "100")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY), eq("FG-LOW-1"), eq(new BigDecimal("100"))))
+                .thenThrow(new BusinessException(409, "成品库存不足: FG-LOW-1 余30 需100")
+                        .withCode("FG_INSUFFICIENT"));
+
+        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("成品库存不足");
     }
 
     @Test
@@ -694,6 +800,15 @@ class InterimSettleServiceTest {
         ref.setSourceBatchNumber(intermediateBatchNo);
         ref.setFeedQuantityKg(new BigDecimal(feedKg));
         ref.setSemiFinished(true);
+        return List.of(ref);
+    }
+
+    /** ①c FG 投料来源 (成品作投料来源): sourceBatchNumber = 常驻成品批号, finishedGoods=true。 */
+    private List<UpstreamRef> upstreamFg(String batchNumber, String feedKg) {
+        UpstreamRef ref = new UpstreamRef();
+        ref.setSourceBatchNumber(batchNumber);
+        ref.setFeedQuantityKg(new BigDecimal(feedKg));
+        ref.setFinishedGoods(true);
         return List.of(ref);
     }
 

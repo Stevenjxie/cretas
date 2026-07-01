@@ -1050,6 +1050,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             productTypeRepo.findByIdIn(ptIds).forEach(pt -> ptNameMap.put(pt.getId(), pt.getName()));
         }
 
+        // ② 批次下拉补 生产日期 / 成本: 仅逐道 SFI 投料下拉 (picker context = 带 productTypeId 过滤) 填充,
+        //    无参 (看板/盘点) 快照不暴露成本 (C3 "只做重量库存" 口径不变)。
+        final boolean pickerContext = filterFamily;
         return rows.stream().map(w -> WipRowDTO.builder()
                 .intermediateBatchNo(w.getIntermediateBatchNo())
                 .sourceWorkProcessTaskId(w.getSourceWorkProcessTaskId())
@@ -1064,6 +1067,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .status(w.getStatus())
                 .productTypeName(ptNameMap.get(w.getProductTypeId()))   // null if no match
                 .batchId(w.getBatchId())
+                // ② picker-only: 生产日期 (createdAt 日期) + 成本 (unitCost, 诚实 null)
+                .productionDate(pickerContext && w.getCreatedAt() != null ? w.getCreatedAt().toLocalDate() : null)
+                .unitCost(pickerContext ? w.getUnitCost() : null)
                 .build()
         ).collect(Collectors.toList());
     }

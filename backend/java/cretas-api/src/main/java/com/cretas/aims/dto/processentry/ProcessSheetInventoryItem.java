@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -26,6 +27,17 @@ public class ProcessSheetInventoryItem {
 
     /** WIP 批次号 (batchNumber / intermediateBatchNo) */
     private String batchNumber;
+
+    /**
+     * ② 批次下拉补品名: 产品类型名称 (从 row payload 的 productTypeId 反查; getInventory 填充,
+     * getInventoryYieldCard 兼容留 null)。前端投料下拉标签用 {@code 品名 | 批号 | ...}。
+     */
+    private String productTypeName;
+
+    /**
+     * ② 批次下拉补生产日期: 该 WIP 批次生产日期 (取自 WIP MaterialBatch.productionDate; getInventory 填充)。
+     */
+    private LocalDate productionDate;
 
     /** 本道产出量 (WIP producedQuantity) */
     private BigDecimal produced;

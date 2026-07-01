@@ -119,5 +119,24 @@ public class ProcessSheetRowRequest {
          * 默认 false (普通 in-plan 在制 WIP 引用, 行为不变)。
          */
         private boolean semiFinished;
+
+        /**
+         * 成品库存(FG)投料 (成品作投料来源)。
+         *
+         * <p>true 时 {@code sourceBatchNumber} 指向常驻成品库存
+         * ({@link com.cretas.aims.entity.inventory.FinishedGoodsBatch#getBatchNumber()}),
+         * 而非本计划内的在制 WIP MaterialBatch, 也不是半成品库存 (SFI)。语义 (与 {@link #semiFinished} 平行):
+         * <ul>
+         *   <li><b>保存</b>: 不解析为 in-plan WIP MaterialBatch, 不写 MaterialConsumption
+         *       (与 SFI 同理, FG 无对应 MaterialBatch 行)。仅随 row_payload 持久化, 跨保存往返。
+         *       保存期 loud-fail 校验该 FG 批次真实存在 (禁止降级)。</li>
+         *   <li><b>小结</b>: 经 {@code FinishedGoodsFeedService.consumeForFeedStrict(batchNumber, feedQuantityKg)}
+         *       从常驻成品库存严格扣减 (缺失/不足即抛 FG_NOT_FOUND/FG_INSUFFICIENT, 禁止降级)。
+         *       FG 投料成本 = feedKg × FG.unitCost 流入本道产出成本 (诚实 null: FG.unitCost 未知 → 本道成本 null)。</li>
+         * </ul>
+         * ⛔ 不与 {@link #semiFinished} 同时为 true (互斥: 一条来源要么 in-plan WIP / 要么 SFI / 要么 FG)。
+         * 默认 false。
+         */
+        private boolean finishedGoods;
     }
 }

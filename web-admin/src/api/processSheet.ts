@@ -39,6 +39,12 @@ export interface UpstreamRef {
    * 小结时经 consumeClerkSemi 扣减常驻 SFI。默认 false (普通 in-plan 在制 WIP 引用)。
    */
   semiFinished?: boolean;
+  /**
+   * ①c 成品库存(FG)投料 (成品作投料来源)。true 时 sourceBatchNumber 指向常驻成品库存
+   * (FinishedGoodsBatch.batchNumber), 后端保存不写 MaterialConsumption, 小结时经
+   * consumeForFeedStrict 严格扣减成品 (loud-fail)。与 semiFinished 互斥。默认 false。
+   */
+  finishedGoods?: boolean;
 }
 
 /**
@@ -132,6 +138,10 @@ export interface ProcessSheetInventoryItem {
   remaining: number;
   status: 'ACTIVE' | 'DEPLETED' | 'COMPLETED';
   unitPrice?: number | null;
+  /** ② 批次下拉补品名: 产品类型名称 (getInventory 填充; getInventoryYieldCard 留 null) */
+  productTypeName?: string | null;
+  /** ② 批次下拉补生产日期: WIP 批次生产日期 (ISO "YYYY-MM-DD"; getInventory 填充) */
+  productionDate?: string | null;
   rowTotalCost?: number | null;
   inputQuantity?: number | null;
   sourceBatchNumber?: string | null;
@@ -348,6 +358,25 @@ export interface SemiFinishedStockItem {
   status?: string | null;
   productTypeName?: string | null;
   batchId?: number | null;
+  /** ② 生产日期 (逐道投料下拉展示; 仅 picker 过滤查询填充, ISO "YYYY-MM-DD") */
+  productionDate?: string | null;
+  /** ② 单位成本 (逐道投料下拉展示; 诚实 null = 成本未知; 仅 picker 过滤查询填充) */
+  unitCost?: number | null;
+}
+
+/**
+ * ①c 成品作投料来源 — 可投料成品库存项 (mirrors FinishedGoodsStockItem Java DTO)。
+ * GET /{factoryId}/finished-goods/inventory
+ */
+export interface FinishedGoodsStockItem {
+  batchNumber: string;
+  productTypeId?: string | null;
+  productTypeName?: string | null;
+  productionDate?: string | null;
+  availableQuantity: number;
+  unit?: string | null;
+  /** 单位成本 (诚实 null = 成本未知; 区别于售价) */
+  unitCost?: number | null;
 }
 
 /**
@@ -379,4 +408,20 @@ export function getSemiFinishedInventory(
   if (filter?.productTypeId) params.productTypeId = filter.productTypeId;
   if (filter?.maxProcessOrder != null) params.maxProcessOrder = filter.maxProcessOrder;
   return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`, { params });
+}
+
+/**
+ * ①c 成品作投料来源 — 工厂级可投料成品库存 (AVAILABLE 且可用量>0)。
+ * GET /{factoryId}/finished-goods/inventory[?productTypeId=]
+ * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
+ *
+ * @param productTypeId 可选产品族过滤 (传当前计划产品 → 后端解析成族键仅返回同族成品; 成品是终态无阶段过滤)。
+ */
+export function getFinishedGoodsInventory(
+  factoryId: string,
+  productTypeId?: string,
+): Promise<ApiResponse<FinishedGoodsStockItem[]>> {
+  const params: Record<string, string> = {};
+  if (productTypeId) params.productTypeId = productTypeId;
+  return get<FinishedGoodsStockItem[]>(`/${factoryId}/finished-goods/inventory`, { params });
 }

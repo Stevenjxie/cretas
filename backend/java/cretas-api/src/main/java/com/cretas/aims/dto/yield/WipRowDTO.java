@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * 半成品库存 (WIP) 行 — 只读视图 (GET /production/batches/{id}/wip 输出)。
@@ -76,4 +77,19 @@ public class WipRowDTO {
      * 镜像 StepYieldDTO.cumulativeYieldRate。跨单位无折算 → null。
      */
     private BigDecimal cumulativeYieldRate;
+
+    // ── ② 批次下拉补 生产日期 / 成本 (逐道 SFI 投料下拉用; 仅过滤查询[picker]填充) ──
+
+    /**
+     * ② 生产日期 (取自 SemiFinishedInventory.createdAt.toLocalDate)。仅逐道 SFI 投料下拉 (带 productTypeId 过滤)
+     * 填充; 无参 (看板/盘点) 快照留 null (C3 视图口径不变)。
+     */
+    private LocalDate productionDate;
+
+    /**
+     * ② 单位成本 (SemiFinishedInventory.unitCost) — 逐道投料下拉展示成本。
+     * 🔴 诚实 null: 未接通成本的半成品 → null (前端显示"成本未知")。
+     * <b>仅</b>逐道投料下拉 (带 productTypeId 过滤) 填充; 无参 (看板/盘点) 快照<b>不</b>暴露成本 (C3 口径不变)。
+     */
+    private BigDecimal unitCost;
 }

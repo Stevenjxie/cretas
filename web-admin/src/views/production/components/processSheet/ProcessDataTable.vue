@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock } from '@element-plus/icons-vue';
 import {
   saveRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
+  getFinishedGoodsInventory,
   type ProcessSheetInventoryItem,
   type LaborSegment,
   type UpstreamRef,
@@ -13,6 +14,7 @@ import {
   type RawMaterialBatchOption,
   type SemiFinishedStockItem,
   type SemiFinishedInventoryFilter,
+  type FinishedGoodsStockItem,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
@@ -72,6 +74,12 @@ interface SheetRow {
    * false → in-plan 在制 WIP。链起步道可仅选 SFI (upstreamItems 空)。
    */
   upstreamSemiFinished: boolean;
+  /**
+   * ①c 焯水/滚揉/去舌苔 单上游: 所选来源是否为常驻成品库存 (FG)。
+   * true → upstreamBatch 指向 FinishedGoodsBatch.batchNumber, buildRequest 写 upstreamSources[0].finishedGoods=true
+   * → 后端小结经 consumeForFeedStrict 严格扣减成品。与 upstreamSemiFinished 互斥。
+   */
+  upstreamFinishedGoods: boolean;
   /** 熟制: multi-source upstream WIP refs */
   upstreamSources: UpstreamRef[];
   /** Multi-segment labor entries */
@@ -217,6 +225,7 @@ function blankRow(): SheetRow {
     rawBatchQty: null,
     upstreamBatch: '',
     upstreamSemiFinished: false,
+    upstreamFinishedGoods: false,
     upstreamSources: [],
     laborSegments: [],
     potCount: 1,
@@ -249,6 +258,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     // 焯水 + 滚揉: 结构相同 (before → inputQuantity, after → outputQuantity)
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
     row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+    row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
     row.fields['before'] = p.inputQuantity ?? null;
     row.fields['after'] = p.outputQuantity ?? null;
     // SP-G G3c: 副产 hydrate (焯水 + 滚揉)
@@ -262,6 +272,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     // 去舌苔: output + scrap → input 反推. inputQuantity = scrap + output.
     row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
     row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+    row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
     row.fields['output'] = p.outputQuantity ?? null;
     // scrap = inputQuantity - outputQuantity (反推恢复, 若无法恢复则留 null)
     const inp = p.inputQuantity ?? null;
@@ -459,6 +470,10 @@ function calcRemaining(row: SheetRow): number | null {
   }
   // Fallback for single-upstream / qushetou unsaved rows: derive from upstream usage.
   if (isSingleUpstream.value || isQuSheTou.value) {
+    if (row.upstreamFinishedGoods) {
+      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      return fg ? fgAvailable(fg) : null;
+    }
     if (row.upstreamSemiFinished) {
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
       return sfi ? sfiAvailable(sfi) : null;
@@ -518,6 +533,12 @@ function upstreamWarning(row: SheetRow): string | null {
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 用量 = before
     const usage = (row.fields['before'] as number) ?? 0;
+    if (row.upstreamFinishedGoods) {
+      // 防呆 Rule 1 — ①c FG 投料 max 守卫: 对照常驻成品库存的可用量。
+      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      if (fg && usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
+      return null;
+    }
     if (row.upstreamSemiFinished) {
       // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量。
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
@@ -531,6 +552,11 @@ function upstreamWarning(row: SheetRow): string | null {
   if (isQuSheTou.value) {
     // 去舌苔: 用量 = 投入量 = scrap + output
     const usage = calcReverseInput(row) ?? 0;
+    if (row.upstreamFinishedGoods) {
+      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      if (fg && usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
+      return null;
+    }
     if (row.upstreamSemiFinished) {
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
       if (sfi && usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
@@ -543,6 +569,14 @@ function upstreamWarning(row: SheetRow): string | null {
   if (isShuZhi.value || isQidiao.value) {
     const warnings: string[] = [];
     for (const src of row.upstreamSources) {
+      if (src.finishedGoods) {
+        // 防呆 Rule 1 — ①c FG 投料 max 守卫: 对照常驻成品库存的可用量。
+        const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
+        if (fg && src.feedQuantityKg > fgAvailable(fg)) {
+          warnings.push(`${src.sourceBatchNumber} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`);
+        }
+        continue;
+      }
       if (src.semiFinished) {
         // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量 (此前漏检 → 超投无提示)。
         const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
@@ -645,7 +679,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
     // semiFinished: 单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
-    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished }];
+    // finishedGoods (①c): 单上游选了成品库存 (FG) → 后端小结 consumeForFeedStrict 严格扣减成品。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
     base.unit = 'kg';
@@ -661,7 +696,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     const scrap = (row.fields['scrap'] as number) ?? 0;
     const inputQty = scrap + output;
     // semiFinished: 去舌苔单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径。
-    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished }];
+    // finishedGoods (①c): 单上游选了成品库存 (FG) → 小结严格扣减成品。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = inputQty;
     base.outputQuantity = output;
     base.unit = 'kg';
@@ -821,6 +857,11 @@ const sfiOptions = ref<SemiFinishedStockItem[]>([]);
 const sfiLoading = ref(false);
 let sfiLoadSeq = 0;
 
+// ①c 成品库存 (FG) 投料来源 — 与 SFI 平行 (07-01 客户: 选批次看到库里所有成品和半成品)。
+const fgOptions = ref<FinishedGoodsStockItem[]>([]);
+const fgLoading = ref(false);
+let fgLoadSeq = 0;
+
 /** 是否多来源混锅工序 (熟制 / 气调) — 多源混锅提供 SFI 投料选项。 */
 const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
 
@@ -830,11 +871,14 @@ const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
  * 不再限混锅道, 支持"从滚揉起步选半成品" (链起步道 upstreamItems 空, 仅 SFI 可选)。
  */
 const showSfi = computed(() => isMultiSource.value || isSingleUpstream.value || isQuSheTou.value);
+/** ①c 是否提供「成品库存(FG)」投料选项 (与 SFI 同工序集: 混锅 + 单上游道)。 */
+const showFg = computed(() => showSfi.value);
 
 // 下拉选项用「类型::批次号」复合值, 让来源类型由选中的 OPTION 显式携带, 而非按字符串值反查
-// (规避 in-plan WIP 批号与 SFI 批号偶然相同时的 WIP↔SFI 误判)。
+// (规避 in-plan WIP 批号与 SFI/FG 批号偶然相同时的误判)。
 const SRC_WIP = 'wip';
 const SRC_SFI = 'sfi';
+const SRC_FG = 'fg';   // ①c 成品库存
 function srcKey(kind: string, batchNo: string): string {
   return `${kind}::${batchNo}`;
 }
@@ -843,11 +887,66 @@ function sfiAvailable(item: SemiFinishedStockItem): number {
   return Number(item.availableQuantity ?? 0) || 0;
 }
 
-/** 半成品库存选项标签: "半成品: {品名} | {批次} | 余{available}{unit}"。 */
+function fgAvailable(item: FinishedGoodsStockItem): number {
+  return Number(item.availableQuantity ?? 0) || 0;
+}
+
+/** ② 成本文字: 有值 → "成本{n}"; null → "成本未知" (诚实, 不显 ¥0)。 */
+function costText(cost: number | null | undefined): string {
+  return cost != null ? `成本${Number(cost)}` : '成本未知';
+}
+
+/** ② 日期文字: null → '无生产日期' 占位 (下拉对齐)。 */
+function dateText(d: string | null | undefined): string {
+  return d ? String(d).slice(0, 10) : '无生产日期';
+}
+
+/**
+ * ② 在制 WIP 选项标签: "{品名} | {批号} | {生产日期} | 余{remaining}kg | {成本}"。
+ * 品名/生产日期由后端 getInventory 回填 (缺失时降级只显批号+余量, 不 crash)。
+ */
+function wipLabel(item: ProcessSheetInventoryItem): string {
+  const name = item.productTypeName || '在制';
+  const parts = [name, item.batchNumber, dateText(item.productionDate),
+    `余${item.remaining}kg`, costText(item.unitPrice)];
+  return parts.join(' | ');
+}
+
+/** ② 半成品库存选项标签: "半成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
 function sfiLabel(item: SemiFinishedStockItem): string {
   const name = item.productTypeName || item.processName || '半成品';
   const unit = item.unit || 'kg';
-  return `半成品: ${name} | ${item.intermediateBatchNo} | 余${sfiAvailable(item)}${unit}`;
+  return `半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
+    + `| 余${sfiAvailable(item)}${unit} | ${costText(item.unitCost)}`;
+}
+
+/** ②/①c 成品库存选项标签: "成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
+function fgLabel(item: FinishedGoodsStockItem): string {
+  const name = item.productTypeName || '成品';
+  const unit = item.unit || 'kg';
+  return `成品: ${name} | ${item.batchNumber} | ${dateText(item.productionDate)} `
+    + `| 余${fgAvailable(item)}${unit} | ${costText(item.unitCost)}`;
+}
+
+/** ①c 加载可投料成品库存 (产品族过滤; 成品是终态无阶段过滤)。 */
+async function loadFgOptions() {
+  if (!showFg.value || !props.factoryId) return;
+  const seq = ++fgLoadSeq;
+  fgLoading.value = true;
+  try {
+    // 防呆过滤 (07-01): 传当前计划 productTypeId → 后端解析成产品族仅返回同族成品 (猪蹄计划不显牛肉)。
+    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId);
+    if (seq !== fgLoadSeq) return;
+    const all = Array.isArray(resp.data) ? resp.data : [];
+    fgOptions.value = all.filter((f) => fgAvailable(f) > 0);
+  } catch (err) {
+    if (seq !== fgLoadSeq) return;
+    fgOptions.value = [];
+    // 非阻断: FG 投料是增量能力, 加载失败仅丢失该选项, 不影响 in-plan WIP / SFI 投料。
+    ElMessage({ message: err instanceof Error ? err.message : '成品库存加载失败', type: 'warning', duration: 3000 });
+  } finally {
+    if (seq === fgLoadSeq) fgLoading.value = false;
+  }
 }
 
 async function loadSfiOptions() {
@@ -885,18 +984,20 @@ async function loadSfiOptions() {
  */
 function srcSelectKey(src: UpstreamRef): string {
   if (!src.sourceBatchNumber) return '';
-  return srcKey(src.semiFinished ? SRC_SFI : SRC_WIP, src.sourceBatchNumber);
+  const kind = src.finishedGoods ? SRC_FG : (src.semiFinished ? SRC_SFI : SRC_WIP);
+  return srcKey(kind, src.sourceBatchNumber);
 }
 
 /**
- * 用户在混锅来源下拉改选后: 由选中 OPTION 的复合值「类型::批次号」显式拆出来源类型与批次号,
- * 据此置 sourceBatchNumber + semiFinished。后端据 semiFinished 决定保存时是否写消耗边 +
- * 小结时走严格 SFI 出库 (consumeClerkSemiStrict) 还是 in-plan 在制 WIP 边。
+ * 用户在混锅来源下拉改选后: 由选中 OPTION 的复合值「类型::批次号」显式拆出来源类型 (wip/sfi/fg) 与批次号,
+ * 据此置 sourceBatchNumber + semiFinished + finishedGoods (三者互斥)。后端据这两个标记决定保存时是否写消耗边
+ * + 小结时走严格 SFI/FG 出库 (consumeClerkSemiStrict / consumeForFeedStrict) 还是 in-plan 在制 WIP 边。
  */
 function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
   if (!key) {
     src.sourceBatchNumber = '';
     src.semiFinished = false;
+    src.finishedGoods = false;
     return;
   }
   const sep = key.indexOf('::');
@@ -904,9 +1005,12 @@ function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
     // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
     src.sourceBatchNumber = key;
     src.semiFinished = false;
+    src.finishedGoods = false;
     return;
   }
-  src.semiFinished = key.slice(0, sep) === SRC_SFI;
+  const kind = key.slice(0, sep);
+  src.semiFinished = kind === SRC_SFI;
+  src.finishedGoods = kind === SRC_FG;
   src.sourceBatchNumber = key.slice(sep + 2);
 }
 
@@ -916,17 +1020,19 @@ function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
 // 单独存 row.upstreamSemiFinished, 规避 WIP 批号与 SFI 批号偶然相同的误判。
 // -------------------------------------------------------------------------
 
-/** 单上游当前选中的复合下拉值 (从 upstreamBatch + upstreamSemiFinished 反推)。 */
+/** 单上游当前选中的复合下拉值 (从 upstreamBatch + upstreamSemiFinished + upstreamFinishedGoods 反推)。 */
 function singleUpstreamSelectKey(row: SheetRow): string {
   if (!row.upstreamBatch) return '';
-  return srcKey(row.upstreamSemiFinished ? SRC_SFI : SRC_WIP, row.upstreamBatch);
+  const kind = row.upstreamFinishedGoods ? SRC_FG : (row.upstreamSemiFinished ? SRC_SFI : SRC_WIP);
+  return srcKey(kind, row.upstreamBatch);
 }
 
-/** 用户改选单上游: 由复合值「类型::批次号」显式拆出批次号 + semiFinished 标记。 */
+/** 用户改选单上游: 由复合值「类型::批次号」显式拆出批次号 + semiFinished + finishedGoods 标记 (三者互斥)。 */
 function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
   if (!key) {
     row.upstreamBatch = '';
     row.upstreamSemiFinished = false;
+    row.upstreamFinishedGoods = false;
     return;
   }
   const sep = key.indexOf('::');
@@ -934,16 +1040,21 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
     // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
     row.upstreamBatch = key;
     row.upstreamSemiFinished = false;
+    row.upstreamFinishedGoods = false;
     return;
   }
-  row.upstreamSemiFinished = key.slice(0, sep) === SRC_SFI;
+  const kind = key.slice(0, sep);
+  row.upstreamSemiFinished = kind === SRC_SFI;
+  row.upstreamFinishedGoods = kind === SRC_FG;
   row.upstreamBatch = key.slice(sep + 2);
 }
 
-/** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI)。 */
+/** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI / 成品FG)。 */
 function srcRemainingLabel(src: UpstreamRef): string {
   const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
   if (wip) return `余${wip.remaining}kg`;
+  const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
+  if (fg) return `成品余${fgAvailable(fg)}${fg.unit || 'kg'}`;
   const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
   if (sfi) return `半成品余${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
   return '';
@@ -970,6 +1081,11 @@ watch(
     sfiLoadSeq++;
     sfiLoading.value = false;
     if (showSfi.value) void loadSfiOptions();
+    // ①c 同工序集加载常驻成品库存供 FG 投料下拉
+    fgOptions.value = [];
+    fgLoadSeq++;
+    fgLoading.value = false;
+    if (showFg.value) void loadFgOptions();
   },
   { immediate: true },
 );
@@ -1100,7 +1216,7 @@ watch(
                 <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
                   <el-option
                     v-for="item in upstreamItems" :key="item.batchNumber"
-                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                    :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
                     :disabled="item.remaining <= 0" />
                 </el-option-group>
@@ -1110,6 +1226,13 @@ watch(
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                     :disabled="sfiAvailable(s) <= 0" />
+                </el-option-group>
+                <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                  <el-option
+                    v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                    :label="fgLabel(f)"
+                    :value="srcKey(SRC_FG, f.batchNumber)"
+                    :disabled="fgAvailable(f) <= 0" />
                 </el-option-group>
               </el-select>
             </div>
@@ -1129,7 +1252,7 @@ watch(
                 <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
                   <el-option
                     v-for="item in upstreamItems" :key="item.batchNumber"
-                    :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                    :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
                     :disabled="item.remaining <= 0" />
                 </el-option-group>
@@ -1139,6 +1262,13 @@ watch(
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                     :disabled="sfiAvailable(s) <= 0" />
+                </el-option-group>
+                <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                  <el-option
+                    v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                    :label="fgLabel(f)"
+                    :value="srcKey(SRC_FG, f.batchNumber)"
+                    :disabled="fgAvailable(f) <= 0" />
                 </el-option-group>
               </el-select>
             </div>
@@ -1170,7 +1300,7 @@ watch(
                   <el-option-group label="本计划在制半成品">
                     <el-option
                       v-for="item in upstreamItems" :key="item.batchNumber"
-                      :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                      :label="wipLabel(item)"
                       :value="srcKey(SRC_WIP, item.batchNumber)"
                       :disabled="item.remaining <= 0" />
                   </el-option-group>
@@ -1180,6 +1310,13 @@ watch(
                       :label="sfiLabel(s)"
                       :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                       :disabled="sfiAvailable(s) <= 0" />
+                  </el-option-group>
+                  <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                    <el-option
+                      v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                      :label="fgLabel(f)"
+                      :value="srcKey(SRC_FG, f.batchNumber)"
+                      :disabled="fgAvailable(f) <= 0" />
                   </el-option-group>
                 </el-select>
                 <el-input-number
@@ -1489,7 +1626,7 @@ watch(
                       <el-option
                         v-for="item in upstreamItems"
                         :key="item.batchNumber"
-                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                        :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
                         :disabled="item.remaining <= 0" />
                     </el-option-group>
@@ -1499,6 +1636,13 @@ watch(
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                         :disabled="sfiAvailable(s) <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                      <el-option
+                        v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                        :label="fgLabel(f)"
+                        :value="srcKey(SRC_FG, f.batchNumber)"
+                        :disabled="fgAvailable(f) <= 0" />
                     </el-option-group>
                   </el-select>
                 </td>
@@ -1518,7 +1662,7 @@ watch(
                       <el-option
                         v-for="item in upstreamItems"
                         :key="item.batchNumber"
-                        :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                        :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
                         :disabled="item.remaining <= 0" />
                     </el-option-group>
@@ -1528,6 +1672,13 @@ watch(
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                         :disabled="sfiAvailable(s) <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                      <el-option
+                        v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                        :label="fgLabel(f)"
+                        :value="srcKey(SRC_FG, f.batchNumber)"
+                        :disabled="fgAvailable(f) <= 0" />
                     </el-option-group>
                   </el-select>
                 </td>
@@ -1707,7 +1858,7 @@ watch(
                       <el-option-group label="本计划在制半成品">
                         <el-option
                           v-for="item in upstreamItems" :key="item.batchNumber"
-                          :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                          :label="wipLabel(item)"
                           :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
@@ -1717,6 +1868,13 @@ watch(
                           :label="sfiLabel(s)"
                           :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
+                      </el-option-group>
+                      <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                        <el-option
+                          v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                          :label="fgLabel(f)"
+                          :value="srcKey(SRC_FG, f.batchNumber)"
+                          :disabled="fgAvailable(f) <= 0" />
                       </el-option-group>
                     </el-select>
                     <el-input-number
@@ -1781,7 +1939,7 @@ watch(
                       <el-option-group label="本计划在制半成品">
                         <el-option
                           v-for="item in upstreamItems" :key="item.batchNumber"
-                          :label="`${item.batchNumber} (余${item.remaining}kg)`"
+                          :label="wipLabel(item)"
                           :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
@@ -1791,6 +1949,13 @@ watch(
                           :label="sfiLabel(s)"
                           :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
+                      </el-option-group>
+                      <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                        <el-option
+                          v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                          :label="fgLabel(f)"
+                          :value="srcKey(SRC_FG, f.batchNumber)"
+                          :disabled="fgAvailable(f) <= 0" />
                       </el-option-group>
                     </el-select>
                     <el-input-number

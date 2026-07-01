@@ -25,6 +25,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.InterimSettleService;
@@ -79,6 +80,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final WipInventoryService wipInventoryService;
+    /** ①c 成品作投料来源 — FG 严格扣减 (loud-fail) + 成本传导读取。与 SFI 投料平行。 */
+    private final FinishedGoodsFeedService finishedGoodsFeedService;
     private final WarehouseResolver warehouseResolver;
     private final ObjectMapper objectMapper;
     /** G3 成本传导: 读 materialized/finished 道的 ProductionBatch 成本 (原料+调料+人工)。 */
@@ -169,9 +172,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 continue;
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
-                // SFI 投料 (semiFinished=true) 引用的是常驻外部半成品库存, 不是本小结的瞬态在制产出
-                // → 不纳入"同小结内被下游投入"统计 (否则若外部 SFI 批号偶然与本计划在制批号相同会污染净结余)。
-                if (ref.isSemiFinished()) {
+                // SFI 投料 (semiFinished=true) / FG 投料 (finishedGoods=true) 引用的是常驻外部半成品/成品库存,
+                // 不是本小结的瞬态在制产出 → 不纳入"同小结内被下游投入"统计 (否则若外部批号偶然与本计划在制批号
+                // 相同会污染净结余)。
+                if (ref.isSemiFinished() || ref.isFinishedGoods()) {
                     continue;
                 }
                 String src = ref.getSourceBatchNumber();
@@ -192,6 +196,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         //       运行余额行锚 semiAnchor 出库, 沿用 consumeClerkSemi 的 not-below-zero 容忍 (行缺失 no-op /
         //       超扣 clamp) —— 这是与 SFI IN 净结余会计互校的有意双保险, 不改 (行为不变)。
         BigDecimal semiOutQuantity = BigDecimal.ZERO;
+        BigDecimal finishedGoodsOutQuantity = BigDecimal.ZERO;
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.getUpstreamSources() == null) {
                 continue;
@@ -199,6 +204,16 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
                 String srcBatchNo = ref.getSourceBatchNumber();
                 BigDecimal feed = nz(ref.getFeedQuantityKg());
+                // (C) ①c FG 投料 (成品作投料来源): 严格扣减常驻成品库存 (缺失/不足即抛 FG_NOT_FOUND/FG_INSUFFICIENT,
+                //   整事务回滚 → 禁止降级, 不产 phantom)。不走 SFI/priorStocked anchor 路径。
+                if (ref.isFinishedGoods()) {
+                    if (srcBatchNo != null && feed.signum() > 0) {
+                        BigDecimal drawn = finishedGoodsFeedService
+                                .consumeForFeedStrict(factoryId, srcBatchNo, feed);
+                        finishedGoodsOutQuantity = finishedGoodsOutQuantity.add(nz(drawn));
+                    }
+                    continue;
+                }
                 // (A) SFI 投料: 严格扣减常驻 SFI 库存 (缺失/不足即抛, 整事务回滚 → 不产 phantom FG)。
                 if (ref.isSemiFinished()) {
                     if (srcBatchNo != null && feed.signum() > 0) {
@@ -302,6 +317,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         summary.put("semiInBatchNumbers", semiInBatchNumbers);
         summary.put("semiInQuantity", semiInQuantity);
         summary.put("semiOutQuantity", semiOutQuantity);
+        summary.put("finishedGoodsOutQuantity", finishedGoodsOutQuantity);   // ①c FG 投料扣减量
         summary.put("finishedGoodsBatchNumbers", finishedBatchNumbers);
         summary.put("finishedQuantity", finishedQuantity);
 
@@ -458,27 +474,32 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             baseTotal = nz(clerkProcessEntryService.computeLaborCost(ur.req.getLaborSegments(), laborRate));
         }
 
-        // Σ SFI 投料成本 (feedKg × 输入 SFI.unitCost); 任一 unitCost null → 诚实 null。
-        BigDecimal sfiFeedCost = BigDecimal.ZERO;
+        // Σ 外部库存投料成本 (feedKg × 输入 SFI/FG.unitCost); 任一 unitCost null → 诚实 null。
+        //   SFI 投料 (semiFinished) 读 SFI 移动均价; FG 投料 (finishedGoods, ①c) 读成品 unitCost。
+        //   两者都不在 ProductionBatch.totalCost 内 (投料边不写 MaterialConsumption), 故此处单独补进。
+        BigDecimal stockFeedCost = BigDecimal.ZERO;
         if (ur.req.getUpstreamSources() != null) {
             for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
-                if (!ref.isSemiFinished()) {
+                boolean semi = ref.isSemiFinished();
+                boolean fg = ref.isFinishedGoods();
+                if (!semi && !fg) {
                     continue; // 在制 WIP 投料的成本已在 ProductionBatch.totalCost (MaterialConsumption 边) 内
                 }
                 BigDecimal feed = nz(ref.getFeedQuantityKg());
                 if (feed.signum() <= 0) {
                     continue;
                 }
-                BigDecimal inputUnitCost = wipInventoryService
-                        .getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
+                BigDecimal inputUnitCost = fg
+                        ? finishedGoodsFeedService.getFeedUnitCost(factoryId, ref.getSourceBatchNumber())
+                        : wipInventoryService.getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
                 if (inputUnitCost == null) {
-                    return null; // 🔴 诚实 null: 输入半成品无成本 → 本道产出成本未知, 不伪造 ¥0
+                    return null; // 🔴 诚实 null: 输入半成品/成品无成本 → 本道产出成本未知, 不伪造 ¥0
                 }
-                sfiFeedCost = sfiFeedCost.add(feed.multiply(inputUnitCost));
+                stockFeedCost = stockFeedCost.add(feed.multiply(inputUnitCost));
             }
         }
 
-        return baseTotal.add(sfiFeedCost).divide(outputQty, 4, RoundingMode.HALF_UP);
+        return baseTotal.add(stockFeedCost).divide(outputQty, 4, RoundingMode.HALF_UP);
     }
 
     /** 调味道工序名正则 — 与 {@code ProcessSheetServiceImpl.buildStepEntry} / materializeBatch 警告分支同源, 不另造。 */
@@ -516,11 +537,12 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         return null;
     }
 
-    /** 本行是否含常驻半成品(SFI)投料 (semiFinished=true 上游)。 */
+    /** 本行是否含常驻外部库存投料 (SFI semiFinished=true 或 FG finishedGoods=true 上游) —
+     *  这类投料成本不在 ProductionBatch.totalCost 内, 混合拓扑下对下游可能漏计 (见调用处 #1 告警)。 */
     private boolean hasSemiFinishedFeed(ProcessSheetRowRequest req) {
         return req.getUpstreamSources() != null
                 && req.getUpstreamSources().stream()
-                        .anyMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
+                        .anyMatch(u -> u.isSemiFinished() || u.isFinishedGoods());
     }
 
     // ─────────────────────────────────────────────────────────────

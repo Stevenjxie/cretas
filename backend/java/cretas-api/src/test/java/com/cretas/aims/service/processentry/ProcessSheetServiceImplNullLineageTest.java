@@ -68,6 +68,7 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private WorkProcessRepository processRepo;
     @Mock private ProductWorkProcessRepository productWorkProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository finishedGoodsBatchRepo;
 
     @Test
     @DisplayName("3: 上游 WIP materialTypeId 为 null + 无原料行 → 400 (不物化)")
@@ -76,7 +77,7 @@ class ProcessSheetServiceImplNullLineageTest {
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
                 new ObjectMapper(), wipRepo, taskRepo, processRepo,
-                productWorkProcessRepo, productTypeRepo);
+                productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo);
 
         // plan belongs to factory
         ProductionPlan plan = new ProductionPlan();

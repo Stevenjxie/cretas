@@ -33,6 +33,7 @@ import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
@@ -96,6 +97,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final WorkProcessRepository processRepo;
     private final ProductWorkProcessRepository productWorkProcessRepo;
     private final ProductTypeRepository productTypeRepo;
+    /** ①c 成品作投料来源 — 保存期 FG 投料存在性 loud-fail 校验 (禁止降级)。 */
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepo;
 
     @Autowired(required = false)
     private WarehouseResolver warehouseResolver;
@@ -141,7 +144,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //   (SFI 边已在 resolveEdges 跳过, 此处 edges 为空)。行以 batchNumber=SFI 锚 + rowStatus=SAVED_SFI
         //   持久化, 供小结 ③ SFI IN 定位过账 (见 InterimSettleServiceImpl)。
         //   成品道 (气调) 的纯 SFI 场景走原路径 (materializeBatch finished=true 不建 WIP → FG), 不入此分支。
-        if (!req.isFinished() && isPureSemiFinishedFed(req)) {
+        if (!req.isFinished() && isPureStockFed(req)) {
             String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
             persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             logChange(factoryId, planId, req, "CREATE", null, req, userId);
@@ -236,7 +239,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             // option F: 纯 SFI 非成品道 (output>0) → 更新行为 SAVED_SFI, 不物化 (同 create 路径)。
             //   产出在小结入 SFI; 输入 SFI 在小结 consumeClerkSemiStrict 扣减。
-            if (!req.isFinished() && isPureSemiFinishedFed(req)) {
+            if (!req.isFinished() && isPureStockFed(req)) {
                 String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
                 updateRowInPlace(existing, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
@@ -440,9 +443,37 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .remaining(remaining)
                     .status(status)
                     .unitPrice(nz(wip.getUnitPrice()))
+                    // ② 批次下拉补 品名 + 生产日期 (成本用 unitPrice)。品名从 row payload 的 productTypeId 反查。
+                    .productTypeName(resolveProductTypeName(factoryId, row))
+                    .productionDate(wip.getProductionDate())
                     .build());
         }
         return result;
+    }
+
+    /**
+     * ② 从 process_sheet_row 的 payload 解析 productTypeId → 产品名称 (供投料下拉品名展示)。
+     * 解析失败 / 无 productType → null (诚实, 不伪造)。
+     */
+    private String resolveProductTypeName(String factoryId, ProcessSheetRow row) {
+        ProcessSheetRowRequest req = parsePayloadQuiet(row.getRowPayload());
+        if (req == null || req.getProductTypeId() == null || req.getProductTypeId().isBlank()) {
+            return null;
+        }
+        return productTypeRepo.findByIdAndFactoryId(req.getProductTypeId(), factoryId)
+                .map(pt -> pt.getName())
+                .orElse(null);
+    }
+
+    private ProcessSheetRowRequest parsePayloadQuiet(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payload, ProcessSheetRowRequest.class);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1260,6 +1291,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 混锅上游边 (SEMI_FINISHED) — 经持久化 batchNumber 解析上游 WIP MaterialBatch
         if (req.getUpstreamSources() != null) {
             for (ProcessSheetRowRequest.UpstreamRef ur : req.getUpstreamSources()) {
+                // ①c 成品库存(FG)投料 (成品作投料来源): 与 SFI 同理不解析为 in-plan WIP MaterialBatch,
+                //   不写 MaterialConsumption。投料随 row_payload 持久化, FG 扣减在小结经
+                //   FinishedGoodsFeedService.consumeForFeedStrict(batchNumber) 完成 (见 InterimSettleServiceImpl)。
+                //   禁止降级 + 防呆: FG 引用必须指向真实存在的成品批次 (factory-scoped 🔒), 否则保存即 loud-fail。
+                if (ur.isFinishedGoods()) {
+                    finishedGoodsBatchRepo.findByFactoryIdAndBatchNumber(factoryId, ur.getSourceBatchNumber())
+                            .orElseThrow(() -> new BusinessException(409,
+                                    "成品库存不存在: " + ur.getSourceBatchNumber())
+                                    .withCode("FG_NOT_FOUND")
+                                    .withHint("请重新选择仍有库存的成品批次")
+                                    .withSeverity("BLOCKING")
+                                    .withHintTarget(req.getProcessCode()));
+                    continue;
+                }
                 // 半成品库存(SFI)投料 (半成品直接产成品): 不解析为 in-plan WIP MaterialBatch,
                 //   不写 MaterialConsumption (material_consumptions.batch_id NOT NULL 只能持 MaterialBatch id,
                 //   SFI 无对应 MaterialBatch)。投料随 row_payload 持久化, SFI 扣减在小结时经
@@ -1345,13 +1390,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //   [option F] 非成品的「纯 SFI 中间道」已在 saveRow/resaveRow 上游拦截 (isPureSemiFinishedFed):
         //   不物化 WIP, 产出直接入 SFI, 根本不会走到这里。因此下面的 400 现在只作为防御, 仅对
         //   「非成品 + 含 SFI 投料 + 但混有无法派生 materialTypeId 的在制来源」这类残余不可解场景兜底。
-        if (hasSemiFinishedUpstream(req)) {
+        if (hasSemiFinishedUpstream(req) || hasFinishedGoodsUpstream(req)) {
             if (req.isFinished()) {
                 return null;
             }
             throw new BusinessException(400,
-                    "半成品库存(SFI)投料无法确定物料类型: 该道混有无法派生物料类型的来源")
-                    .withHint("请检查该道来源; 纯半成品喂的中间道应不含其他无物料类型的在制来源")
+                    "半成品(SFI)/成品(FG)库存投料无法确定物料类型: 该道混有无法派生物料类型的来源")
+                    .withHint("请检查该道来源; 纯半成品/成品喂的中间道应不含其他无物料类型的在制来源")
                     .withHintTarget(req.getProcessCode());
         }
         throw new BusinessException(400, "无法确定原料类型，无法物化批次");
@@ -1363,24 +1408,31 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 && req.getUpstreamSources().stream().anyMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
     }
 
+    /** ①c 该行是否含 FG(成品库存)投料来源 (finishedGoods=true)。 */
+    private boolean hasFinishedGoodsUpstream(ProcessSheetRowRequest req) {
+        return req.getUpstreamSources() != null
+                && req.getUpstreamSources().stream().anyMatch(ProcessSheetRowRequest.UpstreamRef::isFinishedGoods);
+    }
+
     /**
-     * option F: 该行是否为「纯半成品(SFI)喂的中间道」——
-     * 含 SFI 投料, 且<b>所有</b>上游来源均为 SFI (semiFinished=true), 且<b>无</b>原料投入。
+     * option F (①c 扩展): 该行是否为「纯外部库存 (半成品SFI / 成品FG) 喂的中间道」——
+     * 含 SFI/FG 投料, 且<b>所有</b>上游来源均为外部库存 (semiFinished 或 finishedGoods), 且<b>无</b>原料投入。
      *
      * <p>这类道无 raw lineage 无法派生 {@code material_type_id}, 故<b>不物化</b> WIP MaterialBatch;
-     * 产出在小结直接入半成品库(SFI), 停留在 product-type 维度 (复用 SFI in/out)。
-     * 注意: {@code allSemi} 已排除「混有 in-plan WIP (semiFinished=false) 上游」的情形;
-     * 「原料+SFI 混批」因 {@code hasRaw} 返 false (走原路径, 从 raw 派生 materialTypeId)。
+     * 产出在小结直接入半成品库(SFI), 停留在 product-type 维度 (复用 SFI in/out)。FG 投料的扣减在小结经
+     * {@code consumeForFeedStrict} 完成。注意: {@code allStock} 已排除「混有 in-plan WIP 上游」的情形;
+     * 「原料+SFI/FG 混批」因 {@code hasRaw} 返 false (走原路径, 从 raw 派生 materialTypeId)。
      *
-     * <p>成品道 (isFinished) 的纯 SFI 场景不归此判定管辖 —— 调用方另行以 {@code !isFinished()} 限定。
+     * <p>成品道 (isFinished) 的纯 SFI/FG 场景不归此判定管辖 —— 调用方另行以 {@code !isFinished()} 限定。
+     * ①c 成品(FG)作投料来源保持与 ③=F (纯 SFI 中间道) 一致: 非成品的纯 FG 道 = SAVED_SFI (产出入 SFI)。
      */
-    private boolean isPureSemiFinishedFed(ProcessSheetRowRequest req) {
+    private boolean isPureStockFed(ProcessSheetRowRequest req) {
         List<ProcessSheetRowRequest.UpstreamRef> ups = req.getUpstreamSources();
         if (ups == null || ups.isEmpty()) {
             return false;
         }
-        boolean allSemi = ups.stream().allMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
-        if (!allSemi) {
+        boolean allStock = ups.stream().allMatch(u -> u.isSemiFinished() || u.isFinishedGoods());
+        if (!allStock) {
             return false;
         }
         return req.getRawMaterialInputs() == null || req.getRawMaterialInputs().isEmpty();

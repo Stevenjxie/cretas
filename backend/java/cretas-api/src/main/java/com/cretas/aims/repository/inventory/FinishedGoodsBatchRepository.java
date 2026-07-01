@@ -4,10 +4,12 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -20,6 +22,30 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     List<FinishedGoodsBatch> findByFactoryIdAndProductTypeIdAndStatus(String factoryId, String productTypeId, String status);
 
     Optional<FinishedGoodsBatch> findByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
+
+    /**
+     * ①c 成品作投料来源 — 悲观写锁按 (factory, batchNumber) 取单个成品批次, 供小结时严格扣减 (loud-fail)。
+     *
+     * <p>与 {@link #findByFactoryIdAndBatchNumber} 不同: PESSIMISTIC_WRITE 行锁串行化并发扣减,
+     * 防超扣 (禁止降级)。必须在调用方 {@code @Transactional} 内使用。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId AND b.batchNumber = :batchNumber")
+    Optional<FinishedGoodsBatch> findByFactoryIdAndBatchNumberForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("batchNumber") String batchNumber);
+
+    /**
+     * ①c 成品作投料来源 — 该工厂全部 <b>可投料</b> 成品批次 (AVAILABLE 且可用量 &gt; 0), 供逐道录入 FG 投料下拉。
+     *
+     * <p>返回全 productType (调用方按产品族过滤); 按到期日 FEFO 排序 (先到期先用, 与销售出库一致)。
+     * 可用量 = producedQuantity − shippedQuantity − reservedQuantity。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findAvailableForFeedByFactory(@Param("factoryId") String factoryId);
 
     /** 查询有可用库存的成品批次（FEFO 出库 — 先到期先出） */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
