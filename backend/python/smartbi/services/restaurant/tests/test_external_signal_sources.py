@@ -12,10 +12,17 @@ from smartbi.services.restaurant.external_signal_sources import (
 
 
 class FakeWeatherResponse:
-    def __init__(self, payload: dict | None = None, text: str = "", status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: dict | None = None,
+        text: str = "",
+        status_code: int = 200,
+        content: bytes | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
         self.text = text
+        self.content = content if content is not None else text.encode("utf-8")
 
     def raise_for_status(self) -> None:
         return None
@@ -288,6 +295,29 @@ def test_collect_mall_activity_feeds_parses_allowed_public_pages() -> None:
     assert result["events"][0]["expectedImpact"] == "周末/晚市可能增强"
     assert client.calls[0]["url"] == "https://mall.example/robots.txt"
     assert "CretasRestaurantSignalBot" in client.calls[1]["headers"]["User-Agent"]
+
+
+def test_collect_mall_activity_feeds_decodes_gb18030_public_pages() -> None:
+    class GbCrawlerClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def get(self, url: str, headers: dict | None = None, timeout: float = 5.0) -> FakeWeatherResponse:
+            self.calls.append({"url": url, "headers": headers or {}, "timeout": timeout})
+            if url.endswith("/robots.txt"):
+                return FakeWeatherResponse(text="User-agent: *\nAllow: /\n")
+            html = "<html><head><title>南京路快乐一夏主题活动</title></head><body>7月底至8月初 电竞嘉年华</body></html>"
+            return FakeWeatherResponse(text="����", content=html.encode("gb18030"))
+
+    service = RestaurantExternalSignalService(http_client=GbCrawlerClient())
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(city="上海", business_district="南京东路"),
+        feed_urls=["https://mall.example/news"],
+    )
+
+    assert result["events"][0]["title"] == "南京路快乐一夏主题活动"
+    assert result["events"][0]["activityType"] == "文体活动"
 
 
 def test_collect_mall_activity_feeds_respects_robots_disallow() -> None:
