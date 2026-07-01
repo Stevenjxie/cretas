@@ -27,9 +27,7 @@ public class CreateProductionPlanRequest {
     @NotNull(message = "产品类型不能为空")
     private String productTypeId;
 
-    @Schema(description = "计划数量", required = true)
-    @NotNull(message = "计划数量不能为空")
-    @DecimalMin(value = "0.01", message = "计划数量必须大于0")
+    @Schema(description = "计划数量 (SAFETY_STOCK 存货生产时可为空; 其他来源类型必填且 > 0)")
     private BigDecimal plannedQuantity;
 
     @Schema(description = "计划日期", required = true)

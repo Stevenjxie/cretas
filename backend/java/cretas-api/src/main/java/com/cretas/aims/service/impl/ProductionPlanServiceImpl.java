@@ -814,6 +814,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // P0-12: 校验销售订单来源 + 回填客户名
         validateAndEnrichSalesOrderSource(factoryId, request);
 
+        // P1-0: 存货生产(SAFETY_STOCK) 计划数量非必填; 其他来源类型必须大于 0
+        if (request.getSourceType() != PlanSourceType.SAFETY_STOCK) {
+            if (request.getPlannedQuantity() == null
+                    || request.getPlannedQuantity().compareTo(new java.math.BigDecimal("0.01")) < 0) {
+                throw new BusinessException(400, "计划数量不能为空")
+                        .withHint("请输入计划数量").withHintTarget("plannedQuantity");
+            }
+        }
+
         // P1-4: 客户订单来源必须填写工序名称和批次日期
         if (request.getSourceType() == PlanSourceType.CUSTOMER_ORDER) {
             if (request.getProcessName() == null || request.getProcessName().isBlank()) {

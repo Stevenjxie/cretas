@@ -703,7 +703,7 @@ async function submitPlan() {
     ElMessage.warning('请选择产品类型');
     return;
   }
-  if (!planForm.value.plannedQuantity) {
+  if (!planForm.value.plannedQuantity && planForm.value.sourceType !== 'SAFETY_STOCK') {
     ElMessage.warning('请输入计划数量');
     return;
   }
@@ -2757,7 +2757,12 @@ function handleAiFill(params: TableRow) {
           </div>
         </el-form-item>
         <!-- 以销定产: 来源=销售订单时数量按各产品行取, 不手填 → 隐藏 -->
-        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="计划数量" required>
+        <!-- 存货生产(SAFETY_STOCK): 无计划数量, 按实际小结累计 → 同样隐藏 -->
+        <el-form-item
+          v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
+          label="计划数量"
+          required
+        >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
         </el-form-item>
         <el-form-item label="计划生产日" required>

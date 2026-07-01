@@ -211,6 +211,40 @@ class ProductionPlanSafetyStockSourceTest {
         assertNotNull(ex.getMessage());
     }
 
+    // ── Test 5 (新): SAFETY_STOCK + null plannedQuantity → 成功 ──
+
+    @Test
+    @DisplayName("SAFETY_STOCK 来源: plannedQuantity 为 null → 无需数量, 创建成功")
+    void safetyStock_nullPlannedQuantity_succeeds() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            CreateProductionPlanRequest req = safetyStockRequest();
+            req.setPlannedQuantity(null);
+
+            ProductionPlanDTO result = assertDoesNotThrow(
+                    () -> service.createProductionPlan(FACTORY_ID, req, 1L),
+                    "存货生产(SAFETY_STOCK) 不传计划数量应成功");
+            assertNotNull(result, "应返回 DTO");
+        }
+    }
+
+    // ── Test 6 (回归): 非 SAFETY_STOCK 且 plannedQuantity 为 null → 400 ──
+
+    @Test
+    @DisplayName("回归: MANUAL 来源不传 plannedQuantity → 400 BusinessException '计划数量不能为空'")
+    void manualSource_nullPlannedQuantity_throws400() {
+        // No tx mock needed — exception is thrown before registerSynchronization
+        CreateProductionPlanRequest req = safetyStockRequest();
+        req.setSourceType(PlanSourceType.MANUAL);
+        req.setPlannedQuantity(null);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createProductionPlan(FACTORY_ID, req, 1L),
+                "非SAFETY_STOCK来源缺少 plannedQuantity 应抛 400");
+        org.junit.jupiter.api.Assertions.assertTrue(
+                ex.getMessage().contains("计划数量"),
+                "错误消息应含'计划数量', actual: " + ex.getMessage());
+    }
+
     // ── Helper ──
 
     private CreateProductionPlanRequest safetyStockRequest() {
