@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from hashlib import md5
 from html import unescape
 import os
+from pathlib import Path
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -104,7 +105,7 @@ class RestaurantExternalSignalService:
     and prevents accidental provider quota consumption.
     """
 
-    qweather_now_url = "https://devapi.qweather.com/v7/weather/now"
+    qweather_legacy_now_url = "https://devapi.qweather.com/v7/weather/now"
     damai_gateway_url = "https://eco.taobao.com/router/rest"
     mall_activity_user_agent = "CretasRestaurantSignalBot/1.0 (+https://cretas.local/bot-policy)"
 
@@ -143,7 +144,7 @@ class RestaurantExternalSignalService:
                 "门店经纬度和所属商圈",
                 "商场官网/公众号/小程序活动页 URL",
                 "周边 1-3km 重点场馆列表",
-                "和风天气 QWEATHER_API_KEY",
+                "和风天气 QWEATHER_API_KEY 和 QWEATHER_API_HOST",
                 "大麦 DAMAI_APP_KEY 和 DAMAI_APP_SECRET",
             ],
         }
@@ -153,8 +154,8 @@ class RestaurantExternalSignalService:
             {
                 "source": "和风天气",
                 "keyRequired": True,
-                "envVars": ["QWEATHER_API_KEY"],
-                "status": self._configured_status("QWEATHER_API_KEY"),
+                "envVars": ["QWEATHER_API_KEY", "QWEATHER_API_HOST"],
+                "status": self._configured_status("QWEATHER_API_KEY", "QWEATHER_API_HOST"),
                 "refreshCadence": "小时级",
                 "bestUse": "解释雨天、高温、寒潮、台风、空气质量和预警对堂食/外卖的影响。",
                 "officialUrl": "https://dev.qweather.com/docs/api/",
@@ -191,6 +192,7 @@ class RestaurantExternalSignalService:
     def collection_pipeline(self, request: ExternalSignalRequest) -> dict[str, Any]:
         has_location = request.lat is not None and request.lng is not None
         has_qweather = bool(self._env_value("QWEATHER_API_KEY"))
+        has_qweather_host = bool(self._env_value("QWEATHER_API_HOST"))
         has_damai = bool(
             self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")
         )
@@ -207,8 +209,8 @@ class RestaurantExternalSignalService:
                     "source": "和风天气",
                     "productionStatus": (
                         "ready_to_collect"
-                        if has_qweather and has_location
-                        else "needs_key_and_location"
+                        if has_qweather and has_qweather_host and has_location
+                        else "needs_key_host_and_location"
                     ),
                     "refreshCadence": "小时级/日更均可",
                     "storesOneApiCall": True,
@@ -242,9 +244,13 @@ class RestaurantExternalSignalService:
         api_key = self._env_value("QWEATHER_API_KEY")
         if not api_key:
             return {"available": False, "reason": "缺少 QWEATHER_API_KEY"}
+        api_host = self._env_value("QWEATHER_API_HOST")
+        if not api_host:
+            return {"available": False, "reason": "缺少 QWEATHER_API_HOST"}
         response = self._http_client.get(
-            self.qweather_now_url,
-            params={"location": location_id, "key": api_key},
+            self._qweather_now_url(api_host),
+            params={"location": location_id},
+            headers={"X-QW-Api-Key": api_key},
             timeout=5.0,
         )
         response.raise_for_status()
@@ -552,6 +558,19 @@ class RestaurantExternalSignalService:
     def _configured_status(self, *env_vars: str) -> str:
         return "已配置" if all(self._env_value(key) for key in env_vars) else "待配置"
 
+    @property
+    def qweather_now_url(self) -> str:
+        api_host = self._env_value("QWEATHER_API_HOST")
+        return self._qweather_now_url(api_host) if api_host else self.qweather_legacy_now_url
+
+    def _qweather_now_url(self, api_host: str) -> str:
+        host = api_host.strip().rstrip("/")
+        if not host:
+            return self.qweather_legacy_now_url
+        if not host.startswith(("http://", "https://")):
+            host = f"https://{host}"
+        return f"{host}/v7/weather/now"
+
     def _env_value(self, key: str) -> str:
         if self._env is not None:
             return str(self._env.get(key) or "")
@@ -560,6 +579,7 @@ class RestaurantExternalSignalService:
             return value
         settings_key = {
             "QWEATHER_API_KEY": "qweather_api_key",
+            "QWEATHER_API_HOST": "qweather_api_host",
             "DAMAI_APP_KEY": "damai_app_key",
             "DAMAI_APP_SECRET": "damai_app_secret",
             "MALL_ACTIVITY_FEED_URLS": "mall_activity_feed_urls",
@@ -569,13 +589,43 @@ class RestaurantExternalSignalService:
         try:
             from smartbi.config import get_settings
 
-            return str(getattr(get_settings(), settings_key, "") or "")
+            value = str(getattr(get_settings(), settings_key, "") or "")
+            if value:
+                return value
         except Exception:
-            return ""
+            pass
+        return self._env_file_value(key)
+
+    def _env_file_value(self, key: str) -> str:
+        for env_path in self._env_file_candidates():
+            if not env_path.exists() or not env_path.is_file():
+                continue
+            try:
+                lines = env_path.read_text(encoding="utf-8-sig").splitlines()
+            except OSError:
+                continue
+            for raw_line in lines:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, value = line.split("=", 1)
+                if name.strip() == key:
+                    return value.strip().strip('"').strip("'")
+        return ""
+
+    def _env_file_candidates(self) -> list[Path]:
+        module_path = Path(__file__).resolve()
+        return [
+            Path.cwd() / ".env",
+            Path.cwd() / "smartbi" / ".env",
+            module_path.parents[2] / ".env",
+            module_path.parents[3] / ".env",
+        ]
 
     def _can_collect_qweather(self, store: dict[str, Any]) -> bool:
         return bool(
             self._env_value("QWEATHER_API_KEY")
+            and self._env_value("QWEATHER_API_HOST")
             and store.get("lat") is not None
             and store.get("lng") is not None
         )
@@ -590,6 +640,16 @@ class RestaurantExternalSignalService:
                 "budgetCost": 0,
                 "plainImpact": "天气源未接入时，只能提示需要校验天气，不能确认当天是否受雨天、高温或预警影响。",
                 "actionHint": "把和风天气 Key 放到服务器环境变量或 .env 后，再由定时任务采集。",
+            }
+        if not self._env_value("QWEATHER_API_HOST"):
+            return {
+                "type": "weather",
+                "source": "和风天气",
+                "status": "skipped",
+                "reason": "缺少 QWEATHER_API_HOST，未消耗接口额度。",
+                "budgetCost": 0,
+                "plainImpact": "和风新版 API 需要项目里的专属 API Host；只有 Key 时不能确认当天是否受天气影响。",
+                "actionHint": "在和风控制台找到 API Host，填入 QWEATHER_API_HOST 后再采集。",
             }
         if request.lat is None or request.lng is None:
             return {

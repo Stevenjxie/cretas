@@ -125,6 +125,7 @@ class Settings(BaseSettings):
 
     # Restaurant external signal providers. Secrets stay in env/.env only.
     qweather_api_key: str = ""
+    qweather_api_host: str = ""
     damai_app_key: str = ""
     damai_app_secret: str = ""
     mall_activity_feed_urls: str = ""
