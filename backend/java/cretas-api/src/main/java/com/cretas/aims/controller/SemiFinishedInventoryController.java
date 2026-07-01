@@ -36,13 +36,24 @@ public class SemiFinishedInventoryController {
      * <p>返回该工厂所有未软删 WIP 行，含全状态 (AVAILABLE/DEPLETED/RETURNED)，
      * 按工序序升序排列。每行含产品类型名称 ({@code productTypeName}) 和批次 ID ({@code batchId})
      * 供前端分组展示。
+     *
+     * <p><b>防呆过滤 (可选, 07-01 客户会议需求)</b>: 逐道录入 SFI 投料下拉传入以收窄可选半成品,
+     * 防低素养操作员误选。两参数省略 → 全量快照 (向后兼容, 看板/盘点仍用无参调用):
+     * <ul>
+     *   <li>{@code productTypeId} — 同类过滤: 仅返回同产品半成品 (猪蹄计划不显牛肉)。</li>
+     *   <li>{@code maxProcessOrder} — 阶段过滤: 仅返回 {@code processOrder < maxProcessOrder} 的更早阶段半成品 (防回锅)。</li>
+     * </ul>
      */
     @RequirePermission({"production:read"})
     @GetMapping("/inventory")
-    @Operation(summary = "工厂级半成品重量库存 (全状态快照, 仅重量字段)")
-    public ApiResponse<List<WipRowDTO>> listInventory(@PathVariable String factoryId) {
-        List<WipRowDTO> rows = wipInventoryService.listWipByFactory(factoryId);
-        log.debug("[C3] listInventory factoryId={} → {} rows", factoryId, rows.size());
+    @Operation(summary = "工厂级半成品重量库存 (全状态快照, 仅重量字段; 可选 同类+阶段 防呆过滤)")
+    public ApiResponse<List<WipRowDTO>> listInventory(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) String productTypeId,
+            @RequestParam(required = false) Integer maxProcessOrder) {
+        List<WipRowDTO> rows = wipInventoryService.listWipByFactory(factoryId, productTypeId, maxProcessOrder);
+        log.debug("[C3] listInventory factoryId={} productTypeId={} maxProcessOrder={} → {} rows",
+                factoryId, productTypeId, maxProcessOrder, rows.size());
         return ApiResponse.success(rows);
     }
 }

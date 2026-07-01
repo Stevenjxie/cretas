@@ -111,6 +111,32 @@ public interface WipInventoryService {
      */
     List<WipRowDTO> listWipByFactory(String factoryId);
 
+    /**
+     * C3 + 防呆过滤 — 工厂级半成品重量库存视图 (可选 同族 + 阶段 过滤)。
+     *
+     * <p>逐道录入 SFI 投料下拉据此收窄可选半成品, 防低素养操作员误选 (07-01 客户会议防呆需求):
+     * <ul>
+     *   <li><b>同族</b> ({@code productTypeId} 非空): 把当前计划产品解析成<b>产品族</b>
+     *       (以原料为主自动识别, 见 {@link ProductFamilyResolver}), 仅返回<b>同族</b>半成品。
+     *       <b>不是</b>按 productTypeId 精确匹配 —— 07-01 客户澄清: 熟制前半成品在同产品族内通用
+     *       (卤猪蹄/椒麻猪蹄/猪蹄冠 共用同一"猪蹄"半成品, 只在最后熟制道分化成成品), 按 productTypeId
+     *       精确过滤会把通用"猪蹄"半成品对兄弟"猪蹄"成品计划隐藏 → 破坏客户想要的复用; 故按族过滤,
+     *       猪蹄计划显示所有猪蹄族半成品 (跨兄弟成品), 但不显牛肉。
+     *       <b>宁缺勿藏</b>: 仅排除"族已知且与计划族不同"的行; 族识别不出的候选一律放行 (不隐藏可能合法
+     *       复用的项); 计划族本身识别不出 → 不按族过滤 (全放行, 只按阶段)。</li>
+     *   <li><b>阶段</b> ({@code maxProcessOrder} 非空): 仅返回更早阶段 ({@code processOrder < maxProcessOrder})
+     *       的半成品 —— 半成品只能前向投喂 (阶段产出), 不能把后道半成品回锅进前道。
+     *       <b>严格排除</b> {@code processOrder} 为 null 的行 (无法确认阶段 → 防回锅)。此部分不变。</li>
+     * </ul>
+     * 两参数均为 null → 等价 {@link #listWipByFactory(String)} (全量, 向后兼容)。
+     *
+     * @param factoryId       工厂 ID
+     * @param productTypeId   同族过滤: 计划产品类型 id → 内部解析成族键 (null/空白 = 不按族过滤)
+     * @param maxProcessOrder 阶段过滤: 当前道工序序 (null = 不按阶段过滤; 返回 processOrder 严格小于此值的行)
+     * @return 过滤后的 WIP 重量视图 DTO 列表
+     */
+    List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder);
+
     // ==================== G3 小结 (interim-settle) — task-free SFI in/out ====================
 
     /**
