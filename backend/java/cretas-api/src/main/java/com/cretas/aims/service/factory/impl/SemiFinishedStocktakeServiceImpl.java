@@ -48,10 +48,12 @@ import java.util.UUID;
  *   <li>全链 factory-scoped (多租户隔离)</li>
  * </ul>
  *
- * <p><b>数量语义</b>: 生效时把 SFI 行的 {@code availableQuantity} 校准为 {@code actualQty} (盘点真值)。
- * 由于 {@code availableQuantity = producedQuantity - consumedQuantity} 是派生恒等式, 保持
- * {@code consumedQuantity} 不变, 反推 {@code producedQuantity = actualQty + consumedQuantity}。
- * 写一行 ADJUST 流水, {@code quantity = differenceQty} (可正可负), 不改成本口径 (纯数量校准)。
+ * <p><b>数量语义 (delta, 保住凭证+成本不变式)</b>: 生效时在锁定的 SFI 行上应用 delta 修正
+ * {@code availableQuantity_new = 当前 availableQuantity + (actualQty − systemQty快照)} (mirrors SP7),
+ * 保留 count 与 apply 之间的并发产出/领用。修正只累加进独立列 {@code adjustmentQuantity}
+ * (使 {@code produced − consumed + adjustment == availableQuantity_new}), <b>不动</b>
+ * {@code producedQuantity / consumedQuantity / accumulatedCost / unitCost} (它们喂
+ * 半成品入库/发出凭证 + unitCost 分母)。写一行 ADJUST 流水 {@code quantity = actualQty − systemQty}。
  */
 @Slf4j
 @Service
@@ -255,43 +257,52 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
                 continue;
             }
 
+            // delta 语义 (mirrors SP7 FactoryStocktakeServiceImpl:284): 重读锁定行当前余量,
+            // 应用 delta = actualQty − systemQty(快照差) → 保留 count 与 apply 之间的并发产出/领用
+            // (审批可能耗时数天, 绝对-set 会吞掉这期间的真实产出)。
+            BigDecimal delta = item.getDifferenceQty(); // = actualQty − systemQty
+            BigDecimal produced = nz(sfi.getProducedQuantity());
             BigDecimal consumed = nz(sfi.getConsumedQuantity());
-            // 盘点真值: availableQuantity 校准为 actualQty
-            BigDecimal targetAvailable = nz(item.getActualQty()).setScale(2, RoundingMode.HALF_UP);
-            if (targetAvailable.compareTo(BigDecimal.ZERO) < 0) {
-                targetAvailable = BigDecimal.ZERO;
+            BigDecimal currentAvail = nz(sfi.getAvailableQuantity());
+            BigDecimal newAvail = currentAvail.add(delta).setScale(2, RoundingMode.HALF_UP);
+            if (newAvail.signum() < 0) {
+                newAvail = BigDecimal.ZERO; // 防呆 not-below-zero
             }
-            // 保持 consumed 不变, 反推 produced = actual + consumed (维持派生恒等式)
-            BigDecimal newProduced = targetAvailable.add(consumed).setScale(2, RoundingMode.HALF_UP);
-
-            sfi.setProducedQuantity(newProduced);
-            sfi.setAvailableQuantity(targetAvailable);
+            // 🔴 Fix 1 (禁止降级, 保住凭证+成本不变式): 只动 adjustmentQuantity, 让
+            //   produced − consumed + adjustment == newAvail; producedQuantity/consumedQuantity/
+            //   accumulatedCost/unitCost 全部不动 (它们喂 VoucherExportServiceImpl 半成品入库/发出
+            //   凭证 + unitCost 分母)。盘盈/盘亏差异存于 ADJUST 流水; 盘盈=收入/盘亏=损耗 的
+            //   财务差异凭证是文档化的 FOLLOW-UP (SP7 原料盘点也不过账损益凭证)。
+            BigDecimal newAdjustment = newAvail.subtract(produced.subtract(consumed))
+                    .setScale(2, RoundingMode.HALF_UP);
+            sfi.setAdjustmentQuantity(newAdjustment);
+            sfi.setAvailableQuantity(newAvail);
             // 状态同步 (镜像 WipInventoryServiceImpl; 不覆盖 RETURNED)
             if (!SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
-                if (targetAvailable.compareTo(BigDecimal.ZERO) <= 0) {
+                if (newAvail.compareTo(BigDecimal.ZERO) <= 0) {
                     sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
                 } else {
                     sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
                 }
             }
-            sfiRepo.save(sfi); // @Version 乐观锁并发保护
+            sfiRepo.save(sfi); // @Version 乐观锁并发保护 (produced/consumed/成本 未改动)
 
-            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负; 纯数量校准, 不改成本口径)
+            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负 = 真实 delta; 纯数量校准, 不改成本口径)
             SemiFinishedInventoryTransaction txn = SemiFinishedInventoryTransaction.builder()
                     .factoryId(factoryId)
                     .semiFinishedId(sfi.getId())
                     .txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
                     .sourceType(SemiFinishedInventoryTransaction.SourceType.STOCKTAKE)
                     .sourceRef(stocktakeId)
-                    .quantity(item.getDifferenceQty())     // 可正可负
-                    .unitCostAtTxn(sfi.getUnitCost())      // 均价快照 (诚实 null 传播)
-                    .balanceAfter(targetAvailable)
+                    .quantity(delta)                       // 可正可负 = actualQty − systemQty
+                    .unitCostAtTxn(sfi.getUnitCost())      // 均价快照 (诚实 null 传播, 未改动)
+                    .balanceAfter(newAvail)
                     .balanceCostAfter(sfi.getUnitCost())
                     .operatorId(userId)
                     .build();
             sfiTxnRepo.save(txn);
-            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} diff={} newAvailable={}",
-                    factoryId, item.getIntermediateBatchNo(), item.getDifferenceQty(), targetAvailable);
+            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} delta={} newAvailable={} adjustment={}",
+                    factoryId, item.getIntermediateBatchNo(), delta, newAvail, newAdjustment);
         }
 
         stocktake.setStatus(SemiFinishedStocktake.Status.APPLIED);

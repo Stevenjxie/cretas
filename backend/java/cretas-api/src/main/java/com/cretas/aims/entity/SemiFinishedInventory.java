@@ -105,9 +105,25 @@ public class SemiFinishedInventory {
     @Column(name = "consumed_quantity", precision = 12, scale = 2)
     private BigDecimal consumedQuantity;
 
-    /** 余额 = produced − consumed (G7 结余; 防呆下道领用 :max) */
+    /** 余额 = produced − consumed + adjustment (G7 结余; 防呆下道领用 :max) */
     @Column(name = "available_quantity", precision = 12, scale = 2)
     private BigDecimal availableQuantity;
+
+    /**
+     * 盘点净修正量 (可正可负, default 0) — 半成品盘点专用。
+     *
+     * <p>本系统 {@code availableQuantity} 是"派生-on-mutation"字段 (每次 IN/OUT 由
+     * {@code producedQuantity − consumedQuantity} 重算)。盘点差异若直接写 availableQuantity
+     * 会被后续报工/领用重算覆盖; 且 producedQuantity/consumedQuantity/accumulatedCost/unitCost
+     * 喂 {@code VoucherExportServiceImpl} 半成品入库/发出凭证 + unitCost 分母, 盘点不得改动。
+     *
+     * <p>故盘点差异只累加进本列, 所有 availableQuantity 重算站点纳入本列:
+     * <pre>availableQuantity = producedQuantity − consumedQuantity + adjustmentQuantity</pre>
+     * → produced/consumed/成本 保持不变 (凭证+成本不变式保住), 修正持久 (重算不丢)。
+     */
+    @Column(name = "adjustment_quantity", precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal adjustmentQuantity = BigDecimal.ZERO;
 
     /** 滚动累计成本(人工+材料); null=无成本数据 (单元 A.2 地基; 算法在后续任务) */
     @Column(name = "accumulated_cost", precision = 14, scale = 2)

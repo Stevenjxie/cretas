@@ -831,7 +831,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         } else {
             sfi.setProducedQuantity(producedQty);  // BUG-R1 fix: 更新 IN 净额
             // R5 修复: 可用 = 净产出 − 已领用 OUT (clamp ≥0)。旧 bug 直接用净产出, 忽略 OUT → 幻影库存。
-            BigDecimal available = producedQty.subtract(consumedOut).max(BigDecimal.ZERO);
+            // 盘点修正量 (default 0) 纳入 (禁止 reversal 重算覆盖盘点修正; produced/成本不动)。
+            BigDecimal sfiAdj = sfi.getAdjustmentQuantity() != null ? sfi.getAdjustmentQuantity() : BigDecimal.ZERO;
+            BigDecimal available = producedQty.subtract(consumedOut).add(sfiAdj).max(BigDecimal.ZERO);
             sfi.setAvailableQuantity(available);
             // 修1 (honest-null 成本传导): 只要存在未知成本的产出量 → 成本不可信, 诚实置 null
             //   (不把未知量当 ¥0 稀释加权均价)。否则按已知成本算加权均价。

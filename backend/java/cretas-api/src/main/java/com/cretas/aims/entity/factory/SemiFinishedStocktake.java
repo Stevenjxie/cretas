@@ -56,6 +56,14 @@ public class SemiFinishedStocktake extends BaseEntity {
         if (id == null) id = UUID.randomUUID().toString();
     }
 
+    /**
+     * 乐观锁 (Fix 3): 防重复过账。两个并发 {@code apply} (双击 / REST 与 workflow callback 竞争)
+     * 都过 APPLIED 检查 → 第二个事务 save 时 version 冲突 → 回滚 (含其 ADJUST 流水), 唯一过账。
+     */
+    @jakarta.persistence.Version
+    @Column(name = "version")
+    private Long version;
+
     @Column(name = "factory_id", nullable = false, length = 64)
     private String factoryId;
 

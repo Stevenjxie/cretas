@@ -720,7 +720,8 @@ public class YieldReportServiceImpl implements YieldReportService {
             BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
             BigDecimal consumed = nz(wip.getConsumedQuantity());
             wip.setProducedQuantity(produced);
-            wip.setAvailableQuantity(produced.subtract(consumed));
+            // 盘点修正量 (default 0) 纳入余额 (禁止盘点修正被产出重算覆盖; produced/成本不动)
+            wip.setAvailableQuantity(produced.subtract(consumed).add(nz(wip.getAdjustmentQuantity())));
             // 重新累加产出后余额>0 → 回到 AVAILABLE (即便此前被领空 DEPLETED)
             if (wip.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
                     && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
@@ -757,7 +758,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         BigDecimal consumed = nz(sourceWip.getConsumedQuantity()).add(input);
         BigDecimal produced = nz(sourceWip.getProducedQuantity());
         sourceWip.setConsumedQuantity(consumed);
-        sourceWip.setAvailableQuantity(produced.subtract(consumed));
+        sourceWip.setAvailableQuantity(produced.subtract(consumed).add(nz(sourceWip.getAdjustmentQuantity())));
         if (sourceWip.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             sourceWip.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }

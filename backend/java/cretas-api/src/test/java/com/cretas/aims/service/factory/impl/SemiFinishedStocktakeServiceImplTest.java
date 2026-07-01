@@ -198,8 +198,8 @@ class SemiFinishedStocktakeServiceImplTest {
     // 6. apply APPROVED → ADJUST txn + availableQuantity=actualQty
     // -------------------------------------------------------
     @Test
-    @DisplayName("T6: apply APPROVED → 写 ADJUST/STOCKTAKE 流水 + availableQuantity=actualQty + produced=actual+consumed")
-    void apply_approved_writesAdjustTxn_andCalibratesSfi() {
+    @DisplayName("T6: apply APPROVED → ADJUST 流水 + available 校准; producedQuantity/consumedQuantity/成本 不变 (保凭证)")
+    void apply_approved_writesAdjustTxn_andDoesNotTouchProducedOrCost() {
         SemiFinishedStocktakeItem item = buildItem("40.0000");
         item.setActualQty(new BigDecimal("30.0000"));
         item.setDifferenceQty(new BigDecimal("-10.0000"));
@@ -211,6 +211,7 @@ class SemiFinishedStocktakeServiceImplTest {
                 .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
                 .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
                 .availableQuantity(new BigDecimal("40.00")).unitCost(new BigDecimal("12.5000"))
+                .accumulatedCost(new BigDecimal("625.00")).adjustmentQuantity(BigDecimal.ZERO)
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
@@ -221,7 +222,7 @@ class SemiFinishedStocktakeServiceImplTest {
 
         service.apply(st.getId(), FACTORY_ID, USER_ID);
 
-        // ADJUST/STOCKTAKE 流水
+        // ADJUST/STOCKTAKE 流水: quantity = 真实 delta (-10), balanceAfter = 30
         ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor =
                 ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
         verify(sfiTxnRepo).save(txnCaptor.capture());
@@ -234,13 +235,20 @@ class SemiFinishedStocktakeServiceImplTest {
         assertThat(txn.getUnitCostAtTxn().compareTo(new BigDecimal("12.5000"))).isEqualTo(0);
         assertThat(txn.getOperatorId()).isEqualTo(USER_ID);
 
-        // SFI 校准: available=actualQty(30), produced=actual+consumed(40)
+        // 🔴 Fix 1: available=30 (40+delta), adjustment=-10; produced/consumed/成本 全部不变
         ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
         verify(sfiRepo).save(sfiCaptor.capture());
         SemiFinishedInventory saved = sfiCaptor.getValue();
         assertThat(saved.getAvailableQuantity().compareTo(new BigDecimal("30.00"))).isEqualTo(0);
-        assertThat(saved.getProducedQuantity().compareTo(new BigDecimal("40.00"))).isEqualTo(0);
+        assertThat(saved.getAdjustmentQuantity().compareTo(new BigDecimal("-10.00"))).isEqualTo(0);
+        // 不变式: produced − consumed + adjustment == available
+        assertThat(saved.getProducedQuantity().subtract(saved.getConsumedQuantity())
+                .add(saved.getAdjustmentQuantity()).compareTo(new BigDecimal("30.00"))).isEqualTo(0);
+        // producedQuantity/consumedQuantity/accumulatedCost/unitCost UNCHANGED (喂凭证+成本)
+        assertThat(saved.getProducedQuantity().compareTo(new BigDecimal("50.00"))).isEqualTo(0);
         assertThat(saved.getConsumedQuantity().compareTo(new BigDecimal("10.00"))).isEqualTo(0);
+        assertThat(saved.getAccumulatedCost().compareTo(new BigDecimal("625.00"))).isEqualTo(0);
+        assertThat(saved.getUnitCost().compareTo(new BigDecimal("12.5000"))).isEqualTo(0);
         assertThat(saved.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
 
         // stocktake → APPLIED
@@ -251,7 +259,7 @@ class SemiFinishedStocktakeServiceImplTest {
     }
 
     @Test
-    @DisplayName("T6b: apply SURPLUS 且 available 归零→DEPLETED 语义 (actualQty=0)")
+    @DisplayName("T6b: apply available 归零→DEPLETED (actualQty=0); produced 不变")
     void apply_zeroActual_setsDepleted() {
         SemiFinishedStocktakeItem item = buildItem("40.0000");
         item.setActualQty(new BigDecimal("0.0000"));
@@ -263,7 +271,8 @@ class SemiFinishedStocktakeServiceImplTest {
         SemiFinishedInventory sfi = SemiFinishedInventory.builder()
                 .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
                 .producedQuantity(new BigDecimal("40.00")).consumedQuantity(new BigDecimal("0.00"))
-                .availableQuantity(new BigDecimal("40.00")).status(SemiFinishedInventory.Status.AVAILABLE)
+                .availableQuantity(new BigDecimal("40.00")).adjustmentQuantity(BigDecimal.ZERO)
+                .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
                 .thenReturn(Optional.of(sfi));
@@ -276,7 +285,84 @@ class SemiFinishedStocktakeServiceImplTest {
         ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
         verify(sfiRepo).save(sfiCaptor.capture());
         assertThat(sfiCaptor.getValue().getAvailableQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+        assertThat(sfiCaptor.getValue().getProducedQuantity().compareTo(new BigDecimal("40.00"))).isEqualTo(0); // 不变
+        assertThat(sfiCaptor.getValue().getAdjustmentQuantity().compareTo(new BigDecimal("-40.00"))).isEqualTo(0);
         assertThat(sfiCaptor.getValue().getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+    }
+
+    @Test
+    @DisplayName("T6c: delta 语义 — count 与 apply 之间的并发产出不丢 (available=current+delta, 非绝对-set)")
+    void apply_deltaSemantics_preservesConcurrentProduction() {
+        // 快照时 available=40 → systemQty=40; 仓管点数 35 → delta = -5
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("35.0000"));
+        item.setDifferenceQty(new BigDecimal("-5.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        // 审批期间又产出 +10 (produced 50→60, available 40→50)
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("60.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("50.00")).adjustmentQuantity(BigDecimal.ZERO)
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        verify(sfiRepo).save(sfiCaptor.capture());
+        SemiFinishedInventory saved = sfiCaptor.getValue();
+        // delta: 50 + (-5) = 45 (NOT 35 = 绝对-set to actualQty); 并发 +10 产出被保留
+        assertThat(saved.getAvailableQuantity().compareTo(new BigDecimal("45.00"))).isEqualTo(0);
+        assertThat(saved.getProducedQuantity().compareTo(new BigDecimal("60.00"))).isEqualTo(0); // 不变
+        assertThat(saved.getAdjustmentQuantity().compareTo(new BigDecimal("-5.00"))).isEqualTo(0);
+        // 不变式
+        assertThat(saved.getProducedQuantity().subtract(saved.getConsumedQuantity())
+                .add(saved.getAdjustmentQuantity()).compareTo(new BigDecimal("45.00"))).isEqualTo(0);
+
+        ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(sfiTxnRepo).save(txnCaptor.capture());
+        assertThat(txnCaptor.getValue().getQuantity().compareTo(new BigDecimal("-5.0000"))).isEqualTo(0);
+        assertThat(txnCaptor.getValue().getBalanceAfter().compareTo(new BigDecimal("45.00"))).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("T6d: 双次 apply — 第二次 409, ADJUST 流水恰好写一次 (幂等防重复过账)")
+    void apply_doubleApply_writesExactlyOneAdjustTxn() {
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("30.0000"));
+        item.setDifferenceQty(new BigDecimal("-10.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st)); // 同对象 → 第一次后置 APPLIED
+
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("50.00")).consumedQuantity(new BigDecimal("10.00"))
+                .availableQuantity(new BigDecimal("40.00")).adjustmentQuantity(BigDecimal.ZERO)
+                .status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID); // 第一次成功 → APPLIED
+        assertThatThrownBy(() -> service.apply(st.getId(), FACTORY_ID, USER_ID)) // 第二次
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode()).isEqualTo(409);
+
+        // ADJUST 流水恰好一次 (状态守卫 + @Version 兜真并发)
+        verify(sfiTxnRepo, times(1)).save(any());
     }
 
     // -------------------------------------------------------
