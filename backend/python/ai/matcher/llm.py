@@ -109,6 +109,7 @@ async def _call_llm(prompt: str, *, timeout_s: int, tier=None) -> str:
     TimeoutError on overall timeout) so caller's try/except can return [].
     """
     from common.llm_router import SLOT, call_chain  # type: ignore
+    from common.llm_metrics import llm_caller_context  # type: ignore
     from ai.router.llm_tier_selector import LlmTier
 
     # Tier-driven slot selection. Default (no tier) preserves α behavior:
@@ -126,7 +127,8 @@ async def _call_llm(prompt: str, *, timeout_s: int, tier=None) -> str:
         "max_tokens": 200,
         "response_format": {"type": "json_object"},
     }
-    resp = await call_chain(slot, payload, timeout=float(timeout_s))
+    with llm_caller_context("ai_matcher"):
+        resp = await call_chain(slot, payload, timeout=float(timeout_s))
     try:
         return resp["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as e:

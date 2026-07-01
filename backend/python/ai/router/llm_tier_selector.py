@@ -35,6 +35,7 @@ async def _call_classifier(query: str, timeout_s: int = 5) -> str:
     """Call small LLM via existing common/llm_router. SLOT.MAPPER routes to
     cheap fast model (qwen-turbo or equivalent)."""
     from common import llm_router  # type: ignore
+    from common.llm_metrics import llm_caller_context  # type: ignore
 
     messages = [
         {"role": "system", "content": CLASSIFIER_PROMPT},
@@ -42,10 +43,11 @@ async def _call_classifier(query: str, timeout_s: int = 5) -> str:
     ]
     payload = {"messages": messages, "temperature": 0.0, "max_tokens": 50}
 
-    response = await asyncio.wait_for(
-        llm_router.call_chain(llm_router.SLOT.MAPPER, payload),
-        timeout=timeout_s,
-    )
+    with llm_caller_context("llm_tier_selector"):
+        response = await asyncio.wait_for(
+            llm_router.call_chain(llm_router.SLOT.MAPPER, payload),
+            timeout=timeout_s,
+        )
     return response["choices"][0]["message"]["content"]
 
 
