@@ -39,30 +39,41 @@ CFG = {
     "tencent":  ("https://tokenhub.tencentmaas.com/v1", "LLM_TENCENT_API_KEY"),
     "zhipu":    ("https://open.bigmodel.cn/api/paas/v4", "LLM_ZHIPU_API_KEY"),
 }
+def _classify(sc, body):
+    """None = billing-safe (200 has-quota / 403 FreeTierOnly / 402 free-exhausted);
+    else a flag string. 404 NOSKU = retired; other = toggle flip / possible bill."""
+    if 200 <= sc < 300:
+        return None
+    if sc == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
+        return None
+    if sc == 402 and ("FREE_QUOTA_EXHAUSTED" in body or "Insufficient Balance" in body):
+        return None
+    return f"HTTP {sc} :: {body[:90]}"
+
 flags, safe = [], 0
-with httpx.Client(timeout=25.0) as cli:
+with httpx.Client(timeout=30.0) as cli:
     for account, model in pairs:
         base, kenv = CFG[account]
         key = os.environ.get(kenv, "")
         if not key:
             flags.append(f"{account}/{model}: NO-KEY({kenv})"); continue
-        try:
-            resp = cli.post(f"{base}/chat/completions",
-                            headers={"Authorization": f"Bearer {key}"},
-                            json={"model": model, "messages": [{"role": "user", "content": "hi"}],
-                                  "max_tokens": 1})
-            sc, body = resp.status_code, resp.text
-            if 200 <= sc < 300:
-                safe += 1                                  # confirmed free quota
-            elif sc == 403 and ("FreeTierOnly" in body or "AllocationQuota" in body):
-                safe += 1                                  # exhausted-but-free (safe)
-            elif sc == 402 and ("FREE_QUOTA_EXHAUSTED" in body or "Insufficient Balance" in body):
-                safe += 1                                  # tencent free trial exhausted (safe)
-            else:
-                # 404 NOSKU = model retired; anything else = toggle flip / possible bill
-                flags.append(f"{account}/{model}: HTTP {sc} :: {body[:90]}")
-        except Exception as e:
-            flags.append(f"{account}/{model}: ERR {type(e).__name__}")
+        payload = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
+        hdr = {"Authorization": f"Bearer {key}"}
+        result = "ERR unknown"
+        # Retry once on transient timeout/network error so a blip doesn't cry wolf —
+        # only a PERSISTENT bad status (real toggle flip / retired model) should flag.
+        for attempt in (1, 2):
+            try:
+                resp = cli.post(f"{base}/chat/completions", headers=hdr, json=payload)
+                result = _classify(resp.status_code, resp.text)
+                break                                      # got a real HTTP status → trust it
+            except Exception as e:
+                result = f"ERR {type(e).__name__} (x{attempt})"
+                # transient (timeout/connection) → retry once; a 2nd failure flags
+        if result is None:
+            safe += 1
+        else:
+            flags.append(f"{account}/{model}: {result}")
 
 age = (datetime.date.today() - r._REGISTRY_AUDIT_DATE).days
 print(f"[canary {datetime.date.today()}] {len(pairs)} entries · {safe} billing-safe · "
