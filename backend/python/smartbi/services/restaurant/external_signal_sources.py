@@ -69,6 +69,8 @@ PUBLIC_MALL_ACTIVITY_FEEDS = {
     "shanghai_nanjing_road": [
         "https://www.sh.chinanews.com.cn/yule/2026-06-27/147398.shtml",
         "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html",
+        "https://mp.weixin.qq.com/s/7hEP725t7TlzoeTVCxizxg",
+        "https://mp.weixin.qq.com/s/Kfh8T6fcZ4bSK0otaMJOOw",
     ]
 }
 
@@ -406,7 +408,8 @@ class RestaurantExternalSignalService:
                 )
                 continue
 
-            if not self._robots_allowed(raw_url):
+            direct_public_article = self._is_wechat_public_article_url(raw_url)
+            if not direct_public_article and not self._robots_allowed(raw_url):
                 sources.append(
                     {
                         "url": raw_url,
@@ -418,10 +421,7 @@ class RestaurantExternalSignalService:
 
             response = self._http_client.get(
                 raw_url,
-                headers={
-                    "User-Agent": self.mall_activity_user_agent,
-                    "Accept": "text/html,application/xhtml+xml",
-                },
+                headers=self._activity_request_headers(raw_url),
                 timeout=8.0,
             )
             status_code = int(getattr(response, "status_code", 200) or 200)
@@ -441,7 +441,11 @@ class RestaurantExternalSignalService:
             sources.append(
                 {
                     "url": raw_url,
-                    "status": "parsed" if event else "empty",
+                    "status": (
+                        "parsed_direct_public_article"
+                        if event and direct_public_article
+                        else "parsed" if event else "empty"
+                    ),
                     "reason": None if event else "页面里没有识别到活动标题。",
                 }
             )
@@ -463,6 +467,8 @@ class RestaurantExternalSignalService:
                 "noBypass": True,
                 "noLogin": True,
                 "robotsRespected": True,
+                "directSingleWechatArticles": True,
+                "wechatHistoryCrawling": False,
             },
         }
 
@@ -780,6 +786,28 @@ class RestaurantExternalSignalService:
             return "不抓取强平台内容；需要走官方授权、公开 API 或人工摘要。"
         return None
 
+    def _is_wechat_public_article_url(self, raw_url: str) -> bool:
+        parsed = urlparse(raw_url)
+        if parsed.netloc.lower() != "mp.weixin.qq.com":
+            return False
+        path = parsed.path.lower().rstrip("/")
+        return path == "/s" or path.startswith("/s/")
+
+    def _activity_request_headers(self, raw_url: str) -> dict[str, str]:
+        if self._is_wechat_public_article_url(raw_url):
+            return {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 "
+                    "CretasRestaurantSignalBot/1.0"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+            }
+        return {
+            "User-Agent": self.mall_activity_user_agent,
+            "Accept": "text/html,application/xhtml+xml",
+        }
+
     def _robots_allowed(self, raw_url: str) -> bool:
         parsed = urlparse(raw_url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
@@ -911,6 +939,28 @@ class RestaurantExternalSignalService:
                     match.group(0),
                     match.start(),
                     date(year, 1, 1),
+                    date(year, end_month, end_day),
+                    target_day,
+                )
+            )
+            occupied_spans.append(match.span())
+
+        year_range_pattern = re.compile(
+            r"(?:\d{4}年)?(?P<sm>\d{1,2})月(?P<sd>\d{1,2})日\s*[-—~至到]\s*"
+            r"(?:\d{4}年)?(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日"
+        )
+        for match in year_range_pattern.finditer(text):
+            if self._is_span_inside(match.span(), occupied_spans):
+                continue
+            start_month = int(match.group("sm"))
+            start_day = int(match.group("sd"))
+            end_month = int(match.group("em") or start_month)
+            end_day = int(match.group("ed"))
+            candidates.append(
+                self._activity_candidate(
+                    f"{start_month}月{start_day}日-{end_month}月{end_day}日",
+                    match.start(),
+                    date(year, start_month, start_day),
                     date(year, end_month, end_day),
                     target_day,
                 )

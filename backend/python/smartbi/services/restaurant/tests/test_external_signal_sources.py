@@ -493,6 +493,43 @@ def test_collect_mall_activity_feeds_respects_robots_disallow() -> None:
     assert [call["url"] for call in client.calls] == ["https://mall.example/robots.txt"]
 
 
+def test_collect_mall_activity_feeds_crawls_single_public_wechat_article() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mp.weixin.qq.com/s/abc123": """
+                <html>
+                  <head><title>今天10点！南京路线上消费券准时开抢！！！</title></head>
+                  <body>
+                    <div id="js_content">
+                      <p>SHANGHAI 南京路步行街消费券</p>
+                      <p>使用时间：2026年2月6日-2026年2月8日10:00-22:00</p>
+                      <p>第一百货商业中心参与活动。</p>
+                    </div>
+                  </body>
+                </html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路",
+            mall_name="第一百货商业中心",
+            target_date="2026-02-06",
+        ),
+        feed_urls=["https://mp.weixin.qq.com/s/abc123"],
+    )
+
+    assert result["status"] == "collected"
+    assert result["events"][0]["title"] == "今天10点！南京路线上消费券准时开抢！！！"
+    assert result["events"][0]["dateText"] == "2月6日-2月8日"
+    assert result["events"][0]["targetRelevance"] == "active"
+    assert result["sources"][0]["status"] == "parsed_direct_public_article"
+    assert [call["url"] for call in client.calls] == ["https://mp.weixin.qq.com/s/abc123"]
+
+
 def test_collect_mall_activity_feeds_rejects_wechat_history_crawling() -> None:
     client = FakeCrawlerClient({})
     service = RestaurantExternalSignalService(http_client=client)
