@@ -351,12 +351,28 @@ export interface SemiFinishedStockItem {
 }
 
 /**
+ * 半成品重量库存查询防呆过滤 (07-01 客户会议需求)。省略字段 → 后端不按该维度过滤。
+ */
+export interface SemiFinishedInventoryFilter {
+  /** 同类: 计划产品类型 id → 只列同产品半成品 (猪蹄计划不显牛肉)。 */
+  productTypeId?: string;
+  /** 阶段: 当前道工序序 → 只列 processOrder 严格小于此值的更早阶段半成品 (防回锅)。 */
+  maxProcessOrder?: number;
+}
+
+/**
  * 工厂级半成品重量库存快照 (全状态; 调用方按 availableQuantity>0 过滤可投料项)。
  * GET /{factoryId}/semi-finished/inventory
  * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
+ *
+ * @param filter 可选防呆过滤 (同类 productTypeId + 阶段 maxProcessOrder)。省略 → 全量快照 (向后兼容)。
  */
 export function getSemiFinishedInventory(
   factoryId: string,
+  filter?: SemiFinishedInventoryFilter,
 ): Promise<ApiResponse<SemiFinishedStockItem[]>> {
-  return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`);
+  const params: Record<string, string | number> = {};
+  if (filter?.productTypeId) params.productTypeId = filter.productTypeId;
+  if (filter?.maxProcessOrder != null) params.maxProcessOrder = filter.maxProcessOrder;
+  return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`, { params });
 }

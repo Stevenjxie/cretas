@@ -12,6 +12,7 @@ import {
   type ProcessSheetRowHistoryView,
   type RawMaterialBatchOption,
   type SemiFinishedStockItem,
+  type SemiFinishedInventoryFilter,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
@@ -854,7 +855,15 @@ async function loadSfiOptions() {
   const seq = ++sfiLoadSeq;
   sfiLoading.value = true;
   try {
-    const resp = await getSemiFinishedInventory(props.factoryId);
+    // 防呆过滤 (07-01 客户会议): 只列同类产品(猪蹄不显牛肉) + 对应阶段(防回锅) 的半成品。
+    //   同类: 传当前计划 productTypeId → 后端仅返回同产品半成品。
+    //   阶段: 仅当本道 processOrder 为正整数时传 → 后端仅返回更早阶段 (processOrder < 本道)。
+    //         processOrder 缺失/为0 (链起步/未配) → 省略, 只按同类过滤 (务实: 不因缺阶段信息而清空可选项)。
+    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId };
+    if (typeof props.processOrder === 'number' && props.processOrder > 0) {
+      filter.maxProcessOrder = props.processOrder;
+    }
+    const resp = await getSemiFinishedInventory(props.factoryId, filter);
     if (seq !== sfiLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
     sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0);

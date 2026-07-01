@@ -982,9 +982,31 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     @Override
     public List<WipRowDTO> listWipByFactory(String factoryId) {
+        return listWipByFactory(factoryId, null, null);
+    }
+
+    @Override
+    public List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder) {
         List<SemiFinishedInventory> rows = wipRepo.findByFactoryIdForWeightView(factoryId);
         if (rows.isEmpty()) {
             return List.of();
+        }
+
+        // 防呆过滤 (可选) — 逐道 SFI 投料下拉收窄可选半成品:
+        //   同类: productTypeId 非空 → 仅同产品半成品 (猪蹄计划不显牛肉); null productTypeId 行严格排除。
+        //   阶段: maxProcessOrder 非空 → 仅更早阶段 (processOrder < max, 防回锅); null processOrder 行严格排除。
+        // 两者皆 null → 全量 (向后兼容)。见接口 javadoc 说明信号来源。
+        final boolean filterType = productTypeId != null && !productTypeId.isBlank();
+        final boolean filterStage = maxProcessOrder != null;
+        if (filterType || filterStage) {
+            rows = rows.stream()
+                    .filter(w -> !filterType || productTypeId.equals(w.getProductTypeId()))
+                    .filter(w -> !filterStage
+                            || (w.getProcessOrder() != null && w.getProcessOrder() < maxProcessOrder))
+                    .collect(Collectors.toList());
+            if (rows.isEmpty()) {
+                return List.of();
+            }
         }
 
         // 批量取 productType 名称 — 避免 N+1

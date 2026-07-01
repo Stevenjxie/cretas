@@ -111,6 +111,28 @@ public interface WipInventoryService {
      */
     List<WipRowDTO> listWipByFactory(String factoryId);
 
+    /**
+     * C3 + 防呆过滤 — 工厂级半成品重量库存视图 (可选 同类 + 阶段 过滤)。
+     *
+     * <p>逐道录入 SFI 投料下拉据此收窄可选半成品, 防低素养操作员误选 (07-01 客户会议防呆需求):
+     * <ul>
+     *   <li><b>同类</b> ({@code productTypeId} 非空): 仅返回同产品的半成品 (猪蹄计划不显牛肉半成品)。
+     *       半成品 {@code productTypeId} 承载所属计划的产品类型 (同链各道共享同一 productTypeId,
+     *       仅 processOrder 不同), 故同 productTypeId 即"同类"且使 processOrder 可跨计划比较。
+     *       <b>严格排除</b> {@code productTypeId} 为 null 的行 (无法确认同类 → 防呆宁缺勿滥)。</li>
+     *   <li><b>阶段</b> ({@code maxProcessOrder} 非空): 仅返回更早阶段 ({@code processOrder < maxProcessOrder})
+     *       的半成品 —— 半成品只能前向投喂 (阶段产出), 不能把后道半成品回锅进前道。
+     *       <b>严格排除</b> {@code processOrder} 为 null 的行 (无法确认阶段 → 防回锅)。</li>
+     * </ul>
+     * 两参数均为 null → 等价 {@link #listWipByFactory(String)} (全量, 向后兼容)。
+     *
+     * @param factoryId       工厂 ID
+     * @param productTypeId   同类过滤: 计划产品类型 id (null/空白 = 不按同类过滤)
+     * @param maxProcessOrder 阶段过滤: 当前道工序序 (null = 不按阶段过滤; 返回 processOrder 严格小于此值的行)
+     * @return 过滤后的 WIP 重量视图 DTO 列表
+     */
+    List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder);
+
     // ==================== G3 小结 (interim-settle) — task-free SFI in/out ====================
 
     /**

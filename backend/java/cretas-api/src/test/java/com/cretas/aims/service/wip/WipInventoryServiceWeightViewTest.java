@@ -204,6 +204,122 @@ class WipInventoryServiceWeightViewTest {
     }
 
     @Nested
+    @DisplayName("防呆过滤 (同类 productTypeId + 阶段 maxProcessOrder)")
+    class FoolProofFilter {
+
+        private SemiFinishedInventory rowWithOrder(Long id, String ptId, Integer order) {
+            SemiFinishedInventory w = wipRow(id, ptId, 40L,
+                    new BigDecimal("50"), BigDecimal.ZERO, new BigDecimal("50"), "AVAILABLE");
+            w.setProcessOrder(order);
+            return w;
+        }
+
+        @Test
+        @DisplayName("无过滤参数 (null,null) → 全部返回 (向后兼容, 与单参重载一致)")
+        void noParams_returnsAll() {
+            List<SemiFinishedInventory> rows = List.of(
+                    rowWithOrder(1L, "PT-ZHUTI", 2),
+                    rowWithOrder(2L, "PT-NIUROU", 2));
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(rows);
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄"), pt("PT-NIUROU", "卤牛肉")));
+
+            assertThat(service.listWipByFactory(FACTORY_ID, null, null)).hasSize(2);
+            assertThat(service.listWipByFactory(FACTORY_ID)).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("同类 productTypeId → 只返回同产品半成品 (猪蹄计划不显牛肉)")
+        void typeFilter_sameProductOnly() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-ZHUTI", 2),
+                    rowWithOrder(2L, "PT-NIUROU", 2)));
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getProductTypeId()).isEqualTo("PT-ZHUTI");
+        }
+
+        @Test
+        @DisplayName("阶段 maxProcessOrder → 只返回更早阶段 (processOrder < max, 防回锅)")
+        void stageFilter_earlierStagesOnly() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-A", 1),
+                    rowWithOrder(2L, "PT-A", 2),
+                    rowWithOrder(3L, "PT-A", 3),   // == current 道, 排除
+                    rowWithOrder(4L, "PT-A", 4)));  // 后道, 排除 (防回锅)
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-A", "卤猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, null, 3);
+
+            assertThat(result).extracting(WipRowDTO::getProcessOrder)
+                    .containsExactlyInAnyOrder(1, 2);
+        }
+
+        @Test
+        @DisplayName("同类 + 阶段 组合 → 同产品且更早阶段")
+        void typeAndStage_combined() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-ZHUTI", 1),   // ✓ 同类且更早
+                    rowWithOrder(2L, "PT-ZHUTI", 5),   // ✗ 同类但后道
+                    rowWithOrder(3L, "PT-NIUROU", 1))); // ✗ 更早但异类
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", 3);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-1");
+        }
+
+        @Test
+        @DisplayName("null productTypeId 行在同类过滤下严格排除 (防呆宁缺勿滥)")
+        void typeFilter_strictExcludesNullProductType() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, null, 2),
+                    rowWithOrder(2L, "PT-ZHUTI", 2)));
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-ZHUTI", "卤猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-2");
+        }
+
+        @Test
+        @DisplayName("null processOrder 行在阶段过滤下严格排除 (无法确认阶段 → 防回锅)")
+        void stageFilter_strictExcludesNullProcessOrder() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID)).thenReturn(List.of(
+                    rowWithOrder(1L, "PT-A", null),
+                    rowWithOrder(2L, "PT-A", 1)));
+            when(productTypeRepo.findByIdIn(anyCollection()))
+                    .thenReturn(List.of(pt("PT-A", "卤猪蹄")));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, null, 3);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getIntermediateBatchNo()).isEqualTo("IB-2");
+        }
+
+        @Test
+        @DisplayName("过滤后为空 → 返回空 List 且不查 productTypeRepo (短路)")
+        void filteredToEmpty_noProductTypeQuery() {
+            when(wipRepo.findByFactoryIdForWeightView(FACTORY_ID))
+                    .thenReturn(List.of(rowWithOrder(1L, "PT-NIUROU", 2)));
+
+            List<WipRowDTO> result = service.listWipByFactory(FACTORY_ID, "PT-ZHUTI", null);
+
+            assertThat(result).isEmpty();
+            verify(productTypeRepo, never()).findByIdIn(anyCollection());
+        }
+    }
+
+    @Nested
     @DisplayName("全状态覆盖 (AVAILABLE/DEPLETED/RETURNED)")
     class AllStatuses {
 
