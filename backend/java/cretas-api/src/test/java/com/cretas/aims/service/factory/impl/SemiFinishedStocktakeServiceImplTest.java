@@ -551,6 +551,63 @@ class SemiFinishedStocktakeServiceImplTest {
         verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
+    @Test
+    @DisplayName("TV5: 盘亏 |delta|>currentAvail (并发耗尽 → 重读余量已低于快照) — clamp 到 0; "
+            + "ADJUST txn 与凭证按 realizedDelta(=−currentAvail) 过账, 不高估损耗, 借=贷平")
+    void apply_shortageExceedsAvail_booksRealizedDelta_notRawDelta() {
+        // 快照 systemQty=40, 仓管点数 5 → delta = −35 (盘亏 35)
+        SemiFinishedStocktakeItem item = buildItem("40.0000");
+        item.setActualQty(new BigDecimal("5.0000"));
+        item.setDifferenceQty(new BigDecimal("-35.0000"));
+        item.setDifferenceType(SemiFinishedStocktakeItem.DifferenceType.SHORTAGE);
+        SemiFinishedStocktake st = buildStocktake(SemiFinishedStocktake.Status.APPROVED, item);
+        when(stocktakeRepo.findById(st.getId())).thenReturn(Optional.of(st));
+
+        // 审批期间被并发领用耗尽: 重读时 available 只剩 20 (< |delta|=35)。unitCost=8。
+        //   currentAvail=20, delta=−35 → newAvail=max(0, 20−35)=0 → realizedDelta = 0−20 = −20。
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .id(100L).factoryId(FACTORY_ID).intermediateBatchNo(BATCH_NO)
+                .producedQuantity(new BigDecimal("60.00")).consumedQuantity(new BigDecimal("40.00"))
+                .availableQuantity(new BigDecimal("20.00")).unitCost(new BigDecimal("8.0000"))
+                .adjustmentQuantity(BigDecimal.ZERO).status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        when(sfiRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, BATCH_NO))
+                .thenReturn(Optional.of(sfi));
+        when(sfiRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sfiTxnRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stocktakeRepo.save(any())).thenReturn(st);
+
+        service.apply(st.getId(), FACTORY_ID, USER_ID);
+
+        // 库存 clamp 到 0 → DEPLETED
+        ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
+        verify(sfiRepo).save(sfiCaptor.capture());
+        assertThat(sfiCaptor.getValue().getAvailableQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+        assertThat(sfiCaptor.getValue().getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+
+        // ADJUST txn 按 realizedDelta=−20 (NOT raw −35); 台账不变式 balanceAfter=balanceBefore+quantity
+        ArgumentCaptor<SemiFinishedInventoryTransaction> txnCaptor =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(sfiTxnRepo).save(txnCaptor.capture());
+        assertThat(txnCaptor.getValue().getQuantity().compareTo(new BigDecimal("-20.00"))).isEqualTo(0);
+        assertThat(txnCaptor.getValue().getBalanceAfter().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+
+        // 凭证按 realizedDelta 估值: 盘亏 = |−20 × 8| = 160.00 (NOT |−35 × 8| = 280) → 不高估损耗
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> entriesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), entriesCaptor.capture(), eq("SEMI_FINISHED_STOCKTAKE"), eq(st.getId()),
+                anyString(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = entriesCaptor.getValue();
+        assertThat(entries).hasSize(2);
+        assertThat(entries.get(0).subjectCode()).isEqualTo("6602.01");
+        assertThat(entries.get(0).debit().compareTo(new BigDecimal("160.00"))).isEqualTo(0);
+        assertThat(entries.get(1).subjectCode()).isEqualTo("1405");
+        assertThat(entries.get(1).credit().compareTo(new BigDecimal("160.00"))).isEqualTo(0);
+        // 借=贷平
+        assertThat(entries.get(0).debit().compareTo(entries.get(1).credit())).isEqualTo(0);
+    }
+
     // -------------------------------------------------------
     // 7. apply 非 APPROVED → 409
     // -------------------------------------------------------

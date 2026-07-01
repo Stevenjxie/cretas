@@ -277,6 +277,12 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             if (newAvail.signum() < 0) {
                 newAvail = BigDecimal.ZERO; // 防呆 not-below-zero
             }
+            // realizedDelta = 实际发生的余量变化 (clamp 后)。盘盈/未触底盘亏 == delta;
+            //   盘亏 |delta|>currentAvail (并发耗尽) 时 clamp 到 0 → realizedDelta = −currentAvail (< |delta|)。
+            //   台账 ADJUST 流水 + 盘盈/盘亏凭证 都用 realizedDelta, 保证三者 (库存变动/流水/凭证) 一致,
+            //   不按未真实发生的 raw delta 高估损耗 (禁止降级: 记账必须等于实际发生)。
+            //   不变式 balanceAfter(newAvail) == balanceBefore(currentAvail) + realizedDelta 也因此成立。
+            BigDecimal realizedDelta = newAvail.subtract(currentAvail);
             // 🔴 Fix 1 (禁止降级, 保住凭证+成本不变式): 只动 adjustmentQuantity, 让
             //   produced − consumed + adjustment == newAvail; producedQuantity/consumedQuantity/
             //   accumulatedCost/unitCost 全部不动 (它们喂 VoucherExportServiceImpl 半成品入库/发出
@@ -296,32 +302,33 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             }
             sfiRepo.save(sfi); // @Version 乐观锁并发保护 (produced/consumed/成本 未改动)
 
-            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负 = 真实 delta; 纯数量校准, 不改成本口径)
+            // 写预留的 ADJUST/STOCKTAKE 流水 (可正可负 = 实际发生的 realizedDelta; 纯数量校准, 不改成本口径)
             SemiFinishedInventoryTransaction txn = SemiFinishedInventoryTransaction.builder()
                     .factoryId(factoryId)
                     .semiFinishedId(sfi.getId())
                     .txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
                     .sourceType(SemiFinishedInventoryTransaction.SourceType.STOCKTAKE)
                     .sourceRef(stocktakeId)
-                    .quantity(delta)                       // 可正可负 = actualQty − systemQty
+                    .quantity(realizedDelta)               // 实际余量变化 (clamp 后; balanceAfter=before+quantity)
                     .unitCostAtTxn(sfi.getUnitCost())      // 均价快照 (诚实 null 传播, 未改动)
                     .balanceAfter(newAvail)
                     .balanceCostAfter(sfi.getUnitCost())
                     .operatorId(userId)
                     .build();
             sfiTxnRepo.save(txn);
-            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} delta={} newAvailable={} adjustment={}",
-                    factoryId, item.getIntermediateBatchNo(), delta, newAvail, newAdjustment);
+            log.info("半成品盘点 apply: SFI ADJUST factoryId={} batchNo={} realizedDelta={} (rawDelta={}) newAvailable={} adjustment={}",
+                    factoryId, item.getIntermediateBatchNo(), realizedDelta, delta, newAvail, newAdjustment);
 
             // 差异估值 (禁止降级/诚实 null): unitCost=null (未计成本半成品) 无法估值 →
-            //   排除出财务凭证 (数量已调整), 绝不臆造价值。value = delta × unitCost。
+            //   排除出财务凭证 (数量已调整), 绝不臆造价值。value = realizedDelta × unitCost
+            //   (按实际发生的余量变化估值, 盘亏超可用量 clamp 时不高估损耗)。
             BigDecimal unitCost = sfi.getUnitCost();
             if (unitCost == null) {
                 uncostedCount++;
                 log.warn("半成品盘点 apply: SFI unitCost=null 未计成本, 差异行排除出财务凭证 (数量仍调整) "
-                        + "factoryId={} batchNo={} delta={}", factoryId, item.getIntermediateBatchNo(), delta);
+                        + "factoryId={} batchNo={} realizedDelta={}", factoryId, item.getIntermediateBatchNo(), realizedDelta);
             } else {
-                BigDecimal itemValue = delta.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal itemValue = realizedDelta.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
                 valuedCount++;
                 if (itemValue.signum() > 0) {
                     surplusValue = surplusValue.add(itemValue);
