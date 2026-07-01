@@ -122,7 +122,7 @@ import {
 } from '@/api/processProduction';
 import type { TableRow } from '@/types/api';
 
-// 产品分类定义
+// 产品分类定义 (全量 — 仅用于标签渲染/历史数据兼容; 原料/包辅材/调味品 是遗留物料类, 物料应在"原料类型字典"管理)
 const PRODUCT_CATEGORIES = [
   { value: 'FINISHED_PRODUCT', label: '成品' },
   { value: 'RAW_MATERIAL', label: '原料' },
@@ -131,6 +131,12 @@ const PRODUCT_CATEGORIES = [
   { value: 'CUSTOMER_MATERIAL', label: '客户自带原料加工' },
   { value: 'CONTRACT_MANUFACTURING', label: '纯代工' }
 ] as const;
+
+// 产品管理只展示"产出类"(成品/纯代工/客供料). 原料/包辅材/调味品 属物料(投入), 归"原料类型字典"页管理,
+// 不在产品里录 —— 产品是产品, 产品"用"原料(经 BOM 关联), 二者不混。
+const PRODUCT_TABS = PRODUCT_CATEGORIES.filter(
+  c => c.value === 'FINISHED_PRODUCT' || c.value === 'CONTRACT_MANUFACTURING' || c.value === 'CUSTOMER_MATERIAL'
+);
 
 type ProductCategory = typeof PRODUCT_CATEGORIES[number]['value'];
 
@@ -1241,7 +1247,7 @@ async function handleAiProductCreate() {
       <div class="category-tabs">
         <el-tabs v-model="activeTab" @tab-change="handleTabChange">
           <el-tab-pane
-            v-for="category in PRODUCT_CATEGORIES"
+            v-for="category in PRODUCT_TABS"
             :key="category.value"
             :label="category.label"
             :name="category.value"
@@ -1391,7 +1397,7 @@ async function handleAiProductCreate() {
         <el-form-item label="产品大类" prop="productCategory">
           <el-select v-model="formData.productCategory" placeholder="请选择产品大类" style="width: 100%" @change="handleCategoryChange">
             <el-option
-              v-for="category in PRODUCT_CATEGORIES"
+              v-for="category in PRODUCT_TABS"
               :key="category.value"
               :label="category.label"
               :value="category.value"
