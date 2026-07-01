@@ -1,9 +1,11 @@
 package com.cretas.aims.service.yield;
 
+import com.cretas.aims.dto.processentry.LaborSegment;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -14,10 +16,14 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.InterimSettleServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -81,6 +87,12 @@ class InterimSettleServiceTest {
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private WipInventoryService wipInventoryService;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private ProductionBatchRepository batchRepository;
+    @Mock private ClerkProcessEntryService clerkProcessEntryService;
+    @Mock private ProductWorkProcessRepository productWorkProcessRepository;
+    @Mock private WorkProcessRepository workProcessRepository;
+
+    private static final BigDecimal LABOR_RATE = new BigDecimal("20");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private InterimSettleServiceImpl service;
@@ -93,7 +105,13 @@ class InterimSettleServiceTest {
         service = new InterimSettleServiceImpl(
                 planRepository, rowRepository, consumptionRepository, materialBatchRepository,
                 settlementRepository, finishedGoodsBatchRepository, productTypeRepository,
-                wipInventoryService, warehouseResolver, objectMapper);
+                wipInventoryService, warehouseResolver, objectMapper,
+                batchRepository, clerkProcessEntryService,
+                productWorkProcessRepository, workProcessRepository);
+
+        // 工时单价解析 (纯 SFI 中间道人工现算用); 默认按 payload laborSegments 现算真实人工。
+        when(clerkProcessEntryService.resolveLaborRate(eq(FACTORY), any())).thenReturn(LABOR_RATE);
+        when(clerkProcessEntryService.computeLaborCost(any(), any())).thenReturn(BigDecimal.ZERO);
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -399,6 +417,173 @@ class InterimSettleServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // 🔴 成本传导 (G3 SFI cost transmission) — 诚实 null
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("成本传导(a): 纯SFI中间道 (吃 costed SFI + 人工) → postClerkOutput 带真实 unitCost (非 null)")
+    void sfiInCarriesRealMovingAverageCost() {
+        // 道M: SAVED_SFI, 吃常驻 SFI-A (unitCost=10) feed 50 + 本道人工 100 → 产出 40。
+        //   outputTotalCost = 人工100 + 50×10(=500) = 600; outputUnitCost = 600/40 = 15.0000。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));  // 现算人工 (mock 覆写为 100)
+        ProcessSheetRow rM = pureSfiRow(50L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // costed 输入 SFI + 本道人工现算
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 输入 SFI 扣减 (严格)
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-A"), eq(new BigDecimal("50")));
+        // 产出入 SFI: net 40 @ unitCost 15 (真实成本传导, 非 null)
+        ArgumentCaptor<BigDecimal> unitCostCap = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                unitCostCap.capture(), eq(null));
+        assertThat(unitCostCap.getValue()).isNotNull();
+        assertThat(unitCostCap.getValue()).isEqualByComparingTo("15");
+    }
+
+    @Test
+    @DisplayName("成本传导(b) 链: 半成品A(costed) → 道 → SFI-B → 气调成品(FG) → FG.unitCost 含传导成本")
+    void chainTransmitsCostThroughToFinishedGoods() {
+        String anchorB = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        // 小结1: 道A (SAVED_SFI) 吃 RAW-SEMI(unitCost 5) feed 100, 无人工 → 产出 80 → 入 anchorB。
+        //   outputUnitCost = (0 + 100×5)/80 = 500/80 = 6.25
+        ProcessSheetRow rA = pureSfiRow(60L, 1, anchorB,
+                reqNonFinished(1, anchorB, new BigDecimal("80"), upstreamSemi("RAW-SEMI", "100")));
+        // 小结2: 道C 成品, 吃 anchorB(=半成品B, semiFinished) feed 80, productWeight 10kg → FG。
+        //   pb.totalCost(人工/调料) = 40; FG total = 40 + 80×6.25(=500) = 540; FG unitCost = 540/10 = 54。
+        ProcessSheetRow rC = row(61L, 2, "CLK-B-C", reqFinished(2, "CLK-B-C", new BigDecimal("50"),
+                new BigDecimal("10"), upstreamSemi(anchorB, "80")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(rA))            // 小结1
+                .thenReturn(List.of(rA, rC));        // 小结2
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>()).thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "RAW-SEMI")).thenReturn(new BigDecimal("5"));
+        // 半成品B 的移动均价 (小结1 postClerkOutput 6.25 累加后; postClerkOutput 已 mock, 故此处代表其结果)
+        when(wipInventoryService.getSemiUnitCost(FACTORY, anchorB)).thenReturn(new BigDecimal("6.25"));
+        // 道C 成品的 ProductionBatch 成本 (人工/调料, 不含 SFI 投料)
+        ProductionBatch pbC = new ProductionBatch();
+        pbC.setId(61L);
+        pbC.setFactoryId(FACTORY);
+        pbC.setTotalCost(new BigDecimal("40.00"));
+        when(batchRepository.findByIdAndFactoryId(61L, FACTORY)).thenReturn(Optional.of(pbC));
+
+        // ── 小结1: 道A 产出入 anchorB @ 6.25 ──
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+        ArgumentCaptor<BigDecimal> ucA = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchorB), eq(PRODUCT_TYPE), eq(new BigDecimal("80")), any(),
+                ucA.capture(), eq(null));
+        assertThat(ucA.getValue()).isEqualByComparingTo("6.25");
+
+        // ── 小结2: 道C 成品 → FG.unitCost 含传导成本 = 54 ──
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        FinishedGoodsBatch fg = fgCap.getValue();
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("10");
+        assertThat(fg.getUnitCost()).isNotNull();
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("54"); // (40 + 80×6.25) / 10
+    }
+
+    @Test
+    @DisplayName("成本传导(c) 诚实null: 输入 SFI 无成本(unitCost=null) → 产出 unitCost null (不伪造 ¥0), 即便本道有人工")
+    void nullCostSfiInputPoisonsOutputToNull() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("LEGACY-SFI", "50"));
+        req.setLaborSegments(List.of(seg("08:00", "10:00", 2)));  // 有人工, 但输入 SFI 无成本 → 整体诚实 null
+        ProcessSheetRow rM = pureSfiRow(70L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 旧库存: 输入 SFI unitCost 为 null (未接通成本)
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "LEGACY-SFI")).thenReturn(null);
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("50"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 🔴 诚实 null: 输入无成本 → postClerkOutput 收到 unitCost = null (不因有人工而伪造部分成本)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(isSeasoningStep) → 产出 null (不漏调料桶=禁止降级), 即便SFI成本+人工皆已知")
+    void pureSfiSeasoningStepByFlagReturnsNull() {
+        // 纯 SFI 调味道: SFI 投料有成本(10) + 人工有(100), 但调味道调料成本无处可算 → 整道诚实 null。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setSeasoningStep(true);                             // 前端显式调味标志
+        req.setLaborSegments(List.of(seg("08:00", "10:00", 1)));
+        ProcessSheetRow rM = pureSfiRow(80L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 🔴 调味道调料桶未知 → null (不降级成 labor-only=(100+500)/40=15 假数据)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(工序名'卤制'匹配) → 产出 null (工序名口径同 buildStepEntry)")
+    void pureSfiSeasoningStepByNameReturnsNull() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setProcessName("卤制");                              // 工序名匹配 熟/卤/煮/腌/注射/入味/调味
+        ProcessSheetRow rM = pureSfiRow(81L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7): 纯SFI非调味道(工序名'切片'不匹配) → 仍走 labor+SFI 成本 (不误伤非调味道)")
+    void pureSfiNonSeasoningStepStillCosted() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setProcessName("切片");                              // 非调味 → 仍现算成本
+        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));
+        ProcessSheetRow rM = pureSfiRow(82L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 非调味道: (人工100 + 50×10) / 40 = 15 (成本正常传导, 不被 Fix1 误伤)
+        ArgumentCaptor<BigDecimal> uc = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                uc.capture(), eq(null));
+        assertThat(uc.getValue()).isEqualByComparingTo("15");
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Builders
     // ─────────────────────────────────────────────────────────────
 
@@ -457,6 +642,14 @@ class InterimSettleServiceTest {
         req.setProductWeight(productWeight);
         req.setUpstreamSources(upstream);
         return req;
+    }
+
+    private LaborSegment seg(String start, String end, int workers) {
+        LaborSegment s = new LaborSegment();
+        s.setStartTime(start);
+        s.setEndTime(end);
+        s.setWorkerCount(workers);
+        return s;
     }
 
     private List<UpstreamRef> upstream(String sourceBatchNumber, String feedKg) {

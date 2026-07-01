@@ -100,4 +100,17 @@ public interface ClerkProcessEntryService {
      * @return 仓库 ID
      */
     String resolveWarehouseId(String factoryId, String code, List<String> warnings);
+
+    /**
+     * 多时段工时 → 人工成本 (SP-F Task 1.4; 暴露给小结成本传导复用, 单一真相)。
+     *
+     * <p>每段: (end-start 分钟 / 60) × workerCount → 小时 (scale 4, HALF_UP); Σ 全段 × rate, 最终 setScale(2, HALF_UP)。
+     * 与 {@code materializeBatch} 物化时的人工算式字节一致 —— 纯 SFI 中间道 (SAVED_SFI, 不物化) 的人工从未落库,
+     * 小结成本传导须按同算式从 payload 的 laborSegments 现算, 保证与物化道成本口径一致。
+     *
+     * @param segments 多时段工时 (null/空 → 0)
+     * @param rate     工时单价 (¥/工时, 非 null; 由 {@link #resolveLaborRate} 解析)
+     * @return 人工成本 (scale 2, HALF_UP; 无有效段 → 0)
+     */
+    BigDecimal computeLaborCost(java.util.List<com.cretas.aims.dto.processentry.LaborSegment> segments, BigDecimal rate);
 }

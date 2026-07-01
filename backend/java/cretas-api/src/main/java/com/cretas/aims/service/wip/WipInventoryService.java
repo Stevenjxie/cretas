@@ -173,4 +173,17 @@ public interface WipInventoryService {
      * @return 实际出库量 (= qty; 不足/缺失即抛, 故永不少于请求量)
      */
     BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
+
+    /**
+     * 读取常驻半成品库存(SFI)的移动均价 {@code unitCost} —— 成本传导基准 (SFI 投料下游道算本道产出成本时用)。
+     *
+     * <p>🔴 诚实 null: 行缺失 或 {@code unitCost} 为 null (旧库存/未接通成本的半成品) → 返 <b>null</b>,
+     * 绝不伪造 ¥0。调用方 (小结成本计算) 见 null 即把整道产出成本判为未知 (诚实 null 传播), 不当零成本摊薄。
+     *
+     * <p>只读 (不加锁): OUT 扣减 ({@link #consumeClerkSemiStrict}) 不改 unitCost, 故本方法与 OUT 同事务读到的
+     * 值稳定 (moving-average unitCost 仅 IN 时变)。
+     *
+     * @return 该半成品的移动均价 unitCost; 行缺失或成本未知 → null
+     */
+    BigDecimal getSemiUnitCost(String factoryId, String intermediateBatchNo);
 }

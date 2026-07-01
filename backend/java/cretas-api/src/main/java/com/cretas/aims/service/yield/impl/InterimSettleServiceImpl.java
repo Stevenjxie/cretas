@@ -4,8 +4,11 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -15,10 +18,14 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.InterimSettleService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +36,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -73,6 +81,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     private final WipInventoryService wipInventoryService;
     private final WarehouseResolver warehouseResolver;
     private final ObjectMapper objectMapper;
+    /** G3 成本传导: 读 materialized/finished 道的 ProductionBatch 成本 (原料+调料+人工)。 */
+    private final ProductionBatchRepository batchRepository;
+    /** G3 成本传导: 纯 SFI 中间道 (SAVED_SFI, 不物化) 的人工按 payload laborSegments 现算 + 工时单价解析。 */
+    private final ClerkProcessEntryService clerkProcessEntryService;
+    /** Fix1 (#7): 纯 SFI 调味道判定 — 工序名缺失时按 productTypeId+processOrder 反查真实工序名 (与 buildStepEntry 同口径)。 */
+    private final ProductWorkProcessRepository productWorkProcessRepository;
+    private final WorkProcessRepository workProcessRepository;
 
     @Override
     @Transactional
@@ -209,7 +224,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             }
         }
 
-        // ── ③ SFI IN: 未结非成品终点道 (未被同小结消耗) 产出 → 入库 ──
+        // 工时单价 (纯 SFI 中间道人工现算用; 解析一次)。fallback warning 丢弃 (小结非录入路径, 不回传前端)。
+        BigDecimal laborRate = clerkProcessEntryService.resolveLaborRate(factoryId, new ArrayList<>());
+
+        // ── ③ SFI IN: 未结非成品终点道 (未被同小结消耗) 产出 → 入库 (带真实成本传导) ──
         List<String> semiInBatchNumbers = new ArrayList<>();
         BigDecimal semiInQuantity = BigDecimal.ZERO;
         for (UnsettledRow ur : unsettledRows) {
@@ -223,9 +241,24 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             if (net.signum() <= 0) {
                 continue; // 全部被同小结下游消耗 → 瞬态在制, 不入库 (防双重入库)
             }
+            // Fix2 (#1, option b — 文档化窄拓扑): 物化道同时 (a) 吃常驻 SFI 投料 且 (b) 被同小结内下游在制道
+            //   部分消耗时, withinFeed 切片经在制 WIP MaterialBatch.unitPrice (= totalCost/outQty, 保存期已固化,
+            //   不含 SFI 投料成本) 继承给下游 → 该切片的 SFI 投料成本对下游静默漏计 (低估)。net 切片本身入库成本正确。
+            //   保存期已持久化的 MaterialConsumption 边无法在小结回改 (edge 成本 = feedKg×WIP单价 保存时已写), 且
+            //   回改会牵动整条下游成本图 (invasive) → 采 option b: 告警记录, 不静默。窄拓扑, 实务少见。
+            if (withinFeed.signum() > 0 && hasSemiFinishedFeed(ur.req)) {
+                log.warn("[interim-settle] 混合拓扑成本基差 (#1): 物化道 batchNo={} 同时吃 SFI 投料且被同小结下游消耗 "
+                                + "{}kg (>net 部分), 被消耗切片经在制 WIP 单价继承 → 其 SFI 投料成本对下游漏计 (低估). "
+                                + "入 SFI 的 net 切片成本正确. 精确核算请拆分录入或经 SFI 中转",
+                        batchNo, withinFeed.stripTrailingZeros().toPlainString());
+            }
+            // 🔴 成本传导: 本道产出单位成本 = (本道成本 + SFI 投料成本) / 本道全产出量 (非 net —
+            //   net 与 withinFeed 同单价, withinFeed 部分的成本经在制 WIP 消耗边继承给下游道, 不双计)。
+            //   诚实 null: 任一 SFI 投料 unitCost 未知 → outputUnitCost 为 null (postClerkOutput 不摊假成本)。
+            BigDecimal outputUnitCost = computeOutputUnitCost(factoryId, ur, outQty, laborRate);
             wipInventoryService.postClerkOutput(factoryId,
                     semiAnchor(planId, ur.req.getProductTypeId()), ur.req.getProductTypeId(),
-                    net, ur.req.getUnit(), null, null);
+                    net, ur.req.getUnit(), outputUnitCost, null);
             semiInBatchNumbers.add(batchNo);
             semiInQuantity = semiInQuantity.add(net);
         }
@@ -244,8 +277,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 continue;
             }
             String unit = useWeight ? "kg" : (ur.req.getUnit() != null ? ur.req.getUnit() : "kg");
+            // 🔴 成本传导: FG 单位成本 = (本道 ProductionBatch 成本[原料+调料+人工] + SFI 投料成本) / FG 入库量。
+            //   SFI 投料成本不在 ProductionBatch.totalCost 内 (SFI 边不写 MaterialConsumption), 故此处补进。
+            //   分母用 FG 实际入库量 qty (productWeight/outputQuantity), 与库存计量口径一致 (盒/kg 皆按本量摊)。
+            //   诚实 null: 任一 SFI 投料 unitCost 未知 → fgUnitCost 为 null (成品成本未知, 不伪造 ¥0)。
+            BigDecimal fgUnitCost = computeOutputUnitCost(factoryId, ur, qty, laborRate);
             FinishedGoodsBatch fg = createFinishedGoodsForInterim(
-                    plan, ur.req.getProductTypeId(), qty, unit, sessionSeq, userId);
+                    plan, ur.req.getProductTypeId(), qty, unit, sessionSeq, userId, fgUnitCost);
             finishedBatchNumbers.add(fg.getBatchNumber());
             finishedQuantity = finishedQuantity.add(qty);
         }
@@ -300,7 +338,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private FinishedGoodsBatch createFinishedGoodsForInterim(ProductionPlan plan, String productTypeId,
                                                              BigDecimal qty, String unit, int sessionSeq,
-                                                             Long userId) {
+                                                             Long userId, BigDecimal unitCost) {
         if (productTypeId == null || productTypeId.isBlank()) {
             throw new BusinessException(409, "生产计划/工序行缺少产品类型, 不能生成成品库存")
                     .withHint("请先补全产品类型")
@@ -322,6 +360,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     batch.setReservedQuantity(BigDecimal.ZERO);
                     batch.setUnit(unit);
                     batch.setUnitPrice(productType != null ? productType.getUnitPrice() : null);
+                    // 🔴 成本传导 (诚实 null): 成品成本 (含 SFI 投料). null = 未知, 不伪造 ¥0。区别于 unitPrice(售价)。
+                    batch.setUnitCost(unitCost);
                     batch.setProductionDate(LocalDate.now());
                     int shelfLifeDays = productType != null && productType.getShelfLifeDays() != null
                             ? productType.getShelfLifeDays() : 180;
@@ -345,6 +385,142 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
         String suffix = "-S" + sessionSeq;
         return raw.substring(0, 64 - suffix.length()) + suffix;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 成本传导 (G3 SFI cost transmission) — 🔴 红线, 禁止降级 (诚实 null)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 计算一道产出的真实单位成本 (成本传导核心)。
+     *
+     * <pre>
+     *   outputTotalCost = 本道 base 成本 + Σ(SFI 投料: feedQuantityKg × 输入 SFI.unitCost)
+     *   outputUnitCost  = outputTotalCost / outputQty   (scale-4, HALF_UP)
+     * </pre>
+     *
+     * <p>三桶来源 (与 materializeBatch 物化口径一致):
+     * <ul>
+     *   <li><b>base 成本</b>: <br>
+     *     — 物化道 (batchId != null): {@code ProductionBatch.totalCost} —— 已含 <b>原料 + 调料 + 人工
+     *       + 在制 WIP 继承</b> (materializeBatch 逐边写 MaterialConsumption + SEASONING/LABOR 报工累加)。
+     *       SFI 投料<b>不</b>在其内 (SFI 边不写 MaterialConsumption, resolveEdges 跳过), 故下面单独补 SFI 桶。<br>
+     *     — 纯 SFI 中间道 (batchId == null, SAVED_SFI, 不物化): base = <b>本道人工</b>
+     *       (payload {@code laborSegments} 按 {@link ClerkProcessEntryService#computeLaborCost} 现算,
+     *       与物化道人工字节一致)。此类道无原料 (纯 SFI 投料); 调料成本此路径不覆盖 (见 §限制)。</li>
+     *   <li><b>SFI 投料桶</b>: 每条 {@code semiFinished=true} 上游, feedKg × 输入 SFI 的移动均价 unitCost
+     *       ({@link WipInventoryService#getSemiUnitCost})。</li>
+     * </ul>
+     *
+     * <p>🔴 <b>诚实 null 传播</b> (禁止降级):
+     * <ul>
+     *   <li>任一 SFI 投料的 {@code unitCost} 为 null (旧库存/未接通成本的半成品) → 返 <b>null</b>
+     *       (整道产出成本未知, 不当 ¥0 摊薄稀释)。这是"成本传不动"的根因: 只有全部投入成本已知才产出成本。</li>
+     *   <li>物化道 ProductionBatch 缺失 (数据异常) → null (诚实, 不猜)。</li>
+     *   <li>outputQty ≤ 0 → null (无分母)。</li>
+     * </ul>
+     * base 内部沿用现有物化/报工口径 (料/工价 null 已在物化时 nz→0, ProductionBatch.totalCost 恒非 null) —
+     * 与既有 upsertProducedWip/postSemiOutputLedger 诚实 null 纪律对齐: null=未知(传播), 0=已知无成本。
+     *
+     * <p><b>纯 SFI 调味道 (Fix1 #7, 禁止降级)</b>: 纯 SFI 中间道若为熟制/调味道, 其调料成本
+     * (RecipeCostCalculator) 此路径无法现算 (需锅序/配方, 属重算)。此时**不得**只算 labor 降级成非-null 假数据 —
+     * 直接返回 <b>null</b> (诚实, 调料桶未知 = 整道成本未知), 同 null-SFI-feed 输入处理。物化的熟制道 (含原料)
+     * 走 ProductionBatch.totalCost 已含调料, 不受影响。判定见 {@link #isSeasoningRow}。
+     *
+     * @param outputQty unitCost 分母: SFI IN = 本道全产出量 (与 ProductionBatch.totalCost 基准同量);
+     *                  FG = FG 实际入库量 (productWeight/outputQuantity)。
+     * @return 产出单位成本; 任一投入成本未知 → null (诚实, 不伪造 ¥0)。
+     */
+    private BigDecimal computeOutputUnitCost(String factoryId, UnsettledRow ur, BigDecimal outputQty,
+                                             BigDecimal laborRate) {
+        if (outputQty == null || outputQty.signum() <= 0) {
+            return null;
+        }
+        BigDecimal baseTotal;
+        if (ur.row.getBatchId() != null) {
+            // 物化道: ProductionBatch.totalCost 含 原料+调料+人工 (+ 在制 WIP 继承); SFI 投料下面单独补。
+            ProductionBatch pb = batchRepository.findByIdAndFactoryId(ur.row.getBatchId(), factoryId).orElse(null);
+            if (pb == null || pb.getTotalCost() == null) {
+                return null; // 诚实: 批次成本缺失 → 未知
+            }
+            baseTotal = pb.getTotalCost();
+        } else {
+            // 纯 SFI 中间道 (SAVED_SFI, 不物化 → RecipeCostCalculator 从未运行, 本道调料成本无处可算)。
+            //   🔴 Fix1 (#7): 若本道是调味/熟制道 → 调料桶未知, 绝不可只算 labor 降级成非-null 假数据 (违 禁止降级)。
+            //     诚实 null (与 null-SFI-feed 输入同处理)。非调味道 (切/分/拆包 等) 无调料桶 → base = 本道人工 (现算)。
+            if (isSeasoningRow(factoryId, ur.req)) {
+                log.warn("[interim-settle] 纯半成品调味道 (batchNo={}, process={}) 无法现算调料成本 "
+                                + "(SAVED_SFI 不物化 → 无 RecipeCostCalculator) → 产出成本诚实 null (不漏调料桶=禁止降级); "
+                                + "如需成本核算请改走物化录入路径",
+                        ur.row.getBatchNumber(), ur.req.getProcessCode());
+                return null;
+            }
+            baseTotal = nz(clerkProcessEntryService.computeLaborCost(ur.req.getLaborSegments(), laborRate));
+        }
+
+        // Σ SFI 投料成本 (feedKg × 输入 SFI.unitCost); 任一 unitCost null → 诚实 null。
+        BigDecimal sfiFeedCost = BigDecimal.ZERO;
+        if (ur.req.getUpstreamSources() != null) {
+            for (ProcessSheetRowRequest.UpstreamRef ref : ur.req.getUpstreamSources()) {
+                if (!ref.isSemiFinished()) {
+                    continue; // 在制 WIP 投料的成本已在 ProductionBatch.totalCost (MaterialConsumption 边) 内
+                }
+                BigDecimal feed = nz(ref.getFeedQuantityKg());
+                if (feed.signum() <= 0) {
+                    continue;
+                }
+                BigDecimal inputUnitCost = wipInventoryService
+                        .getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
+                if (inputUnitCost == null) {
+                    return null; // 🔴 诚实 null: 输入半成品无成本 → 本道产出成本未知, 不伪造 ¥0
+                }
+                sfiFeedCost = sfiFeedCost.add(feed.multiply(inputUnitCost));
+            }
+        }
+
+        return baseTotal.add(sfiFeedCost).divide(outputQty, 4, RoundingMode.HALF_UP);
+    }
+
+    /** 调味道工序名正则 — 与 {@code ProcessSheetServiceImpl.buildStepEntry} / materializeBatch 警告分支同源, 不另造。 */
+    private static final java.util.regex.Pattern SEASONING_NAME_PATTERN =
+            java.util.regex.Pattern.compile(".*(熟|卤|煮|腌|注射|入味|调味).*");
+
+    /**
+     * Fix1 (#7): 判定一行是否"调味/熟制道" —— 与 {@code buildStepEntry} 决定 processCategory=SEASONING 完全同口径:
+     * {@code req.isSeasoningStep()} 标志为真, 或工序名匹配 {@link #SEASONING_NAME_PATTERN}。
+     *
+     * <p>工序名解析与 buildStepEntry 一致: payload {@code processName} 优先; 前端逐道录入通常不传 processName,
+     * 故缺失时按 {@code (productTypeId, processOrder)} 反查真实工序名 (product-work-process 链), 避免漏判。
+     */
+    private boolean isSeasoningRow(String factoryId, ProcessSheetRowRequest req) {
+        if (req.isSeasoningStep()) {
+            return true;
+        }
+        String name = req.getProcessName();
+        if ((name == null || name.isBlank())
+                && req.getProductTypeId() != null && req.getProcessOrder() != null) {
+            name = resolveProcessName(factoryId, req.getProductTypeId(), req.getProcessOrder());
+        }
+        return name != null && SEASONING_NAME_PATTERN.matcher(name).matches();
+    }
+
+    /** 按 (productTypeId, processOrder) 反查真实工序名 (product-work-process → work_process.processName); 取不到 → null。 */
+    private String resolveProcessName(String factoryId, String productTypeId, Integer processOrder) {
+        for (ProductWorkProcess pwp : productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId)) {
+            if (processOrder.equals(pwp.getProcessOrder()) && pwp.getWorkProcessId() != null) {
+                return workProcessRepository.findById(pwp.getWorkProcessId())
+                        .map(WorkProcess::getProcessName).orElse(null);
+            }
+        }
+        return null;
+    }
+
+    /** 本行是否含常驻半成品(SFI)投料 (semiFinished=true 上游)。 */
+    private boolean hasSemiFinishedFeed(ProcessSheetRowRequest req) {
+        return req.getUpstreamSources() != null
+                && req.getUpstreamSources().stream()
+                        .anyMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
     }
 
     // ─────────────────────────────────────────────────────────────

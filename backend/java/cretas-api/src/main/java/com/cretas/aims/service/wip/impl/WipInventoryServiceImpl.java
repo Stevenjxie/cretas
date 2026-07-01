@@ -515,6 +515,23 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return qty;
     }
 
+    /**
+     * G3 成本传导 — 读常驻半成品库存(SFI)的移动均价 unitCost (见接口 Javadoc)。
+     *
+     * <p>只读非锁 finder ({@code findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull}): 与小结 OUT
+     * 同事务读值稳定 (OUT 不改 unitCost)。🔴 诚实 null: 行缺失 / unitCost 未知 → null (不伪造 ¥0)。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public BigDecimal getSemiUnitCost(String factoryId, String intermediateBatchNo) {
+        if (intermediateBatchNo == null || intermediateBatchNo.isBlank()) {
+            return null;
+        }
+        return wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .map(SemiFinishedInventory::getUnitCost)
+                .orElse(null);
+    }
+
     private void markWipPosted(ProductionReport report) {
         Map<String, Object> fields = report.getCustomFields();
         if (fields == null) {

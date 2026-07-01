@@ -167,4 +167,33 @@ class WipClerkOutputTest {
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("40");
         verify(wipRepo, never()).save(any());
     }
+
+    // ── getSemiUnitCost (成本传导基准, 诚实 null) ──
+
+    @Test
+    @DisplayName("getSemiUnitCost: 行存在且有成本 → 返 unitCost")
+    void getSemiUnitCostReturnsUnitCost() {
+        SemiFinishedInventory row = freshRow();
+        row.setUnitCost(new BigDecimal("12.5000"));
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+        assertThat(service.getSemiUnitCost(FACTORY, ANCHOR)).isEqualByComparingTo("12.5");
+    }
+
+    @Test
+    @DisplayName("getSemiUnitCost: 诚实 null — 行缺失 → null")
+    void getSemiUnitCostMissingRowNull() {
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.empty());
+        assertThat(service.getSemiUnitCost(FACTORY, ANCHOR)).isNull();
+    }
+
+    @Test
+    @DisplayName("getSemiUnitCost: 诚实 null — 行存在但 unitCost 为 null (旧库存无成本) → null (不伪造 0)")
+    void getSemiUnitCostNullCostRowNull() {
+        SemiFinishedInventory row = freshRow(); // unitCost 默认 null
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+        assertThat(service.getSemiUnitCost(FACTORY, ANCHOR)).isNull();
+    }
 }
