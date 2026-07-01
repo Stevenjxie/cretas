@@ -292,9 +292,69 @@ def test_collect_mall_activity_feeds_parses_allowed_public_pages() -> None:
     assert result["events"][0]["title"] == "第一百货夏日市集活动"
     assert result["events"][0]["activityType"] == "市集/快闪"
     assert "7月6日-7月14日" in result["events"][0]["dateText"]
+    assert result["events"][0]["targetRelevance"] == "upcoming"
+    assert result["events"][0]["decisionUse"] == "即将发生：适合提前排班备货，不能解释目标日当天异常。"
     assert result["events"][0]["expectedImpact"] == "周末/晚市可能增强"
     assert client.calls[0]["url"] == "https://mall.example/robots.txt"
     assert "CretasRestaurantSignalBot" in client.calls[1]["headers"]["User-Agent"]
+
+
+def test_collect_mall_activity_feeds_marks_active_event_for_target_day() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mall.example/robots.txt": "User-agent: *\nAllow: /\n",
+            "https://mall.example/events": """
+                <html><body>
+                  <h1>第一百货夏日市集活动</h1>
+                  <p>7月6日-7月14日，六合路平台举办夏日市集和亲子互动。</p>
+                </body></html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="人民广场",
+            mall_name="第一百货商业中心",
+            target_date="2026-07-08",
+        ),
+        feed_urls=["https://mall.example/events"],
+    )
+
+    assert result["events"][0]["targetRelevance"] == "active"
+    assert result["events"][0]["decisionUse"] == "目标日命中：可作为当天客流异常的重要外部解释。"
+
+
+def test_collect_mall_activity_feeds_prefers_target_day_event_when_page_has_multiple_dates() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mall.example/robots.txt": "User-agent: *\nAllow: /\n",
+            "https://mall.example/summer": """
+                <html><body>
+                  <h1>来南京路快乐一夏</h1>
+                  <p>即日起至8月23日，南京路推出暑期主题消费活动。</p>
+                  <p>7月底至8月初，电竞嘉年华重回世纪广场。</p>
+                </body></html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路",
+            mall_name="第一百货商业中心",
+            target_date="2026-07-01",
+        ),
+        feed_urls=["https://mall.example/summer"],
+    )
+
+    assert result["events"][0]["dateText"] == "即日起至8月23日"
+    assert result["events"][0]["targetRelevance"] == "active"
+    assert result["events"][0]["decisionUse"] == "目标日命中：可作为当天客流异常的重要外部解释。"
 
 
 def test_collect_mall_activity_feeds_decodes_gb18030_public_pages() -> None:
