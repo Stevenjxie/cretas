@@ -61,6 +61,7 @@ import TemplateGrid from './components/TemplateGrid.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import AdvancedTrafficPersonaCard from './components/chat/cards/AdvancedTrafficPersonaCard.vue';
+import { resolveAdvancedTrafficPersona } from './advancedTrafficPersonaDemo';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -466,8 +467,8 @@ const memberRfm = computed<MemberRfm | undefined>(
 const multiStoreComparison = computed<MultiStoreComparison | undefined>(
   () => report.value?.sections?.multiStoreComparison
 );
-const advancedTrafficPersona = computed<AdvancedTrafficPersona | undefined>(
-  () => report.value?.sections?.advancedTrafficPersona
+const advancedTrafficPersona = computed<AdvancedTrafficPersona>(
+  () => resolveAdvancedTrafficPersona(report.value)
 );
 
 // W6 — Review collection stats (separate API call)

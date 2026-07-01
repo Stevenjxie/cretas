@@ -96,7 +96,14 @@ const smartBIRoutes: RouteRecordRaw[] = [
       {
         path: 'restaurant-v2',
         name: 'SmartBIRestaurantV2',
-        redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
+        component: () => import('@/views/smart-bi/RestaurantV2Dashboard.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '餐饮综合分析',
+          icon: 'DataAnalysis',
+          module: 'analytics',
+          hideForFactoryTypes: ['FACTORY'],
+        },
       },
       {
         path: 'gold-preview',
