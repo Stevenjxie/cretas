@@ -662,7 +662,11 @@ _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
     SLOT.INSIGHTS:  {"enable_thinking": False},
     SLOT.CHART:     {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
     SLOT.MAPPER:    {"enable_thinking": False, "json": True, "temperature": 0, "seed": 1234},
-    SLOT.REASONING: {"enable_thinking": True},
+    SLOT.REASONING: {},  # NO enable_thinking: deepseek-v3.1 400s on true (only supports
+                          # false/absent, benchmark 2026-07-01); and forced deep thinking
+                          # (31-64s) times out call_chain's 30s budget → fallback. deepseek /
+                          # thinking-only models reason well by default in ~1s. Callers needing
+                          # extended thinking use call_chain_stream (45s) + pass it themselves.
     SLOT.VL:        {"enable_thinking": False},
     SLOT.REVIEW:    {"enable_thinking": False},
 }
