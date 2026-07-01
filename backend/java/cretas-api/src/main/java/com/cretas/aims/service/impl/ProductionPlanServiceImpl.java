@@ -821,6 +821,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 throw new BusinessException(400, "计划数量不能为空")
                         .withHint("请输入计划数量").withHintTarget("plannedQuantity");
             }
+        } else if (request.getPlannedQuantity() == null) {
+            // 存货生产无计划数量要求; 但 production_plans.planned_quantity 列在 prod 是 NOT NULL,
+            // 故存 0 (下游一律按 ≤0 视为"无计划": zeroIfNull / B3 库存校验跳过, 语义正确)。
+            request.setPlannedQuantity(java.math.BigDecimal.ZERO);
         }
 
         // P1-4: 客户订单来源必须填写工序名称和批次日期
