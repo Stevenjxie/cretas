@@ -662,7 +662,7 @@ class RestaurantExternalSignalService:
                 "actionHint": "先补门店 lat/lng，再做小时级天气解释。",
             }
 
-        location = f"{float(request.lng):.6f},{float(request.lat):.6f}"
+        location = f"{float(request.lng):.2f},{float(request.lat):.2f}"
         payload = self.fetch_qweather_now(location)
         now_weather = payload.get("now") if isinstance(payload, dict) else None
         if not isinstance(now_weather, dict):

@@ -210,7 +210,7 @@ def test_collect_snapshot_fetches_weather_and_persists_safe_payload() -> None:
     assert client.calls == [
         {
             "url": "https://abc123.qweatherapi.com/v7/weather/now",
-            "params": {"location": "121.475000,31.235000"},
+            "params": {"location": "121.47,31.23"},
             "headers": {"X-QW-Api-Key": "qweather-secret"},
             "timeout": 5.0,
         }
