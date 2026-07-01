@@ -320,6 +320,40 @@ class RestaurantAnalyzerV2:
             self._expense_tree_cache = load_tree_from_yaml(yaml_path)
         return self._expense_tree_cache
 
+    @staticmethod
+    def _infer_traffic_location_context(store_name: Optional[str]) -> dict[str, Optional[str]]:
+        """Infer demo mall/business-district context from common restaurant store names."""
+        name = store_name or ""
+        context: dict[str, Optional[str]] = {
+            "city": "上海",
+            "business_district": "人民广场",
+            "mall_name": None,
+        }
+
+        if "义乌" in name:
+            context["city"] = "义乌"
+            context["business_district"] = "稠城商圈"
+        elif "苏州" in name:
+            context["city"] = "苏州"
+            context["business_district"] = "核心商圈"
+        elif "南通" in name:
+            context["city"] = "南通"
+            context["business_district"] = "核心商圈"
+
+        mall_rules = [
+            ("第一百货", "人民广场", "第一百货商业中心"),
+            ("大丸百货", "南京东路", "大丸百货"),
+            ("大丸", "南京东路", "大丸百货"),
+        ]
+        for token, district, mall_name in mall_rules:
+            if token in name:
+                context["city"] = "上海"
+                context["business_district"] = district
+                context["mall_name"] = mall_name
+                break
+
+        return context
+
     # ── 主入口 ─────────────────────────────────────────
 
     def analyze(
@@ -407,6 +441,7 @@ class RestaurantAnalyzerV2:
         # Each handler gets the same factory/sub_sector/store metadata; the
         # `params` dict carries section-specific inputs (POS DataFrame,
         # financial data, column overrides, etc).
+        traffic_context = self._infer_traffic_location_context(store_name)
         base_params: dict[str, Any] = {
             "pos_df": pos_df,
             "financial_data": financial_data,
@@ -419,9 +454,9 @@ class RestaurantAnalyzerV2:
             "reviews": reviews,
             "members": members,
             "use_llm": use_llm_reviews,
-            "city": "上海",
-            "business_district": "人民广场",
-            "mall_name": None,
+            "city": traffic_context["city"],
+            "business_district": traffic_context["business_district"],
+            "mall_name": traffic_context["mall_name"],
         }
 
         def _make_req(extra: Optional[dict[str, Any]] = None) -> SectionRequest:
