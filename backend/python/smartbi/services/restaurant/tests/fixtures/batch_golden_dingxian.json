@@ -673,6 +673,33 @@
       "upgradeHint": "上传 TOP 20 SKU 主料清单 → Layer 2 (±8%)"
     },
     "bossDecisionBrief": {
+      "crossPlatformComparison": [
+        {
+          "decisionUse": "决定菜单首屏、团购套餐和服务员推荐顺序。",
+          "platform": "POS/销量",
+          "whatItSays": "当前没有菜品热卖明细，无法判断该主推什么。"
+        },
+        {
+          "decisionUse": "验证热卖菜是不是也被顾客认可，并把差评主题落到出品/服务动作。",
+          "platform": "大众点评/美团评论",
+          "whatItSays": "当前只有评分或评论量，没有足够主题拆解。"
+        },
+        {
+          "decisionUse": "决定当天波动是否先按外部原因处理，避免误判店长执行。",
+          "platform": "商圈/活动/天气",
+          "whatItSays": "已有外部信号可解释异常日。"
+        },
+        {
+          "decisionUse": "决定是否调供应商、改备货、查报损赠品，而不是只做销售动作。",
+          "platform": "月盘点/BOM/采购",
+          "whatItSays": "缺少月底盘点、理论耗用和采购价，不能判断利润差是不是食材漏损。"
+        },
+        {
+          "decisionUse": "决定是抓单店执行，还是做区域活动、商圈资源和门店分流。",
+          "platform": "连锁门店对比",
+          "whatItSays": "缺同城同品牌门店同周期数据，无法判断本店是否异常。"
+        }
+      ],
       "dataGapForRealOperation": [
         "缺 POS/订单: 没有 POS 就只能讲环境，不能判断门店自己有没有接住机会。",
         "缺 月盘点/库存/BOM: 没有月盘点就不能下结论说毛利掉是菜卖错了还是货漏了。",
@@ -746,7 +773,7 @@
           ],
           "ownerAction": "店长本周只抓一个体验问题，连续 7 天复盘差评关键词和高峰现场。",
           "priority": "P0",
-          "recommendation": "如果点评集中说排队久、上菜慢或服务不稳，先改预约、分流、等位话术和高峰排班；不要先把动作放到全店降价。",
+          "recommendation": "本周动作不是全店降价，而是：先从低分评论里找最集中的一个体验问题，连续 7 天复盘。",
           "sourceInputs": [
             "大众点评/顾客评价",
             "POS/订单",

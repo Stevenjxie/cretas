@@ -70,6 +70,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             "decisionCards": decisions["decisionCards"],
             "sourceDecisionMap": self._source_decision_map(readiness),
             "dataReadiness": readiness,
+            "crossPlatformComparison": self._cross_platform_comparison(readiness, params, sections),
             "whatEachSourceAnswers": self._what_each_source_answers(),
             "dataGapForRealOperation": self._data_gap(readiness),
             "nextDataToAskCustomer": self._next_data_to_ask(readiness),
@@ -256,10 +257,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         cards.append({
             "priority": "P0",
             "decision": "本周先解决顾客体验里最容易影响转化的点。",
-            "recommendation": (
-                "如果点评集中说排队久、上菜慢或服务不稳，先改预约、分流、等位话术和高峰排班；"
-                "不要先把动作放到全店降价。"
-            ),
+            "recommendation": self._review_action_text(sections, params),
             "why": (
                 "已有顾客评价，可以把问题落到排队、服务、出品、价格等具体场景。"
                 if has_reviews
@@ -361,7 +359,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
         evidence: list[str] = []
         if isinstance(review, dict):
-            for key in ("riskAlerts", "negativeThemes", "topComplaints", "dishTags"):
+            for key in (
+                "riskAlerts",
+                "negativeThemes",
+                "topComplaints",
+                "dishTags",
+                "positiveDishMentions",
+                "negativeDishMentions",
+            ):
                 value = review.get(key)
                 if isinstance(value, list) and value:
                     evidence.append(f"{key}: {value[:3]}")
@@ -402,6 +407,49 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         return evidence or ["需要菜品销量、售价、食材成本和评论菜品关键词，才能做主推/改价/下架。"]
 
     @staticmethod
+    def _review_action_text(sections: dict[str, Any], params: dict[str, Any]) -> str:
+        review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
+        if not isinstance(review, dict):
+            return (
+                "如果点评集中说排队久、上菜慢或服务不稳，先改预约、分流、等位话术和高峰排班；"
+                "不要先把动作放到全店降价。"
+            )
+
+        themes = BossDecisionBriefHandler._theme_names(review.get("negativeThemes") or [])
+        low_count = BossDecisionBriefHandler._safe_int(review.get("lowRatingCount"))
+        review_count = BossDecisionBriefHandler._safe_int(review.get("reviewCount") or review.get("totalReviews"))
+        negative_dishes = BossDecisionBriefHandler._item_names(
+            review.get("negativeDishMentions") or review.get("complaintDishes") or []
+        )
+        positive_dishes = BossDecisionBriefHandler._item_names(
+            review.get("positiveDishMentions") or review.get("positiveDishes") or []
+        )
+
+        actions: list[str] = []
+        if any(token in themes for token in ("排队", "等位", "上菜慢", "出餐慢")):
+            actions.append("高峰先改预约、等位告知和出餐节奏")
+        if any(token in themes for token in ("服务", "态度", "环境")):
+            actions.append("店长本周盯服务话术、桌边响应和门店环境")
+        if any(token in themes for token in ("味道差", "不好吃", "油", "咸", "干", "预制", "肉少")):
+            target = f"，重点复盘 {'、'.join(negative_dishes[:3])}" if negative_dishes else ""
+            actions.append(f"厨师长抽查出品稳定性{target}")
+        if not actions:
+            actions.append("先从低分评论里找最集中的一个体验问题，连续 7 天复盘")
+
+        scale = ""
+        if review_count and low_count is not None:
+            scale = f"这批点评 {review_count} 条里低分 {low_count} 条，"
+        positive = (
+            f"点评正向菜品可借力 {'、'.join(positive_dishes[:3])}；"
+            if positive_dishes
+            else ""
+        )
+        return (
+            f"{scale}{positive}本周动作不是全店降价，而是："
+            f"{'；'.join(actions)}。"
+        )
+
+    @staticmethod
     def _menu_action_text(sections: dict[str, Any], params: dict[str, Any]) -> str:
         menu = params.get("menu_summary") or sections.get("menuEngineering") or sections.get("menu_engineering") or {}
         if not isinstance(menu, dict):
@@ -413,6 +461,9 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         top_products = menu.get("topProducts") or []
         low_sales = menu.get("lowSalesProducts") or []
         top_categories = menu.get("topCategories") or []
+        review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
+        if not isinstance(review, dict):
+            review = {}
 
         lead_names = [
             str(item.get("name"))
@@ -429,6 +480,12 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             for item in top_categories
             if isinstance(item, dict) and item.get("category")
         ][:2]
+        positive_review_names = BossDecisionBriefHandler._item_names(
+            review.get("positiveDishMentions") or review.get("positiveDishes") or []
+        )[:3]
+        negative_review_names = BossDecisionBriefHandler._item_names(
+            review.get("negativeDishMentions") or review.get("complaintDishes") or []
+        )[:3]
 
         if lead_names:
             lead_text = "、".join(lead_names)
@@ -438,9 +495,19 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 if observe_names
                 else ""
             )
+            positive_text = (
+                f"；点评里也认可 {'、'.join(positive_review_names)}，适合和 POS 热卖菜互相验证"
+                if positive_review_names
+                else ""
+            )
+            negative_text = (
+                f"；其中点评点名不稳定的 {'、'.join(negative_review_names)} 先查出品，通过后再加大投放"
+                if negative_review_names
+                else ""
+            )
             return (
-                f"本周先把 {lead_text} 作为明确主推，放到菜单首屏、团购页和服务员推荐话术里"
-                f"{category_text}{observe_text}。"
+                f"本周先把 {lead_text} 作为主推候选，放到菜单首屏、团购页和服务员推荐话术里"
+                f"{category_text}{positive_text}{negative_text}{observe_text}。"
                 "不要全店打折，先用爆品带套餐和加购。"
             )
 
@@ -458,6 +525,145 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             f"{readiness.get('plainVerdict')} "
             "老板看这个模块时，重点不是看分数，而是按今天、本周、本月三层动作拍板。"
         )
+
+    @staticmethod
+    def _cross_platform_comparison(
+        readiness: dict[str, Any],
+        params: dict[str, Any],
+        sections: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        menu = params.get("menu_summary") or sections.get("menuEngineering") or sections.get("menu_engineering") or {}
+        review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
+        pos = params.get("pos_summary") or {}
+        external = params.get("external_signals") or sections.get("advancedTrafficPersona") or {}
+
+        menu_top = BossDecisionBriefHandler._item_names((menu or {}).get("topProducts") or []) if isinstance(menu, dict) else []
+        review_positive = BossDecisionBriefHandler._item_names((review or {}).get("positiveDishMentions") or []) if isinstance(review, dict) else []
+        review_negative = BossDecisionBriefHandler._item_names((review or {}).get("negativeDishMentions") or []) if isinstance(review, dict) else []
+        themes = BossDecisionBriefHandler._theme_names((review or {}).get("negativeThemes") or []) if isinstance(review, dict) else []
+        pos_parts: list[str] = []
+        if isinstance(pos, dict):
+            revenue = pos.get("periodRevenue") or pos.get("revenue")
+            orders = pos.get("orders")
+            if revenue and orders:
+                pos_parts.append(f"收入片段 {revenue}，订单 {orders}")
+            segments = pos.get("topGuestSegments") or []
+            if isinstance(segments, list) and segments:
+                first_segment = segments[0]
+                if isinstance(first_segment, dict):
+                    segment_name = first_segment.get("segment") or first_segment.get("name")
+                    share = first_segment.get("share")
+                    if segment_name and share is not None:
+                        try:
+                            share_percent = round(float(share) * 100, 1)
+                        except (TypeError, ValueError):
+                            share_percent = None
+                        if share_percent is not None:
+                            pos_parts.append(f"主要桌型/客群是 {segment_name}，占比约 {share_percent}%")
+
+        return [
+            {
+                "platform": "POS/销量",
+                "whatItSays": "；".join(
+                    [
+                        *(
+                            [f"热卖菜优先看 {'、'.join(menu_top[:3])}"]
+                            if menu_top
+                            else ["当前没有菜品热卖明细，无法判断该主推什么。"]
+                        ),
+                        *pos_parts,
+                    ]
+                ),
+                "decisionUse": "决定菜单首屏、团购套餐和服务员推荐顺序。",
+            },
+            {
+                "platform": "大众点评/美团评论",
+                "whatItSays": (
+                    f"好评菜 {'、'.join(review_positive[:3])}；风险菜/主题 {'、'.join((review_negative + themes)[:4])}"
+                    if review_positive or review_negative or themes
+                    else "当前只有评分或评论量，没有足够主题拆解。"
+                ),
+                "decisionUse": "验证热卖菜是不是也被顾客认可，并把差评主题落到出品/服务动作。",
+            },
+            {
+                "platform": "商圈/活动/天气",
+                "whatItSays": "已有外部信号可解释异常日。" if external else "缺少当天商场活动、天气、节假日和周边活动标签。",
+                "decisionUse": "决定当天波动是否先按外部原因处理，避免误判店长执行。",
+            },
+            {
+                "platform": "月盘点/BOM/采购",
+                "whatItSays": (
+                    "已有盘点或 BOM，可继续判断毛利漏点。"
+                    if any(
+                        item.get("source") == "月盘点/库存/BOM" and item.get("available")
+                        for item in readiness.get("sources", [])
+                    )
+                    else "缺少月底盘点、理论耗用和采购价，不能判断利润差是不是食材漏损。"
+                ),
+                "decisionUse": "决定是否调供应商、改备货、查报损赠品，而不是只做销售动作。",
+            },
+            {
+                "platform": "连锁门店对比",
+                "whatItSays": (
+                    "已有连锁对比，可判断单店问题还是区域共性。"
+                    if any(
+                        item.get("source") == "连锁门店对比" and item.get("available")
+                        for item in readiness.get("sources", [])
+                    )
+                    else "缺同城同品牌门店同周期数据，无法判断本店是否异常。"
+                ),
+                "decisionUse": "决定是抓单店执行，还是做区域活动、商圈资源和门店分流。",
+            },
+        ]
+
+    @staticmethod
+    def _item_names(items: Any) -> list[str]:
+        if not isinstance(items, list):
+            return []
+        names: list[str] = []
+        for item in items:
+            name: Any = None
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("dish") or item.get("tag") or item.get("product")
+            elif isinstance(item, (list, tuple)) and item:
+                name = item[0]
+            elif isinstance(item, str):
+                name = item
+            if name is None:
+                continue
+            text = str(name).strip()
+            if text:
+                names.append(text)
+        return names
+
+    @staticmethod
+    def _theme_names(items: Any) -> list[str]:
+        if not isinstance(items, list):
+            return []
+        names: list[str] = []
+        for item in items:
+            name: Any = None
+            if isinstance(item, dict):
+                name = item.get("theme") or item.get("name") or item.get("tag") or item.get("keyword")
+            elif isinstance(item, (list, tuple)) and item:
+                name = item[0]
+            elif isinstance(item, str):
+                name = item
+            if name is None:
+                continue
+            text = str(name).strip()
+            if text:
+                names.append(text)
+        return names
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _source_decision_map(readiness: dict[str, Any]) -> list[dict[str, Any]]:

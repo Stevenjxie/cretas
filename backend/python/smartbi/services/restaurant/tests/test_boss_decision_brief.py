@@ -25,6 +25,8 @@ def test_boss_decision_brief_turns_sources_into_owner_actions() -> None:
                     "rating": 4.6,
                     "riskAlerts": ["排队时间偏长，周末晚市影响进店转化"],
                     "negativeThemes": ["排队久", "上菜慢", "价格偏贵"],
+                    "positiveDishMentions": [{"name": "番茄锅底", "count": 38}],
+                    "negativeDishMentions": [{"name": "牛肉卷", "count": 7}],
                 },
                 "monthly_stocktake": {
                     "topLossItems": ["牛肉卷", "虾滑"],
@@ -78,6 +80,8 @@ def test_boss_decision_brief_turns_sources_into_owner_actions() -> None:
     assert any("月盘点" in card["decision"] or "BOM" in card["recommendation"] for card in cards)
     assert any("大众点评" in source for card in cards for source in card["sourceInputs"])
     assert any("主推" in card["recommendation"] and "下架" in card["recommendation"] for card in cards)
+    assert any("番茄锅底" in card["recommendation"] for card in cards)
+    assert any(item["platform"] == "大众点评/美团评论" for item in data["crossPlatformComparison"])
 
     answers = {item["source"]: item["bossQuestion"] for item in data["whatEachSourceAnswers"]}
     assert "钱是不是漏在食材" in answers["月盘点/库存/BOM"]
@@ -117,7 +121,22 @@ def test_boss_decision_brief_names_actual_dishes_from_menu_summary() -> None:
             store_name="青花椒川食山语（颛桥龙湖店）",
             params={
                 "pos_summary": {"periodRevenue": 73762, "orders": 328},
-                "review_summary": {"rating": 4.73, "reviewCount": 688},
+                "review_summary": {
+                    "rating": 4.73,
+                    "reviewCount": 688,
+                    "lowRatingCount": 41,
+                    "positiveDishMentions": [
+                        {"name": "特色青花椒鱼", "count": 120},
+                        {"name": "双人餐", "count": 35},
+                    ],
+                    "negativeDishMentions": [
+                        {"name": "乌蒙山干锅牛肉", "count": 12},
+                    ],
+                    "negativeThemes": [
+                        {"theme": "味道差", "count": 32},
+                        {"theme": "油", "count": 49},
+                    ],
+                },
                 "menu_summary": {
                     "topCategories": [
                         {"category": "招牌必点", "revenue": 156386.23},
@@ -144,7 +163,29 @@ def test_boss_decision_brief_names_actual_dishes_from_menu_summary() -> None:
     assert "特色青花椒鱼(活鱼现做)" in menu_card["recommendation"]
     assert "双人餐" in menu_card["recommendation"]
     assert "招牌必点" in menu_card["recommendation"]
+    assert "点评里也认可" in menu_card["recommendation"]
+    assert "点评点名不稳定" in menu_card["recommendation"]
     assert "全店打折" in menu_card["recommendation"]
+
+    review_card = next(
+        card for card in response.data["decisionCards"]
+        if card["decision"].startswith("本周先解决顾客体验")
+    )
+    assert "低分 41 条" in review_card["recommendation"]
+    assert "特色青花椒鱼" in review_card["recommendation"]
+    assert "乌蒙山干锅牛肉" in review_card["recommendation"]
+    assert "厨师长抽查出品稳定性" in review_card["recommendation"]
+
+    comparisons = response.data["crossPlatformComparison"]
+    review_comparison = next(item for item in comparisons if item["platform"] == "大众点评/美团评论")
+    assert "好评菜 特色青花椒鱼" in review_comparison["whatItSays"]
+    assert "风险菜/主题 乌蒙山干锅牛肉" in review_comparison["whatItSays"]
+    assert {item["platform"] for item in comparisons}.issuperset({
+        "POS/销量",
+        "大众点评/美团评论",
+        "商圈/活动/天气",
+        "月盘点/BOM/采购",
+    })
 
 
 def test_boss_decision_brief_registered_in_section_router() -> None:
