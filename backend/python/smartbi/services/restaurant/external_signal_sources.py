@@ -759,12 +759,15 @@ class RestaurantExternalSignalService:
         if not title:
             return None
         text = self._html_to_text(html)
-        date_text = self._extract_activity_date(text)
+        date_text = self._extract_activity_date(text, request)
         activity_type = self._classify_activity_type(f"{title} {text}")
+        relevance = self._activity_target_relevance(date_text, request)
         return {
             "title": title,
             "dateText": date_text,
             "activityType": activity_type,
+            "targetRelevance": relevance["status"],
+            "decisionUse": relevance["decisionUse"],
             "mallName": request.mall_name,
             "city": request.city,
             "businessDistrict": request.business_district,
@@ -792,12 +795,189 @@ class RestaurantExternalSignalService:
     def _clean_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", text))).strip()
 
-    def _extract_activity_date(self, text: str) -> str:
-        match = re.search(
-            r"\d{1,2}月\d{1,2}日(?:\s*[-—~至到]\s*(?:\d{1,2}月)?\d{1,2}日)?",
-            text,
+    def _extract_activity_date(self, text: str, request: ExternalSignalRequest) -> str:
+        target_day = self._target_day(request.target_date)
+        candidates = self._activity_date_candidates(text, target_day)
+        if not candidates:
+            return "待人工确认"
+        return min(candidates, key=lambda candidate: candidate["rank"])["dateText"]
+
+    def _activity_date_candidates(self, text: str, target_day: date) -> list[dict[str, Any]]:
+        year = target_day.year
+        candidates: list[dict] = []
+        occupied_spans: list[tuple[int, int]] = []
+
+        today_range_pattern = re.compile(
+            r"即日起\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日"
         )
-        return match.group(0) if match else "待人工确认"
+        for match in today_range_pattern.finditer(text):
+            end_month = int(match.group("em") or target_day.month)
+            end_day = int(match.group("ed"))
+            candidates.append(
+                self._activity_candidate(
+                    match.group(0),
+                    match.start(),
+                    date(year, 1, 1),
+                    date(year, end_month, end_day),
+                    target_day,
+                )
+            )
+            occupied_spans.append(match.span())
+
+        exact_range_pattern = re.compile(
+            r"(?P<sm>\d{1,2})月(?P<sd>\d{1,2})日\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日"
+        )
+        for match in exact_range_pattern.finditer(text):
+            start_month = int(match.group("sm"))
+            start_day = int(match.group("sd"))
+            end_month = int(match.group("em") or start_month)
+            end_day = int(match.group("ed"))
+            candidates.append(
+                self._activity_candidate(
+                    match.group(0),
+                    match.start(),
+                    date(year, start_month, start_day),
+                    date(year, end_month, end_day),
+                    target_day,
+                )
+            )
+            occupied_spans.append(match.span())
+
+        fuzzy_range_pattern = re.compile(
+            r"(?P<sm>\d{1,2})月(?P<sp>上旬|中旬|下旬|初|底|末)\s*[-—~至到]\s*(?P<em>\d{1,2})月(?P<ep>上旬|中旬|下旬|初|底|末)"
+        )
+        for match in fuzzy_range_pattern.finditer(text):
+            start = self._fuzzy_month_window(year, int(match.group("sm")), match.group("sp"))[0]
+            end = self._fuzzy_month_window(year, int(match.group("em")), match.group("ep"))[1]
+            candidates.append(
+                self._activity_candidate(match.group(0), match.start(), start, end, target_day)
+            )
+            occupied_spans.append(match.span())
+
+        exact_pattern = re.compile(r"(?P<m>\d{1,2})月(?P<d>\d{1,2})日")
+        for match in exact_pattern.finditer(text):
+            if self._is_span_inside(match.span(), occupied_spans):
+                continue
+            event_day = date(year, int(match.group("m")), int(match.group("d")))
+            candidates.append(
+                self._activity_candidate(match.group(0), match.start(), event_day, event_day, target_day)
+            )
+
+        fuzzy_pattern = re.compile(r"(?P<m>\d{1,2})月(?P<p>上旬|中旬|下旬|初|底|末)")
+        for match in fuzzy_pattern.finditer(text):
+            if self._is_span_inside(match.span(), occupied_spans):
+                continue
+            start, end = self._fuzzy_month_window(year, int(match.group("m")), match.group("p"))
+            candidates.append(
+                self._activity_candidate(match.group(0), match.start(), start, end, target_day)
+            )
+
+        return candidates
+
+    def _activity_candidate(
+        self,
+        date_text: str,
+        position: int,
+        start: date,
+        end: date,
+        target_day: date,
+    ) -> dict[str, Any]:
+        status_order = 0
+        distance = 0
+        if target_day < start:
+            status_order = 1
+            distance = (start - target_day).days
+        elif target_day > end:
+            status_order = 2
+            distance = (target_day - end).days
+        return {
+            "dateText": date_text,
+            "window": (start, end),
+            "rank": (status_order, distance, position),
+        }
+
+    def _is_span_inside(self, span: tuple[int, int], occupied_spans: list[tuple[int, int]]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in occupied_spans)
+
+    def _activity_target_relevance(
+        self,
+        date_text: str,
+        request: ExternalSignalRequest,
+    ) -> dict[str, str]:
+        target_day = self._target_day(request.target_date)
+        window = self._activity_date_window(date_text, target_day.year)
+        if not window:
+            return {
+                "status": "unknown",
+                "decisionUse": "活动日期待人工确认：只能作为背景信号，不能直接解释目标日异常。",
+            }
+        start, end = window
+        if start <= target_day <= end:
+            return {
+                "status": "active",
+                "decisionUse": "目标日命中：可作为当天客流异常的重要外部解释。",
+            }
+        if target_day < start:
+            return {
+                "status": "upcoming",
+                "decisionUse": "即将发生：适合提前排班备货，不能解释目标日当天异常。",
+            }
+        return {
+            "status": "expired",
+            "decisionUse": "活动已过：只能用于历史复盘，不能解释目标日当天异常。",
+        }
+
+    def _activity_date_window(self, date_text: str, year: int) -> tuple[date, date] | None:
+        today_range = re.search(
+            r"即日起\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日",
+            date_text,
+        )
+        if today_range:
+            end_month = int(today_range.group("em") or 12)
+            end_day = int(today_range.group("ed"))
+            return date(year, 1, 1), date(year, end_month, end_day)
+
+        exact_range = re.search(
+            r"(?P<sm>\d{1,2})月(?P<sd>\d{1,2})日\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日",
+            date_text,
+        )
+        if exact_range:
+            sm = int(exact_range.group("sm"))
+            sd = int(exact_range.group("sd"))
+            em = int(exact_range.group("em") or sm)
+            ed = int(exact_range.group("ed"))
+            return date(year, sm, sd), date(year, em, ed)
+
+        exact = re.search(r"(?P<m>\d{1,2})月(?P<d>\d{1,2})日", date_text)
+        if exact:
+            event_day = date(year, int(exact.group("m")), int(exact.group("d")))
+            return event_day, event_day
+
+        fuzzy_range = re.search(
+            r"(?P<sm>\d{1,2})月(?P<sp>上旬|中旬|下旬|初|底|末)\s*[-—~至到]\s*(?P<em>\d{1,2})月(?P<ep>上旬|中旬|下旬|初|底|末)",
+            date_text,
+        )
+        if fuzzy_range:
+            start = self._fuzzy_month_window(year, int(fuzzy_range.group("sm")), fuzzy_range.group("sp"))[0]
+            end = self._fuzzy_month_window(year, int(fuzzy_range.group("em")), fuzzy_range.group("ep"))[1]
+            return start, end
+
+        fuzzy = re.search(r"(?P<m>\d{1,2})月(?P<p>上旬|中旬|下旬|初|底|末)", date_text)
+        if fuzzy:
+            return self._fuzzy_month_window(year, int(fuzzy.group("m")), fuzzy.group("p"))
+        return None
+
+    def _fuzzy_month_window(self, year: int, month: int, period: str) -> tuple[date, date]:
+        if period in {"上旬", "初"}:
+            return date(year, month, 1), date(year, month, 10)
+        if period == "中旬":
+            return date(year, month, 11), date(year, month, 20)
+        if period in {"下旬", "底", "末"}:
+            last_day = 31 if month in {1, 3, 5, 7, 8, 10, 12} else 30
+            if month == 2:
+                last_day = 29 if year % 4 == 0 else 28
+            return date(year, month, 21), date(year, month, last_day)
+        return date(year, month, 1), date(year, month, 1)
 
     def _classify_activity_type(self, text: str) -> str:
         if any(keyword in text for keyword in ("市集", "快闪", "IP展", "IP 展")):
