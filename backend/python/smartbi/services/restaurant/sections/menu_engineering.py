@@ -72,6 +72,12 @@ class MenuEngineeringHandler(AbstractSectionHandler):
                 started,
             )
 
+        if revenue_col not in pos_df.columns:
+            for alias in ("实收额", "实收金额", "销售金额", "营业额"):
+                if alias in pos_df.columns:
+                    revenue_col = alias
+                    break
+
         missing_cols = [c for c in (name_col, qty_col, revenue_col) if c not in pos_df.columns]
         if missing_cols:
             return self.skipped(

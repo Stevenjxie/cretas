@@ -79,6 +79,9 @@ from smartbi.services.restaurant.sections.value_summary import ValueSummaryHandl
 from smartbi.services.restaurant.sections.advanced_traffic_persona import (
     AdvancedTrafficPersonaHandler,
 )
+from smartbi.services.restaurant.sections.boss_decision_brief import (
+    BossDecisionBriefHandler,
+)
 
 logger = logging.getLogger(__name__)
 _cache = SectionCache(ttl_seconds=300)
@@ -105,6 +108,7 @@ SECTION_DATA_KIND = {
     "review_competitive": "reviews",
     "sales_plan_tracking": "sales_summary",
     "advanced_traffic_persona": "none",
+    "boss_decision_brief": "none",
     # Everything else defaults to "pos" (set in compute_section)
 }
 
@@ -148,6 +152,7 @@ HANDLERS = {
     "store_kpi_dashboard": StoreKpiDashboardHandler(),
     "value_summary": ValueSummaryHandler(),
     "advanced_traffic_persona": AdvancedTrafficPersonaHandler(),
+    "boss_decision_brief": BossDecisionBriefHandler(),
 }
 
 

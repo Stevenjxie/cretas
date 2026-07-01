@@ -223,6 +223,7 @@ class TestRestaurantAnalyzerV2Integration:
             "reviewAnalysis",
             "memberRfm",
             "bomLayerStatus",
+            "bossDecisionBrief",
         }
         # All expected sections should appear
         missing = expected_possible_sections - set(sections.keys())
@@ -235,6 +236,7 @@ class TestRestaurantAnalyzerV2Integration:
         summary = report["summary"]
         assert summary["sectionsGenerated"]
         assert summary["totalDiagnoses"] >= 0
+        assert sections["bossDecisionBrief"]["ownerDecisionNow"]["today"].startswith("今天只做异常归因")
 
     def test_analyzer_graceful_degradation(self, sample_financial_data: dict) -> None:
         """Invalid POS data in one section should not break other sections."""

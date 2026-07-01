@@ -61,6 +61,12 @@ class MultiStoreComparisonHandler(AbstractSectionHandler):
         product_col = request.params.get("product_col", "商品名称")
         quantity_col = request.params.get("quantity_col", "数量")
 
+        if revenue_col not in pos_df.columns:
+            for alias in ("实收额", "实收金额", "销售金额", "营业额"):
+                if alias in pos_df.columns:
+                    revenue_col = alias
+                    break
+
         if store_col not in pos_df.columns:
             return self.skipped(request, f"POS 缺列 {store_col!r}", started)
         if revenue_col not in pos_df.columns:
