@@ -66,18 +66,19 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         }
 
         // ── 定位目标小结 (指定 seq / 默认最近一次); 已撤销 (硬删) → empty → 双撤幂等拒绝 ──
-        ProductionInterimSettlement settlement = (sessionSeq != null
+        ProductionInterimSettlement resolved = (sessionSeq != null
                 ? settlementRepository.findByFactoryIdAndProductionPlanIdAndSessionSeqAndDeletedAtIsNull(
                         factoryId, planId, sessionSeq)
                 : settlementRepository.findTopByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqDesc(
                         factoryId, planId))
-                .orElseThrow(() -> new BusinessException(409,
-                        sessionSeq != null
-                                ? "第 " + sessionSeq + " 次小结不存在或已撤销"
-                                : "无可撤销的小结")
-                        .withCode("INTERIM_SETTLE_NOT_FOUND")
-                        .withHint("该小结可能已被撤销, 请刷新后重试")
-                        .withHintTarget("撤销小结"));
+                .orElseThrow(() -> settlementNotFound(sessionSeq));
+
+        // 🔒 悲观写锁重读 (串行化并发双撤): 纯原料 (无 SFI/FG 入库) 的小结无 findForUpdate 锁点, 两并发撤销
+        //   会双还原料 usedQuantity → 幽灵库存。此处取 PESSIMISTIC_WRITE 行锁: 败者阻塞至赢者提交 (已硬删该行)
+        //   → 重读 empty → NOT_FOUND 拒绝。以 id 重读, 统一兼容 seq 指定 + findTop (最近一次) 两条入口。
+        ProductionInterimSettlement settlement = settlementRepository
+                .findByIdAndFactoryIdForUpdate(resolved.getId(), factoryId)
+                .orElseThrow(() -> settlementNotFound(sessionSeq));
 
         int seq = settlement.getSessionSeq() == null ? 0 : settlement.getSessionSeq();
         LocalDateTime postedAt = settlement.getPostedAt();
@@ -204,6 +205,14 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     // ─────────────────────────────────────────────────────────────
     // Helpers — reversalDetail 解析 (jsonb 回读: 量/成本存为字符串, 防数值精度漂移)
     // ─────────────────────────────────────────────────────────────
+
+    private static BusinessException settlementNotFound(Integer sessionSeq) {
+        return new BusinessException(409,
+                sessionSeq != null ? "第 " + sessionSeq + " 次小结不存在或已撤销" : "无可撤销的小结")
+                .withCode("INTERIM_SETTLE_NOT_FOUND")
+                .withHint("该小结可能已被撤销, 请刷新后重试")
+                .withHintTarget("撤销小结");
+    }
 
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asMap(Object o) {

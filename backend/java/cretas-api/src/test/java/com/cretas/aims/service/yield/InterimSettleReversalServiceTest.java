@@ -259,6 +259,46 @@ class InterimSettleReversalServiceTest {
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("INTERIM_REVERSE_NO_DETAIL"));
     }
 
+    // ── 🔒 悲观锁: 小结经 PESSIMISTIC_WRITE for-update 方法加载 (串行化并发双撤) ──
+    @Test
+    @DisplayName("🔒 小结经悲观写锁 findByIdAndFactoryIdForUpdate 加载 (串行化并发双撤锁点)")
+    void loadsSettlementUnderPessimisticLock() {
+        LocalDateTime postedAt = LocalDateTime.now();
+        Map<String, Object> detail = detail(List.of(sfiIn(ANCHOR, "60", "900")), List.of(), List.of(), List.of(), List.of());
+        stubTarget(1, settlement("s1", 1, postedAt, detail));
+
+        service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L);
+
+        // 断言: orchestrator 通过悲观锁 for-update 方法重读小结 (并发双撤的串行化锁点)
+        verify(settlementRepository, times(1)).findByIdAndFactoryIdForUpdate("s1", FACTORY);
+    }
+
+    // ── 🔒 并发败者: 锁获得前赢者已硬删 → for-update 重读 empty → NOT_FOUND, 不双还原料 ──
+    @Test
+    @DisplayName("🔒 并发双撤败者: 悲观锁重读 empty (赢者已硬删) → NOT_FOUND, 原料/行/硬删均不发生 (不双还幽灵库存)")
+    void concurrentLoserReReadsEmptyRejects() {
+        LocalDateTime postedAt = LocalDateTime.now();
+        Map<String, Object> detail = detail(List.of(), List.of(), List.of(), List.of(), List.of()); // 纯原料 (无 SFI/FG 入库)
+        ProductionInterimSettlement s = settlement("s1", 1, postedAt, detail);
+        // 初次解析命中, 但悲观锁重读 empty (赢者事务已提交+硬删该行)
+        when(settlementRepository.findByFactoryIdAndProductionPlanIdAndSessionSeqAndDeletedAtIsNull(FACTORY, PLAN_ID, 1))
+                .thenReturn(Optional.of(s));
+        when(settlementRepository.findByIdAndFactoryIdForUpdate("s1", FACTORY)).thenReturn(Optional.empty());
+        // 若未被锁挡住会去还的原料 (用于验证败者未触及)
+        MaterialConsumption mc = consumption("RB1", new BigDecimal("100"), postedAt);
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAt(PLAN_ID, FACTORY, postedAt))
+                .thenReturn(new ArrayList<>(List.of(mc)));
+
+        assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("INTERIM_SETTLE_NOT_FOUND"));
+
+        // 败者不双还原料 usedQuantity, 不清消耗戳, 不硬删
+        verify(materialBatchRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        assertThat(mc.getInterimSettledAt()).isNotNull();
+        verify(settlementRepository, never()).hardDeleteById(any());
+    }
+
     // ── 非 SAFETY_STOCK → 400 ──
     @Test
     @DisplayName("非存货生产计划撤销小结 → 400")
@@ -284,6 +324,7 @@ class InterimSettleReversalServiceTest {
         when(settlementRepository
                 .findTopByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqDesc(FACTORY, PLAN_ID))
                 .thenReturn(Optional.of(latest));
+        when(settlementRepository.findByIdAndFactoryIdForUpdate("s3", FACTORY)).thenReturn(Optional.of(latest));
 
         Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, null, 7L);
 
@@ -297,6 +338,9 @@ class InterimSettleReversalServiceTest {
 
     private void stubTarget(int seq, ProductionInterimSettlement s) {
         when(settlementRepository.findByFactoryIdAndProductionPlanIdAndSessionSeqAndDeletedAtIsNull(FACTORY, PLAN_ID, seq))
+                .thenReturn(Optional.of(s));
+        // 悲观锁重读 (串行化并发双撤): 默认返回同一 settlement (个别测试覆写为 empty 模拟并发败者)。
+        when(settlementRepository.findByIdAndFactoryIdForUpdate(s.getId(), FACTORY))
                 .thenReturn(Optional.of(s));
     }
 

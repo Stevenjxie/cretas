@@ -580,6 +580,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             sfi.setAccumulatedCost(acc);
         }
         // 重算 unitCost = accumulatedCost / producedQuantity (produced≤0 或 accumulatedCost null → null, 诚实)。
+        //   #6 已知 cost-only edge (数量安全, 不影响本次 diff 的数量正确性): produced/accumulatedCost 精确复原;
+        //   但若同锚仍残留其它"成本未知(null)"的 IN, 本重算得 acc/produced 非 null, 而诚实值应保持 null (poison
+        //   应延续)。F006 罕见 (同锚 IN 通常成本口径一致/全 null)。可 re-derive, 故留作已知限制不在此处修。
         sfi.setUnitCost((newProduced.signum() > 0 && acc != null)
                 ? acc.divide(newProduced, 4, RoundingMode.HALF_UP) : null);
         sfi.setAvailableQuantity(newAvailable);

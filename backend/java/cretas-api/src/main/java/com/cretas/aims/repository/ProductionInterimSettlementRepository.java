@@ -1,7 +1,9 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ProductionInterimSettlement;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -42,6 +44,21 @@ public interface ProductionInterimSettlementRepository
      */
     Optional<ProductionInterimSettlement> findByFactoryIdAndProductionPlanIdAndSessionSeqAndDeletedAtIsNull(
             String factoryId, String productionPlanId, Integer sessionSeq);
+
+    /**
+     * 撤销小结: 悲观写锁读取某次小结 (串行化并发双撤)。
+     *
+     * <p>为何必须锁: 撤销是 read-modify-delete。<b>纯原料 (无 SFI/FG 入库) 的小结</b> reversalDetail
+     * 的 sfiIn/fgCreated 为空 → 无 {@code findForUpdate} 锁点 → 两个并发撤销 (两标签页/客户端) 会各自读到
+     * 同一批消耗行并<b>双还原料 usedQuantity</b> (原料还回路径只 clamp 到 0, 从不 reject) → 幽灵库存。
+     * 用本方法在 orchestrator 初始加载即取 PESSIMISTIC_WRITE 行锁 → 第 2 个事务阻塞至第 1 个提交 (已硬删该行)
+     * → 第 2 个重读 empty → {@code INTERIM_SETTLE_NOT_FOUND} 拒绝, 不双还。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM ProductionInterimSettlement s "
+            + "WHERE s.id = :id AND s.factoryId = :factoryId AND s.deletedAt IS NULL")
+    Optional<ProductionInterimSettlement> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id, @Param("factoryId") String factoryId);
 
     /**
      * 撤销小结: 物理删除某次小结记录 (绕过 BaseEntity 的 {@code @SQLDelete} 软删)。
