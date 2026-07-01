@@ -423,7 +423,7 @@ class RestaurantExternalSignalService:
                 continue
 
             fetched += 1
-            html = str(getattr(response, "text", "") or "")
+            html = self._response_text(response)
             event = self._parse_mall_activity_html(raw_url, html, request)
             sources.append(
                 {
@@ -714,7 +714,24 @@ class RestaurantExternalSignalService:
         status_code = int(getattr(response, "status_code", 200) or 200)
         if status_code >= 400:
             return True
-        return self._robots_text_allows(str(getattr(response, "text", "") or ""), parsed.path or "/")
+        return self._robots_text_allows(self._response_text(response), parsed.path or "/")
+
+    def _response_text(self, response: Any) -> str:
+        text = str(getattr(response, "text", "") or "")
+        if text and "\ufffd" not in text:
+            return text
+        content = getattr(response, "content", None)
+        if not content:
+            return text
+        candidates: list[str] = []
+        for encoding in ("utf-8", "gb18030", "gbk"):
+            try:
+                candidates.append(bytes(content).decode(encoding))
+            except UnicodeDecodeError:
+                continue
+        if not candidates:
+            return text
+        return min(candidates, key=lambda value: value.count("\ufffd"))
 
     def _robots_text_allows(self, robots_text: str, path: str) -> bool:
         applies = False
@@ -789,7 +806,7 @@ class RestaurantExternalSignalService:
             return "亲子活动"
         if any(keyword in text for keyword in ("会员日", "会员")):
             return "会员日"
-        if any(keyword in text for keyword in ("演出", "音乐", "赛事", "体育")):
+        if any(keyword in text for keyword in ("演出", "音乐", "赛事", "体育", "电竞", "嘉年华")):
             return "文体活动"
         if any(keyword in text for keyword in ("展览", "艺术展", "装置")):
             return "展览活动"
