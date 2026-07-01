@@ -299,6 +299,50 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
     assert any("不能承诺利润能省多少" in gap for gap in page["missingDataInPlainWords"])
 
 
+def test_package_recommendation_can_infer_better_combo_than_existing_pair() -> None:
+    handler = BossDecisionBriefHandler()
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_PACKAGE_TEST",
+            upload_id=None,
+            sub_sector="鱼类餐饮",
+            store_name="套餐测试店",
+            params={
+                "pos_summary": {
+                    "aov": 140,
+                    "weekdayWeekend": {"weekdayAvgDailyRevenue": 10000, "weekendAvgDailyRevenue": 17000, "gapPct": 70},
+                    "customerSegments": [{"segment": "2人桌", "share": 0.52}],
+                },
+                "menu_summary": {
+                    "topProducts": [
+                        {"name": "招牌鱼锅", "revenue": 100000, "soldQty": 1000, "foodCost": 40000},
+                        {"name": "高价牛肉", "revenue": 90000, "soldQty": 1000, "foodCost": 80000},
+                        {"name": "手作豆花", "revenue": 30000, "soldQty": 1000, "foodCost": 3000},
+                    ],
+                    "basketPairs": [
+                        {"left": "招牌鱼锅", "right": "高价牛肉", "orders": 900},
+                    ],
+                },
+                "review_summary": {
+                    "positiveDishMentions": [{"name": "招牌鱼锅", "count": 80}],
+                    "negativeDishMentions": [],
+                },
+            },
+        ),
+        context={},
+    )
+
+    page = response.data["ownerDecisionPage"]
+    top_package = page["packageRecommendations"]["candidates"][0]
+
+    assert top_package["name"] == "招牌鱼锅 + 手作豆花"
+    assert top_package["source"] == "computed_combo"
+    assert top_package["grossMarginPct"] > 60
+    assert top_package["score"] > 80
+    assert any("招牌鱼锅 + 手作豆花" in action for action in page["doFirst"])
+
+
 def test_boss_decision_brief_registered_in_section_router() -> None:
     from smartbi.api.restaurant_sections import HANDLERS, SECTION_DATA_KIND
 

@@ -656,6 +656,11 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         positive_names = set(BossDecisionBriefHandler._item_names(review.get("positiveDishMentions") or []))
         negative_names = set(BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or []))
         two_person_share = BossDecisionBriefHandler._segment_share(pos, ("2人桌", "双人", "2人", "二人"))
+        aov = (
+            BossDecisionBriefHandler._safe_float(pos.get("aov"))
+            or BossDecisionBriefHandler._safe_float(pos.get("avgOrderRevenue"))
+            or BossDecisionBriefHandler._safe_float(pos.get("averageOrderValue"))
+        )
 
         if not metrics:
             return {
@@ -669,7 +674,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         max_pair_orders = max((pair.get("orders") or 0.0 for pair in pairs), default=0.0) or 1.0
         candidates: list[dict[str, Any]] = []
 
-        candidate_pairs = pairs or BossDecisionBriefHandler._fallback_package_pairs(metrics)
+        candidate_pairs = BossDecisionBriefHandler._candidate_package_pairs(metrics, pairs)
         for pair in candidate_pairs:
             names = [name for name in pair.get("items", []) if name in metrics]
             if len(names) < 2:
@@ -686,27 +691,32 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             gross_margin_pct = (gross_profit / package_price * 100) if gross_profit is not None else None
             margin_component = max(0.0, min((gross_margin_pct or 0.0) / 70.0, 1.0))
             sales_component = min(sum((item.get("revenue") or 0.0) for item in item_metrics) / (max_revenue * 2), 1.0)
-            pair_component = min((pair.get("orders") or 0.0) / max_pair_orders, 1.0) if pairs else 0.35
+            if pair.get("source") == "observed_pair":
+                pair_component = min((pair.get("orders") or 0.0) / max_pair_orders, 1.0)
+            else:
+                pair_component = 0.35 if pairs else 0.45
             positive_hits = sum(1 for name in names if BossDecisionBriefHandler._name_hits(name, positive_names))
             negative_hits = sum(1 for name in names if BossDecisionBriefHandler._name_hits(name, negative_names))
             review_component = max(0.0, min(0.5 + positive_hits * 0.25 - negative_hits * 0.25, 1.0))
             segment_component = 1.0 if two_person_share >= 0.35 else 0.5
+            price_fit_component = BossDecisionBriefHandler._price_fit_component(package_price, aov)
 
             if has_full_cost:
                 score = (
-                    margin_component * 35
-                    + sales_component * 25
-                    + pair_component * 20
+                    margin_component * 30
+                    + sales_component * 20
+                    + price_fit_component * 20
                     + review_component * 15
+                    + pair_component * 10
                     + segment_component * 5
                 )
                 status = "ready"
             else:
-                score = sales_component * 40 + pair_component * 30 + review_component * 20 + segment_component * 10
+                score = sales_component * 35 + price_fit_component * 25 + review_component * 20 + pair_component * 10 + segment_component * 10
                 status = "needs_cost_data"
 
             reasons = [
-                f"这组菜历史上有搭配记录 {int(pair.get('orders') or 0)} 次" if pair.get("orders") else "这组菜由热卖菜和适配加购菜组成",
+                f"这组菜历史上有搭配记录 {int(pair.get('orders') or 0)} 次" if pair.get("source") == "observed_pair" else "这是根据菜品收入、成本、价格带和客群推算出的新组合",
                 f"当前 2 人桌占比约 {round(two_person_share * 100, 1)}%，适合做小套餐" if two_person_share else "适合先用小份组合测试工作日",
             ]
             if gross_margin_pct is not None:
@@ -727,11 +737,13 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "grossMarginPct": round(gross_margin_pct, 1) if gross_margin_pct is not None else None,
                 "score": round(score, 1),
                 "status": status,
+                "source": pair.get("source") or "computed_combo",
                 "scoreBreakdown": {
-                    "margin": round(margin_component * 35, 1) if has_full_cost else None,
-                    "sales": round(sales_component * (25 if has_full_cost else 40), 1),
-                    "pairing": round(pair_component * (20 if has_full_cost else 30), 1),
+                    "margin": round(margin_component * 30, 1) if has_full_cost else None,
+                    "sales": round(sales_component * (20 if has_full_cost else 35), 1),
+                    "priceFit": round(price_fit_component * (20 if has_full_cost else 25), 1),
                     "review": round(review_component * (15 if has_full_cost else 20), 1),
+                    "pairing": round(pair_component * 10, 1),
                     "twoPersonFit": round(segment_component * (5 if has_full_cost else 10), 1),
                 },
                 "reason": "；".join(reasons),
@@ -743,8 +755,9 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         return {
             "status": "ready" if has_ready else "needs_cost_data",
             "methodology": (
-                "有成本时按毛利35%、销量25%、搭配20%、点评15%、2人桌适配5%排序；"
-                "没成本时只按销量、搭配、点评和桌型先排候选，不承诺毛利。"
+                "先用已知菜品自动组合候选套餐，再和历史搭配一起排序；"
+                "有成本时按毛利30%、销量20%、价格吸引20%、点评15%、搭配10%、2人桌适配5%排序；"
+                "没成本时只按销量、价格、点评、搭配和桌型先排候选，不承诺毛利。"
             ),
             "candidates": candidates[:3],
             "dataNeeded": [] if has_ready else ["菜品 BOM/单位成本", "采购价", "套餐实际折扣价", "7 天套餐核销和复购"],
@@ -1130,16 +1143,75 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             else:
                 continue
             if len(names) >= 2:
-                pairs.append({"items": names[:2], "orders": orders or 0.0})
+                pairs.append({"items": names[:2], "orders": orders or 0.0, "source": "observed_pair"})
         return pairs
+
+    @staticmethod
+    def _candidate_package_pairs(
+        metrics: dict[str, dict[str, Any]],
+        observed_pairs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for pair in observed_pairs:
+            items = [str(name) for name in pair.get("items", []) if name in metrics]
+            if len(items) < 2:
+                continue
+            key = BossDecisionBriefHandler._pair_key(items[0], items[1])
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(pair)
+
+        for pair in BossDecisionBriefHandler._fallback_package_pairs(metrics):
+            key = BossDecisionBriefHandler._pair_key(pair["items"][0], pair["items"][1])
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(pair)
+        return candidates
 
     @staticmethod
     def _fallback_package_pairs(metrics: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         items = sorted(metrics.values(), key=lambda item: item.get("revenue") or 0.0, reverse=True)
         if len(items) < 2:
             return []
-        lead = items[0]["name"]
-        return [{"items": [lead, item["name"]], "orders": 0.0} for item in items[1:4]]
+        lead_candidates = items[:3]
+        add_on_candidates = sorted(
+            items[1:8],
+            key=lambda item: (
+                item.get("unitRevenue") or 0.0,
+                -(item.get("revenue") or 0.0),
+            ),
+        )
+
+        pairs: list[dict[str, Any]] = []
+        for lead in lead_candidates:
+            for addon in add_on_candidates:
+                if lead["name"] == addon["name"]:
+                    continue
+                pairs.append({"items": [lead["name"], addon["name"]], "orders": 0.0, "source": "computed_combo"})
+        return pairs
+
+    @staticmethod
+    def _pair_key(left: str, right: str) -> tuple[str, str]:
+        return tuple(sorted((left, right)))
+
+    @staticmethod
+    def _price_fit_component(package_price: float, aov: float | None) -> float:
+        if not aov or aov <= 0:
+            return 0.65
+        ratio = package_price / aov
+        if 0.75 <= ratio <= 1.05:
+            return 1.0
+        if 1.05 < ratio <= 1.2:
+            return 0.8
+        if 0.6 <= ratio < 0.75:
+            return 0.75
+        if 1.2 < ratio <= 1.4:
+            return 0.55
+        return 0.3
 
     @staticmethod
     def _segment_share(pos: dict[str, Any], tokens: tuple[str, ...]) -> float:
