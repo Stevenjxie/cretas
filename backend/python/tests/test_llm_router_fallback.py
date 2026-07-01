@@ -150,9 +150,11 @@ def test_fast_slots_disable_thinking_on_aliyun_hybrid():
     assert p["enable_thinking"] is False
 
 
-def test_reasoning_enables_thinking_on_hybrid():
+def test_reasoning_does_not_force_enable_thinking():
+    # deepseek-v3.1 400s on enable_thinking=true (only supports false/absent); forced
+    # deep thinking also times out call_chain. REASONING must NOT inject enable_thinking.
     p = llm_router._apply_slot_params(SLOT.REASONING, "aliyun_c", "deepseek-v3.1", {"messages": []})
-    assert p["enable_thinking"] is True
+    assert "enable_thinking" not in p
 
 
 def test_thinking_only_model_gets_no_enable_thinking():
