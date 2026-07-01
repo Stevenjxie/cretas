@@ -328,9 +328,95 @@ class InterimSettleServiceTest {
                 .hasMessageContaining("半成品库存不足");
     }
 
+    @Test
+    @DisplayName("option F: 纯 SFI 中间道小结 → 产出入 SFI(postClerkOutput 锚+productType+净量) + 输入 SFI 扣减(consumeClerkSemiStrict)")
+    void pureSfiMiddleStepPostsOutputAndDrawsInput() {
+        // 道M: 非成品, 纯 SFI 投料 (吃常驻 SFI-IN-A feed 50), 产出 40 → 入本计划 SFI 锚。
+        //   batchId=null (option F 不物化 WIP), batchNumber=锚, rowStatus=SAVED_SFI。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRow rM = pureSfiRow(30L, 1, anchor,
+                reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-IN-A", "50")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 输入 SFI 扣减 (严格版, 禁止降级)
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-A"), eq(new BigDecimal("50")));
+        assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
+        // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null));
+        assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
+        @SuppressWarnings("unchecked")
+        List<String> semiIn = (List<String>) s.get("semiInBatchNumbers");
+        assertThat(semiIn).containsExactly(anchor);
+        // 非成品 → 不进 FG
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        // 行已打戳 (产出侧幂等)
+        assertThat(rM.getInterimSettledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("option F 链: 道A(纯SFI, 小结1 产出入 anchorY) → 道B(小结2 吃 anchorY) → SFI Y 先升 60 后降 60 净平")
+    void pureSfiChainAcrossSettlements() {
+        // 道A: 非成品纯 SFI (吃常驻 SFI-RAW feed 100), 产出 60 → 入 anchorY (本计划 PT1)。
+        String anchorY = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRow rA = pureSfiRow(40L, 1, anchorY,
+                reqNonFinished(1, anchorY, new BigDecimal("60"), upstreamSemi("SFI-RAW", "100")));
+        // 道B: 成品, 吃 道A 产出的 SFI (anchorY, semiFinished=true) feed 60, productWeight 9kg → FG。
+        ProcessSheetRow rB = row(41L, 2, "CLK-B-B", reqFinished(2, "CLK-B-B", new BigDecimal("50"),
+                new BigDecimal("9"), upstreamSemi(anchorY, "60")));
+
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(rA))            // 小结1: 仅道A 未结
+                .thenReturn(List.of(rA, rB));        // 小结2: 道A 已结 + 道B 未结
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>())
+                .thenReturn(new ArrayList<>());
+
+        // ── 小结1: 道A 产出入 anchorY (+60), 输入 SFI-RAW 严格扣 100 ──
+        Map<String, Object> s1 = service.interimSettle(FACTORY, PLAN_ID, 7L);
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-RAW"), eq(new BigDecimal("100")));
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchorY), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null));
+        assertThat(s1.get("semiInQuantity")).isEqualTo(new BigDecimal("60"));
+        assertThat(rA.getInterimSettledAt()).isNotNull();
+
+        // ── 小结2: 道B 吃 anchorY (-60, 严格扣减), 成品 → FG ──
+        Map<String, Object> s2 = service.interimSettle(FACTORY, PLAN_ID, 7L);
+        assertThat(s2.get("sessionSeq")).isEqualTo(2);
+        // anchorY 被严格扣减 60 (先升后降净平)
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq(anchorY), eq(new BigDecimal("60")));
+        // 小结2 无新 SFI IN (道B 成品), postClerkOutput 累计仍 1 次 (仅来自小结1)
+        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        // 道B 成品 → FG 入库
+        verify(finishedGoodsBatchRepository, times(1)).save(any());
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Builders
     // ─────────────────────────────────────────────────────────────
+
+    /** option F 纯 SFI 中间道行: batchId=null (无 WIP/ProductionBatch), batchNumber=SFI 锚, rowStatus=SAVED_SFI. */
+    private ProcessSheetRow pureSfiRow(Long id, int order, String batchNumber, ProcessSheetRowRequest req) {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setId(id);
+        row.setFactoryId(FACTORY);
+        row.setPlanId(PLAN_ID);
+        row.setProcessCode(req.getProcessCode());
+        row.setProcessOrder(order);
+        row.setClientRowId("c" + id);
+        row.setBatchId(null);
+        row.setBatchNumber(batchNumber);
+        row.setRowStatus(ProcessSheetRow.STATUS_SAVED_SFI);
+        row.setRowPayload(toJson(req));
+        return row;
+    }
 
     private ProcessSheetRow row(Long id, int order, String batchNumber, ProcessSheetRowRequest req) {
         ProcessSheetRow row = new ProcessSheetRow();

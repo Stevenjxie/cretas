@@ -63,6 +63,17 @@ public class ProcessSheetRow extends BaseEntity {
     @Column(name = "row_payload", nullable = false, columnDefinition = "jsonb")
     private String rowPayload;
 
+    /**
+     * option F: 纯半成品(SFI)喂的非成品中间道行标记 —— 该行<b>不物化</b> WIP MaterialBatch
+     * (无 raw lineage 无法派生 material_type_id), 产出在小结直接入半成品库(SFI)。
+     *
+     * <p>此类行 {@code batchId == null} (无 WIP/ProductionBatch) 但 {@code batchNumber} = SFI 锚
+     * (见 {@link com.cretas.aims.service.wip.WipInventoryService#clerkSemiAnchor}),
+     * 借 {@code rowStatus} 与普通 DRAFT (batchNumber==null) / 已物化行 (batchId!=null) 区分,
+     * 使小结 SFI in/out 结算能定位其产出过账。
+     */
+    public static final String STATUS_SAVED_SFI = "SAVED_SFI";
+
     @Column(name = "row_status", nullable = false)
     private String rowStatus = "SAVED";
 

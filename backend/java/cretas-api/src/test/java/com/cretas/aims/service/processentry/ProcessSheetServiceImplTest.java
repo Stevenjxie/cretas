@@ -461,18 +461,68 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
-    @DisplayName("SFI-3: 中间道(非成品)仅 SFI 投料 + output>0 → 400 (无 raw 维度无法物化 WIP, 非裸 500)")
-    void saveRow_nonFinishedSfiOnly_throws400() {
-        seedSfi("SFI-STANDING-3", "50");   // 存在性通过 → 才到 resolveRawMaterialTypeId 抛 400
+    @DisplayName("SFI-3 (option F): 中间道(非成品)仅 SFI 投料 + output>0 → 保存成功, 不物化 WIP/ProductionBatch, batchNumber=SFI 锚, rowStatus=SAVED_SFI, 成本诚实 null")
+    void saveRow_nonFinishedSfiOnly_savesToSfiNoWip() {
+        seedSfi("SFI-STANDING-3", "50");   // 保存需 SFI 真实存在 (loud-fail 存在性校验)
         ProcessSheetRowRequest req = baseReq("row-sfi-mid", "shuzhi", 2, "40");
         req.setInputQuantity(new BigDecimal("50"));
         UpstreamRef sfi = upstreamRef("SFI-STANDING-3", "50");
         sfi.setSemiFinished(true);
         req.setUpstreamSources(List.of(sfi));
 
-        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        // option F: 不物化 raw-lineage WIP (SFI 只有 product-type 维度), 产出直接入 SFI
+        assertThat(result.isMaterialized()).as("纯 SFI 中间道不物化 WIP").isFalse();
+        assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
+        // batchNumber = SFI 锚 (小结 SFI IN 定位), yieldRate 仍算 (40/50*100=80), 成本诚实 null
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        assertThat(result.getYieldRate()).isEqualByComparingTo("80");
+        assertThat(result.getRowTotalCost()).as("SFI 成本诚实 null (不假成 0)").isNull();
+
+        // 无任何 WIP MaterialBatch 落库 (未物化)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", "0"))
+                .as("不物化 → 无 WIP (探测无副作用)").isEmpty();
+
+        // 行持久化: rowStatus=SAVED_SFI, batchNumber=锚, 未物化, payload 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        assertThat(views.get(0).isMaterialized()).isFalse();
+        assertThat(views.get(0).getBatchNumber()).isEqualTo(expectedAnchor);
+        assertThat(views.get(0).getPayload().getUpstreamSources().get(0).isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-3b (option F): DRAFT(output≤0) 再存为纯 SFI 中间道(output>0) → resave 不物化, SAVED_SFI")
+    void resave_draftToPureSfi_savesToSfiNoWip() {
+        seedSfi("SFI-STANDING-3B", "50");
+        // 先存 DRAFT (output 0)
+        ProcessSheetRowRequest draft = baseReq("row-sfi-mid-b", "shuzhi", 2, "0");
+        draft.setOutputQuantity(BigDecimal.ZERO);
+        ProcessSheetRowResult d = processSheetService.saveRow(FACTORY_ID, planId, draft, operatorId);
+        assertThat(d.isMaterialized()).isFalse();
+
+        // 再存: 纯 SFI 中间道 output>0
+        ProcessSheetRowRequest req = baseReq("row-sfi-mid-b", "shuzhi", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-3B", "50");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isUpdated()).as("resave → updated=true").isTrue();
+        assertThat(result.isMaterialized()).as("纯 SFI → 不物化").isFalse();
+        assertThat(result.getBatchId()).isNull();
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
     }
 
     @Test

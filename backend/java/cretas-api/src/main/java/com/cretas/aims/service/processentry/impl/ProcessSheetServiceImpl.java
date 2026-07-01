@@ -37,6 +37,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -134,6 +135,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return buildResult(req, null, null, null, null, null, false, false, warnings);
         }
 
+        // 6.5 option F: 纯半成品(SFI)喂的非成品中间道 —— 不物化 raw-lineage WIP MaterialBatch
+        //   (SFI 只有 product-type 维度, 无 raw_material_types FK 可派生 material_type_id)。产出直接入
+        //   半成品库(SFI), 停留在 product 维度; 输入 SFI 的扣减在小结走 consumeClerkSemiStrict
+        //   (SFI 边已在 resolveEdges 跳过, 此处 edges 为空)。行以 batchNumber=SFI 锚 + rowStatus=SAVED_SFI
+        //   持久化, 供小结 ③ SFI IN 定位过账 (见 InterimSettleServiceImpl)。
+        //   成品道 (气调) 的纯 SFI 场景走原路径 (materializeBatch finished=true 不建 WIP → FG), 不入此分支。
+        if (!req.isFinished() && isPureSemiFinishedFed(req)) {
+            String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
+            persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
+            logChange(factoryId, planId, req, "CREATE", null, req, userId);
+            // materialized=false: 无 WIP 批 (产出在小结入 SFI); yieldRate 仍可算; 成本诚实 null。
+            return buildResult(req, null, anchor, yieldRate(req), null, null, false, false, warnings);
+        }
+
         // 4. SP-E FK 防线: WIP 批 material_type_id 必从原料或上游 WIP 派生 (空 → 400)
         String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
 
@@ -218,6 +233,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 updateRowInPlace(existing, req, null, null, "DRAFT");
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
                 return buildResult(req, null, null, null, null, null, true, false, warnings);
+            }
+            // option F: 纯 SFI 非成品道 (output>0) → 更新行为 SAVED_SFI, 不物化 (同 create 路径)。
+            //   产出在小结入 SFI; 输入 SFI 在小结 consumeClerkSemiStrict 扣减。
+            if (!req.isFinished() && isPureSemiFinishedFed(req)) {
+                String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
+                updateRowInPlace(existing, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
+                logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+                return buildResult(req, null, anchor, yieldRate(req), null, null, true, false, warnings);
             }
             // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
             String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
@@ -1315,18 +1338,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 return e.getSourceBatch().getMaterialTypeId();
             }
         }
-        // 半成品库存(SFI)投料 (半成品直接产成品): SFI 只有 productType 维度, 无 raw_material_types FK,
+        // 半成品库存(SFI)投料: SFI 只有 productType 维度, 无 raw_material_types FK,
         //   且 SFI 边已在 resolveEdges 跳过 → 无 RAW/in-plan-SEMI 边可派生 materialTypeId。
         //   成品道 (气调) 不物化 WIP MaterialBatch (materializeBatch 仅 !finished 时建 WIP), 此返回值不被使用
-        //   → 返回 null (诚实, 无 raw lineage)。非成品道需产出 WIP 批 (material_type_id NOT NULL), 此时无 raw
-        //   维度无法物化 → 保留明确 400, 而非让 createWipMaterialBatch 撞 NOT NULL 抛裸 500。
+        //   → 返回 null (诚实, 无 raw lineage)。
+        //   [option F] 非成品的「纯 SFI 中间道」已在 saveRow/resaveRow 上游拦截 (isPureSemiFinishedFed):
+        //   不物化 WIP, 产出直接入 SFI, 根本不会走到这里。因此下面的 400 现在只作为防御, 仅对
+        //   「非成品 + 含 SFI 投料 + 但混有无法派生 materialTypeId 的在制来源」这类残余不可解场景兜底。
         if (hasSemiFinishedUpstream(req)) {
             if (req.isFinished()) {
                 return null;
             }
             throw new BusinessException(400,
-                    "半成品库存(SFI)投料仅支持直接产成品(气调成品道); 中间道若产半成品需至少一条原料/在制来源以确定物料类型")
-                    .withHint("请在该道补一条原料或在制半成品来源, 或将本道设为成品道")
+                    "半成品库存(SFI)投料无法确定物料类型: 该道混有无法派生物料类型的来源")
+                    .withHint("请检查该道来源; 纯半成品喂的中间道应不含其他无物料类型的在制来源")
                     .withHintTarget(req.getProcessCode());
         }
         throw new BusinessException(400, "无法确定原料类型，无法物化批次");
@@ -1336,6 +1361,29 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private boolean hasSemiFinishedUpstream(ProcessSheetRowRequest req) {
         return req.getUpstreamSources() != null
                 && req.getUpstreamSources().stream().anyMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
+    }
+
+    /**
+     * option F: 该行是否为「纯半成品(SFI)喂的中间道」——
+     * 含 SFI 投料, 且<b>所有</b>上游来源均为 SFI (semiFinished=true), 且<b>无</b>原料投入。
+     *
+     * <p>这类道无 raw lineage 无法派生 {@code material_type_id}, 故<b>不物化</b> WIP MaterialBatch;
+     * 产出在小结直接入半成品库(SFI), 停留在 product-type 维度 (复用 SFI in/out)。
+     * 注意: {@code allSemi} 已排除「混有 in-plan WIP (semiFinished=false) 上游」的情形;
+     * 「原料+SFI 混批」因 {@code hasRaw} 返 false (走原路径, 从 raw 派生 materialTypeId)。
+     *
+     * <p>成品道 (isFinished) 的纯 SFI 场景不归此判定管辖 —— 调用方另行以 {@code !isFinished()} 限定。
+     */
+    private boolean isPureSemiFinishedFed(ProcessSheetRowRequest req) {
+        List<ProcessSheetRowRequest.UpstreamRef> ups = req.getUpstreamSources();
+        if (ups == null || ups.isEmpty()) {
+            return false;
+        }
+        boolean allSemi = ups.stream().allMatch(ProcessSheetRowRequest.UpstreamRef::isSemiFinished);
+        if (!allSemi) {
+            return false;
+        }
+        return req.getRawMaterialInputs() == null || req.getRawMaterialInputs().isEmpty();
     }
 
     // ─────────────────────────────────────────────────────────────

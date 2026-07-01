@@ -14,6 +14,26 @@ import java.util.List;
  */
 public interface WipInventoryService {
 
+    /**
+     * SFI 半成品库运行余额行锚 (per-(plan,productType))。
+     *
+     * <p>格式 {@code CLK-SEMI-{planId[0..8]}-{productTypeId[0..8]}} (各取前 8 位, 总长 ≤64)。
+     *
+     * <p><b>单一真源</b>: 小结入库 ({@link #postClerkOutput} 的 {@code intermediateBatchNo}) 与
+     * 逐道保存 (option F: 纯半成品喂的非成品中间道产出定位) 必须使用<b>同一锚</b>, 故提为
+     * 共享静态方法, 防两处派生逻辑漂移。null 段以 {@code 00000000} 占位。
+     */
+    static String clerkSemiAnchor(String planId, String productTypeId) {
+        return "CLK-SEMI-" + head8(planId) + "-" + head8(productTypeId);
+    }
+
+    private static String head8(String s) {
+        if (s == null) {
+            return "00000000";
+        }
+        return s.length() <= 8 ? s : s.substring(0, 8);
+    }
+
     default SemiFinishedInventory validateSourceWip(String sourceWipNo, BigDecimal inputQuantity, String inputUnit) {
         return validateSourceWip(null, sourceWipNo, inputQuantity, inputUnit, null);
     }

@@ -125,8 +125,12 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         List<UnsettledRow> unsettledRows = new ArrayList<>();
         Set<String> unsettledBatchNumbers = new HashSet<>();
         for (ProcessSheetRow row : allRows) {
-            if (row.getBatchId() == null || row.getBatchNumber() == null) {
-                continue; // DRAFT / 未物化行 → 无产出可过账
+            // option F: 纯半成品(SFI)喂的非成品中间道 (rowStatus=SAVED_SFI) 不物化 WIP → batchId==null,
+            //   但 batchNumber=SFI 锚。它需参与 SFI in/out 结算 (产出入 SFI + 输入 SFI 扣减),
+            //   不能当 DRAFT 跳过。普通 DRAFT (batchNumber==null) 与已物化行 (batchId!=null) 照常。
+            boolean pureSfiOut = ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus());
+            if ((row.getBatchId() == null && !pureSfiOut) || row.getBatchNumber() == null) {
+                continue; // DRAFT / 未物化行 (无批次号) → 无产出可过账
             }
             ProcessSheetRowRequest req = parsePayload(row.getRowPayload());
             if (req == null) {
@@ -347,18 +351,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     // Helpers
     // ─────────────────────────────────────────────────────────────
 
-    /** SFI 运行余额行锚: per-(plan,productType), planId/productTypeId 各取前 8, 总长 ≤64. */
+    /**
+     * SFI 运行余额行锚: per-(plan,productType), planId/productTypeId 各取前 8, 总长 ≤64.
+     *
+     * <p>委托共享单一真源 {@link WipInventoryService#clerkSemiAnchor} —— 逐道保存 (option F 纯 SFI
+     * 中间道产出定位) 与本处小结入库必须用同一锚, 集中派生防漂移。
+     */
     private String semiAnchor(String planId, String productTypeId) {
-        String p = head(planId, 8);
-        String t = head(productTypeId, 8);
-        return "CLK-SEMI-" + p + "-" + t;
-    }
-
-    private static String head(String s, int n) {
-        if (s == null) {
-            return "00000000";
-        }
-        return s.length() <= n ? s : s.substring(0, n);
+        return WipInventoryService.clerkSemiAnchor(planId, productTypeId);
     }
 
     /** 前序各次小结 summary.semiInBatchNumbers 并集 (本次之前已入库的半成品 batchNumber). */
