@@ -10,8 +10,11 @@ Provider keys are read only from environment variables and are never returned.
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from hashlib import md5
+from html import unescape
 import os
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -103,6 +106,7 @@ class RestaurantExternalSignalService:
 
     qweather_now_url = "https://devapi.qweather.com/v7/weather/now"
     damai_gateway_url = "https://eco.taobao.com/router/rest"
+    mall_activity_user_agent = "CretasRestaurantSignalBot/1.0 (+https://cretas.local/bot-policy)"
 
     def __init__(
         self,
@@ -347,6 +351,108 @@ class RestaurantExternalSignalService:
             "snapshots": snapshots,
         }
 
+    def collect_mall_activity_feeds(
+        self,
+        request: ExternalSignalRequest,
+        *,
+        feed_urls: list[str] | None = None,
+        max_pages: int = 5,
+    ) -> dict[str, Any]:
+        """Collect public mall activity pages without anti-bot bypass.
+
+        The crawler is intentionally conservative: configured URLs only,
+        explicit bot UA, robots check, no login/cookies/captcha bypass, and
+        no WeChat public-account history crawling.
+        """
+
+        urls = feed_urls if feed_urls is not None else self._mall_feed_urls()
+        events: list[dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
+        fetched = 0
+
+        for raw_url in [url.strip() for url in urls if url and url.strip()][:max_pages]:
+            blocked_reason = self._unsupported_platform_reason(raw_url)
+            if blocked_reason:
+                sources.append(
+                    {
+                        "url": raw_url,
+                        "status": "unsupported_platform_crawl",
+                        "reason": blocked_reason,
+                    }
+                )
+                continue
+
+            parsed = urlparse(raw_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                sources.append(
+                    {
+                        "url": raw_url,
+                        "status": "invalid_url",
+                        "reason": "只支持 http/https 公开 URL。",
+                    }
+                )
+                continue
+
+            if not self._robots_allowed(raw_url):
+                sources.append(
+                    {
+                        "url": raw_url,
+                        "status": "robots_disallowed",
+                        "reason": "robots.txt 禁止抓取该路径。",
+                    }
+                )
+                continue
+
+            response = self._http_client.get(
+                raw_url,
+                headers={
+                    "User-Agent": self.mall_activity_user_agent,
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+                timeout=8.0,
+            )
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            if status_code >= 400:
+                sources.append(
+                    {
+                        "url": raw_url,
+                        "status": "http_error",
+                        "reason": f"HTTP {status_code}",
+                    }
+                )
+                continue
+
+            fetched += 1
+            html = str(getattr(response, "text", "") or "")
+            event = self._parse_mall_activity_html(raw_url, html, request)
+            sources.append(
+                {
+                    "url": raw_url,
+                    "status": "parsed" if event else "empty",
+                    "reason": None if event else "页面里没有识别到活动标题。",
+                }
+            )
+            if event:
+                events.append(event)
+
+        return {
+            "type": "mall_activity_feed",
+            "source": "商场活动采集",
+            "status": "collected" if events else "skipped",
+            "mallName": request.mall_name,
+            "targetDate": self._target_day(request.target_date).isoformat(),
+            "fetched": fetched,
+            "events": events,
+            "sources": sources,
+            "policy": {
+                "mode": "public_url_only",
+                "userAgent": self.mall_activity_user_agent,
+                "noBypass": True,
+                "noLogin": True,
+                "robotsRespected": True,
+            },
+        }
+
     def build_damai_signed_params(
         self,
         method: str,
@@ -567,15 +673,145 @@ class RestaurantExternalSignalService:
                 "plainImpact": f"{mall} 的活动源还没配置，商场市集、IP 展、会员日只能人工核验。",
                 "actionHint": "先把商场官网活动页、公众号文章列表或小程序活动页 URL 放入配置。",
             }
+        crawl_result = self.collect_mall_activity_feeds(request)
         return {
             "type": "mall_activity",
             "source": "商场活动采集",
-            "status": "ready",
-            "reason": "活动源 URL 已配置，可由后续 HTML/RSS/人工审核采集器消费。",
+            "status": "collected" if crawl_result["events"] else "ready",
+            "reason": "活动源 URL 已配置，已按公开页面采集。" if crawl_result["events"] else "活动源 URL 已配置，但本次未识别到活动。",
             "budgetCost": 0,
             "plainImpact": f"{mall} 的活动源可用于解释非节假日客流异常。",
             "actionHint": "每天采集标题、活动日期、楼层/场地和品牌，再与门店异常日匹配。",
+            "events": crawl_result["events"],
+            "sources": crawl_result["sources"],
         }
+
+    def _mall_feed_urls(self) -> list[str]:
+        raw = self._env_value("MALL_ACTIVITY_FEED_URLS")
+        return [item.strip() for item in re.split(r"[\n,;]+", raw) if item.strip()]
+
+    def _unsupported_platform_reason(self, raw_url: str) -> str | None:
+        parsed = urlparse(raw_url)
+        host = parsed.netloc.lower()
+        query = parsed.query.lower()
+        path = parsed.path.lower()
+        if host == "mp.weixin.qq.com" and (
+            "/cgi-bin/" in path or "appmsg" in path or "action=list" in query
+        ):
+            return "不抓取微信公众号历史/搜索接口；只支持人工投喂的单篇公开文章或商场官网活动页。"
+        if any(host.endswith(domain) for domain in ("dianping.com", "xiaohongshu.com")):
+            return "不抓取强平台内容；需要走官方授权、公开 API 或人工摘要。"
+        return None
+
+    def _robots_allowed(self, raw_url: str) -> bool:
+        parsed = urlparse(raw_url)
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        response = self._http_client.get(
+            robots_url,
+            headers={"User-Agent": self.mall_activity_user_agent},
+            timeout=5.0,
+        )
+        status_code = int(getattr(response, "status_code", 200) or 200)
+        if status_code >= 400:
+            return True
+        return self._robots_text_allows(str(getattr(response, "text", "") or ""), parsed.path or "/")
+
+    def _robots_text_allows(self, robots_text: str, path: str) -> bool:
+        applies = False
+        for raw_line in robots_text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line or ":" not in line:
+                continue
+            key, value = [part.strip() for part in line.split(":", 1)]
+            key_lower = key.lower()
+            value_lower = value.lower()
+            if key_lower == "user-agent":
+                applies = value_lower in {"*", "cretasrestaurantsignalbot"}
+            elif applies and key_lower == "disallow":
+                if value and path.startswith(value):
+                    return False
+        return True
+
+    def _parse_mall_activity_html(
+        self,
+        raw_url: str,
+        html: str,
+        request: ExternalSignalRequest,
+    ) -> dict[str, Any] | None:
+        title = self._first_html_text(html, "h1") or self._first_html_text(html, "title")
+        if not title:
+            return None
+        text = self._html_to_text(html)
+        date_text = self._extract_activity_date(text)
+        activity_type = self._classify_activity_type(f"{title} {text}")
+        return {
+            "title": title,
+            "dateText": date_text,
+            "activityType": activity_type,
+            "mallName": request.mall_name,
+            "city": request.city,
+            "businessDistrict": request.business_district,
+            "sourceUrl": raw_url,
+            "expectedImpact": self._activity_expected_impact(activity_type),
+            "bossAction": self._activity_boss_action(activity_type),
+            "rawExcerpt": text[:180],
+        }
+
+    def _first_html_text(self, html: str, tag: str) -> str:
+        match = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        return self._clean_text(match.group(1))
+
+    def _html_to_text(self, html: str) -> str:
+        without_script = re.sub(
+            r"<(script|style)[^>]*>.*?</\1>",
+            " ",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return self._clean_text(re.sub(r"<[^>]+>", " ", without_script))
+
+    def _clean_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", text))).strip()
+
+    def _extract_activity_date(self, text: str) -> str:
+        match = re.search(
+            r"\d{1,2}月\d{1,2}日(?:\s*[-—~至到]\s*(?:\d{1,2}月)?\d{1,2}日)?",
+            text,
+        )
+        return match.group(0) if match else "待人工确认"
+
+    def _classify_activity_type(self, text: str) -> str:
+        if any(keyword in text for keyword in ("市集", "快闪", "IP展", "IP 展")):
+            return "市集/快闪"
+        if any(keyword in text for keyword in ("亲子", "儿童", "家庭")):
+            return "亲子活动"
+        if any(keyword in text for keyword in ("会员日", "会员")):
+            return "会员日"
+        if any(keyword in text for keyword in ("演出", "音乐", "赛事", "体育")):
+            return "文体活动"
+        if any(keyword in text for keyword in ("展览", "艺术展", "装置")):
+            return "展览活动"
+        return "综合活动"
+
+    def _activity_expected_impact(self, activity_type: str) -> str:
+        return {
+            "市集/快闪": "周末/晚市可能增强",
+            "亲子活动": "周末亲子客可能增强",
+            "会员日": "老客/会员到店可能增强",
+            "文体活动": "散场后晚市可能增强",
+            "展览活动": "游客和拍照客可能增强",
+        }.get(activity_type, "需结合活动时间人工判断")
+
+    def _activity_boss_action(self, activity_type: str) -> str:
+        return {
+            "市集/快闪": "提前准备高峰排队和小食饮品加购，活动后复盘新增客是否沉淀。",
+            "亲子活动": "周末优先保证儿童座椅、家庭套餐和等位体验。",
+            "会员日": "把会员权益和复购券放到当天结账链路里。",
+            "文体活动": "关注散场后一小时，提前安排晚市补位和外带承接。",
+            "展览活动": "门口展示和点评页要强调招牌菜与不踩雷。",
+        }.get(activity_type, "先给异常日打活动标签，再和销售、排队、点评一起复盘。")
 
     def _weather_plain_impact(self, text: str, temp: str, feels_like: Any) -> str:
         weather_text = text.lower()

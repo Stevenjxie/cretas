@@ -12,14 +12,16 @@ from smartbi.services.restaurant.external_signal_sources import (
 
 
 class FakeWeatherResponse:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict | None = None, text: str = "", status_code: int = 200) -> None:
+        self.status_code = status_code
         self._payload = payload
+        self.text = text
 
     def raise_for_status(self) -> None:
         return None
 
     def json(self) -> dict:
-        return self._payload
+        return self._payload or {}
 
 
 class FakeWeatherClient:
@@ -29,7 +31,7 @@ class FakeWeatherClient:
     def get(self, url: str, params: dict, timeout: float) -> FakeWeatherResponse:
         self.calls.append({"url": url, "params": params, "timeout": timeout})
         return FakeWeatherResponse(
-            {
+            payload={
                 "code": "200",
                 "now": {
                     "text": "小雨",
@@ -42,6 +44,18 @@ class FakeWeatherClient:
                 "updateTime": "2026-07-01T13:00+08:00",
             }
         )
+
+
+class FakeCrawlerClient:
+    def __init__(self, pages: dict[str, str]) -> None:
+        self.pages = pages
+        self.calls: list[dict] = []
+
+    def get(self, url: str, headers: dict | None = None, timeout: float = 5.0) -> FakeWeatherResponse:
+        self.calls.append({"url": url, "headers": headers or {}, "timeout": timeout})
+        if url not in self.pages:
+            return FakeWeatherResponse(text="", status_code=404)
+        return FakeWeatherResponse(text=self.pages[url])
 
 
 def test_external_signal_sources_report_key_requirements_without_secrets() -> None:
@@ -237,3 +251,75 @@ def test_collect_for_stores_respects_daily_budget() -> None:
     assert result["skipped"] == 1
     assert result["snapshots"][1]["status"] == "budget_skipped"
     assert len(client.calls) == 1
+
+
+def test_collect_mall_activity_feeds_parses_allowed_public_pages() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mall.example/robots.txt": "User-agent: *\nAllow: /\n",
+            "https://mall.example/events": """
+                <html>
+                  <head><title>第一百货夏日市集活动</title></head>
+                  <body>
+                    <h1>第一百货夏日市集活动</h1>
+                    <p>7月6日-7月14日，六合路平台举办夏日市集和亲子互动。</p>
+                  </body>
+                </html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="人民广场",
+            mall_name="第一百货商业中心",
+            target_date="2026-07-01",
+        ),
+        feed_urls=["https://mall.example/events"],
+    )
+
+    assert result["status"] == "collected"
+    assert result["fetched"] == 1
+    assert result["events"][0]["title"] == "第一百货夏日市集活动"
+    assert result["events"][0]["activityType"] == "市集/快闪"
+    assert "7月6日-7月14日" in result["events"][0]["dateText"]
+    assert result["events"][0]["expectedImpact"] == "周末/晚市可能增强"
+    assert client.calls[0]["url"] == "https://mall.example/robots.txt"
+    assert "CretasRestaurantSignalBot" in client.calls[1]["headers"]["User-Agent"]
+
+
+def test_collect_mall_activity_feeds_respects_robots_disallow() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mall.example/robots.txt": "User-agent: *\nDisallow: /private\n",
+            "https://mall.example/private/events": "<h1>不应抓取</h1>",
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(city="上海", business_district="人民广场"),
+        feed_urls=["https://mall.example/private/events"],
+    )
+
+    assert result["status"] == "skipped"
+    assert result["events"] == []
+    assert result["sources"][0]["status"] == "robots_disallowed"
+    assert [call["url"] for call in client.calls] == ["https://mall.example/robots.txt"]
+
+
+def test_collect_mall_activity_feeds_rejects_wechat_history_crawling() -> None:
+    client = FakeCrawlerClient({})
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(city="上海", business_district="人民广场"),
+        feed_urls=["https://mp.weixin.qq.com/cgi-bin/appmsg?action=list_ex"],
+    )
+
+    assert result["status"] == "skipped"
+    assert result["sources"][0]["status"] == "unsupported_platform_crawl"
+    assert "公众号历史" in result["sources"][0]["reason"]
+    assert client.calls == []
