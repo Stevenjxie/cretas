@@ -33,6 +33,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from common.llm_router import SLOT, call_chain, call_chain_stream
+from common.llm_metrics import llm_caller_context
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ class LLMRequest(BaseModel):
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    # Upstream (Java/RN) may pass who is calling → attributed in smart_bi_llm_usage.
+    # Falls back to the endpoint name so this generic proxy is never "unknown"
+    # (was an 8.7M-token/30d attribution black hole — 2026-07-01 rules-gap heatmap).
+    caller: Optional[str] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,7 +102,8 @@ async def chat(req: LLMRequest) -> Dict[str, Any]:
     """Synchronous chat passthrough — returns complete call_chain response."""
     slot = _parse_slot(req.slot)
     payload = _build_payload(req)
-    return await call_chain(slot, payload)
+    with llm_caller_context(req.caller or "llm_api.chat"):
+        return await call_chain(slot, payload)
 
 
 @router.post("/chat-stream")
@@ -105,11 +111,13 @@ async def chat_stream(req: LLMRequest) -> StreamingResponse:
     """SSE streaming chat. Each event: 'data: <json>\\n\\n'. Ends with 'data: [DONE]\\n\\n'."""
     slot = _parse_slot(req.slot)
     payload = _build_payload(req)
+    _caller = req.caller or "llm_api.chat_stream"
 
     async def _generate() -> AsyncIterator[str]:
         try:
-            async for event in call_chain_stream(slot, payload):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            with llm_caller_context(_caller):
+                async for event in call_chain_stream(slot, payload):
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except RuntimeError as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
@@ -129,7 +137,8 @@ async def tool_call(req: LLMRequest) -> Dict[str, Any]:
     """Function-calling passthrough — transparently forwards tools / tool_choice."""
     slot = _parse_slot(req.slot)
     payload = _build_payload(req)
-    return await call_chain(slot, payload)
+    with llm_caller_context(req.caller or "llm_api.tool_call"):
+        return await call_chain(slot, payload)
 
 
 @router.post("/intent-classify")
@@ -139,7 +148,8 @@ async def intent_classify(req: LLMRequest) -> Dict[str, Any]:
     payload = _build_payload(req)
     # Override temperature regardless of what caller sent
     payload["temperature"] = 0.1
-    return await call_chain(slot, payload)
+    with llm_caller_context(req.caller or "llm_api.intent_classify"):
+        return await call_chain(slot, payload)
 
 
 @router.post("/vision")
@@ -177,4 +187,5 @@ async def vision(
     ]
 
     payload: Dict[str, Any] = {"messages": messages}
-    return await call_chain(parsed_slot, payload)
+    with llm_caller_context("llm_api.vision"):
+        return await call_chain(parsed_slot, payload)
