@@ -75,7 +75,7 @@ Sonnet    Codex          Composer
 
 | 执行者 | 桶 | 擅长 | 通道 |
 |---|---|---|---|
-| **Sonnet** | Claude 20x（便宜） | rule-heavy in-harness：新 Java Tool-Skill、rule-aware review、机械 doc/规则写作（自动加载 `.claude/rules/`） | **in-harness**：organizer 直接 spawn subagent，.claude/rules 自动可见 |
+| **Sonnet 5** (`claude-sonnet-5`) | Claude 20x（便宜, ~2.5x 便宜过 Opus, 引入价 $2/$10 至 8-31） | **主力工蜂** — 与 Opus 4.8 同代(Jan-2026 截止/128K 输出/adaptive): rule-heavy in-harness(Java Tool-Skill/parity/rule-aware review/机械 doc) + **判断密集执行 + 大部分 bug 修复**(2026-07 rebalance, 承接面比 4.6 大扩)。最硬 🔒(成本财务口径/prod迁移/权限RLS/业态隔离/撤回/资金)暂留 Opus 待实测证明 | **in-harness**：organizer 直接 spawn subagent，.claude/rules 自动可见 |
 | **Codex** | GPT 10x（独立 sub，较小桶） | 可 brief 的纯后端 / CLI / E2E / 构建 / TDD | **out-of-harness**：organizer 出卡 → Steve courier → worker 不加载 .claude/rules，brief **必须自包含** |
 | **Composer** | Cursor sub | 独立 UI / 样式 / lint / 补测试 | out-of-harness：同上 |
 | **Opus** | Claude 20x（周额度稀缺） | 判断 / 门控 / 需求框架 / keystone / 🔒 终审 | 本体 |
@@ -99,16 +99,19 @@ Out-of-harness (Codex/Composer 卡 + Steve courier):
 ## 代码执行层路由（2026-06-11 Steve 修订：速度+质量 > token 经济）
 
 > **触发**：本 session Sonnet 写判断密集/红线代码反复栽——getRecipe LazyInit 回归 / G4 把已知密码账号 seed 进 prod 真客户租户 / Flyway 乱序号 / PaymentRequestController 误报。全靠 Opus 终审兜住，但代价是返工 + 救回被关 PR + 迭代，拖慢节奏。Steve：质疑 Sonnet 写代码能力，**别太省 token，速度质量优先**（但机械活仍 Sonnet）。
+>
+> **⚠️ 2026-07-02 重平衡（Sonnet 5 上线）**：上面的证据是 **Sonnet 4.6**。Sonnet 5(`claude-sonnet-5`)与 Opus 4.8 **同代**(Jan-2026 截止/128K 输出/adaptive)，承接面大扩 —— **判断密集/微妙语义/一般 🔒 代码现默认可派 Sonnet 5**(in-harness 规则自动可见 + 独立对抗审计把关)，Opus 收窄到出货闸终审。**但最硬 🔒 子集**(成本/财务口径 · prod 迁移/Flyway 撞号 · 权限/RLS/多租户/业态隔离 · 撤回回退 · 资金路径)**暂留 Opus**，直到用真实此类修复 + 独立审计实测 Sonnet 5 过关，才放行到 Sonnet 修复车道。**别凭 marketing 直接全放** —— 本 session 抓修的微妙 🔒 bug(shippedQuantity污染财务/出成率双计/honest-null泄漏)只有独立对抗审计逮到，先验证再全托。下表按此更新。
 
-### 第一层：按「判断密度」选模型（不再一刀切「执行=Sonnet」）
+### 第一层：按「判断密度」选模型（Sonnet 5 后承接面上移）
 
 | 代码性质 | 执行层 | 例 |
 |---|---|---|
-| **机械 / 低判断 / 规则重** | **Sonnet** | 脚手架、按 spec CRUD、parity port、文档/测试样板、按设计 UI、规则感知机械 review |
-| **判断密集 / 微妙语义 / 🔒红线** | **Opus 自做**（不再「派 Sonnet 再终审兜」） | DB 事务&并发、Hibernate/JPA 语义、影响 prod 的迁移、权限/RLS/多租户、成本/财务口径、撤回回退、报工模型 |
+| **机械 / 低判断 / 规则重** | **Sonnet 5** | 脚手架、按 spec CRUD、parity port、文档/测试样板、按设计 UI、规则感知机械 review |
+| **判断密集 / 微妙语义 / 一般 🔒** | **Sonnet 5**（独立对抗审计把关；2026-07 从 Opus 下放） | DB 事务&并发、Hibernate/JPA 语义、报工模型、常规写库、Java Tool-Skill、parity port |
+| **🔒🔒 最硬红线** | **Opus 自做** → 待 Sonnet 5 实测证明后放行 | 影响 prod 的迁移/Flyway 撞号、权限/RLS/多租户/业态隔离、成本/财务口径、撤回回退、资金路径 |
 | **最难 / Opus 卡住 / 微妙红线 keystone 速度质量都关键** | **Fable**（earned 闸照旧） | 见 Fable 门槛 |
 
-**token 经济降为次要**：原「默认 Sonnet 省周额度」偏好下调 —— 机械/规则重活该 Sonnet 还 Sonnet，但**判断密集/红线代码别为省额度下压到 Sonnet**（兜底迭代比直接 Opus 写更慢更险）。
+**token 经济**：Sonnet 5 便宜 ~2.5x 过 Opus 且引入价 $2/$10(至 8-31)、同代能力 → 主力铺 Sonnet 5 省 Opus 周额度更划算；Opus 集中在最硬 🔒 判断 + 出货闸。（原 2026-06-11「判断密集别下压 Sonnet」是 4.6 时代结论，Sonnet 5 已重平衡如上。）
 
 ### 第二层：Opus-tier 代码 → 二次评估 inline vs Opus subagent（orchestration 轴）
 
@@ -128,10 +131,11 @@ Out-of-harness (Codex/Composer 卡 + Steve courier):
 Claude Max 20x（**Opus 按周限额**）+ GPT 10x（Codex，较小桶）+ Cursor（Composer）。三个都是 flat。
 
 ```text
-2026-06-11 修订: 速度+质量 > token 经济。
-  机械/规则重执行 → Sonnet (该省的省)
-  判断密集/🔒红线代码 → Opus 自做 (别为省额度下压 Sonnet, 兜底迭代更慢更险)
-  最大杠杆 ≠ 全压 Sonnet, 而是 = 按判断密度分层 (上表)
+2026-07-02 重平衡 (Sonnet 5 上线, 覆盖 2026-06-11 的 4.6-时代结论):
+  机械/规则重 + 判断密集/一般🔒 → Sonnet 5 (同代 Opus 4.8, 独立审计把关; 便宜 2.5x 主力铺)
+  🔒🔒 最硬红线 (成本财务口径/prod迁移/权限RLS/业态隔离/撤回/资金) → Opus 暂留, 待 Sonnet 5 实测证明
+  出货闸终审 + 从 main 部署 prod → 恒 Opus (不可外包)
+  最大杠杆 = Sonnet 5 铺量 + Opus 守最硬判断和出货闸 (先验证再把最硬🔒也放行)
 错误用法 = 把 Opus 当机械执行层(写脚手架/批量文档) → 撑爆周限额
   (注: Opus 写红线代码 ≠ 错误用法, 那正是它该干的)
 ```
@@ -178,16 +182,16 @@ Opus 直接做（典型 pattern）:
 按文件切 or 先写 keystone 再交棒 → 避免同文件撞
 ```
 
-### Opus 稀缺额度优先级（2026-06-11 修订：加入红线代码自做）
+### Opus 稀缺额度优先级（2026-07-02 重平衡：Sonnet 5 上线，Opus 收窄）
 
 ```
 ① 模糊高风险需求框架（最高价值，防建错东西）
-② 🔒 Risky 终审（权限/迁移/业态/上线前 diff）
+② 🔒 Risky 终审 + 出货闸 + 从 main 部署 prod（权限/迁移/业态/上线前 diff）— 恒 Opus，不可外包
 ③ 难架构（真有判断模糊的选型）
 ④ 卡死调试（fleet 修 2 轮没好 → Opus root-cause）
-⑤ 🆕 判断密集/🔒红线代码自做（事务/并发/迁移/权限/成本口径/报工模型）— 别下压 Sonnet 兜底
+⑤ 🔒🔒 最硬红线代码自写（成本/财务口径·prod迁移/Flyway·权限/RLS/多租户/业态·撤回·资金）— 暂留 Opus，待 Sonnet 5 实测证明后放行
 ⑥ 小而关键 keystone（已在 context）
-⑦ （机械/规则重执行甩 fleet=Sonnet）
+⑦ （机械/规则重 + 判断密集/一般🔒 → fleet=Sonnet 5，独立对抗审计把关）
 ```
 
 ⚠️ 注意 ⑤ 与「Opus 不当执行层」不冲突：**机械执行**(脚手架/批量doc)甩 fleet 是对的；**红线代码**自做也是对的。区别在判断密度，不在"是不是写代码"。

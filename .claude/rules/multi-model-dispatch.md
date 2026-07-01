@@ -11,7 +11,7 @@
 ```text
 Fable 5        = 破玻璃判断顶层 (2x Opus 消耗, 比 Opus 还稀缺; earned-not-predicted v2: Opus 1 轮认真尝试没收敛即升 + 三类预授权直通, session 个位数次)
 Opus 4.8       = 总工 / 架构师 / 高风险决策 / 上线前终审 (贵但稳, 负责判断对不对) — organizer 本体常驻这档
-Sonnet         = Claude 侧默认执行层 (便宜 20x, rule-heavy in-harness, 自动加载 .claude/rules)
+Sonnet 5       = Claude 侧默认执行层 + 主力工蜂 (model id `claude-sonnet-5`, 与 Opus 4.8 同代/同 Jan-2026 截止, 1M ctx / 128K 输出 / adaptive thinking, $3/$15 且 8-31 前引入价 $2/$10, 比 Opus 便宜 ~2.5x 且更快, 便宜 20x-桶, rule-heavy in-harness 自动加载 .claude/rules). 2026-07 Sonnet 4.6→5 一大跳: 承接面比 4.6 显著扩大, 不再只是"机械执行层"—— 判断密集/rule-heavy/大部分 bug 修复都可交给它, Opus 收窄到最硬 🔒 判断 + 出货闸(见下 §代码执行层重平衡)
 GPT-5.5·Codex  = 复杂执行 + CLI/E2E/构建 + 第二审查 (强执行, 复杂工程操作)
 Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 ```
@@ -26,7 +26,7 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 |---|---|
 | **organizer 本体保持 Opus 4.8 + high** — Fable 5 由 organizer 通过 `fable` subagent (Agent tool model override 支持) 在**单点**派出, 自己 body 不动 | ❌ 把整个 organizer 换成 Fable 5 → 每轮廉价路由分诊 ×2 = `满载消费者` 反模式 ×2, 几天炸周限额 |
 | **earned-not-predicted(v2)**: 默认仍是 Opus 先试 — 但阈值降为 **1 轮认真尝试**(打完没收敛 + 能说清卡在哪 → 升, 不撞第 2 轮); 例外 = 三类**预授权直通**(见下), 触发条件客观可证伪, 不是"我觉得难" | ❌ 预授权三类之外, 预先"为了保险用最好的模型"。没观察到 Opus 卡住就不许升 |
-| **model 轴新顶**: 难判断升级阶梯 = Sonnet 4.6 → Opus 4.8 → **Fable 5**(effort 在每档内作次级旋钮)。Opus 4.8 × xhigh 已试且 wobble → 升 Fable 5, 而不是停在 Opus 继续烧 effort | ❌ 任何执行(Sonnet/Codex/Composer)/路由分诊/批量机械/fan-out workers。`cost = tokens × 2x`, 体量工作进 Fable 5 是灾难 |
+| **model 轴新顶**: 难判断升级阶梯 = Sonnet 5 → Opus 4.8 → **Fable 5**(effort 在每档内作次级旋钮)。Opus 4.8 × xhigh 已试且 wobble → 升 Fable 5, 而不是停在 Opus 继续烧 effort | ❌ 任何执行(Sonnet/Codex/Composer)/路由分诊/批量机械/fan-out workers。`cost = tokens × 2x`, 体量工作进 Fable 5 是灾难 |
 
 #### 防滥用闸 + 防荒废闸 (闸要自我执行, 不靠 organizer 自律)
 
@@ -117,7 +117,8 @@ brief 卡要**自包含** —— 别的 chat 看不到本 chat 的上下文, 卡
 | **规则重 in-harness 执行**（新 Java Tool / Flyway 编号检查 / rule-aware code review / Python parity port 机械修复） | **Sonnet in-harness** | `.claude/rules/*` 自动可见 → 不会因缺上下文翻 12 条 Java port 规则；比 Opus 省 20x 额度 |
 | **Java AI Tool-Skill 意图路由 · Python↔Java parity port（首次判断/架构）** | **Opus**（或 Opus 写死严格 brief 后给 Sonnet/Codex） | 有 `.claude/rules/ai-intent-tool-skill-architecture.md` / `python-java-port.md` 硬规则(Decimal/Map.of order/Lombok null/HALF_UP 等 12 条), 易踩; 首次需判断力 |
 | 🔒 Flyway/migration/schema · 权限/RLS/多租户/业态隔离 · 架构/跨模块重构/新实体 · 上线前 diff 终审 | **Opus 把关** | 见下方⛔红线 |
-| 🆕 **判断密集/微妙语义/🔒红线 代码自写**(DB事务&并发/Hibernate语义/影响prod迁移/权限RLS/成本财务口径/撤回回退/报工模型) | **Opus 自做**(不派Sonnet再终审兜) | 2026-06-11 Steve修订: Sonnet写这类反复栽(getRecipe回归/prod已知密码seed/Flyway乱序), 兜底迭代更慢更险; 速度质量>token经济. 详见 organizer-protocol §代码执行层路由. **Opus写后二次评估 inline(小+在context) vs Opus subagent(大/可并行, 保thin-organizer)** |
+| 🆕 **判断密集/微妙语义/🔒红线 代码自写**(DB事务&并发/Hibernate语义/报工模型/Java Tool-Skill/parity/常规写库) | **Sonnet 5 in-harness**(独立对抗审计把关) | **2026-07-02 重平衡(Sonnet 5 上线)**: Sonnet 5 与 Opus 4.8 同代, 这类现可派 Sonnet 5(规则自动可见), Opus 只做出货闸终审. 原 2026-06-11"不派 Sonnet"的证据是 Sonnet **4.6**(getRecipe回归/密码seed/Flyway乱序), 不代表 5 |
+| 🔒🔒 **最硬红线子集 代码自写**(成本/财务口径 · prod 迁移/Flyway 撞号 · 权限/RLS/多租户/业态隔离 · 撤回回退 · 资金路径) | **暂留 Opus 自做** → 待 Sonnet 5 实测证明后放行 | 本 session 抓修的微妙 🔒 bug(shippedQuantity污染财务/出成率双计/honest-null泄漏)只有独立对抗审计逮到; **别凭 marketing 直接全放**——拿真实此类 🔒 修复让 Sonnet 5 做 + 独立审计, 过了才把这一子集也放行到 Sonnet 修复车道. Opus 写后二次评估 inline(小+在context) vs subagent(大/可并行) 同前 |
 | 同一问题某模型修 2 轮还没好 | 切 **Opus** 做 root-cause review | 不让一个模型一直撞墙; 别盲改 |
 | 某模型改乱了 / 你不放心 | **Opus** root-cause review (先停下判断, 不继续盲改) | |
 
