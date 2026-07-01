@@ -65,6 +65,13 @@ CN_2026_ADJUSTED_WORKDAYS = {
     "2026-10-10",
 }
 
+PUBLIC_MALL_ACTIVITY_FEEDS = {
+    "shanghai_nanjing_road": [
+        "https://www.sh.chinanews.com.cn/yule/2026-06-27/147398.shtml",
+        "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html",
+    ]
+}
+
 
 @dataclass(frozen=True)
 class ExternalSignalRequest:
@@ -196,7 +203,7 @@ class RestaurantExternalSignalService:
         has_damai = bool(
             self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")
         )
-        has_mall_feeds = bool(self._env_value("MALL_ACTIVITY_FEED_URLS"))
+        has_mall_feeds = bool(self._mall_feed_urls())
         return {
             "defaultMode": "manual_or_cron",
             "whyNotOnPageLoad": "外部接口有每日额度，demo 页面打开不应自动消耗配额；由后台定时任务或管理员手动触发采集。",
@@ -371,7 +378,7 @@ class RestaurantExternalSignalService:
         no WeChat public-account history crawling.
         """
 
-        urls = feed_urls if feed_urls is not None else self._mall_feed_urls()
+        urls = feed_urls if feed_urls is not None else self._mall_feed_urls_for_request(request)
         events: list[dict[str, Any]] = []
         sources: list[dict[str, Any]] = []
         fetched = 0
@@ -722,9 +729,9 @@ class RestaurantExternalSignalService:
         }
 
     def _mall_collection_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
-        configured = self._env_value("MALL_ACTIVITY_FEED_URLS")
+        feed_urls = self._mall_feed_urls()
         mall = request.mall_name or "目标商场"
-        if not configured:
+        if not feed_urls:
             return {
                 "type": "mall_activity",
                 "source": "商场活动采集",
@@ -734,7 +741,7 @@ class RestaurantExternalSignalService:
                 "plainImpact": f"{mall} 的活动源还没配置，商场市集、IP 展、会员日只能人工核验。",
                 "actionHint": "先把商场官网活动页、公众号文章列表或小程序活动页 URL 放入配置。",
             }
-        crawl_result = self.collect_mall_activity_feeds(request)
+        crawl_result = self.collect_mall_activity_feeds(request, feed_urls=feed_urls)
         return {
             "type": "mall_activity",
             "source": "商场活动采集",
@@ -750,6 +757,15 @@ class RestaurantExternalSignalService:
     def _mall_feed_urls(self) -> list[str]:
         raw = self._env_value("MALL_ACTIVITY_FEED_URLS")
         return [item.strip() for item in re.split(r"[\n,;]+", raw) if item.strip()]
+
+    def _mall_feed_urls_for_request(self, request: ExternalSignalRequest) -> list[str]:
+        configured_urls = self._mall_feed_urls()
+        if configured_urls:
+            return configured_urls
+        context = f"{request.city} {request.business_district} {request.mall_name}"
+        if any(keyword in context for keyword in ("南京东路", "人民广场", "第一百货", "百联ZX")):
+            return PUBLIC_MALL_ACTIVITY_FEEDS["shanghai_nanjing_road"].copy()
+        return []
 
     def _unsupported_platform_reason(self, raw_url: str) -> str | None:
         parsed = urlparse(raw_url)
@@ -868,6 +884,22 @@ class RestaurantExternalSignalService:
         candidates: list[dict] = []
         occupied_spans: list[tuple[int, int]] = []
 
+        for marker in ("快乐一夏", "今夏", "暑期", "夏季"):
+            position = text.find(marker)
+            if position >= 0:
+                candidates.append(
+                    self._activity_candidate(
+                        "今夏",
+                        position,
+                        date(year, 6, 1),
+                        date(year, 8, 31),
+                        target_day,
+                        specificity=3,
+                    )
+                )
+                occupied_spans.append((position, position + len(marker)))
+                break
+
         today_range_pattern = re.compile(
             r"即日起\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日"
         )
@@ -942,6 +974,8 @@ class RestaurantExternalSignalService:
         start: date,
         end: date,
         target_day: date,
+        *,
+        specificity: int = 0,
     ) -> dict[str, Any]:
         status_order = 0
         distance = 0
@@ -954,7 +988,7 @@ class RestaurantExternalSignalService:
         return {
             "dateText": date_text,
             "window": (start, end),
-            "rank": (status_order, distance, position),
+            "rank": (status_order, specificity, distance, position),
         }
 
     def _is_span_inside(self, span: tuple[int, int], occupied_spans: list[tuple[int, int]]) -> bool:
@@ -989,6 +1023,9 @@ class RestaurantExternalSignalService:
         }
 
     def _activity_date_window(self, date_text: str, year: int) -> tuple[date, date] | None:
+        if date_text == "今夏":
+            return date(year, 6, 1), date(year, 8, 31)
+
         today_range = re.search(
             r"即日起\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日",
             date_text,
@@ -1041,14 +1078,14 @@ class RestaurantExternalSignalService:
         return date(year, month, 1), date(year, month, 1)
 
     def _classify_activity_type(self, text: str) -> str:
+        if any(keyword in text for keyword in ("演出", "音乐", "赛事", "体育", "电竞", "嘉年华", "篮球", "足球")):
+            return "文体活动"
         if any(keyword in text for keyword in ("市集", "快闪", "IP展", "IP 展")):
             return "市集/快闪"
         if any(keyword in text for keyword in ("亲子", "儿童", "家庭")):
             return "亲子活动"
         if any(keyword in text for keyword in ("会员日", "会员")):
             return "会员日"
-        if any(keyword in text for keyword in ("演出", "音乐", "赛事", "体育", "电竞", "嘉年华")):
-            return "文体活动"
         if any(keyword in text for keyword in ("展览", "艺术展", "装置")):
             return "展览活动"
         return "综合活动"

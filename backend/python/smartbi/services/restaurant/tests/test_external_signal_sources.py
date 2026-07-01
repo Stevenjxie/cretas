@@ -405,6 +405,51 @@ def test_collect_mall_activity_feeds_prefers_target_day_event_when_page_has_mult
     assert result["events"][0]["decisionUse"] == "目标日命中：可作为当天客流异常的重要外部解释。"
 
 
+def test_collect_mall_activity_feeds_treats_summer_campaign_as_active() -> None:
+    client = FakeCrawlerClient(
+        {
+            "https://mall.example/robots.txt": "User-agent: *\nAllow: /\n",
+            "https://mall.example/summer": """
+                <html><body>
+                  <h1>来南京路快乐一夏主题活动启幕</h1>
+                  <p>依托南京路商场、秀场、广场三场联动，打造夏日狂欢。</p>
+                  <p>7月底至8月初，电竞嘉年华重回世纪广场。</p>
+                </body></html>
+            """,
+        }
+    )
+    service = RestaurantExternalSignalService(http_client=client)
+
+    result = service.collect_mall_activity_feeds(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路",
+            mall_name="第一百货商业中心",
+            target_date="2026-07-01",
+        ),
+        feed_urls=["https://mall.example/summer"],
+    )
+
+    assert result["events"][0]["dateText"] == "今夏"
+    assert result["events"][0]["targetRelevance"] == "active"
+    assert result["events"][0]["activityType"] == "文体活动"
+
+
+def test_mall_collection_uses_public_nanjing_road_demo_feeds_without_env() -> None:
+    service = RestaurantExternalSignalService(env={})
+
+    urls = service._mall_feed_urls_for_request(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="南京东路/人民广场",
+            mall_name="第一百货商业中心",
+        )
+    )
+
+    assert "https://www.sh.chinanews.com.cn/yule/2026-06-27/147398.shtml" in urls
+    assert "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html" in urls
+
+
 def test_collect_mall_activity_feeds_decodes_gb18030_public_pages() -> None:
     class GbCrawlerClient:
         def __init__(self) -> None:
