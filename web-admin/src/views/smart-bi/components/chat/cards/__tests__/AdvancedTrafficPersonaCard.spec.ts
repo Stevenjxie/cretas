@@ -32,6 +32,58 @@ const SAMPLE = {
       },
     ],
   },
+  plainLanguageAnalysis: {
+    bottomLine: '这家店现在不是没人路过，而是路过的人没有被充分转成进店。',
+    whatItMeans: [
+      '先别急着打折，先查门口动线、等位体验和午市套餐是不是挡住了转化。',
+    ],
+    whyWeThinkSo: [
+      '内部 POS 只能看到已经买单的人，外部客流能解释没进店的人。',
+    ],
+  },
+  solutionPlan: [
+    {
+      step: '第一周',
+      action: '派区域经理去大丸百货店现场复盘。',
+      owner: '区域运营',
+      expectedOutcome: '判断问题在商场客流、楼层动线还是门店体验。',
+    },
+  ],
+  dataSufficiency: {
+    isEnoughForRealDecision: false,
+    plainVerdict: '足够做 demo 和开通说明，不足够直接下真实经营结论。',
+    why: [
+      '现在缺少真实商场客流、楼层动线和竞品变化。',
+    ],
+    whatCanBeDecidedNow: ['先确定要验证的问题和需要开通的数据。'],
+    whatCannotBeDecidedYet: ['不能直接判断大丸百货店下滑一定是外部客流导致。'],
+  },
+  neededEvidence: [
+    {
+      name: '2025中国餐饮连锁化发展白皮书',
+      whyNeeded: '判断连锁餐饮行业大盘和价格趋势。',
+      sourceType: '行业白皮书',
+      priority: 'P1',
+      publicAvailability: '公开摘要可用',
+    },
+    {
+      name: '腾讯/百度商圈客流画像',
+      whyNeeded: '验证商场客流和客群来源。',
+      sourceType: '商务数据',
+      priority: 'P0',
+      publicAvailability: '需商务开通',
+    },
+  ],
+  adviceKnowledgeBase: [
+    {
+      situation: '门店销售下滑，但商圈或商场客流没有同步下滑',
+      plainDiagnosis: '这通常不是没人逛，而是本店没有接住路过的人。',
+      bossAction: '先暂停大额折扣，安排 1 周现场复盘门口展示、等位体验、同层竞品和楼层动线。',
+      decisionRule: '如果商场总客流稳定、本店订单下降超过 10%，优先查门店转化问题。',
+      neededData: ['商场总客流', '餐饮楼层客流', '大众点评原文'],
+      sourceBasis: ['腾讯商场客留大数据', '百度慧眼'],
+    },
+  ],
   decisionScores: [
     {
       key: 'capture_gap',
@@ -75,10 +127,17 @@ describe('AdvancedTrafficPersonaCard', () => {
     expect(wrapper.text()).toContain('高德');
     expect(wrapper.text()).toContain('午市');
     expect(wrapper.text()).toContain('demo 模拟数据');
-    expect(wrapper.text()).toContain('诊断评分');
-    expect(wrapper.text()).toContain('场景推演');
-    expect(wrapper.text()).toContain('验证计划');
-    expect(wrapper.text()).toContain('捕获率 +0.4pp');
-    expect(wrapper.text()).toContain('商场总客流是否同步下降');
+    expect(wrapper.text()).toContain('白话结论');
+    expect(wrapper.text()).toContain('这家店现在不是没人路过');
+    expect(wrapper.text()).toContain('直接方案');
+    expect(wrapper.text()).toContain('第一周');
+    expect(wrapper.text()).toContain('数据够不够');
+    expect(wrapper.text()).toContain('不足够直接下真实经营结论');
+    expect(wrapper.text()).toContain('还缺哪些资料');
+    expect(wrapper.text()).toContain('餐饮连锁化发展白皮书');
+    expect(wrapper.text()).toContain('建议依据库');
+    expect(wrapper.text()).toContain('先暂停大额折扣');
+    expect(wrapper.text()).not.toContain('诊断评分');
+    expect(wrapper.text()).not.toContain('捕获率 +0.4pp');
   });
 });

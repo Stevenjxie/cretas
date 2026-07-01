@@ -14,6 +14,12 @@ describe('advanced traffic persona demo data', () => {
     expect(resolved.requiresEnablement).toBe(true);
     expect(resolved.storeContext.mallName).toBe('第一百货商业中心 / 大丸百货');
     expect(resolved.analysis.headline).toContain('百货');
+    expect(resolved.plainLanguageAnalysis.bottomLine).toContain('不是没人路过');
+    expect(resolved.dataSufficiency.isEnoughForRealDecision).toBe(false);
+    expect(resolved.dataSufficiency.plainVerdict).toContain('足够做 demo');
+    expect(resolved.neededEvidence.some((item) => item.name.includes('白皮书'))).toBe(true);
+    expect(resolved.adviceKnowledgeBase ?? []).toHaveLength(5);
+    expect(resolved.adviceKnowledgeBase?.some((item) => item.bossAction.includes('先暂停大额折扣'))).toBe(true);
   });
 
   it('prefers analyzer output after a V2 report exists', () => {

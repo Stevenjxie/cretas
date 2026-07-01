@@ -483,30 +483,43 @@ export interface AdvancedTrafficPersonaRecommendation {
   expectedImpact?: string;
 }
 
-export interface AdvancedTrafficPersonaDecisionScore {
-  key: string;
-  label?: string;
-  name?: string;
-  score: number;
-  maxScore: number;
-  level?: string;
-  evidence: string;
-  recommendation: string;
+export interface AdvancedTrafficPersonaPlainAnalysis {
+  bottomLine: string;
+  whatItMeans: string[];
+  whyWeThinkSo: string[];
 }
 
-export interface AdvancedTrafficPersonaScenario {
+export interface AdvancedTrafficPersonaSolutionStep {
+  step: string;
+  action: string;
+  owner: string;
+  expectedOutcome: string;
+}
+
+export interface AdvancedTrafficPersonaDataSufficiency {
+  isEnoughForRealDecision: boolean;
+  plainVerdict: string;
+  why: string[];
+  whatCanBeDecidedNow: string[];
+  whatCannotBeDecidedYet: string[];
+}
+
+export interface AdvancedTrafficPersonaNeededEvidence {
   name: string;
-  assumption: string;
-  metricDelta: string;
-  operatingImplication: string;
-  nextAction: string;
+  whyNeeded: string;
+  sourceType: string;
+  priority: string;
+  publicAvailability: string;
+  sourceUrl?: string;
 }
 
-export interface AdvancedTrafficPersonaValidationItem {
-  question: string;
-  requiredFields: string[];
+export interface AdvancedTrafficPersonaAdviceRule {
+  situation: string;
+  plainDiagnosis: string;
+  bossAction: string;
   decisionRule: string;
-  owner?: string;
+  neededData: string[];
+  sourceBasis: string[];
 }
 
 export interface AdvancedTrafficPersona {
@@ -537,9 +550,11 @@ export interface AdvancedTrafficPersona {
     businessQuestion: string;
   }>;
   simulatedMetrics: Record<string, number>;
-  decisionScores?: AdvancedTrafficPersonaDecisionScore[];
-  scenarioSimulations?: AdvancedTrafficPersonaScenario[];
-  validationPlan?: AdvancedTrafficPersonaValidationItem[];
+  plainLanguageAnalysis?: AdvancedTrafficPersonaPlainAnalysis;
+  solutionPlan?: AdvancedTrafficPersonaSolutionStep[];
+  dataSufficiency?: AdvancedTrafficPersonaDataSufficiency;
+  neededEvidence?: AdvancedTrafficPersonaNeededEvidence[];
+  adviceKnowledgeBase?: AdvancedTrafficPersonaAdviceRule[];
   analysis: {
     headline: string;
     comparisonNarrative: string[];

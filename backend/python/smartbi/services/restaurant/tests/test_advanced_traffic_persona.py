@@ -48,15 +48,22 @@ def test_advanced_traffic_persona_demo_contract() -> None:
 
     assert data["simulatedMetrics"]["dailyFootfall"] > 10000
     assert data["simulatedMetrics"]["weekdayWeekendLift"] > 1
+    assert "captureRate" not in data["simulatedMetrics"]
     assert len(data["analysis"]["recommendations"]) >= 5
     assert any(
         "午市" in item["action"] or "排队" in item["action"]
         for item in data["analysis"]["recommendations"]
     )
-    assert len(data["decisionScores"]) >= 4
-    assert all(0 <= item["score"] <= item["maxScore"] for item in data["decisionScores"])
-    assert any("捕获率" in item["name"] for item in data["scenarioSimulations"])
-    assert any("商场总客流" in item["question"] for item in data["validationPlan"])
+    assert data["plainLanguageAnalysis"]["bottomLine"].startswith("这家店现在不是")
+    assert any("先别急着打折" in item for item in data["plainLanguageAnalysis"]["whatItMeans"])
+    assert any("第一周" in item["step"] for item in data["solutionPlan"])
+    assert data["dataSufficiency"]["isEnoughForRealDecision"] is False
+    assert "足够做 demo" in data["dataSufficiency"]["plainVerdict"]
+    assert any("餐饮连锁化" in item["name"] for item in data["neededEvidence"])
+    assert any("腾讯" in item["name"] or "百度" in item["name"] for item in data["neededEvidence"])
+    assert len(data["adviceKnowledgeBase"]) >= 5
+    assert all(item["sourceBasis"] for item in data["adviceKnowledgeBase"])
+    assert any("先暂停大额折扣" in item["bossAction"] for item in data["adviceKnowledgeBase"])
     assert "模拟" in data["dataNote"]
 
 

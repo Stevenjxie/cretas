@@ -5,62 +5,68 @@ interface ProviderInfo {
   provider: string;
   bestUse?: string;
   accessMode?: string;
-  availableFields?: string[];
 }
 
 interface Recommendation {
   priority?: string;
   action: string;
   why?: string;
-  metricTrigger?: string;
-  expectedImpact?: string;
 }
 
-interface DecisionScore {
-  key: string;
-  label?: string;
-  name?: string;
-  score: number;
-  maxScore: number;
-  level?: string;
-  evidence: string;
-  recommendation: string;
+interface PlainLanguageAnalysis {
+  bottomLine: string;
+  whatItMeans: string[];
+  whyWeThinkSo: string[];
 }
 
-interface ScenarioSimulation {
+interface SolutionStep {
+  step: string;
+  action: string;
+  owner: string;
+  expectedOutcome: string;
+}
+
+interface DataSufficiency {
+  isEnoughForRealDecision: boolean;
+  plainVerdict: string;
+  why: string[];
+  whatCanBeDecidedNow: string[];
+  whatCannotBeDecidedYet: string[];
+}
+
+interface NeededEvidence {
   name: string;
-  assumption: string;
-  metricDelta: string;
-  operatingImplication: string;
-  nextAction: string;
+  whyNeeded: string;
+  sourceType: string;
+  priority: string;
+  publicAvailability: string;
 }
 
-interface ValidationPlanItem {
-  question: string;
-  requiredFields: string[];
+interface AdviceRule {
+  situation: string;
+  plainDiagnosis: string;
+  bossAction: string;
   decisionRule: string;
-  owner?: string;
+  neededData: string[];
+  sourceBasis: string[];
 }
 
 interface AdvancedTrafficPersonaData {
   moduleName?: string;
-  requiresEnablement?: boolean;
-  demoMode?: boolean;
   dataNote?: string;
   enablement?: {
     status?: string;
     scope?: string;
   };
   providers?: ProviderInfo[];
-  simulatedMetrics?: Record<string, number>;
-  decisionScores?: DecisionScore[];
-  scenarioSimulations?: ScenarioSimulation[];
-  validationPlan?: ValidationPlanItem[];
+  plainLanguageAnalysis?: PlainLanguageAnalysis;
+  solutionPlan?: SolutionStep[];
+  dataSufficiency?: DataSufficiency;
+  neededEvidence?: NeededEvidence[];
+  adviceKnowledgeBase?: AdviceRule[];
   analysis?: {
     headline?: string;
     recommendations?: Recommendation[];
-    risks?: string[];
-    opportunities?: string[];
   };
 }
 
@@ -68,28 +74,13 @@ const props = defineProps<{ data: AdvancedTrafficPersonaData | Record<string, un
 
 const payload = computed(() => props.data as AdvancedTrafficPersonaData);
 const providers = computed(() => payload.value.providers ?? []);
-const metrics = computed(() => payload.value.simulatedMetrics ?? {});
 const recommendations = computed(() => payload.value.analysis?.recommendations ?? []);
-const decisionScores = computed(() => payload.value.decisionScores ?? []);
-const scenarioSimulations = computed(() => payload.value.scenarioSimulations ?? []);
-const validationPlan = computed(() => payload.value.validationPlan ?? []);
+const plainAnalysis = computed(() => payload.value.plainLanguageAnalysis);
+const solutionPlan = computed(() => payload.value.solutionPlan ?? []);
+const dataSufficiency = computed(() => payload.value.dataSufficiency);
+const neededEvidence = computed(() => payload.value.neededEvidence ?? []);
+const adviceKnowledgeBase = computed(() => payload.value.adviceKnowledgeBase ?? []);
 const statusLabel = computed(() => payload.value.enablement?.status ?? '需额外开通');
-
-function fmtNumber(value: unknown): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
-  return value.toLocaleString('zh-CN');
-}
-
-function fmtPercent(value: unknown): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function scoreWidth(item: DecisionScore): string {
-  if (!item.maxScore) return '0%';
-  const pct = Math.max(0, Math.min(100, (item.score / item.maxScore) * 100));
-  return `${pct.toFixed(0)}%`;
-}
 </script>
 
 <template>
@@ -104,88 +95,113 @@ function scoreWidth(item: DecisionScore): string {
 
     <p v-if="payload.dataNote" class="data-note">{{ payload.dataNote }}</p>
 
-    <div class="metric-grid">
-      <div class="metric-tile">
-        <span class="metric-label">日均路过客流</span>
-        <strong>{{ fmtNumber(metrics.dailyFootfall) }}</strong>
-      </div>
-      <div class="metric-tile">
-        <span class="metric-label">估算到店机会</span>
-        <strong>{{ fmtNumber(metrics.estimatedStoreVisits) }}</strong>
-      </div>
-      <div class="metric-tile">
-        <span class="metric-label">周末提升</span>
-        <strong>{{ fmtPercent((metrics.weekdayWeekendLift ?? 1) - 1) }}</strong>
-      </div>
-      <div class="metric-tile">
-        <span class="metric-label">消费力指数</span>
-        <strong>{{ fmtNumber(metrics.consumptionPowerIndex) }}</strong>
-      </div>
-      <div class="metric-tile">
-        <span class="metric-label">竞品重叠</span>
-        <strong>{{ fmtPercent(metrics.competitorOverlapIndex) }}</strong>
+    <div v-if="plainAnalysis" class="plain-section">
+      <div class="section-label">白话结论</div>
+      <div class="bottom-line">{{ plainAnalysis.bottomLine }}</div>
+      <div class="plain-grid">
+        <div>
+          <strong>老板现在该怎么理解</strong>
+          <ul>
+            <li v-for="item in plainAnalysis.whatItMeans" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+        <div>
+          <strong>为什么这么判断</strong>
+          <ul>
+            <li v-for="item in plainAnalysis.whyWeThinkSo" :key="item">{{ item }}</li>
+          </ul>
+        </div>
       </div>
     </div>
 
-    <div v-if="payload.analysis?.headline" class="headline">
-      {{ payload.analysis.headline }}
-    </div>
-
-    <div v-if="decisionScores.length" class="score-section">
-      <div class="section-label">诊断评分</div>
-      <div class="score-grid">
+    <div v-if="solutionPlan.length" class="solution-section">
+      <div class="section-label">直接方案</div>
+      <div class="solution-list">
         <div
-          v-for="item in decisionScores"
-          :key="item.key"
-          class="score-card"
-          :data-level="item.level ?? 'medium'"
+          v-for="item in solutionPlan"
+          :key="item.step"
+          class="solution-row"
         >
-          <div class="score-head">
-            <strong>{{ item.label ?? item.name }}</strong>
-            <span>{{ item.score }}/{{ item.maxScore }}</span>
-          </div>
-          <div class="score-bar">
-            <i :style="{ width: scoreWidth(item) }" />
-          </div>
-          <p>{{ item.evidence }}</p>
-          <em>{{ item.recommendation }}</em>
+          <strong>{{ item.step }}</strong>
+          <p>{{ item.action }}</p>
+          <span>{{ item.owner }} · {{ item.expectedOutcome }}</span>
         </div>
       </div>
     </div>
 
-    <div v-if="scenarioSimulations.length" class="scenario-section">
-      <div class="section-label">场景推演</div>
-      <div
-        v-for="scenario in scenarioSimulations"
-        :key="scenario.name"
-        class="scenario-row"
-      >
-        <div class="scenario-title">
-          <strong>{{ scenario.name }}</strong>
-          <span>{{ scenario.metricDelta }}</span>
+    <div v-if="dataSufficiency" class="sufficiency-section">
+      <div class="section-label">数据够不够</div>
+      <div class="sufficiency-verdict">{{ dataSufficiency.plainVerdict }}</div>
+      <div class="plain-grid">
+        <div>
+          <strong>现在能决定</strong>
+          <ul>
+            <li v-for="item in dataSufficiency.whatCanBeDecidedNow" :key="item">{{ item }}</li>
+          </ul>
         </div>
-        <p>{{ scenario.assumption }}</p>
-        <p>{{ scenario.operatingImplication }}</p>
-        <em>{{ scenario.nextAction }}</em>
+        <div>
+          <strong>现在还不能拍板</strong>
+          <ul>
+            <li v-for="item in dataSufficiency.whatCannotBeDecidedYet" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+      </div>
+      <ul class="why-list">
+        <li v-for="item in dataSufficiency.why" :key="item">{{ item }}</li>
+      </ul>
+    </div>
+
+    <div v-if="neededEvidence.length" class="evidence-section">
+      <div class="section-label">还缺哪些资料</div>
+      <div
+        v-for="item in neededEvidence"
+        :key="item.name"
+        class="evidence-row"
+      >
+        <div class="evidence-head">
+          <strong>{{ item.name }}</strong>
+          <span>{{ item.priority }} · {{ item.sourceType }}</span>
+        </div>
+        <p>{{ item.whyNeeded }}</p>
+        <em>{{ item.publicAvailability }}</em>
       </div>
     </div>
 
-    <div class="provider-grid">
-      <div
-        v-for="provider in providers"
-        :key="provider.provider"
-        data-test="provider"
-        class="provider-cell"
-      >
-        <div class="provider-name">{{ provider.provider }}</div>
-        <div class="provider-use">{{ provider.bestUse }}</div>
+    <div v-if="adviceKnowledgeBase.length" class="knowledge-section">
+      <div class="section-label">建议依据库</div>
+      <div class="knowledge-list">
+        <div
+          v-for="item in adviceKnowledgeBase"
+          :key="item.situation"
+          class="knowledge-row"
+        >
+          <strong>{{ item.situation }}</strong>
+          <p>{{ item.plainDiagnosis }}</p>
+          <div class="boss-action">{{ item.bossAction }}</div>
+          <small>{{ item.decisionRule }}</small>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="providers.length" class="provider-section">
+      <div class="section-label">可开通的数据来源</div>
+      <div class="provider-grid">
+        <div
+          v-for="provider in providers"
+          :key="provider.provider"
+          data-test="provider"
+          class="provider-cell"
+        >
+          <div class="provider-name">{{ provider.provider }}</div>
+          <div class="provider-use">{{ provider.bestUse }}</div>
+        </div>
       </div>
     </div>
 
     <div v-if="recommendations.length" class="recommendations">
-      <div class="section-label">建议动作</div>
+      <div class="section-label">补充动作</div>
       <div
-        v-for="(item, index) in recommendations.slice(0, 5)"
+        v-for="(item, index) in recommendations.slice(0, 3)"
         :key="`${item.priority}-${index}`"
         class="recommendation-row"
       >
@@ -193,22 +209,7 @@ function scoreWidth(item: DecisionScore): string {
         <div>
           <strong>{{ item.action }}</strong>
           <p v-if="item.why">{{ item.why }}</p>
-          <p v-if="item.metricTrigger" class="recommendation-meta">触发指标：{{ item.metricTrigger }}</p>
-          <p v-if="item.expectedImpact" class="recommendation-meta">预期影响：{{ item.expectedImpact }}</p>
         </div>
-      </div>
-    </div>
-
-    <div v-if="validationPlan.length" class="validation-section">
-      <div class="section-label">验证计划</div>
-      <div
-        v-for="item in validationPlan"
-        :key="item.question"
-        class="validation-row"
-      >
-        <strong>{{ item.question }}</strong>
-        <p>{{ item.decisionRule }}</p>
-        <span>{{ item.owner ? `${item.owner} · ` : '' }}{{ item.requiredFields.join(' / ') }}</span>
       </div>
     </div>
   </section>
@@ -263,174 +264,12 @@ h4 {
   line-height: 1.6;
 }
 
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(116px, 1fr));
-  gap: 8px;
-}
-
-.metric-tile {
-  min-height: 68px;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.metric-label {
-  display: block;
-  margin-bottom: 6px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.metric-tile strong {
-  color: #111827;
-  font-size: 18px;
-}
-
-.headline {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #eef6ff;
-  color: #1e3a8a;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.provider-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.provider-cell {
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.provider-name {
-  margin-bottom: 4px;
-  color: #1f2937;
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.provider-use {
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.score-section,
-.scenario-section,
-.validation-section {
-  margin-top: 12px;
-}
-
-.score-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.score-card {
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.score-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: #111827;
-  font-size: 13px;
-}
-
-.score-head span {
-  color: #0369a1;
-  font-weight: 700;
-}
-
-.score-bar {
-  height: 6px;
-  margin: 8px 0;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e5e7eb;
-}
-
-.score-bar i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: #0ea5e9;
-}
-
-.score-card[data-level="high"] .score-bar i {
-  background: #f97316;
-}
-
-.score-card p,
-.scenario-row p,
-.validation-row p {
-  margin: 0 0 4px;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.score-card em,
-.scenario-row em {
-  color: #334155;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 600;
-  line-height: 1.5;
-}
-
-.scenario-row,
-.validation-row {
-  padding: 10px 0;
-  border-top: 1px solid #e5e7eb;
-}
-
-.scenario-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
-  color: #111827;
-  font-size: 13px;
-}
-
-.scenario-title span {
-  flex-shrink: 0;
-  color: #047857;
-  font-weight: 700;
-}
-
-.validation-row strong {
-  display: block;
-  margin-bottom: 4px;
-  color: #111827;
-  font-size: 13px;
-}
-
-.validation-row span {
-  color: #64748b;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
+.plain-section,
+.solution-section,
+.sufficiency-section,
+.evidence-section,
+.knowledge-section,
+.provider-section,
 .recommendations {
   margin-top: 12px;
 }
@@ -440,6 +279,128 @@ h4 {
   color: #475569;
   font-size: 12px;
   font-weight: 700;
+}
+
+.bottom-line,
+.sufficiency-verdict {
+  padding: 12px;
+  border-radius: 6px;
+  background: #eef6ff;
+  color: #1e3a8a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.plain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.plain-grid > div,
+.solution-row,
+.evidence-row,
+.knowledge-row,
+.provider-cell {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.plain-grid strong,
+.solution-row strong,
+.evidence-head strong,
+.knowledge-row strong,
+.provider-name,
+.recommendation-row strong {
+  display: block;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+li,
+.solution-row p,
+.evidence-row p,
+.knowledge-row p,
+.provider-use,
+.recommendation-row p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.solution-list {
+  display: grid;
+  gap: 8px;
+}
+
+.solution-row span,
+.evidence-row em {
+  color: #334155;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.knowledge-list {
+  display: grid;
+  gap: 8px;
+}
+
+.boss-action {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #0ea5e9;
+  background: #f0f9ff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.knowledge-row small {
+  display: block;
+  margin-top: 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.why-list {
+  margin-top: 10px;
+}
+
+.evidence-row {
+  margin-top: 8px;
+}
+
+.evidence-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.evidence-head span {
+  flex-shrink: 0;
+  color: #0369a1;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .recommendation-row {
@@ -462,44 +423,16 @@ h4 {
   font-weight: 700;
 }
 
-.recommendation-row strong {
-  display: block;
-  color: #111827;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.recommendation-row p {
-  margin: 4px 0 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.recommendation-meta {
-  color: #475569 !important;
-}
-
 @media (max-width: 900px) {
-  .metric-grid,
-  .provider-grid,
-  .score-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .plain-grid,
+  .provider-grid {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
-  .traffic-header {
-    flex-direction: column;
-  }
-
-  .metric-grid,
-  .provider-grid,
-  .score-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .scenario-title {
+  .traffic-header,
+  .evidence-head {
     flex-direction: column;
   }
 }
