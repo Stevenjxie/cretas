@@ -20,5 +20,7 @@ public enum VoucherType {
     /** 折旧 — DepreciationSchedule → 累计折旧/管理费用 */
     DEPRECATION,
     /** 结转损益凭证 (期末自动). */
-    PL_CLOSING
+    PL_CLOSING,
+    /** 库存盘点差异 — 半成品/仓库盘点生效: 盘盈=收入(6301)/盘亏=损耗(6602.01), 库存(1405)增减. */
+    INVENTORY_STOCKTAKE
 }
