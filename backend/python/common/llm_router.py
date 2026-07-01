@@ -135,8 +135,7 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_b", "deepseek-r1"): _d(2026, 7, 16),          # thinking-only
     ("aliyun_b", "deepseek-r1-0528"): _d(2026, 7, 16),     # thinking-only
     ("aliyun_b", "glm-5"): _d(2026, 7, 16),
-    ("aliyun_b", "glm-4.5"): _d(2026, 7, 16),
-    ("aliyun_b", "glm-4.7"): _d(2026, 7, 16),
+    ("aliyun_b", "glm-4.7"): _d(2026, 7, 16),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
     ("aliyun_b", "qwen-turbo"): _d(2026, 7, 16),
     ("aliyun_b", "qwen-flash"): _d(2026, 7, 16),
     ("aliyun_b", "qwen3-coder-flash"): _d(2026, 7, 16),
@@ -175,8 +174,7 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("aliyun_c", "glm-5.1"): _d(2026, 8, 13),
     ("aliyun_c", "glm-5.2"): _d(2026, 9, 15),
     ("aliyun_c", "glm-4.6"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-4.5"): _d(2026, 8, 13),
-    ("aliyun_c", "glm-4.7"): _d(2026, 8, 13),
+    ("aliyun_c", "glm-4.7"): _d(2026, 8, 13),  # bare glm-4.5 dropped — stream-only (H4 probe 400)
     ("aliyun_c", "qwen3-vl-plus-2025-12-19"): _d(2026, 8, 13),
     ("aliyun_c", "qwen-vl-max"): _d(2026, 8, 13),
     ("aliyun_c", "qwen3-vl-plus"): _d(2026, 8, 13),
