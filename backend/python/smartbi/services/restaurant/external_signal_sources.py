@@ -684,6 +684,7 @@ class RestaurantExternalSignalService:
             "type": "weather",
             "source": "和风天气",
             "status": "collected",
+            "severity": self._weather_severity(text, temp, feels_like),
             "title": f"实时天气：{text}，{temp}℃",
             "budgetCost": 1,
             "providerUpdatedAt": payload.get("updateTime"),
@@ -1086,6 +1087,23 @@ class RestaurantExternalSignalService:
         if "晴" in weather_text:
             return "天气本身不是负面因素，如果客流仍下滑，应优先查竞品、商场动线和门店体验。"
         return "天气已采集，可作为当天客流异常的外部解释之一。"
+
+    def _weather_severity(self, text: str, temp: str, feels_like: Any) -> str:
+        if any(marker in text for marker in ("暴雨", "大雨", "雷暴", "台风", "暴雪", "冰雹")):
+            return "high"
+        try:
+            temp_value = float(temp)
+            feels_value = float(feels_like) if feels_like is not None else temp_value
+        except (TypeError, ValueError):
+            temp_value = None
+            feels_value = None
+        if temp_value is not None and (max(temp_value, feels_value or temp_value) >= 35 or temp_value <= 0):
+            return "high"
+        if any(marker in text for marker in ("雨", "雪", "雷", "雾", "霾")):
+            return "medium"
+        if temp_value is not None and (max(temp_value, feels_value or temp_value) >= 32 or temp_value <= 3):
+            return "medium"
+        return "low"
 
     def _weather_action_hint(self, text: str, temp: str) -> str:
         if "雨" in text or "雪" in text or "雷" in text:
