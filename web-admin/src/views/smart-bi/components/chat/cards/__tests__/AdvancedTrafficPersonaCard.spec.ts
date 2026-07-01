@@ -142,6 +142,23 @@ const SAMPLE = {
     plainConclusion: '当天销售或客流异常不能只看门店内部。',
     bossActions: ['不要把短期增长直接外推到下周。'],
     dataNeededForProduction: ['QWEATHER_API_KEY', 'DAMAI_APP_KEY'],
+    collectionPipeline: {
+      defaultMode: 'manual_or_cron',
+      whyNotOnPageLoad: '外部接口有每日额度，demo 页面打开不应自动消耗配额。',
+      dailyBudgetEnv: {
+        weather: 'QWEATHER_DAILY_QUERY_BUDGET',
+        mapPoi: 'AMAP_DAILY_QUERY_BUDGET / TENCENT_MAP_DAILY_QUERY_BUDGET / BAIDU_MAP_DAILY_QUERY_BUDGET',
+      },
+      steps: [
+        {
+          source: '和风天气',
+          productionStatus: 'needs_key_and_location',
+          refreshCadence: '小时级/日更均可',
+          storesOneApiCall: true,
+          whatItWrites: ['天气现况', '体感温度'],
+        },
+      ],
+    },
   },
   decisionScores: [
     {
@@ -201,6 +218,9 @@ describe('AdvancedTrafficPersonaCard', () => {
     expect(wrapper.text()).toContain('QWEATHER_API_KEY');
     expect(wrapper.text()).toContain('大麦开放平台');
     expect(wrapper.text()).toContain('商场活动源待配置');
+    expect(wrapper.text()).toContain('采集链路');
+    expect(wrapper.text()).toContain('manual_or_cron');
+    expect(wrapper.text()).toContain('QWEATHER_DAILY_QUERY_BUDGET');
     expect(wrapper.text()).not.toContain('诊断评分');
     expect(wrapper.text()).not.toContain('捕获率 +0.4pp');
   });

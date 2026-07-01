@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     food_kb_embedding_model: str = "gte-base-zh"
     food_kb_embedding_dims: int = 768
 
+    # Restaurant external signal providers. Secrets stay in env/.env only.
+    qweather_api_key: str = ""
+    damai_app_key: str = ""
+    damai_app_secret: str = ""
+    mall_activity_feed_urls: str = ""
+
     @property
     def food_kb_db_url(self) -> str:
         """Get Food KB PostgreSQL connection URL (for asyncpg)"""

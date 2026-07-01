@@ -8,7 +8,7 @@ Provider keys are read only from environment variables and are never returned.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from hashlib import md5
 import os
 from typing import Any
@@ -72,6 +72,27 @@ class ExternalSignalRequest:
     lng: float | None = None
 
 
+class InMemoryExternalSignalSnapshotStore:
+    """Small test/demo store for external signal snapshots.
+
+    Production callers can replace this with a DB-backed store. The service
+    depends only on ``save(snapshot)`` and ``latest(store_id, target_date)``.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[dict[str, Any]] = []
+
+    def save(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        self._items.append(snapshot)
+        return snapshot
+
+    def latest(self, store_id: str, target_date: str) -> dict[str, Any] | None:
+        for item in reversed(self._items):
+            if item.get("storeId") == store_id and item.get("targetDate") == target_date:
+                return item
+        return None
+
+
 class RestaurantExternalSignalService:
     """Builds source status and demo-ready anomaly context.
 
@@ -83,8 +104,15 @@ class RestaurantExternalSignalService:
     qweather_now_url = "https://devapi.qweather.com/v7/weather/now"
     damai_gateway_url = "https://eco.taobao.com/router/rest"
 
-    def __init__(self, env: dict[str, str] | None = None) -> None:
-        self._env = env if env is not None else os.environ
+    def __init__(
+        self,
+        env: dict[str, str] | None = None,
+        http_client: Any | None = None,
+        snapshot_store: Any | None = None,
+    ) -> None:
+        self._env = env
+        self._http_client = http_client or httpx
+        self._snapshot_store = snapshot_store
 
     def build_context(self, request: ExternalSignalRequest) -> dict[str, Any]:
         target_day = self._target_day(request.target_date)
@@ -99,6 +127,7 @@ class RestaurantExternalSignalService:
             "purpose": "解释某天或某周销售/客流异常是不是天气、节假日、周边活动或商场活动导致。",
             "sourceStatuses": self.source_statuses(),
             "signals": signals,
+            "collectionPipeline": self.collection_pipeline(request),
             "plainConclusion": self._plain_conclusion(signals),
             "bossActions": [
                 "不要把节假日、演出散场、商场活动带来的短期增长直接外推到下周。",
@@ -155,11 +184,61 @@ class RestaurantExternalSignalService:
             },
         ]
 
+    def collection_pipeline(self, request: ExternalSignalRequest) -> dict[str, Any]:
+        has_location = request.lat is not None and request.lng is not None
+        has_qweather = bool(self._env_value("QWEATHER_API_KEY"))
+        has_damai = bool(
+            self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")
+        )
+        has_mall_feeds = bool(self._env_value("MALL_ACTIVITY_FEED_URLS"))
+        return {
+            "defaultMode": "manual_or_cron",
+            "whyNotOnPageLoad": "外部接口有每日额度，demo 页面打开不应自动消耗配额；由后台定时任务或管理员手动触发采集。",
+            "dailyBudgetEnv": {
+                "weather": "QWEATHER_DAILY_QUERY_BUDGET",
+                "mapPoi": "AMAP_DAILY_QUERY_BUDGET / TENCENT_MAP_DAILY_QUERY_BUDGET / BAIDU_MAP_DAILY_QUERY_BUDGET",
+            },
+            "steps": [
+                {
+                    "source": "和风天气",
+                    "productionStatus": (
+                        "ready_to_collect"
+                        if has_qweather and has_location
+                        else "needs_key_and_location"
+                    ),
+                    "refreshCadence": "小时级/日更均可",
+                    "storesOneApiCall": True,
+                    "whatItWrites": ["天气现况", "体感温度", "湿度", "风力", "供应商更新时间"],
+                },
+                {
+                    "source": "中国节假日/调休",
+                    "productionStatus": "ready_without_key",
+                    "refreshCadence": "年度更新",
+                    "storesOneApiCall": False,
+                    "whatItWrites": ["节假日标签", "补班标签"],
+                },
+                {
+                    "source": "大麦开放平台",
+                    "productionStatus": "ready_to_sign" if has_damai else "needs_key_and_api_scope",
+                    "refreshCadence": "日更",
+                    "storesOneApiCall": False,
+                    "whatItWrites": ["活动类型", "场馆", "活动日期", "售票状态"],
+                },
+                {
+                    "source": "商场活动采集",
+                    "productionStatus": "ready_with_feed_urls" if has_mall_feeds else "needs_feed_urls",
+                    "refreshCadence": "日更",
+                    "storesOneApiCall": False,
+                    "whatItWrites": ["活动标题", "活动日期", "楼层/场地", "品牌或活动类型"],
+                },
+            ],
+        }
+
     def fetch_qweather_now(self, location_id: str) -> dict[str, Any]:
-        api_key = self._env.get("QWEATHER_API_KEY")
+        api_key = self._env_value("QWEATHER_API_KEY")
         if not api_key:
             return {"available": False, "reason": "缺少 QWEATHER_API_KEY"}
-        response = httpx.get(
+        response = self._http_client.get(
             self.qweather_now_url,
             params={"location": location_id, "key": api_key},
             timeout=5.0,
@@ -167,14 +246,115 @@ class RestaurantExternalSignalService:
         response.raise_for_status()
         return response.json()
 
+    def collect_snapshot(
+        self,
+        request: ExternalSignalRequest,
+        store_id: str,
+        *,
+        now: datetime | None = None,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        """Collect one store/day external-signal snapshot.
+
+        This is the production-facing pull boundary. It can consume provider
+        quota, so the demo path keeps using ``build_context`` unless a cron or
+        admin endpoint explicitly calls this method.
+        """
+
+        target_day = self._target_day(request.target_date)
+        collected_at = (now or datetime.now(timezone.utc)).isoformat()
+        weather_signal = self._collect_qweather_signal(request)
+        signals = [
+            weather_signal,
+            self._holiday_signal(target_day),
+            self._damai_collection_signal(request),
+            self._mall_collection_signal(request),
+        ]
+        budget_used = sum(1 for signal in signals if signal.get("budgetCost"))
+        snapshot = {
+            "storeId": store_id,
+            "targetDate": target_day.isoformat(),
+            "city": request.city,
+            "businessDistrict": request.business_district,
+            "mallName": request.mall_name,
+            "lat": request.lat,
+            "lng": request.lng,
+            "collectedAt": collected_at,
+            "status": "collected" if any(signal.get("status") == "collected" for signal in signals) else "partial",
+            "budgetUsed": budget_used,
+            "signals": signals,
+            "sourceStatuses": self.source_statuses(),
+            "bossReadableSummary": self._plain_conclusion(signals),
+        }
+        if persist and self._snapshot_store is not None:
+            self._snapshot_store.save(snapshot)
+        return snapshot
+
+    def collect_for_stores(
+        self,
+        stores: list[dict[str, Any]],
+        *,
+        target_date: str | None = None,
+        daily_budget: int = 800,
+    ) -> dict[str, Any]:
+        """Collect snapshots for many stores with a hard daily quota cap."""
+
+        snapshots: list[dict[str, Any]] = []
+        budget_used = 0
+        collected = 0
+        skipped = 0
+        for store in stores:
+            store_id = str(store.get("storeId") or store.get("store_id") or "")
+            expected_cost = 1 if self._can_collect_qweather(store) else 0
+            if expected_cost and budget_used + expected_cost > daily_budget:
+                snapshots.append(
+                    {
+                        "storeId": store_id,
+                        "targetDate": self._target_day(target_date).isoformat(),
+                        "status": "budget_skipped",
+                        "budgetUsed": 0,
+                        "reason": "已达到外部数据每日采集预算，留到下一批或明天采集。",
+                    }
+                )
+                skipped += 1
+                continue
+
+            snapshot = self.collect_snapshot(
+                ExternalSignalRequest(
+                    city=str(store.get("city") or ""),
+                    business_district=str(
+                        store.get("businessDistrict")
+                        or store.get("business_district")
+                        or ""
+                    ),
+                    mall_name=store.get("mallName") or store.get("mall_name"),
+                    target_date=target_date,
+                    lat=store.get("lat"),
+                    lng=store.get("lng"),
+                ),
+                store_id=store_id,
+            )
+            snapshots.append(snapshot)
+            budget_used += int(snapshot.get("budgetUsed") or 0)
+            collected += 1
+
+        return {
+            "targetDate": self._target_day(target_date).isoformat(),
+            "budgetLimit": daily_budget,
+            "budgetUsed": budget_used,
+            "collected": collected,
+            "skipped": skipped,
+            "snapshots": snapshots,
+        }
+
     def build_damai_signed_params(
         self,
         method: str,
         payload: dict[str, Any],
         timestamp: str | None = None,
     ) -> dict[str, str]:
-        app_key = self._env.get("DAMAI_APP_KEY")
-        app_secret = self._env.get("DAMAI_APP_SECRET")
+        app_key = self._env_value("DAMAI_APP_KEY")
+        app_secret = self._env_value("DAMAI_APP_SECRET")
         if not app_key or not app_secret:
             raise ValueError("缺少 DAMAI_APP_KEY 或 DAMAI_APP_SECRET")
 
@@ -221,7 +401,7 @@ class RestaurantExternalSignalService:
         }
 
     def _weather_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
-        configured = self._env.get("QWEATHER_API_KEY")
+        configured = self._env_value("QWEATHER_API_KEY")
         return {
             "type": "weather",
             "source": "和风天气",
@@ -234,7 +414,7 @@ class RestaurantExternalSignalService:
         }
 
     def _damai_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
-        configured = self._env.get("DAMAI_APP_KEY") and self._env.get("DAMAI_APP_SECRET")
+        configured = self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")
         return {
             "type": "nearby_event",
             "source": "大麦开放平台",
@@ -264,7 +444,165 @@ class RestaurantExternalSignalService:
         return "当天销售或客流异常不能只看门店内部，要先排查节假日、天气、周边活动和商场活动这些外部原因。"
 
     def _configured_status(self, *env_vars: str) -> str:
-        return "已配置" if all(self._env.get(key) for key in env_vars) else "待配置"
+        return "已配置" if all(self._env_value(key) for key in env_vars) else "待配置"
+
+    def _env_value(self, key: str) -> str:
+        if self._env is not None:
+            return str(self._env.get(key) or "")
+        value = os.environ.get(key)
+        if value:
+            return value
+        settings_key = {
+            "QWEATHER_API_KEY": "qweather_api_key",
+            "DAMAI_APP_KEY": "damai_app_key",
+            "DAMAI_APP_SECRET": "damai_app_secret",
+            "MALL_ACTIVITY_FEED_URLS": "mall_activity_feed_urls",
+        }.get(key)
+        if not settings_key:
+            return ""
+        try:
+            from smartbi.config import get_settings
+
+            return str(getattr(get_settings(), settings_key, "") or "")
+        except Exception:
+            return ""
+
+    def _can_collect_qweather(self, store: dict[str, Any]) -> bool:
+        return bool(
+            self._env_value("QWEATHER_API_KEY")
+            and store.get("lat") is not None
+            and store.get("lng") is not None
+        )
+
+    def _collect_qweather_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
+        if not self._env_value("QWEATHER_API_KEY"):
+            return {
+                "type": "weather",
+                "source": "和风天气",
+                "status": "skipped",
+                "reason": "缺少 QWEATHER_API_KEY，未消耗接口额度。",
+                "budgetCost": 0,
+                "plainImpact": "天气源未接入时，只能提示需要校验天气，不能确认当天是否受雨天、高温或预警影响。",
+                "actionHint": "把和风天气 Key 放到服务器环境变量或 .env 后，再由定时任务采集。",
+            }
+        if request.lat is None or request.lng is None:
+            return {
+                "type": "weather",
+                "source": "和风天气",
+                "status": "skipped",
+                "reason": "缺少门店经纬度，未消耗接口额度。",
+                "budgetCost": 0,
+                "plainImpact": "没有经纬度就无法按门店拉天气，只能按城市做粗略判断。",
+                "actionHint": "先补门店 lat/lng，再做小时级天气解释。",
+            }
+
+        location = f"{float(request.lng):.6f},{float(request.lat):.6f}"
+        payload = self.fetch_qweather_now(location)
+        now_weather = payload.get("now") if isinstance(payload, dict) else None
+        if not isinstance(now_weather, dict):
+            return {
+                "type": "weather",
+                "source": "和风天气",
+                "status": "error",
+                "reason": "和风天气返回格式不符合预期。",
+                "budgetCost": 1,
+                "plainImpact": "天气接口已有调用，但本次结果不能用于经营判断。",
+                "actionHint": "检查 provider 响应和门店 location 参数。",
+            }
+
+        text = str(now_weather.get("text") or "未知天气")
+        temp = str(now_weather.get("temp") or "--")
+        feels_like = now_weather.get("feelsLike")
+        humidity = now_weather.get("humidity")
+        return {
+            "type": "weather",
+            "source": "和风天气",
+            "status": "collected",
+            "title": f"实时天气：{text}，{temp}℃",
+            "budgetCost": 1,
+            "providerUpdatedAt": payload.get("updateTime"),
+            "safePayload": {
+                "text": text,
+                "temp": temp,
+                "feelsLike": feels_like,
+                "humidity": humidity,
+                "windDir": now_weather.get("windDir"),
+                "windScale": now_weather.get("windScale"),
+            },
+            "plainImpact": self._weather_plain_impact(text, temp, feels_like),
+            "actionHint": self._weather_action_hint(text, temp),
+        }
+
+    def _damai_collection_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
+        if not (self._env_value("DAMAI_APP_KEY") and self._env_value("DAMAI_APP_SECRET")):
+            return {
+                "type": "nearby_event",
+                "source": "大麦开放平台",
+                "status": "skipped",
+                "reason": "缺少 DAMAI_APP_KEY 或 DAMAI_APP_SECRET，暂不拉取。",
+                "budgetCost": 0,
+                "plainImpact": "周边演出、展会、赛事可能解释晚市和周末异常，但当前只能作为待核验因素。",
+                "actionHint": "等大麦权限确认后，再按城市、场馆和日期拉取活动。",
+            }
+        return {
+            "type": "nearby_event",
+            "source": "大麦开放平台",
+            "status": "ready",
+            "reason": "签名能力已就绪；正式拉取需要确认开放平台可用 API 和授权范围。",
+            "budgetCost": 0,
+            "plainImpact": f"{request.business_district} 周边演出活动可作为异常日外部解释源。",
+            "actionHint": "先维护 1-3km 重点场馆清单，再按场馆和日期拉取活动。",
+        }
+
+    def _mall_collection_signal(self, request: ExternalSignalRequest) -> dict[str, Any]:
+        configured = self._env_value("MALL_ACTIVITY_FEED_URLS")
+        mall = request.mall_name or "目标商场"
+        if not configured:
+            return {
+                "type": "mall_activity",
+                "source": "商场活动采集",
+                "status": "skipped",
+                "reason": "未配置 MALL_ACTIVITY_FEED_URLS。",
+                "budgetCost": 0,
+                "plainImpact": f"{mall} 的活动源还没配置，商场市集、IP 展、会员日只能人工核验。",
+                "actionHint": "先把商场官网活动页、公众号文章列表或小程序活动页 URL 放入配置。",
+            }
+        return {
+            "type": "mall_activity",
+            "source": "商场活动采集",
+            "status": "ready",
+            "reason": "活动源 URL 已配置，可由后续 HTML/RSS/人工审核采集器消费。",
+            "budgetCost": 0,
+            "plainImpact": f"{mall} 的活动源可用于解释非节假日客流异常。",
+            "actionHint": "每天采集标题、活动日期、楼层/场地和品牌，再与门店异常日匹配。",
+        }
+
+    def _weather_plain_impact(self, text: str, temp: str, feels_like: Any) -> str:
+        weather_text = text.lower()
+        if "雨" in text or "雪" in text or "雷" in text:
+            return "雨雪天气通常会压低自然到店和排队意愿，但可能把需求转到外卖；堂食下滑不能直接判定门店变差。"
+        try:
+            temp_value = float(temp)
+            feels_value = float(feels_like) if feels_like is not None else temp_value
+        except (TypeError, ValueError):
+            return "天气已采集，需要结合堂食、外卖和排队数据判断影响。"
+        if max(temp_value, feels_value) >= 34:
+            return "高温会降低远距离到店和排队意愿，冷饮、小食和外卖承接更重要。"
+        if temp_value <= 3:
+            return "低温会影响逛街和排队，热菜、热饮和外卖承接要提前准备。"
+        if "晴" in weather_text:
+            return "天气本身不是负面因素，如果客流仍下滑，应优先查竞品、商场动线和门店体验。"
+        return "天气已采集，可作为当天客流异常的外部解释之一。"
+
+    def _weather_action_hint(self, text: str, temp: str) -> str:
+        if "雨" in text or "雪" in text or "雷" in text:
+            return "当天复盘时把堂食和外卖拆开看；雨天不要只用堂食下滑评价店长。"
+        try:
+            if float(temp) >= 34:
+                return "高温日减少门口硬排队，提前推预约、外卖和高毛利饮品组合。"
+        except ValueError:
+            pass
+        return "把天气标签写入异常日复盘，和销售、排队、差评一起看。"
 
     def _target_day(self, value: str | None) -> date:
         if not value:

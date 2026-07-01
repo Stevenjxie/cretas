@@ -6,8 +6,42 @@ import pytest
 
 from smartbi.services.restaurant.external_signal_sources import (
     ExternalSignalRequest,
+    InMemoryExternalSignalSnapshotStore,
     RestaurantExternalSignalService,
 )
+
+
+class FakeWeatherResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class FakeWeatherClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def get(self, url: str, params: dict, timeout: float) -> FakeWeatherResponse:
+        self.calls.append({"url": url, "params": params, "timeout": timeout})
+        return FakeWeatherResponse(
+            {
+                "code": "200",
+                "now": {
+                    "text": "小雨",
+                    "temp": "31",
+                    "feelsLike": "34",
+                    "windDir": "东南风",
+                    "windScale": "3",
+                    "humidity": "80",
+                },
+                "updateTime": "2026-07-01T13:00+08:00",
+            }
+        )
 
 
 def test_external_signal_sources_report_key_requirements_without_secrets() -> None:
@@ -60,6 +94,11 @@ def test_external_signal_sources_are_demo_ready_without_keys() -> None:
     assert any(signal["source"] == "商场活动采集" for signal in context["signals"])
     assert any("QWEATHER_API_KEY" in item for item in context["dataNeededForProduction"])
     assert any("DAMAI_APP_KEY" in item for item in context["dataNeededForProduction"])
+    assert context["collectionPipeline"]["defaultMode"] == "manual_or_cron"
+    assert any(
+        step["source"] == "和风天气" and step["productionStatus"] == "needs_key_and_location"
+        for step in context["collectionPipeline"]["steps"]
+    )
 
 
 def test_external_signal_sources_accept_month_quarter_and_invalid_periods() -> None:
@@ -102,3 +141,99 @@ def test_damai_signed_params_fail_fast_without_keys() -> None:
             "alibaba.damai.maitix.project.distribution.querybypage",
             {"param": "{}"},
         )
+
+
+def test_collect_snapshot_fetches_weather_and_persists_safe_payload() -> None:
+    client = FakeWeatherClient()
+    store = InMemoryExternalSignalSnapshotStore()
+    service = RestaurantExternalSignalService(
+        env={"QWEATHER_API_KEY": "qweather-secret"},
+        http_client=client,
+        snapshot_store=store,
+    )
+
+    snapshot = service.collect_snapshot(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="人民广场",
+            mall_name="第一百货商业中心",
+            target_date="2026-07-01",
+            lat=31.235,
+            lng=121.475,
+        ),
+        store_id="store-001",
+    )
+
+    assert snapshot["storeId"] == "store-001"
+    assert snapshot["budgetUsed"] == 1
+    assert snapshot["signals"][0]["source"] == "和风天气"
+    assert snapshot["signals"][0]["title"] == "实时天气：小雨，31℃"
+    assert snapshot["signals"][0]["plainImpact"]
+    assert client.calls == [
+        {
+            "url": service.qweather_now_url,
+            "params": {"location": "121.475000,31.235000", "key": "qweather-secret"},
+            "timeout": 5.0,
+        }
+    ]
+
+    persisted = store.latest("store-001", "2026-07-01")
+    assert persisted is not None
+    serialized = json.dumps(persisted, ensure_ascii=False)
+    assert "qweather-secret" not in serialized
+
+
+def test_collect_snapshot_skips_network_without_key_or_location() -> None:
+    client = FakeWeatherClient()
+    service = RestaurantExternalSignalService(env={}, http_client=client)
+
+    snapshot = service.collect_snapshot(
+        ExternalSignalRequest(
+            city="上海",
+            business_district="人民广场",
+            target_date="2026-07-01",
+        ),
+        store_id="store-001",
+    )
+
+    assert snapshot["budgetUsed"] == 0
+    assert snapshot["signals"][0]["source"] == "和风天气"
+    assert snapshot["signals"][0]["status"] == "skipped"
+    assert "QWEATHER_API_KEY" in snapshot["signals"][0]["reason"]
+    assert client.calls == []
+
+
+def test_collect_for_stores_respects_daily_budget() -> None:
+    client = FakeWeatherClient()
+    service = RestaurantExternalSignalService(
+        env={"QWEATHER_API_KEY": "qweather-secret"},
+        http_client=client,
+    )
+
+    result = service.collect_for_stores(
+        [
+            {
+                "storeId": "store-001",
+                "city": "上海",
+                "businessDistrict": "人民广场",
+                "lat": 31.235,
+                "lng": 121.475,
+            },
+            {
+                "storeId": "store-002",
+                "city": "上海",
+                "businessDistrict": "陆家嘴",
+                "lat": 31.24,
+                "lng": 121.50,
+            },
+        ],
+        target_date="2026-07-01",
+        daily_budget=1,
+    )
+
+    assert result["budgetLimit"] == 1
+    assert result["budgetUsed"] == 1
+    assert result["collected"] == 1
+    assert result["skipped"] == 1
+    assert result["snapshots"][1]["status"] == "budget_skipped"
+    assert len(client.calls) == 1

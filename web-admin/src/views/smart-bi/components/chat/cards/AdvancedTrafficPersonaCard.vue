@@ -69,11 +69,27 @@ interface ExternalSignal {
   actionHint: string;
 }
 
+interface ExternalSignalPipelineStep {
+  source: string;
+  productionStatus: string;
+  refreshCadence: string;
+  storesOneApiCall: boolean;
+  whatItWrites: string[];
+}
+
+interface ExternalSignalPipeline {
+  defaultMode: string;
+  whyNotOnPageLoad: string;
+  dailyBudgetEnv: Record<string, string>;
+  steps: ExternalSignalPipelineStep[];
+}
+
 interface ExternalSignals {
   moduleName: string;
   purpose: string;
   sourceStatuses: ExternalSignalStatus[];
   signals: ExternalSignal[];
+  collectionPipeline?: ExternalSignalPipeline;
   plainConclusion: string;
   bossActions: string[];
   dataNeededForProduction: string[];
@@ -241,6 +257,36 @@ const statusLabel = computed(() => payload.value.enablement?.status ?? '需额�
           <strong>{{ signal.title }}</strong>
           <p>{{ signal.plainImpact }}</p>
           <small>{{ signal.actionHint }}</small>
+        </div>
+      </div>
+
+      <div v-if="externalSignals.collectionPipeline" class="pipeline-block">
+        <div class="subsection-label">采集链路</div>
+        <div class="pipeline-summary">
+          <strong>{{ externalSignals.collectionPipeline.defaultMode }}</strong>
+          <span>{{ externalSignals.collectionPipeline.whyNotOnPageLoad }}</span>
+        </div>
+        <div class="budget-line">
+          <span
+            v-for="(envName, key) in externalSignals.collectionPipeline.dailyBudgetEnv"
+            :key="key"
+          >
+            {{ key }}: {{ envName }}
+          </span>
+        </div>
+        <div class="pipeline-grid">
+          <div
+            v-for="step in externalSignals.collectionPipeline.steps"
+            :key="step.source"
+            class="pipeline-cell"
+          >
+            <div class="source-head">
+              <strong>{{ step.source }}</strong>
+              <span>{{ step.productionStatus }}</span>
+            </div>
+            <p>{{ step.refreshCadence }} · {{ step.storesOneApiCall ? '单店一次接口' : '不按门店消耗接口' }}</p>
+            <small>{{ step.whatItWrites.join(' / ') }}</small>
+          </div>
         </div>
       </div>
     </div>
@@ -480,6 +526,13 @@ li,
   margin-top: 10px;
 }
 
+.subsection-label {
+  margin: 12px 0 8px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .source-head {
   display: flex;
   align-items: center;
@@ -507,6 +560,60 @@ li,
   margin-top: 10px;
 }
 
+.pipeline-block {
+  margin-top: 10px;
+}
+
+.pipeline-summary {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.pipeline-summary strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.pipeline-summary span,
+.budget-line span,
+.pipeline-cell p,
+.pipeline-cell small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.budget-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.budget-line span {
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #f1f5f9;
+}
+
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.pipeline-cell {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
 .recommendation-row {
   display: grid;
   grid-template-columns: 42px 1fr;
@@ -530,6 +637,7 @@ li,
 @media (max-width: 900px) {
   .plain-grid,
   .source-grid,
+  .pipeline-grid,
   .provider-grid {
     grid-template-columns: 1fr;
   }

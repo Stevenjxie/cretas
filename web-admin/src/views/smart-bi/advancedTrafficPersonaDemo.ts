@@ -337,6 +337,44 @@ export const DEFAULT_ADVANCED_TRAFFIC_PERSONA: AdvancedTrafficPersona = {
         actionHint: '先配置商场官网/公众号/小程序活动页，做日更采集；有物业合作后再接内部活动表。',
       },
     ],
+    collectionPipeline: {
+      defaultMode: 'manual_or_cron',
+      whyNotOnPageLoad: '外部接口有每日额度，demo 页面打开不自动消耗配额；由后台定时任务或管理员手动触发采集。',
+      dailyBudgetEnv: {
+        weather: 'QWEATHER_DAILY_QUERY_BUDGET',
+        mapPoi: 'AMAP_DAILY_QUERY_BUDGET / TENCENT_MAP_DAILY_QUERY_BUDGET / BAIDU_MAP_DAILY_QUERY_BUDGET',
+      },
+      steps: [
+        {
+          source: '和风天气',
+          productionStatus: 'needs_key_and_location',
+          refreshCadence: '小时级/日更均可',
+          storesOneApiCall: true,
+          whatItWrites: ['天气现况', '体感温度', '湿度', '风力', '供应商更新时间'],
+        },
+        {
+          source: '中国节假日/调休',
+          productionStatus: 'ready_without_key',
+          refreshCadence: '年度更新',
+          storesOneApiCall: false,
+          whatItWrites: ['节假日标签', '补班标签'],
+        },
+        {
+          source: '大麦开放平台',
+          productionStatus: 'needs_key_and_api_scope',
+          refreshCadence: '日更',
+          storesOneApiCall: false,
+          whatItWrites: ['活动类型', '场馆', '活动日期', '售票状态'],
+        },
+        {
+          source: '商场活动采集',
+          productionStatus: 'needs_feed_urls',
+          refreshCadence: '日更',
+          storesOneApiCall: false,
+          whatItWrites: ['活动标题', '活动日期', '楼层/场地', '品牌或活动类型'],
+        },
+      ],
+    },
     plainConclusion: '当天销售或客流异常不能只看门店内部，要先排查节假日、天气、周边活动和商场活动这些外部原因。',
     bossActions: [
       '不要把节假日、演出散场、商场活动带来的短期增长直接外推到下周。',

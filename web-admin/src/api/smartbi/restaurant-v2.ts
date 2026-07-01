@@ -541,11 +541,27 @@ export interface AdvancedTrafficPersonaExternalSignal {
   actionHint: string;
 }
 
+export interface AdvancedTrafficPersonaExternalSignalPipelineStep {
+  source: string;
+  productionStatus: string;
+  refreshCadence: string;
+  storesOneApiCall: boolean;
+  whatItWrites: string[];
+}
+
+export interface AdvancedTrafficPersonaExternalSignalPipeline {
+  defaultMode: string;
+  whyNotOnPageLoad: string;
+  dailyBudgetEnv: Record<string, string>;
+  steps: AdvancedTrafficPersonaExternalSignalPipelineStep[];
+}
+
 export interface AdvancedTrafficPersonaExternalSignals {
   moduleName: string;
   purpose: string;
   sourceStatuses: AdvancedTrafficPersonaExternalSignalStatus[];
   signals: AdvancedTrafficPersonaExternalSignal[];
+  collectionPipeline?: AdvancedTrafficPersonaExternalSignalPipeline;
   plainConclusion: string;
   bossActions: string[];
   dataNeededForProduction: string[];
