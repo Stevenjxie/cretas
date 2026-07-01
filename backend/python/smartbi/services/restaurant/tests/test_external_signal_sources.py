@@ -206,7 +206,9 @@ def test_collect_snapshot_fetches_weather_and_persists_safe_payload() -> None:
     assert snapshot["budgetUsed"] == 1
     assert snapshot["signals"][0]["source"] == "和风天气"
     assert snapshot["signals"][0]["title"] == "实时天气：小雨，31℃"
+    assert snapshot["signals"][0]["severity"] == "medium"
     assert snapshot["signals"][0]["plainImpact"]
+    assert "外部原因" in snapshot["bossReadableSummary"]
     assert client.calls == [
         {
             "url": "https://abc123.qweatherapi.com/v7/weather/now",
