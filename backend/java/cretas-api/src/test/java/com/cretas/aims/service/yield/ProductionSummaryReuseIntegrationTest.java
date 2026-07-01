@@ -9,6 +9,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -59,6 +60,7 @@ class ProductionSummaryReuseIntegrationTest {
     @Mock WorkProcessRepository processRepo;
     @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock ProductTypeRepository productTypeRepo;
+    @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepo;
 
     // ProductionSummaryService 依赖
     @Mock ProductionBatchRepository summaryBatchRepo;
@@ -76,7 +78,7 @@ class ProductionSummaryReuseIntegrationTest {
         processSheetService = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo, consumptionRepo,
                 reportRepo, productionPlanRepository, changeLogRepo, mapper, wipRepo, taskRepo,
-                processRepo, productWorkProcessRepo, productTypeRepo);
+                processRepo, productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo);
         summaryService = new ProductionSummaryService(
                 processSheetService, summaryBatchRepo, orderCostBreakdownService, reusedSemiLineageService);
     }
