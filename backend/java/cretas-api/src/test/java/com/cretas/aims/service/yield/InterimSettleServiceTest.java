@@ -16,9 +16,11 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
@@ -87,6 +89,8 @@ class InterimSettleServiceTest {
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private ProductionBatchRepository batchRepository;
     @Mock private ClerkProcessEntryService clerkProcessEntryService;
+    @Mock private ProductWorkProcessRepository productWorkProcessRepository;
+    @Mock private WorkProcessRepository workProcessRepository;
 
     private static final BigDecimal LABOR_RATE = new BigDecimal("20");
 
@@ -102,7 +106,8 @@ class InterimSettleServiceTest {
                 planRepository, rowRepository, consumptionRepository, materialBatchRepository,
                 settlementRepository, finishedGoodsBatchRepository, productTypeRepository,
                 wipInventoryService, warehouseResolver, objectMapper,
-                batchRepository, clerkProcessEntryService);
+                batchRepository, clerkProcessEntryService,
+                productWorkProcessRepository, workProcessRepository);
 
         // 工时单价解析 (纯 SFI 中间道人工现算用); 默认按 payload laborSegments 现算真实人工。
         when(clerkProcessEntryService.resolveLaborRate(eq(FACTORY), any())).thenReturn(LABOR_RATE);
@@ -510,6 +515,72 @@ class InterimSettleServiceTest {
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
                 eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(isSeasoningStep) → 产出 null (不漏调料桶=禁止降级), 即便SFI成本+人工皆已知")
+    void pureSfiSeasoningStepByFlagReturnsNull() {
+        // 纯 SFI 调味道: SFI 投料有成本(10) + 人工有(100), 但调味道调料成本无处可算 → 整道诚实 null。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setSeasoningStep(true);                             // 前端显式调味标志
+        req.setLaborSegments(List.of(seg("08:00", "10:00", 1)));
+        ProcessSheetRow rM = pureSfiRow(80L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 🔴 调味道调料桶未知 → null (不降级成 labor-only=(100+500)/40=15 假数据)
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(工序名'卤制'匹配) → 产出 null (工序名口径同 buildStepEntry)")
+    void pureSfiSeasoningStepByNameReturnsNull() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setProcessName("卤制");                              // 工序名匹配 熟/卤/煮/腌/注射/入味/调味
+        ProcessSheetRow rM = pureSfiRow(81L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                eq(null), eq(null));
+    }
+
+    @Test
+    @DisplayName("成本传导(Fix1 #7): 纯SFI非调味道(工序名'切片'不匹配) → 仍走 labor+SFI 成本 (不误伤非调味道)")
+    void pureSfiNonSeasoningStepStillCosted() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setProcessName("切片");                              // 非调味 → 仍现算成本
+        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));
+        ProcessSheetRow rM = pureSfiRow(82L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 非调味道: (人工100 + 50×10) / 40 = 15 (成本正常传导, 不被 Fix1 误伤)
+        ArgumentCaptor<BigDecimal> uc = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(wipInventoryService, times(1)).postClerkOutput(
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
+                uc.capture(), eq(null));
+        assertThat(uc.getValue()).isEqualByComparingTo("15");
     }
 
     // ─────────────────────────────────────────────────────────────
