@@ -475,6 +475,53 @@ def test_mall_collection_merges_configured_wechat_article_seeds() -> None:
     ]
 
 
+def test_resolve_store_geo_profile_links_store_to_trade_area_and_sources() -> None:
+    service = RestaurantExternalSignalService(env={})
+
+    profile = service.resolve_store_geo_profile(
+        store_id="haidilao-diyi-shopping-mall",
+        store_name="海底捞火锅(第一百货店)",
+        request=ExternalSignalRequest(city="", business_district="", mall_name=None),
+    )
+
+    assert profile["matchStatus"] == "matched_seed"
+    assert profile["confidence"] == "high"
+    assert profile["businessDistrict"] == "南京东路/人民广场"
+    assert profile["mallName"] == "第一百货商业中心"
+    assert profile["floor"] == "5F"
+    assert profile["distanceToDistrictCenterMeters"] < 600
+    assert any(item["scope"] == "mall_or_same_block" and item["matched"] for item in profile["influenceRings"])
+    source_types = {item["sourceType"] for item in profile["activitySourceBindings"]}
+    assert "wechat_public_article" in source_types
+    assert "official_exhibition_schedule" in source_types
+    assert profile["wechatDataSufficiency"]["isEnoughAlone"] is False
+
+
+def test_collect_snapshot_uses_store_geo_profile_when_location_missing() -> None:
+    client = FakeWeatherClient()
+    service = RestaurantExternalSignalService(
+        env={
+            "QWEATHER_API_KEY": "qweather-secret",
+            "QWEATHER_API_HOST": "abc123.qweatherapi.com",
+        },
+        http_client=client,
+    )
+
+    snapshot = service.collect_snapshot(
+        ExternalSignalRequest(city="", business_district="", target_date="2026-07-01"),
+        store_id="haidilao-diyi-shopping-mall",
+        persist=False,
+    )
+
+    assert snapshot["city"] == "上海"
+    assert snapshot["businessDistrict"] == "南京东路/人民广场"
+    assert snapshot["mallName"] == "第一百货商业中心"
+    assert snapshot["lat"] == 31.24035
+    assert snapshot["lng"] == 121.482718
+    assert snapshot["storeGeoProfile"]["matchStatus"] == "matched_seed"
+    assert client.calls[0]["params"] == {"location": "121.48,31.24"}
+
+
 def test_collect_mall_activity_feeds_decodes_gb18030_public_pages() -> None:
     class GbCrawlerClient:
         def __init__(self) -> None:
