@@ -145,6 +145,13 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             String productionPlanId, String factoryId);
 
     /**
+     * 撤销小结: 查某次小结 (postedAt 时间戳) 扣减的全部消耗行 (interim_settled_at == postedAt)。
+     * 逆转时逐行还回来源 MaterialBatch.usedQuantity + 清 interim_settled_at。Factory-scoped 防跨租户。
+     */
+    List<MaterialConsumption> findByProductionPlanIdAndFactoryIdAndInterimSettledAt(
+            String productionPlanId, String factoryId, LocalDateTime interimSettledAt);
+
+    /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
      * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
      */

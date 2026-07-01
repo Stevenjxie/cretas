@@ -61,6 +61,41 @@ public interface FinishedGoodsFeedService {
     BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit);
 
     /**
+     * 撤销小结 — 逆 {@code createFinishedGoodsForInterim} (FG 成品入库 un-create)。
+     *
+     * <p>把某次小结创建/入库的成品量从批次冲销: {@code producedQuantity -= qty}, 写反向调整日志
+     * ({@code referenceType=INTERIM_SETTLE_REVERSAL})。冲销至 0 → 状态置 REVERSED (批次作废)。
+     *
+     * <p>🔴 <b>已发货/预留/领用守卫 (禁止降级)</b>: 若该成品入库后已被发货/预留/生产领用
+     * (available_after = produced − qty − shipped − reserved &lt; 0) → <b>抛 {@code BusinessException(409,
+     * FG_DOWNSTREAM_CONSUMED)}</b> (整事务回滚)。批次不存在 (已撤销/删除) → 抛 {@code FG_NOT_FOUND}。
+     * 悲观行锁串行化。必须在调用方 {@code @Transactional} 内。
+     *
+     * @param factoryId   工厂 ID (factory-scoped 🔒)
+     * @param batchNumber 成品批次号 (= 小结创建的 {@code FinishedGoodsBatch.batchNumber})
+     * @param qty         本次冲销量 (= 小结入库量; ≤0 → no-op)
+     * @param operatorId  操作人 (调整日志 audit, 可空)
+     * @throws com.cretas.aims.exception.BusinessException 409 FG_NOT_FOUND / FG_DOWNSTREAM_CONSUMED
+     */
+    void reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
+
+    /**
+     * 撤销小结 — 逆 {@link #consumeForFeedStrict} (FG 投料 restore, 还回领用)。
+     *
+     * <p>把某次小结投料扣减的成品量还回批次: {@code producedQuantity += qty}, 写反向调整日志
+     * ({@code referenceType=INTERIM_SETTLE_REVERSAL})。DEPLETED → available&gt;0 时恢复 AVAILABLE。
+     * 还量是增加库存 (无 phantom 风险); 批次缺失 → 抛 {@code FG_NOT_FOUND} (被撤销的领用其批次应存在)。
+     * 悲观行锁。必须在调用方 {@code @Transactional} 内。
+     *
+     * @param factoryId   工厂 ID (factory-scoped 🔒)
+     * @param batchNumber 成品批次号 (= 投料时同一批号)
+     * @param qty         本次还回量 (≤0 → no-op)
+     * @param operatorId  操作人 (调整日志 audit, 可空)
+     * @throws com.cretas.aims.exception.BusinessException 409 FG_NOT_FOUND
+     */
+    void restoreForFeed(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
+
+    /**
      * 读成品批次的单位成本 {@code unitCost} — 成本传导基准 (FG 投料下游道算本道产出成本时用)。
      *
      * <p>🔴 诚实 null: 批次缺失 或 {@code unitCost} 为 null (未接通成本的成品) → 返 <b>null</b>, 绝不伪造 ¥0。

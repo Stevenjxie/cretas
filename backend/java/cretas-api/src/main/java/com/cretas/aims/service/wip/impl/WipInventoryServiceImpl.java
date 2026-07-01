@@ -535,6 +535,137 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .orElse(null);
     }
 
+    /**
+     * 撤销小结 — {@link #postClerkOutput} 的逆 (SFI IN un-stock)。见接口 Javadoc。
+     *
+     * <p>{@code findForUpdate} 悲观行锁 → 下游已消耗守卫 (available_after&lt;0 抛) → produced/accumulatedCost 冲销 +
+     * unitCost 重算 → 写 REVERSE/REVERSAL 流水。
+     */
+    @Override
+    @Transactional
+    public void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
+                                   BigDecimal totalCost, Long operatorId) {
+        if (qty == null || qty.signum() <= 0) {
+            return;
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElseThrow(() -> new BusinessException(409, "半成品库存行不存在, 无法撤销入库: " + intermediateBatchNo)
+                        .withCode("SFI_NOT_FOUND")
+                        .withHint("该半成品运行余额行已不存在, 可能已被其它操作清除")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(intermediateBatchNo));
+        BigDecimal produced = nz(sfi.getProducedQuantity());
+        BigDecimal consumed = nz(sfi.getConsumedQuantity());
+        BigDecimal adj = nz(sfi.getAdjustmentQuantity());
+        BigDecimal newProduced = produced.subtract(qty);
+        BigDecimal newAvailable = newProduced.subtract(consumed).add(adj);
+        if (newAvailable.signum() < 0) {
+            // 🔴 下游已消耗守卫 (禁止降级): 冲销会致负库存 → loud-fail, 不产 phantom。
+            BigDecimal reversible = produced.subtract(consumed).max(BigDecimal.ZERO);
+            throw new BusinessException(409, "半成品 " + intermediateBatchNo + " 已被下游消耗 "
+                    + consumed.stripTrailingZeros().toPlainString() + ", 可撤销入库仅 "
+                    + reversible.stripTrailingZeros().toPlainString()
+                    + " (需撤销 " + qty.stripTrailingZeros().toPlainString() + "), 无法撤销小结; 请先撤销下游消耗")
+                    .withCode("SFI_DOWNSTREAM_CONSUMED")
+                    .withHint("该批次半成品已被后续工序/计划领用, 请先撤销下游相关小结再重试")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
+        }
+        sfi.setProducedQuantity(newProduced);
+        // 成本冲销 (诚实): totalCost null → accumulatedCost 未曾加此段, 不减; 否则减去确切金额。
+        BigDecimal acc = sfi.getAccumulatedCost();
+        if (acc != null && totalCost != null) {
+            acc = acc.subtract(totalCost);
+            sfi.setAccumulatedCost(acc);
+        }
+        // 重算 unitCost = accumulatedCost / producedQuantity (produced≤0 或 accumulatedCost null → null, 诚实)。
+        sfi.setUnitCost((newProduced.signum() > 0 && acc != null)
+                ? acc.divide(newProduced, 4, RoundingMode.HALF_UP) : null);
+        sfi.setAvailableQuantity(newAvailable);
+        if (newAvailable.signum() <= 0) {
+            if (!SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+                sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
+            }
+        } else if (!SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(sfi);
+
+        SemiFinishedInventoryTransaction revTxn = SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("interim-settle-reverse-in:" + intermediateBatchNo)
+                .quantity(qty.negate())                 // IN 冲销 = 负量
+                .unitCostAtTxn(sfi.getUnitCost())
+                .balanceAfter(newAvailable)
+                .balanceCostAfter(sfi.getUnitCost())
+                .operatorId(operatorId)
+                .build();
+        txnRepo.save(revTxn);
+        log.info("[interim-reverse] reverseClerkOutput SFI IN 冲销: factory={}, batchNo={}, qty={}, "
+                        + "newProduced={}, newAvailable={}, unitCost={}",
+                factoryId, intermediateBatchNo, qty, newProduced, newAvailable, sfi.getUnitCost());
+    }
+
+    /**
+     * 撤销小结 — {@link #consumeClerkSemi} / {@link #consumeClerkSemiStrict} 的逆 (SFI OUT restore)。见接口 Javadoc。
+     *
+     * <p>{@code findForUpdate} 悲观行锁 → consumed 反冲 (缺失容忍 / 反冲不为负守卫) → 写 REVERSE/REVERSAL 流水。
+     */
+    @Override
+    @Transactional
+    public void restoreClerkSemi(String factoryId, String intermediateBatchNo, BigDecimal qty, Long operatorId) {
+        if (qty == null || qty.signum() <= 0) {
+            return;
+        }
+        java.util.Optional<SemiFinishedInventory> opt = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo);
+        if (opt.isEmpty()) {
+            // 还量容忍: 源库存行已不存在 → 无处可还, 跳过 (不产负行, 不阻塞撤销)。诚实告警。
+            log.warn("[interim-reverse] restoreClerkSemi: no SFI row for batchNo={} (factory={}) — skip (nothing to restore)",
+                    intermediateBatchNo, factoryId);
+            return;
+        }
+        SemiFinishedInventory sfi = opt.get();
+        BigDecimal produced = nz(sfi.getProducedQuantity());
+        BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(qty);
+        if (newConsumed.signum() < 0) {
+            // 诚实: 还量超过历史消耗量 → 报错而非静默置 0。
+            throw new BusinessException(409, "撤销出库量超过已消耗量: " + intermediateBatchNo
+                    + " 请求还 " + qty.stripTrailingZeros().toPlainString()
+                    + " 已消耗 " + nz(sfi.getConsumedQuantity()).stripTrailingZeros().toPlainString())
+                    .withCode("SFI_REVERSE_OVER_CONSUMED")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
+        }
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(sfi);
+
+        SemiFinishedInventoryTransaction revTxn = SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("interim-settle-reverse-out:" + intermediateBatchNo)
+                .quantity(qty)                          // OUT 冲销 = 正量 (还回)
+                .unitCostAtTxn(sfi.getUnitCost())
+                .balanceAfter(sfi.getAvailableQuantity())
+                .balanceCostAfter(sfi.getUnitCost())
+                .operatorId(operatorId)
+                .build();
+        txnRepo.save(revTxn);
+        log.info("[interim-reverse] restoreClerkSemi SFI OUT 还回: factory={}, batchNo={}, qty={}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, qty, newConsumed, sfi.getAvailableQuantity());
+    }
+
     private void markWipPosted(ProductionReport report) {
         Map<String, Object> fields = report.getCustomFields();
         if (fields == null) {

@@ -152,6 +152,105 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         return qty;
     }
 
+    /** 撤销小结: 逆 createFinishedGoodsForInterim (成品入库 un-create) 的调整来源标记。 */
+    private static final String REF_INTERIM_REVERSAL = "INTERIM_SETTLE_REVERSAL";
+
+    @Override
+    @Transactional
+    public void reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
+        if (qty == null || qty.signum() <= 0) {
+            return;
+        }
+        FinishedGoodsBatch fg = finishedGoodsBatchRepository
+                .findByFactoryIdAndBatchNumberForUpdate(factoryId, batchNumber)
+                .orElseThrow(() -> new BusinessException(409, "成品批次不存在, 无法撤销入库: " + batchNumber)
+                        .withCode("FG_NOT_FOUND")
+                        .withHint("该成品批次已不存在, 可能已被撤销/删除")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(batchNumber));
+        BigDecimal before = fg.getProducedQuantity() != null ? fg.getProducedQuantity() : BigDecimal.ZERO;
+        BigDecimal after = before.subtract(qty);
+        BigDecimal shipped = fg.getShippedQuantity() != null ? fg.getShippedQuantity() : BigDecimal.ZERO;
+        BigDecimal reserved = fg.getReservedQuantity() != null ? fg.getReservedQuantity() : BigDecimal.ZERO;
+        BigDecimal availableAfter = after.subtract(shipped).subtract(reserved);
+        if (availableAfter.signum() < 0) {
+            // 🔴 下游守卫 (禁止降级): 已发货/预留/生产领用 → 冲销会致负库存 → loud-fail, 不产 phantom。
+            throw new BusinessException(409, "成品批次 " + batchNumber + " 已发货/预留/领用 (发"
+                    + shipped.stripTrailingZeros().toPlainString() + " 留"
+                    + reserved.stripTrailingZeros().toPlainString() + "), 无法撤销小结入库 "
+                    + qty.stripTrailingZeros().toPlainString() + "; 请先撤销下游发货/领用")
+                    .withCode("FG_DOWNSTREAM_CONSUMED")
+                    .withHint("该批次成品已被发货/预留/领用, 请先撤销下游单据再重试")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(batchNumber);
+        }
+
+        FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
+                .factoryId(fg.getFactoryId())
+                .batchId(fg.getId())
+                .adjustmentQuantity(qty.negate())       // 负数 = 冲销入库
+                .beforeProduced(before)
+                .afterProduced(after)
+                .reason("撤销小结入库 " + qty.stripTrailingZeros().toPlainString()
+                        + (fg.getUnit() != null ? fg.getUnit() : ""))
+                .referenceType(REF_INTERIM_REVERSAL)
+                .operatorId(operatorId)
+                .build();
+        finishedGoodsAdjustmentLogRepository.save(logEntry);
+
+        fg.setProducedQuantity(after);
+        if (availableAfter.signum() <= 0) {
+            // 冲销至可用 0: 批次作废置 REVERSED (小结创建的批次被整撤); 其它耗尽走 DEPLETED。
+            fg.setStatus(after.signum() <= 0
+                    ? FinishedGoodsBatch.Status.REVERSED
+                    : FinishedGoodsBatch.Status.DEPLETED);
+        }
+        finishedGoodsBatchRepository.save(fg);
+        log.info("[interim-reverse] reverseInterimCreate FG 入库冲销: factory={}, batchNo={}, qty={}, "
+                        + "before={}, after={}, status={}",
+                factoryId, batchNumber, qty, before, after, fg.getStatus());
+    }
+
+    @Override
+    @Transactional
+    public void restoreForFeed(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
+        if (qty == null || qty.signum() <= 0) {
+            return;
+        }
+        FinishedGoodsBatch fg = finishedGoodsBatchRepository
+                .findByFactoryIdAndBatchNumberForUpdate(factoryId, batchNumber)
+                .orElseThrow(() -> new BusinessException(409, "成品批次不存在, 无法撤销投料: " + batchNumber)
+                        .withCode("FG_NOT_FOUND")
+                        .withHint("该成品批次已不存在, 无法还回投料领用")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(batchNumber));
+        BigDecimal before = fg.getProducedQuantity() != null ? fg.getProducedQuantity() : BigDecimal.ZERO;
+        BigDecimal after = before.add(qty);            // 还回 = 加 producedQuantity (对齐 consumeForFeedStrict 减 producedQuantity 的逆)
+
+        FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
+                .factoryId(fg.getFactoryId())
+                .batchId(fg.getId())
+                .adjustmentQuantity(qty)                // 正数 = 还回
+                .beforeProduced(before)
+                .afterProduced(after)
+                .reason("撤销小结投料领用 (还回) " + qty.stripTrailingZeros().toPlainString()
+                        + (fg.getUnit() != null ? fg.getUnit() : ""))
+                .referenceType(REF_INTERIM_REVERSAL)
+                .operatorId(operatorId)
+                .build();
+        finishedGoodsAdjustmentLogRepository.save(logEntry);
+
+        fg.setProducedQuantity(after);
+        // 还量后有可用 → 从 DEPLETED/REVERSED 恢复 AVAILABLE。
+        if (!fg.isDepleted() && !FinishedGoodsBatch.Status.EXPIRED.equals(fg.getStatus())
+                && !FinishedGoodsBatch.Status.FROZEN.equals(fg.getStatus())) {
+            fg.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        }
+        finishedGoodsBatchRepository.save(fg);
+        log.info("[interim-reverse] restoreForFeed FG 投料还回: factory={}, batchNo={}, qty={}, before={}, after={}",
+                factoryId, batchNumber, qty, before, after);
+    }
+
     @Override
     @Transactional(readOnly = true)
     public BigDecimal getFeedUnitCost(String factoryId, String batchNumber) {

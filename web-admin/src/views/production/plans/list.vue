@@ -24,6 +24,7 @@ import {
   confirmProductionWarehouseReceipt,
   clearProductionTransitLedger,
   interimSettle,
+  reverseInterimSettle,
   stopProduction,
 } from '@/api/productionPlan';
 import type {
@@ -1692,6 +1693,7 @@ async function handleCopyPlan(row: TableRow): Promise<void> {
 // ==================== Phase 2: BY_STOCK 小结 / 停产 ====================
 // 逐行 loading state，防止双击（防呆 Rule 4）
 const interimSettleLoadingId = ref<string | null>(null);
+const reverseInterimSettleLoadingId = ref<string | null>(null);
 const stopProductionLoadingId = ref<string | null>(null);
 
 async function handleInterimSettle(row: TableRow) {
@@ -1711,6 +1713,44 @@ async function handleInterimSettle(row: TableRow) {
     ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
   } finally {
     interimSettleLoadingId.value = null;
+  }
+}
+
+/**
+ * 撤销小结 (最近一次): 误结时逆转该次小结的入库 + 还回消耗, 使逐道行恢复可编辑。
+ * 防呆 4-位一体: 二次确认 (带计划名/单号 context) + 后端 message 原样 sticky 显示 (含下游已消耗 blocking 引用)。
+ */
+async function handleReverseInterimSettle(row: TableRow) {
+  const planId = String(row.id);
+  const planLabel = String(row.planName || row.planNumber || planId);
+  try {
+    await ElMessageBox.confirm(
+      `撤销「${planLabel}」(${row.planNumber}) 的最近一次小结?将逆转该次小结的半成品/成品入库并还回被扣消耗，误结的逐道行恢复可编辑。若相关半成品/成品已被下游领用或发货，将拒绝撤销。`,
+      '确认撤销小结',
+      { type: 'warning', confirmButtonText: '撤销小结', cancelButtonText: '取消' }
+    );
+  } catch {
+    return; // 用户取消
+  }
+  if (reverseInterimSettleLoadingId.value) return;
+  reverseInterimSettleLoadingId.value = planId;
+  try {
+    const res = await reverseInterimSettle(factoryId.value, planId);
+    if (res.success) {
+      const seq = (res.data as Record<string, unknown> | undefined)?.reversedSessionSeq;
+      ElMessage.success(
+        res.message || (seq != null ? `已撤销第 ${seq} 次小结，相关逐道行恢复可编辑` : '已撤销小结')
+      );
+      loadData();
+    } else {
+      // sticky + 后端原样 message (含下游已消耗 blocking 引用)
+      ElMessage({ message: res.message || '撤销小结失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e: unknown) {
+    const errMsg = (e as any)?.response?.data?.message || '撤销小结失败';
+    ElMessage({ message: errMsg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    reverseInterimSettleLoadingId.value = null;
   }
 }
 
@@ -2331,6 +2371,17 @@ function handleAiFill(params: TableRow) {
               title="增量入库成品并扣料，计划继续开放，可多次小结"
               @click="handleInterimSettle(row)"
             >小结</el-button>
+            <!-- 存货生产 (SAFETY_STOCK) 撤销小结 (逆转最近一次小结, 恢复误结的逐道行) -->
+            <el-button
+              v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
+              type="warning"
+              size="small"
+              link
+              :disabled="reverseInterimSettleLoadingId === String(row.id)"
+              :loading="reverseInterimSettleLoadingId === String(row.id)"
+              title="逆转最近一次小结：撤销该次半成品/成品入库并还回被扣消耗，误结的逐道行恢复可编辑（半成品/成品已被下游领用则拒绝）"
+              @click="handleReverseInterimSettle(row)"
+            >撤销小结</el-button>
             <!-- 存货生产 (SAFETY_STOCK) 停产 (关闭计划) -->
             <el-button
               v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"

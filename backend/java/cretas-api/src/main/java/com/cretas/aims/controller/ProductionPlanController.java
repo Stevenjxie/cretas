@@ -30,6 +30,7 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.orchestration.ProductionWorkflowOrchestrator;
 import com.cretas.aims.service.yield.InterimSettleService;
+import com.cretas.aims.service.yield.InterimSettleReversalService;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.utils.TokenUtils;
 import com.cretas.aims.entity.ProductionBatch;
@@ -75,6 +76,7 @@ public class ProductionPlanController {
     private final MobileService mobileService;
     private final ProductionPlanRepository planRepository;
     private final InterimSettleService interimSettleService;
+    private final InterimSettleReversalService interimSettleReversalService;
     private final ProductionWorkflowOrchestrator workflowOrchestrator;
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
@@ -484,6 +486,29 @@ public class ProductionPlanController {
         log.info("库存生产小结: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
         Map<String, Object> summary = interimSettleService.interimSettle(factoryId, planId, userId);
         return ApiResponse.success("小结已提交", summary);
+    }
+
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/interim-settle/reverse")
+    @Operation(summary = "撤销小结", description = "存货生产 (sourceType=SAFETY_STOCK): 逆转某次小结的半成品/成品入库+还回被扣消耗+清行小结戳, 下游已消耗则 loud-fail 拒绝, 幂等原子。body.sessionSeq 指定次序 (缺省=最近一次)")
+    public ApiResponse<Map<String, Object>> reverseInterimSettle(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader("Authorization") String authorization) {
+
+        Long userId = extractUserId(authorization);
+        Integer sessionSeq = null;
+        if (body != null && body.get("sessionSeq") != null) {
+            sessionSeq = Integer.valueOf(String.valueOf(body.get("sessionSeq")));
+        }
+        log.info("撤销小结: factoryId={}, planId={}, sessionSeq={}, userId={}", factoryId, planId, sessionSeq, userId);
+        Map<String, Object> result = interimSettleReversalService
+                .reverseInterimSettle(factoryId, planId, sessionSeq, userId);
+        return ApiResponse.success("小结已撤销", result);
     }
 
     /**

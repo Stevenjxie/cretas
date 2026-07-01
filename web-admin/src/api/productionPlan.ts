@@ -268,6 +268,19 @@ export function interimSettle(factoryId: string, planId: string) {
 }
 
 /**
+ * 撤销小结 (存货生产 SAFETY_STOCK 计划专用): 逆转某次小结的半成品/成品入库 + 还回被扣消耗 + 清行小结戳,
+ *   误结的逐道行恢复可编辑。下游已消耗则 loud-fail 拒绝 (409 SFI_DOWNSTREAM_CONSUMED / FG_DOWNSTREAM_CONSUMED)。
+ * POST /{factoryId}/production-plans/{planId}/interim-settle/reverse
+ * @param sessionSeq 指定小结次序 (缺省 = 撤销最近一次)
+ */
+export function reverseInterimSettle(factoryId: string, planId: string, sessionSeq?: number) {
+  return post<Record<string, unknown>>(
+    `/${factoryId}/production-plans/${planId}/interim-settle/reverse`,
+    sessionSeq != null ? { sessionSeq } : {}
+  )
+}
+
+/**
  * 停产 (存货生产 SAFETY_STOCK 计划专用): 关闭计划, 不可再小结
  * POST /{factoryId}/production-plans/{planId}/stop-production
  */

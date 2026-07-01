@@ -197,6 +197,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         //       超扣 clamp) —— 这是与 SFI IN 净结余会计互校的有意双保险, 不改 (行为不变)。
         BigDecimal semiOutQuantity = BigDecimal.ZERO;
         BigDecimal finishedGoodsOutQuantity = BigDecimal.ZERO;
+        // 撤销小结 (reversal) 明细收集: 逐笔记录本次小结的库存动作, 存入 summary.reversalDetail,
+        //   使「撤销小结」能精确逆转每笔 (尤其 SFI IN 移动均价成本不可事后重算 → 必须锚定当时的确切金额)。
+        List<Map<String, Object>> sfiOutStrictDetail = new ArrayList<>();  // consumeClerkSemiStrict → restoreClerkSemi
+        List<Map<String, Object>> sfiOutAnchorDetail = new ArrayList<>();  // consumeClerkSemi(priorStocked) → restoreClerkSemi
+        List<Map<String, Object>> fgFeedDetail = new ArrayList<>();        // consumeForFeedStrict → restoreForFeed
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.getUpstreamSources() == null) {
                 continue;
@@ -212,6 +217,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         BigDecimal drawn = finishedGoodsFeedService
                                 .consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
                         finishedGoodsOutQuantity = finishedGoodsOutQuantity.add(nz(drawn));
+                        fgFeedDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                     }
                     continue;
                 }
@@ -221,6 +227,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         BigDecimal drawn = wipInventoryService
                                 .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
                         semiOutQuantity = semiOutQuantity.add(nz(drawn)); // 实际出库量, 非 pre-clamp feed
+                        sfiOutStrictDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                     }
                     continue; // SFI 投料不走 priorStocked anchor 路径 (避免重复扣减)
                 }
@@ -233,9 +240,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     srcProductType = ur.req.getProductTypeId(); // 链内单品回退
                 }
                 if (feed.signum() > 0) {
-                    wipInventoryService.consumeClerkSemi(factoryId,
-                            semiAnchor(planId, srcProductType), feed);
+                    String outAnchor = semiAnchor(planId, srcProductType);
+                    wipInventoryService.consumeClerkSemi(factoryId, outAnchor, feed);
                     semiOutQuantity = semiOutQuantity.add(feed);
+                    sfiOutAnchorDetail.add(qtyDetail("anchor", outAnchor, feed));
                 }
             }
         }
@@ -246,6 +254,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         // ── ③ SFI IN: 未结非成品终点道 (未被同小结消耗) 产出 → 入库 (带真实成本传导) ──
         List<String> semiInBatchNumbers = new ArrayList<>();
         BigDecimal semiInQuantity = BigDecimal.ZERO;
+        // 撤销明细: per-anchor 累计净入库量 + 确切成本 (totalCost = outputUnitCost×net, null=当时未知) →
+        //   撤销时 reverseClerkOutput 逆转 (移动均价成本不可事后重算, 必须锚定此值)。
+        Map<String, BigDecimal> sfiInQtyByAnchor = new LinkedHashMap<>();
+        Map<String, BigDecimal> sfiInCostByAnchor = new LinkedHashMap<>();
+        Set<String> sfiInCostKnownAnchors = new HashSet<>();
         for (UnsettledRow ur : unsettledRows) {
             if (ur.req.isFinished()) {
                 continue; // 成品道走 FG, 不入 SFI
@@ -272,16 +285,28 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             //   net 与 withinFeed 同单价, withinFeed 部分的成本经在制 WIP 消耗边继承给下游道, 不双计)。
             //   诚实 null: 任一 SFI 投料 unitCost 未知 → outputUnitCost 为 null (postClerkOutput 不摊假成本)。
             BigDecimal outputUnitCost = computeOutputUnitCost(factoryId, ur, outQty, laborRate);
+            String inAnchor = semiAnchor(planId, ur.req.getProductTypeId());
             wipInventoryService.postClerkOutput(factoryId,
-                    semiAnchor(planId, ur.req.getProductTypeId()), ur.req.getProductTypeId(),
+                    inAnchor, ur.req.getProductTypeId(),
                     net, ur.req.getUnit(), outputUnitCost, null);
             semiInBatchNumbers.add(batchNo);
             semiInQuantity = semiInQuantity.add(net);
+            // 撤销明细: 按锚累计净量 + 确切成本 (mirror postClerkOutput 内 totalCost = inUnitCost×inQty)。
+            //   任一入库段成本已知 → 该锚 totalCost 累加; 段成本 null 不加 (与 accumulatedCost 语义一致)。
+            sfiInQtyByAnchor.merge(inAnchor, net, BigDecimal::add);
+            if (outputUnitCost != null) {
+                sfiInCostByAnchor.merge(inAnchor, outputUnitCost.multiply(net), BigDecimal::add);
+                sfiInCostKnownAnchors.add(inAnchor);
+            }
         }
 
         // ── ④ FG: 未结成品道产出 (优先成品重 productWeight) → 成品库 ──
         List<String> finishedBatchNumbers = new ArrayList<>();
         BigDecimal finishedQuantity = BigDecimal.ZERO;
+        // 撤销明细: 每个成品批次实际入库量 (dedupe by batchNumber — createFinishedGoodsForInterim 对同一
+        //   session batchNumber orElseGet 只首行入库, 故只记首次 = 批次实际 producedQuantity) → reverseInterimCreate 逆转。
+        List<Map<String, Object>> fgCreatedDetail = new ArrayList<>();
+        Set<String> fgCreatedSeen = new HashSet<>();
         for (UnsettledRow ur : unsettledRows) {
             if (!ur.req.isFinished()) {
                 continue;
@@ -302,6 +327,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     plan, ur.req.getProductTypeId(), qty, unit, sessionSeq, userId, fgUnitCost);
             finishedBatchNumbers.add(fg.getBatchNumber());
             finishedQuantity = finishedQuantity.add(qty);
+            // dedupe: 同 session 多成品道共享 batchNumber, createFinishedGoodsForInterim 只首行实际入库 →
+            //   撤销明细只记首次 (= 批次 producedQuantity), 避免 reverseInterimCreate 重复扣。
+            if (fgCreatedSeen.add(fg.getBatchNumber())) {
+                fgCreatedDetail.add(qtyDetail("batchNumber", fg.getBatchNumber(), qty));
+            }
         }
 
         // ── 打戳: 全部未结产出行标记已结 (产出侧幂等) ──
@@ -321,6 +351,25 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         summary.put("finishedGoodsOutQuantity", finishedGoodsOutQuantity);   // ①c FG 投料扣减量
         summary.put("finishedGoodsBatchNumbers", finishedBatchNumbers);
         summary.put("finishedQuantity", finishedQuantity);
+
+        // ── 撤销小结 (reversal) 明细: 逐笔库存动作, 供「撤销小结」精确逆转 (数量存字符串防 JSON 数值精度漂移) ──
+        List<Map<String, Object>> sfiInDetail = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> e : sfiInQtyByAnchor.entrySet()) {
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("anchor", e.getKey());
+            d.put("qty", e.getValue().toPlainString());
+            // totalCost 诚实 null: 该锚无任何成本已知段 → null (撤销时不减 accumulatedCost)。
+            d.put("totalCost", sfiInCostKnownAnchors.contains(e.getKey())
+                    ? sfiInCostByAnchor.get(e.getKey()).toPlainString() : null);
+            sfiInDetail.add(d);
+        }
+        Map<String, Object> reversalDetail = new LinkedHashMap<>();
+        reversalDetail.put("sfiIn", sfiInDetail);
+        reversalDetail.put("fgCreated", fgCreatedDetail);
+        reversalDetail.put("sfiOutStrict", sfiOutStrictDetail);
+        reversalDetail.put("sfiOutAnchor", sfiOutAnchorDetail);
+        reversalDetail.put("fgFeed", fgFeedDetail);
+        summary.put("reversalDetail", reversalDetail);
 
         ProductionInterimSettlement settlement = ProductionInterimSettlement.builder()
                 .factoryId(factoryId)
@@ -595,6 +644,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** 撤销明细条目: {keyName: id, "qty": qty.toPlainString()} —— 量存字符串防 jsonb 数值精度漂移。 */
+    private static Map<String, Object> qtyDetail(String keyName, String id, BigDecimal qty) {
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put(keyName, id);
+        d.put("qty", nz(qty).toPlainString());
+        return d;
     }
 
     /** 未结行 + 其反序列化 payload 的轻量配对. */

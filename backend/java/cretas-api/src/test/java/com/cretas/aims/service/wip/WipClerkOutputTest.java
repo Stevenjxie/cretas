@@ -3,6 +3,7 @@ package com.cretas.aims.service.wip;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,7 @@ class WipClerkOutputTest {
     private static final String ANCHOR = "CLK-SEMI-PLAN1234-PT123456";
 
     @Mock private SemiFinishedInventoryRepository wipRepo;
+    @Mock private SemiFinishedInventoryTransactionRepository txnRepo;
     @InjectMocks private WipInventoryServiceImpl service;
 
     private SemiFinishedInventory freshRow() {
@@ -195,5 +197,123 @@ class WipClerkOutputTest {
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.of(row));
         assertThat(service.getSemiUnitCost(FACTORY, ANCHOR)).isNull();
+    }
+
+    // ── 撤销小结: reverseClerkOutput (SFI IN un-stock, 下游守卫) ──
+
+    @Test
+    @DisplayName("reverseClerkOutput: 冲销入库净结余 (produced 100 −60 → 40; accumulatedCost 1500 −900 → 600; unitCost 15)")
+    void reverseClerkOutputUnstocks() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("100"));
+        row.setConsumedQuantity(BigDecimal.ZERO);
+        row.setAvailableQuantity(new BigDecimal("100"));
+        row.setAccumulatedCost(new BigDecimal("1500"));
+        row.setUnitCost(new BigDecimal("15"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        service.reverseClerkOutput(FACTORY, ANCHOR, new BigDecimal("60"), new BigDecimal("900"), 7L);
+
+        assertThat(row.getProducedQuantity()).isEqualByComparingTo("40");
+        assertThat(row.getAvailableQuantity()).isEqualByComparingTo("40");
+        assertThat(row.getAccumulatedCost()).isEqualByComparingTo("600");
+        assertThat(row.getUnitCost()).isEqualByComparingTo("15"); // 600 / 40
+        assertThat(row.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("reverseClerkOutput: totalCost null (当时成本未知) → accumulatedCost 不变, unitCost 按 accumulated/produced 重算")
+    void reverseClerkOutputNullTotalCost() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("100"));
+        row.setAvailableQuantity(new BigDecimal("100"));
+        row.setAccumulatedCost(new BigDecimal("600"));
+        row.setUnitCost(null); // 已被 null 成本段 poison
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        service.reverseClerkOutput(FACTORY, ANCHOR, new BigDecimal("60"), null, 7L);
+
+        assertThat(row.getProducedQuantity()).isEqualByComparingTo("40");
+        assertThat(row.getAccumulatedCost()).isEqualByComparingTo("600"); // 不减 (totalCost null)
+        assertThat(row.getUnitCost()).isEqualByComparingTo("15"); // 600 / 40 (accumulatedCost 已知 → 重算)
+    }
+
+    @Test
+    @DisplayName("reverseClerkOutput: 下游已消耗 (available_after<0) → 抛 SFI_DOWNSTREAM_CONSUMED, 不改库存")
+    void reverseClerkOutputDownstreamConsumedThrows() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("60"));
+        row.setConsumedQuantity(new BigDecimal("40")); // 下游已吃 40, 余 20
+        row.setAvailableQuantity(new BigDecimal("20"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.reverseClerkOutput(FACTORY, ANCHOR, new BigDecimal("60"), new BigDecimal("900"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_DOWNSTREAM_CONSUMED");
+                    assertThat(ex.getMessage()).contains("已被下游消耗");
+                });
+        // 未改库存 (抛前不动)
+        assertThat(row.getProducedQuantity()).isEqualByComparingTo("60");
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("reverseClerkOutput: 行缺失 → 抛 SFI_NOT_FOUND")
+    void reverseClerkOutputMissingThrows() {
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.reverseClerkOutput(FACTORY, ANCHOR, new BigDecimal("60"), new BigDecimal("900"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NOT_FOUND"));
+    }
+
+    // ── 撤销小结: restoreClerkSemi (SFI OUT restore, 还回消耗) ──
+
+    @Test
+    @DisplayName("restoreClerkSemi: 还回消耗 (consumed 60 → 0; available 0 → 60; DEPLETED → AVAILABLE)")
+    void restoreClerkSemiRestores() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("60"));
+        row.setConsumedQuantity(new BigDecimal("60"));
+        row.setAvailableQuantity(BigDecimal.ZERO);
+        row.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        service.restoreClerkSemi(FACTORY, ANCHOR, new BigDecimal("60"), 7L);
+
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("0");
+        assertThat(row.getAvailableQuantity()).isEqualByComparingTo("60");
+        assertThat(row.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("restoreClerkSemi: 还量超过已消耗 → 抛 SFI_REVERSE_OVER_CONSUMED (诚实, 不静默置 0)")
+    void restoreClerkSemiOverConsumedThrows() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("60"));
+        row.setConsumedQuantity(new BigDecimal("40"));
+        row.setAvailableQuantity(new BigDecimal("20"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.restoreClerkSemi(FACTORY, ANCHOR, new BigDecimal("60"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_REVERSE_OVER_CONSUMED"));
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("restoreClerkSemi: 行缺失 → 容忍 no-op (无处可还, 不产负行, 不阻塞撤销)")
+    void restoreClerkSemiMissingRowNoop() {
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.empty());
+        service.restoreClerkSemi(FACTORY, ANCHOR, new BigDecimal("50"), 7L);
+        verify(wipRepo, never()).save(any());
     }
 }

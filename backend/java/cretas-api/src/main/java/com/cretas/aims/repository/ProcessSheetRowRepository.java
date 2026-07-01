@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,4 +41,11 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
      */
     List<ProcessSheetRow> findByFactoryIdAndPlanIdAndClientRowId(
             String factoryId, String planId, String clientRowId);
+
+    /**
+     * 撤销小结: 查某次小结 (postedAt 时间戳) 打戳的全部产出行 (interim_settled_at == postedAt)。
+     * 逆转时逐行清 interim_settled_at → 行恢复未结 (可再编辑/删除/重新小结)。
+     */
+    List<ProcessSheetRow> findByFactoryIdAndPlanIdAndInterimSettledAt(
+            String factoryId, String planId, LocalDateTime interimSettledAt);
 }

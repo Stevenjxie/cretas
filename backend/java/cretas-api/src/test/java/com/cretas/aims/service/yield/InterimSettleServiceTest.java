@@ -719,6 +719,66 @@ class InterimSettleServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // 撤销明细 (reversalDetail) — settle 写入供「撤销小结」精确逆转
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("撤销明细: 小结 summary 写 reversalDetail (sfiIn anchor/qty/totalCost 字符串 + sfiOutStrict)")
+    void settleWritesReversalDetail() {
+        // 道M: SAVED_SFI, 吃常驻 SFI-A(unitCost 10) feed 50 + 人工 100 → 产出 40。
+        //   outputUnitCost = (100 + 50×10)/40 = 15; totalCost 记 15×40 = 600。
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
+        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));
+        ProcessSheetRow rM = pureSfiRow(200L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
+        assertThat(rd).isNotNull();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sfiIn = (List<Map<String, Object>>) rd.get("sfiIn");
+        assertThat(sfiIn).hasSize(1);
+        assertThat(sfiIn.get(0).get("anchor")).isEqualTo(anchor);
+        assertThat(sfiIn.get(0).get("qty")).isEqualTo("40");
+        // totalCost = outputUnitCost(15.0000) × net(40) = "600.0000" (= postClerkOutput 内 totalCost, scale-agnostic 比对)
+        assertThat(new BigDecimal((String) sfiIn.get(0).get("totalCost"))).isEqualByComparingTo("600");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sfiOutStrict = (List<Map<String, Object>>) rd.get("sfiOutStrict");
+        assertThat(sfiOutStrict).hasSize(1);
+        assertThat(sfiOutStrict.get(0).get("batchNo")).isEqualTo("SFI-A");
+        assertThat(sfiOutStrict.get(0).get("qty")).isEqualTo("50");
+    }
+
+    @Test
+    @DisplayName("撤销明细: SFI IN 成本诚实 null → reversalDetail.sfiIn.totalCost = null (撤销时不减 accumulatedCost)")
+    void settleReversalDetailNullCost() {
+        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
+        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("LEGACY-SFI", "50"));
+        ProcessSheetRow rM = pureSfiRow(201L, 1, anchor, req);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "LEGACY-SFI")).thenReturn(null);
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sfiIn = (List<Map<String, Object>>) rd.get("sfiIn");
+        assertThat(sfiIn).hasSize(1);
+        assertThat(sfiIn.get(0).get("qty")).isEqualTo("40");
+        assertThat(sfiIn.get(0).get("totalCost")).isNull();   // 诚实 null
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Builders
     // ─────────────────────────────────────────────────────────────
 

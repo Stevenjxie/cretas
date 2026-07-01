@@ -201,6 +201,49 @@ public interface WipInventoryService {
     BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
 
     /**
+     * 撤销小结 (interim-settle reversal) — {@link #postClerkOutput} 的逆 (SFI IN un-stock)。
+     *
+     * <p>把某次小结入库的净结余从运行余额行冲销:
+     * {@code producedQuantity -= qty; accumulatedCost -= totalCost; unitCost 重算; availableQuantity 重算}。
+     *
+     * <p>🔴 <b>下游已消耗守卫 (禁止降级, 不产 phantom 负库存)</b>: 若该半成品在入库后已被下游道/其它计划
+     * 消耗 (available_after = produced − qty − consumed + adjustment &lt; 0), 冲销会致负库存 →
+     * <b>抛 {@code BusinessException(409, SFI_DOWNSTREAM_CONSUMED)}</b> (整事务回滚)。绝不静默 clamp/部分冲销。
+     *
+     * <p><b>成本冲销 (诚实)</b>: {@code totalCost} = 入库时加进 accumulatedCost 的确切金额 (小结记录在
+     * {@code summary.reversalDetail}), null = 当时未知成本 (accumulatedCost 未加, 此处不减)。冲销后
+     * {@code unitCost = accumulatedCost / producedQuantity} (scale-4 HALF_UP; produced≤0 或 accumulatedCost null → null)。
+     * 移动均价对单一 clean IN 精确可逆; 若同锚残留其它 null-成本 IN (poison) 则重算值可能非精确 null (罕见 edge, 见 impl 注)。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo SFI 运行余额行锚 (= 入库时同一锚)
+     * @param qty                 本次冲销量 (= 入库时的净结余; ≤0 → no-op)
+     * @param totalCost           入库时加进 accumulatedCost 的确切金额 (可空 = 当时成本未知, 不减)
+     * @param operatorId          操作人 (REVERSE 流水 audit, 可空)
+     * @throws com.cretas.aims.exception.BusinessException 409 SFI_NOT_FOUND (行缺失) / SFI_DOWNSTREAM_CONSUMED (下游已消耗)
+     */
+    void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
+                            BigDecimal totalCost, Long operatorId);
+
+    /**
+     * 撤销小结 — {@link #consumeClerkSemi} / {@link #consumeClerkSemiStrict} 的逆 (SFI OUT restore, 还回消耗)。
+     *
+     * <p>把某次小结出库的量还回运行余额行: {@code consumedQuantity -= qty; availableQuantity += qty}。
+     * available&gt;0 → 从 DEPLETED 恢复 AVAILABLE (RETURNED 终态不动)。写 REVERSE/REVERSAL 反向流水。
+     *
+     * <p>还量是<b>增加</b>库存 (无 phantom 风险), 故对<b>行缺失容忍</b> (log warn + no-op —— 被撤销的出库其源库存行
+     * 已不存在则无处可还, 跳过不产负行); 但 {@code consumedQuantity} 不得反冲到负 (超过历史消耗量 → 抛
+     * {@code SFI_REVERSE_OVER_CONSUMED}, 诚实报错)。必须在调用方 {@code @Transactional} 内。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo SFI 运行余额行锚 / 常驻 SFI 批次号 (= 出库时同一键)
+     * @param qty                 本次还回量 (≤0 → no-op)
+     * @param operatorId          操作人 (REVERSE 流水 audit, 可空)
+     * @throws com.cretas.aims.exception.BusinessException 409 SFI_REVERSE_OVER_CONSUMED (还量超过已消耗)
+     */
+    void restoreClerkSemi(String factoryId, String intermediateBatchNo, BigDecimal qty, Long operatorId);
+
+    /**
      * 读取常驻半成品库存(SFI)的移动均价 {@code unitCost} —— 成本传导基准 (SFI 投料下游道算本道产出成本时用)。
      *
      * <p>🔴 诚实 null: 行缺失 或 {@code unitCost} 为 null (旧库存/未接通成本的半成品) → 返 <b>null</b>,
