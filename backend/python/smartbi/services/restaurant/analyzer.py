@@ -101,6 +101,7 @@ from .sections.store_pnl_one_pager import StorePnlOnePagerHandler
 from .sections.stored_value import StoredValueHandler
 from .sections.temporal_comparison import TemporalComparisonHandler
 from .sections.advanced_traffic_persona import AdvancedTrafficPersonaHandler
+from .sections.boss_decision_brief import BossDecisionBriefHandler
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,7 @@ class RestaurantAnalyzerV2:
         self._calibration_handler = CalibrationHistoryHandler()
         self._bom_layer_status_handler = BomLayerStatusHandler()
         self._advanced_traffic_persona_handler = AdvancedTrafficPersonaHandler()
+        self._boss_decision_brief_handler = BossDecisionBriefHandler()
 
     # ── P3.5B F5: expense account tree ─────────────────
 
@@ -809,6 +811,21 @@ class RestaurantAnalyzerV2:
         else:
             for w in traffic_resp.warnings:
                 report["warnings"].append(f"高级客流画像生成失败: {w}")
+
+        boss_brief_params = {"sections": dict(report["sections"])}
+        boss_resp = self._boss_decision_brief_handler.compute(
+            _make_req(boss_brief_params),
+            {**context, "sections": boss_brief_params["sections"]},
+        )
+        if boss_resp.status == SectionStatus.OK:
+            boss_section = boss_resp.data
+            report["sections"]["bossDecisionBrief"] = boss_section
+            final_answer = boss_section.get("finalAnswer")
+            if final_answer:
+                report["executiveSummary"].insert(0, f"老板最终决策: {final_answer}")
+        else:
+            for w in boss_resp.warnings:
+                report["warnings"].append(f"老板最终决策简报生成失败: {w}")
 
         # ─── 总结统计 ───
         report["summary"] = {

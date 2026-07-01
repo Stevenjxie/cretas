@@ -1,11 +1,641 @@
 {
   "executiveSummary": [
+    "老板最终决策: 今天先不要因为一天波动就直接打折或怪店长。 现有数据只能做 demo 方向展示；但要承诺利润金额，还必须有 POS、月盘点和财务同时闭环。 老板看这个模块时，重点不是看分数，而是按今天、本周、本月三层动作拍板。",
     "📋 鼎鲜火锅 义乌分公司 current 营收 ¥731,048",
-    "🟡 警戒 | 鼎鲜火锅 义乌分公司 的人力成本率 32.51% (行业基准 25.00%-35.00%, 中位 30.00%), 高于中位数 2.51%, 估算一年多支出约 ¥220,147"
+    "🟡 警戒 | 鼎鲜火锅 义乌分公司 的人力成本率 32.51% (行业基准 25.00%-35.00%, 中位 30.00%), 高于中位数 2.51%, 估算一年多支出约 ¥220,147",
+    "高级客流画像: 稠城商圈客流强，但火锅竞品重叠高；机会在分时段转化和连锁内部分流。"
   ],
   "factoryId": "F-DINGXIAN-YIWU",
   "period": "current",
   "sections": {
+    "advancedTrafficPersona": {
+      "adviceKnowledgeBase": [
+        {
+          "bossAction": "先暂停大额折扣，安排 1 周现场复盘门口展示、等位体验、同层竞品和楼层动线。",
+          "decisionRule": "如果商场总客流稳定、本店订单下降超过 10%，优先查门店转化问题，而不是把责任归到大盘。",
+          "neededData": [
+            "商场总客流",
+            "餐饮楼层客流",
+            "门口等位时长",
+            "同层竞品变化",
+            "大众点评原文"
+          ],
+          "plainDiagnosis": "这通常不是“没人逛”，而是本店没有接住路过的人。",
+          "situation": "门店销售下滑，但商圈或商场客流没有同步下滑",
+          "sourceBasis": [
+            "腾讯商场客留大数据：可做客流趋势、来源地、竞品重叠和画像判断",
+            "百度慧眼：可做商圈、商场、楼层客流和客群画像评估"
+          ]
+        },
+        {
+          "bossAction": "把动作从“店内整改”升级为“商圈联合运营”：商场活动导流、团购曝光、老客召回和外卖补峰同步做。",
+          "decisionRule": "如果商场或楼层客流连续两周下降，本店动作要从单店转化转为外部导流和线上承接。",
+          "neededData": [
+            "商场活动排期",
+            "楼层客流趋势",
+            "团购曝光与转化",
+            "外卖订单时段",
+            "会员来源地"
+          ],
+          "plainDiagnosis": "这时单店经理很难靠门店动作独自扛住，需要和商场、团购、外卖、会员一起做承接。",
+          "situation": "商圈整体客流下降，本店也下降",
+          "sourceBasis": [
+            "百度慧眼商业地产方案：支持客群来源、流向、商圈人群和竞品监测",
+            "高德 POI 搜索：可补充周边供给和竞品密度，不替代真实客流"
+          ]
+        },
+        {
+          "bossAction": "做 45 分钟能吃完的工作日午市套餐，门口、团购页和点评页只强调快、稳、招牌菜。",
+          "decisionRule": "如果午市客流高、停留时间短、客单价不高，优先改套餐和出餐链路，不优先加座或做晚市大促。",
+          "neededData": [
+            "分小时客流",
+            "出餐时长",
+            "午市客单价",
+            "办公楼来源地",
+            "套餐点击和核销"
+          ],
+          "plainDiagnosis": "办公客不是不消费，而是怕慢、怕排队、怕踩雷。",
+          "situation": "午市人多但收入没有明显起来",
+          "sourceBasis": [
+            "餐饮连锁化白皮书/平台报告：用于校准价格带、线上化和连锁门店效率趋势",
+            "内部 POS 和点评原文：用于验证顾客是否在抱怨慢、排队和不稳定"
+          ]
+        },
+        {
+          "bossAction": "设置 35 分钟等位红线，超过就做预约候补、同品牌近店分流和排队补偿。",
+          "decisionRule": "如果周末客流高、等位长、点评里出现慢和服务抱怨，优先做分流和预约，不要继续硬接客。",
+          "neededData": [
+            "等位时长",
+            "周末客流",
+            "点评差评主题",
+            "近店座位余量",
+            "预约候补转化"
+          ],
+          "plainDiagnosis": "这不是越排队越好，排队过长会把本来愿意吃的人变成差评和流失。",
+          "situation": "周末排队很长，但评价和复购变差",
+          "sourceBasis": [
+            "腾讯客流画像：可判断周末游客、家庭客和竞品重叠",
+            "内部连锁门店数据：可判断能不能把人留在品牌内部分流"
+          ]
+        },
+        {
+          "bossAction": "先查竞品是抢同一批人还是不同场景，再决定做招牌菜稳定性、服务确定性，还是做价格带调整。",
+          "decisionRule": "如果 POI 竞品变密但真实客流没有增加，优先做差异化定位和产品组合，不先做全店打折。",
+          "neededData": [
+            "高德/腾讯/百度 POI",
+            "竞品开闭店时间线",
+            "点评菜品关键词",
+            "本店毛利结构",
+            "同商圈客单价"
+          ],
+          "plainDiagnosis": "同赛道变挤时，直接降价往往会先伤毛利，不一定能解决进店理由。",
+          "situation": "周边竞品突然变多，价格战压力变大",
+          "sourceBasis": [
+            "高德 POI 搜索：用于判断供给侧竞品密度和变化",
+            "行业白皮书/平台报告：用于校准品类竞争、价格带和连锁化趋势"
+          ]
+        },
+        {
+          "bossAction": "先给当天打外部原因标签，再复盘会员沉淀、点评引导、备货和排班，不要直接把当天结果外推到下周。",
+          "decisionRule": "如果当天命中节假日、周边活动、商场活动或天气异常，增长先按外部机会处理，再评估门店是否接住机会。",
+          "neededData": [
+            "节假日/调休",
+            "和风天气",
+            "大麦周边活动",
+            "商场活动页",
+            "当天排队和备货记录"
+          ],
+          "plainDiagnosis": "这不一定是门店运营突然变好，可能是节假日、演唱会散场、商场活动、极端天气前后造成的外部流量。",
+          "situation": "某一天销售或客流突然暴涨",
+          "sourceBasis": [
+            "和风天气：小时级天气、预警和极端天气解释",
+            "大麦开放平台：周边演出、体育、亲子、展览活动解释",
+            "国务院节假日通知：节假日和调休解释",
+            "商场活动采集：IP 展、市集、快闪、会员日解释"
+          ]
+        }
+      ],
+      "analysis": {
+        "comparisonNarrative": [
+          "内部 POS 解释已成交结果，客流画像解释未成交机会和商圈天花板。",
+          "公开 POI/天气数据只能做供给和环境 proxy，不能替代真实客流、来源地和停留时长。",
+          "连锁店要把本店放进同城门店网络看，拥堵门店应向近店分流而不是只扩大等位。"
+        ],
+        "headline": "稠城商圈客流强，但火锅竞品重叠高；机会在分时段转化和连锁内部分流。",
+        "opportunities": [
+          "午市办公客可用快餐化套餐承接，和晚市家庭/游客套餐分开设计。",
+          "用来源地 Top3 做定向投放，比全城投放更容易测算 ROI。",
+          "把客流峰谷接入备货阈值，可同时降低缺货和尾段浪费。"
+        ],
+        "recommendations": [
+          {
+            "action": "把午市做成 45 分钟可完成的工作日套餐，并把高毛利小食/饮品设为加价购。",
+            "expectedImpact": "提升午市翻台与加购率，优先验证 2 周。",
+            "metricTrigger": "办公客群 46%，午市峰值指数 1.42，平均停留 48 分钟。",
+            "priority": "P0",
+            "why": "11:30-13:30 的办公客流占全天 31%，但停留时间偏短；缩短决策和出餐链路比单纯降价更直接。"
+          },
+          {
+            "action": "周末 17:00 前开放预约候补和跨店分流，把排队超过 35 分钟的顾客导向同品牌近店。",
+            "expectedImpact": "减少门口流失，并把拥堵转成连锁内部留存。",
+            "metricTrigger": "周末提升 36%，竞品重叠指数 0.67，晚市峰值指数 1.58。",
+            "priority": "P0",
+            "why": "周末客流是工作日 1.36 倍，游客/家庭客群更怕等待；排队体验会直接影响评分和转化。"
+          },
+          {
+            "action": "在人民广场 1km 商圈内做差异化投放，主打服务确定性、等位透明和招牌菜稳定性。",
+            "expectedImpact": "减少同质化价格战，把预算投向更容易转化的人群。",
+            "metricTrigger": "近场餐饮供给高、竞品客群重叠高、消费力指数 116。",
+            "priority": "P1",
+            "why": "火锅竞品密度高，公开 POI 只能说明供给侧拥挤；客流画像补足了客群来源和重叠度。"
+          },
+          {
+            "action": "把游客客群的套餐文案和点评内容分开运营，强化“第一次来上海也不踩雷”的确定性。",
+            "expectedImpact": "提升异地客进店率和高峰前置预订。",
+            "metricTrigger": "游客/商务短停 18%，外区来源 Top3 合计 37%。",
+            "priority": "P1",
+            "why": "游客/短停客群占比高，决策依赖地图、点评和商场导流，信任线索比会员权益更有效。"
+          },
+          {
+            "action": "将门店、商场和供应链指标联动，按客流峰谷调整备货阈值，而不是只按历史销量补货。",
+            "expectedImpact": "降低缺货和晚市尾段浪费并存的问题。",
+            "metricTrigger": "20:00 后客流仍高但堂食转化下降，原料备货应区分到店潜力和实际成交。",
+            "priority": "P2",
+            "why": "内部 POS 只能看到已成交，客流画像能解释没有成交的外部机会和缺口。"
+          }
+        ],
+        "risks": [
+          "同商圈火锅供给密集，评分和服务确定性比价格更容易决定转化。",
+          "周末和晚市峰值容易让排队体验拖累平台评分。",
+          "游客客群占比高时，会员沉淀弱，需要把一次性客流转成评价和复购线索。"
+        ]
+      },
+      "dataNote": "当前为 demo 模拟数据，仅用于展示分析形态。真实启用需要客户门店授权、供应商商务开通和聚合数据合规审查；不采集或展示个人级轨迹。",
+      "dataSufficiency": {
+        "isEnoughForRealDecision": false,
+        "plainVerdict": "足够做 demo 和开通说明，不足够直接下真实经营结论。",
+        "whatCanBeDecidedNow": [
+          "可以决定这个高级模块值得保留，因为它解释的是 POS 和点评解释不了的问题。",
+          "可以决定试点验证路径：先选第一百货和大丸百货，一个看机会承接，一个看异常下滑。",
+          "可以决定需要客户授权哪些数据，而不是盲目购买全量外部数据。"
+        ],
+        "whatCannotBeDecidedYet": [
+          "不能直接认定大丸百货店下滑就是商场客流下滑导致。",
+          "不能直接给出真实投放预算和 ROI。",
+          "不能替代门店现场走访、点评原文和商场物业数据。"
+        ],
+        "why": [
+          "现在用的是模拟客流画像，不能证明某家门店真实的人流变化。",
+          "缺少商场总客流、餐饮楼层客流、门口路过客流和竞品开闭店时间线。",
+          "缺少行业白皮书或平台报告来校准：当前价格带、连锁化趋势、品类竞争强度是不是行业共性。"
+        ]
+      },
+      "demoMode": true,
+      "enablement": {
+        "priceHint": {
+          "basis": "通常按项目、区域、门店包或年度服务计费",
+          "demoAssumption": "MVP 阶段先用模拟字段展示价值，不把付费客流数据作为前置依赖"
+        },
+        "requirements": [
+          "客户确认门店、商圈和竞品分析范围",
+          "腾讯/百度/高德等供应商完成商务授权或数据服务合同",
+          "仅接入聚合统计字段，避免个人画像和明细轨迹",
+          "与内部 POS、会员、供应链数据做字段映射"
+        ],
+        "scope": "按客户/项目/商圈授权，不属于 MVP 免费公开数据能力。",
+        "status": "需额外开通"
+      },
+      "externalSignals": {
+        "bossActions": [
+          "不要把节假日、演出散场、商场活动带来的短期增长直接外推到下周。",
+          "如果外部活动带来新增客，重点做会员沉淀、点评引导和高峰备货复盘。",
+          "如果天气或调休导致下滑，先调整排班和外卖承接，不要马上判断门店经营变差。",
+          "商场活动缺统一 API，先用官网/公众号/小程序活动源做半自动采集，再逐步接物业后台。"
+        ],
+        "collectionPipeline": {
+          "dailyBudgetEnv": {
+            "mapPoi": "AMAP_DAILY_QUERY_BUDGET / TENCENT_MAP_DAILY_QUERY_BUDGET / BAIDU_MAP_DAILY_QUERY_BUDGET",
+            "weather": "QWEATHER_DAILY_QUERY_BUDGET"
+          },
+          "defaultMode": "manual_or_cron",
+          "steps": [
+            {
+              "productionStatus": "needs_key_host_and_location",
+              "refreshCadence": "小时级/日更均可",
+              "source": "和风天气",
+              "storesOneApiCall": true,
+              "whatItWrites": [
+                "天气现况",
+                "体感温度",
+                "湿度",
+                "风力",
+                "供应商更新时间"
+              ]
+            },
+            {
+              "productionStatus": "ready_without_key",
+              "refreshCadence": "年度更新",
+              "source": "中国节假日/调休",
+              "storesOneApiCall": false,
+              "whatItWrites": [
+                "节假日标签",
+                "补班标签"
+              ]
+            },
+            {
+              "productionStatus": "needs_key_and_api_scope",
+              "refreshCadence": "日更",
+              "source": "大麦开放平台",
+              "storesOneApiCall": false,
+              "whatItWrites": [
+                "活动类型",
+                "场馆",
+                "活动日期",
+                "售票状态"
+              ]
+            },
+            {
+              "productionStatus": "needs_feed_urls",
+              "refreshCadence": "日更",
+              "safeCollectionRule": "普通网页放 MALL_ACTIVITY_FEED_URLS；公众号单篇文章放 MALL_ACTIVITY_WECHAT_URLS，不抓公众号历史列表。",
+              "source": "商场活动采集",
+              "storesOneApiCall": false,
+              "whatItWrites": [
+                "活动标题",
+                "活动日期",
+                "楼层/场地",
+                "品牌或活动类型"
+              ]
+            }
+          ],
+          "whyNotOnPageLoad": "外部接口有每日额度，demo 页面打开不应自动消耗配额；由后台定时任务或管理员手动触发采集。"
+        },
+        "dataNeededForProduction": [
+          "门店经纬度和所属商圈",
+          "商场官网/公众号/小程序活动页 URL",
+          "周边 1-3km 重点场馆列表",
+          "和风天气 QWEATHER_API_KEY 和 QWEATHER_API_HOST",
+          "大麦 DAMAI_APP_KEY 和 DAMAI_APP_SECRET"
+        ],
+        "moduleName": "外部原因解释器",
+        "plainConclusion": "当天销售或客流异常不能只看门店内部，要先排查节假日、天气、周边活动和商场活动这些外部原因。",
+        "purpose": "解释某天或某周销售/客流异常是不是天气、节假日、周边活动或商场活动导致。",
+        "signals": [
+          {
+            "actionHint": "按普通工作日/周末逻辑分析，但保留其他外部信号校验。",
+            "plainImpact": "没有明显官方节假日因素，需要继续看天气、活动、交通和商场活动。",
+            "severity": "low",
+            "source": "中国节假日/调休",
+            "title": "普通日期",
+            "type": "holiday"
+          },
+          {
+            "actionHint": "配置 QWEATHER_API_KEY 后，按小时天气和预警自动解释当天客流异常。",
+            "plainImpact": "义乌稠城商圈 的雨天、高温、寒潮或预警会影响堂食、外卖和排队意愿。",
+            "severity": "medium",
+            "source": "和风天气",
+            "title": "天气影响可实时接入",
+            "type": "weather"
+          },
+          {
+            "actionHint": "配置大麦 AppKey/Secret 后，每天拉取 1-3km 重点场馆活动，给异常日打活动标签。",
+            "plainImpact": "稠城商圈 周边演唱会、体育、亲子、展览活动可能造成晚市或周末突增客流。",
+            "severity": "medium",
+            "source": "大麦开放平台",
+            "title": "周边演出活动待接入",
+            "type": "nearby_event"
+          },
+          {
+            "actionHint": "先配置商场官网/公众号/小程序活动页，做日更采集；有物业合作后再接内部活动表。",
+            "plainImpact": "商场 IP 展、市集、品牌快闪、会员日会显著影响客流，且通常没有统一开放 API。",
+            "severity": "medium",
+            "source": "商场活动采集",
+            "title": "目标商场 活动源待配置",
+            "type": "mall_activity"
+          }
+        ],
+        "sourceStatuses": [
+          {
+            "bestUse": "解释雨天、高温、寒潮、台风、空气质量和预警对堂食/外卖的影响。",
+            "envVars": [
+              "QWEATHER_API_KEY",
+              "QWEATHER_API_HOST"
+            ],
+            "keyRequired": true,
+            "officialUrl": "https://dev.qweather.com/docs/api/",
+            "refreshCadence": "小时级",
+            "source": "和风天气",
+            "status": "已配置"
+          },
+          {
+            "bestUse": "识别附近演唱会、体育比赛、亲子演出、展览带来的临时客流。",
+            "envVars": [
+              "DAMAI_APP_KEY",
+              "DAMAI_APP_SECRET"
+            ],
+            "keyRequired": true,
+            "officialUrl": "https://developer.alibaba.com/docs/api.htm?apiId=71773",
+            "refreshCadence": "日更/小时级",
+            "source": "大麦开放平台",
+            "status": "待配置"
+          },
+          {
+            "bestUse": "解释节假日、补班日和长假前后造成的异常客流。",
+            "envVars": [],
+            "keyRequired": false,
+            "officialUrl": "https://www.gov.cn/zhengce/zhengceku/",
+            "refreshCadence": "年度更新",
+            "source": "中国节假日/调休",
+            "status": "可直接使用"
+          },
+          {
+            "bestUse": "采集商场官网、公众号、小程序活动页，解释 IP 展、市集、会员日、品牌快闪带来的客流波动。",
+            "envVars": [
+              "MALL_ACTIVITY_FEED_URLS",
+              "MALL_ACTIVITY_WECHAT_URLS"
+            ],
+            "keyRequired": false,
+            "officialUrl": null,
+            "refreshCadence": "日更",
+            "source": "商场活动采集",
+            "status": "可先半自动接入"
+          }
+        ]
+      },
+      "fieldCatalog": [
+        {
+          "businessQuestion": "商圈有没有足够的外部机会，而不是只看已成交订单。",
+          "demoValue": 21800,
+          "key": "daily_footfall",
+          "label": "日均路过客流",
+          "providerCoverage": [
+            "腾讯",
+            "百度"
+          ]
+        },
+        {
+          "businessQuestion": "排班、备货、预约和套餐窗口应该放在哪些时段。",
+          "demoValue": {
+            "dinner": 1.58,
+            "lateNight": 0.74,
+            "lunch": 1.42
+          },
+          "key": "hourly_flow_index",
+          "label": "分小时客流指数",
+          "providerCoverage": [
+            "腾讯",
+            "百度"
+          ]
+        },
+        {
+          "businessQuestion": "投放和会员召回应该覆盖哪些外部区域。",
+          "demoValue": [
+            {
+              "area": "黄浦区",
+              "share": 0.31
+            },
+            {
+              "area": "静安区",
+              "share": 0.22
+            },
+            {
+              "area": "浦东新区",
+              "share": 0.14
+            }
+          ],
+          "key": "source_area_top3",
+          "label": "来源地 Top3",
+          "providerCoverage": [
+            "腾讯",
+            "百度"
+          ]
+        },
+        {
+          "businessQuestion": "门店是快决策客流还是深度用餐客流，影响产品组合和翻台。",
+          "demoValue": {
+            "0-30m": 0.18,
+            "120m+": 0.11,
+            "30-60m": 0.37,
+            "60-120m": 0.34
+          },
+          "key": "dwell_time_distribution",
+          "label": "停留时长分布",
+          "providerCoverage": [
+            "腾讯",
+            "百度"
+          ]
+        },
+        {
+          "businessQuestion": "当前客单价偏高/偏低是否符合商圈人群支付能力。",
+          "demoValue": 116,
+          "key": "consumption_power_index",
+          "label": "消费力指数",
+          "providerCoverage": [
+            "腾讯",
+            "百度"
+          ]
+        },
+        {
+          "businessQuestion": "同赛道竞品是在抢同一批人，还是服务不同场景。",
+          "demoValue": 0.67,
+          "key": "competitor_overlap_index",
+          "label": "竞品客群重叠指数",
+          "providerCoverage": [
+            "腾讯"
+          ]
+        },
+        {
+          "businessQuestion": "公开 POI 密度与付费客流画像一起判断供需压力。",
+          "demoValue": 61,
+          "key": "nearby_competitor_count",
+          "label": "近场竞品供给数",
+          "providerCoverage": [
+            "高德",
+            "腾讯",
+            "百度"
+          ]
+        }
+      ],
+      "moduleName": "高级客流画像分析",
+      "neededEvidence": [
+        {
+          "name": "腾讯或百度商圈/商场客流画像",
+          "priority": "P0",
+          "publicAvailability": "通常需要商务开通，公开数据不能替代。",
+          "sourceType": "付费/商务数据",
+          "sourceUrl": "https://cloud.tencent.com/product/mall",
+          "whyNeeded": "验证商场有没有人、客从哪里来、在餐饮楼层停多久，以及是否和竞品抢同一批人。"
+        },
+        {
+          "name": "高德 POI、周边搜索和竞品供给数据",
+          "priority": "P0",
+          "publicAvailability": "开放 API 可用，但只能做供给侧 proxy，不能当真实客流。",
+          "sourceType": "开放 API + 业务清洗",
+          "sourceUrl": "https://lbs.amap.com/api/webservice/guide/api-advanced/search",
+          "whyNeeded": "判断门店周边到底有多少同赛道竞品、是否近期供给变密。"
+        },
+        {
+          "name": "餐饮连锁化发展白皮书/行业报告",
+          "priority": "P1",
+          "publicAvailability": "公开摘要可用，完整报告按发布方口径获取。",
+          "sourceType": "行业白皮书",
+          "sourceUrl": "https://www.ccfa.org.cn/portal/cn/xiangxi.jsp?id=446601&sharetype=1&type=33",
+          "whyNeeded": "校准当前餐饮大盘、价格带、连锁化趋势和品类竞争是不是行业共性。"
+        },
+        {
+          "name": "商场物业数据",
+          "priority": "P0",
+          "publicAvailability": "非公开，需要商户或物业合作。",
+          "sourceType": "客户/物业授权数据",
+          "whyNeeded": "确认楼层调整、出入口动线、活动排期和停车/地铁导流是否影响本店。"
+        },
+        {
+          "name": "门店现场走访和点评原文",
+          "priority": "P0",
+          "publicAvailability": "客户授权后可获得。",
+          "sourceType": "客户自有数据 + 人工复盘",
+          "whyNeeded": "确认问题是不是等位、门口展示、服务态度、上菜慢等现场因素。"
+        },
+        {
+          "name": "和风天气、大麦活动、节假日与商场活动源",
+          "priority": "P0",
+          "publicAvailability": "和风和大麦需要注册 Key；节假日可直接结构化；商场活动通常需要配置官网/公众号/小程序活动源。",
+          "sourceType": "开放 API + 半自动采集",
+          "sourceUrl": "https://dev.qweather.com/docs/api/",
+          "whyNeeded": "解释某天突然暴涨或暴跌是不是外部天气、演出、展会、节假日或商场活动导致。"
+        }
+      ],
+      "plainLanguageAnalysis": {
+        "bottomLine": "这家店现在不是没人路过，而是门口的人没有被充分转成进店；如果是大丸百货这类下滑店，先别急着打折，要先判断问题在商场、楼层动线、竞品，还是门店体验。",
+        "whatItMeans": [
+          "先别急着打折。打折只能拉一部分已经想吃的人，但解决不了“路过的人为什么没进来”。",
+          "如果商场整体人流没掉，只有本店掉，那大概率不是大盘问题，而是位置动线、同层竞品、门口展示或服务体验出了问题。",
+          "如果商场整体人流也掉了，就不要只压门店经理，要和商场活动、楼层导流、外卖/团购承接一起做。",
+          "第一百货这类高人流店，重点不是再拉更多人，而是把午市和周末高峰的转化、排队和备货做顺。"
+        ],
+        "whyWeThinkSo": [
+          "内部 POS 只能看到已经买单的人，解释不了“经过但没进店”的人。",
+          "点评能看到顾客进店后的抱怨，解释不了商场人流、楼层动线和竞品变化。",
+          "客流画像、POI 竞品和商场楼层数据放在一起，才能判断到底是外部机会变少，还是门店没有接住机会。"
+        ]
+      },
+      "providers": [
+        {
+          "accessMode": "商务授权/项目制",
+          "availableFields": [
+            "daily_footfall",
+            "hourly_flow_index",
+            "source_area_top3",
+            "dwell_time_distribution",
+            "competitor_overlap_index",
+            "consumption_power_index"
+          ],
+          "bestUse": "商圈客流、来源地、竞品重叠、停留时长、消费力分层",
+          "provider": "腾讯位置大数据"
+        },
+        {
+          "accessMode": "商务授权/行业解决方案",
+          "availableFields": [
+            "trade_area_heat",
+            "resident_visitor_split",
+            "age_band_distribution",
+            "gender_distribution",
+            "origin_city_rank",
+            "weekday_weekend_lift"
+          ],
+          "bestUse": "区域热力、客群来源、常驻/游客拆分、商圈趋势",
+          "provider": "百度慧眼/百度地图"
+        },
+        {
+          "accessMode": "公开地图 API + 商务数据能力需另行确认",
+          "availableFields": [
+            "poi_density",
+            "transit_accessibility",
+            "parking_pressure_index",
+            "weather_flow_factor",
+            "nearby_competitor_count",
+            "route_arrival_time"
+          ],
+          "bestUse": "POI 供给密度、可达性、路况天气 proxy，以及商务授权后的区域客流能力",
+          "provider": "高德/商业位置数据"
+        },
+        {
+          "accessMode": "注册 Key 后接入",
+          "availableFields": [
+            "weather_now",
+            "hourly_forecast",
+            "weather_warning",
+            "air_quality",
+            "precipitation"
+          ],
+          "bestUse": "按小时天气、空气质量、灾害预警解释堂食、外卖、排队和临时客流变化",
+          "provider": "和风天气"
+        },
+        {
+          "accessMode": "注册 AppKey/AppSecret 后接入",
+          "availableFields": [
+            "event_category",
+            "event_time",
+            "venue_name",
+            "city_name",
+            "ticket_status"
+          ],
+          "bestUse": "识别门店周边演唱会、体育、展览、亲子活动带来的临时客流",
+          "provider": "大麦开放平台"
+        }
+      ],
+      "requiresEnablement": true,
+      "simulatedMetrics": {
+        "avgDwellMinutes": 74,
+        "competitorOverlapIndex": 0.67,
+        "consumptionPowerIndex": 116,
+        "dailyFootfall": 21800,
+        "dinnerPeakIndex": 1.58,
+        "estimatedStoreVisits": 828,
+        "lunchPeakIndex": 1.42,
+        "officeWorkerShare": 0.46,
+        "parkingPressureIndex": 0.72,
+        "residentShare": 0.28,
+        "studentShare": 0.08,
+        "touristBusinessShare": 0.18,
+        "transitAccessibilityIndex": 0.91,
+        "weekdayWeekendLift": 1.36
+      },
+      "solutionPlan": [
+        {
+          "action": "把商场总人流、餐饮楼层人流、同层竞品变化、门口等位体验放在一张表里复盘。",
+          "expectedOutcome": "判断下滑到底是商场没客、楼层动线变了、竞品抢走了，还是门店服务拖累。",
+          "owner": "区域运营",
+          "step": "第一周：先查大丸百货店为什么掉"
+        },
+        {
+          "action": "推出工作日午市套餐，门口和团购页只讲三件事：快、稳、不踩雷。",
+          "expectedOutcome": "把办公客从“路过看看”变成“今天就进来吃”。",
+          "owner": "门店店长",
+          "step": "第二周：第一百货店做午市快转化"
+        },
+        {
+          "action": "排队超过 35 分钟就给同品牌近店分流券，同时把预约候补提前到 17:00 前开放。",
+          "expectedOutcome": "减少门口流失，把本来要走掉的人留在品牌内部。",
+          "owner": "区域运营",
+          "step": "第三周：周末高峰做分流和预约"
+        },
+        {
+          "action": "晚市和周末备货不要只看历史销量，要叠加商场活动、天气、楼层客流和预约情况。",
+          "expectedOutcome": "减少高峰缺货和尾段浪费同时发生。",
+          "owner": "供应链",
+          "step": "第四周：把客流变化接到备货"
+        }
+      ],
+      "storeContext": {
+        "businessDistrict": "稠城商圈",
+        "city": "义乌",
+        "mallName": "商圈街区门店",
+        "period": "current",
+        "storeName": "鼎鲜火锅 义乌分公司",
+        "subSector": "火锅"
+      }
+    },
     "benchmarkAlerts": [
       {
         "actionHint": "建议立即重排班, 调整全职兼职比例",
@@ -41,6 +671,247 @@
       "layer2SkuCount": 0,
       "layer3PeriodCount": 0,
       "upgradeHint": "上传 TOP 20 SKU 主料清单 → Layer 2 (±8%)"
+    },
+    "bossDecisionBrief": {
+      "dataGapForRealOperation": [
+        "缺 POS/订单: 没有 POS 就只能讲环境，不能判断门店自己有没有接住机会。",
+        "缺 月盘点/库存/BOM: 没有月盘点就不能下结论说毛利掉是菜卖错了还是货漏了。",
+        "缺 大众点评/顾客评价: 没有评论原文就不能把体验问题定位到具体动作。",
+        "缺 菜品/POS SKU: 没有菜品和成本就无法做菜单工程，只能泛泛说提升销售。",
+        "缺 连锁门店对比: 没有连锁对比就不能判断是不是店长问题、商圈问题还是品牌共性。"
+      ],
+      "dataReadiness": {
+        "enoughForBossDirection": false,
+        "enoughForHardRoiPromise": false,
+        "plainVerdict": "现有数据只能做 demo 方向展示；但要承诺利润金额，还必须有 POS、月盘点和财务同时闭环。",
+        "sources": [
+          {
+            "available": false,
+            "decisionUse": "没有 POS 就只能讲环境，不能判断门店自己有没有接住机会。",
+            "source": "POS/订单"
+          },
+          {
+            "available": false,
+            "decisionUse": "没有月盘点就不能下结论说毛利掉是菜卖错了还是货漏了。",
+            "source": "月盘点/库存/BOM"
+          },
+          {
+            "available": true,
+            "decisionUse": "能判断这个月到底赚没赚钱，食材、人力、房租哪个拖累利润。",
+            "source": "财务/P&L"
+          },
+          {
+            "available": false,
+            "decisionUse": "没有评论原文就不能把体验问题定位到具体动作。",
+            "source": "大众点评/顾客评价"
+          },
+          {
+            "available": false,
+            "decisionUse": "没有菜品和成本就无法做菜单工程，只能泛泛说提升销售。",
+            "source": "菜品/POS SKU"
+          },
+          {
+            "available": true,
+            "decisionUse": "能解释今天或本周异常波动是不是天气、展会、商场活动或商圈变化。",
+            "source": "外部活动/天气/商圈"
+          },
+          {
+            "available": false,
+            "decisionUse": "没有连锁对比就不能判断是不是店长问题、商圈问题还是品牌共性。",
+            "source": "连锁门店对比"
+          }
+        ]
+      },
+      "decisionCards": [
+        {
+          "decision": "今天先不要因为一天波动就直接打折或怪店长。",
+          "evidence": [
+            "外部信号用于解释异常天，不直接证明门店经营好坏。",
+            "POS 只看到已买单的人，看不到路过但没进店的人。"
+          ],
+          "ownerAction": "今天先复盘异常原因，明天再决定是否上促销。",
+          "priority": "P0",
+          "recommendation": "先给当天打外部标签：天气、商场活动、展会、节假日、周边交通；再看堂食、外卖、排队和评价有没有同步变化。",
+          "sourceInputs": [
+            "外部活动/天气/商圈",
+            "POS/订单",
+            "大众点评/顾客评价"
+          ],
+          "why": "已有外部信号，可以先判断当天异常是否受天气、商场活动、展会或节假日影响。"
+        },
+        {
+          "decision": "本周先解决顾客体验里最容易影响转化的点。",
+          "evidence": [
+            "需要补充大众点评/美团/抖音评论原文，才能定位顾客不满意的具体原因。"
+          ],
+          "ownerAction": "店长本周只抓一个体验问题，连续 7 天复盘差评关键词和高峰现场。",
+          "priority": "P0",
+          "recommendation": "如果点评集中说排队久、上菜慢或服务不稳，先改预约、分流、等位话术和高峰排班；不要先把动作放到全店降价。",
+          "sourceInputs": [
+            "大众点评/顾客评价",
+            "POS/订单",
+            "外部活动/天气/商圈"
+          ],
+          "why": "缺少大众点评原文时，只能猜体验问题；需要补评论文本或平台授权数据。"
+        },
+        {
+          "decision": "本月必须把月盘点、BOM 和采购耗用对上。",
+          "evidence": [
+            "已接入 bomLayerStatus"
+          ],
+          "ownerAction": "财务和厨师长本月先对 TOP 20 食材，找出金额最大的 3 个漏点。",
+          "priority": "P0",
+          "recommendation": "用月盘点核对高耗用食材、报损、退菜、赠品和采购价格；先找利润漏点，再谈新品和投放。",
+          "sourceInputs": [
+            "月盘点/库存/BOM",
+            "财务/P&L",
+            "菜品/POS SKU"
+          ],
+          "why": "现在缺月盘点，无法判断利润差到底是卖得不好，还是食材耗用和采购出了问题。"
+        },
+        {
+          "decision": "菜单动作要按菜品角色做，不要所有菜一起促销。",
+          "evidence": [
+            "需要菜品销量、售价、食材成本和评论菜品关键词，才能做主推/改价/下架。"
+          ],
+          "ownerAction": "本周挑 3 个主推菜、3 个观察菜、3 个待下架菜，做两周 A/B。",
+          "priority": "P1",
+          "recommendation": "高毛利且评价好的菜要明确主推，放到门口、团购页和服务员推荐；销量低又低毛利的菜先缩 SKU 或下架；差评集中的菜先改出品稳定性。",
+          "sourceInputs": [
+            "菜品/POS SKU",
+            "大众点评/顾客评价",
+            "月盘点/库存/BOM"
+          ],
+          "why": "缺菜品毛利和销量时，菜单建议只能停留在经验判断。"
+        },
+        {
+          "decision": "如果是连锁店，要先判断这是单店问题还是区域共性。",
+          "evidence": [
+            "当前门店: 鼎鲜火锅 义乌分公司",
+            "分析位置: 义乌 / 稠城商圈",
+            "分析周期: current"
+          ],
+          "ownerAction": "区域经理补同城门店同周期数据后，再决定是否换店长、调商场资源或做区域活动。",
+          "priority": "P1",
+          "recommendation": "把本店放到同商圈、同城市、同品牌门店里比较；如果只有本店差，查店内执行；如果同商圈都差，查商场和外部客流。",
+          "sourceInputs": [
+            "连锁门店对比",
+            "外部活动/天气/商圈",
+            "POS/订单"
+          ],
+          "why": "现在缺连锁门店对比，老板还不能判断是单店店长问题还是品牌/商圈共性。"
+        }
+      ],
+      "decisionPrinciples": [
+        "先判断问题是外部客流、门店转化、菜品结构、成本浪费，还是评价体验，不要把所有波动都归因到店长。",
+        "月盘点回答钱有没有漏掉；大众点评回答顾客为什么不满意；菜品/POS 回答应该推什么或砍什么；外部信号回答当天异常是不是外部原因。",
+        "公开活动和公众号只能解释外部可能性，不能替代商场真实客流、楼层客流和客户授权经营数据。"
+      ],
+      "finalAnswer": "今天先不要因为一天波动就直接打折或怪店长。 现有数据只能做 demo 方向展示；但要承诺利润金额，还必须有 POS、月盘点和财务同时闭环。 老板看这个模块时，重点不是看分数，而是按今天、本周、本月三层动作拍板。",
+      "moduleName": "老板最终决策简报",
+      "nextDataToAskCustomer": [
+        {
+          "askFor": "先要近 90 天订单明细，含渠道、菜品、金额、时间、门店。",
+          "source": "POS/订单"
+        },
+        {
+          "askFor": "再要月底盘点、采购入库、报损、赠品、理论耗用/BOM。",
+          "source": "月盘点/库存/BOM"
+        },
+        {
+          "askFor": "再要点评/美团/抖音评论原文和评分时间线。",
+          "source": "大众点评/顾客评价"
+        },
+        {
+          "askFor": "再要菜品售价、销量、成本和出品分类。",
+          "source": "菜品/POS SKU"
+        },
+        {
+          "askFor": "如果是连锁，再要同城同品牌门店同周期数据。",
+          "source": "连锁门店对比"
+        }
+      ],
+      "ownerDecisionNow": {
+        "notReadyYet": [
+          "没有月盘点和财务闭环前，不要承诺具体节省金额或 ROI。"
+        ],
+        "thisMonth": "月底用月盘点、BOM、采购和财务把利润漏点对上，再决定菜单、备货和供应商动作。",
+        "thisWeek": "本周只抓一个最影响转化的体验问题，同时定 3 个主推菜和 3 个待观察菜。",
+        "today": "今天只做异常归因：外部活动/天气/商场变化 + 堂食外卖 + 排队评价，先不急着打折。"
+      },
+      "plainPurpose": "把月盘点、POS、菜品、大众点评和外部活动天气合成老板能直接拍板的动作。",
+      "sourceDecisionMap": [
+        {
+          "answers": "没有 POS 就只能讲环境，不能判断门店自己有没有接住机会。",
+          "available": false,
+          "source": "POS/订单"
+        },
+        {
+          "answers": "没有月盘点就不能下结论说毛利掉是菜卖错了还是货漏了。",
+          "available": false,
+          "source": "月盘点/库存/BOM"
+        },
+        {
+          "answers": "能判断这个月到底赚没赚钱，食材、人力、房租哪个拖累利润。",
+          "available": true,
+          "source": "财务/P&L"
+        },
+        {
+          "answers": "没有评论原文就不能把体验问题定位到具体动作。",
+          "available": false,
+          "source": "大众点评/顾客评价"
+        },
+        {
+          "answers": "没有菜品和成本就无法做菜单工程，只能泛泛说提升销售。",
+          "available": false,
+          "source": "菜品/POS SKU"
+        },
+        {
+          "answers": "能解释今天或本周异常波动是不是天气、展会、商场活动或商圈变化。",
+          "available": true,
+          "source": "外部活动/天气/商圈"
+        },
+        {
+          "answers": "没有连锁对比就不能判断是不是店长问题、商圈问题还是品牌共性。",
+          "available": false,
+          "source": "连锁门店对比"
+        }
+      ],
+      "storeContext": {
+        "businessDistrict": "稠城商圈",
+        "city": "义乌",
+        "mallName": null,
+        "period": "current",
+        "storeName": "鼎鲜火锅 义乌分公司",
+        "subSector": "火锅"
+      },
+      "whatEachSourceAnswers": [
+        {
+          "bossQuestion": "钱是不是漏在食材、采购、报损、赠品或盘点差异里？",
+          "decision": "决定先查哪些食材、是否调供应商、是否改备货阈值。",
+          "source": "月盘点/库存/BOM"
+        },
+        {
+          "bossQuestion": "顾客为什么不满意，问题在排队、服务、出品、价格还是环境？",
+          "decision": "决定先改等位、排班、服务话术、菜品稳定性，还是价格表达。",
+          "source": "大众点评/顾客评价"
+        },
+        {
+          "bossQuestion": "哪些菜该主推、改价、下架或改出品？",
+          "decision": "决定菜单工程、团购页展示、服务员推荐和 SKU 精简。",
+          "source": "菜品/POS SKU"
+        },
+        {
+          "bossQuestion": "某天突然好/差，是门店原因，还是活动、天气、展会、商场动线原因？",
+          "decision": "决定是否复盘门店执行，还是把动作改成导流、备货、排班和活动承接。",
+          "source": "外部活动/天气/商圈"
+        },
+        {
+          "bossQuestion": "这家店是在品牌里个别掉队，还是整个区域都受影响？",
+          "decision": "决定处理单店执行，还是处理区域商圈、品牌活动和门店分流。",
+          "source": "连锁门店对比"
+        }
+      ]
     },
     "diagnostics": [
       {
@@ -131,31 +1002,65 @@
       }
     ],
     "financialMetrics": {
+      "activeDishCount": null,
+      "actualAvgTicket": null,
+      "avgTicketVsTarget": null,
       "costRigidity": 0.560961801990723,
       "foodCost": 307040.0,
       "foodCostChangePct": -0.44732744732744734,
       "foodCostRatio": 41.999978113612244,
       "grossMarginFolded": 58.00002188638776,
+      "grossMarginPerDish": null,
       "grossMarginUnfolded": 58.00002188638776,
       "grossRevenue": 731048.0,
+      "ingredientWasteRate": null,
       "laborCost": 237660.0,
       "laborCostChangePct": -0.2660397461435123,
       "laborCostRatio": 32.5094932206914,
       "netProfit": null,
       "otherCost": null,
+      "pricedDishCount": null,
+      "recipeCoverageRate": null,
       "rent": 85000.0,
       "rentRatio": 11.627143498101356,
       "restaurantNetMargin": null,
       "revenue": 731048.0,
-      "revenueChangePct": -0.47425643813785373
+      "revenueChangePct": -0.47425643813785373,
+      "targetAvgTicket": null
     },
     "storePnlOnePager": {
+      "controllable_profit": {
+        "breakdown": [
+          {
+            "amount": 307040.0,
+            "controllable": true,
+            "item": "food_cost"
+          },
+          {
+            "amount": 237660.0,
+            "controllable": true,
+            "item": "labor_cost"
+          },
+          {
+            "amount": 85000.0,
+            "controllable": false,
+            "item": "rent"
+          }
+        ],
+        "controllable_cost": 544700.0,
+        "controllable_margin_pct": 25.5,
+        "controllable_profit": 186348.0,
+        "financial_profit": 101348.0,
+        "non_controllable_cost": 85000.0,
+        "revenue": 731048.0,
+        "total_cost": 629700.0
+      },
       "dataSourcesUsed": [
         "financial",
         "diagnostics",
         "benchmark_alerts"
       ],
-      "generatedAt": "2026-04-11T04:22:47",
+      "generatedAt": "2026-07-01T16:12:46",
       "headline": "鼎鲜火锅 义乌分公司 current 营收 ¥731,048",
       "headlineColor": "yellow",
       "kpiCostRigidity": 0.560961801990723,
@@ -232,7 +1137,9 @@
       "diagnostics",
       "benchmarkAlerts",
       "storePnlOnePager",
-      "bomLayerStatus"
+      "bomLayerStatus",
+      "advancedTrafficPersona",
+      "bossDecisionBrief"
     ],
     "totalAlerts": 1,
     "totalDiagnoses": 1
