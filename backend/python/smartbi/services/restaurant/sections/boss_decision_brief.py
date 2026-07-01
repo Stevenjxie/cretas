@@ -290,11 +290,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         cards.append({
             "priority": "P1",
             "decision": "菜单动作要按菜品角色做，不要所有菜一起促销。",
-            "recommendation": (
-                "高毛利且评价好的菜要明确主推，放到门口、团购页和服务员推荐；"
-                "销量低又低毛利的菜先缩 SKU 或下架；"
-                "差评集中的菜先改出品稳定性。"
-            ),
+            "recommendation": self._menu_action_text(sections, params),
             "why": (
                 "已有菜品/POS 数据，可以把动作拆成主推、改价、下架、改出品。"
                 if has_menu
@@ -404,6 +400,54 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 if count is not None:
                     evidence.append(f"建议下架长尾 SKU 数: {count}")
         return evidence or ["需要菜品销量、售价、食材成本和评论菜品关键词，才能做主推/改价/下架。"]
+
+    @staticmethod
+    def _menu_action_text(sections: dict[str, Any], params: dict[str, Any]) -> str:
+        menu = params.get("menu_summary") or sections.get("menuEngineering") or sections.get("menu_engineering") or {}
+        if not isinstance(menu, dict):
+            return (
+                "高毛利且评价好的菜要明确主推，放到门口、团购页和服务员推荐；"
+                "销量低又低毛利的菜先缩 SKU 或下架；差评集中的菜先改出品稳定性。"
+            )
+
+        top_products = menu.get("topProducts") or []
+        low_sales = menu.get("lowSalesProducts") or []
+        top_categories = menu.get("topCategories") or []
+
+        lead_names = [
+            str(item.get("name"))
+            for item in top_products
+            if isinstance(item, dict) and item.get("name")
+        ][:3]
+        observe_names = [
+            str(item.get("name"))
+            for item in low_sales
+            if isinstance(item, dict) and item.get("name")
+        ][:3]
+        category_names = [
+            str(item.get("category"))
+            for item in top_categories
+            if isinstance(item, dict) and item.get("category")
+        ][:2]
+
+        if lead_names:
+            lead_text = "、".join(lead_names)
+            category_text = f"；当前收入大类优先看 {'、'.join(category_names)}" if category_names else ""
+            observe_text = (
+                f"；低销量低金额项先看 {'、'.join(observe_names)}，不要占菜单黄金位置"
+                if observe_names
+                else ""
+            )
+            return (
+                f"本周先把 {lead_text} 作为明确主推，放到菜单首屏、团购页和服务员推荐话术里"
+                f"{category_text}{observe_text}。"
+                "不要全店打折，先用爆品带套餐和加购。"
+            )
+
+        return (
+            "高毛利且评价好的菜要明确主推，放到门口、团购页和服务员推荐；"
+            "销量低又低毛利的菜先缩 SKU 或下架；差评集中的菜先改出品稳定性。"
+        )
 
     @staticmethod
     def _final_answer(readiness: dict[str, Any], decisions: dict[str, Any]) -> str:

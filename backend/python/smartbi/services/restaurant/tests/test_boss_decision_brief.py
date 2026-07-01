@@ -106,6 +106,47 @@ def test_boss_decision_brief_is_honest_when_data_is_missing() -> None:
     assert any(item["source"] == "POS/订单" for item in data["nextDataToAskCustomer"])
 
 
+def test_boss_decision_brief_names_actual_dishes_from_menu_summary() -> None:
+    handler = BossDecisionBriefHandler()
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_QHJ_DEMO",
+            upload_id=None,
+            sub_sector="川菜/砂锅鱼",
+            store_name="青花椒川食山语（颛桥龙湖店）",
+            params={
+                "pos_summary": {"periodRevenue": 73762, "orders": 328},
+                "review_summary": {"rating": 4.73, "reviewCount": 688},
+                "menu_summary": {
+                    "topCategories": [
+                        {"category": "招牌必点", "revenue": 156386.23},
+                        {"category": "热卖推荐", "revenue": 82357.59},
+                    ],
+                    "topProducts": [
+                        {"name": "特色青花椒鱼(活鱼现做)", "revenue": 57777.55},
+                        {"name": "特色青花椒鱼(活鱼手工去刺)", "revenue": 42458.77},
+                        {"name": "双人餐", "revenue": 21529.03},
+                    ],
+                    "lowSalesProducts": [
+                        {"name": "打包盒", "qty": 1, "revenue": 10.34},
+                    ],
+                },
+            },
+        ),
+        context={},
+    )
+
+    menu_card = next(
+        card for card in response.data["decisionCards"]
+        if card["decision"].startswith("菜单动作")
+    )
+    assert "特色青花椒鱼(活鱼现做)" in menu_card["recommendation"]
+    assert "双人餐" in menu_card["recommendation"]
+    assert "招牌必点" in menu_card["recommendation"]
+    assert "全店打折" in menu_card["recommendation"]
+
+
 def test_boss_decision_brief_registered_in_section_router() -> None:
     from smartbi.api.restaurant_sections import HANDLERS, SECTION_DATA_KIND
 
