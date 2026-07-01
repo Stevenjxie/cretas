@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -68,6 +68,8 @@ CN_2026_ADJUSTED_WORKDAYS = {
 PUBLIC_MALL_ACTIVITY_FEEDS = {
     "shanghai_nanjing_road": [
         "https://www.sh.chinanews.com.cn/yule/2026-06-27/147398.shtml",
+        "https://whlyj.sh.gov.cn/cysc/20260511/579b1241c56a484c9afda02051aa6b9d.html",
+        "https://www.neccsh.com/cecsh/exhibitioninfo/exhibitionlist.jspx",
         "https://www.gzw.sh.gov.cn/shgzw_zxzx_gqdt/20260129/01fb8dde5cad41998849c33f7a65298b.html",
         "https://mp.weixin.qq.com/s/7hEP725t7TlzoeTVCxizxg",
         "https://mp.weixin.qq.com/s/Kfh8T6fcZ4bSK0otaMJOOw",
@@ -123,10 +125,12 @@ class RestaurantExternalSignalService:
         env: dict[str, str] | None = None,
         http_client: Any | None = None,
         snapshot_store: Any | None = None,
+        ocr_client: Any | None = None,
     ) -> None:
         self._env = env
         self._http_client = http_client or httpx
         self._snapshot_store = snapshot_store
+        self._ocr_client = ocr_client
 
     def build_context(self, request: ExternalSignalRequest) -> dict[str, Any]:
         target_day = self._target_day(request.target_date)
@@ -371,7 +375,7 @@ class RestaurantExternalSignalService:
         request: ExternalSignalRequest,
         *,
         feed_urls: list[str] | None = None,
-        max_pages: int = 5,
+        max_pages: int = 8,
     ) -> dict[str, Any]:
         """Collect public mall activity pages without anti-bot bypass.
 
@@ -823,7 +827,7 @@ class RestaurantExternalSignalService:
 
     def _response_text(self, response: Any) -> str:
         text = str(getattr(response, "text", "") or "")
-        if text and "\ufffd" not in text:
+        if text and "\ufffd" not in text and not self._looks_mojibake(text):
             return text
         content = getattr(response, "content", None)
         if not content:
@@ -836,7 +840,14 @@ class RestaurantExternalSignalService:
                 continue
         if not candidates:
             return text
-        return min(candidates, key=lambda value: value.count("\ufffd"))
+        return min(candidates, key=self._decode_badness)
+
+    def _looks_mojibake(self, text: str) -> bool:
+        sample = text[:2000]
+        return sum(sample.count(marker) for marker in ("Ã", "Â", "æ", "ç", "å")) >= 8
+
+    def _decode_badness(self, value: str) -> int:
+        return value.count("\ufffd") * 10 + sum(value.count(marker) for marker in ("Ã", "Â", "æ", "ç", "å"))
 
     def _robots_text_allows(self, robots_text: str, path: str) -> bool:
         applies = False
@@ -864,11 +875,14 @@ class RestaurantExternalSignalService:
         if not title:
             return None
         text = self._html_to_text(html)
-        date_text = self._extract_activity_date(text, request)
-        activity_type = self._classify_activity_type(f"{title} {text}")
+        ocr_texts = self._public_article_image_ocr_texts(raw_url, html)
+        analysis_text = f"{text} {' '.join(ocr_texts)}"
+        date_text = self._extract_activity_date(analysis_text, request)
+        activity_type = self._classify_activity_type(f"{title} {analysis_text}")
         relevance = self._activity_target_relevance(date_text, request)
-        return {
+        event = {
             "title": title,
+            "sourceType": self._activity_source_type(raw_url),
             "dateText": date_text,
             "activityType": activity_type,
             "targetRelevance": relevance["status"],
@@ -881,6 +895,10 @@ class RestaurantExternalSignalService:
             "bossAction": self._activity_boss_action(activity_type),
             "rawExcerpt": text[:180],
         }
+        if ocr_texts:
+            event["ocrTextCount"] = len(ocr_texts)
+            event["ocrExcerpt"] = " ".join(ocr_texts)[:180]
+        return event
 
     def _first_html_text(self, html: str, tag: str) -> str:
         match = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", html, flags=re.IGNORECASE | re.DOTALL)
@@ -896,6 +914,68 @@ class RestaurantExternalSignalService:
             flags=re.IGNORECASE | re.DOTALL,
         )
         return self._clean_text(re.sub(r"<[^>]+>", " ", without_script))
+
+    def _activity_source_type(self, raw_url: str) -> str:
+        parsed = urlparse(raw_url)
+        host = parsed.netloc.lower()
+        if host == "mp.weixin.qq.com":
+            return "wechat_public_article"
+        if host.endswith(".gov.cn"):
+            return "government_public_page"
+        if "meet-in-shanghai.net" in host:
+            return "official_tourism_page"
+        if "neccsh.com" in host:
+            return "official_exhibition_schedule"
+        if "chinanews.com.cn" in host:
+            return "public_news_page"
+        return "official_or_public_page"
+
+    def _public_article_image_ocr_texts(self, raw_url: str, html: str) -> list[str]:
+        if not self._ocr_client or not self._is_wechat_public_article_url(raw_url):
+            return []
+        texts: list[str] = []
+        for image_url in self._extract_article_image_urls(raw_url, html)[:3]:
+            try:
+                response = self._http_client.get(
+                    image_url,
+                    headers=self._activity_request_headers(raw_url),
+                    timeout=8.0,
+                )
+                status_code = int(getattr(response, "status_code", 200) or 200)
+                if status_code >= 400:
+                    continue
+                content = getattr(response, "content", b"")
+                if not isinstance(content, bytes):
+                    content = bytes(content)
+                text = self._run_ocr(content, image_url)
+                if text:
+                    texts.append(self._clean_text(text))
+            except Exception:
+                continue
+        return texts
+
+    def _extract_article_image_urls(self, raw_url: str, html: str) -> list[str]:
+        urls: list[str] = []
+        for match in re.finditer(
+            r"<img[^>]+(?:data-src|src)=[\"'](?P<url>[^\"']+)[\"']",
+            html,
+            flags=re.IGNORECASE,
+        ):
+            image_url = unescape(match.group("url")).strip()
+            if not image_url or image_url.startswith("data:"):
+                continue
+            absolute_url = urljoin(raw_url, image_url)
+            if absolute_url not in urls:
+                urls.append(absolute_url)
+        return urls
+
+    def _run_ocr(self, image_bytes: bytes, image_url: str) -> str:
+        if callable(self._ocr_client):
+            return str(self._ocr_client(image_bytes, image_url) or "")
+        extractor = getattr(self._ocr_client, "extract_text", None)
+        if callable(extractor):
+            return str(extractor(image_bytes, image_url) or "")
+        return ""
 
     def _clean_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", text))).strip()
@@ -927,6 +1007,30 @@ class RestaurantExternalSignalService:
                 )
                 occupied_spans.append((position, position + len(marker)))
                 break
+
+        iso_range_pattern = re.compile(
+            r"(?P<sy>\d{4})-(?P<sm>\d{1,2})-(?P<sd>\d{1,2})\s*[-—~至到]\s*"
+            r"(?P<ey>\d{4})-(?P<em>\d{1,2})-(?P<ed>\d{1,2})"
+        )
+        for match in iso_range_pattern.finditer(text):
+            start_year = int(match.group("sy"))
+            start_month = int(match.group("sm"))
+            start_day = int(match.group("sd"))
+            end_year = int(match.group("ey"))
+            end_month = int(match.group("em"))
+            end_day = int(match.group("ed"))
+            if start_year != year and end_year != year:
+                continue
+            candidates.append(
+                self._activity_candidate(
+                    f"{start_month}月{start_day}日-{end_month}月{end_day}日",
+                    match.start(),
+                    date(start_year, start_month, start_day),
+                    date(end_year, end_month, end_day),
+                    target_day,
+                )
+            )
+            occupied_spans.append(match.span())
 
         today_range_pattern = re.compile(
             r"即日起\s*[-—~至到]\s*(?:(?P<em>\d{1,2})月)?(?P<ed>\d{1,2})日"
