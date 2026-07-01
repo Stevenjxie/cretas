@@ -1191,8 +1191,22 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             for addon in add_on_candidates:
                 if lead["name"] == addon["name"]:
                     continue
+                if not BossDecisionBriefHandler._is_likely_addon(lead, addon):
+                    continue
                 pairs.append({"items": [lead["name"], addon["name"]], "orders": 0.0, "source": "computed_combo"})
         return pairs
+
+    @staticmethod
+    def _is_likely_addon(lead: dict[str, Any], addon: dict[str, Any]) -> bool:
+        addon_name = str(addon.get("name") or "")
+        addon_price = addon.get("unitRevenue") or 0.0
+        lead_price = lead.get("unitRevenue") or 0.0
+        addon_tokens = ("饭", "粉", "面", "豆花", "冰粉", "饮", "可乐", "茶", "甜", "小吃", "配菜", "加购")
+        if any(token in addon_name for token in addon_tokens):
+            return True
+        if lead_price > 0 and addon_price > 0 and addon_price <= lead_price * 0.25:
+            return True
+        return False
 
     @staticmethod
     def _pair_key(left: str, right: str) -> tuple[str, str]:
@@ -1201,7 +1215,13 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
     @staticmethod
     def _price_fit_component(package_price: float, aov: float | None) -> float:
         if not aov or aov <= 0:
-            return 0.65
+            if 60 <= package_price <= 180:
+                return 1.0
+            if 180 < package_price <= 260:
+                return 0.65
+            if 260 < package_price <= 360:
+                return 0.35
+            return 0.25
         ratio = package_price / aov
         if 0.75 <= ratio <= 1.05:
             return 1.0

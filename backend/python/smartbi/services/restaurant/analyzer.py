@@ -94,6 +94,7 @@ from .sections.diagnostics import DiagnosticsHandler
 from .sections.dining_heatmap import DiningHeatmapHandler
 from .sections.long_tail_sku import LongTailSkuHandler
 from .sections.member_rfm import MemberRfmHandler
+from .sections.menu_engineering import MenuEngineeringHandler
 from .sections.menu_normalization import MenuNormalizationHandler
 from .sections.multi_store_comparison import MultiStoreComparisonHandler
 from .sections.review_analysis import ReviewAnalysisHandler
@@ -285,6 +286,7 @@ class RestaurantAnalyzerV2:
         self._long_tail_handler = LongTailSkuHandler()
         self._review_analysis_handler = ReviewAnalysisHandler()
         self._member_rfm_handler = MemberRfmHandler()
+        self._menu_engineering_handler = MenuEngineeringHandler()
         self._temporal_handler = TemporalComparisonHandler()
         self._multi_store_handler = MultiStoreComparisonHandler()
         self._calibration_handler = CalibrationHistoryHandler()
@@ -372,6 +374,7 @@ class RestaurantAnalyzerV2:
         quantity_col: str = "数量",
         reviews: Optional[list[dict]] = None,
         members: Optional[list[dict]] = None,  # W5.4 会员 RFM
+        sku_food_costs: Optional[dict[str, float]] = None,
         use_llm_reviews: bool = True,          # W5.5+: LLM default (auto-fallback to regex)
     ) -> dict:
         """V2 主分析入口
@@ -455,6 +458,7 @@ class RestaurantAnalyzerV2:
             "store_col": "门店名称",
             "reviews": reviews,
             "members": members,
+            "sku_food_costs": sku_food_costs,
             "use_llm": use_llm_reviews,
             "city": traffic_context["city"],
             "business_district": traffic_context["business_district"],
@@ -487,6 +491,8 @@ class RestaurantAnalyzerV2:
             context["reviews"] = reviews
         if members:
             context["members"] = members
+        if sku_food_costs:
+            context["sku_food_costs"] = sku_food_costs
         if self.db_session is not None:
             context["db_session"] = self.db_session
         # P3.5B F8: propagate stored_value treatment from margin_spec to stored_value handler
@@ -502,6 +508,20 @@ class RestaurantAnalyzerV2:
         # state via context.
         if pos_df is not None and product_col in pos_df.columns:
             report["sections"]["menuNormalization"] = self._normalize_menu(pos_df, product_col)
+
+        if (
+            pos_df is not None
+            and sku_food_costs
+            and product_col in pos_df.columns
+            and quantity_col in pos_df.columns
+            and revenue_col in pos_df.columns
+        ):
+            menu_engineering_resp = self._menu_engineering_handler.compute(_make_req(), context)
+            if menu_engineering_resp.status == SectionStatus.OK:
+                report["sections"]["menuEngineering"] = menu_engineering_resp.data
+            else:
+                for w in menu_engineering_resp.warnings:
+                    report["warnings"].append(f"菜单工程分析失败: {w}")
 
         # ── Section 2: 渠道毛利率 (POS only) ──
         # Legacy emits a warning if POS is provided but the required columns

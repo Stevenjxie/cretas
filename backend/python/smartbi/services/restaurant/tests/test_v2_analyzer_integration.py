@@ -238,6 +238,56 @@ class TestRestaurantAnalyzerV2Integration:
         assert summary["totalDiagnoses"] >= 0
         assert sections["bossDecisionBrief"]["ownerDecisionNow"]["today"].startswith("今天只做异常归因")
 
+    def test_qhj_demo_bom_costs_flow_into_package_recommendations(self) -> None:
+        """QHJ demo POS + simulated BOM costs should produce costed package recommendations."""
+        qhj_pos_df = pd.DataFrame([
+            {"商品名称": "招牌青花椒味(单人份)", "数量": 1200, "实收额": 69600, "订单来源": "美团", "开单时间": "2026-06-24 12:10", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+            {"商品名称": "招牌青花椒味(2-3人份)", "数量": 420, "实收额": 83160, "订单来源": "大众点评", "开单时间": "2026-06-24 19:30", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+            {"商品名称": "招牌青花椒味(小份)", "数量": 500, "实收额": 79000, "订单来源": "微信", "开单时间": "2026-06-25 18:40", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+            {"商品名称": "经典红糖冰粉", "数量": 850, "实收额": 15300, "订单来源": "美团", "开单时间": "2026-06-25 20:10", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+            {"商品名称": "米饭", "数量": 1300, "实收额": 13000, "订单来源": "堂食", "开单时间": "2026-06-26 12:40", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+            {"商品名称": "小炒现切吊龙", "数量": 360, "实收额": 24480, "订单来源": "大众点评", "开单时间": "2026-06-26 19:10", "门店名称": "青花椒川食山语（颛桥龙湖店）"},
+        ])
+        # Demo BOM total costs for the current period. Unit costs are derived
+        # from the qhj demo seed recipe, multiplied by sold quantity.
+        qhj_sku_food_costs = {
+            "招牌青花椒味(单人份)": 17.35 * 1200,
+            "招牌青花椒味(2-3人份)": 55.10 * 420,
+            "招牌青花椒味(小份)": 35.80 * 500,
+            "经典红糖冰粉": 2.99 * 850,
+            "米饭": 2.40 * 1300,
+            "小炒现切吊龙": 25.12 * 360,
+        }
+        qhj_reviews = [
+            {"id": 1, "rating": 5, "content": "招牌青花椒味好吃，冰粉也不错", "created_at": "2026-06-24", "store_name": "青花椒川食山语（颛桥龙湖店）", "platform": "大众点评"},
+            {"id": 2, "rating": 4, "content": "鱼锅稳定，适合两个人吃", "created_at": "2026-06-25", "store_name": "青花椒川食山语（颛桥龙湖店）", "platform": "大众点评"},
+            {"id": 3, "rating": 3, "content": "小炒现切吊龙有点干，服务慢", "created_at": "2026-06-26", "store_name": "青花椒川食山语（颛桥龙湖店）", "platform": "大众点评"},
+        ]
+
+        v2 = RestaurantAnalyzerV2(factory_id="RES_3101_009", sub_sector="鱼类餐饮")
+        report = v2.analyze(
+            pos_df=qhj_pos_df,
+            reviews=qhj_reviews,
+            sku_food_costs=qhj_sku_food_costs,
+            store_name="青花椒川食山语（颛桥龙湖店）",
+            period="2026-06-W4",
+            use_llm_reviews=False,
+        )
+
+        sections = report["sections"]
+        assert "menuEngineering" in sections
+        page = sections["bossDecisionBrief"]["ownerDecisionPage"]
+        package_recommendations = page["packageRecommendations"]
+        assert package_recommendations["status"] == "ready"
+        assert package_recommendations["candidates"]
+
+        top_package = package_recommendations["candidates"][0]
+        assert top_package["estimatedPackagePrice"] > 0
+        assert top_package["estimatedFoodCost"] > 0
+        assert top_package["estimatedGrossProfit"] > 0
+        assert top_package["grossMarginPct"] > 50
+        assert top_package["scoreBreakdown"]["margin"] is not None
+
     def test_analyzer_graceful_degradation(self, sample_financial_data: dict) -> None:
         """Invalid POS data in one section should not break other sections."""
         # POS df without required columns → channel/heatmap/long tail should skip
