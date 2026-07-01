@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from hashlib import md5
 from html import unescape
+import math
 import os
 from pathlib import Path
 import re
@@ -85,6 +86,50 @@ class ExternalSignalRequest:
     target_date: str | None = None
     lat: float | None = None
     lng: float | None = None
+
+
+@dataclass(frozen=True)
+class StoreGeoProfile:
+    store_id: str
+    store_name: str
+    city: str
+    business_district: str
+    mall_name: str | None
+    floor: str | None
+    lat: float
+    lng: float
+    cuisine_sector: str
+    address: str
+    match_keywords: tuple[str, ...]
+
+
+STORE_GEO_PROFILE_SEEDS = {
+    "haidilao-diyi-shopping-mall": StoreGeoProfile(
+        store_id="haidilao-diyi-shopping-mall",
+        store_name="海底捞火锅(第一百货店)",
+        city="上海",
+        business_district="南京东路/人民广场",
+        mall_name="第一百货商业中心",
+        floor="5F",
+        lat=31.24035,
+        lng=121.482718,
+        cuisine_sector="火锅",
+        address="上海市黄浦区南京东路830号第一百货商业中心5楼",
+        match_keywords=("海底捞", "第一百货", "南京东路830号", "人民广场"),
+    )
+}
+
+BUSINESS_DISTRICT_SEEDS = {
+    "南京东路/人民广场": {
+        "city": "上海",
+        "centerLat": 31.236,
+        "centerLng": 121.481,
+        "radiusMeters": 1800,
+        "directImpactMeters": 800,
+        "nearbyImpactMeters": 3000,
+        "cityLevelMeters": 15000,
+    }
+}
 
 
 class InMemoryExternalSignalSnapshotStore:
@@ -287,22 +332,29 @@ class RestaurantExternalSignalService:
 
         target_day = self._target_day(request.target_date)
         collected_at = (now or datetime.now(timezone.utc)).isoformat()
-        weather_signal = self._collect_qweather_signal(request)
+        store_geo_profile = self.resolve_store_geo_profile(
+            store_id=store_id,
+            store_name=None,
+            request=request,
+        )
+        resolved_request = self._request_with_store_geo(request, store_geo_profile)
+        weather_signal = self._collect_qweather_signal(resolved_request)
         signals = [
             weather_signal,
             self._holiday_signal(target_day),
-            self._damai_collection_signal(request),
-            self._mall_collection_signal(request),
+            self._damai_collection_signal(resolved_request),
+            self._mall_collection_signal(resolved_request),
         ]
         budget_used = sum(1 for signal in signals if signal.get("budgetCost"))
         snapshot = {
             "storeId": store_id,
             "targetDate": target_day.isoformat(),
-            "city": request.city,
-            "businessDistrict": request.business_district,
-            "mallName": request.mall_name,
-            "lat": request.lat,
-            "lng": request.lng,
+            "city": resolved_request.city,
+            "businessDistrict": resolved_request.business_district,
+            "mallName": resolved_request.mall_name,
+            "lat": resolved_request.lat,
+            "lng": resolved_request.lng,
+            "storeGeoProfile": store_geo_profile,
             "collectedAt": collected_at,
             "status": "collected" if any(signal.get("status") == "collected" for signal in signals) else "partial",
             "budgetUsed": budget_used,
@@ -797,6 +849,218 @@ class RestaurantExternalSignalService:
                 result.append(url)
                 seen.add(url)
         return result
+
+    def resolve_store_geo_profile(
+        self,
+        *,
+        store_id: str | None = None,
+        store_name: str | None = None,
+        request: ExternalSignalRequest | None = None,
+    ) -> dict[str, Any]:
+        seed = self._store_geo_seed(store_id, store_name, request)
+        if seed:
+            profile = self._seed_geo_profile(seed)
+        elif request and request.lat is not None and request.lng is not None:
+            profile = self._coordinate_geo_profile(store_id, store_name, request)
+        else:
+            profile = {
+                "matchStatus": "missing_location",
+                "confidence": "low",
+                "decisionUse": "门店缺少经纬度，无法可靠绑定商圈、商场和活动源。",
+                "neededData": ["门店地址", "门店经纬度", "所属商场/楼层"],
+            }
+        profile["activitySourceBindings"] = self._activity_source_bindings(profile)
+        profile["wechatDataSufficiency"] = self._wechat_data_sufficiency(profile)
+        return profile
+
+    def _store_geo_seed(
+        self,
+        store_id: str | None,
+        store_name: str | None,
+        request: ExternalSignalRequest | None,
+    ) -> StoreGeoProfile | None:
+        if store_id and store_id in STORE_GEO_PROFILE_SEEDS:
+            return STORE_GEO_PROFILE_SEEDS[store_id]
+        context = f"{store_name or ''} {request.mall_name if request else ''} {request.business_district if request else ''}"
+        for seed in STORE_GEO_PROFILE_SEEDS.values():
+            if any(keyword and keyword in context for keyword in seed.match_keywords):
+                return seed
+        return None
+
+    def _seed_geo_profile(self, seed: StoreGeoProfile) -> dict[str, Any]:
+        district = BUSINESS_DISTRICT_SEEDS.get(seed.business_district, {})
+        distance = self._distance_meters(
+            seed.lat,
+            seed.lng,
+            float(district.get("centerLat", seed.lat)),
+            float(district.get("centerLng", seed.lng)),
+        )
+        return {
+            "matchStatus": "matched_seed",
+            "confidence": "high",
+            "matchMethod": "store_id_or_keyword_seed",
+            "storeId": seed.store_id,
+            "storeName": seed.store_name,
+            "city": seed.city,
+            "businessDistrict": seed.business_district,
+            "mallName": seed.mall_name,
+            "floor": seed.floor,
+            "lat": seed.lat,
+            "lng": seed.lng,
+            "address": seed.address,
+            "cuisineSector": seed.cuisine_sector,
+            "distanceToDistrictCenterMeters": round(distance),
+            "influenceRings": self._influence_rings(distance, district),
+            "decisionUse": "门店已绑定到商圈和商场，可把天气、商场活动、商圈活动、会展和竞品 POI 挂到这家店复盘。",
+        }
+
+    def _coordinate_geo_profile(
+        self,
+        store_id: str | None,
+        store_name: str | None,
+        request: ExternalSignalRequest,
+    ) -> dict[str, Any]:
+        best_name = ""
+        best_distance = None
+        best_district: dict[str, Any] = {}
+        for name, district in BUSINESS_DISTRICT_SEEDS.items():
+            distance = self._distance_meters(
+                float(request.lat),
+                float(request.lng),
+                float(district["centerLat"]),
+                float(district["centerLng"]),
+            )
+            if best_distance is None or distance < best_distance:
+                best_name = name
+                best_distance = distance
+                best_district = district
+        inside = best_distance is not None and best_distance <= float(best_district.get("radiusMeters", 0))
+        return {
+            "matchStatus": "matched_by_coordinate" if inside else "coordinate_outside_known_districts",
+            "confidence": "medium" if inside else "low",
+            "matchMethod": "nearest_trade_area_radius",
+            "storeId": store_id,
+            "storeName": store_name,
+            "city": request.city or best_district.get("city"),
+            "businessDistrict": best_name if inside else request.business_district,
+            "mallName": request.mall_name,
+            "floor": None,
+            "lat": request.lat,
+            "lng": request.lng,
+            "distanceToDistrictCenterMeters": round(best_distance or 0),
+            "influenceRings": self._influence_rings(best_distance or 0, best_district),
+            "decisionUse": (
+                "门店经纬度落入已知商圈半径，可先做商圈级外部解释；商场和楼层仍需补充。"
+                if inside
+                else "门店未落入已知商圈，需要补商圈 polygon 或人工确认。"
+            ),
+        }
+
+    def _request_with_store_geo(
+        self,
+        request: ExternalSignalRequest,
+        profile: dict[str, Any],
+    ) -> ExternalSignalRequest:
+        return ExternalSignalRequest(
+            city=request.city or str(profile.get("city") or ""),
+            business_district=request.business_district or str(profile.get("businessDistrict") or ""),
+            mall_name=request.mall_name or profile.get("mallName"),
+            target_date=request.target_date,
+            lat=request.lat if request.lat is not None else profile.get("lat"),
+            lng=request.lng if request.lng is not None else profile.get("lng"),
+        )
+
+    def _activity_source_bindings(self, profile: dict[str, Any]) -> list[dict[str, Any]]:
+        if not profile.get("businessDistrict") and not profile.get("mallName"):
+            return []
+        request = ExternalSignalRequest(
+            city=str(profile.get("city") or ""),
+            business_district=str(profile.get("businessDistrict") or ""),
+            mall_name=profile.get("mallName"),
+            lat=profile.get("lat"),
+            lng=profile.get("lng"),
+        )
+        bindings: list[dict[str, Any]] = []
+        for url in self._mall_feed_urls_for_request(request):
+            source_type = self._activity_source_type(url)
+            bindings.append(
+                {
+                    "url": url,
+                    "sourceType": source_type,
+                    "scope": self._activity_binding_scope(url, profile),
+                    "decisionUse": self._activity_binding_decision_use(source_type),
+                }
+            )
+        return bindings
+
+    def _activity_binding_scope(self, url: str, profile: dict[str, Any]) -> str:
+        if "neccsh.com" in url:
+            return "city_level_background"
+        if "mp.weixin.qq.com" in url:
+            return "district_or_mall_public_article"
+        if profile.get("mallName") and any(marker in url for marker in ("gzw.sh.gov.cn", "chinanews.com.cn")):
+            return "district_and_mall_context"
+        return "district_context"
+
+    def _activity_binding_decision_use(self, source_type: str) -> str:
+        return {
+            "wechat_public_article": "公众号单篇公开文章适合补商场活动线索；若时间在海报里，需要 OCR 或人工确认。",
+            "official_exhibition_schedule": "会展排期适合解释城市级商务客和交通波动，距离远时不能直接归因到单店。",
+            "government_public_page": "政务/文旅公开页适合做商圈和城市活动背景，稳定性高于公众号。",
+            "public_news_page": "公开新闻适合补充活动背景和首发首展信息，需要和官方源交叉验证。",
+        }.get(source_type, "公开活动源可作为外部原因解释，但需要按距离和活动日期匹配门店。")
+
+    def _wechat_data_sufficiency(self, profile: dict[str, Any]) -> dict[str, Any]:
+        wechat_count = sum(
+            1
+            for item in profile.get("activitySourceBindings", [])
+            if item.get("sourceType") == "wechat_public_article"
+        )
+        return {
+            "isEnoughAlone": False,
+            "configuredPublicArticleCount": wechat_count,
+            "plainVerdict": "公众号单篇公开文章不够单独支撑老板决策，只够补活动线索和消费券线索。",
+            "whyNotEnough": [
+                "公众号经常把活动时间、地点和券规则放在图片里，必须 OCR 或人工确认。",
+                "公众号只覆盖商场愿意发布的活动，缺少天气、会展、交通、竞品和真实客流。",
+                "同一活动可能多篇转载，必须去重并按目标日、地点、距离匹配门店。",
+            ],
+            "minimumReliableMix": ["公众号单篇文章", "商场/政务/文旅官方页", "会展排期", "天气", "地图 POI/竞品"],
+        }
+
+    def _influence_rings(self, distance: float, district: dict[str, Any]) -> list[dict[str, Any]]:
+        direct = float(district.get("directImpactMeters", 800))
+        nearby = float(district.get("nearbyImpactMeters", 3000))
+        city_level = float(district.get("cityLevelMeters", 15000))
+        return [
+            {
+                "scope": "mall_or_same_block",
+                "maxMeters": direct,
+                "matched": distance <= direct,
+                "decisionUse": "可直接解释门店客流、排队和备货变化。",
+            },
+            {
+                "scope": "trade_area",
+                "maxMeters": nearby,
+                "matched": distance <= nearby,
+                "decisionUse": "可解释商圈级客流和竞品变化，但要结合门店自身数据。",
+            },
+            {
+                "scope": "city_level",
+                "maxMeters": city_level,
+                "matched": distance <= city_level,
+                "decisionUse": "只作为城市背景，不直接归因到单店。",
+            },
+        ]
+
+    def _distance_meters(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+        # Equirectangular approximation is enough for intra-city matching.
+        meters_per_degree_lat = 111_320
+        avg_lat = (lat1 + lat2) / 2
+        meters_per_degree_lng = 111_320 * max(0.1, math.cos(math.radians(avg_lat)))
+        dx = (lng1 - lng2) * meters_per_degree_lng
+        dy = (lat1 - lat2) * meters_per_degree_lat
+        return (dx * dx + dy * dy) ** 0.5
 
     def _unsupported_platform_reason(self, raw_url: str) -> str | None:
         parsed = urlparse(raw_url)
