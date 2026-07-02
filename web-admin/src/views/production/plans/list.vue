@@ -501,7 +501,9 @@ async function loadSettlementStatuses(rows: TableRow[]) {
 async function loadProductTypes() {
   if (!factoryId.value) return;
   try {
-    const response = await get(`/${factoryId.value}/product-types`);
+    // 用 /active 端点取全部启用产品(非分页数组), 避免默认分页 size=20 截断
+    // (F006 176 产品曾只加载前 20 个, 客户端 filterable 下拉搜不到老产品 e.g. 猪舌门腔)
+    const response = await get(`/${factoryId.value}/product-types/active`);
     if (response.success && response.data) {
       productTypes.value = response.data.content || response.data || [];
     } else if (response.success === false) {
