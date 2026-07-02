@@ -6,6 +6,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.TransferType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
@@ -327,11 +328,22 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             it.setIssuedQty(it.getPickedQty());
         }
+
+        // P0-5 / 2026-07-03 物理迁移: 领料确认后, 把已拣批次从原料仓(主仓, WH-LOG) 实际转移到生产仓
+        // (WORKSHOP, WH-WKS)。此前只建 DRAFT InternalTransfer (不移库存) → 料从不真正到达生产仓, 客户
+        // 料流 (采购→原料仓→领料→生产仓→报工从生产仓扣) 断裂。现按已拣批次逐一划出源仓、在生产仓建批次,
+        // 保留单价/单位/效期/批号血缘。幂等: 状态机 PICKING→TRANSFERRED 已防重放, batch_row 内再记
+        // workshopBatchId 二次防呆。
+        String targetWarehouseId = resolveWorkshopWarehouseId(factoryId, mr);
+        relocatePickedMaterialToWorkshop(factoryId, mr, targetWarehouseId, operatorId);
+
         mr.setStatus(Status.TRANSFERRED);
         mr.setTransferredBy(operatorId);
         mr.setTransferredAt(LocalDateTime.now());
 
-        // P0-5: 创建备料调出 InternalTransfer (物流仓 → 工厂鲜棉仓)
+        // P0-5: 记录一张备料调出 InternalTransfer 作审计凭证 (物流仓 → 生产仓)。实际库存迁移已由上方
+        // relocatePickedMaterialToWorkshop 完成, 此单为可追溯凭证 (不再重复扣减)。修复枚举: 之前误传
+        // "FACTORY_TO_FACTORY" (枚举不存在) → TransferType.valueOf 抛异常 → 领料调拨 400。
         List<CreateTransferRequest.TransferItemDTO> outboundItems = new ArrayList<>();
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty();
@@ -350,10 +362,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
         if (!outboundItems.isEmpty()) {
             CreateTransferRequest req = new CreateTransferRequest();
-            req.setTransferType("FACTORY_TO_FACTORY");
+            req.setTransferType(TransferType.WAREHOUSE_TO_WAREHOUSE.name());
             req.setTargetFactoryId(factoryId);
             req.setSourceWarehouseId(mr.getSourceWarehouseId());
-            req.setTargetWarehouseId(mr.getTargetWarehouseId());
+            req.setTargetWarehouseId(mr.getTargetWarehouseId() != null
+                    ? mr.getTargetWarehouseId() : targetWarehouseId);
             req.setTransferDate(LocalDate.now());
             req.setRemark("物料需求单 " + mr.getRequisitionNo() + " 备料调出");
             req.setItems(outboundItems);
@@ -364,6 +377,142 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
 
         return repository.save(mr);
+    }
+
+    /**
+     * 解析该领料单的目标生产仓 (WORKSHOP/WH-WKS) id。优先用 generateFromPlan 预填的 targetWarehouseId,
+     * 缺失 (老单/未 seed) 时按 WORKSHOP 类型回退查询。仍无 → 防呆 loud-fail (不静默跳过物理迁移)。
+     */
+    private String resolveWorkshopWarehouseId(String factoryId, FactoryMaterialRequisition mr) {
+        String targetWarehouseId = mr.getTargetWarehouseId();
+        if ((targetWarehouseId == null || targetWarehouseId.isBlank()) && warehouseRepository != null) {
+            List<FactoryWarehouse> workshopList = warehouseRepository
+                    .findByFactoryIdAndTypeAndDeletedAtIsNullOrderByCodeAsc(factoryId, WarehouseType.WORKSHOP);
+            if (!workshopList.isEmpty()) {
+                targetWarehouseId = workshopList.get(0).getId();
+                mr.setTargetWarehouseId(targetWarehouseId);
+            }
+        }
+        if (targetWarehouseId == null || targetWarehouseId.isBlank()) {
+            throw new BusinessException(409, "领料调拨失败: 未找到该工厂的生产仓 (WORKSHOP/WH-WKS)")
+                    .withCode("PRODUCTION_WORKSHOP_WAREHOUSE_NOT_FOUND")
+                    .withHint("请先在「工厂配置 → 仓库管理」维护生产/车间仓后再确认领料")
+                    .withSeverity("BLOCKING");
+        }
+        return targetWarehouseId;
+    }
+
+    /**
+     * 物理迁移: 逐已拣批次把 issued 数量从源批次 (原料仓) 划出, 在生产仓建同物料新批次。
+     * 保留单价/单位/效期/批号血缘。把新建的生产仓批次 id 回写进 batch_numbers 行 (workshopBatchId),
+     * 供关单退料时精确反向划出。幂等: batch_row 已带 workshopBatchId → 跳过 (二次防呆)。
+     */
+    private void relocatePickedMaterialToWorkshop(String factoryId, FactoryMaterialRequisition mr,
+                                                  String targetWarehouseId, Long operatorId) {
+        if (materialBatchRepository == null) {
+            throw new BusinessException(500, "领料调拨失败: MaterialBatchRepository 未注入")
+                    .withCode("PRODUCTION_REQUISITION_TRANSFER_UNAVAILABLE")
+                    .withHint("请联系管理员检查后端库存服务配置")
+                    .withSeverity("BLOCKING");
+        }
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            BigDecimal issued = it.getIssuedQty();
+            if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            List<Map<String, Object>> batchRows = it.getBatchNumbers();
+            if (batchRows == null || batchRows.isEmpty()) {
+                throw new BusinessException(400, String.format(
+                        "领料调拨失败: 物料 %s 已发 %s 但缺少领料批次, 无法迁移到生产仓",
+                        materialLabel(it), issued.toPlainString()))
+                        .withCode("PRODUCTION_REQUISITION_TRANSFER_BATCH_REQUIRED")
+                        .withHint("请先在拣货确认时补录该物料的领料批次")
+                        .withHintTarget(it.getId())
+                        .withSeverity("BLOCKING");
+            }
+            List<Map<String, Object>> rebuilt = new ArrayList<>(batchRows.size());
+            for (Map<String, Object> batchRow : batchRows) {
+                Map<String, Object> mutableRow = new LinkedHashMap<>(batchRow);
+                // 幂等: 已迁移过 (带 workshopBatchId) → 原样保留, 不重复划出
+                Object existingWks = mutableRow.get("workshopBatchId");
+                BigDecimal moveQty = batchQuantity(batchRow);
+                if ((existingWks != null && !existingWks.toString().isBlank())
+                        || moveQty.compareTo(BigDecimal.ZERO) <= 0) {
+                    rebuilt.add(mutableRow);
+                    continue;
+                }
+                String batchId = resolveBatchId(factoryId, batchRow);
+                MaterialBatch source = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
+                        .orElseThrow(() -> new BusinessException(400, String.format(
+                                "领料调拨失败: 物料 %s 批次 %s 不存在",
+                                materialLabel(it), batchId))
+                                .withCode("PRODUCTION_REQUISITION_TRANSFER_BATCH_NOT_FOUND")
+                                .withHint("请核对领料批次后重新确认领料")
+                                .withHintTarget(it.getId())
+                                .withSeverity("BLOCKING"));
+                if (!factoryId.equals(source.getFactoryId())) {
+                    throw new BusinessException(403, "领料调拨失败: 批次不属于当前工厂 " + source.getId())
+                            .withHint("请切换到正确工厂或核对批次").withSeverity("BLOCKING");
+                }
+                BigDecimal available = source.getCurrentQuantity();
+                if (available.compareTo(moveQty) < 0) {
+                    throw new BusinessException(409, String.format(
+                            "领料调拨失败: 物料 %s 批次 %s 可用 %s 不足以调出 %s",
+                            materialLabel(it), source.getBatchNumber(),
+                            available.toPlainString(), moveQty.toPlainString()))
+                            .withCode("PRODUCTION_REQUISITION_TRANSFER_INSUFFICIENT_STOCK")
+                            .withHint("请核对原料仓实际库存或调整领料数量")
+                            .withHintTarget(it.getId())
+                            .withSeverity("BLOCKING");
+                }
+                // 源批次划出 (原料仓库存减少)
+                BigDecimal used = source.getUsedQuantity() != null ? source.getUsedQuantity() : BigDecimal.ZERO;
+                source.setUsedQuantity(used.add(moveQty));
+                if (source.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+                    source.setStatus(MaterialBatchStatus.DEPLETED);
+                }
+                materialBatchRepository.save(source);
+
+                // 生产仓建同物料新批次 (库存增加), 保留单价/单位/效期血缘
+                MaterialBatch workshop = new MaterialBatch();
+                workshop.setId(UUID.randomUUID().toString());
+                workshop.setFactoryId(factoryId);
+                workshop.setBatchNumber(buildWorkshopBatchNumber(source.getBatchNumber()));
+                workshop.setMaterialTypeId(it.getMaterialTypeId() != null
+                        ? it.getMaterialTypeId() : source.getMaterialTypeId());
+                workshop.setSupplierId(source.getSupplierId());
+                workshop.setReceiptQuantity(moveQty);
+                workshop.setUsedQuantity(BigDecimal.ZERO);
+                workshop.setReservedQuantity(BigDecimal.ZERO);
+                workshop.setQuantityUnit(source.getQuantityUnit() != null
+                        ? source.getQuantityUnit() : (it.getUnit() != null ? it.getUnit() : "kg"));
+                workshop.setUnitPrice(source.getUnitPrice());
+                workshop.setReceiptDate(LocalDate.now());
+                workshop.setProductionDate(source.getProductionDate());
+                workshop.setExpireDate(source.getExpireDate());
+                workshop.setWarehouseId(targetWarehouseId);
+                workshop.setStatus(MaterialBatchStatus.AVAILABLE);
+                workshop.setCreatedBy(operatorId != null ? operatorId : 0L);
+                workshop.setSourceDocType("MATERIAL_REQUISITION");
+                workshop.setSourceDocId(mr.getId());
+                materialBatchRepository.save(workshop);
+
+                mutableRow.put("workshopBatchId", workshop.getId());
+                rebuilt.add(mutableRow);
+                log.info("✅ 领料迁移 物料需求单 {} 物料 {}: 源批次 {} 划出 {} → 生产仓批次 {}",
+                        mr.getRequisitionNo(), materialLabel(it), source.getId(),
+                        moveQty.toPlainString(), workshop.getId());
+            }
+            it.setBatchNumbers(rebuilt);
+        }
+    }
+
+    /** 生产仓批次号: 源批号 + "-WKS-" + 短 UUID, 满足 batch_number 唯一约束。 */
+    private String buildWorkshopBatchNumber(String sourceBatchNumber) {
+        String base = (sourceBatchNumber != null && !sourceBatchNumber.isBlank()) ? sourceBatchNumber : "MR";
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String candidate = base + "-WKS-" + suffix;
+        return candidate.length() > 64 ? candidate.substring(candidate.length() - 64) : candidate;
     }
 
     @Override
@@ -413,6 +562,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             if (returned != null && returned.compareTo(BigDecimal.ZERO) > 0) {
                 executeMaterialReturn(factoryId, mr, it, returned, operatorId);
             }
+            // 2026-07-03: 物理迁移反向收尾。领料时 issued 已从原料仓迁到生产仓 (WKS 新批次)。关单时
+            // 退回料 (returned) 经上方 executeMaterialReturn 加回原料仓源批次; 这里把 (returned + wastage)
+            // 从生产仓 WKS 批次划出, 令 WKS 批次归零 (issued = 报工消耗 + 退回 + 损耗), 避免生产仓幽灵库存。
+            BigDecimal wastage = it.getWastageQty() != null ? it.getWastageQty() : BigDecimal.ZERO;
+            BigDecimal drawFromWorkshop = (returned != null ? returned : BigDecimal.ZERO).add(wastage);
+            if (drawFromWorkshop.compareTo(BigDecimal.ZERO) > 0) {
+                drawDownWorkshopBatchesForItem(factoryId, it, drawFromWorkshop);
+            }
         }
         mr.setStatus(Status.CLOSED);
         mr.setClosedBy(operatorId);
@@ -437,7 +594,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
         if (!returnItems.isEmpty()) {
             CreateTransferRequest req = new CreateTransferRequest();
-            req.setTransferType("FACTORY_TO_FACTORY");
+            req.setTransferType(TransferType.WAREHOUSE_TO_WAREHOUSE.name());
             req.setTargetFactoryId(factoryId);
             req.setSourceWarehouseId(mr.getTargetWarehouseId());
             req.setTargetWarehouseId(mr.getSourceWarehouseId());
@@ -578,6 +735,61 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
         }
         materialBatchRepository.save(batch);
+    }
+
+    /**
+     * 关单反向收尾: 从该行领料时物化的生产仓 (WKS) 批次划出 {@code qtyToDraw} = (退回 + 损耗),
+     * 令生产仓批次归零, 避免退料 (已加回原料仓) 后生产仓仍留幽灵库存造成双计。
+     *
+     * <p>WKS 批次 id 记录在 {@code item.batchNumbers[*].workshopBatchId} (领料迁移时回写)。按记录顺序
+     * 逐批划出。诚实处理: 记录了 workshopBatchId 但批次已不存在 → warn 跳过 (不阻断关单退料主流程);
+     * 全部划完仍有剩余 (报工从原料仓而非生产仓消耗的不一致配置, 或重复关单) → warn, 不静默造负库存。
+     */
+    private void drawDownWorkshopBatchesForItem(String factoryId,
+                                                FactoryMaterialRequisitionItem item,
+                                                BigDecimal qtyToDraw) {
+        if (materialBatchRepository == null || qtyToDraw == null
+                || qtyToDraw.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        List<Map<String, Object>> batchRows = item.getBatchNumbers();
+        if (batchRows == null || batchRows.isEmpty()) {
+            return;
+        }
+        BigDecimal remaining = qtyToDraw;
+        for (Map<String, Object> batchRow : batchRows) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                break;
+            }
+            Object wksId = batchRow.get("workshopBatchId");
+            if (wksId == null || wksId.toString().isBlank()) {
+                continue;
+            }
+            MaterialBatch wks = materialBatchRepository
+                    .findByIdAndFactoryIdForUpdate(wksId.toString(), factoryId)
+                    .orElse(null);
+            if (wks == null) {
+                log.warn("关单退料: 物料需求单行 {} 生产仓批次 {} 不存在, 跳过生产仓划出",
+                        item.getId(), wksId);
+                continue;
+            }
+            BigDecimal available = wks.getCurrentQuantity();
+            if (available.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            BigDecimal draw = remaining.min(available);
+            BigDecimal used = wks.getUsedQuantity() != null ? wks.getUsedQuantity() : BigDecimal.ZERO;
+            wks.setUsedQuantity(used.add(draw));
+            if (wks.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+                wks.setStatus(MaterialBatchStatus.DEPLETED);
+            }
+            materialBatchRepository.save(wks);
+            remaining = remaining.subtract(draw);
+        }
+        if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+            log.warn("关单退料: 物料需求单行 {} 生产仓批次可划出量不足, 剩余 {} 未从生产仓划出 "
+                    + "(报工可能从原料仓而非生产仓消耗, 或重复关单)", item.getId(), remaining.toPlainString());
+        }
     }
 
     private void writeMaterialReturnTrace(String factoryId,

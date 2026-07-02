@@ -1398,15 +1398,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // code/message 对齐修复 (2026-07-02): 文案说「原料仓/物流仓」但旧代码只认单一 resolveLogisticsId 仓。
         // 现放行 = 配置的生产领料默认仓 (resolveProductionRawWh, 默认 WH-LOG) 或 任意 RAW/LOGISTICS 类型仓库。
         // 严格更宽松: 旧行为 (batch 在 WH-LOG) 仍被第一分支命中 → 向后兼容, 不拒绝原先能通过的批次。
-        // 诚实-null 保留: batch 无仓 / 仓非 RAW/LOGISTICS → loud-fail 409。
+        // 2026-07-03: 生产领料把原料物理迁到生产仓 (WORKSHOP/WH-WKS) 后, 报工从生产仓消耗是合法料流,
+        //   故也放行 WORKSHOP 类型仓库的批次 (更宽松, 不拒绝原先能通过的批次)。
+        // 诚实-null 保留: batch 无仓 / 仓非 RAW/LOGISTICS/WORKSHOP → loud-fail 409。
         String batchWarehouseId = rawMb != null ? rawMb.getWarehouseId() : null;
         boolean accepted = batchWarehouseId != null && !batchWarehouseId.isBlank()
                 && (rawWarehouseId.equals(batchWarehouseId)
-                    || warehouseResolver.isRawOrLogisticsWarehouse(factoryId, batchWarehouseId));
+                    || warehouseResolver.isRawOrLogisticsWarehouse(factoryId, batchWarehouseId)
+                    || warehouseResolver.isWorkshopWarehouse(factoryId, batchWarehouseId));
         if (!accepted) {
-            throw new BusinessException(409, "生产逐道报工原料只能从原料仓/物流仓领用，不能从其他仓库扣减")
+            throw new BusinessException(409, "生产逐道报工原料只能从原料仓/物流仓/生产仓领用，不能从其他仓库扣减")
                     .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")
-                    .withHint("请重新选择原料仓/物流仓批次后再保存")
+                    .withHint("请重新选择原料仓/物流仓/生产仓批次后再保存")
                     .withHintTarget("原料批次");
         }
     }

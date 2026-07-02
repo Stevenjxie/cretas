@@ -49,6 +49,7 @@ const typeMap: Record<string, string> = {
   HQ_TO_BRANCH: '总部→分部',
   BRANCH_TO_BRANCH: '分部→分部',
   BRANCH_TO_HQ: '分部→总部',
+  WAREHOUSE_TO_WAREHOUSE: '仓库间调拨',
 };
 
 // PR #289 §B9 — manual transfer create dialog state

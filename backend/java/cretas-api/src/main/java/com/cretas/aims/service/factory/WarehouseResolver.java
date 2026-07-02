@@ -135,6 +135,26 @@ public class WarehouseResolver {
     }
 
     /**
+     * 判断某仓库是否为生产/车间仓 (WORKSHOP) 类型 — 生产报工原料来源仓校验用 (2026-07-03)。
+     *
+     * <p>生产领料把原料从原料仓迁到生产仓 (WH-WKS) 后, 报工从生产仓消耗是合法料流。因此
+     * {@code ProcessSheetServiceImpl.ensureRawMaterialWarehouse} 在 Part B Gate 关闭 (宽松) 时,
+     * 除 RAW/LOGISTICS 外也放行 WORKSHOP 类型仓库的批次。
+     *
+     * <p>诚实-null: warehouseId 为 null/blank 或指向已删除/跨工厂仓库 → 返回 {@code false}。
+     */
+    public boolean isWorkshopWarehouse(String factoryId, String warehouseId) {
+        if (warehouseId == null || warehouseId.isBlank()) {
+            return false;
+        }
+        return factoryWarehouseRepository
+                .findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId)
+                .map(FactoryWarehouse::getType)
+                .filter(type -> type == FactoryWarehouse.WarehouseType.WORKSHOP)
+                .isPresent();
+    }
+
+    /**
      * 查 {@link FactoryWarehouseDefault} 覆盖配置, 并校验它仍指向同工厂有效 (未软删) 的
      * factory_warehouses 记录。
      *

@@ -101,6 +101,43 @@ class ProcessSheetRequisitionGateTest {
     }
 
     @Test
+    @DisplayName("Gate OFF + 批次在生产仓 (领料迁移后) → 放行 (报工从生产仓消耗合法)")
+    void gateOff_batchInWorkshopWarehouse_passes() throws Throwable {
+        String workshopWhId = "wh-wks-001";
+        WarehouseResolver resolver = mock(WarehouseResolver.class);
+        when(resolver.resolveProductionRawWh(FACTORY_ID)).thenReturn(RAW_WH_ID); // 默认生产领料仓 = 原料仓
+        when(resolver.isRawOrLogisticsWarehouse(FACTORY_ID, workshopWhId)).thenReturn(false);
+        when(resolver.isWorkshopWarehouse(FACTORY_ID, workshopWhId)).thenReturn(true);
+        FactorySettingsRepository settingsRepo = mock(FactorySettingsRepository.class);
+        when(settingsRepo.findRequireRequisitionBeforeReportByFactoryId(FACTORY_ID)).thenReturn(false);
+
+        ProcessSheetServiceImpl impl = newImpl(resolver, settingsRepo, mock(FactoryMaterialRequisitionRepository.class));
+        MaterialBatch mb = new MaterialBatch();
+        mb.setWarehouseId(workshopWhId);
+        mb.setMaterialTypeId(MAT_TYPE_ID);
+        assertDoesNotThrow(() -> invokeGate(impl, mb));
+    }
+
+    @Test
+    @DisplayName("Gate OFF + 批次在非 原料/物流/生产 仓 → 409 (诚实拒绝)")
+    void gateOff_batchInForeignWarehouse_throws() throws Throwable {
+        String foreignWhId = "wh-finished-001";
+        WarehouseResolver resolver = mock(WarehouseResolver.class);
+        when(resolver.resolveProductionRawWh(FACTORY_ID)).thenReturn(RAW_WH_ID);
+        when(resolver.isRawOrLogisticsWarehouse(FACTORY_ID, foreignWhId)).thenReturn(false);
+        when(resolver.isWorkshopWarehouse(FACTORY_ID, foreignWhId)).thenReturn(false);
+        FactorySettingsRepository settingsRepo = mock(FactorySettingsRepository.class);
+        when(settingsRepo.findRequireRequisitionBeforeReportByFactoryId(FACTORY_ID)).thenReturn(false);
+
+        ProcessSheetServiceImpl impl = newImpl(resolver, settingsRepo, mock(FactoryMaterialRequisitionRepository.class));
+        MaterialBatch mb = new MaterialBatch();
+        mb.setWarehouseId(foreignWhId);
+        mb.setMaterialTypeId(MAT_TYPE_ID);
+        BusinessException ex = assertThrows(BusinessException.class, () -> invokeGate(impl, mb));
+        assertEquals("PRODUCTION_RAW_WAREHOUSE_REQUIRED", ex.getErrorCode());
+    }
+
+    @Test
     @DisplayName("无 settings repo → 兜底 OFF (向后兼容)")
     void noSettingsRepo_defaultsOff() throws Throwable {
         WarehouseResolver resolver = mock(WarehouseResolver.class);
