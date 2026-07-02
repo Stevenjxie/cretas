@@ -24,6 +24,9 @@ import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
 import type { TableRow } from '@/types/api';
+// 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
+// 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
+import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -260,6 +263,32 @@ function normalizeRecipeMaterialCategory(value: unknown): 'RAW' | 'AUXILIARY' | 
   if (category === 'AUXILIARY' || category === '辅料' || category === '调味料') return 'AUXILIARY';
   return 'RAW';
 }
+
+// 客户张权反馈 (2026-07-02): 「添加原辅料」对话框的「物料类别」只有 RAW/AUXILIARY/PACKAGING 三档
+// (对应 原料/辅料/包材), 没有独立的"调料"档。AUXILIARY 沿用 normalizeRecipeMaterialCategory 的口径
+// (把"调味料"也算进 AUXILIARY), 所以映射到物料主数据大类时, 辅料档同时放行"辅料"+"调料"两个
+// bigCategoryOf 桶 (二者本来就是"非原料非包材的配方成分", 不细分不会让物料消失于筛选结果)。
+const MATERIAL_CATEGORY_TO_BIG_CATEGORIES: Record<'RAW' | 'AUXILIARY' | 'PACKAGING', BigCategory[]> = {
+  RAW: ['原料'],
+  AUXILIARY: ['辅料', '调料'],
+  PACKAGING: ['包材'],
+};
+
+// 「关联原料」下拉按当前选中的「物料类别」筛选 materialTypes, 避免几十项混杂 (客户反馈的
+// 吸塑盒/乳酸链球菌素/玉米淀粉/透明气调膜 混在一起的问题)。未识别类别("其他"桶)的物料
+// 不因未选中的类别而永久消失 — 只在其对应类别被选中时才不出现，这里按设计保守处理:
+// "其他" 桶物料只在没有更精确归类时才会出现，为了不"藏"数据 (fool-proof-design Rule 5 宁缺勿藏)，
+// 三个类别里找不到归属的物料仍归入 RAW 档展示 (与 normalizeRecipeMaterialCategory 默认落 RAW 一致)。
+const filteredMaterialTypesForBomForm = computed<TableRow[]>(() => {
+  const matCat = normalizeRecipeMaterialCategory(bomForm.value.materialCategory);
+  const allowed = new Set<BigCategory>(MATERIAL_CATEGORY_TO_BIG_CATEGORIES[matCat]);
+  return materialTypes.value.filter((m) => {
+    const big = bigCategoryOf(m.category as string | undefined);
+    // "其他"桶只在 RAW 档下兜底展示 (未归类物料默认按原料处理, 不因筛选彻底消失于任一档).
+    if (big === '其他') return matCat === 'RAW';
+    return allowed.has(big);
+  });
+});
 
 function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
   if (bomItems.value.length === 0) {
@@ -2080,14 +2109,22 @@ async function handleAdjustConfirm() {
           </el-select>
         </el-form-item>
         <el-form-item label="关联原料">
-          <el-select v-model="bomForm.materialTypeId" placeholder="选择原料类型(可选)" clearable style="width: 100%" @change="onMaterialLink">
+          <el-select
+            v-model="bomForm.materialTypeId"
+            placeholder="输入名称筛选，或按上方物料类别自动筛选"
+            filterable
+            clearable
+            style="width: 100%"
+            @change="onMaterialLink"
+          >
             <el-option
-              v-for="item in materialTypes"
+              v-for="item in filteredMaterialTypesForBomForm"
               :key="item.id"
               :label="item.name"
               :value="item.id"
             />
           </el-select>
+          <div class="form-tip">已按当前「物料类别」筛选，切换类别后可选项会跟着变</div>
         </el-form-item>
         <!-- Phase A: 成品含量 RAW/AUXILIARY 固定显示「克 (g)」后缀 -->
         <el-form-item label="成品含量" required>
@@ -2280,6 +2317,7 @@ async function handleAdjustConfirm() {
           <el-select
             v-model="bomForm.semiFinishedRefCode"
             placeholder="组合装引用半成品（可选）"
+            filterable
             clearable
             style="width: 100%"
           >
@@ -2297,6 +2335,7 @@ async function handleAdjustConfirm() {
           <el-select
             v-model="bomForm.subProductTypeId"
             placeholder="嵌套子产品（触发递归 BOM 成本）"
+            filterable
             clearable
             style="width: 100%"
           >

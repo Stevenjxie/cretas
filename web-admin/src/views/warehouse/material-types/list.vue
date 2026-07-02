@@ -36,6 +36,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -44,13 +46,46 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
 
 const loading = ref(false);
-const tableData = ref<TableRow[]>([]);
+// 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
+// GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
+// (只有独立的 /raw-material-types/search 子路由支持 keyword, 但那个不支持叠加 materialKind
+// 大类筛选) — 输入框敲字对结果毫无影响, 是纯前端死代码。改为客户端过滤: 一次性拉回当前
+// materialKind 下的全量原料类型 (字典表通常几十到几百条, 远小于 FETCH_ALL_SIZE), keyword 在
+// 浏览器内按 名称/编码/类别 实时过滤 + 客户端分页, 不依赖后端新增接口/参数 (纯前端修复,
+// 无需 Java 改动/部署)。
+const FETCH_ALL_SIZE = 2000;
+const fullData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
-// P11: 物料大类筛选 (原料/辅料/包材). 空串 = 全部.
+// P11: 物料大类筛选 (原料/辅料/包材). 空串 = 全部. (仍走后端 materialKind 参数, 服务端过滤)
 const filterKind = ref('');
+
+// 客户端关键字过滤: 名称 / 编码 / 类别 任一字段包含关键字 (大小写不敏感)。
+const filteredData = computed<TableRow[]>(() => {
+  const kw = searchKeyword.value.trim().toLowerCase();
+  if (!kw) return fullData.value;
+  return fullData.value.filter((m) => {
+    return String(m.name || '').toLowerCase().includes(kw)
+      || String(m.code || '').toLowerCase().includes(kw)
+      || String(m.category || '').toLowerCase().includes(kw);
+  });
+});
+
+// 客户端分页: 对过滤后的全量结果按当前页/页大小切片展示。
+const tableData = computed<TableRow[]>(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+// 关键字/大类变化后, 过滤结果集大小可能变化, 页码超出范围要回退, 且分页组件的 total 要跟着更新。
+watch(filteredData, (list) => {
+  pagination.value.total = list.length;
+  const maxPage = Math.max(1, Math.ceil(list.length / pagination.value.size));
+  if (pagination.value.page > maxPage) pagination.value.page = 1;
+});
 
 // 字典选项 (从后端 system_enums + unit_of_measurements 拉, Canvas 字典管理可改)
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
@@ -116,21 +151,22 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
+    // 一次性拉全量 (materialKind 仍走后端服务端过滤; keyword 不传 — 后端此接口不支持,
+    // 见上方 fullData/filteredData 注释), 客户端再做 关键字过滤 + 分页。
     const res = await get<{ content: TableRow[]; totalElements: number }>(
       `/${factoryId.value}/raw-material-types`,
       {
         params: {
-          page: pagination.value.page,
-          size: pagination.value.size,
-          keyword: searchKeyword.value || undefined,
+          page: 1,
+          size: FETCH_ALL_SIZE,
           // P11: 可选大类过滤 (原料/辅料/包材)
           materialKind: filterKind.value || undefined,
         },
       },
     );
     if (res.success && res.data) {
-      tableData.value = res.data.content || [];
-      pagination.value.total = res.data.totalElements || 0;
+      fullData.value = res.data.content || [];
+      pagination.value.total = filteredData.value.length;
     }
   } catch (e) { console.error(e); }
   finally { loading.value = false; }
@@ -157,19 +193,31 @@ const form = ref({
 });
 
 // P8: 客户列表 (用于 associatedCustomerId 下拉)
+// 客户张权反馈 (2026-07-02): "关联固定客户" 下拉显示"没有数据"。根因排查 (headed + curl F006 对比):
+// 之前调的 GET /{factoryId}/customers 是 CRM 客户列表页用的接口, 服务端加了
+// @DataScope("created_by") (Sprint 6 W2-B RBAC 第2维数据权限) — SELF/SELF_AND_BELOW/DEPT_AND_BELOW
+// 数据域的角色只能看到"自己创建过的客户", 仓库管理员角色几乎从没建过客户记录, 所以这个接口对他们
+// 合法返回 0 条 (不是 bug, 是 CRM 列表页故意的数据域隔离), 但拿来给"关联固定客户"这种引用型下拉用
+// 就是错的接口 — 后端另有专门为下拉场景准备的 GET /{factoryId}/customers/active
+// (CustomerController.getActiveCustomers, 无 DataScope 限制, 文档原话"用于下拉选择等场景"),
+// 跟本文件"关联原料"下拉复用的 /raw-material-types/active 是同一套设计模式。改调这个接口即修复
+// (curl 对比: F006 /customers 对 factory_super_admin 返 17 条能"凑巧"验证通过, 但换 DataScope=SELF
+// 角色会是 0 条; /customers/active 两种角色都稳定返回全部 17 条)。
 interface CustomerItem { id: string; name: string }
 const customerOptions = ref<CustomerItem[]>([]);
+const customerOptionsLoaded = ref(false);
 async function loadCustomers() {
   if (!factoryId.value || customerOptions.value.length > 0) return;
   try {
-    const res = await get<{ content?: CustomerItem[] } | CustomerItem[]>(
-      `/${factoryId.value}/customers`,
-      { params: { size: 200 } },
+    const res = await get<CustomerItem[] | { content?: CustomerItem[] }>(
+      `/${factoryId.value}/customers/active`,
     );
     const data = res.data;
     customerOptions.value = Array.isArray(data) ? data : (data as { content?: CustomerItem[] })?.content ?? [];
   } catch {
     customerOptions.value = [];
+  } finally {
+    customerOptionsLoaded.value = true;
   }
 }
 const packaging = ref({
@@ -651,7 +699,15 @@ async function handleDelete(row: TableRow) {
   } catch { /* user cancelled or interceptor toasted */ }
 }
 
+// 关键字过滤是纯客户端 (filteredData computed 已实时响应 searchKeyword), 敲字/清空即生效,
+// 不需要等 Enter/点搜索按钮才刷新 — 这里只需把页码归 1 (换关键字后从第一页开始看结果)。
+watch(searchKeyword, () => {
+  pagination.value.page = 1;
+});
+
 function handleSearch() {
+  // 大类筛选 (filterKind) 走服务端 materialKind 参数, 变了需要重新拉数据;
+  // 关键字筛选已是客户端实时生效, 这里统一刷新一次也无妨 (数据量小, 成本可忽略)。
   pagination.value.page = 1;
   loadData();
 }
@@ -662,13 +718,12 @@ function handleRefresh() {
   loadData();
 }
 function handlePageChange(page: number) {
+  // 客户端分页: fullData 已一次性拉全量, 翻页只是切片, 不需要再打后端。
   pagination.value.page = page;
-  loadData();
 }
 function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
-  loadData();
 }
 </script>
 
@@ -892,6 +947,20 @@ function handleSizeChange(size: number) {
               :label="c.name"
               :value="c.id"
             />
+            <!-- fool-proof-design Rule 5: 拉不到客户不能只显空白"无数据", 给明确下一步 -->
+            <template #empty>
+              <div style="padding: 8px 12px">
+                <UpstreamMissingHint
+                  v-if="customerOptionsLoaded"
+                  description="本工厂暂无客户"
+                  target-module="sales"
+                  action-text="去添加客户"
+                  contact-text="请联系销售或管理员先添加客户"
+                  @action="goCreate('/sales/customers')"
+                />
+                <span v-else style="color: #909399; font-size: 12px">加载中…</span>
+              </div>
+            </template>
           </el-select>
           <div class="field-hint">选填 — 如吸塑盒专供某客户，留空表示通用包材</div>
         </el-form-item>

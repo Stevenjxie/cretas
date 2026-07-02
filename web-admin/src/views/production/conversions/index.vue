@@ -273,7 +273,7 @@ async function handleDelete(row: TableRow) {
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑转换率' : '新增转换率'" width="500px">
       <el-form :model="conversionForm" label-width="100px">
         <el-form-item label="原料类型" required>
-          <el-select v-model="conversionForm.materialTypeId" placeholder="选择原料类型" style="width: 100%">
+          <el-select v-model="conversionForm.materialTypeId" placeholder="选择原料类型" filterable style="width: 100%">
             <el-option
               v-for="item in materialTypes"
               :key="item.id"
@@ -283,7 +283,7 @@ async function handleDelete(row: TableRow) {
           </el-select>
         </el-form-item>
         <el-form-item label="产品类型" required>
-          <el-select v-model="conversionForm.productTypeId" placeholder="选择产品类型" style="width: 100%">
+          <el-select v-model="conversionForm.productTypeId" placeholder="选择产品类型" filterable style="width: 100%">
             <el-option
               v-for="item in productTypes"
               :key="item.id"
