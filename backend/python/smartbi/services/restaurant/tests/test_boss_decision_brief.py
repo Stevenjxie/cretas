@@ -604,6 +604,20 @@ def test_owner_action_chat_prioritizes_external_event_when_weather_and_activity_
     assert "无法判断" not in data["answer"]
 
 
+def test_owner_action_chat_routes_rain_dine_in_takeout_questions_to_external_event() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_EXTERNAL_RAIN_TAKEOUT",
+            message="如果今天下雨，堂食和外卖动作应该怎么调？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "external_event_response"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+
+
 def test_owner_action_chat_routes_platform_and_door_conversion_questions() -> None:
     cases = [
         "美团大众点评有人看但没下单，老板今天先改什么？",
