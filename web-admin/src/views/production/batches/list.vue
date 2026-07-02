@@ -298,7 +298,10 @@ function getStatusText(status: string) {
           @keyup.enter="handleSearch"
         />
         <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
-          <el-option label="待生产" value="PENDING" />
+          <!-- Bug fix (module-verify 2026-07-03, same root cause as scheduling/plans/create.vue):
+               ProductionBatchStatus 枚举没有 PENDING, 传给后端会 400 (IllegalArgumentException).
+               PLANNED 才是真实"待生产"状态值。 -->
+          <el-option label="待生产" value="PLANNED" />
           <el-option label="生产中" value="IN_PROGRESS" />
           <el-option label="已完成" value="COMPLETED" />
           <el-option label="已取消" value="CANCELLED" />

@@ -120,8 +120,12 @@ public class EquipmentServiceImpl implements EquipmentService {
         equipment.setCreatedAt(LocalDateTime.now());
 
         // 计算下次维护日期
-        if (request.getMaintenanceIntervalHours() != null) {
-            equipment.setNextMaintenanceDate(LocalDate.now().plusDays(30));
+        // Bug fix (module-verify 2026-07-03): 之前无论 maintenanceIntervalHours 是多少
+        // (30 天间隔还是 365 天间隔) 都硬编码 plusDays(30), 跟用户实际填的间隔脱节。
+        // 改用与 recordMaintenance() 一致的换算逻辑 (interval hours / 24 = interval days)。
+        if (request.getMaintenanceIntervalHours() != null && request.getMaintenanceIntervalHours() > 0) {
+            int daysInterval = request.getMaintenanceIntervalHours() / 24;
+            equipment.setNextMaintenanceDate(LocalDate.now().plusDays(daysInterval));
         }
 
         equipment = equipmentRepository.save(equipment);
@@ -160,7 +164,16 @@ public class EquipmentServiceImpl implements EquipmentService {
         if (request.getHourlyCost() != null) equipment.setHourlyCost(request.getHourlyCost());
         if (request.getPowerConsumptionKw() != null) equipment.setPowerConsumptionKw(request.getPowerConsumptionKw());
         if (request.getLocation() != null) equipment.setLocation(request.getLocation());
-        if (request.getMaintenanceIntervalHours() != null) equipment.setMaintenanceIntervalHours(request.getMaintenanceIntervalHours());
+        if (request.getMaintenanceIntervalHours() != null) {
+            equipment.setMaintenanceIntervalHours(request.getMaintenanceIntervalHours());
+            // Bug fix (module-verify 2026-07-03): 老设备编辑时首次补填维护间隔, 若从未有过
+            // nextMaintenanceDate (从未走过 recordMaintenance), 这里按新间隔从今天起算一次,
+            // 否则设备编辑后仍然不会出现在"待维护"列表 (维护功能事实不可达)。已有 nextMaintenanceDate
+            // 的 (走过维护记录) 不覆盖, 避免打乱已排的维护计划。
+            if (equipment.getNextMaintenanceDate() == null && request.getMaintenanceIntervalHours() > 0) {
+                equipment.setNextMaintenanceDate(LocalDate.now().plusDays(request.getMaintenanceIntervalHours() / 24));
+            }
+        }
         if (request.getWarrantyExpiryDate() != null) equipment.setWarrantyExpiryDate(request.getWarrantyExpiryDate());
         if (request.getNotes() != null) equipment.setNotes(request.getNotes());
         equipment.setUpdatedAt(LocalDateTime.now());

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -18,6 +19,8 @@ interface MaintenanceEquipment {
   daysUntilMaintenance: number;
 }
 
+const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -49,7 +52,42 @@ const statistics = ref({
 onMounted(async () => {
   await loadData();
   loadStatistics();
+  // Bug fix (module-verify 2026-07-03): 设备列表页"维护"按钮跳到本页时带
+  // ?equipmentId=X, 但本页数据源是"待维护"清单 (needing-maintenance API), 跟全量
+  // 设备列表不是一回事 — 之前完全不读这个 query param, 快捷跳转是死链。
+  // 现在: 若目标设备已在"待维护"清单里, 直接打开维护对话框; 若还没到维护提醒阈值
+  // (不在清单里), 单独查详情后仍打开对话框, 允许提前登记一次维护; 查不到则提示 + 清掉参数。
+  const targetEquipmentId = route.query.equipmentId ? String(route.query.equipmentId) : '';
+  if (targetEquipmentId) {
+    await openMaintenanceForEquipmentId(targetEquipmentId);
+    router.replace({ query: { ...route.query, equipmentId: undefined } });
+  }
 });
+
+async function openMaintenanceForEquipmentId(equipmentId: string) {
+  const inList = tableData.value.find((row) => String(row.id) === equipmentId);
+  if (inList) {
+    handleMaintenance(inList);
+    return;
+  }
+  if (!factoryId.value) return;
+  try {
+    const response = await get(`/${factoryId.value}/equipment/${equipmentId}`);
+    if (response.success && response.data) {
+      const eq = response.data as { id: string; name?: string; equipmentName?: string };
+      handleMaintenance({
+        id: String(eq.id),
+        code: '', name: eq.name || eq.equipmentName || '', type: '', location: '',
+        status: '', lastMaintenanceDate: '', nextMaintenanceDate: '', daysUntilMaintenance: 0,
+      });
+    } else {
+      ElMessage.warning('未找到该设备，请从设备列表重新进入');
+    }
+  } catch (error) {
+    console.error('加载设备详情失败:', error);
+    ElMessage.warning('未找到该设备，请从设备列表重新进入');
+  }
+}
 
 async function loadData() {
   if (!factoryId.value) return;
