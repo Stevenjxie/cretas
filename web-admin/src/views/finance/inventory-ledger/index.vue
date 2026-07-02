@@ -172,9 +172,12 @@ async function handleExport() {
     };
     if (materialTypeId.value) params.materialTypeId = materialTypeId.value;
 
-    const response = await request.get(
+    // _keepResponse: true 必须 — 否则响应拦截器把 blob 解成 {success,data,message} 信封,
+    // response.headers 会是 undefined(信封没有 headers 字段), 下面读 content-disposition
+    // 会直接抛 TypeError 导致导出静默失败 (2026-07-03 sweep, 同 #1172 根因).
+    const response = await request.get<Blob>(
       `/${factoryId.value}/inventory/ledger/export`,
-      { params, responseType: 'blob' }
+      { params, responseType: 'blob', _keepResponse: true }
     );
 
     // 触发浏览器下载

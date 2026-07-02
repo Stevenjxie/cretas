@@ -284,10 +284,12 @@ async function handleVoucherExport() {
     };
     if (selectedConfigId.value) body.configId = selectedConfigId.value;
 
+    // _keepResponse: true 必须 — 否则拦截器把 blob 解成信封, response.headers 丢失,
+    // downloadBlob 永远拿不到服务端 Content-Disposition 文件名 (2026-07-03 sweep, 同 #1172 根因).
     const response = await request.post(
       `/${factoryId.value}/finance/voucher-export`,
       body,
-      { responseType: 'blob' }
+      { responseType: 'blob', _keepResponse: true }
     );
 
     downloadBlob(response, `voucher_${startDate}_${endDate}.xlsx`);
@@ -318,6 +320,7 @@ async function handleBalanceExport() {
       {
         params: { startDate, endDate, targetSystem: exportTargetSystem.value },
         responseType: 'blob',
+        _keepResponse: true,
       }
     );
 
@@ -346,6 +349,7 @@ async function handleKingdeeImportTemplate() {
       {
         params: { startDate, endDate },
         responseType: 'blob',
+        _keepResponse: true,
       }
     );
 
@@ -373,6 +377,7 @@ async function handleLedgerExport(report: LedgerReportDefinition) {
       {
         params: { startDate, endDate, targetSystem: exportTargetSystem.value },
         responseType: 'blob',
+        _keepResponse: true,
       }
     );
 
