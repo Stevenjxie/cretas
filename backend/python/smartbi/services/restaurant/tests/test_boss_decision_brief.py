@@ -660,6 +660,27 @@ def test_owner_action_chat_routes_overstock_question_to_cost_margin() -> None:
     assert "缺" not in data["answer"]
 
 
+def test_owner_action_chat_routes_bom_variance_question_to_cost_margin() -> None:
+    cases = [
+        "BOM理论用量和实际用量不一致，先查什么？",
+        "成本毛利先查哪几项，今天怎么查？",
+        "如果毛利掉了，是采购、损耗还是菜品结构问题？",
+    ]
+
+    for message in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_COST_BOM_{len(message)}",
+                message=message,
+            )
+        )
+
+        data = response["data"]
+        assert data["scenario"] == "cost_margin"
+        assert "一句话结论" in data["answer"]
+        assert "缺" not in data["answer"]
+
+
 def test_owner_action_chat_routes_returned_dish_rework_question_to_kitchen() -> None:
     response = owner_action_chat(
         OwnerActionChatRequest(
