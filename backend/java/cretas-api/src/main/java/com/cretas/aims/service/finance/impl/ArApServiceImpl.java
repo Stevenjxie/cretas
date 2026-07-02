@@ -49,14 +49,19 @@ public class ArApServiceImpl implements ArApService {
         com.cretas.aims.entity.inventory.PurchaseOrder po = purchaseOrderRepository.findById(purchaseOrderId)
                 .filter(p -> factoryId.equals(p.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + purchaseOrderId));
-        if (po.getStatus() == null
-                || !com.cretas.aims.domain.OrderUsageWhitelists.PO_INVOICEABLE.contains(po.getStatus())) {
+        if (!isPayableStatusValid(po)) {
             throw new com.cretas.aims.exception.BusinessException(409,
                 "采购订单状态不允许应付挂账 (当前: " + (po.getStatus() != null ? po.getStatus().name() : "null") +
                 "). 仅财务审核通过及之后状态可挂账.")
                 .withHint("先完成财务审核流程后再录入应付")
                 .withHintTarget("采购订单");
         }
+    }
+
+    /** Non-throwing counterpart of {@link #validatePayableStatus} for the idempotent auto-post path. */
+    private boolean isPayableStatusValid(com.cretas.aims.entity.inventory.PurchaseOrder po) {
+        return po != null && po.getStatus() != null
+                && com.cretas.aims.domain.OrderUsageWhitelists.PO_INVOICEABLE.contains(po.getStatus());
     }
 
     /** R21 audit C1: recordReceivable was unprotected. Mirror of validatePayableStatus. */
@@ -180,6 +185,74 @@ public class ArApServiceImpl implements ArApService {
             validatePayableStatus(purchaseOrderId, factoryId);
         }
 
+        return persistPayable(factoryId, supplier, supplierId, purchaseOrderId, amount, dueDate, operatedBy, remark);
+    }
+
+    /**
+     * 🔒 doomed-tx 修复 (2026-07-02): 采购入库 confirmReceive 对同一 PO 分批入库时的自动挂账。
+     *
+     * <p>Bug: {@code confirmReceive} 在同一 {@code @Transactional} 内调 {@code recordPayable}，
+     * 后者对已挂账的 PO 抛 {@code BusinessException}(409)。因 recordPayable 自身 {@code @Transactional}
+     * 已 join 当前事务，抛异常把事务标记 rollback-only —— confirmReceive 的 try/catch 捕获异常也无法挽救，
+     * 外层 commit 抛 {@code UnexpectedRollbackException}，被 doomed-tx 兜底网转成误导性通用 409，导致
+     * 第 2 次及以后的分批入库<b>永久无法确认</b>（虽然数据一致，干净回滚）。
+     *
+     * <p>财务语义: 自动挂账用的是 PO 的<b>整单 totalAmount</b>（非本次分批金额），因此一个 PO 只应挂账一次
+     * （首次入库时）。后续分批入库必须<b>跳过</b>而非累加（累加会把整单金额双计/多计）。故本方法幂等跳过，
+     * 不抛异常。见 {@link ArApService#recordPayableIfAbsent} javadoc。
+     */
+    @Override
+    @Transactional
+    public ArApTransaction recordPayableIfAbsent(String factoryId, String supplierId,
+                                                 String purchaseOrderId, BigDecimal amount,
+                                                 LocalDate dueDate, Long operatedBy, String remark) {
+        // 所有跳过条件都是 READ / 校验，绝不写库、绝不抛 —— 保证共享事务不被 doom。
+
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("自动应付挂账跳过(金额缺失或非正): factoryId={}, purchaseOrderId={}, amount={}",
+                    factoryId, purchaseOrderId, amount);
+            return null;
+        }
+
+        // 幂等: 该 PO 已有应付 → 返回已存在记录, 不重复挂账 (一个 PO 一条应付, 首次入库时挂)。
+        if (purchaseOrderId != null) {
+            Optional<ArApTransaction> existing =
+                    transactionRepository.findFirstByFactoryIdAndPurchaseOrderIdAndTransactionType(
+                            factoryId, purchaseOrderId, ArApTransactionType.AP_INVOICE);
+            if (existing.isPresent()) {
+                log.info("自动应付挂账幂等命中(该 PO 已挂账, 跳过): factoryId={}, purchaseOrderId={}, transactionId={}",
+                        factoryId, purchaseOrderId, existing.get().getId());
+                return existing.get();
+            }
+        }
+
+        Optional<Supplier> supplierOpt = supplierRepository.findByIdAndFactoryId(supplierId, factoryId);
+        if (supplierOpt.isEmpty()) {
+            log.warn("自动应付挂账跳过(供应商不存在): factoryId={}, supplierId={}, purchaseOrderId={}",
+                    factoryId, supplierId, purchaseOrderId);
+            return null;
+        }
+
+        // PO 状态不允许挂账 → 跳过(不抛), 收货入库不能被应付侧前置条件阻塞。
+        if (purchaseOrderId != null) {
+            com.cretas.aims.entity.inventory.PurchaseOrder po = purchaseOrderRepository.findById(purchaseOrderId)
+                    .filter(p -> factoryId.equals(p.getFactoryId()))
+                    .orElse(null);
+            if (!isPayableStatusValid(po)) {
+                log.warn("自动应付挂账跳过(采购订单状态不允许挂账): factoryId={}, purchaseOrderId={}, status={}",
+                        factoryId, purchaseOrderId, po != null && po.getStatus() != null ? po.getStatus().name() : "null");
+                return null;
+            }
+        }
+
+        return persistPayable(factoryId, supplierOpt.get(), supplierId, purchaseOrderId,
+                amount, dueDate, operatedBy, remark);
+    }
+
+    /** 应付挂账写库尾段: 更新供应商余额 + 建交易记录 + 持久化。recordPayable / recordPayableIfAbsent 共用。 */
+    private ArApTransaction persistPayable(String factoryId, Supplier supplier, String supplierId,
+                                           String purchaseOrderId, BigDecimal amount,
+                                           LocalDate dueDate, Long operatedBy, String remark) {
         BigDecimal newBalance = (supplier.getCurrentBalance() != null ? supplier.getCurrentBalance() : BigDecimal.ZERO)
                 .add(amount);
         supplier.setCurrentBalance(newBalance);

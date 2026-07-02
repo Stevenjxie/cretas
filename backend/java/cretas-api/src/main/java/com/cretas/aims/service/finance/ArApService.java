@@ -24,6 +24,28 @@ public interface ArApService {
                                    String purchaseOrderId, BigDecimal amount,
                                    LocalDate dueDate, Long operatedBy, String remark);
 
+    /**
+     * 幂等、不抛异常的采购入库应付挂账 — 供与调用方共享事务的自动化调用方使用
+     * （如 confirmReceive 对同一 PO 多次分批入库的自动挂账）。
+     *
+     * <p>与 {@link #recordPayable} 不同，本方法对"预期的跳过条件"<b>绝不抛异常</b>：
+     * 在共享 {@code @Transactional} 内抛异常会把事务标记为 rollback-only，调用方外层 commit
+     * 会抛 {@code UnexpectedRollbackException}（doomed-tx，客户看到误导性 409）。因此本方法：
+     * <ul>
+     *   <li>当该 PO 已有 AP_INVOICE 时返回<b>已存在的记录</b>（幂等 — 一个 PO 一条应付，
+     *       首次入库时挂账，后续分批入库跳过，不重复挂账，金额不双计）；</li>
+     *   <li>当金额缺失/非正、供应商不存在、或采购订单状态不允许挂账时返回 {@code null}（跳过）
+     *       —— 收货入库不能被应付侧的前置条件阻塞；</li>
+     *   <li>否则创建并返回新的 AP_INVOICE（与 recordPayable 成功路径一致）。</li>
+     * </ul>
+     *
+     * <p>手工挂账入口（ArApController /payable）仍用 {@link #recordPayable}，保留 409 防重复的
+     * 防呆提示；本方法仅用于收货自动挂账这类"不得阻塞主流程"的共享事务场景。
+     */
+    ArApTransaction recordPayableIfAbsent(String factoryId, String supplierId,
+                                          String purchaseOrderId, BigDecimal amount,
+                                          LocalDate dueDate, Long operatedBy, String remark);
+
     /** Non-PO payable source, e.g. restaurant supplier delivery note. Idempotent by sourceType/sourceId. */
     ArApTransaction recordPayableFromSource(String factoryId, String supplierId,
                                             String sourceType, String sourceId,
