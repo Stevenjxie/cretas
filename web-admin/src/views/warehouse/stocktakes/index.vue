@@ -198,11 +198,14 @@ async function downloadBulkTemplate() {
     return;
   }
   try {
-    const resp = await request.get(`/${factoryId.value}/stocktakes/bulk-import/template`, {
+    // _keepResponse: true 必须 — 否则响应拦截器把 blob 解成 {success,data,message} 信封,
+    // new Blob([信封对象]) 会 String() 成 "[object Object]" → 下载出损坏文件 (2026-07-03 修).
+    const resp = await request.get<Blob>(`/${factoryId.value}/stocktakes/bulk-import/template`, {
       params: { warehouseId: bulkForm.warehouseId },
       responseType: 'blob',
+      _keepResponse: true,
     });
-    const blob = new Blob([resp as unknown as BlobPart], {
+    const blob = new Blob([resp.data as unknown as BlobPart], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     const url = URL.createObjectURL(blob);
