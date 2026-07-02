@@ -6,6 +6,7 @@ from smartbi.services.restaurant.sections.boss_decision_brief import (
 )
 from smartbi.api.restaurant_sections import (
     _OWNER_ACTION_CHAT_SESSIONS,
+    _owner_action_session_key,
     OwnerActionChatRequest,
     owner_action_chat,
 )
@@ -554,16 +555,17 @@ def test_owner_action_chat_uses_traffic_persona_and_platform_mock_data() -> None
     assert page["platformChannelSnapshot"]["available"] is True
     assert any(item["dimension"] == "外部客流画像" for item in page["analysisDimensions"])
 
-    follow_up_without_session = owner_action_chat(
+    follow_up_with_session = owner_action_chat(
         OwnerActionChatRequest(
             factory_id="F_TRAFFIC_DEMO",
+            session_id=data["sessionId"],
             message="老板今天先看哪三个数？",
         )
     )
-    assert follow_up_without_session["data"]["scenario"] == "traffic_conversion"
-    assert "只看这三个数" in follow_up_without_session["data"]["answer"]
-    assert "门口路过人数" in follow_up_without_session["data"]["answer"]
-    assert "一句话结论" not in follow_up_without_session["data"]["answer"]
+    assert follow_up_with_session["data"]["scenario"] == "traffic_conversion"
+    assert "只看这三个数" in follow_up_with_session["data"]["answer"]
+    assert "门口路过人数" in follow_up_with_session["data"]["answer"]
+    assert "一句话结论" not in follow_up_with_session["data"]["answer"]
 
 
 def test_owner_action_demo_mode_marks_mock_sources_ready() -> None:
@@ -763,7 +765,10 @@ def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -
 
 
 def test_owner_action_follow_up_uses_explicit_session_and_scenario_when_memory_misses() -> None:
-    _OWNER_ACTION_CHAT_SESSIONS.pop("owner-action-missing-worker", None)
+    _OWNER_ACTION_CHAT_SESSIONS.pop(
+        _owner_action_session_key("F_TRAFFIC_CROSS_WORKER", "owner-action-missing-worker"),
+        None,
+    )
 
     response = owner_action_chat(
         OwnerActionChatRequest(
@@ -825,6 +830,67 @@ def test_owner_action_chat_routes_and_keeps_follow_up_session() -> None:
     assert "seating_mix" not in follow_up_data["answer"]
     assert "只看这三个数" in follow_up_data["answer"]
     assert "一句话结论" not in follow_up_data["answer"]
+
+
+def test_owner_action_chat_does_not_reuse_factory_last_scenario_without_session() -> None:
+    _OWNER_ACTION_CHAT_SESSIONS.pop(
+        _owner_action_session_key("F_NO_FACTORY_FALLBACK", "owner-action-external-seeded"),
+        None,
+    )
+
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NO_FACTORY_FALLBACK",
+            session_id="owner-action-external-seeded",
+            message="今天下雨加上商场活动，堂食和外卖要怎么调？",
+        )
+    )
+    assert first["data"]["scenario"] == "external_event_response"
+
+    follow_up_without_session = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NO_FACTORY_FALLBACK",
+            message="具体怎么执行？",
+        )
+    )
+
+    assert follow_up_without_session["data"]["sessionId"] != "owner-action-external-seeded"
+    assert follow_up_without_session["data"]["scenario"] == "package"
+
+
+def test_owner_action_chat_sessions_are_scoped_by_factory() -> None:
+    shared_session = "owner-action-shared-session"
+    _OWNER_ACTION_CHAT_SESSIONS.pop(_owner_action_session_key("F_SESSION_A", shared_session), None)
+    _OWNER_ACTION_CHAT_SESSIONS.pop(_owner_action_session_key("F_SESSION_B", shared_session), None)
+
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_SESSION_A",
+            session_id=shared_session,
+            demoScenario="traffic_conversion",
+            message="瀹㈡祦鐢诲儚鏄剧ず璺繃浜哄浣嗚繘搴楀皯锛屼粖澶╁厛鏀瑰摢涓叆鍙ｏ紵",
+        )
+    )
+    assert first["data"]["scenario"] == "traffic_conversion"
+
+    same_factory_follow_up = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_SESSION_A",
+            session_id=shared_session,
+            message="鍏蜂綋鎬庝箞鎵ц锛?",
+        )
+    )
+    assert same_factory_follow_up["data"]["scenario"] == "traffic_conversion"
+
+    other_factory_same_session = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_SESSION_B",
+            session_id=shared_session,
+            message="鍏蜂綋鎬庝箞鎵ц锛?",
+        )
+    )
+    assert other_factory_same_session["data"]["sessionId"] == shared_session
+    assert other_factory_same_session["data"]["scenario"] == "package"
 
 
 def test_owner_action_chat_explicit_keywords_override_previous_follow_up_topic() -> None:

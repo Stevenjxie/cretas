@@ -21,6 +21,7 @@ import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.LlmIntentFallbackClient;
 import com.cretas.aims.service.smartbi.*;
+import com.cretas.aims.util.BusinessDomainUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -470,9 +471,7 @@ public class SmartBIServiceImpl implements SmartBIService {
         }
         try {
             return factoryRepository.findById(factoryId)
-                    .map(f -> f.getType() != null
-                            && (f.getType() == com.cretas.aims.entity.enums.FactoryType.RESTAURANT
-                                || f.getType() == com.cretas.aims.entity.enums.FactoryType.BRANCH))
+                    .map(f -> BusinessDomainUtils.isRestaurantDomain(f.getType()))
                     .orElse(false);
         } catch (Exception e) {
             log.warn("Failed to check tenant type for {}: {}", factoryId, e.getMessage());

@@ -214,6 +214,32 @@ describe('auth store', () => {
 
   // ── hasRole ───────────────────────────────────────────────
 
+  describe('businessDomain', () => {
+    it('maps BRANCH factoryType to RESTAURANT domain', () => {
+      const store = useAuthStore();
+      store.setUser(makeFactoryUser({
+        factoryUser: { role: 'factory_super_admin', factoryId: 'R_BRANCH_001', factoryType: 'BRANCH', permissions: [] },
+      }));
+
+      expect(store.businessDomain).toBe('RESTAURANT');
+    });
+
+    it('prefers explicit backend businessDomain', () => {
+      const store = useAuthStore();
+      store.setUser(makeFactoryUser({
+        factoryUser: {
+          role: 'factory_super_admin',
+          factoryId: 'R001',
+          factoryType: 'FACTORY',
+          businessDomain: 'RESTAURANT',
+          permissions: [],
+        },
+      }));
+
+      expect(store.businessDomain).toBe('RESTAURANT');
+    });
+  });
+
   describe('hasRole', () => {
     it('returns true for matching single role', () => {
       const store = useAuthStore();

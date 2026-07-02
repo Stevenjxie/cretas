@@ -123,6 +123,9 @@ public class UserDTO {
     @Schema(description = "工厂类型: FACTORY, RESTAURANT, HEADQUARTERS, BRANCH, CENTRAL_KITCHEN")
     private String factoryType;
 
+    @Schema(description = "业务领域: FACTORY / RESTAURANT")
+    private String businessDomain;
+
     /**
      * Normalizing setter — ensures factoryType is always stored as uppercase.
      * Lombok @Data generates a setter but explicit setters take precedence.

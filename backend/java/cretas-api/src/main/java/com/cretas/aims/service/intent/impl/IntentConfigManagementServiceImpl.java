@@ -2,10 +2,10 @@ package com.cretas.aims.service.intent.impl;
 
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.Factory;
-import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.util.BusinessDomainUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
@@ -285,18 +285,16 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
 
     @Override
     public String resolveBusinessDomain(String factoryId) {
-        if (factoryId == null || factoryId.isBlank()) return "FACTORY";
+        if (factoryId == null || factoryId.isBlank()) return BusinessDomainUtils.FACTORY;
         return factoryDomainCache.computeIfAbsent(factoryId, fid -> {
             try {
                 return factoryRepository.findById(fid)
-                        .map(f -> {
-                            if (f.getType() == null) return "FACTORY";
-                            return f.getType() == FactoryType.RESTAURANT ? "RESTAURANT" : "FACTORY";
-                        })
-                        .orElse("FACTORY");
+                        .map(Factory::getType)
+                        .map(BusinessDomainUtils::resolveDomain)
+                        .orElse(BusinessDomainUtils.FACTORY);
             } catch (Exception e) {
                 log.warn("v32 resolveBusinessDomain failed for factoryId={}: {}", fid, e.getMessage());
-                return "FACTORY";
+                return BusinessDomainUtils.FACTORY;
             }
         });
     }

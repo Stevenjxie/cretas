@@ -3,6 +3,7 @@ package com.cretas.aims.mapper;
 import com.cretas.aims.dto.user.CreateUserRequest;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.util.BusinessDomainUtils;
 import org.springframework.stereotype.Component;
 /**
  * 用户实体映射器
@@ -60,6 +61,7 @@ public class UserMapper {
                 .contractRemainingDays(user.getContractRemainingDays())
                 .isContractExpiringSoon(user.isContractExpiringSoon())
                 .factoryType(factoryType != null ? factoryType : "FACTORY")
+                .businessDomain(BusinessDomainUtils.resolveDomain(factoryType))
                 .build();
     }
 

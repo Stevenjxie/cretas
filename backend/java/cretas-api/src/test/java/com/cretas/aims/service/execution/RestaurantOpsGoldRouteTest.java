@@ -124,6 +124,47 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("owner action route refuses manufacturing factories even with owner context")
+    void ownerActionRouteRefusesFactoryDomainEvenWithContext() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("F006")).thenReturn("FACTORY");
+
+        Boolean directQuestion = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "shouldRouteRestaurantOwnerAction",
+                "F006",
+                "老板今天应该怎么提高营收？",
+                Map.of());
+        Boolean contextualFollowUp = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "shouldRouteRestaurantOwnerAction",
+                "F006",
+                "具体怎么执行？",
+                Map.of("ownerActionSessionId", "owner-action-leaked"));
+
+        assertThat(directQuestion).isFalse();
+        assertThat(contextualFollowUp).isFalse();
+    }
+
+    @Test
+    @DisplayName("owner action route accepts restaurant follow-up only when restaurant domain is confirmed")
+    void ownerActionRouteAcceptsRestaurantContextOnlyForRestaurantDomain() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("RES_3101_009")).thenReturn("RESTAURANT");
+
+        Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "shouldRouteRestaurantOwnerAction",
+                "RES_3101_009",
+                "具体怎么执行？",
+                Map.of("ownerActionSessionId", "owner-action-session-1"));
+
+        assertThat(shouldRoute).isTrue();
+    }
+
+    @Test
     @DisplayName("DEMO_REST is forced to RESTAURANT domain even if domain resolver returns FACTORY")
     void demoRestForcesRestaurantDomain() {
         IntentConfigManagementService configService = mock(IntentConfigManagementService.class);

@@ -19,6 +19,7 @@ import com.cretas.aims.service.TempTokenService;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.service.mobile.MobileAuthService;
 import com.cretas.aims.service.mobile.MobileDeviceService;
+import com.cretas.aims.util.BusinessDomainUtils;
 import com.cretas.aims.utils.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -176,14 +177,17 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         user.setLastLogin(LocalDateTime.now());
         userRepository.save(user);
 
+        String factoryType = user.getFactory() != null && user.getFactory().getType() != null
+                ? user.getFactory().getType().name() : "FACTORY";
+
         // 构建响应
         return MobileDTO.LoginResponse.builder()
                 .userId(user.getId())
                 .username(user.getUsername())
                 .factoryId(user.getFactoryId())
                 .factoryName(user.getFactory() != null ? user.getFactory().getName() : null)
-                .factoryType(user.getFactory() != null && user.getFactory().getType() != null
-                        ? user.getFactory().getType().name() : "FACTORY")
+                .factoryType(factoryType)
+                .businessDomain(BusinessDomainUtils.resolveDomain(factoryType))
                 .role(user.getRole())
                 .permissions(parsePermissions(user.getPermissions()))
                 .token(token)
@@ -316,6 +320,7 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                     .username(user.getUsername())
                     .factoryId(user.getFactoryId())
                     .factoryType(factoryType)
+                    .businessDomain(BusinessDomainUtils.resolveDomain(factoryType))
                     .role(role)
                     .build();
         } catch (NumberFormatException e) {

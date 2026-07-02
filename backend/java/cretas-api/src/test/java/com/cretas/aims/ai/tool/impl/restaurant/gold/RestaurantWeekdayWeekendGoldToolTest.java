@@ -144,7 +144,7 @@ class RestaurantWeekdayWeekendGoldToolTest {
     }
 
     @Test
-    @DisplayName("UT-WWG-05: format() — 均等营收, 结论=周末与周中日均相近")
+    @DisplayName("UT-WWG-05: format() — 均等营收, 结论=周末和周中基本持平")
     void format_equalAverage_conclusionIsEqual() {
         Map<String, Object> goldResult = buildTrendResult(List.of(
                 point("2026-03-07", 10_000.0),   // Saturday
@@ -153,7 +153,7 @@ class RestaurantWeekdayWeekendGoldToolTest {
 
         Map<String, Object> result = tool.format(goldResult);
 
-        assertThat(result).containsEntry("结论", "周末与周中日均相近");
+        assertThat(result).containsEntry("结论", "周末和周中基本持平");
     }
 
     // -------------------------------------------------------------------------
@@ -203,6 +203,18 @@ class RestaurantWeekdayWeekendGoldToolTest {
         assertThat(result).containsKey("周末");
         assertThat(result).containsKey("周中");
         assertThat(result).containsKey("结论");
+        assertThat(result).containsKey("decisionBridge");
+        assertThat(result).containsKey("suggestedFollowups");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> bridge = (Map<String, Object>) result.get("decisionBridge");
+        assertThat(bridge).containsEntry("answerMode", "report_with_owner_action");
+        assertThat(bridge).containsEntry("ownerActionScenario", "package");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> followups = (List<Map<String, Object>>) result.get("suggestedFollowups");
+        assertThat(followups).isNotEmpty();
+        assertThat(followups.get(0)).containsEntry("ownerActionScenario", "package");
     }
 
     // -------------------------------------------------------------------------
