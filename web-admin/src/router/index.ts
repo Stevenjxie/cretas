@@ -1017,6 +1017,15 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'HRWagePolicy',
             component: () => import('@/views/hr/wage-policy/index.vue'),
             meta: { requiresAuth: true, title: '工资策略', module: 'hr' }
+          },
+          {
+            // 2026-07-02: 工时单价配置迁移 — 原只在 系统设置(module:'system') 成本设置 tab,
+            // 逐工序报工缺配置死胡同提示无法自助解决 (缺 system 模块的工厂看不到入口)。
+            // 挪到 人事管理(module:'hr') 下, 复用同一后端端点 /config/cost-settings。
+            path: 'config/labor-rate',
+            name: 'HRLaborRateConfig',
+            component: () => import('@/views/hr/config/labor-rate.vue'),
+            meta: { requiresAuth: true, title: '人工成本设置', module: 'hr' }
           }
         ]
       },
