@@ -4,8 +4,10 @@ import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -16,6 +18,7 @@ import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
+import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,6 +69,36 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /**
+     * 原料盘点差异过账 (Decision 3: 长期一致 — 逐项 UI 盘点 + 批量导入 apply 都过账)。
+     * optional — voucherService 不注入时不过账 (向后兼容 + 测试不强制); 镜像 workflowEngine。
+     */
+    @Autowired(required = false)
+    private VoucherService voucherService;
+
+    // -------------------------------------------------------
+    // 原料盘点差异过账 科目 (China GAAP, seed V20260701_02)。科目已 Steve 确认 (2026-07-02)。
+    //   NORMAL/逐项 盘盈:  借 1403 原材料 / 贷 6301 营业外收入
+    //   NORMAL/逐项 盘亏:  借 6602 管理费用 / 贷 1403 原材料
+    //   OPENING 期初:      借 1403 原材料 / 贷 4001 实收资本 (盘盈方向); 盘亏方向借贷互换
+    //      — 期初建账不进 6301 营业外收入, 避免虚增建账当期损益。
+    //   Decision 3: 逐项 UI 盘点 (importMode=null) 现在也按 NORMAL 过账 (修复原料盘点不过账的历史缺口);
+    //               apply 状态守卫 (!=APPLIED 才跑) 保证每单只过账一次, 无双过账。
+    //   Decision 2: 期初/盘盈 绝不混 — 科目不同 (4001 vs 6301) + 摘要不同 + 来源业务类型不同 (可分别筛)。
+    // -------------------------------------------------------
+    private static final String SUBJECT_INVENTORY_CODE = "1403";
+    private static final String SUBJECT_INVENTORY_NAME = "原材料";
+    private static final String SUBJECT_SURPLUS_INCOME_CODE = "6301";
+    private static final String SUBJECT_SURPLUS_INCOME_NAME = "营业外收入";
+    private static final String SUBJECT_SHORTAGE_LOSS_CODE = "6602";
+    private static final String SUBJECT_SHORTAGE_LOSS_NAME = "管理费用";
+    private static final String SUBJECT_OPENING_EQUITY_CODE = "4001";
+    private static final String SUBJECT_OPENING_EQUITY_NAME = "实收资本";
+    /** 常规盘盈/盘亏 凭证来源业务类型 (逐项 + 批量 NORMAL 共用; 与 stocktakeId 组成幂等键)。*/
+    private static final String VOUCHER_SOURCE_TYPE_NORMAL = "FACTORY_STOCKTAKE";
+    /** 期初建账 凭证来源业务类型 (独立, 便于财务分开筛选/核对, Decision 2)。*/
+    private static final String VOUCHER_SOURCE_TYPE_OPENING = "FACTORY_STOCKTAKE_OPENING";
+
     // -------------------------------------------------------
     // 月底约束：>=threshold 日才允许发起盘点
     // prod 默认 29（月底）；test env 可设 1 以跳过限制便于 E2E 验证
@@ -76,9 +109,18 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId) {
-        // 月底约束
+        return initiate(factoryId, req, userId, null);
+    }
+
+    @Override
+    @Transactional
+    public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
+            FactoryStocktake.ImportMode importMode) {
+        // 月底约束 — OPENING 期初建账 除外 (客户任意日建账, Decision 4)。
+        // 全局 threshold 不降 (NORMAL/逐项盘点仍受月底约束), 只对 OPENING 跳过。
+        boolean opening = importMode == FactoryStocktake.ImportMode.OPENING;
         LocalDate today = LocalDate.now();
-        if (today.getDayOfMonth() < monthEndThreshold) {
+        if (!opening && today.getDayOfMonth() < monthEndThreshold) {
             LocalDate nextAllowedDate = today.withDayOfMonth(monthEndThreshold);
             throw new BusinessException(409,
                     "盘点任务只能在月底（" + monthEndThreshold + "日后）发起，当前是 " + today +
@@ -104,6 +146,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         stocktake.setInitiatedBy(userId);
         stocktake.setInitiatedAt(LocalDateTime.now());
         stocktake.setNotes(req.getNotes());
+        stocktake.setImportMode(importMode); // null = 逐项 UI 盘点; NORMAL/OPENING = 批量导入
 
         // 快照该仓库所有 MaterialBatch 的当前库存
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
@@ -258,6 +301,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         assertStatus(stocktake, FactoryStocktake.Status.APPROVED, "生效");
 
+        // Decision 3: 逐项 + 批量 都过账 (voucherService 可用即过账)。科目按 importMode 选 (null → NORMAL)。
+        boolean posting = voucherService != null;
+        BigDecimal surplusValue = BigDecimal.ZERO;   // Σ 盘盈行 value (正)
+        BigDecimal shortageValue = BigDecimal.ZERO;  // Σ |盘亏行 value| (正)
+        int uncostedCount = 0;                       // unitPrice=null 无法估值 → 排除出凭证
+
         for (FactoryStocktakeItem item : stocktake.getItems()) {
             if (item.getDifferenceQty() == null ||
                     item.getDifferenceQty().compareTo(BigDecimal.ZERO) == 0) {
@@ -279,6 +328,29 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             // 防止盘点后数量为负
             if (quantityAfter.compareTo(BigDecimal.ZERO) < 0) {
                 quantityAfter = BigDecimal.ZERO;
+            }
+
+            // 差异估值 (仅批量导入过账时): value = realizedDelta × unitPrice。
+            //   realizedDelta = 实际发生的余量变化 (clamp 后), 保证凭证与库存变动一致, 不高估损耗。
+            //   诚实 null: unitPrice=null (被价格脱敏/未录价) → 排除出凭证, 数量仍调整, 绝不臆造价值。
+            if (posting) {
+                BigDecimal realizedDelta = quantityAfter.subtract(quantityBefore);
+                if (realizedDelta.compareTo(BigDecimal.ZERO) != 0) {
+                    BigDecimal unitPrice = batch.getUnitPrice();
+                    if (unitPrice == null) {
+                        uncostedCount++;
+                        log.warn("SP7 apply(import): unitPrice=null 未录价, 差异行排除出财务凭证 (数量仍调整) "
+                                + "batchId={} realizedDelta={}", item.getMaterialBatchId(), realizedDelta);
+                    } else {
+                        BigDecimal itemValue = realizedDelta.multiply(unitPrice)
+                                .setScale(2, RoundingMode.HALF_UP);
+                        if (itemValue.signum() > 0) {
+                            surplusValue = surplusValue.add(itemValue);
+                        } else if (itemValue.signum() < 0) {
+                            shortageValue = shortageValue.add(itemValue.negate());
+                        }
+                    }
+                }
             }
 
             // 创建 audit 记录（红线 §3.4：每次变动必须有 MaterialBatchAdjustment）
@@ -304,10 +376,82 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             }
         }
 
+        // 原料盘点差异过账 (与库存调整同一 @Transactional — 过账失败则整个 apply 回滚,
+        // 绝不留下"库存已调但凭证未过"的不一致态)。逐项 + 批量 一致过账 (Decision 3)。
+        if (posting) {
+            postStocktakeVoucher(stocktake, factoryId, surplusValue, shortageValue, uncostedCount, userId);
+        }
+
         stocktake.setStatus(FactoryStocktake.Status.APPLIED);
         stocktake.setAppliedAt(LocalDateTime.now());
         stocktakeRepo.save(stocktake);
-        log.info("SP7: 盘点任务已生效 stocktakeId={}", stocktakeId);
+        log.info("SP7: 盘点任务已生效 stocktakeId={} importMode={}", stocktakeId, stocktake.getImportMode());
+    }
+
+    /**
+     * 原料盘点差异过账。NORMAL/逐项=盘盈/盘亏损益; OPENING=期初建账权益 (Decision 2/3)。
+     *
+     * <p>逐项 UI 盘点 (importMode=null) 按 NORMAL 过账 — 修复原料盘点历史不过账缺口。
+     * 复用 {@link VoucherService#createManual} (与半成品盘点同一过账机制, 非平行路径),
+     * 经 (来源业务类型, stocktakeId) 唯一约束幂等; apply 状态守卫保证每单只跑一次 → 无双过账;
+     * createManual 借贷必平校验 + 直建 POSTED。全部差异行 unitPrice=null → 不过账 (仅 warn), 绝不臆造价值。
+     *
+     * <p>Decision 2: 期初 (OPENING) 与 盘盈 (NORMAL) 绝不混 — 贷方科目不同 (4001 vs 6301)、
+     * 摘要不同 ("期初建账" vs "盘点")、来源业务类型不同 (可分别筛选核对)。
+     */
+    private void postStocktakeVoucher(FactoryStocktake stocktake, String factoryId,
+            BigDecimal surplusValue, BigDecimal shortageValue, int uncostedCount, Long userId) {
+        boolean hasSurplus = surplusValue.signum() > 0;
+        boolean hasShortage = shortageValue.signum() > 0;
+        if (!hasSurplus && !hasShortage) {
+            if (uncostedCount > 0) {
+                log.warn("SP7 apply: 全部差异行未录价(unitPrice=null), 不过账凭证 stocktakeNo={} uncosted={}",
+                        stocktake.getStocktakeNo(), uncostedCount);
+            }
+            return;
+        }
+
+        boolean opening = stocktake.getImportMode() == FactoryStocktake.ImportMode.OPENING;
+        String no = stocktake.getStocktakeNo();
+        List<VoucherEntrySpec> entries = new ArrayList<>();
+
+        if (opening) {
+            // 期初建账: 借 原材料 / 贷 实收资本 (盘盈方向); 盘亏方向借贷互换。不进 6301。
+            if (hasSurplus) {
+                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                        surplusValue, null, "期初建账入库 " + no));
+                entries.add(new VoucherEntrySpec(SUBJECT_OPENING_EQUITY_CODE, SUBJECT_OPENING_EQUITY_NAME,
+                        null, surplusValue, "期初建账权益 " + no));
+            }
+            if (hasShortage) {
+                entries.add(new VoucherEntrySpec(SUBJECT_OPENING_EQUITY_CODE, SUBJECT_OPENING_EQUITY_NAME,
+                        shortageValue, null, "期初建账冲减权益 " + no));
+                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                        null, shortageValue, "期初建账减少存货 " + no));
+            }
+        } else {
+            // NORMAL 常规盘点: 盘盈 借原材料/贷营业外收入; 盘亏 借管理费用/贷原材料。
+            if (hasSurplus) {
+                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                        surplusValue, null, "原料盘盈 " + no));
+                entries.add(new VoucherEntrySpec(SUBJECT_SURPLUS_INCOME_CODE, SUBJECT_SURPLUS_INCOME_NAME,
+                        null, surplusValue, "原料盘盈收益 " + no));
+            }
+            if (hasShortage) {
+                entries.add(new VoucherEntrySpec(SUBJECT_SHORTAGE_LOSS_CODE, SUBJECT_SHORTAGE_LOSS_NAME,
+                        shortageValue, null, "原料盘亏损耗 " + no));
+                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                        null, shortageValue, "原料盘亏库存减少 " + no));
+            }
+        }
+
+        String summary = no + (opening ? " 原料期初建账" : " 原料盘点")
+                + (hasSurplus ? "盘盈" : "") + (hasShortage ? "盘亏" : "") + "凭证";
+        String sourceType = opening ? VOUCHER_SOURCE_TYPE_OPENING : VOUCHER_SOURCE_TYPE_NORMAL;
+        voucherService.createManual(factoryId, VoucherType.INVENTORY_STOCKTAKE,
+                LocalDate.now(), entries, sourceType, stocktake.getId(), summary, userId);
+        log.info("SP7 apply: 已过账差异凭证 stocktakeNo={} mode={} sourceType={} 盘盈={} 盘亏={} uncosted={}",
+                no, stocktake.getImportMode(), sourceType, surplusValue, shortageValue, uncostedCount);
     }
 
     @Override

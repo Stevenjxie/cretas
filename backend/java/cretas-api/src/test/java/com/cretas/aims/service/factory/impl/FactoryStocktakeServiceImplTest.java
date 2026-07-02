@@ -1,9 +1,12 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
+import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.exception.BusinessException;
@@ -12,6 +15,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import com.cretas.aims.service.voucher.VoucherService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,6 +69,7 @@ class FactoryStocktakeServiceImplTest {
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+    @Mock private VoucherService voucherService;
 
     @InjectMocks private FactoryStocktakeServiceImpl service;
 
@@ -75,6 +80,8 @@ class FactoryStocktakeServiceImplTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+        // voucherService 是 @Autowired(required=false) 字段, @InjectMocks 走构造器注入不会填充它 → 手动注入
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
     }
 
     // -------------------------------------------------------
@@ -406,6 +413,144 @@ class FactoryStocktakeServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getCode())
                 .isEqualTo(403);
+    }
+
+    // -------------------------------------------------------
+    // 12-14. 批量导入 importMode 过账 (逐项 UI importMode=null 不过账，见 T6)
+    // -------------------------------------------------------
+
+    /** 构造一个 APPROVED、含单一盘盈行(systemQty→actualQty)、批次带 unitPrice 的盘点，返回 [stocktake, 捕获 entries]。*/
+    private FactoryStocktake applyImportSurplus(FactoryStocktake.ImportMode mode, String unitPrice) {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-IMP");
+        item.setSystemQty(new BigDecimal("100.0000"));
+        item.setActualQty(new BigDecimal("120.0000"));
+        item.setDifferenceQty(new BigDecimal("20.0000"));
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setImportMode(mode);
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-IMP");
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        if (unitPrice != null) batch.setUnitPrice(new BigDecimal(unitPrice));
+        when(materialBatchRepo.findById("BATCH-IMP")).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+        return stocktake;
+    }
+
+    @Test
+    @DisplayName("T12: importMode=NORMAL 盘盈 → 过账 借1403原材料 200 / 贷6301营业外收入 200 (来源 FACTORY_STOCKTAKE)")
+    void apply_import_normal_posts_surplus_income() {
+        applyImportSurplus(FactoryStocktake.ImportMode.NORMAL, "10");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> cap = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), cap.capture(), eq("FACTORY_STOCKTAKE"), any(), any(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = cap.getValue();
+        // 借 1403 = 200
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("1403");
+            assertThat(e.debit()).isEqualByComparingTo("200.00");
+        });
+        // 贷 6301 = 200 (营业外收入，NOT 期初权益)
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("6301");
+            assertThat(e.credit()).isEqualByComparingTo("200.00");
+        });
+    }
+
+    @Test
+    @DisplayName("T13: importMode=OPENING 期初 → 过账 借1403原材料 200 / 贷4001实收资本 200 (不进6301, 来源 _OPENING)")
+    void apply_import_opening_posts_equity_not_income() {
+        applyImportSurplus(FactoryStocktake.ImportMode.OPENING, "10");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> cap = ArgumentCaptor.forClass(List.class);
+        // Decision 2: 期初来源业务类型独立 FACTORY_STOCKTAKE_OPENING，与盘盈可分开筛选
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), cap.capture(), eq("FACTORY_STOCKTAKE_OPENING"), any(), any(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = cap.getValue();
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("1403");
+            assertThat(e.debit()).isEqualByComparingTo("200.00");
+        });
+        // 贷 4001 实收资本 (期初权益)，绝不进 6301
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("4001");
+            assertThat(e.credit()).isEqualByComparingTo("200.00");
+        });
+        assertThat(entries).noneSatisfy(e -> assertThat(e.subjectCode()).isEqualTo("6301"));
+    }
+
+    @Test
+    @DisplayName("T14: importMode!=null 但 unitPrice=null (诚实null) → 数量仍调整但不过账凭证")
+    void apply_import_uncosted_no_voucher() {
+        applyImportSurplus(FactoryStocktake.ImportMode.NORMAL, null);
+        // 数量已调整 (batch.save 被调用)，但无凭证过账
+        verify(materialBatchRepo).save(any());
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("T15 (Decision 3): 逐项盘点 importMode=null 现在也过账 → 借1403/贷6301 (来源 FACTORY_STOCKTAKE), 与批量一致")
+    void apply_perItem_null_mode_also_posts_normal() {
+        applyImportSurplus(null, "10"); // importMode=null = 逐项 UI 盘点
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> cap = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), cap.capture(), eq("FACTORY_STOCKTAKE"), any(), any(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = cap.getValue();
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("1403");
+            assertThat(e.debit()).isEqualByComparingTo("200.00");
+        });
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("6301"); // 盘盈=营业外收入, NOT 期初权益
+            assertThat(e.credit()).isEqualByComparingTo("200.00");
+        });
+        assertThat(entries).noneSatisfy(e -> assertThat(e.subjectCode()).isEqualTo("4001"));
+    }
+
+    @Test
+    @DisplayName("T16 (Decision 4): OPENING 期初 initiate 跳过月底约束（任意日放行）; NORMAL 仍受约束")
+    void initiate_opening_bypasses_month_end_gate() {
+        // threshold=28（≤28 保证 withDayOfMonth 在所有月份有效，含非闰 2 月）。
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 28);
+
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        // 核心断言：OPENING 无论今天几号都跳过月底约束 → 创建成功
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        StocktakeDTO opened = service.initiate(FACTORY_ID, req, USER_ID, FactoryStocktake.ImportMode.OPENING);
+        assertThat(opened).isNotNull();
+        assertThat(opened.getStatus()).isEqualTo(FactoryStocktake.Status.INITIATED.name());
+
+        // 对照：当今天 day < 28 时，NORMAL 仍被月底约束拦截 409（证明 OPENING 是真跳过而非约束失效）。
+        // (day >= 28 时约束本就放行，跳过此对照，与 T1 同款 date-safe 处理)
+        if (LocalDateTime.now().getDayOfMonth() < 28) {
+            assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID, FactoryStocktake.ImportMode.NORMAL))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        }
     }
 
     // -------------------------------------------------------

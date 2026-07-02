@@ -2,9 +2,9 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get, post, put } from '@/api/request';
+import request, { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, View, Edit, Check, Close } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, View, Edit, Check, Close, Upload, Download } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
 
@@ -154,6 +154,158 @@ async function submitInitiate() {
   } finally {
     initiateLoading.value = false;
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Bulk import dialog (导出模板 → 填实盘 → 导入比对 → 确认校正)
+// ────────────────────────────────────────────────────────────────────────────
+interface BulkMatchedLine {
+  materialBatchId: string; batchNumber: string; materialName: string; unit: string;
+  systemQty: number | null; actualQty: number | null; differenceQty: number | null; differenceType: string | null;
+}
+interface BulkRowError { rowNumber: number; batchNumber: string; materialName: string; reason: string; }
+interface BulkPreview {
+  stocktakeId?: string | null; stocktakeNo?: string | null;
+  warehouseId: string; warehouseName: string; periodMonth?: string;
+  totalRows: number; matchedCount: number; surplusCount: number; shortageCount: number;
+  matchCount: number; skippedCount: number; errorCount: number;
+  matchedLines: BulkMatchedLine[]; errors: BulkRowError[];
+}
+
+const bulkDialogVisible = ref(false);
+const bulkLoading = ref(false);
+const bulkFile = ref<File | null>(null);
+const bulkPreview = ref<BulkPreview | null>(null);
+const bulkForm = reactive({
+  warehouseId: '',
+  periodMonth: currentMonth.value,
+  openingMode: false,
+});
+
+function openBulkDialog() {
+  bulkForm.warehouseId = '';
+  bulkForm.periodMonth = currentMonth.value;
+  bulkForm.openingMode = false;
+  bulkFile.value = null;
+  bulkPreview.value = null;
+  bulkDialogVisible.value = true;
+}
+
+// 下载当前库存填报模板（blob）
+async function downloadBulkTemplate() {
+  if (!bulkForm.warehouseId) {
+    ElMessage({ message: '请先选择仓库', type: 'warning', duration: 3000 });
+    return;
+  }
+  try {
+    const resp = await request.get(`/${factoryId.value}/stocktakes/bulk-import/template`, {
+      params: { warehouseId: bulkForm.warehouseId },
+      responseType: 'blob',
+    });
+    const blob = new Blob([resp as unknown as BlobPart], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const wname = warehouseName(bulkForm.warehouseId);
+    a.download = `库存盘点模板-${wname}-${bulkForm.periodMonth}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    ElMessage({ message: `模板下载失败：${String((e as Error).message || '')}`, type: 'error', duration: 0, showClose: true });
+  }
+}
+
+// el-upload manual: 记录选中文件，不自动上传
+function onBulkFileChange(uploadFile: { raw?: File }) {
+  bulkFile.value = uploadFile.raw || null;
+  bulkPreview.value = null; // 换文件后清空旧预览
+}
+
+function buildBulkFormData(): FormData | null {
+  if (!bulkForm.warehouseId) {
+    ElMessage({ message: '请选择仓库', type: 'warning', duration: 3000 });
+    return null;
+  }
+  if (!bulkFile.value) {
+    ElMessage({ message: '请选择填好的 Excel 文件', type: 'warning', duration: 3000 });
+    return null;
+  }
+  const fd = new FormData();
+  fd.append('file', bulkFile.value);
+  return fd;
+}
+
+// 预览：read-only 比对
+async function doBulkPreview() {
+  const fd = buildBulkFormData();
+  if (!fd) return;
+  bulkLoading.value = true;
+  try {
+    const res = await post(
+      `/${factoryId.value}/stocktakes/bulk-import/preview?warehouseId=${encodeURIComponent(bulkForm.warehouseId)}`,
+      fd,
+    );
+    if (res.success) {
+      bulkPreview.value = res.data as unknown as BulkPreview;
+    } else {
+      ElMessage({ message: res.message || '比对失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '比对失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    bulkLoading.value = false;
+  }
+}
+
+// 确认：创建盘点 + 回填实盘
+async function doBulkConfirm() {
+  const fd = buildBulkFormData();
+  if (!fd) return;
+  if (!bulkForm.periodMonth) {
+    ElMessage({ message: '请选择盘点月份', type: 'warning', duration: 3000 });
+    return;
+  }
+  const okText = bulkForm.openingMode
+    ? '确认将按【期初建账】创建盘点（生效后过账期初权益凭证，不计营业外收入）'
+    : '确认创建盘点任务并回填实盘数量？';
+  try {
+    await ElMessageBox.confirm(okText, '确认导入', { type: 'warning' });
+  } catch { return; }
+  bulkLoading.value = true;
+  try {
+    const params = new URLSearchParams({
+      warehouseId: bulkForm.warehouseId,
+      periodMonth: bulkForm.periodMonth,
+      openingMode: String(bulkForm.openingMode),
+    });
+    const res = await post(`/${factoryId.value}/stocktakes/bulk-import/confirm?${params.toString()}`, fd);
+    if (res.success) {
+      ElMessage({ message: res.message || '盘点任务已创建', type: 'success', duration: 5000, showClose: true });
+      bulkDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: res.message || '导入失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '导入失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    bulkLoading.value = false;
+  }
+}
+
+function diffTypeTag(t: string | null): string {
+  if (t === 'SURPLUS') return 'success';
+  if (t === 'SHORTAGE') return 'danger';
+  if (t === 'MATCH') return 'info';
+  return '';
+}
+function diffTypeLabel(t: string | null): string {
+  if (t === 'SURPLUS') return '盘盈';
+  if (t === 'SHORTAGE') return '盘亏';
+  if (t === 'MATCH') return '一致';
+  return '未盘点';
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -412,6 +564,9 @@ onMounted(async () => {
           <el-option v-for="(v, k) in statusMap" :key="k" :label="v.label" :value="k" />
         </el-select>
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <el-button v-if="canWrite" :icon="Upload" @click="openBulkDialog">
+          批量导入盘点
+        </el-button>
         <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openInitiateDialog">
           发起盘点
         </el-button>
@@ -439,7 +594,13 @@ onMounted(async () => {
 
     <el-card>
       <el-table v-loading="loading" :data="tableData" row-key="id" stripe>
-        <el-table-column label="盘点单号" prop="stocktakeNo" min-width="150" />
+        <el-table-column label="盘点单号" min-width="200">
+          <template #default="{ row }">
+            <span>{{ row.stocktakeNo }}</span>
+            <el-tag v-if="row.importMode === 'OPENING'" type="warning" size="small" effect="dark" style="margin-left: 6px">期初建账</el-tag>
+            <el-tag v-else-if="row.importMode === 'NORMAL'" type="info" size="small" style="margin-left: 6px">批量导入</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="仓库" min-width="120">
           <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
         </el-table-column>
@@ -545,6 +706,121 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="initiateDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="initiateLoading" @click="submitInitiate">确认发起</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量导入盘点 -->
+    <el-dialog v-model="bulkDialogVisible" title="批量导入盘点（导出模板 → 填实盘 → 导入比对 → 确认校正）" width="900px">
+      <el-form label-width="110px">
+        <el-form-item label="盘点仓库" required>
+          <el-select v-model="bulkForm.warehouseId" placeholder="选择仓库" style="width: 320px" @change="bulkPreview = null">
+            <el-option v-for="w in warehouses" :key="String(w.id)" :label="String(w.name)" :value="String(w.id)">
+              <span>{{ w.name }}</span>
+              <el-tag
+                v-if="wBadgeLabel(w.type)"
+                size="small"
+                style="margin-left: 8px; font-size: 11px"
+                :color="wBadgeColor(w.type)"
+                effect="plain"
+              >{{ wBadgeLabel(w.type) }}</el-tag>
+            </el-option>
+          </el-select>
+          <el-button :icon="Download" style="margin-left: 12px" @click="downloadBulkTemplate">
+            下载当前库存模板
+          </el-button>
+        </el-form-item>
+        <el-form-item label="盘点月份" required>
+          <el-input v-model="bulkForm.periodMonth" placeholder="YYYY-MM" style="width: 160px" />
+          <span style="margin-left: 8px; color: #909399; font-size: 12px">格式: 2026-06</span>
+        </el-form-item>
+        <el-form-item label="期初建账">
+          <el-checkbox v-model="bulkForm.openingMode" @change="bulkPreview = null">
+            本次为期初建账导入
+          </el-checkbox>
+          <el-tooltip
+            content="期初建账：生效后按 借1403原材料/贷4001实收资本 过账（不计营业外收入，避免虚增建账当期损益）。常规月度盘点请不要勾选。"
+            placement="top"
+          >
+            <span style="margin-left: 8px; color: #e6a23c; font-size: 12px">这是什么？</span>
+          </el-tooltip>
+        </el-form-item>
+        <el-form-item label="填好的表格" required>
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            accept=".xlsx,.xls"
+            :on-change="onBulkFileChange"
+            :on-exceed="() => ElMessage({ message: '一次只能上传一个文件', type: 'warning' })"
+          >
+            <el-button :icon="Upload">选择文件</el-button>
+            <template #tip>
+              <span style="color: #909399; font-size: 12px">仅 .xlsx/.xls，请使用上方导出的模板填写「实盘数量」列</span>
+            </template>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+
+      <!-- 比对报告 -->
+      <div v-if="bulkPreview">
+        <el-divider content-position="left">
+          比对报告（仓库：{{ bulkPreview.warehouseName }}）
+        </el-divider>
+        <div style="margin-bottom: 10px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px">
+          <span>数据行：<b>{{ bulkPreview.totalRows }}</b></span>
+          <span>匹配：<b>{{ bulkPreview.matchedCount }}</b></span>
+          <el-tag type="success" size="small">盘盈 {{ bulkPreview.surplusCount }}</el-tag>
+          <el-tag type="danger" size="small">盘亏 {{ bulkPreview.shortageCount }}</el-tag>
+          <el-tag type="info" size="small">一致 {{ bulkPreview.matchCount }}</el-tag>
+          <el-tag size="small">未盘点 {{ bulkPreview.skippedCount }}</el-tag>
+          <el-tag v-if="bulkPreview.errorCount > 0" type="warning" size="small">失败 {{ bulkPreview.errorCount }}</el-tag>
+        </div>
+
+        <!-- 匹配失败（诚实上报，不静默丢弃）-->
+        <el-alert
+          v-if="bulkPreview.errorCount > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 10px"
+          :title="`有 ${bulkPreview.errorCount} 行未能匹配，请核对后修正（其余匹配行仍可确认导入）`"
+        />
+        <el-table v-if="bulkPreview.errorCount > 0" :data="bulkPreview.errors" size="small" max-height="160" border style="margin-bottom: 12px">
+          <el-table-column label="行号" prop="rowNumber" width="70" />
+          <el-table-column label="批次号" prop="batchNumber" width="180" />
+          <el-table-column label="物料名称" prop="materialName" width="140" />
+          <el-table-column label="失败原因" prop="reason" min-width="240" />
+        </el-table>
+
+        <el-table :data="bulkPreview.matchedLines" size="small" max-height="300" border>
+          <el-table-column label="物料名称" prop="materialName" min-width="130" />
+          <el-table-column label="批次号" prop="batchNumber" min-width="170" />
+          <el-table-column label="账面数量" prop="systemQty" width="100" align="right" />
+          <el-table-column label="实盘数量" width="100" align="right">
+            <template #default="{ row }">{{ row.actualQty ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="差异" width="100" align="right">
+            <template #default="{ row }">{{ row.differenceQty ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="单位" prop="unit" width="70" />
+          <el-table-column label="盈亏" width="90">
+            <template #default="{ row }">
+              <el-tag :type="diffTypeTag(row.differenceType)" size="small">{{ diffTypeLabel(row.differenceType) }}</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="bulkDialogVisible = false">取消</el-button>
+        <el-button :loading="bulkLoading" @click="doBulkPreview">预览比对</el-button>
+        <el-button
+          type="primary"
+          :loading="bulkLoading"
+          :disabled="!bulkPreview || bulkPreview.matchedCount === 0"
+          @click="doBulkConfirm"
+        >
+          确认导入（创建盘点）
+        </el-button>
       </template>
     </el-dialog>
 
