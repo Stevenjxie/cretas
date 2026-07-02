@@ -45,24 +45,40 @@ const aiEntryVisible = ref(false);
 function handleWorkflowAITrigger() {
   aiEntryVisible.value = true;
 }
-function handleAiFill(params: Record<string, unknown>) {
+async function handleAiFill(params: Record<string, unknown>) {
   const batchNumber = String(params.batchNumber || '');
-  // Try to match batch in current table; if not found, leave fields blank but pre-fill batchNumber
-  const matched = tableData.value.find(
+  // 1) Try current loaded page first
+  let matched = tableData.value.find(
     (r) => String(r.batchNumber || '').toUpperCase() === batchNumber.toUpperCase()
   );
+  // 2) 兜底: 批次可能存在但不在当前分页 → 按批次号调 API 查, 解析真实 batchId。
+  //    (修复 405: 之前 batchId='' 直接开弹窗, 提交时 POST /material-batches//adjust
+  //     路径塌成 /material-batches/adjust → 撞 /{batchId} 的 GET/PUT/DELETE → 405)
+  if (!matched && batchNumber) {
+    try {
+      const resp = await get(
+        `/${factoryId.value}/material-batches?keyword=${encodeURIComponent(batchNumber)}&size=20`
+      );
+      const list = Array.isArray(resp.data) ? resp.data : (resp.data?.content || []);
+      matched = list.find(
+        (r: TableRow) => String(r.batchNumber || '').toUpperCase() === batchNumber.toUpperCase()
+      );
+    } catch { /* 查失败按未找到处理 */ }
+  }
+  // 3) 仍未找到 → 不开弹窗(避免畸形请求 405), 给可执行提示
+  if (!matched) {
+    ElMessage.warning(
+      `批次 ${batchNumber} 不在库存中，无法调整。请确认批次号，或改用「采购入库」新建该批次(期初入库走采购入库)。`
+    );
+    return;
+  }
   adjustForm.value = {
-    batchId: matched ? String(matched.id) : '',
-    batchNumber: matched ? String(matched.batchNumber) : batchNumber,
-    currentQuantity: matched ? Number(matched.currentQuantity ?? matched.quantity ?? 0) : 0,
+    batchId: String(matched.id),
+    batchNumber: String(matched.batchNumber),
+    currentQuantity: Number(matched.currentQuantity ?? matched.quantity ?? 0),
     adjustQuantity: Number(params.adjustQuantity || 0),
     reason: String(params.reason || ''),
   };
-  if (!matched) {
-    ElMessage.warning(
-      `未在当前列表找到批次 ${batchNumber}，请确认批次号或先搜索后再调整`
-    );
-  }
   adjustDialogVisible.value = true;
 }
 
@@ -202,6 +218,11 @@ function handleAdjust(row: TableRow) {
 }
 
 async function submitAdjust() {
+  // 修复 405: batchId 为空时禁止提交 (否则 POST /material-batches//adjust → 405)。
+  if (!adjustForm.value.batchId) {
+    ElMessage.error('未匹配到该批次的库存记录，无法调整。请确认批次号，或改用「采购入库」新建该批次。');
+    return;
+  }
   if (!adjustForm.value.adjustQuantity || !adjustForm.value.reason) {
     ElMessage.warning('请填写调整数量和原因');
     return;
