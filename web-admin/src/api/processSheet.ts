@@ -153,6 +153,8 @@ export interface ProcessSheetInventoryItem {
   addedCost?: number | null;
   sourceBreakdowns?: ProcessSheetInventorySourceBreakdown[] | null;
   // F006 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null)
+  /** 流程日期: 该工序实际操作日期 (ISO "YYYY-MM-DD"; 取自逐工序录入表单「流程日期」, getInventory 留 null) */
+  processDate?: string | null;
   /** 链内工序序号 */
   processOrder?: number | null;
   /** 工序名称 */

@@ -46,6 +46,12 @@ function fmtPrice(v: number | null | undefined): string {
   return v.toFixed(2);
 }
 
+function fmtDate(v: string | null | undefined): string {
+  if (!v) return '—';
+  // 后端已是 ISO "YYYY-MM-DD" (LocalDate); 兼容偶发 datetime 字符串只取日期部分。
+  return v.slice(0, 10);
+}
+
 function fmtMoney(v: number | null | undefined): string {
   if (v == null) return '—';
   return '¥' + Number(v).toFixed(2);
@@ -140,6 +146,11 @@ defineExpose({ refresh });
     :row-class-name="() => ''"
   >
     <el-table-column prop="processOrder" label="序" width="48" align="center" />
+    <el-table-column label="流程日期" width="100" align="center">
+      <template #default="{ row }">
+        {{ fmtDate(row.processDate) }}
+      </template>
+    </el-table-column>
     <el-table-column prop="processName" label="工序" min-width="90" show-overflow-tooltip>
       <template #default="{ row }">
         {{ row.processName || '—' }}

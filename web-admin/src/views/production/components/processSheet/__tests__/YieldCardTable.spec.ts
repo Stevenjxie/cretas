@@ -20,6 +20,7 @@ describe('YieldCardTable', () => {
       data: [
         {
           batchNumber: 'CLK-W-BLANCH',
+          processDate: '2026-07-01',
           produced: 604.5,
           used: 0,
           remaining: 604.5,
@@ -76,6 +77,7 @@ describe('YieldCardTable', () => {
     await nextTick();
 
     const text = wrapper.text();
+    expect(text).toContain('2026-07-01');
     expect(text).toContain('CLK-W-ROLL');
     expect(text).toContain('765.19');
     expect(text).toContain('48.70%');

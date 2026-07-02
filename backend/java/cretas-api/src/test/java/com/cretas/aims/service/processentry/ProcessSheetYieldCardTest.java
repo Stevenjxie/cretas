@@ -194,6 +194,38 @@ class ProcessSheetYieldCardTest {
     }
 
     @Test
+    @DisplayName("YIELD-CARD-0-DATE: processDate threaded from row payload to yield card item (张权 UX: 流程日期列)")
+    void processSheetRows_processDate_threadedFromPayloadToYieldCardItem() throws Exception {
+        // Real F006 prod row_payload (plan PLAN-1782635211587-C1AB35C2, verified via prod DB):
+        // {"processDate":"2026-06-28", ...}. Confirms getProcessDate() flows unchanged through
+        // Jackson deserialize -> builder -> DTO, matching the value the customer entered in 逐工序录入.
+        ProcessSheetRow row1 = sheetRow(1, 9108L, "CLK-W-1");
+        ProcessSheetRow row2 = sheetRow(2, 9110L, "CLK-W-2");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row1, row2));
+
+        ProcessSheetRowRequest payload1 = sheetPayload("100", "95");
+        payload1.setProcessDate(java.time.LocalDate.of(2026, 6, 28));
+        ProcessSheetRowRequest payload2 = sheetPayload("95", "85");
+        payload2.setProcessDate(java.time.LocalDate.of(2026, 6, 29));
+
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class)).thenReturn(payload1);
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class)).thenReturn(payload2);
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9108"))
+                .thenReturn(Optional.of(materialWip(9108L, "CLK-W-1", "95", "33.68")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "9110"))
+                .thenReturn(Optional.of(materialWip(9110L, "CLK-W-2", "85", "35.66")));
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getProcessDate()).isEqualTo(java.time.LocalDate.of(2026, 6, 28));
+        assertThat(result.get(1).getProcessDate()).isEqualTo(java.time.LocalDate.of(2026, 6, 29));
+    }
+
+    @Test
     @DisplayName("YIELD-CARD-0B: partial upstream WIP consumption inherits raw-equivalent quantity by consumed ratio")
     void processSheetRows_partialUpstreamConsumption_usesInheritedRawEquivalent() throws Exception {
         ProcessSheetRow rollingRow = sheetRow(3, 9201L, "CLK-W-ROLL");
