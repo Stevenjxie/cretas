@@ -117,6 +117,62 @@ _BASE_PLATFORM_CHANNELS = [
 ]
 
 
+_BASE_ROLE_ACTION_PLAN: list[dict[str, Any]] = [
+    {
+        "role": "仓管",
+        "ownerQuestion": "今天会不会缺货或备太多",
+        "todayActions": [
+            "10:30 前核对活鱼、青花椒底料、手作冰豆花原料的当前库存和安全库存",
+            "活鱼按晚市预测 80% 先备，保留 20% 临时补货空间",
+            "把临期豆腐、番茄、冰粉原料贴红标，优先给厨师长排进今日备料",
+        ],
+        "watchTomorrow": ["活鱼缺货次数", "临期/报损金额", "紧急补货次数"],
+        "dataUsed": ["current_stock", "safety_stock", "expiry_alerts", "event_lift"],
+    },
+    {
+        "role": "厨师长",
+        "ownerQuestion": "厨房今天先保哪几道菜",
+        "todayActions": [
+            "晚市前只保招牌青花椒鱼、手作冰豆花、双人套餐三条主线",
+            "招牌鱼每小时抽查咸淡、鱼片熟度、上菜时长",
+            "低销量复杂菜晚高峰不主动推荐，避免拖慢出餐",
+        ],
+        "watchTomorrow": ["平均上菜时长", "招牌鱼出品抽查不合格次数", "退菜/重做次数"],
+        "dataUsed": ["review_negative_themes", "dish_complaints", "serve_minutes"],
+    },
+    {
+        "role": "前台/门迎",
+        "ownerQuestion": "顾客进店后怎么承接",
+        "todayActions": [
+            "门口只讲招牌鱼、双人价格、预计用餐时间三句话",
+            "核销客进店先确认券，再引导招牌鱼或双人套餐",
+            "等位超过 12 分钟时主动给明确时间并提示可拼桌",
+        ],
+        "watchTomorrow": ["进店转化率", "核销到店率", "等位差评次数"],
+        "dataUsed": ["traffic_capture", "coupon_redemption", "queue_minutes"],
+    },
+    {
+        "role": "店长",
+        "ownerQuestion": "老板不用盯所有细节，店长今天怎么管",
+        "todayActions": [
+            "17:30 开班前按仓管、厨师长、前台三张清单派工",
+            "18:00-20:00 只盯等位、上菜、缺货三个异常",
+            "打烊后复盘三个数：收入、上菜时长、报损金额",
+        ],
+        "watchTomorrow": ["晚市收入", "平均上菜时长", "报损金额"],
+        "dataUsed": ["pos_revenue", "service_speed", "inventory_loss"],
+    },
+]
+
+
+_BASE_INVENTORY_ALERTS: list[dict[str, Any]] = [
+    {"ingredient": "活鱼", "unit": "kg", "currentStock": 42, "safetyStock": 58, "forecastNeed": 72, "reorderQty": 30, "risk": "今晚招牌鱼可能缺货", "priority": "HIGH"},
+    {"ingredient": "青花椒底料", "unit": "kg", "currentStock": 8, "safetyStock": 12, "forecastNeed": 15, "reorderQty": 7, "risk": "底料实际耗用高于 BOM 6.1%", "priority": "HIGH"},
+    {"ingredient": "手作冰豆花原料", "unit": "kg", "currentStock": 18, "safetyStock": 15, "forecastNeed": 21, "reorderQty": 3, "risk": "商场活动日加购会拉高用量", "priority": "MEDIUM"},
+    {"ingredient": "豆腐", "unit": "kg", "currentStock": 16, "safetyStock": 10, "forecastNeed": 8, "reorderQty": 0, "risk": "有临期，今天先用不要补", "priority": "LOW"},
+]
+
+
 _BASE_PARAMS: dict[str, Any] = {
     "store_name": "青花椒川食山语（颛桥龙湖店）",
     "sub_sector": "鱼类餐饮/砂锅鱼",
@@ -180,11 +236,62 @@ _BASE_PARAMS: dict[str, Any] = {
         "activities": [{"title": "龙湖天街周末会员日", "expectedTrafficLiftPct": 18}],
     },
     "traffic_persona": _BASE_TRAFFIC_PERSONA,
+    "role_action_plan": _BASE_ROLE_ACTION_PLAN,
+    "inventory_alerts": _BASE_INVENTORY_ALERTS,
+    "expiry_alerts": [
+        {"ingredient": "豆腐", "expireInHours": 18, "quantity": 6.5, "suggestion": "今天先放进员工餐或低峰小份菜，不要补货"},
+        {"ingredient": "番茄", "expireInHours": 30, "quantity": 9.0, "suggestion": "午市优先消耗，晚市不再追加采购"},
+    ],
+    "operations_metrics": {
+        "revenueVsLastWeekPct": 10.5,
+        "forecastDinnerOrders": 420,
+        "queueMinutesPeak": 18,
+        "serveMinutesAvg": 21,
+        "eventTrafficLiftPct": 18,
+        "frontDeskConversionGapPct": 8.4,
+    },
 }
 
 
 _SCENARIO_PATCHES: dict[str, dict[str, Any]] = {
     "package": {},
+    "operations_dispatch": {
+        "pos_summary": {
+            "weekdayWeekend": {"weekdayAvgDailyRevenue": 18600, "weekendAvgDailyRevenue": 22600, "gapPct": 21.5},
+            "daypartRevenue": [{"name": "午市", "share": 0.27}, {"name": "晚市", "share": 0.66}],
+            "staffingByDaypart": [{"name": "午市", "share": 0.34}, {"name": "晚市", "share": 0.38}],
+        },
+        "review_summary": {
+            "rating": 4.38,
+            "reviewCount": 690,
+            "lowRatingCount": 82,
+            "negativeThemes": [{"theme": "上菜慢", "count": 54}, {"theme": "等位久", "count": 38}, {"theme": "核销解释不清", "count": 22}],
+            "negativeDishMentions": [{"name": "招牌青花椒鱼", "count": 36}],
+        },
+        "external_signals": {
+            "weather": {"text": "多云转阵雨，晚市商场客流会集中"},
+            "activities": [{"title": "龙湖天街夏日会员日", "expectedTrafficLiftPct": 18, "date": "2026-07-03"}],
+        },
+    },
+    "inventory_reorder": {
+        "financial_summary": {"revenue": 1784831.9, "foodCostRatio": 0.47, "grossMarginPct": 53},
+        "monthly_stocktake": {
+            "topLossItems": ["活鱼边角损耗 18.6kg", "青花椒底料盘亏 7.2kg", "豆腐临期报损 6.5kg"],
+            "varianceItems": ["活鱼实际耗用高于理论 8.4%", "底料实际耗用高于理论 6.1%"],
+        },
+        "menu_summary": {
+            "topProducts": [
+                {"name": "招牌青花椒鱼[活鱼现做]", "revenue": 237060, "soldQty": 1030, "foodCost": 132800},
+                {"name": "手作冰豆花", "revenue": 27880, "soldQty": 697, "foodCost": 6970},
+            ],
+        },
+        "review_summary": {
+            "rating": 4.52,
+            "reviewCount": 650,
+            "lowRatingCount": 48,
+            "negativeThemes": [{"theme": "招牌鱼售罄", "count": 19}, {"theme": "上菜慢", "count": 31}],
+        },
+    },
     "traffic_conversion": {
         "pos_summary": {
             "weekdayWeekend": {"weekdayAvgDailyRevenue": 17200, "weekendAvgDailyRevenue": 19800, "gapPct": 15.1},

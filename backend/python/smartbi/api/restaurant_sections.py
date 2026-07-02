@@ -209,6 +209,8 @@ def _owner_action_session_key(factory_id: str, session_id: str) -> str:
 
 _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("store_compare", ("所有门店", "其他门店", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "最值得学习", "复制到")),
+    ("operations_dispatch", ("仓管", "前台", "门迎", "分别", "派工", "调度", "今日作战", "管理层", "减少工作", "谁做什么", "各岗位", "分工")),
+    ("inventory_reorder", ("库存预警", "补货", "采购补货", "安全库存", "临期", "缺货", "备货缺口", "库存风险", "先看什么")),
     ("seating_mix", ("二人桌", "两人桌", "四人桌", "两人客", "四人客", "桌型", "桌子", "翻台", "翻台率", "排队", "等位")),
     ("staffing_schedule", ("排班", "人手", "加人", "加一个人", "加在哪", "哪个环节", "岗位", "前厅", "后厨", "员工时间", "工时", "午市", "晚市", "忙不过来")),
     ("external_event_response", ("商场活动", "天气", "下雨", "雨天", "天气不好", "高温", "降温", "寒潮", "堂食", "外卖", "节日", "外部", "活动", "商圈活动", "周边活动")),
@@ -415,11 +417,96 @@ def _owner_rate_people(rate: Any) -> str:
     return str(round(value * 100))
 
 
+def _owner_role_action_plan(params: dict[str, Any], scenario: str) -> list[dict[str, Any]]:
+    raw = params.get("role_action_plan") or params.get("roleActionPlan")
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if scenario not in {"operations_dispatch", "inventory_reorder"}:
+        return []
+    return [
+        {
+            "role": "仓管",
+            "ownerQuestion": "今天先看库存缺口和临期风险",
+            "todayActions": [
+                "核对活鱼、青花椒底料、冰豆花原料的当前库存和安全库存",
+                "活鱼按晚市预测 80% 先备，保留临时补货空间",
+                "把临期豆腐和番茄贴红标，优先安排今天消耗，不要继续补",
+            ],
+            "watchTomorrow": ["缺货次数", "临期报损金额", "紧急补货次数"],
+        },
+        {
+            "role": "厨师长",
+            "ownerQuestion": "今天先保招牌菜和出餐速度",
+            "todayActions": [
+                "晚市前只保招牌青花椒鱼、冰豆花、双人套餐三条主线",
+                "每小时抽查招牌鱼咸淡、鱼片熟度、上菜时长",
+                "低销量复杂菜晚高峰不主动推荐，避免拖慢出餐",
+            ],
+            "watchTomorrow": ["平均上菜时长", "出品抽查不合格次数", "退菜/重做次数"],
+        },
+        {
+            "role": "前台/门迎",
+            "ownerQuestion": "今天先把路过客和核销客接住",
+            "todayActions": [
+                "门口只讲招牌鱼、双人价格、预计用餐时间三句话",
+                "核销客进店先确认券，再引导招牌鱼或双人套餐",
+                "等位超过 12 分钟时主动给明确时间并提示可拼桌",
+            ],
+            "watchTomorrow": ["进店转化率", "核销到店率", "等位差评次数"],
+        },
+        {
+            "role": "店长",
+            "ownerQuestion": "今天只盯三个异常",
+            "todayActions": [
+                "17:30 开班前按仓管、厨师长、前台三张清单派工",
+                "18:00-20:00 只盯等位、上菜、缺货三个异常",
+                "打烊后复盘收入、上菜时长、报损金额",
+            ],
+            "watchTomorrow": ["晚市收入", "平均上菜时长", "报损金额"],
+        },
+    ]
+
+
 def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str) -> str:
     params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
     pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
     financial = params.get("financial_summary") if isinstance(params.get("financial_summary"), dict) else {}
     stocktake = params.get("monthly_stocktake") if isinstance(params.get("monthly_stocktake"), dict) else {}
+
+    if scenario == "operations_dispatch":
+        ops = params.get("operations_metrics") if isinstance(params.get("operations_metrics"), dict) else {}
+        revenue_lift = _owner_metric(ops.get("revenueVsLastWeekPct"), 1)
+        dinner_orders = _owner_metric(ops.get("forecastDinnerOrders"))
+        queue_minutes = _owner_metric(ops.get("queueMinutesPeak"))
+        serve_minutes = _owner_metric(ops.get("serveMinutesAvg"))
+        event_lift = _owner_metric(ops.get("eventTrafficLiftPct"), 1)
+        parts = ["这不是单独推一个套餐的问题，而是把今天的营收目标拆给岗位。"]
+        if revenue_lift:
+            parts.append(f"本周营收比上周高约 {revenue_lift}%，说明需求不是没有。")
+        if event_lift:
+            parts.append(f"商场活动预计还会把客流抬高约 {event_lift}%，所以现场承接会更关键。")
+        if dinner_orders:
+            parts.append(f"晚市预计大约 {dinner_orders} 单，仓管先保活鱼和青花椒底料不断货。")
+        if queue_minutes or serve_minutes:
+            parts.append(f"高峰等位约 {queue_minutes or '18'} 分钟、上菜约 {serve_minutes or '21'} 分钟，厨师长和前台要一起压这两个点。")
+        parts.append("老板今天不需要盯所有细节，只要让仓管、厨师长、前台、店长各自按清单执行。")
+        return "".join(parts)
+
+    if scenario == "inventory_reorder":
+        alerts = params.get("inventory_alerts") if isinstance(params.get("inventory_alerts"), list) else []
+        high = [item for item in alerts if isinstance(item, dict) and item.get("priority") == "HIGH"]
+        names = "、".join(str(item.get("ingredient")) for item in high[:2] if item.get("ingredient"))
+        top = high[0] if high else {}
+        current = _owner_metric(top.get("currentStock"))
+        safety = _owner_metric(top.get("safetyStock"))
+        reorder = _owner_metric(top.get("reorderQty"))
+        parts = ["库存预警先看缺口和临期，不要平均补货。"]
+        if names:
+            parts.append(f"今天优先看 {names}，因为它们直接影响招牌鱼能不能卖、毛利能不能守住。")
+        if top:
+            parts.append(f"{top.get('ingredient')} 当前约 {current}kg，安全库存约 {safety}kg，建议先补 {reorder}kg。")
+        parts.append("豆腐、番茄这类有临期的先消耗，不要为了看起来库存多就继续采购。")
+        return "".join(parts)
 
     if scenario == "traffic_conversion":
         traffic = owner_page.get("trafficPersona") if isinstance(owner_page.get("trafficPersona"), dict) else {}
@@ -496,6 +583,19 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
     params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
     pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
 
+    if scenario == "operations_dispatch":
+        return [
+            "店长 17:30 开班前把仓管、厨师长、前台三张清单派出去，今晚只盯等位、上菜、缺货三个异常。",
+            "仓管先补活鱼和青花椒底料，临期豆腐和番茄贴红标给厨师长优先消耗。",
+            "厨师长只保招牌鱼、冰豆花、双人套餐三条主线，前台只讲招牌鱼、双人价格、预计用餐时间三句话。",
+        ]
+    if scenario == "inventory_reorder":
+        return [
+            "仓管先把活鱼、青花椒底料、冰豆花原料按当前库存、今晚预测、安全库存排一张补货清单。",
+            "活鱼和青花椒底料按缺口补，豆腐、番茄这类临期货先消耗，不要平均补货。",
+            "厨师长同步把今天能消耗临期原料的菜排进备料，前台不要继续强推会消耗不足原料的复杂菜。",
+        ]
+
     if scenario == "traffic_conversion":
         return [
             "门口海报和等位牌只讲一句话：招牌鱼是什么、两个人大概多少钱、多久能吃完。",
@@ -563,6 +663,10 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
 
 
 def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
+    if scenario == "operations_dispatch":
+        return "今天先别让每个岗位都自己判断重点，也别临时全员加班。先按仓管、厨师长、前台、店长四张清单跑一晚。"
+    if scenario == "inventory_reorder":
+        return "今天先别平均补货，也别只看采购单价。缺口货要补，临期货要先消耗，毛利异常货要查 BOM 和损耗。"
     if scenario == "traffic_conversion":
         return "今天先别继续加投流，也别全店打折。人已经在门口了，先把门口和线上入口讲清楚。"
     if scenario == "store_compare":
@@ -574,6 +678,10 @@ def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
 
 
 def _owner_watch_numbers(owner_page: dict[str, Any], scenario: str) -> str:
+    if scenario == "operations_dispatch":
+        return "明天只看三个数：晚市收入、平均上菜时长、缺货/售罄次数。收入涨、上菜变快、缺货变少，说明岗位分工有效。"
+    if scenario == "inventory_reorder":
+        return "明天只看三个数：活鱼缺货次数、临期报损金额、紧急补货次数。缺货少了、报损没涨、临时补货少了，说明补货策略对。"
     if scenario == "traffic_conversion":
         return "明天只看三个数：门口路过多少人、进店多少人、最后下单多少单。路过人差不多但进店和下单涨了，就说明入口改对了。"
     focus = owner_page.get("decisionFocus") if isinstance(owner_page.get("decisionFocus"), dict) else {}
@@ -687,6 +795,48 @@ def _owner_evidence_charts(owner_page: dict[str, Any], scenario: str, params: di
     external = params.get("external_signals") if isinstance(params.get("external_signals"), dict) else {}
     traffic = owner_page.get("trafficPersona") if isinstance(owner_page.get("trafficPersona"), dict) else {}
     platform = owner_page.get("platformChannelSnapshot") if isinstance(owner_page.get("platformChannelSnapshot"), dict) else {}
+
+    if scenario == "operations_dispatch":
+        role_plan = _owner_role_action_plan(params, scenario)
+        if role_plan:
+            labels = [str(item.get("role") or "") for item in role_plan if item.get("role")]
+            action_counts = [
+                len(item.get("todayActions") or []) if isinstance(item.get("todayActions"), list) else 0
+                for item in role_plan
+                if item.get("role")
+            ]
+            watch_counts = [
+                len(item.get("watchTomorrow") or []) if isinstance(item.get("watchTomorrow"), list) else 0
+                for item in role_plan
+                if item.get("role")
+            ]
+            charts.append(_owner_bar_chart(
+                "今天每个岗位先做哪几件事",
+                labels,
+                [
+                    {"name": "今天动作数", "type": "bar", "data": action_counts, "label": {"show": True, "position": "top"}},
+                    {"name": "明天复盘数", "type": "bar", "data": watch_counts, "label": {"show": True, "position": "top"}},
+                ],
+                y_name="件",
+                bottom=60,
+            ))
+
+    if scenario in {"operations_dispatch", "inventory_reorder"}:
+        alerts = params.get("inventory_alerts") if isinstance(params.get("inventory_alerts"), list) else []
+        rows: list[dict[str, Any]] = [item for item in alerts if isinstance(item, dict) and item.get("ingredient")]
+        if rows:
+            labels = [str(item.get("ingredient"))[:12] for item in rows[:4]]
+            charts.append(_owner_bar_chart(
+                "库存先补哪里、哪里先别补",
+                labels,
+                [
+                    {"name": "当前库存", "type": "bar", "data": [_owner_float(item.get("currentStock"), 0) or 0 for item in rows[:4]]},
+                    {"name": "安全库存", "type": "bar", "data": [_owner_float(item.get("safetyStock"), 0) or 0 for item in rows[:4]]},
+                    {"name": "建议补货", "type": "bar", "data": [_owner_float(item.get("reorderQty"), 0) or 0 for item in rows[:4]], "label": {"show": True, "position": "top"}},
+                ],
+                y_name="kg",
+                bottom=65,
+            ))
 
     if scenario in {"traffic_conversion", "external_event_response"} and traffic.get("available"):
         capture = traffic.get("captureRate")
@@ -973,6 +1123,10 @@ def _owner_evidence_charts(owner_page: dict[str, Any], scenario: str, params: di
 
 
 def _owner_chart_guide(scenario: str) -> str:
+    if scenario == "operations_dispatch":
+        return "先看岗位动作有没有拆清楚，再看库存缺口；老板今天只需要盯等位、上菜、缺货三个异常。"
+    if scenario == "inventory_reorder":
+        return "先看当前库存和安全库存的差，再看建议补货；缺口货要补，临期货先消耗，不要平均补。"
     if scenario == "traffic_conversion":
         return "先看第一张：本店每100个路过的人进店几个，和同层类似店差多少；再看第二张：哪个平台有人看但没下单。"
     if scenario == "package":
@@ -999,6 +1153,8 @@ def _owner_chart_guide(scenario: str) -> str:
 def _owner_chat_follow_ups(scenario: str) -> list[str]:
     scenario_specific = {
         "package": "把套餐执行细节拆给我",
+        "operations_dispatch": "把仓管厨师长前台的动作拆细",
+        "inventory_reorder": "库存补货今天具体先看哪几项",
         "seating_mix": "桌型今天具体怎么调",
         "staffing_schedule": "排班今天具体怎么排",
         "staff_training": "开班前话术怎么讲",
@@ -1020,6 +1176,18 @@ def _owner_metric_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
         return ""
 
     metric_sets = {
+        "operations_dispatch": (
+            "晚市收入",
+            "平均上菜时长",
+            "缺货/售罄次数",
+            "收入涨、上菜变快、缺货变少，说明仓管、厨师长、前台、店长的分工跑通了。",
+        ),
+        "inventory_reorder": (
+            "活鱼缺货次数",
+            "临期报损金额",
+            "紧急补货次数",
+            "缺货少了、报损没涨、临时补货少了，说明今天不是乱补，而是按安全库存和临期风险补对了。",
+        ),
         "traffic_conversion": (
             "门口路过人数",
             "进店人数",
@@ -1116,6 +1284,16 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
         ])
 
     scenario_steps = {
+        "operations_dispatch": [
+            "仓管：10:30 前核对活鱼、青花椒底料、冰豆花原料，按安全库存和今晚预测列缺口。",
+            "厨师长：晚市只保招牌鱼、冰豆花、双人套餐，复杂低销量菜不主动推，避免拖慢上菜。",
+            "前台/店长：前台只讲招牌、价格、用餐时间三句话；店长晚高峰只盯等位、上菜、缺货。",
+        ],
+        "inventory_reorder": [
+            "先补活鱼和青花椒底料，因为它们直接决定招牌鱼能不能卖、毛利能不能守住。",
+            "豆腐、番茄等临期原料今天优先消耗，不要继续补货；仓管贴红标，厨师长排进备料。",
+            "打烊后对三件事：有没有售罄、有没有报损、有没有临时补货；明天按结果调整安全库存。",
+        ],
         "traffic_conversion": [
             "门口：海报只保留“招牌鱼 + 双人价格 + 大概用餐时间”，让路过的人 3 秒内看懂。",
             "平台：美团/大众点评/抖音首图统一成招牌鱼和双人套餐，不要把一堆菜名堆在第一屏。",
@@ -1200,6 +1378,8 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
         return action_follow_up
 
     direction_label = {
+        "operations_dispatch": "岗位派工",
+        "inventory_reorder": "库存补货",
         "traffic_conversion": "客流转化",
         "package": "套餐和毛利",
         "seating_mix": "桌型和翻台",
@@ -1319,8 +1499,11 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
 
     data = response.data or {}
     owner_page = data.get("ownerDecisionPage") or {}
+    role_plan = _owner_role_action_plan(params, scenario)
     if isinstance(owner_page, dict):
         owner_page["demoParams"] = params
+        if role_plan:
+            owner_page["roleActionPlan"] = role_plan
     answer = _owner_chat_answer(owner_page, scenario, body.message, is_follow_up=is_follow_up_turn)
     follow_ups = _owner_chat_follow_ups(scenario)
     charts = _owner_evidence_charts(owner_page, scenario, params)
@@ -1343,6 +1526,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
             "followUpSuggestions": follow_ups,
             "charts": charts,
             "chartGuide": chart_guide,
+            "roleActionPlan": role_plan,
             "decisionFocus": owner_page.get("decisionFocus"),
             "ownerDecisionPage": owner_page,
             "demoActionScenarios": list_owner_action_demo_scenarios(),

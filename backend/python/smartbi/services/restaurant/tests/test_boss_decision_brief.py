@@ -967,3 +967,46 @@ def test_owner_action_chat_routes_extended_boss_decision_questions() -> None:
         assert data["scenario"] == scenario
         assert expected_text in data["answer"]
         assert data["charts"], message
+
+
+def test_owner_action_chat_routes_cross_role_operations_dispatch() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_ROLE_ACTION_DEMO",
+            message="这周营收同比上周怎么提高，仓管厨师长前台分别要做什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "operations_dispatch"
+    assert "仓管" in data["answer"]
+    assert "厨师长" in data["answer"]
+    assert "前台" in data["answer"]
+    assert "店长" in data["answer"]
+
+    role_plan = data["ownerDecisionPage"]["roleActionPlan"]
+    roles = {item["role"] for item in role_plan}
+    assert {"仓管", "厨师长", "前台/门迎", "店长"}.issubset(roles)
+    assert any("活鱼" in action for item in role_plan for action in item["todayActions"])
+    assert any("上菜" in metric for item in role_plan for metric in item["watchTomorrow"])
+    assert data["charts"]
+
+
+def test_owner_action_chat_routes_inventory_reorder_and_seeds_role_plan() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_INVENTORY_REORDER_DEMO",
+            message="库存预警和采购补货今天先看什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "inventory_reorder"
+    assert "不要平均补货" in data["answer"]
+    assert "活鱼" in data["answer"]
+    assert "青花椒底料" in data["answer"]
+
+    role_plan = data["ownerDecisionPage"]["roleActionPlan"]
+    warehouse = next(item for item in role_plan if item["role"] == "仓管")
+    assert any("安全库存" in action for action in warehouse["todayActions"])
+    assert any("临期" in action for action in warehouse["todayActions"])
