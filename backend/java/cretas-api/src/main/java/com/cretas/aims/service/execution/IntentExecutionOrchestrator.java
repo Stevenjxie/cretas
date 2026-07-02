@@ -67,10 +67,10 @@ public class IntentExecutionOrchestrator {
     private static final Pattern RESTAURANT_OWNER_ACTION_TOPIC_PATTERN = Pattern.compile(
             "二人桌|两人桌|四人桌|桌型|桌子|翻台|翻台率|排队|等位|小套餐|套餐|排班|加人|前厅|后厨|员工|厨房|出餐|上菜慢|服务差评|"
                     + "商圈|商场|客流|画像|进店|转化|曝光|核销|活动|天气|备货|推品|毛利|成本|原料|采购|价格|门店|品牌|单店|复购|复杂菜|"
-                    + "评论|顾客|差评|好评|库存|销量|风险");
+                    + "评论|顾客|差评|好评|库存|销量|风险|菜品|服务问题");
 
     private static final Pattern RESTAURANT_OWNER_ACTION_DECISION_PATTERN = Pattern.compile(
-            "今天|今晚|这个星期|本周|怎么|如何|要不要|有没有|哪些问题|最在意|最应该|影响|风险|建议|适合|带动|一起卖|比|补|推|调|排|改|提高|提升|安排|算|做什么|动作|先查|处理|培训|复制|学习|表现|差在哪里");
+            "今天|今晚|这个星期|本周|怎么|如何|要不要|有没有|哪些问题|问题|最在意|最应该|影响|风险|建议|适合|带动|一起卖|比|补|推|调|排|改|提高|提升|安排|算|做什么|动作|先查|处理|培训|复制|学习|表现|差在哪里");
 
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
