@@ -184,12 +184,15 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         if (!(msgObj instanceof String message) || message.isBlank()) {
             return result;
         }
+        String advice = defaultAdviceForTool();
+        String scenario = defaultOwnerActionScenarioForTool();
+        result.putIfAbsent("actionAdvice", advice);
+        result.putIfAbsent("decisionBridge", decisionBridge(advice, scenario));
+        result.putIfAbsent("suggestedFollowups", decisionFollowups(scenario));
         if (containsActionAdvice(message)) {
             return result;
         }
-        String advice = defaultAdviceForTool();
         result.put("message", message + "\n\n建议：" + advice);
-        result.putIfAbsent("actionAdvice", advice);
         return result;
     }
 
@@ -226,6 +229,60 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             return "先把低星评价和高频差评标签按门店拆开，优先处理服务、环境、口味里分数最低的一项，并在一周后复查评分变化。";
         }
         return "先定位排名最高和最低的项目差异，再按门店、菜品、时段拆分验证原因，做一轮小范围调整后复盘指标变化。";
+    }
+
+    private Map<String, Object> decisionBridge(String advice, String scenario) {
+        Map<String, Object> bridge = new LinkedHashMap<>();
+        bridge.put("answerMode", "report_with_owner_action");
+        bridge.put("ownerActionScenario", scenario);
+        bridge.put("plainDecision", advice);
+        bridge.put("why", "这条仍然是普通报表回答，但后续追问会继续走同一个 /ai-intents/execute，并带上老板决策场景。");
+        return bridge;
+    }
+
+    private List<Map<String, Object>> decisionFollowups(String scenario) {
+        return List.of(
+                followup("老板今天怎么用这张报表做决定？", "老板今天怎么用这张报表做决定？", scenario),
+                followup("哪些动作今天先不要做？", "哪些动作今天先不要做？", scenario),
+                followup("明天看哪三个数判断有没有效果？", "明天看哪三个数判断有没有效果？", scenario)
+        );
+    }
+
+    private Map<String, Object> followup(String label, String question, String scenario) {
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("label", label);
+        f.put("question", question);
+        f.put("ownerActionScenario", scenario);
+        return f;
+    }
+
+    private String defaultOwnerActionScenarioForTool() {
+        String tool = getToolName();
+        if ("restaurant_dish_bestseller_gold".equals(tool)) {
+            return "single_item_push";
+        }
+        if ("restaurant_store_revenue_rank_gold".equals(tool)) {
+            return "store_compare";
+        }
+        if ("restaurant_discount_usage_gold".equals(tool)) {
+            return "traffic_conversion";
+        }
+        if ("restaurant_revenue_trend_gold".equals(tool)) {
+            return "external_event_response";
+        }
+        if ("restaurant_dish_slowseller_gold".equals(tool)) {
+            return "cost_margin";
+        }
+        if ("restaurant_weekday_weekend_gold".equals(tool)) {
+            return "package";
+        }
+        if ("restaurant_order_type_mix_gold".equals(tool)) {
+            return "traffic_conversion";
+        }
+        if (tool != null && tool.contains("review")) {
+            return "staff_training";
+        }
+        return "store_compare";
     }
 
     // =========================================================================

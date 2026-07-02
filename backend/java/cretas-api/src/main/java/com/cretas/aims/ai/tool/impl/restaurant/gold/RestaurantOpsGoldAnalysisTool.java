@@ -95,7 +95,50 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         result.put("charts", response.getOrDefault("charts", Collections.emptyList()));
         result.put("insights", response.getOrDefault("insights", Collections.emptyList()));
         result.put("processingTimeMs", response.getOrDefault("processing_time_ms", 0));
+        String scenario = ownerActionScenario(question, asString(params.get("intentCode")));
+        result.put("decisionBridge", decisionBridge(scenario));
+        result.put("suggestedFollowups", decisionFollowups(scenario));
         return result;
+    }
+
+    private static String ownerActionScenario(String question, String intentCode) {
+        String text = ((question == null ? "" : question) + " " + (intentCode == null ? "" : intentCode)).toLowerCase();
+        if (text.contains("损耗") || text.contains("盘亏") || text.contains("领料") || text.contains("成本")
+                || text.contains("毛利") || text.contains("采购") || text.contains("bom")) {
+            return "cost_margin";
+        }
+        if (text.contains("门店") || text.contains("哪家店") || text.contains("排行") || text.contains("对比")) {
+            return "store_compare";
+        }
+        if (text.contains("趋势") || text.contains("营收") || text.contains("销售") || text.contains("同比")
+                || text.contains("环比")) {
+            return "external_event_response";
+        }
+        return "store_compare";
+    }
+
+    private static Map<String, Object> decisionBridge(String scenario) {
+        Map<String, Object> bridge = new LinkedHashMap<>();
+        bridge.put("answerMode", "report_with_owner_action");
+        bridge.put("ownerActionScenario", scenario);
+        bridge.put("plainDecision", "这条是经营报表回答；如果老板继续追问，我会基于同一份数据直接给今天动作、不要做什么和明天看什么。");
+        return bridge;
+    }
+
+    private static List<Map<String, Object>> decisionFollowups(String scenario) {
+        return List.of(
+                followup("老板今天怎么做？", "老板今天怎么用这张报表做决定？", scenario),
+                followup("先别做什么？", "哪些动作今天先不要做？", scenario),
+                followup("明天看什么数？", "明天看哪三个数判断有没有效果？", scenario)
+        );
+    }
+
+    private static Map<String, Object> followup(String label, String question, String scenario) {
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("label", label);
+        f.put("question", question);
+        f.put("ownerActionScenario", scenario);
+        return f;
     }
 
     private static String asString(Object value) {

@@ -1134,9 +1134,10 @@ async function tryJavaIntentChat(
       if (Array.isArray(_followups) && _followups.length > 0) {
         msg.suggestedFollowups = _followups
           .filter((f: unknown) => f && typeof (f as { question?: unknown }).question === 'string')
-          .map((f: { label?: string; question: string }) => ({
+          .map((f: { label?: string; question: string; ownerActionScenario?: string }) => ({
             label: String(f.label ?? f.question),
             question: String(f.question),
+            ownerActionScenario: f.ownerActionScenario,
           }));
       }
       const _glossary = _rd?.glossary ?? _td?.glossary;
@@ -1183,8 +1184,9 @@ async function tryJavaIntentChat(
             if (Array.isArray(inner?.suggestedFollowups)) {
               msg.suggestedFollowups = inner.suggestedFollowups
                 .filter((f: { question?: unknown }) => f && typeof f.question === 'string')
-                .map((f: { label?: string; question: string }) => ({
+                .map((f: { label?: string; question: string; ownerActionScenario?: string }) => ({
                   label: String(f.label ?? f.question), question: String(f.question),
+                  ownerActionScenario: f.ownerActionScenario,
                 }));
             }
             if (inner?.glossary && typeof inner.glossary === 'object') msg.glossary = inner.glossary;
