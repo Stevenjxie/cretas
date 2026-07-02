@@ -127,6 +127,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         context: dict[str, Any],
         sections: dict[str, Any],
     ) -> dict[str, Any]:
+        demo_mode = bool(params.get("demoMode") or params.get("demoScenario") or params.get("demo_scenario"))
         pos_ready = bool(
             context.get("pos_df") is not None
             or params.get("pos_summary")
@@ -175,6 +176,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             or "multiStoreComparison" in sections
             or "crossChainBenchmark" in sections
         )
+        if demo_mode:
+            pos_ready = True
+            finance_ready = True
+            stocktake_ready = True
+            review_ready = True
+            menu_ready = True
+            external_ready = True
+            chain_ready = True
 
         source_statuses = [
             self._source_status(

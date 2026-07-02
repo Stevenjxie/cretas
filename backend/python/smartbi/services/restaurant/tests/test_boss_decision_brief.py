@@ -562,6 +562,44 @@ def test_owner_action_chat_uses_traffic_persona_and_platform_mock_data() -> None
     assert "一句话结论" not in follow_up_without_session["data"]["answer"]
 
 
+def test_owner_action_demo_mode_marks_mock_sources_ready() -> None:
+    handler = BossDecisionBriefHandler()
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_DEMO_READY",
+            upload_id=None,
+            sub_sector="鱼类餐饮",
+            period="2026-07-demo",
+            params={"demo_scenario": "external_event_response"},
+        ),
+        context={},
+    )
+
+    data = response.data
+    readiness = data["dataReadiness"]
+    assert all(item["available"] for item in readiness["sources"])
+    assert readiness["enoughForBossDirection"] is True
+    assert readiness["enoughForHardRoiPromise"] is True
+    assert "缺" not in data["finalAnswer"]
+    assert "无法判断" not in data["finalAnswer"]
+    assert all("缺" not in str(card.get("why", "")) for card in data["decisionCards"])
+
+
+def test_owner_action_chat_prioritizes_external_event_when_weather_and_activity_are_named() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_EXTERNAL_EVENT_DEMO",
+            message="结合今天的天气、商圈活动和客流画像，今天适合怎么做生意？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "external_event_response"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+    assert "无法判断" not in data["answer"]
+
+
 def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -> None:
     first = owner_action_chat(
         OwnerActionChatRequest(
