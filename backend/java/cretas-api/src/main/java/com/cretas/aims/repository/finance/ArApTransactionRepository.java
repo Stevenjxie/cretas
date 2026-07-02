@@ -143,6 +143,14 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     boolean existsByFactoryIdAndPurchaseOrderIdAndTransactionType(
             String factoryId, String purchaseOrderId, ArApTransactionType transactionType);
 
+    /**
+     * Idempotent lookup for auto-posted PO payables (采购入库自动挂账 across partial receives).
+     * Mirrors the predicate of {@link #existsByFactoryIdAndPurchaseOrderIdAndTransactionType}
+     * but returns the existing row so callers can skip WITHOUT throwing inside a shared tx.
+     */
+    Optional<ArApTransaction> findFirstByFactoryIdAndPurchaseOrderIdAndTransactionType(
+            String factoryId, String purchaseOrderId, ArApTransactionType transactionType);
+
     /** Source-based idempotency for non-SO/PO AP invoices. */
     Optional<ArApTransaction> findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
             String factoryId, String sourceType, String sourceId, ArApTransactionType transactionType);

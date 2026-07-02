@@ -16,6 +16,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.entity.enums.PurchaseType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -1256,20 +1257,27 @@ public class PurchaseServiceImpl implements PurchaseService {
         log.info("确认入库: receiveId={}, receiveNumber={}, batchesCreated={}", receiveId, record.getReceiveNumber(), record.getItems().size());
 
         // 自动创建应付账款（采购入库 → AP_INVOICE）
+        // 🔒 doomed-tx 修复 (2026-07-02): 必须用 recordPayableIfAbsent (幂等、不抛)。
+        // 旧代码用 recordPayable 并 try/catch(BusinessException) 吞"重复挂账"异常 —— 但 recordPayable
+        // 是 @Transactional，对已挂账的 PO 抛 409 时事务已被标记 rollback-only，catch 也救不回，外层
+        // commit 抛 UnexpectedRollbackException → doomed-tx 兜底转通用 409 → 同一 PO 第 2 次分批入库
+        // 永久无法确认。recordPayableIfAbsent 对"已存在/金额缺失/状态不允许"等预期条件返回 existing/null
+        // 而非抛异常，事务从不被 doom，收货入库不被应付侧阻塞。
         if (record.getPurchaseOrderId() != null) {
             try {
                 PurchaseOrder order = purchaseOrderRepository.findById(record.getPurchaseOrderId()).orElse(null);
                 if (order != null && order.getSupplierId() != null && order.getTotalAmount() != null) {
-                    arApService.recordPayable(factoryId, order.getSupplierId(), order.getId(),
+                    ArApTransaction ap = arApService.recordPayableIfAbsent(factoryId, order.getSupplierId(), order.getId(),
                             order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
                             "采购入库自动挂账-" + record.getReceiveNumber());
-                    log.info("自动创建应付: orderId={}, amount={}", order.getId(), order.getTotalAmount());
+                    if (ap != null) {
+                        log.info("自动应付挂账: orderId={}, amount={}, transactionId={}",
+                                order.getId(), order.getTotalAmount(), ap.getId());
+                    }
                 }
-            } catch (BusinessException e) {
-                // 重复挂账（ArApService 内置防重），忽略
-                log.warn("应付自动挂账跳过(可能已存在): {}", e.getMessage());
             } catch (Exception e) {
-                log.error("应付自动挂账失败: receiveId={}", receiveId, e);
+                // 幂等方法不会因"重复/状态"抛异常; 走到这里是真正的意外错误。收货入库不阻塞, 记日志。
+                log.error("应付自动挂账失败(非预期): receiveId={}", receiveId, e);
             }
         }
 
