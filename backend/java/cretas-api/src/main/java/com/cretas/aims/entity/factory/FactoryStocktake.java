@@ -42,6 +42,19 @@ public class FactoryStocktake extends BaseEntity {
         INITIATED, COUNTING, PENDING_APPROVAL, APPROVED, APPLIED, REJECTED
     }
 
+    /**
+     * 导入模式（仅批量导入创建的盘点任务有值；逐项 UI 发起的为 null）。
+     *
+     * <ul>
+     *   <li>{@code null} — 逐项录入盘点（历史行为，apply 不过账损益凭证，保持原样）</li>
+     *   <li>{@code NORMAL} — 批量导入常规月度盘点：apply 过账 盘盈(借1405/贷6301) / 盘亏(借6602.01/贷1405)</li>
+     *   <li>{@code OPENING} — 批量导入期初建账：apply 过账 借1405/贷 期初权益科目（不进营业外收入，避免虚增当期损益）</li>
+     * </ul>
+     */
+    public enum ImportMode {
+        NORMAL, OPENING
+    }
+
     @Id
     @Column(name = "id", nullable = false, length = 64)
     private String id;
@@ -101,6 +114,11 @@ public class FactoryStocktake extends BaseEntity {
     /** SP12 §5.2: 工作流实例 ID，关联 ApprovalWorkflowInstance.id */
     @Column(name = "workflow_instance_id", length = 191)
     private String workflowInstanceId;
+
+    /** 批量导入模式（NORMAL / OPENING）；逐项 UI 发起为 null。决定 apply 时是否/如何过账损益凭证。*/
+    @Enumerated(EnumType.STRING)
+    @Column(name = "import_mode", length = 20)
+    private ImportMode importMode;
 
     @OneToMany(mappedBy = "stocktake", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<FactoryStocktakeItem> items = new ArrayList<>();
