@@ -269,12 +269,20 @@ const rawReceivableWarehouses = computed(() =>
   warehouseOptions.value.filter((w) => RAW_RECEIVABLE_WAREHOUSE_TYPES.includes(w.type))
 );
 
-/** 原料入库推荐仓 (RAW/SALTED/LOGISTICS 都能收原料, 见 WarehouseInventoryGuardService.assertCanReceive) */
+/**
+ * 原料入库推荐仓。默认 **物流仓(LOGISTICS/WH-LOG)** — 与 WarehouseResolver.resolveLogisticsId 落点一致,
+ * 保证采购入库落点 == 生产报工消耗仓(ensureRawMaterialWarehouse) == 销售 FIFO 默认仓, 全链一致。
+ *
+ * ⚠️ 2026-07-02 回退: 原先默认 WH-RAW(原料仓), 但 resolveLogisticsId 被采购/生产/销售三语义共用,
+ * 料落原料仓会导致生产报工挡("只能从原料仓/物流仓领用" 实际只认物流仓) + 销售 FIFO 查空(FG 落物流仓)。
+ * 改回默认物流仓止血。"采购进主仓" 的正确做法是拆分三个 purpose + 接领料单 gate (见后续 spec), 不是改这里的默认。
+ * RAW/SALTED 仍在候选(用户可手选), 只是不再作默认。
+ */
 function defaultRawWarehouseId(list: FactoryWarehouse[]): string {
-  const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
-  if (raw) return raw.id;
   const logistics = list.find((w) => w.type === 'LOGISTICS' && w.isActive !== false);
-  return logistics ? logistics.id : '';
+  if (logistics) return logistics.id;
+  const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
+  return raw ? raw.id : '';
 }
 
 async function loadData() {
@@ -341,7 +349,7 @@ function handleCreate() {
     purchaseOrderId: '',
     supplierId: '',
     receiveDate: new Date().toISOString().slice(0, 10),
-    // 默认原料仓(WH-RAW), 无则默认物流仓(WH-LOG); loadOptions() 完成后回填 (见下 .then)
+    // 默认物流仓(WH-LOG, 与 resolveLogisticsId 一致), 无则原料仓; loadOptions() 完成后回填 (见下 .then)
     warehouseId: '',
     remark: '',
     items: [],
