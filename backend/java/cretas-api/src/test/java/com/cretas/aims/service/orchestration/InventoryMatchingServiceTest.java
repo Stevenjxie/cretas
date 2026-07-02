@@ -8,6 +8,7 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
@@ -54,6 +55,9 @@ class InventoryMatchingServiceTest {
     @Mock
     private FactoryWarehouseRepository factoryWarehouseRepository;
 
+    @Mock
+    private FactoryWarehouseDefaultRepository factoryWarehouseDefaultRepository;
+
     private WarehouseResolver warehouseResolver;
 
     private InventoryMatchingService service;
@@ -64,8 +68,8 @@ class InventoryMatchingServiceTest {
 
     @BeforeEach
     void setUp() {
-        // Real WarehouseResolver wired to mock repo
-        warehouseResolver = new WarehouseResolver(factoryWarehouseRepository);
+        // Real WarehouseResolver wired to mock repos (no default-warehouse config → hardcoded fallback)
+        warehouseResolver = new WarehouseResolver(factoryWarehouseRepository, factoryWarehouseDefaultRepository);
 
         // Use ReflectionTestUtils since Lombok @RequiredArgsConstructor builds a 3-arg ctor
         service = new InventoryMatchingService(salesOrderRepository, finishedGoodsBatchRepository, warehouseResolver);
