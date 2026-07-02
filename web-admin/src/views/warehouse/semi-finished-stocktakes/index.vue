@@ -184,14 +184,24 @@ async function openCountDialog(row: TableRow) {
 }
 
 async function saveCountItems() {
-  countLoading.value = true;
-  try {
-    // backend PUT /items expects a raw array of { itemId, actualQty, notes }
-    const updates = countItems.value.map((item) => ({
+  // backend PUT /items expects a raw array of { itemId, actualQty, notes }.
+  // actualQty is @NotNull server-side and validated across the WHOLE array —
+  // only send rows the user has actually filled in (partial PUT is supported
+  // and idempotent, per controller doc "可多次调用，幂等更新"), otherwise
+  // every un-filled row among e.g. 199 rows triggers "实盘数量不能为空" ×197.
+  const updates = countItems.value
+    .filter((item) => item.actualQty != null)
+    .map((item) => ({
       itemId: item.id,
       actualQty: item.actualQty,
       notes: item.notes,
     }));
+  if (updates.length === 0) {
+    ElMessage({ message: '请至少填写一项实盘数量后再保存', type: 'warning', duration: 3000 });
+    return;
+  }
+  countLoading.value = true;
+  try {
     const res = await put(`/${factoryId.value}/semi-finished-stocktakes/${countStocktakeId.value}/items`, updates);
     if (res.success) {
       ElMessage({ message: '实盘数量已保存（暂存，批准后生效）', type: 'success', duration: 3000 });
