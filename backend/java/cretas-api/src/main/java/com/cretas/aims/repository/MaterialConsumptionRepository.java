@@ -145,6 +145,25 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             String productionPlanId, String factoryId);
 
     /**
+     * 小结原料扣减定位 (bug fix 2026-07-02): 按 (factoryId, production_batch_id ∈ 本计划各道 WIP 批次)
+     * + 未小结 定位待扣减消耗行。
+     *
+     * <p><b>为什么不按 production_plan_id 查</b>: 逐工序首/中间道 (finished=false) 写的 raw
+     * {@link MaterialConsumption} 其 {@code production_plan_id} <b>故意为 null</b>
+     * (见 {@code ClerkProcessEntryServiceImpl} createProductionBatch 注释 — 防 OrderCostBreakdownService
+     * 按 plan-scoped SUM 双计在制 WIP 原料成本), 但 {@code production_batch_id} (per-道 WIP ProductionBatch id)
+     * <b>恒有值</b>。原 {@code findBy...ProductionPlanId...} 查询会漏掉这些 null-plan 在制道消耗 →
+     * 小结扣减循环从不执行 → 原料零扣减 (production creates stock from nothing, 幻库存)。
+     *
+     * <p>改用 production_batch_id ∈ 本计划各道 process_sheet_rows.batch_id 定位, 命中所有在制/成品道的
+     * raw+WIP 消耗边, 与既有成品道扣减行为对称 (成品道 production_plan_id 非 null, 亦被此查询命中)。
+     * production_batch_id 上已有 {@code idx_consumption_production_batch} 索引, 无需新增迁移。
+     * Factory-scoped 防跨租户。
+     */
+    List<MaterialConsumption> findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(
+            String factoryId, List<Long> productionBatchIds);
+
+    /**
      * 撤销小结: 查某次小结 (postedAt 时间戳) 扣减的全部消耗行 (interim_settled_at == postedAt)。
      * 逆转时逐行还回来源 MaterialBatch.usedQuantity + 清 interim_settled_at。Factory-scoped 防跨租户。
      */
