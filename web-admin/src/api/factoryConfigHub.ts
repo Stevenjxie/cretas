@@ -167,6 +167,7 @@ export interface FactorySettings {
   enableEquipmentManagement?: boolean
   enableAttendance?: boolean
   skipProcessReportingDefault?: boolean
+  requireRequisitionBeforeReport?: boolean
   allowSelfRegistration?: boolean
   requireAdminApproval?: boolean
   defaultUserRole?: string

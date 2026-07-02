@@ -317,6 +317,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         settings.setEnableEquipmentManagement(true);
         settings.setEnableAttendance(true);
         settings.setSkipProcessReportingDefault(false);
+        settings.setRequireRequisitionBeforeReport(false);
 
         // 重置用户注册设置
         settings.setAllowSelfRegistration(false);
@@ -431,6 +432,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                 .enableEquipmentManagement(settings.getEnableEquipmentManagement())
                 .enableAttendance(settings.getEnableAttendance())
                 .skipProcessReportingDefault(settings.getSkipProcessReportingDefault())
+                .requireRequisitionBeforeReport(settings.getRequireRequisitionBeforeReport())
                 // 审计信息
                 .lastModifiedAt(settings.getLastModifiedAt())
                 .factoryName(settings.getFactoryName())
@@ -525,6 +527,9 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         }
         if (dto.isSkipProcessReportingDefaultSpecified()) {
             settings.setSkipProcessReportingDefault(Boolean.TRUE.equals(dto.getSkipProcessReportingDefault()));
+        }
+        if (dto.isRequireRequisitionBeforeReportSpecified()) {
+            settings.setRequireRequisitionBeforeReport(Boolean.TRUE.equals(dto.getRequireRequisitionBeforeReport()));
         }
     }
 

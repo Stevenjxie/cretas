@@ -93,6 +93,14 @@
           </el-text>
         </div>
       </el-form-item>
+      <el-form-item label="报工前必须领料确认">
+        <div class="reporting-mode-setting">
+          <el-switch v-model="form.requireRequisitionBeforeReport" />
+          <el-text type="info" size="small">
+            开启=生产报工前，该计划必须先生成领料单、由仓管拣货确认并调拨到生产仓，否则报工被拦截（强制"仓管没确认领料，生产不能报工"料流）。关闭（默认）=报工照旧，从物料所在原料仓/物流仓消耗。请在仓管培训到位后再逐工厂开启。
+          </el-text>
+        </div>
+      </el-form-item>
 
       <el-form-item>
         <el-button type="primary" :loading="saving" @click="onSave">保存设置</el-button>
@@ -131,6 +139,7 @@ const form = reactive<FactorySettings>({
   enableEquipmentManagement: true,
   enableAttendance: true,
   skipProcessReportingDefault: false,
+  requireRequisitionBeforeReport: false,
   allowSelfRegistration: false,
   requireAdminApproval: true,
   defaultUserRole: 'viewer',

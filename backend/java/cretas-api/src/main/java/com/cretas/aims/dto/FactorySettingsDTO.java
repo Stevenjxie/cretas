@@ -118,6 +118,21 @@ public class FactorySettingsDTO {
         this.skipProcessReportingDefaultSpecified = true;
     }
 
+    @Schema(description = "报工前必须领料确认(② Part B Gate, opt-in, false=报工照旧)", example = "false")
+    private Boolean requireRequisitionBeforeReport;
+
+    /**
+     * Update payload presence marker. Distinguishes an explicit JSON null
+     * (reset to the DB default false) from an omitted field (leave as-is).
+     */
+    @JsonIgnore
+    private boolean requireRequisitionBeforeReportSpecified;
+
+    public void setRequireRequisitionBeforeReport(Boolean requireRequisitionBeforeReport) {
+        this.requireRequisitionBeforeReport = requireRequisitionBeforeReport;
+        this.requireRequisitionBeforeReportSpecified = true;
+    }
+
     @Schema(description = "最后修改时间")
     private LocalDateTime lastModifiedAt;
 
