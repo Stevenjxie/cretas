@@ -113,7 +113,7 @@ const isQidiao = computed(() => props.processCode === 'qidiao');
 // -------------------------------------------------------------------------
 const rawBatchOptions = ref<RawMaterialBatchOption[]>([]);
 const rawBatchLoading = ref(false);
-const rawWarehouseId = ref('');
+const consumableWarehouseIds = ref<string[]>([]);
 let rawBatchLoadSeq = 0;
 
 function extractRawBatches(
@@ -149,22 +149,36 @@ function rawBatchLabel(batch: RawMaterialBatchOption): string {
   return `${name} | ${batch.batchNumber || batch.id} | 余${qty}${unit}${price}`;
 }
 
-function pickRawWarehouse(warehouses: FactoryWarehouse[]): FactoryWarehouse | undefined {
-  return warehouses.find((w) => w.code === 'WH-LOG' && w.isActive !== false)
-    ?? warehouses.find((w) => (w.type === 'RAW' || w.type === 'LOGISTICS') && w.isActive !== false);
+// 报工消耗可领用的仓库: 原料仓/物流仓 (WH-LOG/RAW/LOGISTICS) + 生产仓 (WH-WKS/WORKSHOP)。
+// 领料调拨后, 原料已实际搬到生产仓 (batch.warehouseId=WH-WKS, sourceDocType=MATERIAL_REQUISITION),
+// 报工必须能选到生产仓里的这些料 (后端 ensureRawMaterialWarehouse 已接受 WORKSHOP 批次)。WIP/半成品
+// 批 (sourceDocType=PRODUCTION_BATCH) 由 extractRawBatches 过滤掉, 不会被误当原料领用。
+function pickConsumableWarehouseIds(warehouses: FactoryWarehouse[]): string[] {
+  return warehouses
+    .filter((w) => w.isActive !== false)
+    .filter(
+      (w) =>
+        w.type === 'RAW' ||
+        w.type === 'LOGISTICS' ||
+        w.type === 'WORKSHOP' ||
+        w.code === 'WH-LOG' ||
+        w.code === 'WH-RAW' ||
+        w.code === 'WH-WKS',
+    )
+    .map((w) => w.id);
 }
 
-async function ensureRawWarehouseId(): Promise<string | null> {
-  if (rawWarehouseId.value) return rawWarehouseId.value;
+async function ensureConsumableWarehouseIds(): Promise<string[] | null> {
+  if (consumableWarehouseIds.value.length > 0) return consumableWarehouseIds.value;
   const resp = await listWarehouses(props.factoryId);
   const warehouses = Array.isArray(resp.data) ? resp.data : [];
-  const rawWarehouse = pickRawWarehouse(warehouses);
-  if (!rawWarehouse?.id) {
-    ElMessage.error('未配置原料仓/物流仓，无法加载原料批次');
+  const ids = pickConsumableWarehouseIds(warehouses);
+  if (ids.length === 0) {
+    ElMessage.error('未配置原料仓/物流仓/生产仓，无法加载原料批次');
     return null;
   }
-  rawWarehouseId.value = rawWarehouse.id;
-  return rawWarehouse.id;
+  consumableWarehouseIds.value = ids;
+  return ids;
 }
 
 async function loadRawBatches() {
@@ -172,17 +186,21 @@ async function loadRawBatches() {
   const seq = ++rawBatchLoadSeq;
   rawBatchLoading.value = true;
   try {
-    const warehouseId = await ensureRawWarehouseId();
-    if (!warehouseId) {
+    const warehouseIds = await ensureConsumableWarehouseIds();
+    if (!warehouseIds) {
       rawBatchOptions.value = [];
       return;
     }
+    // 工厂全仓拉一次 (不限单仓), 再按可领用仓集合过滤 → 同时覆盖原料仓 + 生产仓, 排除成品/质检等其它仓。
     const resp = await getAvailableRawBatches(props.factoryId, {
-      warehouseId,
       productTypeId: props.productTypeId,
     });
     if (seq !== rawBatchLoadSeq) return;
-    rawBatchOptions.value = extractRawBatches(resp.data).filter((b) => rawBatchAvailable(b) > 0);
+    const allowed = new Set(warehouseIds);
+    rawBatchOptions.value = extractRawBatches(resp.data)
+      // 批次带 warehouseId 时限定在可领用仓; 老数据无 warehouseId 的兜底保留 (与旧单仓查询口径一致不回归)。
+      .filter((b) => !b.warehouseId || allowed.has(b.warehouseId))
+      .filter((b) => rawBatchAvailable(b) > 0);
   } catch (err) {
     if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = [];
@@ -1102,7 +1120,7 @@ watch(
   () => [props.factoryId, props.processCode, props.productTypeId] as const,
   () => {
     rawBatchOptions.value = [];
-    rawWarehouseId.value = '';
+    consumableWarehouseIds.value = [];
     rawBatchLoadSeq++;
     rawBatchLoading.value = false;
     if (isXiuYou.value) void loadRawBatches();

@@ -198,6 +198,83 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         verify(repository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("transferToFactory blocks (no false success) when picking was never confirmed")
+    void transferToFactory_withoutConfirmedPicking_blocks() {
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // 仓管跳过「确认领料」直接点调拨: picked_qty 全为 null
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            it.setPickedQty(null);
+            it.setBatchNumbers(new ArrayList<>());
+        }
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
+        assertTrue(ex.getMessage().contains("确认领料"), "message must tell 仓管 to confirm picking first");
+        // no state change, no phantom success
+        assertEquals(Status.PICKING, mr.getStatus());
+        verify(repository, never()).save(any());
+        verify(transferService, never()).createTransfer(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("transferToFactory auto-allocates batches (FEFO) when 仓管 only entered picked qty, then moves stock")
+    void transferToFactory_autoAllocatesBatchesWhenMissing_movesStock() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+        batchStore.put("batch-2", batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00"));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // confirm-picking 只录了数量 (picked_qty 已存在), 未选批次 → batch_numbers 空
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            it.setBatchNumbers(new ArrayList<>());
+        }
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // 系统按 FEFO 从原料仓自动分配领料批次
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY_ID, "MAT-001", WH_LOGISTICS))
+                .thenReturn(List.of(batchStore.get("batch-1")));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY_ID, "MAT-002", WH_LOGISTICS))
+                .thenReturn(List.of(batchStore.get("batch-2")));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus());
+        // WH-LOG source deducted (auto-picked batch划出)
+        assertEquals(new BigDecimal("10.00"), batchStore.get("batch-1").getUsedQuantity());
+        assertEquals(MaterialBatchStatus.DEPLETED, batchStore.get("batch-1").getStatus());
+        assertEquals(new BigDecimal("0.50"), batchStore.get("batch-2").getUsedQuantity());
+        // WH-WKS batch created for the auto-allocated material
+        MaterialBatch wks1 = findWorkshopBatch("MAT-001");
+        assertNotNull(wks1, "workshop batch created from auto-allocated picking");
+        assertEquals(WH_WORKSHOP, wks1.getWarehouseId());
+        assertEquals(new BigDecimal("10.00"), wks1.getReceiptQuantity());
+        // the auto-allocated batchId is recorded on the item rows (for downstream reversal)
+        assertEquals("batch-1", mr.getItems().get(0).getBatchNumbers().get(0).get("batchId"));
+        assertNotNull(mr.getItems().get(0).getBatchNumbers().get(0).get("workshopBatchId"));
+    }
+
+    @Test
+    @DisplayName("transferToFactory auto-allocation blocks honestly when raw stock cannot cover picked qty")
+    void transferToFactory_autoAllocationInsufficient_blocks() {
+        // only 3 available for MAT-001 but picked 10
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "7.00", "3.50"));
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            it.setBatchNumbers(new ArrayList<>());
+        }
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY_ID, "MAT-001", WH_LOGISTICS))
+                .thenReturn(List.of(batchStore.get("batch-1")));
+        lenient().when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY_ID, "MAT-001"))
+                .thenReturn(List.of(batchStore.get("batch-1")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
+        assertTrue(ex.getMessage().contains("不足"));
+        verify(repository, never()).save(any());
+    }
+
     // ==================== close: return + workshop drawdown ====================
 
     @Test
