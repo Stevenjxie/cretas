@@ -202,6 +202,11 @@ class OwnerActionChatRequest(BaseModel):
 
 _OWNER_ACTION_CHAT_SESSIONS: dict[str, dict[str, Any]] = {}
 
+
+def _owner_action_session_key(factory_id: str, session_id: str) -> str:
+    return f"{factory_id}:{session_id}"
+
+
 _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("store_compare", ("所有门店", "其他门店", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "最值得学习", "复制到")),
     ("seating_mix", ("二人桌", "两人桌", "四人桌", "两人客", "四人客", "桌型", "桌子", "翻台", "翻台率", "排队", "等位")),
@@ -1268,7 +1273,8 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     factory_id = _effective_str(body.factory_id, body.factoryId, default="RES_DEMO_QHJ")
     provided_session_id = _effective_str(body.session_id, body.sessionId)
     session_id = provided_session_id or f"owner-action-{uuid.uuid4().hex[:12]}"
-    previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_id, {})
+    session_key = _owner_action_session_key(factory_id, session_id)
+    previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_key, {})
     requested = _effective_str(body.demo_scenario, body.demoScenario)
     scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
     scenarios = set(list_owner_action_demo_scenarios())
@@ -1319,7 +1325,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     follow_ups = _owner_chat_follow_ups(scenario)
     charts = _owner_evidence_charts(owner_page, scenario, params)
     chart_guide = _owner_chart_guide(scenario) if charts else ""
-    _OWNER_ACTION_CHAT_SESSIONS[session_id] = {
+    _OWNER_ACTION_CHAT_SESSIONS[session_key] = {
         "scenario": scenario,
         "lastMessage": body.message,
         "lastAnswer": answer,

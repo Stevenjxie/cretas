@@ -19,6 +19,7 @@ interface LoginData {
   role?: string;
   factoryId?: string;
   factoryType?: string;
+  businessDomain?: string;
   permissions?: string[];
 }
 

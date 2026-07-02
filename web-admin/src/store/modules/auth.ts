@@ -33,6 +33,13 @@ function getFactoryBrandOverride(id?: string) {
   return id ? FACTORY_BRAND_OVERRIDES[id] : undefined;
 }
 
+function resolveBusinessDomain(factoryType?: string, explicitDomain?: string): 'FACTORY' | 'RESTAURANT' {
+  const domain = explicitDomain?.toUpperCase();
+  if (domain === 'RESTAURANT' || domain === 'FACTORY') return domain;
+  const type = factoryType?.toUpperCase();
+  return type === 'RESTAURANT' || type === 'BRANCH' ? 'RESTAURANT' : 'FACTORY';
+}
+
 export const useAuthStore = defineStore('auth', () => {
   // State
   const user = ref<User | null>(null);
@@ -79,6 +86,12 @@ export const useAuthStore = defineStore('auth', () => {
     if (!u) return '';
     if (isFactoryUser(u)) return u.factoryUser?.factoryType || 'FACTORY';
     return '';
+  });
+
+  const businessDomain = computed(() => {
+    const u = user.value as User | null;
+    if (!u || !isFactoryUser(u)) return '';
+    return resolveBusinessDomain(u.factoryUser?.factoryType, u.factoryUser?.businessDomain);
   });
 
   const factoryName = computed(() => {
@@ -168,6 +181,7 @@ export const useAuthStore = defineStore('auth', () => {
         factoryName: data.factoryName,
         factoryLogoUrl: data.factoryLogoUrl,
         factoryType: data.factoryType || 'FACTORY',
+        businessDomain: resolveBusinessDomain(data.factoryType || 'FACTORY', data.businessDomain),
         permissions: data.permissions || [],
       }
     } as User;
@@ -247,6 +261,7 @@ export const useAuthStore = defineStore('auth', () => {
     factoryName,
     factoryLogoUrl,
     factoryType,
+    businessDomain,
     brandTitle,
     brandSubtitle,
     isLiushanmenFactory,

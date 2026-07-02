@@ -560,7 +560,7 @@ function inferDomainFromFilename(name: string): string {
 // P1-B: For RESTAURANT tenants, the quick-question section is replaced by the
 // grouped catalog (rendered separately in the template). This flat list is used
 // as a fallback for non-restaurant tenants and the autocomplete list.
-const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT');
+const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
 const ownerActionSessionId = ref('');
 const pendingOwnerActionScenario = ref('');
 

@@ -142,6 +142,7 @@ export interface PlatformUser extends BaseUser {
 
 // 工厂类型
 export type FactoryType = 'FACTORY' | 'RESTAURANT' | 'HEADQUARTERS' | 'BRANCH' | 'CENTRAL_KITCHEN';
+export type BusinessDomain = 'FACTORY' | 'RESTAURANT';
 
 // 工厂用户接口
 export interface FactoryUser extends BaseUser {
@@ -152,6 +153,7 @@ export interface FactoryUser extends BaseUser {
     factoryName?: string;
     factoryLogoUrl?: string;
     factoryType?: FactoryType;
+    businessDomain?: BusinessDomain;
     department?: Department;
     position?: string;
     permissions: string[];
