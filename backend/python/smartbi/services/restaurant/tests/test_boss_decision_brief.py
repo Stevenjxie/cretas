@@ -554,16 +554,17 @@ def test_owner_action_chat_uses_traffic_persona_and_platform_mock_data() -> None
     assert page["platformChannelSnapshot"]["available"] is True
     assert any(item["dimension"] == "外部客流画像" for item in page["analysisDimensions"])
 
-    follow_up_without_session = owner_action_chat(
+    follow_up_with_session = owner_action_chat(
         OwnerActionChatRequest(
             factory_id="F_TRAFFIC_DEMO",
+            session_id=data["sessionId"],
             message="老板今天先看哪三个数？",
         )
     )
-    assert follow_up_without_session["data"]["scenario"] == "traffic_conversion"
-    assert "只看这三个数" in follow_up_without_session["data"]["answer"]
-    assert "门口路过人数" in follow_up_without_session["data"]["answer"]
-    assert "一句话结论" not in follow_up_without_session["data"]["answer"]
+    assert follow_up_with_session["data"]["scenario"] == "traffic_conversion"
+    assert "只看这三个数" in follow_up_with_session["data"]["answer"]
+    assert "门口路过人数" in follow_up_with_session["data"]["answer"]
+    assert "一句话结论" not in follow_up_with_session["data"]["answer"]
 
 
 def test_owner_action_demo_mode_marks_mock_sources_ready() -> None:
@@ -825,6 +826,29 @@ def test_owner_action_chat_routes_and_keeps_follow_up_session() -> None:
     assert "seating_mix" not in follow_up_data["answer"]
     assert "只看这三个数" in follow_up_data["answer"]
     assert "一句话结论" not in follow_up_data["answer"]
+
+
+def test_owner_action_chat_does_not_reuse_factory_last_scenario_without_session() -> None:
+    _OWNER_ACTION_CHAT_SESSIONS.pop("owner-action-external-seeded", None)
+
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NO_FACTORY_FALLBACK",
+            session_id="owner-action-external-seeded",
+            message="今天下雨加上商场活动，堂食和外卖要怎么调？",
+        )
+    )
+    assert first["data"]["scenario"] == "external_event_response"
+
+    follow_up_without_session = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NO_FACTORY_FALLBACK",
+            message="具体怎么执行？",
+        )
+    )
+
+    assert follow_up_without_session["data"]["sessionId"] != "owner-action-external-seeded"
+    assert follow_up_without_session["data"]["scenario"] == "package"
 
 
 def test_owner_action_chat_explicit_keywords_override_previous_follow_up_topic() -> None:

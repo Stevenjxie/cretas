@@ -564,13 +564,10 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const ownerActionSessionId = ref('');
 const pendingOwnerActionScenario = ref('');
 
-function isRestaurantOwnerActionQuery(query: string): boolean {
+function shouldSendOwnerActionContext(query: string): boolean {
   if (!isRestaurantTenant.value) return false;
   const text = query.trim();
-  if ((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text)) {
-    return true;
-  }
-  return /老板|店长|区域经理|今天.*动作|具体动作|二人桌|四人桌|桌型|翻台|排队|小套餐|套餐|排班|员工|厨房|出餐|差评|毛利|成本|商圈|客流|画像|进店|转化|曝光|核销|活动|天气|备货|推品|营收|营业额|收入|利润|复购|评价|评论|口碑|美团|大众点评|抖音|团购|菜单|菜品|优化|建议|解决|怎么做生意/.test(text);
+  return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
 }
 
 function isOwnerActionFollowupText(query: string): boolean {
@@ -1028,7 +1025,7 @@ async function tryJavaIntentChat(
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
   try {
-    const ownerActionQuery = isRestaurantOwnerActionQuery(query);
+    const ownerActionQuery = shouldSendOwnerActionContext(query);
     const res = await executeIntent(factoryId, query, {
       sessionId: javaIntentSessionId.value,
       context: ownerActionQuery ? {
