@@ -529,6 +529,15 @@ function calcLaborPerBox(row: SheetRow): number | null {
   });
 }
 
+/**
+ * 🔒 防呆 Rule — 单位不对齐守卫: 库存单位为"计数"单位(盒/个/件/只)时,
+ * 与本道按 kg 投料的数值口径不可直接比较(会造成静默超扣/误判)。
+ * 检测到即拦截,要求改选 kg 单位的批次。
+ */
+function isCountUnit(unit: string | null | undefined): boolean {
+  return !!unit && /盒|个|件|只/.test(unit);
+}
+
 function upstreamWarning(row: SheetRow): string | null {
   if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 用量 = before
@@ -536,12 +545,14 @@ function upstreamWarning(row: SheetRow): string | null {
     if (row.upstreamFinishedGoods) {
       // 防呆 Rule 1 — ①c FG 投料 max 守卫: 对照常驻成品库存的可用量。
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      if (fg && isCountUnit(fg.unit)) return `该来源单位为${fg.unit}，与本道kg投料不匹配，请选择kg单位的半成品/成品批次`;
       if (fg && usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
       return null;
     }
     if (row.upstreamSemiFinished) {
       // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量。
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      if (sfi && isCountUnit(sfi.unit)) return `该来源单位为${sfi.unit}，与本道kg投料不匹配，请选择kg单位的半成品/成品批次`;
       if (sfi && usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
       return null;
     }
@@ -554,11 +565,13 @@ function upstreamWarning(row: SheetRow): string | null {
     const usage = calcReverseInput(row) ?? 0;
     if (row.upstreamFinishedGoods) {
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      if (fg && isCountUnit(fg.unit)) return `该来源单位为${fg.unit}，与本道kg投料不匹配，请选择kg单位的半成品/成品批次`;
       if (fg && usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
       return null;
     }
     if (row.upstreamSemiFinished) {
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      if (sfi && isCountUnit(sfi.unit)) return `该来源单位为${sfi.unit}，与本道kg投料不匹配，请选择kg单位的半成品/成品批次`;
       if (sfi && usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
       return null;
     }
@@ -572,6 +585,10 @@ function upstreamWarning(row: SheetRow): string | null {
       if (src.finishedGoods) {
         // 防呆 Rule 1 — ①c FG 投料 max 守卫: 对照常驻成品库存的可用量。
         const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
+        if (fg && isCountUnit(fg.unit)) {
+          warnings.push(`${src.sourceBatchNumber} 单位为${fg.unit}，与本道kg投料不匹配，请选择kg单位的批次`);
+          continue;
+        }
         if (fg && src.feedQuantityKg > fgAvailable(fg)) {
           warnings.push(`${src.sourceBatchNumber} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`);
         }
@@ -580,6 +597,10 @@ function upstreamWarning(row: SheetRow): string | null {
       if (src.semiFinished) {
         // 防呆 Rule 1 — SFI 投料 max 守卫: 对照常驻半成品库存的可用量 (此前漏检 → 超投无提示)。
         const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
+        if (sfi && isCountUnit(sfi.unit)) {
+          warnings.push(`${src.sourceBatchNumber} 单位为${sfi.unit}，与本道kg投料不匹配，请选择kg单位的批次`);
+          continue;
+        }
         if (sfi && src.feedQuantityKg > sfiAvailable(sfi)) {
           warnings.push(`${src.sourceBatchNumber} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`);
         }
@@ -628,6 +649,10 @@ function saveDisabledReason(row: SheetRow): string | null {
     if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
     if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
   }
+  // 🔒 防呆 Rule 1 — 超投/单位不匹配 must-fix 不是 advisory: upstreamWarning() 命中时同样 disable 保存,
+  // 不能只在提示区显示警告文字却仍放行保存(2026-07-02 GATE-HANDBACK 阻断项②)。
+  const w = upstreamWarning(row);
+  if (w) return w;
   return null;
 }
 
