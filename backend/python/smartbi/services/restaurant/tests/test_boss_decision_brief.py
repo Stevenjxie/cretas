@@ -608,6 +608,7 @@ def test_owner_action_chat_routes_platform_and_door_conversion_questions() -> No
     cases = [
         "美团大众点评有人看但没下单，老板今天先改什么？",
         "门口路过客很多，为什么没有转成订单，怎么解决？",
+        "商场热起来了但青花椒没有涨，今天怎么接住这波人？",
     ]
 
     for message in cases:
