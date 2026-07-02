@@ -173,6 +173,16 @@ export function saveWarehouseDefaults(factoryId: string, defaults: WarehouseDefa
   )
 }
 
+/**
+ * 清除某 purpose 的默认仓配置 → 回退系统默认仓 (WarehouseResolver 硬编码 code)。
+ * 幂等：无配置时后端 no-op 仍返回成功。
+ */
+export function deleteWarehouseDefault(factoryId: string, purpose: WarehouseDefaultPurpose) {
+  return request.delete<any, { success: boolean; message?: string }>(
+    `/${factoryId}/factory/warehouse-defaults/${purpose}`,
+  )
+}
+
 // ==================== Template presets (frontend constants) ====================
 
 /** 六扇门含盐化代加工 7 仓预设（与后端 LIUSHANMEN_SALTED 对应） */
