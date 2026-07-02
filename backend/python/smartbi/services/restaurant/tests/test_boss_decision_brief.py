@@ -632,6 +632,20 @@ def test_owner_action_chat_routes_single_extra_worker_question_to_staffing() -> 
     assert "缺" not in data["answer"]
 
 
+def test_owner_action_chat_routes_waiter_script_training_question() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_STAFF_TRAINING_SCRIPT",
+            message="开班前服务员今天先训练哪三句话术？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "staff_training"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+
+
 def test_owner_action_chat_routes_platform_and_door_conversion_questions() -> None:
     cases = [
         "美团大众点评有人看但没下单，老板今天先改什么？",
