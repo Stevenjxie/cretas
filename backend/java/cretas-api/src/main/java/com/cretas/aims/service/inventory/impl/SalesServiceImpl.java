@@ -2540,9 +2540,11 @@ public class SalesServiceImpl implements SalesService {
                                                         String sourceWarehouseCode) {
         // T4-D5 #572 Phase B-1: honor caller-supplied sourceWarehouseCode (PR #547/#564 chain).
         // null/blank → WH-LOG fallback (D5 默认行为, Phase A 一致).
+        // 用途拆分 (2026-07-02): 默认来源走 resolveSalesOutboundWh (SALES_OUTBOUND_DEFAULT),
+        // 未配置回退 WH-LOG = 现状。
         String warehouseId = (sourceWarehouseCode != null && !sourceWarehouseCode.isBlank())
                 ? warehouseResolver.resolveId(factoryId, sourceWarehouseCode)
-                : warehouseResolver.resolveLogisticsId(factoryId);
+                : warehouseResolver.resolveSalesOutboundWh(factoryId);
         return finishedGoodsBatchRepository
                 .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId);
     }

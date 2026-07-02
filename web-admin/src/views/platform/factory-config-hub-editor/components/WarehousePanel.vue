@@ -75,7 +75,7 @@
       </el-form>
       <div class="defaults-hint">
         <el-text type="info" size="small">
-          留空 = 用系统默认仓（物流仓/车间仓/研发库）。配置后该用途的入库自动进所选仓。
+          留空 = 用系统默认仓（采购入库/销售出货/生产领料默认物流仓 WH-LOG；生产成品用车间仓；研发用研发库）。配置后该用途自动进所选仓，互不影响。
         </el-text>
       </div>
       <div class="defaults-actions">
@@ -436,9 +436,12 @@ async function onApplyTemplate() {
 // ==================== 默认仓用途配置 ====================
 
 const WAREHOUSE_DEFAULT_PURPOSE_KEYS: WarehouseDefaultPurpose[] = [
-  'LOGISTICS_DEFAULT',
+  'PURCHASE_INBOUND_DEFAULT',
+  'SALES_OUTBOUND_DEFAULT',
+  'PRODUCTION_RAW_DEFAULT',
   'WORKSHOP_DEFAULT',
   'RD_DEFAULT',
+  'LOGISTICS_DEFAULT',
 ]
 
 const defaultsLoading = ref(false)
@@ -448,6 +451,9 @@ const defaultsForm = reactive<Record<WarehouseDefaultPurpose, string | undefined
   LOGISTICS_DEFAULT: undefined,
   WORKSHOP_DEFAULT: undefined,
   RD_DEFAULT: undefined,
+  PURCHASE_INBOUND_DEFAULT: undefined,
+  SALES_OUTBOUND_DEFAULT: undefined,
+  PRODUCTION_RAW_DEFAULT: undefined,
 })
 
 // 上次从后端加载到的已持久化映射快照，用来判断"清空但保存"时后端是否真的能删除。
@@ -455,6 +461,9 @@ const persistedDefaults = reactive<Record<WarehouseDefaultPurpose, string | unde
   LOGISTICS_DEFAULT: undefined,
   WORKSHOP_DEFAULT: undefined,
   RD_DEFAULT: undefined,
+  PURCHASE_INBOUND_DEFAULT: undefined,
+  SALES_OUTBOUND_DEFAULT: undefined,
+  PRODUCTION_RAW_DEFAULT: undefined,
 })
 
 async function loadDefaults() {

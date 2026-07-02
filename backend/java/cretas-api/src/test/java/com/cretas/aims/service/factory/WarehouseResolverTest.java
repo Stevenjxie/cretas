@@ -228,4 +228,151 @@ class WarehouseResolverTest {
 
         assertEquals(WH_WKS_ID, id, "悬空配置应回退到硬编码 WH-WKS, 不抛异常");
     }
+
+    // ==================== 用途拆分 resolver (2026-07-02, warehouse-purpose-split Part A) ====================
+    // resolvePurchaseInboundWh / resolveSalesOutboundWh / resolveProductionRawWh 全部 fallback WH-LOG。
+    // 无配置 = 现状 (WH-LOG); 有配置 = 配置仓; 悬空配置 = 回退 WH-LOG。
+
+    /**
+     * (Split-a) 向后兼容 — 最重要: 三个新 resolver 无配置全回退硬编码 WH-LOG (= 拆分前 resolveLogisticsId 行为)。
+     */
+    @Test
+    @DisplayName("(Split-a) 无配置 → 采购/销售/生产领料三 resolver 全回退 WH-LOG (向后兼容)")
+    void splitResolvers_noConfig_fallBackToWhLog() {
+        // 未 stub factoryWarehouseDefaultRepository → Optional.empty() (无配置)
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_LOG))
+                .thenReturn(Optional.of(whLog));
+
+        assertEquals(WH_LOG_ID, warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID));
+        assertEquals(WH_LOG_ID, warehouseResolver.resolveSalesOutboundWh(FACTORY_ID));
+        assertEquals(WH_LOG_ID, warehouseResolver.resolveProductionRawWh(FACTORY_ID));
+
+        // 回退路径不校验默认仓 id 有效性
+        verify(factoryWarehouseRepository, never())
+                .findByIdAndFactoryIdAndDeletedAtIsNull(anyString(), anyString());
+    }
+
+    /**
+     * (Split-b) 有配置且指向有效仓库 → resolver 返回配置的仓库 (不走硬编码 WH-LOG)。
+     * 以 PURCHASE_INBOUND_DEFAULT 为代表 (三个 resolver 共用 resolveConfiguredWarehouseId 逻辑)。
+     */
+    @Test
+    @DisplayName("(Split-b) 采购入库配置 (指向有效仓) → 返回配置仓, 不回退 WH-LOG")
+    void resolvePurchaseInboundWh_withConfig_returnsConfiguredWarehouse() {
+        FactoryWarehouseDefault config = new FactoryWarehouseDefault();
+        config.setFactoryId(FACTORY_ID);
+        config.setPurpose(WarehouseDefaultPurpose.PURCHASE_INBOUND_DEFAULT);
+        config.setWarehouseId(CONFIGURED_WH_ID);
+
+        FactoryWarehouse custom = new FactoryWarehouse();
+        custom.setId(CONFIGURED_WH_ID);
+        custom.setFactoryId(FACTORY_ID);
+        custom.setCode("WH-MAIN");
+        custom.setType(WarehouseType.RAW);
+
+        when(factoryWarehouseDefaultRepository
+                .findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.PURCHASE_INBOUND_DEFAULT))
+                .thenReturn(Optional.of(config));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(CONFIGURED_WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(custom));
+
+        assertEquals(CONFIGURED_WH_ID, warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID));
+        // 配置命中 → 不回退硬编码 WH-LOG
+        verify(factoryWarehouseRepository, never())
+                .findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_LOG);
+    }
+
+    /**
+     * (Split-c) 悬空配置 (仓库已软删/不存在) → 回退硬编码 WH-LOG, 不抛异常。
+     * 以 SALES_OUTBOUND_DEFAULT 为代表。
+     */
+    @Test
+    @DisplayName("(Split-c) 销售出货悬空配置 → 回退 WH-LOG, 不报错")
+    void resolveSalesOutboundWh_danglingConfig_fallsBackToWhLog() {
+        FactoryWarehouseDefault config = new FactoryWarehouseDefault();
+        config.setFactoryId(FACTORY_ID);
+        config.setPurpose(WarehouseDefaultPurpose.SALES_OUTBOUND_DEFAULT);
+        config.setWarehouseId("wh-deleted-uuid-888");
+
+        when(factoryWarehouseDefaultRepository
+                .findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.SALES_OUTBOUND_DEFAULT))
+                .thenReturn(Optional.of(config));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("wh-deleted-uuid-888", FACTORY_ID))
+                .thenReturn(Optional.empty());
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_LOG))
+                .thenReturn(Optional.of(whLog));
+
+        assertEquals(WH_LOG_ID, warehouseResolver.resolveSalesOutboundWh(FACTORY_ID),
+                "悬空配置应回退到硬编码 WH-LOG, 不抛异常");
+    }
+
+    /**
+     * (Split-d) resolveProductionRawWh 有配置 → 返回配置仓 (报工 gate 用)。
+     */
+    @Test
+    @DisplayName("(Split-d) 生产领料配置 (指向有效仓) → 返回配置仓")
+    void resolveProductionRawWh_withConfig_returnsConfiguredWarehouse() {
+        FactoryWarehouseDefault config = new FactoryWarehouseDefault();
+        config.setFactoryId(FACTORY_ID);
+        config.setPurpose(WarehouseDefaultPurpose.PRODUCTION_RAW_DEFAULT);
+        config.setWarehouseId(CONFIGURED_WH_ID);
+
+        FactoryWarehouse custom = new FactoryWarehouse();
+        custom.setId(CONFIGURED_WH_ID);
+        custom.setFactoryId(FACTORY_ID);
+        custom.setCode("WH-RAW");
+        custom.setType(WarehouseType.RAW);
+
+        when(factoryWarehouseDefaultRepository
+                .findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.PRODUCTION_RAW_DEFAULT))
+                .thenReturn(Optional.of(config));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(CONFIGURED_WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(custom));
+
+        assertEquals(CONFIGURED_WH_ID, warehouseResolver.resolveProductionRawWh(FACTORY_ID));
+    }
+
+    // ==================== isRawOrLogisticsWarehouse (报工原料来源仓校验) ====================
+
+    @Test
+    @DisplayName("isRawOrLogisticsWarehouse: RAW 类型仓 → true")
+    void isRawOrLogisticsWarehouse_rawType_returnsTrue() {
+        FactoryWarehouse raw = new FactoryWarehouse();
+        raw.setId("wh-raw-1");
+        raw.setFactoryId(FACTORY_ID);
+        raw.setType(WarehouseType.RAW);
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("wh-raw-1", FACTORY_ID))
+                .thenReturn(Optional.of(raw));
+
+        assertTrue(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, "wh-raw-1"));
+    }
+
+    @Test
+    @DisplayName("isRawOrLogisticsWarehouse: LOGISTICS 类型仓 → true")
+    void isRawOrLogisticsWarehouse_logisticsType_returnsTrue() {
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(WH_LOG_ID, FACTORY_ID))
+                .thenReturn(Optional.of(whLog));
+
+        assertTrue(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, WH_LOG_ID));
+    }
+
+    @Test
+    @DisplayName("isRawOrLogisticsWarehouse: WORKSHOP 类型仓 → false (报工不能从车间仓领原料)")
+    void isRawOrLogisticsWarehouse_workshopType_returnsFalse() {
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(WH_WKS_ID, FACTORY_ID))
+                .thenReturn(Optional.of(whWks));
+
+        assertFalse(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, WH_WKS_ID));
+    }
+
+    @Test
+    @DisplayName("isRawOrLogisticsWarehouse: null / blank / 不存在(跨工厂/已删) → false (诚实-null)")
+    void isRawOrLogisticsWarehouse_nullBlankOrMissing_returnsFalse() {
+        assertFalse(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, null));
+        assertFalse(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, "  "));
+
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("wh-gone", FACTORY_ID))
+                .thenReturn(Optional.empty());
+        assertFalse(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, "wh-gone"));
+    }
 }

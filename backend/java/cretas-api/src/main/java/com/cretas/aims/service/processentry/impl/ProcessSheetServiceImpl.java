@@ -1363,15 +1363,24 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (warehouseResolver == null) {
             return;
         }
-        String rawWarehouseId = warehouseResolver.resolveLogisticsId(factoryId);
+        // 用途拆分 (2026-07-02): 生产报工原料来源走独立 resolveProductionRawWh (PRODUCTION_RAW_DEFAULT),
+        // 未配置回退 WH-LOG = 现状。不再与采购入库 / 销售出货共用 resolveLogisticsId。
+        String rawWarehouseId = warehouseResolver.resolveProductionRawWh(factoryId);
         if (rawWarehouseId == null || rawWarehouseId.isBlank()) {
             throw new BusinessException(500, "未配置原料仓/物流仓，不能保存生产领料")
                     .withCode("PRODUCTION_RAW_WAREHOUSE_NOT_CONFIGURED")
                     .withHint("请先维护工厂仓库配置")
                     .withHintTarget("原料批次");
         }
+        // code/message 对齐修复 (2026-07-02): 文案说「原料仓/物流仓」但旧代码只认单一 resolveLogisticsId 仓。
+        // 现放行 = 配置的生产领料默认仓 (resolveProductionRawWh, 默认 WH-LOG) 或 任意 RAW/LOGISTICS 类型仓库。
+        // 严格更宽松: 旧行为 (batch 在 WH-LOG) 仍被第一分支命中 → 向后兼容, 不拒绝原先能通过的批次。
+        // 诚实-null 保留: batch 无仓 / 仓非 RAW/LOGISTICS → loud-fail 409。
         String batchWarehouseId = rawMb != null ? rawMb.getWarehouseId() : null;
-        if (batchWarehouseId == null || batchWarehouseId.isBlank() || !rawWarehouseId.equals(batchWarehouseId)) {
+        boolean accepted = batchWarehouseId != null && !batchWarehouseId.isBlank()
+                && (rawWarehouseId.equals(batchWarehouseId)
+                    || warehouseResolver.isRawOrLogisticsWarehouse(factoryId, batchWarehouseId));
+        if (!accepted) {
             throw new BusinessException(409, "生产逐道报工原料只能从原料仓/物流仓领用，不能从其他仓库扣减")
                     .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")
                     .withHint("请重新选择原料仓/物流仓批次后再保存")

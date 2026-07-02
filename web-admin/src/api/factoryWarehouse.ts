@@ -130,12 +130,22 @@ export function applyWarehouseTemplate(factoryId: string, body: ApplyTemplateBod
 // Role gate: factory_super_admin / permission_admin (backend @RequireRole)
 
 /** 默认仓路由用途 — 镜像后端 WarehouseDefaultPurpose 枚举。 */
-export type WarehouseDefaultPurpose = 'LOGISTICS_DEFAULT' | 'WORKSHOP_DEFAULT' | 'RD_DEFAULT'
+export type WarehouseDefaultPurpose =
+  | 'LOGISTICS_DEFAULT'
+  | 'WORKSHOP_DEFAULT'
+  | 'RD_DEFAULT'
+  | 'PURCHASE_INBOUND_DEFAULT'
+  | 'SALES_OUTBOUND_DEFAULT'
+  | 'PRODUCTION_RAW_DEFAULT'
 
 export const WAREHOUSE_DEFAULT_PURPOSE_LABELS: Record<WarehouseDefaultPurpose, string> = {
-  LOGISTICS_DEFAULT: '采购入库 / 销售出货 / 原料默认仓',
+  // 用途拆分 (2026-07-02): LOGISTICS_DEFAULT 原本三语义共用, 已拆出采购入库/销售出货/生产领料三个独立用途。
+  LOGISTICS_DEFAULT: '调拨 / 退货 / 其余默认仓',
   WORKSHOP_DEFAULT: '生产成品 / 报工消耗默认仓',
   RD_DEFAULT: '研发 / 试制默认仓',
+  PURCHASE_INBOUND_DEFAULT: '采购入库默认仓',
+  SALES_OUTBOUND_DEFAULT: '销售出货默认仓',
+  PRODUCTION_RAW_DEFAULT: '生产领料默认仓',
 }
 
 export interface FactoryWarehouseDefault {
