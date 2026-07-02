@@ -324,6 +324,21 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     public FactoryMaterialRequisition transferToFactory(String factoryId, String id, Long operatorId) {
         FactoryMaterialRequisition mr = getById(factoryId, id);
         assertStatus(mr, Status.PICKING);
+
+        // 防呆 (Rule 4 幂等 + 反假成功): 调拨前必须已「确认领料」录入实际拣货数量。若所有行 picked_qty
+        // 均为 null/0, 说明仓管跳过了确认领料直接点调拨 → 之前会静默把状态推到 TRANSFERRED 并返 200
+        // (相relocate/outbound 两个循环全 skip, 零库存移动), 用户以为「已调拨」实则料没搬 → 假成功。
+        // 现 loud-block, 明确告诉仓管下一步动作。
+        boolean anyPicked = mr.getItems().stream()
+                .anyMatch(it -> it.getPickedQty() != null
+                        && it.getPickedQty().compareTo(BigDecimal.ZERO) > 0);
+        if (!anyPicked) {
+            throw new BusinessException(409, "调拨失败: 该领料单尚未确认领料数量, 无料可调拨到生产仓")
+                    .withCode("PRODUCTION_REQUISITION_NOT_PICKED")
+                    .withHint("请先点击「确认领料」逐物料录入实际拣货数量, 再执行调拨")
+                    .withSeverity("BLOCKING");
+        }
+
         // 所有行 issued_qty = picked_qty
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             it.setIssuedQty(it.getPickedQty());
@@ -335,6 +350,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 保留单价/单位/效期/批号血缘。幂等: 状态机 PICKING→TRANSFERRED 已防重放, batch_row 内再记
         // workshopBatchId 二次防呆。
         String targetWarehouseId = resolveWorkshopWarehouseId(factoryId, mr);
+        // 防呆 (客户原话「你告诉他这个东西你要收多少就行了」): 仓管确认领料只录数量, 系统按 FEFO 从
+        // 原料仓自动分配领料批次。若某行确认时已带批次 (前端预选/老单) 则不动。
+        autoAllocatePickedBatchesIfMissing(factoryId, mr);
         relocatePickedMaterialToWorkshop(factoryId, mr, targetWarehouseId, operatorId);
 
         mr.setStatus(Status.TRANSFERRED);
@@ -400,6 +418,71 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     .withSeverity("BLOCKING");
         }
         return targetWarehouseId;
+    }
+
+    /**
+     * 防呆自动分批: 仓管确认领料只录「实际拣货数量」(picked_qty), 不选批次。调拨前按 FEFO (先到期先出)
+     * 从原料仓 (mr.sourceWarehouseId, 缺失回退工厂全仓) 自动为每行分配领料批次, 写进 batch_numbers,
+     * 供 {@link #relocatePickedMaterialToWorkshop} 逐批划出。已带批次的行 (前端预选 / 老单) 跳过。
+     * 库存不足 → loud-fail (honest, 不静默少领), 明确告诉仓管缺口。
+     */
+    private void autoAllocatePickedBatchesIfMissing(String factoryId, FactoryMaterialRequisition mr) {
+        if (materialBatchRepository == null) {
+            return; // relocate 会再报 UNAVAILABLE
+        }
+        String sourceWarehouseId = mr.getSourceWarehouseId();
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            BigDecimal issued = it.getIssuedQty();
+            if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            List<Map<String, Object>> existing = it.getBatchNumbers();
+            if (existing != null && !existing.isEmpty()) {
+                continue; // 已选批次 (前端预选或老单), 尊重之
+            }
+            String materialTypeId = it.getMaterialTypeId();
+            List<MaterialBatch> candidates = Collections.emptyList();
+            if (sourceWarehouseId != null && !sourceWarehouseId.isBlank()) {
+                candidates = materialBatchRepository
+                        .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, sourceWarehouseId);
+            }
+            // 源仓无该物料可用批次 → 回退工厂全仓 FEFO (兼容批次未标 warehouse 的老数据)
+            if (candidates.isEmpty()) {
+                candidates = materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId);
+            }
+
+            BigDecimal remaining = issued;
+            List<Map<String, Object>> allocated = new ArrayList<>();
+            for (MaterialBatch b : candidates) {
+                if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                    break;
+                }
+                BigDecimal avail = b.getCurrentQuantity();
+                if (avail == null || avail.compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                BigDecimal take = avail.min(remaining);
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("batchId", b.getId());
+                row.put("batchNumber", b.getBatchNumber());
+                row.put("qty", take.toPlainString());
+                allocated.add(row);
+                remaining = remaining.subtract(take);
+            }
+            if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                throw new BusinessException(409, String.format(
+                        "领料调拨失败: 物料 %s 原料仓可用库存不足以领出 %s (尚缺 %s)",
+                        materialLabel(it), issued.toPlainString(), remaining.toPlainString()))
+                        .withCode("PRODUCTION_REQUISITION_TRANSFER_INSUFFICIENT_STOCK")
+                        .withHint("请核对原料仓实际库存, 或在「确认领料」调低该物料拣货数量")
+                        .withHintTarget(it.getId())
+                        .withSeverity("BLOCKING");
+            }
+            it.setBatchNumbers(allocated);
+            log.info("✅ 领料自动分批 物料需求单 {} 物料 {}: 按 FEFO 分配 {} 个批次共 {}{}",
+                    mr.getRequisitionNo(), materialLabel(it), allocated.size(),
+                    issued.toPlainString(), it.getUnit() != null ? it.getUnit() : "");
+        }
     }
 
     /**
