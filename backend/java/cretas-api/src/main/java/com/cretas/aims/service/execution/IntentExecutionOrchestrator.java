@@ -62,7 +62,7 @@ public class IntentExecutionOrchestrator {
     private static final Pattern RESTAURANT_OWNER_ACTION_DIRECT_PATTERN = Pattern.compile(
             "老板|店长|区域经理|今天.*动作|今天.*应该|今天.*最应该|今天.*怎么|今天.*要不要|今天.*适合|今天.*查|今天.*调|今天.*改|今天.*提高|"
                     + "具体动作|提高营收|提升营收|提高营业额|提高客单价|怎么提高|怎么提升|应该怎么|应该先|怎么处理|怎么培训|先改|先做|"
-                    + "今天.*做|今天.*推|今晚.*排班|要怎么备货|怎么调|怎么排班|帮我算.*套餐|能不能复制|最值得学习");
+                    + "今天.*做|今天.*推|今晚.*排班|要怎么备货|怎么调|怎么排班|哪个时间段|最需要加人|加前厅|加后厨|帮我算.*套餐|能不能复制|最值得学习");
 
     private static final Pattern RESTAURANT_OWNER_ACTION_TOPIC_PATTERN = Pattern.compile(
             "二人桌|两人桌|四人桌|桌型|桌子|翻台|翻台率|排队|等位|小套餐|套餐|排班|加人|前厅|后厨|员工|厨房|出餐|上菜慢|服务差评|"
@@ -70,7 +70,7 @@ public class IntentExecutionOrchestrator {
                     + "评论|顾客|差评|好评|库存|销量|风险");
 
     private static final Pattern RESTAURANT_OWNER_ACTION_DECISION_PATTERN = Pattern.compile(
-            "今天|今晚|这个星期|本周|怎么|如何|要不要|有没有|哪些问题|最在意|影响|风险|建议|适合|带动|一起卖|推|调|排|改|提高|提升|安排|算|做什么|动作|先查|处理|培训|复制|学习|表现|差在哪里");
+            "今天|今晚|这个星期|本周|怎么|如何|要不要|有没有|哪些问题|最在意|最应该|影响|风险|建议|适合|带动|一起卖|比|补|推|调|排|改|提高|提升|安排|算|做什么|动作|先查|处理|培训|复制|学习|表现|差在哪里");
 
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
