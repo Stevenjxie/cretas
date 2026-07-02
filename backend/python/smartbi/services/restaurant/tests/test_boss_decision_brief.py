@@ -618,6 +618,20 @@ def test_owner_action_chat_routes_rain_dine_in_takeout_questions_to_external_eve
     assert "缺" not in data["answer"]
 
 
+def test_owner_action_chat_routes_single_extra_worker_question_to_staffing() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_STAFFING_ONE_EXTRA_WORKER",
+            message="今天只加一个人，应该加在哪个环节？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "staffing_schedule"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+
+
 def test_owner_action_chat_routes_platform_and_door_conversion_questions() -> None:
     cases = [
         "美团大众点评有人看但没下单，老板今天先改什么？",
