@@ -115,9 +115,25 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         // 前序各次小结已入库的半成品 batchNumber 并集 (用于精确判定 SFI OUT 只扣真正入过库的)
         Set<String> priorStocked = collectPriorStockedBatchNumbers(factoryId, planId);
 
+        // ── 加载本计划全部 process_sheet_rows (扣减侧 + 产出侧结算共用) ──
+        List<ProcessSheetRow> allRows = rowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+
         // ── ① 扣原料 (会话幂等): 未结 material_consumptions → 来源 MaterialBatch 悲观锁扣减 ──
-        List<MaterialConsumption> unposted = consumptionRepository
-                .findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(planId, factoryId);
+        //   🔴 关键 (bug fix 2026-07-02 幻库存): 逐工序首/中间道 (finished=false) 写的 raw 消耗其
+        //   production_plan_id 故意为 null (防成本双计), 但 production_batch_id (per-道 WIP ProductionBatch id)
+        //   恒有值。故按 (factory, production_batch_id ∈ 本计划各道 batchId) 定位待扣减消耗, 而非按
+        //   production_plan_id (会漏掉 null-plan 在制道消耗 → 原料零扣减: 产成品却不减原料 = 幻库存)。
+        //   本计划各道 batchId = process_sheet_rows.batch_id (物化后的 ProductionBatch.id); 纯 SFI 中间道
+        //   (SAVED_SFI, batchId==null) 无 raw 消耗, 自然不在集合内。成品道 batchId 亦纳入, 与既有行为对称。
+        List<Long> planBatchIds = allRows.stream()
+                .map(ProcessSheetRow::getBatchId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        List<MaterialConsumption> unposted = planBatchIds.isEmpty()
+                ? List.of()
+                : consumptionRepository
+                        .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(factoryId, planBatchIds);
         BigDecimal deductedQuantity = BigDecimal.ZERO;
         int deductedCount = 0;
         for (MaterialConsumption mc : unposted) {
@@ -137,8 +153,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             deductedCount++;
         }
 
-        // ── 加载本计划全部 process_sheet_rows, 分未结/已结, 建索引 ──
-        List<ProcessSheetRow> allRows = rowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        // ── 分未结/已结, 建索引 (allRows 已在扣减前加载) ──
         Map<String, String> productTypeByBatchNumber = new HashMap<>();   // 所有已物化行 batchNumber → productTypeId
         List<UnsettledRow> unsettledRows = new ArrayList<>();
         Set<String> unsettledBatchNumbers = new HashSet<>();

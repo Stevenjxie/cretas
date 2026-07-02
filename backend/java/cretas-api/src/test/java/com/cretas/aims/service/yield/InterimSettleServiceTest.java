@@ -192,9 +192,11 @@ class InterimSettleServiceTest {
                 .thenReturn(List.of(r1, r2, r3, r4)) // 小结2 (道4 加入; 道1-3 已被打戳)
                 .thenReturn(List.of(r1, r2, r3, r4)); // 小结3 (全部已结)
 
-        // 小结1 原料消耗: 一笔 raw 100 (来源 RB1); 小结2/3 无未结消耗
+        // 小结1 原料消耗: 一笔 raw 100 (来源 RB1); 小结2/3 无未结消耗。
+        //   bug fix: 扣减改按 (factory, production_batch_id ∈ 本计划各道 batchId) 定位 — 道1-3 的 batchId
+        //   = 行 id 1/2/3 (见 row() helper), 首道 raw 消耗 productionBatchId=1L。stub 按新签名。
         MaterialConsumption rawC = consumption("RB1", new BigDecimal("100"));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY), any()))
                 .thenReturn(new ArrayList<>(List.of(rawC)))   // 小结1
                 .thenReturn(new ArrayList<>())                 // 小结2
                 .thenReturn(new ArrayList<>());                // 小结3
