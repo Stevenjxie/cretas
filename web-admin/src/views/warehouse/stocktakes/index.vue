@@ -594,7 +594,13 @@ onMounted(async () => {
 
     <el-card>
       <el-table v-loading="loading" :data="tableData" row-key="id" stripe>
-        <el-table-column label="盘点单号" prop="stocktakeNo" min-width="150" />
+        <el-table-column label="盘点单号" min-width="200">
+          <template #default="{ row }">
+            <span>{{ row.stocktakeNo }}</span>
+            <el-tag v-if="row.importMode === 'OPENING'" type="warning" size="small" effect="dark" style="margin-left: 6px">期初建账</el-tag>
+            <el-tag v-else-if="row.importMode === 'NORMAL'" type="info" size="small" style="margin-left: 6px">批量导入</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="仓库" min-width="120">
           <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
         </el-table-column>

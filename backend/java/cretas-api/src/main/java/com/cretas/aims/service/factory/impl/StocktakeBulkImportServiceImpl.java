@@ -14,7 +14,6 @@ import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.factory.StocktakeBulkImportService;
@@ -51,7 +50,6 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
     private final RawMaterialTypeRepository rawMaterialTypeRepo;
     private final FactoryWarehouseRepository warehouseRepo;
     private final FactoryStocktakeService stocktakeService;
-    private final FactoryStocktakeRepository stocktakeRepo;
     private final ExcelUtil excelUtil;
 
     private static final String SHEET_NAME = "库存盘点";
@@ -123,14 +121,8 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
         req.setNotes(notes != null && !notes.isBlank()
                 ? notes
                 : "批量导入盘点（匹配 " + preview.getMatchedCount() + " / 失败 " + preview.getErrorCount() + "）");
-        StocktakeDTO created = stocktakeService.initiate(factoryId, req, userId);
-
-        // 1b) 打上导入模式标记（驱动 apply 时的过账科目：NORMAL 盘盈/盘亏 · OPENING 期初权益）。
-        //     逐项 UI 盘点不经此路径 → import_mode 保持 null → apply 不过账（历史行为不变）。
-        stocktakeRepo.findById(created.getId()).ifPresent(st -> {
-            st.setImportMode(mode);
-            stocktakeRepo.save(st);
-        });
+        // initiate 直接落 importMode（驱动 apply 过账科目）+ OPENING 跳过月底约束（Decision 4）。
+        StocktakeDTO created = stocktakeService.initiate(factoryId, req, userId, mode);
 
         // 2) 建 materialBatchId → itemId 映射（来自 initiate 的快照明细）
         Map<String, String> itemIdByBatchId = new HashMap<>();

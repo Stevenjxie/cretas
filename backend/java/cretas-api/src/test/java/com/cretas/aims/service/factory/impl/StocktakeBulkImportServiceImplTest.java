@@ -9,7 +9,6 @@ import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.utils.ExcelUtil;
@@ -55,7 +54,6 @@ class StocktakeBulkImportServiceImplTest {
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
     @Mock private FactoryWarehouseRepository warehouseRepo;
     @Mock private FactoryStocktakeService stocktakeService;
-    @Mock private FactoryStocktakeRepository stocktakeRepo;
 
     private final ExcelUtil excelUtil = new ExcelUtil(); // 真实实现，做 write/read 往返
 
@@ -65,7 +63,7 @@ class StocktakeBulkImportServiceImplTest {
     void setUp() {
         service = new StocktakeBulkImportServiceImpl(
                 materialBatchRepo, rawMaterialTypeRepo, warehouseRepo,
-                stocktakeService, stocktakeRepo, excelUtil);
+                stocktakeService, excelUtil);
     }
 
     private MaterialBatch batch(String id, String no, String typeId, String qty, String price) {

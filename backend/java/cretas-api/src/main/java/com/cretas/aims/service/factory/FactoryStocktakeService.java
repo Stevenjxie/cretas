@@ -30,6 +30,17 @@ public interface FactoryStocktakeService {
     StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId);
 
     /**
+     * 发起盘点任务，带批量导入模式 (SP7 + 盘点批量导入)。
+     *
+     * <p>importMode: null=逐项 UI 盘点 / NORMAL=批量常规盘点 / OPENING=批量期初建账。
+     * <p>Decision 4: OPENING 期初建账 <b>跳过月底约束</b>（可任意日发起）；NORMAL/null 仍受约束。
+     *
+     * @param importMode 导入模式（决定 apply 过账科目 + 是否跳过月底约束）
+     */
+    StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
+                          FactoryStocktake.ImportMode importMode);
+
+    /**
      * 批量更新明细行的实盘数量。
      *
      * @param stocktakeId 盘点任务 ID
