@@ -72,6 +72,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
 
+    /**
+     * ② Part A: 采购落点仓解析器. 领料需求单的来源仓应取「采购实际落点」(而不是硬编码物流仓),
+     * 让采购进原料仓的工厂 (e.g. LIUSHANMEN, PURCHASE_INBOUND_DEFAULT=原料仓) 领料能拣到已入库原料.
+     * required=false 兼容单测 (缺失时防御回退到老 LOGISTICS 仓查找, 行为与现状一致).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
+
     private void runConfiguredValidation(String factoryId, String operation, java.util.Map<String, Object> context) {
         if (validationRuleEvaluator == null) return;
         try {
@@ -169,15 +177,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         mr.setRequiredDate(plan.getExpectedCompletionDate());
         mr.setRequestedBy(requestedBy);
 
-        // P1-4: auto-populate source (物流仓) + target (鲜棉仓) from FactoryWarehouse lookup
-        // 为 B1 InternalTransfer 流水提供 warehouse 上下文 (之前是 null).
-        List<FactoryWarehouse> logisticsList = warehouseRepository
-                .findByFactoryIdAndTypeAndDeletedAtIsNullOrderByCodeAsc(factoryId, WarehouseType.LOGISTICS);
+        // ② Part A / P1-4: 领料来源仓 = 采购实际落点仓 (resolvePurchaseInboundWh: PURCHASE_INBOUND_DEFAULT
+        // 配置 → 否则回退 WH-LOG). 目标仓 = 车间/生产仓. 为 B1 InternalTransfer 流水 + 下游 FEFO 自动分配
+        // (autoAllocatePickedBatchesIfMissing 按 sourceWarehouseId 挑批次) 提供 warehouse 上下文.
+        // 采购进原料仓的工厂 (e.g. LIUSHANMEN) → source=原料仓, 连上其采购; 未配置工厂 (F006) → WH-LOG = 现状.
+        mr.setSourceWarehouseId(resolveRequisitionSourceWarehouseId(factoryId));
         List<FactoryWarehouse> workshopList = warehouseRepository
                 .findByFactoryIdAndTypeAndDeletedAtIsNullOrderByCodeAsc(factoryId, WarehouseType.WORKSHOP);
-        if (!logisticsList.isEmpty()) {
-            mr.setSourceWarehouseId(logisticsList.get(0).getId());
-        }
         if (!workshopList.isEmpty()) {
             mr.setTargetWarehouseId(workshopList.get(0).getId());
         }
@@ -247,6 +253,40 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         log.info("✅ 生成物料需求单: {} factory={} plan={} items={}",
                 saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size());
         return saved;
+    }
+
+    /**
+     * 解析领料需求单的来源仓 = 采购实际落点仓。
+     *
+     * <p>优先用 {@link com.cretas.aims.service.factory.WarehouseResolver#resolvePurchaseInboundWh}
+     * (读 {@code PURCHASE_INBOUND_DEFAULT} 配置, 否则回退 WH-LOG), 使采购进原料仓的工厂领料能从原料仓
+     * 拣到已入库原料; 未配置的工厂回退 WH-LOG = 现状 (向后兼容, 零行为变化)。
+     *
+     * <p>防御回退 (resolver 未注入 / 返回空 / 抛异常时): 老 LOGISTICS 类型仓查找 → 任意仓库, 避免
+     * 来源仓为 null 破坏下游 FEFO 自动分配 ({@code autoAllocatePickedBatchesIfMissing} 按
+     * {@code sourceWarehouseId} 挑批次)。
+     */
+    private String resolveRequisitionSourceWarehouseId(String factoryId) {
+        if (warehouseResolver != null) {
+            try {
+                String resolved = warehouseResolver.resolvePurchaseInboundWh(factoryId);
+                if (resolved != null && !resolved.isBlank()) {
+                    return resolved;
+                }
+            } catch (Exception e) {
+                log.warn("解析采购落点仓失败, 回退 LOGISTICS 仓查找: factory={} ({})", factoryId, e.getMessage());
+            }
+        }
+        // 防御回退 1: 老 LOGISTICS 类型仓 (与拆分前 P1-4 行为一致)
+        List<FactoryWarehouse> logisticsList = warehouseRepository
+                .findByFactoryIdAndTypeAndDeletedAtIsNullOrderByCodeAsc(factoryId, WarehouseType.LOGISTICS);
+        if (!logisticsList.isEmpty()) {
+            return logisticsList.get(0).getId();
+        }
+        // 防御回退 2: 任意仓库 (避免来源仓为 null 破坏 FEFO 自动分配)
+        List<FactoryWarehouse> anyList = warehouseRepository
+                .findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId);
+        return anyList.isEmpty() ? null : anyList.get(0).getId();
     }
 
     @Override
