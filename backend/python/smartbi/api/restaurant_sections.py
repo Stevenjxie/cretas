@@ -204,13 +204,14 @@ _OWNER_ACTION_CHAT_SESSIONS: dict[str, dict[str, Any]] = {}
 _OWNER_ACTION_FACTORY_LAST_SCENARIOS: dict[str, str] = {}
 
 _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("seating_mix", ("二人桌", "两人桌", "桌型", "桌子", "翻台", "等位")),
-    ("staffing_schedule", ("排班", "人手", "员工时间", "工时", "午市", "晚市", "忙不过来")),
-    ("staff_training", ("培训", "服务员", "服务态度", "话术", "催菜", "意识")),
-    ("kitchen_quality", ("厨房", "出品", "口味", "太咸", "难吃", "差评", "稳定")),
-    ("package", ("套餐", "组合", "小套餐", "工作日", "低峰", "客单")),
-    ("cost_margin", ("成本", "毛利", "BOM", "盘点", "损耗", "采购", "盈利")),
-    ("traffic_conversion", ("客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销")),
+    ("store_compare", ("所有门店", "其他门店", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "最值得学习", "复制到")),
+    ("staff_training", ("培训", "服务员", "服务态度", "服务差评", "话术", "催菜", "意识", "店长", "开班前")),
+    ("kitchen_quality", ("厨房", "后厨", "出品", "口味", "太咸", "难吃", "上菜慢", "复杂菜", "出餐速度", "保证出餐", "稳定")),
+    ("seating_mix", ("二人桌", "两人桌", "四人桌", "两人客", "四人客", "桌型", "桌子", "翻台", "翻台率", "排队", "等位")),
+    ("staffing_schedule", ("排班", "人手", "加人", "前厅", "后厨", "员工时间", "工时", "午市", "晚市", "忙不过来")),
+    ("package", ("套餐", "组合", "小套餐", "工作日", "低峰", "客单", "提高客单价")),
+    ("cost_margin", ("成本", "毛利", "BOM", "盘点", "损耗", "采购", "采购价格", "原料", "食材", "盈利")),
+    ("traffic_conversion", ("客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销", "进店少")),
     ("external_event_response", ("商场活动", "天气", "节日", "客流", "外部", "活动")),
     ("single_item_push", ("主推", "单品", "招牌", "爆品", "引流菜")),
 )
@@ -373,6 +374,11 @@ def _owner_rate_people(rate: Any) -> str:
 
 
 def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str) -> str:
+    params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
+    pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
+    financial = params.get("financial_summary") if isinstance(params.get("financial_summary"), dict) else {}
+    stocktake = params.get("monthly_stocktake") if isinstance(params.get("monthly_stocktake"), dict) else {}
+
     if scenario == "traffic_conversion":
         traffic = owner_page.get("trafficPersona") if isinstance(owner_page.get("trafficPersona"), dict) else {}
         platform = owner_page.get("platformChannelSnapshot") if isinstance(owner_page.get("platformChannelSnapshot"), dict) else {}
@@ -410,15 +416,88 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
             parts.append(f"{weak_text} 有人看但下单弱，说明页面、套餐说明或到店核销没有讲清楚。")
         return "".join(parts)
 
+    if scenario == "store_compare":
+        chain = pos.get("chainRank") if isinstance(pos.get("chainRank"), dict) else {}
+        compare = pos.get("storeComparison") if isinstance(pos.get("storeComparison"), dict) else {}
+        store_count = chain.get("storeCount") or 8
+        revenue_rank = chain.get("revenueRank") or 6
+        daily_rank = chain.get("dailyRank") or 2
+        aov_rank = chain.get("aovRank") or 5
+        copy_from = compare.get("copyFrom") or "日均表现更好的同城门店"
+        weak = "、".join(compare.get("weakerThanPeers") or ["工作日午市收入", "双人套餐承接", "客单价"])
+        strong = "、".join(compare.get("strongerThanPeers") or ["日均单量", "大众点评评分", "商场自然客流"])
+        return (
+            f"这家店不是完全差店：连锁 {store_count} 家里，总收入大概第 {revenue_rank}，但日均能做到第 {daily_rank}，说明客流和基本盘不弱。"
+            f"真正拖后腿的是{weak}；强项是{strong}。"
+            f"所以区域经理今天不要只盯销售额排名，要把它和 {copy_from} 对比，看能复制哪一个动作。"
+        )
+
+    if scenario == "cost_margin":
+        food_cost = _owner_pct(financial.get("foodCostRatio"))
+        gross = financial.get("grossMarginPct")
+        losses = "、".join(str(item) for item in (stocktake.get("topLossItems") or [])[:2])
+        variance = "、".join(str(item) for item in (stocktake.get("varianceItems") or [])[:2])
+        parts = []
+        if food_cost is not None:
+            parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross or 51}%，比健康状态更紧。")
+        if losses:
+            parts.append(f"盘点先指向 {losses} 这些损耗点。")
+        if variance:
+            parts.append(f"BOM 和实际用量差异主要在 {variance}。")
+        parts.append("所以今天先查采购价、BOM 用量和后厨损耗，不要只让前厅多卖。")
+        return "".join(parts)
+
     return fallback
 
 
 def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action: str) -> list[str]:
+    params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
+    pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
+
     if scenario == "traffic_conversion":
         return [
             "门口海报和等位牌只讲一句话：招牌鱼是什么、两个人大概多少钱、多久能吃完。",
             "美团/大众点评和抖音团购页面同步改成同一套话术，主图先放招牌鱼和双人价格，不要堆一堆菜名。",
             "收银和门迎今天专门盯核销客：进店先确认券、引导点招牌，别让线上来的客人现场又犹豫。",
+        ]
+    if scenario == "seating_mix":
+        return [
+            "午市和晚高峰先把 2 张四人桌改成可拼可拆：两人客来了不要占死四人桌，四人客来了再拼回去。",
+            "前厅今天按“先看人数、再引导桌型、再推荐双人/四人套餐”走，避免排队多但客单价没起来。",
+            "先别直接加排班或催厨房；如果桌型错了，加员工和提出餐速度也只是把堵点往后移。",
+        ]
+    if scenario == "staffing_schedule":
+        return [
+            "今天把人手压到晚市 18:00-20:00：前厅多 1 人盯等位和核销，后厨多 1 人盯招牌鱼出餐。",
+            "午市只保留稳定班，不要平均撒人；忙的时段没人，闲的时段人多，是最浪费的排班。",
+            "店长开班前把分工讲清：谁迎宾、谁催菜、谁处理差评苗头，别等顾客催了才临时补位。",
+        ]
+    if scenario == "staff_training":
+        return [
+            "开班前只训练三句话：招牌鱼怎么介绍、双人套餐多少钱、等位/上菜慢怎么安抚。",
+            "服务员今天不要背长话术，只要每桌主动说一次“招牌怎么点更划算”，把犹豫客变成下单客。",
+            "店长晚市后复盘差评关键词：服务态度、没人催菜、核销不清楚，哪个最多明天就继续训哪个。",
+        ]
+    if scenario == "kitchen_quality":
+        return [
+            "今天先把被差评点名最多的招牌鱼做出餐抽查：咸淡、鱼片熟度、上菜时长三项必须记录。",
+            "晚高峰前减少复杂低销量菜的备料和推荐，厨房先保招牌鱼、冰豆花、双人套餐这几条主线。",
+            "前厅一旦发现上菜慢超过阈值，立刻提醒后厨和店长，不要等顾客写差评才处理。",
+        ]
+    if scenario == "cost_margin":
+        return [
+            "今天先查三张表：活鱼采购价、招牌鱼 BOM 理论用量、昨日盘点损耗；先找毛利漏点。",
+            "如果活鱼实际用量比 BOM 高，先称重抽查和切配标准，不要只靠涨价补利润。",
+            "高毛利小食可以带低销量菜，但必须算套餐售价、食材成本和毛利，毛利守不住就不推。",
+        ]
+    if scenario == "store_compare":
+        compare = pos.get("storeComparison") if isinstance(pos.get("storeComparison"), dict) else {}
+        copy_from = compare.get("copyFrom") or "日均表现更好的同城门店"
+        copy_action = compare.get("copyAction") or "复制它的双人套餐首屏和服务员推荐话术"
+        return [
+            f"区域经理今天先盯青花椒这家店的工作日午市和客单价，不要只看总收入第几名。",
+            f"直接复制 {copy_from} 的一个动作：{copy_action}。",
+            "明天复盘只看这家店和对标店的三项差距：工作日午市收入、双人套餐占比、客单价。",
         ]
     if scenario == "package":
         package_decision = owner_page.get("packageDecision") if isinstance(owner_page.get("packageDecision"), dict) else {}
@@ -444,6 +523,10 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
 def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
     if scenario == "traffic_conversion":
         return "今天先别继续加投流，也别全店打折。人已经在门口了，先把门口和线上入口讲清楚。"
+    if scenario == "store_compare":
+        return "今天先别把这家店简单判成差店。它日均不弱，问题是工作日和客单价没吃满，要和同类门店拆开比。"
+    if scenario == "cost_margin":
+        return "今天先别直接涨价，也别砍掉主菜。先查采购价、BOM 和损耗，否则可能把顾客喜欢的菜也误伤。"
     text = _first_text(owner_page.get("doNotDo"))
     return text or "先别凭感觉大改菜单、价格和排班，等今天这一个动作看出效果再扩大。"
 
@@ -459,6 +542,10 @@ def _owner_watch_numbers(owner_page: dict[str, Any], scenario: str) -> str:
         return "今天看三个数：高峰等位、上菜时长、差评关键词。等位和上菜时间降下来，排班就有用。"
     if action_type == "package":
         return "今天看三个数：套餐卖了多少份、有没有拉高客单、毛利有没有守住。只卖得多但毛利掉了，就不是好套餐。"
+    if scenario == "cost_margin":
+        return "今天看三个数：活鱼采购价、BOM 实际偏差、盘点损耗金额。三项收窄，毛利才是真的补回来了。"
+    if scenario == "store_compare":
+        return "今天看三个数：工作日午市收入、双人套餐占比、客单价。它们追上对标店，说明复制动作有效。"
     return "今天看三个数：订单数、客单价、差评关键词。先看动作有没有让生意变好，再决定要不要扩大。"
 
 
@@ -808,6 +895,38 @@ def _owner_evidence_charts(owner_page: dict[str, Any], scenario: str, params: di
                 },
             })
 
+    if scenario == "store_compare":
+        chain = pos.get("chainRank") if isinstance(pos.get("chainRank"), dict) else {}
+        store_count = _owner_float(chain.get("storeCount"), 8) or 8
+        rank_rows = [
+            ("总收入排名", _owner_float(chain.get("revenueRank"), 6) or 6),
+            ("日均排名", _owner_float(chain.get("dailyRank"), 2) or 2),
+            ("客单价排名", _owner_float(chain.get("aovRank"), 5) or 5),
+            ("评价排名", _owner_float(chain.get("reviewRank"), 3) or 3),
+        ]
+        charts.append(_owner_bar_chart(
+            "这家店在连锁里到底强在哪弱在哪",
+            [row[0] for row in rank_rows],
+            [{"name": f"{int(store_count)}家店内排名", "type": "bar", "data": [row[1] for row in rank_rows], "label": {"show": True, "position": "top"}}],
+            y_name="排名，越小越好",
+        ))
+
+        peer_rows: list[tuple[str, float]] = []
+        for item in pos.get("peerStores") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "对标店").replace("青花椒", "")[:8]
+            aov = _owner_float(item.get("aov"))
+            if aov is not None:
+                peer_rows.append((name, round(aov, 1)))
+        if peer_rows:
+            charts.append(_owner_bar_chart(
+                "客单价和对标门店差多少",
+                [row[0] for row in peer_rows],
+                [{"name": "客单价", "type": "bar", "data": [row[1] for row in peer_rows], "label": {"show": True, "position": "top", "formatter": "{c}元"}}],
+                y_name="元",
+            ))
+
     return charts[:3]
 
 
@@ -830,6 +949,8 @@ def _owner_chart_guide(scenario: str) -> str:
         return "先看活动和天气会不会抬高客流，再看门口能不能把这波人接住。"
     if scenario == "single_item_push":
         return "先看平台入口能不能承接，再看主推菜或套餐毛利是否撑得住。"
+    if scenario == "store_compare":
+        return "先看这家店在连锁里的排名结构：日均不弱但客单价和工作日弱，再看应该复制哪家店的做法。"
     return "图表是给建议做证据用的：先看差距最大的柱子，再决定今天先改哪一个动作。"
 
 
@@ -844,6 +965,7 @@ def _owner_chat_follow_ups(scenario: str) -> list[str]:
         "traffic_conversion": "客流多但进店少，今天先改哪个入口？",
         "external_event_response": "今天商场活动和天气怎么影响备货？",
         "single_item_push": "主推单品放在哪些入口最合适？",
+        "store_compare": "这家店应该复制哪家门店的哪一个动作？",
     }
     first = scenario_specific.get(scenario, "这件事今天第一步做什么？")
     return [first, "老板今天先看哪三个数？", "如果只做一天，怎么判断有没有效果？"]
@@ -910,6 +1032,12 @@ def _owner_metric_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
             "主推菜毛利额",
             "卖得动、能带加购、毛利额变高，说明主推单品选对了。",
         ),
+        "store_compare": (
+            "工作日午市收入",
+            "双人套餐占比",
+            "客单价",
+            "这三个数追近对标店，说明复制动作有效；如果只有订单涨但客单不涨，说明还是只吃到了自然客流。",
+        ),
     }
     first, second, third, judgement = metric_sets.get(
         scenario,
@@ -952,6 +1080,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str) 
         "cost_margin": "成本毛利",
         "external_event_response": "商圈活动",
         "single_item_push": "主推单品",
+        "store_compare": "门店对比",
     }.get(scenario, "今天动作")
 
     parts = [
@@ -1054,6 +1183,8 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
 
     data = response.data or {}
     owner_page = data.get("ownerDecisionPage") or {}
+    if isinstance(owner_page, dict):
+        owner_page["demoParams"] = params
     answer = _owner_chat_answer(owner_page, scenario, body.message)
     follow_ups = _owner_chat_follow_ups(scenario)
     charts = _owner_evidence_charts(owner_page, scenario, params)

@@ -330,6 +330,32 @@ _SCENARIO_PATCHES: dict[str, dict[str, Any]] = {
             "negativeThemes": [],
         },
     },
+    "store_compare": {
+        "pos_summary": {
+            "orders": 7775,
+            "revenue": 1784831.9,
+            "aov": 229.56,
+            "weekdayWeekend": {"weekdayAvgDailyRevenue": 15801.98, "weekendAvgDailyRevenue": 28534.66, "gapPct": 80.6},
+            "chainRank": {"revenueRank": 6, "dailyRank": 2, "storeCount": 8, "aovRank": 5, "reviewRank": 3},
+            "peerStores": [
+                {"name": "青花椒静安大融城店", "revenueRank": 1, "dailyRank": 1, "aov": 246, "bestPractice": "工作日午市双人鱼套餐承接好，出餐稳定"},
+                {"name": "青花椒浦东前滩店", "revenueRank": 2, "dailyRank": 3, "aov": 238, "bestPractice": "商场活动日提前备鱼和冰豆花，晚市不缺货"},
+                {"name": "青花椒闵行龙湖店", "revenueRank": 6, "dailyRank": 2, "aov": 230, "bestPractice": "自然客流强，但工作日和客单价还没吃满"},
+            ],
+            "storeComparison": {
+                "strongerThanPeers": ["日均单量", "大众点评评分", "商场自然客流"],
+                "weakerThanPeers": ["工作日午市收入", "双人套餐承接", "客单价"],
+                "copyFrom": "青花椒静安大融城店",
+                "copyAction": "把招牌鱼+冰豆花双人套餐放到点评/美团首屏，并要求服务员按两句话推荐",
+            },
+        },
+        "review_summary": {
+            "rating": 4.73,
+            "reviewCount": 688,
+            "lowRatingCount": 41,
+            "negativeThemes": [{"theme": "工作日午市等位和推荐不清楚", "count": 22}],
+        },
+    },
 }
 
 

@@ -620,6 +620,7 @@ def test_owner_action_chat_returns_scenario_specific_charts() -> None:
         ("staffing_schedule", "今天排班应该怎么调？", "忙的时段和人手是不是对得上"),
         ("kitchen_quality", "厨房先改哪道菜、怎么验收？", "哪道菜最需要厨房抽查"),
         ("cost_margin", "哪些菜要先查BOM和盘点损耗？", "菜品收入、食材成本、毛利差多少"),
+        ("store_compare", "这家店在所有门店里表现算好还是差？差在哪里？", "这家店在连锁里到底强在哪弱在哪"),
     ]
     for scenario, message, expected_title in cases:
         response = owner_action_chat(
@@ -638,3 +639,30 @@ def test_owner_action_chat_returns_scenario_specific_charts() -> None:
         if scenario == "cost_margin":
             assert "整店成本和同类店差多少" in titles
             assert "套餐价格、成本、毛利能不能撑住" not in titles
+        if scenario == "store_compare":
+            assert "门店对比" in data["answer"]
+            assert "区域经理" in data["answer"]
+            assert "工作日午市" in data["answer"]
+
+
+def test_owner_action_chat_routes_extended_boss_decision_questions() -> None:
+    cases = [
+        ("今天排班怎么调最合理？", "staffing_schedule", "排班"),
+        ("如果服务差评多，店长今天应该怎么培训员工？", "staff_training", "开班前"),
+        ("如果差评集中在上菜慢，今天厨房应该怎么改？", "kitchen_quality", "厨房"),
+        ("哪些原料可能影响毛利？采购价格是否正常？", "cost_margin", "采购价"),
+        ("哪家店最值得学习？它的做法能不能复制到青花椒？", "store_compare", "复制"),
+    ]
+
+    for message, scenario, expected_text in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_ROUTE_{scenario}",
+                message=message,
+            )
+        )
+
+        data = response["data"]
+        assert data["scenario"] == scenario
+        assert expected_text in data["answer"]
+        assert data["charts"], message
