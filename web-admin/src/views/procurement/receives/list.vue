@@ -38,7 +38,7 @@ import { WH_INBOUND_CONFIG } from '@/components/ai-entry/types';
 // 客户张权反馈 (2026-07-02, "小问题"): 入库单没法选仓库, 默认全进物流仓(WH-LOG).
 // 后端早已支持 (PurchaseServiceImpl L1122/L2062-2071 CreateReceiveRecordRequest.warehouseId,
 // 未传才兜底 resolveLogisticsId), 只缺前端选择器.
-import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
+import { listWarehouses, type FactoryWarehouse, type WarehouseType } from '@/api/factoryWarehouse';
 // Issue #794: 采购入库拍照附件 UI (六扇门 May 7 part 2 L177-180)
 // "拍照也可以留个单谱吧... 留个附件类似一个拍照然后一个附件吗也可以的呀"
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
@@ -72,11 +72,61 @@ interface ReceiveItem {
   factoryNumber?: string;
   originPlace?: string;
   remark?: string;
+  // UI-only (not sent to backend, stripped in handleSubmit): 客户张权反馈 (2026-07-02) 大类筛选,
+  // 让仓管先选 原料/辅料/调料/包材 再选具体物料, 而不是在一个混杂几十项的大下拉里翻找。
+  _bigCategory?: BigCategory | '';
 }
 
 interface SupplierOption { id: string; name: string }
-interface MaterialTypeOption { id: string; name: string; code: string; unit: string; unitPrice?: number }
+interface MaterialTypeOption {
+  id: string; name: string; code: string; unit: string; unitPrice?: number;
+  // category: RawMaterialType.category 自由文本字段, 用于 bigCategoryOf() 归类到 4 大类.
+  // createdAt: 用于物料下拉按创建时间倒序 (最新物料排最前).
+  category?: string; createdAt?: string;
+}
 interface PurchaseOrderOption { id: string; orderNumber: string; supplierName?: string; supplierId?: string; status?: string }
+
+// 客户张权反馈 (2026-07-02): 物料下拉太乱 (原料/辅料/调料/包材混在一起, 面酱/白醋/牛腩排/黄油…),
+// 加"先选大类再选物料"两级筛选。
+//
+// category 字段是自由文本, 两套并存的取值来源 (2026-07-02 curl F006 真实数据确认):
+// 1. system_enums.MATERIAL_CATEGORY 字典 (V20260506_01 seed, 新建物料表单下拉用的规范值):
+//    主材/辅材/调味料/包材/添加剂 (添加剂 2026-07-01 新增)
+// 2. 历史遗留自由文本 (早于字典落地 / material-spec-config 系统默认类别):
+//    原料/肉类/禽类/海鲜/水产类/海水鱼/淡水鱼/虾类/贝类/蔬菜/水果/粉类/米面/油类/调料/调味品
+// F006 真实数据目前只有 原料(5)/肉类(1)/包材(1) 三个值 (无调料/辅料记录), 两套来源都要能归到
+// 4 个业务大类; 未识别的 category 归"其他"桶 (不隐藏, 宁缺勿藏 — fool-proof-design Rule 5)。
+type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他';
+const BIG_CATEGORY_OPTIONS: { label: string; value: BigCategory | '' }[] = [
+  { label: '全部', value: '' },
+  { label: '原料', value: '原料' },
+  { label: '辅料', value: '辅料' },
+  { label: '调料', value: '调料' },
+  { label: '包材', value: '包材' },
+  { label: '其他', value: '其他' },
+];
+const RAW_CATEGORY_VALUES = new Set([
+  '原料', '主材', '肉类', '禽类', '海鲜', '水产类', '海水鱼', '淡水鱼', '虾类', '贝类',
+  '蔬菜', '水果', '粉类', '米面', '油类',
+]);
+const AUX_CATEGORY_VALUES = new Set(['辅料', '辅材', '添加剂']);
+const SEASONING_CATEGORY_VALUES = new Set(['调料', '调味料', '调味品']);
+const PACKAGING_CATEGORY_VALUES = new Set(['包材', 'packaging', 'PACKAGING']);
+
+function bigCategoryOf(category: string | null | undefined): BigCategory {
+  const c = (category || '').trim();
+  if (!c) return '其他';
+  if (RAW_CATEGORY_VALUES.has(c)) return '原料';
+  if (AUX_CATEGORY_VALUES.has(c)) return '辅料';
+  if (SEASONING_CATEGORY_VALUES.has(c)) return '调料';
+  if (PACKAGING_CATEGORY_VALUES.has(c)) return '包材';
+  return '其他';
+}
+
+function materialsForRow(row: ReceiveItem, options: MaterialTypeOption[]): MaterialTypeOption[] {
+  if (!row._bigCategory) return options; // 全部
+  return options.filter((m) => bigCategoryOf(m.category) === row._bigCategory);
+}
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -149,6 +199,8 @@ function handleAiFill(params: Record<string, unknown>) {
         factoryNumber: '',
         originPlace: '',
         remark: '',
+        // 同 handlePoChange: 大类跟随 AI 匹配到的实际物料类别; 未匹配到 (AI 没认出/新物料) → 全部.
+        _bigCategory: matched ? bigCategoryOf(matched.category) : '',
       };
     });
   }
@@ -199,6 +251,24 @@ const purchaseOrderOptions = ref<PurchaseOrderOption[]>([]);
 const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
 const warehouseOptions = ref<FactoryWarehouse[]>([]);
 
+/**
+ * 客户张权反馈 (2026-07-02): 入库仓库下拉不该列出成品仓/半成品仓/车间/研发库这些采购收货用不到的仓,
+ * 只列能收原料的仓。
+ *
+ * 对齐后端 WarehouseInventoryGuardService.assertCanReceive: WIP 仓只收 SEMI_FINISHED、FINISHED 仓
+ * 只收 FINISHED — 两者显式拒绝 RAW，选了会在确认入库时被 422 拦。RAW/SALTED 仓显式只收 RAW。
+ * LOGISTICS(物流仓) 未被 guard 显式限制，且是 WarehouseResolver.resolveLogisticsId 的原料默认落点
+ * (采购入库未指定仓库时的兜底仓)，纳入白名单。
+ *
+ * WORKSHOP(车间/鲜棉仓, WH-WKS = resolveWorkshopId 报工消耗默认仓) 和 RD(研发/中试库, WH-RD = 试制
+ * 批次专属仓) 虽未被 guard 显式拦截，但有各自专属业务用途，不该出现在采购入库候选里 — 排除。
+ * TEMP/QC/LINESIDE/RETURNS/SCRAP/OUTSOURCE/TRANSFER/OTHER 同理，都是专项流转仓非常规采购收货目标。
+ */
+const RAW_RECEIVABLE_WAREHOUSE_TYPES: WarehouseType[] = ['RAW', 'SALTED', 'LOGISTICS'];
+const rawReceivableWarehouses = computed(() =>
+  warehouseOptions.value.filter((w) => RAW_RECEIVABLE_WAREHOUSE_TYPES.includes(w.type))
+);
+
 /** 原料入库推荐仓 (RAW/SALTED/LOGISTICS 都能收原料, 见 WarehouseInventoryGuardService.assertCanReceive) */
 function defaultRawWarehouseId(list: FactoryWarehouse[]): string {
   const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
@@ -230,8 +300,13 @@ async function loadOptions() {
       get<{ content: SupplierOption[] } | SupplierOption[]>(
         `/${factoryId.value}/reference-data/suppliers?usage=active`
       ),
-      get<{ content: MaterialTypeOption[] } | MaterialTypeOption[]>(
-        `/${factoryId.value}/reference-data/materials?usage=active`
+      // 客户张权反馈 (2026-07-02): 物料下拉需按大类筛选 + 按创建时间排序, 两者都需要
+      // reference-data/materials 缺失的字段 (category 有但 createdAt 无)。改用
+      // /raw-material-types/active — 同一批激活物料, DTO 含 category + createdAt +
+      // 未加权限限制 (无 @RequirePermission), CRUD 已 @CacheEvict 保新鲜, 纯前端换数据源
+      // 不改后端。
+      get<MaterialTypeOption[] | { content: MaterialTypeOption[] }>(
+        `/${factoryId.value}/raw-material-types/active`
       ),
       get<{ content: PurchaseOrderOption[] } | PurchaseOrderOption[]>(
         `/${factoryId.value}/reference-data/purchase-orders?usage=receivable`
@@ -241,7 +316,12 @@ async function loadOptions() {
     ]);
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);
-    materialOptions.value = ext<MaterialTypeOption>(mat);
+    // Req 3 (2026-07-02): 按创建时间倒序 — 最新建档的物料排最前, 方便找刚录入的品类.
+    materialOptions.value = ext<MaterialTypeOption>(mat).slice().sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
     // 后端 /reference-data/purchase-orders 返回 { id, poNumber, supplierId }
     // (ReferenceDataController: displayField=poNumber per V13), 不含 orderNumber/supplierName。
     // normalize 到本组件契约 (orderNumber + supplierName), 否则下拉 label 显示 "undefined ·"
@@ -291,17 +371,24 @@ async function handlePoChange(poId: string) {
       (it) => Number((it.pendingQuantity ?? it.quantity) || 0) > 0
     );
     if (items.length) {
-      form.value.items = items.map((it) => ({
-        materialTypeId: String(it.materialTypeId || ''),
-        materialName: String(it.materialName || ''),
-        receivedQuantity: Number(it.pendingQuantity ?? it.quantity ?? 0),
-        unit: String(it.unit || 'kg'),
-        unitPrice: it.unitPrice != null ? Number(it.unitPrice) : undefined,
-        qcResult: '',
-        factoryNumber: '',
-        originPlace: '',
-        remark: '',
-      }));
+      form.value.items = items.map((it) => {
+        const materialTypeId = String(it.materialTypeId || '');
+        // 已知具体物料 (来自 PO 明细) → 大类跟随该物料实际类别, 而非强制"原料",
+        // 避免选了辅料/包材的 PO 行后大类下拉把刚带入的物料筛没了.
+        const matched = materialOptions.value.find((m) => m.id === materialTypeId);
+        return {
+          materialTypeId,
+          materialName: String(it.materialName || ''),
+          receivedQuantity: Number(it.pendingQuantity ?? it.quantity ?? 0),
+          unit: String(it.unit || 'kg'),
+          unitPrice: it.unitPrice != null ? Number(it.unitPrice) : undefined,
+          qcResult: '',
+          factoryNumber: '',
+          originPlace: '',
+          remark: '',
+          _bigCategory: matched ? bigCategoryOf(matched.category) : '',
+        };
+      });
       ElMessage.success(`已带入 ${items.length} 项待收物料 (默认实收=待收量)，请核对实收数量与厂号/产地`);
     }
   } catch { /* interceptor 已 toast */ }
@@ -318,6 +405,8 @@ function addItem() {
     factoryNumber: '',
     originPlace: '',
     remark: '',
+    // Req 2: 默认大类=原料 (fool-proof-design Rule 3: 约束选择而非自由翻找; 最常见场景优先)
+    _bigCategory: '原料',
   });
 }
 
@@ -366,7 +455,11 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    const payload = { ...form.value };
+    const payload = {
+      ...form.value,
+      // _bigCategory 是纯前端筛选状态 (Req 2), 不是后端 CreateReceiveRecordRequest 契约字段, 剥离掉.
+      items: form.value.items.map(({ _bigCategory, ...item }) => item),
+    };
     if (!payload.purchaseOrderId) delete (payload as Record<string, unknown>).purchaseOrderId;
     const res = await post<ReceiveRow>(`/${factoryId.value}/purchase/receives`, payload);
     if (res.success && res.data) {
@@ -727,9 +820,11 @@ onMounted(() => { loadData(); loadOptions(); });
           (PurchaseServiceImpl L2062-2066)。选了 WIP/成品仓会被后端 422 拦(assertCanReceive)。
         -->
         <el-form-item label="入库仓库">
+          <!-- Req 1 (2026-07-02): 只列能收原料的仓 (原料仓/盐化仓/物流仓), 不列成品仓/半成品仓/
+               车间/研发库 — 见 rawReceivableWarehouses 定义处注释. -->
           <el-select v-model="form.warehouseId" placeholder="(可选,默认物流仓) 选择入库仓库" clearable filterable style="width:100%">
             <el-option
-              v-for="w in warehouseOptions" :key="w.id"
+              v-for="w in rawReceivableWarehouses" :key="w.id"
               :label="`${w.name} (${w.code})`"
               :value="w.id"
             />
@@ -745,6 +840,14 @@ onMounted(() => { loadData(); loadOptions(); });
           <el-button size="small" @click="router.push('/warehouse/manufacturers')">厂商登记表</el-button>
         </div>
         <el-table :data="form.items" border>
+          <!-- Req 2 (2026-07-02): 先选大类(原料/辅料/调料/包材)再选物料, 避免几十项混杂下拉难找. -->
+          <el-table-column label="大类" width="100">
+            <template #default="{ row }">
+              <el-select v-model="row._bigCategory" size="small" style="width:100%">
+                <el-option v-for="opt in BIG_CATEGORY_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </template>
+          </el-table-column>
           <el-table-column label="物料类型" min-width="200">
             <template #header><span class="req-star">*</span>物料类型</template>
             <template #default="{ row, $index }">
@@ -753,7 +856,11 @@ onMounted(() => { loadData(); loadOptions(); });
                 filterable size="small" style="width:100%"
                 @change="(val: string) => handleMaterialChange($index, val)"
               >
-                <el-option v-for="m in materialOptions" :key="m.id" :label="`${m.name} (${m.code})`" :value="m.id" />
+                <!-- Req 3: materialOptions 已按创建时间倒序排好, 这里只按大类筛选, 顺序原样保留. -->
+                <el-option
+                  v-for="m in materialsForRow(row, materialOptions)" :key="m.id"
+                  :label="`${m.name} (${m.code})`" :value="m.id"
+                />
               </el-select>
             </template>
           </el-table-column>
