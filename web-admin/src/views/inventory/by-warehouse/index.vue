@@ -18,7 +18,10 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
-import { warehouseDisplayLabel, warehouseDisplayName } from '@/utils/warehouse';
+// 2026-07-02 fix: warehouseDisplayName now shows the warehouse's real DB
+// `name` (customer-configured) instead of a hardcoded WH-WKS/WH-LOG label —
+// see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
+import { warehouseDisplayName } from '@/utils/warehouse';
 
 const authStore = useAuthStore();
 const ownFactoryId = computed(() => authStore.factoryId);

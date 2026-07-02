@@ -14,6 +14,7 @@ import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import { formatAmount } from '@/utils/tableFormatters';
+import { warehouseDisplayName } from '@/utils/warehouse';
 import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
@@ -580,6 +581,30 @@ const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
 const salesEmployees = ref<TableRow[]>([]);
 
+// 2026-07-02 fix (LIUSHANMEN "同仓库多名字"): 来源仓库下拉之前是硬编码
+// "总仓 (WH-LOG)" / "线边仓 (WH-WKS)" 两个选项 — 客户在仓库配置里改了 DB name
+// 之后这里仍然显示旧硬编码名字。改为加载真实仓库列表, DB name 为准；
+// 加载失败/为空时才 fallback 回旧的两个硬编码选项。
+const warehouseList = ref<TableRow[]>([]);
+async function loadWarehouses() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/factory/warehouses`, { _silent: true } as never);
+    warehouseList.value = Array.isArray(res?.data) ? res.data.filter((w: TableRow) => w.isActive !== false) : [];
+  } catch { warehouseList.value = []; }
+}
+const LEGACY_WAREHOUSE_OPTIONS = [
+  { label: '总仓 (WH-LOG)', value: 'WH-LOG' },
+  { label: '线边仓 (WH-WKS)', value: 'WH-WKS' },
+];
+const warehouseSelectOptions = computed(() => {
+  if (!warehouseList.value.length) return LEGACY_WAREHOUSE_OPTIONS;
+  return warehouseList.value.map((w) => ({
+    label: `${warehouseDisplayName(String(w.name || ''), String(w.code || ''))} (${w.code})`,
+    value: String(w.code || ''),
+  }));
+});
+
 // T130 Feature C — 来源仓库 = OPERATOR memory. 记住该操作员上次选的仓库, 新行预填.
 // Key 按 user.id 隔离 (不同操作员各自记忆), anon 兜底.
 const warehouseMemoryKey = computed(
@@ -694,7 +719,7 @@ async function loadGoldSummary() {
 
 onMounted(() => {
   loadData(); loadCustomers(); loadProducts(); loadSalesEmployees();
-  loadGoldSummary();
+  loadGoldSummary(); loadWarehouses();
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
@@ -2429,11 +2454,18 @@ function handleMergePurchase() {
             <el-option :value="9" label="9% 原料" />
             <el-option :value="13" label="13% 加工" />
           </el-select>
-          <!-- T4-D1 (issue #525): 来源仓库 select — labels 总仓 / 线边仓 per utils/warehouse.ts. -->
+          <!-- T4-D1 (issue #525): 来源仓库 select.
+               2026-07-02 fix: options come from the real warehouse list (DB name
+               authoritative) instead of hardcoded 总仓/线边仓 — falls back to the
+               legacy 2 options only if the list fails to load. -->
           <!-- T130 Feature C — 用户选仓库即记忆 (按操作员), 下次新行预填. -->
           <el-select v-model="item.sourceWarehouseCode" placeholder="选择" clearable style="width: 110px" size="default" @change="(v: string) => rememberWarehouse(v)">
-            <el-option label="总仓 (WH-LOG)" value="WH-LOG" />
-            <el-option label="线边仓 (WH-WKS)" value="WH-WKS" />
+            <el-option
+              v-for="opt in warehouseSelectOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
           <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1">删除</el-button>
         </div>
