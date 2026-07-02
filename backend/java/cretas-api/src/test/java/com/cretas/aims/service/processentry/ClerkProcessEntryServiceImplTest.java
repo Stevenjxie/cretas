@@ -1178,4 +1178,78 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(auxRpt.getPackagingDetail().get(0))
                 .containsEntry("name", "包装膜");
     }
+
+    /**
+     * T17 — 🔒 honest-null: 混批含未计价源 (源 unitPrice==null) → 批次 ROLL-UP totalCost/unitCost 诚实置 null。
+     *
+     * <p>与纯 SFI 投料路径 (ProcessSheetServiceImpl:151「成本诚实 null」) 一致 —— 未知成本不假造 0。
+     * 区分 null(未知) vs 0(真免费): 仅 null unitPrice 触发 honest-null。
+     *
+     * <p>全部已计价的姊妹批 (WIP-C) 仍精确求和 (回归 all-costed 保证; T8/T1 亦覆盖)。
+     */
+    @Test
+    @DisplayName("T17: 混批含未计价源 (unitPrice=null) → totalCost/unitCost honest-null; 已计价批仍精确")
+    void t17_mixedUncostedSource_honestNull() {
+        stubNoIdempotency("T17-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch rawCosted = rawMb("RAW-T17-C", FACTORY, new BigDecimal("10"));   // 已计价
+        MaterialBatch rawUncosted = rawMb("RAW-T17-U", FACTORY, null);                 // 未计价 (unitPrice=null)
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T17-C", FACTORY)).thenReturn(Optional.of(rawCosted));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T17-U", FACTORY)).thenReturn(Optional.of(rawUncosted));
+
+        BatchEntry wipCosted = wipBatch("WIP-C", "PT-A", List.of(
+                rawStep(1, "100", "100", List.of(rawInput("RAW-T17-C", "100")))
+        ));
+        BatchEntry wipUncosted = wipBatch("WIP-U", "PT-B", List.of(
+                rawStep(1, "50", "50", List.of(rawInput("RAW-T17-U", "50")))
+        ));
+        BatchEntry finished = finishedBatch("FIN-T17", "PT-PRODUCT", List.of(
+                blendStep(1, "100", "80", List.of(
+                        upstreamSource("WIP-C", "65.7"),
+                        upstreamSource("WIP-U", "34.3")
+                ))
+        ));
+
+        service.recordChain(FACTORY, PLAN_ID,
+                req("T17-KEY", List.of(wipCosted, wipUncosted, finished)), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo, times(3)).save(cap.capture());
+        List<ProductionBatch> saved = cap.getAllValues();
+
+        // 成品批 (REGULAR) 混入未计价源 → ROLL-UP honest-null
+        ProductionBatch finBatch = saved.stream()
+                .filter(b -> "REGULAR".equals(b.getBatchType()))
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(finBatch.getTotalCost()).as("含未计价源 → totalCost honest-null (不假造 0)").isNull();
+        assertThat(finBatch.getUnitCost()).as("含未计价源 → unitCost honest-null").isNull();
+
+        // 未计价 WIP 批也 honest-null (诚实链传播), 已计价 WIP 批仍精确
+        ProductionBatch wipUncostedBatch = saved.stream()
+                .filter(b -> "CLERK_WIP".equals(b.getBatchType()) && b.getTotalCost() == null)
+                .findFirst().orElse(null);
+        assertThat(wipUncostedBatch).as("未计价 WIP 批也 honest-null").isNotNull();
+
+        ProductionBatch wipCostedBatch = saved.stream()
+                .filter(b -> "CLERK_WIP".equals(b.getBatchType()) && b.getTotalCost() != null)
+                .findFirst().orElse(null);
+        assertThat(wipCostedBatch).as("已计价 WIP 批 totalCost 仍精确 100kg×¥10=¥1000")
+                .isNotNull();
+        assertThat(wipCostedBatch.getTotalCost()).isEqualByComparingTo("1000.00");
+
+        // WIP-U 的产出 MaterialBatch 单价诚实 null (供下游复用时再次触发 anyUncosted)
+        ArgumentCaptor<MaterialBatch> mbCap = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo, atLeastOnce()).save(mbCap.capture());
+        boolean anyWipUnitPriceNull = mbCap.getAllValues().stream()
+                .anyMatch(mb -> mb.getUnitPrice() == null);
+        assertThat(anyWipUnitPriceNull)
+                .as("未计价 WIP 产出批 unitPrice 诚实 null (honest-null 复用链)").isTrue();
+    }
 }
