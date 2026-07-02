@@ -43,6 +43,12 @@ public class SemiFinishedInventoryController {
      *   <li>{@code productTypeId} — 同类过滤: 仅返回同产品半成品 (猪蹄计划不显牛肉)。</li>
      *   <li>{@code maxProcessOrder} — 阶段过滤: 仅返回 {@code processOrder < maxProcessOrder} 的更早阶段半成品 (防回锅)。</li>
      * </ul>
+     *
+     * <p><b>成本口径 (by-design)</b>: 传入 {@code productTypeId} (picker context) → 返回真实
+     * {@code unitCost} + {@code productionDate}; <b>无 {@code productTypeId} (看板/盘点快照) → 成本脱敏为 null</b>
+     * (客户"只做重量库存")。要成本请走带 {@code productTypeId} 的过滤变体。详见 {@link WipRowDTO} 类注释。
+     * 现有唯一无过滤消费方是重量库存看板 ({@code warehouse/semi-finished/list.vue}), 不需要成本;
+     * 唯一需成本的消费方 (逐道投料下拉) 总是带 {@code productTypeId}。</p>
      */
     @RequirePermission({"production:read"})
     @GetMapping("/inventory")
