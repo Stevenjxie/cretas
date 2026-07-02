@@ -646,6 +646,34 @@ def test_owner_action_chat_routes_waiter_script_training_question() -> None:
     assert "缺" not in data["answer"]
 
 
+def test_owner_action_chat_routes_overstock_question_to_cost_margin() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_COST_OVERSTOCK",
+            message="哪些菜不适合继续备太多？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "cost_margin"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+
+
+def test_owner_action_chat_routes_returned_dish_rework_question_to_kitchen() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_KITCHEN_REWORK",
+            message="退菜和重做变多，今天厨师长先查什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "kitchen_quality"
+    assert "一句话结论" in data["answer"]
+    assert "缺" not in data["answer"]
+
+
 def test_owner_action_chat_routes_platform_and_door_conversion_questions() -> None:
     cases = [
         "美团大众点评有人看但没下单，老板今天先改什么？",
