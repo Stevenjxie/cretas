@@ -12,6 +12,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.service.inventory.FeedUnitConverter;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -501,20 +502,39 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         .withHint("请重新选择仍有库存的半成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(intermediateBatchNo));
+        // 🟠 盒⇄kg 折算: 计数单位半成品 (盒/个/件/只) 作 kg 道投料来源时, 把 kg 投料量折算为盒数扣减
+        //   (依据 ProductType.gramsPerUnit)。kg/重量单位来源 → 原样 (deductQty = qty, 行为不变; 不查产品避免多余 IO)。
+        //   🔴 诚实 null (禁止降级): 计数单位来源缺每盒克重 → 无法折算 → loud-fail, 绝不臆造 1盒=1kg。
+        BigDecimal deductQty;
+        if (FeedUnitConverter.isCountUnit(sfi.getUnit())) {
+            deductQty = FeedUnitConverter.feedKgToSourceUnit(
+                    qty, sfi.getUnit(), resolveGramsPerUnit(sfi.getProductTypeId()));
+            if (deductQty == null) {
+                throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为" + sfi.getUnit()
+                        + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为" + sfi.getUnit() + "扣减")
+                        .withCode("SFI_NO_GRAMS_PER_UNIT")
+                        .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试投料")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(intermediateBatchNo);
+            }
+        } else {
+            deductQty = qty; // kg / 重量单位: 直投 (行为不变)
+        }
         BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal consumed = nz(sfi.getConsumedQuantity());
         BigDecimal available = produced.subtract(consumed);
-        if (qty.compareTo(available) > 0) {
-            // 禁止降级: 不足即抛 (不 clamp), 防 phantom/不足库存生产成品。
+        if (deductQty.compareTo(available) > 0) {
+            // 禁止降级: 不足即抛 (不 clamp), 防 phantom/不足库存生产成品。余/需按来源原生单位 (盒装时为盒数)。
+            String u = sfi.getUnit() != null ? sfi.getUnit() : "";
             throw new BusinessException(409, "半成品库存不足: " + intermediateBatchNo
-                    + " 余" + available.stripTrailingZeros().toPlainString()
-                    + " 需" + qty.stripTrailingZeros().toPlainString())
+                    + " 余" + available.stripTrailingZeros().toPlainString() + u
+                    + " 需" + deductQty.stripTrailingZeros().toPlainString() + u)
                     .withCode("SFI_INSUFFICIENT")
                     .withHint("请减少投料量或选择其他半成品批次")
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
-        BigDecimal newConsumed = consumed.add(qty);
+        BigDecimal newConsumed = consumed.add(deductQty);
         sfi.setConsumedQuantity(newConsumed);
         sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
         if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0
@@ -522,9 +542,43 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }
         wipRepo.save(sfi);
-        log.info("[wip] consumeClerkSemiStrict SFI OUT: factory={}, batchNo={}, qty={}, consumed={}, available={}",
-                factoryId, intermediateBatchNo, qty, sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
-        return qty;
+        // 返回<b>实际扣减量</b> (来源原生单位: kg 源=qty; 盒源=盒数) — 撤销小结据此 restoreClerkSemi 精确还回 (口径一致)。
+        log.info("[wip] consumeClerkSemiStrict SFI OUT: factory={}, batchNo={}, feedKg={}, deducted={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, qty, deductQty, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return deductQty;
+    }
+
+    /**
+     * 盒⇄kg 成本口径: 把 kg 投料量折算为半成品来源的原生单位数量 (计数单位→盒数; kg 源→原值),
+     * 供小结成本核算 (成本 = 折算后数量 × 每单位 unitCost)。与 {@link #consumeClerkSemiStrict} 折算同源 (口径一致)。
+     *
+     * <p>🔴 诚实 null: 批次缺失 / 计数单位来源缺每盒克重 → null (调用方判本道产出成本未知, 禁止臆造)。只读不锁。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public BigDecimal resolveSemiFeedQtyInSourceUnit(String factoryId, String intermediateBatchNo, BigDecimal feedKg) {
+        if (feedKg == null || feedKg.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElse(null);
+        if (sfi == null) {
+            return null; // 诚实 null: 批次缺失 → 成本未知
+        }
+        if (!FeedUnitConverter.isCountUnit(sfi.getUnit())) {
+            return feedKg; // kg / 重量单位: 原值 (不查产品避免多余 IO)
+        }
+        return FeedUnitConverter.feedKgToSourceUnit(feedKg, sfi.getUnit(), resolveGramsPerUnit(sfi.getProductTypeId()));
+    }
+
+    /** 读产品每盒标准克重 (ProductType.gramsPerUnit); 缺 productTypeId / 产品缺失 / 未配 → null (诚实 null)。 */
+    private BigDecimal resolveGramsPerUnit(String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank()) {
+            return null;
+        }
+        return productTypeRepo.findById(productTypeId).map(ProductType::getGramsPerUnit).orElse(null);
     }
 
     /**
@@ -1189,8 +1243,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .filter(id -> id != null && !id.isBlank())
                 .collect(Collectors.toSet());
         Map<String, String> ptNameMap = new HashMap<>();
+        // 盒⇄kg 折算依据: 每盒克重 (计数单位半成品作 kg 道投料来源时前端换算用)。诚实 null: 未配 → null。
+        Map<String, BigDecimal> ptGramsMap = new HashMap<>();
         if (!ptIds.isEmpty()) {
-            productTypeRepo.findByIdIn(ptIds).forEach(pt -> ptNameMap.put(pt.getId(), pt.getName()));
+            productTypeRepo.findByIdIn(ptIds).forEach(pt -> {
+                ptNameMap.put(pt.getId(), pt.getName());
+                ptGramsMap.put(pt.getId(), pt.getGramsPerUnit());
+            });
         }
 
         // ② 批次下拉补 生产日期 / 成本: 仅逐道 SFI 投料下拉 (picker context = 带 productTypeId 过滤) 填充,
@@ -1213,6 +1272,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 // ② picker-only: 生产日期 (createdAt 日期) + 成本 (unitCost, 诚实 null)
                 .productionDate(pickerContext && w.getCreatedAt() != null ? w.getCreatedAt().toLocalDate() : null)
                 .unitCost(pickerContext ? w.getUnitCost() : null)
+                // ② picker-only: 每盒克重 (盒装半成品作 kg 道投料来源时前端 kg⇄盒 折算; 诚实 null)
+                .gramsPerUnit(pickerContext ? ptGramsMap.get(w.getProductTypeId()) : null)
                 .build()
         ).collect(Collectors.toList());
     }

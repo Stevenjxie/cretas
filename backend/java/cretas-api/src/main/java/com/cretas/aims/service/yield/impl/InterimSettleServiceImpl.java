@@ -541,13 +541,22 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 if (feed.signum() <= 0) {
                     continue;
                 }
+                // 盒⇄kg 折算: 计数单位来源 (盒装成品/半成品) 把 kg 投料折算为原生单位数量 (盒数), 成本 = 盒数 × 每盒 unitCost;
+                //   kg 源 → feed 原值 × 每kg unitCost (行为不变)。与扣减侧 consumeForFeedStrict/consumeClerkSemiStrict 折算同源。
+                //   🔴 诚实 null: 盒装来源缺每盒克重 → 无法折算 → 整道产出成本未知 (禁止臆造)。
+                BigDecimal feedInSourceUnit = fg
+                        ? finishedGoodsFeedService.resolveFeedQtyInSourceUnit(factoryId, ref.getSourceBatchNumber(), feed)
+                        : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, ref.getSourceBatchNumber(), feed);
+                if (feedInSourceUnit == null) {
+                    return null; // 🔴 诚实 null: 盒装来源缺每盒克重折算 → 本道产出成本未知, 不伪造
+                }
                 BigDecimal inputUnitCost = fg
                         ? finishedGoodsFeedService.getFeedUnitCost(factoryId, ref.getSourceBatchNumber())
                         : wipInventoryService.getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
                 if (inputUnitCost == null) {
                     return null; // 🔴 诚实 null: 输入半成品/成品无成本 → 本道产出成本未知, 不伪造 ¥0
                 }
-                stockFeedCost = stockFeedCost.add(feed.multiply(inputUnitCost));
+                stockFeedCost = stockFeedCost.add(feedInSourceUnit.multiply(inputUnitCost));
             }
         }
 

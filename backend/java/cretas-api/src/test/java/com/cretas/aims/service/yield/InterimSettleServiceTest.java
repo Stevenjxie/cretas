@@ -153,6 +153,11 @@ class InterimSettleServiceTest {
         // ①c FG 投料严格扣减: 默认成功返回请求量; 个别测试覆写为抛 (不足/缺失)。
         when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
+        // 盒⇄kg 成本口径折算: 默认 kg 源原样透传 (feedKg → feedKg); 盒装测试可覆写返回盒数/null。
+        when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
     }
 
     @Test
@@ -409,6 +414,57 @@ class InterimSettleServiceTest {
         FinishedGoodsBatch fg = fgCap.getValue();
         assertThat(fg.getUnitCost()).isNotNull();
         assertThat(fg.getUnitCost()).isEqualByComparingTo("64"); // (40 + 30×20) / 10
+    }
+
+    @Test
+    @DisplayName("🟢 盒装 FG 投料成本传导: feed 2kg 折算 10盒 × unitCost 20(¥/盒) = 200 + pb 40 → 产出 unitCost 24 (盒⇄kg 折算成本一致)")
+    void fgBoxFeedstockConvertsCostByBoxes() {
+        // 盒装成品 FG-BOX (200g/盒, unitCost 20 元/盒) feed 2kg → 折算 10 盒; 成本 = 10 × 20 = 200。
+        //   pb.totalCost = 40; FG total = 40 + 200 = 240; output 10kg → FG.unitCost = 240/10 = 24。
+        ProcessSheetRow rC = row(123L, 1, "CLK-B-FGBOX", reqFinished(1, "CLK-B-FGBOX", new BigDecimal("50"),
+                new BigDecimal("10"), upstreamFg("FG-BOX", "2")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rC));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 盒⇄kg 折算: 2kg → 10 盒 (成本口径); unitCost = 20 元/盒。
+        when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(FACTORY, "FG-BOX", new BigDecimal("2")))
+                .thenReturn(new BigDecimal("10"));
+        when(finishedGoodsFeedService.getFeedUnitCost(FACTORY, "FG-BOX")).thenReturn(new BigDecimal("20"));
+        ProductionBatch pbC = new ProductionBatch();
+        pbC.setId(123L);
+        pbC.setFactoryId(FACTORY);
+        pbC.setTotalCost(new BigDecimal("40.00"));
+        when(batchRepository.findByIdAndFactoryId(123L, FACTORY)).thenReturn(Optional.of(pbC));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getUnitCost()).isEqualByComparingTo("24"); // (40 + 10盒×20) / 10
+    }
+
+    @Test
+    @DisplayName("🔴 盒装 FG 缺每盒克重成本诚实null: resolveFeedQtyInSourceUnit → null → 产出 unitCost null (不伪造)")
+    void fgBoxFeedstockNoGramsPoisonsToNull() {
+        ProcessSheetRow rC = row(124L, 1, "CLK-B-FGBN", reqFinished(1, "CLK-B-FGBN", new BigDecimal("50"),
+                new BigDecimal("10"), upstreamFg("FG-BOXNG", "2")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rC));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 盒装缺每盒克重 → 折算返 null (诚实 null)
+        when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(FACTORY, "FG-BOXNG", new BigDecimal("2")))
+                .thenReturn(null);
+        ProductionBatch pbC = new ProductionBatch();
+        pbC.setId(124L);
+        pbC.setFactoryId(FACTORY);
+        pbC.setTotalCost(new BigDecimal("40.00"));
+        when(batchRepository.findByIdAndFactoryId(124L, FACTORY)).thenReturn(Optional.of(pbC));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getUnitCost()).isNull(); // 诚实 null: 盒装缺克重无法折算 → 成本未知
     }
 
     @Test

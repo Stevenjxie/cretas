@@ -45,20 +45,39 @@ public interface FinishedGoodsFeedService {
      *
      * <ul>
      *   <li>批次不存在 (factory-scoped) → 抛 {@code BusinessException(409, FG_NOT_FOUND)}。</li>
-     *   <li><b>单位不一致</b> (FG 批次 unit 与投料 {@code feedUnit} 不同, 无安全换算) → 抛
-     *       {@code BusinessException(409, FG_UNIT_MISMATCH)} (禁止降级: 不 kg↔盒 误扣)。</li>
-     *   <li>扣减量超过可用量 (qty &gt; available) → 抛 {@code BusinessException(409, FG_INSUFFICIENT)} (拒绝超扣, 防 phantom)。</li>
+     *   <li><b>计数单位 (盒/个/件/只) + kg 投料</b>: 依据 {@code ProductType.gramsPerUnit} 把 kg 折算为盒数扣减
+     *       (盒 = qty × 1000 / gramsPerUnit, scale=2 HALF_UP)。🔴 <b>缺每盒克重</b> → 抛
+     *       {@code BusinessException(409, FG_NO_GRAMS_PER_UNIT)} (诚实 null, 禁止臆造 1盒=1kg)。</li>
+     *   <li><b>其它单位不一致</b> (如 托 vs kg, 无 gramsPerUnit 折算依据) → 抛
+     *       {@code BusinessException(409, FG_UNIT_MISMATCH)} (禁止降级: 不误扣)。</li>
+     *   <li>扣减量超过可用量 (折算后 &gt; available) → 抛 {@code BusinessException(409, FG_INSUFFICIENT)} (拒绝超扣, 防 phantom)。</li>
      * </ul>
-     * 成功时 {@code producedQuantity -= qty} (available 随之下降), 可用量 ≤ 0 → DEPLETED, 返回<b>实际扣减量</b>
-     * (= qty, 不足即抛故永不少扣)。悲观行锁串行化并发扣减。必须在调用方 {@code @Transactional} 内执行。
+     * 成功时 {@code producedQuantity -= deductQty} (available 随之下降), 可用量 ≤ 0 → DEPLETED,
+     * 返回<b>实际扣减量</b> (成品原生单位: kg 源=qty; 盒源=折算盒数; 不足即抛故永不少扣)。撤销小结 {@link #restoreForFeed}
+     * 据此返回值精确还回 (口径一致)。悲观行锁串行化并发扣减。必须在调用方 {@code @Transactional} 内执行。
      *
      * @param factoryId   工厂 ID (factory-scoped 🔒)
      * @param batchNumber 成品批次号 (= {@code FinishedGoodsBatch.batchNumber})
-     * @param qty         本次投料扣减量 (≤0 → 返回 0, 不扣)
-     * @param feedUnit    投料计量单位 (逐道投料量为 kg → 传 "kg"); 与 FG 批次 unit 比对, 不一致即 loud-fail
-     * @return 实际扣减量 (= qty; 不足/缺失/单位不一致即抛)
+     * @param qty         本次投料量 (kg; ≤0 → 返回 0, 不扣)
+     * @param feedUnit    投料计量单位 (逐道投料量为 kg → 传 "kg"); 计数单位成品经 gramsPerUnit 折算, 其它单位不一致 loud-fail
+     * @return 实际扣减量 (成品原生单位: kg 源=qty, 盒源=折算盒数; 不足/缺失/盒装缺克重/单位不一致即抛)
      */
     BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit);
+
+    /**
+     * 盒⇄kg 成本口径 — 把 kg 投料量折算为成品来源的<b>原生单位</b>数量 (计数单位 盒/个/件/只 → 盒数; kg 源 → 原值),
+     * 供小结成本核算 (成本 = 折算后数量 × 每单位 {@link #getFeedUnitCost})。与 {@link #consumeForFeedStrict}
+     * 的扣减折算<b>同源同口径</b> (盒 = feedKg × 1000 / gramsPerUnit, scale=2 HALF_UP), 保证扣减量与计价量一致。
+     *
+     * <p>🔴 诚实 null: 批次缺失 / 计数单位来源缺 {@code ProductType.gramsPerUnit} → 返 {@code null}
+     * (调用方判本道产出成本未知, 禁止臆造)。只读不锁。
+     *
+     * @param factoryId   工厂 ID (factory-scoped 🔒)
+     * @param batchNumber 成品批次号
+     * @param feedKg      本道投料量 (kg; ≤0 → 返回 0)
+     * @return 折算后的原生单位数量 (kg 源=feedKg; 盒源=盒数); 缺失/盒装缺克重 → null
+     */
+    BigDecimal resolveFeedQtyInSourceUnit(String factoryId, String batchNumber, BigDecimal feedKg);
 
     /**
      * 撤销小结 — 逆 {@code createFinishedGoodsForInterim} (FG 成品入库 un-create)。

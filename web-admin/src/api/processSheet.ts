@@ -362,6 +362,12 @@ export interface SemiFinishedStockItem {
   productionDate?: string | null;
   /** ② 单位成本 (逐道投料下拉展示; 诚实 null = 成本未知; 仅 picker 过滤查询填充) */
   unitCost?: number | null;
+  /**
+   * ② 每盒/份标准克重 (ProductType.gramsPerUnit, "1 份/盒 = X 克")。
+   * 计数单位 (盒/个/件/只) 半成品作 kg 道投料来源时, 前端据此把 kg⇄盒 折算 (余 N 盒 ≈ M kg)。
+   * 诚实 null: 未配每盒克重 → null (前端据此拦截盒装投料, 禁止臆造)。
+   */
+  gramsPerUnit?: number | null;
 }
 
 /**
@@ -377,6 +383,12 @@ export interface FinishedGoodsStockItem {
   unit?: string | null;
   /** 单位成本 (诚实 null = 成本未知; 区别于售价) */
   unitCost?: number | null;
+  /**
+   * 每盒/份标准克重 (ProductType.gramsPerUnit, "1 份/盒 = X 克")。
+   * 计数单位 (盒/个/件/只) 成品作 kg 道投料来源时, 前端据此把 kg⇄盒 折算 (余 N 盒 ≈ M kg)。
+   * 诚实 null: 未配每盒克重 → null (前端据此拦截盒装投料, 禁止臆造 1盒=1kg)。
+   */
+  gramsPerUnit?: number | null;
 }
 
 /**

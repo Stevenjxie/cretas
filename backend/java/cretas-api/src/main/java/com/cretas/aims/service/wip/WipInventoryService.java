@@ -188,21 +188,41 @@ public interface WipInventoryService {
      * <b>常驻半成品库存</b> 的出库 <b>失败即抛 (禁止降级)</b>:
      * <ul>
      *   <li>SFI 行不存在 → 抛 {@code BusinessException(409, SFI_NOT_FOUND)} (拒绝 phantom 出库)。</li>
-     *   <li>出库量超过可用 (qty &gt; available) → 抛 {@code BusinessException(409, SFI_INSUFFICIENT)}
+     *   <li>出库量超过可用 (deductQty &gt; available) → 抛 {@code BusinessException(409, SFI_INSUFFICIENT)}
      *       (拒绝超扣 → 防 phantom/不足库存生产成品)。</li>
+     *   <li><b>计数单位来源 (盒/个/件/只) 缺每盒克重</b> ({@code ProductType.gramsPerUnit} null) → 抛
+     *       {@code BusinessException(409, SFI_NO_GRAMS_PER_UNIT)} (🔴 诚实 null, 禁止臆造 1盒=1kg)。</li>
      * </ul>
-     * 成功时按 {@code consumedQuantity += qty; availableQuantity = produced - consumed} 扣减,
-     * available≤0 → DEPLETED, 并返回 <b>实际出库量</b> (= {@code qty}, 因不足即抛, 永不少扣)。
+     * <b>盒⇄kg 折算</b>: 计数单位半成品 (盒装) 作 kg 道投料来源时, 把 {@code qty} (kg) 折算为盒数
+     * ({@code 盒 = qty × 1000 / gramsPerUnit}, scale=2 HALF_UP) 后扣减; kg/重量单位来源原样扣减 (行为不变)。
+     * 成功时按 {@code consumedQuantity += deductQty; availableQuantity = produced - consumed} 扣减,
+     * available≤0 → DEPLETED, 并返回 <b>实际扣减量</b> (来源原生单位: kg 源=qty; 盒源=盒数; 因不足即抛, 永不少扣)。
+     * 撤销小结 {@link #restoreClerkSemi} 据此返回值精确还回 (口径一致)。
      *
      * <p>容忍版 {@link #consumeClerkSemi} 仍保留给 <b>计划内前序小结半成品</b> 的 anchor 出库
      * (那里的 not-below-zero 是有意双保险, 与 SFI IN 净结余会计互为校验)。
      *
      * @param factoryId           工厂 ID (factory-scoped 🔒)
      * @param intermediateBatchNo 常驻 SFI 批次号 (= {@link SemiFinishedInventory#getIntermediateBatchNo()})
-     * @param qty                 本次出库量 (≤0 → 返回 0, 不扣)
-     * @return 实际出库量 (= qty; 不足/缺失即抛, 故永不少于请求量)
+     * @param qty                 本次投料量 (kg; ≤0 → 返回 0, 不扣)
+     * @return 实际扣减量 (来源原生单位: kg 源=qty, 盒源=折算盒数; 不足/缺失/盒装缺克重即抛, 故永不少于请求量)
      */
     BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
+
+    /**
+     * 盒⇄kg 成本口径 — 把 kg 投料量折算为半成品来源的<b>原生单位</b>数量 (计数单位 盒/个/件/只 → 盒数; kg 源 → 原值),
+     * 供小结成本核算 (成本 = 折算后数量 × 每单位 {@link #getSemiUnitCost})。与 {@link #consumeClerkSemiStrict}
+     * 的扣减折算<b>同源同口径</b> (盒 = feedKg × 1000 / gramsPerUnit, scale=2 HALF_UP), 保证扣减量与计价量一致。
+     *
+     * <p>🔴 诚实 null: 批次缺失 / 计数单位来源缺 {@code ProductType.gramsPerUnit} → 返 {@code null}
+     * (调用方判本道产出成本未知, 禁止臆造)。只读不锁。
+     *
+     * @param factoryId           工厂 ID (factory-scoped 🔒)
+     * @param intermediateBatchNo 常驻 SFI 批次号
+     * @param feedKg              本道投料量 (kg; ≤0 → 返回 0)
+     * @return 折算后的原生单位数量 (kg 源=feedKg; 盒源=盒数); 缺失/盒装缺克重 → null
+     */
+    BigDecimal resolveSemiFeedQtyInSourceUnit(String factoryId, String intermediateBatchNo, BigDecimal feedKg);
 
     /**
      * 撤销小结 (interim-settle reversal) — {@link #postClerkOutput} 的逆 (SFI IN un-stock)。

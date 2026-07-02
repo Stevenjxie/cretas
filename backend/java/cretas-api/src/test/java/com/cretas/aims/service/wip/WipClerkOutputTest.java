@@ -1,7 +1,9 @@
 package com.cretas.aims.service.wip;
 
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
@@ -40,6 +42,7 @@ class WipClerkOutputTest {
 
     @Mock private SemiFinishedInventoryRepository wipRepo;
     @Mock private SemiFinishedInventoryTransactionRepository txnRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
     @InjectMocks private WipInventoryServiceImpl service;
 
     private SemiFinishedInventory freshRow() {
@@ -52,6 +55,23 @@ class WipClerkOutputTest {
                 .availableQuantity(BigDecimal.ZERO)
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
+    }
+
+    /** 盒装半成品行 (计数单位), 供盒⇄kg 折算测试。 */
+    private SemiFinishedInventory boxRow(String producedBoxes) {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal(producedBoxes));
+        row.setAvailableQuantity(new BigDecimal(producedBoxes));
+        row.setUnit("盒");
+        return row;
+    }
+
+    /** 桩: PT1 配了每盒克重。 */
+    private void stubGrams(String grams) {
+        ProductType pt = new ProductType();
+        pt.setId("PT1");
+        pt.setGramsPerUnit(new BigDecimal(grams));
+        when(productTypeRepo.findById("PT1")).thenReturn(Optional.of(pt));
     }
 
     @Test
@@ -170,6 +190,81 @@ class WipClerkOutputTest {
         // 未扣减 (抛前不改)
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("40");
         verify(wipRepo, never()).save(any());
+    }
+
+    // ── 盒⇄kg 折算 (计数单位半成品作 kg 道投料来源) ──
+
+    @Test
+    @DisplayName("🟢 盒装半成品 + 每盒克重 → kg 投料折算盒数扣减 (200g/盒, 投 2kg → 扣 10盒), consumed 盒数")
+    void consumeClerkSemiStrictBoxConvertsToBoxes() {
+        SemiFinishedInventory row = boxRow("50");   // 余 50 盒
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+        stubGrams("200");
+
+        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2"));   // 2kg → 10盒
+
+        assertThat(drawn).isEqualByComparingTo("10");             // 返回扣减盒数 (供撤销精确还回)
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("10");
+        assertThat(row.getAvailableQuantity()).isEqualByComparingTo("40");
+    }
+
+    @Test
+    @DisplayName("🔴 盒装半成品缺每盒克重 (honest-null): kg 投料 → SFI_NO_GRAMS_PER_UNIT (禁止臆造, 不扣)")
+    void consumeClerkSemiStrictBoxWithoutGramsThrows() {
+        SemiFinishedInventory row = boxRow("50");
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+        when(productTypeRepo.findById("PT1")).thenReturn(Optional.empty());   // 未配每盒克重
+
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NO_GRAMS_PER_UNIT"));
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("0");   // 未扣
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🔴 盒装半成品可用量边界: 折算盒数 > 余盒 → SFI_INSUFFICIENT (余10盒=2kg, 投 2.2kg=11盒 → 超)")
+    void consumeClerkSemiStrictBoxOverAvailabilityThrows() {
+        SemiFinishedInventory row = boxRow("10");   // 余 10 盒 = 2kg
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+        stubGrams("200");
+
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2.2")))   // 11盒
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_INSUFFICIENT"));
+        assertThat(row.getConsumedQuantity()).isEqualByComparingTo("0");   // 未扣
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("成本口径 resolveSemiFeedQtyInSourceUnit: 盒装→盒数(2kg→10盒); kg→原值; 缺克重→null; 缺失→null")
+    void resolveSemiFeedQtyInSourceUnit() {
+        // 盒装 + 克重: 2kg → 10 盒
+        SemiFinishedInventory box = boxRow("50");
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR)).thenReturn(Optional.of(box));
+        stubGrams("200");
+        assertThat(service.resolveSemiFeedQtyInSourceUnit(FACTORY, ANCHOR, new BigDecimal("2")))
+                .isEqualByComparingTo("10");
+
+        // kg 源: 原样 (5kg → 5)
+        SemiFinishedInventory kg = freshRow();   // unit null → 非计数
+        kg.setProducedQuantity(new BigDecimal("50"));
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, "KGSFI")).thenReturn(Optional.of(kg));
+        assertThat(service.resolveSemiFeedQtyInSourceUnit(FACTORY, "KGSFI", new BigDecimal("5")))
+                .isEqualByComparingTo("5");
+
+        // 盒装缺克重: 诚实 null
+        SemiFinishedInventory boxNoGrams = boxRow("50");
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, "BOXNG")).thenReturn(Optional.of(boxNoGrams));
+        when(productTypeRepo.findById("PT1")).thenReturn(Optional.empty());
+        assertThat(service.resolveSemiFeedQtyInSourceUnit(FACTORY, "BOXNG", new BigDecimal("2"))).isNull();
+
+        // 批次缺失: 诚实 null
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, "MISS")).thenReturn(Optional.empty());
+        assertThat(service.resolveSemiFeedQtyInSourceUnit(FACTORY, "MISS", new BigDecimal("2"))).isNull();
     }
 
     // ── getSemiUnitCost (成本传导基准, 诚实 null) ──
