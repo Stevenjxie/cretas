@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { FormRules } from 'element-plus';
 import { Plus, Search, Refresh, List } from '@element-plus/icons-vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
@@ -43,14 +44,25 @@ const defaultForm = {
 };
 const form = reactive({ ...defaultForm });
 
-const formRules = {
+// 客户张权原话 (2026-07-02): "这个不要强制 一般不会放系统里面的 都是一脉单传的"
+// 联系人/联系电话/地址 改为选填 — 只有供应商名称必填。手机号格式仍校验, 但仅当填了值时才检查
+// (validator 在空值时直接 cb() 放行, 避免 pattern rule 对空字符串误报格式错误)。
+const formRules: FormRules = {
   name: [{ required: true, message: '请输入供应商名称', trigger: 'blur' }],
-  contactPerson: [{ required: true, message: '请输入联系人', trigger: 'blur' }],
+  contactPerson: [],
   phone: [
-    { required: true, message: '请输入联系电话', trigger: 'blur' },
-    { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' },
+    {
+      validator: (_rule: unknown, value: string, callback: (err?: Error) => void) => {
+        if (value && !/^1[3-9]\d{9}$/.test(value)) {
+          callback(new Error('请输入正确的手机号'));
+        } else {
+          callback();
+        }
+      },
+      trigger: 'blur',
+    },
   ],
-  address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
+  address: [],
 };
 
 onMounted(() => {

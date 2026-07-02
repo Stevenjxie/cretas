@@ -35,6 +35,10 @@ import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { WH_INBOUND_CONFIG } from '@/components/ai-entry/types';
+// 客户张权反馈 (2026-07-02, "小问题"): 入库单没法选仓库, 默认全进物流仓(WH-LOG).
+// 后端早已支持 (PurchaseServiceImpl L1122/L2062-2071 CreateReceiveRecordRequest.warehouseId,
+// 未传才兜底 resolveLogisticsId), 只缺前端选择器.
+import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 // Issue #794: 采购入库拍照附件 UI (六扇门 May 7 part 2 L177-180)
 // "拍照也可以留个单谱吧... 留个附件类似一个拍照然后一个附件吗也可以的呀"
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
@@ -150,7 +154,14 @@ function handleAiFill(params: Record<string, unknown>) {
   }
 
   // Open create dialog (loadOptions handled by handleCreate, but we want pre-fill not reset)
-  if (supplierOptions.value.length === 0) loadOptions();
+  const optionsReady = supplierOptions.value.length > 0
+    ? Promise.resolve()
+    : loadOptions();
+  optionsReady.then(() => {
+    if (!form.value.warehouseId) {
+      form.value.warehouseId = defaultRawWarehouseId(warehouseOptions.value);
+    }
+  });
   createVisible.value = true;
 }
 
@@ -186,6 +197,15 @@ const supplierOptions = ref<SupplierOption[]>([]);
 const materialOptions = ref<MaterialTypeOption[]>([]);
 const purchaseOrderOptions = ref<PurchaseOrderOption[]>([]);
 const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
+const warehouseOptions = ref<FactoryWarehouse[]>([]);
+
+/** 原料入库推荐仓 (RAW/SALTED/LOGISTICS 都能收原料, 见 WarehouseInventoryGuardService.assertCanReceive) */
+function defaultRawWarehouseId(list: FactoryWarehouse[]): string {
+  const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
+  if (raw) return raw.id;
+  const logistics = list.find((w) => w.type === 'LOGISTICS' && w.isActive !== false);
+  return logistics ? logistics.id : '';
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -206,7 +226,7 @@ async function loadData() {
 async function loadOptions() {
   if (!factoryId.value) return;
   try {
-    const [sup, mat, po, manufacturers] = await Promise.all([
+    const [sup, mat, po, manufacturers, warehouses] = await Promise.all([
       get<{ content: SupplierOption[] } | SupplierOption[]>(
         `/${factoryId.value}/reference-data/suppliers?usage=active`
       ),
@@ -217,6 +237,7 @@ async function loadOptions() {
         `/${factoryId.value}/reference-data/purchase-orders?usage=receivable`
       ),
       listManufacturers(factoryId.value, true),
+      listWarehouses(factoryId.value),
     ]);
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);
@@ -231,6 +252,7 @@ async function loadOptions() {
       supplierName: p.supplierName || supplierOptions.value.find((s) => s.id === p.supplierId)?.name || '',
     }));
     manufacturerOptions.value = ext<ManufacturerRegistry>(manufacturers);
+    warehouseOptions.value = (warehouses?.data || []).filter((w) => w.isActive !== false);
   } catch { /* interceptor */ }
 }
 
@@ -239,11 +261,17 @@ function handleCreate() {
     purchaseOrderId: '',
     supplierId: '',
     receiveDate: new Date().toISOString().slice(0, 10),
+    // 默认原料仓(WH-RAW), 无则默认物流仓(WH-LOG); loadOptions() 完成后回填 (见下 .then)
     warehouseId: '',
     remark: '',
     items: [],
   };
-  loadOptions();
+  loadOptions().then(() => {
+    // Rule 1 (fool-proof-design): 预填推荐仓, 用户仍可改选; 不选也不阻塞(后端兜底物流仓)。
+    if (!form.value.warehouseId) {
+      form.value.warehouseId = defaultRawWarehouseId(warehouseOptions.value);
+    }
+  });
   createVisible.value = true;
   // Auto-populate supplier when PO selected (single-source-of-truth FE convenience)
 }
@@ -692,6 +720,20 @@ onMounted(() => { loadData(); loadOptions(); });
         </el-form-item>
         <el-form-item label="入库日期" prop="receiveDate">
           <el-date-picker v-model="form.receiveDate" type="date" value-format="YYYY-MM-DD" style="width:200px" />
+        </el-form-item>
+        <!--
+          客户张权反馈 (2026-07-02): 入库单没法选仓库, 之前都默认进物流仓(WH-LOG)。
+          不选也不阻塞 — 后端 CreateReceiveRecordRequest.warehouseId 未传时兜底物流仓
+          (PurchaseServiceImpl L2062-2066)。选了 WIP/成品仓会被后端 422 拦(assertCanReceive)。
+        -->
+        <el-form-item label="入库仓库">
+          <el-select v-model="form.warehouseId" placeholder="(可选,默认物流仓) 选择入库仓库" clearable filterable style="width:100%">
+            <el-option
+              v-for="w in warehouseOptions" :key="w.id"
+              :label="`${w.name} (${w.code})`"
+              :value="w.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="备注" prop="remark">
           <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="入库备注(可选)" />
