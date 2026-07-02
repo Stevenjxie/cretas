@@ -56,7 +56,7 @@ const hasProducts = computed(() => props.products.length > 0);
     <el-table v-else :data="rows" border size="small">
       <el-table-column label="产品" min-width="160">
         <template #default="{ row, $index }">
-          <el-select v-if="row" :model-value="row.productTypeId" placeholder="选择产品"
+          <el-select v-if="row" :model-value="row.productTypeId" placeholder="选择产品" filterable
             @update:model-value="(v: string) => onProductChange($index, v)">
             <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
