@@ -96,6 +96,11 @@ const stepsStatus = computed(() => {
 });
 
 const isOutbound = computed(() => transfer.value?.sourceFactoryId === factoryId.value);
+// Bug fix (module-verify 2026-07-03): 同厂(仓间, 如原料仓→生产仓)调拨 sourceFactoryId===targetFactoryId,
+// isOutbound 恒为 true → 之前 receive/confirm 按钮门控在 `!isOutbound` 上, 永不渲染, 调拨单卡死在 SHIPPED。
+// 后端 assertSourceFactory/assertTargetFactory 对同厂调拨两个都放行(factoryId 同时等于 source 和 target),
+// 所以门控只需加 isInbound: 同厂时 isOutbound 和 isInbound 都为 true, 发运+签收/入库按钮都渲染。
+const isInbound = computed(() => transfer.value?.targetFactoryId === factoryId.value);
 
 async function handleAction(action: string) {
   if (submitting.value) return;
@@ -362,8 +367,8 @@ async function submitDecide() {
               type="primary"
               :loading="submitting"
               @click="handleAction('ship')">确认发运</el-button>
-            <el-button v-if="transfer.status === 'SHIPPED' && !isOutbound" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
-            <el-button v-if="transfer.status === 'RECEIVED' && !isOutbound" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
+            <el-button v-if="transfer.status === 'SHIPPED' && isInbound" type="primary" :loading="submitting" @click="handleAction('receive')">确认签收</el-button>
+            <el-button v-if="transfer.status === 'RECEIVED' && isInbound" type="success" :loading="submitting" @click="handleAction('confirm')">确认入库</el-button>
             <el-button v-if="['DRAFT','REQUESTED'].includes(transfer.status)" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
           </div>
         </div>

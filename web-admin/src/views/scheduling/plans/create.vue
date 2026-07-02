@@ -51,21 +51,28 @@ onMounted(() => {
   loadProductionLines();
 });
 
+// 尚未开工、可被排入调度计划的批次状态。ProductionBatchStatus 枚举没有 PENDING
+// (旧代码传 status=PENDING 触发 IllegalArgumentException → 400, 批次列表恒为空,
+// 排程计划页面无法创建, module-verify 2026-07-03 抓出)。PLANNED 是当前值,
+// PLANNING 是历史遗留同义值 (见 ProductionBatchStatus.java 注释), 两者都算"待调度"。
+const SCHEDULABLE_STATUSES = new Set(['PLANNED', 'PLANNING']);
+
 async function loadBatches() {
   if (!factoryId.value) return;
 
   try {
-    // 加载待调度的生产批次
+    // 加载待调度的生产批次。后端单个 status 参数不支持传多值, 这里不传 status
+    // 拉全量后前端过滤 PLANNED/PLANNING, 避免漏掉历史 PLANNING 数据。
     // Bug fix (sidebar audit): 后端 @Min(1) 要求 page>=1, 之前 page:0 触发 400 "Page index must not be less than zero"
     const response = await get(`/${factoryId.value}/processing/batches`, {
       params: {
-        status: 'PENDING',
         page: 1,
-        size: 100
+        size: 200
       }
     });
     if (response.success && response.data) {
-      batches.value = response.data.content || [];
+      const content = (response.data.content || []) as TableRow[];
+      batches.value = content.filter((b) => SCHEDULABLE_STATUSES.has(String(b.status || '').toUpperCase()));
     }
   } catch (error) {
     console.error('加载批次失败:', error);

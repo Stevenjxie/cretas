@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.equipment;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -21,8 +22,13 @@ import java.time.LocalDate;
 @Schema(description = "创建设备请求")
 public class CreateEquipmentRequest {
 
+    // Bug fix (module-verify 2026-07-03): web-admin 设备表单 POST 用 "equipmentCode"
+    // (对齐 EquipmentDTO GET 响应字段名/entity.equipmentCode), RN 移动端沿用旧字段名 "code"
+    // (对齐 entity.code, 二者在实体上是同值冗余列)。JsonAlias 让两端都能正确写入,
+    // 不然 web-admin 传的 equipmentCode 被静默丢弃 → 后端总是 auto-generate 编号。
     @Schema(description = "设备编码(可选，不填则自动生成)")
     @Size(max = 50, message = "设备编码长度不能超过50个字符")
+    @JsonAlias("equipmentCode")
     private String code;
 
     @Schema(description = "设备名称", required = true)

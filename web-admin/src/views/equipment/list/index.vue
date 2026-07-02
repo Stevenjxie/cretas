@@ -144,6 +144,11 @@ const form = ref({
   manufacturer: '',
   status: 'IDLE',
   notes: '',
+  // Bug fix (module-verify 2026-07-03): 表单之前没有维护间隔字段, UI 建的设备永远不会
+  // 设置 nextMaintenanceDate, 也就永远不会出现在"待维护"列表里 (设备维护功能事实上不可达)。
+  // 用户按"天"填写 (对齐 RN 移动端 maintenanceInterval 的天数惯例), 提交时换算成后端的
+  // maintenanceIntervalHours (小时)。
+  maintenanceIntervalDays: null as number | null,
 });
 const dialogTitle = computed(() => (editingId.value ? '编辑设备' : '新建设备'));
 const submitting = ref(false);
@@ -158,12 +163,15 @@ function handleAdd() {
     manufacturer: '',
     status: 'IDLE',
     notes: '',
+    maintenanceIntervalDays: null,
   };
   formDialogVisible.value = true;
 }
 
 function handleEdit(row: TableRow) {
   editingId.value = String(row.id || '');
+  const hours = row.maintenanceIntervalHours;
+  const hoursNum = typeof hours === 'number' ? hours : Number(hours);
   form.value = {
     equipmentCode: String(row.equipmentCode || ''),
     name: String(row.name || ''),
@@ -172,6 +180,7 @@ function handleEdit(row: TableRow) {
     manufacturer: String(row.manufacturer || ''),
     status: String(row.status || 'IDLE'),
     notes: String(row.notes || ''),
+    maintenanceIntervalDays: Number.isFinite(hoursNum) && hoursNum > 0 ? Math.round(hoursNum / 24) : null,
   };
   formDialogVisible.value = true;
 }
@@ -181,11 +190,16 @@ async function handleSave() {
   if (!form.value.equipmentCode) return ElMessage.warning('请填写设备编号');
   submitting.value = true;
   try {
+    const { maintenanceIntervalDays, ...rest } = form.value;
+    const payload = {
+      ...rest,
+      maintenanceIntervalHours: maintenanceIntervalDays ? maintenanceIntervalDays * 24 : undefined,
+    };
     if (editingId.value) {
-      const res = await put(`/${factoryId.value}/equipment/${editingId.value}`, form.value);
+      const res = await put(`/${factoryId.value}/equipment/${editingId.value}`, payload);
       if (res.success) ElMessage.success('更新成功');
     } else {
-      const res = await post(`/${factoryId.value}/equipment`, form.value);
+      const res = await post(`/${factoryId.value}/equipment`, payload);
       if (res.success) ElMessage.success('创建成功');
     }
     formDialogVisible.value = false;
@@ -299,6 +313,15 @@ async function handleDelete(row: TableRow) {
             <el-option label="故障 (FAULT)" value="FAULT" />
             <el-option label="离线 (OFFLINE)" value="OFFLINE" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="维护间隔(天)">
+          <el-input-number
+            v-model="form.maintenanceIntervalDays"
+            :min="1"
+            :precision="0"
+            style="width: 100%"
+            placeholder="不填则不进入待维护提醒"
+          />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="2" />
