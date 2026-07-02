@@ -125,6 +125,54 @@ export function applyWarehouseTemplate(factoryId: string, body: ApplyTemplateBod
   )
 }
 
+// ==================== 默认仓路由配置 (Layer 2) ====================
+// Backend: FactoryWarehouseDefaultController @ /api/mobile/{factoryId}/factory/warehouse-defaults
+// Role gate: factory_super_admin / permission_admin (backend @RequireRole)
+
+/** 默认仓路由用途 — 镜像后端 WarehouseDefaultPurpose 枚举。 */
+export type WarehouseDefaultPurpose = 'LOGISTICS_DEFAULT' | 'WORKSHOP_DEFAULT' | 'RD_DEFAULT'
+
+export const WAREHOUSE_DEFAULT_PURPOSE_LABELS: Record<WarehouseDefaultPurpose, string> = {
+  LOGISTICS_DEFAULT: '采购入库 / 销售出货 / 原料默认仓',
+  WORKSHOP_DEFAULT: '生产成品 / 报工消耗默认仓',
+  RD_DEFAULT: '研发 / 试制默认仓',
+}
+
+export interface FactoryWarehouseDefault {
+  id: string
+  factoryId: string
+  purpose: WarehouseDefaultPurpose
+  warehouseId: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface WarehouseDefaultSpec {
+  purpose: WarehouseDefaultPurpose
+  warehouseId: string
+}
+
+export interface UpsertWarehouseDefaultsBody {
+  /** 单条（与 defaults 二选一，defaults 优先） */
+  purpose?: WarehouseDefaultPurpose
+  warehouseId?: string
+  /** 批量 */
+  defaults?: WarehouseDefaultSpec[]
+}
+
+export function getWarehouseDefaults(factoryId: string) {
+  return request.get<any, { success: boolean; data: FactoryWarehouseDefault[]; message?: string }>(
+    `/${factoryId}/factory/warehouse-defaults`,
+  )
+}
+
+export function saveWarehouseDefaults(factoryId: string, defaults: WarehouseDefaultSpec[]) {
+  return request.put<any, { success: boolean; data: FactoryWarehouseDefault[]; message?: string }>(
+    `/${factoryId}/factory/warehouse-defaults`,
+    { defaults },
+  )
+}
+
 // ==================== Template presets (frontend constants) ====================
 
 /** 六扇门含盐化代加工 7 仓预设（与后端 LIUSHANMEN_SALTED 对应） */

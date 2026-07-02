@@ -49,6 +49,42 @@
       </el-table-column>
     </el-table>
 
+    <!-- 默认仓用途配置 -->
+    <el-divider content-position="left">默认仓用途配置</el-divider>
+    <div v-loading="defaultsLoading" class="defaults-section">
+      <el-form label-width="220px" class="defaults-form">
+        <el-form-item
+          v-for="purpose in WAREHOUSE_DEFAULT_PURPOSE_KEYS"
+          :key="purpose"
+          :label="WAREHOUSE_DEFAULT_PURPOSE_LABELS[purpose]"
+        >
+          <el-select
+            v-model="defaultsForm[purpose]"
+            clearable
+            placeholder="未配置（用系统默认仓）"
+            style="width: 320px"
+          >
+            <el-option
+              v-for="w in rows"
+              :key="w.id"
+              :label="`${w.name} (${w.code})`"
+              :value="w.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <div class="defaults-hint">
+        <el-text type="info" size="small">
+          留空 = 用系统默认仓（物流仓/车间仓/研发库）。配置后该用途的入库自动进所选仓。
+        </el-text>
+      </div>
+      <div class="defaults-actions">
+        <el-button type="primary" :loading="defaultsSaving" @click="onSaveDefaults">
+          保存默认仓配置
+        </el-button>
+      </div>
+    </div>
+
     <!-- 新建 / 编辑 Dialog -->
     <el-dialog v-model="dialogOpen" :title="dialogTitle" width="480px">
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
@@ -189,12 +225,16 @@ import {
   updateWarehouse,
   deleteWarehouse,
   applyWarehouseTemplate,
+  getWarehouseDefaults,
+  saveWarehouseDefaults,
   WAREHOUSE_TYPE_LABELS,
   WAREHOUSE_TYPE_DEFAULTS,
+  WAREHOUSE_DEFAULT_PURPOSE_LABELS,
   LIUSHANMEN_SALTED_TEMPLATE,
   type FactoryWarehouse,
   type WarehouseType,
   type WarehouseSpec,
+  type WarehouseDefaultPurpose,
 } from '@/api/factoryWarehouse'
 
 interface Props {
@@ -392,7 +432,96 @@ async function onApplyTemplate() {
   }
 }
 
-onMounted(loadData)
+// ==================== 默认仓用途配置 ====================
+
+const WAREHOUSE_DEFAULT_PURPOSE_KEYS: WarehouseDefaultPurpose[] = [
+  'LOGISTICS_DEFAULT',
+  'WORKSHOP_DEFAULT',
+  'RD_DEFAULT',
+]
+
+const defaultsLoading = ref(false)
+const defaultsSaving = ref(false)
+
+const defaultsForm = reactive<Record<WarehouseDefaultPurpose, string | undefined>>({
+  LOGISTICS_DEFAULT: undefined,
+  WORKSHOP_DEFAULT: undefined,
+  RD_DEFAULT: undefined,
+})
+
+// 上次从后端加载到的已持久化映射快照，用来判断"清空但保存"时后端是否真的能删除。
+const persistedDefaults = reactive<Record<WarehouseDefaultPurpose, string | undefined>>({
+  LOGISTICS_DEFAULT: undefined,
+  WORKSHOP_DEFAULT: undefined,
+  RD_DEFAULT: undefined,
+})
+
+async function loadDefaults() {
+  if (!props.factoryId) return
+  defaultsLoading.value = true
+  try {
+    const res = await getWarehouseDefaults(props.factoryId)
+    for (const key of WAREHOUSE_DEFAULT_PURPOSE_KEYS) {
+      defaultsForm[key] = undefined
+      persistedDefaults[key] = undefined
+    }
+    if (res.success && res.data) {
+      for (const item of res.data) {
+        defaultsForm[item.purpose] = item.warehouseId
+        persistedDefaults[item.purpose] = item.warehouseId
+      }
+    }
+  } finally {
+    defaultsLoading.value = false
+  }
+}
+
+async function onSaveDefaults() {
+  const specs = WAREHOUSE_DEFAULT_PURPOSE_KEYS
+    .filter((key) => !!defaultsForm[key])
+    .map((key) => ({ purpose: key, warehouseId: defaultsForm[key] as string }))
+
+  // 后端 upsert 目前不接受空 warehouseId（无 DELETE 语义），
+  // 清空一个"已配置"用途无法通过此接口真正移除映射——如实提示，不静默假装成功。
+  const clearedButUnsupported = WAREHOUSE_DEFAULT_PURPOSE_KEYS.filter(
+    (key) => persistedDefaults[key] && !defaultsForm[key],
+  )
+
+  if (specs.length === 0 && clearedButUnsupported.length === 0) {
+    ElMessage.info('未做任何修改')
+    return
+  }
+
+  defaultsSaving.value = true
+  try {
+    if (specs.length > 0) {
+      await saveWarehouseDefaults(props.factoryId, specs)
+    }
+    if (clearedButUnsupported.length > 0) {
+      const labels = clearedButUnsupported
+        .map((k) => WAREHOUSE_DEFAULT_PURPOSE_LABELS[k])
+        .join('、')
+      ElMessage({
+        message: `${labels} 已清空显示，但后端暂不支持删除已配置的默认仓映射，刷新后将恢复原配置`,
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+      })
+    } else {
+      ElMessage.success('默认仓配置已保存')
+    }
+    await loadDefaults()
+  } catch {
+    // axios interceptor handles error toast (e.g. 400 仓库不存在或不属于当前工厂)
+  } finally {
+    defaultsSaving.value = false
+  }
+}
+
+onMounted(() => {
+  loadData()
+  loadDefaults()
+})
 </script>
 
 <style scoped>
@@ -441,5 +570,18 @@ onMounted(loadData)
   padding: 8px 12px;
   background: var(--el-fill-color-light);
   border-radius: 4px;
+}
+.defaults-section {
+  padding: 4px 0 8px;
+}
+.defaults-form {
+  max-width: 480px;
+}
+.defaults-hint {
+  margin: 4px 0 12px;
+}
+.defaults-actions {
+  display: flex;
+  gap: 8px;
 }
 </style>
