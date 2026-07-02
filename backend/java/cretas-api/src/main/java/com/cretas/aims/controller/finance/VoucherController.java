@@ -107,7 +107,14 @@ public class VoucherController {
         // 跨租户校验 (Rule 8 sweep): findBySourceBusiness 按 businessType+businessId 全局查询不带 factory,
         // 返回的凭证可能属于别厂。仅当凭证归属当前工厂时才返回, 否则视作"未生成"(不泄漏别厂凭证存在性)。
         if (v.isEmpty() || !factoryId.equals(v.get().getFactoryId())) {
-            return ResponseEntity.ok(Map.of("success", true, "data", null, "message", "未生成凭证"));
+            // Map.of(...) throws NPE on a null value ("data", null) — this "not yet
+            // generated" branch is a normal, frequent response (idempotent check from
+            // UI), so it must not 500. Use a null-tolerant HashMap instead.
+            Map<String, Object> notFound = new HashMap<>();
+            notFound.put("success", true);
+            notFound.put("data", null);
+            notFound.put("message", "未生成凭证");
+            return ResponseEntity.ok(notFound);
         }
         return ResponseEntity.ok(Map.of("success", true, "data", v.get()));
     }
