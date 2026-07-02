@@ -76,6 +76,64 @@ public class WarehouseResolver {
                 .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_RD));
     }
 
+    // ==================== 用途拆分 resolver (2026-07-02, warehouse-purpose-split Part A) ====================
+    // resolveLogisticsId 原本被采购入库 / 销售出货 / 生产报工三个冲突语义共用 → 拆成独立 resolver +
+    // 独立 config purpose。三者 fallback 全部 WH-LOG = 现状, 未配置零行为变化 (向后兼容)。
+
+    /**
+     * 采购入库默认仓 id — 采购收货物化 raw MaterialBatch 的落点。
+     * 有 {@link WarehouseDefaultPurpose#PURCHASE_INBOUND_DEFAULT} 配置则优先用配置, 否则回退 WH-LOG
+     * (与拆分前 resolveLogisticsId 行为一致)。
+     */
+    public String resolvePurchaseInboundWh(String factoryId) {
+        return resolveConfiguredWarehouseId(factoryId, WarehouseDefaultPurpose.PURCHASE_INBOUND_DEFAULT)
+                .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_LOG));
+    }
+
+    /**
+     * 销售出货默认仓 id — 成品发货 FIFO / 可用批次默认来源仓 (per-row sourceWarehouseCode 为空时的默认)。
+     * 有 {@link WarehouseDefaultPurpose#SALES_OUTBOUND_DEFAULT} 配置则优先用配置, 否则回退 WH-LOG
+     * (与拆分前 resolveLogisticsId 行为一致)。
+     */
+    public String resolveSalesOutboundWh(String factoryId) {
+        return resolveConfiguredWarehouseId(factoryId, WarehouseDefaultPurpose.SALES_OUTBOUND_DEFAULT)
+                .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_LOG));
+    }
+
+    /**
+     * 生产领料/报工原料默认仓 id — 逐道报工消耗 raw 的来源仓。
+     * 有 {@link WarehouseDefaultPurpose#PRODUCTION_RAW_DEFAULT} 配置则优先用配置, 否则回退 WH-LOG
+     * (与拆分前 resolveLogisticsId 行为一致)。
+     */
+    public String resolveProductionRawWh(String factoryId) {
+        return resolveConfiguredWarehouseId(factoryId, WarehouseDefaultPurpose.PRODUCTION_RAW_DEFAULT)
+                .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_LOG));
+    }
+
+    /**
+     * 判断某仓库是否为原料仓 (RAW) 或物流仓 (LOGISTICS) 类型 — 生产报工原料来源仓校验用。
+     *
+     * <p>{@code ProcessSheetServiceImpl.ensureRawMaterialWarehouse} 对齐文案「原料仓/物流仓」: 除了
+     * 配置的生产领料默认仓 ({@link #resolveProductionRawWh}) 外, 任何 RAW / LOGISTICS 类型的<b>有效
+     * (未软删、同工厂)</b> 仓库也允许作为报工原料来源。
+     *
+     * <p>诚实-null: {@code warehouseId} 为 null/blank 或指向已删除/跨工厂仓库 → 返回 {@code false}
+     * (调用方据此 loud-fail, 不静默放行)。
+     *
+     * @return true 当且仅当 warehouseId 指向本工厂未软删的 RAW/LOGISTICS 类型仓库。
+     */
+    public boolean isRawOrLogisticsWarehouse(String factoryId, String warehouseId) {
+        if (warehouseId == null || warehouseId.isBlank()) {
+            return false;
+        }
+        return factoryWarehouseRepository
+                .findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId)
+                .map(FactoryWarehouse::getType)
+                .filter(type -> type == FactoryWarehouse.WarehouseType.RAW
+                        || type == FactoryWarehouse.WarehouseType.LOGISTICS)
+                .isPresent();
+    }
+
     /**
      * 查 {@link FactoryWarehouseDefault} 覆盖配置, 并校验它仍指向同工厂有效 (未软删) 的
      * factory_warehouses 记录。

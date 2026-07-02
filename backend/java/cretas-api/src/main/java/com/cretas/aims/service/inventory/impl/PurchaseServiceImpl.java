@@ -2068,9 +2068,11 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         batch.setCreatedBy(userId);
         // D1: 采购入库默认 WH-LOG (物流仓). per PR #310 spec — raw material persistent in logistics warehouse.
+        // 用途拆分 (2026-07-02): 采购入库落点走独立 resolvePurchaseInboundWh (PURCHASE_INBOUND_DEFAULT),
+        // 未配置回退 WH-LOG = 现状; 让「采购进主仓/原料仓」可单独配置, 不影响销售 FIFO / 生产报工。
         String warehouseId = (record.getWarehouseId() != null && !record.getWarehouseId().isBlank())
                 ? record.getWarehouseId()
-                : warehouseResolver.resolveLogisticsId(factoryId);
+                : warehouseResolver.resolvePurchaseInboundWh(factoryId);
         batch.setWarehouseId(warehouseId);
 
         // SP7 §3.3 (W1 红线 #03): 采购收货前校验目标仓库类型 — 原料只能入 RAW/SALTED/legacy 仓.

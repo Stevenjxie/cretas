@@ -75,7 +75,7 @@
       </el-form>
       <div class="defaults-hint">
         <el-text type="info" size="small">
-          留空 = 用系统默认仓（物流仓/车间仓/研发库）。配置后该用途的入库自动进所选仓。
+          留空 = 用系统默认仓（采购入库默认物流仓 WH-LOG；生产成品用车间仓；研发用研发库）。配置「采购入库默认仓」后，采购收货入库自动进所选仓（如原料仓/主仓），不影响销售出货与生产报工。
         </el-text>
       </div>
       <div class="defaults-actions">
@@ -435,10 +435,18 @@ async function onApplyTemplate() {
 
 // ==================== 默认仓用途配置 ====================
 
+// 用途拆分 Part A (2026-07-02): 仅暴露 PURCHASE_INBOUND_DEFAULT（单调用点，配置安全）。
+// SALES_OUTBOUND_DEFAULT / PRODUCTION_RAW_DEFAULT 暂不暴露（feature-flag off）——
+//   deferred until all sales-outbound + production-raw write-path sites are consistently
+//   repointed（销售发货实扣/批次校验/FEFO 预留 + 生产领料写路径仍走 resolveLogisticsId→WH-LOG）。
+//   见 spec Part A follow-up。隐藏后这两个 purpose 永不会被写入 → resolver 恒 fallback WH-LOG，
+//   与未重指的写路径保持读/写一致，无库存不足假象 landmine。
+// 枚举值/labels/表单 Record 仍保留全部 6 项（type/backward-compat），仅此渲染列表收窄。
 const WAREHOUSE_DEFAULT_PURPOSE_KEYS: WarehouseDefaultPurpose[] = [
-  'LOGISTICS_DEFAULT',
+  'PURCHASE_INBOUND_DEFAULT',
   'WORKSHOP_DEFAULT',
   'RD_DEFAULT',
+  'LOGISTICS_DEFAULT',
 ]
 
 const defaultsLoading = ref(false)
@@ -448,6 +456,9 @@ const defaultsForm = reactive<Record<WarehouseDefaultPurpose, string | undefined
   LOGISTICS_DEFAULT: undefined,
   WORKSHOP_DEFAULT: undefined,
   RD_DEFAULT: undefined,
+  PURCHASE_INBOUND_DEFAULT: undefined,
+  SALES_OUTBOUND_DEFAULT: undefined,
+  PRODUCTION_RAW_DEFAULT: undefined,
 })
 
 // 上次从后端加载到的已持久化映射快照，用来判断"清空但保存"时后端是否真的能删除。
@@ -455,6 +466,9 @@ const persistedDefaults = reactive<Record<WarehouseDefaultPurpose, string | unde
   LOGISTICS_DEFAULT: undefined,
   WORKSHOP_DEFAULT: undefined,
   RD_DEFAULT: undefined,
+  PURCHASE_INBOUND_DEFAULT: undefined,
+  SALES_OUTBOUND_DEFAULT: undefined,
+  PRODUCTION_RAW_DEFAULT: undefined,
 })
 
 async function loadDefaults() {
