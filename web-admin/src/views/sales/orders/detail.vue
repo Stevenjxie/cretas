@@ -13,7 +13,10 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 // T4-D1 (issue #525): F006 customer asked for 来源仓库 (总仓/线边仓) per line item.
-import { warehouseDisplayLabel } from '@/utils/warehouse';
+// 2026-07-02 fix: resolve against the loaded warehouse list (DB name is
+// authoritative) instead of always showing the hardcoded WH-WKS/WH-LOG label
+// — see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
+import { warehouseNameByCode, type WarehouseCodeNameLike } from '@/utils/warehouse';
 import type { TableRow } from '@/types/api';
 
 const route = useRoute();
@@ -230,6 +233,22 @@ async function loadProductsForEdit() {
   } catch { products.value = []; }
 }
 
+// 2026-07-02 fix (LIUSHANMEN "同仓库多名字"): 来源仓库列必须显示真实 DB name,
+// 不能一律硬编码"总仓/线边仓" — 客户可在仓库配置里重命名 WH-LOG/WH-WKS。
+const warehouses = ref<WarehouseCodeNameLike[]>([]);
+
+async function loadWarehouses() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/factory/warehouses`, { _silent: true } as never);
+    warehouses.value = Array.isArray(res?.data) ? res.data : [];
+  } catch { warehouses.value = []; }
+}
+
+function sourceWarehouseLabel(code: string | null | undefined): string {
+  return warehouseNameByCode(warehouses.value, code);
+}
+
 function openEditItems() {
   const existing = Array.isArray((order.value as any)?.items) ? (order.value as any).items : [];
   editItemsRows.value = existing.length
@@ -278,6 +297,7 @@ onMounted(async () => {
   loadPayments();
   loadPurchaseOrders();
   loadFormulas();
+  loadWarehouses();
   await loadProductsForEdit();
   if (route.query.editItems === '1' && isDraft.value) {
     openEditItems();
@@ -1246,11 +1266,13 @@ async function handleQuickPayFull() {
               <el-table-column label="已发货" width="100" align="right">
                 <template #default="{ row }">{{ row.deliveredQuantity || 0 }}</template>
               </el-table-column>
-              <!-- T4-D1 (issue #525): 来源仓库 — F006 customer wants to see 总仓/线边仓 label per line.
+              <!-- T4-D1 (issue #525): 来源仓库 per line item.
                    Backend: sales_order_items.source_warehouse_code (V20260514_01 migration).
-                   Label mapping via utils/warehouse.ts: WH-LOG → 总仓, WH-WKS → 线边仓. -->
+                   2026-07-02 fix: shows the warehouse's real DB name (resolved from
+                   the loaded warehouse list), not a hardcoded WH-LOG→总仓 label —
+                   see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident. -->
               <el-table-column label="来源仓库" width="120">
-                <template #default="{ row }">{{ warehouseDisplayLabel(row.sourceWarehouseCode) }}</template>
+                <template #default="{ row }">{{ sourceWarehouseLabel(row.sourceWarehouseCode) }}</template>
               </el-table-column>
               <!-- E-4 (六扇门需求矩阵 / PR #737/#749): 同时显示未税净价 + 含税价双值.
                    后端 SalesOrderItem.getLineAmount()       = 未税小计 (折后未税)
