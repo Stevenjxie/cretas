@@ -1939,6 +1939,17 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 诚实 null 传播: 若所有报工的 laborCost 均为 null (standard_hourly_rate 未配) → 批次 laborCost 保持 null;
      * 若至少一笔有值 → 累加 (null 视 0 贡献, 最终 > 0 则写回)。
      * fail-soft: 任何异常仅记 WARN, 不阻塞调用方事务。</p>
+     *
+     * <p><b>per-batch 隔离保证 (2026-07-02 follow-up C 调查结论)</b>:
+     * 聚合源 {@code findYieldReportsByBatch(factoryId, batchId)} 硬性按 batchId 作用域
+     * (JPQL {@code WHERE factoryId AND batchId AND reportType='YIELD' AND deletedAt IS NULL}),
+     * 且此处是 {@code setLaborCost(重算 Σ)} <b>覆盖</b>而非累加 —— 即使多线程并发对同产品/同日的
+     * <b>不同批次</b>并发报工, 各批各算, <b>不存在跨批人工串账的 scoping bug</b>
+     * (回归护栏见 {@code YieldLaborBatchScopeTest} + {@code ProductionReportRepositoryBatchScopeTest})。
+     * 曾观察到并发下某瞬显示异常人工值、隔离重试自愈 —— 属并发写入过程中的<b>瞬时读</b>
+     * (mid-write read), 权威 batch-scoped 重算给出正确值, 非作用域错误。
+     * 若未来要根除瞬时读窗口, 可考虑对 rollup 的 read-modify-write 加悲观锁 / {@code @Version}
+     * 乐观锁, 但那是<b>独立决定</b>: 当前 set-覆盖语义下并发重算的<b>最终值仍正确</b>, 无需为此改动。</p>
      */
     private void rollupLaborCostToBatch(String factoryId, Long batchId) {
         try {
