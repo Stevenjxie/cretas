@@ -291,6 +291,23 @@ def _is_follow_up(message: str) -> bool:
             "\u9a8c\u8bc1",
             "\u843d\u5730",
             "\u7136\u540e\u5462",
+            "\u6267\u884c\u7ec6\u8282",
+            "\u62c6\u7ed9\u6211",
+            "\u5177\u4f53\u6539",
+            "\u5177\u4f53\u8c03",
+            "\u5177\u4f53\u6392",
+            "\u600e\u4e48\u8bb2",
+            "\u600e\u4e48\u9a8c\u6536",
+            "\u600e\u4e48\u5907\u8d27",
+            "\u5148\u67e5\u54ea",
+            "\u54ea\u4e9b\u4e8b\u60c5",
+            "\u5148\u4e0d\u8981",
+            "\u4e0d\u8981\u505a",
+            "\u54ea\u4e00\u4e2a\u52a8\u4f5c",
+            "\u653e\u5230\u54ea\u4e9b\u5165\u53e3",
+            "\u590d\u5236\u54ea\u5bb6\u5e97",
+            "\u5165\u53e3\u548c\u5e73\u53f0\u9875\u9762",
+            "\u4e3b\u63a8\u83dc\u653e",
         )
     )
 def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> str:
@@ -956,19 +973,19 @@ def _owner_chart_guide(scenario: str) -> str:
 
 def _owner_chat_follow_ups(scenario: str) -> list[str]:
     scenario_specific = {
-        "package": "这个小套餐按毛利和成本怎么配？",
-        "seating_mix": "要看哪些数据决定二人桌和四人桌比例？",
-        "staffing_schedule": "今天排班应该怎么调？",
-        "staff_training": "服务员这周先训练哪三句话术？",
-        "kitchen_quality": "厨房先改哪道菜、怎么验收？",
-        "cost_margin": "哪些菜要先查BOM和盘点损耗？",
-        "traffic_conversion": "客流多但进店少，今天先改哪个入口？",
-        "external_event_response": "今天商场活动和天气怎么影响备货？",
-        "single_item_push": "主推单品放在哪些入口最合适？",
-        "store_compare": "这家店应该复制哪家门店的哪一个动作？",
+        "package": "把套餐执行细节拆给我",
+        "seating_mix": "桌型今天具体怎么调",
+        "staffing_schedule": "排班今天具体怎么排",
+        "staff_training": "开班前话术怎么讲",
+        "kitchen_quality": "厨房抽查怎么做",
+        "cost_margin": "成本毛利先查哪几项",
+        "traffic_conversion": "入口和平台页面具体改什么",
+        "external_event_response": "商场活动当天怎么备货",
+        "single_item_push": "主推菜放到哪些入口",
+        "store_compare": "复制哪家店的哪一个动作",
     }
     first = scenario_specific.get(scenario, "这件事今天第一步做什么？")
-    return [first, "老板今天先看哪三个数？", "如果只做一天，怎么判断有没有效果？"]
+    return [first, "老板今天先看哪三个数？", "哪些事情今天先不要做？"]
 
 
 def _owner_metric_follow_up_answer(owner_page: dict[str, Any], scenario: str, message: str) -> str:
@@ -1053,7 +1070,91 @@ def _owner_metric_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
     ])
 
 
-def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str) -> str:
+def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, message: str) -> str:
+    text = (message or "").strip()
+    if any(keyword in text for keyword in ("哪三个数", "三个数", "哪些数", "看什么数", "判断有没有效果", "有没有效果")):
+        return ""
+
+    plain_actions = _owner_plain_actions(owner_page, scenario, _first_text(owner_page.get("doFirst")))
+    do_not_do = _owner_do_not_do(owner_page, scenario)
+    chart_guide = _owner_chart_guide(scenario)
+    params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
+    pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
+    compare = pos.get("storeComparison") if isinstance(pos.get("storeComparison"), dict) else {}
+
+    if any(keyword in text for keyword in ("不要", "别做", "先不要", "风险", "避开")):
+        return "\n\n".join([
+            "这个追问我只说今天先别做什么，不重复前面的诊断。",
+            f"今天先别做：{do_not_do}",
+            "原因很简单：老板动作要先打最窄的点。还没看完今天的数据前，同时改价格、菜单、排班和投流，会分不清到底是哪一个动作起作用。",
+            "明天复盘时，如果核心数据没变好，再决定要不要扩大到第二个动作。",
+        ])
+
+    scenario_steps = {
+        "traffic_conversion": [
+            "门口：海报只保留“招牌鱼 + 双人价格 + 大概用餐时间”，让路过的人 3 秒内看懂。",
+            "平台：美团/大众点评/抖音首图统一成招牌鱼和双人套餐，不要把一堆菜名堆在第一屏。",
+            "现场：门迎先确认券，再引导点招牌；同时记录顾客问得最多的一句话，晚上改页面文案。",
+        ],
+        "package": [
+            "先选 1 个主菜 + 1 个高毛利小食，别超过 2 道核心菜，避免厨房复杂化。",
+            "售价按“单点原价略低一点”定，食材成本必须先算清，毛利率守不住就不推。",
+            "只在工作日午市和低峰测 7 天；如果套餐份数涨但毛利掉，就立刻停。",
+        ],
+        "seating_mix": [
+            "午市前先改 2 张四人桌为可拼可拆，两人客优先坐可拆桌，不要占死整张四人桌。",
+            "晚高峰让前厅按人数引导：两人客推双人套餐，四人客推加菜组合，避免只提高翻台不提高客单。",
+            "只改一块区域先试，别全店同时改；防止四人客真的来了却没桌。",
+        ],
+        "staffing_schedule": [
+            "18:00-20:00 前厅多 1 人盯等位和核销，后厨多 1 人盯招牌鱼出餐。",
+            "午市只保稳定班，不平均加人；忙的时段没人、闲的时段人多，是最浪费的排班。",
+            "店长开班前分清三个人：谁迎宾，谁催菜，谁处理差评苗头。",
+        ],
+        "staff_training": [
+            "第一句：两个人怎么点最划算，直接报招牌鱼双人方案。",
+            "第二句：等位或上菜慢时怎么安抚，先给明确时间，不要只说马上。",
+            "第三句：核销券怎么引导，进店先确认券，再引导点招牌。",
+        ],
+        "kitchen_quality": [
+            "先抽查招牌鱼：咸淡、鱼片熟度、出餐时长，三项都要记录。",
+            "晚高峰前减少复杂低销量菜推荐，厨房先保招牌和套餐主线。",
+            "前厅发现上菜慢超过阈值，立刻报店长，不等顾客写差评。",
+        ],
+        "cost_margin": [
+            "先看活鱼采购价有没有高于近 7 天均价。",
+            "再看招牌鱼 BOM 理论用量和实际用量差多少。",
+            "最后看盘点损耗，特别是活鱼边角和底料包材，不要只盯售价。",
+        ],
+        "external_event_response": [
+            "活动开始前 2 小时把招牌鱼和冰豆花备足，但只按高峰预估的 80% 备，留补货空间。",
+            "门口话术改成活动客能听懂的双人/家庭场景，不要只讲菜名。",
+            "活动时段每小时看一次核销和等位，发现排队多但下单少，就立刻调整门迎推荐。",
+        ],
+        "single_item_push": [
+            "大众点评/美团首屏放招牌鱼，抖音短视频讲双人价格和出餐速度。",
+            "门口海报只放一个主推菜，不要同时推 5 个菜。",
+            "服务员只问一句：今天要不要先上招牌鱼？别让顾客重新看完整菜单。",
+        ],
+        "store_compare": [
+            f"先复制 {compare.get('copyFrom') or '日均表现更好的同城门店'} 的一个动作：{compare.get('copyAction') or '双人套餐首屏和服务员推荐话术'}。",
+            "不要复制整套菜单，只复制一个经过验证的入口动作。",
+            "明天只比工作日午市收入、双人套餐占比、客单价，别用总收入排名判断。",
+        ],
+    }
+    steps = scenario_steps.get(scenario) or plain_actions[:3]
+    if not steps:
+        return ""
+
+    return "\n\n".join([
+        "这个追问我只拆执行细节，不重复前面的结论。",
+        "今天照这三步做：\n" + "\n".join(f"{index}. {step}" for index, step in enumerate(steps[:3], start=1)),
+        f"看图时只抓一个重点：{chart_guide}",
+        f"今天先别做：{do_not_do}",
+    ])
+
+
+def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, is_follow_up: bool = False) -> str:
     headline = _plain_text(owner_page.get("headline"))
     diagnosis = _plain_text(owner_page.get("plainDiagnosis"))
     focus = owner_page.get("decisionFocus") or {}
@@ -1069,6 +1170,9 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str) 
     metric_follow_up = _owner_metric_follow_up_answer(owner_page, scenario, message)
     if metric_follow_up:
         return metric_follow_up
+    action_follow_up = _owner_action_follow_up_answer(owner_page, scenario, message)
+    if action_follow_up and is_follow_up:
+        return action_follow_up
 
     direction_label = {
         "traffic_conversion": "客流转化",
@@ -1146,6 +1250,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
         previous = {"scenario": _OWNER_ACTION_FACTORY_LAST_SCENARIOS.get(factory_id, "")}
     requested = _effective_str(body.demo_scenario, body.demoScenario)
     scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
+    is_follow_up_turn = bool(previous.get("scenario")) and _is_follow_up(body.message) and scenario == previous.get("scenario")
 
     try:
         params = get_owner_action_demo_scenario(scenario)
@@ -1185,7 +1290,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     owner_page = data.get("ownerDecisionPage") or {}
     if isinstance(owner_page, dict):
         owner_page["demoParams"] = params
-    answer = _owner_chat_answer(owner_page, scenario, body.message)
+    answer = _owner_chat_answer(owner_page, scenario, body.message, is_follow_up=is_follow_up_turn)
     follow_ups = _owner_chat_follow_ups(scenario)
     charts = _owner_evidence_charts(owner_page, scenario, params)
     chart_guide = _owner_chart_guide(scenario) if charts else ""

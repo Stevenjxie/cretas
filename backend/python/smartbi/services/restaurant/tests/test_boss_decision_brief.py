@@ -562,6 +562,49 @@ def test_owner_action_chat_uses_traffic_persona_and_platform_mock_data() -> None
     assert "一句话结论" not in follow_up_without_session["data"]["answer"]
 
 
+def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -> None:
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_FOLLOWUP_UX",
+            message="客流画像显示路过人多但进店少，今天先改哪个入口？",
+        )
+    )
+
+    first_data = first["data"]
+    assert first_data["scenario"] == "traffic_conversion"
+    assert "一句话结论" in first_data["answer"]
+
+    execution_follow_up = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_FOLLOWUP_UX",
+            session_id=first_data["sessionId"],
+            message="入口和平台页面具体改什么",
+        )
+    )
+
+    execution_data = execution_follow_up["data"]
+    assert execution_data["sessionId"] == first_data["sessionId"]
+    assert execution_data["scenario"] == "traffic_conversion"
+    assert "这个追问我只拆执行细节，不重复前面的结论" in execution_data["answer"]
+    assert "一句话结论" not in execution_data["answer"]
+    assert "门口" in execution_data["answer"]
+    assert "平台" in execution_data["answer"]
+    assert execution_data["answer"] != first_data["answer"]
+
+    risk_follow_up = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_FOLLOWUP_UX",
+            session_id=first_data["sessionId"],
+            message="哪些事情今天先不要做？",
+        )
+    )
+
+    risk_data = risk_follow_up["data"]
+    assert risk_data["scenario"] == "traffic_conversion"
+    assert "今天先别做" in risk_data["answer"]
+    assert "一句话结论" not in risk_data["answer"]
+
+
 def test_owner_action_chat_routes_and_keeps_follow_up_session() -> None:
     first = owner_action_chat(
         OwnerActionChatRequest(
