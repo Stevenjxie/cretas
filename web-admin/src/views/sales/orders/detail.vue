@@ -75,7 +75,9 @@ const returnForm = ref<{ returnDate: string; reason: string; remark: string; wit
 const batchAllocDialogVisible = ref(false);
 const batchAllocLoading = ref(false);
 type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number };
-type AllocItem = { deliveryItemId: string; productName: string; deliveredQuantity: number; allocations: AllocRow[] };
+// 🔴 G1: sourceWarehouseCode (发货行声明的来源仓, 空=未声明) + stockWarehouses (该产品实际有货的仓库 code,
+// 仅在无推荐批次时查, 用于诚实空态提示「成品在 X 仓」而非误导的「请先生产」)。
+type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[] };
 const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: AllocItem[] }>({
   deliveryId: '', deliveryNumber: '', items: [],
 });
@@ -666,6 +668,7 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
       const sourceWarehouseCode = (it.sourceWarehouseCode as string) || '';
 
       let allocations: AllocRow[] = [];
+      let stockWarehouses: string[] = [];
       if (productTypeId && deliveredQuantity > 0) {
         const swcParam = sourceWarehouseCode
           ? `&sourceWarehouseCode=${encodeURIComponent(sourceWarehouseCode)}`
@@ -682,8 +685,17 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
             allocatedQty: Number(r.recommendedQuantity || 0),
           }));
         }
+        // 🔴 G1: 无推荐批次时查该产品实际有货的仓库, 供诚实空态提示 (成品在 X 仓 vs 真的没货).
+        if (allocations.length === 0) {
+          try {
+            const whRes = await get<string[]>(
+              `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/stock-warehouses?productTypeId=${productTypeId}`
+            );
+            if (whRes.success && Array.isArray(whRes.data)) stockWarehouses = whRes.data.map(String);
+          } catch { /* 非关键: 查不到就退回通用提示 */ }
+        }
       }
-      items.push({ deliveryItemId, productName, deliveredQuantity, allocations });
+      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, sourceWarehouseCode, allocations, stockWarehouses });
     }
     batchAllocForm.value = { deliveryId, deliveryNumber, items };
     batchAllocDialogVisible.value = true;
@@ -700,6 +712,22 @@ function sumAllocated(item: AllocItem): number {
   return item.allocations.reduce((s, a) => s + Number(a.allocatedQty || 0), 0);
 }
 
+// 🔴 G1: 诚实空态 (fool-proof Rule 5) — 无可分配批次时, 区分「成品在别的仓」vs「真的没货」,
+// 绝不误导用户「请先生产」当成品其实存在于其他仓库。
+function emptyStateTitle(item: AllocItem): string {
+  return item.stockWarehouses.length > 0 ? '当前来源仓无可用成品批次' : '没有可用成品批次';
+}
+function emptyStateDesc(item: AllocItem): string {
+  if (item.stockWarehouses.length > 0) {
+    const where = item.stockWarehouses.join(' / ');
+    const src = item.sourceWarehouseCode
+      ? `当前发货行来源仓为「${item.sourceWarehouseCode}」`
+      : '当前发货行未声明来源仓';
+    return `该产品成品在「${where}」仓有库存，${src} — 请改选来源仓，或先调拨到来源仓后再分配。`;
+  }
+  return '该产品当前全厂无可发货成品库存（已含全部可售仓库，研发/中试库除外），请先完成生产入库，或联系仓管检查库存状态。';
+}
+
 async function handleBatchAllocate() {
   if (submitting.value) return;
   // Zero-quantity items don't need allocation (skip them from validation + submission).
@@ -710,7 +738,7 @@ async function handleBatchAllocate() {
   // Validation: per-item total must equal deliveredQuantity (backend enforces)
   for (const item of activeItems) {
     if (item.allocations.length === 0) {
-      return ElMessage.warning(`${item.productName}: 没有可用成品批次, 请先生产`);
+      return ElMessage.warning(`${item.productName}: ${emptyStateDesc(item)}`);
     }
     const total = sumAllocated(item);
     if (Math.abs(total - item.deliveredQuantity) > 0.001) {
@@ -1688,10 +1716,10 @@ async function handleQuickPayFull() {
         </el-table>
         <el-alert
           v-else
-          type="warning"
+          :type="item.stockWarehouses.length > 0 ? 'error' : 'warning'"
           :closable="false"
-          title="没有可用成品批次"
-          description="请先完成此产品的生产入库, 或联系仓管检查库存状态。"
+          :title="emptyStateTitle(item)"
+          :description="emptyStateDesc(item)"
         />
       </div>
       <template #footer>

@@ -75,6 +75,9 @@ class SalesOrderFulfillmentWarehouseTest {
                 null);   // applicationEventPublisher
         ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
         when(warehouseResolver.resolveLogisticsId(FACTORY_A)).thenReturn(WH_LOG_ID);
+        // getAvailableBatches (read path) blank source 走 resolveSalesOutboundWh (2026-07-02 用途拆分),
+        // fallback WH-LOG = 现状. LENIENT: 未用到的测试忽略。
+        when(warehouseResolver.resolveSalesOutboundWh(FACTORY_A)).thenReturn(WH_LOG_ID);
     }
 
     /** Invoke private deductFinishedGoodsInventory via reflection. */
@@ -118,37 +121,37 @@ class SalesOrderFulfillmentWarehouseTest {
     // ============================================================
 
     @Test
-    @DisplayName("标准: 仅查询 WH-LOG 批次, 用 WH-LOG warehouseId 解析")
-    void deduct_queriesWhLogOnly() throws Exception {
+    @DisplayName("🔴 G1: blank source → 跨全部可售仓库 (除 WH-RD) 扣减, 不再单仓 WH-LOG")
+    void deduct_queriesAllShippableWarehouses() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        // R6 #6: deduct 路径改用 findShippableBatchesByWarehouse (produced-shipped>0, 不减 reserved)
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        // 🔴 G1: blank source 走 findShippableBatchesAllWarehousesExcluding (跨仓, 排 WH-RD)
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
         invokeDeduct(item);
 
-        // WH-LOG repository 查询调用 1 次, factory-only 查询 (无 warehouse 过滤) 永远不调用
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        // blank 不再解析单一物流仓, 也不走单仓 shippable 查询
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
         verify(finishedGoodsBatchRepository, times(1))
-                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
         verify(finishedGoodsBatchRepository, never())
-                .findAvailableBatches(anyString(), anyString());
+                .findShippableBatchesByWarehouse(anyString(), anyString(), anyString());
 
         // 扣减 30 / 50
         assertEquals(0, whLogBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
         assertEquals("B-LOG-001", whLogBatch.getBatchNumber());
-        // 批次 id 写回到 delivery item (SalesServiceImpl line 1008-1010)
-        // — 这里 id 由 JPA @GeneratedValue 但测试中我们手工 set 验证: skip 因 id null in unit test
     }
 
     @Test
-    @DisplayName("标准: FIFO 跨多个 WH-LOG 批次扣减")
-    void deduct_consumesAcrossWhLogBatchesFifo() throws Exception {
+    @DisplayName("标准: FEFO 跨多个批次扣减 (blank source, 跨仓候选)")
+    void deduct_consumesAcrossBatchesFefo() throws Exception {
         FinishedGoodsBatch oldBatch = buildAvailableBatch("B-LOG-OLD", WH_LOG_ID, new BigDecimal("20"));
         FinishedGoodsBatch newBatch = buildAvailableBatch("B-LOG-NEW", WH_LOG_ID, new BigDecimal("40"));
         // Repository returns FEFO ordered (oldest first)
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(oldBatch, newBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("35"));
@@ -167,26 +170,39 @@ class SalesOrderFulfillmentWarehouseTest {
     }
 
     // ============================================================
-    // Negative — WH-WKS only, no WH-LOG → insufficient stock
+    // 🔴 G1 bug repro — FG only in WH-WKS, blank source → NOW ships (was insufficient)
     // ============================================================
 
     @Test
-    @DisplayName("负: 仅 WH-WKS 有库存 → 销售扣减抛 BusinessException (不可用)")
-    void deduct_onlyWhWksAvailable_throwsInsufficient() throws Exception {
-        // Repository 按 WH-LOG warehouseId 查 → 返空 (WH-WKS 批次被仓库 filter 排除)
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+    @DisplayName("🔴 G1 repro: 成品仅在 WH-WKS + blank source → 现在能发货 (旧逻辑误报库存不足)")
+    void deduct_onlyWhWksAvailable_blankSource_nowShips() throws Exception {
+        final String WH_WKS_ID = "wh-wks-f001";
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", WH_WKS_ID, new BigDecimal("50"));
+        // 跨仓候选集包含 WH-WKS 批次 (生产落点)
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(wksBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
+        invokeDeduct(item);  // 不再抛"库存不足"
+
+        assertEquals(0, wksBatch.getShippedQuantity().compareTo(new BigDecimal("10")));
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(wksBatch));
+    }
+
+    @Test
+    @DisplayName("负: blank source 全厂无可发货成品 → 抛 BusinessException + message 提示可售仓库")
+    void deduct_noStockAnywhere_blankSource_throwsInsufficient() throws Exception {
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(Collections.emptyList());
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
         BusinessException ex = assertThrows(BusinessException.class, () -> invokeDeduct(item));
 
-        // 错误信息提示 "成品库存不足" + 缺少数量
         assertNotNull(ex.getMessage());
         assertEquals(true, ex.getMessage().contains("成品库存不足"));
         assertEquals(true, ex.getMessage().contains(PRODUCT_TYPE));
-
-        // 没有 save 调用 (没批次扣)
-        verify(finishedGoodsBatchRepository, never()).save(eq((FinishedGoodsBatch) null));
     }
 
     // ============================================================
@@ -205,7 +221,7 @@ class SalesOrderFulfillmentWarehouseTest {
         assertEquals(1, batches.size());
         assertEquals(WH_LOG_ID, batches.get(0).getWarehouseId());
         // 验证调用走 WH-LOG 过滤路径
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
         verify(finishedGoodsBatchRepository, times(1))
                 .findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
     }
@@ -246,38 +262,42 @@ class SalesOrderFulfillmentWarehouseTest {
     }
 
     @Test
-    @DisplayName("T4-D5 #572: sourceWarehouseCode=null (legacy) → 回落 WH-LOG, 行为与 D5 一致")
-    void deduct_nullSourceWarehouseCode_fallsBackToWhLog() throws Exception {
+    @DisplayName("🔴 G1: sourceWarehouseCode=null → 跨全部可售仓库 (除 WH-RD), 不再单仓 WH-LOG")
+    void deduct_nullSourceWarehouseCode_searchesAllWarehouses() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
-        // sourceWarehouseCode 留 null (legacy 行)
+        // sourceWarehouseCode 留 null
         invokeDeduct(item);
 
-        // 回落到 resolveLogisticsId, 不调 resolveId(code)
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        // 不再解析单仓, 也不调 resolveId(code)
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
         verify(finishedGoodsBatchRepository, times(1))
-                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
 
         assertEquals(0, whLogBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
     }
 
     @Test
-    @DisplayName("T4-D5 #572: sourceWarehouseCode=空字符串 → 也走 fallback (blank-safe)")
-    void deduct_blankSourceWarehouseCode_fallsBackToWhLog() throws Exception {
+    @DisplayName("🔴 G1: sourceWarehouseCode=空字符串 → 也走跨仓发现 (blank-safe)")
+    void deduct_blankSourceWarehouseCode_searchesAllWarehouses() throws Exception {
         FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(whLogBatch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
         item.setSourceWarehouseCode("   ");
         invokeDeduct(item);
 
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+        verify(finishedGoodsBatchRepository, times(1))
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
     }
 
     @Test
@@ -331,7 +351,7 @@ class SalesOrderFulfillmentWarehouseTest {
 
         assertEquals(1, batches.size());
         assertEquals(WH_LOG_ID, batches.get(0).getWarehouseId());
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 
@@ -343,7 +363,7 @@ class SalesOrderFulfillmentWarehouseTest {
 
         salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE, "   ");
 
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 
@@ -357,7 +377,7 @@ class SalesOrderFulfillmentWarehouseTest {
         // produced=100, reserved=50 (本 SO 预留), available=50. 发货 50。
         FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-RSV", WH_LOG_ID, new BigDecimal("100"));
         batch.setReservedQuantity(new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(batch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
@@ -379,7 +399,7 @@ class SalesOrderFulfillmentWarehouseTest {
         // 新逻辑: findShippableBatchesByWarehouse 返回该批 (produced-shipped=50>0), Pass2 动用预留发货。
         FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-FULLRSV", WH_LOG_ID, new BigDecimal("50"));
         batch.setReservedQuantity(new BigDecimal("50"));
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(batch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
@@ -399,7 +419,7 @@ class SalesOrderFulfillmentWarehouseTest {
         // Pass1 扣 available 30; Pass2 从预留再发 20, 释放预留 20。
         FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-MIX", WH_LOG_ID, new BigDecimal("100"));
         batch.setReservedQuantity(new BigDecimal("70"));
-        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(batch));
 
         SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
@@ -421,7 +441,7 @@ class SalesOrderFulfillmentWarehouseTest {
 
         salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE);
 
-        verify(warehouseResolver, times(1)).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 }

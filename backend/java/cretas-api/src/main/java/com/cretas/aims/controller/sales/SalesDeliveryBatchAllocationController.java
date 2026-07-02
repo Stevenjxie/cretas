@@ -63,6 +63,16 @@ public class SalesDeliveryBatchAllocationController {
                 service.recommendFifo(factoryId, productTypeId, requiredQty, sourceWarehouseCode));
     }
 
+    @GetMapping("/stock-warehouses")
+    @Operation(summary = "该产品有可用成品库存的仓库清单",
+            description = "🔴 G1 (2026-07-03): 诚实空态用 — 发货行来源仓无货时提示成品实际所在仓库, 供改选来源仓/调拨。")
+    public ApiResponse<List<String>> stockWarehouses(
+            @PathVariable String factoryId,
+            @RequestParam String productTypeId) {
+        return ApiResponse.success("查询成功",
+                service.warehousesWithAvailableStock(factoryId, productTypeId));
+    }
+
     @RequirePermission({"sales:read_write"})
     @RequireModule("sales_order")
     @DeleteMapping
