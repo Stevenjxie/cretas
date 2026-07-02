@@ -48,4 +48,11 @@ public class FinishedGoodsStockItem {
      * 🔴 诚实 null: 未接通成本的成品 → null (不伪造 ¥0), 区别于售价 unitPrice。
      */
     private BigDecimal unitCost;
+
+    /**
+     * 每盒/份标准克重 (取自 {@link com.cretas.aims.entity.ProductType#getGramsPerUnit()}, "1 份/盒 = X 克")。
+     * 计数单位 (盒/个/件/只) 成品作 kg 道投料来源时, 前端据此把 kg⇄盒 折算 (余 N 盒 ≈ M kg)。
+     * 🔴 诚实 null: 未配置每盒克重 → null (前端据此拦截盒装投料, 禁止臆造 1盒=1kg)。
+     */
+    private BigDecimal gramsPerUnit;
 }

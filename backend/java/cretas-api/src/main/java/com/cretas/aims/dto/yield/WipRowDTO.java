@@ -105,4 +105,12 @@ public class WipRowDTO {
      * <b>仅</b>逐道投料下拉 (带 productTypeId 过滤) 填充; 无参 (看板/盘点) 快照<b>不</b>暴露成本 (C3 口径不变)。
      */
     private BigDecimal unitCost;
+
+    /**
+     * ② 每盒/份标准克重 (取自 {@link com.cretas.aims.entity.ProductType#getGramsPerUnit()}, "1 份/盒 = X 克")。
+     * 计数单位 (盒/个/件/只) 半成品作 kg 道投料来源时, 前端据此把 kg⇄盒 折算 (余 N 盒 ≈ M kg)。
+     * 🔴 诚实 null: 未配置每盒克重 → null (前端据此拦截盒装投料, 禁止臆造)。
+     * <b>仅</b>逐道投料下拉 (带 productTypeId 过滤 = pickerContext) 填充; 无参快照留 null (C3 口径不变)。
+     */
+    private BigDecimal gramsPerUnit;
 }
