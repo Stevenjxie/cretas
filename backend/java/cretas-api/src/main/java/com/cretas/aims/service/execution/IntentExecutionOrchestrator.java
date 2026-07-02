@@ -253,7 +253,7 @@ public class IntentExecutionOrchestrator {
         // 0.15. 餐饮老板动作建议统一入口:
         // Web Admin 只调用 Java /ai-intents/execute；需要 Python 深度分析时由 Java 内部路由。
         // 放在普通餐饮 phrase shortcut 前面，避免“提高营收/排班/套餐/桌型”被普通查询工具抢走。
-        if (!negationVetoWrite && shouldRouteRestaurantOwnerAction(factoryId, userInput)) {
+        if (!negationVetoWrite && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
 
@@ -1639,7 +1639,7 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput) {
+    private boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput, Map<String, Object> context) {
         if (userInput == null || userInput.isBlank()) {
             return false;
         }
@@ -1647,11 +1647,26 @@ public class IntentExecutionOrchestrator {
         if (!"RESTAURANT".equalsIgnoreCase(factoryDomain)) {
             return false;
         }
+        if (hasOwnerActionContinuationContext(context)) {
+            return true;
+        }
         if (RESTAURANT_OWNER_ACTION_DIRECT_PATTERN.matcher(userInput).find()) {
             return true;
         }
         return RESTAURANT_OWNER_ACTION_TOPIC_PATTERN.matcher(userInput).find()
                 && RESTAURANT_OWNER_ACTION_DECISION_PATTERN.matcher(userInput).find();
+    }
+
+    private boolean hasOwnerActionContinuationContext(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return false;
+        }
+        String sessionId = stringValue(context.get("ownerActionSessionId"));
+        if (sessionId != null && !sessionId.isBlank()) {
+            return true;
+        }
+        String scenario = stringValue(context.get("ownerActionScenario"));
+        return scenario != null && !scenario.isBlank() && !"auto".equalsIgnoreCase(scenario);
     }
 
     @SuppressWarnings("unchecked")
