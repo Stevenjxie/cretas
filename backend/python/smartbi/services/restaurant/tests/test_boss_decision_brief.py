@@ -885,6 +885,8 @@ def test_owner_action_chat_routes_extended_boss_decision_questions() -> None:
         ("如果差评集中在上菜慢，今天厨房应该怎么改？", "kitchen_quality", "厨房"),
         ("哪些原料可能影响毛利？采购价格是否正常？", "cost_margin", "采购价"),
         ("哪家店最值得学习？它的做法能不能复制到青花椒？", "store_compare", "复制"),
+        ("哪些菜值得主推，哪些低价值菜要排除？", "single_item_push", "低价值"),
+        ("主推单品怎么判断有没有拉动加购？", "single_item_push", "加购率"),
     ]
 
     for message, scenario, expected_text in cases:

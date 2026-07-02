@@ -26,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -95,6 +96,31 @@ class RestaurantOpsGoldRouteTest {
     void doesNotRouteForFactoryDomain() {
         assertThat(orchestrator.matchRestaurantOpsIntent("总营收和客单价表现怎么样", "FACTORY"))
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("routes store benchmark decision questions to owner action before weekday report")
+    void routesStoreBenchmarkDecisionToOwnerAction() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+
+        for (String question : new String[]{
+                "如果日均不差但工作日弱，应该复制哪家店做法？",
+                "这家店和同商圈门店比，问题在客流还是执行？",
+                "连锁内部排名不高，今天先补哪个动作？",
+                "哪些菜值得主推，哪些低价值菜要排除？",
+                "主推单品怎么判断有没有拉动加购？"
+        }) {
+            Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
+                    orchestrator,
+                    "shouldRouteRestaurantOwnerAction",
+                    "DEMO_REST",
+                    question,
+                    Map.of());
+
+            assertThat(shouldRoute).as(question).isTrue();
+        }
     }
 
     @Test

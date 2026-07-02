@@ -213,7 +213,7 @@ _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("kitchen_quality", ("厨房", "后厨", "厨师长", "出品", "口味", "太咸", "难吃", "上菜慢", "复杂菜", "出餐速度", "保证出餐", "稳定", "退菜", "重做")),
     ("package", ("套餐", "组合", "小套餐", "工作日", "低峰", "客单", "提高客单价")),
     ("cost_margin", ("成本", "毛利", "BOM", "盘点", "月盘点", "损耗", "损耗高", "采购", "采购价格", "原料", "食材", "盈利", "备货", "少备", "备太多", "不能多备", "继续备", "不适合继续备", "不应该继续重点推", "继续重点推")),
-    ("single_item_push", ("主推", "单品", "招牌", "爆品", "引流菜")),
+    ("single_item_push", ("主推", "单品", "招牌", "爆品", "引流菜", "低价值", "加购", "拉动加购", "首屏", "短视频")),
 )
 
 
@@ -1154,8 +1154,8 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
         ],
         "single_item_push": [
             "大众点评/美团首屏放招牌鱼，抖音短视频讲双人价格和出餐速度。",
-            "门口海报只放一个主推菜，不要同时推 5 个菜。",
-            "服务员只问一句：今天要不要先上招牌鱼？别让顾客重新看完整菜单。",
+            "门口海报只放一个主推菜，不要同时推 5 个菜；米饭、餐具、纸巾这类低价值配套项不参与主推排序。",
+            "服务员只问一句：今天要不要先上招牌鱼，再带一份冰豆花？用主推菜销量、连带加购率、毛利额一起判断有没有真的拉动。",
         ],
         "store_compare": [
             f"先复制 {compare.get('copyFrom') or '日均表现更好的同城门店'} 的一个动作：{compare.get('copyAction') or '双人套餐首屏和服务员推荐话术'}。",
@@ -1214,6 +1214,8 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     ]
     if plain_reason:
         parts.append(f"为什么这么说：{plain_reason}")
+    if scenario == "single_item_push":
+        parts.append("主推排序口径：米饭、餐具、纸巾这类低价值配套项先排除；真正看招牌菜销量、连带加购率和毛利额，三项同时变好才算主推有效。")
     if plain_actions:
         action_lines = "\n".join(f"{index}. {action}" for index, action in enumerate(plain_actions[:3], start=1))
         parts.append(f"今天就做这几件事：\n{action_lines}")
