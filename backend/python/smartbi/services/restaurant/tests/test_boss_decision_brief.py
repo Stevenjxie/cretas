@@ -4,7 +4,11 @@ from smartbi.services.restaurant.sections.base import SectionRequest, SectionSta
 from smartbi.services.restaurant.sections.boss_decision_brief import (
     BossDecisionBriefHandler,
 )
-from smartbi.api.restaurant_sections import OwnerActionChatRequest, owner_action_chat
+from smartbi.api.restaurant_sections import (
+    _OWNER_ACTION_CHAT_SESSIONS,
+    OwnerActionChatRequest,
+    owner_action_chat,
+)
 
 
 def test_boss_decision_brief_turns_sources_into_owner_actions() -> None:
@@ -641,6 +645,39 @@ def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -
     assert risk_data["scenario"] == "traffic_conversion"
     assert "今天先别做" in risk_data["answer"]
     assert "一句话结论" not in risk_data["answer"]
+
+
+def test_owner_action_follow_up_uses_explicit_session_and_scenario_when_memory_misses() -> None:
+    _OWNER_ACTION_CHAT_SESSIONS.pop("owner-action-missing-worker", None)
+
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_CROSS_WORKER",
+            session_id="owner-action-missing-worker",
+            demoScenario="traffic_conversion",
+            message="哪些事情今天先不要做？",
+        )
+    )
+
+    data = response["data"]
+    assert data["sessionId"] == "owner-action-missing-worker"
+    assert data["scenario"] == "traffic_conversion"
+    assert "今天先别做" in data["answer"]
+    assert "一句话结论" not in data["answer"]
+
+
+def test_owner_action_package_question_with_two_person_context_prefers_package() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_PACKAGE_PRIORITY",
+            message="两人客多的时候，应该推什么小套餐提升客单？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "package"
+    assert "套餐" in data["answer"]
+    assert "一句话结论" in data["answer"]
 
 
 def test_owner_action_chat_routes_and_keeps_follow_up_session() -> None:

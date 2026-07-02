@@ -314,6 +314,11 @@ def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> 
     scenarios = set(list_owner_action_demo_scenarios())
     if requested in scenarios:
         return requested
+    if (
+        "套餐" in message
+        and any(keyword in message for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高"))
+    ):
+        return "package"
     for scenario, keywords in _OWNER_ACTION_KEYWORDS:
         if any(keyword in message for keyword in keywords):
             return scenario
@@ -1244,13 +1249,18 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     """
 
     factory_id = _effective_str(body.factory_id, body.factoryId, default="RES_DEMO_QHJ")
-    session_id = _effective_str(body.session_id, body.sessionId) or f"owner-action-{uuid.uuid4().hex[:12]}"
+    provided_session_id = _effective_str(body.session_id, body.sessionId)
+    session_id = provided_session_id or f"owner-action-{uuid.uuid4().hex[:12]}"
     previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_id, {})
     if not previous and _is_follow_up(body.message):
         previous = {"scenario": _OWNER_ACTION_FACTORY_LAST_SCENARIOS.get(factory_id, "")}
     requested = _effective_str(body.demo_scenario, body.demoScenario)
     scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
-    is_follow_up_turn = bool(previous.get("scenario")) and _is_follow_up(body.message) and scenario == previous.get("scenario")
+    scenarios = set(list_owner_action_demo_scenarios())
+    is_follow_up_turn = _is_follow_up(body.message) and (
+        (bool(previous.get("scenario")) and scenario == previous.get("scenario"))
+        or (bool(provided_session_id) and requested in scenarios and scenario == requested)
+    )
 
     try:
         params = get_owner_action_demo_scenario(scenario)
