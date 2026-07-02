@@ -249,11 +249,17 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         BigDecimal batchTotalCost = BigDecimal.ZERO;
         int consumptionsWritten = 0;
         BigDecimal firstInputQty = firstPositiveInput(steps);
+        // 🔒 honest-null: 任一消耗源 unitPrice==null (成本未知, 非 0) → 批次 ROLL-UP 成本不可知。
+        //   区分 null(未知) vs 0(真免费): 仅 null 触发诚实置 null; genuinely-free 源 (unitPrice=0) 不触发。
+        boolean anyUncosted = false;
 
         // 2. 写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    ⛔ 不访问任何 in-memory map —— edges 是唯一上游输入.
         for (ResolvedEdge e : edges) {
             MaterialBatch src = e.getSourceBatch();
+            if (src.getUnitPrice() == null) {
+                anyUncosted = true;  // 未计价源: edgeCost 仍写 0 (consumption 行), 但 ROLL-UP 诚实 null
+            }
             BigDecimal unitPrice = nz(src.getUnitPrice());
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
@@ -327,17 +333,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 4. 半成品批产出 → MaterialBatch(priced, PRODUCTION_BATCH 来源)
         String wipMbId = null;
         if (!ctx.isFinished() && lastOutputQty.signum() > 0) {
-            BigDecimal wipUnitPrice = batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0
+            // 🔒 honest-null: 未计价源存在 → WIP 单价不可知 (null), 供下游复用时其 getUnitPrice()==null
+            //   再次触发 anyUncosted, 诚实链完整传播 (不把未知成本以 0 假造进复用批单价)。
+            BigDecimal wipUnitPrice = anyUncosted ? null
+                    : (batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
+                    : BigDecimal.ZERO);
             wipMbId = createWipMaterialBatch(
                     ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
                     lastOutputQty, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
         }
-        applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty);
+        applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty, anyUncosted);
 
         return new MaterializedBatch(batch.getId(), batch.getBatchNumber(),
-                wipMbId, batchTotalCost, consumptionsWritten);
+                wipMbId, anyUncosted ? null : batchTotalCost, consumptionsWritten);
     }
 
     /**
@@ -356,11 +365,16 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         BigDecimal batchTotalCost = BigDecimal.ZERO;
         int consumptionsWritten = 0;
         BigDecimal firstInputQty = firstPositiveInput(steps);
+        // 🔒 honest-null: 镜像 materializeBatch — 任一消耗源 unitPrice==null → ROLL-UP 成本诚实 null。
+        boolean anyUncosted = false;
 
         // 1. 重写每条已解析上游消耗边 (RAW + SEMI_FINISHED); 成本 = feedKg × 上游单价.
         //    与 materializeBatch 同算式 (setScale(2,HALF_UP)), 写入 existingBatchId.
         for (ResolvedEdge e : edges) {
             MaterialBatch src = e.getSourceBatch();
+            if (src.getUnitPrice() == null) {
+                anyUncosted = true;  // 未计价源: edgeCost 仍写 0, 但 ROLL-UP 诚实 null
+            }
             BigDecimal unitPrice = nz(src.getUnitPrice());
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
@@ -426,9 +440,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     .orElseThrow(() -> new BusinessException(404,
                             "WIP 批次不存在或无权访问: " + existingWipMbId));
             wip.setReceiptQuantity(lastOutputQty);
-            BigDecimal wipUnitPrice = (batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0)
+            // 🔒 honest-null: 镜像 materializeBatch — 未计价源存在 → WIP 单价诚实 null。
+            BigDecimal wipUnitPrice = anyUncosted ? null
+                    : ((batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0)
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
+                    : BigDecimal.ZERO);
             wip.setUnitPrice(wipUnitPrice);
             materialBatchRepo.save(wip);
         }
@@ -440,11 +456,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (lastOutputQty.signum() > 0) {
             pb.setQuantity(lastOutputQty);
         }
-        applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty);
+        applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty, anyUncosted);
         batchRepo.save(pb);
 
         return new MaterializedBatch(existingBatchId, pb.getBatchNumber(),
-                existingWipMbId, batchTotalCost, consumptionsWritten);
+                existingWipMbId, anyUncosted ? null : batchTotalCost, consumptionsWritten);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -513,17 +529,26 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                        BigDecimal laborCost,
                                        BigDecimal totalCost,
                                        BigDecimal inputQty,
-                                       BigDecimal outputQty) {
+                                       BigDecimal outputQty,
+                                       boolean anyUncosted) {
         BigDecimal material = nz(materialCost);
         BigDecimal labor = nz(laborCost);
         BigDecimal total = nz(totalCost);
         batch.setMaterialCost(material.setScale(2, RoundingMode.HALF_UP));
         batch.setLaborCost(labor.signum() > 0 ? labor.setScale(2, RoundingMode.HALF_UP) : null);
-        batch.setTotalCost(total.setScale(2, RoundingMode.HALF_UP));
-        if (outputQty != null && outputQty.signum() > 0) {
-            batch.setUnitCost(total.divide(outputQty, 4, RoundingMode.HALF_UP));
-        } else {
+        // 🔒 honest-null: 任一消耗源未计价 (unitPrice==null, 成本未知而非 0) → 批次总成本/单价不可知,
+        // 写 null 而非 nz-求和后的低估值 (与纯 SFI 投料路径 ProcessSheetServiceImpl:151 「成本诚实 null」一致)。
+        // materialCost/laborCost 仍写已知分量, 仅 ROLL-UP totalCost/unitCost 诚实置 null。
+        if (anyUncosted) {
+            batch.setTotalCost(null);
             batch.setUnitCost(null);
+        } else {
+            batch.setTotalCost(total.setScale(2, RoundingMode.HALF_UP));
+            if (outputQty != null && outputQty.signum() > 0) {
+                batch.setUnitCost(total.divide(outputQty, 4, RoundingMode.HALF_UP));
+            } else {
+                batch.setUnitCost(null);
+            }
         }
         if (inputQty != null && inputQty.signum() > 0 && outputQty != null) {
             batch.setYieldRate(outputQty.multiply(new BigDecimal("100"))
