@@ -748,6 +748,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .inheritedCost(rowProvenance.inheritedCost)
                     .addedCost(addedCost)
                     .sourceBreakdowns(rowProvenance.sourceBreakdowns)
+                    .processDate(req.getProcessDate())
                     .processOrder(row.getProcessOrder())
                     .processName(resolveRowProcessName(req, row, nameByOrderByProduct))
                     .unit(unit)

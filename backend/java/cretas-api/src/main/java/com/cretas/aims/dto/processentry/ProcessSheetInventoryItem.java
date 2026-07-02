@@ -91,6 +91,13 @@ public class ProcessSheetInventoryItem {
 
     // ── 双出成率扩展字段 (getInventoryYieldCard 填充; getInventory 兼容留 null) ──
 
+    /**
+     * 流程日期 (该工序实际操作日期, 取自 ProcessSheetRowRequest.processDate — 逐工序录入表单填的「流程日期」)。
+     * 客户张权 UX 反馈: 双出成率总览表前面加日期方便查看来源批次是哪天录的。
+     * 仅逐工序电子表格路径 (getInventoryYieldCardFromProcessSheetRows) 填充; WIP 路径留 null.
+     */
+    private LocalDate processDate;
+
     /** 链内工序序 (SemiFinishedInventory.processOrder) */
     private Integer processOrder;
 
