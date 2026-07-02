@@ -61,20 +61,22 @@ class WipClerkOutputTest {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.of(row));
 
-        service.postClerkOutput(FACTORY, ANCHOR, "PT1", new BigDecimal("60"), "kg", null, null);
+        service.postClerkOutput(FACTORY, ANCHOR, "PT1", new BigDecimal("60"), "kg", null, null, 3);
         assertThat(row.getProducedQuantity()).isEqualByComparingTo("60");
         assertThat(row.getAvailableQuantity()).isEqualByComparingTo("60");
+        assertThat(row.getProcessOrder()).isEqualTo(3); // 首次落道序 → picker 可见性锚
 
-        service.postClerkOutput(FACTORY, ANCHOR, "PT1", new BigDecimal("40"), "kg", null, null);
+        service.postClerkOutput(FACTORY, ANCHOR, "PT1", new BigDecimal("40"), "kg", null, null, 2);
         assertThat(row.getProducedQuantity()).isEqualByComparingTo("100");
         assertThat(row.getAvailableQuantity()).isEqualByComparingTo("100");
+        assertThat(row.getProcessOrder()).isEqualTo(2); // 取 MIN (最早道) → 靠后复用道仍可见
         verify(wipRepo, never()).saveAndFlush(any()); // 既有行不新建占位行
     }
 
     @Test
     @DisplayName("postClerkOutput: inQty<=0 → no-op")
     void postClerkOutputZeroNoop() {
-        service.postClerkOutput(FACTORY, ANCHOR, "PT1", BigDecimal.ZERO, "kg", null, null);
+        service.postClerkOutput(FACTORY, ANCHOR, "PT1", BigDecimal.ZERO, "kg", null, null, 1);
         verify(wipRepo, never()).save(any());
     }
 

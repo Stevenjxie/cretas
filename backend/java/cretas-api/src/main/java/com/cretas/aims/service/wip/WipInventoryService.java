@@ -155,10 +155,14 @@ public interface WipInventoryService {
      * @param unit                单位
      * @param inUnitCost          本次入库单位成本 (诚实 null: 无成本数据时传 null, 不假成 0)
      * @param materialBatchRefs   溯源 (可空)
+     * @param processOrder        产出此 SFI 的工序序 (picker 阶段可见性锚)。锚跨多次小结可被不同道喂 →
+     *                            取 MIN (最早道), 让新产 SFI 在尽可能靠后的复用道 (maxProcessOrder 大) 仍可见 (宁缺勿藏)。
+     *                            null 允许 (旧路径/历史无序), 但 {@code listWipByFactory} picker 阶段过滤
+     *                            (processOrder != null && < maxProcessOrder) 严格排除 null → 逐道录入必传。
      */
     void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
                          BigDecimal inQty, String unit, BigDecimal inUnitCost,
-                         List<java.util.Map<String, Object>> materialBatchRefs);
+                         List<java.util.Map<String, Object>> materialBatchRefs, Integer processOrder);
 
     /**
      * G3 小结半成品出库 (SFI OUT) — task-free，{@link #postClerkOutput} 的逆向。
