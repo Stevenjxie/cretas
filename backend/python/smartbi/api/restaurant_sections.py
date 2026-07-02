@@ -208,7 +208,7 @@ _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("seating_mix", ("二人桌", "两人桌", "四人桌", "两人客", "四人客", "桌型", "桌子", "翻台", "翻台率", "排队", "等位")),
     ("staffing_schedule", ("排班", "人手", "加人", "前厅", "后厨", "员工时间", "工时", "午市", "晚市", "忙不过来")),
     ("external_event_response", ("商场活动", "天气", "节日", "外部", "活动", "商圈活动", "周边活动")),
-    ("traffic_conversion", ("客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销", "进店少", "客流情况")),
+    ("traffic_conversion", ("客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销", "进店少", "客流情况", "客流", "门口", "路过", "下单", "入口", "平台", "页面", "首图", "美团", "大众点评", "抖音", "团购")),
     ("staff_training", ("培训", "服务员", "服务态度", "服务差评", "话术", "催菜", "意识", "店长", "开班前", "评论", "顾客", "复购", "最在意")),
     ("kitchen_quality", ("厨房", "后厨", "出品", "口味", "太咸", "难吃", "上菜慢", "复杂菜", "出餐速度", "保证出餐", "稳定")),
     ("package", ("套餐", "组合", "小套餐", "工作日", "低峰", "客单", "提高客单价")),
@@ -310,6 +310,22 @@ def _is_follow_up(message: str) -> bool:
             "\u4e3b\u63a8\u83dc\u653e",
         )
     )
+
+
+def _has_owner_action_topic(message: str) -> bool:
+    text = message or ""
+    if (
+        "套餐" in text
+        and any(keyword in text for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高"))
+    ):
+        return True
+    return any(
+        keyword in text
+        for _, keywords in _OWNER_ACTION_KEYWORDS
+        for keyword in keywords
+    )
+
+
 def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> str:
     scenarios = set(list_owner_action_demo_scenarios())
     if requested in scenarios:
@@ -1252,7 +1268,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     provided_session_id = _effective_str(body.session_id, body.sessionId)
     session_id = provided_session_id or f"owner-action-{uuid.uuid4().hex[:12]}"
     previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_id, {})
-    if not previous and _is_follow_up(body.message):
+    if not previous and _is_follow_up(body.message) and not _has_owner_action_topic(body.message):
         previous = {"scenario": _OWNER_ACTION_FACTORY_LAST_SCENARIOS.get(factory_id, "")}
     requested = _effective_str(body.demo_scenario, body.demoScenario)
     scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
