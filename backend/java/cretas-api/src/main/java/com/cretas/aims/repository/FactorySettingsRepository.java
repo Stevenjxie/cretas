@@ -55,6 +55,12 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
     @Query("SELECT f.skipProcessReportingDefault FROM FactorySettings f WHERE f.factoryId = :factoryId")
     Boolean findSkipProcessReportingDefaultByFactoryId(@Param("factoryId") String factoryId);
      /**
+     * 获取工厂级"报工前必须领料确认"开关 (② Part B 生产领料单 Gate, V20261027_32).
+     * 无 settings 行时返回 null (调用方兜底为 false = 报工照旧, 向后兼容安全默认).
+      */
+    @Query("SELECT f.requireRequisitionBeforeReport FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    Boolean findRequireRequisitionBeforeReportByFactoryId(@Param("factoryId") String factoryId);
+     /**
      * 更新AI每周配额（仅平台管理员可用）
       */
     @Query("UPDATE FactorySettings f SET f.aiWeeklyQuota = :quota WHERE f.factoryId = :factoryId")

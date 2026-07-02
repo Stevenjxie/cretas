@@ -47,13 +47,18 @@ class ProcessSheetRawWarehouseGuardTest {
         return impl;
     }
 
-    /** 反射调用 private ensureRawMaterialWarehouse, 解包 InvocationTargetException。 */
+    /**
+     * 反射调用 private ensureRawMaterialWarehouse(factoryId, planId, rawMb), 解包 InvocationTargetException。
+     *
+     * <p>② Part B Gate 通过 field 注入的 factorySettingsRepository 读取; 本测试不注入它 → gate OFF
+     * → 走 Part A 宽松仓校验分支 (本套断言的行为不变), planId 参数在 gate OFF 时不参与。
+     */
     private void invokeGate(ProcessSheetServiceImpl impl, String factoryId, MaterialBatch rawMb) throws Throwable {
         Method m = ProcessSheetServiceImpl.class
-                .getDeclaredMethod("ensureRawMaterialWarehouse", String.class, MaterialBatch.class);
+                .getDeclaredMethod("ensureRawMaterialWarehouse", String.class, String.class, MaterialBatch.class);
         m.setAccessible(true);
         try {
-            m.invoke(impl, factoryId, rawMb);
+            m.invoke(impl, factoryId, "PLAN-IRRELEVANT-WHEN-GATE-OFF", rawMb);
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }

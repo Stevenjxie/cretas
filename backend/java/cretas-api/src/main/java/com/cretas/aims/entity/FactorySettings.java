@@ -213,6 +213,22 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean skipProcessReportingDefault = false;
 
+    /**
+     * 工厂级"报工前必须领料确认"开关 (② Part B 生产领料单 Gate, V20261027_32).
+     *
+     * <p>opt-in, 默认 false (向后兼容: 现有工厂如 LIUSHANMEN 料流仍是报工直接从原料仓消耗, 零回归):
+     * <ul>
+     *   <li>false → 报工照旧, 从物料所在原料仓/物流仓消耗 (② Part A 宽松 ensureRawMaterialWarehouse)。</li>
+     *   <li>true  → 报工前该生产计划必须有仓管已确认(拣货+调拨, 状态 TRANSFERRED/ISSUED/IN_USE)的领料单,
+     *       且覆盖被消耗物料, 否则 BLOCKING + 指引"请先在该计划生成领料单并由仓管确认领料到生产仓"。</li>
+     * </ul>
+     * 列 DEFAULT FALSE → 未显式配置的工厂 (现有 + 未来) 默认关闭。需人工在工厂配置页 per-factory 开启,
+     * 用于强制客户张权(F006 仓管场景)诉求的"仓管没确认领料，生产不能报工"料流。
+     */
+    @Column(name = "require_requisition_before_report")
+    @Builder.Default
+    private Boolean requireRequisitionBeforeReport = false;
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID

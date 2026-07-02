@@ -35,6 +35,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
@@ -103,6 +104,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private WarehouseResolver warehouseResolver;
 
+    /**
+     * ② Part B 生产领料单 Gate — 工厂级"报工前必须领料确认"开关读取 (required=false 兼容单测).
+     * 无 settings 行 / 未注入 → 兜底 false = 报工照旧 (向后兼容安全默认)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
+    /**
+     * ② Part B Gate — 校验该生产计划是否已有仓管确认的领料单 (required=false 兼容单测).
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -128,7 +142,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<String> warnings = new ArrayList<>();
 
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
-        List<ResolvedEdge> edges = resolveEdges(factoryId, req);
+        List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
 
         // 6. outputQuantity gate: <=0 → 存 DRAFT 行, 不物化 WIP 批
         if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
@@ -225,7 +239,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         ProcessSheetRowRequest beforeReq = tryDeserialize(existing.getRowPayload());
 
         // 与 create 同的 factory-scoped 上游/原料边解析 (🔒)
-        List<ResolvedEdge> edges = resolveEdges(factoryId, req);
+        List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
         BigDecimal newOutput = req.getOutputQuantity();
         boolean hasOutput = newOutput != null && newOutput.signum() > 0;
 
@@ -1289,7 +1303,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // Edge resolution (factory-scoped 🔒)
     // ─────────────────────────────────────────────────────────────
 
-    private List<ResolvedEdge> resolveEdges(String factoryId, ProcessSheetRowRequest req) {
+    private List<ResolvedEdge> resolveEdges(String factoryId, String planId, ProcessSheetRowRequest req) {
         List<ResolvedEdge> edges = new ArrayList<>();
 
         // 原料边 (修油首道领料) — factory-scoped raw MaterialBatch
@@ -1299,7 +1313,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
-                ensureRawMaterialWarehouse(factoryId, rawMb);
+                ensureRawMaterialWarehouse(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
             }
         }
@@ -1359,10 +1373,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return edges;
     }
 
-    private void ensureRawMaterialWarehouse(String factoryId, MaterialBatch rawMb) {
+    private void ensureRawMaterialWarehouse(String factoryId, String planId, MaterialBatch rawMb) {
         if (warehouseResolver == null) {
             return;
         }
+
+        // ② Part B Gate (opt-in, 默认 OFF): 工厂开启"报工前必须领料确认"后, 报工前该计划必须有仓管确认的领料单
+        //   覆盖被消耗物料 → 强制"仓管没确认领料，生产不能报工"料流。关闭 (默认) 时走下方 Part A 宽松校验, ZERO 行为变化。
+        if (isRequisitionGateEnabled(factoryId)) {
+            enforceRequisitionConfirmed(factoryId, planId, rawMb);
+            return;
+        }
+
         // 用途拆分 (2026-07-02): 生产报工原料来源走独立 resolveProductionRawWh (PRODUCTION_RAW_DEFAULT),
         // 未配置回退 WH-LOG = 现状。不再与采购入库 / 销售出货共用 resolveLogisticsId。
         String rawWarehouseId = warehouseResolver.resolveProductionRawWh(factoryId);
@@ -1386,6 +1408,80 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHint("请重新选择原料仓/物流仓批次后再保存")
                     .withHintTarget("原料批次");
         }
+    }
+
+    /**
+     * ② Part B Gate 开关读取。无 repo (单测) / 无 settings 行 → 兜底 false (报工照旧, 向后兼容安全默认)。
+     */
+    private boolean isRequisitionGateEnabled(String factoryId) {
+        if (factorySettingsRepository == null) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(
+                    factorySettingsRepository.findRequireRequisitionBeforeReportByFactoryId(factoryId));
+        } catch (Exception e) {
+            // 配置读取异常不应阻断报工 —— 兜底 false (安全默认: 不误伤正在报工的工厂)。
+            log.warn("读取工厂 {} 领料 Gate 开关失败, 兜底为关闭: {}", factoryId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * ② Part B Gate (工厂已开启时): 校验该生产计划已有仓管确认的领料单覆盖被消耗物料。
+     *
+     * <p>诚实实现说明 (🔒 设计决策): {@code FactoryMaterialRequisitionServiceImpl.transferToFactory} 仅创建
+     * <b>DRAFT</b> 状态的 InternalTransfer, 并 <b>不会</b>在此刻把 MaterialBatch 物理迁移到车间仓 (迁移发生在
+     * 调拨单单独确认/签收时)。因此本 Gate <b>不做</b>"批次必须在车间仓"的物理仓校验 (会因 DRAFT 未迁移而误挡),
+     * 而是校验"仓管已确认领料"这一业务事实 —— 该计划存在状态 ∈ {TRANSFERRED, ISSUED, IN_USE} 的领料单,
+     * 且其明细覆盖被消耗物料 (issuedQty>0)。这如实实现客户"仓管没确认领料，生产不能报工"诉求, 不依赖不确定的物理迁移语义。
+     *
+     * <p>防呆: BLOCKING 错误必带明确下一步指引 (never dead-end)。
+     */
+    private void enforceRequisitionConfirmed(String factoryId, String planId, MaterialBatch rawMb) {
+        String matTypeId = rawMb != null ? rawMb.getMaterialTypeId() : null;
+        // rawMb 无 materialName 字段; 用 materialTypeId 作标签 (领料单明细里带真实名, 报工挡在批次层这里够用)。
+        String matName = matTypeId != null ? matTypeId : "该原料";
+
+        if (requisitionRepository == null || planId == null) {
+            // 无 repo (单测环境) 或无计划上下文 → 无法校验领料单; Gate 已显式开启, 不静默放行 → BLOCKING。
+            throw requisitionRequired(matName, "无法校验领料单 (缺少计划上下文)");
+        }
+
+        List<FactoryMaterialRequisition> reqs = requisitionRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId);
+
+        boolean covered = reqs.stream()
+                .filter(ProcessSheetServiceImpl::isRequisitionConfirmed)
+                .flatMap(r -> r.getItems() != null ? r.getItems().stream() : java.util.stream.Stream.empty())
+                .anyMatch(it -> matTypeId != null
+                        && matTypeId.equals(it.getMaterialTypeId())
+                        && it.getIssuedQty() != null
+                        && it.getIssuedQty().compareTo(BigDecimal.ZERO) > 0);
+
+        if (!covered) {
+            boolean anyConfirmed = reqs.stream().anyMatch(ProcessSheetServiceImpl::isRequisitionConfirmed);
+            String detail = anyConfirmed
+                    ? "该计划领料单未覆盖原料「" + matName + "」(该料未被仓管拣货/调拨)"
+                    : "该计划尚无仓管已确认的领料单";
+            throw requisitionRequired(matName, detail);
+        }
+    }
+
+    /** 领料单是否已被仓管确认 (拣货+调拨后状态): TRANSFERRED / ISSUED / IN_USE。 */
+    private static boolean isRequisitionConfirmed(FactoryMaterialRequisition r) {
+        return r.getStatus() == FactoryMaterialRequisition.Status.TRANSFERRED
+                || r.getStatus() == FactoryMaterialRequisition.Status.ISSUED
+                || r.getStatus() == FactoryMaterialRequisition.Status.IN_USE;
+    }
+
+    private BusinessException requisitionRequired(String matName, String detail) {
+        return new BusinessException(409,
+                "生产报工需先领料：" + detail + "。请先在该生产计划生成领料单，由仓管拣货确认并调拨到生产仓后再报工。")
+                .withCode("PRODUCTION_REQUISITION_REQUIRED")
+                .withHint("路径: 生产管理 → 物料需求单 → 按计划生成 → 备料 → 确认领料 → 调拨")
+                .withHintTarget("原料批次")
+                .withSeverity("BLOCKING");
     }
 
     /**

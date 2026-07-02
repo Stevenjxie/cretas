@@ -61,6 +61,13 @@ const closeDialogVisible = ref(false);
 const closeTarget = ref<Requisition | null>(null);
 const closeRows = ref<ClosePreviewRow[]>([]);
 
+interface ConfirmPickRow extends RequisitionItem {
+  pickedInput: number;
+}
+const confirmDialogVisible = ref(false);
+const confirmTarget = ref<Requisition | null>(null);
+const confirmRows = ref<ConfirmPickRow[]>([]);
+
 const statusMap: Record<string, { text: string; type: 'info' | 'warning' | 'success' | 'danger' | '' }> = {
   PENDING: { text: '待备料', type: 'warning' },
   PICKING: { text: '备料中', type: 'warning' },
@@ -188,9 +195,54 @@ async function handleAction(row: Requisition, action: string, confirmMsg: string
 const handleStartPicking = (row: Requisition) =>
   handleAction(row, 'start-picking', `开始备料 ${row.requisitionNo}?`, '已进入备料状态');
 const handleTransfer = (row: Requisition) =>
-  handleAction(row, 'transfer', `调拨 ${row.requisitionNo}?`, '已调拨');
+  handleAction(row, 'transfer', `调拨 ${row.requisitionNo} 到生产仓?`, '已调拨到生产仓');
 const handleReceive = (row: Requisition) =>
   handleAction(row, 'receive', `签收 ${row.requisitionNo}?`, '已签收');
+
+// 仓管确认领料 (confirm-picking): 逐物料录入实际拣货数量。防呆: 预填需求量 = "要收多少",
+// 仓管只需核对确认 (Rule 1 预先显示边界 + Rule 2 上下文带单号/品名)。
+async function openConfirmDialog(row: Requisition) {
+  try {
+    const data = await fetchDetail(row);
+    if (!data) return;
+    confirmTarget.value = data;
+    confirmRows.value = (data.items || []).map((item) => {
+      const picked = toNumber(item.pickedQty);
+      return {
+        ...item,
+        // 预填: 已录过用已录值, 否则默认 = 需求量 (仓管默认按需领, 只需核对)
+        pickedInput: picked > 0 ? picked : toNumber(item.requiredQty),
+      };
+    });
+    confirmDialogVisible.value = true;
+  } catch (e) {
+    handleCatchError(e, '加载领料明细失败');
+  }
+}
+
+async function submitConfirm() {
+  if (!confirmTarget.value || submitting.value) return;
+  const invalid = confirmRows.value.filter((row) => row.pickedInput < 0);
+  if (invalid.length > 0) {
+    ElMessage.warning('拣货数量不能为负数');
+    return;
+  }
+  try {
+    submitting.value = true;
+    const res = await put(`/${factoryId.value}/material-requisitions/${confirmTarget.value.id}/confirm-picking`, {
+      items: confirmRows.value.map((row) => ({ itemId: row.id, pickedQty: row.pickedInput ?? 0 })),
+    });
+    if (res.success) {
+      ElMessage.success('已确认领料，可调拨到生产仓');
+      confirmDialogVisible.value = false;
+      loadData();
+    }
+  } catch {
+    // interceptor displayed backend error
+  } finally {
+    submitting.value = false;
+  }
+}
 
 async function openCloseDialog(row: Requisition) {
   try {
@@ -312,6 +364,7 @@ async function handleCancel(row: Requisition) {
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
             <el-button v-if="row.status === 'PENDING' && canWrite" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
+            <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
             <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
             <el-button v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small" @click="handleReceive(row)">签收</el-button>
             <el-button v-if="['ISSUED','IN_USE'].includes(row.status) && canWrite" type="warning" link size="small" @click="openCloseDialog(row)">关单</el-button>
@@ -370,6 +423,43 @@ async function handleCancel(row: Requisition) {
       </template>
       <template #footer>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="confirmDialogVisible" :title="`确认领料 ${confirmTarget?.requisitionNo || ''}`" width="820px" destroy-on-close>
+      <el-alert
+        title="仓管确认实际拣货数量。默认已按需求量预填，核对无误直接确认；确认后可调拨到生产仓。"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
+      <el-descriptions v-if="confirmTarget" :column="2" border size="small" style="margin-bottom: 12px">
+        <el-descriptions-item label="单号">{{ confirmTarget.requisitionNo }}</el-descriptions-item>
+        <el-descriptions-item label="生产计划">{{ confirmTarget.productionPlanId || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <el-table :data="confirmRows" border size="small">
+        <el-table-column prop="materialName" label="物料" min-width="180" show-overflow-tooltip />
+        <el-table-column label="需求量" width="110" align="right">
+          <template #default="{ row }">{{ qty(row.requiredQty) }}</template>
+        </el-table-column>
+        <el-table-column label="实际拣货" width="180" align="right">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.pickedInput"
+              :min="0"
+              :precision="3"
+              :step="0.001"
+              controls-position="right"
+              class="qty-input"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="unit" label="单位" width="80" align="center" />
+      </el-table>
+      <template #footer>
+        <el-button @click="confirmDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitConfirm">确认领料</el-button>
       </template>
     </el-dialog>
 
