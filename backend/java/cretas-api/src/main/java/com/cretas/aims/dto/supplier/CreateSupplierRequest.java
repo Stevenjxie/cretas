@@ -27,14 +27,16 @@ public class CreateSupplierRequest {
     @Size(max = 200, message = "供应商名称长度不能超过200个字符")
     private String name;
 
-    @Schema(description = "联系人", required = true)
-    @NotBlank(message = "联系人不能为空")
+    // 客户张权原话 (2026-07-02): "这个不要强制 一般不会放系统里面的 都是一脉单传的"
+    // 联系人/联系电话/地址 改为选填 (去掉 @NotBlank), 手机号格式仍校验但允许空字符串
+    // (pattern 加 ^$| 分支, 同 UpdateSupplierRequest.phone 既有 pattern). Entity 层
+    // contact_person/phone/address 列本就 nullable (无 nullable=false), 不需要迁移.
+    @Schema(description = "联系人")
     @Size(max = 100, message = "联系人长度不能超过100个字符")
     private String contactPerson;
 
-    @Schema(description = "联系电话", required = true)
-    @NotBlank(message = "联系电话不能为空")
-    @Pattern(regexp = "^1[3-9]\\d{9}$", message = "手机号格式不正确")
+    @Schema(description = "联系电话")
+    @Pattern(regexp = "^$|^1[3-9]\\d{9}$", message = "手机号格式不正确")
     private String phone;
 
     @Schema(description = "邮箱")
@@ -42,8 +44,7 @@ public class CreateSupplierRequest {
     @Size(max = 100, message = "邮箱长度不能超过100个字符")
     private String email;
 
-    @Schema(description = "地址", required = true)
-    @NotBlank(message = "地址不能为空")
+    @Schema(description = "地址")
     @Size(max = 500, message = "地址长度不能超过500个字符")
     private String address;
 
