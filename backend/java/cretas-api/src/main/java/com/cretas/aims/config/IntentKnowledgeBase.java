@@ -6850,6 +6850,9 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("菜品销售排名", "RESTAURANT_BESTSELLER_QUERY");
         restaurantPhraseMapping.put("本月菜品销售排名", "RESTAURANT_BESTSELLER_QUERY");
         restaurantPhraseMapping.put("菜品销售排名前十", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("外卖点什么多", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("外卖什么菜卖得多", "RESTAURANT_BESTSELLER_QUERY");
+        restaurantPhraseMapping.put("外卖热销菜", "RESTAURANT_BESTSELLER_QUERY");
 
         // RESTAURANT_DISH_SALES_RANKING — 菜品销量排行
         restaurantPhraseMapping.put("销量最好的菜", "RESTAURANT_DISH_SALES_RANKING");

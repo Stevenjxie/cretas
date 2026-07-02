@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from smartbi.services.llm_fallback_logger import (
-    LlmFallbackLogPayload, log_fallback, update_feedback,
+    LlmFallbackLogPayload, log_fallback, log_template_hit, update_feedback,
 )
 
 
@@ -79,6 +79,34 @@ async def test_log_fallback_tolerates_embedding_failure():
     # positional args after SQL: query, factory_id, upload_id, answer,
     # agg_meta_json, query_embedding, history_json, total_wall_ms, llm_wall_ms
     assert args[6] is None  # query_embedding position
+
+
+@pytest.mark.asyncio
+async def test_log_template_hit_writes_agg_meta_for_learning_context():
+    pool, conn = _make_mock_pool()
+
+    row_id = await log_template_hit(
+        pool,
+        query="哪些菜要先查BOM和盘点损耗？",
+        factory_id="F001",
+        upload_id=None,
+        template_code="restaurant_owner_action:cost_margin",
+        answer="一句话结论：成本/毛利异常",
+        total_wall_ms=44,
+        agg_meta={
+            "source": "restaurant_owner_action",
+            "scenario": "cost_margin",
+            "chart_titles": ["菜品收入、食材成本、毛利差多少"],
+            "learning_policy": "capture_for_feedback_and_review_only",
+        },
+    )
+
+    assert row_id == 12345
+    args = conn.fetchval.call_args[0]
+    assert "agg_meta" in args[0]
+    assert args[5] is not None
+    assert "cost_margin" in args[5]
+    assert args[6] == "restaurant_owner_action:cost_margin"
 
 
 @pytest.mark.asyncio

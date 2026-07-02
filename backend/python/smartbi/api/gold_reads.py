@@ -126,6 +126,14 @@ def _parse_date(s: str, field: str) -> date:
         )
 
 
+DEMO_GOLD_TENANT_ALIASES = {
+    # The public no-login restaurant demo account is intentionally lightweight
+    # in Java auth, but the AI demo needs the full restaurant Gold dataset.
+    # Keep the JWT tenant check strict, then read from the rich demo factory.
+    "DEMO_REST": "RES_3101_009",
+}
+
+
 def _resolve_tenant(factory_id: Optional[str]) -> str:
     """Factor out the 'use JWT tenant unless caller explicitly matches' guard."""
     tenant = get_factory_id()
@@ -137,7 +145,7 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
             status_code=403,
             detail=f"factory_id query param {fid!r} doesn't match JWT tenant {tenant!r}",
         )
-    return fid
+    return DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
 
 
 def _parse_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:

@@ -37,6 +37,15 @@ export interface ChatExecuteOptions {
   context?: Record<string, unknown>;
 }
 
+export interface IntentFeedbackPayload {
+  userInput: string;
+  matchedIntentCode: string;
+  correctIntentCode?: string | null;
+  isCorrect: boolean;
+  sessionId?: string;
+  userFeedback?: string;
+}
+
 export async function executeIntent(
   factoryId: string,
   userInput: string,
@@ -55,6 +64,19 @@ export async function executeIntent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const envelope = res as any;
   return (envelope.data ?? envelope) as IntentExecuteResponse;
+}
+
+export async function submitIntentFeedback(
+  factoryId: string,
+  payload: IntentFeedbackPayload,
+): Promise<boolean> {
+  try {
+    await request.post(`/${factoryId}/ai-intents/feedback`, payload);
+    return true;
+  } catch (e) {
+    console.warn('[intent-feedback] submit failed:', e);
+    return false;
+  }
 }
 
 /** Fetch cached xlsx by cache_key for user-clicked download. */

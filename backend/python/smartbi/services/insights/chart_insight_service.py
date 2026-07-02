@@ -182,6 +182,15 @@ def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
         top_label = labels[top_i] if top_i < len(labels) else f"第{top_i + 1}项"
         bot_label = labels[bot_i] if bot_i < len(labels) else f"第{bot_i + 1}项"
         top_share = top / total * 100 if total > 0 else 0
+        if bot > 0 and top / bot < 1.05:
+            return InsightResult(
+                finding=f"{top_label}和{bot_label}差距很小，基本可以按同一水平看。",
+                implication="这类图不适合硬分第一名和末位，重点应该看两边的客流、客单价、排班和差评有没有结构差异。",
+                suggestion="建议不要因为这张图单独做大促，先用同一套备货和排班基准，再去查午晚市、客单价和差评标签是否有明显差别。",
+                source="template",
+                tier=2,
+                input_hash=input_hash,
+            )
         ratio_text = f"{top / bot:.1f}倍" if bot > 0 else "差距很大"
         return InsightResult(
             finding=f"{top_label}排第一，占整体{_fmt_pct(top_share)}；末位是{bot_label}，头尾大约差{ratio_text}。",

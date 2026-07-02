@@ -74,6 +74,9 @@ public class RestaurantOrderTypeMixGoldTool extends GoldBackedRestaurantTool {
         String period = (rawStart != null ? rawStart.toString() : "?")
                 + " 至 " + (rawEnd != null ? rawEnd.toString() : "?");
 
+        boolean revenueEstimated = Boolean.TRUE.equals(goldResult.get("revenue_estimated"));
+        Object estimationNote = goldResult.get("estimation_note");
+
         List<Map<String, Object>> rawTypes =
                 goldResult.get("order_types") instanceof List
                         ? (List<Map<String, Object>>) goldResult.get("order_types")
@@ -94,6 +97,9 @@ public class RestaurantOrderTypeMixGoldTool extends GoldBackedRestaurantTool {
 
         StringBuilder sb = new StringBuilder();
         sb.append("堂食 vs 外卖（").append(period).append("）：\n");
+        if (revenueEstimated && estimationNote != null) {
+            sb.append(estimationNote).append("\n");
+        }
         for (int i = 0; i < breakdown.size(); i++) {
             Map<String, Object> entry = breakdown.get(i);
             Object rev = entry.get("营收");

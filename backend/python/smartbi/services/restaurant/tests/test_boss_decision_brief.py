@@ -4,6 +4,7 @@ from smartbi.services.restaurant.sections.base import SectionRequest, SectionSta
 from smartbi.services.restaurant.sections.boss_decision_brief import (
     BossDecisionBriefHandler,
 )
+from smartbi.api.restaurant_sections import OwnerActionChatRequest, owner_action_chat
 
 
 def test_boss_decision_brief_turns_sources_into_owner_actions() -> None:
@@ -281,6 +282,10 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
     assert "主要靠晚市" in page["plainDiagnosis"]
     assert "2人桌" in page["plainDiagnosis"]
     assert "美团/大众点评" in page["plainDiagnosis"]
+    assert page["decisionFocus"]["primaryActionType"] == "package"
+    assert page["decisionFocus"]["shouldRecommendPackage"] is True
+    assert page["packageDecision"]["status"] == "active"
+    assert page["packageDecision"]["candidates"][0]["name"] == "特色青花椒鱼[活鱼现做] + 手作冰豆花"
     assert page["packageRecommendations"]["status"] == "ready"
     top_package = page["packageRecommendations"]["candidates"][0]
     assert top_package["name"] == "特色青花椒鱼[活鱼现做] + 手作冰豆花"
@@ -297,6 +302,144 @@ def test_boss_decision_page_turns_rich_qhj_signals_into_plain_actions() -> None:
     assert any(item["dimension"] == "渠道结构" and "已经能看渠道贡献" in item["currentFinding"] for item in page["analysisDimensions"])
     assert any(item["dimension"] == "利润闭环" and "还缺 BOM" in item["currentFinding"] for item in page["analysisDimensions"])
     assert any("不能承诺利润能省多少" in gap for gap in page["missingDataInPlainWords"])
+
+
+def test_owner_decision_does_not_make_package_primary_when_review_risk_dominates() -> None:
+    handler = BossDecisionBriefHandler()
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_REVIEW_RISK",
+            upload_id=None,
+            sub_sector="鱼类餐饮",
+            store_name="点评风险测试店",
+            params={
+                "pos_summary": {
+                    "aov": 160,
+                    "weekdayWeekend": {"weekdayAvgDailyRevenue": 10000, "weekendAvgDailyRevenue": 18000, "gapPct": 80},
+                    "customerSegments": [{"segment": "2人桌", "share": 0.50}],
+                },
+                "menu_summary": {
+                    "topProducts": [
+                        {"name": "招牌鱼锅", "revenue": 100000, "soldQty": 800, "foodCost": 35000},
+                        {"name": "手作豆花", "revenue": 24000, "soldQty": 600, "foodCost": 4800},
+                    ],
+                    "basketPairs": [
+                        {"left": "招牌鱼锅", "right": "手作豆花", "orders": 480},
+                    ],
+                },
+                "review_summary": {
+                    "rating": 4.1,
+                    "reviewCount": 500,
+                    "lowRatingCount": 120,
+                    "positiveDishMentions": [{"name": "招牌鱼锅", "count": 60}],
+                    "negativeDishMentions": [{"name": "招牌鱼锅", "count": 95}],
+                    "negativeThemes": [
+                        {"theme": "上菜慢", "count": 72},
+                        {"theme": "服务差", "count": 58},
+                        {"theme": "味道不稳定", "count": 43},
+                    ],
+                },
+            },
+        ),
+        context={},
+    )
+
+    page = response.data["ownerDecisionPage"]
+
+    assert page["decisionFocus"]["primaryActionType"] == "staffing_schedule"
+    assert page["decisionFocus"]["shouldRecommendPackage"] is False
+    assert page["packageDecision"]["status"] == "available_but_not_primary"
+    assert page["packageDecision"]["candidates"]
+    assert "套餐" not in page["doFirst"][0]
+    assert "排班" in page["decisionFocus"]["why"]
+
+
+def test_owner_decision_recommends_table_mix_when_two_person_demand_exceeds_two_seat_supply() -> None:
+    handler = BossDecisionBriefHandler()
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_TABLE_MIX",
+            upload_id=None,
+            sub_sector="商场餐饮",
+            store_name="桌型测试店",
+            params={
+                "pos_summary": {
+                    "aov": 120,
+                    "customerSegments": [
+                        {"segment": "2人桌", "share": 0.58},
+                        {"segment": "4人桌", "share": 0.22},
+                    ],
+                    "tableMix": [
+                        {"tableType": "2人桌", "share": 0.18},
+                        {"tableType": "4人桌", "share": 0.62},
+                    ],
+                },
+                "menu_summary": {
+                    "topProducts": [
+                        {"name": "招牌牛肉饭", "revenue": 80000, "soldQty": 1000, "foodCost": 28000},
+                    ],
+                },
+                "review_summary": {"rating": 4.7, "negativeThemes": []},
+            },
+        ),
+        context={},
+    )
+
+    page = response.data["ownerDecisionPage"]
+
+    assert page["decisionFocus"]["primaryActionType"] == "seating_mix"
+    assert page["decisionFocus"]["shouldRecommendPackage"] is False
+    assert page["packageDecision"]["status"] == "not_enough_data"
+    assert "2 人客" in page["decisionFocus"]["why"]
+    assert "桌型" in page["doFirst"][0]
+
+
+def test_owner_decision_recommends_kitchen_quality_when_dish_reviews_dominate() -> None:
+    handler = BossDecisionBriefHandler()
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_KITCHEN_QUALITY",
+            upload_id=None,
+            sub_sector="川菜",
+            store_name="厨房测试店",
+            params={
+                "pos_summary": {
+                    "aov": 180,
+                    "weekdayWeekend": {"weekdayAvgDailyRevenue": 15000, "weekendAvgDailyRevenue": 22000, "gapPct": 46.7},
+                    "customerSegments": [{"segment": "2人桌", "share": 0.45}],
+                },
+                "menu_summary": {
+                    "topProducts": [
+                        {"name": "水煮鱼", "revenue": 120000, "soldQty": 900, "foodCost": 48000},
+                        {"name": "冰粉", "revenue": 20000, "soldQty": 700, "foodCost": 5000},
+                    ],
+                    "basketPairs": [{"left": "水煮鱼", "right": "冰粉", "orders": 500}],
+                },
+                "review_summary": {
+                    "rating": 4.2,
+                    "reviewCount": 600,
+                    "lowRatingCount": 130,
+                    "negativeDishMentions": [{"name": "水煮鱼", "count": 160}],
+                    "negativeThemes": [
+                        {"theme": "味道不稳定", "count": 95},
+                        {"theme": "太咸", "count": 42},
+                    ],
+                },
+            },
+        ),
+        context={},
+    )
+
+    page = response.data["ownerDecisionPage"]
+
+    assert page["decisionFocus"]["primaryActionType"] == "kitchen_quality"
+    assert page["decisionFocus"]["shouldRecommendPackage"] is False
+    assert page["packageDecision"]["status"] == "available_but_not_primary"
+    assert "厨房" in page["decisionFocus"]["why"]
+    assert "水煮鱼" in page["doFirst"][0]
 
 
 def test_package_recommendation_can_infer_better_combo_than_existing_pair() -> None:
@@ -348,3 +491,150 @@ def test_boss_decision_brief_registered_in_section_router() -> None:
 
     assert "boss_decision_brief" in HANDLERS
     assert SECTION_DATA_KIND["boss_decision_brief"] == "none"
+
+
+def test_owner_action_demo_scenarios_trigger_distinct_actions() -> None:
+    expected = {
+        "package": "package",
+        "seating_mix": "seating_mix",
+        "staffing_schedule": "staffing_schedule",
+        "staff_training": "staff_training",
+        "kitchen_quality": "kitchen_quality",
+        "cost_margin": "cost_margin",
+        "external_event_response": "external_event_response",
+        "single_item_push": "single_item_push",
+        "traffic_conversion": "traffic_conversion",
+    }
+    handler = BossDecisionBriefHandler()
+
+    for scenario, action_type in expected.items():
+        response = handler.compute(
+            SectionRequest(
+                factory_id="RES_3101_009",
+                upload_id=None,
+                sub_sector="鱼类餐饮",
+                period="2026-07-demo",
+                params={"demo_scenario": scenario},
+            ),
+            context={},
+        )
+
+        page = response.data["ownerDecisionPage"]
+        assert page["decisionFocus"]["primaryActionType"] == action_type, scenario
+        assert response.data["storeContext"]["storeName"] == "青花椒川食山语（颛桥龙湖店）"
+        assert page["decisionFocus"]["signals"], scenario
+
+
+def test_owner_action_chat_uses_traffic_persona_and_platform_mock_data() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_DEMO",
+            message="客流画像显示路过人多但进店少，今天先改哪个入口？",
+        )
+    )
+
+    data = response["data"]
+    page = data["ownerDecisionPage"]
+
+    assert data["scenario"] == "traffic_conversion"
+    assert len(data["charts"]) >= 2
+    assert any(chart["title"] == "门口路过客有没有被拉进店" for chart in data["charts"])
+    assert any(chart["title"] == "各平台入口谁看了但没下单" for chart in data["charts"])
+    assert data["chartGuide"]
+    assert page["decisionFocus"]["primaryActionType"] == "traffic_conversion"
+    assert "100 个路过的人里大概只有" in data["answer"]
+    assert "今天先别继续加投流" in data["answer"]
+    assert "明天只看三个数" in data["answer"]
+    assert "抖音团购" in data["answer"]
+    assert page["trafficPersona"]["available"] is True
+    assert page["platformChannelSnapshot"]["available"] is True
+    assert any(item["dimension"] == "外部客流画像" for item in page["analysisDimensions"])
+
+    follow_up_without_session = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_TRAFFIC_DEMO",
+            message="老板今天先看哪三个数？",
+        )
+    )
+    assert follow_up_without_session["data"]["scenario"] == "traffic_conversion"
+    assert "只看这三个数" in follow_up_without_session["data"]["answer"]
+    assert "门口路过人数" in follow_up_without_session["data"]["answer"]
+    assert "一句话结论" not in follow_up_without_session["data"]["answer"]
+
+
+def test_owner_action_chat_routes_and_keeps_follow_up_session() -> None:
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_DEMO",
+            message="二人桌不够，周末翻台怎么调整？",
+        )
+    )
+
+    first_data = first["data"]
+    assert first["success"] is True
+    assert first_data["scenario"] == "seating_mix"
+    assert first_data["sessionId"]
+    assert first_data["answer"]
+    assert first_data["followUpSuggestions"]
+
+    follow_up = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_DEMO",
+            session_id=first_data["sessionId"],
+            message="具体要看哪些数？",
+        )
+    )
+
+    follow_up_data = follow_up["data"]
+    assert follow_up_data["sessionId"] == first_data["sessionId"]
+    assert follow_up_data["scenario"] == "seating_mix"
+    assert "sessionId" not in follow_up_data["answer"]
+    assert "seating_mix" not in follow_up_data["answer"]
+    assert "只看这三个数" in follow_up_data["answer"]
+    assert "一句话结论" not in follow_up_data["answer"]
+
+
+def test_owner_action_chat_explicit_keywords_override_previous_follow_up_topic() -> None:
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_EXPLICIT_OVERRIDE",
+            message="商圈活动和天气会影响今天客流吗？要怎么备货和推品？",
+        )
+    )
+    assert first["data"]["scenario"] == "external_event_response"
+
+    next_turn = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_EXPLICIT_OVERRIDE",
+            message="今天应该主推哪个单品，为什么？",
+        )
+    )
+
+    assert next_turn["data"]["scenario"] == "single_item_push"
+    assert "主推单品" in next_turn["data"]["answer"]
+
+
+def test_owner_action_chat_returns_scenario_specific_charts() -> None:
+    cases = [
+        ("seating_mix", "二人桌不够，周末翻台怎么调？", "来的客人和桌型是不是匹配"),
+        ("staffing_schedule", "今天排班应该怎么调？", "忙的时段和人手是不是对得上"),
+        ("kitchen_quality", "厨房先改哪道菜、怎么验收？", "哪道菜最需要厨房抽查"),
+        ("cost_margin", "哪些菜要先查BOM和盘点损耗？", "菜品收入、食材成本、毛利差多少"),
+    ]
+    for scenario, message, expected_title in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_{scenario}",
+                message=message,
+                demoScenario=scenario,
+            )
+        )
+
+        data = response["data"]
+        titles = [chart["title"] for chart in data["charts"]]
+        assert data["scenario"] == scenario
+        assert expected_title in titles
+        assert data["chartGuide"]
+        if scenario == "cost_margin":
+            assert "整店成本和同类店差多少" in titles
+            assert "套餐价格、成本、毛利能不能撑住" not in titles

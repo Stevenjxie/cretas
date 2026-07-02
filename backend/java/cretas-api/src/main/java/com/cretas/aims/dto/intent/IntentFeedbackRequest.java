@@ -27,4 +27,7 @@ public class IntentFeedbackRequest {
 
     /** 会话ID（可选，用于追踪） */
     private String sessionId;
+
+    /** 用户对回答/匹配问题的补充说明（可选） */
+    private String userFeedback;
 }

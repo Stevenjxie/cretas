@@ -6,6 +6,8 @@
  *   → ChatTurn[] in panel state → rendered as ChatBubble with SectionPayload[]
  */
 
+import type { ChartConfig } from '@/api/smartbi/common';
+
 /** Output from one Python section endpoint (one entry in sections array) */
 export interface SectionPayload {
   sectionName: string;
@@ -49,4 +51,31 @@ export interface ChatQueryResponse {
   sections: SectionPayload[];
   followUpChips?: string[];
   error?: string;
+}
+
+/** Request to the boss-facing restaurant owner action demo chat. */
+export interface OwnerActionChatRequest {
+  message: string;
+  factoryId: string;
+  sessionId?: string;
+  demoScenario?: string;
+  storeName?: string;
+  subSector?: string;
+  period?: string;
+}
+
+/** Response from the boss-facing restaurant owner action demo chat. */
+export interface OwnerActionChatResponse {
+  sessionId: string;
+  scenario: string;
+  answer: string;
+  responseText: string;
+  log_id?: number | null;
+  logId?: number | null;
+  followUpSuggestions: string[];
+  charts?: ChartConfig[];
+  chartGuide?: string;
+  decisionFocus?: Record<string, unknown>;
+  ownerDecisionPage?: Record<string, unknown>;
+  demoActionScenarios?: string[];
 }

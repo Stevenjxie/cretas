@@ -108,7 +108,11 @@ public class RestaurantWeekdayWeekendGoldTool extends GoldBackedRestaurantTool {
         double avgWeekday = nWeekday > 0 ? round2(totalWeekday / nWeekday) : 0.0;
 
         String conclusion;
-        if (avgWeekend > avgWeekday) {
+        double baseline = Math.max(Math.max(avgWeekend, avgWeekday), 1.0);
+        double diffRatio = Math.abs(avgWeekend - avgWeekday) / baseline;
+        if (diffRatio < 0.03) {
+            conclusion = "周末和周中基本持平";
+        } else if (avgWeekend > avgWeekday) {
             conclusion = "周末日均更高";
         } else if (avgWeekday > avgWeekend) {
             conclusion = "周中日均更高";

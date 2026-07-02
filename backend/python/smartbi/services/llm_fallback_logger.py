@@ -105,6 +105,7 @@ async def log_template_hit(
     template_code: str,
     answer: str,
     total_wall_ms: int,
+    agg_meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Log a template cache-hit answer so the user can 👍/👎 it.
 
@@ -113,12 +114,13 @@ async def log_template_hit(
     to tie feedback back to a (query, template) pair.
     """
     answer_trunc = (answer or "")[:4000]
+    agg_meta_json = _json.dumps(agg_meta or {}, ensure_ascii=False, default=str)
     sql = """
         INSERT INTO smart_bi_llm_fallback_log (
             query, factory_id, upload_id, answer,
-            source, template_code, total_wall_ms, llm_wall_ms
+            agg_meta, source, template_code, total_wall_ms, llm_wall_ms
         ) VALUES (
-            $1, $2, $3, $4, 'template', $5, $6, 0
+            $1, $2, $3, $4, $5::jsonb, 'template', $6, $7, 0
         )
         RETURNING id
     """
@@ -126,7 +128,7 @@ async def log_template_hit(
         async with pool.acquire() as conn:
             row_id = await conn.fetchval(
                 sql, query, factory_id, upload_id, answer_trunc,
-                template_code, total_wall_ms,
+                agg_meta_json, template_code, total_wall_ms,
             )
         logger.debug(f"[template-log] wrote id={row_id} template={template_code}")
         return row_id

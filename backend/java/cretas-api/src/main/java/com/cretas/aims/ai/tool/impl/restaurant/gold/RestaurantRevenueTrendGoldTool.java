@@ -114,14 +114,40 @@ public class RestaurantRevenueTrendGoldTool extends GoldBackedRestaurantTool {
         // (last - first)/first 把"半个月 vs 整月"当成断崖式下跌 (实测 -100%)。
         // 展示的 byMonth 仍保留当前月 (标"进行中"), 但趋势方向/环比% 只用已完结月份。
         String curMonthPrefix = java.time.YearMonth.now().toString(); // e.g. "2026-06"
-        boolean lastIsPartial = !byMonth.isEmpty()
+        boolean lastIsCurrentMonth = !byMonth.isEmpty()
                 && byMonth.get(byMonth.size() - 1).get("月份") != null
                 && byMonth.get(byMonth.size() - 1).get("月份").toString().startsWith(curMonthPrefix);
+        boolean lastLooksIncomplete = false;
+        if (byMonth.size() >= 2) {
+            double prev = ((Number) byMonth.get(byMonth.size() - 2).get("营收")).doubleValue();
+            double last = ((Number) byMonth.get(byMonth.size() - 1).get("营收")).doubleValue();
+            lastLooksIncomplete = prev > 0 && last > 0 && last < prev * 0.25;
+        }
+        boolean lastIsPartial = lastIsCurrentMonth || lastLooksIncomplete;
         if (lastIsPartial) {
             byMonth.get(byMonth.size() - 1).put("进行中", true);
         }
         List<Map<String, Object>> completed = (lastIsPartial && byMonth.size() >= 2)
                 ? byMonth.subList(0, byMonth.size() - 1) : byMonth;
+
+        if (lastIsPartial && !completed.isEmpty()) {
+            peakMonth = null;
+            peakRev = Double.NEGATIVE_INFINITY;
+            troughMonth = null;
+            troughRev = Double.POSITIVE_INFINITY;
+            for (Map<String, Object> m : completed) {
+                String mo = m.get("月份").toString();
+                double rev = ((Number) m.get("营收")).doubleValue();
+                if (rev > peakRev) {
+                    peakRev = rev;
+                    peakMonth = mo;
+                }
+                if (rev < troughRev) {
+                    troughRev = rev;
+                    troughMonth = mo;
+                }
+            }
+        }
 
         // First→last month-over-month direction (环比 over the whole span, 已完结月份).
         String momDirection = "持平";
@@ -168,9 +194,14 @@ public class RestaurantRevenueTrendGoldTool extends GoldBackedRestaurantTool {
                         .append("（").append(fmtAmt(troughRev)).append("）");
             }
             sb.append("。\n");
-            if (byMonth.size() >= 2) {
-                String firstMo = byMonth.get(0).get("月份").toString();
-                String lastMo = byMonth.get(byMonth.size() - 1).get("月份").toString();
+            if (lastIsPartial && !byMonth.isEmpty()) {
+                String partialMonth = byMonth.get(byMonth.size() - 1).get("月份").toString();
+                sb.append("注意：").append(partialMonth)
+                        .append(" 数据疑似未完整结账，暂不拿它判断下滑。\n");
+            }
+            if (completed.size() >= 2) {
+                String firstMo = completed.get(0).get("月份").toString();
+                String lastMo = completed.get(completed.size() - 1).get("月份").toString();
                 sb.append("整体走势 ").append(firstMo).append(" → ").append(lastMo)
                         .append(" 营收").append(momDirection);
                 if (momPct != 0.0) {
@@ -189,6 +220,10 @@ public class RestaurantRevenueTrendGoldTool extends GoldBackedRestaurantTool {
         if (weekdayAvg > 0 || weekendAvg > 0) {
             String wwConcl = weekendAvg > weekdayAvg ? "周末日均更高"
                     : (weekdayAvg > weekendAvg ? "周中日均更高" : "周末与周中日均相近");
+            double baseline = Math.max(Math.max(weekdayAvg, weekendAvg), 1.0);
+            if (Math.abs(weekendAvg - weekdayAvg) / baseline < 0.03) {
+                wwConcl = "周末和周中基本持平";
+            }
             sb.append("周末日均").append(fmtAmt(weekendAvg))
                     .append("，周中日均").append(fmtAmt(weekdayAvg))
                     .append("（").append(wwConcl).append("）。");

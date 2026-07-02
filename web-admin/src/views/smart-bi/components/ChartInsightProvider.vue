@@ -125,17 +125,78 @@ function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null)
       .replace(/供给、价格、曝光和执行/g, context.action)
       .replace(/整体效率/g, context.efficiency);
   };
+  const applyLabels = (value?: string) => {
+    if (!value) return value;
+    let localized = value;
+    const labels = chart.config?.xAxis?.data ?? [];
+    labels.slice(0, 6).forEach((label, index) => {
+      const name = String(label);
+      localized = localized
+        .replace(new RegExp(`${context.noun}${index + 1}`, 'g'), name)
+        .replace(new RegExp(`项目${index + 1}`, 'g'), name);
+    });
+    return localized;
+  };
+  const finding = applyLabels(apply(raw.finding)) || raw.finding;
+  const implication = applyLabels(apply(raw.implication));
+  const suggestion = applyLabels(apply(raw.suggestion));
+  const title = chart.title || '';
+  const labels = [
+    ...axisData(chart.config?.xAxis),
+    ...axisData(chart.config?.yAxis),
+  ].map((label) => String(label));
+  const labelText = labels.join(' ');
+  const hasNonDishLine = /无需餐具|测试商品|打包费|配送费/.test(labelText);
+  if ((/慢销|滞销/.test(title) && !hasNonDishLine)) {
+    return {
+      ...raw,
+      finding: '这张慢销榜已经排除了测试商品、无需餐具这类系统行，重点看真实菜品里谁长期卖不动。',
+      implication: '老板不要只看销量低，还要看它是不是占备货、占厨房工位、或者造成损耗。',
+      suggestion: '先把低销量菜分三类：能做套餐搭配的保留，毛利好但曝光低的试推一周，只拖库存和工位的限量或下架。',
+    };
+  }
+  if (/慢销|滞销/.test(title) || hasNonDishLine) {
+    return {
+      ...raw,
+      finding: '这张慢销榜里混有“测试商品/无需餐具”这类非正式菜品，老板先不要直接按榜单下架。',
+      implication: '真正要处理的是销量低、还占备货或厨房工位的正式菜品；只看排名会误伤临时规格或系统行。',
+      suggestion: '先把非菜品行排除，再看酒酿馒头、腐竹-砂锅煲这类真实菜品：能并入套餐的并入，只拖库存的限量或下架。',
+    };
+  }
+  if (/畅销|热销|菜品|销量|Top\s*\d*/i.test(title) && chart.meta?.domain === 'restaurant') {
+    return {
+      ...raw,
+      finding: 'Top 菜品可以作为主推池，但不等于每一道都适合外卖或套餐。',
+      implication: '老板要先看三件事：毛利能不能守住、出餐是否稳定、包装和差评能不能扛住。',
+      suggestion: '先从第一名和套餐类菜品里挑 1-2 个做小范围测试，再用毛利、客单价和差评标签决定要不要放大。',
+    };
+  }
+  if (/周末|周中/.test(title) && /头尾大约差1\.0倍|差距很小/.test(finding)) {
+    return {
+      ...raw,
+      finding: '周末和周中差距很小，基本可以按同一水平看。',
+      implication: '这张图不适合硬分第一名和末位，重点看两边的客流、客单价、排班和差评有没有结构差异。',
+      suggestion: '建议不要因为这张图单独做大促，先用同一套备货和排班基准，再查午晚市、客单价和差评标签是否有明显差别。',
+    };
+  }
   return {
     ...raw,
-    finding: apply(raw.finding) || raw.finding,
-    implication: apply(raw.implication),
-    suggestion: apply(raw.suggestion),
+    finding,
+    implication,
+    suggestion,
   };
+}
+
+function axisData(axis: unknown): unknown[] {
+  const firstAxis = Array.isArray(axis) ? axis[0] : axis;
+  if (!firstAxis || typeof firstAxis !== 'object') return [];
+  const data = (firstAxis as { data?: unknown }).data;
+  return Array.isArray(data) ? data : [];
 }
 
 function insightContext(chart: ChartWithMeta) {
   const title = chart.title || '';
-  const xDim = chart.meta?.xDim;
+  const xDim = String(chart.meta?.xDim || '');
   const yMetric = String(chart.meta?.yMetric || '');
   const isReviewChart = /评价|口碑|点评|美团|差评|星级|好评/.test(title)
     || (chart.meta?.domain === 'restaurant' && /review|rating|star|score|comment/.test(yMetric));
@@ -152,6 +213,9 @@ function insightContext(chart: ChartWithMeta) {
     return { noun: '评价分项', action: '评分、低星占比、回复和服务体验', efficiency: '口碑管理效率' };
   }
   if (chart.meta?.domain === 'restaurant') {
+    if (/周末|周中|工作日|午市|晚市|早餐|夜宵|时段|小时|日期|月份|星期/.test(title)) {
+      return { noun: '时段', action: '不同时段的客流、客单价、排班、出餐速度和活动节奏', efficiency: '时段经营效率' };
+    }
     if (xDim === 'store') {
       return { noun: '门店', action: '门店客流、客单价、渠道结构和班次执行', efficiency: '门店经营效率' };
     }

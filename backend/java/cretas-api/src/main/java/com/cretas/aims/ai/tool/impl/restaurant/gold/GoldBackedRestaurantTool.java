@@ -134,17 +134,18 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             String factoryId,
             Map<String, Object> params,
             Map<String, Object> context) throws Exception {
+        String goldFactoryId = resolveGoldFactoryId(factoryId);
 
         // 1. Resolve the analysis window
-        LocalDate[] win = resolveWindow(factoryId, params);
+        LocalDate[] win = resolveWindow(goldFactoryId, params);
 
         // 2. Call Gold — isolate failures
         Map<String, Object> g;
         try {
-            g = queryGold(factoryId, win[0], win[1], params);
+            g = queryGold(goldFactoryId, win[0], win[1], params);
         } catch (Exception ex) {
             log.warn("[{}] Gold call failed factory={} range={}..{}: {}",
-                    getToolName(), factoryId, win[0], win[1], ex.getMessage());
+                    getToolName(), goldFactoryId, win[0], win[1], ex.getMessage());
             Map<String, Object> errResult = new HashMap<>();
             errResult.put("dataAvailable", false);
             errResult.put("message", "数据服务暂时不可用，请稍后重试。");
@@ -164,6 +165,15 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // 4. Format and return. The restaurant demo is used by operators who need
         // next actions, not just rankings, so keep every Gold answer actionable.
         return ensureActionableMessage(format(g));
+    }
+
+    private String resolveGoldFactoryId(String factoryId) {
+        if ("DEMO_REST".equalsIgnoreCase(factoryId)) {
+            // Public no-login restaurant demo account: use the complete QHJ-style
+            // Gold dataset so AI demo questions have dish/revenue/review depth.
+            return "RES_3101_009";
+        }
+        return factoryId;
     }
 
     private Map<String, Object> ensureActionableMessage(Map<String, Object> result) {
@@ -199,6 +209,15 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         }
         if ("restaurant_discount_usage_gold".equals(tool)) {
             return "优先核查优惠金额最高的活动是否带来新增订单和毛利；对高补贴低客单的券先限量或改门槛，再观察一周。";
+        }
+        if ("restaurant_revenue_trend_gold".equals(tool)) {
+            return "先别只看涨跌百分比。先确认最新月份是否已经完整结账；如果是完整月份，再把下滑拆到门店、渠道、折扣和时段，优先处理连续两个月下滑的门店。周末和周中差距不大时，不要整天打折，先做午市/晚市分时段动作。";
+        }
+        if ("restaurant_dish_slowseller_gold".equals(tool)) {
+            return "先排除测试商品、无需餐具、临时规格这类非正式菜品；真正慢销的菜先看是否高损耗、高备货或占厨房工位。处理顺序是：能并入套餐的先并入，只拖库存的限量或下架，毛利好的保留小范围曝光再观察一周。";
+        }
+        if ("restaurant_weekday_weekend_gold".equals(tool)) {
+            return "直接分开看周中和周末：如果周末明显高，就把备货、排班和等位动线压到周五晚到周日；如果周中弱，就用午市双人套餐、工作日会员券和附近办公/商场入口补低峰。差距不大时不要为了周末单独做大促，先查客单价、翻台和差评是否有差别。";
         }
         if ("restaurant_order_type_mix_gold".equals(tool)) {
             return "分别看堂食和外卖的客单价、毛利和差评标签；外卖占比高时先查包装、出餐时长和平台抽佣，堂食占比高时优化翻台与套餐引导。";

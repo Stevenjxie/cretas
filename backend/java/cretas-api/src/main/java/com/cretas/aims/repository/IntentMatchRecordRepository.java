@@ -286,6 +286,44 @@ public interface IntentMatchRecordRepository extends JpaRepository<IntentMatchRe
             Pageable pageable);
 
     /**
+     * Locate the latest record backing a user's visible AI answer so feedback
+     * buttons can write to the same learning/audit stream.
+     */
+    @Query("SELECT r FROM IntentMatchRecord r WHERE r.factoryId = :factoryId " +
+           "AND r.userId = :userId " +
+           "AND r.matchedIntentCode = :intentCode " +
+           "AND r.normalizedInput = :normalizedInput " +
+           "ORDER BY r.createdAt DESC")
+    List<IntentMatchRecord> findLatestForFeedback(
+            @Param("factoryId") String factoryId,
+            @Param("userId") Long userId,
+            @Param("intentCode") String intentCode,
+            @Param("normalizedInput") String normalizedInput,
+            Pageable pageable);
+
+    @Query("SELECT r FROM IntentMatchRecord r WHERE r.factoryId = :factoryId " +
+           "AND r.userId = :userId " +
+           "AND r.matchedIntentCode = :intentCode " +
+           "AND r.userInput = :userInput " +
+           "ORDER BY r.createdAt DESC")
+    List<IntentMatchRecord> findLatestForFeedbackByUserInput(
+            @Param("factoryId") String factoryId,
+            @Param("userId") Long userId,
+            @Param("intentCode") String intentCode,
+            @Param("userInput") String userInput,
+            Pageable pageable);
+
+    @Query("SELECT r FROM IntentMatchRecord r WHERE r.factoryId = :factoryId " +
+           "AND r.userId = :userId " +
+           "AND r.matchedIntentCode = :intentCode " +
+           "ORDER BY r.createdAt DESC")
+    List<IntentMatchRecord> findLatestForFeedbackByIntent(
+            @Param("factoryId") String factoryId,
+            @Param("userId") Long userId,
+            @Param("intentCode") String intentCode,
+            Pageable pageable);
+
+    /**
      * 查询 LLM 高置信度记录（用于 RAG 检索）
      * LLM 判定高置信度的记录可作为 few-shot 示例
      */

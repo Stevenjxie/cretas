@@ -31,6 +31,8 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
 
     private static final String FILTER_DISH_NAME = "dish_name";
     private static final String FILTER_DISH_ID   = "dish_id";
+    private static final int CANDIDATE_LIMIT = 20;
+    private static final int DISPLAY_LIMIT = 5;
 
     @Override
     public String getToolName() {
@@ -74,7 +76,7 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
     protected Map<String, Object> queryGold(
             String factoryId, LocalDate start, LocalDate end, Map<String, Object> params)
             throws Exception {
-        Map<String, Object> result = gold.fetchTopProducts(factoryId, start, end, 5, "desc");
+        Map<String, Object> result = gold.fetchTopProducts(factoryId, start, end, CANDIDATE_LIMIT, "desc");
         if (result == null) {
             return null;
         }
@@ -120,8 +122,31 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
             }
         }
 
-        List<Map<String, Object>> formatted = new ArrayList<>();
+        List<String> excludedSupportItems = new ArrayList<>();
+        List<Map<String, Object>> decisionRows = new ArrayList<>();
         for (Map<String, Object> row : raw) {
+            Object productName = row.get("product_name");
+            String name = productName != null ? productName.toString() : "";
+            if (!hasDishFilter && isLowValueSupportItem(name)) {
+                excludedSupportItems.add(name);
+                continue;
+            }
+            decisionRows.add(row);
+            if (!hasDishFilter && decisionRows.size() >= DISPLAY_LIMIT) {
+                break;
+            }
+        }
+
+        if (decisionRows.isEmpty()) {
+            Map<String, Object> emptyResult = new LinkedHashMap<>();
+            emptyResult.put("dataAvailable", false);
+            emptyResult.put("message", "本期畅销榜主要是米饭、餐具、饮料等低价值配套项，暂时没有足够的主菜/套餐可用于主推决策。");
+            emptyResult.put("actionHint", "请补充菜品分类或配方成本，再生成主推菜品榜。");
+            return emptyResult;
+        }
+
+        List<Map<String, Object>> formatted = new ArrayList<>();
+        for (Map<String, Object> row : decisionRows) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("dish_id", row.get("product_id"));
             entry.put("菜品", row.get("product_name"));
@@ -131,8 +156,13 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("畅销菜品 Top").append(formatted.size())
+        sb.append("畅销主推菜品 Top").append(formatted.size())
                 .append("（按销售额，").append(period).append("）：\n");
+        if (!excludedSupportItems.isEmpty()) {
+            sb.append("已先排除低价值配套项：")
+                    .append(String.join("、", excludedSupportItems.stream().distinct().limit(5).toList()))
+                    .append("。\n");
+        }
         for (int i = 0; i < formatted.size(); i++) {
             Map<String, Object> entry = formatted.get(i);
             Object qty = entry.get("销量");
@@ -158,6 +188,7 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("畅销TOP5", formatted);
+        result.put("excluded_support_items", excludedSupportItems);
         if (!formatted.isEmpty()) {
             result.put("top_dish", formatted.get(0));
         }
@@ -165,7 +196,7 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
         result.put("message", sb.toString());
         if (!chartNames.isEmpty()) {
             result.put("chartConfig", barChartConfig(
-                    "畅销菜品 Top5 (销售额/万元)", chartNames, chartVals, "万元"));
+                    "畅销主推菜品 Top5 (销售额/万元)", chartNames, chartVals, "万元"));
         }
         return result;
     }
@@ -188,6 +219,25 @@ public class RestaurantDishBestsellerGoldTool extends GoldBackedRestaurantTool {
 
     private static String fmtAmt(double v) {
         return v >= 10_000 ? String.format("%.1f万", v / 10_000) : String.format("%.0f", v);
+    }
+
+    private static boolean isLowValueSupportItem(String name) {
+        if (name == null) return true;
+        String n = name.trim();
+        if (n.isEmpty()) return true;
+        if (n.contains("套餐")) return false;
+        return n.contains("米饭")
+                || n.contains("白饭")
+                || n.contains("无需餐具")
+                || n.contains("餐具")
+                || n.contains("打包费")
+                || n.contains("配送费")
+                || n.contains("矿泉水")
+                || n.contains("可乐")
+                || n.contains("雪碧")
+                || n.contains("王老吉")
+                || n.contains("饮料")
+                || n.contains("测试");
     }
 
     @Override

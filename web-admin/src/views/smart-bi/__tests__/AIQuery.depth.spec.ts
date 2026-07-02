@@ -19,9 +19,11 @@ import { createPinia, setActivePinia } from 'pinia';
 // ── executeIntent / intent-chat ──────────────────────────────
 const executeIntentMock = vi.fn();
 const fetchCachedXlsxMock = vi.fn();
+const submitIntentFeedbackMock = vi.fn(async () => true);
 vi.mock('@/api/smartbi/intent-chat', () => ({
   executeIntent: (...args: unknown[]) => executeIntentMock(...args),
   fetchCachedXlsx: (...args: unknown[]) => fetchCachedXlsxMock(...args),
+  submitIntentFeedback: (...args: unknown[]) => submitIntentFeedbackMock(...args),
 }));
 
 // ── smartbi API (Python fallback path — should NOT be called in these tests) ──

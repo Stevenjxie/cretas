@@ -9,7 +9,7 @@ import { useChartResize } from '@/composables/useChartResize';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads, nl2sql, logFeedback, type AnalysisResult, type AIInsightData, type ChartConfig, type UploadHistoryItem, type NL2SQLResponse } from '@/api/smartbi';
-import { executeIntent, fetchCachedXlsx } from '@/api/smartbi/intent-chat';
+import { executeIntent, fetchCachedXlsx, submitIntentFeedback } from '@/api/smartbi/intent-chat';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
 import { pickDefaultDataSource } from './composables/useDataSourceSelect';
@@ -98,6 +98,14 @@ interface ChatMessage {
   templateCode?: string;
   // Phase 1 (Apr 23 2026): log id of the fallback log row (LLM answers only)
   logId?: number | null;
+  // Java Tool-Skill answers do not use Python fallback logs. Keep enough context
+  // to submit feedback to /ai-intents/feedback and feed the intent learning loop.
+  feedbackTarget?: {
+    source: 'java-intent';
+    userInput: string;
+    intentCode: string;
+    sessionId?: string;
+  };
   feedbackValue?: 1 | -1 | 0;  // local optimistic state
   feedbackPending?: boolean;  // Phase 1.5 Task 1 nit: prevent double-click POSTs
   // P2 guardrail (Apr 24 2026): backend flags numeric hallucination in
@@ -120,7 +128,7 @@ interface ChatMessage {
   // suggestedFollowups: clickable down-drill chips ({label shown, question sent}).
   // glossary: term → 通俗定义 for the expandable 字段说明 block + local meta-Q answers.
   // chartGuide: one-liner explaining how to read the chart.
-  suggestedFollowups?: Array<{ label: string; question: string }>;
+  suggestedFollowups?: Array<{ label: string; question: string; ownerActionScenario?: string }>;
   glossary?: Record<string, string>;
   chartGuide?: string;
   // UI local state for the expandable 字段说明/怎么看图 block.
@@ -149,6 +157,10 @@ function extractChartLabels(opt: Record<string, unknown>, chartType: string): st
   const xAxis = opt['xAxis'];
   if (xAxis && typeof xAxis === 'object' && Array.isArray((xAxis as Record<string, unknown>)['data'])) {
     return ((xAxis as Record<string, unknown>)['data'] as unknown[]).map((item) => String(item));
+  }
+  const yAxis = opt['yAxis'];
+  if (yAxis && typeof yAxis === 'object' && Array.isArray((yAxis as Record<string, unknown>)['data'])) {
+    return ((yAxis as Record<string, unknown>)['data'] as unknown[]).map((item) => String(item));
   }
   if (chartType === 'pie' && Array.isArray(opt['series'])) {
     const series = opt['series'] as Array<Record<string, unknown>>;
@@ -315,6 +327,18 @@ interface RestaurantQuickGroup {
   questions: string[];
 }
 const RESTAURANT_QUICK_GROUPS: RestaurantQuickGroup[] = [
+  {
+    label: '老板今天要做什么',
+    questions: [
+      '这个星期营收比上周怎么提高？给我今天能做的动作',
+      '二人桌不够、周末翻台慢，今天桌型和排队怎么调？',
+      '根据菜品毛利和成本，帮我算一个适合今天推的小套餐',
+      '今晚怎么排班？哪些时段要加人，哪些时段可以少排？',
+      '厨房出餐慢和差评变多，今天先改哪三个动作？',
+      '商圈活动和天气会影响今天客流吗？要怎么备货和推品？',
+      '客流画像显示路过人多但进店少，今天先改哪个入口？',
+    ],
+  },
   {
     label: '经营总览',
     questions: [
@@ -537,6 +561,21 @@ function inferDomainFromFilename(name: string): string {
 // grouped catalog (rendered separately in the template). This flat list is used
 // as a fallback for non-restaurant tenants and the autocomplete list.
 const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT');
+const ownerActionSessionId = ref('');
+const pendingOwnerActionScenario = ref('');
+
+function isRestaurantOwnerActionQuery(query: string): boolean {
+  if (!isRestaurantTenant.value) return false;
+  return /老板|今天.*动作|具体动作|二人桌|四人桌|桌型|翻台|排队|小套餐|套餐|排班|员工|厨房|出餐|差评|毛利|成本|商圈|客流|画像|进店|转化|曝光|核销|活动|天气|备货|推品/.test(query);
+}
+
+function ownerActionFollowups(items?: string[], scenario?: string): Array<{ label: string; question: string; ownerActionScenario?: string }> {
+  return (items ?? []).slice(0, 4).map((question) => ({
+    label: question.length > 18 ? `${question.slice(0, 18)}...` : question,
+    question,
+    ownerActionScenario: scenario,
+  }));
+}
 
 const quickQuestions = computed<string[]>(() => {
   // Restaurant tenants get the grouped catalog (rendered as grouped chips).
@@ -723,8 +762,9 @@ function relatedFollowups(templateCode?: string): string[] {
   return RELATED_FOLLOWUPS[templateCode] || [];
 }
 
-function triggerRelatedFollowup(query: string) {
+function triggerRelatedFollowup(query: string, ownerActionScenario?: string) {
   inputQuery.value = query;
+  pendingOwnerActionScenario.value = ownerActionScenario || '';
   handleSendMessage();
 }
 
@@ -743,7 +783,7 @@ function timeFollowups(lastQuestion?: string): Array<{ label: string; question: 
 }
 
 async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
-  if (!msg.logId) return;
+  if (!msg.logId && !msg.feedbackTarget) return;
   if (msg.feedbackPending) return;  // in-flight, ignore rapid double-click
   if (msg.feedbackValue === value) return;  // already this value, no-op
   const prevValue = msg.feedbackValue;
@@ -763,7 +803,19 @@ async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
     }
     comment = (result as { value?: string }).value || undefined;
   }
-  const ok = await logFeedback(msg.logId, value, comment);
+  let ok = false;
+  if (msg.logId) {
+    ok = await logFeedback(msg.logId, value, comment);
+  } else if (msg.feedbackTarget && factoryId.value) {
+    ok = await submitIntentFeedback(factoryId.value, {
+      userInput: msg.feedbackTarget.userInput,
+      matchedIntentCode: msg.feedbackTarget.intentCode,
+      isCorrect: value === 1,
+      correctIntentCode: value === 1 ? msg.feedbackTarget.intentCode : null,
+      sessionId: msg.feedbackTarget.sessionId,
+      userFeedback: comment,
+    });
+  }
   if (!ok) {
     msg.feedbackValue = prevValue;
     ElMessage.warning('反馈提交失败, 请稍后重试');
@@ -968,10 +1020,17 @@ async function tryJavaIntentChat(
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
   try {
+    const ownerActionQuery = isRestaurantOwnerActionQuery(query);
     const res = await executeIntent(factoryId, query, {
       sessionId: javaIntentSessionId.value,
+      context: ownerActionQuery ? {
+        ownerActionSessionId: ownerActionSessionId.value || undefined,
+        ownerActionScenario: pendingOwnerActionScenario.value || undefined,
+        storeName: '青花椒上海示范店',
+        subSector: '中餐/川味酸菜鱼',
+        period: 'this_week',
+      } : undefined,
     });
-    javaIntentSessionId.value = res.sessionId ?? undefined;
 
     const i = idx();
     if (i === -1) return 'handled';
@@ -991,6 +1050,20 @@ async function tryJavaIntentChat(
       let preview: any = null;
 
       const toolData = res.resultData?.data;
+      // Java is now the single frontend entry. It may internally route boss-facing
+      // action questions to Python owner-action sections and return their payload
+      // directly as resultData.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resultDataAny = res.resultData as any;
+      const isOwnerActionResponse = resultDataAny?.source === 'restaurant_owner_action';
+      if (isOwnerActionResponse) {
+        ownerActionSessionId.value = String(resultDataAny.sessionId || ownerActionSessionId.value || '');
+        msg.source = 'restaurant_owner_action';
+        msg.templateCode = `owner_action_${resultDataAny.scenario || 'general'}`;
+        msg.logId = resultDataAny.log_id ?? resultDataAny.logId ?? null;
+      } else {
+        javaIntentSessionId.value = res.sessionId ?? undefined;
+      }
       if (toolData?.download_url) {
         downloadUrl = toolData.download_url;
         summary = toolData.summary as Record<string, unknown> | undefined;
@@ -1065,6 +1138,26 @@ async function tryJavaIntentChat(
       const _chartGuide = _rd?.chartGuide ?? _td?.chartGuide;
       if (typeof _chartGuide === 'string' && _chartGuide.trim()) {
         msg.chartGuide = _chartGuide;
+      }
+      if (isOwnerActionResponse && Array.isArray(resultDataAny.followUpSuggestions)) {
+        msg.suggestedFollowups = ownerActionFollowups(resultDataAny.followUpSuggestions, resultDataAny.scenario);
+      }
+      if (isOwnerActionResponse && Array.isArray(resultDataAny.suggestedFollowups)) {
+        msg.suggestedFollowups = resultDataAny.suggestedFollowups
+          .filter((f: unknown) => f && typeof (f as { question?: unknown }).question === 'string')
+          .map((f: { label?: string; question: string; ownerActionScenario?: string }) => ({
+            label: String(f.label ?? f.question),
+            question: String(f.question),
+            ownerActionScenario: f.ownerActionScenario,
+          }));
+      }
+      if (res.intentCode && !isOwnerActionResponse) {
+        msg.feedbackTarget = {
+          source: 'java-intent',
+          userInput: query,
+          intentCode: res.intentCode,
+          sessionId: res.sessionId ?? javaIntentSessionId.value,
+        };
       }
       if (!downloadUrl) {
         const rawMsg = res.message || '';
@@ -1319,10 +1412,12 @@ async function handleSendMessage() {
   // AND user has a data source loaded.
   const intentResult = await tryJavaIntentChat(query, assistantId);
   if (intentResult === 'handled') {
+    pendingOwnerActionScenario.value = '';
     isTyping.value = false;
     scrollToBottom();
     return;
   }
+  pendingOwnerActionScenario.value = '';
 
   // Fix 2 (Apr 23 2026): pass last 3 Q+A pairs as conversation history so
   // backend LLM can resolve pronominal/temporal references ("这个月"/"它"/
@@ -2174,7 +2269,7 @@ function handleKeydown(event: KeyboardEvent) {
                 </div>
                 <!-- Chart Insight for single-chart message (bar/line/pie wired; exotic→null→renders nothing) -->
                 <ChartInsightProvider
-                  v-if="message.chartConfig && message.chartConfig.option"
+                  v-if="message.chartConfig && message.chartConfig.option && message.source !== 'restaurant_owner_action'"
                   :chart="messageChartWithMeta(message)"
                   :perms="{ canViewFinance: false }"
                   :factory-id="factoryId ?? ''"
@@ -2190,7 +2285,13 @@ function handleKeydown(event: KeyboardEvent) {
                   ></div>
                 </div>
                 <!-- Chart Insight for P2 multi-chart: each ChartInsightProvider has its own setup() → v-for safe -->
-                <template v-if="message.charts && message.charts.length">
+                <div
+                  v-if="message.source === 'restaurant_owner_action' && message.chartGuide"
+                  class="owner-chart-guide"
+                >
+                  <strong>怎么看这几张图：</strong>{{ message.chartGuide }}
+                </div>
+                <template v-if="message.source !== 'restaurant_owner_action' && message.charts && message.charts.length">
                   <ChartInsightProvider
                     v-for="(c, ci) in message.charts"
                     :key="`insight-${message.id}__${ci}`"
@@ -2203,7 +2304,7 @@ function handleKeydown(event: KeyboardEvent) {
 
                 <!-- P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 (zero extra call). -->
                 <div
-                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && ((message.glossary && Object.keys(message.glossary).length > 0) || message.chartGuide)"
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && message.source !== 'restaurant_owner_action' && ((message.glossary && Object.keys(message.glossary).length > 0) || message.chartGuide)"
                   class="message-depth-block"
                 >
                   <el-link
@@ -2328,7 +2429,7 @@ function handleKeydown(event: KeyboardEvent) {
                     type="info"
                     plain
                     round
-                    @click="triggerRelatedFollowup(f.question)"
+                    @click="triggerRelatedFollowup(f.question, f.ownerActionScenario)"
                   >
                     {{ f.label }}
                   </el-button>
@@ -2359,7 +2460,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
                      Template hits get a logId via _log_template_hit_safe in chat.py. -->
                 <div
-                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && message.logId"
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.logId || message.feedbackTarget)"
                   class="message-feedback"
                 >
                   <span class="feedback-label">这个回答有用吗?</span>
@@ -2777,6 +2878,16 @@ function handleKeydown(event: KeyboardEvent) {
   }
 
   /* P1 (2026-06-02): expandable 字段说明 / 怎么看这张图 block. */
+  .owner-chart-guide {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-left: 3px solid #2d8b57;
+    background: #f4fbf7;
+    color: #303133;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
   .message-depth-block {
     margin-top: 8px;
   }

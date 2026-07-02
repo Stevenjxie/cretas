@@ -33,8 +33,9 @@ class _FakeRecord(dict):
 class _FakeConn:
     """Minimal asyncpg connection stub. Records the SQL for inspection."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, row=None):
         self._rows = rows
+        self._row = row
         self.last_sql = None
 
     async def __aenter__(self):
@@ -52,15 +53,16 @@ class _FakeConn:
 
     async def fetchrow(self, sql, *a, **k):
         self.last_sql = sql
-        return self._rows[0] if self._rows else None
+        return self._row if self._row is not None else (self._rows[0] if self._rows else None)
 
 
 class _FakePool:
     """Fake asyncpg Pool whose acquire() context manager yields a _FakeConn."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, row=None):
         self._rows = [_FakeRecord(r) for r in rows]
-        self._conn = _FakeConn(self._rows)
+        self._row = _FakeRecord(row) if row is not None else None
+        self._conn = _FakeConn(self._rows, self._row)
 
     def acquire(self):
         return self._conn
@@ -126,6 +128,28 @@ class TestOrderTypeMix:
         result = self._run([])
         assert result["total_revenue"] == 0.0
         assert result["order_types"] == []
+
+    def test_zero_amount_with_bills_estimates_from_overall_avg_ticket(self):
+        rows = [
+            {"amt": Decimal("0.00"), "bills": 100, "order_type": "鍫傞"},
+            {"amt": Decimal("0.00"), "bills": 50, "order_type": "澶栧崠"},
+        ]
+        pool = _FakePool(rows, row={"revenue": Decimal("30000.00"), "bills": 150})
+        result = asyncio.get_event_loop().run_until_complete(
+            order_type_mix(pool, "RES_3101_009", (date(2025, 1, 1), date(2025, 12, 31)))
+        )
+
+        assert result["revenue_estimated"] is True
+        assert result["total_revenue"] == pytest.approx(30000.0, rel=1e-6)
+        assert result["estimation_note"]
+
+        dine_in = next(t for t in result["order_types"] if t["order_type"] == "鍫傞")
+        takeout = next(t for t in result["order_types"] if t["order_type"] == "澶栧崠")
+        assert dine_in["revenue"] == pytest.approx(20000.0, rel=1e-6)
+        assert takeout["revenue"] == pytest.approx(10000.0, rel=1e-6)
+        assert dine_in["revenue_pct"] == pytest.approx(66.7, abs=0.1)
+        assert takeout["revenue_pct"] == pytest.approx(33.3, abs=0.1)
+        assert dine_in["revenue_estimated"] is True
 
     def test_single_type_is_100_pct(self):
         rows = [{"amt": Decimal("1000.00"), "bills": 50, "order_type": "堂食"}]
@@ -261,7 +285,7 @@ class TestTopProductsOrderParam:
         # Find the last ORDER BY ... line
         lines = [line.strip() for line in sql.splitlines() if "ORDER BY" in line.upper()]
         # The last ORDER BY is the one we care about (there may be one inside LATERAL)
-        outer_order_lines = [line for line in lines if "SUM" in line]
+        outer_order_lines = [line for line in lines if "G.REVENUE" in line.upper()]
         assert len(outer_order_lines) == 1
         assert "ASC" in outer_order_lines[0].upper()
         assert "DESC" not in outer_order_lines[0].upper()

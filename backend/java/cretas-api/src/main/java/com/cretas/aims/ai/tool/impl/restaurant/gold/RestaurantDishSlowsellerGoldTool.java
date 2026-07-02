@@ -77,8 +77,20 @@ public class RestaurantDishSlowsellerGoldTool extends GoldBackedRestaurantTool {
                         ? (List<Map<String, Object>>) goldResult.get("top_products")
                         : Collections.emptyList();
 
-        List<Map<String, Object>> formatted = new ArrayList<>();
+        List<String> excludedNonDish = new ArrayList<>();
+        List<Map<String, Object>> dishRows = new ArrayList<>();
         for (Map<String, Object> row : raw) {
+            Object productName = row.get("product_name");
+            String name = productName != null ? productName.toString() : "";
+            if (isNonDishLine(name)) {
+                excludedNonDish.add(name);
+                continue;
+            }
+            dishRows.add(row);
+        }
+
+        List<Map<String, Object>> formatted = new ArrayList<>();
+        for (Map<String, Object> row : dishRows) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("菜品", row.get("product_name"));
             entry.put("销量", row.get("qty_sold"));
@@ -88,6 +100,11 @@ public class RestaurantDishSlowsellerGoldTool extends GoldBackedRestaurantTool {
 
         StringBuilder sb = new StringBuilder();
         sb.append("慢销/滞销菜品（销量垫底，").append(period).append("）：\n");
+        if (!excludedNonDish.isEmpty()) {
+            sb.append("已先排除非菜品行：")
+                    .append(String.join("、", excludedNonDish.stream().distinct().limit(4).toList()))
+                    .append("。\n");
+        }
         for (int i = 0; i < formatted.size(); i++) {
             Map<String, Object> entry = formatted.get(i);
             Object qty = entry.get("销量");
@@ -113,6 +130,7 @@ public class RestaurantDishSlowsellerGoldTool extends GoldBackedRestaurantTool {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("统计周期", period);
         result.put("慢销TOP10", formatted);
+        result.put("excluded_non_dish_lines", excludedNonDish);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
         if (!chartNames.isEmpty()) {
@@ -131,11 +149,32 @@ public class RestaurantDishSlowsellerGoldTool extends GoldBackedRestaurantTool {
     protected boolean isEmpty(Map<String, Object> goldResult) {
         Object raw = goldResult.get("top_products");
         if (!(raw instanceof List)) return true;
-        return ((List<?>) raw).isEmpty();
+        List<?> rows = (List<?>) raw;
+        if (rows.isEmpty()) return true;
+        for (Object item : rows) {
+            if (item instanceof Map<?, ?> row) {
+                Object name = row.get("product_name");
+                if (name != null && !isNonDishLine(name.toString())) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     @Override
     protected String emptyMessage() {
         return "本期暂无菜品销售数据。请确认已上传含菜品销量的经营报表(商品销量报表/POS 明细)。";
+    }
+
+    private static boolean isNonDishLine(String name) {
+        if (name == null) return true;
+        String n = name.trim();
+        return n.isEmpty()
+                || n.contains("测试")
+                || n.contains("无需餐具")
+                || n.contains("餐具")
+                || n.contains("打包费")
+                || n.contains("配送费");
     }
 }

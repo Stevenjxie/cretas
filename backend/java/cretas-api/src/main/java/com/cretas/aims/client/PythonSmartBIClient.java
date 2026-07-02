@@ -1843,6 +1843,31 @@ public class PythonSmartBIClient {
     }
 
     /**
+     * 餐饮老板动作建议 Chat。
+     *
+     * <p>Web Admin 统一打 Java /ai-intents/execute，Java 再把需要深度经营动作
+     * 分析的问题转给 Python section。这样前端不用维护第二套路由和反馈入口。</p>
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> askRestaurantOwnerActionChat(Map<String, Object> chatRequest) {
+        log.info("餐饮老板动作建议: factoryId={}, scenario={}",
+                chatRequest.get("factory_id"), chatRequest.get("demoScenario"));
+        try {
+            Request request = new Request.Builder()
+                    .url(config.getUrl() + "/api/smartbi/restaurant/sections/owner-action-chat")
+                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(chatRequest)))
+                    .build();
+            return executeWithRetry(request, Map.class);
+        } catch (IOException | PythonServiceUnavailableException e) {
+            log.error("餐饮老板动作建议失败: {}", e.getMessage());
+            Map<String, Object> errorResult = new java.util.HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", e.getMessage());
+            return errorResult;
+        }
+    }
+
+    /**
      * 食品知识库实体提取 (NER)
      */
     @SuppressWarnings("unchecked")

@@ -13,7 +13,7 @@
 
     Badge text:
       source='rules'    → "数据驱动"
-      source='template' → "数据驱动·已学习"
+      source='template' → "数据驱动·经验模板"
       source='llm'      → "AI生成"
       source='cache'    → "数据驱动·已缓存"
   -->
@@ -127,7 +127,7 @@ const props = withDefaults(
 /**
  * Badge text mapped from insight source:
  *   rules    → "数据驱动"
- *   template → "数据驱动·已学习"
+ *   template → "数据驱动·经验模板"
  *   llm      → "AI生成"
  *   cache    → "数据驱动·已缓存"
  */
@@ -136,7 +136,7 @@ const badgeText = computed<string>(() => {
   switch (props.insight.source) {
     case 'rules':    return '数据驱动';
     case 'cache':    return '数据驱动·已缓存';
-    case 'template': return '数据驱动·已学习';
+    case 'template': return '数据驱动·经验模板';
     case 'llm':      return 'AI生成';
     default:         return '数据驱动';
   }

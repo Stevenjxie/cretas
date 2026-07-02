@@ -57,7 +57,7 @@
       <!-- 堂食 / 外卖 / 渠道占比 -->
       <el-card class="rgg-card" shadow="never">
         <template #header>
-          <div class="rgg-card-header"><el-icon><PieChart /></el-icon><span>渠道占比 (堂食 / 外卖)</span></div>
+          <div class="rgg-card-header"><el-icon><PieChart /></el-icon><span>支付渠道占比</span></div>
         </template>
         <el-skeleton v-if="loading" :rows="5" animated />
         <div v-else-if="channels.length" class="rgg-rank-list">

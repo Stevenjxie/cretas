@@ -24,7 +24,16 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
 
     def compute(self, request: SectionRequest, context: dict[str, Any]) -> SectionResponse:
         started = time.time()
-        params = request.params or {}
+        params = dict(request.params or {})
+        demo_scenario = params.get("demo_scenario") or params.get("demoScenario")
+        if demo_scenario:
+            from smartbi.services.restaurant.demo_owner_action_scenarios import (
+                get_owner_action_demo_scenario,
+            )
+
+            demo_params = get_owner_action_demo_scenario(str(demo_scenario))
+            demo_params.update(params)
+            params = demo_params
         sections = (
             params.get("sections")
             or context.get("sections")
@@ -57,6 +66,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         data = {
             "moduleName": "老板最终决策简报",
             "plainPurpose": "把月盘点、POS、菜品、大众点评和外部活动天气合成老板能直接拍板的动作。",
+            "demoActionScenarios": self._demo_action_scenarios() if params.get("demoMode") else [],
             "storeContext": {
                 "storeName": store_name,
                 "subSector": sub_sector,
@@ -88,6 +98,28 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             ],
         }
         return self.ok(request, data=data, started=started)
+
+    @staticmethod
+    def _demo_action_scenarios() -> list[dict[str, str]]:
+        from smartbi.services.restaurant.demo_owner_action_scenarios import (
+            list_owner_action_demo_scenarios,
+        )
+
+        labels = {
+            "package": "套餐推荐",
+            "seating_mix": "桌型调整",
+            "staffing_schedule": "排班调整",
+            "staff_training": "员工培训",
+            "kitchen_quality": "厨房出品",
+            "cost_margin": "成本毛利",
+            "external_event_response": "外部活动承接",
+            "single_item_push": "单品主推",
+            "traffic_conversion": "客流转化",
+        }
+        return [
+            {"key": key, "label": labels.get(key, key)}
+            for key in list_owner_action_demo_scenarios()
+        ]
 
     def _build_readiness(
         self,
@@ -133,6 +165,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         external_ready = bool(
             params.get("external_signals")
             or params.get("store_geo_profile")
+            or params.get("traffic_persona")
+            or params.get("trafficPersona")
             or "advancedTrafficPersona" in sections
             or "advanced_traffic_persona" in sections
         )
@@ -359,6 +393,9 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             title = activities[0].get("title") if isinstance(activities[0], dict) else None
             if title:
                 parts.append(f"活动信号: {title}")
+        traffic = BossDecisionBriefHandler._traffic_persona_summary(params, sections)
+        if traffic.get("available"):
+            parts.append(f"客流画像: {traffic.get('plainText')}")
         return "；".join(parts) or "已有外部信号，可以先判断当天异常是否受天气、商场活动、展会或节假日影响。"
 
     @staticmethod
@@ -552,13 +589,21 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             review = {}
 
         package_recommendations = BossDecisionBriefHandler._package_recommendations(pos, menu, review)
+        decision_focus = BossDecisionBriefHandler._decision_focus(pos, menu, review, readiness, package_recommendations, params)
+        package_decision = BossDecisionBriefHandler._package_decision(package_recommendations, decision_focus)
+        traffic_summary = BossDecisionBriefHandler._traffic_persona_summary(params, sections)
+        platform_summary = BossDecisionBriefHandler._platform_channel_summary(pos)
         headline = BossDecisionBriefHandler._owner_headline(store_name, pos, menu, review)
-        actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness, package_recommendations)
+        actions = BossDecisionBriefHandler._owner_action_items(pos, menu, review, readiness, package_decision, decision_focus)
         return {
             "title": "老板今天先看这个",
             "headline": headline,
             "plainDiagnosis": BossDecisionBriefHandler._plain_diagnosis(pos, menu, review),
+            "decisionFocus": decision_focus,
+            "packageDecision": package_decision,
             "packageRecommendations": package_recommendations,
+            "trafficPersona": traffic_summary,
+            "platformChannelSnapshot": platform_summary,
             "doFirst": actions["doFirst"],
             "doNotDo": actions["doNotDo"],
             "decisionPlan": {
@@ -567,8 +612,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "thisMonth": decisions.get("ownerDecisionNow", {}).get("thisMonth"),
             },
             "expectedImpact": BossDecisionBriefHandler._expected_impact(pos),
-            "keyEvidence": BossDecisionBriefHandler._owner_key_evidence(pos, menu, review),
-            "analysisDimensions": BossDecisionBriefHandler._analysis_dimensions(readiness, pos, menu, review, sections),
+            "keyEvidence": BossDecisionBriefHandler._owner_key_evidence(pos, menu, review, traffic_summary, platform_summary),
+            "analysisDimensions": BossDecisionBriefHandler._analysis_dimensions(readiness, pos, menu, review, sections, traffic_summary, platform_summary),
             "dataStillMissing": BossDecisionBriefHandler._data_gap(readiness),
             "missingDataInPlainWords": BossDecisionBriefHandler._missing_data_plain(readiness),
         }
@@ -648,6 +693,155 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             parts.append(f"差评主要在说：{'、'.join(themes[:3])}。本周先抓最集中的一个问题")
 
         return "。".join(parts) or "现在可以先判断经营方向，但还不能承诺能多赚多少钱。还需要每天订单、评论原文、菜品成本和月盘点。"
+
+    @staticmethod
+    def _decision_focus(
+        pos: dict[str, Any],
+        menu: dict[str, Any],
+        review: dict[str, Any],
+        readiness: dict[str, Any],
+        package_recommendations: dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        params = params or {}
+        review_risk = BossDecisionBriefHandler._review_risk(review)
+        if review_risk["isHigh"]:
+            return {
+                "primaryProblem": review_risk["primaryProblem"],
+                "primaryActionType": review_risk["actionType"],
+                "shouldRecommendPackage": False,
+                "why": review_risk["why"],
+                "signals": review_risk["signals"],
+            }
+
+        metrics = BossDecisionBriefHandler._menu_item_metrics(menu)
+        cost_signal = BossDecisionBriefHandler._cost_margin_signal(params, menu)
+        if cost_signal:
+            return {
+                "primaryProblem": "成本/毛利异常",
+                "primaryActionType": "cost_margin",
+                "shouldRecommendPackage": False,
+                "why": cost_signal["why"],
+                "signals": cost_signal["signals"],
+            }
+
+        external_signal = BossDecisionBriefHandler._external_event_signal(params)
+        if external_signal:
+            return {
+                "primaryProblem": "外部活动/天气导致客流异常",
+                "primaryActionType": "external_event_response",
+                "shouldRecommendPackage": False,
+                "why": external_signal["why"],
+                "signals": external_signal["signals"],
+            }
+
+        traffic_signal = BossDecisionBriefHandler._traffic_conversion_signal(params, pos)
+        if traffic_signal:
+            return {
+                "primaryProblem": "商场有客流但本店转化不足",
+                "primaryActionType": "traffic_conversion",
+                "shouldRecommendPackage": False,
+                "why": traffic_signal["why"],
+                "signals": traffic_signal["signals"],
+            }
+
+        seating_signal = BossDecisionBriefHandler._seating_mix_signal(pos)
+        if seating_signal:
+            return {
+                "primaryProblem": "桌型供需不匹配",
+                "primaryActionType": "seating_mix",
+                "shouldRecommendPackage": False,
+                "why": seating_signal["why"],
+                "signals": seating_signal["signals"],
+            }
+
+        staffing_signal = BossDecisionBriefHandler._staffing_schedule_signal(pos)
+        if staffing_signal:
+            return {
+                "primaryProblem": "高峰排班不匹配",
+                "primaryActionType": "staffing_schedule",
+                "shouldRecommendPackage": False,
+                "why": staffing_signal["why"],
+                "signals": staffing_signal["signals"],
+            }
+
+        has_package_candidate = bool((package_recommendations or {}).get("candidates"))
+        has_ready_package = (package_recommendations or {}).get("status") == "ready"
+        weekday_gap = BossDecisionBriefHandler._weekday_weekend_gap(pos)
+        two_person_share = BossDecisionBriefHandler._segment_share(pos, ("2人桌", "双人", "2人", "二人"))
+        channel = BossDecisionBriefHandler._top_named_share(pos.get("channelGroups") or [], ("channel", "name"))
+        weak_daypart = BossDecisionBriefHandler._weak_lunch_or_low_peak(pos)
+        package_signals: list[str] = []
+
+        if weekday_gap is not None and weekday_gap >= 30:
+            package_signals.append(f"工作日明显弱，周末比工作日高 {round(weekday_gap, 1)}%")
+        if two_person_share >= 0.35:
+            package_signals.append(f"2 人桌占比约 {round(two_person_share * 100, 1)}%，适合用小套餐承接")
+        if weak_daypart:
+            package_signals.append(weak_daypart)
+        if channel:
+            package_signals.append(f"最大来客入口是 {channel['name']}，可以先在这个入口测试")
+
+        package_is_primary = has_ready_package and has_package_candidate and bool(package_signals) and (
+            (weekday_gap is not None and weekday_gap >= 30)
+            or weak_daypart is not None
+            or (two_person_share >= 0.35 and channel is not None)
+        )
+        if package_is_primary:
+            return {
+                "primaryProblem": "工作日/低峰转化不足",
+                "primaryActionType": "package",
+                "shouldRecommendPackage": True,
+                "why": "；".join(package_signals),
+                "signals": package_signals,
+            }
+
+        if metrics:
+            top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
+            top_name = top_products[0] if top_products else "当前热卖菜"
+            return {
+                "primaryProblem": "菜品主推顺序",
+                "primaryActionType": "single_item_push",
+                "shouldRecommendPackage": False,
+                "why": f"现在更适合先把 {top_name} 的主推、加购和渠道展示打透，套餐不是本期第一动作。",
+                "signals": [f"已有菜品明细: {top_name}"],
+            }
+
+        missing = BossDecisionBriefHandler._data_gap(readiness)
+        return {
+            "primaryProblem": "关键数据不足",
+            "primaryActionType": "data_request",
+            "shouldRecommendPackage": False,
+            "why": "现在还不能给老板下硬动作，先补齐订单、菜品、点评和成本数据。",
+            "signals": missing[:3],
+        }
+
+    @staticmethod
+    def _package_decision(package_recommendations: dict[str, Any], decision_focus: dict[str, Any]) -> dict[str, Any]:
+        candidates = package_recommendations.get("candidates") or [] if isinstance(package_recommendations, dict) else []
+        if decision_focus.get("shouldRecommendPackage"):
+            return {
+                "status": "active",
+                "title": "本期可以主推小套餐",
+                "whyNow": decision_focus.get("why"),
+                "candidates": candidates,
+                "dataNeeded": package_recommendations.get("dataNeeded", []) if isinstance(package_recommendations, dict) else [],
+            }
+        if candidates:
+            return {
+                "status": "available_but_not_primary",
+                "title": "可以算套餐，但不是本期第一动作",
+                "whyNow": decision_focus.get("why"),
+                "candidates": candidates,
+                "dataNeeded": package_recommendations.get("dataNeeded", []) if isinstance(package_recommendations, dict) else [],
+            }
+        return {
+            "status": "not_enough_data",
+            "title": "现在不建议给套餐结论",
+            "whyNow": "缺少足够的菜品销量、成本或搭配数据。",
+            "candidates": [],
+            "dataNeeded": package_recommendations.get("dataNeeded", []) if isinstance(package_recommendations, dict) else [],
+        }
 
     @staticmethod
     def _package_recommendations(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
@@ -791,16 +985,48 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         menu: dict[str, Any],
         review: dict[str, Any],
         readiness: dict[str, Any],
-        package_recommendations: dict[str, Any] | None = None,
+        package_decision: dict[str, Any] | None = None,
+        decision_focus: dict[str, Any] | None = None,
     ) -> dict[str, list[str]]:
         do_first: list[str] = []
         do_not_do = ["不要一上来就全店打折。先看清楚到底是没人来、来了不买、菜不稳，还是成本漏了。"]
 
-        top_package = BossDecisionBriefHandler._top_package_action(package_recommendations)
+        focus_type = (decision_focus or {}).get("primaryActionType")
+        negative_dishes = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
+        themes = BossDecisionBriefHandler._theme_names(review.get("negativeThemes") or [])
+        if focus_type == "seating_mix":
+            do_first.append("先调桌型：把一部分 4 人桌拆成可拼可分的 2 人桌，午市和工作日晚市优先给 2 人客，连续看 7 天翻台和等位。")
+        elif focus_type == "staffing_schedule":
+            if themes:
+                do_first.append(f"先调高峰排班和出餐动线：点评里集中说 {'、'.join(themes[:3])}，本周把最忙时段多排 1 个前厅/传菜位。")
+            else:
+                do_first.append("先调员工工作时间：把人从低峰挪到高峰，连续看 7 天等位、上菜时长和差评关键词。")
+        elif focus_type == "staff_training":
+            do_first.append("先做员工服务训练：把迎宾、点单、催菜、差评回复拆成固定话术和检查表，店长每天抽查 3 桌。")
+        elif focus_type == "kitchen_quality":
+            if negative_dishes:
+                do_first.append(f"厨房先修出品：本周只盯 {'、'.join(negative_dishes[:3])}，厨师长按口味、温度、份量和出餐时间逐项抽查。")
+            else:
+                do_first.append("厨房先修出品稳定性：把口味、温度、份量和出餐时间做成每日抽查表，稳定后再放大推广。")
+        elif focus_type == "cost_margin":
+            do_first.append("先查成本和毛利：把热卖菜 BOM、采购价、盘点差异、报损和赠品拉到同一张表，先处理差异最大的 3 个食材。")
+        elif focus_type == "external_event_response":
+            do_first.append("先按外部活动做当天作战：提前备货、调高峰排班、门口引导和商场券承接，不要把异常客流误判成日常趋势。")
+        elif focus_type == "traffic_conversion":
+            do_first.append("先改进店转化：门口海报、等位牌、美团/点评页和抖音团购页只讲三件事：招牌鱼、双人吃多少钱、多久能吃完；连续 7 天看路过客流、进店人数、下单数有没有一起变好。")
+        elif focus_type == "experience_fix":
+            if negative_dishes:
+                do_first.append(f"本周先修点评里被点名的菜：{'、'.join(negative_dishes[:3])}。先让厨师长抽查出品，再决定要不要放大推广。")
+            elif themes:
+                do_first.append(f"本周先修点评问题：{'、'.join(themes[:3])}。先把体验稳住，再谈引流和套餐。")
+            else:
+                do_first.append("本周先修顾客体验问题。先把低分原因查清楚，再谈引流和套餐。")
+
+        top_package = BossDecisionBriefHandler._top_package_action(package_decision)
         weekday_weekend = pos.get("weekdayWeekend") or {}
         if isinstance(weekday_weekend, dict):
             gap_pct = BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
-            if gap_pct is not None and gap_pct >= 30:
+            if gap_pct is not None and gap_pct >= 30 and focus_type == "package":
                 if top_package:
                     do_first.append(top_package)
                 else:
@@ -815,7 +1041,6 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             else:
                 do_first.append(f"把 {top_products[0]} 放到菜单首屏、团购页和服务员话术里，先用它带动加购。")
 
-        negative_dishes = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
         if negative_dishes:
             do_first.append(f"厨师长本周先抽查 {'、'.join(negative_dishes[:3])}。确认出品稳定，再加大推广。")
             do_not_do.append(f"不要先猛推 {'、'.join(negative_dishes[:3])}。这些菜在评论里已经有不稳定信号。")
@@ -861,7 +1086,13 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         }
 
     @staticmethod
-    def _owner_key_evidence(pos: dict[str, Any], menu: dict[str, Any], review: dict[str, Any]) -> list[str]:
+    def _owner_key_evidence(
+        pos: dict[str, Any],
+        menu: dict[str, Any],
+        review: dict[str, Any],
+        traffic_summary: dict[str, Any] | None = None,
+        platform_summary: dict[str, Any] | None = None,
+    ) -> list[str]:
         evidence: list[str] = []
         orders = pos.get("orders")
         revenue = pos.get("revenue") or pos.get("periodRevenue")
@@ -885,6 +1116,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             if revenue_rank and daily_rank and store_count:
                 evidence.append(f"连锁里: 总销售额第 {revenue_rank}/{store_count}，日均第 {daily_rank}/{store_count}")
 
+        if isinstance(traffic_summary, dict) and traffic_summary.get("available"):
+            plain_text = traffic_summary.get("plainText")
+            if plain_text:
+                evidence.append(str(plain_text))
+
+        if isinstance(platform_summary, dict) and platform_summary.get("topPlatform"):
+            evidence.append(str(platform_summary["topPlatform"]))
+
         top_products = BossDecisionBriefHandler._item_names(menu.get("topProducts") or [])
         if top_products:
             evidence.append(f"主推候选菜: {'、'.join(top_products[:3])}")
@@ -904,6 +1143,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         menu: dict[str, Any],
         review: dict[str, Any],
         sections: dict[str, Any],
+        traffic_summary: dict[str, Any] | None = None,
+        platform_summary: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         return [
             BossDecisionBriefHandler._dimension(
@@ -939,8 +1180,22 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             BossDecisionBriefHandler._dimension(
                 "渠道结构",
                 "钱主要从美团、点评、抖音、微信还是商场券来？预算该先花在哪？",
-                "已经能看渠道贡献。" if pos.get("channelGroups") else "还缺渠道拆分，看不出预算该投哪里。",
+                (
+                    "已经能看渠道贡献和平台漏斗。"
+                    if platform_summary and platform_summary.get("available")
+                    else "已经能看渠道贡献。"
+                ) if pos.get("channelGroups") else "还缺渠道拆分，看不出预算该投哪里。",
                 "按渠道看订单、券核销、实收和复购。",
+            ),
+            BossDecisionBriefHandler._dimension(
+                "外部客流画像",
+                "商场和楼层有没有人？这些人有没有路过门口？最后有没有进店？",
+                (
+                    str(traffic_summary.get("plainText"))
+                    if traffic_summary and traffic_summary.get("available")
+                    else "还缺商场/楼层/门口客流画像，只能看到已经买单的人。"
+                ),
+                "按天补商场总客流、餐饮楼层客流、门口路过、进店人数、来源地和客群。",
             ),
             BossDecisionBriefHandler._dimension(
                 "连锁对比",
@@ -955,6 +1210,132 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "补采购入库、月底盘点、理论耗用/BOM、报损和赠品。",
             ),
         ]
+
+    @staticmethod
+    def _traffic_persona_summary(params: dict[str, Any], sections: dict[str, Any]) -> dict[str, Any]:
+        advanced = sections.get("advancedTrafficPersona") or sections.get("advanced_traffic_persona") or {}
+        traffic = (
+            params.get("traffic_persona")
+            or params.get("trafficPersona")
+            or params.get("traffic_profile")
+            or (advanced.get("trafficPersona") if isinstance(advanced, dict) else None)
+            or (advanced.get("simulatedMetrics") if isinstance(advanced, dict) else None)
+            or {}
+        )
+        if not isinstance(traffic, dict) or not traffic:
+            return {"available": False, "plainText": "还缺商场、楼层和门口客流画像。"}
+
+        mall_footfall = BossDecisionBriefHandler._safe_float(traffic.get("mallFootfall") or traffic.get("dailyFootfall"))
+        floor_footfall = BossDecisionBriefHandler._safe_float(traffic.get("restaurantFloorFootfall"))
+        passersby = BossDecisionBriefHandler._safe_float(traffic.get("storefrontPassersby") or traffic.get("passersby"))
+        visits = BossDecisionBriefHandler._safe_float(traffic.get("estimatedStoreVisits") or traffic.get("storeVisits"))
+        capture_rate = BossDecisionBriefHandler._safe_float(traffic.get("captureRate"))
+        if capture_rate is None and passersby and visits is not None:
+            capture_rate = visits / passersby
+
+        trend = traffic.get("trafficTrend") or {}
+        mall_lift = BossDecisionBriefHandler._safe_float(trend.get("mallVsLastWeekPct") if isinstance(trend, dict) else None)
+        order_vs_traffic = BossDecisionBriefHandler._safe_float(trend.get("storeOrdersVsTrafficPct") if isinstance(trend, dict) else None)
+        benchmark = traffic.get("mallBenchmarks") or {}
+        peer_capture = BossDecisionBriefHandler._safe_float(
+            benchmark.get("sameFloorPeerCaptureRate") if isinstance(benchmark, dict) else None
+        )
+
+        profiles = traffic.get("customerProfiles") or []
+        top_profile = profiles[0] if isinstance(profiles, list) and profiles and isinstance(profiles[0], dict) else {}
+        top_segment = top_profile.get("segment")
+        top_need = top_profile.get("need")
+
+        parts: list[str] = []
+        if mall_footfall:
+            parts.append(f"商场日客流约 {int(mall_footfall)}")
+        if floor_footfall:
+            parts.append(f"餐饮楼层约 {int(floor_footfall)}")
+        if passersby:
+            parts.append(f"门口路过约 {int(passersby)}")
+        if visits is not None:
+            parts.append(f"估算进店约 {int(visits)}")
+        if capture_rate is not None:
+            parts.append(f"进店转化约 {round(capture_rate * 100, 1)}%")
+        if peer_capture is not None:
+            parts.append(f"同层参考约 {round(peer_capture * 100, 1)}%")
+        if mall_lift is not None:
+            parts.append(f"商场客流较上周 {BossDecisionBriefHandler._change_phrase(mall_lift)}")
+        if order_vs_traffic is not None:
+            parts.append(f"本店订单相对客流 {BossDecisionBriefHandler._change_phrase(order_vs_traffic)}")
+        if top_segment:
+            parts.append(f"主要路过客是 {top_segment}" + (f"，需求是{top_need}" if top_need else ""))
+
+        return {
+            "available": True,
+            "plainText": "；".join(parts) or "已有客流画像，但字段还需要继续清洗。",
+            "mallFootfall": mall_footfall,
+            "restaurantFloorFootfall": floor_footfall,
+            "storefrontPassersby": passersby,
+            "estimatedStoreVisits": visits,
+            "captureRate": capture_rate,
+            "peerCaptureRate": peer_capture,
+            "mallVsLastWeekPct": mall_lift,
+            "storeOrdersVsTrafficPct": order_vs_traffic,
+            "topSegment": top_segment,
+            "topNeed": top_need,
+        }
+
+    @staticmethod
+    def _platform_channel_summary(pos: dict[str, Any]) -> dict[str, Any]:
+        channels = pos.get("platformChannels") or pos.get("platform_channels") or []
+        if not isinstance(channels, list) or not channels:
+            return {"available": False}
+
+        normalized: list[dict[str, Any]] = []
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            platform = str(item.get("platform") or item.get("name") or "").strip()
+            if not platform:
+                continue
+            revenue = BossDecisionBriefHandler._safe_float(item.get("revenue") or item.get("amount"))
+            orders = BossDecisionBriefHandler._safe_float(item.get("orders") or item.get("orderCount"))
+            exposure = BossDecisionBriefHandler._safe_float(item.get("exposure") or item.get("impressions"))
+            visits = BossDecisionBriefHandler._safe_float(item.get("storePageVisits") or item.get("visits"))
+            conversion = BossDecisionBriefHandler._safe_float(item.get("conversionRate"))
+            if conversion is None and visits and orders is not None:
+                conversion = orders / visits
+            normalized.append({
+                "platform": platform,
+                "orders": orders,
+                "revenue": revenue,
+                "exposure": exposure,
+                "storePageVisits": visits,
+                "couponRedemptions": BossDecisionBriefHandler._safe_float(item.get("couponRedemptions")),
+                "conversionRate": conversion,
+                "rating": BossDecisionBriefHandler._safe_float(item.get("rating")),
+                "mainProblem": item.get("mainProblem"),
+            })
+
+        if not normalized:
+            return {"available": False}
+
+        top_by_revenue = max(normalized, key=lambda item: item.get("revenue") or 0.0)
+        weak_conversion = [
+            item for item in normalized
+            if item.get("exposure") and item.get("conversionRate") is not None and item["conversionRate"] < 0.10
+        ]
+        weak_conversion.sort(key=lambda item: item.get("conversionRate") or 0.0)
+        top_text = (
+            f"最大成交入口是 {top_by_revenue['platform']}"
+            + (f"，收入约 {round(top_by_revenue['revenue'], 0)}" if top_by_revenue.get("revenue") is not None else "")
+        )
+        if weak_conversion:
+            weakest = weak_conversion[0]
+            top_text += f"；{weakest['platform']} 曝光不少但转化约 {round((weakest.get('conversionRate') or 0) * 100, 1)}%，先改页面和核销承接"
+
+        return {
+            "available": True,
+            "channels": normalized,
+            "topPlatform": top_text,
+            "weakConversionPlatforms": [item["platform"] for item in weak_conversion[:3]],
+        }
 
     @staticmethod
     def _dimension(name: str, question: str, current: str, next_step: str) -> dict[str, str]:
@@ -975,6 +1356,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         review = params.get("review_summary") or sections.get("reviewAnalysis") or sections.get("review_analysis") or {}
         pos = params.get("pos_summary") or {}
         external = params.get("external_signals") or sections.get("advancedTrafficPersona") or {}
+        traffic_summary = BossDecisionBriefHandler._traffic_persona_summary(params, sections)
+        platform_summary = BossDecisionBriefHandler._platform_channel_summary(pos if isinstance(pos, dict) else {})
 
         menu_top = BossDecisionBriefHandler._item_names((menu or {}).get("topProducts") or []) if isinstance(menu, dict) else []
         review_positive = BossDecisionBriefHandler._item_names((review or {}).get("positiveDishMentions") or []) if isinstance(review, dict) else []
@@ -1026,8 +1409,21 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             },
             {
                 "platform": "商圈/活动/天气",
-                "whatItSays": "已有外部信号可解释异常日。" if external else "缺少当天商场活动、天气、节假日和周边活动标签。",
+                "whatItSays": (
+                    f"已有外部信号可解释异常日；{traffic_summary.get('plainText')}"
+                    if traffic_summary.get("available")
+                    else ("已有外部信号可解释异常日。" if external else "缺少当天商场活动、天气、节假日和周边活动标签。")
+                ),
                 "decisionUse": "决定当天波动是否先按外部原因处理，避免误判店长执行。",
+            },
+            {
+                "platform": "美团/点评/抖音/POS渠道漏斗",
+                "whatItSays": (
+                    platform_summary.get("topPlatform")
+                    if platform_summary.get("available")
+                    else "缺少平台曝光、访问、券核销、订单和评分拆分。"
+                ),
+                "decisionUse": "决定先改哪个线上入口、团购套餐、门口核销和会员沉淀，而不是平均用力。",
             },
             {
                 "platform": "月盘点/BOM/采购",
@@ -1054,6 +1450,351 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
                 "decisionUse": "决定是抓单店执行，还是做区域活动、商圈资源和门店分流。",
             },
         ]
+
+    @staticmethod
+    def _review_risk(review: dict[str, Any]) -> dict[str, Any]:
+        rating = BossDecisionBriefHandler._safe_float(review.get("rating"))
+        review_count = BossDecisionBriefHandler._safe_float(review.get("reviewCount") or review.get("reviews"))
+        low_rating_count = BossDecisionBriefHandler._safe_float(review.get("lowRatingCount") or review.get("lowRatings"))
+        low_rating_ratio = (low_rating_count / review_count) if review_count and low_rating_count is not None else None
+        negative_theme_count = BossDecisionBriefHandler._sum_counts(review.get("negativeThemes") or [])
+        negative_dish_count = BossDecisionBriefHandler._sum_counts(review.get("negativeDishMentions") or [])
+        themes = BossDecisionBriefHandler._theme_names(review.get("negativeThemes") or [])
+        negative_dishes = BossDecisionBriefHandler._item_names(review.get("negativeDishMentions") or [])
+
+        signals: list[str] = []
+        if rating is not None and rating < 4.3:
+            signals.append(f"评分只有 {round(rating, 2)}")
+        if low_rating_ratio is not None and low_rating_ratio >= 0.15:
+            signals.append(f"低分评价占比约 {round(low_rating_ratio * 100, 1)}%")
+        if negative_theme_count >= 100:
+            signals.append(f"差评主题累计 {int(negative_theme_count)} 次")
+        if negative_dish_count >= 80:
+            signals.append(f"风险菜被点名 {int(negative_dish_count)} 次")
+        if themes:
+            signals.append(f"点评集中在 {'、'.join(themes[:3])}")
+        if negative_dishes:
+            signals.append(f"风险菜是 {'、'.join(negative_dishes[:3])}")
+
+        hard_risk = (
+            (rating is not None and rating < 4.3)
+            or (low_rating_ratio is not None and low_rating_ratio >= 0.15)
+            or negative_theme_count >= 100
+            or negative_dish_count >= 150
+        )
+        action_type, primary_problem, why = BossDecisionBriefHandler._review_action_type(
+            review.get("negativeThemes") or [],
+            review.get("negativeDishMentions") or [],
+        )
+        return {
+            "isHigh": hard_risk,
+            "actionType": action_type,
+            "primaryProblem": primary_problem,
+            "why": why,
+            "signals": signals,
+        }
+
+    @staticmethod
+    def _review_action_type(negative_themes: Any, negative_dishes: Any) -> tuple[str, str, str]:
+        theme_scores = {
+            "staffing_schedule": 0.0,
+            "staff_training": 0.0,
+            "kitchen_quality": 0.0,
+        }
+        for item in negative_themes if isinstance(negative_themes, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("theme") or item.get("name") or "").strip()
+            count = BossDecisionBriefHandler._safe_float(item.get("count") or item.get("mentions") or item.get("qty")) or 1.0
+            if BossDecisionBriefHandler._contains_any(name, ("慢", "排队", "等位", "等餐", "上菜", "出餐")):
+                theme_scores["staffing_schedule"] += count
+            if BossDecisionBriefHandler._contains_any(name, ("服务", "态度", "培训", "话术", "不主动")):
+                theme_scores["staff_training"] += count
+            if BossDecisionBriefHandler._contains_any(name, ("味", "咸", "淡", "冷", "出品", "不稳定", "难吃", "食材", "份量")):
+                theme_scores["kitchen_quality"] += count
+
+        negative_dish_count = BossDecisionBriefHandler._sum_counts(negative_dishes)
+        if negative_dish_count >= 150:
+            theme_scores["kitchen_quality"] += negative_dish_count
+
+        action_type = max(theme_scores, key=lambda key: theme_scores[key])
+        if theme_scores[action_type] <= 0:
+            return (
+                "experience_fix",
+                "顾客体验风险",
+                "点评风险优先。现在如果先推套餐，可能只是把更多客人带到不稳定体验里；先修出品、服务或等位问题。",
+            )
+        if action_type == "staffing_schedule":
+            return (
+                "staffing_schedule",
+                "高峰排班/出餐动线问题",
+                "点评风险优先，而且问题更像排班和出餐节奏。先把高峰人手、传菜和催菜动线调顺，再谈套餐。",
+            )
+        if action_type == "staff_training":
+            return (
+                "staff_training",
+                "员工服务意识/话术问题",
+                "点评风险优先，而且问题更像员工服务意识和话术。先训练前厅动作，再放大引流。",
+            )
+        return (
+            "kitchen_quality",
+            "厨房出品稳定性问题",
+            "点评风险优先，而且问题更像厨房出品。先把口味、温度、份量和被点名菜稳定下来，再谈套餐。",
+        )
+
+    @staticmethod
+    def _cost_margin_signal(params: dict[str, Any], menu: dict[str, Any]) -> dict[str, Any] | None:
+        financial = params.get("financial_summary") or params.get("financialMetrics") or {}
+        stocktake = params.get("monthly_stocktake") or {}
+        has_cost_context = bool(financial or stocktake)
+        signals: list[str] = []
+        hard_cost_problem = False
+        if isinstance(financial, dict):
+            food_cost_ratio = BossDecisionBriefHandler._safe_float(
+                financial.get("foodCostRatio") or financial.get("food_cost_ratio")
+            )
+            gross_margin_pct = BossDecisionBriefHandler._safe_float(
+                financial.get("grossMarginPct") or financial.get("gross_margin_pct")
+            )
+            if food_cost_ratio is not None:
+                normalized_ratio = food_cost_ratio * 100 if food_cost_ratio <= 1 else food_cost_ratio
+                if normalized_ratio >= 45:
+                    signals.append(f"食材成本率约 {round(normalized_ratio, 1)}%，已经偏高")
+                    hard_cost_problem = True
+            if gross_margin_pct is not None and gross_margin_pct < 55:
+                signals.append(f"综合毛利率约 {round(gross_margin_pct, 1)}%，需要先查成本")
+                hard_cost_problem = True
+
+        metrics = BossDecisionBriefHandler._menu_item_metrics(menu)
+        low_margin_items: list[str] = []
+        for name, item in metrics.items():
+            unit_revenue = item.get("unitRevenue") or 0.0
+            unit_food_cost = item.get("unitFoodCost")
+            if unit_revenue and unit_food_cost is not None:
+                margin_pct = (unit_revenue - unit_food_cost) / unit_revenue * 100
+                if margin_pct < 50 and (item.get("revenue") or 0.0) > 50000:
+                    low_margin_items.append(f"{name} 毛利约 {round(margin_pct, 1)}%")
+        if low_margin_items:
+            signals.append(f"热卖菜毛利偏低：{'、'.join(low_margin_items[:2])}")
+            hard_cost_problem = has_cost_context
+
+        if hard_cost_problem and isinstance(stocktake, dict):
+            losses = stocktake.get("topLossItems") or []
+            variances = stocktake.get("varianceItems") or []
+            if losses:
+                signals.append(f"盘点/报损集中在 {'、'.join(str(item) for item in losses[:2])}")
+            if variances:
+                signals.append(f"BOM 差异集中在 {'、'.join(str(item) for item in variances[:2])}")
+
+        if hard_cost_problem and signals:
+            return {
+                "why": "；".join(signals) + "。这时先查采购、BOM、损耗和赠品，比先推套餐更重要。",
+                "signals": signals,
+            }
+        return None
+
+    @staticmethod
+    def _traffic_conversion_signal(params: dict[str, Any], pos: dict[str, Any]) -> dict[str, Any] | None:
+        traffic = BossDecisionBriefHandler._traffic_persona_summary(params, {})
+        platform = BossDecisionBriefHandler._platform_channel_summary(pos)
+        if not traffic.get("available"):
+            return None
+
+        passersby = BossDecisionBriefHandler._safe_float(traffic.get("storefrontPassersby"))
+        capture_rate = BossDecisionBriefHandler._safe_float(traffic.get("captureRate"))
+        peer_capture = BossDecisionBriefHandler._safe_float(traffic.get("peerCaptureRate"))
+        mall_lift = BossDecisionBriefHandler._safe_float(traffic.get("mallVsLastWeekPct"))
+        order_vs_traffic = BossDecisionBriefHandler._safe_float(traffic.get("storeOrdersVsTrafficPct"))
+        top_segment = traffic.get("topSegment")
+        top_need = traffic.get("topNeed")
+
+        signals: list[str] = []
+        conversion_problem = False
+        if passersby is not None and passersby >= 3000 and capture_rate is not None:
+            signals.append(f"门口路过约 {int(passersby)}，进店转化约 {round(capture_rate * 100, 1)}%")
+            if capture_rate < 0.18:
+                conversion_problem = True
+        if peer_capture is not None and capture_rate is not None and peer_capture - capture_rate >= 0.04:
+            signals.append(f"同层参考进店转化约 {round(peer_capture * 100, 1)}%，本店低 {round((peer_capture - capture_rate) * 100, 1)} 个点")
+            conversion_problem = True
+        if mall_lift is not None and mall_lift >= 8 and order_vs_traffic is not None and order_vs_traffic <= -8:
+            signals.append(f"商场客流较上周高 {round(mall_lift, 1)}%，但本店订单相对客流低 {round(abs(order_vs_traffic), 1)}%")
+            conversion_problem = True
+        if top_segment:
+            signals.append(f"主要路过客是 {top_segment}" + (f"，他们更在意{top_need}" if top_need else ""))
+        if platform.get("weakConversionPlatforms"):
+            signals.append(f"弱转化平台：{'、'.join(platform['weakConversionPlatforms'])}")
+            conversion_problem = True
+
+        if conversion_problem and signals:
+            return {
+                "why": "；".join(signals) + "。先把门口展示、点评/美团/抖音页面和核销承接改掉，比继续买流量更优先。",
+                "signals": signals,
+            }
+        return None
+
+    @staticmethod
+    def _external_event_signal(params: dict[str, Any]) -> dict[str, Any] | None:
+        pos = params.get("pos_summary") or {}
+        external = params.get("external_signals") or {}
+        if not isinstance(pos, dict) or not isinstance(external, dict):
+            return None
+
+        anomaly = pos.get("dailyAnomaly") or pos.get("anomaly") or {}
+        revenue_lift = BossDecisionBriefHandler._safe_float(
+            anomaly.get("revenueVsBaselinePct") if isinstance(anomaly, dict) else None
+        )
+        orders_lift = BossDecisionBriefHandler._safe_float(
+            anomaly.get("ordersVsBaselinePct") if isinstance(anomaly, dict) else None
+        )
+        activities = external.get("activities") or external.get("events") or []
+        weather = external.get("weather") or {}
+        has_activity = isinstance(activities, list) and bool(activities)
+        weather_text = weather.get("text") if isinstance(weather, dict) else None
+
+        signals: list[str] = []
+        if revenue_lift is not None and abs(revenue_lift) >= 25:
+            signals.append(f"当天营收较基准变化 {round(revenue_lift, 1)}%")
+        if orders_lift is not None and abs(orders_lift) >= 25:
+            signals.append(f"当天订单较基准变化 {round(orders_lift, 1)}%")
+        if has_activity:
+            titles = [str(item.get("title") or item.get("name") or item) for item in activities[:2]]
+            signals.append(f"商场/周边活动：{'、'.join(titles)}")
+        if weather_text:
+            signals.append(f"天气：{weather_text}")
+
+        activity_lift = any(
+            (BossDecisionBriefHandler._safe_float(item.get("expectedTrafficLiftPct")) or 0) >= 25
+            for item in activities
+            if isinstance(item, dict)
+        ) if has_activity else False
+        if (revenue_lift is not None and abs(revenue_lift) >= 25 and (has_activity or weather_text)) or activity_lift:
+            return {
+                "why": "；".join(signals) + "。先按外部流量日安排备货、排班和承接，不要误判为日常经营自然变好。",
+                "signals": signals,
+            }
+        return None
+
+    @staticmethod
+    def _seating_mix_signal(pos: dict[str, Any]) -> dict[str, Any] | None:
+        two_person_demand = BossDecisionBriefHandler._segment_share(pos, ("2人桌", "双人", "2人", "二人"))
+        two_seat_supply = BossDecisionBriefHandler._table_share(pos, ("2人桌", "二人桌", "2人台", "双人桌", "2座"))
+        four_seat_supply = BossDecisionBriefHandler._table_share(pos, ("4人桌", "四人桌", "4人台", "四人台", "4座"))
+        if two_person_demand >= 0.45 and two_seat_supply and two_seat_supply <= 0.30 and two_person_demand - two_seat_supply >= 0.18:
+            signals = [
+                f"2 人客占比约 {round(two_person_demand * 100, 1)}%",
+                f"2 人桌供给约 {round(two_seat_supply * 100, 1)}%",
+            ]
+            if four_seat_supply:
+                signals.append(f"4 人桌供给约 {round(four_seat_supply * 100, 1)}%")
+            return {
+                "why": "；".join(signals) + "。先调桌型比例，比先做套餐更直接。",
+                "signals": signals,
+            }
+        return None
+
+    @staticmethod
+    def _staffing_schedule_signal(pos: dict[str, Any]) -> dict[str, Any] | None:
+        dayparts = pos.get("daypartRevenue") or []
+        staffing = pos.get("staffingByDaypart") or pos.get("laborByDaypart") or pos.get("laborCoverage") or []
+        if not isinstance(dayparts, list) or not isinstance(staffing, list):
+            return None
+        revenue_shares = BossDecisionBriefHandler._named_share_map(dayparts, ("name", "daypart"))
+        labor_shares = BossDecisionBriefHandler._named_share_map(staffing, ("name", "daypart", "shift"))
+        for name, revenue_share in revenue_shares.items():
+            labor_share = labor_shares.get(name)
+            if labor_share is None:
+                continue
+            if revenue_share >= 0.45 and revenue_share - labor_share >= 0.18:
+                return {
+                    "why": f"{name} 收入占比约 {round(revenue_share * 100, 1)}%，但员工工时占比约 {round(labor_share * 100, 1)}%。先调排班。",
+                    "signals": [
+                        f"{name} 收入占比 {round(revenue_share * 100, 1)}%",
+                        f"{name} 工时占比 {round(labor_share * 100, 1)}%",
+                    ],
+                }
+        return None
+
+    @staticmethod
+    def _weekday_weekend_gap(pos: dict[str, Any]) -> float | None:
+        weekday_weekend = pos.get("weekdayWeekend") or {}
+        if not isinstance(weekday_weekend, dict):
+            return None
+        return BossDecisionBriefHandler._safe_float(weekday_weekend.get("gapPct"))
+
+    @staticmethod
+    def _weak_lunch_or_low_peak(pos: dict[str, Any]) -> str | None:
+        dayparts = pos.get("daypartRevenue") or []
+        if not isinstance(dayparts, list):
+            return None
+        lunch_share: float | None = None
+        low_peak_name: str | None = None
+        low_peak_share: float | None = None
+        for item in dayparts:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("daypart") or "").strip()
+            share = BossDecisionBriefHandler._safe_float(item.get("share") or item.get("revenueShare"))
+            if share is not None and share > 1:
+                share = share / 100
+            if not name or share is None:
+                continue
+            if "午" in name:
+                lunch_share = share
+            if low_peak_share is None or share < low_peak_share:
+                low_peak_name = name
+                low_peak_share = share
+        if lunch_share is not None and lunch_share < 0.35:
+            return f"午市占比约 {round(lunch_share * 100, 1)}%，可以用小套餐测试承接"
+        if low_peak_name and low_peak_share is not None and low_peak_share < 0.25:
+            return f"{low_peak_name} 占比约 {round(low_peak_share * 100, 1)}%，适合先做低峰测试"
+        return None
+
+    @staticmethod
+    def _sum_counts(items: Any) -> float:
+        if not isinstance(items, list):
+            return 0.0
+        total = 0.0
+        for item in items:
+            if isinstance(item, dict):
+                total += BossDecisionBriefHandler._safe_float(item.get("count") or item.get("mentions") or item.get("qty")) or 0.0
+        return total
+
+    @staticmethod
+    def _table_share(pos: dict[str, Any], tokens: tuple[str, ...]) -> float:
+        table_mix = pos.get("tableMix") or pos.get("table_mix") or pos.get("seatMix") or pos.get("seatingMix") or []
+        if not isinstance(table_mix, list):
+            return 0.0
+        for item in table_mix:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("tableType") or item.get("type") or item.get("name") or item.get("segment") or "").strip()
+            if not name or not BossDecisionBriefHandler._contains_any(name, tokens):
+                continue
+            share = BossDecisionBriefHandler._safe_float(item.get("share") or item.get("ratio") or item.get("pct") or item.get("percent"))
+            if share is None:
+                continue
+            return share / 100 if share > 1 else share
+        return 0.0
+
+    @staticmethod
+    def _named_share_map(items: Any, name_keys: tuple[str, ...]) -> dict[str, float]:
+        if not isinstance(items, list):
+            return {}
+        result: dict[str, float] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = next((str(item.get(key)).strip() for key in name_keys if item.get(key)), "")
+            share = BossDecisionBriefHandler._safe_float(item.get("share") or item.get("ratio") or item.get("pct") or item.get("percent"))
+            if not name or share is None:
+                continue
+            result[name] = share / 100 if share > 1 else share
+        return result
+
+    @staticmethod
+    def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
+        return any(token in text for token in tokens)
 
     @staticmethod
     def _menu_item_metrics(menu: dict[str, Any]) -> dict[str, dict[str, Any]]:

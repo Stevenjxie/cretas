@@ -6,6 +6,7 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -58,6 +59,15 @@ public class IntentExecutionOrchestrator {
     private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
             "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
 
+    private static final Pattern RESTAURANT_OWNER_ACTION_DIRECT_PATTERN = Pattern.compile(
+            "老板|今天.*动作|具体动作|提高营收|提升营收|怎么提高|怎么提升|先改|先做|今天.*做|今天.*推|今晚.*排班|要怎么备货|怎么调|怎么排班|帮我算.*套餐");
+
+    private static final Pattern RESTAURANT_OWNER_ACTION_TOPIC_PATTERN = Pattern.compile(
+            "二人桌|四人桌|桌型|翻台|排队|小套餐|套餐|排班|员工|厨房|出餐|商圈|客流|画像|进店|转化|曝光|核销|活动|天气|备货|推品|毛利");
+
+    private static final Pattern RESTAURANT_OWNER_ACTION_DECISION_PATTERN = Pattern.compile(
+            "今天|今晚|这个星期|本周|怎么|如何|要不要|建议|推|调|排|改|提高|提升|安排|算|做什么|动作");
+
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
     private final IntentSemanticsParser semanticsParser;
@@ -104,6 +114,9 @@ public class IntentExecutionOrchestrator {
 
     @Autowired(required = false)
     private com.cretas.aims.config.IntentSlotConfiguration intentSlotConfiguration;
+
+    @Autowired(required = false)
+    private PythonSmartBIClient pythonSmartBIClient;
 
     // Sprint 13 #305 业态门控: shared business-type gate (RESTAURANT vs FACTORY). Reused by the
     // explicit-intent flow + SseStreamingService so all paths gate identically.
@@ -216,6 +229,7 @@ public class IntentExecutionOrchestrator {
         //                  recognizeIntentWithConfidence, which already handles VETO_WRITE safely
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
+        String userInput = request.getUserInput();
         String vInput = request.getUserInput();
         if (vInput != null && !vInput.isEmpty()) {
             QueryPreprocessorService.NegationKind vk;
@@ -230,6 +244,13 @@ public class IntentExecutionOrchestrator {
                 return buildNegationVetoClarificationResponse(vInput);
             }
             negationVetoWrite = (vk == QueryPreprocessorService.NegationKind.VETO_WRITE);
+        }
+
+        // 0.15. 餐饮老板动作建议统一入口:
+        // Web Admin 只调用 Java /ai-intents/execute；需要 Python 深度分析时由 Java 内部路由。
+        // 放在普通餐饮 phrase shortcut 前面，避免“提高营收/排班/套餐/桌型”被普通查询工具抢走。
+        if (!negationVetoWrite && shouldRouteRestaurantOwnerAction(factoryId, userInput)) {
+            return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
 
         // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
@@ -259,7 +280,6 @@ public class IntentExecutionOrchestrator {
         //
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
-        String userInput = request.getUserInput();
         if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
@@ -390,7 +410,10 @@ public class IntentExecutionOrchestrator {
         }
 
         // Drools 验证
-        if (validationEnabled) {
+        // Read-only query intents should not enter the Drools validation engine:
+        // the engine is meant to guard writes/critical actions, and repeated
+        // compilation on high-volume chat queries can exhaust JVM Metaspace.
+        if (shouldRunDroolsValidation(intent)) {
             ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
             if (!validationResult.isValid()) {
                 return buildDroolsFailureResponse(intent, validationResult);
@@ -1612,6 +1635,153 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    private boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        String factoryDomain = resolveFactoryDomainSafe(factoryId);
+        if (!"RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return false;
+        }
+        if (RESTAURANT_OWNER_ACTION_DIRECT_PATTERN.matcher(userInput).find()) {
+            return true;
+        }
+        return RESTAURANT_OWNER_ACTION_TOPIC_PATTERN.matcher(userInput).find()
+                && RESTAURANT_OWNER_ACTION_DECISION_PATTERN.matcher(userInput).find();
+    }
+
+    @SuppressWarnings("unchecked")
+    private IntentExecuteResponse executeRestaurantOwnerActionChat(String factoryId,
+                                                                   IntentExecuteRequest request,
+                                                                   Long userId) {
+        Map<String, Object> context = request.getContext() == null
+                ? Collections.emptyMap()
+                : request.getContext();
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("factory_id", factoryId);
+        body.put("factoryId", factoryId);
+        body.put("message", request.getUserInput());
+        putIfPresent(body, "sessionId", stringValue(context.get("ownerActionSessionId")));
+        putIfPresent(body, "demoScenario", stringValue(context.get("ownerActionScenario")));
+        body.put("storeName", stringValueOrDefault(context.get("storeName"), "青花椒上海示范店"));
+        body.put("subSector", stringValueOrDefault(context.get("subSector"), "中餐/川味酸菜鱼"));
+        body.put("period", stringValueOrDefault(context.get("period"), "this_week"));
+
+        if (pythonSmartBIClient == null) {
+            return buildRestaurantOwnerActionError("老板动作分析服务未配置，请稍后重试。", userId);
+        }
+
+        Map<String, Object> raw = pythonSmartBIClient.askRestaurantOwnerActionChat(body);
+        boolean ok = Boolean.TRUE.equals(raw.get("success"));
+        Object dataObj = raw.get("data");
+        if (!ok || !(dataObj instanceof Map<?, ?> dataMapRaw)) {
+            String message = stringValueOrDefault(raw.get("message"), "老板动作分析暂时没有返回，请稍后重试。");
+            return buildRestaurantOwnerActionError(message, userId);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
+        data.put("source", "restaurant_owner_action");
+        data.put("suggestedFollowups", normalizeOwnerActionFollowups(
+                data.get("followUpSuggestions"),
+                stringValue(data.get("scenario"))));
+
+        String answer = firstNonBlank(
+                stringValue(data.get("responseText")),
+                stringValue(data.get("answer")),
+                "已生成老板决策建议。");
+        String sessionId = stringValue(data.get("sessionId"));
+
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode("RESTAURANT_OWNER_ACTION_CHAT")
+                .intentName("餐饮老板动作建议")
+                .intentCategory("RESTAURANT")
+                .sensitivityLevel("LOW")
+                .confidence(0.99)
+                .matchMethod("JAVA_OWNER_ACTION_ROUTE")
+                .status("SUCCESS")
+                .message(answer)
+                .formattedText(answer)
+                .resultData(data)
+                .executedAt(LocalDateTime.now())
+                .sessionId(sessionId)
+                .metadata(ownerActionMetadata(userId))
+                .build();
+    }
+
+    private IntentExecuteResponse buildRestaurantOwnerActionError(String message, Long userId) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode("RESTAURANT_OWNER_ACTION_CHAT")
+                .intentName("餐饮老板动作建议")
+                .intentCategory("RESTAURANT")
+                .status("ERROR")
+                .message(message)
+                .formattedText(message)
+                .executedAt(LocalDateTime.now())
+                .metadata(ownerActionMetadata(userId))
+                .build();
+    }
+
+    private Map<String, Object> ownerActionMetadata(Long userId) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("source", "restaurant_owner_action");
+        if (userId != null) {
+            metadata.put("userId", userId);
+        }
+        return metadata;
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private String stringValueOrDefault(Object value, String fallback) {
+        String actual = stringValue(value);
+        return actual == null || actual.isBlank() ? fallback : actual;
+    }
+
+    private String firstNonBlank(String first, String second, String fallback) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        if (second != null && !second.isBlank()) {
+            return second;
+        }
+        return fallback;
+    }
+
+    private List<Map<String, Object>> normalizeOwnerActionFollowups(Object followUps, String scenario) {
+        if (!(followUps instanceof List<?> items)) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Object item : items) {
+            String question = stringValue(item);
+            if (question == null || question.isBlank()) {
+                continue;
+            }
+            Map<String, Object> followup = new LinkedHashMap<>();
+            followup.put("label", question.length() > 18 ? question.substring(0, 18) + "..." : question);
+            followup.put("question", question);
+            if (scenario != null && !scenario.isBlank()) {
+                followup.put("ownerActionScenario", scenario);
+            }
+            normalized.add(followup);
+            if (normalized.size() >= 4) {
+                break;
+            }
+        }
+        return normalized;
+    }
+
     private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult, String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
         // C1: drop candidates whose owning intent's business_type is incompatible with this
@@ -1945,6 +2115,13 @@ public class IntentExecutionOrchestrator {
             failedResult.addViolation("规则验证异常", "Drools规则引擎执行异常: " + e.getMessage(), "HIGH");
             return failedResult;
         }
+    }
+
+    private boolean shouldRunDroolsValidation(AIIntentConfig intent) {
+        if (!validationEnabled || intent == null) {
+            return false;
+        }
+        return !"QUERY".equals(extractOperationType(intent));
     }
 
     private String extractOperationType(AIIntentConfig intent) {

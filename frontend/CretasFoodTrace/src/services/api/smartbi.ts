@@ -15,6 +15,8 @@ import type {
   ExecutiveDashboardData,
   NLQueryRequest,
   NLQueryResponse,
+  RestaurantOwnerActionChatRequest,
+  RestaurantOwnerActionChatResponse,
   DrillDownRequest,
   DrillDownResponse,
   SmartBIAlert,
@@ -225,6 +227,26 @@ export const smartBIApi = {
     return apiClient.post<ApiResponse<NLQueryResponse>>(
       `/api/mobile/${currentFactoryId}/smart-bi/query`,
       queryBody
+    );
+  },
+
+  /**
+   * 餐饮老板决策 AI 问答（demo 专用）
+   *
+   * 后端会根据老板的问题路由到套餐、桌型、排班、培训、厨房、成本、
+   * 商场活动等动作场景，并用 sessionId 保持追问上下文。
+   */
+  restaurantOwnerActionChat: async (
+    request: RestaurantOwnerActionChatRequest
+  ): Promise<ApiResponse<RestaurantOwnerActionChatResponse>> => {
+    const { factoryId, ...queryBody } = request;
+    const currentFactoryId = requireFactoryId(factoryId);
+    return apiClient.post<ApiResponse<RestaurantOwnerActionChatResponse>>(
+      '/api/smartbi/restaurant/sections/owner-action-chat',
+      {
+        ...queryBody,
+        factory_id: currentFactoryId,
+      }
     );
   },
 

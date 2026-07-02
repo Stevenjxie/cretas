@@ -602,6 +602,7 @@ async def order_type_mix(
     if end is not None:
         params.append(end)
         conds.append(f"date <= ${len(params)}")
+    daily_where = " AND ".join(conds)
     conds.append("order_type IS NOT NULL")
     where = " AND ".join(conds)
     async with pool.acquire() as conn:
@@ -618,9 +619,43 @@ async def order_type_mix(
             *params,
         )
     total = sum((Decimal(str(r["amt"])) for r in rows), Decimal("0"))
+    total_bills = sum((int(r["bills"] or 0) for r in rows), 0)
+    avg_ticket: Optional[Decimal] = None
+    revenue_estimated = False
+    estimation_note: Optional[str] = None
+    if total <= 0 and total_bills > 0:
+        async with pool.acquire() as conn:
+            avg_row = await conn.fetchrow(
+                f"""
+                SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue,
+                       COALESCE(SUM(bill_count), 0)                AS bills
+                  FROM agg_daily
+                 WHERE {daily_where}
+                """,
+                *params,
+            )
+        overall_revenue = Decimal(str(avg_row["revenue"] or 0)) if avg_row else Decimal("0")
+        overall_bills = int(avg_row["bills"] or 0) if avg_row else 0
+        if overall_revenue > 0 and overall_bills > 0:
+            avg_ticket = overall_revenue / Decimal(overall_bills)
+            revenue_estimated = True
+            estimation_note = "堂食/外卖金额字段缺失，按全店平均客单价估算，仅用于结构参考。"
+
+    if revenue_estimated and avg_ticket is not None:
+        total = sum(
+            (
+                (avg_ticket * Decimal(int(r["bills"] or 0))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                for r in rows
+            ),
+            Decimal("0"),
+        )
+
     types = []
     for r in rows:
         amt = Decimal(str(r["amt"]))
+        bills = int(r["bills"] or 0)
+        if revenue_estimated and avg_ticket is not None:
+            amt = (avg_ticket * Decimal(bills)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         pct = (
             (amt / total * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
             if total > 0
@@ -632,14 +667,17 @@ async def order_type_mix(
             # is a no-op for qhj, but guards against bracketed POS export values.
             "order_type": _clean_display_name(r["order_type"]),
             "revenue": float(amt),
-            "bill_count": int(r["bills"]),
+            "bill_count": bills,
             "revenue_pct": float(pct),
+            "revenue_estimated": revenue_estimated,
         })
     return {
         "factory_id": factory_id,
         "start_date": start.isoformat() if start is not None else None,
         "end_date": end.isoformat() if end is not None else None,
         "total_revenue": float(total),
+        "revenue_estimated": revenue_estimated,
+        "estimation_note": estimation_note,
         "order_types": types,
     }
 

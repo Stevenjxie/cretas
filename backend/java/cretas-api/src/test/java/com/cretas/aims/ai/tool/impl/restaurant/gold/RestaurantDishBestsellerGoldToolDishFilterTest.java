@@ -31,6 +31,31 @@ class RestaurantDishBestsellerGoldToolDishFilterTest {
     }
 
     @Test
+    @DisplayName("format excludes low-value support items before ranking")
+    void formatExcludesLowValueSupportItemsBeforeRanking() {
+        Map<String, Object> result = goldResult();
+        result.put("top_products", List.of(
+                Map.of("product_id", 300, "product_name", "米饭",
+                        "qty_sold", 9000.0, "revenue", 90000.0),
+                Map.of("product_id", 301, "product_name", "王老吉",
+                        "qty_sold", 5000.0, "revenue", 50000.0),
+                Map.of("product_id", 201, "product_name", "招牌青花椒鱼",
+                        "qty_sold", 1500.0, "revenue", 45000.0),
+                Map.of("product_id", 202, "product_name", "抖音松叶蟹368套餐",
+                        "qty_sold", 800.0, "revenue", 28000.0)
+        ));
+
+        Map<String, Object> formattedResult = tool.format(result);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rank = (List<Map<String, Object>>) formattedResult.get("畅销TOP5");
+        assertThat(rank).extracting(row -> row.get("菜品"))
+                .containsExactly("招牌青花椒鱼", "抖音松叶蟹368套餐");
+        assertThat(formattedResult.get("message").toString()).contains("已先排除低价值配套项");
+        assertThat(formattedResult.get("message").toString()).doesNotContain("1. 米饭");
+    }
+
+    @Test
     @DisplayName("dish_id filter returns only the selected dish row")
     void dishIdFilterReturnsSingleDish() {
         Map<String, Object> input = goldResult();
