@@ -3,6 +3,7 @@ package com.cretas.aims.service.sales.impl;
 import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -63,15 +64,29 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     .withHint("请先在发货单中设置发货数量").withHintTarget("deliveredQuantity");
         }
 
-        // T4-D5 (#572): resolve the expected source warehouse for this delivery line.
-        // sourceWarehouseCode is per-row (PR #547/#564); null/blank → WH-LOG (legacy default).
-        String expectedWarehouseId;
-        String expectedWarehouseCode = item.getSourceWarehouseCode();
-        if (expectedWarehouseCode != null && !expectedWarehouseCode.isBlank()) {
-            expectedWarehouseId = warehouseResolver.resolveId(factoryId, expectedWarehouseCode);
-        } else {
-            expectedWarehouseId = warehouseResolver.resolveLogisticsId(factoryId);
-            expectedWarehouseCode = "WH-LOG";
+        // T4-D5 (#572) + 🔴 G1 (2026-07-03): resolve the expected source warehouse for this line.
+        // sourceWarehouseCode is per-row (PR #547/#564).
+        //   - EXPLICIT (non-blank): batch must match that warehouse exactly (409 guard preserved —
+        //     blocks manual pickers from bypassing the line's declared source warehouse).
+        //   - BLANK (common case): NO declared source → NO single-warehouse constraint. Accept a
+        //     batch from ANY shippable (non-RD) warehouse — mirrors recommendFifo / deduct discovery
+        //     so 「推荐能选 → 分配能过 → 发货能扣」三段一致. This is NOT relaxing the explicit-source
+        //     guard; it removes the phantom WH-LOG default that was never an explicit user choice and
+        //     caused FG in WH-WKS/FINISHED to be un-shippable (Steve #1 named bug).
+        String explicitWarehouseCode = item.getSourceWarehouseCode();
+        boolean hasExplicitSource = explicitWarehouseCode != null && !explicitWarehouseCode.isBlank();
+        String expectedWarehouseId = hasExplicitSource
+                ? warehouseResolver.resolveId(factoryId, explicitWarehouseCode)
+                : null;
+        // For the blank case, resolve RD warehouse id to exclude non-saleable trial batches.
+        // Defensive: factories without a WH-RD seed → null (nothing to exclude).
+        String rdWarehouseId = null;
+        if (!hasExplicitSource) {
+            try {
+                rdWarehouseId = warehouseResolver.resolveRdId(factoryId);
+            } catch (BusinessException ignore) {
+                rdWarehouseId = null;
+            }
         }
 
         // 2. 校验每一条 allocation：batch 存在、同工厂、warehouse 匹配、有足够可用库存
@@ -93,12 +108,20 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 throw new BusinessException(403, "成品批次不属于当前工厂: " + dto.getFinishedGoodsBatchId())
                         .withHint("跨工厂调用被拒绝, 请选择本工厂的成品批次").withHintTarget("finishedGoodsBatchId");
             }
-            // T4-D5 (#572): batch.warehouseId must match line's declared sourceWarehouseCode.
-            // Blocks manual pickers from bypassing the line's intended warehouse.
-            if (!expectedWarehouseId.equals(batch.getWarehouseId())) {
+            // T4-D5 (#572) + 🔴 G1: warehouse guard.
+            if (hasExplicitSource) {
+                // EXPLICIT source → batch must be in that exact warehouse (409 guard preserved).
+                if (!expectedWarehouseId.equals(batch.getWarehouseId())) {
+                    throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
+                            + " 所在仓库与发货行声明的来源仓库 " + explicitWarehouseCode + " 不匹配")
+                            .withHint("请选择 " + explicitWarehouseCode + " 仓库内的成品批次, 或修改发货行的来源仓库")
+                            .withHintTarget("finishedGoodsBatchId");
+                }
+            } else if (rdWarehouseId != null && rdWarehouseId.equals(batch.getWarehouseId())) {
+                // BLANK source → any warehouse OK EXCEPT the R&D/trial warehouse (non-saleable).
                 throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
-                        + " 所在仓库与发货行声明的来源仓库 " + expectedWarehouseCode + " 不匹配")
-                        .withHint("请选择 " + expectedWarehouseCode + " 仓库内的成品批次, 或修改发货行的来源仓库")
+                        + " 位于研发/中试库, 不可用于销售出货")
+                        .withHint("研发/中试批次不混入可售库存, 请选择其他仓库的成品批次")
                         .withHintTarget("finishedGoodsBatchId");
             }
             BigDecimal available = batch.getProducedQuantity()
@@ -162,15 +185,21 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     .withHint("请输入大于 0 的需求数量").withHintTarget("requiredQty");
         }
 
-        // T4-D5 (#572): honor caller-supplied sourceWarehouseCode (PR #547/#564 data contract).
-        // Legacy callers passing null fall back to WH-LOG — preserves D5 default.
-        // 用途拆分 (2026-07-02): 默认来源走 resolveSalesOutboundWh (SALES_OUTBOUND_DEFAULT),
-        // 未配置回退 WH-LOG = 现状。
-        String warehouseId = (sourceWarehouseCode != null && !sourceWarehouseCode.isBlank())
-                ? warehouseResolver.resolveId(factoryId, sourceWarehouseCode)
-                : warehouseResolver.resolveSalesOutboundWh(factoryId);
-        var batches = finishedGoodsBatchRepository
-                .findAvailableBatchesFifoByWarehouse(factoryId, productTypeId, warehouseId);
+        // T4-D5 (#572) + 🔴 G1 (2026-07-03): warehouse discovery.
+        //   - EXPLICIT sourceWarehouseCode → FIFO within that warehouse (respect explicit choice).
+        //   - BLANK (common case) → FEFO across ALL shippable (non-RD) warehouses, so FG produced
+        //     into WH-WKS / FINISHED / transferred to WH-LOG is discoverable. Fixes Steve #1 bug
+        //     where a blank source hard-defaulted to a single WH-LOG and returned empty.
+        boolean hasExplicitSource = sourceWarehouseCode != null && !sourceWarehouseCode.isBlank();
+        List<FinishedGoodsBatch> batches;
+        if (hasExplicitSource) {
+            String warehouseId = warehouseResolver.resolveId(factoryId, sourceWarehouseCode);
+            batches = finishedGoodsBatchRepository
+                    .findAvailableBatchesFifoByWarehouse(factoryId, productTypeId, warehouseId);
+        } else {
+            batches = finishedGoodsBatchRepository
+                    .findAvailableBatchesFefoAllWarehousesExcluding(factoryId, productTypeId, WarehouseCodes.WH_RD);
+        }
 
         List<Map<String, Object>> result = new ArrayList<>();
         BigDecimal remaining = requiredQty;
@@ -197,6 +226,15 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
+    }
+
+    @Override
+    public List<String> warehousesWithAvailableStock(String factoryId, String productTypeId) {
+        if (factoryId == null || factoryId.isBlank() || productTypeId == null || productTypeId.isBlank()) {
+            return List.of();
+        }
+        return finishedGoodsBatchRepository
+                .findWarehouseCodesWithAvailableStock(factoryId, productTypeId, WarehouseCodes.WH_RD);
     }
 
     @Override

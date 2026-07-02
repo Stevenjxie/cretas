@@ -9,6 +9,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -2885,16 +2886,25 @@ public class SalesServiceImpl implements SalesService {
      * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
     private void deductFinishedGoodsInventory(String factoryId, SalesDeliveryItem item) {
-        // T4-D5 #572: honor per-row sourceWarehouseCode (PR #547/#564 data contract).
-        // Legacy rows (sourceWarehouseCode null) fall back to WH-LOG — preserves D5 default.
+        // T4-D5 #572 + 🔴 G1 (2026-07-03): per-row sourceWarehouseCode drives the candidate set.
+        //   - EXPLICIT source → deduct only from that warehouse (respect explicit choice).
+        //   - BLANK (common case) → deduct FEFO across ALL shippable (non-RD) warehouses. Mirrors
+        //     recommendFifo / allocateBatches discovery so 「推荐能选 → 分配能过 → 发货能扣」三段一致.
+        //     Fixes Steve #1 bug: FG produced into WH-WKS was invisible under the old WH-LOG-only default.
+        // R6 #6: findShippable* 过滤 (produced-shipped>0, 不减 reserved), 让被本 SO 预留耗尽
+        // (available=0) 的批次也能进入发货候选 —— Pass 2 动用其预留物理库存。
         String sourceCode = item.getSourceWarehouseCode();
-        String warehouseId = (sourceCode != null && !sourceCode.isBlank())
-                ? warehouseResolver.resolveId(factoryId, sourceCode)
-                : warehouseResolver.resolveLogisticsId(factoryId);
-        // R6 #6: 用 findShippableBatchesByWarehouse (过滤 produced-shipped>0, 不减 reserved),
-        // 让被本 SO 预留耗尽 (available=0) 的批次也能进入发货候选 —— Pass 2 动用其预留物理库存。
-        List<FinishedGoodsBatch> batches = finishedGoodsBatchRepository
-                .findShippableBatchesByWarehouse(factoryId, item.getProductTypeId(), warehouseId);
+        boolean hasExplicitSource = sourceCode != null && !sourceCode.isBlank();
+        List<FinishedGoodsBatch> batches;
+        if (hasExplicitSource) {
+            String warehouseId = warehouseResolver.resolveId(factoryId, sourceCode);
+            batches = finishedGoodsBatchRepository
+                    .findShippableBatchesByWarehouse(factoryId, item.getProductTypeId(), warehouseId);
+        } else {
+            batches = finishedGoodsBatchRepository
+                    .findShippableBatchesAllWarehousesExcluding(
+                            factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD);
+        }
 
         BigDecimal remaining = item.getDeliveredQuantity();
 
@@ -2929,10 +2939,10 @@ public class SalesServiceImpl implements SalesService {
         }
 
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-            String warehouseDisplay = (sourceCode != null && !sourceCode.isBlank()) ? sourceCode : "WH-LOG";
+            String warehouseDisplay = hasExplicitSource ? sourceCode : "全部可售仓库(除研发库)";
             throw new BusinessException(String.format("成品库存不足: 产品=%s, 仓库=%s, 缺少数量=%s",
                 item.getProductTypeId(), warehouseDisplay, remaining.toPlainString()))
-                .withHint("请检查 " + warehouseDisplay + " 库存, 或调整销售订单的来源仓库后再发货")
+                .withHint("请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
                 .withHintTarget("生产计划");
         }
     }

@@ -28,12 +28,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * T4-D5 (#572) tests: SalesDeliveryBatchAllocationServiceImpl must honor
- * SalesDeliveryItem.sourceWarehouseCode in both allocateBatches (manual pick)
- * and recommendFifo (FIFO recommendation) paths.
+ * T4-D5 (#572) + 🔴 G1 (2026-07-03) tests: SalesDeliveryBatchAllocationServiceImpl
+ * warehouse discovery / guard semantics.
  *
- * <p>Legacy callers / rows with null sourceWarehouseCode fall back to WH-LOG
- * (preserves D5 default per PR #310 §5).
+ * <ul>
+ *   <li><b>EXPLICIT</b> sourceWarehouseCode → strict single-warehouse (recommend filters, allocate
+ *       409-guards). Unchanged from T4-D5.</li>
+ *   <li><b>BLANK</b> sourceWarehouseCode (G1 fix) → NO single-warehouse constraint: recommend
+ *       searches ALL shippable (non-RD) warehouses; allocate accepts any non-RD warehouse batch.
+ *       Fixes Steve #1 bug where blank hard-defaulted to WH-LOG and returned empty even though FG
+ *       existed in WH-WKS.</li>
+ * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 class SalesDeliveryBatchAllocationServiceWarehouseTest {
@@ -49,6 +54,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     private static final String ITEM_ID = "42";
     private static final String WH_LOG_ID = "wh-log-uuid-001";
     private static final String WH_WKS_ID = "wh-wks-uuid-001";
+    private static final String WH_RD_ID = "wh-rd-uuid-001";
     private static final String PRODUCT_ID = "p-1";
 
     private SalesDeliveryItem deliveryItem(String sourceCode, BigDecimal qty) {
@@ -113,22 +119,46 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         verify(allocationRepository).saveAll(anyList());
     }
 
+    // 🔴 G1: blank source → accept a batch from ANY non-RD warehouse (previously 409'd WH-WKS batch).
     @Test
-    void allocateBatches_nullSourceWarehouseCode_fallsBackToWHLOG() {
+    void allocateBatches_blankSource_acceptsBatchFromAnyNonRdWarehouse() {
         SalesDeliveryItem item = deliveryItem(null, new BigDecimal("10"));
         when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
-        when(warehouseResolver.resolveLogisticsId(FID)).thenReturn(WH_LOG_ID);
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
 
-        FinishedGoodsBatch logBatch = batch("b1", WH_LOG_ID, new BigDecimal("20"));
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(logBatch));
+        // FG sits in WH-WKS (production landing zone) — under the old WH-LOG default this 409'd.
+        FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
         dto.setAllocatedQty(new BigDecimal("10"));
 
         assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
-        verify(warehouseResolver).resolveLogisticsId(FID);
+        verify(allocationRepository).saveAll(anyList());
+        // blank source resolves NO explicit warehouse — the phantom WH-LOG default is gone.
         verify(warehouseResolver, never()).resolveId(eq(FID), any());
+    }
+
+    // 🔴 G1: blank source still rejects a batch from the R&D/trial warehouse (non-saleable).
+    @Test
+    void allocateBatches_blankSource_rejectsRdWarehouseBatch() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("10"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+
+        FinishedGoodsBatch rdBatch = batch("b1", WH_RD_ID, new BigDecimal("20"));
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(rdBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("10"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("研发") || ex.getMessage().contains("中试"),
+                "error should explain the batch is in the R&D/trial warehouse");
     }
 
     // ─────────────── recommendFifo ───────────────
@@ -142,32 +172,52 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "WH-WKS");
 
         verify(warehouseResolver).resolveId(FID, "WH-WKS");
-        verify(warehouseResolver, never()).resolveLogisticsId(any());
         verify(finishedGoodsBatchRepository).findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_WKS_ID);
+        // explicit path must NOT fall into the cross-warehouse discovery.
+        verify(finishedGoodsBatchRepository, never())
+                .findAvailableBatchesFefoAllWarehousesExcluding(any(), any(), any());
     }
 
+    // 🔴 G1: blank source → cross-warehouse (non-RD) discovery, NOT a single-warehouse lookup.
+    // This is the core bug repro: FG in WH-WKS must be surfaced under a blank source.
     @Test
-    void recommendFifo_nullSourceWarehouseCode_fallsBackToWHLOG() {
-        when(warehouseResolver.resolveLogisticsId(FID)).thenReturn(WH_LOG_ID);
-        when(finishedGoodsBatchRepository.findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_LOG_ID))
-                .thenReturn(List.of());
+    void recommendFifo_blankSource_searchesAllWarehousesExcludingRd() {
+        FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
+                .thenReturn(List.of(wksBatch));
 
-        service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null);
+        var result = service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null);
 
-        verify(warehouseResolver).resolveLogisticsId(FID);
+        assertEquals(1, result.size(), "FG in WH-WKS must be discovered under a blank source (bug repro)");
+        assertEquals("BATCH-b1", result.get(0).get("batchNumber"));
+        verify(finishedGoodsBatchRepository).findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD");
         verify(warehouseResolver, never()).resolveId(eq(FID), any());
-        verify(finishedGoodsBatchRepository).findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_LOG_ID);
+        verify(warehouseResolver, never()).resolveLogisticsId(any());
+        verify(finishedGoodsBatchRepository, never())
+                .findAvailableBatchesFifoByWarehouse(any(), any(), any());
     }
 
     @Test
-    void recommendFifo_blankSourceWarehouseCode_fallsBackToWHLOG() {
-        when(warehouseResolver.resolveLogisticsId(FID)).thenReturn(WH_LOG_ID);
-        when(finishedGoodsBatchRepository.findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_LOG_ID))
+    void recommendFifo_blankStringSource_searchesAllWarehousesExcludingRd() {
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
                 .thenReturn(List.of());
 
         service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "  ");
 
-        verify(warehouseResolver).resolveLogisticsId(FID);
+        verify(finishedGoodsBatchRepository).findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD");
         verify(warehouseResolver, never()).resolveId(eq(FID), any());
+    }
+
+    // ─────────────── warehousesWithAvailableStock (honest empty-state) ───────────────
+
+    @Test
+    void warehousesWithAvailableStock_delegatesExcludingRd() {
+        when(finishedGoodsBatchRepository.findWarehouseCodesWithAvailableStock(FID, PRODUCT_ID, "WH-RD"))
+                .thenReturn(List.of("WH-WKS", "WH-LOG"));
+
+        var codes = service.warehousesWithAvailableStock(FID, PRODUCT_ID);
+
+        assertEquals(List.of("WH-WKS", "WH-LOG"), codes);
+        verify(finishedGoodsBatchRepository).findWarehouseCodesWithAvailableStock(FID, PRODUCT_ID, "WH-RD");
     }
 }

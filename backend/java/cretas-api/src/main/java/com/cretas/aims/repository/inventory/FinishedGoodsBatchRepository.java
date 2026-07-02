@@ -113,6 +113,71 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId,
             @Param("warehouseId") String warehouseId);
 
+    /**
+     * 🔴 G1 (2026-07-03): 发货批次推荐 <b>跨全部可售仓库</b> (FEFO), 仅排除研发/中试库 (WH-RD)。
+     *
+     * <p><b>为什么</b>: 发货行 {@code sourceWarehouseCode} 为空 (最常见) 时, 旧逻辑硬默认单一 WH-LOG 仓,
+     * 但成品实际可能在车间仓 (WH-WKS, 生产落点)、成品仓 (FINISHED)、物流仓 (WH-LOG, 调拨落点) 等任一仓 —
+     * 单仓严格过滤 → 明明有货却返回空 → 用户无法出货 (Steve #1 named bug)。
+     * 未声明来源仓 = 无显式约束 → 应在所有<b>可售</b>仓库中发现库存。
+     *
+     * <p>排除 WH-RD: 试制批次 (is_trial) 不混入可售库存 (SP10 §RD-1, 与
+     * {@link #sumSaleableQuantityByProductTypeAndUnitExcludeRd} 口径一致)。
+     *
+     * <p>可用量 = producedQuantity − shippedQuantity − reservedQuantity (与单仓推荐口径一致)。
+     * FEFO 排序 (先到期先出), 跨仓统一排序。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b, com.cretas.aims.entity.factory.FactoryWarehouse w " +
+            "WHERE b.warehouseId = w.id AND w.factoryId = :factoryId AND w.code <> :excludeWarehouseCode " +
+            "AND b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findAvailableBatchesFefoAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludeWarehouseCode") String excludeWarehouseCode);
+
+    /**
+     * 🔴 G1 (2026-07-03): 发货扣减候选批次 <b>跨全部可售仓库</b> (FEFO), 仅排除 WH-RD。
+     *
+     * <p>{@code deductFinishedGoodsInventory} 在发货行来源仓为空时的候选集 —— 与
+     * {@link #findAvailableBatchesFefoAllWarehousesExcluding} (推荐) 同仓范围, 保证
+     * 「推荐能选 → 分配能过 → 发货能扣」三段一致, 不再出现推荐列出却扣减失败。
+     *
+     * <p>过滤用<b>物理未发量</b> {@code (producedQuantity - shippedQuantity) > 0} (不减 reserved),
+     * 与 {@link #findShippableBatchesByWarehouse} 一致 (R6 #6: 让被本 SO 预留耗尽的批次也能发出)。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b, com.cretas.aims.entity.factory.FactoryWarehouse w " +
+            "WHERE b.warehouseId = w.id AND w.factoryId = :factoryId AND w.code <> :excludeWarehouseCode " +
+            "AND b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findShippableBatchesAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludeWarehouseCode") String excludeWarehouseCode);
+
+    /**
+     * 🔴 G1 (2026-07-03): 该产品有可用成品库存的<b>仓库 code 清单</b> (去重, 排除 WH-RD)。
+     *
+     * <p>诚实空态用: 当发货行<b>显式</b>声明的来源仓无货、但成品在其他仓库时, 前端据此提示
+     * 「成品在 X 仓, 当前来源仓 Y — 请改选来源仓或调拨」而不是误导的「请先生产入库」(fool-proof Rule 5)。
+     */
+    @Query("SELECT DISTINCT w.code FROM FinishedGoodsBatch b, com.cretas.aims.entity.factory.FactoryWarehouse w " +
+            "WHERE b.warehouseId = w.id AND w.factoryId = :factoryId AND w.code <> :excludeWarehouseCode " +
+            "AND b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
+    List<String> findWarehouseCodesWithAvailableStock(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludeWarehouseCode") String excludeWarehouseCode);
+
     /** 汇总指定产品类型的可用成品库存总量（用于销售订单库存检查） */
     @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
             "FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +

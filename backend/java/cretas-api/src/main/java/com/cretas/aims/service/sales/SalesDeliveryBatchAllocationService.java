@@ -48,4 +48,14 @@ public interface SalesDeliveryBatchAllocationService {
      * When null/blank, falls back to WH-LOG (legacy D5 default).
      */
     List<Map<String, Object>> recommendFifo(String factoryId, String productTypeId, BigDecimal requiredQty, String sourceWarehouseCode);
+
+    /**
+     * 🔴 G1 (2026-07-03): 该产品当前有可用成品库存的仓库 code 清单 (去重, 排除研发/中试库)。
+     *
+     * <p>诚实空态用: 当发货行<b>显式</b>声明的来源仓无货、但成品在其他仓库时, 前端据此提示
+     * 「成品在 X 仓, 当前来源仓 Y — 请改选来源仓或调拨」而非误导的「请先生产入库」(fool-proof Rule 5)。
+     *
+     * @return 有可用库存的仓库 code 列表 (可能为空 = 该产品全厂无可发货成品)。
+     */
+    List<String> warehousesWithAvailableStock(String factoryId, String productTypeId);
 }
