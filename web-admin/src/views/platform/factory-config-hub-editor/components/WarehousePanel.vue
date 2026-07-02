@@ -227,6 +227,7 @@ import {
   applyWarehouseTemplate,
   getWarehouseDefaults,
   saveWarehouseDefaults,
+  deleteWarehouseDefault,
   WAREHOUSE_TYPE_LABELS,
   WAREHOUSE_TYPE_DEFAULTS,
   WAREHOUSE_DEFAULT_PURPOSE_LABELS,
@@ -481,13 +482,12 @@ async function onSaveDefaults() {
     .filter((key) => !!defaultsForm[key])
     .map((key) => ({ purpose: key, warehouseId: defaultsForm[key] as string }))
 
-  // 后端 upsert 目前不接受空 warehouseId（无 DELETE 语义），
-  // 清空一个"已配置"用途无法通过此接口真正移除映射——如实提示，不静默假装成功。
-  const clearedButUnsupported = WAREHOUSE_DEFAULT_PURPOSE_KEYS.filter(
+  // 用户清空了某个"已配置"用途 → 调用后端 DELETE 真正移除映射，回退系统默认仓。
+  const clearedPurposes = WAREHOUSE_DEFAULT_PURPOSE_KEYS.filter(
     (key) => persistedDefaults[key] && !defaultsForm[key],
   )
 
-  if (specs.length === 0 && clearedButUnsupported.length === 0) {
+  if (specs.length === 0 && clearedPurposes.length === 0) {
     ElMessage.info('未做任何修改')
     return
   }
@@ -497,19 +497,11 @@ async function onSaveDefaults() {
     if (specs.length > 0) {
       await saveWarehouseDefaults(props.factoryId, specs)
     }
-    if (clearedButUnsupported.length > 0) {
-      const labels = clearedButUnsupported
-        .map((k) => WAREHOUSE_DEFAULT_PURPOSE_LABELS[k])
-        .join('、')
-      ElMessage({
-        message: `${labels} 已清空显示，但后端暂不支持删除已配置的默认仓映射，刷新后将恢复原配置`,
-        type: 'warning',
-        duration: 0,
-        showClose: true,
-      })
-    } else {
-      ElMessage.success('默认仓配置已保存')
+    // 逐个清除被移除的用途（DELETE 幂等，回退系统默认仓）
+    for (const purpose of clearedPurposes) {
+      await deleteWarehouseDefault(props.factoryId, purpose)
     }
+    ElMessage.success('默认仓配置已保存')
     await loadDefaults()
   } catch {
     // axios interceptor handles error toast (e.g. 400 仓库不存在或不属于当前工厂)

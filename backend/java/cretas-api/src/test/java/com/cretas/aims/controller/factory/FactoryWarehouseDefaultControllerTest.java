@@ -130,6 +130,36 @@ class FactoryWarehouseDefaultControllerTest {
     }
 
     @Test
+    @DisplayName("clear: 有配置 → 软删 (set deletedAt) + save")
+    void clear_existing_softDeletes() {
+        FactoryWarehouseDefault existing = new FactoryWarehouseDefault();
+        existing.setId("cfg-clear-001");
+        existing.setFactoryId(FACTORY_ID);
+        existing.setPurpose(WarehouseDefaultPurpose.LOGISTICS_DEFAULT);
+        existing.setWarehouseId("wh-some");
+        when(defaultRepository.findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.LOGISTICS_DEFAULT))
+                .thenReturn(Optional.of(existing));
+
+        ApiResponse<Void> resp = controller.clear(FACTORY_ID, WarehouseDefaultPurpose.LOGISTICS_DEFAULT);
+
+        assertTrue(resp.getSuccess());
+        assertNotNull(existing.getDeletedAt(), "应设置 deletedAt (软删)");
+        verify(defaultRepository).save(existing);
+    }
+
+    @Test
+    @DisplayName("clear: 无配置 → 幂等 no-op, 仍返回成功, 不写库")
+    void clear_absent_idempotentNoop() {
+        when(defaultRepository.findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.RD_DEFAULT))
+                .thenReturn(Optional.empty());
+
+        ApiResponse<Void> resp = controller.clear(FACTORY_ID, WarehouseDefaultPurpose.RD_DEFAULT);
+
+        assertTrue(resp.getSuccess());
+        verify(defaultRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("list 返回该工厂的默认仓配置")
     void list_returnsConfigs() {
         FactoryWarehouseDefault cfg = new FactoryWarehouseDefault();

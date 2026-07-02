@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -113,6 +114,39 @@ public class FactoryWarehouseDefaultController {
         }
 
         return ApiResponse.success("默认仓配置已保存", result);
+    }
+
+    // ==================== 清除 (软删) ====================
+
+    /**
+     * 清除某 purpose 的默认仓配置 → 回退系统默认仓 (WarehouseResolver 硬编码 code)。
+     *
+     * <p>软删除该 (factory_id, purpose) 的有效映射 (set deleted_at)。让超级管理员把已配置的默认仓
+     * 恢复为系统默认 (物流仓/车间仓/研发库), 而不是被 UI 卡住无法移除。
+     *
+     * <p><b>幂等</b>: 若该 purpose 无有效配置 → no-op, 仍返回成功 (200)。重复调用安全。
+     *
+     * <p>权限/多租户: 与 GET/PUT 同 ({@code factory_super_admin} / {@code permission_admin} +
+     * warehouse 模块 + factory-scoped 查询, 无法删别厂的配置)。
+     *
+     * <p><b>软删细节</b>: {@code BaseEntity} 的 {@code @SQLDelete} 在 {@code @MappedSuperclass} 上被
+     * Hibernate 静默忽略 (见 BaseEntity R68 注释), 故此处手动 {@code setDeletedAt} + save, 不用
+     * {@code repository.delete()}。
+     */
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequireModule("warehouse")
+    @DeleteMapping("/{purpose}")
+    public ApiResponse<Void> clear(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable WarehouseDefaultPurpose purpose) {
+
+        defaultRepository.findByFactoryIdAndPurposeAndDeletedAtIsNull(factoryId, purpose)
+                .ifPresent(entity -> {
+                    entity.setDeletedAt(LocalDateTime.now());
+                    defaultRepository.save(entity);
+                    log.info("清除默认仓配置 factoryId={} purpose={} (回退系统默认仓)", factoryId, purpose);
+                });
+        return ApiResponse.successMessage("默认仓配置已清除");
     }
 
     // ==================== helpers ====================
