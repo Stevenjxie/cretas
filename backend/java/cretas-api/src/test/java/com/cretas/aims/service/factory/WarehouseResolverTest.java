@@ -2,8 +2,11 @@ package com.cretas.aims.service.factory;
 
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
+import com.cretas.aims.entity.factory.FactoryWarehouseDefault;
 import com.cretas.aims.entity.factory.WarehouseCodes;
+import com.cretas.aims.entity.factory.WarehouseDefaultPurpose;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +37,9 @@ class WarehouseResolverTest {
 
     @Mock
     private FactoryWarehouseRepository factoryWarehouseRepository;
+
+    @Mock
+    private FactoryWarehouseDefaultRepository factoryWarehouseDefaultRepository;
 
     @InjectMocks
     private WarehouseResolver warehouseResolver;
@@ -127,5 +133,99 @@ class WarehouseResolverTest {
         // 与 V20260411_03 / V20260424_08 seed 必须一致
         assertEquals("WH-LOG", WarehouseCodes.WH_LOG);
         assertEquals("WH-WKS", WarehouseCodes.WH_WKS);
+    }
+
+    // ==================== V20261027_30 可配置默认仓 ====================
+
+    private static final String CONFIGURED_WH_ID = "wh-custom-uuid-777";
+
+    /**
+     * (a) 向后兼容 — 最重要的测试。
+     *
+     * <p>工厂无默认仓配置 (findByFactoryIdAndPurpose 返 empty, Mockito Optional 默认值)
+     * → resolver 必须回退到硬编码 WH-LOG/WH-WKS/WH-RD 查询, 行为与现状 100% 一致。
+     * 上面 resolveLogisticsId_returnsCorrectId / resolveWorkshopId_returnsCorrectId 已隐式覆盖
+     * (它们不 stub 默认仓 repo, 走的正是回退路径); 这里显式断言三个 purpose 全回退。
+     */
+    @Test
+    @DisplayName("(a) 无配置 → 三个 resolver 全回退硬编码仓 (向后兼容)")
+    void noConfig_fallsBackToHardcodedWarehouses() {
+        // 未 stub factoryWarehouseDefaultRepository → 默认返 Optional.empty() (无配置)
+        FactoryWarehouse whRd = new FactoryWarehouse();
+        whRd.setId("wh-rd-uuid-001");
+        whRd.setFactoryId(FACTORY_ID);
+        whRd.setCode(WarehouseCodes.WH_RD);
+
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_LOG))
+                .thenReturn(Optional.of(whLog));
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_WKS))
+                .thenReturn(Optional.of(whWks));
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_RD))
+                .thenReturn(Optional.of(whRd));
+
+        assertEquals(WH_LOG_ID, warehouseResolver.resolveLogisticsId(FACTORY_ID));
+        assertEquals(WH_WKS_ID, warehouseResolver.resolveWorkshopId(FACTORY_ID));
+        assertEquals("wh-rd-uuid-001", warehouseResolver.resolveRdId(FACTORY_ID));
+
+        // 回退路径不查默认仓的 id 有效性 (只有配置存在时才校验)
+        verify(factoryWarehouseRepository, never())
+                .findByIdAndFactoryIdAndDeletedAtIsNull(anyString(), anyString());
+    }
+
+    /**
+     * (b) 有配置且指向有效仓库 → resolver 返回配置的仓库 (不走硬编码)。
+     */
+    @Test
+    @DisplayName("(b) 有配置 (指向有效仓库) → resolver 返回配置仓库")
+    void withConfig_returnsConfiguredWarehouse() {
+        FactoryWarehouseDefault config = new FactoryWarehouseDefault();
+        config.setFactoryId(FACTORY_ID);
+        config.setPurpose(WarehouseDefaultPurpose.LOGISTICS_DEFAULT);
+        config.setWarehouseId(CONFIGURED_WH_ID);
+
+        FactoryWarehouse custom = new FactoryWarehouse();
+        custom.setId(CONFIGURED_WH_ID);
+        custom.setFactoryId(FACTORY_ID);
+        custom.setCode("WH-MAIN");
+        custom.setType(WarehouseType.RAW);
+
+        when(factoryWarehouseDefaultRepository
+                .findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.LOGISTICS_DEFAULT))
+                .thenReturn(Optional.of(config));
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(CONFIGURED_WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(custom));
+
+        String id = warehouseResolver.resolveLogisticsId(FACTORY_ID);
+
+        assertEquals(CONFIGURED_WH_ID, id);
+        // 配置命中 → 不回退硬编码 code 查询
+        verify(factoryWarehouseRepository, never())
+                .findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_LOG);
+    }
+
+    /**
+     * (c) 悬空配置 (指向已软删/不存在的仓库) → resolver 回退硬编码, 不抛异常。
+     */
+    @Test
+    @DisplayName("(c) 悬空配置 (仓库已删除) → 回退硬编码, 不报错")
+    void danglingConfig_fallsBackToHardcoded() {
+        FactoryWarehouseDefault config = new FactoryWarehouseDefault();
+        config.setFactoryId(FACTORY_ID);
+        config.setPurpose(WarehouseDefaultPurpose.WORKSHOP_DEFAULT);
+        config.setWarehouseId("wh-deleted-uuid-999");
+
+        when(factoryWarehouseDefaultRepository
+                .findByFactoryIdAndPurposeAndDeletedAtIsNull(FACTORY_ID, WarehouseDefaultPurpose.WORKSHOP_DEFAULT))
+                .thenReturn(Optional.of(config));
+        // 指向的仓库已软删 / 不存在
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("wh-deleted-uuid-999", FACTORY_ID))
+                .thenReturn(Optional.empty());
+        // 回退硬编码 WH-WKS
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_WKS))
+                .thenReturn(Optional.of(whWks));
+
+        String id = warehouseResolver.resolveWorkshopId(FACTORY_ID);
+
+        assertEquals(WH_WKS_ID, id, "悬空配置应回退到硬编码 WH-WKS, 不抛异常");
     }
 }
