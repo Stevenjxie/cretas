@@ -205,7 +205,7 @@ class InterimSettleServiceTest {
         assertThat(rb1.getUsedQuantity()).isEqualByComparingTo("100");
         // SFI IN 仅道3 (道1/道2 同小结内被消耗 → 瞬态不入库)
         verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null));
+                eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null), any());
         @SuppressWarnings("unchecked")
         List<String> semiIn1 = (List<String>) s1.get("semiInBatchNumbers");
         assertThat(semiIn1).containsExactly("CLK-W-3");
@@ -224,7 +224,7 @@ class InterimSettleServiceTest {
         // SFI OUT: 道4 消耗道3 (前序已入库 CLK-W-3) → consumeClerkSemi 60 (同 anchor)
         ArgumentCaptor<String> anchorIn = ArgumentCaptor.forClass(String.class);
         verify(wipInventoryService).postClerkOutput(eq(FACTORY), anchorIn.capture(),
-                eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null));
+                eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null), any());
         ArgumentCaptor<String> anchorOut = ArgumentCaptor.forClass(String.class);
         verify(wipInventoryService, times(1)).consumeClerkSemi(eq(FACTORY), anchorOut.capture(),
                 eq(new BigDecimal("60")));
@@ -239,7 +239,7 @@ class InterimSettleServiceTest {
         assertThat(fg.getUnit()).isEqualTo("kg");
         assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S2");
         // 小结2 无新 SFI IN (道4 是成品), postClerkOutput 仍累计 1 次 (来自小结1)
-        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
 
         // ───────────────── 小结3 (重复点击, 幂等) ─────────────────
         Map<String, Object> s3 = service.interimSettle(FACTORY, PLAN_ID, 7L);
@@ -247,7 +247,7 @@ class InterimSettleServiceTest {
         assertThat(s3.get("sessionSeq")).isEqualTo(3);
         assertThat(s3.get("deductedConsumptionCount")).isEqualTo(0);
         // 累计调用次数不变: postClerkOutput 仍 1, consumeClerkSemi 仍 1, FG save 仍 1
-        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         verify(wipInventoryService, times(1)).consumeClerkSemi(any(), any(), any());
         verify(finishedGoodsBatchRepository, times(1)).save(any());
         // RB1 未被再次扣减
@@ -269,7 +269,7 @@ class InterimSettleServiceTest {
 
         // 道A 净结余 = 60 − 40(同小结投B) = 20 → SFI IN 20 (而非整道判瞬态漏入)
         verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("20")), any(), eq(null), eq(null));
+                eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("20")), any(), eq(null), eq(null), any());
         assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("20"));
         @SuppressWarnings("unchecked")
         List<String> semiIn = (List<String>) s.get("semiInBatchNumbers");
@@ -307,7 +307,7 @@ class InterimSettleServiceTest {
         assertThat(fgCap.getValue().getUnit()).isEqualTo("kg");
 
         // 成品道不入 SFI (postClerkOutput 不被调用)
-        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         // 行已打戳
         assertThat(rX.getInterimSettledAt()).isNotNull();
     }
@@ -381,7 +381,7 @@ class InterimSettleServiceTest {
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
         // 成品道不入 SFI
-        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         assertThat(rX.getInterimSettledAt()).isNotNull();
     }
 
@@ -472,7 +472,7 @@ class InterimSettleServiceTest {
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
         // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
         verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null));
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null), any());
         assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
         @SuppressWarnings("unchecked")
         List<String> semiIn = (List<String>) s.get("semiInBatchNumbers");
@@ -505,7 +505,7 @@ class InterimSettleServiceTest {
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
         // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
         verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null));
+                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null), any());
         assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
         // 非成品 → 不进 FG
         verify(finishedGoodsBatchRepository, never()).save(any());
@@ -535,7 +535,7 @@ class InterimSettleServiceTest {
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-RAW"), eq(new BigDecimal("100")));
         verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchorY), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null));
+                eq(FACTORY), eq(anchorY), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null), any());
         assertThat(s1.get("semiInQuantity")).isEqualTo(new BigDecimal("60"));
         assertThat(rA.getInterimSettledAt()).isNotNull();
 
@@ -546,7 +546,7 @@ class InterimSettleServiceTest {
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq(anchorY), eq(new BigDecimal("60")));
         // 小结2 无新 SFI IN (道B 成品), postClerkOutput 累计仍 1 次 (仅来自小结1)
-        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         // 道B 成品 → FG 入库
         verify(finishedGoodsBatchRepository, times(1)).save(any());
     }
@@ -580,7 +580,7 @@ class InterimSettleServiceTest {
         ArgumentCaptor<BigDecimal> unitCostCap = ArgumentCaptor.forClass(BigDecimal.class);
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                unitCostCap.capture(), eq(null));
+                unitCostCap.capture(), eq(null), any());
         assertThat(unitCostCap.getValue()).isNotNull();
         assertThat(unitCostCap.getValue()).isEqualByComparingTo("15");
     }
@@ -617,7 +617,7 @@ class InterimSettleServiceTest {
         ArgumentCaptor<BigDecimal> ucA = ArgumentCaptor.forClass(BigDecimal.class);
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchorB), eq(PRODUCT_TYPE), eq(new BigDecimal("80")), any(),
-                ucA.capture(), eq(null));
+                ucA.capture(), eq(null), any());
         assertThat(ucA.getValue()).isEqualByComparingTo("6.25");
 
         // ── 小结2: 道C 成品 → FG.unitCost 含传导成本 = 54 ──
@@ -649,7 +649,7 @@ class InterimSettleServiceTest {
         // 🔴 诚实 null: 输入无成本 → postClerkOutput 收到 unitCost = null (不因有人工而伪造部分成本)
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null));
+                eq(null), eq(null), any());
     }
 
     @Test
@@ -672,7 +672,7 @@ class InterimSettleServiceTest {
         // 🔴 调味道调料桶未知 → null (不降级成 labor-only=(100+500)/40=15 假数据)
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null));
+                eq(null), eq(null), any());
     }
 
     @Test
@@ -691,7 +691,7 @@ class InterimSettleServiceTest {
 
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null));
+                eq(null), eq(null), any());
     }
 
     @Test
@@ -714,7 +714,7 @@ class InterimSettleServiceTest {
         ArgumentCaptor<BigDecimal> uc = ArgumentCaptor.forClass(BigDecimal.class);
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                uc.capture(), eq(null));
+                uc.capture(), eq(null), any());
         assertThat(uc.getValue()).isEqualByComparingTo("15");
     }
 

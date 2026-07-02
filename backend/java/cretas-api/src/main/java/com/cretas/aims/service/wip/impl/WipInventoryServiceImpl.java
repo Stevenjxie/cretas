@@ -394,7 +394,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Transactional
     public void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
                                 BigDecimal inQty, String unit, BigDecimal inUnitCost,
-                                List<Map<String, Object>> materialBatchRefs) {
+                                List<Map<String, Object>> materialBatchRefs, Integer processOrder) {
         if (inQty == null || inQty.signum() <= 0) {
             return;
         }
@@ -405,6 +405,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .intermediateBatchNo(intermediateBatchNo)
                     .productTypeId(productTypeId)
                     .unit(unit)
+                    .processOrder(processOrder)
                     .producedQuantity(BigDecimal.ZERO)
                     .consumedQuantity(BigDecimal.ZERO)
                     .availableQuantity(BigDecimal.ZERO)
@@ -427,6 +428,14 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         SemiFinishedInventory sfi = wipRepo
                 .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
                 .orElseThrow(() -> new IllegalStateException("SFI row missing after create: " + intermediateBatchNo));
+        // 锚跨多次小结可被不同 processOrder 的道喂 → 取 MIN (最早道)。picker 阶段过滤
+        // (listWipByFactory: processOrder != null && < maxProcessOrder) 严格排除 null, 故必须落值;
+        // 取最早道 → 新产 SFI 在尽可能靠后的复用道 (maxProcessOrder 大) 仍可见 (宁缺勿藏)。
+        // 既有行 processOrder=null (旧路径) → 用本次 incoming 填; 双非空 → 保留更小者。
+        if (processOrder != null
+                && (sfi.getProcessOrder() == null || processOrder.compareTo(sfi.getProcessOrder()) < 0)) {
+            sfi.setProcessOrder(processOrder);
+        }
         BigDecimal totalCost = inUnitCost == null ? null : inUnitCost.multiply(inQty);
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, unit, materialBatchRefs);
         wipRepo.save(sfi);

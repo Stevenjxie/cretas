@@ -286,9 +286,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             //   诚实 null: 任一 SFI 投料 unitCost 未知 → outputUnitCost 为 null (postClerkOutput 不摊假成本)。
             BigDecimal outputUnitCost = computeOutputUnitCost(factoryId, ur, outQty, laborRate);
             String inAnchor = semiAnchor(planId, ur.req.getProductTypeId());
+            // processOrder: 产出此 SFI 的道序 (持久化行 ur.row) → 传给锚, picker 阶段可见性过滤依赖它。
+            //   锚跨多道/多次小结 → postClerkOutput 内取 MIN (最早道)。历史行 processOrder 可空, 容忍。
             wipInventoryService.postClerkOutput(factoryId,
                     inAnchor, ur.req.getProductTypeId(),
-                    net, ur.req.getUnit(), outputUnitCost, null);
+                    net, ur.req.getUnit(), outputUnitCost, null, ur.row.getProcessOrder());
             semiInBatchNumbers.add(batchNo);
             semiInQuantity = semiInQuantity.add(net);
             // 撤销明细: 按锚累计净量 + 确切成本 (mirror postClerkOutput 内 totalCost = inUnitCost×inQty)。
