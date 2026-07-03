@@ -64,6 +64,15 @@ public class StocktakeController {
         return ApiResponse.success("盘点任务已发起", result);
     }
 
+    @GetMapping("/initiate-constraint")
+    @Operation(summary = "查询发起盘点的月底约束展示态",
+               description = "fool-proof Rule 1: 边界必须在用户填表前展示, 供前端弹窗打开时立即展示" +
+                       " (是否今天可发起 / 下次可发起日期), 不做任何校验, initiate() 仍是唯一 enforce 处")
+    public ApiResponse<Map<String, Object>> getInitiateConstraint(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
+        return ApiResponse.success(stocktakeService.getInitiateConstraint());
+    }
+
     @GetMapping
     @Operation(summary = "分页查询盘点任务", description = "支持按状态过滤")
     public ApiResponse<Page<StocktakeDTO>> list(

@@ -119,11 +119,34 @@ const initiateForm = reactive({
   notes: '',
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// 月底约束展示态 (fool-proof Rule 1: 边界必须在填表前展示, 不能填完点提交才报错)
+// ────────────────────────────────────────────────────────────────────────────
+interface InitiateConstraint {
+  monthEndThreshold: number;
+  canInitiateToday: boolean;
+  today: string;
+  nextAllowedDate: string;
+}
+const initiateConstraint = ref<InitiateConstraint | null>(null);
+const initiateConstraintLoading = ref(false);
+
+async function loadInitiateConstraint() {
+  if (!factoryId.value) return;
+  initiateConstraintLoading.value = true;
+  try {
+    const res = await get(`/${factoryId.value}/stocktakes/initiate-constraint`);
+    if (res.success && res.data) initiateConstraint.value = res.data;
+  } catch { /* 展示态加载失败不阻塞发起 — 后端 initiate() 仍会真实校验并报错 */ }
+  finally { initiateConstraintLoading.value = false; }
+}
+
 function openInitiateDialog() {
   initiateForm.warehouseId = '';
   initiateForm.periodMonth = currentMonth.value;
   initiateForm.notes = '';
   initiateDialogVisible.value = true;
+  void loadInitiateConstraint();
 }
 
 async function submitInitiate() {
@@ -133,6 +156,14 @@ async function submitInitiate() {
   }
   if (!initiateForm.periodMonth) {
     ElMessage({ message: '请选择盘点月份', type: 'warning', duration: 3000 });
+    return;
+  }
+  // 防呆 Rule 1: 月底约束已在弹窗打开时展示, 此处兜底拦截 (防用户在约束加载完成前抢点提交)
+  if (initiateConstraint.value && !initiateConstraint.value.canInitiateToday) {
+    ElMessage({
+      message: `本月盘点只能在每月${initiateConstraint.value.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.value.nextAllowedDate}`,
+      type: 'warning', duration: 0, showClose: true,
+    });
     return;
   }
   initiateLoading.value = true;
@@ -683,6 +714,23 @@ onMounted(async () => {
 
     <!-- ──────────────── Initiate Dialog ──────────────── -->
     <el-dialog v-model="initiateDialogVisible" title="发起盘点任务" width="480px">
+      <!-- 防呆 Rule 1: 月底约束在弹窗打开时立即展示, 不等填完表单点提交才报错 -->
+      <el-alert
+        v-if="initiateConstraint && !initiateConstraint.canInitiateToday"
+        type="warning"
+        show-icon
+        :closable="false"
+        :title="`本月盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.nextAllowedDate}`"
+        style="margin-bottom: 16px"
+      />
+      <el-alert
+        v-else-if="initiateConstraint && initiateConstraint.canInitiateToday"
+        type="success"
+        show-icon
+        :closable="false"
+        title="今天可以发起本月盘点"
+        style="margin-bottom: 16px"
+      />
       <el-form label-width="100px">
         <el-form-item label="盘点仓库" required>
           <el-select v-model="initiateForm.warehouseId" placeholder="选择仓库" style="width: 100%">
@@ -708,7 +756,17 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="initiateDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="initiateLoading" @click="submitInitiate">确认发起</el-button>
+        <el-tooltip
+          :disabled="!initiateConstraint || initiateConstraint.canInitiateToday"
+          :content="initiateConstraint ? `本月盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.nextAllowedDate}` : ''"
+        >
+          <el-button
+            type="primary"
+            :loading="initiateLoading"
+            :disabled="!!initiateConstraint && !initiateConstraint.canInitiateToday"
+            @click="submitInitiate"
+          >确认发起</el-button>
+        </el-tooltip>
       </template>
     </el-dialog>
 

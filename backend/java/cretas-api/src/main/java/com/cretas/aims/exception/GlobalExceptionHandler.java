@@ -37,6 +37,8 @@ import org.slf4j.MDC;
 import java.sql.SQLException;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 /**
  * 全局异常处理器
@@ -319,9 +321,18 @@ public class GlobalExceptionHandler {
         return ApiResponse.error(400, message);
     }
 
+    /** 匹配 Spring 嵌套/数组字段路径, 如 "items[0].receivedQuantity" → group(1)="0". */
+    private static final Pattern INDEXED_FIELD_PATTERN = Pattern.compile("^.*\\[(\\d+)]\\..+$");
+
     /**
      * Format a single field validation error into a user-readable Chinese string.
      * Intercepts Bean Validation's default English messages for common constraints.
+     *
+     * fool-proof-design 跨规则铁律 (a): "网络 response.message 必须是仓管员/财务能看懂的
+     * 人话", 不能是原始 Java 字段路径。此前 `field + ": " + msg` 一律把 Java camelCase
+     * 字段名 (甚至 "items[0].receivedQuantity" 这种嵌套数组路径) 拼进用户可见 toast,
+     * 采购入库/报损等表单校验失败时用户看到 "items[0].receivedQuantity: 收货数量必须大于0"
+     * 这类术语, 完全不知道对应"第几行"或"哪个输入框"。
      */
     private static String formatFieldError(FieldError err) {
         String msg = err.getDefaultMessage();
@@ -331,9 +342,17 @@ public class GlobalExceptionHandler {
         if ("must not be null".equals(msg) || "must not be blank".equals(msg) || "must not be empty".equals(msg)) {
             return "字段 '" + field + "' 不能为空";
         }
-        // Custom messages (entity/DTO provided @NotNull(message = "xxx不能为空")) — keep as-is
-        // since they already read naturally in Chinese.
-        return msg.contains(field) ? msg : field + ": " + msg;
+        // 数组/列表行项目 (e.g. "items[0].receivedQuantity") → 转成"第N行"人话前缀,
+        // 让用户知道具体是表格里第几行填错, 而不是原始 Java 字段路径。
+        Matcher indexed = INDEXED_FIELD_PATTERN.matcher(field);
+        if (indexed.matches()) {
+            int rowIndex = Integer.parseInt(indexed.group(1));
+            return "第" + (rowIndex + 1) + "行：" + msg;
+        }
+        // Custom messages (entity/DTO provided @NotNull(message = "xxx不能为空")) 已经是
+        // 自然中文语句, 拼接原始 Java 字段名 (camelCase, 有时含"."/"[]") 只会增加术语噪音,
+        // 不提供额外信息 — 直接用 msg。字段名仍完整保留在 log.warn(...) 供排查。
+        return msg;
     }
 
     /**

@@ -228,7 +228,13 @@ async function submitCreate() {
       wastageQty: form.wastageQty,
       wastageReason: form.wastageReason,
       reasonDetail: form.wastageReason === 'OTHER' ? form.reasonDetail : undefined,
-      photoUrls: form.photoUrls,
+      // P0 fix: backend CreateWastageReportRequest.photoUrls is a `String` field
+      // (JSON array string, e.g. '["url1","url2"]' — see WastageReport entity /
+      // WastageReportServiceImpl#validatePhotos which re-parses it as JSON text).
+      // Sending a raw JS array here fails Jackson deserialization with
+      // "字段类型不正确，期望 String" and the create ALWAYS 400s — 报损 was 100%
+      // unusable via web-admin. Must JSON.stringify before sending.
+      photoUrls: JSON.stringify(form.photoUrls),
       notes: form.notes || undefined,
     };
     const res = await post(`/${factoryId.value}/wastage-reports`, payload);

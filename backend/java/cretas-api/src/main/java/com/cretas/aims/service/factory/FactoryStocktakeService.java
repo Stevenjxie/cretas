@@ -9,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工厂盘点任务服务接口 (SP7 §5.1).
@@ -39,6 +40,19 @@ public interface FactoryStocktakeService {
      */
     StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
                           FactoryStocktake.ImportMode importMode);
+
+    /**
+     * 查询"发起盘点"的月底约束展示态 (fool-proof-design Rule 1: 边界必须在用户填表前展示,
+     * 不能等填完表单点提交才报错). 只读, 不做任何校验/side-effect —— {@link #initiate}
+     * 仍是唯一真正 enforce 约束的地方, 本方法只是把同一个 threshold 换算成前端可直接渲染的
+     * 展示字段 (是否今天可发起 / 下次可发起日期), 不改变约束本身。
+     *
+     * <p>只覆盖 NORMAL/逐项盘点路径 (OPENING 期初建账不受月底约束, Decision 4)。
+     *
+     * @return {@code monthEndThreshold}(int) / {@code canInitiateToday}(boolean) /
+     *         {@code today}(LocalDate) / {@code nextAllowedDate}(LocalDate)
+     */
+    Map<String, Object> getInitiateConstraint();
 
     /**
      * 批量更新明细行的实盘数量。

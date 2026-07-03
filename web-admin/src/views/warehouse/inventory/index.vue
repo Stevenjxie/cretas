@@ -72,12 +72,19 @@ async function handleAiFill(params: Record<string, unknown>) {
     );
     return;
   }
+  const aiReason = String(params.reason || '');
+  // AI 抽取的原因是自由文本, 映射进标准下拉: 命中已知选项用对应 value, 否则落 OTHER + 保留原文本。
+  const matchedOption = adjustReasonOptions.find(
+    (o) => o.value !== 'OTHER' && (o.label === aiReason || o.value === aiReason)
+  );
   adjustForm.value = {
     batchId: String(matched.id),
     batchNumber: String(matched.batchNumber),
+    materialName: String(matched.materialName || matched.materialTypeName || ''),
     currentQuantity: Number(matched.currentQuantity ?? matched.quantity ?? 0),
     adjustQuantity: Number(params.adjustQuantity || 0),
-    reason: String(params.reason || ''),
+    reason: matchedOption ? matchedOption.value : (aiReason ? 'OTHER' : ''),
+    reasonOther: matchedOption ? '' : aiReason,
   };
   adjustDialogVisible.value = true;
 }
@@ -106,10 +113,21 @@ const adjustLoading = ref(false);
 const adjustForm = ref({
   batchId: '',
   batchNumber: '',
+  materialName: '',
   currentQuantity: 0,
   adjustQuantity: 0,
-  reason: ''
+  reason: '',
+  reasonOther: '',
 });
+
+// Bug 5 (fool-proof Rule 3): 调整原因改标准下拉 (与报损原因一致的约束选择, 不是自由 textarea)
+const adjustReasonOptions = [
+  { value: 'STOCKTAKE_DIFF', label: '盘点差异' },
+  { value: 'WASTAGE', label: '损耗' },
+  { value: 'DAMAGED', label: '破损' },
+  { value: 'EXPIRED', label: '过期' },
+  { value: 'OTHER', label: '其他' },
+];
 
 // 批次详情对话框
 const detailDialogVisible = ref(false);
@@ -210,9 +228,13 @@ function handleAdjust(row: TableRow) {
   adjustForm.value = {
     batchId: row.id,
     batchNumber: row.batchNumber,
+    // Bug 2 fix: MaterialBatchDTO 字段是 materialName, materialTypeName 在该 DTO 上不存在
+    // (恒 undefined) — 保留 materialTypeName 兜底以防其他来源行数据带这个别名。
+    materialName: row.materialName || row.materialTypeName || '',
     currentQuantity: row.currentQuantity ?? row.quantity ?? 0,
     adjustQuantity: 0,
-    reason: ''
+    reason: '',
+    reasonOther: '',
   };
   adjustDialogVisible.value = true;
 }
@@ -225,6 +247,11 @@ async function submitAdjust() {
   }
   if (!adjustForm.value.adjustQuantity || !adjustForm.value.reason) {
     ElMessage.warning('请填写调整数量和原因');
+    return;
+  }
+  // Bug 5 (fool-proof Rule 3): 选"其他"必须补充说明, 否则后端/审计看到的只有一个"其他"无信息量
+  if (adjustForm.value.reason === 'OTHER' && !adjustForm.value.reasonOther.trim()) {
+    ElMessage.warning('请填写具体的调整原因');
     return;
   }
 
@@ -242,11 +269,18 @@ async function submitAdjust() {
     return;
   }
 
+  // Bug 5: 后端 reason 是自由字符串字段 (无 enum 校验) — 下拉选"其他"时把具体说明拼进去,
+  // 否则落库/审计只看到裸标签 "其他"。
+  const selectedReasonLabel = adjustReasonOptions.find((o) => o.value === adjustForm.value.reason)?.label || adjustForm.value.reason;
+  const finalReason = adjustForm.value.reason === 'OTHER'
+    ? adjustForm.value.reasonOther.trim()
+    : selectedReasonLabel;
+
   adjustLoading.value = true;
   try {
     const response = await post(`/${factoryId.value}/material-batches/${adjustForm.value.batchId}/adjust`, {
       quantity: newQuantity,
-      reason: adjustForm.value.reason
+      reason: finalReason
     });
     if (response.success) {
       ElMessage.success('调整成功');
@@ -424,7 +458,11 @@ function getStatusText(status: string) {
 
       <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
         <el-table-column prop="batchNumber" label="批次号" width="160" />
-        <el-table-column prop="materialTypeName" label="材料类型" min-width="150" show-overflow-tooltip />
+        <!-- Bug 2 fix: MaterialBatchDTO 返回字段是 materialName, 不是 materialTypeName (后者在
+             该 DTO 上不存在, 恒 undefined → 之前列永远显 "-", 仓管员看不到具体物料) -->
+        <el-table-column label="材料类型" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.materialName || row.materialTypeName || '-' }}</template>
+        </el-table-column>
         <el-table-column label="当前数量" width="120" align="right">
           <template #default="{ row }">
             {{ row.currentQuantity ?? row.quantity ?? '-' }}
@@ -517,8 +555,18 @@ function getStatusText(status: string) {
     </el-card>
 
     <!-- 调整库存对话框 -->
-    <el-dialog v-model="adjustDialogVisible" title="调整库存" width="450px" :close-on-click-modal="false">
+    <!-- Bug 2 (fool-proof Rule 2 上下文): 标题带物料名, 用户一眼看清在调整哪个物料的库存,
+         而不是只看到一串批次号数字。 -->
+    <el-dialog
+      v-model="adjustDialogVisible"
+      :title="adjustForm.materialName ? `调整库存 — ${adjustForm.materialName} (${adjustForm.batchNumber})` : '调整库存'"
+      width="450px"
+      :close-on-click-modal="false"
+    >
       <el-form :model="adjustForm" label-width="100px">
+        <el-form-item label="物料名称">
+          <el-input :model-value="adjustForm.materialName || '-'" disabled />
+        </el-form-item>
         <el-form-item label="批次号">
           <el-input v-model="adjustForm.batchNumber" disabled />
         </el-form-item>
@@ -538,8 +586,15 @@ function getStatusText(status: string) {
  "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
           </div>
         </el-form-item>
+        <!-- Bug 5 (fool-proof Rule 3): 调整原因改标准下拉, 与报损原因一致的约束选择,
+             不是自由 textarea (之前用户可瞎写无统计价值)。 -->
         <el-form-item label="调整原因" required>
-          <el-input v-model="adjustForm.reason" type="textarea" :rows="3" placeholder="请输入调整原因" />
+          <el-select v-model="adjustForm.reason" placeholder="选择调整原因" style="width: 100%">
+            <el-option v-for="opt in adjustReasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="adjustForm.reason === 'OTHER'" label="补充说明" required>
+          <el-input v-model="adjustForm.reasonOther" type="textarea" :rows="2" placeholder="请填写具体调整原因" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -562,7 +617,7 @@ function getStatusText(status: string) {
         </div>
         <div class="detail-item">
           <span class="detail-label">材料类型</span>
-          <span class="detail-value">{{ detailData.materialTypeName || '-' }}</span>
+          <span class="detail-value">{{ detailData.materialName || detailData.materialTypeName || '-' }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">供应商</span>
