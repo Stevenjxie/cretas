@@ -347,8 +347,40 @@ public class ProcessingServiceImpl implements ProcessingService {
             productionPlanRepository.findById(batch.getProductionPlanId())
                     .ifPresent(plan -> batch.setBatchSourceType(plan.getPlanSourceType()));
         }
+        enrichBatchDisplayFields(batch);
         return batch;
     }
+
+    /**
+     * headed-audit 修复 (2026-07-03): 生产批次列表显示 GUID + 空数量列.
+     *
+     * <p>根因: 部分批次创建路径 (文员逐道录入 {@code ClerkProcessEntryServiceImpl},
+     * AI dataop 工具 {@code ProcessingBatchCreateToolDataOp}) 没有在创建时写入
+     * {@code productName}/{@code plannedQuantity}, 导致这些历史行落库即为 null。
+     * 与生产计划列表同根因 (sibling GUID-resolution bug, 见 ProductionPlanMapper.toDTO
+     * 71-76 行 "Bug #1b" 修复) — 这里同样在读时兜底解析, 不需要数据回填迁移:
+     * <ul>
+     *   <li>productName 为空 → 按 productTypeId 查 product_types 表回填 (只读, 不落库)</li>
+     *   <li>plannedQuantity 为空 → 退回 quantity (NOT NULL, 创建时必填的"初始数量")</li>
+     * </ul>
+     * 批次对象此时已 detached (repository 方法各自独立事务、已提交关闭), 内存赋值不会
+     * 被 Hibernate 脏检查回写数据库, 与 {@link #getBatchById} 已有的
+     * {@code batchSourceType} 回填模式一致。
+     */
+    private void enrichBatchDisplayFields(ProductionBatch batch) {
+        if (batch == null) {
+            return;
+        }
+        if ((batch.getProductName() == null || batch.getProductName().isBlank())
+                && batch.getProductTypeId() != null) {
+            productTypeRepository.findById(batch.getProductTypeId())
+                    .ifPresent(pt -> batch.setProductName(pt.getName()));
+        }
+        if (batch.getPlannedQuantity() == null) {
+            batch.setPlannedQuantity(batch.getQuantity());
+        }
+    }
+
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
@@ -363,6 +395,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         } else {
             page = productionBatchRepository.findByFactoryId(factoryId, pageable);
         }
+        page.getContent().forEach(this::enrichBatchDisplayFields);
         return PageResponse.of(
                 page.getContent(),
                 pageRequest.getPage(),
@@ -390,6 +423,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         } else {
             page = productionBatchRepository.findByFactoryIdAndIsTrial(factoryId, isTrial, pageable);
         }
+        page.getContent().forEach(this::enrichBatchDisplayFields);
         return PageResponse.of(
                 page.getContent(),
                 pageRequest.getPage(),
@@ -415,6 +449,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         } else {
             page = productionBatchRepository.findByFactoryIdAndSupervisorId(factoryId, supervisorId, pageable);
         }
+        page.getContent().forEach(this::enrichBatchDisplayFields);
         return PageResponse.of(
                 page.getContent(),
                 pageRequest.getPage(),

@@ -86,6 +86,42 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     Page<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses, Pageable pageable);
 
     /**
+     * 生产计划列表搜索 (headed-audit 修复, 2026-07-03): 按计划编号/产品名称模糊匹配, 配合状态过滤/全量.
+     *
+     * <p>keyword 为 null/空时不过滤 (CAST 给 PG 类型 hint, 见 database-entity-sync.md 参数-side IS NULL 规范)。
+     * productType 走只读 LEFT JOIN (与 {@link ProductionPlan#getProductType()} 同一 product_type_id 列),
+     * 避免 FK 脏数据丢行。
+     */
+    @Query("SELECT p FROM ProductionPlan p LEFT JOIN p.productType pt " +
+           "WHERE p.factoryId = :factoryId " +
+           "AND (CAST(:keyword AS string) IS NULL " +
+           "     OR LOWER(p.planNumber) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')) " +
+           "     OR LOWER(pt.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))")
+    Page<ProductionPlan> findByFactoryIdAndKeyword(@Param("factoryId") String factoryId,
+                                                    @Param("keyword") String keyword,
+                                                    Pageable pageable);
+
+    @Query("SELECT p FROM ProductionPlan p LEFT JOIN p.productType pt " +
+           "WHERE p.factoryId = :factoryId AND p.status = :status " +
+           "AND (CAST(:keyword AS string) IS NULL " +
+           "     OR LOWER(p.planNumber) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')) " +
+           "     OR LOWER(pt.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))")
+    Page<ProductionPlan> findByFactoryIdAndStatusAndKeyword(@Param("factoryId") String factoryId,
+                                                             @Param("status") ProductionPlanStatus status,
+                                                             @Param("keyword") String keyword,
+                                                             Pageable pageable);
+
+    @Query("SELECT p FROM ProductionPlan p LEFT JOIN p.productType pt " +
+           "WHERE p.factoryId = :factoryId AND p.status IN :statuses " +
+           "AND (CAST(:keyword AS string) IS NULL " +
+           "     OR LOWER(p.planNumber) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')) " +
+           "     OR LOWER(pt.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))")
+    Page<ProductionPlan> findByFactoryIdAndStatusInAndKeyword(@Param("factoryId") String factoryId,
+                                                               @Param("statuses") Collection<ProductionPlanStatus> statuses,
+                                                               @Param("keyword") String keyword,
+                                                               Pageable pageable);
+
+    /**
      * 查找指定日期范围内的生产计划
      * 暂时注释 - 数据库表中没有planned_date字段
      */

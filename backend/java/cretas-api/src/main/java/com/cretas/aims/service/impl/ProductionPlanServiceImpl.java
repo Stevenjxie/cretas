@@ -1290,27 +1290,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         Page<ProductionPlan> planPage;
 
+        // headed-audit 修复 (2026-07-03): keyword 之前从未被应用到查询, 搜索框全无效。
+        // 空白/空字符串一律当"未提供"处理 (null), 交给 repository 端的 CAST null-guard。
+        String keyword = pageRequest.getKeyword() != null && !pageRequest.getKeyword().isBlank()
+                ? pageRequest.getKeyword().trim()
+                : null;
+
         // 如果指定了状态过滤
         if (pageRequest.getStatus() != null && !pageRequest.getStatus().isEmpty()) {
             String statusFilter = pageRequest.getStatus().toUpperCase();
             if ("UNFINISHED".equals(statusFilter) || "ACTIVE".equals(statusFilter)) {
-                planPage = productionPlanRepository.findByFactoryIdAndStatusIn(
+                planPage = productionPlanRepository.findByFactoryIdAndStatusInAndKeyword(
                         factoryId,
                         List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS),
+                        keyword,
                         pageable);
-                log.info("按未完成状态过滤生产计划: factoryId={}, status={}", factoryId, statusFilter);
+                log.info("按未完成状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, statusFilter, keyword);
             } else {
                 try {
                     ProductionPlanStatus status = ProductionPlanStatus.valueOf(statusFilter);
-                    planPage = productionPlanRepository.findByFactoryIdAndStatus(factoryId, status, pageable);
-                    log.info("按状态过滤生产计划: factoryId={}, status={}", factoryId, status);
+                    planPage = productionPlanRepository.findByFactoryIdAndStatusAndKeyword(factoryId, status, keyword, pageable);
+                    log.info("按状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, status, keyword);
                 } catch (IllegalArgumentException e) {
-                    log.warn("无效的状态值: {}, 返回全部数据", pageRequest.getStatus());
-                    planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+                    log.warn("无效的状态值: {}, 返回全部数据 (keyword={})", pageRequest.getStatus(), keyword);
+                    planPage = productionPlanRepository.findByFactoryIdAndKeyword(factoryId, keyword, pageable);
                 }
             }
         } else {
-            planPage = productionPlanRepository.findByFactoryId(factoryId, pageable);
+            planPage = productionPlanRepository.findByFactoryIdAndKeyword(factoryId, keyword, pageable);
         }
 
         List<ProductionPlanDTO> planDTOs = planPage.getContent().stream()
