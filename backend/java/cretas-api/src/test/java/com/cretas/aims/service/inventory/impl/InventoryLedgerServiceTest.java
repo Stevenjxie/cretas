@@ -3,6 +3,7 @@ package com.cretas.aims.service.inventory.impl;
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.SnapshotType;
+import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.InventoryLedgerSnapshot;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.stubbing.OngoingStubbing;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -21,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -102,6 +105,46 @@ class InventoryLedgerServiceTest {
         snap.setClosingAmount(closingAmount);
         snap.setSnapshotType(SnapshotType.PERIOD_CLOSE);
         return snap;
+    }
+
+    /**
+     * 快照 + 关联 AccountingPeriod (用于期初滚算测试 T26-T29).
+     * {@code buildSnapshot} 不设 accountingPeriodId → resolveOpening 找不到期间, 退回快照原始值
+     * (T1/T3/T8-T13/T19 沿用旧行为); 这个 overload 显式设置 accountingPeriodId + stub
+     * accountingPeriodRepo, 触发真实的"期末日期 vs startDate 缺口"滚算路径.
+     */
+    private InventoryLedgerSnapshot buildSnapshotWithPeriod(String matId, BigDecimal closingQty,
+                                                              BigDecimal closingAmount,
+                                                              String accountingPeriodId,
+                                                              int periodYear, int periodMonth) {
+        InventoryLedgerSnapshot snap = buildSnapshot(matId, closingQty, closingAmount);
+        snap.setAccountingPeriodId(accountingPeriodId);
+        AccountingPeriod period = AccountingPeriod.builder()
+                .id(accountingPeriodId)
+                .factoryId(FACTORY_ID)
+                .year(periodYear)
+                .month(periodMonth)
+                .status(AccountingPeriod.Status.CLOSED)
+                .build();
+        when(accountingPeriodRepo.findById(accountingPeriodId)).thenReturn(Optional.of(period));
+        return snap;
+    }
+
+    /**
+     * 依次 stub {@code em.createQuery(...).getResultList()} 返回值序列 (顺序敏感, 对应实现里
+     * EM 调用的实际发出顺序). 每个元素要么是单个 BigDecimal(→包成单元素 list), 要么直接是
+     * List(用 {@link Collections#emptyList()} 表示"无匹配行/诚实 null 金额").
+     */
+    @SuppressWarnings("unchecked")
+    private void stubSequentialResults(Object... resultsInOrder) {
+        Query q = mock(Query.class);
+        when(q.setParameter(anyString(), any())).thenReturn(q);
+        OngoingStubbing<List> stubbing = when(q.getResultList());
+        for (Object r : resultsInOrder) {
+            List<Object> list = (r instanceof List) ? (List<Object>) r : List.of(r);
+            stubbing = stubbing.thenReturn(list);
+        }
+        when(em.createQuery(anyString())).thenReturn(q);
     }
 
     /** 设置所有 EntityManager.createQuery 返回零 */
@@ -682,5 +725,181 @@ class InventoryLedgerServiceTest {
         String summaryPR = InventoryLedgerServiceImpl.buildKingdeeMovementSummary(
                 "purchase_return", "PO-2026-005", "掌中宝", new BigDecimal("5.000000"), "kg");
         assertEquals(summaryReturn, summaryPR, "purchase_return 和 return 应生成相同摘要");
+    }
+
+    // ========================= T26-T29: 2026-07 期初滚算修复 (🔴 静默错数据) =========================
+    //
+    // 复现真实 prod bug: findLatestBeforePeriod 只按 year*100+month 找"≤查询月的最近已结账快照",
+    // 不校验缺口/不校验查询起点在月中的哪一天. 修复后期初 = 快照期末滚算至 startDate 前一天的
+    // 真实结存 (resolveOpening + rollForwardOpening), 而不是直接透传可能过期的快照原始值.
+
+    @Test
+    @DisplayName("T26: 陈旧快照回溯 (stale reach-back) — 紧邻月未结账时期初必须滚算, 不能直接用更老的快照原始值")
+    void testResolveOpening_staleSnapshotGap_rollsForwardThroughUnclosedMonth() {
+        // 快照: 5月(period 2026-05, 期末2026-05-31) 结存 2000.000000, 金额未知(null)
+        InventoryLedgerSnapshot snap = buildSnapshotWithPeriod(MAT_ID,
+                new BigDecimal("2000.000000"), null, "AP-2026-05", 2026, 5);
+
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪蹄", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(eq(FACTORY_ID), eq(MAT_ID),
+                eq(SnapshotType.PERIOD_CLOSE), anyInt()))
+                .thenReturn(List.of(snap));
+
+        // 6月(未结账, 无快照, 缺口窗口 06-01~06-30): 入库50, 生产领用800 → 净 -750
+        // 7月1-3(查询窗口): 入库10, 生产领用5 → 净 +5
+        stubSequentialResults(
+                // === 缺口滚算 (2026-06-01 ~ 2026-06-30) ===
+                new BigDecimal("50.000000"),   // 1. inbound qty
+                Collections.emptyList(),        // 2. inbound amount (无单价, 诚实 null)
+                new BigDecimal("800.000000"),  // 3. production out qty
+                BigDecimal.ZERO,                 // 4. transfer in qty
+                BigDecimal.ZERO,                 // 5. transfer out qty
+                BigDecimal.ZERO,                 // 6. stocktake profit qty
+                BigDecimal.ZERO,                 // 7. stocktake loss qty
+                Collections.emptyList(),        // 8. stocktake profit amount
+                Collections.emptyList(),        // 9. stocktake loss amount
+                // === 查询窗口 (2026-07-01 ~ 2026-07-03) ===
+                new BigDecimal("10.000000"),   // 10. inbound qty
+                Collections.emptyList(),        // 11. inbound amount
+                new BigDecimal("5.000000"),    // 12. production out qty
+                BigDecimal.ZERO,                 // 13. transfer in qty
+                BigDecimal.ZERO,                 // 14. transfer out qty
+                BigDecimal.ZERO,                 // 15. stocktake profit qty
+                BigDecimal.ZERO,                 // 16. stocktake loss qty
+                Collections.emptyList(),        // 17. stocktake profit amount
+                Collections.emptyList()         // 18. stocktake loss amount
+        );
+
+        List<InventoryLedgerLineDTO> result = service.getLedger(
+                FACTORY_ID, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null);
+
+        assertEquals(1, result.size());
+        InventoryLedgerLineDTO line = result.get(0);
+
+        // 期初必须是滚算后的 1250 (2000 + 50 - 800), 不是快照原始值 2000 (那是虚高72%的过期数)
+        assertEquals(0, new BigDecimal("1250.000000").compareTo(line.getOpeningQty()),
+                "期初应滚算 6 月流水, 不能直接透传 5 月快照原始值 2000");
+        assertNotEquals(0, new BigDecimal("2000.000000").compareTo(line.getOpeningQty()),
+                "期初不应等于陈旧快照的原始值 (回归防御: 防止改回旧的直传逻辑)");
+        // 期末 = 滚算期初1250 + 入库10 - 领用5 = 1255
+        assertEquals(0, new BigDecimal("1255.000000").compareTo(line.getClosingQty()),
+                "期末应基于滚算后的正确期初计算, 算术恒等式期末=期初+入-出 必须成立");
+    }
+
+    @Test
+    @DisplayName("T27: 月中查询 (partial-month blindness) — 快照紧邻上一期但查询起点非月初, 期初须补齐月初到起点前一天的流水")
+    void testResolveOpening_partialMonthGap_rollsForwardWithinSamePeriod() {
+        // 快照: 4月(period 2026-04, 期末2026-04-30) 结存 3000
+        InventoryLedgerSnapshot snap = buildSnapshotWithPeriod(MAT_ID,
+                new BigDecimal("3000.000000"), null, "AP-2026-04", 2026, 4);
+
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(eq(FACTORY_ID), eq(MAT_ID),
+                eq(SnapshotType.PERIOD_CLOSE), anyInt()))
+                .thenReturn(List.of(snap));
+
+        // 查询窗口 2026-05-15 ~ 2026-05-31 → 缺口 05-01~05-14 (同月月初到查询起点前一天)
+        stubSequentialResults(
+                // === 缺口滚算 (2026-05-01 ~ 2026-05-14) ===
+                new BigDecimal("20.000000"),   // inbound qty
+                Collections.emptyList(),        // inbound amount
+                new BigDecimal("120.000000"),  // production out qty
+                BigDecimal.ZERO, BigDecimal.ZERO,  // transfer in/out
+                BigDecimal.ZERO, BigDecimal.ZERO,  // stocktake profit/loss qty
+                Collections.emptyList(), Collections.emptyList(), // stocktake profit/loss amount
+                // === 查询窗口 (2026-05-15 ~ 2026-05-31) ===
+                new BigDecimal("5.000000"),    // inbound qty
+                Collections.emptyList(),        // inbound amount
+                new BigDecimal("2.000000"),    // production out qty
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                Collections.emptyList(), Collections.emptyList()
+        );
+
+        List<InventoryLedgerLineDTO> result = service.getLedger(
+                FACTORY_ID, LocalDate.of(2026, 5, 15), LocalDate.of(2026, 5, 31), null);
+
+        InventoryLedgerLineDTO line = result.get(0);
+        // 期初 = 3000 + 20(05-01~14入库) - 120(05-01~14领用) = 2900, 不是快照原始值 3000
+        assertEquals(0, new BigDecimal("2900.000000").compareTo(line.getOpeningQty()),
+                "月中查询期初应补齐月初到起点前一天的流水, 不能漏计半个月");
+        // 期末 = 2900 + 5 - 2 = 2903
+        assertEquals(0, new BigDecimal("2903.000000").compareTo(line.getClosingQty()),
+                "期末应基于补齐后的期初计算");
+    }
+
+    @Test
+    @DisplayName("T28: 无缺口 (紧邻期首日查询) — 直接用快照值, 不触发滚算 (回归防御: 正常路径不受影响)")
+    void testResolveOpening_noGap_usesSnapshotDirectly() {
+        // 快照: 4月(期末2026-04-30) 结存 1500, 金额 8000.00
+        InventoryLedgerSnapshot snap = buildSnapshotWithPeriod(MAT_ID,
+                new BigDecimal("1500.000000"), new BigDecimal("8000.00"), "AP-2026-04B", 2026, 4);
+
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "牛腱", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(eq(FACTORY_ID), eq(MAT_ID),
+                eq(SnapshotType.PERIOD_CLOSE), anyInt()))
+                .thenReturn(List.of(snap));
+
+        // 查询窗口紧邻期末次日 (2026-05-01), 无缺口 → 不应发出滚算查询, 直接沿用快照值
+        stubQueryReturnsZero();
+
+        List<InventoryLedgerLineDTO> result = service.getLedger(
+                FACTORY_ID, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), null);
+
+        InventoryLedgerLineDTO line = result.get(0);
+        assertEquals(0, new BigDecimal("1500.000000").compareTo(line.getOpeningQty()),
+                "无缺口时期初直接等于快照值");
+        assertEquals(0, new BigDecimal("8000.00").compareTo(line.getOpeningAmount()),
+                "无缺口时期初金额直接等于快照值");
+        assertEquals(0, new BigDecimal("1500.000000").compareTo(line.getClosingQty()),
+                "无期间流水时期末=期初");
+    }
+
+    @Test
+    @DisplayName("T29: 期初金额滚算 — 缺口窗口的入库/领用金额按移动均价滚算, 均价前后一致")
+    void testResolveOpening_amountRollForward_preservesAvgPrice() {
+        // 快照: 5月结存 100kg / ¥1000.00 (均价 ¥10/kg)
+        InventoryLedgerSnapshot snap = buildSnapshotWithPeriod(MAT_ID,
+                new BigDecimal("100.000000"), new BigDecimal("1000.00"), "AP-2026-05B", 2026, 5);
+
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(eq(FACTORY_ID), eq(MAT_ID),
+                eq(SnapshotType.PERIOD_CLOSE), anyInt()))
+                .thenReturn(List.of(snap));
+
+        stubSequentialResults(
+                // === 缺口滚算 (2026-06-01 ~ 2026-06-30): 入库50kg¥500(均价¥10), 领用30kg ===
+                new BigDecimal("50.000000"),
+                new BigDecimal("500.00"),
+                new BigDecimal("30.000000"),
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                Collections.emptyList(), Collections.emptyList(),
+                // === 查询窗口 (2026-07-01, 单日, 无流水) ===
+                BigDecimal.ZERO, Collections.emptyList(), BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                Collections.emptyList(), Collections.emptyList()
+        );
+
+        List<InventoryLedgerLineDTO> result = service.getLedger(
+                FACTORY_ID, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), null);
+
+        InventoryLedgerLineDTO line = result.get(0);
+        // 期初数量 = 100 + 50 - 30 = 120
+        assertEquals(0, new BigDecimal("120.000000").compareTo(line.getOpeningQty()),
+                "期初数量应滚算 6 月流水");
+        // 期初金额 = 1000 + 500(入库) - 300(领用30kg×均价¥10) = 1200.00
+        assertEquals(0, new BigDecimal("1200.00").compareTo(line.getOpeningAmount()),
+                "期初金额应按移动均价滚算, 而不是直接透传快照原始金额 1000");
+        // 无期间流水 → 期末 = 期初, 均价保持 ¥10/kg (滚算前后均价一致, 证明算术自洽)
+        assertEquals(0, new BigDecimal("1200.00").compareTo(line.getClosingAmount()),
+                "期末金额 = 期初(无期间流水)");
+        assertEquals(0, new BigDecimal("10.0000").compareTo(line.getMovingAvgUnitPrice()),
+                "移动均价应保持 ¥10/kg, 证明滚算金额与数量口径一致");
     }
 }

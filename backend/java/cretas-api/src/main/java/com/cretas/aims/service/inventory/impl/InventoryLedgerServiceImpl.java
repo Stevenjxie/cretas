@@ -25,6 +25,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -34,7 +35,12 @@ import java.util.stream.Collectors;
  *
  * <p>数据来源:
  * <ol>
- *   <li>期初: {@link InventoryLedgerSnapshot} (月结快照); 若无快照则从 MaterialBatch 全量聚合兜底</li>
+ *   <li>期初: {@link InventoryLedgerSnapshot} (月结快照) 滚算至 startDate 前一天 — 若快照所在
+ *       期与查询起点之间存在未结账缺口(缺口月无快照), 用同口径流水聚合把缺口补齐, 不直接
+ *       透传"最近一次已结账快照"这个可能过期的值(见 {@link #resolveOpening} 2026-07 修复:
+ *       之前 findLatestBeforePeriod 只按 year*100+month 找"≤ 查询月的最近快照", 若紧邻月未
+ *       结账会静默跳过继续往前找更老的快照, 造成期初虚高/虚低且无任何提示); 若无任何快照则从
+ *       MaterialBatch 全量聚合兜底</li>
  *   <li>入库: PurchaseReceiveItem (receiveDate BETWEEN start..end)</li>
  *   <li>出库(生产): MaterialConsumption / MaterialBatch.usedQuantity 变化</li>
  *   <li>出库(销售): SalesDeliveryItem (via SalesDeliveryRecord.deliveryDate)</li>
@@ -327,17 +333,10 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     private InventoryLedgerLineDTO buildLine(String factoryId, RawMaterialType mt,
                                               LocalDate start, LocalDate end,
                                               InventoryLedgerSnapshot openingSnap) {
-        // === 期初 ===
-        BigDecimal openingQty = ZERO;
-        BigDecimal openingAmount = null;
-
-        if (openingSnap != null) {
-            openingQty = nvl(openingSnap.getClosingQty());
-            openingAmount = openingSnap.getClosingAmount(); // PriceSensitive — may be null for warehouse role
-        } else {
-            // 兜底: 从 MaterialBatch 全量聚合 startDate 之前的净入库数量
-            openingQty = aggregateBatchQtyBefore(factoryId, mt.getId(), start);
-        }
+        // === 期初 (2026-07 修复: 滚算至 start 前一天真实结存, 不透传可能过期的快照) ===
+        OpeningBalance opening = resolveOpening(factoryId, mt.getId(), start, openingSnap);
+        BigDecimal openingQty = opening.qty();
+        BigDecimal openingAmount = opening.amount(); // PriceSensitive — may be null for warehouse role
 
         // === 入库 (PurchaseReceiveItem) ===
         BigDecimal inboundQty = aggregateInboundQty(factoryId, mt.getId(), start, end);
@@ -434,6 +433,119 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 .outboundAmount(outboundAmount)
                 .movingAvgUnitPrice(movingAvgUnitPrice)
                 .build();
+    }
+
+    // ========================= 期初解析 (2026-07 修复: 滚算至 startDate 前一天) =========================
+
+    /** 期初结存 (数量 + 金额, 金额诚实 null 当无法计算价格时). */
+    private record OpeningBalance(BigDecimal qty, BigDecimal amount) {
+    }
+
+    /**
+     * 解析期初结存 = startDate 前一天(含)的真实库存状态.
+     *
+     * <p><b>2026-07 修复背景</b>: 修复前直接把 {@code findLatestBeforePeriod} 找到的"最近一次
+     * 已结账快照"当期初, 但该查询只按 {@code year*100+month < 查询月} 匹配, 不校验快照是不是
+     * "紧邻查询起点的上一期". 若紧邻的上一期还没结账(常态 — 大多数查询发生在当月未结账时),
+     * 会静默跳过继续往前找更老的快照, 导致期初把中间所有未结账期的入/出/调拨/盘点流水全部
+     * 丢失(F006 DDY002 实测: 2026-07-01~03 查询期初错误回退到 05-31 快照 2009.12, 真实应为
+     * 06-30 结存 1166.39, 虚高 72%). 同样地, 即使快照就是紧邻上一期, 若查询起点不是月初(如
+     * 06-15), 也需要把该月 06-01~06-14 的流水补进期初, 否则漏计"半个月"的流水.
+     *
+     * <p>修复: 快照期末(period end) 到 startDate 前一天之间若存在缺口(含部分月), 用 buildLine
+     * 同一套流水聚合方法(入库/生产领用/销售出货/调拨/盘盈损)把缺口滚算进期初, 而不是静默透传
+     * 一个可能已经过期的数字. 若期间记录本身缺失(数据异常), 诚实退回原始快照值(不新增虚假精度),
+     * 而不是抛异常阻断整张报表.
+     */
+    private OpeningBalance resolveOpening(String factoryId, String materialTypeId, LocalDate start,
+                                           InventoryLedgerSnapshot openingSnap) {
+        if (openingSnap == null) {
+            // 兜底: 从 MaterialBatch 全量聚合 startDate 之前的净入库数量 (无快照时唯一数据源,
+            // 已经是 as-of-start 的诚实聚合, 不需要额外滚算)
+            return new OpeningBalance(aggregateBatchQtyBefore(factoryId, materialTypeId, start), null);
+        }
+
+        LocalDate periodEnd = resolveSnapshotPeriodEnd(openingSnap);
+        if (periodEnd == null) {
+            // 防御: 快照关联的 AccountingPeriod 找不到(测试桩或数据异常) — 无法校验缺口,
+            // 退回快照原始值(不是新 bug, 是维持旧行为而非抛异常阻断整张报表)
+            log.warn("[InventoryLedger] AccountingPeriod {} not found for snapshot {} (material={}) "
+                            + "— cannot verify opening-balance gap, falling back to raw snapshot value",
+                    openingSnap.getAccountingPeriodId(), openingSnap.getId(), materialTypeId);
+            return new OpeningBalance(nvl(openingSnap.getClosingQty()), openingSnap.getClosingAmount());
+        }
+
+        LocalDate gapStart = periodEnd.plusDays(1);
+        LocalDate gapEnd = start.minusDays(1);
+        if (gapStart.isAfter(gapEnd)) {
+            // 快照期末紧邻查询起点 (下期第 1 天开始查询) — 无缺口, 快照值即真实期初
+            return new OpeningBalance(nvl(openingSnap.getClosingQty()), openingSnap.getClosingAmount());
+        }
+
+        // 缺口存在 (跨未结账月 和/或 查询起点非月初) — 用同口径流水聚合滚算补齐
+        return rollForwardOpening(factoryId, materialTypeId,
+                nvl(openingSnap.getClosingQty()), openingSnap.getClosingAmount(), gapStart, gapEnd);
+    }
+
+    /** 快照所属 AccountingPeriod 的期末日期 (该月最后一天); 期间记录缺失时返回 null. */
+    private LocalDate resolveSnapshotPeriodEnd(InventoryLedgerSnapshot snap) {
+        if (snap.getAccountingPeriodId() == null) {
+            return null;
+        }
+        return accountingPeriodRepo.findById(snap.getAccountingPeriodId())
+                .map(p -> YearMonth.of(p.getYear(), p.getMonth()).atEndOfMonth())
+                .orElse(null);
+    }
+
+    /**
+     * 把 [gapStart, gapEnd] 区间的流水滚算进 baseQty/baseAmount, 算出滚算后的结存.
+     * 复用与 {@link #buildLine} 完全相同的聚合口径与精度规则(scale/HALF_UP), 保证
+     * "期初(滚算) + 本期流水 = 期末" 的算术恒等式对任意查询窗口都成立.
+     */
+    private OpeningBalance rollForwardOpening(String factoryId, String materialTypeId,
+                                               BigDecimal baseQty, BigDecimal baseAmount,
+                                               LocalDate gapStart, LocalDate gapEnd) {
+        BigDecimal inboundQty = aggregateInboundQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal inboundAmount = aggregateInboundAmount(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal outProdQty = aggregateProductionOutQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal outSalesQty = aggregateSalesOutQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal transferInQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, true);
+        BigDecimal transferOutQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, false);
+        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, materialTypeId, gapStart, gapEnd);
+
+        BigDecimal totalOut = nvl(outProdQty).add(nvl(outSalesQty)).add(nvl(transferOutQty));
+        BigDecimal adjustQty = nvl(profitQty).subtract(nvl(lossQty));
+        BigDecimal newQty = nvl(baseQty).add(nvl(inboundQty)).subtract(totalOut)
+                .add(nvl(transferInQty)).add(adjustQty)
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+
+        BigDecimal newAmount = null;
+        if (inboundAmount != null || baseAmount != null) {
+            BigDecimal inAmt = nvl(inboundAmount);
+            BigDecimal baseAmt = nvl(baseAmount);
+            BigDecimal adjAmt = (profitAmount != null || lossAmount != null)
+                    ? nvl(profitAmount).subtract(nvl(lossAmount))
+                    : ZERO;
+            // 移动均价估算 (同 buildLine 出库金额估算口径): (期初金额+入库金额) / (期初数量+入库数量)
+            BigDecimal avgPrice = (baseAmt.add(inAmt).compareTo(ZERO) > 0
+                    && nvl(baseQty).add(nvl(inboundQty)).compareTo(ZERO) > 0)
+                    ? baseAmt.add(inAmt)
+                    .divide(nvl(baseQty).add(nvl(inboundQty)), PRICE_SCALE, RoundingMode.HALF_UP)
+                    : null;
+            if (avgPrice != null) {
+                BigDecimal outAmt = totalOut.multiply(avgPrice).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+                BigDecimal transferInAmt = nvl(transferInQty).multiply(avgPrice).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+                BigDecimal transferOutAmt = nvl(transferOutQty).multiply(avgPrice).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+                newAmount = baseAmt.add(inAmt).subtract(outAmt)
+                        .add(transferInAmt).subtract(transferOutAmt).add(adjAmt)
+                        .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+            }
+            // avgPrice == null (base+inbound 均为 0 或数量为 0): 诚实 null, 不伪造金额
+        }
+        return new OpeningBalance(newQty, newAmount);
     }
 
     // ========================= 聚合查询 =========================
@@ -546,8 +658,15 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     // ========================= 盘盈/盘损分列查询 (W8) =========================
 
     /**
-     * 盘盈数量: correction / return 类型 (正调整, ≥0).
+     * 盘盈数量: correction / return / STOCKTAKE 等非 loss/damage 类型 **且实际调整量为正** (≥0).
      * 诚实 ZERO 当期间无盘盈记录.
+     *
+     * <p>2026-07 修复: 之前只按 {@code adjustmentType NOT IN ('loss','damage')} 分桶, 未校验
+     * 符号. {@link com.cretas.aims.service.factory.impl.FactoryStocktakeServiceImpl} 的盘点
+     * 生效路径把 {@code adjustmentType="STOCKTAKE"} 且 {@code adjustmentQuantity=差异值}(带符号,
+     * 盘亏为负) 写入同一张表 — 负差异会被静默计入"盘盈"桶, 实测 F006 DZT001 出现
+     * {@code stocktakeProfitQty=-0.02} 违反"盘盈≥0"不变式. 加 {@code adjustmentQuantity > 0}
+     * 守卫, 负值调整量归入 {@link #aggregateStocktakeLossQty} (按符号而非仅按类型分桶).
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeProfitQty(String factoryId, String materialTypeId,
@@ -558,6 +677,7 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
                     "  AND a.adjustmentType NOT IN ('loss','damage') " +
+                    "  AND a.adjustmentQuantity > 0 " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
                     .setParameter("fid", factoryId)
@@ -573,18 +693,22 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     }
 
     /**
-     * 盘损数量: loss / damage 类型 (取绝对值, ≥0).
-     * 诚实 ZERO 当期间无盘损记录.
+     * 盘损数量: loss / damage 类型 (任意符号) **或** 其他类型但调整量为负 (盘亏) — 逐行取绝对值
+     * 后求和, 取绝对值 (≥0). 诚实 ZERO 当期间无盘损记录.
+     *
+     * <p>2026-07 修复: 加 {@code OR a.adjustmentQuantity < 0} 分支, 承接 STOCKTAKE 等类型的负
+     * 差异(见 {@link #aggregateStocktakeProfitQty} 注释); 并改为逐行 {@code ABS()} 后再
+     * {@code SUM}(而非先 SUM 再对总和取绝对值), 避免同期正负混合调整互相抵消导致金额偏小.
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeLossQty(String factoryId, String materialTypeId,
                                                   LocalDate start, LocalDate end) {
         try {
             List<Object> result = em.createQuery(
-                    "SELECT COALESCE(SUM(a.adjustmentQuantity), 0) " +
+                    "SELECT COALESCE(SUM(ABS(a.adjustmentQuantity)), 0) " +
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
-                    "  AND a.adjustmentType IN ('loss','damage') " +
+                    "  AND (a.adjustmentType IN ('loss','damage') OR a.adjustmentQuantity < 0) " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
                     .setParameter("fid", factoryId)
@@ -592,7 +716,6 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .setParameter("start", start.atStartOfDay())
                     .setParameter("endPlus1", end.plusDays(1).atStartOfDay())
                     .getResultList();
-            // loss 存储为正值 (adjustmentQuantity > 0), 展示取绝对值
             return result.isEmpty() ? ZERO : toBD(result.get(0)).abs().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
             log.debug("[InventoryLedger] Stocktake loss qty query failed: {}", e.getMessage());
@@ -601,7 +724,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     }
 
     /**
-     * 盘盈金额: correction / return × 批次单价 (诚实 null 当无单价).
+     * 盘盈金额: correction / return / STOCKTAKE(正差异) × 批次单价 (诚实 null 当无单价).
+     * 2026-07 修复: 同 {@link #aggregateStocktakeProfitQty} 加 {@code adjustmentQuantity > 0} 守卫.
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeProfitAmount(String factoryId, String materialTypeId,
@@ -612,6 +736,7 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
                     "  AND a.adjustmentType NOT IN ('loss','damage') " +
+                    "  AND a.adjustmentQuantity > 0 " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND b.unitPrice IS NOT NULL " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
@@ -629,17 +754,19 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     }
 
     /**
-     * 盘损金额: loss/damage × 批次单价 (取绝对值, 诚实 null 当无单价).
+     * 盘损金额: loss/damage 类型 或 负差异 × 批次单价, 逐行取绝对值后求和 (≥0, 诚实 null 当无单价).
+     * 2026-07 修复: 同 {@link #aggregateStocktakeLossQty} 加 {@code OR adjustmentQuantity < 0} 分支
+     * + 逐行 ABS 求和(避免同期正负混合抵消).
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeLossAmount(String factoryId, String materialTypeId,
                                                      LocalDate start, LocalDate end) {
         try {
             List<Object> result = em.createQuery(
-                    "SELECT SUM(a.adjustmentQuantity * b.unitPrice) " +
+                    "SELECT SUM(ABS(a.adjustmentQuantity) * b.unitPrice) " +
                     "FROM MaterialBatchAdjustment a JOIN a.batch b " +
                     "WHERE b.factoryId = :fid AND b.materialTypeId = :mid " +
-                    "  AND a.adjustmentType IN ('loss','damage') " +
+                    "  AND (a.adjustmentType IN ('loss','damage') OR a.adjustmentQuantity < 0) " +
                     "  AND a.adjustmentTime >= :start AND a.adjustmentTime < :endPlus1 " +
                     "  AND b.unitPrice IS NOT NULL " +
                     "  AND a.deletedAt IS NULL AND b.deletedAt IS NULL")
@@ -649,7 +776,7 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .setParameter("endPlus1", end.plusDays(1).atStartOfDay())
                     .getResultList();
             Object val = result.isEmpty() ? null : result.get(0);
-            // loss 量存储为正值 → 金额也是正值; 展示取绝对值 (≥0)
+            // ABS() 已在 SQL 层逐行取绝对值; Java 侧 .abs() 作双重防御 (理论上 unitPrice 若为负会破坏此不变式)
             return val == null ? null : toBD(val).abs().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
             log.debug("[InventoryLedger] Stocktake loss amount query failed: {}", e.getMessage());
