@@ -170,11 +170,97 @@ class VoucherExportKingdeeTemplateTest {
                 "借方", "贷方", "币种", "汇率", "核算维度");
     }
 
+    @Test
+    @DisplayName("KIS/K3 profile writes 18-column standard-format-voucher layout distinct from 云星空")
+    void exportKingdeeImportTemplate_kis_writesStandardFormatVoucherColumns() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_KIS))
+                .thenReturn(Optional.empty());
+        Voucher voucher = voucher("V-001", "1001", LocalDate.of(2026, 5, 10));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(java.util.List.of(voucher));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-001"))
+                .thenReturn(java.util.List.of(
+                        entry("E-001", 1, "1002", "银行存款", "收款", "12.345", "0.00", "客户:张三"),
+                        entry("E-002", 2, "6001", "主营业务收入", "收款", "0.00", "12.345", "")
+                ));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(VoucherTargetSystem.KINGDEE_KIS), USER_ID, out);
+
+        assertTrue(fileName.startsWith("kingdee-kis-import-template_"));
+        Sheet sheet = readFirstSheet(out.toByteArray());
+        assertEquals("凭证导入", sheet.getSheetName());
+        assertRow(sheet.getRow(0),
+                "日期", "凭证字", "凭证号", "附单据数", "摘要", "科目编码", "科目名称",
+                "借方金额", "贷方金额", "币别", "汇率", "原币金额", "数量", "单价",
+                "核算类别", "核算编码", "核算名称", "制单人");
+
+        Row debit = sheet.getRow(1);
+        assertEquals("2026-05-10", cellAsString(debit.getCell(0)));
+        assertEquals("记", cellAsString(debit.getCell(1)));
+        assertEquals("1001", cellAsString(debit.getCell(2)));
+        assertEquals("", cellAsString(debit.getCell(3)), "附单据数 honest-blank, not fabricated");
+        assertEquals("收款", cellAsString(debit.getCell(4)));
+        assertEquals("1002", cellAsString(debit.getCell(5)));
+        assertEquals("银行存款", cellAsString(debit.getCell(6)));
+        assertEquals("12.35", cellAsString(debit.getCell(7)), "HALF_UP rounds 12.345 to 12.35");
+        assertEquals("", cellAsString(debit.getCell(8)), "debit row credit amount must be blank, not 0.00");
+        assertEquals("人民币", cellAsString(debit.getCell(9)));
+        assertEquals("1", cellAsString(debit.getCell(10)));
+        assertEquals("", cellAsString(debit.getCell(11)), "原币金额 honest-blank (single-currency system)");
+        assertEquals("", cellAsString(debit.getCell(12)), "数量 honest-blank (no qty dimension tracked)");
+        assertEquals("", cellAsString(debit.getCell(13)), "单价 honest-blank");
+        assertEquals("", cellAsString(debit.getCell(14)), "核算类别 honest-blank");
+        assertEquals("", cellAsString(debit.getCell(15)), "核算编码 honest-blank");
+        assertEquals("客户:张三", cellAsString(debit.getCell(16)), "核算名称 reuses same auxiliaryEntityId as 云星空 辅助核算");
+        assertEquals("", cellAsString(debit.getCell(17)), "制单人 honest-blank (no username resolution wired)");
+
+        ArgumentCaptor<VoucherExportRecord> record = ArgumentCaptor.forClass(VoucherExportRecord.class);
+        verify(exportRecordRepo).save(record.capture());
+        assertEquals("KINGDEE_IMPORT_TEMPLATE", record.getValue().getExportType());
+        assertEquals(VoucherTargetSystem.KINGDEE_KIS, record.getValue().getTargetSystem());
+        assertEquals(2, record.getValue().getRowCount());
+    }
+
+    @Test
+    @DisplayName("KIS/K3 config override changes reusable column names, keeps KIS-only literal columns")
+    void exportKingdeeImportTemplate_kisConfigOverride_changesReusableHeaders() throws Exception {
+        VoucherExportConfig config = VoucherExportConfig.builder()
+                .factoryId(FACTORY_ID)
+                .targetSystem(VoucherTargetSystem.KINGDEE_KIS)
+                .colVoucherNo("凭证编号")
+                .colDate("业务日期")
+                .colSummary("分录摘要")
+                .colSubjectCode("会计科目编码")
+                .colSubjectName("会计科目名称")
+                .colDebit("借方")
+                .colCredit("贷方")
+                .colCurrency("币种")
+                .colAuxiliary("核算维度")
+                .build();
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_KIS))
+                .thenReturn(Optional.of(config));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(java.util.List.of());
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(VoucherTargetSystem.KINGDEE_KIS), USER_ID, out);
+
+        assertRow(readFirstSheet(out.toByteArray()).getRow(0),
+                "业务日期", "凭证字", "凭证编号", "附单据数", "分录摘要", "会计科目编码", "会计科目名称",
+                "借方", "贷方", "币种", "汇率", "原币金额", "数量", "单价",
+                "核算类别", "核算编码", "核算维度", "制单人");
+    }
+
     private VoucherExportRequestDTO buildReq() {
+        return buildReq(VoucherTargetSystem.KINGDEE);
+    }
+
+    private VoucherExportRequestDTO buildReq(VoucherTargetSystem targetSystem) {
         return VoucherExportRequestDTO.builder()
                 .startDate(START)
                 .endDate(END)
-                .targetSystem(VoucherTargetSystem.KINGDEE)
+                .targetSystem(targetSystem)
                 .build();
     }
 

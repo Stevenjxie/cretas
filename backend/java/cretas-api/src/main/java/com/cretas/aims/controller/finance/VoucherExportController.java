@@ -91,6 +91,10 @@ public class VoucherExportController {
         log.info("[SP11] VoucherExport subjectBalance: factoryId={} file={}", factoryId, fileName);
     }
 
+    /**
+     * 金蝶导入模板导出 — 支持 云星空(KINGDEE_YXSKY, 默认, 向后兼容) 和 KIS/K3(KINGDEE_KIS) 两种列集.
+     * 六膳门客户两套金蝶版本都要用, 前端加了格式选择器 (见 voucher-export/index.vue).
+     */
     @GetMapping("/voucher-import-template")
     @RequireModule("finance")
     @RequirePermission({"finance:read_write"})
@@ -98,17 +102,18 @@ public class VoucherExportController {
             @PathVariable String factoryId,
             @RequestParam String startDate,
             @RequestParam String endDate,
+            @RequestParam(defaultValue = "KINGDEE_YXSKY") VoucherTargetSystem targetSystem,
             HttpServletRequest request,
             HttpServletResponse response) throws Exception {
 
         Long userId = currentUserId(request);
-        VoucherExportRequestDTO req = buildRequest(startDate, endDate, VoucherTargetSystem.KINGDEE_YXSKY);
+        VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         String fileName = voucherExportService.exportKingdeeImportTemplate(
                 factoryId, req, userId, response.getOutputStream());
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
-        log.info("[Kingdee] import template export: factoryId={} file={}", factoryId, fileName);
+        log.info("[Kingdee] import template export: factoryId={} target={} file={}", factoryId, targetSystem, fileName);
     }
 
     @GetMapping("/chronological-ledger/export")
