@@ -16,7 +16,8 @@
  * Endpoints:
  *   POST /api/mobile/{factoryId}/finance/voucher-export          — 序时账 xlsx
  *   GET  /api/mobile/{factoryId}/finance/subject-balance/export  — 科目余额 xlsx
- *   GET  /api/mobile/{factoryId}/finance/voucher-import-template — 金蝶云星空导入模板 xlsx
+ *   GET  /api/mobile/{factoryId}/finance/voucher-import-template — 金蝶导入模板 xlsx
+ *                                                                   (?targetSystem=KINGDEE_YXSKY 默认 | KINGDEE_KIS)
  *   GET    /api/mobile/{factoryId}/finance/export-config          — 查列表
  *   POST   /api/mobile/{factoryId}/finance/export-config          — 新建
  *   PUT    /api/mobile/{factoryId}/finance/export-config/{id}     — 更新
@@ -36,7 +37,9 @@ import request from '@/api/request';
 // ============================================================
 // Types — mirror backend DTOs (camelCase, backend truth)
 // ============================================================
-type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM' | 'KINGDEE_YXSKY';
+type VoucherTargetSystem = 'KINGDEE' | 'YONYOU' | 'CUSTOM' | 'KINGDEE_YXSKY' | 'KINGDEE_KIS';
+/** Kingdee 导入模板专用: 只有云星空/KIS-K3 两种列集实现, 见后端 VoucherExportServiceImpl. */
+type KingdeeImportTarget = 'KINGDEE_YXSKY' | 'KINGDEE_KIS';
 // SP6 SettlementType enum values (PREPAID/CREDIT_FIRST/NO_INVOICE/MONTHLY/CREDIT_PERIOD/IMMEDIATE)
 type SettlementType = 'PREPAID' | 'CREDIT_FIRST' | 'NO_INVOICE' | 'MONTHLY' | 'CREDIT_PERIOD' | 'IMMEDIATE';
 type LedgerReportType = 'chronological' | 'general' | 'subsidiary' | 'trialBalance' | 'incomeStatement' | 'quantityAmount';
@@ -111,6 +114,8 @@ function currentMonthRange(): [string, string] {
 const exportDateRange = ref<[string, string] | null>(currentMonthRange());
 const exportTargetSystem = ref<VoucherTargetSystem>('KINGDEE');
 const selectedConfigId = ref('');
+// 六膳门需要 云星空 + KIS/K3 两种金蝶版本, 用户导出前先选版本 (fool-proof Rule 3: 约束选择而非猜测)
+const kingdeeImportTarget = ref<KingdeeImportTarget>('KINGDEE_YXSKY');
 
 const canExport = computed(() =>
   !!exportDateRange.value && !!exportDateRange.value[0] && !!exportDateRange.value[1]
@@ -334,6 +339,10 @@ async function handleBalanceExport() {
   }
 }
 
+function kingdeeImportTargetLabel(target: KingdeeImportTarget): string {
+  return target === 'KINGDEE_KIS' ? '金蝶KIS/K3' : '金蝶云星空';
+}
+
 async function handleKingdeeImportTemplate() {
   if (!canExport.value) {
     ElMessage({ message: '请先选择日期范围', type: 'warning', duration: 3000 });
@@ -347,14 +356,21 @@ async function handleKingdeeImportTemplate() {
     const response = await request.get(
       `/${factoryId.value}/finance/voucher-import-template`,
       {
-        params: { startDate, endDate },
+        params: { startDate, endDate, targetSystem: kingdeeImportTarget.value },
         responseType: 'blob',
         _keepResponse: true,
       }
     );
 
-    downloadBlob(response, `kingdee_import_template_${startDate}_${endDate}.xlsx`);
-    ElMessage({ message: '金蝶导入模板已导出', type: 'success', duration: 3000 });
+    const filePrefix = kingdeeImportTarget.value === 'KINGDEE_KIS'
+      ? 'kingdee_kis_import_template'
+      : 'kingdee_yxsky_import_template';
+    downloadBlob(response, `${filePrefix}_${startDate}_${endDate}.xlsx`);
+    ElMessage({
+      message: `${kingdeeImportTargetLabel(kingdeeImportTarget.value)}导入模板已导出`,
+      type: 'success',
+      duration: 3000,
+    });
   } catch {
     // 拦截器已 toast
   } finally {
@@ -531,6 +547,7 @@ function getTargetSystemLabel(ts: VoucherTargetSystem): string {
     YONYOU: '用友',
     CUSTOM: '通用',
     KINGDEE_YXSKY: '金蝶云星空',
+    KINGDEE_KIS: '金蝶KIS/K3',
   };
   return map[ts] ?? ts;
 }
@@ -611,6 +628,17 @@ onMounted(async () => {
           >
             导出科目余额表
           </el-button>
+        </el-form-item>
+      </el-form>
+
+      <el-form :inline="true" class="export-form kingdee-import-form">
+        <el-form-item label="金蝶版本">
+          <el-select v-model="kingdeeImportTarget" style="width: 140px">
+            <el-option label="云星空" value="KINGDEE_YXSKY" />
+            <el-option label="KIS/K3" value="KINGDEE_KIS" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
           <el-button
             type="success"
             :icon="Download"
@@ -618,7 +646,7 @@ onMounted(async () => {
             :disabled="!canExport || !canWrite"
             @click="handleKingdeeImportTemplate"
           >
-            金蝶导入模板
+            {{ kingdeeImportTargetLabel(kingdeeImportTarget) }}导入模板
           </el-button>
         </el-form-item>
       </el-form>
@@ -816,6 +844,7 @@ onMounted(async () => {
           <el-select v-model="configForm.targetSystem" :disabled="configDialogMode === 'edit'">
             <el-option label="金蝶" value="KINGDEE" />
             <el-option label="金蝶云星空" value="KINGDEE_YXSKY" />
+            <el-option label="金蝶KIS/K3" value="KINGDEE_KIS" />
             <el-option label="用友" value="YONYOU" />
             <el-option label="通用" value="CUSTOM" />
           </el-select>
@@ -951,6 +980,9 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+.kingdee-import-form {
+  margin-top: -4px;
 }
 .ledger-report-grid {
   display: grid;

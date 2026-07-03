@@ -8,7 +8,9 @@ public enum VoucherTargetSystem {
     KINGDEE("金蝶"),
     YONYOU("用友"),
     CUSTOM("自定义"),
-    KINGDEE_YXSKY("金蝶云星空");
+    KINGDEE_YXSKY("金蝶云星空"),
+    /** 金蝶 KIS专业版/标准版/K3 — 标准格式凭证 Excel 引入模板 (列集与云星空不同, 见 VoucherExportServiceImpl). */
+    KINGDEE_KIS("金蝶KIS/K3");
 
     private final String displayName;
 

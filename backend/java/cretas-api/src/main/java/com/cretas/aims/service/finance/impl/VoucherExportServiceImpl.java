@@ -80,6 +80,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private static final String KINGDEE_CLOUD_CURRENCY = "人民币";
     private static final String KINGDEE_CLOUD_EXCHANGE_RATE = "1";
     private static final String KINGDEE_CLOUD_SHEET_NAME = "凭证导入";
+    // KIS/K3 "标准格式凭证" 列集与云星空不同 (附单据数/数量/单价/原币金额/核算类别/核算编码/制单人
+    // 均是云星空模板没有的字段) — 见 buildKisImportRows 头部 comment 引用来源。
+    private static final String KIS_BLANK = "";
 
     private final VoucherRepository voucherRepo;
     private final VoucherEntryRepository entryRepo;
@@ -166,14 +169,36 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportKingdeeImportTemplate(String factoryId, VoucherExportRequestDTO req,
                                               Long userId, OutputStream out) throws Exception {
+        // 六膳门需要 KIS/K3 和 云星空 两种金蝶版本 (列集不同, 见下方两个 build*ImportRows).
+        // 未传 targetSystem (老 caller) 或非 KIS 一律走云星空, 保持向后兼容.
+        VoucherTargetSystem target = req.getTargetSystem() == VoucherTargetSystem.KINGDEE_KIS
+                ? VoucherTargetSystem.KINGDEE_KIS
+                : VoucherTargetSystem.KINGDEE_YXSKY;
+
         VoucherExportRequestDTO kingdeeReq = VoucherExportRequestDTO.builder()
                 .startDate(req.getStartDate())
                 .endDate(req.getEndDate())
-                .targetSystem(VoucherTargetSystem.KINGDEE_YXSKY)
+                .targetSystem(target)
                 .build();
-        VoucherExportConfig config = resolveConfig(factoryId, VoucherTargetSystem.KINGDEE_YXSKY);
+        VoucherExportConfig config = resolveConfig(factoryId, target);
         List<VoucherImportLine> lines = loadVoucherImportLines(factoryId, req);
 
+        List<List<Object>> rows = target == VoucherTargetSystem.KINGDEE_KIS
+                ? buildKisImportRows(config, lines)
+                : buildYxskyImportRows(config, lines);
+
+        String filePrefix = target == VoucherTargetSystem.KINGDEE_KIS
+                ? "kingdee-kis-import-template"
+                : "kingdee-yxsky-import-template";
+
+        writeRawRows(out, rows, KINGDEE_CLOUD_SHEET_NAME);
+        String fileName = buildFileName(filePrefix, factoryId, req.getStartDate(), req.getEndDate());
+        saveExportRecord(factoryId, TYPE_KINGDEE_IMPORT_TEMPLATE, kingdeeReq, userId, fileName, lines.size());
+        return fileName;
+    }
+
+    /** 金蝶云星空 凭证导入 sheet — 11 列 (凭证字/凭证号/日期/摘要/科目编码/科目名称/借方/贷方/币别/汇率/辅助核算). */
+    private List<List<Object>> buildYxskyImportRows(VoucherExportConfig config, List<VoucherImportLine> lines) {
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of(
                 "凭证字",
@@ -204,11 +229,74 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     nvlStr(line.auxiliary())
             ));
         }
+        return rows;
+    }
 
-        writeRawRows(out, rows, KINGDEE_CLOUD_SHEET_NAME);
-        String fileName = buildFileName("kingdee-yxsky-import-template", factoryId, req.getStartDate(), req.getEndDate());
-        saveExportRecord(factoryId, TYPE_KINGDEE_IMPORT_TEMPLATE, kingdeeReq, userId, fileName, lines.size());
-        return fileName;
+    /**
+     * 金蝶 KIS专业版/标准版/K3 "标准格式凭证" Excel 引入模板 — 18 列, 列集跟云星空不同.
+     *
+     * <p>KIS/K3 系列 (专业版/标准版/旗舰版/精斗云共享同一份 "引入标准格式凭证" 工具) 的规范列集
+     * 反复出现在金蝶官方及第三方教程中 (凭证字/凭证号/附单据数/核算类别/核算编码/核算名称/制单人
+     * 是云星空模板没有、KIS 系列特有的字段):
+     * <pre>
+     * 日期,凭证字,凭证号,附单据数,摘要,科目编码,科目名称,借方金额,贷方金额,
+     * 币别,汇率,原币金额,数量,单价,核算类别,核算编码,核算名称,制单人
+     * </pre>
+     * 来源: 金蝶 KIS专业版 "文件→引出/引入标准格式凭证" 工具说明 + 多篇第三方教程交叉确认
+     * (知乎《金蝶专业版/商贸版/旗舰版K3/精斗云批量导入凭证模板操作》,
+     * CSDN《金蝶专业版日记账批量生成凭证导入操作》等) — 该字段集合跨 KIS 专业版/标准版/K3/精斗云
+     * 版本共享, 是行业内公认的"标准格式凭证"结构。
+     *
+     * <p>本系统无多币种/辅助核算分类/数量单价/制单人姓名解析等维度, 这些列按 Cretas 现有数据诚实留空
+     * (禁止降级处理: 不编造假数据) — 客户导入 KIS 时按需在 Excel 里手工补齐, 或后续按需求接入。
+     * 汇率/币别沿用云星空同款单币种(人民币/1)常量, 因为两个 profile 目前都只服务人民币记账。
+     */
+    private List<List<Object>> buildKisImportRows(VoucherExportConfig config, List<VoucherImportLine> lines) {
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of(
+                config.getColDate(),
+                "凭证字",
+                config.getColVoucherNo(),
+                "附单据数",
+                config.getColSummary(),
+                config.getColSubjectCode(),
+                config.getColSubjectName(),
+                config.getColDebit(),
+                config.getColCredit(),
+                config.getColCurrency(),
+                "汇率",
+                "原币金额",
+                "数量",
+                "单价",
+                "核算类别",
+                "核算编码",
+                config.getColAuxiliary(),
+                "制单人"
+        ));
+
+        for (VoucherImportLine line : lines) {
+            rows.add(List.of(
+                    line.date() == null ? "" : line.date().toString(),
+                    KINGDEE_CLOUD_VOUCHER_WORD,
+                    nvlStr(line.voucherNumber()),
+                    KIS_BLANK,
+                    nvlStr(line.summary()),
+                    nvlStr(line.subjectCode()),
+                    nvlStr(line.subjectName()),
+                    blankIfZero(line.debit()),
+                    blankIfZero(line.credit()),
+                    KINGDEE_CLOUD_CURRENCY,
+                    KINGDEE_CLOUD_EXCHANGE_RATE,
+                    KIS_BLANK,
+                    KIS_BLANK,
+                    KIS_BLANK,
+                    KIS_BLANK,
+                    KIS_BLANK,
+                    nvlStr(line.auxiliary()),
+                    KIS_BLANK
+            ));
+        }
+        return rows;
     }
 
     @Override
@@ -1075,6 +1163,18 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     .colCredit("贷方金额")
                     .colCurrency("币别")
                     .colAuxiliary("辅助核算");
+        } else if (resolvedTarget == VoucherTargetSystem.KINGDEE_KIS) {
+            // KIS/K3 canonical field naming differs from云星空 (核算名称 not 辅助核算) — see
+            // buildKisImportRows() javadoc for the full column-set citation.
+            builder.colVoucherNo("凭证号")
+                    .colDate("日期")
+                    .colSummary("摘要")
+                    .colSubjectCode("科目编码")
+                    .colSubjectName("科目名称")
+                    .colDebit("借方金额")
+                    .colCredit("贷方金额")
+                    .colCurrency("币别")
+                    .colAuxiliary("核算名称");
         }
         return builder.build();
     }
