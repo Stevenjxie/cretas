@@ -448,7 +448,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         List<ProductionReport> reports = page.getContent();
         Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
         List<Map<String, Object>> content = reports.stream()
-                .map(r -> reportToMap(r, evidenceUrls))
+                .map(r -> reportToMap(factoryId, r, evidenceUrls))
                 .collect(Collectors.toList());
 
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
@@ -459,7 +459,7 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         List<ProductionReport> reports = reportRepository.findByProcessTaskIdAndDeletedAtIsNull(taskId);
         Map<String, List<String>> evidenceUrls = loadProductionReportEvidenceUrls(factoryId, reports);
         return reports.stream()
-                .map(r -> reportToMap(r, evidenceUrls))
+                .map(r -> reportToMap(factoryId, r, evidenceUrls))
                 .collect(Collectors.toList());
     }
 
@@ -553,6 +553,61 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         return productTypeRepository.findByIdAndFactoryId(task.getProductTypeId(), factoryId)
                 .map(ProductType::getName)
                 .orElse(null);
+    }
+
+    /** 审批队列读取时按需回填: 报工行的 process_task_id → ProcessTask (供 productName/processCategory 回落解析)。 */
+    private ProcessTask resolveTaskForReport(String factoryId, ProductionReport r) {
+        if (r.getProcessTaskId() == null) {
+            return null;
+        }
+        return taskRepository.findByFactoryIdAndId(factoryId, r.getProcessTaskId()).orElse(null);
+    }
+
+    /**
+     * 审批队列读取时回落解析产品名。real-data audit (2026-07-04, F006 prod 1789 条 PENDING)
+     * 确认: 报工行自带的 product_type_id 才是主路径 (1602/1789 非空), 老的 process_task_id
+     * (ProcessTask) 路径几乎不用 (仅 1/1789 非空) — 两条都保留, 前者优先。
+     */
+    private String effectiveProductName(String factoryId, ProductionReport r) {
+        if (!isBlank(r.getProductName())) {
+            return r.getProductName();
+        }
+        if (r.getProductTypeId() != null) {
+            String name = productTypeRepository.findByIdAndFactoryId(r.getProductTypeId(), factoryId)
+                    .map(ProductType::getName)
+                    .orElse(null);
+            if (!isBlank(name)) {
+                return name;
+            }
+        }
+        return resolveProductName(factoryId, resolveTaskForReport(factoryId, r));
+    }
+
+    /**
+     * 审批队列读取时回落解析工序名。real-data audit 确认: 报工行自带的 work_process_task_id
+     * → WorkProcessTask.workProcessId 才是主路径 (1602/1789 非空); 部分 WorkProcessTask 自身
+     * 未绑定 workProcessId (数据缺口, honest-null 无法回填); ProcessTask 路径作最后兜底。
+     */
+    private String effectiveProcessCategory(String factoryId, ProductionReport r) {
+        if (!isBlank(r.getProcessCategory())) {
+            return r.getProcessCategory();
+        }
+        if (r.getWorkProcessTaskId() != null) {
+            String name = workProcessTaskRepository.findByFactoryIdAndId(factoryId, r.getWorkProcessTaskId())
+                    .map(WorkProcessTask::getWorkProcessId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .flatMap(id -> workProcessRepository.findByFactoryIdAndId(factoryId, id))
+                    .map(WorkProcess::getProcessName)
+                    .orElse(null);
+            if (!isBlank(name)) {
+                return name;
+            }
+        }
+        return resolveProcessName(factoryId, resolveTaskForReport(factoryId, r), null);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private Map<String, Object> buildCustomFields(ProcessWorkReportSubmitRequest request) {
@@ -730,11 +785,11 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         }
     }
 
-    private Map<String, Object> reportToMap(ProductionReport r) {
-        return reportToMap(r, Map.of());
+    private Map<String, Object> reportToMap(String factoryId, ProductionReport r) {
+        return reportToMap(factoryId, r, Map.of());
     }
 
-    private Map<String, Object> reportToMap(ProductionReport r, Map<String, List<String>> attachmentUrlsByEntityId) {
+    private Map<String, Object> reportToMap(String factoryId, ProductionReport r, Map<String, List<String>> attachmentUrlsByEntityId) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", r.getId());
         map.put("factoryId", r.getFactoryId());
@@ -760,8 +815,14 @@ public class ProcessWorkReportingServiceImpl implements ProcessWorkReportingServ
         map.put("productionStartTime", r.getProductionStartTime());
         map.put("productionEndTime", r.getProductionEndTime());
         map.put("reportMode", r.getReportMode());
-        map.put("processCategory", r.getProcessCategory());
-        map.put("productName", r.getProductName());
+        // Fool-proof Rule 2 (审批必带身份信息): legacy 报工行 process_category/product_name 列
+        // 在写入时可能为 null(旧版提交路径未回填)。审批队列必须显示品名+工序供审批人判断,
+        // 空值下审批 = 盲审。按需回落, 只在列为空时才查(不影响已有非空值行, 0 额外查询):
+        // 1) 报工行自带 product_type_id / work_process_task_id (F006 生产数据主路径,
+        //    real-data audit 确认 ~90% pending 行走这条, process_task_id 反而几乎不用)
+        // 2) 退回旧版 process_task_id → ProcessTask → WorkProcess/ProductType 路径
+        map.put("processCategory", effectiveProcessCategory(factoryId, r));
+        map.put("productName", effectiveProductName(factoryId, r));
         map.put("approvalStatus", r.getApprovalStatus());
         map.put("isSupplemental", r.getIsSupplemental());
         map.put("approvedBy", r.getApprovedBy());
