@@ -327,8 +327,12 @@ public class TransferServiceImpl implements TransferService {
 
         // D1: warehouse strategy per PR #310 §5 — 调拨发货扣减按 source warehouse 过滤.
         String sourceWarehouseId = transfer.getSourceWarehouseId();
+        // MES↔ERP Fix #4: 同厂调拨 (源工厂==目标工厂, e.g. 生产仓→物流仓 内部搬托) 不是销售/发货,
+        //   成品扣减不得动 shippedQuantity (销售口径), 否则内部搬库虚增销售/COGS + Σproduced 膨胀。
+        boolean intraFactory = Objects.equals(
+                transfer.getSourceFactoryId(), transfer.getTargetFactoryId());
         for (InternalTransferItem item : transfer.getItems()) {
-            deductSourceInventory(transfer.getSourceFactoryId(), sourceWarehouseId, item);
+            deductSourceInventory(transfer.getSourceFactoryId(), sourceWarehouseId, item, intraFactory);
         }
 
         transfer.setStatus(TransferStatus.SHIPPED);
@@ -486,7 +490,8 @@ public class TransferServiceImpl implements TransferService {
      * 指定 {@code item.sourceBatchId} (e.g. 卤味需要选新货, 不要 FEFO 最早), 校验后
      * 优先消耗该批次, 不足部分再 FEFO 兜底. 未指定时 = 默认全 FEFO (原行为).
      */
-    private void deductSourceInventory(String factoryId, String sourceWarehouseId, InternalTransferItem item) {
+    private void deductSourceInventory(String factoryId, String sourceWarehouseId, InternalTransferItem item,
+                                       boolean intraFactory) {
         // B1: 检查用户是否预选批次 (status=APPROVED 阶段写入). 若 SHIPPED+ 后被回填则也允许走 preselected 分支.
         String preselectedBatchId = item.getSourceBatchId();
 
@@ -549,7 +554,16 @@ public class TransferServiceImpl implements TransferService {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
                 BigDecimal available = batch.getAvailableQuantity();
                 BigDecimal deduct = remaining.min(available);
-                batch.setShippedQuantity(batch.getShippedQuantity().add(deduct));
+                if (intraFactory) {
+                    // MES↔ERP Fix #4: 同厂调拨 = 内部搬仓, 非销售. 减 producedQuantity (对齐
+                    //   FinishedGoodsFeedServiceImpl / 报损 SCRAP), 绝不动 shippedQuantity → 不虚增
+                    //   销售/发货/COGS. availableQuantity = produced - shipped - reserved 仍正确下降;
+                    //   源 -qty / 目标 +qty (createTargetInventory) → 工厂 Σproduced 守恒 (不 +qty 膨胀)。
+                    batch.setProducedQuantity(batch.getProducedQuantity().subtract(deduct));
+                } else {
+                    // 跨厂调拨 = 成品离开本厂, 记 shippedQuantity (原行为不变)。
+                    batch.setShippedQuantity(batch.getShippedQuantity().add(deduct));
+                }
                 if (batch.isDepleted()) batch.setStatus("DEPLETED");
                 finishedGoodsBatchRepository.save(batch);
                 if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
@@ -862,6 +876,15 @@ public class TransferServiceImpl implements TransferService {
             batch.setProducedQuantity(qty);
             batch.setUnit(item.getUnit());
             batch.setUnitPrice(item.getUnitPrice());
+            // MES↔ERP Fix #4: 保成本血缘 — 调入方成品批次继承调出方源批次的 unitCost (库存成本),
+            //   否则 unitCost=null → 下游成本口径把内部搬库的成品当零成本 (honest-null → 0)。
+            //   源批次 id = item.sourceBatchId (SHIP 时 deductSourceInventory 记录的首个消耗批次)。
+            //   诚实 null: 源批次无成本 (unitCost=null) → 目标亦 null, 不伪造 ¥0。unitPrice(售价) 独立处理。
+            if (item.getSourceBatchId() != null) {
+                finishedGoodsBatchRepository.findById(item.getSourceBatchId())
+                        .map(FinishedGoodsBatch::getUnitCost)
+                        .ifPresent(batch::setUnitCost);
+            }
             batch.setProductionDate(LocalDate.now());
             batch.setStatus("AVAILABLE");
             batch.setCreatedBy(userId);

@@ -141,7 +141,29 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404,
                             "消耗来源批次不存在或无权访问: " + mc.getBatchId()));
-            src.setUsedQuantity(nz(src.getUsedQuantity()).add(nz(mc.getQuantity())));
+            // MES↔ERP Fix #6: 负库存守卫 (honest-fail). 延迟扣减设计下, 同一批次可被本计划多道
+            //   报工累计投料 → 小结累加扣减时若 Σ投料 > 批次可用 (超投), 会把 currentQuantity 扣成负
+            //   (幻库存: 半成品/成品凭空产出而原料不足)。此前仅事后置 USED_UP, 从不拦截负库存 → 静默腐蚀。
+            //   在真正写入前校验: 累加后 currentQuantity < 0 即 loud-fail 回滚整个小结事务 (禁止降级)。
+            //   合法混批/多源全量消耗恰好落 0 (>= 0) 不受影响; 仅真超投触发。src 为悲观锁托管实体,
+            //   同批次多笔消耗在同事务内 usedQuantity 累加正确 (一级缓存同实例)。
+            BigDecimal newUsed = nz(src.getUsedQuantity()).add(nz(mc.getQuantity()));
+            BigDecimal reserved = nz(src.getReservedQuantity());
+            BigDecimal afterCurrent = nz(src.getReceiptQuantity()).subtract(newUsed).subtract(reserved);
+            if (afterCurrent.compareTo(BigDecimal.ZERO) < 0) {
+                BigDecimal availableBefore = nz(src.getReceiptQuantity()).subtract(reserved);
+                throw new BusinessException(409, String.format(
+                        "批次 %s 可用不足: 本次小结累计扣减 %s, 批次可用仅 %s (超投 %s)",
+                        src.getBatchNumber(),
+                        newUsed.stripTrailingZeros().toPlainString(),
+                        availableBefore.stripTrailingZeros().toPlainString(),
+                        afterCurrent.negate().stripTrailingZeros().toPlainString()))
+                        .withCode("BATCH_INSUFFICIENT")
+                        .withHint("请核对报工投料量或先补充该原料批次库存")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(src.getBatchNumber());
+            }
+            src.setUsedQuantity(newUsed);
             src.setLastUsedAt(now);
             if (src.getCurrentQuantity() != null && src.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
                 src.setStatus(MaterialBatchStatus.USED_UP);

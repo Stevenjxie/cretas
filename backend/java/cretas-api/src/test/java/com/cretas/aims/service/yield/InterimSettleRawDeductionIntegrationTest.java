@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 🔒 小结原料扣减 幻库存 bug 回归集成测试 (2026-07-02).
@@ -92,6 +93,7 @@ class InterimSettleRawDeductionIntegrationTest {
     private Long operatorId;
     private String planId;
     private String rawBatchId;
+    private String rawWarehouseId;
 
     @BeforeEach
     void setUp() {
@@ -107,7 +109,7 @@ class InterimSettleRawDeductionIntegrationTest {
         operatorId = user.getId();
 
         // 原料仓 (WH-LOG): ProcessSheetService.ensureRawMaterialWarehouse 要求原料批次落原料/物流仓。
-        String rawWarehouseId = "WH-" + UUID.randomUUID().toString().substring(0, 8);
+        rawWarehouseId = "WH-" + UUID.randomUUID().toString().substring(0, 8);
         FactoryWarehouse wh = new FactoryWarehouse();
         wh.setId(rawWarehouseId);
         wh.setFactoryId(FACTORY_ID);
@@ -220,6 +222,59 @@ class InterimSettleRawDeductionIntegrationTest {
         assertThat(reloadRaw().getUsedQuantity())
                 .as("🔴 幂等: usedQuantity 仍 200 (不双扣至 400)")
                 .isEqualByComparingTo(CONSUMED);
+    }
+
+    // ── MES↔ERP Fix #6: 报工超投 → 小结负库存守卫 (loud-fail, 不静默产幻库存) ──
+
+    @Test
+    @DisplayName("Fix#6: 报工投料 300kg > 批次可用 100kg (3×超投) → 小结 loud-fail 409 可用不足, usedQuantity 不被扣成负")
+    void interimSettleGuardsAgainstNegativeStock_onOverConsumption() {
+        // 小库存原料批次: 仅 100kg 可用 (落原料仓, 满足 ensureRawMaterialWarehouse)
+        String smallBatchId = "IT-RAWSMALL-" + UUID.randomUUID().toString().substring(0, 8);
+        MaterialBatch small = new MaterialBatch();
+        small.setId(smallBatchId);
+        small.setFactoryId(FACTORY_ID);
+        small.setBatchNumber("IT-SMALLNO-" + System.currentTimeMillis() % 100000);
+        small.setMaterialTypeId("IT-RAWTYPE-SMALL");
+        small.setWarehouseId(rawWarehouseId);
+        small.setReceiptQuantity(new BigDecimal("100.00"));
+        small.setQuantityUnit("kg");
+        small.setUsedQuantity(BigDecimal.ZERO);
+        small.setReservedQuantity(BigDecimal.ZERO);
+        small.setUnitPrice(RAW_PRICE);
+        small.setStatus(MaterialBatchStatus.AVAILABLE);
+        small.setReceiptDate(LocalDate.now());
+        small.setCreatedBy(operatorId);
+        materialBatchRepo.saveAndFlush(small);
+
+        // 真实写路径: 首道报工投 300kg (3× 可用) — resolveEdges 不拦 (延迟扣减设计), 写下 300kg 消耗
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId("row-over-1");
+        req.setProcessCode("chaoshui");
+        req.setProcessOrder(1);
+        req.setProcessName("焯水");
+        req.setProductTypeId(PRODUCT_TYPE_ID);
+        req.setFinished(false);
+        req.setInputQuantity(new BigDecimal("300"));
+        req.setOutputQuantity(new BigDecimal("250"));
+        req.setUnit("kg");
+        ProcessSheetRowRequest.RawInput ri = new ProcessSheetRowRequest.RawInput();
+        ri.setMaterialBatchId(smallBatchId);
+        ri.setQuantity(new BigDecimal("300"));
+        req.setRawMaterialInputs(List.of(ri));
+
+        ProcessSheetRowResult saved = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(saved.getBatchNumber()).as("报工写路径本身不拦超投 (延迟扣减设计)").isNotBlank();
+
+        // 小结 → 累计扣减 300 > 可用 100 → currentQuantity 将成 -200 → loud-fail 409, 整事务回滚
+        assertThatThrownBy(() -> interimSettleService.interimSettle(FACTORY_ID, planId, operatorId))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("可用不足");
+
+        // 守卫在 setUsedQuantity 之前抛 → 批次 usedQuantity 未被扣成负 (无静默幻库存)
+        assertThat(materialBatchRepo.findById(smallBatchId).orElseThrow().getCurrentQuantity())
+                .as("🔴 负库存守卫: currentQuantity 不被扣成负")
+                .isGreaterThanOrEqualTo(BigDecimal.ZERO);
     }
 
     private MaterialBatch reloadRaw() {

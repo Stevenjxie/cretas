@@ -314,4 +314,90 @@ class TransferShipBatchSelectionTest {
         b.setStatus("AVAILABLE");
         return b;
     }
+
+    // ===== MES↔ERP Fix #4: 同厂成品调拨不污染 shippedQuantity + 保 unitCost =====
+
+    @Test
+    @DisplayName("Fix#4: 同厂成品调拨 (生产仓→物流仓) — 源 shippedQuantity 不动 + 减 producedQuantity + 目标继承 unitCost + Σproduced 守恒")
+    void intraFactoryFinishedGoodsTransfer_noShippedPollution_preservesUnitCost() {
+        // 同厂: sourceFactoryId == targetFactoryId == F001 (生产仓 WH-WKS → 物流仓 WH-LOG 内部搬托)
+        InternalTransferItem item = finishedGoodsItem(301L, "PT_001", new BigDecimal("10"));
+        InternalTransfer t = new InternalTransfer();
+        t.setId("T_FIX4_001");
+        t.setTransferNumber("TR-FIX4-001");
+        t.setSourceFactoryId("F001");
+        t.setTargetFactoryId("F001");           // ← 同厂
+        t.setSourceWarehouseId("WH-WKS");       // 生产仓
+        t.setTargetWarehouseId("WH-LOG");       // 物流仓 (设置后 createTargetInventory 无需 warehouseResolver)
+        t.setStatus(TransferStatus.APPROVED);
+        t.setTransferType(TransferType.HQ_TO_BRANCH);
+        item.setTransferId(t.getId());
+        t.getItems().add(item);
+
+        // 源成品批次: produced=100, shipped=0, unitCost=8.5 (成本血缘), 生产仓
+        FinishedGoodsBatch src = finishedGoodsBatch("FG_SRC", new BigDecimal("100"));
+        src.setProductTypeId("PT_001");
+        src.setUnitCost(new BigDecimal("8.5000"));
+        src.setUnit("件");
+
+        when(transferRepository.findByIdAndEitherFactoryId("T_FIX4_001", "F001")).thenReturn(Optional.of(t));
+        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse("F001", "PT_001", "WH-WKS"))
+                .thenReturn(List.of(src));
+        when(finishedGoodsBatchRepository.findById("FG_SRC")).thenReturn(Optional.of(src));
+        // 捕获 confirm 阶段创建的目标批次
+        final List<FinishedGoodsBatch> saved = new ArrayList<>();
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(i -> {
+            saved.add(i.getArgument(0));
+            return i.getArgument(0);
+        });
+        when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(i -> i.getArgument(0));
+        when(transferItemRepository.saveAll(any())).thenAnswer(i -> i.getArgument(0));
+
+        // SHIP (扣源) → RECEIVE → CONFIRM (建目标)
+        service.shipTransfer("F001", "T_FIX4_001", 99L);
+
+        // 源: shippedQuantity 未动 (不虚增销售); producedQuantity 减 10
+        assertThat(src.getShippedQuantity()).isEqualByComparingTo("0");
+        assertThat(src.getProducedQuantity()).isEqualByComparingTo("90");
+        assertThat(item.getSourceBatchId()).isEqualTo("FG_SRC");
+
+        service.receiveTransfer("F001", "T_FIX4_001", 99L);
+        service.confirmTransfer("F001", "T_FIX4_001", 99L);
+
+        // 目标批次: 继承源 unitCost (成本血缘不断), producedQuantity=10
+        FinishedGoodsBatch target = saved.stream()
+                .filter(b -> !"FG_SRC".equals(b.getId()))
+                .reduce((a, b) -> b)   // 最后创建的 = 目标
+                .orElseThrow();
+        assertThat(target.getUnitCost()).isNotNull();
+        assertThat(target.getUnitCost()).isEqualByComparingTo("8.5000");
+        assertThat(target.getProducedQuantity()).isEqualByComparingTo("10");
+        assertThat(target.getWarehouseId()).isEqualTo("WH-LOG");
+
+        // 工厂 Σproduced 守恒: 源 90 + 目标 10 = 100 (未因内部搬库 +10 膨胀)
+        assertThat(src.getProducedQuantity().add(target.getProducedQuantity()))
+                .isEqualByComparingTo("100");
+    }
+
+    @Test
+    @DisplayName("Fix#4: 跨厂成品调拨仍记 shippedQuantity (原行为不变)")
+    void crossFactoryFinishedGoodsTransfer_stillBumpsShipped() {
+        InternalTransferItem item = finishedGoodsItem(302L, "PT_001", new BigDecimal("10"));
+        InternalTransfer t = buildTransfer("F001", "WH_FG", TransferStatus.APPROVED, item); // target=F002 (跨厂)
+
+        FinishedGoodsBatch src = finishedGoodsBatch("FG_X", new BigDecimal("100"));
+        src.setProductTypeId("PT_001");
+
+        when(transferRepository.findByIdAndEitherFactoryId("T_B1_001", "F001")).thenReturn(Optional.of(t));
+        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse("F001", "PT_001", "WH_FG"))
+                .thenReturn(List.of(src));
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(i -> i.getArgument(0));
+        when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.shipTransfer("F001", "T_B1_001", 99L);
+
+        // 跨厂: 成品离厂 → shippedQuantity 记账 (produced 不动)
+        assertThat(src.getShippedQuantity()).isEqualByComparingTo("10");
+        assertThat(src.getProducedQuantity()).isEqualByComparingTo("100");
+    }
 }
