@@ -491,7 +491,7 @@ function getStatusText(status: string) {
             <el-table-column prop="deliveryDate" label="计划发货日期" width="130" :formatter="emptyCell" />
             <el-table-column prop="logisticsCompany" label="物流公司" width="130" :formatter="emptyCell" />
             <el-table-column label="销售订单" width="170" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.salesOrder?.orderNumber || row.salesOrderId || '-' }}</template>
+              <template #default="{ row }">{{ row.orderNumber || row.salesOrder?.orderNumber || row.salesOrderId || '-' }}</template>
             </el-table-column>
             <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="120" align="right">
               <template #default="{ row }">{{ row.totalAmount ? `¥${row.totalAmount}` : '-' }}</template>
@@ -634,7 +634,8 @@ function getStatusText(status: string) {
       <template v-if="confirmingDelivery">
         <el-descriptions :column="2" border size="small" style="margin-bottom: 12px;">
           <el-descriptions-item label="发货单号">{{ confirmingDelivery.deliveryNumber }}</el-descriptions-item>
-          <el-descriptions-item label="客户">{{ confirmingDelivery.customer?.name || confirmingDelivery.customerName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="客户">{{ confirmingDelivery.customer?.name || confirmingDelivery.customerName || confirmingDelivery.customerId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="销售订单">{{ confirmingDelivery.orderNumber || confirmingDelivery.salesOrder?.orderNumber || confirmingDelivery.salesOrderId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="计划日期">{{ confirmingDelivery.deliveryDate || '-' }}</el-descriptions-item>
           <el-descriptions-item label="物流公司">{{ confirmingDelivery.logisticsCompany || '-' }}</el-descriptions-item>
         </el-descriptions>

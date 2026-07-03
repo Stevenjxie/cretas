@@ -50,8 +50,16 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         // leaking F002 customer data into F001 payment_records, AND any user could record
         // payment against DRAFT/CANCELLED SO. R21 fixed parallel paths (recordReceivable,
         // recordPayable) but missed this one. Mirror of ArApServiceImpl.validateReceivableStatus.
-        SalesOrder so = salesOrderRepository.findById(salesOrderId)
-                .filter(s -> factoryId.equals(s.getFactoryId()))
+        //
+        // Headed-audit fix (2026-07-03): findByIdAndFactoryIdForUpdate takes a PESSIMISTIC_WRITE
+        // row lock on the SO for the lifetime of this transaction. This serializes concurrent
+        // recordPayment calls for the SAME salesOrderId (double-click / retry-storm), so the 60s
+        // dedup check below (findRecentDuplicatePayments) actually sees the first request's
+        // not-yet-committed PENDING row instead of racing past it. Plain findById() TOCTOU-raced:
+        // two same-millisecond requests could both SELECT "no dupe" before either INSERT committed
+        // → 2 distinct PENDING payment records for the same 收款 (network-proven, real 财务对账
+        // corruption risk per 防呆 Rule 4). Lock scope = single SO row, does not block other orders.
+        SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(salesOrderId, factoryId)
                 .orElseThrow(() -> new com.cretas.aims.exception.ResourceNotFoundException(
                         "销售订单不存在: " + salesOrderId));
         if (so.getStatus() == null
@@ -67,8 +75,11 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         // 金额双计入 SO paidAmount 是资金完整性 bug (edge-case 审计 2026-06-24 抓: 双击建 2 条 PENDING)。
         // 窗口取 60s (非 5min): 双击/网络重试是亚秒级, 60s 足够拦截; 同时把"60s 内两笔真实等额分期"
         // 的误拦面缩到极小 (reviewer ISSUE-2)。窗口长度可按业务调整。
-        // 注: 这是应用层瞬时去重, 与 TransferService R4 同范式; 极端并发 (同毫秒双请求) 仍可能各过一次,
-        // 但不加 DB 唯一约束 — 那会永久禁止合法等额分期 (reviewer ISSUE-1 的修法与其 ISSUE-2 自相矛盾)。
+        // 注: 这是应用层瞬时去重, 与 TransferService R4 同范式; 不加 DB 唯一约束 — 那会永久禁止合法
+        // 等额分期 (reviewer ISSUE-1 的修法与其 ISSUE-2 自相矛盾)。2026-07-03 前, 同毫秒并发 (双击)
+        // 仍可能各过一次此检查 (TOCTOU) — 现已被上面 findByIdAndFactoryIdForUpdate 的 SO 行锁堵住:
+        // 并发请求对同一 salesOrderId 串行化执行, 第二个请求执行到这里时一定能看到第一个已提交的
+        // PENDING 行。
         java.util.List<PaymentRecord> dupes = paymentRecordRepository.findRecentDuplicatePayments(
                 factoryId, salesOrderId, amount, java.time.LocalDateTime.now().minusSeconds(60));
         if (!dupes.isEmpty()) {

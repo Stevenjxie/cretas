@@ -77,7 +77,7 @@ class PaymentRecordServiceImplCrossTenantTest {
         so.setId("so-1");
         so.setFactoryId("F001");
         so.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
-        when(salesOrderRepository.findById("so-1")).thenReturn(Optional.of(so));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate("so-1", "F001")).thenReturn(Optional.of(so));
 
         PaymentRecord existing = new PaymentRecord();
         existing.setId("pay-existing");
@@ -96,5 +96,36 @@ class PaymentRecordServiceImplCrossTenantTest {
                         "REF", null, 42L, null));
         assertEquals(409, ex.getCode());
         verify(paymentRecordRepository, never()).save(any());
+    }
+
+    /**
+     * headed-audit fix (2026-07-03): rapid double-click race — findByIdAndFactoryIdForUpdate
+     * takes a PESSIMISTIC_WRITE row lock on the SO so concurrent recordPayment calls for the
+     * same salesOrderId serialize instead of both racing past the 60s dedup SELECT before
+     * either INSERT commits. This test locks in that the locking finder (not plain findById)
+     * is the one actually used to load the SO in the happy path.
+     */
+    @Test
+    void recordPayment_locksSalesOrderRow_notPlainFindById() {
+        com.cretas.aims.entity.inventory.SalesOrder so = new com.cretas.aims.entity.inventory.SalesOrder();
+        so.setId("so-2");
+        so.setFactoryId("F001");
+        so.setCustomerId("cust-1");
+        so.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate("so-2", "F001")).thenReturn(Optional.of(so));
+        when(paymentRecordRepository.findRecentDuplicatePayments(
+                org.mockito.ArgumentMatchers.eq("F001"), org.mockito.ArgumentMatchers.eq("so-2"),
+                org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class),
+                org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class)))
+                .thenReturn(java.util.List.of());
+        when(paymentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.recordPayment("F001", "so-2", new java.math.BigDecimal("200.00"),
+                com.cretas.aims.entity.enums.PaymentMethod.BANK_TRANSFER, null,
+                "REF2", null, 42L, null);
+
+        verify(salesOrderRepository).findByIdAndFactoryIdForUpdate("so-2", "F001");
+        verify(salesOrderRepository, never()).findById(any());
+        verify(paymentRecordRepository).save(any());
     }
 }
