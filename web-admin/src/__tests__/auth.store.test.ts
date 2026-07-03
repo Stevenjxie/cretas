@@ -238,6 +238,38 @@ describe('auth store', () => {
 
       expect(store.businessDomain).toBe('RESTAURANT');
     });
+
+    it('shows restaurant admin label for restaurant super admin', () => {
+      const store = useAuthStore();
+      store.setUser(makeFactoryUser({
+        factoryUser: {
+          role: 'factory_super_admin',
+          factoryId: 'DEMO_REST',
+          factoryType: 'RESTAURANT',
+          businessDomain: 'RESTAURANT',
+          permissions: [],
+        },
+      }));
+
+      expect(store.roleMetadata.displayName).toBe('餐饮管理员');
+      expect(store.roleMetadata.department).toBe('restaurant');
+    });
+
+    it('keeps factory super admin label for factory domain', () => {
+      const store = useAuthStore();
+      store.setUser(makeFactoryUser({
+        factoryUser: {
+          role: 'factory_super_admin',
+          factoryId: 'F001',
+          factoryType: 'FACTORY',
+          businessDomain: 'FACTORY',
+          permissions: [],
+        },
+      }));
+
+      expect(store.roleMetadata.displayName).toBe('工厂总监');
+      expect(store.roleMetadata.department).toBe('all');
+    });
   });
 
   describe('hasRole', () => {

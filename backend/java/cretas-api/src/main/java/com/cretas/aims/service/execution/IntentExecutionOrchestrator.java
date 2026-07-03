@@ -253,7 +253,11 @@ public class IntentExecutionOrchestrator {
         // 0.15. 餐饮老板动作建议统一入口:
         // Web Admin 只调用 Java /ai-intents/execute；需要 Python 深度分析时由 Java 内部路由。
         // 放在普通餐饮 phrase shortcut 前面，避免“提高营收/排班/套餐/桌型”被普通查询工具抢走。
-        if (!negationVetoWrite && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+        // Owner-action is advisory/read-only. Keep routing restaurant老板 follow-ups like
+        // "不要套餐，今天排班和备货怎么调？" through this path even when negation
+        // pre-processing marks the wording as VETO_WRITE; otherwise it falls into a
+        // low-level report intent and returns "missing month_summary" instead of a decision.
+        if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
 

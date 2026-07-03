@@ -47,12 +47,14 @@ class RestaurantOpsGoldRouteTest {
     private IntentExecutionOrchestrator orchestrator;
     private AIIntentService aiIntentService;
     private ToolRegistry toolRegistry;
+    private QueryPreprocessorService queryPreprocessorService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
         aiIntentService = mock(AIIntentService.class);
         toolRegistry = mock(ToolRegistry.class);
+        queryPreprocessorService = mock(QueryPreprocessorService.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,
                 mock(IntentSemanticsParser.class),
@@ -73,7 +75,7 @@ class RestaurantOpsGoldRouteTest {
                 mock(ResultValidatorService.class),
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
-                mock(QueryPreprocessorService.class));
+                queryPreprocessorService);
     }
 
     @Test
@@ -118,6 +120,45 @@ class RestaurantOpsGoldRouteTest {
         assertThat(response.getMessage()).contains("仓管补活鱼");
         assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action");
         assertThat(((Map<?, ?>) response.getResultData()).get("advisorSource")).isEqualTo("restaurant_owner_action_advisor");
+        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
+        verify(advisorTool).execute(any(ToolCall.class), any());
+    }
+
+    @Test
+    @DisplayName("owner action follow-up still routes through advisor when user negates an action")
+    void ownerActionFollowUpWithNegatedActionUsesAdvisor() throws Exception {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+        when(queryPreprocessorService.detectNegationVeto(any(), any()))
+                .thenReturn(QueryPreprocessorService.NegationKind.VETO_WRITE);
+
+        ToolExecutor advisorTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
+                .thenReturn(Optional.of(advisorTool));
+        when(advisorTool.execute(any(ToolCall.class), any()))
+                .thenReturn(objectMapper.writeValueAsString(Map.of(
+                        "success", true,
+                        "data", Map.of(
+                                "dataAvailable", true,
+                                "source", "restaurant_owner_action_advisor",
+                                "message", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
+                                "answer", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
+                                "sessionId", "owner-action-followup",
+                                "scenario", "staffing_inventory"
+                        )
+                )));
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("不要套餐，今天排班和备货怎么调？")
+                .build();
+
+        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
+        assertThat(response.getMessage()).contains("前厅").contains("备货");
+        assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action");
         verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
         verify(advisorTool).execute(any(ToolCall.class), any());
     }

@@ -119,7 +119,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   const roleMetadata = computed(() => {
     const role = currentRole.value;
-    return ROLE_METADATA[role] || ROLE_METADATA['viewer'];
+    const metadata = ROLE_METADATA[role] || ROLE_METADATA['viewer'];
+    if (businessDomain.value === 'RESTAURANT' && role === 'factory_super_admin') {
+      return {
+        ...metadata,
+        displayName: '餐饮管理员',
+        description: '拥有餐饮门店经营、采购、库存、财务和智能分析权限',
+        department: 'restaurant',
+      };
+    }
+    return metadata;
   });
 
   const isPlatform = computed(() => isPlatformUser(user.value as User | null));
