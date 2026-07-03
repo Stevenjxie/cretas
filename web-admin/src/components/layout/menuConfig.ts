@@ -320,6 +320,8 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/production-analytics/cost-summary', title: '成本汇总', icon: 'Tickets', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/production-analytics/three-price-comparison', title: '三价对比看板', icon: 'Money', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
       // -- 数据管理 --
       { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
       { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },

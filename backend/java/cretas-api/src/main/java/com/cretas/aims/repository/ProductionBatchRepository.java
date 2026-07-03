@@ -312,6 +312,27 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             String factoryId, String productionPlanId);
 
     /**
+     * 三价对比看板 (per-SKU): 某产品最近一条已算出 {@code unitCost} 的批次 (按创建时间倒序).
+     *
+     * <p>{@code unitCost} 由 {@link ProductionBatch#calculateMetrics()} 诚实计算 (跨单位/无成本
+     * 输入时留 null, 见实体注释) — 本查询只取有值的行, 调用方用最新一条作为「实际成本」看板取数,
+     * 空列表即诚实缺数据 (不臆造 0)。排除 CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径统一
+     * (batchType 允许 null, 与既有排除写法不同 — 避免历史空 batchType 记录被误排除)。
+     *
+     * @param factoryId     工厂ID
+     * @param productTypeId 产品类型ID
+     * @param pageable      调用方传 {@code PageRequest.of(0, 1)} 只取最近一条
+     * @return 按 createdAt 倒序的批次列表 (通常调用方只用第 0 条)
+     */
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.productTypeId = :productTypeId " +
+           "AND p.unitCost IS NOT NULL AND (p.batchType IS NULL OR p.batchType <> 'CLERK_WIP') " +
+           "ORDER BY p.createdAt DESC")
+    java.util.List<ProductionBatch> findRecentPricedBatches(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            Pageable pageable);
+
+    /**
      * 统计关联生产计划中未完成的批次数量
      * 用于供应链联动：批次报工后判断PP是否全部完成
      *

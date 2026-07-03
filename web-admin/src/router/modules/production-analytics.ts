@@ -41,6 +41,12 @@ const productionAnalyticsRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/production-analytics/M67CostSummary.vue'),
         meta: { requiresAuth: true, title: '成本汇总', icon: 'Tickets', module: 'analytics' },
       },
+      {
+        path: 'three-price-comparison',
+        name: 'PAThreePriceComparison',
+        component: () => import('@/views/production-analytics/ThreePriceComparison.vue'),
+        meta: { requiresAuth: true, title: '三价对比看板', icon: 'Money', module: 'analytics' },
+      },
     ],
   },
 ];
