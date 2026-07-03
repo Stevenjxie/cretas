@@ -114,6 +114,7 @@ public class MaterialBatchController {
     private final MaterialBatchService materialBatchService;
     private final MobileService mobileService;
     private final PriceMaskResolver priceMaskResolver;
+    private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
 
     /**
      * 创建原材料批次（入库）
@@ -172,6 +173,38 @@ public class MaterialBatchController {
         log.info("创建原材料批次: factoryId={}, materialTypeId={}", factoryId, request.getMaterialTypeId());
         MaterialBatchDTO batch = materialBatchService.createMaterialBatch(factoryId, request, userId);
         return ApiResponse.success("原材料批次创建成功", batch);
+    }
+
+    /**
+     * 期初建账 (opening inventory onboarding) —— 批量建立起始库存 + 过期初凭证 (借 1403 / 贷 4001)，
+     * <b>不产生任何供应商应付</b>。
+     *
+     * <p>修复此前客户被迫走采购入库建账 (每个物料挂供应商应付 → 幽灵应付) 的问题。支持 200+ 行一次导入
+     * (前端把 Excel 逐行解析进 items)。诚实-null: 未录单价的行仍建批次但不计入凭证金额。幂等: 相同
+     * batchKey / 相同内容重复提交不双建。</p>
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/opening")
+    @Operation(summary = "期初建账 (批量起始库存 + 借1403/贷4001 期初凭证, 无应付)",
+            description = "凭空建立起始库存并过期初凭证; 不挂供应商应付。诚实-null + 幂等 + 支持批量。")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "OPENING_INVENTORY",
+            entityType = "MaterialBatch")
+    public ApiResponse<com.cretas.aims.dto.material.OpeningInventoryResult> createOpeningInventory(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.material.OpeningInventoryRequest request) {
+
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("期初建账: factoryId={}, items={}", factoryId,
+                request.getItems() != null ? request.getItems().size() : 0);
+        com.cretas.aims.dto.material.OpeningInventoryResult result =
+                openingInventoryService.createOpeningInventory(factoryId, request, userId);
+        return ApiResponse.success(
+                result.isIdempotentHit() ? "期初建账已存在 (幂等命中)" : "期初建账成功", result);
     }
 
     /**

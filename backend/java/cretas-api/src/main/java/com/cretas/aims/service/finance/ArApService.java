@@ -52,6 +52,25 @@ public interface ArApService {
                                             BigDecimal amount, LocalDate dueDate,
                                             Long operatedBy, String remark);
 
+    /**
+     * 红冲 (reverse) 一笔"误走采购入库建账"产生的幽灵应付挂账。
+     *
+     * <p>用于期初建账修正: 客户把期初存货当采购入库录入 → 每个物料挂了一笔供应商应付 (AP_INVOICE),
+     * 但客户并不欠供应商钱。本方法对指定的 AP_INVOICE 建一笔<b>反向</b> AP_CREDIT_NOTE
+     * (金额 = 原额取负), 把供应商应付余额减回去 —— 净额归零。会计侧的正确期初凭证
+     * (借 1403 / 贷 4001) 由调用方 (OpeningInventoryService) 另行过账, 本方法只管应付台账。
+     *
+     * <p><b>幂等</b>: 以 {@code (sourceType=OPENING_AP_CORRECTION, sourceId=apTransactionId)} 为键 —— 同一笔应付
+     * 重复调用返回<b>已有的红冲交易</b>, 不重复冲减余额。返回值的 {@code amount} 为负 (红冲额), 供调用方
+     * 取绝对值补记期初凭证。
+     *
+     * <p>校验: 交易须存在、属于当前工厂、类型为 {@code AP_INVOICE} (供应商挂账); 否则抛业务异常。
+     *
+     * @return 红冲交易 (AP_CREDIT_NOTE); 若已红冲过则返回既有那笔 (幂等命中)
+     */
+    ArApTransaction reverseOpeningPayable(String factoryId, String apTransactionId,
+                                          String reason, Long operatedBy);
+
     // ==================== 收付款（冲减应收/应付） ====================
 
     /**

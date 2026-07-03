@@ -136,6 +136,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             "请从采购入库、退货入库或盘点单发起；历史数据或批量迁移请走 LEGACY_IMPORT 并申请 inventory:legacy_import 授权";
     private static final String LEGACY_IMPORT_SOURCE_DOC_TYPE = "LEGACY_IMPORT";
     private static final String LEGACY_IMPORT_PERMISSION = "inventory:legacy_import";
+    /**
+     * 期初建账 (opening inventory onboarding) 来源单据类型。建账时凭空建立起始库存,
+     * <b>不产生应付账款</b> (与采购入库 PURCHASE_RECEIVE 相反) —— 期初存货的对方科目是
+     * 实收资本 (4001), 不是供应商应付 (2202)。会计过账由 OpeningInventoryService 单独完成
+     * (借 1403 原材料 / 贷 4001 实收资本)。此处只把 OPENING 列入 createMaterialBatch 的
+     * <b>no-AP allowlist</b>: 即使经 createMaterialBatch 建 OPENING 批次也绝不触发 recordPayable。
+     */
+    private static final String OPENING_SOURCE_DOC_TYPE = "OPENING";
 
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
@@ -441,6 +449,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 }
                 log.info("B10: 赠品入库 notes={}", request.getNotes());
                 break;
+            case OPENING_SOURCE_DOC_TYPE:
+                // 期初建账 (opening inventory onboarding): 凭空建立起始库存, 不需 sourceDocId,
+                // 不产生应付账款 (对方科目=实收资本 4001, 由 OpeningInventoryService 过账)。
+                // 属 no-AP allowlist —— 唯一目的是让 createMaterialBatch 认识 OPENING 而不落 default 分支报错。
+                log.info("OPENING: 期初建账入库 (no-AP) materialTypeId={} notes={}",
+                        request.getMaterialTypeId(), request.getNotes());
+                break;
             // TODO 出库类型 (客户原话 4947s): INVENTORY_LOSS 盘亏出库 / INTERNAL_USE 领用出库
             //   出库链路不走 MaterialBatchService.createMaterialBatch (这里只管入库),
             //   需在 sales shipment / warehouse outbound service 另开分支, 本轮范围外.
@@ -449,7 +464,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 break;
             default:
                 throw new BusinessException(400, "不支持的 sourceDocType: " + type)
-                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/INVENTORY_GAIN/FREE_GIFT/LEGACY_IMPORT)");
+                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/INVENTORY_GAIN/FREE_GIFT/LEGACY_IMPORT/OPENING)");
         }
     }
 

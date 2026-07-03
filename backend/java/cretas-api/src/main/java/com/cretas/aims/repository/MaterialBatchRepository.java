@@ -495,6 +495,17 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             String factoryId, String sourceDocType, String sourceDocId);
 
     /**
+     * 期初建账幂等: 某工厂某来源单据键 (sourceDocType=OPENING, sourceDocId=batchKey) 下的全部批次。
+     * 一个期初提交会建多条批次共用同一 batchKey (故非 Optional, 而是 List)。
+     */
+    java.util.List<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocIdOrderByBatchNumberAsc(
+            String factoryId, String sourceDocType, String sourceDocId);
+
+    /** 期初建账幂等存在性检查 (是否已用该 batchKey 建过期初批次)。 */
+    boolean existsByFactoryIdAndSourceDocTypeAndSourceDocId(
+            String factoryId, String sourceDocType, String sourceDocId);
+
+    /**
      * 统计低库存材料数量
      */
     @Query(value = "SELECT COUNT(*) FROM (SELECT m.material_type_id FROM material_batches m " +
