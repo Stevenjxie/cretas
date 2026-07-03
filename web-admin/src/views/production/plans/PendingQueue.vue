@@ -124,6 +124,13 @@ function getStatusText(status: string): string {
   return map[String(status).toUpperCase()] ?? status;
 }
 
+// 防呆 Rule 1: 存货生产(SAFETY_STOCK)等无「计划数量」字段的计划落地为 0/null，
+// 裸 "0" 紧邻状态标签会被文员误读成异常/漏填，明确降级为 "—"。
+function formatPlannedQuantity(v: number | null | undefined): string {
+  if (v == null || v === 0) return '—';
+  return String(v);
+}
+
 // ==================== Urgency / Shortage ====================
 
 /**
@@ -290,11 +297,12 @@ function goToPlanList() {
 
       <!-- 计划数量 -->
       <el-table-column
-        prop="plannedQuantity"
         label="计划量"
         width="100"
         align="right"
-      />
+      >
+        <template #default="{ row }">{{ formatPlannedQuantity(row.plannedQuantity) }}</template>
+      </el-table-column>
 
       <!-- 计划日期 + 紧迫度 -->
       <el-table-column label="计划日期" width="160" align="center">

@@ -10,10 +10,14 @@ import YieldCardTable from './YieldCardTable.vue';
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
 // Persisted in localStorage so the preference survives page refreshes.
+// 🔴 防呆 Rule 1: 默认卡片视图 — 这是「逐工序录入」操作员抽屉, 密集 ~13 列表格
+//   把保存按钮挤出可视区外(横向滚动才看得到), 低文化素质操作员发现不了。卡片布局
+//   逐字段纵向排列, 保存按钮永远在卡片头部可见, 无需横向滚动。已有明确偏好(用户
+//   手动切过一次)时尊重 localStorage, 未设置过才用卡片默认。
 // -------------------------------------------------------------------------
 const VIEW_MODE_KEY = 'sp-f-process-sheet-view';
 const savedView = localStorage.getItem(VIEW_MODE_KEY);
-const viewMode = ref<'grid' | 'card'>(savedView === 'card' ? 'card' : 'grid');
+const viewMode = ref<'grid' | 'card'>(savedView === 'grid' ? 'grid' : 'card');
 
 function onViewModeChange(val: string | number | boolean) {
   const mode = val as 'grid' | 'card';

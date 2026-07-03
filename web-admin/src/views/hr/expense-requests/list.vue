@@ -68,11 +68,13 @@ const monthlyCatHint = ref<Record<string, number> | null>(null);
 const rejectDialogVisible = ref(false);
 const rejectingRow = ref<ExpenseRow | null>(null);
 const rejectForm = ref({ reasonKey: '凭证不全', otherDetail: '' });
+const rejectSubmitting = ref(false);
 
 // Mark-paid dialog
 const markPaidDialogVisible = ref(false);
 const markPaidRow = ref<ExpenseRow | null>(null);
 const markPaidForm = ref({ paymentRecordId: '' });
+const markPaidSubmitting = ref(false);
 
 function currentYearMonth(): string {
   const d = new Date();
@@ -162,6 +164,7 @@ function openCreate() {
 }
 
 async function handleCreate(submitNow: boolean) {
+  if (createSubmitting.value) return;
   if (!createForm.value.expenseDate) {
     ElMessage.error('请选择发生日期');
     return;
@@ -210,7 +213,7 @@ function openReject(row: ExpenseRow) {
 }
 
 async function confirmReject() {
-  if (!rejectingRow.value) return;
+  if (!rejectingRow.value || rejectSubmitting.value) return;
   const finalReason = rejectForm.value.reasonKey === '其他'
     ? rejectForm.value.otherDetail.trim()
     : rejectForm.value.reasonKey;
@@ -218,6 +221,7 @@ async function confirmReject() {
     ElMessage.error('请填写"其他"补充说明');
     return;
   }
+  rejectSubmitting.value = true;
   try {
     const res = await post(
       `/${factoryId.value}/hr/expense-requests/${rejectingRow.value.id}/reject`,
@@ -229,6 +233,7 @@ async function confirmReject() {
       await loadData();
     }
   } catch (e) { console.error(e); }
+  finally { rejectSubmitting.value = false; }
 }
 
 async function cancelRow(row: ExpenseRow) {
@@ -246,7 +251,8 @@ function openMarkPaid(row: ExpenseRow) {
 }
 
 async function confirmMarkPaid() {
-  if (!markPaidRow.value) return;
+  if (!markPaidRow.value || markPaidSubmitting.value) return;
+  markPaidSubmitting.value = true;
   try {
     const res = await post(
       `/${factoryId.value}/hr/expense-requests/${markPaidRow.value.id}/mark-paid`,
@@ -258,6 +264,7 @@ async function confirmMarkPaid() {
       await loadData();
     }
   } catch (e) { console.error(e); }
+  finally { markPaidSubmitting.value = false; }
 }
 </script>
 
@@ -389,7 +396,7 @@ async function confirmMarkPaid() {
       </el-form>
       <template #footer>
         <el-button @click="rejectDialogVisible = false">取消</el-button>
-        <el-button type="danger" @click="confirmReject">确认拒绝</el-button>
+        <el-button type="danger" :loading="rejectSubmitting" @click="confirmReject">确认拒绝</el-button>
       </template>
     </el-dialog>
 
@@ -407,7 +414,7 @@ async function confirmMarkPaid() {
       </el-form>
       <template #footer>
         <el-button @click="markPaidDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmMarkPaid">确认</el-button>
+        <el-button type="primary" :loading="markPaidSubmitting" @click="confirmMarkPaid">确认</el-button>
       </template>
     </el-dialog>
   </div>
