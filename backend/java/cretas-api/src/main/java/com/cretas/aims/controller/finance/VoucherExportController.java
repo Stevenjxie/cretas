@@ -3,6 +3,7 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
+import com.cretas.aims.entity.enums.VoucherExportFileFormat;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
 import com.cretas.aims.service.finance.VoucherExportService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -103,17 +104,35 @@ public class VoucherExportController {
             @RequestParam String startDate,
             @RequestParam String endDate,
             @RequestParam(defaultValue = "KINGDEE_YXSKY") VoucherTargetSystem targetSystem,
+            @RequestParam(defaultValue = "XLSX") VoucherExportFileFormat format,
             HttpServletRequest request,
             HttpServletResponse response) throws Exception {
 
         Long userId = currentUserId(request);
-        VoucherExportRequestDTO req = buildRequest(startDate, endDate, targetSystem);
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        VoucherExportRequestDTO req = VoucherExportRequestDTO.builder()
+                .startDate(java.time.LocalDate.parse(startDate))
+                .endDate(java.time.LocalDate.parse(endDate))
+                .targetSystem(targetSystem)
+                .exportFormat(format)
+                .build();
+        response.setContentType(contentTypeFor(format));
         String fileName = voucherExportService.exportKingdeeImportTemplate(
                 factoryId, req, userId, response.getOutputStream());
         setAttachmentHeader(response, fileName);
         response.flushBuffer();
-        log.info("[Kingdee] import template export: factoryId={} target={} file={}", factoryId, targetSystem, fileName);
+        log.info("[Kingdee] import template export: factoryId={} target={} format={} file={}",
+                factoryId, targetSystem, format, fileName);
+    }
+
+    private String contentTypeFor(VoucherExportFileFormat format) {
+        return switch (format) {
+            // .dbf 是二进制交换文件, 用通用 octet-stream 让浏览器直接下载
+            case DBF -> "application/octet-stream";
+            // .xls (BIFF) 金蝶 KIS专业版
+            case XLS -> "application/vnd.ms-excel";
+            // .xlsx 云星空
+            case XLSX -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        };
     }
 
     @GetMapping("/chronological-ledger/export")

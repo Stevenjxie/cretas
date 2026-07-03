@@ -18,9 +18,14 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.DepartmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
@@ -71,6 +76,11 @@ class VoucherExportServiceTest {
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepo;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private CustomerRepository customerRepo;
+    @Mock private SupplierRepository supplierRepo;
+    @Mock private DepartmentRepository departmentRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private UserRepository userRepo;
 
     private VoucherExportServiceImpl service;
 
@@ -83,7 +93,8 @@ class VoucherExportServiceTest {
     void setUp() {
         service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
                 accountingPeriodRepo, exportConfigRepo, exportRecordRepo,
-                materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo);
+                materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo,
+                customerRepo, supplierRepo, departmentRepo, productTypeRepo, userRepo);
     }
 
     private VoucherExportRequestDTO buildReq() {
