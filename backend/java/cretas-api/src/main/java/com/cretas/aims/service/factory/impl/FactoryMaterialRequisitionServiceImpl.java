@@ -1,19 +1,16 @@
 package com.cretas.aims.service.factory.impl;
 
-import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.entity.enums.TransferType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem.MaterialCategory;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
-import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.production.ProductionMaterialReturn;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -25,7 +22,6 @@ import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.production.ProductionMaterialReturnRepository;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
-import com.cretas.aims.service.inventory.TransferService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -51,7 +47,6 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final FactoryMaterialRequisitionItemRepository itemRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final BomItemRepository bomItemRepository;
-    private final TransferService transferService;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -399,41 +394,17 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         mr.setTransferredBy(operatorId);
         mr.setTransferredAt(LocalDateTime.now());
 
-        // P0-5: 记录一张备料调出 InternalTransfer 作审计凭证 (物流仓 → 生产仓)。实际库存迁移已由上方
-        // relocatePickedMaterialToWorkshop 完成, 此单为可追溯凭证 (不再重复扣减)。修复枚举: 之前误传
-        // "FACTORY_TO_FACTORY" (枚举不存在) → TransferType.valueOf 抛异常 → 领料调拨 400。
-        List<CreateTransferRequest.TransferItemDTO> outboundItems = new ArrayList<>();
-        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
-            BigDecimal issued = it.getIssuedQty();
-            if (issued != null && issued.compareTo(BigDecimal.ZERO) > 0) {
-                outboundItems.add(new CreateTransferRequest.TransferItemDTO(
-                        "RAW_MATERIAL",
-                        it.getMaterialTypeId(),
-                        null,
-                        it.getMaterialName(),
-                        issued,
-                        it.getUnit() != null ? it.getUnit() : "kg",
-                        null,
-                        "备料调出: " + mr.getRequisitionNo()
-                ));
-            }
-        }
-        if (!outboundItems.isEmpty()) {
-            CreateTransferRequest req = new CreateTransferRequest();
-            req.setTransferType(TransferType.WAREHOUSE_TO_WAREHOUSE.name());
-            req.setTargetFactoryId(factoryId);
-            req.setSourceWarehouseId(mr.getSourceWarehouseId());
-            req.setTargetWarehouseId(mr.getTargetWarehouseId() != null
-                    ? mr.getTargetWarehouseId() : targetWarehouseId);
-            req.setTransferDate(LocalDate.now());
-            req.setRemark("物料需求单 " + mr.getRequisitionNo() + " 备料调出");
-            req.setItems(outboundItems);
-            InternalTransfer outbound = transferService.createTransfer(factoryId, req, operatorId);
-            mr.setOutboundTransferId(outbound.getId());
-            log.info("✅ 物料需求单 {} 备料调出 InternalTransfer 已创建: {}",
-                    mr.getRequisitionNo(), outbound.getId());
-        }
-
+        // 🔒🔒 2026-07-03 双扣防呆 (bug #3): 不再创建「备料调出」InternalTransfer。实际库存迁移已由
+        // 上方 relocatePickedMaterialToWorkshop 完成 (源仓批次划出 + 生产仓建同物料新批次)。此前额外建
+        // 一张 DRAFT InternalTransfer 号称「可追溯审计凭证」, 但 DRAFT 与真实调拨单在「调拨管理」列表里
+        // 无法区分, 是一个可被走完的动作单。#1177 打通同厂调拨的提交→审批→发货→签收按钮后, 被训练「把单子
+        // 走完」的仓管会 提交→审批→发货 (TransferServiceImpl.shipTransfer → deductSourceInventory 按
+        // 物料 FEFO 二次扣减真实库存, 很可能扣到别的批次) → 签收/确认 (createTargetInventory 再建一张生产
+        // 仓批次) → 原料被扣两遍 + 生产仓重复批次, 全程 HTTP 200 零拦截 = 静默库存双扣。
+        // 审计留痕由需求单自身承载: 状态 TRANSFERRED + transferredBy/transferredAt + 每行 batchNumbers
+        // 携 workshopBatchId, 精确记录「哪个源批次划出多少 → 哪个生产仓批次」。
+        // ⛔ 不要为了「在调拨管理里可见」重新加回这张 transfer —— 它就是双扣陷阱的根源。outboundTransferId
+        // 字段保留 (向后兼容历史数据), 新流程留 null。
         return repository.save(mr);
     }
 
@@ -698,38 +669,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         mr.setClosedBy(operatorId);
         mr.setClosedAt(LocalDateTime.now());
 
-        // P0-5: 创建退料调入 InternalTransfer (工厂鲜棉仓 → 物流仓), 仅在有退料时
-        List<CreateTransferRequest.TransferItemDTO> returnItems = new ArrayList<>();
-        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
-            BigDecimal returned = it.getReturnedQty();
-            if (returned != null && returned.compareTo(BigDecimal.ZERO) > 0) {
-                returnItems.add(new CreateTransferRequest.TransferItemDTO(
-                        "RAW_MATERIAL",
-                        it.getMaterialTypeId(),
-                        null,
-                        it.getMaterialName(),
-                        returned,
-                        it.getUnit() != null ? it.getUnit() : "kg",
-                        null,
-                        "退料调入: " + mr.getRequisitionNo()
-                ));
-            }
-        }
-        if (!returnItems.isEmpty()) {
-            CreateTransferRequest req = new CreateTransferRequest();
-            req.setTransferType(TransferType.WAREHOUSE_TO_WAREHOUSE.name());
-            req.setTargetFactoryId(factoryId);
-            req.setSourceWarehouseId(mr.getTargetWarehouseId());
-            req.setTargetWarehouseId(mr.getSourceWarehouseId());
-            req.setTransferDate(LocalDate.now());
-            req.setRemark("物料需求单 " + mr.getRequisitionNo() + " 退料调入");
-            req.setItems(returnItems);
-            InternalTransfer returnTransfer = transferService.createTransfer(factoryId, req, operatorId);
-            mr.setReturnTransferId(returnTransfer.getId());
-            log.info("✅ 物料需求单 {} 退料调入 InternalTransfer 已创建: {}",
-                    mr.getRequisitionNo(), returnTransfer.getId());
-        }
-
+        // 🔒🔒 2026-07-03 双退防呆 (bug #3 同因 sweep): 不再创建「退料调入」InternalTransfer。退料回原料仓
+        // 已由上方 executeMaterialReturn 完成 (源批次已用量减回 + 负数 MaterialConsumption 留痕), 生产仓
+        // 侧由 drawDownWorkshopBatchesForItem 划平。此前额外建的 DRAFT 退料调入单同为可走完的动作单, 仓管
+        // 走完 → 再次 FEFO 扣生产仓库存 + 在原料仓重复建批次 → 退料被处理两遍 (与备料调出对称的双计陷阱)。
+        // 审计留痕由 ProductionMaterialReturn (EXECUTED) + MaterialConsumption (负数, MATERIAL_RETURN) 承载。
+        // ⛔ 不要为「调拨管理可见」重新加回。returnTransferId 字段保留兼容历史数据, 新流程留 null。
         return repository.save(mr);
     }
 

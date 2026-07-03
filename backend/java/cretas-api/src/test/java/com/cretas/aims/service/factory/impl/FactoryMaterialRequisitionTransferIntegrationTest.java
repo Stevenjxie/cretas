@@ -1,10 +1,8 @@
 package com.cretas.aims.service.factory.impl;
 
-import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.entity.enums.TransferType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
@@ -145,16 +143,17 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertNotNull(recorded);
         assertEquals(wks1.getId(), recorded);
 
-        // audit transfer uses a VALID enum (previously "FACTORY_TO_FACTORY" → 400)
-        ArgumentCaptor<CreateTransferRequest> captor = ArgumentCaptor.forClass(CreateTransferRequest.class);
-        verify(transferService).createTransfer(eq(FACTORY_ID), captor.capture(), eq(OPERATOR));
-        CreateTransferRequest req = captor.getValue();
-        assertEquals(TransferType.WAREHOUSE_TO_WAREHOUSE.name(), req.getTransferType());
-        assertEquals(WH_LOGISTICS, req.getSourceWarehouseId());
-        assertEquals(WH_WORKSHOP, req.getTargetWarehouseId());
-        assertEquals("tr-stub-1", mr.getOutboundTransferId());
-        // valueOf must not throw for the persisted type
-        assertEquals(TransferType.WAREHOUSE_TO_WAREHOUSE, TransferType.valueOf(req.getTransferType()));
+        // 🔒🔒 bug #3 双扣防呆: 领料只做物理迁移, 绝不再创建一张可被仓管「走完」的备料调出 InternalTransfer.
+        // 若创建 DRAFT transfer, 仓管 提交→审批→发货 会二次 deductSourceInventory (FEFO 扣真实库存) +
+        // 签收再建生产仓批次 = 原料双扣 + 生产仓重复批次, 全程 HTTP 200 零拦截 (#1177 后被触发).
+        verify(transferService, never()).createTransfer(any(), any(), any());
+        assertNull(mr.getOutboundTransferId(), "领料迁移不得留下可走完的备料调出单");
+        // 源仓恰好扣一次 (batch-1 used=10, 上方已断言), 生产仓 MAT-001 恰好一张新批次 — 无重复入库
+        long mat001WorkshopBatches = batchStore.values().stream()
+                .filter(b -> WH_WORKSHOP.equals(b.getWarehouseId()))
+                .filter(b -> "MAT-001".equals(b.getMaterialTypeId()))
+                .count();
+        assertEquals(1L, mat001WorkshopBatches, "MAT-001 生产仓批次必须恰好一张 (无重复入库)");
     }
 
     @Test
@@ -300,12 +299,10 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertEquals(new BigDecimal("10.00"), batchStore.get("wks-1").getUsedQuantity());
         assertEquals(new BigDecimal("0.00"), batchStore.get("wks-1").getCurrentQuantity());
 
-        // return transfer uses valid enum
-        ArgumentCaptor<CreateTransferRequest> transferCaptor = ArgumentCaptor.forClass(CreateTransferRequest.class);
-        verify(transferService).createTransfer(eq(FACTORY_ID), transferCaptor.capture(), eq(OPERATOR));
-        assertEquals(TransferType.WAREHOUSE_TO_WAREHOUSE.name(), transferCaptor.getValue().getTransferType());
-        assertEquals(WH_WORKSHOP, transferCaptor.getValue().getSourceWarehouseId());
-        assertEquals(WH_LOGISTICS, transferCaptor.getValue().getTargetWarehouseId());
+        // 🔒🔒 bug #3 同因: 退料只做物理回库 (executeMaterialReturn 减回原料仓 + drawDown 划平生产仓),
+        // 不再创建一张可被走完的退料调入 InternalTransfer (否则退料被处理两遍).
+        verify(transferService, never()).createTransfer(any(), any(), any());
+        assertNull(mr.getReturnTransferId(), "退料回库不得留下可走完的退料调入单");
 
         // trace + return records preserved
         ArgumentCaptor<MaterialConsumption> consumptionCaptor = ArgumentCaptor.forClass(MaterialConsumption.class);
