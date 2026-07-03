@@ -48,6 +48,12 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
                 : Optional.empty();
         if (tplOpt.isPresent()) {
             entries = voucherTemplateService.renderEntries(tplOpt.get(), businessEntity);
+            // 🔴🔒 辅助核算修复 (#1207): template-first 路径 renderEntries 只从 TemplateEntry
+            // (无 auxiliary 字段) 渲染, 故模板凭证的分录 auxiliaryType/auxiliaryEntityId 永远为 null
+            // → 90/99 有模板的工厂 (含 F006) 金蝶导出的客户/供应商/职员维度全空。这里补一个 hook,
+            // 让 generator (它知道源业务单) 把 aux 附到正确的模板分录上, 与 buildEntries 硬编码
+            // 路径的 aux 归属一致。honest-null: 无源实体 / 匹配不到目标行 → 不附 (不造假)。
+            applyAuxiliary(entries, businessEntity);
         } else {
             // SP11 settlement→subject mapping (#754): 子类可覆盖 factoryId-aware 重载
             // 以按结算方式/业态映射科目; 默认委托回无 factoryId 的 buildEntries (向后兼容).
@@ -134,6 +140,88 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
 
     protected BigDecimal nullToZero(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
+    }
+
+    // ==================== 辅助核算 (auxiliary accounting) — template 路径 hook ====================
+
+    /** 分录借贷方向 (辅助核算目标行匹配用). */
+    protected enum EntrySide { DEBIT, CREDIT }
+
+    /**
+     * 🔴🔒 template-first 路径的辅助核算 hook (#1207). 默认 no-op —— 无辅助核算的 generator
+     * 不需要覆盖 (honest-null: 不附即无维度)。
+     *
+     * <p>在 {@link #buildEntries(String, Object)} 硬编码路径里用 {@code debitEntryWithAuxiliary}/
+     * {@code creditEntryWithAuxiliary} 附辅助核算的 generator, 必须覆盖此方法, 把<b>同样的</b>
+     * 辅助核算维度附到 <b>template 渲染出的对应分录</b>上 (用 {@link #attachAuxiliary} 匹配)。
+     *
+     * <p>只在 template 路径调用 (硬编码路径的 aux 已在 buildEntries 内 inline 设置, 不重复)。
+     *
+     * @param entries        template 渲染出的分录 (可原地 mutate)
+     * @param businessEntity  源业务单 (generator 从中取 customerId/supplierId/... )
+     */
+    protected void applyAuxiliary(List<VoucherEntry> entries, T businessEntity) {
+        // 默认无辅助核算
+    }
+
+    /**
+     * 把辅助核算维度附到 template 渲染分录中"承载该维度的那一行", 镜像 buildEntries 的归属逻辑。
+     *
+     * <p>匹配策略 (稳健, 容忍客户自定义科目):
+     * <ol>
+     *   <li>优先: {@code side} 侧且 subjectCode 以 {@code subjectCodePrefix} 开头的行
+     *       (标准科目族, 如应收 "1122" / 应付 "2202")；</li>
+     *   <li>回退: {@code side} 侧<b>唯一</b>的一行 (硬编码路径下往来科目本就是该侧唯一行,
+     *       客户模板改了科目码也能命中)；</li>
+     *   <li>再回退: 全部分录里 subjectCode 前缀匹配的行 (侧向歧义时的最后手段)；</li>
+     *   <li>都匹配不到 → 不附 (honest-null, 不造假)。</li>
+     * </ol>
+     *
+     * <p>{@code type}/{@code entityId} 任一为 null → 直接不附 (honest-null, 与硬编码路径的
+     * {@code auxType != null ? ... : null} 三元一致)。
+     */
+    protected void attachAuxiliary(List<VoucherEntry> entries, EntrySide side,
+            String subjectCodePrefix, AuxiliaryType type, String entityId) {
+        if (type == null || entityId == null || entries == null || entries.isEmpty()) {
+            return; // honest-null
+        }
+        VoucherEntry target = findAuxTarget(entries, side, subjectCodePrefix);
+        if (target != null) {
+            target.setAuxiliaryType(type);
+            target.setAuxiliaryEntityId(entityId);
+        }
+    }
+
+    private VoucherEntry findAuxTarget(List<VoucherEntry> entries, EntrySide side, String prefix) {
+        List<VoucherEntry> onSide = new java.util.ArrayList<>();
+        for (VoucherEntry e : entries) {
+            boolean isDebit = e.getDebit() != null && e.getDebit().signum() > 0;
+            boolean isCredit = e.getCredit() != null && e.getCredit().signum() > 0;
+            if ((side == EntrySide.DEBIT && isDebit) || (side == EntrySide.CREDIT && isCredit)) {
+                onSide.add(e);
+            }
+        }
+        // 1) 优先: 该侧且科目前缀匹配
+        if (prefix != null && !prefix.isBlank()) {
+            for (VoucherEntry e : onSide) {
+                if (e.getSubjectCode() != null && e.getSubjectCode().startsWith(prefix)) {
+                    return e;
+                }
+            }
+        }
+        // 2) 回退: 该侧唯一一行
+        if (onSide.size() == 1) {
+            return onSide.get(0);
+        }
+        // 3) 再回退: 全分录里科目前缀匹配 (侧向歧义时)
+        if (prefix != null && !prefix.isBlank()) {
+            for (VoucherEntry e : entries) {
+                if (e.getSubjectCode() != null && e.getSubjectCode().startsWith(prefix)) {
+                    return e;
+                }
+            }
+        }
+        return null; // honest-null
     }
 
     /**
