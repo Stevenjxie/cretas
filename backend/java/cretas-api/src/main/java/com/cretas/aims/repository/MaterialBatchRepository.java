@@ -220,14 +220,22 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                   @Param("materialTypeId") String materialTypeId);
 
     /**
-     * 查找可用的批次（FEFO - 带 warehouse 过滤）。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。
-     * 用途：报工消耗 (WH-WKS 固定)、调拨发货 (source warehouse)、BOM 展开 (WH-WKS 优先)。
+     * 查找可用的批次（FEFO - 带 warehouse 过滤，排除 PRODUCTION_BATCH 来源）。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。
+     * 用途：报工消耗 (WH-WKS 固定)、调拨发货 (source warehouse)、领料回退 (auto-allocate)、BOM 展开 (WH-WKS 优先)。
+     *
+     * <p>MES↔ERP Fix #5 (2026-07-04): 对齐 findAvailableBatchesFEFO / findAllAvailableInWarehouse,
+     * 排除 sourceDocType='PRODUCTION_BATCH' 的 WIP 半成品批次。这些批次 (materialTypeId=原料血缘,
+     * warehouseId=WH-WKS) 是在制半成品内部成本工件, 与真实原料库存不可区分 → 仓库侧 FEFO
+     * (调拨/领料回退/报损) 若误拣会把在制半成品当原料吃掉 (labor 已计入其成本 → 被当原料再消耗
+     * = labor 双计; 下游小结超扣 → 负库存)。生产侧真正需要投料 WIP 的路径 (报工混锅 SFI 投料) 走
+     * 独立的 findByFactoryIdAndSourceDocTypeAndSourceDocId (按 sourceDocId 精确解析), 不受此排除影响。
      */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +
            "AND m.warehouseId = :warehouseId " +
            "AND m.status = 'AVAILABLE' " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "ORDER BY m.expireDate ASC NULLS LAST, m.receiptDate ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFOByWarehouse(@Param("factoryId") String factoryId,
                                                             @Param("materialTypeId") String materialTypeId,
