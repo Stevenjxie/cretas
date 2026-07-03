@@ -31,10 +31,33 @@ export interface OpeningInventoryRequest {
   remark?: string;
 }
 
+/**
+ * Field names mirror backend OpeningInventoryResult.java 1:1 — do NOT rename
+ * without checking the DTO first (2026-07-03 bug: this interface used to have
+ * createdBatches/skippedNoPriceCount which don't exist on the backend response,
+ * so res.data.createdBatches was always undefined → toast showed "已建 undefined 条").
+ */
 export interface OpeningInventoryResult {
-  createdBatches: number;
+  /** 幂等业务键 (回显; 重复提交用它命中) */
+  batchKey: string;
+  /** 是否幂等命中 (true=之前已建过, 本次未新建) */
+  idempotentHit: boolean;
+  /** 本次建立的批次数 */
+  createdCount: number;
+  /** 计入期初凭证的行数 (有单价) */
+  pricedCount: number;
+  /** 未录单价的行数 (诚实-null: 建了批次但不计入凭证金额) */
+  uncostedCount: number;
+  /** 期初存货总价值 (Σ数量×单价, 即凭证借方 1403 金额) */
+  totalOpeningValue: number;
+  /** 期初凭证ID (全部行未录价时为 null) */
   voucherId: string | null;
-  skippedNoPriceCount: number;
+  /** 期初凭证号 (全部行未录价时为 null) */
+  voucherNumber: string | null;
+  /** 建立的批次ID列表 */
+  batchIds: string[];
+  /** 建立的批次号列表 */
+  batchNumbers: string[];
 }
 
 /** 物料主数据 (原材料类型字典) 精简字段, 用于建账页物料下拉。 */

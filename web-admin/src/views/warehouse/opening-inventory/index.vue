@@ -119,11 +119,11 @@ async function submitItems(items: OpeningInventoryItem[], remark: string): Promi
     const res = await createOpeningInventory(factoryId.value, { items, remark: remark || undefined });
     if (res.success && res.data) {
       lastResult.value = res.data;
-      const { createdBatches, voucherId, skippedNoPriceCount } = res.data;
-      const parts = [`已建 ${createdBatches} 条期初库存`];
+      const { createdCount, voucherId, uncostedCount } = res.data;
+      const parts = [`已建 ${createdCount} 条期初库存`];
       parts.push(voucherId ? `记账凭证 ${voucherId} (借1403原材料/贷4001实收资本)` : '本次无金额记账 (全部行无单价)');
-      if (skippedNoPriceCount > 0) {
-        parts.push(`${skippedNoPriceCount} 条无单价未计入记账金额`);
+      if (uncostedCount > 0) {
+        parts.push(`${uncostedCount} 条无单价未计入记账金额`);
       }
       ElMessage({ message: parts.join(', '), type: 'success', duration: 0, showClose: true });
       return true;
