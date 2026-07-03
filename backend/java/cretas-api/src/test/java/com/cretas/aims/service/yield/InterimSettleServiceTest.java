@@ -848,7 +848,12 @@ class InterimSettleServiceTest {
         corpse.setProducedQuantity(BigDecimal.ZERO);
         corpse.setShippedQuantity(BigDecimal.ZERO);
         corpse.setReservedQuantity(BigDecimal.ZERO);
-        corpse.setStatus(FinishedGoodsBatch.Status.REVERSED);
+        // 🔴🔴 非-intern 字符串 (new String) 复现 prod: FinishedGoodsBatch.Status 是 String 常量 holder
+        //   (非 enum), prod Postgres 从 varchar 读回的 status 是新建非 intern 字符串。旧代码 `getStatus()
+        //   == Status.REVERSED` 是 String 引用相等 → 对非 intern 值恒 false → 复活分支不进 (bug)。
+        //   若这里用 setStatus(Status.REVERSED) (intern 常量) 则 == 恰好为真, 照不出 bug (= #1202 单测的盲区)。
+        //   必须用 new String(...) 强制非 intern, 逼出引用相等缺陷; 修复用 .equals() 值相等即通过。
+        corpse.setStatus(new String(FinishedGoodsBatch.Status.REVERSED));
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-PP-001-S1"))
                 .thenReturn(Optional.of(corpse));
 

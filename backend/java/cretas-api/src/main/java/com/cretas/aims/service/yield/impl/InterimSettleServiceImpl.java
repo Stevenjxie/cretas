@@ -464,7 +464,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             //   shipped/reserved/produced 皆 0 (reverseInterimCreate 的下游守卫: 已发货/预留即 loud-fail
             //   不会置 REVERSED), 故重置安全。复活后的批次进本次 summary.reversalDetail.fgCreated →
             //   未来可再次撤销 (可逆性保持)。
-            if (batch.getStatus() == FinishedGoodsBatch.Status.REVERSED) {
+            // 🔴🔴 2026-07-04 (#1202 修不动的根因, live 复验实证): FinishedGoodsBatch.Status 是 String 常量
+            //   holder (非 enum), getStatus() 返 String。#1202 写成 `getStatus() == Status.REVERSED` = String
+            //   引用相等 (==)。prod Postgres 从 varchar 读回的 status 是**新建非 intern 字符串**, 与字面量常量
+            //   "REVERSED" 引用不等 → 判断恒 false → 复活分支从不进 → 尸体原样返回 (仍 REVERSED/0), 但下方
+            //   summary.finishedQuantity 照加 → 假报产量, 发货无货 (= #1202 之前的完全相同症状, 修了个寂寞)。
+            //   H2/Hibernate 恰好返回引用相等的 String (或 intern), 故 #1202 的纯 mock 单测 (用 intern 常量
+            //   setStatus) + 集成测试都照不出 = test-vs-reality gap。必须用值相等 .equals(), 禁止 String ==。
+            if (FinishedGoodsBatch.Status.REVERSED.equals(batch.getStatus())) {
                 ProductType productType = productTypeRepository
                         .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
                 populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
