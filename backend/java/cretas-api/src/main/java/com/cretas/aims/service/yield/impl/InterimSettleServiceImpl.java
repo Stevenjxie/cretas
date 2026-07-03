@@ -429,34 +429,64 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
         String batchNumber = finishedGoodsBatchNumber(plan, sessionSeq);
         // 幂等防护 (产出行标记已防重, 此处为 batchNumber 撞号二次保险)
-        return finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(plan.getFactoryId(), batchNumber)
-                .orElseGet(() -> {
-                    ProductType productType = productTypeRepository
-                            .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
-                    FinishedGoodsBatch batch = new FinishedGoodsBatch();
-                    batch.setFactoryId(plan.getFactoryId());
-                    batch.setBatchNumber(batchNumber);
-                    batch.setProductTypeId(productTypeId);
-                    batch.setProductName(productType != null ? productType.getName() : null);
-                    batch.setProducedQuantity(qty);
-                    batch.setShippedQuantity(BigDecimal.ZERO);
-                    batch.setReservedQuantity(BigDecimal.ZERO);
-                    batch.setUnit(unit);
-                    batch.setUnitPrice(productType != null ? productType.getUnitPrice() : null);
-                    // 🔴 成本传导 (诚实 null): 成品成本 (含 SFI 投料). null = 未知, 不伪造 ¥0。区别于 unitPrice(售价)。
-                    batch.setUnitCost(unitCost);
-                    batch.setProductionDate(LocalDate.now());
-                    int shelfLifeDays = productType != null && productType.getShelfLifeDays() != null
-                            ? productType.getShelfLifeDays() : 180;
-                    batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
-                    batch.setStorageLocation("库存生产小结入库");
-                    batch.setProductionPlanId(plan.getId());
-                    batch.setWarehouseId(warehouseResolver.resolveWorkshopId(plan.getFactoryId()));
-                    batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
-                    batch.setCreatedBy(userId != null ? userId : 0L);
-                    batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库: " + plan.getPlanNumber());
-                    return finishedGoodsBatchRepository.save(batch);
-                });
+        var existing = finishedGoodsBatchRepository
+                .findByFactoryIdAndBatchNumber(plan.getFactoryId(), batchNumber);
+        if (existing.isPresent()) {
+            FinishedGoodsBatch batch = existing.get();
+            // 🔒🔒 2026-07-03 撤销→重新小结 (bug #3, 确定性 100% 失败修复):
+            //   「撤销小结」把该 batchNumber 的 FG 冲销为 producedQuantity=0 + status=REVERSED (审计尸体,
+            //   不硬删批次行), 并硬删小结记录释放 session_seq。重新小结复用同 seq → 生成同 batchNumber。
+            //   旧代码 findByFactoryIdAndBatchNumber 无状态过滤命中 REVERSED 尸体 → orElseGet 不触发 →
+            //   数量不入 (但下方 summary.finishedQuantity 仍累加) → 假报产量, FG 实为 0/REVERSED → 发货无货。
+            //   此处显式"复活": 把尸体重置为本次小结的真实产量 + AVAILABLE + 可售。REVERSED 尸体必然
+            //   shipped/reserved/produced 皆 0 (reverseInterimCreate 的下游守卫: 已发货/预留即 loud-fail
+            //   不会置 REVERSED), 故重置安全。复活后的批次进本次 summary.reversalDetail.fgCreated →
+            //   未来可再次撤销 (可逆性保持)。
+            if (batch.getStatus() == FinishedGoodsBatch.Status.REVERSED) {
+                ProductType productType = productTypeRepository
+                        .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
+                populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
+                batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库(撤销后重做): " + plan.getPlanNumber());
+                return finishedGoodsBatchRepository.save(batch);
+            }
+            // 非 REVERSED (同次小结多成品道去重命中 / 真实已产 AVAILABLE/DEPLETED) → 原样返回 (幂等, 不覆盖真实数据)。
+            return batch;
+        }
+        ProductType productType = productTypeRepository
+                .findByIdAndFactoryId(productTypeId, plan.getFactoryId()).orElse(null);
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setFactoryId(plan.getFactoryId());
+        batch.setBatchNumber(batchNumber);
+        populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
+        batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库: " + plan.getPlanNumber());
+        return finishedGoodsBatchRepository.save(batch);
+    }
+
+    /**
+     * 填充/重置小结成品批次的业务字段 (不含 factoryId/batchNumber/remark — 由调用方设置)。
+     * 新建 (create) 与撤销后复活 (reset REVERSED 尸体) 共用, 保证两路径字段一致。
+     */
+    private void populateInterimFinishedGoods(FinishedGoodsBatch batch, ProductionPlan plan, ProductType productType,
+                                              String productTypeId, BigDecimal qty, String unit,
+                                              Long userId, BigDecimal unitCost) {
+        batch.setProductTypeId(productTypeId);
+        batch.setProductName(productType != null ? productType.getName() : null);
+        batch.setProducedQuantity(qty);
+        batch.setShippedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit(unit);
+        batch.setUnitPrice(productType != null ? productType.getUnitPrice() : null);
+        // 🔴 成本传导 (诚实 null): 成品成本 (含 SFI 投料). null = 未知, 不伪造 ¥0。区别于 unitPrice(售价)。
+        batch.setUnitCost(unitCost);
+        batch.setProductionDate(LocalDate.now());
+        int shelfLifeDays = productType != null && productType.getShelfLifeDays() != null
+                ? productType.getShelfLifeDays() : 180;
+        batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
+        batch.setStorageLocation("库存生产小结入库");
+        batch.setProductionPlanId(plan.getId());
+        batch.setWarehouseId(warehouseResolver.resolveWorkshopId(plan.getFactoryId()));
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        batch.setCreatedBy(userId != null ? userId : 0L);
     }
 
     /** FG-{planNumber}-S{seq}, ≤64 截断 (mirror finishedGoodsBatchNumber :2822-2832). */
