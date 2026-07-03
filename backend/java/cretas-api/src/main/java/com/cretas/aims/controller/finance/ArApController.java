@@ -40,6 +40,7 @@ public class ArApController {
     private final MobileService mobileService;
     /** R23 audit C4: conditional module check for /adjustment endpoint (counterpartyType-dependent). */
     private final FactoryConfigService factoryConfigService;
+    private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
 
     /**
      * AUD-5 B-A3 sister sweep batch 3 (edge audit 2026-05-20): explicit length caps mirror PG
@@ -328,6 +329,33 @@ public class ArApController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    // ==================== 期初建账修正 (opening AP correction) ====================
+
+    /**
+     * 修正"误走采购入库建账"产生的幽灵应付 —— <b>管理员专用</b>。
+     *
+     * <p>客户把期初存货当采购入库录入 → 每个物料挂了供应商应付 (¥436k 幽灵应付), 但客户并不欠供应商钱。
+     * 本操作红冲指定应付 + 补正确的期初凭证 (借 1403 / 贷 4001), <b>库存数量不动</b>。幂等 + 留痕。
+     * 要修正哪几笔由 {@code apTransactionIds} 传入 (不硬编码任何租户/记录), organizer 审阅后对具体记录调用。</p>
+     *
+     * <p>权限: 覆盖类级 {@code finance:read_write}, 收紧到 {@code finance:approve_adjustment} (审批级, 4-眼)。</p>
+     */
+    @RequirePermission("finance:approve_adjustment")
+    @RequireModule("finance_ap")
+    @PostMapping("/opening/correct-misrouted-ap")
+    @Operation(summary = "修正误走采购入库建账的幽灵应付 (红冲应付 + 补期初凭证, 库存不动) — 管理员专用")
+    public ApiResponse<com.cretas.aims.dto.finance.OpeningApCorrectionResult> correctMisroutedOpeningAp(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.finance.OpeningApCorrectionRequest request) {
+        Long userId = extractUserId(authorization);
+        log.info("期初建账修正(幽灵应付红冲): factoryId={}, apCount={}", factoryId,
+                request.getApTransactionIds() != null ? request.getApTransactionIds().size() : 0);
+        com.cretas.aims.dto.finance.OpeningApCorrectionResult result =
+                openingInventoryService.correctMisroutedOpeningAp(factoryId, request, userId);
+        return ApiResponse.success("幽灵应付修正完成", result);
     }
 
     // ==================== Boundary validators (AUD-5 B-A3 sister sweep batch 3) ====================

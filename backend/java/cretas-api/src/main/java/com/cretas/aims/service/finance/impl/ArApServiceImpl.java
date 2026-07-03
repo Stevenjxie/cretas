@@ -323,6 +323,71 @@ public class ArApServiceImpl implements ArApService {
         return saved;
     }
 
+    /** 期初建账修正: 红冲交易的来源标记 (sourceType), 与被红冲的原应付ID (sourceId) 组成幂等键。 */
+    private static final String OPENING_AP_CORRECTION_SOURCE_TYPE = "OPENING_AP_CORRECTION";
+
+    @Override
+    @Transactional
+    public ArApTransaction reverseOpeningPayable(String factoryId, String apTransactionId,
+                                                 String reason, Long operatedBy) {
+        if (apTransactionId == null || apTransactionId.isBlank()) {
+            throw new BusinessException(400, "待红冲的应付交易ID不能为空").withHintTarget("apTransactionId");
+        }
+
+        // 幂等: 该应付已被红冲过 → 返回既有红冲交易, 不重复冲减余额。
+        Optional<ArApTransaction> existingReversal =
+                transactionRepository.findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
+                        factoryId, OPENING_AP_CORRECTION_SOURCE_TYPE, apTransactionId, ArApTransactionType.AP_CREDIT_NOTE);
+        if (existingReversal.isPresent()) {
+            log.info("期初应付红冲幂等命中: factoryId={}, apTransactionId={}, reversalId={}",
+                    factoryId, apTransactionId, existingReversal.get().getId());
+            return existingReversal.get();
+        }
+
+        ArApTransaction original = transactionRepository.findById(apTransactionId)
+                .filter(t -> factoryId.equals(t.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("应付交易不存在或不属于当前工厂: " + apTransactionId));
+
+        if (original.getTransactionType() != ArApTransactionType.AP_INVOICE) {
+            throw new BusinessException(400,
+                    "只能红冲应付挂账 (AP_INVOICE), 当前交易类型: " + original.getTransactionType())
+                    .withHint("请确认传入的是采购入库建账产生的应付挂账交易");
+        }
+        if (original.getCounterpartyType() != CounterpartyType.SUPPLIER) {
+            throw new BusinessException(400, "该应付交易对手不是供应商, 无法红冲")
+                    .withHint("期初应付修正仅适用于供应商应付挂账");
+        }
+
+        BigDecimal originalAmount = original.getAmount() != null ? original.getAmount() : BigDecimal.ZERO;
+        if (originalAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "该应付挂账金额非正, 无需红冲: " + originalAmount);
+        }
+
+        Supplier supplier = supplierRepository.findByIdAndFactoryId(original.getCounterpartyId(), factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("供应商不存在: " + original.getCounterpartyId()));
+
+        // 红冲: 供应商应付余额减回原额 (可能变负, 允许 —— 反映"本不该挂的应付"被冲销)。
+        BigDecimal newBalance = (supplier.getCurrentBalance() != null ? supplier.getCurrentBalance() : BigDecimal.ZERO)
+                .subtract(originalAmount);
+        supplier.setCurrentBalance(newBalance);
+        supplierRepository.save(supplier);
+
+        String remark = (reason != null && !reason.isBlank() ? reason : "期初建账修正: 红冲误挂应付")
+                + " (红冲原应付 " + original.getTransactionNumber() + "/" + apTransactionId + ")";
+        ArApTransaction reversal = buildTransaction(
+                factoryId, ArApTransactionType.AP_CREDIT_NOTE,
+                CounterpartyType.SUPPLIER, original.getCounterpartyId(), supplier.getName(),
+                originalAmount.negate(), newBalance, null, operatedBy, remark);
+        reversal.setPurchaseOrderId(original.getPurchaseOrderId());
+        reversal.setSourceType(OPENING_AP_CORRECTION_SOURCE_TYPE);
+        reversal.setSourceId(apTransactionId);
+
+        ArApTransaction saved = transactionRepository.save(reversal);
+        log.info("期初应付红冲: factoryId={}, apTransactionId={}, supplierId={}, amount=-{}, balance={}, reversalId={}",
+                factoryId, apTransactionId, original.getCounterpartyId(), originalAmount, newBalance, saved.getId());
+        return saved;
+    }
+
     @Override
     @Transactional
     public ArApTransaction recordArPayment(String factoryId, String customerId,
