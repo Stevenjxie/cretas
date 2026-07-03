@@ -207,6 +207,62 @@ def _owner_action_session_key(factory_id: str, session_id: str) -> str:
     return f"{factory_id}:{session_id}"
 
 
+def _owner_action_data_readiness(scenario: str, params: dict[str, Any]) -> dict[str, Any]:
+    source_types = [
+        "pos_sales",
+        "review_feedback",
+        "inventory",
+        "bom_cost",
+        "traffic_persona",
+        "external_event",
+    ]
+    scenario_sources = {
+        "operations_dispatch": ["pos_sales", "inventory", "review_feedback", "traffic_persona"],
+        "inventory_reorder": ["inventory", "bom_cost", "pos_sales"],
+        "traffic_conversion": ["traffic_persona", "pos_sales", "review_feedback"],
+        "package": ["pos_sales", "bom_cost", "review_feedback"],
+        "seating_mix": ["pos_sales", "traffic_persona"],
+        "staffing_schedule": ["pos_sales", "review_feedback"],
+        "staff_training": ["review_feedback", "pos_sales"],
+        "kitchen_quality": ["review_feedback", "pos_sales", "bom_cost"],
+        "cost_margin": ["bom_cost", "inventory", "pos_sales"],
+        "external_event_response": ["external_event", "traffic_persona", "pos_sales"],
+        "single_item_push": ["pos_sales", "bom_cost", "review_feedback"],
+        "store_compare": ["pos_sales", "review_feedback", "traffic_persona"],
+    }
+    return {
+        "mode": "demo_mock_plus_seeded_external",
+        "scenario": scenario,
+        "sourceTypes": source_types,
+        "usedForThisAnswer": scenario_sources.get(scenario, source_types[:3]),
+        "mockFields": [
+            "traffic_persona",
+            "external_event",
+            "store_compare",
+            "role_action_plan",
+        ],
+        "seededFields": [
+            "pos_sales",
+            "review_feedback",
+            "inventory",
+            "bom_cost",
+        ],
+        "enoughForDemoDecision": True,
+        "enoughForProductionRoiPromise": False,
+        "missingForProduction": [
+            "客户授权的真实 POS / 收银 / 外卖订单明细",
+            "客户授权的大众点评/美团/抖音评价与曝光转化数据",
+            "真实 BOM、采购价、盘点、报损、排班和桌台流水",
+            "商场或位置平台正式授权的客流画像与活动数据",
+        ],
+        "confidenceNote": (
+            "当前 demo 足够展示老板动作建议和跨维度分析口径；"
+            "上线给真实老板承诺 ROI 前，需要把 mock 客流和外部活动替换为授权实时数据。"
+        ),
+        "demoMode": bool(params.get("demoMode", True)),
+    }
+
+
 _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("store_compare", ("所有门店", "其他门店", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "最值得学习", "复制到")),
     ("operations_dispatch", ("仓管", "前台", "门迎", "分别", "派工", "调度", "今日作战", "管理层", "减少工作", "谁做什么", "各岗位", "分工")),
@@ -1508,6 +1564,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     follow_ups = _owner_chat_follow_ups(scenario)
     charts = _owner_evidence_charts(owner_page, scenario, params)
     chart_guide = _owner_chart_guide(scenario) if charts else ""
+    data_readiness = _owner_action_data_readiness(scenario, params)
     _OWNER_ACTION_CHAT_SESSIONS[session_key] = {
         "scenario": scenario,
         "lastMessage": body.message,
@@ -1529,6 +1586,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
             "roleActionPlan": role_plan,
             "decisionFocus": owner_page.get("decisionFocus"),
             "ownerDecisionPage": owner_page,
+            "dataReadiness": data_readiness,
             "demoActionScenarios": list_owner_action_demo_scenarios(),
         },
     }

@@ -1,9 +1,13 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
@@ -27,11 +31,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @DisplayName("IntentExecutionOrchestrator — restaurant ops gold deterministic route")
@@ -39,10 +46,13 @@ class RestaurantOpsGoldRouteTest {
 
     private IntentExecutionOrchestrator orchestrator;
     private AIIntentService aiIntentService;
+    private ToolRegistry toolRegistry;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
         aiIntentService = mock(AIIntentService.class);
+        toolRegistry = mock(ToolRegistry.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,
                 mock(IntentSemanticsParser.class),
@@ -50,12 +60,12 @@ class RestaurantOpsGoldRouteTest {
                 mock(RuleEngineService.class),
                 mock(ConversationService.class),
                 mock(ConversationMemoryService.class),
-                new ObjectMapper(),
+                objectMapper,
                 mock(DashScopeClient.class),
                 mock(DashScopeConfig.class),
                 mock(IntentKnowledgeBase.class),
                 mock(AIAnalysisResultRepository.class),
-                mock(ToolRegistry.class),
+                toolRegistry,
                 mock(AnalysisRouterService.class),
                 mock(ComplexityRouter.class),
                 mock(AgentOrchestrator.class),
@@ -64,6 +74,51 @@ class RestaurantOpsGoldRouteTest {
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+    }
+
+    @Test
+    @DisplayName("owner action execution delegates through governed restaurant owner advisor tool")
+    void ownerActionExecutionUsesGovernedTool() throws Exception {
+        ToolExecutor advisorTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
+                .thenReturn(Optional.of(advisorTool));
+        when(advisorTool.execute(any(ToolCall.class), any()))
+                .thenReturn(objectMapper.writeValueAsString(Map.of(
+                        "success", true,
+                        "data", Map.of(
+                                "dataAvailable", true,
+                                "source", "restaurant_owner_action_advisor",
+                                "answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
+                                "message", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
+                                "sessionId", "owner-action-001",
+                                "scenario", "operations_dispatch",
+                                "suggestedFollowups", List.of(Map.of("question", "仓管具体做什么？"))
+                        )
+                )));
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("这周营收同比上周怎么提高，仓管厨师长前台分别做什么？")
+                .context(Map.of(
+                        "ownerActionSessionId", "owner-action-001",
+                        "ownerActionScenario", "operations_dispatch",
+                        "storeName", "青花椒上海示范店",
+                        "subSector", "中餐/川味酸菜鱼",
+                        "period", "this_week"))
+                .build();
+
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "executeRestaurantOwnerActionChat",
+                "DEMO_REST",
+                request,
+                7L);
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getMessage()).contains("仓管补活鱼");
+        assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action_advisor");
+        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
+        verify(advisorTool).execute(any(ToolCall.class), any());
     }
 
     @Test
