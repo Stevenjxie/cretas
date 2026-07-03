@@ -156,8 +156,23 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         }
 
         // ── ⑤ 原料 restore (还回来源 MaterialBatch.usedQuantity + 清消耗行 interim_settled_at) ──
-        List<MaterialConsumption> consumptions = consumptionRepository
-                .findByProductionPlanIdAndFactoryIdAndInterimSettledAt(planId, factoryId, postedAt);
+        //   🔴 关键 (bug fix 2026-07-03, mirror #1167 幻库存修复): 扣减侧 InterimSettleServiceImpl 按
+        //   (factory, production_batch_id ∈ 本计划各道 batchId) 定位并 stamp 待扣减消耗 —— 因为逐工序首/中间道
+        //   (finished=false) 写的 raw 消耗其 production_plan_id 故意为 null (防成本双计), 只有 production_batch_id
+        //   恒有值。撤销侧必须用同一 key 反查, 否则原 findBy...ProductionPlanId... 永远漏掉这些 null-plan 在制道
+        //   消耗行 → 其 usedQuantity 不还回 + interim_settled_at 戳清不掉 → 撤销后重新小结时它们已非未结 →
+        //   永久幻扣减 (原料永久短缺, 保证盘点差异; rawRestored 计数亦偏低)。
+        //   本计划各道 batchId = process_sheet_rows.batch_id (与扣减侧 findByFactoryIdAndPlanId 同源, 反查时行仍在);
+        //   叠加 interim_settled_at = postedAt 精确锁定本次小结扣减的那批行 → 撤销集与扣减侧 deducted 集完全一致。
+        List<Long> planBatchIds = rowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                .map(ProcessSheetRow::getBatchId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        List<MaterialConsumption> consumptions = planBatchIds.isEmpty()
+                ? List.of()
+                : consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                        factoryId, planBatchIds, postedAt);
         int rawRestored = 0;
         for (MaterialConsumption mc : consumptions) {
             MaterialBatch src = materialBatchRepository
