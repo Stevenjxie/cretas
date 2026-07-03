@@ -171,6 +171,22 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             String productionPlanId, String factoryId, LocalDateTime interimSettledAt);
 
     /**
+     * 撤销小结 原料还回定位 (bug fix 2026-07-03, mirror
+     * {@link #findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull}): 按
+     * (factoryId, production_batch_id ∈ 本计划各道 WIP 批次) + interim_settled_at == postedAt 定位
+     * 某次小结扣减的全部消耗行, 供撤销逐行还回来源 MaterialBatch.usedQuantity + 清 interim_settled_at。
+     *
+     * <p><b>为什么不按 production_plan_id 查</b> (与扣减侧同因): 扣减侧
+     * {@code InterimSettleServiceImpl} 按 production_batch_id 定位并 stamp 消耗 (含逐工序首/中间道
+     * production_plan_id <b>故意为 null</b> 防成本双计的在制道消耗)。撤销侧若按 production_plan_id 反查
+     * 会漏掉这些 null-plan 消耗行 → 其 usedQuantity 不还回 + interim_settled_at 戳清不掉 → 撤销后重新
+     * 小结时这些行已非未结 → 永久幻扣减 (库存永久短缺, 保证盘点差异)。与扣减侧同 key 反查 → 撤销集 ==
+     * 扣减集, 无跨小结/跨计划渗漏。production_batch_id 上已有索引, 无需新增迁移。Factory-scoped 防跨租户。
+     */
+    List<MaterialConsumption> findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+            String factoryId, List<Long> productionBatchIds, LocalDateTime interimSettledAt);
+
+    /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
      * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
      */

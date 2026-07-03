@@ -81,8 +81,10 @@ class InterimSettleReversalServiceTest {
         plan.setSourceType(PlanSourceType.SAFETY_STOCK);
         when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
 
-        // 默认无原料/行 (个别测试覆写)
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAt(any(), any(), any()))
+        // 默认无原料/行 (个别测试覆写)。原料还回按 (factory, production_batch_id ∈ 本计划各道) 反查 (mirror 扣减侧)。
+        when(rowRepository.findByFactoryIdAndPlanId(any(), any()))
+                .thenReturn(new ArrayList<>());
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(any(), any(), any()))
                 .thenReturn(new ArrayList<>());
         when(rowRepository.findByFactoryIdAndPlanIdAndInterimSettledAt(any(), any(), any()))
                 .thenReturn(new ArrayList<>());
@@ -167,9 +169,16 @@ class InterimSettleReversalServiceTest {
                 List.of(qty("batchNo", "FG-STANDING-1", "20")));  // FG feed 还回
         stubTarget(2, settlement("s2", 2, postedAt, detail));
 
-        // 原料: 一笔 RB1 消耗 100 (小结时 usedQuantity 已 +100 → 现 150)
+        // 原料: 一笔 RB1 消耗 100 (小结时 usedQuantity 已 +100 → 现 150), 挂在本计划某道 WIP 批次 555。
+        //   撤销侧按 (factory, production_batch_id ∈ 本计划各道 batchId) 反查 (mirror 扣减侧)。
+        ProcessSheetRow matRow = settledRow(9L, postedAt);
+        matRow.setBatchId(555L);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(new ArrayList<>(List.of(matRow)));
         MaterialConsumption mc = consumption("RB1", new BigDecimal("100"), postedAt);
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAt(PLAN_ID, FACTORY, postedAt))
+        mc.setProductionBatchId(555L);
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                eq(FACTORY), eq(List.of(555L)), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
         MaterialBatch rb1 = new MaterialBatch();
         rb1.setId("RB1");
@@ -195,6 +204,51 @@ class InterimSettleReversalServiceTest {
         assertThat(r.get("rawRestored")).isEqualTo(1);
     }
 
+    // ── (f) 🔒🔒 幻库存回归 (mirror #1167): 逐工序首/中间道 raw 消耗 production_plan_id=null (只有
+    //         production_batch_id 有值) → 撤销必须按 production_batch_id 反查还回, 否则永久幻扣减 ──
+    @Test
+    @DisplayName("(f) 🔒🔒 null-plan-id 在制道 raw 消耗: 撤销按 production_batch_id 反查还回 usedQuantity+清戳+rawRestored 正确 (mirror #1167 扣减侧)")
+    void restoresNullPlanIdConsumptionByProductionBatchId() {
+        LocalDateTime postedAt = LocalDateTime.now();
+        Map<String, Object> detail = detail(List.of(), List.of(), List.of(), List.of(), List.of());
+        stubTarget(1, settlement("s1", 1, postedAt, detail));
+
+        // 本计划一道物化行, production_batch_id = 555 (raw 消耗挂此 WIP 批次, 逐工序道 plan_id 故意 null)。
+        ProcessSheetRow row = settledRow(3L, postedAt);
+        row.setBatchId(555L);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(new ArrayList<>(List.of(row)));
+
+        // 该道 raw 消耗: production_plan_id == null (逐工序首/中间道防成本双计), production_batch_id == 555。
+        //   撤销侧按 (factory, production_batch_id ∈ {555}, interim_settled_at=postedAt) 反查命中。
+        //   ⚠️ 旧代码按 production_plan_id 反查 → planId 非 null 但此行 plan_id=null → 永远漏掉 (bug)。
+        MaterialConsumption mc = consumption("RB1", new BigDecimal("50"), postedAt);
+        mc.setProductionPlanId(null);          // 🔴 关键: null-plan-id 在制道消耗
+        mc.setProductionBatchId(555L);
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                eq(FACTORY), eq(List.of(555L)), eq(postedAt)))
+                .thenReturn(new ArrayList<>(List.of(mc)));
+
+        // 来源批次 RB1: 小结时 usedQuantity 已 +50 → 现 50; 撤销应还回到 0。
+        MaterialBatch rb1 = new MaterialBatch();
+        rb1.setId("RB1");
+        rb1.setFactoryId(FACTORY);
+        rb1.setReceiptQuantity(new BigDecimal("100"));
+        rb1.setUsedQuantity(new BigDecimal("50"));
+        rb1.setReservedQuantity(BigDecimal.ZERO);
+        rb1.setStatus(MaterialBatchStatus.USED_UP);
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("RB1", FACTORY)).thenReturn(Optional.of(rb1));
+
+        Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L);
+
+        // 修复前: null-plan 行不被反查 → usedQuantity 仍 50 (永久幻扣减), rawRestored=0。
+        // 修复后: 按 production_batch_id 反查 → usedQuantity 50→0, 戳清空, 有余量 100 → 恢复 AVAILABLE, rawRestored=1。
+        assertThat(rb1.getUsedQuantity()).isEqualByComparingTo("0");
+        assertThat(rb1.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
+        assertThat(mc.getInterimSettledAt()).isNull();
+        assertThat(r.get("rawRestored")).isEqualTo(1);
+    }
+
     // ── (d) 下游已消耗 → reverseClerkOutput 抛 → 整体 loud-fail, 后续不发生 (原子) ──
     @Test
     @DisplayName("(d) 下游已消耗: reverseClerkOutput 抛 SFI_DOWNSTREAM_CONSUMED → 整体抛, 原料/行/硬删都不发生")
@@ -209,7 +263,8 @@ class InterimSettleReversalServiceTest {
         stubTarget(1, settlement("s1", 1, postedAt, detail));
         // 一笔原料 (若未回滚会被还回) — 用于验证抛后未触及
         MaterialConsumption mc = consumption("RB1", new BigDecimal("100"), postedAt);
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAt(PLAN_ID, FACTORY, postedAt))
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                eq(FACTORY), any(), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
 
         doThrow(new BusinessException(409, "半成品 " + ANCHOR + " 已被下游消耗 40, 无法撤销小结")
@@ -286,7 +341,8 @@ class InterimSettleReversalServiceTest {
         when(settlementRepository.findByIdAndFactoryIdForUpdate("s1", FACTORY)).thenReturn(Optional.empty());
         // 若未被锁挡住会去还的原料 (用于验证败者未触及)
         MaterialConsumption mc = consumption("RB1", new BigDecimal("100"), postedAt);
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAt(PLAN_ID, FACTORY, postedAt))
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                eq(FACTORY), any(), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
 
         assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
