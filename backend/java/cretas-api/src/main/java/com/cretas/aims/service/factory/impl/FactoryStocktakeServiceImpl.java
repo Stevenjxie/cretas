@@ -170,6 +170,21 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     }
 
     @Override
+    public Map<String, Object> getInitiateConstraint() {
+        LocalDate today = LocalDate.now();
+        boolean canInitiateToday = today.getDayOfMonth() >= monthEndThreshold;
+        // 与 initiate() 同一算法: 当月 threshold 日 (若本月无该日, withDayOfMonth 会抛异常
+        // 但 threshold 恒 <=29, 每月都有29日, 不会踩月末天数不足)。
+        LocalDate nextAllowedDate = canInitiateToday ? today : today.withDayOfMonth(monthEndThreshold);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("monthEndThreshold", monthEndThreshold);
+        result.put("canInitiateToday", canInitiateToday);
+        result.put("today", today);
+        result.put("nextAllowedDate", nextAllowedDate);
+        return result;
+    }
+
+    @Override
     @Transactional
     public void updateItems(String stocktakeId, String factoryId, List<StocktakeItemUpdateDTO> updates, Long userId) {
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);

@@ -554,6 +554,48 @@ class FactoryStocktakeServiceImplTest {
     }
 
     // -------------------------------------------------------
+    // getInitiateConstraint (fool-proof Rule 1: 边界预先展示态, warehouse UX bugfix batch)
+    // -------------------------------------------------------
+
+    @Test
+    @DisplayName("T14: getInitiateConstraint threshold=29, today.dayOfMonth<29 → canInitiateToday=false, nextAllowedDate=当月29日")
+    void getInitiateConstraint_beforeThreshold_returnsCanInitiateFalse() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
+        int todayDay = java.time.LocalDate.now().getDayOfMonth();
+        java.util.Map<String, Object> result = service.getInitiateConstraint();
+
+        assertThat(result.get("monthEndThreshold")).isEqualTo(29);
+        if (todayDay < 29) {
+            assertThat(result.get("canInitiateToday")).isEqualTo(false);
+            java.time.LocalDate expectedNext = java.time.LocalDate.now().withDayOfMonth(29);
+            assertThat(result.get("nextAllowedDate")).isEqualTo(expectedNext);
+        } else {
+            assertThat(result.get("canInitiateToday")).isEqualTo(true);
+            assertThat(result.get("nextAllowedDate")).isEqualTo(java.time.LocalDate.now());
+        }
+    }
+
+    @Test
+    @DisplayName("T15: getInitiateConstraint threshold=1 (test env) → canInitiateToday 恒 true, nextAllowedDate=today")
+    void getInitiateConstraint_thresholdOne_alwaysCanInitiateToday() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        java.util.Map<String, Object> result = service.getInitiateConstraint();
+
+        assertThat(result.get("monthEndThreshold")).isEqualTo(1);
+        assertThat(result.get("canInitiateToday")).isEqualTo(true);
+        assertThat(result.get("nextAllowedDate")).isEqualTo(java.time.LocalDate.now());
+        assertThat(result.get("today")).isEqualTo(java.time.LocalDate.now());
+    }
+
+    @Test
+    @DisplayName("T16: getInitiateConstraint 是只读展示态, 不做任何 repo 写入/校验 side-effect")
+    void getInitiateConstraint_isReadOnly_noRepoInteraction() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 29);
+        service.getInitiateConstraint();
+        verifyNoInteractions(stocktakeRepo, stocktakeItemRepo, materialBatchRepo, adjustmentRepo);
+    }
+
+    // -------------------------------------------------------
     // helpers
     // -------------------------------------------------------
 
