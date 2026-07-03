@@ -1196,7 +1196,9 @@ async function handleQuickPayFull() {
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="openFinanceReview('approve')">审核通过</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="openFinanceReview('reject')">审核驳回</el-button>
             <el-button v-if="order.status === 'FINANCE_APPROVED'" type="primary" :loading="submitting" @click="handleStartProduction">开始生产</el-button>
-            <el-button v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)" type="primary" :loading="submitting" @click="openDeliveryDialog">{{ label('delivery') }}</el-button>
+            <!-- Rule 2 (fool-proof-design): 与下方发货记录里"确认发货"(handleShip, 真正扣库存) 区分标签,
+                 避免点错静默无反应 —— 这个按钮只是打开"新建发货单"对话框. -->
+            <el-button v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)" type="primary" :loading="submitting" @click="openDeliveryDialog">新建{{ label('delivery') }}单</el-button>
             <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
                  Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
             <el-button v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
@@ -1507,9 +1509,9 @@ async function handleQuickPayFull() {
                     content="发货确认 (扣库存) 由仓库角色操作, 请前往: 仓储管理 → 出货管理"
                     placement="top"
                   >
-                    <el-button type="warning" link size="small" disabled>发货</el-button>
+                    <el-button type="warning" link size="small" disabled>确认发货</el-button>
                   </el-tooltip>
-                  <el-button v-if="['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWarehouseConfirm" type="warning" link size="small" :disabled="submitting" @click="handleShip(row.id)">发货</el-button>
+                  <el-button v-if="['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWarehouseConfirm" type="warning" link size="small" :disabled="submitting" @click="handleShip(row.id)">确认发货</el-button>
                   <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="handleDelivered(row.id)">签收</el-button>
                 </template>
               </el-table-column>
