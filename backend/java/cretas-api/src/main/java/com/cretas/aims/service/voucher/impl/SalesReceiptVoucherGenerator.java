@@ -97,4 +97,15 @@ public class SalesReceiptVoucherGenerator extends AbstractVoucherGenerator<Sales
         }
         return entries;
     }
+
+    /**
+     * 🔴🔒 #1207: template 路径把 CUSTOMER 辅助核算附到应收账款借方行 (与 buildEntries 一致)。
+     * 借方 = 应收 (客户欠款), 前缀 1122; 收入/销项税在贷方不挂客户维度。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, SalesOrder order) {
+        String customerId = order.getCustomerId();
+        attachAuxiliary(entries, EntrySide.DEBIT, "1122",
+                customerId != null ? AuxiliaryType.CUSTOMER : null, customerId);
+    }
 }

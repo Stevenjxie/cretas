@@ -177,4 +177,17 @@ public class PurchasePaymentVoucherGenerator extends AbstractVoucherGenerator<Pu
         }
         return entries;
     }
+
+    /**
+     * 🔴🔒 #1207: template 路径把 SUPPLIER 辅助核算附到应付款贷方行 (与 buildEntries 一致)。
+     * 贷方 = 往来 (供应商应付/预付银行/现结现金), 前缀 2202 (默认应付); settlement 映射改了
+     * 贷方科目码时, 回退到"贷方唯一行"仍命中往来行 —— 镜像硬编码路径把 aux 挂在 creditCode 上。
+     * 库存/进项税在借方不挂供应商维度。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, PurchaseOrder order) {
+        String supplierId = order.getSupplierId();
+        attachAuxiliary(entries, EntrySide.CREDIT, "2202",
+                supplierId != null ? AuxiliaryType.SUPPLIER : null, supplierId);
+    }
 }

@@ -74,4 +74,18 @@ public class ExpenseVoucherGenerator extends AbstractVoucherGenerator<WastageRec
                         inventoryRef != null && !inventoryRef.isBlank() ? inventoryRef : null)
         );
     }
+
+    /**
+     * 🔴🔒 #1207: template 路径把 INVENTORY 辅助核算附到库存商品贷方行 (与 buildEntries 一致)。
+     * 贷方 = 库存减少 (按批次/SKU 分账), 前缀 1405; 管理费用借方不挂存货维度。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, WastageRecord w) {
+        String inventoryRef = w.getMaterialBatchId() != null && !w.getMaterialBatchId().isBlank()
+                ? w.getMaterialBatchId()
+                : w.getRawMaterialTypeId();
+        boolean present = inventoryRef != null && !inventoryRef.isBlank();
+        attachAuxiliary(entries, EntrySide.CREDIT, "1405",
+                present ? AuxiliaryType.INVENTORY : null, present ? inventoryRef : null);
+    }
 }

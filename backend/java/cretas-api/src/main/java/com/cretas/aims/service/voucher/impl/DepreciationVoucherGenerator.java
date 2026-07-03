@@ -102,6 +102,21 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
         );
     }
 
+    /**
+     * 🔴🔒 #1207: template 路径把 DEPT/PROJECT 辅助核算附到管理费用借方行 (与 buildEntries 一致)。
+     * 借方 = 管理费用-折旧 (按部门优先/项目备选归集), 前缀 6602; 累计折旧贷方不挂。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, Map<String, Object> input) {
+        String deptId = stringOrNull(input.get("deptId"));
+        String projectId = stringOrNull(input.get("projectId"));
+        if (deptId != null) {
+            attachAuxiliary(entries, EntrySide.DEBIT, "6602", AuxiliaryType.DEPT, deptId);
+        } else if (projectId != null) {
+            attachAuxiliary(entries, EntrySide.DEBIT, "6602", AuxiliaryType.PROJECT, projectId);
+        }
+    }
+
     private BigDecimal toBigDecimal(Object v) {
         Objects.requireNonNull(v, "DepreciationVoucherGenerator: amount is required");
         if (v instanceof BigDecimal bd) return bd;

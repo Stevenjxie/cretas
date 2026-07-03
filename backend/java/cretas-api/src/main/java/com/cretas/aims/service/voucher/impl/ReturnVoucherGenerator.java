@@ -97,4 +97,24 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
                         counterpartyId != null ? AuxiliaryType.CUSTOMER : null, counterpartyId)
         );
     }
+
+    /**
+     * 🔴🔒 #1207: template 路径把 CUSTOMER/SUPPLIER 辅助核算附到对应往来账款行 (与 buildEntries 一致)。
+     * <ul>
+     *   <li>PURCHASE_RETURN → 应付账款在借方 (冲减供应商欠款), 前缀 2202, SUPPLIER；</li>
+     *   <li>SALES_RETURN (默认/老数据无 type) → 应收账款在贷方 (冲减客户欠款), 前缀 1122, CUSTOMER。</li>
+     * </ul>
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, ReturnOrder r) {
+        String counterpartyId = r.getCounterpartyId();
+        if (counterpartyId == null) {
+            return; // honest-null
+        }
+        if (r.getReturnType() == ReturnType.PURCHASE_RETURN) {
+            attachAuxiliary(entries, EntrySide.DEBIT, "2202", AuxiliaryType.SUPPLIER, counterpartyId);
+        } else {
+            attachAuxiliary(entries, EntrySide.CREDIT, "1122", AuxiliaryType.CUSTOMER, counterpartyId);
+        }
+    }
 }

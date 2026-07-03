@@ -67,4 +67,15 @@ public class WageVoucherGenerator extends AbstractVoucherGenerator<PayrollRecord
                 creditEntry(2, "1002", "银行存款", amount, "工资银行划款")
         );
     }
+
+    /**
+     * 🔴🔒 #1207: template 路径把 EMPLOYEE 辅助核算附到应付职工薪酬借方行 (与 buildEntries 一致)。
+     * 借方 = 应付职工薪酬 (冲减负债, 按职员分账), 前缀 2211; 银行存款贷方不挂职员维度。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, PayrollRecord r) {
+        String workerId = r.getWorkerId() != null ? r.getWorkerId().toString() : null;
+        attachAuxiliary(entries, EntrySide.DEBIT, "2211",
+                workerId != null ? AuxiliaryType.EMPLOYEE : null, workerId);
+    }
 }

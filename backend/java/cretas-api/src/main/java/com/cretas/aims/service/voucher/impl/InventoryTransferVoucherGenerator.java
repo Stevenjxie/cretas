@@ -79,6 +79,30 @@ public class InventoryTransferVoucherGenerator extends AbstractVoucherGenerator<
     }
 
     /**
+     * 🔴🔒 #1207: template 路径把 INVENTORY 辅助核算附到借贷两条库存商品行 (与 buildEntries 一致),
+     * 并补 cost_center 仓库维度 (调入=借方/target, 调出=贷方/source), 让两条同科目 1405 行可区分。
+     * 多品类调拨 (singleItemId=null) 时不挂 INVENTORY (避免误导), 但仍补 cost_center。
+     */
+    @Override
+    protected void applyAuxiliary(List<VoucherEntry> entries, InternalTransfer t) {
+        String singleItemId = detectSingleItemId(t);
+        AuxiliaryType auxType = singleItemId != null ? AuxiliaryType.INVENTORY : null;
+        // 借贷两侧库存商品行都挂 INVENTORY (同一 SKU 调入调出)
+        attachAuxiliary(entries, EntrySide.DEBIT, "1405", auxType, singleItemId);
+        attachAuxiliary(entries, EntrySide.CREDIT, "1405", auxType, singleItemId);
+        // cost_center 仓库维度 (与 buildEntries 一致): 借方=调入 target, 贷方=调出 source
+        for (VoucherEntry e : entries) {
+            boolean isDebit = e.getDebit() != null && e.getDebit().signum() > 0;
+            boolean isCredit = e.getCredit() != null && e.getCredit().signum() > 0;
+            if (isDebit && e.getCostCenter() == null) {
+                e.setCostCenter(buildCostCenter(t.getTargetFactoryId(), t.getTargetWarehouseId(), "调入"));
+            } else if (isCredit && e.getCostCenter() == null) {
+                e.setCostCenter(buildCostCenter(t.getSourceFactoryId(), t.getSourceWarehouseId(), "调出"));
+            }
+        }
+    }
+
+    /**
      * Sprint 6 W4-A: 若调拨单 items 全部为单一品类 (同一 materialTypeId 或同一 productTypeId),
      * 返该 ID; 否则 null. 老调拨单 items=空 也返 null (向后兼容).
      */
