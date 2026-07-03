@@ -611,10 +611,14 @@ const warehouseMemoryKey = computed(
   () => `cretas_so_last_warehouse_${authStore.user?.id ?? 'anon'}`
 );
 function getRememberedWarehouse(): string {
+  // 🔴 BLOCKING fix (2026-07-03, Steve #1 客户优先级 "有货发不出"): fallback 从
+  // 'WH-LOG' 改为 '' (空). 空 = 让后端 G1 跨仓 FEFO 发现(在 WH-WKS 等任意有货仓里找批次);
+  // 显式 'WH-LOG' = 单仓严格匹配, 会挡住 G1 本来要修的路径(成品在 WH-WKS 时批次分配对话框空).
+  // 有记忆的显式选择(用户主动选过)仍然保留 — 只有"从未选过"时才 fallback 为空,不再硬编码仓库.
   try {
-    return localStorage.getItem(warehouseMemoryKey.value) || 'WH-LOG';
+    return localStorage.getItem(warehouseMemoryKey.value) || '';
   } catch {
-    return 'WH-LOG';
+    return '';
   }
 }
 function rememberWarehouse(code: string) {
@@ -1511,8 +1515,10 @@ function handleEdit(row: TableRow) {
           boxQuantity: item.boxQuantity != null ? Number(item.boxQuantity) : null,
           taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
           // T130 Feature C / F9 fix (issue #525): handleEdit 之前漏带 sourceWarehouseCode,
-          // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回.
-          sourceWarehouseCode: String(item.sourceWarehouseCode || 'WH-LOG'),
+          // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回(保留原值,不再强制回 WH-LOG).
+          // 🔴 BLOCKING fix (2026-07-03): 空 (未声明) 是合法且现在是"好"状态 (G1 跨仓 FEFO),
+          // 不要把编辑时本来是空的行强改成显式 WH-LOG — 那会重新挡住 G1 修的路径.
+          sourceWarehouseCode: String(item.sourceWarehouseCode || ''),
         }))
       : [emptyOrderItem()],
     contractFileUrl: (row.contractFileUrl ? String(row.contractFileUrl) : null) as string | null,
