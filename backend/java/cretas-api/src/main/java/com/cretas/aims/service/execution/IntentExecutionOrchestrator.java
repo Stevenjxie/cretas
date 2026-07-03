@@ -75,6 +75,11 @@ public class IntentExecutionOrchestrator {
     private static final Pattern RESTAURANT_OWNER_ACTION_DECISION_PATTERN = Pattern.compile(
             "今天|今晚|这个星期|本周|怎么|如何|为什么|要不要|有没有|哪些问题|问题|最在意|最应该|影响|风险|建议|适合|带动|一起卖|比|补|推|调|排|改|提高|提升|优化|解决|安排|算|做什么|动作|先查|先看|先不要|处理|培训|复制|学习|表现|差在哪里");
 
+    private static final Pattern RESTAURANT_OWNER_ACTION_FORCE_PATTERN = Pattern.compile(
+            "厨师长|仓管|前台|门迎|员工工时|几段班|人效|午市|晚市|分别盯什么|具体补什么|"
+                    + "配什么小菜|小菜饮品|别只看销量|厨房备菜|备菜怎么调|商场今天有活动|门口和套餐|"
+                    + "天气热|品类更合适|厨房慢|服务慢");
+
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
     private final IntentSemanticsParser semanticsParser;
@@ -1656,6 +1661,9 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         if (hasOwnerActionContinuationContext(context)) {
+            return true;
+        }
+        if (RESTAURANT_OWNER_ACTION_FORCE_PATTERN.matcher(userInput).find()) {
             return true;
         }
         if (RESTAURANT_OWNER_ACTION_DIRECT_PATTERN.matcher(userInput).find()) {

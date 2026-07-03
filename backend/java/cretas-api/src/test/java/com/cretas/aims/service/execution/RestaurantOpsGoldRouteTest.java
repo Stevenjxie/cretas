@@ -259,6 +259,31 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("routes role, menu pairing, and kitchen action questions to owner action before report tools")
+    void routesBossDecisionVariantsToOwnerAction() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+
+        for (String question : new String[]{
+                "厨师长、仓管、前台今天分别盯什么？",
+                "酸菜鱼配什么小菜饮品更合理，别只看销量",
+                "如果今晚客流比昨天多，厨房备菜怎么调？",
+                "商场今天有活动的话，我们门口和套餐怎么配合？",
+                "厨房慢和服务慢哪个先处理？",
+        }) {
+            Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
+                    orchestrator,
+                    "shouldRouteRestaurantOwnerAction",
+                    "DEMO_REST",
+                    question,
+                    Map.of());
+
+            assertThat(shouldRoute).as(question).isTrue();
+        }
+    }
+
+    @Test
     @DisplayName("owner action route refuses manufacturing factories even with owner context")
     void ownerActionRouteRefusesFactoryDomainEvenWithContext() {
         IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
