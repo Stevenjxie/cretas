@@ -780,6 +780,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
 // Save / delete handlers
 // -------------------------------------------------------------------------
 async function handleSave(row: SheetRow) {
+  if (row.saving) return;
   const reason = saveDisabledReason(row);
   if (reason) {
     // 防呆 4位一体: type:error (非 warning) + sticky (duration:0) + showClose + next-action 明示
@@ -1595,7 +1596,9 @@ watch(
               <td class="sp-td" style="font-size:11px;color:#c0c4cc;white-space:nowrap">
                 {{ formatSettledAt(row.interimSettledAt) }}
               </td>
-              <td class="sp-td sp-td-actions" :colspan="999">
+              <!-- 已小结只读行: colspan=999 铺满剩余列, 不用 .sp-td-actions (sticky right:0
+                   在跨列 colspan 单元格上会产生错位; 该按钮只是查看历史, 非防呆焦点)。 -->
+              <td class="sp-td" style="text-align:center;white-space:nowrap" :colspan="999">
                 <el-button
                   v-if="hasHistory(row)"
                   link size="small" :icon="Clock"
@@ -1849,7 +1852,7 @@ watch(
                 <el-button
                   type="primary" size="small" :icon="Check"
                   :loading="row.saving"
-                  :disabled="!!saveDisabledReason(row)"
+                  :disabled="!!saveDisabledReason(row) || row.saving"
                   :title="saveDisabledReason(row) || '保存此行'"
                   @click="handleSave(row)"
                   style="padding:3px 8px">保存</el-button>
@@ -2121,7 +2124,17 @@ watch(
 .sp-th-daterange { width: 240px; }
 .sp-th-batch     { width: 160px; min-width: 130px; }
 .sp-th-labor     { width: 100px; }
-.sp-th-actions   { width: 120px; text-align: center; }
+/* 🔴 防呆 Rule 1: 操作/保存列必须始终可见, 不能被横向滚动藏起来 —
+   低文化素质操作员发现不了藏在滚动区外的保存按钮, 数据可能"静默不保存"。
+   position:sticky + right:0 把该列钉在可视区右缘, 无论横向滚多远都够得着。 */
+.sp-th-actions   {
+  width: 120px;
+  text-align: center;
+  position: sticky;
+  right: 0;
+  z-index: 4; /* 高于 .sp-th 的 z-index:2 — 表头此列同时 sticky top + right (左上/右上双固定角) */
+  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.08);
+}
 
 /* Body cells */
 .sp-td {
@@ -2135,11 +2148,25 @@ watch(
 .sp-td-daterange {}
 .sp-td-batch     { color: #409eff; font-weight: 600; font-size: 11px; }
 .sp-td-labor   { text-align: center; }
-.sp-td-actions { text-align: center; white-space: nowrap; }
+/* 🔴 防呆 Rule 1 (同上): 每行的保存/操作列同样钉在右缘, 与表头 sticky 呼应,
+   保证滚到再远也能一眼看到、点到"保存"按钮。 */
+.sp-td-actions {
+  text-align: center;
+  white-space: nowrap;
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.06);
+  /* 显式背景色 (与下方 .sp-tr-even/odd 一致) — sticky 定位后仍需不透明背景,
+     否则横向滚动时后面的单元格内容会从缝隙透出来。 */
+  background: #ffffff;
+}
 
 /* Row alternating background */
 .sp-tr-even { background: #ffffff; }
 .sp-tr-odd  { background: #fafafa; }
+.sp-tr-even .sp-td-actions { background: #ffffff; }
+.sp-tr-odd  .sp-td-actions { background: #fafafa; }
 .sp-tr-saved .sp-td-status { background: #f0f9eb; }
 .sp-tr-draft .sp-td-status { background: #fdf6ec; }
 

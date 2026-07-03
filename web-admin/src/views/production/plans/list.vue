@@ -2011,6 +2011,14 @@ function getStatusText(status: string) {
   return getPlanStatusText(status);
 }
 
+// 防呆 Rule 1: SAFETY_STOCK(存货生产)等无「计划数量」字段的计划落地为 0/null，
+// 若原样显示裸 "0" 紧邻黄色「未完成」状态标签，操作员会误读成异常/漏填。
+// 明确区分"没有这个字段"(—) 与"真实数量为 0"(理论不会出现于 UI，但同样降级显示避免误读)。
+function formatPlannedQuantity(v: number | null | undefined): string {
+  if (v == null || v === 0) return '—';
+  return String(v);
+}
+
 // ==================== View Plan ====================
 const viewDialogVisible = ref(false);
 const viewPlan = ref<TableRow | null>(null);
@@ -2336,7 +2344,9 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip />
         <el-table-column prop="processName" label="工序" width="120" show-overflow-tooltip />
         <el-table-column prop="batchDate" label="批次日期" width="120" />
-        <el-table-column prop="plannedQuantity" label="计划数量" width="100" align="right" />
+        <el-table-column label="计划数量" width="100" align="right">
+          <template #default="{ row }">{{ formatPlannedQuantity(row.plannedQuantity) }}</template>
+        </el-table-column>
         <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
         <el-table-column prop="plannedDate" label="计划日期" width="120" />
         <el-table-column prop="status" label="状态" width="100" align="center">
@@ -2615,7 +2625,7 @@ function handleAiFill(params: TableRow) {
             <el-descriptions-item label="产品类型">{{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}</el-descriptions-item>
             <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="计划数量">{{ viewPlan.plannedQuantity }}</el-descriptions-item>
+            <el-descriptions-item label="计划数量">{{ formatPlannedQuantity(viewPlan.plannedQuantity) }}</el-descriptions-item>
             <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
@@ -3014,7 +3024,7 @@ function handleAiFill(params: TableRow) {
           </div>
           <div>
             <div class="settlement-context-label">计划数量</div>
-            <div class="settlement-context-value">{{ completePlannedQuantity }}</div>
+            <div class="settlement-context-value">{{ formatPlannedQuantity(completePlannedQuantity) }}</div>
           </div>
         </div>
         <el-divider content-position="left">产出核对</el-divider>
@@ -3025,8 +3035,9 @@ function handleAiFill(params: TableRow) {
             :precision="2"
             style="width: 100%"
           />
-          <div class="settlement-help">
-            计划数量只是参考，超出时系统预警并要求原因，不硬拦。
+          <!-- 防呆 Rule 1: 有计划数量时软性参考提示; 存货生产等无计划数量 (=0/null) 跳过, 不误导 -->
+          <div v-if="completePlannedQuantity > 0" class="settlement-help">
+            参考: 计划 {{ completePlannedQuantity }} kg。计划数量只是参考，超出时系统预警并要求原因，不硬拦。
           </div>
         </el-form-item>
         <el-alert

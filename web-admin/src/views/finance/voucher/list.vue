@@ -39,6 +39,9 @@ const voidReason = ref('');
 const voidOtherText = ref(''); // Rule 3: "其他" 时补充文本
 const voiding = ref(false);
 
+// 防呆 Rule 4: 过账是财务写操作(不可逆), 无 loading 保护时双击可能重复提交过账请求。
+const postingIds = ref<Set<string>>(new Set());
+
 // Rule 3: 作废原因标准选项
 const VOID_REASON_OPTIONS = [
   { value: '录入有误', label: '录入有误' },
@@ -109,12 +112,14 @@ function handleViewDetail(id: string) {
 }
 
 async function handlePost(id: string) {
+  if (postingIds.value.has(id)) return;
   try {
     await ElMessageBox.confirm('确认将该凭证过账？过账后不可直接编辑。', '确认过账', {
       confirmButtonText: '确认过账',
       cancelButtonText: '取消',
       type: 'warning',
     });
+    postingIds.value = new Set(postingIds.value).add(id);
     await postVoucher(factoryId.value, id);
     ElMessage.success('凭证已过账');
     loadData();
@@ -126,6 +131,10 @@ async function handlePost(id: string) {
       duration: 0,
       showClose: true,
     });
+  } finally {
+    const next = new Set(postingIds.value);
+    next.delete(id);
+    postingIds.value = next;
   }
 }
 
@@ -264,6 +273,7 @@ onMounted(() => loadData());
               link
               type="success"
               size="small"
+              :loading="postingIds.has(row.id)"
               @click="handlePost(row.id)"
             >
               过账
