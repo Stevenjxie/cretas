@@ -7,6 +7,7 @@ import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
@@ -316,6 +317,45 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         assertStatus(stocktake, FactoryStocktake.Status.APPROVED, "生效");
 
+        // ---------------------------------------------------------------
+        // Bug2 修复: 漂移守卫 — differenceQty 是"实盘数量 − 快照 systemQty"的冻结值
+        // (计数 updateItems() 时算出)。如果批次在"计数"与"生效 apply"之间被并发
+        // 消耗/入库改变了 (quantityBefore 漂移), 直接把这个冻结差异套到当前实时
+        // quantityBefore 上既不是实盘结果也不是干净对账 (曾在客户租户产生莫名的
+        // 0.5 困惑差异)。诚实失败 (禁止降级): 生效前统一预检全部待过账行, 任一批次
+        // 漂移就整体拦截并给出可操作提示, 不静默套用过期差异。全部一致才进入第二遍
+        // 真正 mutate (与 ReportReversalServiceImpl 的"先验证全部, 再统一执行"两阶段
+        // 模式一致), 避免部分生效。
+        // ---------------------------------------------------------------
+        java.util.Map<String, MaterialBatch> batchCache = new java.util.LinkedHashMap<>();
+        List<String> driftedBatches = new ArrayList<>();
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            if (item.getDifferenceQty() == null ||
+                    item.getDifferenceQty().compareTo(BigDecimal.ZERO) == 0) {
+                continue;
+            }
+            MaterialBatch batch = materialBatchRepo.findById(item.getMaterialBatchId()).orElse(null);
+            if (batch == null) {
+                continue; // 批次已不存在 — 下面的主循环会照常 warn 跳过, 无需在此重复处理
+            }
+            batchCache.put(item.getMaterialBatchId(), batch);
+            BigDecimal liveQty = batch.getReceiptQuantity() != null ? batch.getReceiptQuantity() : BigDecimal.ZERO;
+            BigDecimal snapshotQty = item.getSystemQty() != null ? item.getSystemQty() : BigDecimal.ZERO;
+            if (liveQty.setScale(2, RoundingMode.HALF_UP)
+                    .compareTo(snapshotQty.setScale(2, RoundingMode.HALF_UP)) != 0) {
+                driftedBatches.add(String.format("%s(盘点时=%s, 当前=%s)",
+                        batch.getBatchNumber() != null ? batch.getBatchNumber() : batch.getId(),
+                        snapshotQty, liveQty));
+            }
+        }
+        if (!driftedBatches.isEmpty()) {
+            throw new BusinessException(409,
+                    "以下批次在盘点计数后库存已发生变动，无法按旧差异生效，请重新盘点: "
+                            + String.join("；", driftedBatches))
+                    .withCode("STOCKTAKE_DRIFT")
+                    .withHint("请重新发起该批次的盘点或先处理完并发出入库后再生效");
+        }
+
         // Decision 3: 逐项 + 批量 都过账 (voucherService 可用即过账)。科目按 importMode 选 (null → NORMAL)。
         boolean posting = voucherService != null;
         BigDecimal surplusValue = BigDecimal.ZERO;   // Σ 盘盈行 value (正)
@@ -328,9 +368,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue; // 差异为 0 的行跳过
             }
 
-            // 读取当前批次
-            MaterialBatch batch = materialBatchRepo.findById(item.getMaterialBatchId())
-                    .orElse(null);
+            // 读取当前批次 (复用预检阶段已取的实例, 避免二次查询/防止两次读取间再度漂移)
+            MaterialBatch batch = batchCache.get(item.getMaterialBatchId());
             if (batch == null) {
                 log.warn("SP7 apply: 批次不存在，跳过 batchId={}", item.getMaterialBatchId());
                 continue;
@@ -385,6 +424,25 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
             // 更新批次数量（null 安全，通过 receiptQuantity 字段）
             batch.setReceiptQuantity(quantityAfter);
+
+            // Bug1 修复: 盘盈把批次从 0 恢复为正数后, 必须同步把 stale 的 USED_UP/DEPLETED
+            // 消耗终态重置为 AVAILABLE — 否则批次继续被 findAvailable / FEFO 等查询排除,
+            // 恢复的库存在报工/发货/领料 picker 里不可见 = 事实上仍然"丢失"。反向: 盘亏把批次
+            // 耗光时同步置 USED_UP, 与 markBatchAsUsedUp / adjustBatchQuantity 的耗尽语义一致。
+            // 镜像 ReportReversalServiceImpl.restoreMaterialBatchConsumption /
+            // InterimSettleReversalServiceImpl 的恢复判定 (USED_UP/DEPLETED → AVAILABLE
+            // 当且仅当剩余可用量 > 0); 其他状态 (EXPIRED/SCRAPPED/DEFECTIVE/RESERVED/INSPECTING
+            // 等各自独立生命周期) 不动, 避免误改无关状态机。
+            BigDecimal availableAfter = batch.getCurrentQuantity(); // receiptQuantity - usedQuantity - reservedQuantity
+            if (availableAfter != null && availableAfter.compareTo(BigDecimal.ZERO) > 0
+                    && (batch.getStatus() == MaterialBatchStatus.USED_UP
+                        || batch.getStatus() == MaterialBatchStatus.DEPLETED)) {
+                batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            } else if (availableAfter != null && availableAfter.compareTo(BigDecimal.ZERO) == 0
+                    && batch.getStatus() == MaterialBatchStatus.AVAILABLE) {
+                batch.setStatus(MaterialBatchStatus.USED_UP);
+            }
+
             materialBatchRepo.save(batch);
             if (item.getDifferenceQty().compareTo(BigDecimal.ZERO) < 0) {
                 inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "ADJUST");
