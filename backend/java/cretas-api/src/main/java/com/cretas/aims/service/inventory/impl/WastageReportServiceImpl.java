@@ -1,9 +1,11 @@
 package com.cretas.aims.service.inventory.impl;
 
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.dto.inventory.CreateWastageReportRequest;
 import com.cretas.aims.dto.inventory.WastageReportDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.inventory.WastageReport;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
@@ -11,6 +13,8 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.WastageReportRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.inventory.WastageReportService;
+import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.service.voucher.impl.WastageReportVoucherGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -56,6 +61,19 @@ public class WastageReportServiceImpl implements WastageReportService {
 
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+
+    /**
+     * 报损财务过账 (审批通过 → 借 6602.01 管理费用-损耗 / 贷 1403 原材料)。
+     *
+     * <p>{@code required=false} + null-guard: 与半成品盘点 (workflowEngine) / VoucherServiceImpl
+     * (accountingPeriodService) 同款范式 — 现有 {@code @InjectMocks} 单测不注入这两个 bean,
+     * null 时跳过过账 (仅测试环境预期; prod 恒注入)。审批流的过账逻辑见 {@link #postWastageVoucher}。
+     */
+    @Autowired(required = false)
+    private VoucherService voucherService;
+
+    @Autowired(required = false)
+    private WastageReportVoucherGenerator wastageReportVoucherGenerator;
 
     // -------------------------------------------------------
     // W2 角色码修复 (2026-06-10): 真实 FactoryUserRole 码（小写）
@@ -163,13 +181,18 @@ public class WastageReportServiceImpl implements WastageReportService {
         // 双轨路由（C1孪生坑：角色来自 requestRole，非 SecurityContext）
         routeApproval(report, requestRole);
 
-        // 原子写 adjustment + 扣减库存
-        applyWastageToInventory(report, approverId, requestRole);
+        // 原子写 adjustment + 扣减库存 (返回已加载批次, 供财务过账计价复用)
+        MaterialBatch batch = applyWastageToInventory(report, approverId, requestRole);
 
         report.setStatus(WastageReport.Status.APPLIED);
         report.setApprovedBy(approverId);
         report.setApprovedAt(LocalDateTime.now());
         report.setAppliedAt(LocalDateTime.now());
+
+        // 财务过账 (与库存扣减同一 @Transactional — 过账失败则整个 approve 回滚, 绝不留
+        // "库存已扣但凭证未过"的不一致态; 镜像半成品盘点差异过账)。
+        postWastageVoucher(report, batch, approverId);
+
         wastageReportRepo.save(report);
         log.info("SP7: 报损单已审批生效 reportId={} approverId={}", reportId, approverId);
     }
@@ -290,7 +313,7 @@ public class WastageReportServiceImpl implements WastageReportService {
      * 而非减 receiptQuantity, 使 currentQuantity 正确反映 + 与领料模型一致。
      * (DisposalRecordService.applyDisposalToInventory 原料分支同款写法, 已先行落地。)
      */
-    private void applyWastageToInventory(WastageReport report, Long approverId, String approverRole) {
+    private MaterialBatch applyWastageToInventory(WastageReport report, Long approverId, String approverRole) {
         MaterialBatch batch = materialBatchRepo.findById(report.getMaterialBatchId())
                 .orElseThrow(() -> new BusinessException(404,
                         "报损批次不存在: " + report.getMaterialBatchId()));
@@ -329,6 +352,72 @@ public class WastageReportServiceImpl implements WastageReportService {
         batch.setLastUsedAt(LocalDateTime.now());
         materialBatchRepo.save(batch);
         inventoryLowStockEventPublisher.publishIfLowStock(report.getFactoryId(), batch, "WASTAGE");
+        return batch;
+    }
+
+    /**
+     * 报损审批通过后过账财务凭证 (借 6602.01 管理费用-损耗 / 贷 1403 原材料)，报损价值 =
+     * 报损数量 × 批次单价。与 {@link #applyWastageToInventory} 同一 @Transactional (approve 事务内)。
+     *
+     * <p>设计要点:
+     * <ul>
+     *   <li><b>科目/金额</b>: 双轨 (WAREHOUSE/FACTORY) 均记同一"损耗=费用"分录 (张权客户模型;
+     *       需求未区分两轨的会计后果, 与半成品盘亏 / 餐饮报损同科目)。金额与分录由
+     *       {@link WastageReportVoucherGenerator} 统一计算 (单一事实来源)。</li>
+     *   <li><b>持久化</b>: 用 {@code voucherService.createManual} 直建 POSTED 凭证 (审批即入账),
+     *       镜像半成品盘点差异过账。createManual 借贷必平自校验 + 刻意绕过期间结账 gate
+     *       (库存校准类事件须能过账)。</li>
+     *   <li><b>幂等</b>: 状态机已保证 approve 仅 PENDING_APPROVAL→APPLIED 一次性迁移;
+     *       再加 findBySourceBusiness 前置判重 + DB uk_voucher_source_business
+     *       (WASTAGE_REPORT, reportId) 唯一约束兜底。</li>
+     *   <li><b>honest-null (禁止降级)</b>: 批次单价缺失 (unitPrice=null) → 库存已实扣, 但缺成本
+     *       无法产平衡凭证 → 只记日志不过账 (不产 0 金额假凭证)。补价后可另行补凭证。</li>
+     *   <li><b>backward-compat</b>: voucherService / generator 未注入 (老 @InjectMocks 单测) →
+     *       跳过过账 (prod 恒注入)。</li>
+     * </ul>
+     */
+    private void postWastageVoucher(WastageReport report, MaterialBatch batch, Long approverId) {
+        if (voucherService == null || wastageReportVoucherGenerator == null) {
+            log.warn("SP7: voucherService/generator 未注入, 跳过报损财务过账 reportId={} (仅测试环境预期)",
+                    report.getId());
+            return;
+        }
+        // 幂等: 同报损单已有凭证 → 跳过 (状态机已防重, uk_voucher_source_business 兜底)
+        if (voucherService.findBySourceBusiness(
+                WastageReportVoucherGenerator.BUSINESS_TYPE, report.getId()).isPresent()) {
+            log.info("SP7: 报损单财务凭证已存在 (幂等跳过) reportId={}", report.getId());
+            return;
+        }
+        // honest-null: 批次无单价 → 只扣库存不过账 (禁止降级: 不产 0 金额假凭证)
+        if (batch.getUnitPrice() == null) {
+            log.warn("SP7: 报损批次无单价 (unitPrice=null), 库存已扣减但不过账财务凭证 (honest-null) "
+                    + "reportId={} batchId={}", report.getId(), report.getMaterialBatchId());
+            return;
+        }
+        // 报损价值 = 报损数量 × 批次单价 (scale-2 HALF_UP), 由 generator 统一计算
+        BigDecimal value = wastageReportVoucherGenerator.computeWastageValue(report);
+        if (value.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("SP7: 报损价值 <= 0 (unitPrice={}, qty={}), 不过账财务凭证 reportId={}",
+                    batch.getUnitPrice(), report.getWastageQty(), report.getId());
+            return;
+        }
+        // 借 6602.01 管理费用-损耗 / 贷 1403 原材料 (与 generator.buildEntries 同科目; createManual
+        // 不承载辅助核算, 与半成品盘点差异过账一致 — 库存明细账维度在盘点/报损场景不入凭证辅助核算)。
+        List<VoucherEntrySpec> specs = List.of(
+                new VoucherEntrySpec(
+                        WastageReportVoucherGenerator.SUBJECT_LOSS_CODE,
+                        WastageReportVoucherGenerator.SUBJECT_LOSS_NAME,
+                        value, null, "报损损耗 " + report.getReportNo()),
+                new VoucherEntrySpec(
+                        WastageReportVoucherGenerator.SUBJECT_MATERIAL_CODE,
+                        WastageReportVoucherGenerator.SUBJECT_MATERIAL_NAME,
+                        null, value, "原材料减少 (" + report.getWastageReason() + ")"));
+
+        voucherService.createManual(report.getFactoryId(), VoucherType.EXPENSE, LocalDate.now(),
+                specs, WastageReportVoucherGenerator.BUSINESS_TYPE, report.getId(),
+                "报损单 " + report.getReportNo() + " 损耗过账 (借6602.01/贷1403)", approverId);
+        log.info("SP7: 报损单已过账财务凭证 借6602.01/贷1403 reportId={} value={} track={}",
+                report.getId(), value, report.getTrackType());
     }
 
     /**

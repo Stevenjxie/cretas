@@ -527,6 +527,156 @@ class WastageReportServiceImplTest {
         assertThat(adjCaptor.getValue().getQuantityAfter().compareTo(new BigDecimal("70.00"))).isEqualTo(0);
     }
 
+    // =======================================================
+    // 财务过账 (借 6602.01 管理费用-损耗 / 贷 1403 原材料)
+    // =======================================================
+
+    /** 装配 voucherService (mock) + 真实 generator (共用 materialBatchRepo mock)。 */
+    private com.cretas.aims.service.voucher.VoucherService wireVoucher() {
+        com.cretas.aims.service.voucher.VoucherService voucherService =
+                mock(com.cretas.aims.service.voucher.VoucherService.class);
+        com.cretas.aims.service.voucher.impl.WastageReportVoucherGenerator gen =
+                new com.cretas.aims.service.voucher.impl.WastageReportVoucherGenerator(materialBatchRepo);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        ReflectionTestUtils.setField(service, "wastageReportVoucherGenerator", gen);
+        return voucherService;
+    }
+
+    private MaterialBatch pricedBatch(BigDecimal receipt, BigDecimal unitPrice) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(receipt);
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnitPrice(unitPrice);
+        return batch;
+    }
+
+    // -------------------------------------------------------
+    // 20. WAREHOUSE 轨 approve → 过账 借 6602.01 / 贷 1403 借贷平衡 = 报损价值 (10 × 3.00 = 30.00)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T20: approve 过账 借6602.01/贷1403 借贷平衡=30.00 (10×3.00), source=WASTAGE_REPORT, type=EXPENSE")
+    @SuppressWarnings("unchecked")
+    void approve_postsBalancedWastageVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), new BigDecimal("3.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        ArgumentCaptor<List<com.cretas.aims.dto.finance.VoucherEntrySpec>> specsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(
+                eq(FACTORY_ID), eq(com.cretas.aims.entity.enums.VoucherType.EXPENSE), any(),
+                specsCaptor.capture(), eq("WASTAGE_REPORT"), eq(report.getId()), any(), eq(USER_ID));
+
+        List<com.cretas.aims.dto.finance.VoucherEntrySpec> specs = specsCaptor.getValue();
+        assertThat(specs).hasSize(2);
+        var debit = specs.get(0);
+        var credit = specs.get(1);
+        assertThat(debit.subjectCode()).isEqualTo("6602.01");
+        assertThat(debit.debit()).isEqualByComparingTo("30.00");
+        assertThat(credit.subjectCode()).isEqualTo("1403");
+        assertThat(credit.credit()).isEqualByComparingTo("30.00");
+        // 借贷平衡
+        BigDecimal totalDebit = specs.stream().map(s -> s.debit() == null ? BigDecimal.ZERO : s.debit()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = specs.stream().map(s -> s.credit() == null ? BigDecimal.ZERO : s.credit()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(totalDebit).isEqualByComparingTo(totalCredit).isEqualByComparingTo("30.00");
+
+        // 库存仍扣减 (usedQuantity 0 → 10)
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        assertThat(batchCaptor.getValue().getUsedQuantity()).isEqualByComparingTo("10.00");
+    }
+
+    // -------------------------------------------------------
+    // 21. honest-null: 批次无单价 → 库存扣减但不过账凭证 (不产假凭证)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T21: honest-null — 批次 unitPrice=null → 扣库存但不调 createManual")
+    void approve_noUnitPrice_deductsStockButNoVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), null))); // 无单价
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        // 库存仍扣减
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        assertThat(batchCaptor.getValue().getUsedQuantity()).isEqualByComparingTo("10.00");
+        // 但不过账凭证 (honest-null)
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // -------------------------------------------------------
+    // 22. 幂等: 已有凭证 → 不重复过账
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T22: 幂等 — findBySourceBusiness 已存在 → 不再调 createManual")
+    void approve_idempotent_existingVoucher_skipsPosting() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any()))
+                .thenReturn(Optional.of(mock(com.cretas.aims.entity.finance.Voucher.class)));
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), new BigDecimal("3.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+        // 库存仍扣减 (幂等只作用于凭证, 不影响本次扣减)
+        verify(materialBatchRepo).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 23. FACTORY 轨也过账 (双轨同科目 借6602.01/贷1403)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T23: FACTORY 轨 production_manager approve → 同样过账 借6602.01/贷1403 = 5×4.00 = 20.00")
+    @SuppressWarnings("unchecked")
+    void approve_factoryTrack_alsoPostsVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("5.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("50.00"), new BigDecimal("4.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "production_manager");
+
+        ArgumentCaptor<List<com.cretas.aims.dto.finance.VoucherEntrySpec>> specsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(
+                eq(FACTORY_ID), eq(com.cretas.aims.entity.enums.VoucherType.EXPENSE), any(),
+                specsCaptor.capture(), eq("WASTAGE_REPORT"), eq(report.getId()), any(), eq(USER_ID));
+        List<com.cretas.aims.dto.finance.VoucherEntrySpec> specs = specsCaptor.getValue();
+        assertThat(specs.get(0).debit()).isEqualByComparingTo("20.00");
+        assertThat(specs.get(1).credit()).isEqualByComparingTo("20.00");
+    }
+
     // -------------------------------------------------------
     // helpers
     // -------------------------------------------------------
