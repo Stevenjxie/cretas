@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
 import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer, Warning } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
+import { confirmDiscardIfDirty } from '@/utils/confirmDiscardChanges';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import {
   downloadImportTemplate,
@@ -767,6 +768,8 @@ async function handleStart(row: TableRow) {
 // ==================== 逐工序电子表格抽屉 (SP-F) ====================
 const entryDrawerVisible = ref(false);
 const entryRow = ref<any>(null);
+// 防呆: 关抽屉前若有未保存草稿行 (ProcessDataTable 聚合上报) 二次确认, 见 handleEntryDrawerBeforeClose
+const processSheetRef = ref<{ hasUnsavedRows: boolean } | null>(null);
 
 function isStepwise(row: any): boolean {
   return row.skipProcessReporting === false;
@@ -778,6 +781,11 @@ function openProcessEntry(row: any) {
 }
 
 function onEntrySubmitted() { loadData(); }
+
+async function handleEntryDrawerBeforeClose(done: () => void) {
+  const dirty = processSheetRef.value?.hasUnsavedRows === true;
+  if (await confirmDiscardIfDirty(dirty)) done();
+}
 
 // ==================== 核对结单 dialog (#742 / 6.12 revised) ====================
 interface SettlementRawConsumptionForm {
@@ -1284,6 +1292,22 @@ async function handleComplete(row: TableRow) {
   // 先加载可用批次/WIP, 再用报工 derive 出的预填灌入 (预填依赖已加载的批次列表做校验)
   await loadSettlementInventoryOptions(row);
   await applySettlementPrefill(row);
+  // 防呆: 预填完成后才快照 (自动带入的数据不算"用户改动"), 之后用户手改才计入 dirty
+  completeFormSnapshot.value = JSON.stringify(completeForm.value);
+}
+
+// 防呆: 核对结单 dialog 关闭前若表单已被用户改动 (相对预填完成时的快照) 二次确认
+const completeFormSnapshot = ref('');
+function completeFormIsDirty(): boolean {
+  return JSON.stringify(completeForm.value) !== completeFormSnapshot.value;
+}
+async function requestCloseCompleteDialog() {
+  if (await confirmDiscardIfDirty(completeFormIsDirty())) {
+    completeDialogVisible.value = false;
+  }
+}
+async function handleCompleteDialogBeforeClose(done: () => void) {
+  if (await confirmDiscardIfDirty(completeFormIsDirty())) done();
 }
 
 async function submitComplete() {
@@ -1644,6 +1668,12 @@ const cancelProductName = computed(() => {
   if (!r) return '';
   return String(r.productTypeName || r.productName || r.productTypeId || '');
 });
+// 防呆 Rule 2: 取消 dialog 标题需同时带品名+单号 (与编辑 dialog 一致), 避免多个同品名计划混淆
+const cancelPlanNumber = computed(() => {
+  const r = cancelRow.value;
+  if (!r) return '';
+  return String(r.planNumber || r.id || '');
+});
 
 function handleCancel(row: TableRow) {
   if (actionLoading.value) return;
@@ -1880,6 +1910,21 @@ const stopProductionLoadingId = ref<string | null>(null);
 async function handleInterimSettle(row: TableRow) {
   const planId = String(row.id);
   if (interimSettleLoadingId.value) return;
+  // 防呆 Rule 1/2: 小结是真实入库+扣料操作 (非只读), 之前一键无确认就执行 — 加轻量 confirm
+  // 带品名+单号+大白话后果说明, 避免误触
+  const productLabel = String(row.productTypeName || row.productName || row.productTypeId || '');
+  const planNumberLabel = String(row.planNumber || planId);
+  const planLabel = productLabel ? `${productLabel} (${planNumberLabel})` : planNumberLabel;
+  try {
+    await ElMessageBox.confirm(
+      `小结「${planLabel}」将按当前已录入数量扣减已投入原料并产出半成品/成品入库，计划继续挂起。确认执行？`,
+      '确认小结',
+      { type: 'warning', confirmButtonText: '确认小结', cancelButtonText: '取消' }
+    );
+  } catch {
+    return; // 用户取消
+  }
+  if (interimSettleLoadingId.value) return;
   interimSettleLoadingId.value = planId;
   try {
     const res = await interimSettle(factoryId.value, planId);
@@ -2015,10 +2060,13 @@ async function handleRejectReversal(reqRow: InterimSettleReversalRequest) {
 
 async function handleStopProduction(row: TableRow) {
   const planId = String(row.id);
-  const planLabel = String(row.planName || row.planNumber || planId);
+  // 防呆 Rule 2: confirm 必须带品名, 不能只靠计划单号 (仓管员按品名认物料, 单号不好记)
+  const productLabel = String(row.productTypeName || row.productName || row.productTypeId || '');
+  const planNumberLabel = String(row.planNumber || planId);
+  const planLabel = productLabel ? `${productLabel} (${planNumberLabel})` : planNumberLabel;
   try {
     await ElMessageBox.confirm(
-      `停产「${planLabel}」(${row.planNumber})?停产后计划关闭，不可再小结。`,
+      `停产「${planLabel}」?停产后计划关闭，不可再小结。`,
       '确认停产',
       { type: 'warning', confirmButtonText: '停产', cancelButtonText: '取消' }
     );
@@ -3134,6 +3182,7 @@ function handleAiFill(params: TableRow) {
       class="settlement-dialog"
       destroy-on-close
       append-to-body
+      :before-close="handleCompleteDialogBeforeClose"
     >
       <el-form label-width="118px" class="settlement-form">
         <el-alert
@@ -3413,7 +3462,7 @@ function handleAiFill(params: TableRow) {
         />
       </el-form>
       <template #footer>
-        <el-button @click="completeDialogVisible = false">取消</el-button>
+        <el-button @click="requestCloseCompleteDialog">取消</el-button>
         <el-button
           type="primary"
           :loading="actionLoading"
@@ -3658,7 +3707,7 @@ function handleAiFill(params: TableRow) {
     <!-- #743 取消原因 dialog (快捷下拉 + 品名) -->
     <el-dialog
       v-model="cancelDialogVisible"
-      :title="cancelProductName ? `取消计划 — ${cancelProductName}` : '取消计划'"
+      :title="cancelProductName ? `取消计划 — ${cancelProductName} (${cancelPlanNumber})` : '取消计划'"
       width="460px"
       destroy-on-close
       append-to-body
@@ -3666,6 +3715,9 @@ function handleAiFill(params: TableRow) {
       <el-form label-width="100px">
         <el-form-item label="品名">
           <span>{{ cancelProductName || '-' }}</span>
+        </el-form-item>
+        <el-form-item label="计划单号">
+          <span>{{ cancelPlanNumber || '-' }}</span>
         </el-form-item>
         <el-form-item label="取消原因" required>
           <el-select
@@ -3859,9 +3911,11 @@ function handleAiFill(params: TableRow) {
       size="80%"
       :close-on-click-modal="false"
       :destroy-on-close="false"
+      :before-close="handleEntryDrawerBeforeClose"
     >
       <ProcessSheet
         v-if="entryRow"
+        ref="processSheetRef"
         :factory-id="String(factoryId)"
         :plan-id="String(entryRow?.id || '')"
         :product-type-id="String(entryRow?.productTypeId || '')"

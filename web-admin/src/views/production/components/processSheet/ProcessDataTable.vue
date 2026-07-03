@@ -1138,6 +1138,16 @@ watch(
   },
   { immediate: true },
 );
+
+// -------------------------------------------------------------------------
+// 未保存草稿检测 (防呆 Rule: 关闭「逐工序录入」抽屉前警示未保存内容)
+// -------------------------------------------------------------------------
+// rowStatus === 'UNSAVED' 只在用户主动「+新增」加了一行且还没保存成功时出现
+// (初始加载/hydrate 来的行是 SAVED/DRAFT, 空表不会自动插一行占位)，可直接当
+// "本工序有未保存草稿行" 的信号，供父组件(ProcessSheet → list.vue 抽屉)聚合。
+const hasUnsavedRows = computed(() => rows.value.some((r) => r.rowStatus === 'UNSAVED'));
+
+defineExpose({ hasUnsavedRows });
 </script>
 
 <template>

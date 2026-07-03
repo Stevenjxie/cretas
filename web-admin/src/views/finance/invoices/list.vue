@@ -7,6 +7,7 @@ import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
+import { confirmDiscardIfDirty } from '@/utils/confirmDiscardChanges';
 import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
@@ -267,7 +268,28 @@ const requestOverLimit = computed<boolean>(() => {
   return total > unbilledAmount.value + 0.001;
 });
 
+// 防呆: 关弹窗前若表单已被改动 (相对打开时的快照) 二次确认
+const requestFormSnapshot = ref('');
+function openRequestDialog() {
+  requestDialogVisible.value = true;
+  requestFormSnapshot.value = JSON.stringify(requestForm.value);
+}
+function requestFormIsDirty(): boolean {
+  return JSON.stringify(requestForm.value) !== requestFormSnapshot.value;
+}
+async function requestCloseRequestDialog() {
+  if (await confirmDiscardIfDirty(requestFormIsDirty())) {
+    requestDialogVisible.value = false;
+  }
+}
+async function handleRequestDialogBeforeClose(done: () => void) {
+  if (await confirmDiscardIfDirty(requestFormIsDirty())) done();
+}
+
 async function handleRequestSubmit() {
+  // 防呆 Rule 4 defense-in-depth: 同一 JS tick 内快速双击, :disabled 响应式更新来不及生效,
+  // 顶部同步 guard 兜底 (后端 409 幂等是最后一道防线, 这里省一次无谓请求)
+  if (submitting.value) return;
   if (!requestForm.value.salesOrderId || !requestForm.value.amount) {
     ElMessage.warning('请填写订单ID和金额'); return;
   }
@@ -307,7 +329,7 @@ async function handleRequestSubmit() {
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>
-            <el-button v-if="canWrite && canViewPrice" type="primary" @click="requestDialogVisible = true">申请开票</el-button>
+            <el-button v-if="canWrite && canViewPrice" type="primary" @click="openRequestDialog">申请开票</el-button>
           </div>
         </div>
       </template>
@@ -394,6 +416,7 @@ async function handleRequestSubmit() {
         : '申请开票'"
       width="540px"
       destroy-on-close
+      :before-close="handleRequestDialogBeforeClose"
     >
       <el-form label-width="90px">
         <el-form-item label="销售订单" required>
@@ -469,7 +492,7 @@ async function handleRequestSubmit() {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="requestDialogVisible = false">取消</el-button>
+        <el-button @click="requestCloseRequestDialog">取消</el-button>
         <el-button
           type="primary"
           :loading="submitting"
