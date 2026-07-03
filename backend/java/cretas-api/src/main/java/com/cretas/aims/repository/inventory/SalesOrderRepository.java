@@ -2,9 +2,11 @@ package com.cretas.aims.repository.inventory;
 
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -157,4 +159,21 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
             "(com.cretas.aims.entity.enums.SalesOrderStatus.DRAFT, " +
             " com.cretas.aims.entity.enums.SalesOrderStatus.CANCELLED)")
     List<String> findDistinctFactoryIds();
+
+    /**
+     * 收款登记双击去重 TOCTOU 收窄 (headed audit 2026-07-03): 60s 时间窗
+     * check-then-insert (见 {@link com.cretas.aims.repository.PaymentRecordRepository
+     * #findRecentDuplicatePayments}) 在两个并发请求同毫秒抵达时各自都读不到对方未提交的
+     * PENDING 行 → 双双通过检查 → 2 条重复收款记录 (network-proven: rapid double-click
+     * 两个 POST 都返 200)。取该销售单的 PESSIMISTIC_WRITE 行锁, 让第二个并发请求阻塞至
+     * 第一个事务提交, 再重新可见第一个已插入的 PENDING 收款行, 60s 窗口 dedup 查询才能
+     * 真正拦下第二笔。镜像 {@link com.cretas.aims.service.yield.impl.InterimSettleReversalServiceImpl
+     * #reverseInterimSettle} 的悲观锁串行化范式。
+     *
+     * <p>只锁本销售单这一行, 不影响其它订单的并发收款 — 锁粒度按业务 key 收窄, 不是全表锁。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT so FROM SalesOrder so WHERE so.id = :id AND so.factoryId = :factoryId")
+    Optional<SalesOrder> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id, @Param("factoryId") String factoryId);
 }

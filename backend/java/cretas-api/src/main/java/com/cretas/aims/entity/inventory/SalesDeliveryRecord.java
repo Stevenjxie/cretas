@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
+import org.hibernate.annotations.Formula;
 import org.hibernate.annotations.Type;
 
 import jakarta.persistence.*;
@@ -68,8 +69,31 @@ public class SalesDeliveryRecord extends BaseEntity {
     @Column(name = "sales_order_id", length = 191)
     private String salesOrderId;
 
+    /**
+     * headed-audit fix (2026-07-03): same rationale as {@link #customerName} — the
+     * {@link #salesOrder} relation is {@code @JsonIgnore}d, so the 待确认发货单 list
+     * only had the raw {@link #salesOrderId} UUID to show in the "销售订单" column
+     * (human-unreadable, worker can't cross-check against the paper/system order number).
+     * {@code sales_order_id} can be NULL (delivery not linked to an SO) — subquery
+     * then naturally returns NULL, no special-case needed.
+     */
+    @Formula("(SELECT so.order_number FROM sales_orders so WHERE so.id = sales_order_id)")
+    private String orderNumber;
+
     @Column(name = "customer_id", nullable = false, length = 191)
     private String customerId;
+
+    /**
+     * headed-audit fix (2026-07-03): 仓储→出货管理→"销售发货单待确认" 列表
+     * ({@code GET /warehouse/deliveries/pending}) 原样序列化本 entity, 而 {@link #customer}
+     * 关系是 {@code @JsonIgnore} (避免懒加载序列化炸), 结果前端只能拿到 {@link #customerId}
+     * 裸 UUID (如 "56e40470-…") — 仓管员无法判断该发哪个客户的货, 也无法确认装车对象。
+     * 用 {@code @Formula} 只读派生列 (镜像 {@link SalesOrder#getCustomerName()} 同一 pattern),
+     * DB 端 subquery 拿客户名, 无需改任何 controller/DTO/service 调用点, 且自动覆盖本 entity
+     * 被序列化的所有位置 (待确认列表 + confirmDelivery 响应 + 确认弹窗)。
+     */
+    @Formula("(SELECT c.name FROM customers c WHERE c.id = customer_id)")
+    private String customerName;
 
     @Column(name = "delivery_date", nullable = false)
     private LocalDate deliveryDate;
