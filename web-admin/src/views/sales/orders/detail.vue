@@ -926,6 +926,17 @@ function computedRemainingAmount() {
   return Math.max(0, total - paid);
 }
 
+// 防呆 Rule 1 (fool-proof-design): 开票申请 上限展示 — 订单总额 / 已开票 / 可开票.
+// 缺失导致六膳门全生命周期测试踩坑: 收款登记已有对等 computedRemainingAmount() 上限,
+// 开票申请此前无任何上限展示 (mirror finance/invoices/list.vue R1+R2 retrofit 2026-05-17
+// 和 finance/payments/list.vue E-FP-3 retrofit 的同款模式).
+function computedInvoiceableAmount() {
+  if (!order.value) return 0;
+  const total = Number(order.value.totalAmount || 0);
+  const invoiced = Number(order.value.invoicedAmount || 0);
+  return Math.max(0, total - invoiced);
+}
+
 // V3 P0-11 补强 — 审批进度时间线 (Verification Round 2 / Agent A 截图 3 硬伤)
 // 客户截图底部固定显示 "张权 提交申请 → 刘会林 审批人(已同意)" timeline
 // 我们从现有 SalesOrder 字段直接渲染, 不加新字段
@@ -1416,6 +1427,8 @@ async function handleQuickPayFull() {
               <el-button v-if="canWrite" type="primary" @click="openInvoiceDialog">
                 + 一键开票申请 (按税率分组)
               </el-button>
+              <!-- 防呆 Rule 1: 订单总额/已开票/可开票 上限, mirror 收款 tab 的 待收 提示 (line 1536) -->
+              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }} / 可开票 {{ formatAmount(computedInvoiceableAmount()) }}</span>
               <span class="tab-hint">客户原话: 一笔订单可同时含 9% 原料 + 13% 加工费, 按税率分组拆分</span>
             </div>
 
@@ -1731,12 +1744,38 @@ async function handleQuickPayFull() {
     </el-dialog>
 
     <!-- ─── 一键开票对话框 ─── -->
-    <el-dialog v-model="invoiceDialogVisible" title="一键开票申请 (按税率自动分组)" width="520px" destroy-on-close>
+    <el-dialog
+      v-model="invoiceDialogVisible"
+      :title="order
+        ? `一键开票申请 — ${order.customerName || order.customer?.name || '客户未知'} (${order.orderNumber || orderId})`
+        : '一键开票申请 (按税率自动分组)'"
+      width="520px"
+      destroy-on-close
+    >
+      <!-- 防呆 Rule 1 (fool-proof-design): 提交前先显订单总额/已开票/可开票上限,
+           mirror 收款登记 computedRemainingAmount() 的展示方式 + finance/invoices/list.vue
+           R1+R2 retrofit 的 banner 样式 (订单总额/已开/可开 三段 + 超限变红). -->
+      <el-alert
+        v-if="canViewPrice"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      >
+        <template #title>
+          订单总额 <b>{{ formatAmount(order?.totalAmount || 0) }}</b>
+          · 已开票 <b>{{ formatAmount(order?.invoicedAmount || 0) }}</b>
+          · <span :style="{ color: computedInvoiceableAmount() > 0 ? '#67c23a' : '#f56c6c' }">可开票 <b>{{ formatAmount(computedInvoiceableAmount()) }}</b></span>
+        </template>
+        <template v-if="computedInvoiceableAmount() === 0" #default>
+          该订单已全额开票, 无需再次申请
+        </template>
+      </el-alert>
       <el-alert
         type="info"
         :closable="false"
         title="系统将自动按销售订单明细的税率分组聚合"
-        description="若订单含 9% 原料 + 13% 加工费, 会生成两组明细供财务审批。"
+        description="若订单含 9% 原料 + 13% 加工费, 会生成两组明细供财务审批。提交后按上方「可开票」余额为限自动生成本次开票明细。"
         style="margin-bottom: 16px"
       />
       <el-form label-width="90px">
@@ -1752,7 +1791,12 @@ async function handleQuickPayFull() {
       </el-form>
       <template #footer>
         <el-button @click="invoiceDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreateInvoice">提交开票申请</el-button>
+        <el-button
+          type="primary"
+          :loading="submitting"
+          :disabled="canViewPrice && computedInvoiceableAmount() === 0"
+          @click="handleCreateInvoice"
+        >提交开票申请</el-button>
       </template>
     </el-dialog>
 
