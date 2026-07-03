@@ -12,10 +12,8 @@
 import type {
   ChatQueryRequest,
   ChatQueryResponse,
-  OwnerActionChatRequest,
-  OwnerActionChatResponse,
 } from '@/types/restaurant-chat';
-import { post, pythonFetch, PYTHON_LLM_TIMEOUT_MS } from './common';
+import { post } from './common';
 
 /**
  * Send a natural language query to the restaurant diagnostic chat.
@@ -45,35 +43,6 @@ export async function askRestaurantQuestion(
   // If backend returns ChatQueryResponse directly (success field inline), use as-is.
   const raw = response as unknown as { data?: ChatQueryResponse } & ChatQueryResponse;
   return raw.data ?? raw;
-}
-
-/**
- * Send a boss-facing owner action question to the restaurant demo chat.
- *
- * This path is deterministic for demo: it routes questions to package,
- * table mix, staffing, training, kitchen, cost, event, or single-item actions
- * and keeps follow-up context through sessionId.
- */
-export async function askRestaurantOwnerActionQuestion(
-  request: OwnerActionChatRequest,
-): Promise<OwnerActionChatResponse> {
-  const response = await pythonFetch<{ success: boolean; data: OwnerActionChatResponse }>(
-    '/api/smartbi/restaurant/sections/owner-action-chat',
-    {
-      method: 'POST',
-      timeoutMs: PYTHON_LLM_TIMEOUT_MS,
-      body: JSON.stringify({
-        factory_id: request.factoryId,
-        message: request.message,
-        sessionId: request.sessionId,
-        demoScenario: request.demoScenario,
-        storeName: request.storeName,
-        subSector: request.subSector,
-        period: request.period,
-      }),
-    },
-  );
-  return response.data;
 }
 
 /**

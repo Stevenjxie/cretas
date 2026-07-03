@@ -7,7 +7,6 @@ import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -122,9 +121,6 @@ public class IntentExecutionOrchestrator {
 
     @Autowired(required = false)
     private com.cretas.aims.config.IntentSlotConfiguration intentSlotConfiguration;
-
-    @Autowired(required = false)
-    private PythonSmartBIClient pythonSmartBIClient;
 
     // Sprint 13 #305 业态门控: shared business-type gate (RESTAURANT vs FACTORY). Reused by the
     // explicit-intent flow + SseStreamingService so all paths gate identically.
@@ -1720,7 +1716,7 @@ public class IntentExecutionOrchestrator {
         }
 
         Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
-        data.putIfAbsent("source", "restaurant_owner_action_advisor");
+        normalizeOwnerActionSource(data);
         data.put("suggestedFollowups", normalizeOwnerActionFollowups(
                 data.get("followUpSuggestions"),
                 stringValue(data.get("scenario"))));
@@ -1770,6 +1766,16 @@ public class IntentExecutionOrchestrator {
             metadata.put("userId", userId);
         }
         return metadata;
+    }
+
+    private void normalizeOwnerActionSource(Map<String, Object> data) {
+        Object source = data.get("source");
+        if ("restaurant_owner_action_advisor".equals(source)) {
+            data.put("advisorSource", "restaurant_owner_action_advisor");
+        } else {
+            data.putIfAbsent("advisorSource", "restaurant_owner_action_advisor");
+        }
+        data.put("source", "restaurant_owner_action");
     }
 
     private void putIfPresent(Map<String, Object> target, String key, String value) {

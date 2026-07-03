@@ -82,7 +82,8 @@ class RestaurantOwnerActionAdvisorToolTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) envelope.get("data");
         assertThat(data).containsEntry("dataAvailable", true);
-        assertThat(data).containsEntry("source", "restaurant_owner_action_advisor");
+        assertThat(data).containsEntry("source", "restaurant_owner_action");
+        assertThat(data).containsEntry("advisorSource", "restaurant_owner_action_advisor");
         assertThat(data).containsEntry("scenario", "operations_dispatch");
         assertThat(data).containsEntry("sessionId", "owner-action-001");
         assertThat(data).containsEntry("answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。");
@@ -125,6 +126,8 @@ class RestaurantOwnerActionAdvisorToolTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) envelope.get("data");
         assertThat(data).containsEntry("dataAvailable", false);
+        assertThat(data).containsEntry("source", "restaurant_owner_action");
+        assertThat(data).containsEntry("advisorSource", "restaurant_owner_action_advisor");
         assertThat(data.get("message").toString()).contains("服务未配置");
     }
 

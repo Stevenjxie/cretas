@@ -116,7 +116,8 @@ class RestaurantOpsGoldRouteTest {
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getMessage()).contains("仓管补活鱼");
-        assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action_advisor");
+        assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action");
+        assertThat(((Map<?, ?>) response.getResultData()).get("advisorSource")).isEqualTo("restaurant_owner_action_advisor");
         verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
         verify(advisorTool).execute(any(ToolCall.class), any());
     }

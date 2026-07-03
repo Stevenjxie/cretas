@@ -112,7 +112,8 @@ public class RestaurantOwnerActionAdvisorTool extends AbstractBusinessTool {
         result.put("dataAvailable", true);
         result.put("message", answer);
         result.put("answer", answer);
-        result.put("source", "restaurant_owner_action_advisor");
+        result.put("source", "restaurant_owner_action");
+        result.put("advisorSource", "restaurant_owner_action_advisor");
         result.put("scenario", pythonData.get("scenario"));
         result.put("sessionId", pythonData.get("sessionId"));
         result.put("ownerDecisionPage", pythonData.getOrDefault("ownerDecisionPage", Collections.emptyMap()));
@@ -133,7 +134,8 @@ public class RestaurantOwnerActionAdvisorTool extends AbstractBusinessTool {
         result.put("dataAvailable", false);
         result.put("message", message);
         result.put("answer", message);
-        result.put("source", "restaurant_owner_action_advisor");
+        result.put("source", "restaurant_owner_action");
+        result.put("advisorSource", "restaurant_owner_action_advisor");
         result.put("charts", Collections.emptyList());
         result.put("roleActionPlan", Collections.emptyList());
         result.put("suggestedFollowups", Collections.emptyList());

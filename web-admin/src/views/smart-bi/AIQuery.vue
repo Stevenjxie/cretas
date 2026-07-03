@@ -1060,7 +1060,8 @@ async function tryJavaIntentChat(
       // directly as resultData.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const resultDataAny = res.resultData as any;
-      const isOwnerActionResponse = resultDataAny?.source === 'restaurant_owner_action';
+      const isOwnerActionResponse = resultDataAny?.source === 'restaurant_owner_action'
+        || resultDataAny?.advisorSource === 'restaurant_owner_action_advisor';
       if (isOwnerActionResponse) {
         ownerActionSessionId.value = String(resultDataAny.sessionId || ownerActionSessionId.value || '');
         msg.source = 'restaurant_owner_action';

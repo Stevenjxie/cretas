@@ -315,27 +315,6 @@ export interface NLQueryResponse {
   suggestions?: string[];
 }
 
-export interface RestaurantOwnerActionChatRequest {
-  message: string;
-  sessionId?: string;
-  demoScenario?: string;
-  storeName?: string;
-  subSector?: string;
-  period?: string;
-  factoryId?: string;
-}
-
-export interface RestaurantOwnerActionChatResponse {
-  sessionId: string;
-  scenario: string;
-  answer: string;
-  responseText: string;
-  followUpSuggestions: string[];
-  decisionFocus?: Record<string, unknown>;
-  ownerDecisionPage?: Record<string, unknown>;
-  demoActionScenarios?: string[];
-}
-
 // ==================== 数据下钻 ====================
 
 /**
