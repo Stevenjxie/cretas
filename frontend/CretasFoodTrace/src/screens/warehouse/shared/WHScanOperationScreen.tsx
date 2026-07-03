@@ -5,7 +5,10 @@
  *                跳 WHReceiptCreate (2 字段收货页).
  *                六扇门 May 7 transcript: "扫一下上面的拳运码 然后开始入库"
  *
- * 出库 (outbound): 扫批次条码 — Phase 2 接入实际出库流程.
+ * 出库 (outbound): 扫物料批次一物一码标签 → 拿 batchId/materialName/
+ *                remainingQuantity → 跳 WHOutboundIssue (出库数量 1 字段闭环,
+ *                与入库对称). 剩余量为 0 时 honest-fail, 不跳转.
+ *                Phase 2 收口 (此前只 Alert 展示信息, 不落实际出库).
  *
  * 历史: 原实现是 setTimeout + 假批次号 mock (TODO 注释明示). 本次 W-ABA-1
  * Day 4 改造为真实 expo-camera + onBarcodeScanned, 支持 QR + Code128 双格式
@@ -20,7 +23,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
-import { WHInboundStackParamList } from "../../../types/navigation";
+import { WHInboundStackParamList, WHOutboundStackParamList } from "../../../types/navigation";
 import { purchaseApiClient } from "../../../services/api/purchaseApiClient";
 import {
   materialLabelApiClient,
@@ -28,7 +31,10 @@ import {
 } from "../../../services/api/materialLabelApiClient";
 import { handleError } from "../../../utils/errorHandler";
 
-type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList>;
+// 本页在 WHInboundStackNavigator 和 WHOutboundStackNavigator 两个 stack 里都注册
+// (shared screen), 按扫码时的 mode 分别导航到各自 stack 的目标页, 用交叉类型让
+// navigate() 对两边的路由名都类型安全.
+type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList & WHOutboundStackParamList>;
 
 /**
  * 兼容旧/新参数:
@@ -108,6 +114,26 @@ export function WHScanOperationScreen() {
       try {
         const labelRes = await materialLabelApiClient.scanMaterialBatchLabel(code);
         if (labelRes.success && labelRes.data) {
+          if (mode === "outbound") {
+            const label = labelRes.data;
+            const remaining = label.remainingQuantity ?? 0;
+            // 防呆 honest-fail: 剩余量为 0/缺值, 明确告知不跳转 (不是静默失败)
+            if (!(remaining > 0) || !label.batchId) {
+              Alert.alert(
+                "无法出库",
+                `批次 ${label.batchNumber ?? code} 剩余库存为 0 或数据异常, 无法继续出库.\n请确认扫描的是正确的批次标签, 或联系仓库主管核实.`,
+              );
+              return;
+            }
+            navigation.navigate("WHOutboundIssue", {
+              batchId: label.batchId,
+              batchNumber: label.batchNumber,
+              materialName: label.materialName ?? undefined,
+              remainingQuantity: remaining,
+              quantityUnit: label.quantityUnit ?? undefined,
+            });
+            return;
+          }
           Alert.alert("物料标签已识别", formatMaterialLabel(labelRes.data));
           return;
         }

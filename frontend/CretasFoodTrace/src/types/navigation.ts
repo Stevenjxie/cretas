@@ -724,6 +724,15 @@ export type WHOutboundStackParamList = {
   WHTrackingDetail: { shipmentId: string };
   WHOrderDetail: { orderId: string };
   WHScanOperation: { type: 'inbound' | 'outbound'; orderId?: string; mode?: string };
+  // 扫码出库 (领料/出库确认) — 扫物料批次标签 → 本页 prefill 物料名/批次/剩余量,
+  // 仓管员只填"出库数量"一个字段. 与 WHReceiptCreate (入库) 对称.
+  WHOutboundIssue: {
+    batchId: string;
+    batchNumber: string;
+    materialName?: string;
+    remainingQuantity: number;
+    quantityUnit?: string;
+  };
 };
 
 export type WHInventoryStackParamList = {

@@ -15,6 +15,7 @@ import WHLoadingScreen from "../../screens/warehouse/outbound/WHLoadingScreen";
 import WHShippingConfirmScreen from "../../screens/warehouse/outbound/WHShippingConfirmScreen";
 import WHTrackingDetailScreen from "../../screens/warehouse/outbound/WHTrackingDetailScreen";
 import WHOrderDetailScreen from "../../screens/warehouse/outbound/WHOrderDetailScreen";
+import WHOutboundIssueScreen from "../../screens/warehouse/outbound/WHOutboundIssueScreen";
 import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperationScreen";
 
 const Stack = createNativeStackNavigator<WHOutboundStackParamList>();
@@ -76,6 +77,13 @@ export function WHOutboundStackNavigator() {
         name="WHScanOperation"
         component={WHScanOperationScreen}
         options={{ title: "扫码作业" }}
+      />
+
+      {/* 扫码出库确认 (领料/出库, 扫物料批次标签后 2 字段闭环) */}
+      <Stack.Screen
+        name="WHOutboundIssue"
+        component={WHOutboundIssueScreen}
+        options={{ title: "扫码出库确认" }}
       />
     </Stack.Navigator>
   );
