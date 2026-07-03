@@ -142,6 +142,21 @@ const searchForm = ref({
   keyword: '',
   status: 'UNFINISHED'
 });
+const STATUS_FILTER_LABELS: Record<string, string> = {
+  UNFINISHED: '未完成', PREPARED: '草稿', PLANNED: '待执行', PENDING: '待执行 (PENDING)',
+  IN_PROGRESS: '进行中', PAUSED: '暂停', COMPLETED: '已结单', CANCELLED: '已取消',
+};
+// Rule 1 (fool-proof-design): 按编号/关键词搜索在受限状态筛选下 0 结果时, 提示切到"全部"重试,
+// 而不是让用户误以为查不到这个计划 (#3 blocking-bug 场景: 按已知计划号搜, 状态默认"未完成")。
+const emptyText = computed(() => {
+  if (loading.value || tableData.value.length > 0) return '暂无数据';
+  const status = searchForm.value.status;
+  if (searchForm.value.keyword && status) {
+    const label = STATUS_FILTER_LABELS[status] || status;
+    return `当前筛选[${label}]无结果，试试切换状态筛选为「全部」`;
+  }
+  return '暂无数据';
+});
 
 // U-FOOTER-1
 const summaryRequest = computed<ListSummaryRequest>(() => ({
@@ -2535,6 +2550,9 @@ function handleAiFill(params: TableRow) {
           @keyup.enter="handleSearch"
         />
         <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
+          <!-- Rule 1 (fool-proof-design): "全部" 必须是显式可选项, 不能只靠 clearable 的隐藏 x 图标才能回到不限状态
+               —— 否则搜索一个已完成/已取消的计划号, 默认"未完成"筛选下静默 0 结果, 用户以为查不到 -->
+          <el-option label="全部" value="" />
           <el-option label="未完成" value="UNFINISHED" />
           <el-option label="草稿" value="PREPARED" />
           <el-option label="待执行" value="PLANNED" />
@@ -2552,7 +2570,7 @@ function handleAiFill(params: TableRow) {
       <el-table
         :data="tableData"
         v-loading="loading"
-        empty-text="暂无数据"
+        :empty-text="emptyText"
         stripe
         border
         style="width: 100%"

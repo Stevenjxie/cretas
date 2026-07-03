@@ -90,6 +90,9 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/materials', title: '原料入库登记 (具体批次)', icon: '', module: 'warehouse' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },
+      // SP7 六扇门 ERP-lite — 盘点任务(批量导入/期初建账/审批应用), 与上面"盘点管理"是不同页面,
+      // 之前只在 router 里注册没进侧边栏, 用户无法自助发现 (fool-proof-design Rule 5: dead-end 改导航)
+      { path: '/warehouse/stocktakes', title: '批量盘点/建账', icon: '', module: 'warehouse' },
       { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse' },
       // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
       { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },

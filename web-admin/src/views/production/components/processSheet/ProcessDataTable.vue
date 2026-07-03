@@ -114,6 +114,10 @@ const isQidiao = computed(() => props.processCode === 'qidiao');
 const rawBatchOptions = ref<RawMaterialBatchOption[]>([]);
 const rawBatchLoading = ref(false);
 const consumableWarehouseIds = ref<string[]>([]);
+// 未落仓(warehouseId 为空)因而被隐藏的批次数 — 后端 ensureRawMaterialWarehouse 强制要求
+// RAW/LOGISTICS/WORKSHOP 仓库, 空 warehouseId 的批次保存必 409。展示这个数字而不是静默隐藏,
+// 让用户知道"为什么少了几条", 而不是以为数据丢了 (Rule 1: 预先显示边界)。
+const rawBatchExcludedNoWarehouseCount = ref(0);
 let rawBatchLoadSeq = 0;
 
 function extractRawBatches(
@@ -197,10 +201,12 @@ async function loadRawBatches() {
     });
     if (seq !== rawBatchLoadSeq) return;
     const allowed = new Set(warehouseIds);
-    rawBatchOptions.value = extractRawBatches(resp.data)
-      // 批次带 warehouseId 时限定在可领用仓; 老数据无 warehouseId 的兜底保留 (与旧单仓查询口径一致不回归)。
-      .filter((b) => !b.warehouseId || allowed.has(b.warehouseId))
-      .filter((b) => rawBatchAvailable(b) > 0);
+    const candidates = extractRawBatches(resp.data).filter((b) => rawBatchAvailable(b) > 0);
+    // 后端 ensureRawMaterialWarehouse 强制要求非空 warehouseId 且属于 RAW/LOGISTICS/WORKSHOP,
+    // 否则保存必 409 "只能从原料仓/物流仓/生产仓领用"。不落仓(null warehouseId)的批次一律
+    // 不提供选择 —— 提供了也是选完就被后端拒绝的死路 (fool-proof-design Rule 5: 不做 dead-end)。
+    rawBatchExcludedNoWarehouseCount.value = candidates.filter((b) => !b.warehouseId).length;
+    rawBatchOptions.value = candidates.filter((b) => !!b.warehouseId && allowed.has(b.warehouseId));
   } catch (err) {
     if (seq !== rawBatchLoadSeq) return;
     rawBatchOptions.value = [];
@@ -1250,6 +1256,10 @@ defineExpose({ hasUnsavedRows });
               <span v-if="!row.rawBatchId" style="display:block;margin-top:3px;font-size:11px;color:#f56c6c">
                 请先选择原料批次，再保存此行
               </span>
+              <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
+              <span v-if="rawBatchExcludedNoWarehouseCount > 0" style="display:block;margin-top:3px;font-size:11px;color:#e6a23c">
+                另有 {{ rawBatchExcludedNoWarehouseCount }} 个批次未落仓，无法领用（请先完成入库/领料）
+              </span>
             </div>
             <div class="sp-card-field">
               <label class="sp-card-label">出库重量(kg)</label>
@@ -1663,6 +1673,13 @@ defineExpose({ hasUnsavedRows });
                   <div v-if="!row.rawBatchId" style="margin-top:2px;font-size:11px;color:#f56c6c;white-space:nowrap">
                     请先选择原料批次
                   </div>
+                  <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
+                  <el-tooltip
+                    v-if="rawBatchExcludedNoWarehouseCount > 0"
+                    :content="`另有 ${rawBatchExcludedNoWarehouseCount} 个批次未落仓，无法领用（请先完成入库/领料）`"
+                    placement="top">
+                    <el-icon style="color:#e6a23c;margin-top:2px;cursor:pointer"><Warning /></el-icon>
+                  </el-tooltip>
                 </td>
                 <td class="sp-td sp-td-num">
                   <el-input-number
