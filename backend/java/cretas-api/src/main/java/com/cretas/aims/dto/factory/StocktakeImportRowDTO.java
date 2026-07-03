@@ -51,8 +51,18 @@ public class StocktakeImportRowDTO {
     @ColumnWidth(10)
     private String unit;
 
-    /** 实盘数量（仓管填写。留空 = 未盘点，导入时跳过不校正）。*/
+    /** 实盘数量（仓管填写。留空 = 未盘点，导入时跳过不校正）。
+     *  期初建账 (OPENING) 新建物料行时，此列填期初数量（从 0 起的盘盈）。*/
     @ExcelProperty(value = "实盘数量", index = 5)
     @ColumnWidth(14)
     private BigDecimal actualQty;
+
+    /**
+     * 期初单价（元/单位，可空）。<b>仅期初建账 (OPENING) 新建物料行使用</b>：
+     * 新建批次从 0 盘盈到期初数量，此单价用于估值并计入期初凭证 (借1403原材料/贷4001实收资本)。
+     * 常规盘点 (NORMAL) 忽略此列（既有批次已有自身单价）。诚实-null：留空则只建数量不计入凭证金额。
+     */
+    @ExcelProperty(value = "单价(期初建账新建填写,可空)", index = 6)
+    @ColumnWidth(22)
+    private BigDecimal unitPrice;
 }

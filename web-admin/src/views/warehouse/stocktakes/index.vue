@@ -191,15 +191,16 @@ async function submitInitiate() {
 // Bulk import dialog (导出模板 → 填实盘 → 导入比对 → 确认校正)
 // ────────────────────────────────────────────────────────────────────────────
 interface BulkMatchedLine {
-  materialBatchId: string; batchNumber: string; materialName: string; unit: string;
+  materialBatchId: string | null; batchNumber: string; materialName: string; unit: string;
   systemQty: number | null; actualQty: number | null; differenceQty: number | null; differenceType: string | null;
+  materialTypeId?: string | null; unitPrice?: number | null; willCreate?: boolean;
 }
 interface BulkRowError { rowNumber: number; batchNumber: string; materialName: string; reason: string; }
 interface BulkPreview {
   stocktakeId?: string | null; stocktakeNo?: string | null;
   warehouseId: string; warehouseName: string; periodMonth?: string;
   totalRows: number; matchedCount: number; surplusCount: number; shortageCount: number;
-  matchCount: number; skippedCount: number; errorCount: number;
+  matchCount: number; skippedCount: number; willCreateCount?: number; errorCount: number;
   matchedLines: BulkMatchedLine[]; errors: BulkRowError[];
 }
 
@@ -277,8 +278,12 @@ async function doBulkPreview() {
   if (!fd) return;
   bulkLoading.value = true;
   try {
+    const previewParams = new URLSearchParams({
+      warehouseId: bulkForm.warehouseId,
+      openingMode: String(bulkForm.openingMode),
+    });
     const res = await post(
-      `/${factoryId.value}/stocktakes/bulk-import/preview?warehouseId=${encodeURIComponent(bulkForm.warehouseId)}`,
+      `/${factoryId.value}/stocktakes/bulk-import/preview?${previewParams.toString()}`,
       fd,
     );
     if (res.success) {
@@ -805,6 +810,22 @@ onMounted(async () => {
             <span style="margin-left: 8px; color: #e6a23c; font-size: 12px">这是什么？</span>
           </el-tooltip>
         </el-form-item>
+        <!-- 期初建账已并入盘点：勾选后可在同一张表里【新增物料行】(从 0 建账) + 校正既有批次 -->
+        <el-alert
+          v-if="bulkForm.openingMode"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin: 0 0 12px 110px; max-width: 760px"
+        >
+          <template #title>
+            期初建账做什么：录入开业/上线时<b>已经存在</b>的库存 ——
+            在模板里对<b>新物料</b>直接新增行（填「物料名称/编码 + 实盘数量(=期初数量) + 单价」，批次号留空自动生成），
+            系统会<b>新建批次并从 0 盘盈建账</b>；对<b>已存在的批次</b>行则按实盘数量校正。
+            生效后按 <b>借 1403 原材料 / 贷 4001 实收资本</b> 记一笔期初凭证，<b>不产生采购应付款</b>
+            （与「采购入库」的本质区别）。诚实-null：无单价的行只建数量、不计入凭证金额。
+          </template>
+        </el-alert>
         <el-form-item label="填好的表格" required>
           <el-upload
             :auto-upload="false"
@@ -833,6 +854,9 @@ onMounted(async () => {
           <el-tag type="danger" size="small">盘亏 {{ bulkPreview.shortageCount }}</el-tag>
           <el-tag type="info" size="small">一致 {{ bulkPreview.matchCount }}</el-tag>
           <el-tag size="small">未盘点 {{ bulkPreview.skippedCount }}</el-tag>
+          <el-tag v-if="bulkForm.openingMode && (bulkPreview.willCreateCount || 0) > 0" type="warning" size="small" effect="dark">
+            将新建 {{ bulkPreview.willCreateCount }}
+          </el-tag>
           <el-tag v-if="bulkPreview.errorCount > 0" type="warning" size="small">失败 {{ bulkPreview.errorCount }}</el-tag>
         </div>
 
@@ -854,7 +878,12 @@ onMounted(async () => {
 
         <el-table :data="bulkPreview.matchedLines" size="small" max-height="300" border>
           <el-table-column label="物料名称" prop="materialName" min-width="130" />
-          <el-table-column label="批次号" prop="batchNumber" min-width="170" />
+          <el-table-column label="批次号" min-width="170">
+            <template #default="{ row }">
+              <span v-if="row.willCreate" style="color: #909399">（新建，自动生成）</span>
+              <span v-else>{{ row.batchNumber }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="账面数量" prop="systemQty" width="100" align="right" />
           <el-table-column label="实盘数量" width="100" align="right">
             <template #default="{ row }">{{ row.actualQty ?? '—' }}</template>
@@ -862,10 +891,17 @@ onMounted(async () => {
           <el-table-column label="差异" width="100" align="right">
             <template #default="{ row }">{{ row.differenceQty ?? '—' }}</template>
           </el-table-column>
-          <el-table-column label="单位" prop="unit" width="70" />
-          <el-table-column label="盈亏" width="90">
+          <el-table-column v-if="bulkForm.openingMode" label="单价" width="90" align="right">
             <template #default="{ row }">
-              <el-tag :type="diffTypeTag(row.differenceType)" size="small">{{ diffTypeLabel(row.differenceType) }}</el-tag>
+              <span v-if="row.willCreate">{{ row.unitPrice != null ? row.unitPrice : '无单价' }}</span>
+              <span v-else style="color: #c0c4cc">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="单位" prop="unit" width="70" />
+          <el-table-column label="盈亏" width="100">
+            <template #default="{ row }">
+              <el-tag v-if="row.willCreate" type="warning" size="small" effect="dark">将新建</el-tag>
+              <el-tag v-else :type="diffTypeTag(row.differenceType)" size="small">{{ diffTypeLabel(row.differenceType) }}</el-tag>
             </template>
           </el-table-column>
         </el-table>

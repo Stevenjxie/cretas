@@ -39,26 +39,35 @@ public class StocktakeBulkImportPreviewDTO {
     private int matchCount;
     /** 匹配成功但实盘数量留空（未盘点）→ 生效时跳过，不校正。*/
     private int skippedCount;
+    /** 期初建账 (OPENING) 模式下：未匹配现有批次、将新建的物料行数（从 0 盘盈建账）。*/
+    private int willCreateCount;
     /** 匹配失败行数（= errors.size()）。*/
     private int errorCount;
 
     private List<MatchedLine> matchedLines = new ArrayList<>();
     private List<RowError> errors = new ArrayList<>();
 
-    /** 匹配成功的比对行。*/
+    /** 匹配成功的比对行（含期初 OPENING 模式下「将新建」行）。*/
     @Data
     public static class MatchedLine {
+        /** 现有批次 ID；期初「将新建」行在预览阶段为 null，确认阶段建壳后回填。*/
         private String materialBatchId;
         private String batchNumber;
         private String materialName;
         private String unit;
         private BigDecimal systemQty;
-        /** 实盘数量；留空表示未盘点。*/
+        /** 实盘数量；留空表示未盘点。期初新建行 = 期初数量。*/
         private BigDecimal actualQty;
-        /** = 实盘 - 账面；未盘点时为 null。*/
+        /** = 实盘 - 账面；未盘点时为 null。期初新建行 = 期初数量（从 0 盘盈）。*/
         private BigDecimal differenceQty;
         /** SURPLUS / SHORTAGE / MATCH / null(未盘点)。*/
         private String differenceType;
+        /** 期初 OPENING「将新建」行：解析出的物料类型 ID（ADJUST 行为 null）。*/
+        private String materialTypeId;
+        /** 期初 OPENING「将新建」行：期初单价（可空，诚实-null）。*/
+        private BigDecimal unitPrice;
+        /** true = 该行将新建批次（期初 create-from-zero），非既有批次校正。*/
+        private boolean willCreate;
     }
 
     /** 匹配失败行（诚实上报，供用户改表后重传）。*/

@@ -62,15 +62,22 @@ public class StocktakeBulkImportController {
     }
 
     @PostMapping("/preview")
-    @Operation(summary = "预览导入比对", description = "read-only：不落库，返回盘盈/盘亏报告 + 匹配失败明细")
+    @Operation(summary = "预览导入比对",
+            description = "read-only：不落库，返回盘盈/盘亏报告 + 匹配失败明细。"
+                    + "openingMode=true（期初建账）时，未匹配现有库存的新物料行标记为「将新建」而非报错。")
     public ApiResponse<StocktakeBulkImportPreviewDTO> preview(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam @Parameter(description = "仓库ID") String warehouseId,
+            @RequestParam(defaultValue = "false") @Parameter(description = "是否期初建账导入") boolean openingMode,
             @RequestParam("file") MultipartFile file) throws IOException {
         validateFile(file);
-        log.info("盘点批量导入: 预览 factoryId={} warehouseId={} file={}",
-                factoryId, warehouseId, file.getOriginalFilename());
-        StocktakeBulkImportPreviewDTO result = bulkImportService.preview(factoryId, warehouseId, file.getInputStream());
+        FactoryStocktake.ImportMode mode = openingMode
+                ? FactoryStocktake.ImportMode.OPENING
+                : FactoryStocktake.ImportMode.NORMAL;
+        log.info("盘点批量导入: 预览 factoryId={} warehouseId={} mode={} file={}",
+                factoryId, warehouseId, mode, file.getOriginalFilename());
+        StocktakeBulkImportPreviewDTO result = bulkImportService.preview(
+                factoryId, warehouseId, mode, file.getInputStream());
         return ApiResponse.success("比对完成", result);
     }
 

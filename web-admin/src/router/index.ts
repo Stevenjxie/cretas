@@ -350,15 +350,9 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/materials/list.vue'),
             meta: { requiresAuth: true, title: '原材料批次', module: 'warehouse' }
           },
-          // 期初建账 (opening inventory onboarding) — 建账/上线时录入现有库存 + 计入财务
-          // 借1403原材料/贷4001实收资本, 不产生采购应付. Steve 明确要求放在仓储模块 (仓管录入动作),
-          // 不放 finance (记账是这个动作的会计副作用, 不是主流程).
-          {
-            path: 'opening-inventory',
-            name: 'WarehouseOpeningInventory',
-            component: () => import('@/views/warehouse/opening-inventory/index.vue'),
-            meta: { requiresAuth: true, title: '期初建账', module: 'warehouse' }
-          },
+          // 期初建账已并入盘点 (Steve 架构决策 2026-07): 期初/盘盈/盘亏都是"库存调整+过凭证",
+          // 统一在「批量盘点/建账」(/warehouse/stocktakes) 勾选「期初建账」一个入口完成——
+          // 既有批次校正 + 新物料从 0 建账 + 同一张 借1403/贷4001 期初凭证。原独立「期初建账」页已移除。
           // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
           {
             path: 'inventory-total',

@@ -27,8 +27,13 @@ public interface StocktakeBulkImportService {
     /**
      * 预览：解析上传的 Excel，按批次号匹配当前库存并计算差异。read-only，不落库。
      * 匹配失败行以 errors 诚实上报，不静默丢弃。
+     *
+     * <p>{@code importMode=OPENING}（期初建账）时：未匹配现有批次的新物料行不再报错，而是标记为
+     * 「将新建」(willCreate)——确认后从 0 盘盈建账（需物料名称/编码可在物料字典解析 + 填实盘数量）。
+     * {@code NORMAL} 时保持原语义：未知批次一律报错。
      */
-    StocktakeBulkImportPreviewDTO preview(String factoryId, String warehouseId, InputStream inputStream);
+    StocktakeBulkImportPreviewDTO preview(String factoryId, String warehouseId,
+                                          FactoryStocktake.ImportMode importMode, InputStream inputStream);
 
     /**
      * 确认：再次解析校验后，创建盘点任务并回填实盘数量（复用 initiate + updateItems）。
