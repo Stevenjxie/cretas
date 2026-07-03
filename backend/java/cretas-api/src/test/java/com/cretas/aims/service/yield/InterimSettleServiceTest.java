@@ -836,6 +836,46 @@ class InterimSettleServiceTest {
         assertThat(sfiIn.get(0).get("totalCost")).isNull();   // 诚实 null
     }
 
+    @Test
+    @DisplayName("🔒🔒 bug #3: 撤销后重新小结命中 REVERSED 尸体 batchNumber → 复活为真实产量+AVAILABLE+可售 (非跳过留 0)")
+    void resettleRevivesReversedFinishedGoodsCorpse() {
+        // 前次小结 FG-PP-001-S1 已被撤销 → 留 REVERSED 尸体 (producedQuantity=0, shipped/reserved=0);
+        // 小结记录已硬删 → savedSettlements 空 → 重新小结 seq 回到 1 → 撞同 batchNumber。
+        FinishedGoodsBatch corpse = new FinishedGoodsBatch();
+        corpse.setId("fg-corpse-1");
+        corpse.setFactoryId(FACTORY);
+        corpse.setBatchNumber("FG-PP-001-S1");
+        corpse.setProducedQuantity(BigDecimal.ZERO);
+        corpse.setShippedQuantity(BigDecimal.ZERO);
+        corpse.setReservedQuantity(BigDecimal.ZERO);
+        corpse.setStatus(FinishedGoodsBatch.Status.REVERSED);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-PP-001-S1"))
+                .thenReturn(Optional.of(corpse));
+
+        // 重新小结: 一条成品道 productWeight 8kg → 必须复活尸体为 8 + AVAILABLE (旧代码 orElseGet 跳过留 0)。
+        ProcessSheetRow rFg = row(30L, 1, "CLK-B-RS",
+                reqFinished(1, "CLK-B-RS", new BigDecimal("50"), new BigDecimal("8"), null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rFg));
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 9L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        FinishedGoodsBatch saved = fgCap.getValue();
+        assertThat(saved.getId()).isEqualTo("fg-corpse-1");                       // 复用尸体行 (不新建撞唯一约束)
+        assertThat(saved.getProducedQuantity()).isEqualByComparingTo("8");        // 真实产量, 非留 0
+        assertThat(saved.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE); // 可售, 非 REVERSED
+        // summary.finishedQuantity 与实际 FG 一致 (不再假报产量却无货)
+        assertThat(s.get("finishedQuantity")).isEqualTo(new BigDecimal("8"));
+        // fgCreated 明细记录 → 本次小结可再次撤销 (可逆性保持)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fgCreated = (List<Map<String, Object>>) rd.get("fgCreated");
+        assertThat(fgCreated).hasSize(1);
+        assertThat(fgCreated.get(0).get("batchNumber")).isEqualTo("FG-PP-001-S1");
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Builders
     // ─────────────────────────────────────────────────────────────

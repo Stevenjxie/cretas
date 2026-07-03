@@ -318,6 +318,54 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     }
 
     @Test
+    @DisplayName("bug #1: close derives return from WKS balance (issued 100, consumed 60 → return EXACTLY 40, no phantom) even with consumedQty unset")
+    void close_derivesReturnFromWorkshopBalance_noPhantom() {
+        // 领料 100 → 调拨 (WKS 建批 100) → 报工/小结 consume 60 (WKS used 60 → remaining 40) → 关单 wastage 0。
+        batchStore.put("raw-1", batch("raw-1", "MAT-001", WH_LOGISTICS, "100.00", "100.00", "3.00"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "100.00", "60.00", "3.00"));
+
+        FactoryMaterialRequisition mr = new FactoryMaterialRequisition();
+        mr.setId(MR_ID);
+        mr.setFactoryId(FACTORY_ID);
+        mr.setProductionPlanId(PLAN_ID);
+        mr.setStatus(Status.ISSUED);
+        mr.setSourceWarehouseId(WH_LOGISTICS);
+        mr.setTargetWarehouseId(WH_WORKSHOP);
+        FactoryMaterialRequisitionItem it = new FactoryMaterialRequisitionItem();
+        it.setId("it-1");
+        it.setRequisition(mr);
+        it.setMaterialTypeId("MAT-001");
+        it.setMaterialName("Material A");
+        it.setUnit("kg");
+        it.setIssuedQty(new BigDecimal("100.00"));
+        it.setConsumedQty(null); // dead field, deliberately unset — proves fix does not rely on it
+        it.setBatchNumbers(new ArrayList<>(List.of(mutableRow("raw-1", "100.00", "wks-1"))));
+        List<FactoryMaterialRequisitionItem> items = new ArrayList<>();
+        items.add(it);
+        mr.setItems(items);
+
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.close(FACTORY_ID, MR_ID, OPERATOR, List.of());
+
+        // returned = WKS remaining (40) − wastage (0) = 40 (NOT the buggy full issued 100)
+        assertEquals(new BigDecimal("40.00"), mr.getItems().get(0).getReturnedQty());
+        // consumed derived from physical WKS balance (100 − 40) and written back into the dead field
+        assertEquals(new BigDecimal("60.00"), mr.getItems().get(0).getConsumedQty());
+        // WH-RAW restored by EXACTLY 40 (used 100 → 60) — NO phantom +40
+        assertEquals(new BigDecimal("60.00"), batchStore.get("raw-1").getUsedQuantity());
+        // WKS drawn to zero (used 60 → 100, current 0)
+        assertEquals(new BigDecimal("0.00"), batchStore.get("wks-1").getCurrentQuantity());
+
+        // return trace = -40 against the raw source batch
+        ArgumentCaptor<MaterialConsumption> consumptionCaptor = ArgumentCaptor.forClass(MaterialConsumption.class);
+        verify(materialConsumptionRepository).save(consumptionCaptor.capture());
+        assertEquals(new BigDecimal("-40.00"), consumptionCaptor.getValue().getQuantity());
+        assertEquals("raw-1", consumptionCaptor.getValue().getBatchId());
+    }
+
+    @Test
     @DisplayName("close draws down WH-WKS by returned + wastage so the workshop batch zeroes out")
     void close_wastage_alsoDrawsDownWorkshop() {
         batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "10.00", "3.50"));
@@ -342,8 +390,10 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     }
 
     @Test
-    @DisplayName("close rejects negative returns when consumed plus wastage exceeds issued")
+    @DisplayName("close rejects negative returns when wastage exceeds the WKS unconsumed remainder")
     void close_shouldRejectWhenConsumedAndWastageExceedIssued() {
+        // WKS received 10, prod consumed 9.5 → remaining 0.5; wastage 1.0 > 0.5 → returned -0.5 → honest-fail.
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "9.50", "3.50"));
         FactoryMaterialRequisition mr = buildMrInIssued(
                 new BigDecimal("10.00"), new BigDecimal("9.50"),
                 new BigDecimal("0.50"), new BigDecimal("0.50"), "wks-1", null);

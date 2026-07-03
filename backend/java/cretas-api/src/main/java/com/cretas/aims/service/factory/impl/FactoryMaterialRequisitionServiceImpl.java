@@ -634,21 +634,43 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许关单")
                     .withHint("请刷新物料需求单列表查看最新状态");
         }
-        // 自动计算退料 returned = issued - consumed
+        // 自动计算退料 returned = 生产仓未消耗剩余 − 损耗
         Map<String, BigDecimal> wastageByItemId = parseWastageByItemId(closeItems);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty() != null ? it.getIssuedQty() : BigDecimal.ZERO;
-            BigDecimal consumed = it.getConsumedQty() != null ? it.getConsumedQty() : BigDecimal.ZERO;
             BigDecimal wastage = wastageByItemId.getOrDefault(it.getId(),
                     it.getWastageQty() != null ? it.getWastageQty() : BigDecimal.ZERO);
             if (wastage.compareTo(BigDecimal.ZERO) < 0) {
-                throw invalidReturnQuantity(it, issued, consumed, wastage);
+                throw invalidReturnQuantity(it, issued, BigDecimal.ZERO, wastage);
             }
-            BigDecimal returned = issued.subtract(consumed).subtract(wastage);
+            // 🔴🔒🔒 2026-07-03 幻库存修复 (bug #1): consumedQty 是死字段 (整个 main 代码零个 setConsumedQty
+            //   调用点, grep 确认)。旧算法 returned = issued − consumed(恒 0) − wastage → 恒退回全部发出量,
+            //   即使报工/小结实际消耗了一部分 → 被消耗的料被重复加回原料仓 = 幽灵库存 (issued 55.556, 实耗 20,
+            //   旧代码退 55.556 而非 35.556 → +20 phantom)。
+            //   真实"未消耗剩余"= 领料时物化到生产仓 (WKS) 的该行批次现存合计: 领料按 issued 建 WKS 批,
+            //   报工/小结逐笔扣 WKS.usedQuantity → currentQuantity = issued − 实际消耗。故:
+            //     returned = WKS现存 − wastage   (= 物理退回原料仓的量 = 未消耗剩余)
+            //     consumed = issued − WKS现存    (真实消耗, 回写死字段供打印/核算)
+            WorkshopRemaining wr = computeWorkshopRemaining(factoryId, it);
+            BigDecimal consumed;
+            BigDecimal returned;
+            if (wr.hasWorkshopBatch()) {
+                consumed = issued.subtract(wr.remaining());
+                if (consumed.signum() < 0) {
+                    consumed = BigDecimal.ZERO; // 数据异常防御: WKS 现存 > 发出量 → 消耗不为负 (不放大退回)
+                }
+                returned = wr.remaining().subtract(wastage);
+            } else {
+                // 无 WKS 物化批次 (撤单前旧数据 / 未走物理迁移的单): 无物理锚可推导, 沿用死字段口径 (≡0), 不臆造。
+                consumed = it.getConsumedQty() != null ? it.getConsumedQty() : BigDecimal.ZERO;
+                returned = issued.subtract(consumed).subtract(wastage);
+            }
             if (returned.compareTo(BigDecimal.ZERO) < 0) {
+                // honest-fail: 损耗 > 生产仓未消耗剩余 (WKS balance < expected) → 数据矛盾, 不静默造负库存。
                 throw invalidReturnQuantity(it, issued, consumed, wastage);
             }
             it.setWastageQty(wastage);
+            it.setConsumedQty(consumed);
             it.setReturnedQty(returned);
         }
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
@@ -803,6 +825,49 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
         }
         materialBatchRepository.save(batch);
+    }
+
+    /**
+     * 计算该领料行在生产仓 (WKS) 物化批次的现存合计 + 是否存在 WKS 锚。关单时据此推导真实消耗与可退量:
+     * 领料迁移时按 issued 在生产仓建 WKS 批 (id 记于 {@code batchNumbers[*].workshopBatchId}), 报工/小结
+     * 逐笔扣 WKS.usedQuantity → 现存 (currentQuantity) = issued − 实际消耗 = 未消耗剩余。
+     *
+     * <p>用 {@code findByIdAndFactoryIdForUpdate} 悲观锁读 (与随后 {@link #drawDownWorkshopBatchesForItem}
+     * 划出同锁, 消除 compute→drawdown 之间的 TOCTOU)。记录了 workshopBatchId 但批次已不存在 → 视作 0 现存
+     * (已划平/删除, 诚实不臆造可退量)。同一 WKS 批次去重只计一次。
+     */
+    private WorkshopRemaining computeWorkshopRemaining(String factoryId, FactoryMaterialRequisitionItem item) {
+        List<Map<String, Object>> batchRows = item.getBatchNumbers();
+        if (batchRows == null || batchRows.isEmpty() || materialBatchRepository == null) {
+            return new WorkshopRemaining(false, BigDecimal.ZERO);
+        }
+        boolean hasWks = false;
+        BigDecimal remaining = BigDecimal.ZERO;
+        Set<String> seen = new HashSet<>();
+        for (Map<String, Object> row : batchRows) {
+            Object wksId = row.get("workshopBatchId");
+            if (wksId == null || wksId.toString().isBlank()) {
+                continue;
+            }
+            if (!seen.add(wksId.toString())) {
+                continue; // 去重: 同一 WKS 批次只计一次
+            }
+            hasWks = true;
+            MaterialBatch wks = materialBatchRepository
+                    .findByIdAndFactoryIdForUpdate(wksId.toString(), factoryId).orElse(null);
+            if (wks == null) {
+                continue; // 记录了 WKS 批次但已不存在 → 视作 0 现存 (诚实)
+            }
+            BigDecimal cur = wks.getCurrentQuantity();
+            if (cur != null && cur.signum() > 0) {
+                remaining = remaining.add(cur);
+            }
+        }
+        return new WorkshopRemaining(hasWks, remaining);
+    }
+
+    /** {@link #computeWorkshopRemaining} 返回值: 是否存在 WKS 物化批次 + 现存合计。 */
+    private record WorkshopRemaining(boolean hasWorkshopBatch, BigDecimal remaining) {
     }
 
     /**
