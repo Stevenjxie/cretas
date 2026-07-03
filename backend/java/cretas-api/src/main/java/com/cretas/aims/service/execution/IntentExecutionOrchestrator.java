@@ -243,6 +243,10 @@ public class IntentExecutionOrchestrator {
                 log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
                 vk = QueryPreprocessorService.NegationKind.NONE;
             }
+            if (vk == QueryPreprocessorService.NegationKind.VETO_READ
+                    && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+                return executeRestaurantOwnerActionChat(factoryId, request, userId);
+            }
             if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
                 log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
                 return buildNegationVetoClarificationResponse(vInput);

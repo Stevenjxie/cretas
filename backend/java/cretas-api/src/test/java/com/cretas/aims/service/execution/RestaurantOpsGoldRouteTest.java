@@ -164,6 +164,44 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("owner action business preference is not treated as cancel operation")
+    void ownerActionNegatedBusinessPreferenceUsesAdvisor() throws Exception {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+        when(queryPreprocessorService.detectNegationVeto(any(), any()))
+                .thenReturn(QueryPreprocessorService.NegationKind.VETO_READ);
+
+        ToolExecutor advisorTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
+                .thenReturn(Optional.of(advisorTool));
+        when(advisorTool.execute(any(ToolCall.class), any()))
+                .thenReturn(objectMapper.writeValueAsString(Map.of(
+                        "success", true,
+                        "data", Map.of(
+                                "dataAvailable", true,
+                                "source", "restaurant_owner_action_advisor",
+                                "message", "不打折也能先做门口转化、套餐陈列和前厅话术。",
+                                "answer", "不打折也能先做门口转化、套餐陈列和前厅话术。",
+                                "sessionId", "owner-action-no-discount",
+                                "scenario", "revenue_recovery"
+                        )
+                )));
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("不想打折，那今天还有什么办法提升营收？")
+                .build();
+
+        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
+        assertThat(response.getMessage()).contains("不打折").contains("转化");
+        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
+        verify(advisorTool).execute(any(ToolCall.class), any());
+    }
+
+    @Test
     @DisplayName("routes stock shortage, wastage, requisition, margin, and sales questions to RESTAURANT_OPS intents")
     void routesCoreRestaurantOpsQuestions() {
         assertThat(orchestrator.matchRestaurantOpsIntent("最近哪些食材盘亏最严重", "RESTAURANT"))
