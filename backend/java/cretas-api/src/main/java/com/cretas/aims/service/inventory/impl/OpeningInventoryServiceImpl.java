@@ -140,51 +140,14 @@ public class OpeningInventoryServiceImpl implements OpeningInventoryService {
         List<String> batchIds = new ArrayList<>();
         List<String> batchNumbers = new ArrayList<>();
 
+        String notes = (request.getRemark() != null && !request.getRemark().isBlank())
+                ? "期初建账: " + request.getRemark()
+                : "期初建账";
+
         for (OpeningInventoryItem item : items) {
-            RawMaterialType materialType = materialTypeRepository.findById(item.getMaterialTypeId())
-                    .filter(mt -> factoryId.equals(mt.getFactoryId()))
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "原材料类型不存在或不属于当前工厂: " + item.getMaterialTypeId()));
-
-            String warehouseId = (item.getWarehouseId() != null && !item.getWarehouseId().isBlank())
-                    ? item.getWarehouseId()
-                    : warehouseResolver.resolvePurchaseInboundWh(factoryId);
-
-            // 原料只能入 RAW/物流/legacy 仓 (守卫在 save 前抛 422, 不污染事务)。
-            if (warehouseInventoryGuardService != null) {
-                warehouseInventoryGuardService.assertCanReceive(warehouseId, factoryId, "RAW");
-            }
-
-            MaterialBatch batch = new MaterialBatch();
-            batch.setId(UUID.randomUUID().toString());
-            batch.setFactoryId(factoryId);
-            batch.setMaterialTypeId(item.getMaterialTypeId());
-            batch.setWarehouseId(warehouseId);
-            // 建账日 = 今天 (避免补录时效锁); 生产日期单独记录。
-            batch.setReceiptDate(LocalDate.now());
-            batch.setProductionDate(item.getProductionDate());
-            batch.setReceiptQuantity(item.getQuantity().setScale(2, RoundingMode.HALF_UP));
-            batch.setQuantityUnit(resolveUnit(item, materialType));
-            batch.setUnitPrice(item.getUnitPrice());   // 诚实-null: 可为空
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
-            batch.setInboundType(InboundType.LEGACY_IMPORT);   // 期初=历史/迁移导入语义
-            batch.setSourceDocType(OPENING_SOURCE_DOC_TYPE);
-            batch.setSourceDocId(batchKey);
-            batch.setCreatedBy(userId);
-            if (request.getRemark() != null && !request.getRemark().isBlank()) {
-                batch.setNotes("期初建账: " + request.getRemark());
-            } else {
-                batch.setNotes("期初建账");
-            }
-            resolveExpireDate(batch, item, materialType);
-
-            // 批次号: 显式传入则用 (去重兜底), 否则系统生成 (防手敲重码)。
-            String base = (item.getBatchNumber() != null && !item.getBatchNumber().isBlank())
-                    ? item.getBatchNumber()
-                    : generateMaterialBatchNumber(factoryId);
-            batch.setBatchNumber(generateUniqueBatchNumber(base));
-
-            batch = materialBatchRepository.save(batch);
+            // 建批次 (数量 = 期初数量) —— 与建壳共用 buildAndSaveOpeningBatch, 保证字段一致。
+            MaterialBatch batch = buildAndSaveOpeningBatch(
+                    factoryId, item, batchKey, item.getQuantity(), notes, userId);
             batchIds.add(batch.getId());
             batchNumbers.add(batch.getBatchNumber());
 
@@ -206,8 +169,7 @@ public class OpeningInventoryServiceImpl implements OpeningInventoryService {
                 log.warn("期初建账诚实-null: 未录单价, 建批次但不计入凭证金额 batchNumber={} materialTypeId={} qty={}",
                         batch.getBatchNumber(), item.getMaterialTypeId(), batch.getReceiptQuantity());
             }
-
-            publishBatchCreatedEvent(factoryId, batch);
+            // 注: MaterialBatchCreatedEvent 已在 buildAndSaveOpeningBatch 内发布, 此处不再重复。
         }
 
         // ---- 过一张期初凭证 (借 1403 / 贷 4001 = Σ数量×单价) ----
@@ -244,6 +206,77 @@ public class OpeningInventoryServiceImpl implements OpeningInventoryService {
                 .batchIds(batchIds)
                 .batchNumbers(batchNumbers)
                 .build();
+    }
+
+    // =====================================================================
+    // 1b) 盘点 OPENING create-from-zero 建壳 (期初已并入盘点, 见接口注释)
+    // =====================================================================
+
+    @Override
+    @Transactional
+    public MaterialBatch createOpeningBatchShell(String factoryId, OpeningInventoryItem item,
+                                                 String batchKey, Long userId) {
+        if (item == null || item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank()) {
+            throw new BusinessException(400, "盘点期初新建批次缺少物料类型").withHintTarget("materialTypeId");
+        }
+        // 空壳: receiptQuantity=0, 不过凭证/不挂应付/不建移动均价基线。
+        // 数量与价值由盘点 apply 的盘盈机制补入, 并计入盘点同一张期初凭证 (借1403/贷4001), 避免双过账。
+        MaterialBatch shell = buildAndSaveOpeningBatch(
+                factoryId, item, batchKey, BigDecimal.ZERO, "期初建账(盘点新建)", userId);
+        log.info("盘点期初建壳: factoryId={}, batchNumber={}, materialTypeId={}, unitPrice={} (数量待盘盈补入)",
+                factoryId, shell.getBatchNumber(), item.getMaterialTypeId(), item.getUnitPrice());
+        return shell;
+    }
+
+    /**
+     * 建一个期初批次并保存 + 发布 MaterialBatchCreatedEvent。期初建账 (数量=期初数量) 与
+     * 盘点 OPENING 建壳 (数量=0) 共用此方法, 保证字段/来源单据/事件完全一致。凭证/应付/移动均价
+     * 由各调用方按语义处理 (建壳不过凭证, 由盘点 apply 统一过账)。
+     */
+    private MaterialBatch buildAndSaveOpeningBatch(String factoryId, OpeningInventoryItem item,
+            String batchKey, BigDecimal receiptQuantity, String notes, Long userId) {
+        RawMaterialType materialType = materialTypeRepository.findById(item.getMaterialTypeId())
+                .filter(mt -> factoryId.equals(mt.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "原材料类型不存在或不属于当前工厂: " + item.getMaterialTypeId()));
+
+        String warehouseId = (item.getWarehouseId() != null && !item.getWarehouseId().isBlank())
+                ? item.getWarehouseId()
+                : warehouseResolver.resolvePurchaseInboundWh(factoryId);
+
+        // 原料只能入 RAW/物流/legacy 仓 (守卫在 save 前抛 422, 不污染事务)。
+        if (warehouseInventoryGuardService != null) {
+            warehouseInventoryGuardService.assertCanReceive(warehouseId, factoryId, "RAW");
+        }
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(UUID.randomUUID().toString());
+        batch.setFactoryId(factoryId);
+        batch.setMaterialTypeId(item.getMaterialTypeId());
+        batch.setWarehouseId(warehouseId);
+        // 建账日 = 今天 (避免补录时效锁); 生产日期单独记录。
+        batch.setReceiptDate(LocalDate.now());
+        batch.setProductionDate(item.getProductionDate());
+        batch.setReceiptQuantity(receiptQuantity.setScale(2, RoundingMode.HALF_UP));
+        batch.setQuantityUnit(resolveUnit(item, materialType));
+        batch.setUnitPrice(item.getUnitPrice());   // 诚实-null: 可为空
+        batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        batch.setInboundType(InboundType.LEGACY_IMPORT);   // 期初=历史/迁移导入语义
+        batch.setSourceDocType(OPENING_SOURCE_DOC_TYPE);
+        batch.setSourceDocId(batchKey);
+        batch.setCreatedBy(userId);
+        batch.setNotes(notes);
+        resolveExpireDate(batch, item, materialType);
+
+        // 批次号: 显式传入则用 (去重兜底), 否则系统生成 (防手敲重码)。
+        String base = (item.getBatchNumber() != null && !item.getBatchNumber().isBlank())
+                ? item.getBatchNumber()
+                : generateMaterialBatchNumber(factoryId);
+        batch.setBatchNumber(generateUniqueBatchNumber(base));
+
+        batch = materialBatchRepository.save(batch);
+        publishBatchCreatedEvent(factoryId, batch);
+        return batch;
     }
 
     // =====================================================================

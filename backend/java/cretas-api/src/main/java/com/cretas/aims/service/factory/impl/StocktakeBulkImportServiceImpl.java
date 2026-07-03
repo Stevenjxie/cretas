@@ -7,6 +7,7 @@ import com.cretas.aims.dto.factory.StocktakeBulkImportPreviewDTO.RowError;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeImportRowDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.material.OpeningInventoryItem;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
@@ -17,6 +18,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.factory.StocktakeBulkImportService;
+import com.cretas.aims.service.inventory.OpeningInventoryService;
 import com.cretas.aims.utils.ExcelUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +53,8 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
     private final FactoryWarehouseRepository warehouseRepo;
     private final FactoryStocktakeService stocktakeService;
     private final ExcelUtil excelUtil;
+    /** 期初建账建壳复用 (期初已并入盘点, Steve 架构决策 2026-07)。*/
+    private final OpeningInventoryService openingInventoryService;
 
     private static final String SHEET_NAME = "库存盘点";
 
@@ -84,10 +88,12 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
     // -------------------------------------------------------
 
     @Override
-    public StocktakeBulkImportPreviewDTO preview(String factoryId, String warehouseId, InputStream inputStream) {
+    public StocktakeBulkImportPreviewDTO preview(String factoryId, String warehouseId,
+            FactoryStocktake.ImportMode importMode, InputStream inputStream) {
+        FactoryStocktake.ImportMode mode = importMode != null ? importMode : FactoryStocktake.ImportMode.NORMAL;
         FactoryWarehouse warehouse = requireWarehouse(factoryId, warehouseId);
         List<StocktakeImportRowDTO> rows = readRows(inputStream);
-        return match(factoryId, warehouse, rows);
+        return match(factoryId, warehouse, rows, mode);
     }
 
     // -------------------------------------------------------
@@ -100,18 +106,45 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                                                  String notes, FactoryStocktake.ImportMode importMode,
                                                  InputStream inputStream, Long userId) {
         FactoryStocktake.ImportMode mode = importMode != null ? importMode : FactoryStocktake.ImportMode.NORMAL;
+        boolean opening = mode == FactoryStocktake.ImportMode.OPENING;
         FactoryWarehouse warehouse = requireWarehouse(factoryId, warehouseId);
         List<StocktakeImportRowDTO> rows = readRows(inputStream);
-        StocktakeBulkImportPreviewDTO preview = match(factoryId, warehouse, rows);
+        StocktakeBulkImportPreviewDTO preview = match(factoryId, warehouse, rows, mode);
         preview.setPeriodMonth(periodMonth);
 
-        // 无任何可回填的实盘数量 → 拒绝创建空盘点（诚实提示）
+        // 无任何可回填的实盘数量 → 拒绝创建空盘点（诚实提示）。
+        // 期初「将新建」行也带 actualQty（期初数量），因此同样被这里视为有效动作。
         boolean hasActual = preview.getMatchedLines().stream().anyMatch(l -> l.getActualQty() != null);
         if (!hasActual) {
             throw new BusinessException(400,
                     "没有任何有效的实盘数量可导入（匹配成功 " + preview.getMatchedCount()
                             + " 行，其中已填实盘 0 行，失败 " + preview.getErrorCount() + " 行）")
                     .withHint("请在模板「实盘数量」列填写后再导入");
+        }
+
+        // OPENING 期初建账：未匹配现有库存的新物料行，先建「空壳」批次 (数量=0, 不过凭证/不挂应付)。
+        // 建壳后该批次被下面 initiate 快照 (systemQty=0)，回填实盘=期初数量 → 生效 apply 走盘盈机制
+        // 把数量+价值补入并计入盘点同一张期初凭证 (借1403/贷4001)。confirm 整体 @Transactional：
+        // 若 initiate 因同仓同月防重等抛异常，建壳一并回滚，不留孤儿空批次。
+        if (opening) {
+            String rawKey = "OPENSTK-" + warehouseId + "-" + (periodMonth != null ? periodMonth : "");
+            String batchKey = rawKey.length() > 64 ? rawKey.substring(0, 64) : rawKey;
+            for (StocktakeBulkImportPreviewDTO.MatchedLine line : preview.getMatchedLines()) {
+                if (!line.isWillCreate()) {
+                    continue;
+                }
+                OpeningInventoryItem item = new OpeningInventoryItem();
+                item.setMaterialTypeId(line.getMaterialTypeId());
+                item.setWarehouseId(warehouseId);
+                item.setQuantity(line.getActualQty());   // 仅语义参考；建壳实际 receiptQuantity=0
+                item.setUnitPrice(line.getUnitPrice());  // 诚实-null: 可空
+                item.setQuantityUnit(line.getUnit());
+                item.setBatchNumber(blankToNull(line.getBatchNumber()));
+                MaterialBatch shell = openingInventoryService.createOpeningBatchShell(
+                        factoryId, item, batchKey, userId);
+                line.setMaterialBatchId(shell.getId());   // 回填真实 batchId，供快照映射
+                line.setBatchNumber(shell.getBatchNumber());
+            }
         }
 
         // 1) 创建盘点任务（复用 initiate：快照账面 + 月底约束 + 同仓同月防重）
@@ -161,8 +194,9 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
 
         preview.setStocktakeId(created.getId());
         preview.setStocktakeNo(created.getStocktakeNo());
-        log.info("盘点批量导入: 确认创建 factoryId={} stocktakeId={} 回填 {} 行 (跳过未盘 {} / 失败 {})",
-                factoryId, created.getId(), updates.size(), preview.getSkippedCount(), preview.getErrorCount());
+        log.info("盘点批量导入: 确认创建 factoryId={} stocktakeId={} mode={} 回填 {} 行 (跳过未盘 {} / 将新建 {} / 失败 {})",
+                factoryId, created.getId(), mode, updates.size(),
+                preview.getSkippedCount(), preview.getWillCreateCount(), preview.getErrorCount());
         return preview;
     }
 
@@ -171,7 +205,9 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
     // -------------------------------------------------------
 
     private StocktakeBulkImportPreviewDTO match(String factoryId, FactoryWarehouse warehouse,
-                                                List<StocktakeImportRowDTO> rows) {
+                                                List<StocktakeImportRowDTO> rows,
+                                                FactoryStocktake.ImportMode mode) {
+        boolean opening = mode == FactoryStocktake.ImportMode.OPENING;
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
                 factoryId, warehouse.getId());
         Map<String, MaterialBatch> batchByNo = new HashMap<>();
@@ -181,6 +217,8 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             }
         }
         Map<String, String> nameById = loadMaterialNames(batches);
+        // OPENING 才需要名称/编码 → 物料类型 解析 (create-from-zero)。
+        Map<String, RawMaterialType> typeByKey = opening ? loadMaterialTypeIndex(factoryId) : Map.of();
 
         StocktakeBulkImportPreviewDTO dto = new StocktakeBulkImportPreviewDTO();
         dto.setWarehouseId(warehouse.getId());
@@ -194,59 +232,104 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             String batchNo = row.getBatchNumber() != null ? row.getBatchNumber().trim() : "";
             String rowMaterialName = row.getMaterialName();
 
-            if (batchNo.isEmpty()) {
-                dto.getErrors().add(new RowError(rowNum, "", rowMaterialName, "批次号为空，无法匹配库存"));
-                continue;
-            }
-            if (!seenBatchNos.add(batchNo)) {
+            // 非空批次号在文件内去重 (空批次号在 OPENING 表示"新物料自动生成批次号", 不去重)。
+            if (!batchNo.isEmpty() && !seenBatchNos.add(batchNo)) {
                 dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName, "批次号在导入文件中重复出现"));
                 continue;
             }
-            MaterialBatch batch = batchByNo.get(batchNo);
-            if (batch == null) {
-                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
-                        "批次号未在仓库[" + warehouse.getName() + "]找到当前库存（可能已消耗或录入错误）"));
+
+            MaterialBatch batch = batchNo.isEmpty() ? null : batchByNo.get(batchNo);
+
+            if (batch != null) {
+                // ---- 既有批次校正 (ADJUST, NORMAL/OPENING 共用) ----
+                BigDecimal actual = row.getActualQty();
+                if (actual != null && actual.compareTo(BigDecimal.ZERO) < 0) {
+                    dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName, "实盘数量不能为负数"));
+                    continue;
+                }
+                MatchedLine line = new MatchedLine();
+                line.setMaterialBatchId(batch.getId());
+                line.setBatchNumber(batchNo);
+                line.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
+                line.setUnit(batch.getQuantityUnit());
+                BigDecimal systemQty = scale4(batch.getReceiptQuantity());
+                line.setSystemQty(systemQty);
+                if (actual == null) {
+                    line.setActualQty(null);
+                    line.setDifferenceQty(null);
+                    line.setDifferenceType(null);
+                    dto.setSkippedCount(dto.getSkippedCount() + 1);
+                } else {
+                    BigDecimal actual4 = scale4(actual);
+                    BigDecimal diff = actual4.subtract(systemQty).setScale(4, RoundingMode.HALF_UP);
+                    line.setActualQty(actual4);
+                    line.setDifferenceQty(diff);
+                    int cmp = diff.compareTo(BigDecimal.ZERO);
+                    if (cmp > 0) {
+                        line.setDifferenceType("SURPLUS");
+                        dto.setSurplusCount(dto.getSurplusCount() + 1);
+                    } else if (cmp < 0) {
+                        line.setDifferenceType("SHORTAGE");
+                        dto.setShortageCount(dto.getShortageCount() + 1);
+                    } else {
+                        line.setDifferenceType("MATCH");
+                        dto.setMatchCount(dto.getMatchCount() + 1);
+                    }
+                }
+                dto.getMatchedLines().add(line);
                 continue;
             }
 
+            // ---- batch == null：未匹配现有库存 ----
+            if (!opening) {
+                // NORMAL：语义不变——未知批次一律诚实报错。
+                if (batchNo.isEmpty()) {
+                    dto.getErrors().add(new RowError(rowNum, "", rowMaterialName, "批次号为空，无法匹配库存"));
+                } else {
+                    dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                            "批次号未在仓库[" + warehouse.getName() + "]找到当前库存（可能已消耗或录入错误）"));
+                }
+                continue;
+            }
+
+            // OPENING 期初建账：新物料行 → 从 0 盘盈建账 (create-from-zero)。
+            RawMaterialType type = resolveMaterialType(typeByKey, rowMaterialName);
+            if (type == null) {
+                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                        "物料名称/编码未匹配到物料字典，无法新建期初批次（请核对名称，或先在「原料类型字典」创建该物料）"));
+                continue;
+            }
             BigDecimal actual = row.getActualQty();
-            if (actual != null && actual.compareTo(BigDecimal.ZERO) < 0) {
-                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName, "实盘数量不能为负数"));
+            if (actual == null) {
+                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                        "期初新建物料必须在「实盘数量」列填写期初数量"));
+                continue;
+            }
+            if (actual.compareTo(BigDecimal.ZERO) <= 0) {
+                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                        "期初新建物料的数量必须大于 0"));
                 continue;
             }
 
             MatchedLine line = new MatchedLine();
-            line.setMaterialBatchId(batch.getId());
-            line.setBatchNumber(batchNo);
-            line.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
-            line.setUnit(batch.getQuantityUnit());
-            BigDecimal systemQty = scale4(batch.getReceiptQuantity());
-            line.setSystemQty(systemQty);
-
-            if (actual == null) {
-                // 未盘点：不校正
-                line.setActualQty(null);
-                line.setDifferenceQty(null);
-                line.setDifferenceType(null);
-                dto.setSkippedCount(dto.getSkippedCount() + 1);
-            } else {
-                BigDecimal actual4 = scale4(actual);
-                BigDecimal diff = actual4.subtract(systemQty).setScale(4, RoundingMode.HALF_UP);
-                line.setActualQty(actual4);
-                line.setDifferenceQty(diff);
-                int cmp = diff.compareTo(BigDecimal.ZERO);
-                if (cmp > 0) {
-                    line.setDifferenceType("SURPLUS");
-                    dto.setSurplusCount(dto.getSurplusCount() + 1);
-                } else if (cmp < 0) {
-                    line.setDifferenceType("SHORTAGE");
-                    dto.setShortageCount(dto.getShortageCount() + 1);
-                } else {
-                    line.setDifferenceType("MATCH");
-                    dto.setMatchCount(dto.getMatchCount() + 1);
-                }
-            }
+            line.setMaterialBatchId(null);   // 建壳后 confirm 回填
+            line.setBatchNumber(batchNo);    // 可空 → 建壳时系统生成
+            line.setMaterialName(type.getName());
+            line.setMaterialTypeId(type.getId());
+            String unit = (row.getUnit() != null && !row.getUnit().isBlank())
+                    ? row.getUnit()
+                    : (type.getUnit() != null ? type.getUnit() : "kg");
+            line.setUnit(unit);
+            line.setSystemQty(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP));
+            BigDecimal actual4 = scale4(actual);
+            line.setActualQty(actual4);
+            line.setDifferenceQty(actual4);   // 从 0 盘盈
+            line.setDifferenceType("SURPLUS");
+            line.setUnitPrice(row.getUnitPrice());   // 诚实-null
+            line.setWillCreate(true);
             dto.getMatchedLines().add(line);
+            dto.setSurplusCount(dto.getSurplusCount() + 1);
+            dto.setWillCreateCount(dto.getWillCreateCount() + 1);
         }
 
         dto.setMatchedCount(dto.getMatchedLines().size());
@@ -278,6 +361,42 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                     .withHint("点击「导出模板」获取当前库存后填写");
         }
         return rows;
+    }
+
+    /**
+     * OPENING 名称/编码 → RawMaterialType 索引。key = 规范化(去空格+小写) 的 name 与 code。
+     * 名称优先于编码；仅精确匹配（create 会过财务凭证，不做模糊猜测，未匹配则诚实报错）。
+     */
+    private Map<String, RawMaterialType> loadMaterialTypeIndex(String factoryId) {
+        List<RawMaterialType> types = rawMaterialTypeRepo.findByFactoryId(factoryId);
+        Map<String, RawMaterialType> index = new HashMap<>();
+        // 先放 code（低优先），再放 name（覆盖 code，name 优先）。
+        for (RawMaterialType t : types) {
+            if (t.getCode() != null && !t.getCode().isBlank()) {
+                index.putIfAbsent(normalizeKey(t.getCode()), t);
+            }
+        }
+        for (RawMaterialType t : types) {
+            if (t.getName() != null && !t.getName().isBlank()) {
+                index.put(normalizeKey(t.getName()), t);
+            }
+        }
+        return index;
+    }
+
+    private RawMaterialType resolveMaterialType(Map<String, RawMaterialType> typeByKey, String raw) {
+        if (raw == null || raw.isBlank() || typeByKey.isEmpty()) {
+            return null;
+        }
+        return typeByKey.get(normalizeKey(raw));
+    }
+
+    private static String normalizeKey(String s) {
+        return s.trim().toLowerCase();
+    }
+
+    private static String blankToNull(String s) {
+        return (s != null && !s.isBlank()) ? s : null;
     }
 
     private Map<String, String> loadMaterialNames(List<MaterialBatch> batches) {
