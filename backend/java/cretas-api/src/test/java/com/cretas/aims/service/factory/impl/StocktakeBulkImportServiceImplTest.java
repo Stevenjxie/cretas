@@ -177,6 +177,35 @@ class StocktakeBulkImportServiceImplTest {
     }
 
     @Test
+    @DisplayName("(🔒🔒 phantom-variance) NORMAL 预览：消耗过批次 (receipt=100/used=30) 账面=可用量70, 实盘70 → 零差异 (非幻影-30盘亏)")
+    void preview_consumedBatch_systemQtyIsCurrentAvailable_notGross() {
+        FactoryWarehouse wh = new FactoryWarehouse();
+        wh.setId(WAREHOUSE_ID);
+        wh.setFactoryId(FACTORY_ID);
+        wh.setName("原料仓");
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WAREHOUSE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(wh));
+
+        MaterialBatch consumed = batch("id-C1", "BC01", "T1", "100", "10");
+        consumed.setUsedQuantity(new BigDecimal("30"));       // 已领用 30 → 可用量 = 70
+        consumed.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(consumed));
+        lenient().when(rawMaterialTypeRepo.findAllById(any())).thenReturn(List.of(type("T1", "猪蹄")));
+
+        // 仓管照货架实物盘 70 (= 可用量), 应为零差异, 绝不是照 gross 100 盘出 -30 幻影盘亏
+        List<StocktakeImportRowDTO> rows = List.of(row("猪蹄", "BC01", new BigDecimal("70")));
+        StocktakeBulkImportPreviewDTO dto = service.preview(
+                FACTORY_ID, WAREHOUSE_ID, FactoryStocktake.ImportMode.NORMAL, toExcel(rows));
+
+        StocktakeBulkImportPreviewDTO.MatchedLine line = dto.getMatchedLines().stream()
+                .filter(l -> "BC01".equals(l.getBatchNumber())).findFirst().orElseThrow();
+        assertThat(line.getSystemQty()).isEqualByComparingTo("70");   // 账面 = 当前可用量, 非 gross 100
+        assertThat(line.getDifferenceQty()).isEqualByComparingTo("0"); // 零差异
+        assertThat(line.getDifferenceType()).isEqualTo("MATCH");
+    }
+
+    @Test
     @DisplayName("确认：无任何实盘数量 → 400 拒绝创建空盘点")
     void confirm_noActuals_rejected() {
         stubWarehouseAndBatches();
