@@ -125,6 +125,10 @@ public class ProductionPlanMapper {
         dto.setForceInsertBy(plan.getForceInsertBy());
         dto.setForceInsertedAt(plan.getForceInsertedAt());
 
+        // 排产锁定 (Issue #759): 前端编辑弹窗据此判断是否可编辑 + 展示锁定原因
+        dto.setIsLocked(plan.getIsLocked());
+        dto.setLockReason(plan.getLockReason());
+
         return dto;
     }
 
