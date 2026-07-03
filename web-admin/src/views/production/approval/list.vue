@@ -51,11 +51,30 @@ async function loadData() {
   }
 }
 
-async function handleApprove(row: ApprovalItem) {
+// 报工审批"通过"防呆 (fool-proof-design.md Rule 1+2+4): 原先点击即提交, 零上下文零确认,
+// 且产品/工序列曾为空白 → 对批量盲审的误点零容错(审批结果影响成本/工资下游核算, 不可逆)。
+// 改为: 点击"通过"只打开确认弹框(展示完整上下文), 真正提交挪到 confirmApprove(), 并用
+// approveSubmitting 防重复点击(Rule 4 幂等 UX 层 — 弹框内确认按钮 disabled+loading)。
+const approveDialogVisible = ref(false);
+const approveTargetRow = ref<ApprovalItem | null>(null);
+const approveSubmitting = ref(false);
+
+function handleApprove(row: ApprovalItem) {
   if (!factoryId.value) return;
+  approveTargetRow.value = row;
+  approveDialogVisible.value = true;
+}
+
+async function confirmApprove() {
+  const row = approveTargetRow.value;
+  // approveSubmitting 兜底: 弹框确认按钮已 :loading disabled, 但仍防御双击竞态.
+  if (!factoryId.value || !row || approveSubmitting.value) return;
+  approveSubmitting.value = true;
   try {
     await approveReport(factoryId.value, row.id);
     ElMessage.success('已通过');
+    approveDialogVisible.value = false;
+    approveTargetRow.value = null;
     loadData();
   } catch (e) {
     // R26 P1 (qa-prompt v2.4 Rule 7+8 real-window finding): pre-fix this catch
@@ -70,8 +89,20 @@ async function handleApprove(row: ApprovalItem) {
     // R26 follow-up (reviewer #16 concern #4): only reload on 409 (already-processed
     // race — backend state diverged from UI cache). On 502/network error, loadData()
     // would just retry-and-fail too, doubling failed-request rate during outage.
-    if (err?.status === 409) loadData();
+    if (err?.status === 409) {
+      approveDialogVisible.value = false;
+      approveTargetRow.value = null;
+      loadData();
+    }
+  } finally {
+    approveSubmitting.value = false;
   }
+}
+
+function cancelApprove() {
+  if (approveSubmitting.value) return;
+  approveDialogVisible.value = false;
+  approveTargetRow.value = null;
 }
 
 // C-OPINION-1: 弹框 state + pending row reference (替代 ElMessageBox.prompt)
@@ -99,14 +130,20 @@ async function handleRejectConfirm(reason: string) {
   }
 }
 
+// Rule 4 幂等 UX 层: 批量确认本身已由 ElMessageBox.confirm 挡下误点; batchApproveSubmitting
+// 额外防"确认对话框关闭动画期间"的第二次点击(慢网络下 el-dialog 的关闭过渡可能让按钮短暂
+// 仍可点击)。
+const batchApproveSubmitting = ref(false);
+
 async function handleBatchApprove() {
-  if (!factoryId.value || selectedIds.value.length === 0) return;
+  if (!factoryId.value || selectedIds.value.length === 0 || batchApproveSubmitting.value) return;
   try {
     await ElMessageBox.confirm(
       `确定批量通过 ${selectedIds.value.length} 条报工记录？`,
       '批量审批',
-      { type: 'warning' }
+      { type: 'warning', confirmButtonText: '确认批量审批', cancelButtonText: '取消' }
     );
+    batchApproveSubmitting.value = true;
     await batchApproveReports(factoryId.value, selectedIds.value);
     ElMessage.success(`已批量通过 ${selectedIds.value.length} 条`);
     selectedIds.value = [];
@@ -120,6 +157,8 @@ async function handleBatchApprove() {
     }
     // R26 follow-up (reviewer #16 concern #4): only reload on 409 race.
     if (err?.status === 409) loadData();
+  } finally {
+    batchApproveSubmitting.value = false;
   }
 }
 
@@ -293,6 +332,8 @@ function evidenceImageIndex(urls: string[], url: string): number {
             v-if="canWrite && selectedIds.length > 0"
             type="success"
             :icon="Check"
+            :loading="batchApproveSubmitting"
+            :disabled="batchApproveSubmitting"
             @click="handleBatchApprove"
           >
             批量通过 ({{ selectedIds.length }})
@@ -455,7 +496,14 @@ function evidenceImageIndex(urls: string[], url: string): number {
         <el-table-column prop="processTaskId" label="任务ID" width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="160" fixed="right" v-if="canWrite">
           <template #default="{ row }">
-            <el-button type="success" text size="small" :icon="Check" @click="handleApprove(row)">
+            <el-button
+              type="success"
+              text
+              size="small"
+              :icon="Check"
+              :disabled="approveSubmitting && approveTargetRow?.id === row.id"
+              @click="handleApprove(row)"
+            >
               通过
             </el-button>
             <el-button type="danger" text size="small" :icon="Close" @click="handleReject(row)">
@@ -492,6 +540,55 @@ function evidenceImageIndex(urls: string[], url: string): number {
       confirm-text="驳回"
       @confirm="handleRejectConfirm"
     />
+
+    <!-- fool-proof-design.md Rule 1+2: 通过前必先展示完整上下文再确认, 不可一键秒批.
+         镜像 production/batches/detail.vue「申请撤回整单」弹框的 el-alert 上下文 pattern. -->
+    <el-dialog
+      v-model="approveDialogVisible"
+      title="确认审批通过"
+      width="480px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!approveSubmitting"
+      destroy-on-close
+      @close="cancelApprove"
+    >
+      <el-alert
+        v-if="approveTargetRow"
+        :title="`${approveTargetRow.productName || '产品未知'} - ${approveTargetRow.processCategory || '工序未知'}`"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          <div class="approve-context">
+            <span>报工人: <strong>{{ approveTargetRow.reporterName || '-' }}</strong></span>
+            <span>报工日期: <strong>{{ formatDate(approveTargetRow.reportDate) }}</strong></span>
+            <span>投入量: <strong>{{ formatQty(approveTargetRow.inputQuantity) }}</strong></span>
+            <span>产出量: <strong>{{ formatQty(approveTargetRow.outputQuantity) }}</strong></span>
+            <span>人数: <strong>{{ approveTargetRow.totalWorkers ?? '-' }}</strong></span>
+            <span>工时(分钟): <strong>{{ approveTargetRow.totalWorkMinutes ?? '-' }}</strong></span>
+          </div>
+        </template>
+      </el-alert>
+      <el-alert
+        style="margin-top:12px"
+        title="审批通过后将计入下游成本/工资核算，不可撤销（如需撤销请到「报工撤回」流程重新审批）。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <template #footer>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <el-button :disabled="approveSubmitting" @click="cancelApprove">取消</el-button>
+          <el-button
+            type="success"
+            :loading="approveSubmitting"
+            :disabled="approveSubmitting"
+            @click="confirmApprove"
+          >确认审批通过</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -560,5 +657,13 @@ function evidenceImageIndex(urls: string[], url: string): number {
   white-space: normal;
   line-height: 18px;
   padding: 3px 8px;
+}
+.approve-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font-size: 13px;
+  color: #606266;
+  margin-top: 4px;
 }
 </style>

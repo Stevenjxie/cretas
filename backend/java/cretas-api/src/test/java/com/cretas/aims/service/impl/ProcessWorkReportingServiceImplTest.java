@@ -1,8 +1,11 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.ProcessWorkReportSubmitRequest;
+import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.ProcessTask;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
@@ -22,6 +25,10 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -944,6 +951,125 @@ class ProcessWorkReportingServiceImplTest {
             service.calibrateTaskQuantities(FACTORY_ID);
 
             verify(taskRepository, never()).save(any());
+        }
+    }
+
+    // ==================== 待审批列表 productName/processCategory 回落解析 ====================
+    // Fool-proof Rule 2 (审批必带身份信息) fix, 2026-07-04. real-data audit against F006 prod
+    // (1789 条 PENDING 报工) 发现绝大多数行的 product_name / process_category 列本身是 null,
+    // 但报工行自带的 product_type_id / work_process_task_id 可回落解析出真实名称
+    // (product_type_id 非空 1602/1789, work_process_task_id 非空 1602/1789, 而旧的
+    // process_task_id 路径几乎不用: 仅 1/1789 非空)。
+
+    @Nested
+    @DisplayName("待审批列表 — productName/processCategory 回落解析")
+    class GetPendingApprovalsTests {
+
+        @Test
+        @DisplayName("UT-PWR-22: product_name/process_category 为空但带 product_type_id/work_process_task_id → 回落解析出真实名称")
+        void getPendingApprovals_fallsBackToDirectFields_whenNameColumnsBlank() {
+            ProductionReport report = ProductionReport.builder()
+                    .id(REPORT_ID)
+                    .factoryId(FACTORY_ID)
+                    .processTaskId(null)
+                    .productTypeId("PROD-001")
+                    .workProcessTaskId(7001L)
+                    .workerId(WORKER_ID)
+                    .reporterName("张三")
+                    .reportType(ProductionReport.ReportType.PROGRESS)
+                    .outputQuantity(new BigDecimal("50"))
+                    .approvalStatus("PENDING")
+                    .status(ProductionReport.Status.SUBMITTED)
+                    .isSupplemental(false)
+                    .build();
+
+            Pageable pageable = PageRequest.of(0, 20);
+            Page<ProductionReport> page = new PageImpl<>(List.of(report), pageable, 1);
+            when(reportRepository.findPendingApprovalsForFactory(FACTORY_ID, "PENDING", pageable))
+                    .thenReturn(page);
+            when(attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdInOrderByUploadedAtAsc(
+                    anyString(), any(), anyList())).thenReturn(List.of());
+
+            ProductType productType = new ProductType();
+            productType.setId("PROD-001");
+            productType.setFactoryId(FACTORY_ID);
+            productType.setName("叮咚好食光椒麻掌中宝 120g");
+            when(productTypeRepository.findByIdAndFactoryId("PROD-001", FACTORY_ID))
+                    .thenReturn(Optional.of(productType));
+
+            WorkProcessTask wpt = wipTask().build();
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 7001L))
+                    .thenReturn(Optional.of(wpt));
+
+            WorkProcess workProcess = WorkProcess.builder()
+                    .id("WP-001")
+                    .factoryId(FACTORY_ID)
+                    .processName("水解化冻")
+                    .build();
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, "WP-001"))
+                    .thenReturn(Optional.of(workProcess));
+
+            PageResponse<Map<String, Object>> result = service.getPendingApprovals(FACTORY_ID, pageable);
+
+            assertEquals(1, result.getContent().size());
+            Map<String, Object> row = result.getContent().get(0);
+            assertEquals("叮咚好食光椒麻掌中宝 120g", row.get("productName"));
+            assertEquals("水解化冻", row.get("processCategory"));
+        }
+
+        @Test
+        @DisplayName("UT-PWR-23: 报工行已带 productName/processCategory → 不触发回落查询")
+        void getPendingApprovals_usesExistingColumns_noFallbackQuery() {
+            ProductionReport report = pendingReport()
+                    .productName("已有产品名")
+                    .build(); // pendingReport() 已设 processCategory="切割"
+
+            Pageable pageable = PageRequest.of(0, 20);
+            Page<ProductionReport> page = new PageImpl<>(List.of(report), pageable, 1);
+            when(reportRepository.findPendingApprovalsForFactory(FACTORY_ID, "PENDING", pageable))
+                    .thenReturn(page);
+            when(attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdInOrderByUploadedAtAsc(
+                    anyString(), any(), anyList())).thenReturn(List.of());
+
+            PageResponse<Map<String, Object>> result = service.getPendingApprovals(FACTORY_ID, pageable);
+
+            Map<String, Object> row = result.getContent().get(0);
+            assertEquals("已有产品名", row.get("productName"));
+            assertEquals("切割", row.get("processCategory"));
+            verifyNoInteractions(productTypeRepository, workProcessTaskRepository);
+            verify(taskRepository, never()).findByFactoryIdAndId(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("UT-PWR-24: 全部字段都无法解析(数据缺口) → honest-null, 不伪造名称")
+        void getPendingApprovals_returnsNull_whenNoResolvablePath() {
+            ProductionReport report = ProductionReport.builder()
+                    .id(REPORT_ID)
+                    .factoryId(FACTORY_ID)
+                    .processTaskId(null)
+                    .productTypeId(null)
+                    .workProcessTaskId(null)
+                    .workerId(WORKER_ID)
+                    .reporterName("张三")
+                    .reportType(ProductionReport.ReportType.PROGRESS)
+                    .outputQuantity(new BigDecimal("50"))
+                    .approvalStatus("PENDING")
+                    .status(ProductionReport.Status.SUBMITTED)
+                    .isSupplemental(false)
+                    .build();
+
+            Pageable pageable = PageRequest.of(0, 20);
+            Page<ProductionReport> page = new PageImpl<>(List.of(report), pageable, 1);
+            when(reportRepository.findPendingApprovalsForFactory(FACTORY_ID, "PENDING", pageable))
+                    .thenReturn(page);
+            when(attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdInOrderByUploadedAtAsc(
+                    anyString(), any(), anyList())).thenReturn(List.of());
+
+            PageResponse<Map<String, Object>> result = service.getPendingApprovals(FACTORY_ID, pageable);
+
+            Map<String, Object> row = result.getContent().get(0);
+            assertNull(row.get("productName"));
+            assertNull(row.get("processCategory"));
         }
     }
 }
