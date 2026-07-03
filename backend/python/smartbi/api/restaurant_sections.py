@@ -1362,7 +1362,9 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
     pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
     compare = pos.get("storeComparison") if isinstance(pos.get("storeComparison"), dict) else {}
 
-    if any(keyword in text for keyword in ("不要", "别做", "先不要", "风险", "避开")):
+    asks_for_do_not_do = any(keyword in text for keyword in ("别做", "先不要", "不要做", "风险", "避开", "哪些不要", "什么不要"))
+    asks_for_direct_answer = any(keyword in text for keyword in ("不要泛泛", "不要讲理论", "不要只", "不要光", "不要套餐", "不要米饭"))
+    if asks_for_do_not_do and not asks_for_direct_answer:
         return "\n\n".join([
             "这个追问我只说今天先别做什么，不重复前面的诊断。",
             f"今天先别做：{do_not_do}",
@@ -1547,11 +1549,12 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     session_key = _owner_action_session_key(factory_id, session_id)
     previous = _OWNER_ACTION_CHAT_SESSIONS.get(session_key, {})
     requested = _effective_str(body.demo_scenario, body.demoScenario)
+    requested_scenario = _OWNER_ACTION_SCENARIO_ALIASES.get(str(requested or "").strip(), requested)
     scenario = _pick_owner_action_scenario(body.message, requested, previous.get("scenario", ""))
     scenarios = set(list_owner_action_demo_scenarios())
     is_follow_up_turn = _is_follow_up(body.message) and (
         (bool(previous.get("scenario")) and scenario == previous.get("scenario"))
-        or (bool(provided_session_id) and requested in scenarios and scenario == requested)
+        or (bool(provided_session_id) and requested_scenario in scenarios and scenario == requested_scenario)
     )
 
     try:

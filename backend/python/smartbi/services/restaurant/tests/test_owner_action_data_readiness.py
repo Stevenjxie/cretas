@@ -52,3 +52,20 @@ def test_owner_action_chat_routes_boss_variant_questions_to_specific_scenarios()
         assert data["dataReadiness"]["scenario"] == expected_scenario, message
         for word in expected_words:
             assert word in answer, f"{message}: missing {word} in {answer}"
+
+
+def test_owner_action_followup_negative_style_request_still_answers_action() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_DATA_READINESS_DEMO",
+            message="不要泛泛说，仓管今天具体补什么？",
+            sessionId="owner-action-style-negative",
+            demoScenario="inventory",
+        )
+    )
+
+    answer = response["data"]["answer"]
+    assert response["data"]["dataReadiness"]["scenario"] == "inventory_reorder"
+    assert "今天照这三步做" in answer
+    assert "先补活鱼" in answer
+    assert "今天先别做什么" not in answer
