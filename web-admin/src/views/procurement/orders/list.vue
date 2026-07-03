@@ -323,7 +323,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
         showClose: true,
       });
       break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 

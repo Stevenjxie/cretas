@@ -25,24 +25,35 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 function rowActionsFor(row: TableRow) {
   // #751: 删除 dropdown 中的 'view-detail' (页面已有独立"查看" button, 避免重复 button 跳同页)
+  // fool-proof-design Rule 5: 'edit'/'lock' 没有真实后端能力 (无批次编辑表单/接口,
+  // 无锁定 API) — 之前点了才弹 toast (click-then-toast, dead-end)。改用
+  // forceDisabled: 灰显 + hover 提示原因, 用户不用点一次才知道不可用。
   const all = computeRowActions(
     'processTask',
     { status: String(row.status || 'IN_PROGRESS'), id: String(row.id || '') },
-    { canViewPrice: canViewPrice.value }
+    {
+      canViewPrice: canViewPrice.value,
+      forceDisabled: {
+        edit: '批次编辑功能暂未上线 (无独立编辑表单)，如需修改请联系管理员',
+        lock: '锁定功能后端 API 对接中，暂不可用',
+      },
+    }
   );
   return all.filter((a) => a.id !== 'view-detail');
 }
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': router.push(`/production/batches/${row.id}`); break;
-    // #751: 编辑跳详情页 + ?mode=edit hint, 让详情页区分 read-only vs edit (页面侧需消费 query)
+    // #751: 编辑跳详情页 + ?mode=edit hint — 'edit' 已在 rowActionsFor() 用
+    // forceDisabled 灰显 (无编辑表单), 这个 case 保留只作防御 (元素被禁用后
+    // el-dropdown 不会派发 command)。
     case 'edit': router.push(`/production/batches/${row.id}?mode=edit`); break;
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产批次_${row.batchNumber || row.id}` }); break;
     case 'lock':
-      // #747 sister: 同步 plans 的提示文案
+      // 'lock' 已在 rowActionsFor() 用 forceDisabled 灰显; 保留仅作防御。
       ElMessage.info('锁定后该批次将不再允许修改数量/报工记录，进入封存状态。后端 API 正在对接中，暂时不可用。');
       break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 // AI 智能创建生产批次 (Day 9, Issue #780.3)
@@ -238,11 +249,17 @@ async function submitCreate() {
   }
 }
 
+// ProductionBatchStatus.java real values: PLANNED/PLANNING/IN_PROGRESS/PRODUCING/
+// PAUSED/COMPLETED/CANCELLED. PENDING kept for back-compat display only (not a
+// real value); PLANNING/PRODUCING are legacy aliases of PLANNED/IN_PROGRESS.
 function getStatusType(status: string) {
   const map: Record<string, string> = {
     PLANNED: 'info',
+    PLANNING: 'info',
     PENDING: 'info',
     IN_PROGRESS: 'warning',
+    PRODUCING: 'warning',
+    PAUSED: 'warning',
     COMPLETED: 'success',
     CANCELLED: 'danger'
   };
@@ -252,8 +269,11 @@ function getStatusType(status: string) {
 function getStatusText(status: string) {
   const map: Record<string, string> = {
     PLANNED: '待生产',
+    PLANNING: '待生产',
     PENDING: '待生产',
     IN_PROGRESS: '生产中',
+    PRODUCING: '生产中',
+    PAUSED: '已暂停',
     COMPLETED: '已完成',
     CANCELLED: '已取消'
   };
@@ -303,6 +323,7 @@ function getStatusText(status: string) {
                PLANNED 才是真实"待生产"状态值。 -->
           <el-option label="待生产" value="PLANNED" />
           <el-option label="生产中" value="IN_PROGRESS" />
+          <el-option label="已暂停" value="PAUSED" />
           <el-option label="已完成" value="COMPLETED" />
           <el-option label="已取消" value="CANCELLED" />
         </el-select>
@@ -329,9 +350,18 @@ function getStatusText(status: string) {
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
         <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
-            <!-- #751: 查看 vs 编辑 区分 — 详情页消费 ?mode=edit 决定 read-only / editable -->
+            <!-- #751: 查看 vs 编辑 区分 — 详情页消费 ?mode=edit 决定 read-only / editable.
+                 fool-proof-design Rule 5: 批次没有独立编辑表单, 之前点了才发现是死路
+                 (click-then-toast) — 灰显 + title 说明原因, 而不是让用户点一次才知道。 -->
             <el-button type="primary" link size="small" @click="router.push(`/production/batches/${row.id}`)">查看</el-button>
-            <el-button v-if="canWrite" type="warning" link size="small" @click="router.push(`/production/batches/${row.id}?mode=edit`)">编辑</el-button>
+            <el-button
+              v-if="canWrite"
+              type="warning"
+              link
+              size="small"
+              disabled
+              title="批次编辑功能暂未上线 (无独立编辑表单)"
+            >编辑</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"

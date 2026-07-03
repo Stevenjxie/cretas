@@ -338,7 +338,22 @@ function handleRowActionClick(actionId: string, row: TableRow) {
         query: { salesOrderId: String(row.id), action: 'create' },
       });
       break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    // convert-to-purchase / edit-price were listed in rowActionsConfig with no
+    // handler here (fell to the generic debug toast below — a real dead-menu
+    // item, not the key-mismatch class but the same "menu promises an action
+    // with no wiring" symptom). procurement/orders/list.vue has no query-param
+    // prefill for a from-SO purchase flow yet, so route to the order detail
+    // (same wayfinding pattern already used for edit-price/view-price-history
+    // on the purchaseOrder side) rather than leave a dead click.
+    case 'convert-to-purchase':
+      ElMessage.info(`请在销售单 ${row.orderNumber || row.id} 详情页查看缺料情况后手动生成采购单`);
+      goDetail(String(row.id));
+      break;
+    case 'edit-price':
+      ElMessage.info(`请在销售单 ${row.orderNumber || row.id} 详情页维护行项目单价`);
+      goDetail(String(row.id));
+      break;
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 

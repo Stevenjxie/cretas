@@ -69,7 +69,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     // Shipments 复用 sales-order 模板 — 出货关联的销售单 PDF 是客户期望
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.salesOrderId || row.id), { fileName: `出货单_${row.id}` }); break;
     case 'return': openReturnDialog(row); break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 function openAiForRow(row: TableRow) {
@@ -182,6 +182,7 @@ function getStatusType(status: string) {
     PENDING: 'info',
     SHIPPED: 'warning',
     DELIVERED: 'success',
+    RETURNED: 'danger',
     CANCELLED: 'danger'
   };
   return map[status?.toUpperCase()] || 'info';
@@ -192,6 +193,7 @@ function getStatusText(status: string) {
     PENDING: '待出货',
     SHIPPED: '已发货',
     DELIVERED: '已送达',
+    RETURNED: '已退货',
     CANCELLED: '已取消'
   };
   return map[status?.toUpperCase()] || status;
@@ -294,12 +296,16 @@ async function submitCreateForm() {
               style="width: 280px;"
               @change="handleSearch"
             />
+            <!-- 同一 key-mismatch bug class: 后端 ShipmentRecordService 只 setStatus 小写
+                 pending/shipped/delivered/returned/cancelled ('草稿'/DRAFT 从未真实存在),
+                 findByFactoryIdAndStatus 是精确匹配 (PG = 大小写敏感) — 之前传大写值筛选
+                 永远 0 结果。改传真实小写值。 -->
             <el-select v-model="statusFilter" placeholder="状态" clearable style="width: 140px" @change="handleSearch">
-              <el-option label="草稿" value="DRAFT" />
-              <el-option label="待发货" value="PENDING" />
-              <el-option label="已发货" value="SHIPPED" />
-              <el-option label="已签收" value="DELIVERED" />
-              <el-option label="已取消" value="CANCELLED" />
+              <el-option label="待发货" value="pending" />
+              <el-option label="已发货" value="shipped" />
+              <el-option label="已签收" value="delivered" />
+              <el-option label="已退货" value="returned" />
+              <el-option label="已取消" value="cancelled" />
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>

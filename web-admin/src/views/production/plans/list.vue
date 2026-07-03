@@ -79,10 +79,17 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 function rowActionsFor(row: TableRow) {
   // #751: 删除 dropdown 中的 'view-detail' (页面已有独立"查看" button, 避免 3 button 跳同页)
+  // fool-proof-design Rule 5: 'lock' 后端 API 未实装 — 灰显 + hover 原因, 不再让用户
+  // 点了才弹 toast (#747 与 production/batches 的 'lock' 同款处理)。
   const all = computeRowActions(
     'productionPlan',
     { status: String(row.status || ''), id: String(row.id || '') },
-    { canViewPrice: canViewPrice.value }
+    {
+      canViewPrice: canViewPrice.value,
+      forceDisabled: {
+        lock: '锁定功能后端 API 对接中，暂不可用',
+      },
+    }
   );
   const filtered = all.filter((a) => a.id !== 'view-detail');
   // 6.12 N1b: PC 主流程砍掉"待生产→点开工"中间态。
@@ -96,15 +103,26 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'cancel': handleCancel(row); break;
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产计划_${row.planNumber || row.id}` }); break;
     case 'copy': void handleCopyPlan(row); break;
+    // PENDING_APPROVAL (ProductionPlanStatus) 是"申请撤回/取消"进入的状态, 由
+    // PRODUCTION_REVERSAL 审批流驱动 — 真正的审批入口是下方"撤销小结审批"列表
+    // (openReversalApproval), 不是逐行单独审批。之前这两个 action 列在菜单里但
+    // switch 没有对应 case, 点了直接落到 debug toast — 同一类"菜单列了但没接线"
+    // 的死菜单症状。改为打开真正的审批入口。
+    case 'approve':
+    case 'reject':
+      ElMessage.info(`计划 ${row.planNumber || row.id} 的撤销/取消申请请在下方「撤销小结审批」列表中处理`);
+      void openReversalApproval();
+      break;
     case 'lock':
-      // #747: 锁定动作目前后端 API 未实装, 给出明确提示而非静默 info
+      // 'lock' 已在 rowActionsFor() 用 forceDisabled 灰显; 保留仅作防御 (禁用项
+      // el-dropdown 不会派发 command)。
       ElMessageBox.alert(
         '锁定后该生产计划将不再允许修改数量/日期，进入排产保护阶段（避免生产中误改）。\n\n后端 API 正在对接中，暂时不可用。',
         '锁定生产计划',
         { confirmButtonText: '我知道了' }
       ).catch(() => { /* dismiss */ });
       break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 function openAiForRow(row: TableRow) {
