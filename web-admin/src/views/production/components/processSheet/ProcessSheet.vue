@@ -174,6 +174,7 @@ const loading = ref(false);
 const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({});
 const initialRowsMap = ref<Record<string, ProcessSheetRowView[]>>({});
 const inventoryTableRefs = ref<Record<string, InstanceType<typeof InventoryTable> | null>>({});
+const dataTableRefs = ref<Record<string, InstanceType<typeof ProcessDataTable> | null>>({});
 // F006 双出成率总览 (全工序汇总卡 — 张权需求: 一眼看全链对上工序/对原料率)
 const yieldCardRef = ref<InstanceType<typeof YieldCardTable> | null>(null);
 const yieldOverviewActive = ref<string[]>(['yield']);
@@ -255,6 +256,16 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
   if (!upKey) return [];
   return inventoryMap.value[upKey] || [];
 }
+
+// -------------------------------------------------------------------------
+// 未保存草稿聚合 (防呆): 任一工序 tab 有未保存草稿行 → 整个抽屉视为 dirty，
+// 父组件 (list.vue 抽屉) 关闭前据此二次确认。
+// -------------------------------------------------------------------------
+const hasUnsavedRows = computed(() =>
+  Object.values(dataTableRefs.value).some((tbl) => tbl?.hasUnsavedRows === true)
+);
+
+defineExpose({ hasUnsavedRows });
 </script>
 
 <template>
@@ -306,6 +317,7 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
         <div style="display:flex;flex-direction:column;gap:16px">
           <!-- Data entry table — full width -->
           <ProcessDataTable
+            :ref="(el: any) => dataTableRefs[procKey(proc)] = el"
             :factory-id="factoryId"
             :plan-id="planId"
             :process-code="proc.code"
