@@ -33,6 +33,7 @@ def test_owner_action_chat_routes_boss_variant_questions_to_specific_scenarios()
         ("如果今晚客流比昨天多，厨房备菜怎么调？", "", "inventory_reorder", ("补货", "仓管")),
         ("商场今天有活动的话，我们门口和套餐怎么配合？", "", "external_event_response", ("商场", "活动")),
         ("酸菜鱼配什么小菜饮品更合理，别只看销量", "", "package", ("套餐", "毛利")),
+        ("周末桌子翻不动，是桌型、出餐还是服务的问题？先查什么？", "", "seating_mix", ("桌", "翻台")),
         ("不要泛泛说，仓管今天具体补什么？", "inventory", "inventory_reorder", ("仓管", "补")),
         ("厨房慢和服务慢哪个先处理？", "review", "staff_training", ("厨房", "服务")),
     ]

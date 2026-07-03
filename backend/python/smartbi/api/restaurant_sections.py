@@ -420,6 +420,8 @@ def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> 
         return "external_event_response"
     if "套餐" in message and any(keyword in message for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备")):
         return "package"
+    if any(keyword in message for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
+        return "seating_mix"
     if any(keyword in message for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢")) and not any(keyword in message for keyword in ("备菜", "备货", "补货", "库存")):
         return "kitchen_quality"
     if any(keyword in message for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "盘点", "月盘点", "损耗", "采购价格", "盈利")):
