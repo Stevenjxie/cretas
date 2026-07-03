@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
 import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer, Warning } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
@@ -323,6 +323,7 @@ async function loadSelectableSalesOrders() {
 }
 
 function handleSourceTypeChange(val: string) {
+  sourceOrderIdError.value = false;
   if (val === 'CUSTOMER_ORDER') {
     if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   } else {
@@ -330,6 +331,10 @@ function handleSourceTypeChange(val: string) {
     planForm.value.sourceOrderItemId = '';
   }
 }
+
+// 「来源销售订单」校验失败态 — 防呆: 空字段红框锚定 + 自动聚焦, 不只弹个 toast 让用户自己找。
+const sourceOrderIdError = ref(false);
+const sourceOrderSelectRef = ref<InstanceType<typeof ElSelect> | null>(null);
 
 // P0-12: 当前选中订单的可选产品行
 const selectedOrderItems = computed<TableRow[]>(() => {
@@ -340,6 +345,7 @@ const selectedOrderItems = computed<TableRow[]>(() => {
 });
 
 function handleSalesOrderSelect(orderId: string) {
+  sourceOrderIdError.value = false;
   const so = selectableSalesOrders.value.find((o) => String(o.id) === String(orderId));
   // 切换订单时清空已选行
   planForm.value.sourceOrderItemId = '';
@@ -671,7 +677,10 @@ async function submitPlan() {
   const isSoDriven = planForm.value.sourceType === 'CUSTOMER_ORDER';
   if (isSoDriven) {
     if (!planForm.value.sourceOrderId) {
-      ElMessage.warning('请选择来源销售订单');
+      // 防呆: 红框锚定 + 自动聚焦空字段 + sticky 可关闭错误提示 (不是 3 秒自动消失的 toast)。
+      sourceOrderIdError.value = true;
+      void nextTick(() => sourceOrderSelectRef.value?.focus());
+      ElMessage({ message: '请选择来源销售订单', type: 'error', duration: 0, showClose: true });
       return;
     }
     if (!planForm.value.sourceOrderItemIds || planForm.value.sourceOrderItemIds.length === 0) {
@@ -2890,8 +2899,14 @@ function handleAiFill(params: TableRow) {
             存货生产可多次小结（增量入库半成品/成品+实时扣料），计划保持开放，做完手动停产关闭；无需关联销售订单
           </div>
         </el-form-item>
-        <el-form-item v-if="planForm.sourceType === 'CUSTOMER_ORDER'" label="销售订单" required>
+        <el-form-item
+          v-if="planForm.sourceType === 'CUSTOMER_ORDER'"
+          label="销售订单"
+          required
+          :class="{ 'field-error': sourceOrderIdError }"
+        >
           <el-select
+            ref="sourceOrderSelectRef"
             v-model="planForm.sourceOrderId"
             placeholder="选择关联的销售订单"
             filterable
@@ -2906,6 +2921,7 @@ function handleAiFill(params: TableRow) {
               :value="String(so.id)"
             />
           </el-select>
+          <div v-if="sourceOrderIdError" class="field-error-hint">请选择来源销售订单</div>
         </el-form-item>
         <!-- SP5 多SO合并: 追加额外销售订单 -->
         <el-form-item
@@ -3892,6 +3908,19 @@ function handleAiFill(params: TableRow) {
 </template>
 
 <style lang="scss" scoped>
+// 校验失败字段红框锚定 (fool-proof-design Rule: 预先显示边界, 不只弹 toast 让用户自己找字段)。
+.field-error {
+  :deep(.el-select__wrapper) {
+    box-shadow: 0 0 0 1px var(--el-color-danger, #f56c6c) inset !important;
+  }
+}
+
+.field-error-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-color-danger, #f56c6c);
+}
+
 .page-wrapper {
   height: 100%;
   width: 100%;
