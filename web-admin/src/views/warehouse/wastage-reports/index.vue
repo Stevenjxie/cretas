@@ -121,7 +121,17 @@ function warehouseName(id: string) {
 
 // ────────────────────────────────────────────────────────────────────────────
 // 批次下拉 (防呆: 选批次 → 报损数量绑定该批次可用量, 与报废处置一致)。
-// 批次选填: 留空=物料级报损 (现有行为不变, 后端 approve 时 gate 可用量)。
+//
+// ⚠️ 批次为必选, 不是选填: 后端 CreateWastageReportRequest.materialBatchId 是
+// @NotBlank, DB 列 wastage_reports.material_batch_id 也是 NOT NULL (V20261010_24)。
+// 报损服务 (WastageReportServiceImpl) 全程按单一批次扣减 (applyWastageToInventory),
+// 没有跨批次 FEFO 物料级扣减路径。之前 UI 写 "留空=物料级报损" 但后端从未支持过 —
+// 仓管员照着提示留空批次 100% 命中 400 "批次 ID 不能为空"。
+// 修复: UI 诚实化为必选, 不再宣传后端不支持的路径 (fool-proof-design.md Rule 1/2)。
+// 若未来要支持真物料级报损 (跨批次 FEFO 自动扣减), 需要: ①Flyway 迁移放开
+// material_batch_id NOT NULL ②前端加物料类型选择器(当前无) ③后端仿
+// BatchConsumptionServiceImpl.adjustConsumption 写跨批次 FEFO 扣减 —
+// 属于新功能设计, 不在本次缺陷修复范围内。
 // ────────────────────────────────────────────────────────────────────────────
 const batches = ref<TableRow[]>([]);
 
@@ -132,7 +142,7 @@ async function loadBatches() {
       params: { status: 'AVAILABLE', size: 200 },
     });
     if (res.success && res.data) batches.value = res.data.content || res.data || [];
-  } catch { /* silent — 批次选填, 加载失败不阻塞物料级报损 */ }
+  } catch { /* silent — 加载失败时批次下拉为空, 提交仍会被 submitCreate 的必选校验挡住 */ }
 }
 
 // 按所选仓库过滤批次 (仓库未选则显全部)
@@ -142,7 +152,20 @@ const warehouseBatches = computed<TableRow[]>(() => {
   return batches.value.filter((b) => String(b.warehouseId) === String(wid));
 });
 
-// 选中批次的可用量 (currentQuantity 优先); 未选批次 → null (qty 无 max, 物料级)
+// Bug 3 fix: 列表"批次"列之前直接渲染 row.materialBatchId (裸 GUID)。
+// 复用 create dialog 已加载的 batches (AVAILABLE 批次) 解析显示名 "批次号 - 物料名"。
+// 注意: 已耗尽/非 AVAILABLE 批次可能不在 batches 里 (loadBatches 只拉 AVAILABLE) —
+// 找不到时诚实回退显示原始 ID, 而不是静默隐藏。
+function batchLabel(id: unknown): string {
+  const idStr = id == null ? '' : String(id);
+  if (!idStr) return '—';
+  const b = batches.value.find((x) => String(x.id) === idStr);
+  if (!b) return idStr;
+  const name = b.materialName || b.materialTypeName || '物料';
+  return `${b.batchNumber || idStr} - ${name}`;
+}
+
+// 选中批次的可用量 (currentQuantity 优先); 批次必选, 未选时 null 仅用于禁止提交前的兜底态
 const selectedWastageMax = computed<number | null>(() => {
   const b = batches.value.find((x) => String(x.id) === String(createForm.value.materialBatchId));
   if (!b) return null;
@@ -201,11 +224,16 @@ async function submitCreate() {
     ElMessage({ message: '请选择仓库', type: 'warning', duration: 3000 });
     return;
   }
+  // 批次必选 (后端 @NotBlank + DB NOT NULL, 服务不支持跨批次物料级扣减 — 见上方批次下拉注释)
+  if (!form.materialBatchId) {
+    ElMessage({ message: '请选择批次（报损须精确到批次，用于扣减对应库存与核算成本）', type: 'warning', duration: 0, showClose: true });
+    return;
+  }
   if (!form.wastageQty || form.wastageQty <= 0) {
     ElMessage({ message: '请填写报损数量', type: 'warning', duration: 3000 });
     return;
   }
-  // 防呆: 选了批次则报损数量不可超过该批次可用量 (与报废处置一致; 留空批次=物料级不校验)
+  // 防呆: 报损数量不可超过所选批次可用量 (与报废处置一致)
   if (selectedWastageMax.value != null && form.wastageQty > selectedWastageMax.value) {
     ElMessage({ message: `报损数量不能超过批次可用量 ${selectedWastageMax.value}`, type: 'warning', duration: 0, showClose: true });
     return;
@@ -439,8 +467,8 @@ onMounted(async () => {
         <el-table-column label="仓库" min-width="110">
           <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
         </el-table-column>
-        <el-table-column label="批次" prop="materialBatchId" min-width="110">
-          <template #default="{ row }">{{ row.materialBatchId || '—' }}</template>
+        <el-table-column label="批次" prop="materialBatchId" min-width="180">
+          <template #default="{ row }">{{ batchLabel(row.materialBatchId) }}</template>
         </el-table-column>
         <el-table-column label="报损数量" prop="wastageQty" width="100" align="right" />
         <el-table-column label="报损原因" width="120">
@@ -536,11 +564,10 @@ onMounted(async () => {
             </el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="批次">
+        <el-form-item label="批次" required>
           <el-select
             v-model="createForm.materialBatchId"
-            placeholder="可选 — 选批次后限定报损数量上限；留空=物料级报损"
-            clearable
+            placeholder="请选择批次（报损须精确到批次）"
             filterable
             style="width: 100%"
           >
