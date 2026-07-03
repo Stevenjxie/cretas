@@ -1,6 +1,9 @@
 package com.cretas.aims.service.finance.impl;
 
 import com.cretas.aims.dto.finance.VoucherExportRequestDTO;
+import com.cretas.aims.entity.Customer;
+import com.cretas.aims.entity.enums.AuxiliaryType;
+import com.cretas.aims.entity.enums.VoucherExportFileFormat;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherTargetSystem;
 import com.cretas.aims.entity.enums.VoucherType;
@@ -9,9 +12,14 @@ import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.entity.finance.VoucherExportConfig;
 import com.cretas.aims.entity.finance.VoucherExportRecord;
 import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.DepartmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
@@ -34,10 +42,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.nio.charset.Charset;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -58,6 +72,11 @@ class VoucherExportKingdeeTemplateTest {
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepo;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private CustomerRepository customerRepo;
+    @Mock private SupplierRepository supplierRepo;
+    @Mock private DepartmentRepository departmentRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private UserRepository userRepo;
 
     private VoucherExportServiceImpl service;
 
@@ -70,7 +89,8 @@ class VoucherExportKingdeeTemplateTest {
     void setUp() {
         service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
                 accountingPeriodRepo, exportConfigRepo, exportRecordRepo,
-                materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo);
+                materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo,
+                customerRepo, supplierRepo, departmentRepo, productTypeRepo, userRepo);
     }
 
     @Test
@@ -250,6 +270,238 @@ class VoucherExportKingdeeTemplateTest {
                 "业务日期", "凭证字", "凭证编号", "附单据数", "分录摘要", "会计科目编码", "会计科目名称",
                 "借方", "贷方", "币种", "汇率", "原币金额", "数量", "单价",
                 "核算类别", "核算编码", "核算维度", "制单人");
+    }
+
+    @Test
+    @DisplayName("云星空 auxiliary UUID resolves to 类别:名称, not raw UUID")
+    void exportKingdeeImportTemplate_yxsky_resolvesAuxiliaryUuidToNameCategory() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_YXSKY))
+                .thenReturn(Optional.empty());
+        String customerUuid = "11111111-2222-3333-4444-555555555555";
+        Voucher voucher = voucher("V-002", "1002", LocalDate.of(2026, 5, 12));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(List.of(voucher));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-002"))
+                .thenReturn(List.of(
+                        entryAux("E-1", 1, "1122", "应收账款", "销售", "100.00", "0.00",
+                                AuxiliaryType.CUSTOMER, customerUuid),
+                        entry("E-2", 2, "6001", "主营业务收入", "销售", "0.00", "100.00", "")
+                ));
+        when(customerRepo.findAllById(any())).thenReturn(List.of(customer(customerUuid, "张三海鲜", "C001")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(VoucherTargetSystem.KINGDEE_YXSKY), USER_ID, out);
+
+        Sheet sheet = readFirstSheet(out.toByteArray());
+        String aux = cellAsString(sheet.getRow(1).getCell(10)); // 辅助核算 column
+        assertEquals("客户:张三海鲜", aux, "UUID must be resolved to 类别:名称");
+        assertFalse(aux.contains(customerUuid), "must never emit the raw UUID");
+    }
+
+    @Test
+    @DisplayName("KIS auxiliary resolves to 核算类别 + 核算编码 + 核算名称 (not UUID)")
+    void exportKingdeeImportTemplate_kis_resolvesAuxiliaryCategoryCodeName() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_KIS))
+                .thenReturn(Optional.empty());
+        String customerUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        Voucher voucher = voucher("V-003", "1003", LocalDate.of(2026, 5, 13));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(List.of(voucher));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-003"))
+                .thenReturn(List.of(
+                        entryAux("E-1", 1, "1122", "应收账款", "销售", "200.00", "0.00",
+                                AuxiliaryType.CUSTOMER, customerUuid)
+                ));
+        when(customerRepo.findAllById(any())).thenReturn(List.of(customer(customerUuid, "李四餐饮", "C009")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(VoucherTargetSystem.KINGDEE_KIS), USER_ID, out);
+
+        Row row = readFirstSheet(out.toByteArray()).getRow(1);
+        assertEquals("客户", cellAsString(row.getCell(14)), "核算类别 = 客户");
+        assertEquals("C009", cellAsString(row.getCell(15)), "核算编码 = 实体 code");
+        assertEquals("李四餐饮", cellAsString(row.getCell(16)), "核算名称 = 实体名, not UUID");
+        assertFalse(cellAsString(row.getCell(16)).contains(customerUuid));
+    }
+
+    @Test
+    @DisplayName("unresolvable auxiliary entity leaves name blank, never emits UUID")
+    void exportKingdeeImportTemplate_unresolvableAuxiliary_blankNotUuid() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_KIS))
+                .thenReturn(Optional.empty());
+        String deletedUuid = "dddddddd-0000-0000-0000-000000000000";
+        Voucher voucher = voucher("V-004", "1004", LocalDate.of(2026, 5, 14));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(List.of(voucher));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-004"))
+                .thenReturn(List.of(
+                        entryAux("E-1", 1, "1122", "应收账款", "销售", "50.00", "0.00",
+                                AuxiliaryType.CUSTOMER, deletedUuid)
+                ));
+        when(customerRepo.findAllById(any())).thenReturn(List.of()); // entity gone
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(VoucherTargetSystem.KINGDEE_KIS), USER_ID, out);
+
+        Row row = readFirstSheet(out.toByteArray()).getRow(1);
+        assertEquals("客户", cellAsString(row.getCell(14)), "核算类别 still known from type");
+        assertEquals("", cellAsString(row.getCell(15)), "核算编码 blank when unresolved");
+        assertEquals("", cellAsString(row.getCell(16)), "核算名称 blank (NOT the UUID)");
+    }
+
+    @Test
+    @DisplayName("DBF format writes a valid dBASE file with KIS field schema and a parseable record")
+    void exportKingdeeImportTemplate_dbf_writesValidDbaseFile() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Optional.empty());
+        String customerUuid = "12341234-1234-1234-1234-123412341234";
+        Voucher voucher = voucher("V-005", "1005", LocalDate.of(2026, 5, 15));
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(List.of(voucher));
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-005"))
+                .thenReturn(List.of(
+                        entryAux("E-1", 1, "1122", "应收账款", "销售收款", "12.35", "0.00",
+                                AuxiliaryType.CUSTOMER, customerUuid),
+                        entry("E-2", 2, "6001", "主营业务收入", "销售收款", "0.00", "12.35", "")
+                ));
+        when(customerRepo.findAllById(any())).thenReturn(List.of(customer(customerUuid, "王五商贸", "C077")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        VoucherExportRequestDTO req = VoucherExportRequestDTO.builder()
+                .startDate(START).endDate(END)
+                .targetSystem(VoucherTargetSystem.KINGDEE_KIS)
+                .exportFormat(VoucherExportFileFormat.DBF)
+                .build();
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportKingdeeImportTemplate(FACTORY_ID, req, USER_ID, out);
+        assertTrue(fileName.endsWith(".dbf"), "DBF filename extension");
+        assertTrue(fileName.startsWith("kingdee-kis-voucher_"));
+
+        ParsedDbf dbf = parseDbf(out.toByteArray());
+        // field schema present
+        assertTrue(dbf.fieldNames.containsAll(List.of(
+                "FDATE", "FTRANSDATE", "FPERIOD", "FGROUP", "FNUM", "FENTRYID", "FEXP", "FACCTID",
+                "FCLSNAME1", "FOBJID1", "FOBJNAME1", "FDC", "FCYID", "FEXCHRATE",
+                "FFCYAMT", "FDEBIT", "FCREDIT", "FAMOUNT", "FQUANTITY", "FPRICE", "FPREPARE")),
+                "all KIS DBF fields present; got " + dbf.fieldNames);
+        assertEquals(2, dbf.records.size(), "two entries → two DBF records");
+
+        Map<String, String> debit = dbf.records.get(0);
+        assertEquals("20260515", debit.get("FDATE"));
+        assertEquals("5", debit.get("FPERIOD"), "FPERIOD = voucher month");
+        assertEquals("记", debit.get("FGROUP"));
+        assertEquals("1005", debit.get("FNUM"));
+        assertEquals("0", debit.get("FENTRYID"), "分录号 0-based");
+        assertEquals("销售收款", debit.get("FEXP"));
+        assertEquals("1122", debit.get("FACCTID"));
+        assertEquals("客户", debit.get("FCLSNAME1"), "核算类别名 resolved");
+        assertEquals("C077", debit.get("FOBJID1"), "核算项目代码 resolved");
+        assertEquals("王五商贸", debit.get("FOBJNAME1"), "核算项目名 resolved, not UUID");
+        assertFalse(debit.get("FOBJNAME1").contains(customerUuid));
+        assertEquals("1", debit.get("FDC"), "debit → FDC=1");
+        assertEquals("RMB", debit.get("FCYID"));
+        assertEquals("12.35", debit.get("FDEBIT"), "HALF_UP 12.345→12.35");
+        assertEquals("0.00", debit.get("FCREDIT"));
+        assertEquals("12.35", debit.get("FAMOUNT"));
+
+        Map<String, String> credit = dbf.records.get(1);
+        assertEquals("1", credit.get("FENTRYID"), "second entry in same voucher → 1");
+        assertEquals("0", credit.get("FDC"), "credit → FDC=0");
+        assertEquals("12.35", credit.get("FCREDIT"));
+    }
+
+    @Test
+    @DisplayName("XLS format writes legacy BIFF workbook (.xls) for KIS专业版")
+    void exportKingdeeImportTemplate_xls_writesBiff() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_KIS))
+                .thenReturn(Optional.empty());
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END)).thenReturn(List.of());
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        VoucherExportRequestDTO req = VoucherExportRequestDTO.builder()
+                .startDate(START).endDate(END)
+                .targetSystem(VoucherTargetSystem.KINGDEE_KIS)
+                .exportFormat(VoucherExportFileFormat.XLS)
+                .build();
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String fileName = service.exportKingdeeImportTemplate(FACTORY_ID, req, USER_ID, out);
+        assertTrue(fileName.endsWith(".xls"), "legacy BIFF extension");
+        // BIFF (HSSF) magic: D0 CF 11 E0 (OLE2 compound file)
+        byte[] bytes = out.toByteArray();
+        assertEquals((byte) 0xD0, bytes[0]);
+        assertEquals((byte) 0xCF, bytes[1]);
+        try (org.apache.poi.hssf.usermodel.HSSFWorkbook wb =
+                     new org.apache.poi.hssf.usermodel.HSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = wb.getSheetAt(0);
+            assertRow(sheet.getRow(0),
+                    "日期", "凭证字", "凭证号", "附单据数", "摘要", "科目编码", "科目名称",
+                    "借方金额", "贷方金额", "币别", "汇率", "原币金额", "数量", "单价",
+                    "核算类别", "核算编码", "核算名称", "制单人");
+        }
+    }
+
+    private Customer customer(String id, String name, String code) {
+        Customer c = new Customer();
+        c.setId(id);
+        c.setFactoryId(FACTORY_ID);
+        c.setName(name);
+        c.setCode(code);
+        return c;
+    }
+
+    private VoucherEntry entryAux(String id, int lineNo, String code, String name,
+                                  String summary, String debit, String credit,
+                                  AuxiliaryType auxType, String auxId) {
+        VoucherEntry e = entry(id, lineNo, code, name, summary, debit, credit, auxId);
+        e.setAuxiliaryType(auxType);
+        return e;
+    }
+
+    // ---- Minimal dBASE III (.dbf) parser for test verification ----
+    private record ParsedDbf(List<String> fieldNames, List<Map<String, String>> records) {
+    }
+
+    private static ParsedDbf parseDbf(byte[] bytes) {
+        Charset gbk = Charset.isSupported("GBK") ? Charset.forName("GBK") : Charset.defaultCharset();
+        int recordCount = u32(bytes, 4);
+        int headerLength = u16(bytes, 8);
+        int numFields = (headerLength - 32 - 1) / 32;
+
+        List<String> names = new ArrayList<>();
+        int[] lengths = new int[numFields];
+        for (int i = 0; i < numFields; i++) {
+            int off = 32 + i * 32;
+            StringBuilder nm = new StringBuilder();
+            for (int j = 0; j < 11 && bytes[off + j] != 0; j++) {
+                nm.append((char) (bytes[off + j] & 0xFF));
+            }
+            names.add(nm.toString());
+            lengths[i] = bytes[off + 16] & 0xFF;
+        }
+
+        List<Map<String, String>> records = new ArrayList<>();
+        int pos = headerLength;
+        for (int r = 0; r < recordCount; r++) {
+            pos++; // deletion flag
+            Map<String, String> rec = new LinkedHashMap<>();
+            for (int i = 0; i < numFields; i++) {
+                String raw = new String(bytes, pos, lengths[i], gbk).trim();
+                rec.put(names.get(i), raw);
+                pos += lengths[i];
+            }
+            records.add(rec);
+        }
+        return new ParsedDbf(names, records);
+    }
+
+    private static int u16(byte[] b, int off) {
+        return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8);
+    }
+
+    private static int u32(byte[] b, int off) {
+        return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8)
+                | ((b[off + 2] & 0xFF) << 16) | ((b[off + 3] & 0xFF) << 24);
     }
 
     private VoucherExportRequestDTO buildReq() {

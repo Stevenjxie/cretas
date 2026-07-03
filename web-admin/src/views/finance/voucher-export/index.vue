@@ -114,8 +114,26 @@ function currentMonthRange(): [string, string] {
 const exportDateRange = ref<[string, string] | null>(currentMonthRange());
 const exportTargetSystem = ref<VoucherTargetSystem>('KINGDEE');
 const selectedConfigId = ref('');
-// 六膳门需要 云星空 + KIS/K3 两种金蝶版本, 用户导出前先选版本 (fool-proof Rule 3: 约束选择而非猜测)
-const kingdeeImportTarget = ref<KingdeeImportTarget>('KINGDEE_YXSKY');
+// 六膳门用哪个金蝶版本就导哪种格式 (fool-proof Rule 3: 约束选择而非猜测).
+// 不同版本原生"引入"接受不同文件格式: 云星空→.xlsx, KIS专业版→legacy .xls, KIS标准版/迷你版/K3→.dbf
+type KingdeeExportFormat = 'XLSX' | 'XLS' | 'DBF';
+type KingdeeEdition = 'YXSKY_XLSX' | 'KIS_XLS' | 'KIS_DBF';
+interface KingdeeEditionDef {
+  value: KingdeeEdition;
+  label: string;
+  targetSystem: KingdeeImportTarget;
+  format: KingdeeExportFormat;
+  ext: string;
+}
+const KINGDEE_EDITIONS: KingdeeEditionDef[] = [
+  { value: 'YXSKY_XLSX', label: '金蝶云星空 (.xlsx)', targetSystem: 'KINGDEE_YXSKY', format: 'XLSX', ext: 'xlsx' },
+  { value: 'KIS_XLS', label: '金蝶KIS专业版 (.xls)', targetSystem: 'KINGDEE_KIS', format: 'XLS', ext: 'xls' },
+  { value: 'KIS_DBF', label: '金蝶KIS标准版/迷你版/K3 (.dbf)', targetSystem: 'KINGDEE_KIS', format: 'DBF', ext: 'dbf' },
+];
+const kingdeeEdition = ref<KingdeeEdition>('YXSKY_XLSX');
+const selectedKingdeeEdition = computed<KingdeeEditionDef>(
+  () => KINGDEE_EDITIONS.find((e) => e.value === kingdeeEdition.value) ?? KINGDEE_EDITIONS[0]
+);
 
 const canExport = computed(() =>
   !!exportDateRange.value && !!exportDateRange.value[0] && !!exportDateRange.value[1]
@@ -339,10 +357,6 @@ async function handleBalanceExport() {
   }
 }
 
-function kingdeeImportTargetLabel(target: KingdeeImportTarget): string {
-  return target === 'KINGDEE_KIS' ? '金蝶KIS/K3' : '金蝶云星空';
-}
-
 async function handleKingdeeImportTemplate() {
   if (!canExport.value) {
     ElMessage({ message: '请先选择日期范围', type: 'warning', duration: 3000 });
@@ -350,24 +364,25 @@ async function handleKingdeeImportTemplate() {
   }
   if (!factoryId.value) return;
 
+  const edition = selectedKingdeeEdition.value;
   kingdeeTemplateLoading.value = true;
   try {
     const [startDate, endDate] = exportDateRange.value!;
     const response = await request.get(
       `/${factoryId.value}/finance/voucher-import-template`,
       {
-        params: { startDate, endDate, targetSystem: kingdeeImportTarget.value },
+        params: { startDate, endDate, targetSystem: edition.targetSystem, format: edition.format },
         responseType: 'blob',
         _keepResponse: true,
       }
     );
 
-    const filePrefix = kingdeeImportTarget.value === 'KINGDEE_KIS'
-      ? 'kingdee_kis_import_template'
+    const filePrefix = edition.targetSystem === 'KINGDEE_KIS'
+      ? 'kingdee_kis_voucher'
       : 'kingdee_yxsky_import_template';
-    downloadBlob(response, `${filePrefix}_${startDate}_${endDate}.xlsx`);
+    downloadBlob(response, `${filePrefix}_${startDate}_${endDate}.${edition.ext}`);
     ElMessage({
-      message: `${kingdeeImportTargetLabel(kingdeeImportTarget.value)}导入模板已导出`,
+      message: `${edition.label}导入文件已导出`,
       type: 'success',
       duration: 3000,
     });
@@ -632,10 +647,14 @@ onMounted(async () => {
       </el-form>
 
       <el-form :inline="true" class="export-form kingdee-import-form">
-        <el-form-item label="金蝶版本">
-          <el-select v-model="kingdeeImportTarget" style="width: 140px">
-            <el-option label="云星空" value="KINGDEE_YXSKY" />
-            <el-option label="KIS/K3" value="KINGDEE_KIS" />
+        <el-form-item label="金蝶版本/格式">
+          <el-select v-model="kingdeeEdition" style="width: 300px">
+            <el-option
+              v-for="ed in KINGDEE_EDITIONS"
+              :key="ed.value"
+              :label="ed.label"
+              :value="ed.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -646,8 +665,13 @@ onMounted(async () => {
             :disabled="!canExport || !canWrite"
             @click="handleKingdeeImportTemplate"
           >
-            {{ kingdeeImportTargetLabel(kingdeeImportTarget) }}导入模板
+            导出{{ selectedKingdeeEdition.label }}
           </el-button>
+        </el-form-item>
+        <el-form-item>
+          <span class="form-hint">
+            按贵司实际使用的金蝶版本选择: 云星空→.xlsx; KIS专业版→.xls; KIS标准版/迷你版/K3→.dbf
+          </span>
         </el-form-item>
       </el-form>
 
