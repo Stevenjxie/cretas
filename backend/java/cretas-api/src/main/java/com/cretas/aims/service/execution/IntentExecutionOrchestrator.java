@@ -4,6 +4,7 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
+import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.client.PythonSmartBIClient;
@@ -1690,11 +1691,27 @@ public class IntentExecutionOrchestrator {
         body.put("subSector", stringValueOrDefault(context.get("subSector"), "中餐/川味酸菜鱼"));
         body.put("period", stringValueOrDefault(context.get("period"), "this_week"));
 
-        if (pythonSmartBIClient == null) {
-            return buildRestaurantOwnerActionError("老板动作分析服务未配置，请稍后重试。", userId);
+        Optional<ToolExecutor> advisorTool = toolRegistry.getExecutor("restaurant_owner_action_advisor");
+        if (advisorTool.isEmpty()) {
+            return buildRestaurantOwnerActionError("老板动作分析工具未配置，请稍后重试。", userId);
         }
 
-        Map<String, Object> raw = pythonSmartBIClient.askRestaurantOwnerActionChat(body);
+        Map<String, Object> raw;
+        try {
+            ToolCall toolCall = ToolCall.of(
+                    "owner-action-" + System.nanoTime(),
+                    "restaurant_owner_action_advisor",
+                    objectMapper.writeValueAsString(body));
+            Map<String, Object> toolContext = new LinkedHashMap<>();
+            toolContext.put("factoryId", factoryId);
+            toolContext.put("userId", userId != null ? userId : 0L);
+            String toolResponseJson = advisorTool.get().execute(toolCall, toolContext);
+            raw = objectMapper.readValue(toolResponseJson, Map.class);
+        } catch (Exception ex) {
+            log.warn("餐饮老板动作建议 Tool 执行失败: {}", ex.getMessage(), ex);
+            return buildRestaurantOwnerActionError("老板动作分析暂时不可用，请稍后重试。", userId);
+        }
+
         boolean ok = Boolean.TRUE.equals(raw.get("success"));
         Object dataObj = raw.get("data");
         if (!ok || !(dataObj instanceof Map<?, ?> dataMapRaw)) {
@@ -1703,7 +1720,7 @@ public class IntentExecutionOrchestrator {
         }
 
         Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
-        data.put("source", "restaurant_owner_action");
+        data.putIfAbsent("source", "restaurant_owner_action_advisor");
         data.put("suggestedFollowups", normalizeOwnerActionFollowups(
                 data.get("followUpSuggestions"),
                 stringValue(data.get("scenario"))));
@@ -1721,7 +1738,7 @@ public class IntentExecutionOrchestrator {
                 .intentCategory("RESTAURANT")
                 .sensitivityLevel("LOW")
                 .confidence(0.99)
-                .matchMethod("JAVA_OWNER_ACTION_ROUTE")
+                .matchMethod("JAVA_OWNER_ACTION_TOOL_ROUTE")
                 .status("SUCCESS")
                 .message(answer)
                 .formattedText(answer)
