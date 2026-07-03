@@ -52,7 +52,9 @@ interface ReceiveRow {
   supplierId: string;
   supplierName?: string;
   receiveDate: string;
-  status: 'DRAFT' | 'CONFIRMED' | 'CANCELLED';
+  // PurchaseReceiveStatus.java real values — was 'DRAFT'|'CONFIRMED'|'CANCELLED'
+  // ('CANCELLED' never exists on this entity; 'PENDING_QC'/'REJECTED' were missing).
+  status: 'DRAFT' | 'PENDING_QC' | 'CONFIRMED' | 'REJECTED';
   warehouseId?: string;
   remark?: string;
   itemCount?: number;
@@ -106,7 +108,7 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 function rowActionsFor(row: ReceiveRow) {
   return computeRowActions(
     'whInbound',
-    { status: String(row.status || 'PENDING'), id: String(row.id || '') },
+    { status: String(row.status || 'DRAFT'), id: String(row.id || '') },
     { canViewPrice: canViewPrice.value }
   );
 }
@@ -116,7 +118,7 @@ function handleRowActionClick(actionId: string, row: ReceiveRow) {
     case 'submit': handleConfirm(row); break;
     // 入库单复用 material-requisition 模板 (warehouse:read 准入)
     case 'print-pdf': void safePrint('material-requisition', factoryId.value, String(row.id), { fileName: `入库单_${row.receiveNumber || row.id}` }); break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 // AI 智能创建入库单 (Day 9, Issue #780.2)
@@ -492,10 +494,13 @@ async function handleDetail(row: ReceiveRow) {
 }
 
 function statusTag(status: string): { type: string; label: string } {
+  // PurchaseReceiveStatus.java real values — 'CANCELLED' never exists on this
+  // entity; PENDING_QC/REJECTED were missing (fell to default: raw untranslated status).
   switch (status) {
     case 'DRAFT': return { type: 'info', label: '草稿' };
+    case 'PENDING_QC': return { type: 'warning', label: '待质检' };
     case 'CONFIRMED': return { type: 'success', label: '已确认' };
-    case 'CANCELLED': return { type: 'danger', label: '已取消' };
+    case 'REJECTED': return { type: 'danger', label: '已退回' };
     default: return { type: '', label: status };
   }
 }

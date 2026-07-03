@@ -359,7 +359,7 @@ async function handleRowActionClick(actionId: string, row: TableRow): Promise<vo
       break;
     }
     default:
-      ElMessage.info(`Action: ${actionId}`);
+      ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 function openAiForRow(row: TableRow) {

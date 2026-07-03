@@ -50,7 +50,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'view-detail': router.push(`/sales/returns/${row.id}`); break;
     // Sales return 复用 sales-order 模板 (后端 RBAC 仍校验 sales:read)
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售退货单_${row.returnNumber || row.id}` }); break;
-    default: ElMessage.info(`Action: ${actionId}`);
+    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }
 function openAiForRow(row: TableRow) {
