@@ -1641,10 +1641,27 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         Map<String, BigDecimal> inventoryByType = getInventoryByMaterialType(factoryId);
         statistics.put("inventoryByType", inventoryByType);
 
+        // 库存总量（跨物料类型汇总数量）
+        // Bug fix (headed-audit): web-admin 库存盘点页 KPI 卡片读 statistics.totalQuantity，
+        // 本方法之前从未返回该字段 → 卡片一直渲染空白。加法字段，不影响既有消费方。
+        BigDecimal totalQuantity = inventoryByType.values().stream()
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        statistics.put("totalQuantity", totalQuantity);
+
+        // 低库存预警数量（跨物料类型，与 getLowStockWarnings 同口径）
+        // Bug fix (headed-audit): 前端 KPI 卡片读 statistics.lowStockCount，本方法之前
+        // 从未返回该字段 → 卡片一直渲染空白。
+        int lowStockCount = getLowStockWarnings(factoryId).size();
+        statistics.put("lowStockCount", lowStockCount);
+
         // 即将过期批次数（7天内）
         List<MaterialBatch> expiringBatches = materialBatchRepository.findExpiringBatchesByStatus(
                 factoryId, LocalDate.now().plusDays(7), MaterialBatchStatus.AVAILABLE);
         statistics.put("expiringBatchesCount", expiringBatches.size());
+        // Bug fix (headed-audit): 前端 KPI 卡片读 statistics.expiringCount（别名，与
+        // expiringBatchesCount 同值）。保留旧字段名向后兼容，新增 expiringCount 供前端读取。
+        statistics.put("expiringCount", expiringBatches.size());
 
         return statistics;
     }
