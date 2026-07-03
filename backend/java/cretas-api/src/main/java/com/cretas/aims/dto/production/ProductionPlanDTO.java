@@ -279,4 +279,12 @@ public class ProductionPlanDTO {
     @Schema(description = "产品类型名称")
     private String productTypeName;
 
+    // ======= 排产锁定 (Issue #759) =======
+
+    @Schema(description = "是否已锁定 (锁定后进入排产保护阶段, PUT /production-plans/{planId} 会 409)")
+    private Boolean isLocked;
+
+    @Schema(description = "锁定原因")
+    private String lockReason;
+
 }

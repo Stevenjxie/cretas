@@ -43,6 +43,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -100,7 +101,7 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
             @RequestHeader("Authorization") String authorization,
-            @Valid @RequestBody CreateProductionPlanRequest request) {
+            @Validated(CreateProductionPlanRequest.OnCreate.class) @RequestBody CreateProductionPlanRequest request) {
 
         // 获取当前用户ID
         String token = TokenUtils.extractToken(authorization);
@@ -168,7 +169,7 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "访问令牌", required = true)
             @RequestHeader("Authorization") String authorization,
-            @Valid @RequestBody CreateProductionPlanRequest request) {
+            @Validated(CreateProductionPlanRequest.OnCreate.class) @RequestBody CreateProductionPlanRequest request) {
 
         String token = TokenUtils.extractToken(authorization);
         Long userId = mobileService.getUserFromToken(token).getId();

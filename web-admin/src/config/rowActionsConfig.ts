@@ -47,6 +47,11 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
   },
   productionPlan: {
     DRAFT: ['edit', 'submit', 'copy', 'delete', 'view-detail'],
+    // PREPARED = M-PREP-1 草稿态 (POST /production-plans/draft); 后端 update/delete 把
+    // PREPARED 与 PENDING 一视同仁 (ProductionPlanServiceImpl#updateProductionPlan /
+    // #deleteProductionPlan). 之前该 status 没进这张表, 落到 DEFAULT_UNKNOWN_STATUS_ACTIONS
+    // (只有 view-detail) — 草稿态计划实际上一个操作按钮都没有, 同一类 dead-stub 缺口。
+    PREPARED: ['edit', 'view-detail', 'cancel'],
     PLANNED: ['edit', 'view-detail', 'cancel'],
     PENDING: ['edit', 'view-detail', 'cancel'],
     PENDING_APPROVAL: ['approve', 'reject', 'view-detail'],

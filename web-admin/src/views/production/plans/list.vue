@@ -5,7 +5,7 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get, post } from '@/api/request';
+import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer, Warning } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
@@ -91,6 +91,7 @@ function rowActionsFor(row: TableRow) {
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': handleViewPlan(row); break;
+    case 'edit': void handleEditPlan(row); break;
     case 'cancel': handleCancel(row); break;
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产计划_${row.planNumber || row.id}` }); break;
     case 'copy': void handleCopyPlan(row); break;
@@ -1672,6 +1673,171 @@ async function submitCancel() {
     if (error !== 'cancel') console.error('[提交失败]', error);
   } finally {
     actionLoading.value = false;
+  }
+}
+
+// ==================== 编辑生产计划 dialog (更多→编辑 dead-stub 修复) ====================
+// 之前「更多→编辑」只弹一个 debug toast (`Action: edit`), 不开任何表单 — 厂长创建计划后
+// 无法改计划日期/数量, 是一个完全没接线的死桩。这里用独立的轻量 dialog 而非复用复杂的
+// 「新建计划」dialog (那个 dialog 的以销定产多产品批量建单逻辑跟「编辑单张已存在的计划」
+// 语义冲突 — 编辑时改 SO/产品行选择不应该走 batch-from-so 去新建计划), 只暴露真正
+// 编辑后仍讲得通的字段: 计划日期(核心需求)/计划数量/预计完成日期/预计工人数/指派主管/备注。
+//
+// 可编辑状态: 只有 PENDING / PREPARED — 与后端 ProductionPlanServiceImpl#updateProductionPlan
+// 的状态守卫严格一致(该方法对其他任何状态一律 409)。注意: PAUSED 语义上是"曾经 IN_PROGRESS
+// 后暂停", 不是"尚未开始", 编辑数量/日期跟"生产已开始不可编辑"的防呆意图冲突, 因此不放行
+// (即使某些早期草案把 PAUSED 也算作可编辑 — 那是对 PAUSED 语义的误判)。
+const EDITABLE_PLAN_STATUSES = new Set(['PENDING', 'PREPARED']);
+
+function blockedEditMessage(status: string, isLocked?: boolean, lockReason?: string): string {
+  if (isLocked) {
+    return `计划已锁定${lockReason ? `（${lockReason}）` : ''}，请先在「更多」中解锁后再编辑`;
+  }
+  switch (status) {
+    case 'IN_PROGRESS':
+    case 'PAUSED':
+      return '生产已开始的计划不可编辑，如需调整数量/日期请先「暂停/停止生产」或联系车间主管';
+    case 'COMPLETED':
+      return '已完成的计划不可编辑';
+    case 'CANCELLED':
+      return '已取消的计划不可编辑';
+    case 'PENDING_APPROVAL':
+      return '该计划正在审批流程中，暂不可编辑';
+    default:
+      return `当前状态 (${status}) 不可编辑，请刷新列表查看最新状态`;
+  }
+}
+
+const editDialogVisible = ref(false);
+const editDialogLoading = ref(false);
+const editingPlanId = ref('');
+// 编辑弹窗标题用的上下文 (防呆 Rule 2: 必须显示品名+单号, 不能是空表单)
+const editingPlanNumber = ref('');
+const editingProductName = ref('');
+const editForm = ref({
+  plannedDate: '',
+  plannedQuantity: 0,
+  expectedCompletionDate: '',
+  estimatedWorkers: undefined as number | undefined,
+  assignedSupervisorId: '' as string | number | undefined,
+  notes: '',
+});
+// 编辑提交时用完整详情 hydrate PUT payload (而不是只传编辑过的几个字段) —
+// CreateProductionPlanRequest 里若干字段有 Java 默认值 (sourceType=MANUAL /
+// planType=FROM_INVENTORY / priority=5 / isMixedBatch=false ...), 编辑请求如果漏传
+// 这些字段, 反序列化会落到默认值, updateEntity 的 null-guard 挡不住"非 null 但是默认值"
+// 的情况 —— 会把已有计划的来源类型/计划类型/优先级悄悄冲掉。所以先拉完整详情原样回填,
+// 再只覆盖真正编辑过的字段。
+let editingPlanDetail: TableRow | null = null;
+
+async function handleEditPlan(row: TableRow) {
+  const status = String(row.status || '');
+  const rowLocked = Boolean(row.isLocked);
+  // Rule 1 (防呆): 先用列表已有的行数据快速判断, 不等网络往返就能挡掉明显不可编辑的行。
+  if (!EDITABLE_PLAN_STATUSES.has(status) || rowLocked) {
+    ElMessageBox.alert(blockedEditMessage(status, rowLocked, row.lockReason ? String(row.lockReason) : undefined), '不可编辑', {
+      confirmButtonText: '我知道了',
+    }).catch(() => { /* dismiss */ });
+    return;
+  }
+
+  editDialogLoading.value = true;
+  editingPlanId.value = String(row.id);
+  try {
+    const response = await get(`/${factoryId.value}/production-plans/${row.id}`);
+    if (!response.success || !response.data) {
+      ElMessage({ message: response.message || '加载生产计划详情失败', type: 'error', duration: 0, showClose: true });
+      return;
+    }
+    const plan = response.data as TableRow;
+    // 防御性二次校验: 列表行数据可能已过期 (并发操作/另一个 tab 锁定/开工), 以刚拉取的
+    // 详情为准, 而不是只信列表缓存 (Rule 1: 提交前也要挡, 不只是点击那一刻)。
+    const freshStatus = String(plan.status || '');
+    const freshLocked = Boolean(plan.isLocked);
+    if (!EDITABLE_PLAN_STATUSES.has(freshStatus) || freshLocked) {
+      ElMessageBox.alert(
+        blockedEditMessage(freshStatus, freshLocked, plan.lockReason ? String(plan.lockReason) : undefined),
+        '不可编辑',
+        { confirmButtonText: '我知道了' }
+      ).catch(() => { /* dismiss */ });
+      return;
+    }
+
+    editingPlanDetail = plan;
+    editingPlanNumber.value = String(plan.planNumber || plan.id || '');
+    editingProductName.value = String(plan.productTypeName || plan.productName || plan.productTypeId || '');
+    editForm.value = {
+      plannedDate: String(plan.plannedDate || ''),
+      plannedQuantity: Number(plan.plannedQuantity) || 0,
+      expectedCompletionDate: plan.expectedCompletionDate ? String(plan.expectedCompletionDate) : '',
+      estimatedWorkers: plan.estimatedWorkers !== null && plan.estimatedWorkers !== undefined ? Number(plan.estimatedWorkers) : undefined,
+      assignedSupervisorId: plan.assignedSupervisorId !== null && plan.assignedSupervisorId !== undefined ? plan.assignedSupervisorId : '',
+      notes: String(plan.notes || ''),
+    };
+    editDialogVisible.value = true;
+  } catch (e) {
+    handleCatchError(e, '加载生产计划详情失败');
+  } finally {
+    editDialogLoading.value = false;
+  }
+}
+
+async function submitEditPlan() {
+  if (!editingPlanDetail || !factoryId.value) return;
+  if (!editForm.value.plannedDate) {
+    ElMessage.warning('请选择计划生产日');
+    return;
+  }
+  if (!editForm.value.plannedQuantity && editingPlanDetail.sourceType !== 'SAFETY_STOCK') {
+    ElMessage.warning('请输入计划数量');
+    return;
+  }
+  editDialogLoading.value = true;
+  try {
+    // Hydrate 完整字段(避免 Java DTO 默认值冲掉未编辑的 sourceType/planType/priority 等),
+    // 再用表单编辑过的字段覆盖。
+    const src = editingPlanDetail;
+    const payload = {
+      productTypeId: src.productTypeId,
+      plannedQuantity: editForm.value.plannedQuantity,
+      plannedDate: editForm.value.plannedDate,
+      expectedCompletionDate: editForm.value.expectedCompletionDate || undefined,
+      customerOrderNumber: src.customerOrderNumber || undefined,
+      priority: src.priority,
+      estimatedMaterialCost: src.estimatedMaterialCost,
+      estimatedLaborCost: src.estimatedLaborCost,
+      estimatedEquipmentCost: src.estimatedEquipmentCost,
+      estimatedOtherCost: src.estimatedOtherCost,
+      notes: editForm.value.notes || undefined,
+      planType: src.planType,
+      estimatedWorkers: editForm.value.estimatedWorkers,
+      assignedSupervisorId: editForm.value.assignedSupervisorId || undefined,
+      sourceType: src.sourceType,
+      sourceOrderId: src.sourceOrderId || undefined,
+      sourceOrderIds: Array.isArray(src.sourceOrderIds) ? src.sourceOrderIds : undefined,
+      sourceOrderItemId: src.sourceOrderItemId || undefined,
+      sourceCustomerName: src.sourceCustomerName || undefined,
+      processName: src.processName || undefined,
+      batchDate: src.batchDate || undefined,
+      aiConfidence: src.aiConfidence,
+      forecastReason: src.forecastReason || undefined,
+      isMixedBatch: src.isMixedBatch,
+      mixedBatchType: src.mixedBatchType || undefined,
+      relatedOrders: Array.isArray(src.relatedOrders) ? src.relatedOrders : undefined,
+      skipProcessReporting: src.skipProcessReporting,
+    };
+    const response = await put(`/${factoryId.value}/production-plans/${editingPlanId.value}`, payload);
+    if (response.success) {
+      ElMessage.success('生产计划已更新');
+      editDialogVisible.value = false;
+      loadData();
+    } else {
+      ElMessage({ message: response.message || '更新失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    handleCatchError(e, '更新生产计划失败');
+  } finally {
+    editDialogLoading.value = false;
   }
 }
 
@@ -3500,6 +3666,61 @@ function handleAiFill(params: TableRow) {
       <template #footer>
         <el-button @click="cancelDialogVisible = false">关闭</el-button>
         <el-button type="danger" :loading="actionLoading" @click="submitCancel">确认取消计划</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑生产计划 dialog (更多→编辑 dead-stub 修复; 防呆 Rule 2: 标题带品名+单号) -->
+    <el-dialog
+      v-model="editDialogVisible"
+      :title="editingProductName ? `编辑生产计划 — ${editingProductName} (${editingPlanNumber})` : '编辑生产计划'"
+      width="520px"
+      destroy-on-close
+      append-to-body
+    >
+      <el-form v-loading="editDialogLoading" :model="editForm" label-width="120px">
+        <el-form-item label="产品">
+          <span>{{ editingProductName || '-' }}</span>
+        </el-form-item>
+        <el-form-item label="单号">
+          <span>{{ editingPlanNumber || '-' }}</span>
+        </el-form-item>
+        <el-form-item label="计划生产日" required>
+          <el-date-picker
+            v-model="editForm.plannedDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择计划生产日"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="预计完成日期">
+          <el-date-picker
+            v-model="editForm.expectedCompletionDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="默认为计划生产日+1天"
+            style="width: 100%"
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="计划数量" required>
+          <el-input-number v-model="editForm.plannedQuantity" :min="0" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="预计工人数">
+          <el-input-number v-model="editForm.estimatedWorkers" :min="1" :max="500" style="width: 100%" placeholder="可不填" />
+        </el-form-item>
+        <el-form-item label="指派车间主管">
+          <el-select v-model="editForm.assignedSupervisorId" clearable placeholder="可不填，稍后再指派" style="width: 100%">
+            <el-option v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="editForm.notes" type="textarea" :rows="2" placeholder="可不填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="editDialogLoading" @click="submitEditPlan">保存</el-button>
       </template>
     </el-dialog>
 

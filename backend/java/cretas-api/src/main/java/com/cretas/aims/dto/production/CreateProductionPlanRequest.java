@@ -15,6 +15,15 @@ import java.util.Map;
 /**
  * 创建生产计划请求对象
  *
+ * <p>同一 DTO 复用于「创建」({@code POST /production-plans}, {@code POST /production-plans/draft})
+ * 和「编辑」({@code PUT /production-plans/{planId}}) 两条端点。两者共享的字段级约束落在 Bean
+ * Validation 默认组 {@link jakarta.validation.groups.Default}, 两端点都用 {@code @Valid} 校验时都会生效。
+ *
+ * <p>{@link #plannedDate} 的 {@code @FutureOrPresent} 只对「创建」有意义 — 编辑一个尚未开始
+ * 的计划需要允许把计划日期改到今天/过去几天以内(六扇门"系统不强制按计划日"软约束; 也允许纯粹改期到未来),
+ * 因此该约束被单独分组到 {@link OnCreate}, 编辑端点仍用 {@code @Valid}(仅校验 Default 组)
+ * 会自动跳过它, 不需要改任何其他字段的校验行为。
+ *
  * @author Cretas Team
  * @version 1.0.0
  * @since 2025-01-09
@@ -22,6 +31,13 @@ import java.util.Map;
 @Data
 @Schema(description = "创建生产计划请求")
 public class CreateProductionPlanRequest {
+
+    /**
+     * 校验分组: 仅「创建」端点使用 (extends Default, 所以校验 OnCreate 组时 Default 组约束照常生效)。
+     * 「编辑」端点继续用 {@code @Valid}(隐式 Default 组), 天然跳过只挂在 OnCreate 组下的约束
+     * (目前只有 {@link #plannedDate} 的 {@code @FutureOrPresent})。
+     */
+    public interface OnCreate extends jakarta.validation.groups.Default {}
 
     @Schema(description = "产品类型ID", required = true)
     @NotNull(message = "产品类型不能为空")
@@ -32,7 +48,7 @@ public class CreateProductionPlanRequest {
 
     @Schema(description = "计划日期", required = true)
     @NotNull(message = "计划日期不能为空")
-    @FutureOrPresent(message = "计划日期不能是过去")
+    @FutureOrPresent(message = "计划日期不能是过去", groups = OnCreate.class)
     private LocalDate plannedDate;
 
     @Schema(description = "预计完成日期（默认为计划日期+1天）")
