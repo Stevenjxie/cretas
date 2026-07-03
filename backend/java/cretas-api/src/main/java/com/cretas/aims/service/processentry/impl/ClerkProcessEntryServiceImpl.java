@@ -29,6 +29,7 @@ import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
@@ -98,6 +99,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final FactoryCostSettingsRepository costSettingsRepository;
     /** SP-D Fix 2: 跨租户守卫 — 验证 planId 归属 factoryId. null-tolerant (测试 @InjectMocks 未注入时 skip check). */
     private final ProductionPlanRepository planRepository;
+    /** headed-audit 修复 (2026-07-03): 批次创建时解析产品名称. null-tolerant (测试 @InjectMocks 未注入时 skip). */
+    private final ProductTypeRepository productTypeRepository;
 
     // ─────────────────────────────────────────────────────────────
     // Public API
@@ -502,6 +505,25 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         batch.setProductTypeId(ctx.getProductTypeId());
         batch.setBatchNumber(batchNumber);
         batch.setQuantity(qty);
+        // headed-audit 修复 (2026-07-03): 文员逐道录入建的批次此前没写 productName/plannedQuantity,
+        // 导致 生产批次 列表显示 GUID + 空数量列 (ProcessingServiceImpl.enrichBatchDisplayFields 是
+        // 读时兜底, 这里把写时的根因也修掉, 保持与 ProcessingServiceImpl.createBatch /
+        // ProductionPlanServiceImpl.createBatchFromPlan 同样"创建时就写对"的一致性)。
+        // null-tolerant: productTypeRepository 为 null 时 (测试 @InjectMocks 未注入) 跳过, 不 NPE
+        // (同文件既有 planRepository/costSettingsRepository null-tolerant 惯例)。
+        if (productTypeRepository != null && ctx.getProductTypeId() != null) {
+            productTypeRepository.findById(ctx.getProductTypeId())
+                    .ifPresent(pt -> batch.setProductName(pt.getName()));
+        }
+        // plannedQuantity: FINISHED 批次已挂 planId → 取计划的真实计划数量;
+        // WIP 批次 (无 planId 语义) 或计划已不存在 → 退回本批次的产出数量 qty。
+        BigDecimal plannedQty = null;
+        if (planRepository != null && ctx.getPlanId() != null) {
+            plannedQty = planRepository.findById(ctx.getPlanId())
+                    .map(com.cretas.aims.entity.ProductionPlan::getPlannedQuantity)
+                    .orElse(null);
+        }
+        batch.setPlannedQuantity(plannedQty != null ? plannedQty : qty);
         batch.setUnit(steps == null ? "kg"
                 : steps.stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中

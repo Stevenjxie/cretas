@@ -20,6 +20,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessEntryIdempotencyRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
 import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
@@ -80,6 +81,7 @@ class ClerkProcessEntryServiceImplTest {
     @Mock private ProductRecipeRepository recipeRepo;
     @Mock private RecipeIngredientRepository ingredientRepo;
     @Mock private ProductionPlanRepository planRepository;
+    @Mock private ProductTypeRepository productTypeRepository;
     @Mock private com.cretas.aims.repository.ProductionReportRepository reportRepo;
 
     @InjectMocks
