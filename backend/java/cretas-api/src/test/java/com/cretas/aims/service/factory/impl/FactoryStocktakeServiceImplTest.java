@@ -337,6 +337,136 @@ class FactoryStocktakeServiceImplTest {
     }
 
     // -------------------------------------------------------
+    // 6b (Bug1). apply 盘盈把 USED_UP 批次从 0 恢复为正数 → 状态重置 AVAILABLE
+    //   (否则恢复的库存在报工/发货/领料 picker 里因 status=USED_UP 仍不可见)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6b (Bug1): 盘盈恢复 USED_UP 批次至正数 → status 重置为 AVAILABLE")
+    void apply_surplus_restoresUsedUpBatch_resetsStatusToAvailable() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-001");
+        item.setSystemQty(BigDecimal.ZERO); // 快照 = 当时已耗尽
+        item.setActualQty(new BigDecimal("2.0000"));
+        item.setDifferenceQty(new BigDecimal("2.0000")); // 盘盈 +2
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-001");
+        batch.setReceiptQuantity(BigDecimal.ZERO); // live == snapshot, 无漂移
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP);
+        when(materialBatchRepo.findById("BATCH-001")).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getReceiptQuantity().compareTo(new BigDecimal("2.00"))).isEqualTo(0);
+        assertThat(saved.getStatus()).isEqualTo(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+    }
+
+    // -------------------------------------------------------
+    // 6c (Bug1 反向). apply 盘亏把 AVAILABLE 批次耗光至 0 → 状态置 USED_UP
+    //   (与 markBatchAsUsedUp / adjustBatchQuantity 的耗尽语义一致)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6c (Bug1 反向): 盘亏耗光 AVAILABLE 批次至 0 → status 置 USED_UP")
+    void apply_shortage_drainsAvailableBatchToZero_setsStatusUsedUp() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-001");
+        item.setSystemQty(new BigDecimal("2.0000"));
+        item.setActualQty(BigDecimal.ZERO);
+        item.setDifferenceQty(new BigDecimal("-2.0000")); // 盘亏 -2 → 归零
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SHORTAGE);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-001");
+        batch.setReceiptQuantity(new BigDecimal("2.00")); // live == snapshot, 无漂移
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+        when(materialBatchRepo.findById("BATCH-001")).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getReceiptQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+        assertThat(saved.getStatus()).isEqualTo(com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP);
+    }
+
+    // -------------------------------------------------------
+    // 6d (Bug2). apply 漂移守卫: 批次在盘点计数后 (systemQty 快照) 与生效时
+    //   (live receiptQuantity) 之间已发生变动 → 409 拦截, 不静默套用过期差异,
+    //   且不写任何 MaterialBatchAdjustment / batch save (整体不生效, 无部分写)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6d (Bug2): 批次在盘点后已变动(漂移) → apply 整体拦截 409, 不写任何调整")
+    void apply_batchDriftedSinceCount_throws409_writesNothing() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-001");
+        item.setSystemQty(new BigDecimal("10.0000")); // 盘点计数时快照
+        item.setActualQty(new BigDecimal("12.0000"));
+        item.setDifferenceQty(new BigDecimal("2.0000")); // 冻结差异 +2
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-001");
+        batch.setBatchNumber("MB-20260701-001");
+        // 并发消耗把 live 数量从快照的 10 拉到 6 (盘点后又被领用/报工消耗)
+        batch.setReceiptQuantity(new BigDecimal("6.00"));
+        when(materialBatchRepo.findById("BATCH-001")).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.apply(stocktake.getId(), FACTORY_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getMessage()).contains("MB-20260701-001");
+                    assertThat(be.getMessage()).contains("重新盘点");
+                });
+
+        // honest-fail: 整体拦截, 不留下部分生效的痕迹
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+        // stocktake 状态不应被推进到 APPLIED
+        verify(stocktakeRepo, never()).save(argThat(st -> st.getStatus() == FactoryStocktake.Status.APPLIED));
+    }
+
+    // -------------------------------------------------------
     // 7. approve 角色校验: 错误角色 → 403
     // approve() checks role BEFORE calling findAndValidate, so no repo stub needed
     // -------------------------------------------------------
