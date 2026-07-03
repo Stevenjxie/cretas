@@ -158,8 +158,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             item.setStocktake(stocktake);
             item.setMaterialBatchId(batch.getId());
             item.setRawMaterialTypeId(batch.getMaterialTypeId());
-            item.setSystemQty(batch.getReceiptQuantity() != null ?
-                    batch.getReceiptQuantity().setScale(4, RoundingMode.HALF_UP) : BigDecimal.ZERO);
+            // 🔴 Fix (🔒🔒 phantom-variance): 快照「当前可用量」(receipt − used − reserved),
+            // 不是 gross receiptQuantity。仓管盘点的是货架实物 = 可用量; 用 gross 会把已领用量
+            // (usedQuantity) 当成盘亏 → 每个领料过的原料仓源批次凭空产生假损耗 (虚假盘亏凭证)。
+            // getCurrentQuantity() 为 @Transient 计算属性, receiptQuantity=null 时返回 ZERO (恒非 null)。
+            BigDecimal available = batch.getCurrentQuantity();
+            item.setSystemQty((available != null ? available : BigDecimal.ZERO)
+                    .setScale(4, RoundingMode.HALF_UP));
             items.add(item);
         }
         stocktake.setItems(items);
@@ -339,7 +344,10 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue; // 批次已不存在 — 下面的主循环会照常 warn 跳过, 无需在此重复处理
             }
             batchCache.put(item.getMaterialBatchId(), batch);
-            BigDecimal liveQty = batch.getReceiptQuantity() != null ? batch.getReceiptQuantity() : BigDecimal.ZERO;
+            // 🔴 Fix (🔒🔒): 漂移比对必须与快照同口径 — snapshot 现为「当前可用量」, live 也取
+            // getCurrentQuantity(), 否则每个 usedQuantity>0 的批次 (receiptQuantity != 可用量)
+            // 会被误判为"盘点后漂移"而永久拦截生效 (STOCKTAKE_DRIFT), 使消耗过的批次无法盘点。
+            BigDecimal liveQty = batch.getCurrentQuantity() != null ? batch.getCurrentQuantity() : BigDecimal.ZERO;
             BigDecimal snapshotQty = item.getSystemQty() != null ? item.getSystemQty() : BigDecimal.ZERO;
             if (liveQty.setScale(2, RoundingMode.HALF_UP)
                     .compareTo(snapshotQty.setScale(2, RoundingMode.HALF_UP)) != 0) {
@@ -375,6 +383,11 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue;
             }
 
+            // 差异是 delta (= 实盘 − 快照可用量), 把它加到 receiptQuantity 上即可让
+            // getCurrentQuantity() (= receipt − used − reserved) 精确落到实盘真值 —— used/reserved
+            // 不变, receiptQuantity 平移 delta ⇒ 可用量平移 delta。⚠️ 这里必须用 receiptQuantity 作
+            // quantityBefore (不是 getCurrentQuantity()): systemQty 快照已在可用量口径扣过 used,
+            // 若这里再拿可用量作基准会二次扣减 used (双减)。快照口径=可用量, 应用口径=receiptQuantity, 二者配套。
             BigDecimal quantityBefore = batch.getReceiptQuantity() != null
                     ? batch.getReceiptQuantity() : BigDecimal.ZERO;
             BigDecimal quantityAfter = quantityBefore.add(item.getDifferenceQty())

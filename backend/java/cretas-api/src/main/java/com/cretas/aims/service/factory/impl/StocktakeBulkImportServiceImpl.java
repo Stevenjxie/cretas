@@ -74,7 +74,9 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             row.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
             row.setBatchNumber(batch.getBatchNumber());
             row.setWarehouseName(warehouse.getName());
-            row.setSystemQty(scale4(batch.getReceiptQuantity()));
+            // 🔴 Fix (🔒🔒 phantom-variance): 模板「账面数量」= 当前可用量 (receipt − used − reserved),
+            // 与 initiate() 快照同口径。用 gross receiptQuantity 会让仓管照着虚高账面盘, 已领用量被误计为盘亏。
+            row.setSystemQty(scale4(batch.getCurrentQuantity()));
             row.setUnit(batch.getQuantityUnit());
             row.setActualQty(null); // 留空待仓管填写
             rows.add(row);
@@ -252,7 +254,10 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                 line.setBatchNumber(batchNo);
                 line.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
                 line.setUnit(batch.getQuantityUnit());
-                BigDecimal systemQty = scale4(batch.getReceiptQuantity());
+                // 🔴 Fix (🔒🔒 phantom-variance): 预览「账面数量」+ 差异计算基准 = 当前可用量
+                // (receipt − used − reserved), 与 initiate() 快照 + updateItems() 重算口径一致。
+                // 否则预览显示的差异 (基于 gross) 与 apply 实际生效的差异 (基于可用量) 不一致 → 误导仓管 + 假盘亏。
+                BigDecimal systemQty = scale4(batch.getCurrentQuantity());
                 line.setSystemQty(systemQty);
                 if (actual == null) {
                     line.setActualQty(null);
