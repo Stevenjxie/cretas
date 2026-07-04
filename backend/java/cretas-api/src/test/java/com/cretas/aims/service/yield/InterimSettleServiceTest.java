@@ -176,6 +176,39 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("🔒🔒 Gap2: 已终结 (停产/完工→COMPLETED) 的存货计划再小结 → 409 拒绝 (防停产后残料从不扣减=幻库存)")
+    void rejectsInterimSettleOnTerminalPlan() {
+        ProductionPlan stopped = new ProductionPlan();
+        stopped.setId(PLAN_ID);
+        stopped.setFactoryId(FACTORY);
+        stopped.setSourceType(PlanSourceType.SAFETY_STOCK);
+        stopped.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.COMPLETED);
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(stopped));
+
+        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能再小结");
+        // 未越过守卫: 不写小结记录 (无 SFI/FG/扣减副作用)
+        verify(settlementRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Gap2 反向: CANCELLED 存货计划再小结 → 409 拒绝")
+    void rejectsInterimSettleOnCancelledPlan() {
+        ProductionPlan cancelled = new ProductionPlan();
+        cancelled.setId(PLAN_ID);
+        cancelled.setFactoryId(FACTORY);
+        cancelled.setSourceType(PlanSourceType.SAFETY_STOCK);
+        cancelled.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(cancelled));
+
+        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能再小结");
+        verify(settlementRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("跨小结全链: 小结1 SFI IN 道3, 小结2 SFI OUT 道3 + FG, 小结3 幂等无变化")
     void crossSettlementSfiInOutAndIdempotency() {
         // ── 行对象 (跨调用复用同一实例; 服务会给未结行打 interim_settled_at 戳) ──

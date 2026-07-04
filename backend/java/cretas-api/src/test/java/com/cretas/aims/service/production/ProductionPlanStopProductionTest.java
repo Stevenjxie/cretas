@@ -1,14 +1,17 @@
 package com.cretas.aims.service.production;
 
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -36,10 +39,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 /**
@@ -71,6 +76,7 @@ class ProductionPlanStopProductionTest {
     @Mock private SalesOrderItemRepository         salesOrderItemRepository;
     @Mock private BomService                       bomService;
     @Mock private ApplicationEventPublisher        applicationEventPublisher;
+    @Mock private ProcessSheetRowRepository        processSheetRowRepository;
 
     private ProductionPlanServiceImpl service;
 
@@ -83,6 +89,7 @@ class ProductionPlanStopProductionTest {
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository, bomService);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -170,5 +177,59 @@ class ProductionPlanStopProductionTest {
         assertTrue(ex.getMessage().contains("仅存货生产计划可停产"));
         verify(productionPlanRepository, never()).save(any());
         verify(applicationEventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("🔒🔒 Gap2b: 有未结报工消耗时停产 → 409 拒绝 (停产零扣减, 若放行则残料永不扣减=幻库存)")
+    void stopProduction_withUnsettledConsumption_blocked() {
+        ProductionPlan plan = byStockPlan();
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setBatchId(555L);   // 已物化的 per-道 ProductionBatch id → 纳入 unsettled 检测
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(row));
+        // 存在未结算 (interimSettledAt IS NULL) 报工消耗 → 停产必须拦截
+        when(materialConsumptionRepository
+                .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY_ID), anyList()))
+                .thenReturn(List.of(new MaterialConsumption()));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.stopProduction(FACTORY_ID, PLAN_ID));
+
+        assertEquals(409, ex.getCode(), "有未结报工消耗应 409 拒绝停产");
+        assertEquals("STOP_BLOCKED_UNSETTLED_CONSUMPTION", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("请先小结再停产"));
+        // 关键: 状态未翻转, 未保存 (幻库存被前置守卫堵死)
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus(), "状态不应变 COMPLETED");
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Gap2b 反向: 报工消耗已全部小结 (无未结) → 正常停产 → COMPLETED (不误伤干净停产)")
+    void stopProduction_allConsumptionSettled_completes() {
+        ProductionPlan plan = byStockPlan();
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setBatchId(777L);
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(row));
+        // 无未结消耗 (全部已小结) → 停产放行
+        when(materialConsumptionRepository
+                .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.stopProduction(FACTORY_ID, PLAN_ID);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        verify(productionPlanRepository).save(plan);
     }
 }
