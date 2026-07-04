@@ -200,8 +200,37 @@ class StocktakeBulkImportServiceImplTest {
 
         StocktakeBulkImportPreviewDTO.MatchedLine line = dto.getMatchedLines().stream()
                 .filter(l -> "BC01".equals(l.getBatchNumber())).findFirst().orElseThrow();
-        assertThat(line.getSystemQty()).isEqualByComparingTo("70");   // 账面 = 当前可用量, 非 gross 100
+        assertThat(line.getSystemQty()).isEqualByComparingTo("70");   // 账面 = 货架实物 (receipt − used), 非 gross 100
         assertThat(line.getDifferenceQty()).isEqualByComparingTo("0"); // 零差异
+        assertThat(line.getDifferenceType()).isEqualTo("MATCH");
+    }
+
+    @Test
+    @DisplayName("(🔒🔒 reserved-overshoot, 修#1201overshoot) NORMAL 预览：预留过批次 (receipt=100/reserved=30) 账面=货架实物100 (非可用量70), 实盘100 → 零差异 (非幻影+30盘盈)")
+    void preview_reservedBatch_systemQtyIsPhysicalShelf_notSubtractingReserved() {
+        FactoryWarehouse wh = new FactoryWarehouse();
+        wh.setId(WAREHOUSE_ID);
+        wh.setFactoryId(FACTORY_ID);
+        wh.setName("原料仓");
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WAREHOUSE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(wh));
+
+        MaterialBatch reserved = batch("id-R1", "BR01", "T1", "100", "10");
+        reserved.setUsedQuantity(BigDecimal.ZERO);
+        reserved.setReservedQuantity(new BigDecimal("30")); // 预留 30 — 货物物理仍在货架, 可用量=70
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(reserved));
+        lenient().when(rawMaterialTypeRepo.findAllById(any())).thenReturn(List.of(type("T1", "猪蹄")));
+
+        // 仓管照货架实物盘 100 (预留货物仍在架上), 应为零差异, 绝不是照可用量 70 盘出 +30 幻影盘盈
+        List<StocktakeImportRowDTO> rows = List.of(row("猪蹄", "BR01", new BigDecimal("100")));
+        StocktakeBulkImportPreviewDTO dto = service.preview(
+                FACTORY_ID, WAREHOUSE_ID, FactoryStocktake.ImportMode.NORMAL, toExcel(rows));
+
+        StocktakeBulkImportPreviewDTO.MatchedLine line = dto.getMatchedLines().stream()
+                .filter(l -> "BR01".equals(l.getBatchNumber())).findFirst().orElseThrow();
+        assertThat(line.getSystemQty()).isEqualByComparingTo("100");  // 账面 = 货架实物, 非可用量 70
+        assertThat(line.getDifferenceQty()).isEqualByComparingTo("0"); // 零差异 (无幻影盘盈)
         assertThat(line.getDifferenceType()).isEqualTo("MATCH");
     }
 

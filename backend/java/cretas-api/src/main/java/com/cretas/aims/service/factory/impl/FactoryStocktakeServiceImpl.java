@@ -158,12 +158,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             item.setStocktake(stocktake);
             item.setMaterialBatchId(batch.getId());
             item.setRawMaterialTypeId(batch.getMaterialTypeId());
-            // 🔴 Fix (🔒🔒 phantom-variance): 快照「当前可用量」(receipt − used − reserved),
-            // 不是 gross receiptQuantity。仓管盘点的是货架实物 = 可用量; 用 gross 会把已领用量
-            // (usedQuantity) 当成盘亏 → 每个领料过的原料仓源批次凭空产生假损耗 (虚假盘亏凭证)。
-            // getCurrentQuantity() 为 @Transient 计算属性, receiptQuantity=null 时返回 ZERO (恒非 null)。
-            BigDecimal available = batch.getCurrentQuantity();
-            item.setSystemQty((available != null ? available : BigDecimal.ZERO)
+            // 🔴 Fix (🔒🔒 phantom-variance): 快照「货架实物量」= receiptQuantity − usedQuantity,
+            // 既不是 gross receiptQuantity, 也不是可用量 getCurrentQuantity()(= receipt − used − reserved)。
+            // 仓管盘点数的是货架上肉眼可见的实物: 已领用(used)的货已物理离开货架 → 扣减;
+            // 预留(reserved)是逻辑占用(下游订单/生产计划挂占), 货物物理上仍在货架上 → 不扣减。
+            //   • 用 gross receiptQuantity → 已领用量被误计为盘亏(旧幻影短缺 bug, #1201 已修)。
+            //   • 用 getCurrentQuantity()(含 −reserved) → 预留量被误计为盘盈(#1201 overshoot, 本次修):
+            //     仓管数到货架实物, 系统账面已扣预留, 实物 > 账面 → 假盘盈 → 虚假 借1403/贷6301, 且
+            //     后续预留转消耗时同批货二次扣减, 库存 + 损益永久虚增 reserved。
+            // getPhysicalQuantity() 为 @Transient 计算属性, receiptQuantity=null 时返回 ZERO (恒非 null)。
+            BigDecimal physical = batch.getPhysicalQuantity();
+            item.setSystemQty((physical != null ? physical : BigDecimal.ZERO)
                     .setScale(4, RoundingMode.HALF_UP));
             items.add(item);
         }
@@ -344,10 +349,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue; // 批次已不存在 — 下面的主循环会照常 warn 跳过, 无需在此重复处理
             }
             batchCache.put(item.getMaterialBatchId(), batch);
-            // 🔴 Fix (🔒🔒): 漂移比对必须与快照同口径 — snapshot 现为「当前可用量」, live 也取
-            // getCurrentQuantity(), 否则每个 usedQuantity>0 的批次 (receiptQuantity != 可用量)
-            // 会被误判为"盘点后漂移"而永久拦截生效 (STOCKTAKE_DRIFT), 使消耗过的批次无法盘点。
-            BigDecimal liveQty = batch.getCurrentQuantity() != null ? batch.getCurrentQuantity() : BigDecimal.ZERO;
+            // 🔴 Fix (🔒🔒): 漂移比对必须与快照同口径 — snapshot 现为「货架实物量」(receipt − used),
+            // live 也取 getPhysicalQuantity(), 否则:
+            //   • 每个 usedQuantity>0 的批次会被误判为"盘点后漂移"而永久拦截生效 (STOCKTAKE_DRIFT),
+            //     使消耗过的批次无法盘点 (#1201 修的口径);
+            //   • 若用含 −reserved 的 getCurrentQuantity(), 有预留的批次 live≠snapshot 又会误判漂移
+            //     (#1201 overshoot, 本次修) —— snapshot 用 physical, live 也必须 physical。
+            BigDecimal liveQty = batch.getPhysicalQuantity() != null ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
             BigDecimal snapshotQty = item.getSystemQty() != null ? item.getSystemQty() : BigDecimal.ZERO;
             if (liveQty.setScale(2, RoundingMode.HALF_UP)
                     .compareTo(snapshotQty.setScale(2, RoundingMode.HALF_UP)) != 0) {
@@ -383,11 +391,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue;
             }
 
-            // 差异是 delta (= 实盘 − 快照可用量), 把它加到 receiptQuantity 上即可让
-            // getCurrentQuantity() (= receipt − used − reserved) 精确落到实盘真值 —— used/reserved
-            // 不变, receiptQuantity 平移 delta ⇒ 可用量平移 delta。⚠️ 这里必须用 receiptQuantity 作
-            // quantityBefore (不是 getCurrentQuantity()): systemQty 快照已在可用量口径扣过 used,
-            // 若这里再拿可用量作基准会二次扣减 used (双减)。快照口径=可用量, 应用口径=receiptQuantity, 二者配套。
+            // 差异是 delta (= 实盘 − 快照货架实物量), 把它加到 receiptQuantity 上即可让
+            // getPhysicalQuantity() (= receipt − used) 精确落到实盘真值 —— used/reserved 不变,
+            // receiptQuantity 平移 delta ⇒ 货架实物 + 可用量 同步平移 delta。⚠️ 这里必须用
+            // receiptQuantity 作 quantityBefore (不是 getPhysicalQuantity()/getCurrentQuantity()):
+            // systemQty 快照已在货架实物口径扣过 used, 若这里再拿扣过 used 的量作基准会二次扣减 used
+            // (双减)。快照口径=货架实物(receipt−used), 应用口径=receiptQuantity, 二者配套。
+            // 例: receipt=100/used=0/reserved=30, 实盘=95 → systemQty=100, delta=−5,
+            //     quantityBefore=receipt=100, quantityAfter=95 ⇒ physical=95=实盘, available=95−30=65 (无幻影)。
             BigDecimal quantityBefore = batch.getReceiptQuantity() != null
                     ? batch.getReceiptQuantity() : BigDecimal.ZERO;
             BigDecimal quantityAfter = quantityBefore.add(item.getDifferenceQty())

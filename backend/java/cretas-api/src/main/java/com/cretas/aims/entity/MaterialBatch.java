@@ -210,6 +210,33 @@ public class MaterialBatch extends BaseEntity {
     }
 
     /**
+     * 获取货架实物数量 (physical shelf quantity)。
+     *
+     * <p>计算公式: {@code receiptQuantity − usedQuantity} —— <b>不</b>扣减 reservedQuantity。
+     *
+     * <p>与 {@link #getCurrentQuantity()} 的关键区别: 预留 (reserved) 是<b>逻辑占用</b>
+     * (下游订单/生产计划挂占), 货物<b>物理上仍在货架上</b>, 没有离开仓库; 而已领用
+     * (used) 的货物是<b>物理离开</b>了。因此:
+     * <ul>
+     *   <li>可用量 {@code getCurrentQuantity()} = receipt − used − reserved (可再分配给新需求)</li>
+     *   <li>货架实物 {@code getPhysicalQuantity()} = receipt − used (仓管盘点时肉眼看到的量)</li>
+     * </ul>
+     *
+     * <p>盘点 (stocktake) 快照/差异对账<b>必须</b>用本方法 (货架实物), 不能用可用量 ——
+     * 否则每个有 reserved 的批次会凭空产生 {@code reserved} 数量的假盘盈 (仓管数到货架实物,
+     * 系统账面却已扣掉预留, 实物 > 账面 → 假盘盈 → 虚假 借1403/贷6301 营业外收入凭证 +
+     * 后续预留转消耗时同一批货二次扣减, 库存与损益永久虚增 reserved)。
+     */
+    @Transient
+    public BigDecimal getPhysicalQuantity() {
+        if (receiptQuantity == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal used = usedQuantity != null ? usedQuantity : BigDecimal.ZERO;
+        return receiptQuantity.subtract(used);
+    }
+
+    /**
      * 获取剩余数量（与getCurrentQuantity相同）
      */
     @Transient
