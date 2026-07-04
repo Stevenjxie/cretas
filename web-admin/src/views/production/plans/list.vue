@@ -2495,7 +2495,7 @@ function handleAiFill(params: TableRow) {
         <div style="font-size: 13px; line-height: 1.7;">
           <strong>计划确认后，先进入未完成列表；原料库存不足只做预警，不阻断开工或结单：</strong>
           <ul style="margin: 4px 0 4px 18px; padding: 0;">
-            <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。</li>
+            <li><strong>生成调拨单</strong>：根据 BOM 自动计算所需原辅料/包材，发申请给仓库审批。库存不足或需要从其他仓库调料时使用。<em>仅适用于有明确计划量的计划（销售订单/手工/预测）；存货生产不预排数量，请直接用「逐道录入/小结」备料。</em></li>
             <li><strong>核对结单</strong>：PC 文员逐单核对实际产量、原料/半成品领用和工时；缺料信息会在列表和弹窗里作为参考值显示。</li>
             <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
             <li><strong>PC 结单</strong>：不需要逐道报工的计划，也必须由文员在「核对结单」里录入实际产量、实际领用和人效后，才算完成。</li>
@@ -2787,8 +2787,10 @@ function handleAiFill(params: TableRow) {
               title="转为生产批次并开工(建批次+工序任务, 用于 APP 逐道报工)"
               @click="handleCreateBatch(row)"
             >APP报工</el-button>
+            <!-- 生成调拨单: 需要明确计划量 (BOM × 计划量 展开). 存货生产(SAFETY_STOCK)
+                 计划量=0 (产量在逐道录入/小结时才定), 展开全 0 会落地死调拨单 → 对其隐藏. -->
             <el-button
-              v-if="canWrite && isStartable(row.status)"
+              v-if="canWrite && isStartable(row.status) && row.sourceType !== 'SAFETY_STOCK'"
               type="warning"
               link
               size="small"
