@@ -25,6 +25,8 @@ public class InterimSettleReversalRequestDTO {
     private String rejectReason;
     private LocalDateTime executedAt;
     private String affectedBatchNumbers;
+    /** #1214 缺口修复: 连带冲销的同厂调拨记录操作提示 (分号分隔); 无连带冲销 → null。 */
+    private String transferReconcileHints;
     /** 统一审批中心 workflow 实例 ID (可空)。 */
     private String workflowInstanceId;
 
@@ -44,6 +46,7 @@ public class InterimSettleReversalRequestDTO {
         dto.setRejectReason(r.getRejectReason());
         dto.setExecutedAt(r.getExecutedAt());
         dto.setAffectedBatchNumbers(r.getAffectedBatchNumbers());
+        dto.setTransferReconcileHints(r.getTransferReconcileHints());
         dto.setWorkflowInstanceId(r.getWorkflowInstanceId());
         return dto;
     }

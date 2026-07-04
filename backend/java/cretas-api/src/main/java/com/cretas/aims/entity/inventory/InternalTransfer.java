@@ -135,7 +135,10 @@ public class InternalTransfer extends BaseEntity {
     @Column(name = "confirmed_at")
     private LocalDateTime confirmedAt;
 
-    /** 驳回/取消原因 */
+    /**
+     * 驳回/取消/冲销原因。冲销场景 (status=REVERSED): 由
+     * {@code FinishedGoodsFeedServiceImpl.reverseInterimCreate} 写入操作提示, 说明物理货物需人工核实/退回。
+     */
     @Column(name = "reject_reason", length = 500)
     private String rejectReason;
 

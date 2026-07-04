@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -141,12 +142,18 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         }
 
         // ── ② FG un-create (带下游守卫) ──
+        //   #1214 静默漂移缺口修复: reverseInterimCreate 若连带冲销了同厂调拨记录 (TRF-child 整批退回归零),
+        //   会返回操作提示 (fool-proof Rule 2/5: 告知物理货物需人工核实/退回) — 汇总进响应供前端展示。
         int fgCreatedReversed = 0;
+        List<String> transferReconcileHints = new ArrayList<>();
         for (Map<String, Object> d : asList(reversalDetail.get("fgCreated"))) {
             String batchNumber = str(d.get("batchNumber"));
             BigDecimal qty = dec(d.get("qty"));
             if (batchNumber != null && qty != null && qty.signum() > 0) {
-                finishedGoodsFeedService.reverseInterimCreate(factoryId, batchNumber, qty, userId);
+                List<String> hints = finishedGoodsFeedService.reverseInterimCreate(factoryId, batchNumber, qty, userId);
+                if (hints != null) {
+                    transferReconcileHints.addAll(hints);
+                }
                 affected.add(batchNumber);
                 fgCreatedReversed++;
             }
@@ -248,11 +255,13 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         result.put("rawRestored", rawRestored);
         result.put("rowsUnstamped", rowsUnstamped);
         result.put("affectedBatchNumbers", new java.util.ArrayList<>(affected));  // 供治理层盘点告警快照
+        // #1214 缺口修复: 连带冲销同厂调拨记录的操作提示 (物理货物需人工核实/退回); 无连带冲销 → 空列表。
+        result.put("transferReconcileHints", transferReconcileHints);
 
         log.info("[interim-reverse] factory={}, plan={}, seq={}: SFI-in冲销 {}, FG-create冲销 {}, "
-                        + "SFI-out还回 {}, FG-feed还回 {}, 原料还回 {}, 清行戳 {}",
+                        + "SFI-out还回 {}, FG-feed还回 {}, 原料还回 {}, 清行戳 {}, 调拨连带冲销提示 {}",
                 factoryId, planId, seq, sfiInReversed, fgCreatedReversed, sfiOutRestored,
-                fgFeedRestored, rawRestored, rowsUnstamped);
+                fgFeedRestored, rawRestored, rowsUnstamped, transferReconcileHints.size());
         return result;
     }
 

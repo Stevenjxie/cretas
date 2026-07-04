@@ -57,6 +57,7 @@ class FinishedGoodsFeedServiceTest {
     @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private com.cretas.aims.repository.inventory.InternalTransferItemRepository internalTransferItemRepository;
+    @Mock private com.cretas.aims.repository.inventory.InternalTransferRepository internalTransferRepository;
 
     private FinishedGoodsFeedServiceImpl service;
 
@@ -64,7 +65,7 @@ class FinishedGoodsFeedServiceTest {
     void setUp() {
         service = new FinishedGoodsFeedServiceImpl(
                 finishedGoodsBatchRepository, productFamilyResolver, finishedGoodsAdjustmentLogRepository,
-                productTypeRepository, internalTransferItemRepository);
+                productTypeRepository, internalTransferItemRepository, internalTransferRepository);
     }
 
     /** 桩: 让 productTypeId 对应的产品配了每盒克重 gramsPerUnit。 */

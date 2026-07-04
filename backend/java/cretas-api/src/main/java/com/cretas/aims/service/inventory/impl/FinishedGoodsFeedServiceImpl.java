@@ -12,6 +12,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
+import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
@@ -48,6 +49,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     private final ProductTypeRepository productTypeRepository;
     /** 撤销小结连带退库: 查源批次被同厂调拨搬出的 TRF-child 子批 (仍在公司内, 须一并退回, 不留孤儿库存)。 */
     private final InternalTransferItemRepository internalTransferItemRepository;
+    /** #1214 静默漂移缺口修复: TRF-child 子批被整批退回归零时, 连带把源 InternalTransfer 记录置 REVERSED。 */
+    private final InternalTransferRepository internalTransferRepository;
 
     /** ①c 成品投料扣减的调整来源标记 (审计口径, 区别于 SCRAP 报损 / 手工 adjust)。 */
     private static final String REF_PRODUCTION_FEED = "PRODUCTION_FEED";
@@ -235,9 +238,9 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
 
     @Override
     @Transactional
-    public void reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
+    public List<String> reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
         if (qty == null || qty.signum() <= 0) {
-            return;
+            return List.of();
         }
         FinishedGoodsBatch fg = finishedGoodsBatchRepository
                 .findByFactoryIdAndBatchNumberForUpdate(factoryId, batchNumber)
@@ -259,6 +262,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                 .findIntraFactoryFinishedGoodsConsumers(fg.getId(), factoryId);
 
         List<FinishedGoodsBatch> childBatches = new ArrayList<>();   // CONFIRMED 已建子批 (可退回)
+        // #1214 静默漂移缺口修复: 子批 id → 建它的调拨行, 供退到 REVERSED 时反查连带冲销对应 InternalTransfer。
+        Map<String, InternalTransferItem> childBatchIdToItem = new HashMap<>();
         BigDecimal childRecoverable = BigDecimal.ZERO;               // 子批仍可回收合计
         BigDecimal childShippedReserved = BigDecimal.ZERO;           // 子批已发货/预留 (真不可逆, 仅报错定位)
         BigDecimal inTransitQty = BigDecimal.ZERO;                   // 在途 (已出库未确认收货, 子批未建)
@@ -280,6 +285,7 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .add(nz(child.getShippedQuantity())).add(nz(child.getReservedQuantity()));
                 if (cRec.signum() > 0) {
                     childBatches.add(child);
+                    childBatchIdToItem.put(child.getId(), it);
                     childRecoverable = childRecoverable.add(cRec);
                 }
             } else if (st == TransferStatus.SHIPPED || st == TransferStatus.RECEIVED) {
@@ -325,6 +331,7 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         // ── 退库 (总退回量 = qty): 先退 TRF-child 子批 (把搬到别仓的成品拉回并退掉), 剩余从主批退 ──
         //   recoverable >= qty 保证总能凑够; 主批退量 = qty − 子批实退, 恒 <= sourceRecoverable → available 不为负。
         BigDecimal remaining = qty;
+        List<String> transferReconcileHints = new ArrayList<>();   // #1214 缺口修复: 连带冲销调拨的操作提示
         for (FinishedGoodsBatch child : childBatches) {
             if (remaining.signum() <= 0) {
                 break;
@@ -362,6 +369,16 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                             + "before={}, after={}, status={}",
                     factoryId, child.getBatchNumber(), take, cBefore, cAfter, child.getStatus());
             remaining = remaining.subtract(take);
+
+            // ── #1214 静默漂移缺口修复: 子批整批退回归零 (REVERSED) → 连带把建它的 InternalTransfer 记录同步冲销 ──
+            //   否则该 CONFIRMED 调拨记录悬空指向一个已作废的批次: 物流仓 FG 视图显示 0 (批次已冲销), 但调拨单
+            //   仍是 CONFIRMED/quantity=40/targetBatchId→已冲销批次, 下次 FG 盘点会误判"盘盈"/拣货会误判"有货"。
+            if (child.getStatus() == FinishedGoodsBatch.Status.REVERSED) {
+                String hint = reconcileTransferForRetiredChild(childBatchIdToItem.get(child.getId()), child, take);
+                if (hint != null) {
+                    transferReconcileHints.add(hint);
+                }
+            }
         }
 
         // ── 退主批剩余量 ──
@@ -394,6 +411,47 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         log.info("[interim-reverse] reverseInterimCreate FG 入库冲销: factory={}, batchNo={}, qty={}, "
                         + "主批退={}, 子批连带退={}, before={}, after={}, status={}",
                 factoryId, batchNumber, qty, remaining, qty.subtract(remaining), before, after, fg.getStatus());
+        return transferReconcileHints;
+    }
+
+    /**
+     * #1214 静默漂移缺口修复: 一个 TRF-child 成品批次因撤销小结<b>整批退回归零</b> (REVERSED) 后, 把建它的
+     * {@code InternalTransfer} 记录同步冲销 —— 否则该 CONFIRMED 调拨单悬空指向一个已作废的批次
+     * (targetBatchId 指向的批次已 REVERSED/produced=0), 物流仓 FG 视图显示 0 而调拨单仍宣称"已确认收货 N 件",
+     * 下次 FG 盘点会误判盘盈 / 拣货会误判有货。
+     *
+     * <p>只把<b>记录</b>状态置 REVERSED + 写操作提示 (fool-proof Rule 2/5), <b>不</b>假设物理货物已归位 ——
+     * 账面冲销 ≠ 物理必然搬回, 需人工核实。幂等: 同一调拨多次触发只在仍为 CONFIRMED 时改写一次
+     * (防御性; 正常路径一个 targetBatchId 只对应一个待冲销子批, 不会重复调用)。
+     *
+     * @param item  建该子批的调拨行 (可能为 null — 防御性, 理论上 childBatchIdToItem 必命中); null → no-op
+     * @param child 已冲销归零的 TRF-child 批次 (仅用于批号/数量拼接提示文案)
+     * @param take  本次从该子批实退的量 (成品原生单位)
+     * @return 操作提示文案 (含调拨单号 + 数量 + 核实指引); item/transfer 缺失或已非 CONFIRMED (已处理过/异常态) → null
+     */
+    private String reconcileTransferForRetiredChild(InternalTransferItem item, FinishedGoodsBatch child, BigDecimal take) {
+        if (item == null) {
+            log.warn("[interim-reverse] 子批 {} 退回归零但找不到对应调拨行 (childBatchIdToItem 未命中), 跳过调拨记录冲销",
+                    child.getBatchNumber());
+            return null;
+        }
+        InternalTransfer transfer = item.getTransfer();
+        if (transfer == null || transfer.getStatus() != TransferStatus.CONFIRMED) {
+            return null;   // 已冲销过 / 非 CONFIRMED (防御性幂等, 不重复处理)
+        }
+        String qtyStr = take.stripTrailingZeros().toPlainString() + (child.getUnit() != null ? child.getUnit() : "");
+        String hint = "已从调拨单 " + transfer.getTransferNumber() + " 冲销账面成品 " + qtyStr
+                + " (关联生产小结已撤销), 该调拨记录已作废(REVERSED) — 请核实/退回物流仓 "
+                + (transfer.getTargetWarehouseId() != null ? transfer.getTargetWarehouseId() : "目标仓")
+                + " 的对应物理货物, 避免后续盘点误判盘盈";
+        transfer.setStatus(TransferStatus.REVERSED);
+        String existingReason = transfer.getRejectReason();
+        transfer.setRejectReason((existingReason != null && !existingReason.isBlank() ? existingReason + "; " : "")
+                + "生产小结撤销连带冲销 " + qtyStr + " (源批次冲销批次 " + child.getBatchNumber() + "), 物理货物请人工核实/退回");
+        internalTransferRepository.save(transfer);
+        log.info("[interim-reverse] 连带冲销调拨记录: transferId={}, transferNumber={}, childBatchNo={}, take={}",
+                transfer.getId(), transfer.getTransferNumber(), child.getBatchNumber(), take);
+        return hint;
     }
 
     private static BigDecimal nz(BigDecimal v) {

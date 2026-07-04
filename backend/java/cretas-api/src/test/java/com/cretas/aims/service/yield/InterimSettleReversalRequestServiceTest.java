@@ -156,13 +156,14 @@ class InterimSettleReversalRequestServiceTest {
 
     // ── ③ 审批通过 → 执行逆转 + EXECUTED + affectedBatchNumbers 快照 ──
     @Test
-    @DisplayName("③ 审批通过 → 内联执行逆转, 状态 EXECUTED, affectedBatchNumbers 快照")
+    @DisplayName("③ 审批通过 → 内联执行逆转, 状态 EXECUTED, affectedBatchNumbers 快照, 无连带冲销调拨 → transferReconcileHints null")
     void approveExecutesReversal() {
         InterimSettleReversalRequest req = pendingRequest(1, LocalDateTime.now().minusHours(2));
         when(requestRepository.findByIdAndFactoryId(REQ_ID, FACTORY)).thenReturn(Optional.of(req));
         Map<String, Object> reverseResult = new LinkedHashMap<>();
         reverseResult.put("reversedSessionSeq", 1);
         reverseResult.put("affectedBatchNumbers", List.of("CLK-SEMI-A", "FG-PP-001-S2"));
+        reverseResult.put("transferReconcileHints", List.of());
         when(reversalService.reverseInterimSettle(FACTORY, PLAN_ID, 1, 99L)).thenReturn(reverseResult);
 
         InterimSettleReversalRequestDTO dto = service.approve(REQ_ID, FACTORY, 99L, "finance_manager");
@@ -173,6 +174,27 @@ class InterimSettleReversalRequestServiceTest {
         assertThat(dto.getApprovedBy()).isEqualTo(99L);
         assertThat(dto.getExecutedAt()).isNotNull();
         assertThat(dto.getAffectedBatchNumbers()).isEqualTo("CLK-SEMI-A,FG-PP-001-S2");
+        assertThat(dto.getTransferReconcileHints()).isNull();  // 空提示列表 → 不落库空字符串, 落 null
+    }
+
+    // ── ③' #1214 缺口修复: 连带冲销调拨记录的提示落库快照 (分号分隔) + DTO 透出 ──
+    @Test
+    @DisplayName("③' reverseInterimSettle 返回 transferReconcileHints → approve 拼接落库 + DTO 透出")
+    void approveExecutesReversalPersistsTransferReconcileHints() {
+        InterimSettleReversalRequest req = pendingRequest(1, LocalDateTime.now().minusHours(2));
+        when(requestRepository.findByIdAndFactoryId(REQ_ID, FACTORY)).thenReturn(Optional.of(req));
+        Map<String, Object> reverseResult = new LinkedHashMap<>();
+        reverseResult.put("reversedSessionSeq", 1);
+        reverseResult.put("affectedBatchNumbers", List.of("FG-PP-001-S2"));
+        reverseResult.put("transferReconcileHints", List.of(
+                "已从调拨单 TRF-1 冲销账面成品 40kg — 请核实/退回",
+                "已从调拨单 TRF-2 冲销账面成品 60kg — 请核实/退回"));
+        when(reversalService.reverseInterimSettle(FACTORY, PLAN_ID, 1, 99L)).thenReturn(reverseResult);
+
+        InterimSettleReversalRequestDTO dto = service.approve(REQ_ID, FACTORY, 99L, "finance_manager");
+
+        assertThat(dto.getTransferReconcileHints()).isEqualTo(
+                "已从调拨单 TRF-1 冲销账面成品 40kg — 请核实/退回; 已从调拨单 TRF-2 冲销账面成品 60kg — 请核实/退回");
     }
 
     // ── ③ 角色: 非审批角色 → 403, 不执行 ──

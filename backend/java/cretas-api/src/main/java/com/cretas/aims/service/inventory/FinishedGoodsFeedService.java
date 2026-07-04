@@ -90,13 +90,20 @@ public interface FinishedGoodsFeedService {
      * FG_DOWNSTREAM_CONSUMED)}</b> (整事务回滚)。批次不存在 (已撤销/删除) → 抛 {@code FG_NOT_FOUND}。
      * 悲观行锁串行化。必须在调用方 {@code @Transactional} 内。
      *
+     * <p>🔴 <b>同厂调拨记录连带冲销 (2026-07-04 修复 #1214 静默漂移缺口)</b>: 若冲销涉及被同厂调拨搬到别仓的
+     * TRF-child 子批, 且该子批被<b>整批退回归零</b> (状态转 {@code FinishedGoodsBatch.Status.REVERSED}), 则
+     * 对应 {@code InternalTransfer} 记录同步置为 {@code TransferStatus.REVERSED} + 写入 {@code rejectReason}
+     * 操作提示 (不再让一个 CONFIRMED 调拨记录悬空指向一个已作废的批次)。返回值为这些提示的人类可读文案列表
+     * (供调用方合并进撤销小结响应, fool-proof Rule 2/5: 告知操作员物理货物需人工核实/退回), 无连带冲销时返回空列表。
+     *
      * @param factoryId   工厂 ID (factory-scoped 🔒)
      * @param batchNumber 成品批次号 (= 小结创建的 {@code FinishedGoodsBatch.batchNumber})
      * @param qty         本次冲销量 (= 小结入库量; ≤0 → no-op)
      * @param operatorId  操作人 (调整日志 audit, 可空)
+     * @return 连带冲销的同厂调拨记录操作提示 (人类可读文案); 无 → 空列表
      * @throws com.cretas.aims.exception.BusinessException 409 FG_NOT_FOUND / FG_DOWNSTREAM_CONSUMED
      */
-    void reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
+    List<String> reverseInterimCreate(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
 
     /**
      * 撤销小结 — 逆 {@link #consumeForFeedStrict} (FG 投料 restore, 还回领用)。

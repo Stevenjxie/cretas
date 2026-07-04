@@ -43,6 +43,8 @@ const statusMap: Record<string, { text: string; type: string }> = {
   RECEIVED: { text: '已签收', type: '' },
   CONFIRMED: { text: '已确认', type: 'success' },
   CANCELLED: { text: '已取消', type: 'info' },
+  // #1214 缺口修复: 撤销小结连带冲销同厂调拨记录时置此状态 (物理货物需人工核实/退回, 见调拨单备注)。
+  REVERSED: { text: '已冲销', type: 'danger' },
 };
 
 const typeMap: Record<string, string> = {
