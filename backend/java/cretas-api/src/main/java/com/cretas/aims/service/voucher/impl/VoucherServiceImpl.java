@@ -143,8 +143,8 @@ public class VoucherServiceImpl implements VoucherService {
     private String mapLinkType(VoucherType type) {
         if (type == null) return "free";
         return switch (type) {
-            case SALES_RECEIPT, RETURN -> "sale";
-            case PURCHASE_PAYMENT, INVENTORY_TRANSFER, INVENTORY_STOCKTAKE -> "stock";
+            case SALES_RECEIPT, RETURN, CASH_RECEIPT -> "sale";
+            case PURCHASE_PAYMENT, INVENTORY_TRANSFER, INVENTORY_STOCKTAKE, CASH_PAYMENT -> "stock";
             case WAGE, EXPENSE, DEPRECATION, PL_CLOSING, COST_CARRYOVER -> "free";
         };
     }
@@ -397,6 +397,62 @@ public class VoucherServiceImpl implements VoucherService {
 
         Voucher saved = voucherRepo.save(voucher);
         log.info("✅ 手工凭证 (POSTED): {} type={} source={}/{} total={}",
+                saved.getVoucherNumber(), type, sourceBusinessType, sourceBusinessId, totalDebit);
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public Voucher createCashMovementVoucher(String factoryId, VoucherType type, LocalDate voucherDate,
+                                             List<VoucherEntry> entries, String sourceBusinessType,
+                                             String sourceBusinessId, String description, Long userId) {
+        if (entries == null || entries.isEmpty()) {
+            throw new IllegalArgumentException("createCashMovementVoucher: entries 不能为空");
+        }
+        // 幂等: (sourceBusinessType, sourceBusinessId) 唯一标识该笔现金流水的凭证
+        // (uk_voucher_source_business)。防 AFTER_COMMIT 监听器重投 / 同笔重复确认导致重复生成。
+        Optional<Voucher> existing = voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull(
+                sourceBusinessType, sourceBusinessId);
+        if (existing.isPresent()) {
+            log.debug("现金流水凭证已存在 (idempotent hit): {}/{} → {}",
+                    sourceBusinessType, sourceBusinessId, existing.get().getId());
+            return existing.get();
+        }
+
+        // 期间结账 gate: 现金凭证落在 CLOSED 期间则拒 (与 createFromBusiness 一致)。
+        // 监听器 fail-soft 兜住抛出的 PeriodClosedException — 结转/月结对账会暴露漂移。
+        assertPeriodOpen(factoryId, voucherDate);
+
+        Voucher voucher = Voucher.builder()
+                .factoryId(factoryId)
+                .voucherNumber(generateVoucherNumber(factoryId, voucherDate))
+                .voucherType(type)
+                .voucherDate(voucherDate)
+                .sourceBusinessType(sourceBusinessType)
+                .sourceBusinessId(sourceBusinessId)
+                .status(VoucherStatus.DRAFT)   // 业务凭证惯例: 生成 DRAFT, 财务手工过账
+                .createdBy(userId)
+                .description(description)
+                .build();
+
+        int lineNo = 1;
+        for (VoucherEntry e : entries) {
+            e.setLineNo(lineNo++);
+            e.setDebit(nz(e.getDebit()));
+            e.setCredit(nz(e.getCredit()));
+            e.setVoucher(voucher);
+            voucher.getEntries().add(e);
+        }
+        BigDecimal totalDebit = voucher.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = voucher.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        voucher.setTotalDebit(totalDebit);
+        voucher.setTotalCredit(totalCredit);
+        voucher.validateBalanced();
+
+        Voucher saved = voucherRepo.save(voucher);
+        log.info("✅ 现金流水凭证 (DRAFT): {} type={} source={}/{} total={}",
                 saved.getVoucherNumber(), type, sourceBusinessType, sourceBusinessId, totalDebit);
         return saved;
     }

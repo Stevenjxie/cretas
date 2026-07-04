@@ -29,5 +29,21 @@ public enum VoucherType {
      * 让 6401 有真实发生额, 经 {@code PL_CLOSING} 结转进 4103, 修复"毛利=收入"缺口;
      * 同时释放 1405, 使其反映真实剩余存货 (采购已借 1405, COGS 结转贷 1405)。
      */
-    COST_CARRYOVER
+    COST_CARRYOVER,
+    /**
+     * 收款凭证 (资金段, finance audit Bug 5) — 客户收款时的现金流动 GL。
+     * 借 1002 银行存款 (或 1001 库存现金, 按 paymentMethod) / 贷 1122 应收账款 = 收款金额。
+     * 客户辅助核算挂在 1122 贷方行。此前 {@code recordArPayment} 只写 AR 子账 +
+     * Customer.currentBalance, 从不过 GL → 1002 是死账 (只被工资 WAGE 贷)、1122 只增不减
+     * (仅退货冲减)。本类型让现金入账 + 应收冲减真正进 GL, 使 1002/1122 随真实资金流动。
+     */
+    CASH_RECEIPT,
+    /**
+     * 付款凭证 (资金段, finance audit Bug 5) — 供应商付款时的现金流动 GL。
+     * 借 2202 应付账款 / 贷 1002 银行存款 (或 1001 库存现金, 按 paymentMethod) = 付款金额。
+     * 供应商辅助核算挂在 2202 借方行。此前 {@code recordApPayment} 只写 AP 子账 +
+     * Supplier.currentBalance, 从不过 GL → 2202 只增不减 (仅退货冲减)。本类型让应付冲减 +
+     * 现金付出真正进 GL, 使 2202/1002 随真实资金流动。
+     */
+    CASH_PAYMENT
 }

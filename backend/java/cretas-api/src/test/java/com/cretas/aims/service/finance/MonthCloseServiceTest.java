@@ -45,6 +45,7 @@ class MonthCloseServiceTest {
     @Mock private AccountingPeriodService periodService;
     @Mock private ArApService arApService;
     @Mock private IncomeStatementService incomeStatementService;
+    @Mock private com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -60,7 +61,13 @@ class MonthCloseServiceTest {
     void setUp() {
         // @InjectMocks can't inject the real ObjectMapper (not a mock), build manually
         service = new MonthCloseServiceImpl(periodRepo, periodService, arApService,
-                incomeStatementService, objectMapper);
+                incomeStatementService, objectMapper, voucherEntryRepository);
+
+        // 资金段子账↔总账对账 (finance audit Bug 5): 默认零漂移 stub (lenient — 非每个 test 都到 previewClose)。
+        lenient().when(arApService.getFinanceOverview(FACTORY)).thenReturn(java.util.Map.of(
+                "totalReceivable", BigDecimal.ZERO, "totalPayable", BigDecimal.ZERO));
+        lenient().when(voucherEntryRepository.sumNetDebitBySubjectPrefix(eq(FACTORY), anyString()))
+                .thenReturn(BigDecimal.ZERO);
 
         sampleIncomeStatement = IncomeStatementDTO.builder()
                 .factoryId(FACTORY)
@@ -101,7 +108,7 @@ class MonthCloseServiceTest {
 
         assertTrue(result.isCanClose(), "OPEN 期间无阻塞项 → canClose");
         assertEquals("PASS", result.getReconciliationStatus());
-        assertEquals(3, result.getChecks().size());
+        assertEquals(4, result.getChecks().size());  // +1: 子账↔总账对账 (finance audit Bug 5)
         assertNotNull(result.getSummary());
     }
 
@@ -121,6 +128,56 @@ class MonthCloseServiceTest {
                 .findFirst().orElseThrow();
         assertFalse(adjCheck.isPassed());
         assertEquals(3L, adjCheck.getValue());
+    }
+
+    @Test
+    void previewClose_subledgerGlDrift_surfacesWarningButStillCanClose() {
+        // finance audit Bug 5: AR 子账 ¥1000 但 1122 GL 只有 ¥600 (漂移 ¥400) → WARNING, 不阻塞。
+        when(periodService.findPeriod(FACTORY, Y, M)).thenReturn(Optional.empty());
+        stubNoPendingAdjustments();
+        when(incomeStatementService.generate(FACTORY, Y, M, Y, M)).thenReturn(sampleIncomeStatement);
+        when(arApService.getFinanceOverview(FACTORY)).thenReturn(java.util.Map.of(
+                "totalReceivable", new BigDecimal("1000.00"),
+                "totalPayable", new BigDecimal("500.00")));
+        when(voucherEntryRepository.sumNetDebitBySubjectPrefix(FACTORY, "1122%"))
+                .thenReturn(new BigDecimal("600.00"));   // 应收 GL 漂移 400
+        when(voucherEntryRepository.sumNetDebitBySubjectPrefix(FACTORY, "2202%"))
+                .thenReturn(new BigDecimal("-500.00"));   // 应付 GL 净贷 500 → 取负 = 500, 与子账一致
+
+        MonthCloseReconciliationDTO result = service.previewClose(FACTORY, Y, M);
+
+        assertTrue(result.isCanClose(), "对账漂移是 WARNING (非阻塞), 仍可结账");
+        assertEquals("WARNING", result.getReconciliationStatus());
+        MonthCloseReconciliationDTO.CheckItem reconcile = result.getChecks().stream()
+                .filter(c -> c.getName().contains("对账"))
+                .findFirst().orElseThrow();
+        assertFalse(reconcile.isPassed(), "AR 子账 1000 vs GL 600 差 400 > 容差 → 未通过");
+        assertEquals("WARNING", reconcile.getSeverity());
+        assertTrue(reconcile.getDetail().contains("1000") && reconcile.getDetail().contains("600"),
+                "detail 必须列出两套账数字供财务核查");
+    }
+
+    @Test
+    void previewClose_subledgerGlWithinTolerance_reconcilePasses() {
+        // 子账与 GL 一致 (差 ≤ ¥1) → 对账 check passed=true, 不产生 WARNING。
+        when(periodService.findPeriod(FACTORY, Y, M)).thenReturn(Optional.empty());
+        stubNoPendingAdjustments();
+        when(incomeStatementService.generate(FACTORY, Y, M, Y, M)).thenReturn(sampleIncomeStatement);
+        when(arApService.getFinanceOverview(FACTORY)).thenReturn(java.util.Map.of(
+                "totalReceivable", new BigDecimal("1000.00"),
+                "totalPayable", new BigDecimal("500.00")));
+        when(voucherEntryRepository.sumNetDebitBySubjectPrefix(FACTORY, "1122%"))
+                .thenReturn(new BigDecimal("1000.00"));
+        when(voucherEntryRepository.sumNetDebitBySubjectPrefix(FACTORY, "2202%"))
+                .thenReturn(new BigDecimal("-500.00"));
+
+        MonthCloseReconciliationDTO result = service.previewClose(FACTORY, Y, M);
+
+        assertEquals("PASS", result.getReconciliationStatus());
+        MonthCloseReconciliationDTO.CheckItem reconcile = result.getChecks().stream()
+                .filter(c -> c.getName().contains("对账"))
+                .findFirst().orElseThrow();
+        assertTrue(reconcile.isPassed(), "子账==GL → 对账通过");
     }
 
     @Test
