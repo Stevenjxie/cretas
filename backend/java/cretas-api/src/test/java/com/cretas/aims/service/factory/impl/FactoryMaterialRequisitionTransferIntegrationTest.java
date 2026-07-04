@@ -2,7 +2,9 @@ package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
@@ -474,6 +476,8 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         mr.setItems(items);
 
         when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        // 存货生产 (SAFETY_STOCK) 计划 — 唯一有「小结-待结算」窗口的计划族, 守卫才对其生效。
+        stubPlanSourceType(PlanSourceType.SAFETY_STOCK);
         // 1 unsettled 报工 consumption still references the WKS batch → close must be blocked.
         when(materialConsumptionRepository.countUnsettledConsumptionByBatchIds(FACTORY_ID, List.of("wks-1")))
                 .thenReturn(1L);
@@ -505,7 +509,8 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
                 new BigDecimal("0.50"), new BigDecimal("0.50"), "wks-1", null);
         when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        // all consumption already settled → 0 unsettled on the WKS batch.
+        // 存货生产计划 → 守卫生效; all consumption already settled → 0 unsettled on the WKS batch.
+        stubPlanSourceType(PlanSourceType.SAFETY_STOCK);
         when(materialConsumptionRepository.countUnsettledConsumptionByBatchIds(FACTORY_ID, List.of("wks-1")))
                 .thenReturn(0L);
 
@@ -518,7 +523,43 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertEquals(new BigDecimal("0.00"), batchStore.get("wks-1").getCurrentQuantity());
     }
 
+    @Test
+    @DisplayName("F1 narrow (#1215 over-block fix): 结单-family plan (CUSTOMER_ORDER) with unsettled MC → close PROCEEDS, guard never consulted (not permanently stuck)")
+    void close_nonStockPlan_notBlocked_guardGatedToSafetyStock() {
+        // 结单-family: consumption is deducted immediately at 结单 (WKS used=8/current=2), interimSettledAt
+        // is NEVER stamped for this family → its MC rows stay interimSettledAt IS NULL forever. If the guard
+        // fired on family-agnostic `interimSettledAt IS NULL`, this requisition would be stuck ISSUED forever
+        // (its 小结 path 400s: 仅存货生产可小结). The narrowed guard must NOT fire for non-SAFETY_STOCK plans.
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "10.00", "3.50"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "8.00", "3.50"));
+
+        FactoryMaterialRequisition mr = buildMrInIssued(
+                new BigDecimal("10.00"), new BigDecimal("8.00"),
+                new BigDecimal("0.50"), new BigDecimal("0.50"), "wks-1", null);
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // 结单-family plan → guard gated out entirely.
+        stubPlanSourceType(PlanSourceType.CUSTOMER_ORDER);
+
+        service.close(FACTORY_ID, MR_ID, OPERATOR, List.of());
+
+        // Close proceeded (WKS current already reflects consumption at 结单 → returned = 2), and the
+        // unsettled-count guard was NEVER consulted for a 结单-family plan.
+        assertEquals(Status.CLOSED, mr.getStatus());
+        assertEquals(new BigDecimal("2.00"), mr.getItems().get(0).getReturnedQty());
+        verify(materialConsumptionRepository, never()).countUnsettledConsumptionByBatchIds(any(), any());
+    }
+
     // ==================== builders ====================
+
+    /** 存根本单关联生产计划的来源类型 (F1 守卫的计划族门控)。 */
+    private void stubPlanSourceType(PlanSourceType sourceType) {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        plan.setSourceType(sourceType);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+    }
 
     private FactoryMaterialRequisition buildMrInPicking() {
         FactoryMaterialRequisition mr = new FactoryMaterialRequisition();

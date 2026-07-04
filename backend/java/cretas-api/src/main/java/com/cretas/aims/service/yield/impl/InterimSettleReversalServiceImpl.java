@@ -73,28 +73,6 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
                     .withHintTarget("撤销小结");
         }
 
-        // 🔴🔒🔒 2026-07-04 sister #4 防呆 (关单后撤销小结 → 生产仓幻库存): 领料单关单 close() 时按
-        //   「WKS 现存 = issued − 已小结实耗」把未消耗料退回原料仓 + drawDown 划平生产仓 WKS 批次 (归零)。
-        //   若此后撤销小结, 步骤 ⑤ 会对消耗来源批次 (mc.batchId = 已被 close 划平的 WKS 批次) 还回
-        //   usedQuantity → WKS 批次凭空出现正现存 = CLOSED 领料单上的幻库存 (料已实际退回原料仓/消耗, 生产仓
-        //   却又冒出一份)。关单是领料料流的终态: 一旦关单, 该计划的小结不应再撤销。fail-fast (在任何库存变更前
-        //   loud-block, 保持撤销原子性)。领料单已关单 → 该改的只能是新开领料 + 重新报工小结, 不是撤旧小结。
-        //   无领料闸的计划 (F006 直接从原料仓消耗, 无 WKS 物化) → 无 CLOSED 领料单 → 不触发 (行为不变)。
-        if (requisitionRepository != null) {
-            boolean hasClosedRequisition = requisitionRepository
-                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
-                    .stream()
-                    .anyMatch(r -> r.getStatus() == com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED);
-            if (hasClosedRequisition) {
-                throw new BusinessException(409,
-                        "撤销小结失败: 本生产计划的领料单已关单退料, 关单后不可再撤销小结 (避免生产仓幻库存)")
-                        .withCode("INTERIM_REVERSE_REQUISITION_CLOSED")
-                        .withHint("如需调整, 请新开领料单并重新报工小结; 已关单的领料料流不可逆")
-                        .withHintTarget("撤销小结")
-                        .withSeverity("BLOCKING");
-            }
-        }
-
         // ── 定位目标小结 (指定 seq / 默认最近一次); 已撤销 (硬删) → empty → 双撤幂等拒绝 ──
         ProductionInterimSettlement resolved = (sessionSeq != null
                 ? settlementRepository.findByFactoryIdAndProductionPlanIdAndSessionSeqAndDeletedAtIsNull(
@@ -122,6 +100,46 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
                     .withCode("INTERIM_REVERSE_NO_DETAIL")
                     .withHint("该小结缺少可逆转的明细数据, 无法自动撤销")
                     .withHintTarget("撤销小结");
+        }
+
+        // ── 本次撤销 step ⑤ 将「还回 usedQuantity」的消耗来源批次 (mc.batchId): interim_settled_at == 本次小结
+        //   postedAt, 挂在本计划各道 batchId 上。提前计算, 既供下方 sister #4 关单-交叠 守卫, 又供 step ⑤ 复用
+        //   (同一读, 且 ①-④ 不触及这些 raw 消耗行 → 复用安全, 免二次查询)。
+        List<Long> planBatchIds = rowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                .map(ProcessSheetRow::getBatchId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        List<MaterialConsumption> consumptions = planBatchIds.isEmpty()
+                ? List.of()
+                : consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                        factoryId, planBatchIds, postedAt);
+
+        // 🔴🔒🔒 2026-07-04 sister #4 防呆 (关单后撤销小结 → 生产仓幻库存) — 收窄为 settlement-级 交叠判定。
+        //   首版 #1215 用 plan-级 anyMatch(status==CLOSED) 误伤: 只要本计划曾关过任一领料单 (R1), 之后所有小结的
+        //   撤销全被永久拒绝 —— 即使被撤的这次小结 (如 settle#2, 只引用 R2 / raw 批次) 的消耗根本不碰 R1 划平的
+        //   WKS 批次, 撤销它完全安全。
+        //   真实危险: close() 按「WKS 现存 = issued − 已小结实耗」把未消耗料退回原料仓 + drawDown 划平生产仓 WKS
+        //   批次 (归零)。若被撤这次小结的某笔消耗来源批次 (mc.batchId) 命中某张已关单领料单划平的 WKS 批次, step ⑤
+        //   会对它还回 usedQuantity → 生产仓凭空冒出正现存 = CLOSED 领料单上的幻库存。故仅当「本次撤销的消耗来源
+        //   批次集」∩「已关单领料单的 WKS 批次集」非空时才 fail-fast loud-block (任何库存变更前); 无交叠 → 安全放行
+        //   (被撤小结只引用 raw 批次 / 或另一张未关单领料单的 WKS 批次)。无领料闸 (F006 直消耗) / 无已关单领料单 /
+        //   本次消耗为空 → 不触发 (行为不变)。
+        if (requisitionRepository != null && !consumptions.isEmpty()) {
+            java.util.Set<String> closedWorkshopBatchIds = collectClosedRequisitionWorkshopBatchIds(factoryId, planId);
+            if (!closedWorkshopBatchIds.isEmpty()) {
+                boolean overlapsClosedWks = consumptions.stream()
+                        .map(MaterialConsumption::getBatchId)
+                        .anyMatch(closedWorkshopBatchIds::contains);
+                if (overlapsClosedWks) {
+                    throw new BusinessException(409,
+                            "撤销小结失败: 本次小结的消耗涉及已关单退料的生产仓批次, 关单后不可再撤销 (避免生产仓幻库存)")
+                            .withCode("INTERIM_REVERSE_REQUISITION_CLOSED")
+                            .withHint("如需调整, 请新开领料单并重新报工小结; 已关单的领料料流不可逆")
+                            .withHintTarget("撤销小结")
+                            .withSeverity("BLOCKING");
+                }
+            }
         }
 
         // 被逆转影响的半成品/成品批次号 (供治理层快照 → 半成品盘点撤销告警)。
@@ -194,15 +212,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         //   永久幻扣减 (原料永久短缺, 保证盘点差异; rawRestored 计数亦偏低)。
         //   本计划各道 batchId = process_sheet_rows.batch_id (与扣减侧 findByFactoryIdAndPlanId 同源, 反查时行仍在);
         //   叠加 interim_settled_at = postedAt 精确锁定本次小结扣减的那批行 → 撤销集与扣减侧 deducted 集完全一致。
-        List<Long> planBatchIds = rowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
-                .map(ProcessSheetRow::getBatchId)
-                .filter(id -> id != null)
-                .distinct()
-                .toList();
-        List<MaterialConsumption> consumptions = planBatchIds.isEmpty()
-                ? List.of()
-                : consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
-                        factoryId, planBatchIds, postedAt);
+        //   ⚠️ planBatchIds / consumptions 已在上方 (sister #4 守卫前) 计算, 此处复用同一读 (①-④ 不改这些 raw 消耗行)。
         int rawRestored = 0;
         for (MaterialConsumption mc : consumptions) {
             MaterialBatch src = materialBatchRepository
@@ -259,6 +269,36 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     // ─────────────────────────────────────────────────────────────
     // Helpers — reversalDetail 解析 (jsonb 回读: 量/成本存为字符串, 防数值精度漂移)
     // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 收集本计划全部「已关单 (CLOSED)」领料单在生产仓 (WKS) 物化的批次 id
+     * ({@code batchNumbers[*].workshopBatchId})。sister #4 settlement-级 交叠守卫据此判断: 本次撤销将
+     * 还回 usedQuantity 的消耗来源批次是否命中某张已被 close() 划平的 WKS 批次 (命中即幻库存危险)。
+     * 未关单 (ISSUED/IN_USE/…) 领料单不纳入 —— 它们的 WKS 批次仍在, 撤销还回不产生幻库存。
+     */
+    private java.util.Set<String> collectClosedRequisitionWorkshopBatchIds(String factoryId, String planId) {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (com.cretas.aims.entity.factory.FactoryMaterialRequisition r :
+                requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)) {
+            if (r.getStatus() != com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED
+                    || r.getItems() == null) {
+                continue;
+            }
+            for (com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem it : r.getItems()) {
+                List<Map<String, Object>> rows = it.getBatchNumbers();
+                if (rows == null) {
+                    continue;
+                }
+                for (Map<String, Object> row : rows) {
+                    Object wks = row.get("workshopBatchId");
+                    if (wks != null && !wks.toString().isBlank()) {
+                        ids.add(wks.toString());
+                    }
+                }
+            }
+        }
+        return ids;
+    }
 
     private static BusinessException settlementNotFound(Integer sessionSeq) {
         return new BusinessException(409,
