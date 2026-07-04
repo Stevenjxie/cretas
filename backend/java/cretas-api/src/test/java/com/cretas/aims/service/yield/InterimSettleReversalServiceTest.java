@@ -143,7 +143,7 @@ class InterimSettleReversalServiceTest {
 
     // ── (b) FG 成品行撤销 → reverseInterimCreate ──
     @Test
-    @DisplayName("(b) 撤销含 FG 入库的小结 → reverseInterimCreate(batchNumber, qty); 硬删小结")
+    @DisplayName("(b) 撤销含 FG 入库的小结 → reverseInterimCreate(batchNumber, qty); 硬删小结; 无连带冲销调拨 → 提示列表为空")
     void reverseFgRow() {
         LocalDateTime postedAt = LocalDateTime.now();
         Map<String, Object> detail = detail(
@@ -158,6 +158,28 @@ class InterimSettleReversalServiceTest {
                 .reverseInterimCreate(eq(FACTORY), eq("FG-PP-001-S2"), eq(new BigDecimal("9")), eq(7L));
         assertThat(r.get("fgCreatedReversed")).isEqualTo(1);
         verify(settlementRepository, times(1)).hardDeleteById("s2");
+        // 未 stub reverseInterimCreate 返回值 (默认空 list) → 无连带冲销调拨记录, 响应提示列表为空 (非 null)。
+        assertThat(r.get("transferReconcileHints")).isEqualTo(List.of());
+    }
+
+    // ── (b') FG 成品行撤销触及同厂调拨的 TRF-child 整批退回归零 → #1214 缺口修复: 提示汇总进响应 ──
+    @Test
+    @DisplayName("(b') reverseInterimCreate 连带冲销同厂调拨记录 (返回操作提示) → 汇总进 reverseInterimSettle 响应 transferReconcileHints")
+    void reverseFgRowAggregatesTransferReconcileHints() {
+        LocalDateTime postedAt = LocalDateTime.now();
+        Map<String, Object> detail = detail(
+                List.of(),
+                List.of(fgCreated("FG-PP-001-S2", "9")),
+                List.of(), List.of(), List.of());
+        stubTarget(2, settlement("s2", 2, postedAt, detail));
+        String hint = "已从调拨单 TRF-1 冲销账面成品 9kg (关联生产小结已撤销), 该调拨记录已作废(REVERSED) — 请核实/退回物流仓";
+        when(finishedGoodsFeedService.reverseInterimCreate(
+                eq(FACTORY), eq("FG-PP-001-S2"), eq(new BigDecimal("9")), eq(7L)))
+                .thenReturn(List.of(hint));
+
+        Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 2, 7L);
+
+        assertThat(r.get("transferReconcileHints")).isEqualTo(List.of(hint));
     }
 
     // ── (c) 还回被扣的上游 SFI/FG + 原料 ──

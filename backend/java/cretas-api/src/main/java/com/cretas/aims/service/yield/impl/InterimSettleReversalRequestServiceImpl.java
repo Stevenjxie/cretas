@@ -176,9 +176,13 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
         req.setApprovedAt(LocalDateTime.now());
         req.setExecutedAt(LocalDateTime.now());
         req.setAffectedBatchNumbers(joinAffected(result));
+        // #1214 缺口修复: 连带冲销同厂调拨记录的操作提示落库快照 (不能只落日志), 供审批中心/操作员事后核实
+        // "哪些调拨记录被连带冲销, 物理货物是否已实际归位" (fool-proof Rule 2/5)。
+        req.setTransferReconcileHints(joinTransferHints(result));
         InterimSettleReversalRequest saved = requestRepository.save(req);
-        log.info("[interim-reverse] 撤销申请已审批+执行: requestId={}, factory={}, plan={}, seq={}, approver={}, affected={}",
-                requestId, factoryId, req.getProductionPlanId(), req.getSessionSeq(), approverId, saved.getAffectedBatchNumbers());
+        log.info("[interim-reverse] 撤销申请已审批+执行: requestId={}, factory={}, plan={}, seq={}, approver={}, affected={}, transferHints={}",
+                requestId, factoryId, req.getProductionPlanId(), req.getSessionSeq(), approverId,
+                saved.getAffectedBatchNumbers(), saved.getTransferReconcileHints());
 
         // 驱动统一审批中心实例到终态 (APPROVE) → 离开待审列表 (镜像 PurchaseServiceImpl 业务端点驱动 workflow)。
         // 逆转已成功执行在前; 此推进与 approve 同事务原子 (transition 抛 → 全回滚, 自愈于重试)。
@@ -282,6 +286,19 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
         Object v = result == null ? null : result.get("affectedBatchNumbers");
         if (v instanceof List<?> list && !list.isEmpty()) {
             return String.join(",", list.stream().map(String::valueOf).toList());
+        }
+        return null;
+    }
+
+    /**
+     * #1214 缺口修复: 从逆转结果拼接连带冲销同厂调拨记录的操作提示 (分号分隔) 供落库快照。
+     * 无连带冲销 (纯原料小结 / 无同厂调拨) → null (不写空字符串, 与 joinAffected 同惯例)。
+     */
+    @SuppressWarnings("unchecked")
+    private static String joinTransferHints(Map<String, Object> result) {
+        Object v = result == null ? null : result.get("transferReconcileHints");
+        if (v instanceof List<?> list && !list.isEmpty()) {
+            return String.join("; ", list.stream().map(String::valueOf).toList());
         }
         return null;
     }

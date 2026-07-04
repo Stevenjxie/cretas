@@ -92,6 +92,14 @@ public class InterimSettleReversalRequest extends BaseEntity {
     private String affectedBatchNumbers;
 
     /**
+     * #1214 静默漂移缺口修复: 执行时快照 —— 撤销小结连带冲销的同厂调拨 (TRF-child) 记录操作提示 (分号分隔)。
+     * 每条提示含调拨单号 + 冲销数量 + "请核实/退回物理货物" 指引 (fool-proof Rule 2/5, 见
+     * {@code FinishedGoodsFeedServiceImpl#reconcileTransferForRetiredChild})。无连带冲销 → null。
+     */
+    @Column(name = "transfer_reconcile_hints", columnDefinition = "TEXT")
+    private String transferReconcileHints;
+
+    /**
      * 复用 INVENTORY_ADJUSTMENT workflow 实例 ID (镜像半成品盘点 {@code SemiFinishedStocktake.workflowInstanceId})。
      * 申请创建时登记进统一审批中心列表; 审批/驳回时驱动该实例到终态。可空: 工厂无 active workflow 时不登记 (向后兼容)。
      */
