@@ -11,6 +11,7 @@ import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
 import type { TableRow } from '@/types/api';
+import { listWarehouses } from '@/api/factoryWarehouse';
 
 const route = useRoute();
 const router = useRouter();
@@ -52,11 +53,49 @@ const statusMap: Record<string, { text: string; type: string }> = {
   CANCELLED: { text: '已取消', type: 'info' },
 };
 
+// Bug fix (fool-proof-design audit): 原三元链 `A ? x : B ? y : z` 把非 HQ_TO_BRANCH/BRANCH_TO_BRANCH
+// 的类型 (含 WAREHOUSE_TO_WAREHOUSE 仓库间调拨) 全部误判为 '分部→总部'. 改用完整 map, 与
+// transfer/list.vue 的 typeMap 保持一致 (含 WAREHOUSE_TO_WAREHOUSE 真实标签).
+const TRANSFER_TYPE_LABELS: Record<string, string> = {
+  HQ_TO_BRANCH: '总部→分部',
+  BRANCH_TO_BRANCH: '分部→分部',
+  BRANCH_TO_HQ: '分部→总部',
+  WAREHOUSE_TO_WAREHOUSE: '仓库间调拨',
+};
+function transferTypeLabel(type?: string | null): string {
+  if (!type) return '-';
+  return TRANSFER_TYPE_LABELS[type] || type;
+}
+
 // 状态流转步骤
 const statusSteps = ['DRAFT', 'REQUESTED', 'APPROVED', 'SHIPPED', 'RECEIVED', 'CONFIRMED'];
 const terminalStatuses = ['REJECTED', 'CANCELLED'];
 
-onMounted(() => loadTransfer());
+// 仓库真名解析 (Rule 2 防呆: 富确认弹窗要显示 源仓→目标仓, 不是裸 UUID), 同
+// material-requisitions/list.vue 的 warehouseNameMap 写法.
+const warehouseNameMap = ref<Record<string, string>>({});
+async function loadWarehouseNames() {
+  if (!factoryId.value) return;
+  try {
+    const res = await listWarehouses(factoryId.value);
+    if (res.success) {
+      const map: Record<string, string> = {};
+      (res.data || []).forEach((w) => { map[w.id] = w.name; });
+      warehouseNameMap.value = map;
+    }
+  } catch {
+    // best-effort: 展示回退到裸 ID, 不阻塞主流程
+  }
+}
+function warehouseName(id?: string | null): string {
+  if (!id) return '-';
+  return warehouseNameMap.value[id] || id;
+}
+
+onMounted(() => {
+  loadTransfer();
+  loadWarehouseNames();
+});
 
 async function loadTransfer() {
   if (!factoryId.value || !transferId.value) return;
@@ -102,6 +141,22 @@ const isOutbound = computed(() => transfer.value?.sourceFactoryId === factoryId.
 // 所以门控只需加 isInbound: 同厂时 isOutbound 和 isInbound 都为 true, 发运+签收/入库按钮都渲染。
 const isInbound = computed(() => transfer.value?.targetFactoryId === factoryId.value);
 
+// Rule 2 (fool-proof-design): 富确认弹窗 — 品名 × 数量, 供 handleAction 各操作复用
+// (对齐 material-requisitions/list.vue 的 buildItemsSummaryHtml 写法)。
+function transferItemName(row: Record<string, unknown>): string {
+  const mt = row.materialType as { name?: string } | undefined;
+  const pt = row.productType as { name?: string } | undefined;
+  return String(mt?.name || pt?.name || row.materialTypeId || row.productTypeId || '-');
+}
+function buildTransferItemsSummaryHtml(): string {
+  const items = (transfer.value?.items as Record<string, unknown>[] | undefined) || [];
+  if (items.length === 0) return '<div style="color:#909399">（无物料明细）</div>';
+  const rows = items
+    .map((it) => `<div>${transferItemName(it)} × ${it.quantity ?? 0}${it.unit || ''}</div>`)
+    .join('');
+  return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${rows}</div>`;
+}
+
 async function handleAction(action: string) {
   if (submitting.value) return;
   // Rule 3: reject / cancel 需先收集原因，走独立 dialog
@@ -121,8 +176,22 @@ async function handleAction(action: string) {
   };
   const a = map[action];
   if (!a) return;
+  // Rule 2 防呆修复: 原弹窗 `确认${a.label}？` + 标题 '操作确认' 在 a.label 本身含"确认"时
+  // (如"确认签收") 拼出 "确认确认签收？" 的重复错字; 且完全没有单号/物料/仓库上下文,
+  // 低技术素养仓管员点一下就签收, 无从核对。改为对齐 material-requisitions 的富确认样式:
+  // 标题直接用 a.label (自身已是完整短语, 不再前缀"确认"), 正文带 单号 + 仓库路由 + 物料清单。
+  const t = transfer.value;
+  const routeLine = (t?.sourceWarehouseId || t?.targetWarehouseId)
+    ? `<div style="margin-top:4px">${warehouseName(t?.sourceWarehouseId)} → ${warehouseName(t?.targetWarehouseId)}</div>`
+    : '';
   try {
-    await ElMessageBox.confirm(`确认${a.label}？`, '操作确认');
+    await ElMessageBox.confirm(
+      `<div>调拨单号：<b>${t?.transferNumber || ''}</b></div>` +
+        routeLine +
+        buildTransferItemsSummaryHtml(),
+      a.label,
+      { type: 'warning', dangerouslyUseHTMLString: true, confirmButtonText: a.label, cancelButtonText: '取消' },
+    );
   } catch { return; }
   submitting.value = true;
   try {
@@ -396,15 +465,21 @@ async function submitDecide() {
         <el-descriptions :column="3" border>
           <el-descriptions-item label="调拨编号">{{ transfer.transferNumber }}</el-descriptions-item>
           <el-descriptions-item label="调拨类型">
-            {{ transfer.transferType === 'HQ_TO_BRANCH' ? '总部→分部' : transfer.transferType === 'BRANCH_TO_BRANCH' ? '分部→分部' : '分部→总部' }}
+            {{ transferTypeLabel(transfer.transferType) }}
           </el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="总金额">{{ formatAmount(transfer.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item label="调出方">{{ transfer.sourceFactory?.name || transfer.sourceFactoryId }}</el-descriptions-item>
           <el-descriptions-item label="调入方">{{ transfer.targetFactory?.name || transfer.targetFactoryId }}</el-descriptions-item>
+          <!-- Rule 2 (fool-proof-design): 同厂仓库间调拨 (WAREHOUSE_TO_WAREHOUSE) 只看调出方/调入方
+               (同一工厂) 分不清究竟哪个仓到哪个仓, 加仓库名. -->
+          <el-descriptions-item v-if="transfer.sourceWarehouseId || transfer.targetWarehouseId" label="仓库路由">
+            {{ warehouseName(transfer.sourceWarehouseId) }} → {{ warehouseName(transfer.targetWarehouseId) }}
+          </el-descriptions-item>
           <el-descriptions-item label="调拨日期">{{ transfer.transferDate }}</el-descriptions-item>
           <el-descriptions-item label="预计到达">{{ transfer.expectedArrivalDate || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="申请人">{{ transfer.requestedBy || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="审批人">{{ transfer.approvedBy || '-' }}</el-descriptions-item>
+          <!-- fool-proof-design Rule 2: 后端 getTransferById 已解析 requestedByName/approvedByName (userId→姓名). -->
+          <el-descriptions-item label="申请人">{{ transfer.requestedByName || transfer.requestedBy || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="审批人">{{ transfer.approvedByName || transfer.approvedBy || '-' }}</el-descriptions-item>
           <el-descriptions-item label="备注" :span="3">{{ transfer.remark || '-' }}</el-descriptions-item>
         </el-descriptions>
 

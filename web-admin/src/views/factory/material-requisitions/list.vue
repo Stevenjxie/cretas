@@ -103,6 +103,19 @@ const statusMap: Record<string, { text: string; type: 'info' | 'warning' | 'succ
   CANCELLED: { text: '已取消', type: 'danger' },
 };
 
+// Fool-proof-design display fix: 详情弹窗类别列之前直显后端原始枚举 (RAW/AUXILIARY/PACKAGING/
+// SEMI_FINISHED, 对应 FactoryMaterialRequisitionItem.MaterialCategory), 仓管员看不懂英文缩写。
+const MATERIAL_CATEGORY_LABELS: Record<string, string> = {
+  RAW: '原料',
+  AUXILIARY: '辅料',
+  PACKAGING: '包装',
+  SEMI_FINISHED: '半成品',
+};
+function materialCategoryLabel(category?: string | null): string {
+  if (!category) return '-';
+  return MATERIAL_CATEGORY_LABELS[category] || category;
+}
+
 onMounted(() => {
   loadData();
   loadWarehouseNames();
@@ -633,7 +646,9 @@ async function submitCancel() {
 
         <el-table :data="detailData.items || []" border size="small" class="detail-table" max-height="360">
           <el-table-column prop="materialName" label="物料" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="materialCategory" label="类别" width="90" align="center" />
+          <el-table-column label="类别" width="90" align="center">
+            <template #default="{ row }">{{ materialCategoryLabel(row.materialCategory) }}</template>
+          </el-table-column>
           <el-table-column prop="requiredQty" label="需求" width="90" align="right" />
           <el-table-column prop="issuedQty" label="发出" width="90" align="right" />
           <el-table-column prop="consumedQty" label="实用" width="90" align="right" />

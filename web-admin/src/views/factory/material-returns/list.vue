@@ -8,9 +8,14 @@ import { handleCatchError } from '@/utils/errorToast';
 interface MaterialReturnRecord {
   id: string;
   requisitionId: string;
+  // 防呆 Rule 2 (fool-proof-design): 后端 (ProductionMaterialReturnController) 已批量解析裸 GUID
+  // 为人类可读名称, 前端只展示 requisitionNo/materialName/batchNumber, 不再显 UUID。
+  requisitionNo?: string;
   requisitionItemId: string;
   materialTypeId: string;
+  materialName?: string;
   materialBatchId: string;
+  batchNumber?: string;
   returnQuantity: number | string;
   returnStatus: string;
   createdAt?: string | null;
@@ -21,7 +26,8 @@ const factoryId = computed(() => authStore.factoryId);
 
 const loading = ref(false);
 const tableData = ref<MaterialReturnRecord[]>([]);
-const requisitionId = ref('');
+// 防呆 Rule 2: 搜索框改按需求单号 (人话) 查询, 不再要求仓管员手填需求单 UUID。
+const requisitionNo = ref('');
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
 onMounted(loadData);
@@ -38,7 +44,7 @@ async function loadData() {
       page: pagination.value.page - 1,
       size: pagination.value.size,
     };
-    if (requisitionId.value.trim()) params.requisitionId = requisitionId.value.trim();
+    if (requisitionNo.value.trim()) params.requisitionNo = requisitionNo.value.trim();
     const res = await get(`/${factoryId.value}/production-material-returns`, { params });
     if (res.success) {
       const data = res.data || {};
@@ -71,7 +77,7 @@ function handlePageChange(page: number) {
         <span class="page-subtitle">生产关单回仓台账</span>
       </div>
       <div class="header-actions">
-        <el-input v-model="requisitionId" clearable placeholder="需求单 ID" class="filter-input" @keyup.enter="handleSearch" />
+        <el-input v-model="requisitionNo" clearable placeholder="需求单号 (如 MR-20260701-001)" class="filter-input" @keyup.enter="handleSearch" />
         <el-button type="primary" @click="handleSearch">查询</el-button>
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
       </div>
@@ -82,10 +88,15 @@ function handlePageChange(page: number) {
         <el-table-column prop="createdAt" label="执行时间" width="160">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column prop="requisitionId" label="需求单 ID" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="requisitionItemId" label="明细 ID" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="materialTypeId" label="物料 ID" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="materialBatchId" label="批次 ID" min-width="170" show-overflow-tooltip />
+        <el-table-column label="需求单号" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.requisitionNo || row.requisitionId }}</template>
+        </el-table-column>
+        <el-table-column label="物料名称" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
+        </el-table-column>
+        <el-table-column label="批次号" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.batchNumber || row.materialBatchId }}</template>
+        </el-table-column>
         <el-table-column prop="returnQuantity" label="退回数量" width="120" align="right" />
         <el-table-column prop="returnStatus" label="状态" width="110" align="center">
           <template #default="{ row }">

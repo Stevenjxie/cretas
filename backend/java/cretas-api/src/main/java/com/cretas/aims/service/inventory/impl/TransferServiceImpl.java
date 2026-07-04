@@ -13,6 +13,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -34,6 +35,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class TransferServiceImpl implements TransferService {
@@ -73,6 +76,14 @@ public class TransferServiceImpl implements TransferService {
 
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+
+    /**
+     * fool-proof-design Rule 2 (2026-07-04): 申请人/审批人 userId → 姓名解析 (详情页展示用).
+     * required=false + null-guard: 同 warehouseResolver 等既有 optional 依赖同款范式,
+     * 现有 @InjectMocks 单测不注入此 bean 时不炸, 仅跳过姓名填充 (prod 恒注入).
+     */
+    @Autowired(required = false)
+    private UserRepository userRepository;
 
     public TransferServiceImpl(InternalTransferRepository transferRepository,
                                InternalTransferItemRepository transferItemRepository,
@@ -207,7 +218,32 @@ public class TransferServiceImpl implements TransferService {
         transfer.getItems().size();
         // PR #289 §B4 — populate 调出方 currentStock for detail-page "现有库存" column.
         populateCurrentStock(transfer);
+        // fool-proof-design Rule 2 — populate 申请人/审批人姓名 for detail-page display (裸 userId → 姓名).
+        populateRequestApproveNames(transfer);
         return transfer;
+    }
+
+    /**
+     * fool-proof-design Rule 2 (2026-07-04, F006 反馈): 详情页「申请人」「审批人」之前直显裸 userId,
+     * 仓管员看不懂。批量 (最多2个 id) 一次 findAllById 填充 transient requestedByName/approvedByName。
+     */
+    private void populateRequestApproveNames(InternalTransfer transfer) {
+        if (userRepository == null || transfer == null) return;
+        List<Long> userIds = Stream.of(transfer.getRequestedBy(), transfer.getApprovedBy())
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (userIds.isEmpty()) return;
+        Map<Long, com.cretas.aims.entity.User> userMap = userRepository.findAllById(userIds).stream()
+                .collect(Collectors.toMap(com.cretas.aims.entity.User::getId, java.util.function.Function.identity()));
+        if (transfer.getRequestedBy() != null) {
+            com.cretas.aims.entity.User u = userMap.get(transfer.getRequestedBy());
+            transfer.setRequestedByName(u != null ? u.getFullName() : null);
+        }
+        if (transfer.getApprovedBy() != null) {
+            com.cretas.aims.entity.User u = userMap.get(transfer.getApprovedBy());
+            transfer.setApprovedByName(u != null ? u.getFullName() : null);
+        }
     }
 
     /**

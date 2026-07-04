@@ -25,9 +25,13 @@ public class WastageReportDTO {
     private String photoUrls;
     private String status;
     private Long submittedBy;
+    // fool-proof-design Rule 2 (2026-07-04): 列表/详情不该显裸 userId — 批量解析姓名, 与
+    // ReportReversalLog.submittedByName 同款范式 (service 层按批次 findAllById 填充, 非 @JsonIgnore 关联).
+    private String submittedByName;
     private LocalDateTime submittedAt;
     private String approverRole;
     private Long approvedBy;
+    private String approvedByName;
     private LocalDateTime approvedAt;
     private String rejectReason;
     private LocalDateTime appliedAt;
