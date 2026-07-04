@@ -1263,16 +1263,24 @@ public class PurchaseServiceImpl implements PurchaseService {
         // commit 抛 UnexpectedRollbackException → doomed-tx 兜底转通用 409 → 同一 PO 第 2 次分批入库
         // 永久无法确认。recordPayableIfAbsent 对"已存在/金额缺失/状态不允许"等预期条件返回 existing/null
         // 而非抛异常，事务从不被 doom，收货入库不被应付侧阻塞。
+        //
+        // 🔴🔒 金额口径修复 (2026-07-03): 按<b>本次入库单实收金额</b> record.getTotalAmount()
+        // (Σ 实收数量 × 单价) 挂账，非 PO 计划总额 order.getTotalAmount()。六膳门超收 130kg (计划
+        // 100kg) 时旧实现只挂 100×20=2000，漏挂实收差额 600。幂等键改为每张入库单 (PURCHASE_RECEIVE,
+        // receiveId)：同一入库单重复确认不重复挂账；分批入库各挂各的实收值，累计 = 实收总额。
         if (record.getPurchaseOrderId() != null) {
             try {
                 PurchaseOrder order = purchaseOrderRepository.findById(record.getPurchaseOrderId()).orElse(null);
-                if (order != null && order.getSupplierId() != null && order.getTotalAmount() != null) {
+                // 实收金额: 入库单 totalAmount (Σ 实收数量 × 单价)。为 0/缺价时 recordPayableIfAbsent 诚实跳过 (不伪造应付)。
+                BigDecimal receivedValue = record.getTotalAmount();
+                if (order != null && order.getSupplierId() != null) {
                     ArApTransaction ap = arApService.recordPayableIfAbsent(factoryId, order.getSupplierId(), order.getId(),
-                            order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
+                            "PURCHASE_RECEIVE", record.getId(),
+                            receivedValue, LocalDate.now().plusDays(30), userId,
                             "采购入库自动挂账-" + record.getReceiveNumber());
                     if (ap != null) {
-                        log.info("自动应付挂账: orderId={}, amount={}, transactionId={}",
-                                order.getId(), order.getTotalAmount(), ap.getId());
+                        log.info("自动应付挂账(实收值): orderId={}, receiveId={}, receivedValue={}, transactionId={}",
+                                order.getId(), record.getId(), receivedValue, ap.getId());
                     }
                 }
             } catch (Exception e) {
