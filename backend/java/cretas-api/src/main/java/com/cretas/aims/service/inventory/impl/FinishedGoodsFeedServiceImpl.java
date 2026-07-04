@@ -2,12 +2,16 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
@@ -17,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +46,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
     /** 盒⇄kg 折算依据: 读 ProductType.gramsPerUnit (每盒标准克重) — 盒装成品作 kg 道投料来源时换算。 */
     private final ProductTypeRepository productTypeRepository;
+    /** 撤销小结连带退库: 查源批次被同厂调拨搬出的 TRF-child 子批 (仍在公司内, 须一并退回, 不留孤儿库存)。 */
+    private final InternalTransferItemRepository internalTransferItemRepository;
 
     /** ①c 成品投料扣减的调整来源标记 (审计口径, 区别于 SCRAP 报损 / 手工 adjust)。 */
     private static final String REF_PRODUCTION_FEED = "PRODUCTION_FEED";
@@ -239,37 +246,144 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .withHint("该成品批次已不存在, 可能已被撤销/删除")
                         .withSeverity("BLOCKING")
                         .withHintTarget(batchNumber));
-        BigDecimal before = fg.getProducedQuantity() != null ? fg.getProducedQuantity() : BigDecimal.ZERO;
-        BigDecimal after = before.subtract(qty);
-        BigDecimal shipped = fg.getShippedQuantity() != null ? fg.getShippedQuantity() : BigDecimal.ZERO;
-        BigDecimal reserved = fg.getReservedQuantity() != null ? fg.getReservedQuantity() : BigDecimal.ZERO;
-        BigDecimal availableAfter = after.subtract(shipped).subtract(reserved);
-        if (availableAfter.signum() < 0) {
-            // 🔴 下游守卫 (禁止降级): 已发货/预留/生产领用 → 冲销会致负库存 → loud-fail, 不产 phantom。
-            throw new BusinessException(409, "成品批次 " + batchNumber + " 已发货/预留/领用 (发"
-                    + shipped.stripTrailingZeros().toPlainString() + " 留"
-                    + reserved.stripTrailingZeros().toPlainString() + "), 无法撤销小结入库 "
-                    + qty.stripTrailingZeros().toPlainString() + "; 请先撤销下游发货/领用")
+        BigDecimal before = nz(fg.getProducedQuantity());
+        BigDecimal shipped = nz(fg.getShippedQuantity());
+        BigDecimal reserved = nz(fg.getReservedQuantity());
+        BigDecimal sourceRecoverable = before.subtract(shipped).subtract(reserved);   // 主批仍可回收 (= available)
+
+        // ── 同厂调拨搬出的成品仍在公司内, 一并计入可回收并退回子批 ──
+        //   MES↔ERP #1204 Fix#4: 同厂调拨 = 减源批 producedQuantity + 在目标仓建 TRF-child 子批 (货没离厂,
+        //   只是换仓)。若不计这部分, 生产 100→调拨 40 后撤销小结 (qty=100) 会 100% dead-end (available_after=-40)。
+        //   真正不可逆的只有: 跨厂发货 (shipped) / 预留 (reserved) / 下游生产领用 (produced 已减)。
+        List<InternalTransferItem> intraConsumers = internalTransferItemRepository
+                .findIntraFactoryFinishedGoodsConsumers(fg.getId(), factoryId);
+
+        List<FinishedGoodsBatch> childBatches = new ArrayList<>();   // CONFIRMED 已建子批 (可退回)
+        BigDecimal childRecoverable = BigDecimal.ZERO;               // 子批仍可回收合计
+        BigDecimal childShippedReserved = BigDecimal.ZERO;           // 子批已发货/预留 (真不可逆, 仅报错定位)
+        BigDecimal inTransitQty = BigDecimal.ZERO;                   // 在途 (已出库未确认收货, 子批未建)
+        List<String> inTransitTransfers = new ArrayList<>();
+        for (InternalTransferItem it : intraConsumers) {
+            InternalTransfer t = it.getTransfer();
+            TransferStatus st = t != null ? t.getStatus() : null;
+            if (st == TransferStatus.CONFIRMED && it.getTargetBatchId() != null) {
+                FinishedGoodsBatch child = finishedGoodsBatchRepository
+                        .findByIdAndFactoryIdForUpdate(it.getTargetBatchId(), factoryId)
+                        .orElse(null);
+                if (child == null) {
+                    continue;   // 子批已不存在 (被删/进一步撤销) → 视为不可回收, 后续 recoverable<qty 会拦
+                }
+                BigDecimal cRec = nz(child.getProducedQuantity())
+                        .subtract(nz(child.getShippedQuantity()))
+                        .subtract(nz(child.getReservedQuantity()));
+                childShippedReserved = childShippedReserved
+                        .add(nz(child.getShippedQuantity())).add(nz(child.getReservedQuantity()));
+                if (cRec.signum() > 0) {
+                    childBatches.add(child);
+                    childRecoverable = childRecoverable.add(cRec);
+                }
+            } else if (st == TransferStatus.SHIPPED || st == TransferStatus.RECEIVED) {
+                inTransitQty = inTransitQty.add(nz(it.getQuantity()));
+                if (t != null && t.getTransferNumber() != null) {
+                    inTransitTransfers.add(t.getTransferNumber());
+                }
+            }
+        }
+
+        BigDecimal recoverable = sourceRecoverable.add(childRecoverable);
+        if (recoverable.compareTo(qty) < 0) {
+            // 🔴 下游守卫 (禁止降级): 差额是真出厂/预留/在途/下游领用, 撤销会致负库存 → loud-fail, 不产 phantom。
+            //   报错命名真因 + 给恢复路径 (fool-proof Rule 2/5)。
+            StringBuilder cause = new StringBuilder();
+            if (shipped.signum() > 0 || childShippedReserved.signum() > 0) {
+                BigDecimal outQty = shipped.add(childShippedReserved);
+                cause.append(" 已发货/预留 ").append(outQty.stripTrailingZeros().toPlainString()).append(" (离厂/售出);");
+            }
+            if (reserved.signum() > 0) {
+                cause.append(" 主批预留 ").append(reserved.stripTrailingZeros().toPlainString()).append(";");
+            }
+            if (inTransitQty.signum() > 0) {
+                cause.append(" 调拨在途 ").append(inTransitQty.stripTrailingZeros().toPlainString())
+                        .append(" (调拨单 ").append(String.join("/", inTransitTransfers))
+                        .append(", 请先确认收货或取消该调拨单);");
+            }
+            BigDecimal gone = qty.subtract(recoverable);
+            BigDecimal explained = shipped.add(childShippedReserved).add(reserved).add(inTransitQty);
+            if (gone.compareTo(explained) > 0) {
+                cause.append(" 部分成品已被下游生产领用, 请先撤销下游领用;");
+            }
+            throw new BusinessException(409, "成品批次 " + batchNumber + " 无法撤销小结入库 "
+                    + qty.stripTrailingZeros().toPlainString() + " (仅 "
+                    + recoverable.stripTrailingZeros().toPlainString() + " 可回收):"
+                    + (cause.length() > 0 ? cause : " 部分成品已流出/消耗;") + " 请先撤销相应下游单据再重试")
                     .withCode("FG_DOWNSTREAM_CONSUMED")
-                    .withHint("该批次成品已被发货/预留/领用, 请先撤销下游单据再重试")
+                    .withHint("该批次成品部分已发货/预留/调拨在途/下游领用, 请先撤销对应下游单据再重试")
                     .withSeverity("BLOCKING")
                     .withHintTarget(batchNumber);
         }
 
+        // ── 退库 (总退回量 = qty): 先退 TRF-child 子批 (把搬到别仓的成品拉回并退掉), 剩余从主批退 ──
+        //   recoverable >= qty 保证总能凑够; 主批退量 = qty − 子批实退, 恒 <= sourceRecoverable → available 不为负。
+        BigDecimal remaining = qty;
+        for (FinishedGoodsBatch child : childBatches) {
+            if (remaining.signum() <= 0) {
+                break;
+            }
+            BigDecimal cRec = nz(child.getProducedQuantity())
+                    .subtract(nz(child.getShippedQuantity()))
+                    .subtract(nz(child.getReservedQuantity()));
+            BigDecimal take = remaining.min(cRec);
+            if (take.signum() <= 0) {
+                continue;
+            }
+            BigDecimal cBefore = nz(child.getProducedQuantity());
+            BigDecimal cAfter = cBefore.subtract(take);
+            finishedGoodsAdjustmentLogRepository.save(FinishedGoodsAdjustmentLog.builder()
+                    .factoryId(child.getFactoryId())
+                    .batchId(child.getId())
+                    .adjustmentQuantity(take.negate())      // 负数 = 连带退回同厂调拨子批
+                    .beforeProduced(cBefore)
+                    .afterProduced(cAfter)
+                    .reason("撤销小结连带退回同厂调拨成品 " + take.stripTrailingZeros().toPlainString()
+                            + (child.getUnit() != null ? child.getUnit() : "")
+                            + " (源批 " + batchNumber + ")")
+                    .referenceType(REF_INTERIM_REVERSAL)
+                    .operatorId(operatorId)
+                    .build());
+            child.setProducedQuantity(cAfter);
+            BigDecimal cAvail = cAfter.subtract(nz(child.getShippedQuantity())).subtract(nz(child.getReservedQuantity()));
+            if (cAvail.signum() <= 0) {
+                child.setStatus(cAfter.signum() <= 0
+                        ? FinishedGoodsBatch.Status.REVERSED
+                        : FinishedGoodsBatch.Status.DEPLETED);
+            }
+            finishedGoodsBatchRepository.save(child);
+            log.info("[interim-reverse] reverseInterimCreate 连带退子批: factory={}, childBatchNo={}, take={}, "
+                            + "before={}, after={}, status={}",
+                    factoryId, child.getBatchNumber(), take, cBefore, cAfter, child.getStatus());
+            remaining = remaining.subtract(take);
+        }
+
+        // ── 退主批剩余量 ──
+        BigDecimal after = before.subtract(remaining);
         FinishedGoodsAdjustmentLog logEntry = FinishedGoodsAdjustmentLog.builder()
                 .factoryId(fg.getFactoryId())
                 .batchId(fg.getId())
-                .adjustmentQuantity(qty.negate())       // 负数 = 冲销入库
+                .adjustmentQuantity(remaining.negate())       // 负数 = 冲销入库 (主批实退量)
                 .beforeProduced(before)
                 .afterProduced(after)
-                .reason("撤销小结入库 " + qty.stripTrailingZeros().toPlainString()
-                        + (fg.getUnit() != null ? fg.getUnit() : ""))
+                .reason("撤销小结入库 " + remaining.stripTrailingZeros().toPlainString()
+                        + (fg.getUnit() != null ? fg.getUnit() : "")
+                        + (remaining.compareTo(qty) < 0
+                                ? " (另 " + qty.subtract(remaining).stripTrailingZeros().toPlainString() + " 连带退同厂调拨子批)"
+                                : ""))
                 .referenceType(REF_INTERIM_REVERSAL)
                 .operatorId(operatorId)
                 .build();
         finishedGoodsAdjustmentLogRepository.save(logEntry);
 
         fg.setProducedQuantity(after);
+        BigDecimal availableAfter = after.subtract(shipped).subtract(reserved);
         if (availableAfter.signum() <= 0) {
             // 冲销至可用 0: 批次作废置 REVERSED (小结创建的批次被整撤); 其它耗尽走 DEPLETED。
             fg.setStatus(after.signum() <= 0
@@ -278,8 +392,12 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         }
         finishedGoodsBatchRepository.save(fg);
         log.info("[interim-reverse] reverseInterimCreate FG 入库冲销: factory={}, batchNo={}, qty={}, "
-                        + "before={}, after={}, status={}",
-                factoryId, batchNumber, qty, before, after, fg.getStatus());
+                        + "主批退={}, 子批连带退={}, before={}, after={}, status={}",
+                factoryId, batchNumber, qty, remaining, qty.subtract(remaining), before, after, fg.getStatus());
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     @Override

@@ -1,9 +1,14 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.entity.enums.TransferItemType;
+import com.cretas.aims.entity.enums.TransferStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
 import com.cretas.aims.service.inventory.impl.FinishedGoodsFeedServiceImpl;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import org.junit.jupiter.api.DisplayName;
@@ -16,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +45,7 @@ class FinishedGoodsFeedReverseTest {
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private ProductFamilyResolver productFamilyResolver;
     @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
+    @Mock private InternalTransferItemRepository internalTransferItemRepository;
     @InjectMocks private FinishedGoodsFeedServiceImpl service;
 
     private FinishedGoodsBatch fg(BigDecimal produced, BigDecimal shipped, BigDecimal reserved) {
@@ -53,6 +60,38 @@ class FinishedGoodsFeedReverseTest {
         b.setUnit("kg");
         b.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         return b;
+    }
+
+    private FinishedGoodsBatch childFg(String id, BigDecimal produced, BigDecimal shipped, BigDecimal reserved) {
+        FinishedGoodsBatch b = new FinishedGoodsBatch();
+        b.setId(id);
+        b.setFactoryId(FACTORY);
+        b.setBatchNumber("TRF-FG-" + id);
+        b.setProductTypeId("PT1");
+        b.setProducedQuantity(produced);
+        b.setShippedQuantity(shipped);
+        b.setReservedQuantity(reserved);
+        b.setUnit("kg");
+        b.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        return b;
+    }
+
+    /** 同厂调拨行 (sourceFactory == targetFactory), 消费源批次 fg-id. */
+    private InternalTransferItem intraItem(TransferStatus status, String transferNumber,
+                                           String targetBatchId, BigDecimal qty) {
+        InternalTransfer t = new InternalTransfer();
+        t.setId("trf-" + transferNumber);
+        t.setTransferNumber(transferNumber);
+        t.setSourceFactoryId(FACTORY);
+        t.setTargetFactoryId(FACTORY);   // 同厂
+        t.setStatus(status);
+        InternalTransferItem it = new InternalTransferItem();
+        it.setItemType(TransferItemType.FINISHED_GOODS);
+        it.setSourceBatchId("fg-id");
+        it.setTargetBatchId(targetBatchId);
+        it.setQuantity(qty);
+        it.setTransfer(t);
+        return it;
     }
 
     // ── reverseInterimCreate (成品入库冲销) ──
@@ -96,6 +135,92 @@ class FinishedGoodsFeedReverseTest {
         assertThatThrownBy(() -> service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("9"), 7L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_NOT_FOUND"));
+    }
+
+    // ── reverseInterimCreate: 同厂调拨搬出的成品仍可回收 (核心 bug 修复) ──
+
+    @Test
+    @DisplayName("reverseInterimCreate: 同厂调拨 40 至物流仓 (主批 100→60) → 撤销 100 成功: 主批退 60→0 REVERSED + 子批退 40→0 REVERSED")
+    void reverseInterimCreateReclaimsIntraTransferred() {
+        // 小结产 100, 同厂调拨 40 → 主批 producedQuantity=60, 物流仓 TRF-child producedQuantity=40。
+        FinishedGoodsBatch main = fg(new BigDecimal("60"), BigDecimal.ZERO, BigDecimal.ZERO);
+        FinishedGoodsBatch child = childFg("child-1", new BigDecimal("40"), BigDecimal.ZERO, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(main));
+        when(internalTransferItemRepository.findIntraFactoryFinishedGoodsConsumers("fg-id", FACTORY))
+                .thenReturn(List.of(intraItem(TransferStatus.CONFIRMED, "TRF-1", "child-1", new BigDecimal("40"))));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("child-1", FACTORY))
+                .thenReturn(Optional.of(child));
+
+        service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("100"), 7L);
+
+        // 主批退回 60 (剩余量 = 100 − 子批 40), 子批退回 40, 合计 100 全撤; 无孤儿库存。
+        assertThat(child.getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(child.getStatus()).isEqualTo(FinishedGoodsBatch.Status.REVERSED);
+        assertThat(main.getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(main.getStatus()).isEqualTo(FinishedGoodsBatch.Status.REVERSED);
+        // 两条调整日志 (主批 + 子批)。
+        verify(finishedGoodsAdjustmentLogRepository, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    @Test
+    @DisplayName("reverseInterimCreate: 全部 100 同厂调拨走 (主批 100→0) → 撤销 100 成功: 全从子批退, 主批不动")
+    void reverseInterimCreateReclaimsWhenAllTransferred() {
+        FinishedGoodsBatch main = fg(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        FinishedGoodsBatch child = childFg("child-2", new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(main));
+        when(internalTransferItemRepository.findIntraFactoryFinishedGoodsConsumers("fg-id", FACTORY))
+                .thenReturn(List.of(intraItem(TransferStatus.CONFIRMED, "TRF-2", "child-2", new BigDecimal("100"))));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("child-2", FACTORY))
+                .thenReturn(Optional.of(child));
+
+        service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("100"), 7L);
+
+        assertThat(child.getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(child.getStatus()).isEqualTo(FinishedGoodsBatch.Status.REVERSED);
+        assertThat(main.getProducedQuantity()).isEqualByComparingTo("0");  // 主批未动 (退量 = 0)
+    }
+
+    @Test
+    @DisplayName("reverseInterimCreate: 子批被真实发货 10 (child.shipped>0) → 30 可回收, 主批 60 → 共 90<100 → 仍 FG_DOWNSTREAM_CONSUMED")
+    void reverseInterimCreateBlocksWhenChildTrulyShipped() {
+        FinishedGoodsBatch main = fg(new BigDecimal("60"), BigDecimal.ZERO, BigDecimal.ZERO);
+        FinishedGoodsBatch child = childFg("child-3", new BigDecimal("40"), new BigDecimal("10"), BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(main));
+        when(internalTransferItemRepository.findIntraFactoryFinishedGoodsConsumers("fg-id", FACTORY))
+                .thenReturn(List.of(intraItem(TransferStatus.CONFIRMED, "TRF-3", "child-3", new BigDecimal("40"))));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("child-3", FACTORY))
+                .thenReturn(Optional.of(child));
+
+        assertThatThrownBy(() -> service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("100"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_DOWNSTREAM_CONSUMED");
+                    assertThat(ex.getMessage()).contains("已发货");
+                });
+        assertThat(main.getProducedQuantity()).isEqualByComparingTo("60"); // 未改
+        assertThat(child.getProducedQuantity()).isEqualByComparingTo("40"); // 未改
+    }
+
+    @Test
+    @DisplayName("reverseInterimCreate: 调拨在途 (SHIPPED 未确认, 子批未建) → 主批 60<100 → block, 报错命名调拨单号")
+    void reverseInterimCreateBlocksWhenInTransit() {
+        FinishedGoodsBatch main = fg(new BigDecimal("60"), BigDecimal.ZERO, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(main));
+        when(internalTransferItemRepository.findIntraFactoryFinishedGoodsConsumers("fg-id", FACTORY))
+                .thenReturn(List.of(intraItem(TransferStatus.SHIPPED, "TRF-INFLIGHT", null, new BigDecimal("40"))));
+
+        assertThatThrownBy(() -> service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("100"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_DOWNSTREAM_CONSUMED");
+                    assertThat(ex.getMessage()).contains("调拨在途");
+                    assertThat(ex.getMessage()).contains("TRF-INFLIGHT");
+                });
+        assertThat(main.getProducedQuantity()).isEqualByComparingTo("60"); // 未改
     }
 
     // ── restoreForFeed (成品投料还回) ──
