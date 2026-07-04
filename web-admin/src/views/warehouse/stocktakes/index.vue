@@ -117,7 +117,28 @@ const initiateForm = reactive({
   warehouseId: '',
   periodMonth: currentMonth.value,
   notes: '',
+  // 临时/专项盘点 (fool-proof Rule 5: 月底约束不再是 dead-end — 月底前也有出口)
+  adHoc: false,
+  adHocReasonSelect: '',
+  adHocReasonOther: '',
 });
+
+// fool-proof Rule 3: 自由文本改约束下拉 (标准原因 + 其他才显文本框)
+const adHocReasonOptions = [
+  { value: 'THEFT_SUSPECTED', label: '疑似失窃' },
+  { value: 'DAMAGE', label: '货物损坏' },
+  { value: 'CUSTOMER_AUDIT', label: '客户抽查' },
+  { value: 'SPECIAL_REVIEW', label: '专项复核' },
+  { value: 'OTHER', label: '其他' },
+];
+
+function resolveAdHocReason(): string {
+  if (!initiateForm.adHoc) return '';
+  if (initiateForm.adHocReasonSelect === 'OTHER') return initiateForm.adHocReasonOther.trim();
+  return adHocReasonOptions.find((o) => o.value === initiateForm.adHocReasonSelect)?.label || '';
+}
+
+const adHocReasonValid = computed(() => initiateForm.adHoc && !!resolveAdHocReason());
 
 // ────────────────────────────────────────────────────────────────────────────
 // 月底约束展示态 (fool-proof Rule 1: 边界必须在填表前展示, 不能填完点提交才报错)
@@ -145,6 +166,9 @@ function openInitiateDialog() {
   initiateForm.warehouseId = '';
   initiateForm.periodMonth = currentMonth.value;
   initiateForm.notes = '';
+  initiateForm.adHoc = false;
+  initiateForm.adHocReasonSelect = '';
+  initiateForm.adHocReasonOther = '';
   initiateDialogVisible.value = true;
   void loadInitiateConstraint();
 }
@@ -158,20 +182,26 @@ async function submitInitiate() {
     ElMessage({ message: '请选择盘点月份', type: 'warning', duration: 3000 });
     return;
   }
-  // 防呆 Rule 1: 月底约束已在弹窗打开时展示, 此处兜底拦截 (防用户在约束加载完成前抢点提交)
-  if (initiateConstraint.value && !initiateConstraint.value.canInitiateToday) {
+  // 防呆 Rule 1 + Rule 5: 月底约束已在弹窗打开时展示, 此处兜底拦截 (防用户在约束加载完成前抢点提交)。
+  // Rule 5 (无 dead-end): 常规盘点被约束挡住时, 提供【临时/专项盘点】出口 — 勾选 + 填写标准原因即可绕过。
+  if (initiateConstraint.value && !initiateConstraint.value.canInitiateToday && !adHocReasonValid.value) {
     ElMessage({
-      message: `本月盘点只能在每月${initiateConstraint.value.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.value.nextAllowedDate}`,
+      message: initiateForm.adHoc
+        ? '请选择临时盘点原因（或填写补充说明）后再发起'
+        : `本月盘点只能在每月${initiateConstraint.value.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.value.nextAllowedDate}；如需临时/专项清点（疑似失窃/货物损坏等），勾选下方【临时盘点】并填写原因。`,
       type: 'warning', duration: 0, showClose: true,
     });
     return;
   }
   initiateLoading.value = true;
   try {
+    const adHocReason = resolveAdHocReason();
     const res = await post(`/${factoryId.value}/stocktakes`, {
       warehouseId: initiateForm.warehouseId,
       periodMonth: initiateForm.periodMonth,
       notes: initiateForm.notes,
+      adHoc: initiateForm.adHoc,
+      adHocReason,
     });
     if (res.success) {
       ElMessage({ message: '盘点任务已发起', type: 'success', duration: 3000 });
@@ -196,6 +226,27 @@ interface BulkMatchedLine {
   materialTypeId?: string | null; unitPrice?: number | null; willCreate?: boolean;
 }
 interface BulkRowError { rowNumber: number; batchNumber: string; materialName: string; reason: string; }
+
+// 盘点差异预览 — 镜像后端 StocktakeDiffPreviewDTO (backend/.../dto/factory/StocktakeDiffPreviewDTO.java)
+interface DiffPreviewLine {
+  itemId: string;
+  materialBatchId: string | null;
+  batchNumber: string | null;
+  materialName: string | null;
+  systemQty: number | null;
+  actualQty: number | null;
+  differenceQty: number | null;
+  differenceType: string | null;
+}
+interface DiffPreviewResponse {
+  stocktakeId?: string;
+  stocktakeNo?: string;
+  periodMonth?: string;
+  diffLines: DiffPreviewLine[];
+  surplusCount: number;
+  shortageCount: number;
+  matchCount: number;
+}
 interface BulkPreview {
   stocktakeId?: string | null; stocktakeNo?: string | null;
   warehouseId: string; warehouseName: string; periodMonth?: string;
@@ -221,6 +272,20 @@ function openBulkDialog() {
   bulkFile.value = null;
   bulkPreview.value = null;
   bulkDialogVisible.value = true;
+}
+
+// fool-proof Rule 5 (无 dead-end): 期初建账此前只能靠"批量导入盘点"弹窗里一个不起眼的
+// 勾选框才能摸到 (bulkForm.openingMode) — 新仓管员根本发现不了入口。加一个独立的、
+// 有清楚文字的顶层按钮, 直接复用现成的批量导入 dialog + 预置勾选, 不重新实现导入流程。
+const bulkDialogTitle = computed(() =>
+  bulkForm.openingMode
+    ? '期初建账 / 期初入库（新增期初物料 + 校正已有批次）'
+    : '批量导入盘点（导出模板 → 填实盘 → 导入比对 → 确认校正）'
+);
+
+function openOpeningEntry() {
+  openBulkDialog();
+  bulkForm.openingMode = true;
 }
 
 // 下载当前库存填报模板（blob）
@@ -353,7 +418,7 @@ function diffTypeLabel(t: string | null): string {
 const detailDialogVisible = ref(false);
 const detailData = ref<TableRow | null>(null);
 const detailLoading = ref(false);
-const diffPreview = ref<TableRow[]>([]);
+const diffPreview = ref<DiffPreviewLine[]>([]);
 const diffLoading = ref(false);
 
 async function openDetail(row: TableRow) {
@@ -369,9 +434,11 @@ async function openDetail(row: TableRow) {
 async function loadDiffPreview(stocktakeId: string) {
   diffLoading.value = true;
   try {
-    const res = await get(`/${factoryId.value}/stocktakes/${stocktakeId}/diff-preview`);
+    // ⚠️ Bug fix (2026-07): 后端 DTO 字段是 `diffLines`（StocktakeDiffPreviewDTO.diffLines）,
+    // 之前误读 `res.data.items`（不存在的字段）→ 差异预览表格一直渲染"暂无数据"。
+    const res = await get<DiffPreviewResponse>(`/${factoryId.value}/stocktakes/${stocktakeId}/diff-preview`);
     if (res.success && res.data) {
-      diffPreview.value = Array.isArray(res.data) ? res.data : (res.data.items || []);
+      diffPreview.value = Array.isArray(res.data.diffLines) ? res.data.diffLines : [];
     }
   } catch { /* silent */ } finally {
     diffLoading.value = false;
@@ -606,6 +673,9 @@ onMounted(async () => {
         <el-button v-if="canWrite" :icon="Upload" @click="openBulkDialog">
           批量导入盘点
         </el-button>
+        <el-button v-if="canWrite" type="success" :icon="Plus" @click="openOpeningEntry">
+          期初建账/期初入库
+        </el-button>
         <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openInitiateDialog">
           发起盘点
         </el-button>
@@ -720,14 +790,19 @@ onMounted(async () => {
     <!-- ──────────────── Initiate Dialog ──────────────── -->
     <el-dialog v-model="initiateDialogVisible" title="发起盘点任务" width="480px">
       <!-- 防呆 Rule 1: 月底约束在弹窗打开时立即展示, 不等填完表单点提交才报错 -->
+      <!-- 防呆 Rule 5 (无 dead-end): 约束挡住时给出临时盘点出口, 不是纯粹拒绝 -->
       <el-alert
         v-if="initiateConstraint && !initiateConstraint.canInitiateToday"
         type="warning"
         show-icon
         :closable="false"
-        :title="`本月盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.nextAllowedDate}`"
-        style="margin-bottom: 16px"
-      />
+        :title="`本月常规盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起（下次可发起日期: ${initiateConstraint.nextAllowedDate}）`"
+        style="margin-bottom: 8px"
+      >
+        <template #default>
+          如需临时/专项清点（疑似失窃、货物损坏等），勾选下方【临时盘点】并填写原因即可立即发起。
+        </template>
+      </el-alert>
       <el-alert
         v-else-if="initiateConstraint && initiateConstraint.canInitiateToday"
         type="success"
@@ -758,17 +833,31 @@ onMounted(async () => {
         <el-form-item label="备注">
           <el-input v-model="initiateForm.notes" type="textarea" :rows="2" placeholder="可选" />
         </el-form-item>
+        <!-- 临时/专项盘点出口: 只在月底约束挡住时展示, 平时常规发起不打扰 -->
+        <el-form-item v-if="initiateConstraint && !initiateConstraint.canInitiateToday" label="临时盘点">
+          <el-checkbox v-model="initiateForm.adHoc">
+            本次为临时盘点（如疑似失窃/损坏，需专项清点）
+          </el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="initiateForm.adHoc" label="临时盘点原因" required>
+          <el-select v-model="initiateForm.adHocReasonSelect" placeholder="选择原因" style="width: 100%">
+            <el-option v-for="opt in adHocReasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="initiateForm.adHoc && initiateForm.adHocReasonSelect === 'OTHER'" label="补充说明" required>
+          <el-input v-model="initiateForm.adHocReasonOther" type="textarea" :rows="2" placeholder="请填写具体原因" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="initiateDialogVisible = false">取消</el-button>
         <el-tooltip
-          :disabled="!initiateConstraint || initiateConstraint.canInitiateToday"
-          :content="initiateConstraint ? `本月盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起，下次可发起日期: ${initiateConstraint.nextAllowedDate}` : ''"
+          :disabled="!initiateConstraint || initiateConstraint.canInitiateToday || adHocReasonValid"
+          :content="initiateConstraint ? `本月常规盘点只能在每月${initiateConstraint.monthEndThreshold}日后发起（下次可发起日期: ${initiateConstraint.nextAllowedDate}）；或勾选【临时盘点】并填写原因立即发起` : ''"
         >
           <el-button
             type="primary"
             :loading="initiateLoading"
-            :disabled="!!initiateConstraint && !initiateConstraint.canInitiateToday"
+            :disabled="!!initiateConstraint && !initiateConstraint.canInitiateToday && !adHocReasonValid"
             @click="submitInitiate"
           >确认发起</el-button>
         </el-tooltip>
@@ -776,7 +865,7 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- 批量导入盘点 -->
-    <el-dialog v-model="bulkDialogVisible" title="批量导入盘点（导出模板 → 填实盘 → 导入比对 → 确认校正）" width="900px">
+    <el-dialog v-model="bulkDialogVisible" :title="bulkDialogTitle" width="900px">
       <el-form label-width="110px">
         <el-form-item label="盘点仓库" required>
           <el-select v-model="bulkForm.warehouseId" placeholder="选择仓库" style="width: 320px" @change="bulkPreview = null">
@@ -819,7 +908,7 @@ onMounted(async () => {
           style="margin: 0 0 12px 110px; max-width: 760px"
         >
           <template #title>
-            期初建账做什么：录入开业/上线时<b>已经存在</b>的库存 ——
+            <b>首次使用</b>：录入原料/调料的<b>期初库存</b>（开业/上线时<b>已经存在</b>的库存）——
             在模板里对<b>新物料</b>直接新增行（填「物料名称/编码 + 实盘数量(=期初数量) + 单价」，批次号留空自动生成），
             系统会<b>新建批次并从 0 盘盈建账</b>；对<b>已存在的批次</b>行则按实盘数量校正。
             生效后按 <b>借 1403 原材料 / 贷 4001 实收资本</b> 记一笔期初凭证，<b>不产生采购应付款</b>
@@ -946,7 +1035,8 @@ onMounted(async () => {
         <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED'" style="margin-top: 20px">
           <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
             盘点差异预览
-            <el-text type="warning" style="font-size: 12px; margin-left: 8px">（已审批，批准后生效）</el-text>
+            <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（已应用，差异已过账）</el-text>
+            <el-text v-else type="warning" style="font-size: 12px; margin-left: 8px">（已审批，批准后生效）</el-text>
           </div>
           <el-table v-loading="diffLoading" :data="diffPreview" size="small" border>
             <el-table-column label="批次/物料" prop="materialName" min-width="130" />

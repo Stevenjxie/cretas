@@ -7,6 +7,7 @@ import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
@@ -16,6 +17,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -63,6 +65,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final FactoryStocktakeItemRepository stocktakeItemRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+    /** 🔴 Fix (previewDiff materialName 空白, 2026-07): 按 batch.materialTypeId 反查物料名, 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames。 */
+    private final RawMaterialTypeRepository rawMaterialTypeRepo;
     /**
      * 🔴🔒🔒 生产仓「延迟扣减」盘点盲区修复 (2026-07-04): 快照/漂移比对须从货架实物量扣掉
      * 未小结的报工消耗 (报工写未结 MaterialConsumption 但不扣 usedQuantity, 小结才扣)。
@@ -124,15 +128,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
             FactoryStocktake.ImportMode importMode) {
         // 月底约束 — OPENING 期初建账 除外 (客户任意日建账, Decision 4)。
-        // 全局 threshold 不降 (NORMAL/逐项盘点仍受月底约束), 只对 OPENING 跳过。
+        // 全局 threshold 不降 (NORMAL/逐项盘点仍受月底约束), 只对 OPENING / 临时盘点跳过。
+        // 🔒 fool-proof Rule 5 (2026-07): 月底约束此前无任何例外出口 (疑似失窃/货损等
+        // 需要立即清点的场景被死死挡到月底) — 加 adHoc 逃生舱, 不新增枚举值/不动 DB CHECK
+        // (project memory: 加枚举新值易漏迁移放宽 CHECK, 这里用轻量 boolean 规避)。
         boolean opening = importMode == FactoryStocktake.ImportMode.OPENING;
+        boolean adHoc = req.isAdHoc();
         LocalDate today = LocalDate.now();
-        if (!opening && today.getDayOfMonth() < monthEndThreshold) {
+        if (!opening && !adHoc && today.getDayOfMonth() < monthEndThreshold) {
             LocalDate nextAllowedDate = today.withDayOfMonth(monthEndThreshold);
             throw new BusinessException(409,
                     "盘点任务只能在月底（" + monthEndThreshold + "日后）发起，当前是 " + today +
                     "，下次可发起日期: " + nextAllowedDate)
                     .withHint("等到 " + monthEndThreshold + " 日再发起");
+        }
+        if (adHoc) {
+            log.info("SP7: 临时/专项盘点发起 (跳过月底约束) factoryId={} warehouseId={} today={} reason={}",
+                    factoryId, req.getWarehouseId(), today, req.getAdHocReason());
         }
 
         // 防重复发起（同仓库同月份已有未完成盘点）
@@ -587,6 +599,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         preview.setStocktakeNo(stocktake.getStocktakeNo());
         preview.setPeriodMonth(stocktake.getPeriodMonth());
 
+        // 🔴 Fix (materialName 空白, 2026-07): 批量反查 batch → materialTypeId → 物料名,
+        // 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames() 的解法, 避免 previewDiff
+        // 表格「物料名称」列一直渲染空白 (此前只 setBatchNumber, 从未 setMaterialName)。
+        List<String> batchIds = stocktake.getItems().stream()
+                .map(FactoryStocktakeItem::getMaterialBatchId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toList());
+        Map<String, MaterialBatch> batchById = materialBatchRepo.findAllById(batchIds).stream()
+                .collect(Collectors.toMap(MaterialBatch::getId, b -> b, (a, b) -> a));
+        List<String> typeIds = batchById.values().stream()
+                .map(MaterialBatch::getMaterialTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+        Map<String, String> nameByTypeId = rawMaterialTypeRepo.findAllById(typeIds).stream()
+                .collect(Collectors.toMap(RawMaterialType::getId, RawMaterialType::getName, (a, b) -> a));
+
         List<StocktakeDiffPreviewDTO.DiffLine> lines = new ArrayList<>();
         int surplus = 0, shortage = 0, match = 0;
         for (FactoryStocktakeItem item : stocktake.getItems()) {
@@ -598,10 +627,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             line.setDifferenceQty(item.getDifferenceQty());
             line.setDifferenceType(item.getDifferenceType() != null ? item.getDifferenceType().name() : null);
 
-            // 获取批次号用于展示
-            materialBatchRepo.findById(item.getMaterialBatchId()).ifPresent(b -> {
-                line.setBatchNumber(b.getBatchNumber());
-            });
+            // 获取批次号 + 物料名称用于展示
+            MaterialBatch batch = batchById.get(item.getMaterialBatchId());
+            if (batch != null) {
+                line.setBatchNumber(batch.getBatchNumber());
+                String materialTypeId = batch.getMaterialTypeId();
+                String materialName = nameByTypeId.getOrDefault(materialTypeId, materialTypeId);
+                line.setMaterialName(materialName);
+            }
 
             lines.add(line);
             if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.SURPLUS) surplus++;
