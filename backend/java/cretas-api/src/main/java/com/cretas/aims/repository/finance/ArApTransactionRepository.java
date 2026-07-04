@@ -159,6 +159,14 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     List<ArApTransaction> findByFactoryIdAndSourceTypeAndSourceIdInAndTransactionTypeAndDeletedAtIsNull(
             String factoryId, String sourceType, List<String> sourceIds, ArApTransactionType transactionType);
 
+    /**
+     * #3(a) 退货资金链: 按来源单据 (sourceType/sourceId) + 审批状态查调整。用于父单据 (退货单)
+     * 被驳回时级联撤销其挂起的 AR/AP_ADJUSTMENT。返回该来源下所有匹配状态的调整行 (通常 0 或 1)。
+     */
+    List<ArApTransaction> findByFactoryIdAndSourceTypeAndSourceIdAndApprovalStatusAndDeletedAtIsNull(
+            String factoryId, String sourceType, String sourceId,
+            com.cretas.aims.entity.enums.ArApApprovalStatus approvalStatus);
+
     List<ArApTransaction> findByFactoryIdAndCounterpartyTypeAndCounterpartyIdAndTransactionTypeAndTransactionDateBetweenOrderByTransactionDateAscCreatedAtAsc(
             String factoryId, CounterpartyType counterpartyType, String counterpartyId,
             ArApTransactionType transactionType, LocalDate startDate, LocalDate endDate);

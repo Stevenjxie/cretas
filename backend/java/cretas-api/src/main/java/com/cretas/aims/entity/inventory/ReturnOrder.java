@@ -167,6 +167,13 @@ public class ReturnOrder extends BaseEntity {
     @OneToMany(mappedBy = "returnOrder", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<ReturnOrderItem> items = new ArrayList<>();
 
+    /**
+     * #3(b) 防呆 Rule 2/5: 完成退货时回传给操作员的一次性提示 (如"余额冲减待财务审批")。
+     * 非持久化字段 — 仅在 completeReturnOrder 返回的响应 JSON 里带出, 不落库。
+     */
+    @Transient
+    private String completionHint;
+
     // ==================== 计算属性 ====================
 
     @Transient
