@@ -79,6 +79,20 @@ public class ProductionWorkflowOrchestrator {
         log.info("开始为生产计划生成调拨单: planId={}, product={}, qty={}",
                 planId, plan.getProductTypeId(), plan.getPlannedQuantity());
 
+        // 🔒 防呆 Rule 1: 计划量为 0/null 时拒绝生成 (loud-fail), 绝不落地 0 数量的死调拨单.
+        // 背景: SAFETY_STOCK(存货生产) 计划按设计 plannedQuantity=0 —— 产量在「逐道录入/小结」时才确定,
+        // 没有预排的目标数量. BOM 展开 (qty × perUnit) 会得到全 0 的需求, 若继续会持久化一个
+        // sourceWarehouse=null / 全 0 数量 / status=REQUESTED 的幽灵调拨单, 前端却提示"生成成功"
+        // (静默失败 artifact). 此处提前拦截, 前端亦对 SAFETY_STOCK 隐藏「生成调拨单」按钮.
+        BigDecimal plannedQty = plan.getPlannedQuantity();
+        if (plannedQty == null || plannedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "该计划的计划量为 0，无法生成调拨单")
+                    .withHint("存货生产(按库存生产)的产量在「逐道录入/小结」时才确定，不需要预先生成调拨单；"
+                            + "若确需备料请直接使用逐道录入，或将本计划改为有明确数量的销售订单计划。")
+                    .withHintTarget("plannedQuantity")
+                    .withSeverity("BLOCKING");
+        }
+
         // Step 2: BOM展开 — FUTURE TOOL: bom_expansion_calculate
         List<MaterialRequirement> requirements = bomExpansionService.expandBOM(
                 factoryId, plan.getProductTypeId(), plan.getPlannedQuantity());
@@ -87,6 +101,19 @@ public class ProductionWorkflowOrchestrator {
             throw new BusinessException(409, "该产品未配置转换率，无法生成调拨单")
                     .withHint("请在 [生产管理 → BOM 成本管理 → 转换率 tab] 为该产品添加原料 → 产品的转换率配置 (conversionRate)")
                     .withHintTarget("productTypeId");
+        }
+
+        // 🔒 防呆 Rule 1 (深度防御): 即便计划量>0, 若 BOM 展开后所有需求项数量都 ≤ 0
+        // (例如配方项均为 0), 同样拒绝, 绝不落地全 0 数量的死调拨单.
+        boolean hasPositiveRequirement = requirements.stream().anyMatch(r -> {
+            BigDecimal q = r.getRequiredQuantity();
+            return q != null && q.compareTo(BigDecimal.ZERO) > 0;
+        });
+        if (!hasPositiveRequirement) {
+            throw new BusinessException(400, "按 BOM 展开后所需物料数量均为 0，无法生成调拨单")
+                    .withHint("请检查该产品的 BOM/转换率配置是否为 0，或计划量是否有效。")
+                    .withHintTarget("productTypeId")
+                    .withSeverity("BLOCKING");
         }
 
         // Step 3: 库存校验 (可选，记录日志但不阻断)
