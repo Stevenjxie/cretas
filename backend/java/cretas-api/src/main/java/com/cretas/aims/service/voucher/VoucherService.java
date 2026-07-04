@@ -52,4 +52,24 @@ public interface VoucherService {
             String factoryId, com.cretas.aims.entity.enums.VoucherType type,
             java.time.LocalDate voucherDate, java.util.List<com.cretas.aims.dto.finance.VoucherEntrySpec> entries,
             String sourceBusinessType, String sourceBusinessId, String description, Long userId);
+
+    /**
+     * 资金段现金流水凭证 (finance audit Bug 5): 收款 (借 1002/贷 1122) / 付款 (借 2202/贷 1002)。
+     *
+     * <p>与 {@link #createManual} 的区别:
+     * <ul>
+     *   <li>status = <b>DRAFT</b> (业务凭证惯例, 财务手工过账; #1225 的 POSTED-only 金蝶导出闸兜住泄漏),
+     *       createManual 是 POSTED (期末系统结转)。</li>
+     *   <li>接收已构建好的 {@link com.cretas.aims.entity.finance.VoucherEntry} (含辅助核算),
+     *       createManual 的 {@link com.cretas.aims.dto.finance.VoucherEntrySpec} 不带 aux。</li>
+     *   <li><b>幂等</b>: 按 (sourceBusinessType, sourceBusinessId) 查已有凭证直接返回, 不重复生成
+     *       (uk_voucher_source_business; 防监听器重投 / 重复确认)。</li>
+     *   <li>走期间结账 gate (assertPeriodOpen) — 落在 CLOSED 期间抛异常, 由 AFTER_COMMIT 监听器 fail-soft 兜住。</li>
+     * </ul>
+     */
+    com.cretas.aims.entity.finance.Voucher createCashMovementVoucher(
+            String factoryId, com.cretas.aims.entity.enums.VoucherType type,
+            java.time.LocalDate voucherDate,
+            java.util.List<com.cretas.aims.entity.finance.VoucherEntry> entries,
+            String sourceBusinessType, String sourceBusinessId, String description, Long userId);
 }

@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -165,4 +166,25 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate,
             @Param("cashCodes") List<String> cashCodes);
+
+    /**
+     * 资金段子账↔总账对账 (finance audit Bug 5): 某科目族 (subjectCode LIKE prefix) 在非作废凭证下的
+     * 净借方余额 = Σ debit − Σ credit (跨全部历史, 与 sumReceivables/sumPayables 的累计口径一致)。
+     *
+     * <p>用途: 月结对账比对 —— 应收 (1122, 借方常态) net-debit 应 ≈ AR 子账余额;
+     * 应付 (2202, 贷方常态) 取 net-debit 后取负 ≈ AP 子账余额。二者偏差 = 两套账漂移
+     * (手工调整无凭证 / 凭证生成失败 / 历史数据), 由月结 WARNING 暴露。
+     *
+     * <p>含 DRAFT+POSTED+REVERSED (排 VOID), 与 {@link #aggregateBySubject} 一致:
+     * REVERSED 原凭证 + 其 POSTED 红冲镜像相互抵消, 净额自洽。
+     */
+    @Query("SELECT COALESCE(SUM(e.debit), 0) - COALESCE(SUM(e.credit), 0) " +
+            "FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND e.subjectCode LIKE :subjectPrefix " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "  AND v.deletedAt IS NULL")
+    BigDecimal sumNetDebitBySubjectPrefix(
+            @Param("factoryId") String factoryId,
+            @Param("subjectPrefix") String subjectPrefix);
 }

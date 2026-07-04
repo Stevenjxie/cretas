@@ -405,4 +405,58 @@ class VoucherServiceImplTest {
         assertEquals("VOUCHER_IS_REVERSAL", ex.getErrorCode());
         verify(voucherRepo, never()).save(any());
     }
+
+    // ==================== createCashMovementVoucher (资金段 GL, finance audit Bug 5) ====================
+
+    /** 收款: 借 1002 银行存款 / 贷 1122 应收账款 (客户辅助核算), DRAFT, 借贷平衡。 */
+    @Test
+    void createCashMovementVoucher_receipt_buildsBalancedDraftWithCustomerAux() {
+        when(voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("CASH_RECEIPT", "txn-1"))
+                .thenReturn(Optional.empty());
+        when(voucherRepo.countByFactoryIdAndYear(eq("F001"), eq("2026"))).thenReturn(0L);
+        when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        java.util.List<VoucherEntry> entries = java.util.List.of(
+                VoucherEntry.builder().subjectCode("1002").subjectName("银行存款")
+                        .debit(new BigDecimal("100.00")).credit(BigDecimal.ZERO).description("收款-客户A").build(),
+                VoucherEntry.builder().subjectCode("1122").subjectName("应收账款")
+                        .debit(BigDecimal.ZERO).credit(new BigDecimal("100.00"))
+                        .auxiliaryType(com.cretas.aims.entity.enums.AuxiliaryType.CUSTOMER)
+                        .auxiliaryEntityId("cust-1").description("冲减应收-客户A").build());
+
+        Voucher saved = service.createCashMovementVoucher("F001", VoucherType.CASH_RECEIPT,
+                LocalDate.of(2026, 5, 16), entries, "CASH_RECEIPT", "txn-1", "收款 客户A", 300L);
+
+        assertEquals(VoucherStatus.DRAFT, saved.getStatus(), "现金流水凭证为 DRAFT (财务手工过账)");
+        assertEquals(VoucherType.CASH_RECEIPT, saved.getVoucherType());
+        assertEquals(new BigDecimal("100.00"), saved.getTotalDebit());
+        assertEquals(new BigDecimal("100.00"), saved.getTotalCredit());
+        assertEquals(2, saved.getEntries().size());
+        // 客户辅助核算挂在 1122 贷方行
+        VoucherEntry ar = saved.getEntries().stream().filter(e -> "1122".equals(e.getSubjectCode())).findFirst().orElseThrow();
+        assertEquals(com.cretas.aims.entity.enums.AuxiliaryType.CUSTOMER, ar.getAuxiliaryType());
+        assertEquals("cust-1", ar.getAuxiliaryEntityId());
+        assertEquals(1, saved.getEntries().get(0).getLineNo());
+        verify(voucherRepo).save(any(Voucher.class));
+    }
+
+    /** 幂等: 同一 (CASH_RECEIPT, txnId) 已有凭证 → 直接返回, 不重复 save (监听器重投防线)。 */
+    @Test
+    void createCashMovementVoucher_idempotentHitReturnsExistingNoSave() {
+        Voucher existing = Voucher.builder().id("v-cash-1").factoryId("F001").build();
+        when(voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull("CASH_PAYMENT", "txn-2"))
+                .thenReturn(Optional.of(existing));
+
+        java.util.List<VoucherEntry> entries = java.util.List.of(
+                VoucherEntry.builder().subjectCode("2202").subjectName("应付账款")
+                        .debit(new BigDecimal("50.00")).credit(BigDecimal.ZERO).build(),
+                VoucherEntry.builder().subjectCode("1002").subjectName("银行存款")
+                        .debit(BigDecimal.ZERO).credit(new BigDecimal("50.00")).build());
+
+        Voucher result = service.createCashMovementVoucher("F001", VoucherType.CASH_PAYMENT,
+                LocalDate.of(2026, 5, 16), entries, "CASH_PAYMENT", "txn-2", "付款 供应商B", 300L);
+
+        assertSame(existing, result);
+        verify(voucherRepo, never()).save(any());
+    }
 }

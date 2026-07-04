@@ -41,6 +41,8 @@ public class MonthCloseServiceImpl implements MonthCloseService {
     private final ArApService arApService;
     private final IncomeStatementService incomeStatementService;
     private final ObjectMapper objectMapper;
+    /** 资金段子账↔总账对账 (finance audit Bug 5): 读 1122/2202 凭证净余额。 */
+    private final com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
 
     private static final String STATUS_PASS = "PASS";
     private static final String STATUS_WARNING = "WARNING";
@@ -100,6 +102,10 @@ public class MonthCloseServiceImpl implements MonthCloseService {
                         : "本月暂无收入/成本凭证数据, 利润表为空")
                 .value(pl != null ? pl.getNetProfit() : null)
                 .build());
+
+        // Check 4 (WARNING): 资金段子账↔总账对账 (finance audit Bug 5) — AR/AP 子账 vs 1122/2202 GL 余额。
+        // 非阻塞: 漂移只暴露不拦结账 (历史数据/手工调整无凭证/凭证生成失败都会漂移, 财务需可见即可)。
+        checks.add(buildSubledgerGlReconcileCheck(factoryId));
 
         // 综合结论: 任一 WARNING check 失败 → WARNING; 否则 PASS
         boolean anyWarning = checks.stream()
@@ -198,6 +204,68 @@ public class MonthCloseServiceImpl implements MonthCloseService {
         if (month == null || month < 1 || month > 12) {
             throw new BusinessException(400, "month 必须 1-12: " + month);
         }
+    }
+
+    /** 资金段对账容差 ¥1.00 — 超过即视为漂移 (WARNING, 不阻塞)。 */
+    private static final java.math.BigDecimal RECONCILE_TOLERANCE = new java.math.BigDecimal("1.00");
+
+    /**
+     * 资金段子账↔总账对账 (finance audit Bug 5): 比对
+     * <ul>
+     *   <li>应收: AR 子账余额 (sumReceivables) vs 1122 应收账款 GL 净借方余额;</li>
+     *   <li>应付: AP 子账余额 (sumPayables) vs 2202 应付账款 GL 净贷方余额 (取 net-debit 后取负)。</li>
+     * </ul>
+     * 偏差超容差 → WARNING (passed=false, 不阻塞结账), detail 列出两套账数字 + 差额供财务核查。
+     * 常见漂移源: 手工调整无凭证 / 历史数据 / 凭证生成 fail-soft 失败。计算失败 fail-open 返 INFO。
+     */
+    private MonthCloseReconciliationDTO.CheckItem buildSubledgerGlReconcileCheck(String factoryId) {
+        try {
+            java.util.Map<String, Object> overview = arApService.getFinanceOverview(factoryId);
+            java.math.BigDecimal subAr = nzd(asDecimal(overview.get("totalReceivable")));
+            java.math.BigDecimal subAp = nzd(asDecimal(overview.get("totalPayable")));
+            // 1122 借方常态: net-debit = 应收余额; 2202 贷方常态: 应付余额 = -(net-debit)。
+            java.math.BigDecimal glAr = nzd(voucherEntryRepository.sumNetDebitBySubjectPrefix(factoryId, "1122%"));
+            java.math.BigDecimal glAp = nzd(voucherEntryRepository.sumNetDebitBySubjectPrefix(factoryId, "2202%")).negate();
+
+            java.math.BigDecimal arDiff = subAr.subtract(glAr);
+            java.math.BigDecimal apDiff = subAp.subtract(glAp);
+            boolean within = arDiff.abs().compareTo(RECONCILE_TOLERANCE) <= 0
+                    && apDiff.abs().compareTo(RECONCILE_TOLERANCE) <= 0;
+
+            String detail = String.format(
+                    "应收: 子账 %s vs 总账(1122) %s (差 %s); 应付: 子账 %s vs 总账(2202) %s (差 %s)%s",
+                    nz(subAr), nz(glAr), nz(arDiff), nz(subAp), nz(glAp), nz(apDiff),
+                    within ? " — 一致"
+                           : " — 存在漂移, 请财务核查 (常见: 手工调整无凭证 / 历史数据 / 凭证生成失败)");
+
+            java.math.BigDecimal maxDrift = arDiff.abs().max(apDiff.abs());
+            return MonthCloseReconciliationDTO.CheckItem.builder()
+                    .name("子账↔总账对账 (应收/应付)")
+                    .passed(within)
+                    .severity(SEV_WARNING)
+                    .detail(detail)
+                    .value(maxDrift)
+                    .build();
+        } catch (Exception e) {
+            log.warn("[MonthClose] 子账↔总账对账计算失败 factory={}: {}", factoryId, e.getMessage());
+            return MonthCloseReconciliationDTO.CheckItem.builder()
+                    .name("子账↔总账对账 (应收/应付)")
+                    .passed(true)  // 计算失败不阻塞结账 (INFO)
+                    .severity(SEV_INFO)
+                    .detail("对账计算失败, 跳过 (不阻塞结账): " + e.getMessage())
+                    .build();
+        }
+    }
+
+    private java.math.BigDecimal asDecimal(Object v) {
+        if (v == null) return null;
+        if (v instanceof java.math.BigDecimal bd) return bd;
+        if (v instanceof Number n) return new java.math.BigDecimal(n.toString());
+        return null;
+    }
+
+    private java.math.BigDecimal nzd(java.math.BigDecimal v) {
+        return v != null ? v : java.math.BigDecimal.ZERO;
     }
 
     /** 统计未审批的应收/应付调整笔数. 失败 fail-open 返 0 (对账是 best-effort 提示, 不阻塞). */

@@ -515,7 +515,35 @@ public class ArApServiceImpl implements ArApService {
                 log.error("发布 PaymentReceivedEvent 失败: {}", e.getMessage(), e);
             }
         }
+
+        // 资金段 GL (finance audit Bug 5): 发布现金流水事件 → AFTER_COMMIT 监听器 fail-soft
+        // 生成 收款凭证 (借 1002 银行存款 / 贷 1122 应收账款, 客户辅助核算)。amount 用正数 (子账存负数)。
+        publishCashMovement(saved, com.cretas.aims.entity.enums.VoucherType.CASH_RECEIPT,
+                customerId, customer.getName(), amount, method, operatedBy);
         return saved;
+    }
+
+    /**
+     * 资金段 GL (finance audit Bug 5): 发布 {@link com.cretas.aims.event.CashMovementRecordedEvent}。
+     * publisher 为 null (测试 / 未装配) 时静默跳过; 发布失败仅告警不影响收付款主流程。
+     */
+    private void publishCashMovement(ArApTransaction txn, com.cretas.aims.entity.enums.VoucherType type,
+                                     String counterpartyId, String counterpartyName, BigDecimal amount,
+                                     PaymentMethod method, Long operatedBy) {
+        if (applicationEventPublisher == null) {
+            return;
+        }
+        try {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.CashMovementRecordedEvent(
+                    this, txn.getFactoryId(), txn.getId(), type,
+                    counterpartyId, counterpartyName,
+                    amount != null ? amount.abs() : BigDecimal.ZERO, method,
+                    txn.getTransactionDate() != null ? txn.getTransactionDate() : LocalDate.now(),
+                    operatedBy));
+        } catch (Exception e) {
+            log.error("发布 CashMovementRecordedEvent 失败 (不影响收付款): txnId={}: {}",
+                    txn.getId(), e.getMessage(), e);
+        }
     }
 
     @Override
@@ -562,7 +590,13 @@ public class ArApServiceImpl implements ArApService {
 
         log.info("应付付款: factoryId={}, supplierId={}, amount={}, balance={}",
                 factoryId, supplierId, amount, newBalance);
-        return transactionRepository.save(transaction);
+        ArApTransaction saved = transactionRepository.save(transaction);
+
+        // 资金段 GL (finance audit Bug 5): 发布现金流水事件 → AFTER_COMMIT 监听器 fail-soft
+        // 生成 付款凭证 (借 2202 应付账款 / 贷 1002 银行存款, 供应商辅助核算)。amount 用正数 (子账存负数)。
+        publishCashMovement(saved, com.cretas.aims.entity.enums.VoucherType.CASH_PAYMENT,
+                supplierId, supplier.getName(), amount, method, operatedBy);
+        return saved;
     }
 
     // ==================== 手工调整 ====================
