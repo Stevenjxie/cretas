@@ -19,4 +19,14 @@ public class CreateStocktakeRequest {
     private String periodMonth;
 
     private String notes;
+
+    /**
+     * 临时/专项盘点 (fool-proof Rule 5: 月底约束无例外的 dead-end 修复, 2026-07).
+     * 为 true 时跳过月底约束门 (与 OPENING 期初建账同待遇), 用于疑似失窃/货物损坏等
+     * 需要立即清点的场景, 不等到月底。默认 false = 常规盘点仍受月底约束。
+     */
+    private boolean adHoc = false;
+
+    /** 临时盘点原因 (adHoc=true 时前端要求必填, 标准下拉 + 其他)。仅记日志, 不落库 (保持改动轻量)。 */
+    private String adHocReason;
 }

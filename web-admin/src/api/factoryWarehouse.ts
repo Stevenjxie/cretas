@@ -29,7 +29,7 @@ export type WarehouseType =
 
 export const WAREHOUSE_TYPE_LABELS: Record<WarehouseType, string> = {
   LOGISTICS: '物流仓',
-  WORKSHOP: '鲜棉仓/车间',
+  WORKSHOP: '生产仓',
   OTHER: '其他',
   RAW: '原料仓',
   WIP: '半成品仓',
@@ -209,7 +209,7 @@ export const LIUSHANMEN_SALTED_TEMPLATE: WarehouseSpec[] = [
 /** 标准仓型默认 code + name（自选仓型模板用） */
 export const WAREHOUSE_TYPE_DEFAULTS: Record<WarehouseType, { code: string; name: string }> = {
   LOGISTICS: { code: 'WH-LOG',    name: '物流仓' },
-  WORKSHOP:  { code: 'WH-WKS',    name: '鲜棉仓/车间' },
+  WORKSHOP:  { code: 'WH-WKS',    name: '生产仓' },
   RAW:       { code: 'WH-RAW',    name: '原料仓' },
   WIP:       { code: 'WH-WIP',    name: '半成品仓' },
   FINISHED:  { code: 'WH-FG',     name: '成品仓' },
