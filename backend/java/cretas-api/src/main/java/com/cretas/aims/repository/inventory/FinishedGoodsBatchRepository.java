@@ -36,6 +36,19 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("batchNumber") String batchNumber);
 
     /**
+     * 撤销小结连带退库 — 悲观写锁按 (id, factory) 取单个成品批次 (TRF-child 同厂调拨子批)。
+     *
+     * <p>撤销小结时若源批次的一部分已被同厂调拨搬到别的仓 (生成 TRF-FG-* 子批, 见
+     * {@code TransferServiceImpl#createTargetInventory}), 须锁定并一并退库 (拉回搬出量),
+     * 否则撤销后物流仓残留孤儿库存。必须在调用方 {@code @Transactional} 内使用。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.id = :id AND b.factoryId = :factoryId")
+    Optional<FinishedGoodsBatch> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId);
+
+    /**
      * ①c 成品作投料来源 — 该工厂全部 <b>可投料</b> 成品批次 (AVAILABLE 且可用量 &gt; 0), 供逐道录入 FG 投料下拉。
      *
      * <p>返回全 productType (调用方按产品族过滤); 按到期日 FEFO 排序 (先到期先用, 与销售出库一致)。
