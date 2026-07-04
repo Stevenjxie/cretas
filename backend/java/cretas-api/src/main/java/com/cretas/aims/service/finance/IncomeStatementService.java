@@ -4,9 +4,11 @@ import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.report.BalanceSheetDTO;
 import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
 import com.cretas.aims.entity.enums.AccountCategory;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -49,6 +51,7 @@ import java.util.Map;
 public class IncomeStatementService {
 
     private final VoucherEntryRepository voucherEntryRepo;
+    private final VoucherRepository voucherRepo;
     private final AccountRepository accountRepo;
 
     public IncomeStatementDTO generate(String factoryId,
@@ -65,7 +68,10 @@ public class IncomeStatementService {
         log.info("[IncomeStatement] generate factoryId={}, range={} to {}", factoryId, startDate, endDate);
 
         // Step 1: 聚合期间 entries by subjectCode
-        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubject(
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表切到 POSTED-only 口径 (排除 DRAFT 未审草稿);
+        // 同时排除结转产物 (PL_CLOSING/COST_CARRYOVER 红冲镜像) — 否则已结账期间的利润表会显示
+        // 营业收入=0/成本=0 (被结转分录清零), 见 aggregateBySubjectExcludingDraftAndClosing javadoc。
+        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(
                 factoryId, startDate, endDate);
 
         // Step 2: 预取 Account 索引
@@ -132,6 +138,10 @@ public class IncomeStatementService {
         BigDecimal operatingProfit = grossProfit.subtract(totalExpense).setScale(2, RoundingMode.HALF_UP);
         BigDecimal netProfit = operatingProfit.subtract(incomeTax).setScale(2, RoundingMode.HALF_UP);
 
+        // 待过账 (DRAFT) 凭证数 — 见 pendingDraftVoucherCount javadoc。
+        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+
         return IncomeStatementDTO.builder()
                 .factoryId(factoryId)
                 .startYear(startYear)
@@ -149,6 +159,7 @@ public class IncomeStatementService {
                 .incomeTax(incomeTax.setScale(2, RoundingMode.HALF_UP))
                 .netProfit(netProfit)
                 .generatedAt(LocalDateTime.now().toString())
+                .pendingDraftVoucherCount(pendingDraftCount)
                 .build();
     }
 

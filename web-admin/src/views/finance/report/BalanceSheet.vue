@@ -46,6 +46,20 @@
         </template>
       </el-alert>
 
+      <!-- F006 财务审计 Bug 6 (2026-07-04): 待过账提示 — 官方报表已切 POSTED-only, 让财务人员
+           知道"为什么数字看着少" (fool-proof-design Rule 5: 空/低数据必须给原因). -->
+      <el-alert
+        v-if="data && (data.pendingDraftVoucherCount ?? 0) > 0"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 16px;"
+      >
+        <template #title>
+          本报表仅含已过账 (POSTED) 凭证; 另有 {{ data.pendingDraftVoucherCount }} 张凭证待过账 (未计入本报表)
+        </template>
+      </el-alert>
+
       <!-- 平衡校验 -->
       <el-alert
         v-if="data && data.balanceCheck === false"

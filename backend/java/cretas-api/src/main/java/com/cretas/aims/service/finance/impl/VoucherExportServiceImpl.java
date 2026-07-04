@@ -494,7 +494,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
         VoucherExportConfig config = resolveConfig(factoryId, req.getTargetSystem());
         List<SubjectAggregateRow> openingAggregates = loadOpeningAggregates(factoryId, req.getStartDate());
-        List<SubjectAggregateRow> currentAggregates = entryRepo.aggregateBySubject(
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表切 POSTED-only (排除 DRAFT 未审草稿), 见
+        // aggregateBySubjectExcludingDraft javadoc。
+        List<SubjectAggregateRow> currentAggregates = entryRepo.aggregateBySubjectExcludingDraft(
                 factoryId, req.getStartDate(), req.getEndDate());
         List<SubjectBalanceLine> balanceLines = buildSubjectBalanceLines(
                 factoryId, openingAggregates, currentAggregates);
@@ -522,10 +524,12 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             ));
         }
 
+        // rowCount (审计记录) 用 balanceLines.size() 而非 rows.size()-1, 避免下方 footer 行计入行数。
+        int rowCount = balanceLines.size();
+        appendPendingDraftFooter(rows, factoryId, req.getStartDate(), req.getEndDate());
         writeRawRows(out, rows);
 
         String fileName = buildFileName("subject-balance", factoryId, req.getStartDate(), req.getEndDate());
-        int rowCount = Math.max(0, rows.size() - 1);
 
         // 防呆 R4: 仅在无 5min 窗口重复时落审计记录 — 重复请求仍正常导出, 不插重复 export_record。
         if (recent.isEmpty()) {
@@ -550,7 +554,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportChronologicalLedger(String factoryId, VoucherExportRequestDTO req,
                                             Long userId, OutputStream out) throws Exception {
-        List<VoucherLine> lines = loadVoucherLines(factoryId, req);
+        // 序时账 (chronological ledger) 是本系统内的账簿视图, 保持 DRAFT 可见 (见 loadVoucherLines
+        // javadoc) — 与 F006 财务审计 Bug 6 (2026-07-04) 明确点名 POSTED-only 的"总账/明细账"不同。
+        List<VoucherLine> lines = loadVoucherLines(factoryId, req, /*excludeDraft=*/false);
         Map<String, BigDecimal> runningBySubject = openingBalanceBySubject(factoryId, req.getStartDate());
 
         List<List<Object>> rows = new ArrayList<>();
@@ -589,11 +595,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportGeneralLedger(String factoryId, VoucherExportRequestDTO req,
                                       Long userId, OutputStream out) throws Exception {
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表切 POSTED-only (排除 DRAFT 未审草稿).
         List<SubjectLedgerLine> lines = buildSubjectLedgerLines(
                 factoryId,
                 loadOpeningAggregates(factoryId, req.getStartDate()),
-                entryRepo.aggregateBySubject(factoryId, req.getStartDate(), req.getEndDate()),
-                entryRepo.aggregateBySubject(factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
+                entryRepo.aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
+                entryRepo.aggregateBySubjectExcludingDraft(
+                        factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
 
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("科目编码", "科目名称", "期初(借/贷)", "本期借方", "本期贷方", "本年累计", "期末(借/贷)"));
@@ -611,6 +619,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
         appendEmptyStateIfNeeded(rows, "暂无符合条件的科目发生额");
         appendSourceFooter(rows);
+        appendPendingDraftFooter(rows, factoryId, req.getStartDate(), req.getEndDate());
         writeRawRows(out, rows);
         String fileName = buildFileName("general-ledger", factoryId, req.getStartDate(), req.getEndDate());
         saveExportRecord(factoryId, TYPE_GENERAL_LEDGER, req, userId, fileName, lines.size());
@@ -621,7 +630,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportSubsidiaryLedger(String factoryId, VoucherExportRequestDTO req,
                                          Long userId, OutputStream out) throws Exception {
-        List<VoucherLine> voucherLines = loadVoucherLines(factoryId, req);
+        // F006 财务审计 Bug 6 (2026-07-04): 明细账是官方账簿, 排除 DRAFT (未审草稿).
+        List<VoucherLine> voucherLines = loadVoucherLines(factoryId, req, /*excludeDraft=*/true);
         Map<String, BigDecimal> openingBySubject = openingBalanceBySubject(factoryId, req.getStartDate());
         Map<String, List<VoucherLine>> bySubject = new TreeMap<>();
         for (VoucherLine line : voucherLines) {
@@ -679,6 +689,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
         appendEmptyStateIfNeeded(rows, "暂无符合条件的科目明细");
         appendSourceFooter(rows);
+        appendPendingDraftFooter(rows, factoryId, req.getStartDate(), req.getEndDate());
         writeRawRows(out, rows);
         String fileName = buildFileName("subsidiary-ledger", factoryId, req.getStartDate(), req.getEndDate());
         saveExportRecord(factoryId, TYPE_SUBSIDIARY_LEDGER, req, userId, fileName, dataRows);
@@ -689,10 +700,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportTrialBalance(String factoryId, VoucherExportRequestDTO req,
                                      Long userId, OutputStream out) throws Exception {
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表切 POSTED-only (排除 DRAFT 未审草稿).
         List<SubjectLedgerLine> lines = buildSubjectLedgerLines(
                 factoryId,
                 loadOpeningAggregates(factoryId, req.getStartDate()),
-                entryRepo.aggregateBySubject(factoryId, req.getStartDate(), req.getEndDate()),
+                entryRepo.aggregateBySubjectExcludingDraft(factoryId, req.getStartDate(), req.getEndDate()),
                 List.of());
         validateTrialBalance(lines);
 
@@ -727,6 +739,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         ));
 
         appendSourceFooter(rows);
+        appendPendingDraftFooter(rows, factoryId, req.getStartDate(), req.getEndDate());
         writeRawRows(out, rows);
         String fileName = buildFileName("trial-balance", factoryId, req.getStartDate(), req.getEndDate());
         saveExportRecord(factoryId, TYPE_TRIAL_BALANCE, req, userId, fileName, lines.size());
@@ -737,10 +750,14 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     @Transactional
     public String exportIncomeStatement(String factoryId, VoucherExportRequestDTO req,
                                         Long userId, OutputStream out) throws Exception {
+        // F006 财务审计 Bug 6 (2026-07-04): 排除 DRAFT (未审草稿) + 排除结转产物 (PL_CLOSING/
+        // COST_CARRYOVER 红冲镜像) — 否则已结账期间会显示营收/成本=0, 见
+        // aggregateBySubjectExcludingDraftAndClosing javadoc。
         IncomeAmounts period = buildIncomeAmounts(factoryId,
-                entryRepo.aggregateBySubject(factoryId, req.getStartDate(), req.getEndDate()));
+                entryRepo.aggregateBySubjectExcludingDraftAndClosing(factoryId, req.getStartDate(), req.getEndDate()));
         IncomeAmounts yearToDate = buildIncomeAmounts(factoryId,
-                entryRepo.aggregateBySubject(factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
+                entryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                        factoryId, LocalDate.of(req.getStartDate().getYear(), 1, 1), req.getEndDate()));
 
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("项目", "本期金额", "本年累计金额"));
@@ -758,6 +775,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         addIncomeRow(rows, "减：所得税", period.incomeTax, yearToDate.incomeTax);
         addIncomeRow(rows, "五、净利润", period.netProfit(), yearToDate.netProfit());
         rows.add(List.of(SOURCE_FOOTER_TEXT));
+        appendPendingDraftFooter(rows, factoryId, req.getStartDate(), req.getEndDate());
 
         writeRawRows(out, rows);
         String fileName = buildFileName("income-statement", factoryId, req.getStartDate(), req.getEndDate());
@@ -1046,7 +1064,9 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             return List.of();
         }
 
-        return entryRepo.aggregateBySubject(factoryId, EPOCH_START, previousMonth.atEndOfMonth());
+        // F006 财务审计 Bug 6 (2026-07-04): 期初余额是上期已 CLOSED 的真实账面, 排除 DRAFT
+        // (未审草稿绝不该出现在"已关账期"的期初余额里)。
+        return entryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, previousMonth.atEndOfMonth());
     }
 
     private List<SubjectBalanceLine> buildSubjectBalanceLines(
@@ -1160,10 +1180,17 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return result;
     }
 
-    private List<VoucherLine> loadVoucherLines(String factoryId, VoucherExportRequestDTO req) {
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): {@code excludeDraft} 让调用方选择口径 ——
+     * 明细账 (exportSubsidiaryLedger) 是官方账簿, 传 {@code true} 排除 DRAFT (未审草稿);
+     * 序时账 (exportChronologicalLedger) 是本系统内的账簿视图, 传 {@code false} 保持 DRAFT 可见
+     * (未财审草稿仍可在此追溯查看)。两者都始终排除 VOID (作废凭证从未过账, 无财务效应)。
+     */
+    private List<VoucherLine> loadVoucherLines(String factoryId, VoucherExportRequestDTO req, boolean excludeDraft) {
         List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
                         factoryId, req.getStartDate(), req.getEndDate()).stream()
                 .filter(v -> v.getStatus() != VoucherStatus.VOID)
+                .filter(v -> !excludeDraft || v.getStatus() != VoucherStatus.DRAFT)
                 .sorted(Comparator
                         .comparing(Voucher::getVoucherDate, Comparator.nullsLast(Comparator.naturalOrder()))
                         .thenComparing(Voucher::getVoucherNumber, Comparator.nullsLast(Comparator.naturalOrder())))
@@ -1592,6 +1619,18 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
     private void appendSourceFooter(List<List<Object>> rows) {
         rows.add(List.of("凭证来源口径=" + VOUCHER_SOURCE_CALIBER_PENDING));
+    }
+
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): 官方报表已切 POSTED-only, 本行告知财务人员期间内还有
+     * 多少张 DRAFT (待审) 凭证<b>未计入</b>本报表 —— 防止"报表数字看着少/为0"却不知道为什么
+     * (fool-proof-design Rule 5: 空/低数据必须给出原因 + next action, 而不是让人猜)。
+     */
+    private void appendPendingDraftFooter(List<List<Object>> rows, String factoryId,
+                                          LocalDate startDate, LocalDate endDate) {
+        long pendingCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+        rows.add(List.of("本报表仅含已过账(POSTED)凭证; 另有 " + pendingCount + " 张凭证待过账(未计入本报表)"));
     }
 
     private void saveExportRecord(String factoryId, String exportType, VoucherExportRequestDTO req,

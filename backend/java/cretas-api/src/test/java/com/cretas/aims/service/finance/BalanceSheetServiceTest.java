@@ -6,8 +6,10 @@ import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.AccountingPeriod;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +47,9 @@ class BalanceSheetServiceTest {
 
     @Mock
     private VoucherEntryRepository voucherEntryRepo;
+
+    @Mock
+    private VoucherRepository voucherRepo;
 
     @Mock
     private AccountRepository accountRepo;
@@ -99,7 +104,7 @@ class BalanceSheetServiceTest {
                 row("2202", "应付账款", "0.00", "20000.00"),
                 row("4001", "实收资本", "0.00", "50000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, payableAccount, capitalAccount));
@@ -133,6 +138,39 @@ class BalanceSheetServiceTest {
     }
 
     @Test
+    void generate_mixedDraftAndPosted_usesPostedOnlyAndReportsPendingCount() {
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表必须只用 aggregateBySubjectExcludingDraft
+        // (POSTED-only, 人工审核制), 不再用 DRAFT-inclusive 的 aggregateBySubject. 同时报表须
+        // 透出 pendingDraftVoucherCount 告知财务人员还有多少张凭证待审核未计入报表.
+        List<SubjectAggregateRow> postedOnlyAggregates = Arrays.asList(
+                row("1001", "库存现金", "70000.00", "0.00"),
+                row("4001", "实收资本", "0.00", "70000.00")
+        );
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(postedOnlyAggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(cashAccount, capitalAccount));
+        when(accountingPeriodService.getStatus(FACTORY, YEAR, MONTH))
+                .thenReturn(AccountingPeriod.Status.CLOSED);
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(3L);
+
+        BalanceSheetDTO dto = service.generate(FACTORY, YEAR, MONTH);
+
+        // POSTED-only 聚合应完全采信 (不该混入任何 DRAFT 凭证的假设金额)
+        assertEquals(new BigDecimal("70000.00"), dto.getTotalAssets());
+        assertEquals(new BigDecimal("70000.00"), dto.getTotalEquity());
+        assertTrue(dto.getBalanceCheck());
+        // 待过账提示必须透出, 让财务人员知道报表口径 + 还有多少张凭证未计入
+        assertEquals(3L, dto.getPendingDraftVoucherCount());
+
+        // 验证服务从未调用旧的 DRAFT-inclusive 方法
+        org.mockito.Mockito.verify(voucherEntryRepo, org.mockito.Mockito.never())
+                .aggregateBySubject(org.mockito.ArgumentMatchers.any(), any(LocalDate.class), any(LocalDate.class));
+    }
+
+    @Test
     void generate_unbalancedData_returnsCheckFalse() {
         // Asset 100 vs Liability 30 + Equity 50 = 80 → diff 20 > 0.01
         List<SubjectAggregateRow> aggregates = Arrays.asList(
@@ -140,7 +178,7 @@ class BalanceSheetServiceTest {
                 row("2202", "应付账款", "0.00", "30.00"),
                 row("4001", "实收资本", "0.00", "50.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, payableAccount, capitalAccount));
@@ -162,7 +200,7 @@ class BalanceSheetServiceTest {
                 row("1001", "库存现金", "1000.00", "0.00"),
                 row("5001", "主营业务收入", "0.00", "5000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, revenueAccount));
@@ -191,7 +229,7 @@ class BalanceSheetServiceTest {
                 row("1001", "库存现金", "9710036.42", "0.00"),
                 row("5001", "主营业务收入", "0.00", "9710036.42")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, revenueAccount));
@@ -227,7 +265,7 @@ class BalanceSheetServiceTest {
                 row("6602", "管理费用", "100.00", "0.00"),
                 row("5001", "主营业务收入", "0.00", "1000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, revenueAccount, costAccount, expenseAccount));
@@ -251,7 +289,7 @@ class BalanceSheetServiceTest {
                 row("4001", "实收资本", "0.00", "50000.00"),
                 row("5001", "主营业务收入", "0.00", "70000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, capitalAccount, revenueAccount));
@@ -278,7 +316,7 @@ class BalanceSheetServiceTest {
                 row("4104", "利润分配", "0.00", "30000.00"),
                 row("5001", "主营业务收入", "0.00", "50000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, profitDistAccount, revenueAccount));
@@ -301,7 +339,7 @@ class BalanceSheetServiceTest {
                 row("1999", "自定义流动资产", "5000.00", "0.00"),
                 row("2999", "自定义流动负债", "0.00", "5000.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Collections.emptyList());  // 没有任何 Account 注册
@@ -319,7 +357,7 @@ class BalanceSheetServiceTest {
 
     @Test
     void generate_emptyData_returnsZeroAndBalanced() {
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(new ArrayList<>());
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Collections.emptyList());
@@ -351,7 +389,7 @@ class BalanceSheetServiceTest {
         List<SubjectAggregateRow> aggregates = Collections.singletonList(
                 row("1001", "现金", "1000.00", "0.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(systemCash, factoryCash));  // 顺序无所谓

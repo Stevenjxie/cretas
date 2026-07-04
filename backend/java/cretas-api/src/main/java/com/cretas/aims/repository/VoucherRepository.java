@@ -43,6 +43,14 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
     @Query("SELECT v FROM Voucher v WHERE v.factoryId = ?1 AND v.voucherDate BETWEEN ?2 AND ?3 AND v.deletedAt IS NULL")
     List<Voucher> findByFactoryIdAndDateRange(String factoryId, LocalDate from, LocalDate to);
 
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): 统计期间内待过账 (DRAFT) 凭证数 — 官方报表切到
+     * POSTED-only 口径后, 用于给财务人员一个"为什么报表数字看着少"的可见提示
+     * (pendingDraftVoucherCount), 而不是让报表悄悄变空/变小却不说明原因。
+     */
+    long countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+            String factoryId, VoucherStatus status, LocalDate from, LocalDate to);
+
     long countByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, VoucherStatus status);
 
     /** 凭证号生成: factory + year 最大序号. */

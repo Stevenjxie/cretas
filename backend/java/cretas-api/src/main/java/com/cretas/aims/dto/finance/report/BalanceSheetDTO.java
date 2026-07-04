@@ -83,6 +83,13 @@ public class BalanceSheetDTO {
     private String generatedAt;
 
     /**
+     * F006 财务审计 Bug 6 (2026-07-04): 本期 (EPOCH_START ~ 报表截止日) 待过账 (DRAFT, 未财审)
+     * 凭证数. 报表口径已切到 POSTED-only (人工审核制: DRAFT 不计入官方报表), 本字段让财务人员
+     * 看到"为什么数字比预期少" — 而不是悄悄少算却不说明. 0 = 无待办.
+     */
+    private Long pendingDraftVoucherCount;
+
+    /**
      * 报表行项 — accountCode/name + amount.
      */
     @Data

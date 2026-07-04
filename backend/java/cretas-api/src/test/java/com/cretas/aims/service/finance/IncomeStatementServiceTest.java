@@ -5,8 +5,10 @@ import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
 import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.finance.Account;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,6 +48,9 @@ class IncomeStatementServiceTest {
 
     @Mock
     private VoucherEntryRepository voucherEntryRepo;
+
+    @Mock
+    private VoucherRepository voucherRepo;
 
     @Mock
     private AccountRepository accountRepo;
@@ -107,7 +112,7 @@ class IncomeStatementServiceTest {
                 row("6601", "管理费用", "10000.00", "0.00"),         // debit 10k
                 row("6801", "所得税费用", "8000.00", "0.00")          // debit 8k (含在 totalExpense 内)
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(revenueAccount, costAccount, expenseAccount, incomeTaxAccount));
@@ -133,13 +138,42 @@ class IncomeStatementServiceTest {
     }
 
     @Test
+    void generate_mixedDraftAndPosted_usesPostedOnlyExcludingClosingAndReportsPendingCount() {
+        // F006 财务审计 Bug 6 (2026-07-04): 利润表必须只用
+        // aggregateBySubjectExcludingDraftAndClosing (POSTED-only + 排除结转产物噪音),
+        // 不再用 DRAFT-inclusive 的 aggregateBySubject. 同时须透出 pendingDraftVoucherCount.
+        List<SubjectAggregateRow> postedOnlyAggregates = Arrays.asList(
+                row("5001", "主营业务收入", "0.00", "50000.00"),
+                row("5401", "主营业务成本", "20000.00", "0.00")
+        );
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(postedOnlyAggregates);
+        when(accountRepo.findVisibleToFactory(FACTORY))
+                .thenReturn(Arrays.asList(revenueAccount, costAccount));
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(2L);
+
+        IncomeStatementDTO dto = service.generate(FACTORY, START_YEAR, START_MONTH, END_YEAR, END_MONTH);
+
+        assertEquals(new BigDecimal("50000.00"), dto.getTotalRevenue());
+        assertEquals(new BigDecimal("20000.00"), dto.getTotalCost());
+        assertEquals(new BigDecimal("30000.00"), dto.getGrossProfit());
+        assertEquals(2L, dto.getPendingDraftVoucherCount());
+
+        org.mockito.Mockito.verify(voucherEntryRepo, org.mockito.Mockito.never())
+                .aggregateBySubject(org.mockito.ArgumentMatchers.any(), any(LocalDate.class), any(LocalDate.class));
+    }
+
+    @Test
     void generate_balanceAccountsExcluded() {
         // 现金账户存在但应被排除 — 利润表只看 5/6xxx
         List<SubjectAggregateRow> aggregates = Arrays.asList(
                 row("1001", "库存现金", "5000.00", "0.00"),     // ASSET, 应排除
                 row("5001", "主营业务收入", "0.00", "10000.00")  // REVENUE, 应保留
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(cashAccount, revenueAccount));
@@ -162,7 +196,7 @@ class IncomeStatementServiceTest {
                 row("5401", "主营业务成本", "2000.00", "0.00"),
                 row("6601", "管理费用", "500.00", "0.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Arrays.asList(revenueAccount, costAccount, expenseAccount));
@@ -183,7 +217,7 @@ class IncomeStatementServiceTest {
                 row("5999", "自定义收入", "0.00", "3000.00"),
                 row("6999", "自定义成本", "1000.00", "0.00")
         );
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(aggregates);
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Collections.emptyList());  // 没注册 Account
@@ -197,7 +231,7 @@ class IncomeStatementServiceTest {
 
     @Test
     void generate_emptyData_returnsAllZeros() {
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(new ArrayList<>());
         when(accountRepo.findVisibleToFactory(FACTORY))
                 .thenReturn(Collections.emptyList());

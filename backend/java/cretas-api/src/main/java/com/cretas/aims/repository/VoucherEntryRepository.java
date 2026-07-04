@@ -84,6 +84,12 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
      * IncomeStatement 仅取期间发生. 都用本方法, BalanceSheet 把 startDate 设为远古 (1970-01-01).
      *
      * <p>subjectName 取 max(e.subjectName), 避免同 code 在不同 voucher 里 name 抖动导致 GROUP BY 失败.
+     *
+     * <p>⚠️ F006 财务审计 Bug 6 (2026-07-04): 本方法 <b>包含 DRAFT</b> (未财审草稿) — 官方财务报表
+     * (资产负债表/利润表/科目余额表/试算平衡表/总账/明细账) <b>不应再使用本方法</b>, 已全部改用
+     * {@link #aggregateBySubjectExcludingDraft} / {@link #aggregateBySubjectExcludingDraftAndClosing}
+     * (人工审核制: DRAFT = 待财务审核, 计入官方报表会把"未审核"误当"已发生")。本方法保留仅供潜在的
+     * 内部/管理层预览视图 (若未来需要"含未审核草稿"的口径), 当前代码库无此类调用方。
      */
     @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
             "  e.subjectCode, MAX(e.subjectName), " +
@@ -143,6 +149,85 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             "GROUP BY e.subjectCode " +
             "ORDER BY e.subjectCode ASC")
     List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectPosted(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): 官方财务报表 (资产负债表/科目余额表/总账/试算平衡表/明细账)
+     * 专用 — 排除 DRAFT (未财审草稿), 但<b>保留 REVERSED</b>.
+     *
+     * <p>与 {@link #aggregateBySubject} 的唯一区别: 多排除 DRAFT。与 {@link #aggregateBySubjectPosted}
+     * 的关键区别: <b>不</b>排除 REVERSED, 也<b>不</b>按 voucherType 排除 PL_CLOSING/COST_CARRYOVER
+     * 红冲镜像。
+     *
+     * <p><b>为什么必须保留 REVERSED</b> (红字冲销 "金蝶规范", 见 {@code VoucherServiceImpl.reversePostedVoucher}):
+     * 已过账凭证不可直接抹掉, 而是原凭证标记 REVERSED (状态标记, 财务效应<b>不</b>清零) + 生成一张
+     * 借贷互换的红字冲销凭证 (POSTED, 同期). 两者<b>都需计入</b>聚合才能借贷互相抵消归零
+     * (原凭证 debit X 仍计 + 冲销凭证 credit X 计 → 该科目净额归零)。若像
+     * {@link #aggregateBySubjectPosted} 那样用 {@code status = POSTED} 排除 REVERSED, 则原凭证的
+     * 财务效应被抹掉、只剩冲销凭证的相反分录被计入 → 净额变成"倍数冲销"(双重错误), 而非正确的零。
+     * 这不是假设 — {@code SalesOrderVoucherListener}/{@code ReturnOrderVoucherListener} 复用同一
+     * {@code voidVoucher→reversePostedVoucher} 机制处理销售/退货凭证撤销, 是日常高频业务场景。
+     *
+     * <p><b>为什么不排除 PL_CLOSING/COST_CARRYOVER</b>: 资产负债表/总账/科目余额表/试算平衡表/明细账
+     * 要反映<b>真实账簿状态</b> (含结转分录) —— 已结账期间的 6xxx 科目就<b>应该</b>显示被结转清零后的
+     * 期末余额, 4103 就<b>应该</b>显示结转转入的留存收益。排除结转凭证会人为"解除"已完成的结账,
+     * 使报表与真实账簿脱节。({@link #aggregateBySubjectPosted} 的结转排除逻辑是
+     * {@code ProfitLossClosingServiceImpl} 专用 — 它要计算"本期业务发生额、不含结转噪音"以生成
+     * 下一张结转凭证, 语义完全不同, 不应被本报表复用。)
+     *
+     * <p>用途: {@code BalanceSheetService}, {@code VoucherExportServiceImpl} 的
+     * exportSubjectBalance / exportGeneralLedger / exportTrialBalance / loadOpeningAggregates /
+     * exportSubsidiaryLedger (经 loadVoucherLines excludeDraft=true)。
+     */
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "  e.subjectCode, MAX(e.subjectName), " +
+            "  COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
+            "  COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT " +
+            "  AND v.deletedAt IS NULL " +
+            "GROUP BY e.subjectCode " +
+            "ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectExcludingDraft(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): 利润表 (Income Statement) 专用 — 排除 DRAFT (未财审草稿)
+     * + 排除结转产物 (PL_CLOSING / COST_CARRYOVER 红冲镜像), 但<b>保留 REVERSED</b> (与
+     * {@link #aggregateBySubjectExcludingDraft} 同理, 见其 javadoc 关于红字冲销的说明)。
+     *
+     * <p>为什么利润表必须排除结转产物: 若不排除, 已结账期间的 6xxx 科目在聚合里会被结转分录
+     * 清零抵消 → 利润表对一个<b>已结账</b>的期间会显示营业收入=0/成本=0 (荒谬 —— 利润表要展示的
+     * 是"本期真实发生的业务活动", 与是否已完成结账机械动作无关)。此排除逻辑与
+     * {@link #aggregateBySubjectPosted} (结转损益专用) 完全一致 —— 二者本质计算同一个量
+     * ("本期业务口径损益, 不含结转噪音") —— 唯一区别是本方法<b>保留 REVERSED</b> 以支持红字冲销
+     * 正确抵消 (见上)。
+     *
+     * <p>用途: {@code IncomeStatementService}, {@code VoucherExportServiceImpl.exportIncomeStatement}。
+     */
+    @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
+            "  e.subjectCode, MAX(e.subjectName), " +
+            "  COALESCE(SUM(e.debit), 0), COALESCE(SUM(e.credit), 0), " +
+            "  COUNT(e)) " +
+            "FROM VoucherEntry e JOIN e.voucher v " +
+            "WHERE v.factoryId = :factoryId " +
+            "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.VOID " +
+            "  AND v.status <> com.cretas.aims.entity.enums.VoucherStatus.DRAFT " +
+            "  AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
+            "  AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER " +
+            "           AND v.originalVoucherId IS NOT NULL) " +
+            "  AND v.deletedAt IS NULL " +
+            "GROUP BY e.subjectCode " +
+            "ORDER BY e.subjectCode ASC")
+    List<com.cretas.aims.dto.finance.SubjectAggregateRow> aggregateBySubjectExcludingDraftAndClosing(
             @Param("factoryId") String factoryId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);

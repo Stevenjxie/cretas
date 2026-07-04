@@ -103,7 +103,7 @@ class FinanceReportExportTest {
         // Amount = 70000.005 (rounds to 70000.01 with HALF_UP, 70000.00 with HALF_EVEN)
         // Using exact value to ensure scale=2 is present
         Account cashAccount = buildAccount("1001", "库存现金", AccountCategory.ASSET);
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(row("1001", "库存现金", "70000.005", "0.000")));
         when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of(cashAccount));
         when(accountingPeriodService.getStatus(FACTORY, 2026, 5))
@@ -125,7 +125,7 @@ class FinanceReportExportTest {
 
     @Test
     void exportBalanceSheet_emptyData_headersOnlyNoException() throws Exception {
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(Collections.emptyList());
         when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
         when(accountingPeriodService.getStatus(FACTORY, 2026, 5))
@@ -154,7 +154,7 @@ class FinanceReportExportTest {
     void exportBalanceSheet_fileName_containsFactoryAndPeriod() throws Exception {
         // month=12 — need separate stub for this month value
         Account cashAccount = buildAccount("1001", "库存现金", AccountCategory.ASSET);
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(row("1001", "库存现金", "70000.00", "0.00")));
         when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of(cashAccount));
         when(accountingPeriodService.getStatus(FACTORY, 2026, 12))
@@ -278,7 +278,7 @@ class FinanceReportExportTest {
 
     private void stubBalanceSheetWithOneAsset() {
         Account cashAccount = buildAccount("1001", "库存现金", AccountCategory.ASSET);
-        when(voucherEntryRepo.aggregateBySubject(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(row("1001", "库存现金", "70000.00", "0.00")));
         when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(List.of(cashAccount));
         when(accountingPeriodService.getStatus(FACTORY, 2026, 5))

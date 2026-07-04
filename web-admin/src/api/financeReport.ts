@@ -29,6 +29,11 @@ export interface BalanceSheetDTO {
   /** true 当 |totalAssets - totalLiabilitiesAndEquity| <= 0.01. */
   balanceCheck: boolean;
   generatedAt: string;
+  /**
+   * F006 财务审计 Bug 6 (2026-07-04): 官方报表已切 POSTED-only (人工审核制, DRAFT 待审草稿
+   * 不计入). 本字段 = 期间内待过账凭证数, 用于向财务人员说明"报表数字看着少"的原因.
+   */
+  pendingDraftVoucherCount?: number;
 }
 
 export interface IncomeStatementDTO {
@@ -48,6 +53,8 @@ export interface IncomeStatementDTO {
   incomeTax: number;
   netProfit: number;
   generatedAt: string;
+  /** F006 财务审计 Bug 6 (2026-07-04): 期间内待过账 (DRAFT) 凭证数, 见 BalanceSheetDTO 同名字段. */
+  pendingDraftVoucherCount?: number;
 }
 
 export interface CashFlowActivity {
