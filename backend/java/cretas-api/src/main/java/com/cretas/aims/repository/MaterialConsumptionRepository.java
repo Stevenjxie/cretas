@@ -206,27 +206,59 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
     /**
      * 🔴🔒🔒 生产仓盘点「延迟扣减」盲区修复 (bug fix 2026-07-04, mirror
      * {@link #countUnsettledConsumptionByBatchIds} 但逐批 <b>SUM 数量</b>而非计数):
-     * 汇总指定批次集合上尚未小结的正向消耗数量, 按批次分组返回 {@code [batchId, Σquantity]}。
+     * 汇总指定批次集合上<b>真正待小结</b>的正向消耗数量, 按批次分组返回 {@code [batchId, Σquantity]}。
      *
      * <p>物料消耗采「延迟扣减」设计: 报工写 {@link MaterialConsumption} (未结, {@code interimSettledAt}
      * IS NULL, {@code batchId} = 被消耗的来源批次) 但<b>不即时扣</b> {@code usedQuantity}; 直到「小结」
      * ({@code InterimSettleServiceImpl} §①) 才在同一原子事务内逐笔 {@code usedQuantity += quantity} +
      * stamp {@code interimSettledAt}。因此某批次「货架实物」= {@code getPhysicalQuantity()}(=receipt−used)
-     * − Σ(本查询未结消耗) —— 未结消耗对应的货已物理投入产品/在制, 只是账面 {@code usedQuantity} 尚未扣。
+     * − Σ(本查询待小结消耗) —— 待小结消耗对应的货已物理投入产品/在制, 只是账面 {@code usedQuantity} 尚未扣。
      *
      * <p><b>盘点必须减去本值</b>: 否则生产仓在「报工-未小结」窗口盘点, 会把待扣量误判为盘亏 (假 6602
      * 管理费用凭证), 且随后小结对已被盘点划空 (receipt 下移) 的批次 {@code usedQuantity += quantity} 会把
      * currentQuantity 扣成负 → {@code BATCH_INSUFFICIENT} 409 永久卡死 (关单亦 409, 双向死锁)。
      *
-     * <p>与 count 版<b>同谓词</b> ({@code factoryId + batchId IN + interimSettledAt IS NULL + quantity>0}),
-     * 继承其正确域: {@code quantity>0} 排除退料回库负数留痕; 类级 {@code @Where(deleted_at IS NULL)} 附加
-     * 软删除过滤; {@code interimSettledAt IS NULL} 与 {@code usedQuantity} 扣减在小结事务内原子同步 →
-     * 无「已扣 used 但仍未结」窗口 → 绝不重复减 (与 {@code getPhysicalQuantity()=receipt−used} 组合, 未结
-     * 消耗只减一次, 无 double-subtract)。领料即时扣减 / #1201/#1213 原料仓场景无未结消耗 → 不在结果中,
-     * 调用方按 0 处理 → 快照口径不变。Factory-scoped 防跨租户。
+     * <p><b>🔴🔒🔒 计划族门控 (bug fix 2026-07-04, #1216↔#1217 姊妹流缺口)</b>: {@code interimSettledAt
+     * IS NULL} <b>只对「存货生产 (SAFETY_STOCK)」计划</b>代表「待小结、账面 usedQuantity 尚未扣」。
+     * 非 SAFETY_STOCK 的「结单族」计划 (CUSTOMER_ORDER / MANUAL / …) 走「结单」
+     * ({@code ProductionPlanServiceImpl.settleProduction → postMaterialBatchConsumption}) 在结单时即时扣
+     * {@code usedQuantity}, <b>永不 stamp {@code interimSettledAt}</b> → 其报工消耗行恒 {@code interimSettledAt
+     * IS NULL} 但<b>早已落库扣减</b> (非待小结)。若不区分计划族一并减去 (#1216 首版缺陷), 结单族批次的
+     * {@code getPhysicalQuantity()} (已扣 used) 会被<b>二次减去同一消耗</b> → 账面虚低 → 仓管数到实物 →
+     * 假盘盈 + 假 借1403/贷6301 凭证 → apply 平移 receipt 上抬 → 幻库存累积 (每次盘点腐蚀)。
+     *
+     * <p><b>为何按 productionBatchId → process_sheet_rows.planId 反查族, 而非 mc.productionPlanId 或
+     * ProductionBatch.productionPlanId</b>: (1) 逐工序非末道消耗行 {@code mc.productionPlanId} <b>故意为
+     * null</b> (防成本双计, 见 {@code ClerkProcessEntryServiceImpl} writeConsumption); 按它门控会漏掉这些
+     * <b>真 SAFETY_STOCK 待小结</b>行 → 重开 #1216 原盲区 (SAFETY_STOCK 报工-未结窗口假盘亏)。(2) 非末道
+     * WIP {@code ProductionBatch.productionPlanId} <b>亦为 null</b> (createProductionBatch 仅 FINISHED 批挂
+     * 计划) → 经 ProductionBatch 反查同样漏。唯一可靠链 = {@code mc.productionBatchId ∈
+     * process_sheet_rows.batch_id} 且该 row 的 {@code plan_id} 对应计划 {@code sourceType = SAFETY_STOCK}
+     * —— 这正是 {@code InterimSettleServiceImpl §①} 定位待扣减行的<b>同一 key</b> (它按本计划各道
+     * {@code process_sheet_rows.batch_id} 收集 {@code productionBatchId} 再扣减), 故本 SUM 的减除集 <b>严格
+     * 等于</b>小结将扣减集 —— 只减真正会被小结扣的量, 不多不少。honest-null-safe: {@code productionBatchId}
+     * 为 null / 不属任何 SAFETY_STOCK 计划 process_sheet_row → 不在子查询内 → 不减 (族未知即不减, 避免错减
+     * 腐蚀财务); 而小结本也只经 {@code productionBatchId IN} 扣减这些行, 故排除口径一致。
+     *
+     * <p>其余谓词与 count 版<b>同</b> ({@code factoryId + batchId IN + interimSettledAt IS NULL + quantity>0}):
+     * {@code quantity>0} 排除退料回库负数留痕; 类级 {@code @Where(deleted_at IS NULL)} 附加软删除过滤;
+     * {@code interimSettledAt IS NULL} 与 {@code usedQuantity} 扣减在小结事务内原子同步 → 无「已扣 used 但仍
+     * 未结」窗口 → 与 {@code getPhysicalQuantity()=receipt−used} 组合, 待小结消耗只减一次, 无 double-subtract。
+     * 领料即时扣减 / #1201/#1213 原料仓场景无待小结消耗 → 不在结果中, 调用方按 0 处理 → 快照口径不变。
+     *
+     * <p><b>与 count 版 ({@link #countUnsettledConsumptionByBatchIds}) 的门控差异</b>: count 版由唯一调用方
+     * ({@code FactoryMaterialRequisitionServiceImpl.close} 经 {@code isInterimSettlePlan} #1217) 在<b>调用点</b>
+     * 已按单一计划族门控 (仅 SAFETY_STOCK 领料单才 count), 且只查该单 WKS 批次 → 无需查内族过滤。本 SUM 版被
+     * 盘点<b>跨整仓多批次</b>调用 (这些批次可能横跨多个不同族计划), 无法在调用点门控 → 必须在查询内按族过滤。
+     * Factory-scoped 防跨租户。
      */
     @Query("SELECT m.batchId, SUM(m.quantity) FROM MaterialConsumption m WHERE m.factoryId = :factoryId "
             + "AND m.batchId IN :batchIds AND m.interimSettledAt IS NULL AND m.quantity > 0 "
+            + "AND m.productionBatchId IN ("
+            + "  SELECT r.batchId FROM ProcessSheetRow r, ProductionPlan p "
+            + "  WHERE r.factoryId = :factoryId AND r.batchId IS NOT NULL "
+            + "    AND r.planId = p.id AND p.factoryId = :factoryId "
+            + "    AND p.sourceType = com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK) "
             + "GROUP BY m.batchId")
     List<Object[]> sumUnsettledConsumptionGroupedByBatch(@Param("factoryId") String factoryId,
                                                          @Param("batchIds") List<String> batchIds);
