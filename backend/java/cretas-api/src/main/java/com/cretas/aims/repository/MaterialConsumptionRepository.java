@@ -204,6 +204,34 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
                                              @Param("batchIds") List<String> batchIds);
 
     /**
+     * 🔴🔒🔒 生产仓盘点「延迟扣减」盲区修复 (bug fix 2026-07-04, mirror
+     * {@link #countUnsettledConsumptionByBatchIds} 但逐批 <b>SUM 数量</b>而非计数):
+     * 汇总指定批次集合上尚未小结的正向消耗数量, 按批次分组返回 {@code [batchId, Σquantity]}。
+     *
+     * <p>物料消耗采「延迟扣减」设计: 报工写 {@link MaterialConsumption} (未结, {@code interimSettledAt}
+     * IS NULL, {@code batchId} = 被消耗的来源批次) 但<b>不即时扣</b> {@code usedQuantity}; 直到「小结」
+     * ({@code InterimSettleServiceImpl} §①) 才在同一原子事务内逐笔 {@code usedQuantity += quantity} +
+     * stamp {@code interimSettledAt}。因此某批次「货架实物」= {@code getPhysicalQuantity()}(=receipt−used)
+     * − Σ(本查询未结消耗) —— 未结消耗对应的货已物理投入产品/在制, 只是账面 {@code usedQuantity} 尚未扣。
+     *
+     * <p><b>盘点必须减去本值</b>: 否则生产仓在「报工-未小结」窗口盘点, 会把待扣量误判为盘亏 (假 6602
+     * 管理费用凭证), 且随后小结对已被盘点划空 (receipt 下移) 的批次 {@code usedQuantity += quantity} 会把
+     * currentQuantity 扣成负 → {@code BATCH_INSUFFICIENT} 409 永久卡死 (关单亦 409, 双向死锁)。
+     *
+     * <p>与 count 版<b>同谓词</b> ({@code factoryId + batchId IN + interimSettledAt IS NULL + quantity>0}),
+     * 继承其正确域: {@code quantity>0} 排除退料回库负数留痕; 类级 {@code @Where(deleted_at IS NULL)} 附加
+     * 软删除过滤; {@code interimSettledAt IS NULL} 与 {@code usedQuantity} 扣减在小结事务内原子同步 →
+     * 无「已扣 used 但仍未结」窗口 → 绝不重复减 (与 {@code getPhysicalQuantity()=receipt−used} 组合, 未结
+     * 消耗只减一次, 无 double-subtract)。领料即时扣减 / #1201/#1213 原料仓场景无未结消耗 → 不在结果中,
+     * 调用方按 0 处理 → 快照口径不变。Factory-scoped 防跨租户。
+     */
+    @Query("SELECT m.batchId, SUM(m.quantity) FROM MaterialConsumption m WHERE m.factoryId = :factoryId "
+            + "AND m.batchId IN :batchIds AND m.interimSettledAt IS NULL AND m.quantity > 0 "
+            + "GROUP BY m.batchId")
+    List<Object[]> sumUnsettledConsumptionGroupedByBatch(@Param("factoryId") String factoryId,
+                                                         @Param("batchIds") List<String> batchIds);
+
+    /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
      * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
      */

@@ -15,6 +15,7 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -62,6 +63,11 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final FactoryStocktakeItemRepository stocktakeItemRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+    /**
+     * 🔴🔒🔒 生产仓「延迟扣减」盘点盲区修复 (2026-07-04): 快照/漂移比对须从货架实物量扣掉
+     * 未小结的报工消耗 (报工写未结 MaterialConsumption 但不扣 usedQuantity, 小结才扣)。
+     */
+    private final MaterialConsumptionRepository materialConsumptionRepo;
 
     /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
@@ -152,24 +158,33 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         // 快照该仓库所有 MaterialBatch 的当前库存
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
                 factoryId, req.getWarehouseId());
+        // 🔴 Fix (🔒🔒 生产仓延迟扣减盲区, 2026-07-04): 逐批预取未小结报工消耗量 (见 loadUnsettledByBatch)。
+        Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
+                batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
         List<FactoryStocktakeItem> items = new ArrayList<>();
         for (MaterialBatch batch : batches) {
             FactoryStocktakeItem item = new FactoryStocktakeItem();
             item.setStocktake(stocktake);
             item.setMaterialBatchId(batch.getId());
             item.setRawMaterialTypeId(batch.getMaterialTypeId());
-            // 🔴 Fix (🔒🔒 phantom-variance): 快照「货架实物量」= receiptQuantity − usedQuantity,
+            // 🔴 Fix (🔒🔒 phantom-variance): 快照「货架实物量」= receiptQuantity − usedQuantity − 未小结报工消耗,
             // 既不是 gross receiptQuantity, 也不是可用量 getCurrentQuantity()(= receipt − used − reserved)。
             // 仓管盘点数的是货架上肉眼可见的实物: 已领用(used)的货已物理离开货架 → 扣减;
             // 预留(reserved)是逻辑占用(下游订单/生产计划挂占), 货物物理上仍在货架上 → 不扣减。
             //   • 用 gross receiptQuantity → 已领用量被误计为盘亏(旧幻影短缺 bug, #1201 已修)。
-            //   • 用 getCurrentQuantity()(含 −reserved) → 预留量被误计为盘盈(#1201 overshoot, 本次修):
-            //     仓管数到货架实物, 系统账面已扣预留, 实物 > 账面 → 假盘盈 → 虚假 借1403/贷6301, 且
-            //     后续预留转消耗时同批货二次扣减, 库存 + 损益永久虚增 reserved。
+            //   • 用 getCurrentQuantity()(含 −reserved) → 预留量被误计为盘盈(#1201 overshoot)。
+            // 🔴 生产仓延迟扣减盲区 (2026-07-04, 本次修): 报工写「未小结」MaterialConsumption 但不扣 usedQuantity
+            //   (小结才扣)。故生产仓 WKS 批次 getPhysicalQuantity()(=receipt−used) 仍含「已投产但账面未扣」的量,
+            //   高于仓管真正数到的货架实物。若不减未小结消耗: 仓管诚实数少 → 假盘亏 6 → 假 借6602/贷1403 凭证,
+            //   随后小结对已被盘点划空 (receipt 下移) 的批次 usedQuantity+=6 扣成负 → 409 永久卡死 + 关单亦 409。
+            //   减去未小结消耗后账面=真实货架实物 → 零差异 → 无假凭证 + 无 receipt 平移 → 小结正常扣减不 409。
+            //   领料即时扣减 / #1201/#1213 原料仓场景无未结消耗 → 减 0, 口径不变。与 receipt−used 组合只减一次,
+            //   无 double-subtract (getPhysicalQuantity 本身不含未结消耗, 小结扣 used 时同事务清 interimSettledAt)。
             // getPhysicalQuantity() 为 @Transient 计算属性, receiptQuantity=null 时返回 ZERO (恒非 null)。
-            BigDecimal physical = batch.getPhysicalQuantity();
-            item.setSystemQty((physical != null ? physical : BigDecimal.ZERO)
-                    .setScale(4, RoundingMode.HALF_UP));
+            BigDecimal physical = batch.getPhysicalQuantity() != null
+                    ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
+            BigDecimal shelf = physicalShelf(physical, unsettledByBatch.get(batch.getId()));
+            item.setSystemQty(shelf.setScale(4, RoundingMode.HALF_UP));
             items.add(item);
         }
         stocktake.setItems(items);
@@ -338,6 +353,16 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         // 模式一致), 避免部分生效。
         // ---------------------------------------------------------------
         java.util.Map<String, MaterialBatch> batchCache = new java.util.LinkedHashMap<>();
+        // 🔴 Fix (🔒🔒 生产仓延迟扣减盲区, 2026-07-04): 漂移比对的 live 口径也须减去「当前」未小结报工消耗,
+        // 与快照口径 (货架实物 = physical − 未结消耗) 保持一致 — 否则生产仓 WKS 有真实变异时会被误判漂移拦截。
+        // physical−unsettled 在小结前后是不变量 (小结把量从「未结消耗桶」移到 usedQuantity, 两侧同减 physical),
+        // 故窗口内发生小结不会误报漂移; 而若窗口内又有新报工 (unsettled 增大) 则 live≠snapshot → 正当漂移拦截。
+        List<String> driftCandidateBatchIds = stocktake.getItems().stream()
+                .filter(it -> it.getDifferenceQty() != null
+                        && it.getDifferenceQty().compareTo(BigDecimal.ZERO) != 0)
+                .map(FactoryStocktakeItem::getMaterialBatchId)
+                .collect(Collectors.toList());
+        Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId, driftCandidateBatchIds);
         List<String> driftedBatches = new ArrayList<>();
         for (FactoryStocktakeItem item : stocktake.getItems()) {
             if (item.getDifferenceQty() == null ||
@@ -349,13 +374,16 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 continue; // 批次已不存在 — 下面的主循环会照常 warn 跳过, 无需在此重复处理
             }
             batchCache.put(item.getMaterialBatchId(), batch);
-            // 🔴 Fix (🔒🔒): 漂移比对必须与快照同口径 — snapshot 现为「货架实物量」(receipt − used),
-            // live 也取 getPhysicalQuantity(), 否则:
+            // 🔴 Fix (🔒🔒): 漂移比对必须与快照同口径 — snapshot 为「货架实物量」(receipt − used − 未结消耗),
+            // live 也取 physical − 未结消耗, 否则:
             //   • 每个 usedQuantity>0 的批次会被误判为"盘点后漂移"而永久拦截生效 (STOCKTAKE_DRIFT),
             //     使消耗过的批次无法盘点 (#1201 修的口径);
             //   • 若用含 −reserved 的 getCurrentQuantity(), 有预留的批次 live≠snapshot 又会误判漂移
-            //     (#1201 overshoot, 本次修) —— snapshot 用 physical, live 也必须 physical。
-            BigDecimal liveQty = batch.getPhysicalQuantity() != null ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
+            //     (#1201 overshoot) —— snapshot 用 physical, live 也必须 physical;
+            //   • 生产仓 WKS 批次若不减未结消耗, 有真实盘亏时 live(=physical) ≠ snapshot(=physical−未结) → 误判漂移。
+            BigDecimal physicalLive = batch.getPhysicalQuantity() != null
+                    ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
+            BigDecimal liveQty = physicalShelf(physicalLive, unsettledByBatch.get(item.getMaterialBatchId()));
             BigDecimal snapshotQty = item.getSystemQty() != null ? item.getSystemQty() : BigDecimal.ZERO;
             if (liveQty.setScale(2, RoundingMode.HALF_UP)
                     .compareTo(snapshotQty.setScale(2, RoundingMode.HALF_UP)) != 0) {
@@ -678,6 +706,55 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     // -------------------------------------------------------
     // private helpers
     // -------------------------------------------------------
+
+    /**
+     * 🔴🔒🔒 生产仓延迟扣减盲区 (2026-07-04): 逐批查未小结报工消耗量 (报工写未结
+     * MaterialConsumption 但不即时扣 usedQuantity, 小结才扣)。返回 batchId → Σ未结消耗量,
+     * 无未结消耗的批次不在 map 中 (调用方 {@link #physicalShelf} 按 0 处理 → 口径不变)。
+     * 空/全 null 输入短路返回空 map, 不打无谓 SQL。谓词与 #1215 关单守卫同源, 继承其正确域。
+     */
+    private Map<String, BigDecimal> loadUnsettledByBatch(String factoryId, List<String> batchIds) {
+        Map<String, BigDecimal> map = new java.util.HashMap<>();
+        if (batchIds == null || batchIds.isEmpty()) {
+            return map;
+        }
+        List<String> ids = batchIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (ids.isEmpty()) {
+            return map;
+        }
+        for (Object[] row : materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(factoryId, ids)) {
+            if (row == null || row.length < 2 || row[0] == null) {
+                continue;
+            }
+            map.put((String) row[0], toBigDecimal(row[1]));
+        }
+        return map;
+    }
+
+    /**
+     * 货架实物量 = max(0, physical − 未结报工消耗)。clamp 到 0 防超投场景 (未结消耗 > physical,
+     * 小结本身会 BATCH_INSUFFICIENT 拦) 下算出负账面 → 反被仓管数 0 误判为假盘盈。unsettled=null → 减 0。
+     */
+    private static BigDecimal physicalShelf(BigDecimal physical, BigDecimal unsettled) {
+        BigDecimal p = physical != null ? physical : BigDecimal.ZERO;
+        BigDecimal u = unsettled != null ? unsettled : BigDecimal.ZERO;
+        BigDecimal shelf = p.subtract(u);
+        return shelf.signum() < 0 ? BigDecimal.ZERO : shelf;
+    }
+
+    /** SUM(BigDecimal) 聚合结果类型 driver 可能返 BigDecimal/别的 Number, 统一转 BigDecimal (不丢精度)。 */
+    private static BigDecimal toBigDecimal(Object v) {
+        if (v == null) {
+            return BigDecimal.ZERO;
+        }
+        if (v instanceof BigDecimal) {
+            return (BigDecimal) v;
+        }
+        return new BigDecimal(v.toString());
+    }
 
     private FactoryStocktake findAndValidate(String stocktakeId, String factoryId) {
         FactoryStocktake stocktake = stocktakeRepo.findById(stocktakeId)
