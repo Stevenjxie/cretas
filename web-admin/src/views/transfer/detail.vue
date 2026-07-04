@@ -143,10 +143,18 @@ const isInbound = computed(() => transfer.value?.targetFactoryId === factoryId.v
 
 // Rule 2 (fool-proof-design): 富确认弹窗 — 品名 × 数量, 供 handleAction 各操作复用
 // (对齐 material-requisitions/list.vue 的 buildItemsSummaryHtml 写法)。
+// Bug fix (residual UX re-verify 2026-07): GET /{factoryId}/transfers/{id} 返回的
+// item 里 materialType/productType 并未 hydrate (nested 对象缺失), 但后端确实回填了
+// 扁平字段 row.itemName (人类可读品名, 如 "牛肉前腱子")。原逻辑只 fallback 到
+// materialTypeId/productTypeId (裸编码 RMT_xxx), 从未检查 row.itemName → 表格和确认弹窗
+// 都显示裸编码。row.itemName 优先于裸 id fallback (但仍让已 hydrate 的 materialType/productType
+// 优先, 因为那是更结构化的来源)。
 function transferItemName(row: Record<string, unknown>): string {
   const mt = row.materialType as { name?: string } | undefined;
   const pt = row.productType as { name?: string } | undefined;
-  return String(mt?.name || pt?.name || row.materialTypeId || row.productTypeId || '-');
+  return String(
+    mt?.name || pt?.name || row.itemName || row.materialTypeId || row.productTypeId || '-',
+  );
 }
 function buildTransferItemsSummaryHtml(): string {
   const items = (transfer.value?.items as Record<string, unknown>[] | undefined) || [];
@@ -260,12 +268,7 @@ const shipBlockedReason = computed(() => {
   if (!hasStockShortage.value) return '';
   const shortageRows = (transfer.value?.items as Record<string, unknown>[] | undefined)
     ?.filter(isStockShortage) ?? [];
-  const names = shortageRows.map(r => {
-    const m = (r.materialType as { name?: string } | undefined)?.name
-      ?? (r.productType as { name?: string } | undefined)?.name
-      ?? r.materialTypeId ?? r.productTypeId ?? '-';
-    return String(m);
-  });
+  const names = shortageRows.map(r => transferItemName(r));
   return `库存不足 (${names.join(', ')}). 请先采购或调入补足后再发货.`;
 });
 
@@ -494,7 +497,7 @@ async function submitDecide() {
           </el-table-column>
           <el-table-column label="品名" min-width="150">
             <template #default="{ row }">
-              {{ row.materialType?.name || row.productType?.name || row.materialTypeId || row.productTypeId || '-' }}
+              {{ transferItemName(row) }}
             </template>
           </el-table-column>
           <el-table-column prop="quantity" label="调拨数量" width="120" align="right" />
