@@ -647,17 +647,28 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   loud-block 关单, 引导先完成小结。小结后关单 (WKS.currentQuantity 已 = issued − 实耗) 走既有
         //   正确路径 (#1202 post-settle), 不受影响; 无 WKS 物化批次的老单/未走物理迁移单不触发 (行为不变);
         //   未报工即关单 (无未结消耗) 亦正常退全额 (issued 未被消耗, 应退回)。
-        List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
-        if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
-            long unsettled = materialConsumptionRepository
-                    .countUnsettledConsumptionByBatchIds(factoryId, workshopBatchIds);
-            if (unsettled > 0) {
-                throw new BusinessException(409, String.format(
-                        "关单失败: 本领料单尚有 %d 笔报工消耗未小结, 无法关单退料", unsettled))
-                        .withCode("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLE")
-                        .withHint("请先在「生产计划 → 小结」完成本次报工消耗的结算, 再回到本单关单退料")
-                        .withHintTarget(mr.getId())
-                        .withSeverity("BLOCKING");
+        //
+        //   ⚠️ 2026-07-04 收窄 (bug fix, 首版 #1215 误伤): 该守卫只对「存货生产 (SAFETY_STOCK) 计划」有效 ——
+        //   `interimSettledAt IS NULL` 仅在小结 (InterimSettleServiceImpl, 仅 SAFETY_STOCK) 路径才被盖戳。
+        //   非 SAFETY_STOCK 计划走「结单」(ProductionPlanServiceImpl.settleProduction → postMaterialBatchConsumption)
+        //   即时扣减 usedQuantity, 永不盖 interimSettledAt → 其消耗行恒 `interimSettledAt IS NULL` 但早已落库扣减,
+        //   并非「待小结」。若不区分计划族, 结单族的领料单 (报工+结单后, 计划已 COMPLETED) 会被此守卫永久 409,
+        //   而其 hint「请先小结」指向的小结端对结单族 400 (仅存货生产可小结) → 死路。故仅在计划确为 SAFETY_STOCK
+        //   (真存在「小结-待结算」窗口) 时才 count-and-block; 计划非 SAFETY_STOCK / 无 planId / 计划查不到 →
+        //   无该窗口, 守卫不触发, 结单族领料单正常关单退料。
+        if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
+            List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
+            if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
+                long unsettled = materialConsumptionRepository
+                        .countUnsettledConsumptionByBatchIds(factoryId, workshopBatchIds);
+                if (unsettled > 0) {
+                    throw new BusinessException(409, String.format(
+                            "关单失败: 本领料单尚有 %d 笔报工消耗未小结, 无法关单退料", unsettled))
+                            .withCode("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLE")
+                            .withHint("请先在「生产计划 → 小结」完成本次报工消耗的结算, 再回到本单关单退料")
+                            .withHintTarget(mr.getId())
+                            .withSeverity("BLOCKING");
+                }
             }
         }
 
@@ -741,6 +752,21 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     // ---------- helpers ----------
+
+    /**
+     * 关单-前-小结 防呆的计划族判定: 该计划是否为「存货生产 (SAFETY_STOCK)」——即真正存在「小结-待结算」窗口
+     * (报工写未结消耗、暂不扣 WKS.usedQuantity, 直到小结才逐笔扣) 的唯一计划族。只有此族的 {@code interimSettledAt
+     * IS NULL} 消耗才代表「待小结、尚未落库扣减」; 非此族 (结单路径即时扣减、永不盖戳) 的 null 戳消耗早已扣减,
+     * 不可当作待结算而阻止关单。planId 缺失 / 计划查不到 → 保守视为「非小结族」(无待结算窗口 → 守卫不触发)。
+     */
+    private boolean isInterimSettlePlan(String factoryId, String productionPlanId) {
+        if (productionPlanId == null || productionPlanId.isBlank() || productionPlanRepository == null) {
+            return false;
+        }
+        return productionPlanRepository.findByIdAndFactoryId(productionPlanId, factoryId)
+                .map(p -> p.getSourceType() == com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK)
+                .orElse(false);
+    }
 
     /**
      * 收集本领料单全部行在生产仓 (WKS) 物化的批次 id (领料迁移时回写进 {@code batchNumbers[*].workshopBatchId})。
