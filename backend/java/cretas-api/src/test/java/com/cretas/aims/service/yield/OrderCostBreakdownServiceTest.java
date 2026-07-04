@@ -182,6 +182,37 @@ class OrderCostBreakdownServiceTest {
     }
 
     @Test
+    @DisplayName("computeByPlan: 按计划取批次归集权威成本 (结单族成品成本传导用) — label=planId")
+    void computeByPlan_aggregatesPlanBatches() {
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, "PP1"))
+                .thenReturn(List.of(batch(1L, "100")));
+        when(yieldReportService.getYield(F, 1L)).thenReturn(batchYield("0", BigDecimal.ZERO));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(1L, F))
+                .thenReturn(List.of(cons("MB1", "78", "91.92", "7170")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB1", F))
+                .thenReturn(Optional.of(mb("MB1", "原料A", null, null)));
+
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, "PP1", false);
+
+        assertThat(dto.isHasData()).isTrue();
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("7170");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("7170");
+        assertThat(dto.getOrderId()).isEqualTo("PP1");   // label 填 planId (展示用)
+    }
+
+    @Test
+    @DisplayName("computeByPlan: 无批次 → hasData=false (诚实空态, 不造 0 行)")
+    void computeByPlan_noBatches_empty() {
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, "PP-EMPTY"))
+                .thenReturn(List.of());
+
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, "PP-EMPTY", false);
+
+        assertThat(dto.isHasData()).isFalse();
+        assertThat(dto.getOrderId()).isEqualTo("PP-EMPTY");
+    }
+
+    @Test
     @DisplayName("首道原料材料不双计: 报告侧首道 material 被排除, 原料只来自 traced consumption")
     void firstStepMaterialNotDoubleCounted() {
         // 报告首道(修油)material=999 (应被忽略), 熟制 980, 包装 880; 原料来自 consumption 1000

@@ -232,6 +232,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private WarehouseResolver warehouseResolver;
 
     /**
+     * 🔴 成本传导 (2026-07-04): 结单族 CUSTOMER_ORDER 成品入库单位成本基准.
+     *
+     * <p>结单族 {@code createFinishedGoodsFromReceipt} 历史只写 unitPrice(售价) 不写 unitCost(成本) →
+     * 成品批次 unitCost=null → 毛利/COGS 对结单族全盲 (期末 COGS 结转 honest-null 排除, 结单族销售无成本)。
+     * 复用 {@link OrderCostBreakdownService#computeByPlan} (单一权威成本, 与 SAFETY_STOCK 小结的成本传导
+     * 同源 = 逐道 原料+人工+调料+包装, 但结单族生产批不设 ProductionBatch.totalCost, 故不能直接镜像
+     * interim-settle 的 computeOutputUnitCost, 改走 MaterialConsumption 派生的权威成本, 与 出厂核算 字节一致)。
+     * required=false 兼容单测 (反射注入 mock); 不注入 → unitCost 保持 null (诚实, 不伪造 ¥0)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.yield.OrderCostBreakdownService orderCostBreakdownService;
+
+    /**
      * R1/R2 (2026-06-14): 取消计划按批次定向级联关闭 WorkProcessTask (新表), 取代旧的
      * "按产品类型全关 ProcessTask" (会误关同产品并行另一批次的活跃任务)。
      * required=false 兼容单测 (反射注入) 与无工序任务场景。
@@ -2857,6 +2870,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setUnit(unit);
         batch.setUnitPrice(productType != null ? productType.getUnitPrice() : null);
+        // 🔴 成本传导 (2026-07-04): 结单族成品单位成本 = 该计划权威生产成本 / 入库量 (诚实 null, 不伪造 ¥0)。
+        //   与 SAFETY_STOCK 小结成本同基准 (原料+人工+调料+包装), 让期末 COGS 结转能纳入结单族销售。
+        batch.setUnitCost(resolveReceiptUnitCost(settlement.getFactoryId(), plan.getId(), received));
         batch.setProductionDate(LocalDate.now());
         int shelfLifeDays = productType != null && productType.getShelfLifeDays() != null
                 ? productType.getShelfLifeDays()
@@ -2869,6 +2885,43 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
         return finishedGoodsBatchRepository.save(batch);
+    }
+
+    /**
+     * 🔴 成本传导 — 结单族成品入库单位成本 (诚实 null, 禁止降级).
+     *
+     * <p>unitCost = 该生产计划的权威生产成本 (原料+人工+调料+包装, 由 {@link OrderCostBreakdownService}
+     * 沿 MaterialConsumption 边回溯归集) / 入库量 (scale-4, HALF_UP)。与 SAFETY_STOCK 小结的成本传导
+     * 同一基准, 也与 出厂核算/成本汇总页字节一致。
+     *
+     * <p><b>诚实 null (禁止伪造 ¥0)</b>: 以下任一 → 返 null (成品成本未知, 不当 0 摊入 COGS):
+     * <ul>
+     *   <li>{@code orderCostBreakdownService} 未注入 (单测反射场景);</li>
+     *   <li>该计划无生产批次 (hasData=false) — 无成本可归集;</li>
+     *   <li>归集总成本 null 或 ≤0 — 全部投入物料/人工均未定价 (upstream priceless);</li>
+     *   <li>入库量 ≤0 — 无分母。</li>
+     * </ul>
+     * 常规场景 (物料已定价) → 返回真实传导成本。null 由 期末 COGS 结转 honest-null 排除 + 记 WARN 暴露缺口,
+     * 不静默造 0。
+     */
+    private BigDecimal resolveReceiptUnitCost(String factoryId, String planId, BigDecimal received) {
+        if (orderCostBreakdownService == null || planId == null
+                || received == null || received.signum() <= 0) {
+            return null;
+        }
+        try {
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO cb =
+                    orderCostBreakdownService.computeByPlan(factoryId, planId, false);
+            if (cb == null || !cb.isHasData()
+                    || cb.getTotalCost() == null || cb.getTotalCost().signum() <= 0) {
+                return null;   // 诚实: 无成本基准 (无批次 / 全未定价) → 未知, 不伪造 ¥0
+            }
+            return cb.getTotalCost().divide(received, 4, RoundingMode.HALF_UP);
+        } catch (Exception e) {
+            log.warn("结单族成品成本传导失败 (factory={}, plan={}): {} — unitCost 置 null (诚实, 不伪造)",
+                    factoryId, planId, e.getMessage());
+            return null;
+        }
     }
 
     private String finishedGoodsBatchNumber(ProductionSettlement settlement) {
