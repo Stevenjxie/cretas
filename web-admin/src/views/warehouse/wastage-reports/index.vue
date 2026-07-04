@@ -566,7 +566,7 @@ onMounted(async () => {
         type="warning"
         show-icon
         :closable="false"
-        title="报损出库计入损耗成本。至少上传1张照片证据（照片URL）。"
+        title="报损出库计入损耗成本。至少上传1张照片证据。"
         style="margin-bottom: 16px"
       />
       <el-form label-width="110px">
