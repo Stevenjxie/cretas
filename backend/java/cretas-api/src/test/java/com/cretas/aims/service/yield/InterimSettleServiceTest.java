@@ -278,7 +278,7 @@ class InterimSettleServiceTest {
         FinishedGoodsBatch fg = fgCap.getValue();
         assertThat(fg.getProducedQuantity()).isEqualByComparingTo("9");
         assertThat(fg.getUnit()).isEqualTo("kg");
-        assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S2");
+        assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S2-PT1"); // 含 productType8 (PT1)
         // 小结2 无新 SFI IN (道4 是成品), postClerkOutput 仍累计 1 次 (来自小结1)
         verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
 
@@ -905,7 +905,7 @@ class InterimSettleServiceTest {
         FinishedGoodsBatch corpse = new FinishedGoodsBatch();
         corpse.setId("fg-corpse-1");
         corpse.setFactoryId(FACTORY);
-        corpse.setBatchNumber("FG-PP-001-S1");
+        corpse.setBatchNumber("FG-PP-001-S1-PT1"); // 含 productType8 (PT1)
         corpse.setProducedQuantity(BigDecimal.ZERO);
         corpse.setShippedQuantity(BigDecimal.ZERO);
         corpse.setReservedQuantity(BigDecimal.ZERO);
@@ -915,7 +915,7 @@ class InterimSettleServiceTest {
         //   若这里用 setStatus(Status.REVERSED) (intern 常量) 则 == 恰好为真, 照不出 bug (= #1202 单测的盲区)。
         //   必须用 new String(...) 强制非 intern, 逼出引用相等缺陷; 修复用 .equals() 值相等即通过。
         corpse.setStatus(new String(FinishedGoodsBatch.Status.REVERSED));
-        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-PP-001-S1"))
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "FG-PP-001-S1-PT1"))
                 .thenReturn(Optional.of(corpse));
 
         // 重新小结: 一条成品道 productWeight 8kg → 必须复活尸体为 8 + AVAILABLE (旧代码 orElseGet 跳过留 0)。
@@ -939,7 +939,155 @@ class InterimSettleServiceTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> fgCreated = (List<Map<String, Object>>) rd.get("fgCreated");
         assertThat(fgCreated).hasSize(1);
-        assertThat(fgCreated.get(0).get("batchNumber")).isEqualTo("FG-PP-001-S1");
+        assertThat(fgCreated.get(0).get("batchNumber")).isEqualTo("FG-PP-001-S1-PT1");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 🔴🔒🔒 多成品行 (一次小结 N 条成品行) — 同产品累加 / 不同产品各自批次 (silent-loss 修复)
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("🔴🔒🔒 多成品行同产品累加: 一次小结 2 条同产品成品行 (10+20) → FG producedQuantity=30 (不丢第2行), summary.finishedQuantity=30")
+    void multipleSameProductFinishedRowsAccumulate() {
+        // 同一小结两条成品行, 同产品 PT1, 各产出 10 / 20 (盒)。
+        //   旧 bug: 第2行撞同 (plan,seq) 批号 → createFinishedGoodsForInterim 原样返回首行批次 (只入10),
+        //   但 finishedQuantity 仍累加 30 → 假报产量 (发货无货)。修复后: 单批次累加为 30。
+        ProcessSheetRow r1 = row(300L, 1, "WIP-FR-1",
+                reqFinished(1, "WIP-FR-1", new BigDecimal("10"), null, null));
+        ProcessSheetRow r2 = row(301L, 2, "WIP-FR-2",
+                reqFinished(2, "WIP-FR-2", new BigDecimal("20"), null, null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 单一 FG 批次 (同产品同小结 → 一个批号), producedQuantity = 10+20 = 30 (累加, 非只入首行10)
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        FinishedGoodsBatch fg = fgCap.getValue();
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("30");
+        assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S1-PT1");
+        // summary.finishedQuantity == 实际 FG 总量 (不再假报; 无幻库存)
+        assertThat(s.get("finishedQuantity")).isEqualTo(new BigDecimal("30"));
+        @SuppressWarnings("unchecked")
+        List<String> fgBatchNos = (List<String>) s.get("finishedGoodsBatchNumbers");
+        assertThat(fgBatchNos).containsExactly("FG-PP-001-S1-PT1"); // 不重复列同批号两次
+        // 撤销明细: 单条, 记聚合全量 30 → 撤销可完整逆转 (不留残)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fgCreated = (List<Map<String, Object>>) rd.get("fgCreated");
+        assertThat(fgCreated).hasSize(1);
+        assertThat(fgCreated.get(0).get("batchNumber")).isEqualTo("FG-PP-001-S1-PT1");
+        assertThat(fgCreated.get(0).get("qty")).isEqualTo("30");
+        // 两行均打戳 (产出侧幂等)
+        assertThat(r1.getInterimSettledAt()).isNotNull();
+        assertThat(r2.getInterimSettledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("🔴🔒🔒 多成品行不同产品: 一次小结 2 条不同产品成品行 → 2 个独立 FG 批次 (各自产品+量), 第2行量不错记到首行产品")
+    void multipleDifferentProductFinishedRowsGetSeparateBatches() {
+        // 行1 产品 PT1 产出 10; 行2 产品 PT2 产出 20 (盒)。必须两个 FG 批次, 各含自己产品与量。
+        //   旧 bug: 两行撞同批号 → 第2行(PT2,20) 被当"已存在"跳过, 20 蒸发, 且若入库会错记到 PT1。
+        ProcessSheetRowRequest req1 = reqFinished(1, "WIP-DP-1", new BigDecimal("10"), null, null);
+        req1.setProductTypeId("PT1");
+        ProcessSheetRowRequest req2 = reqFinished(2, "WIP-DP-2", new BigDecimal("20"), null, null);
+        req2.setProductTypeId("PT2");
+        ProcessSheetRow r1 = row(310L, 1, "WIP-DP-1", req1);
+        ProcessSheetRow r2 = row(311L, 2, "WIP-DP-2", req2);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        // 两个独立 FG 批次 (产品维度分离)
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(2)).save(fgCap.capture());
+        List<FinishedGoodsBatch> saved = fgCap.getAllValues();
+        FinishedGoodsBatch fgPt1 = saved.stream()
+                .filter(b -> "FG-PP-001-S1-PT1".equals(b.getBatchNumber())).findFirst().orElseThrow();
+        FinishedGoodsBatch fgPt2 = saved.stream()
+                .filter(b -> "FG-PP-001-S1-PT2".equals(b.getBatchNumber())).findFirst().orElseThrow();
+        // 产品 + 量 各归各 (第2行 PT2 的20 不错记到 PT1)
+        assertThat(fgPt1.getProductTypeId()).isEqualTo("PT1");
+        assertThat(fgPt1.getProducedQuantity()).isEqualByComparingTo("10");
+        assertThat(fgPt2.getProductTypeId()).isEqualTo("PT2");
+        assertThat(fgPt2.getProducedQuantity()).isEqualByComparingTo("20");
+        // summary.finishedQuantity = 10+20 = 30 (两批次总量)
+        assertThat(s.get("finishedQuantity")).isEqualTo(new BigDecimal("30"));
+        @SuppressWarnings("unchecked")
+        List<String> fgBatchNos = (List<String>) s.get("finishedGoodsBatchNumbers");
+        assertThat(fgBatchNos).containsExactlyInAnyOrder("FG-PP-001-S1-PT1", "FG-PP-001-S1-PT2");
+        // 撤销明细两条 (各批次可各自逆转)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fgCreated = (List<Map<String, Object>>) rd.get("fgCreated");
+        assertThat(fgCreated).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("🔴 多成品行同产品加权成本: 行1(qty10,base100→uc10)+行2(qty20,base400→uc20) → FG.unitCost=(100+400)/30=16.6667")
+    void multipleSameProductRowsWeightedUnitCost() {
+        ProcessSheetRow r1 = row(320L, 1, "WIP-WC-1",
+                reqFinished(1, "WIP-WC-1", new BigDecimal("10"), null, null));
+        ProcessSheetRow r2 = row(321L, 2, "WIP-WC-2",
+                reqFinished(2, "WIP-WC-2", new BigDecimal("20"), null, null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
+        // 行1 base cost 100 → unitCost 100/10=10; 行2 base cost 400 → 400/20=20 (无外部投料)
+        ProductionBatch pb1 = new ProductionBatch();
+        pb1.setId(320L); pb1.setFactoryId(FACTORY); pb1.setTotalCost(new BigDecimal("100.00"));
+        ProductionBatch pb2 = new ProductionBatch();
+        pb2.setId(321L); pb2.setFactoryId(FACTORY); pb2.setTotalCost(new BigDecimal("400.00"));
+        when(batchRepository.findByIdAndFactoryId(320L, FACTORY)).thenReturn(Optional.of(pb1));
+        when(batchRepository.findByIdAndFactoryId(321L, FACTORY)).thenReturn(Optional.of(pb2));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        FinishedGoodsBatch fg = fgCap.getValue();
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("30");
+        // 加权平均 = (10×10 + 20×20)/30 = 500/30 = 16.6667 (scale-4 HALF_UP)
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("16.6667");
+    }
+
+    @Test
+    @DisplayName("🔴 多成品行加权成本诚实null: 一行成本已知一行未知(pb缺失) → 整批 unitCost null (不以已知行伪造均价), 量仍累加")
+    void multipleSameProductRowsHonestNullCost() {
+        ProcessSheetRow r1 = row(330L, 1, "WIP-HN-1",
+                reqFinished(1, "WIP-HN-1", new BigDecimal("10"), null, null));
+        ProcessSheetRow r2 = row(331L, 2, "WIP-HN-2",
+                reqFinished(2, "WIP-HN-2", new BigDecimal("20"), null, null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
+        // 行1 有成本; 行2 的 ProductionBatch 缺失 → computeOutputUnitCost 返 null → 整批诚实 null
+        ProductionBatch pb1 = new ProductionBatch();
+        pb1.setId(330L); pb1.setFactoryId(FACTORY); pb1.setTotalCost(new BigDecimal("100.00"));
+        when(batchRepository.findByIdAndFactoryId(330L, FACTORY)).thenReturn(Optional.of(pb1));
+        when(batchRepository.findByIdAndFactoryId(331L, FACTORY)).thenReturn(Optional.empty());
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("30"); // 量仍累加 (库存不丢)
+        assertThat(fgCap.getValue().getUnitCost()).isNull();                            // 诚实 null: 一行未知 → 整批未知
+    }
+
+    @Test
+    @DisplayName("🔴 多成品行同产品混计量单位 (kg vs 盒) → loud-fail (禁止降级, 不静默相加异构口径)")
+    void multipleSameProductRowsUnitConflictLoudFails() {
+        // 行1 用成品重 (productWeight → kg), 行2 用盒 (outputQuantity) → 同产品 PT1 单位冲突 → 整个小结 loud-fail
+        ProcessSheetRow r1 = row(340L, 1, "WIP-UC-1",
+                reqFinished(1, "WIP-UC-1", new BigDecimal("10"), new BigDecimal("5"), null)); // productWeight → kg
+        ProcessSheetRow r2 = row(341L, 2, "WIP-UC-2",
+                reqFinished(2, "WIP-UC-2", new BigDecimal("20"), null, null));                // 盒
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
+
+        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("计量单位不一致");
+        // loud-fail → @Transactional 回滚 → 不产生任何 FG (无 phantom)
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     // ─────────────────────────────────────────────────────────────

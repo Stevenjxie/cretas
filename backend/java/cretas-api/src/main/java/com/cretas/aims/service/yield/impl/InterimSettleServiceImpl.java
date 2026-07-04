@@ -355,12 +355,18 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
 
         // ── ④ FG: 未结成品道产出 (优先成品重 productWeight) → 成品库 ──
+        //   🔴🔒🔒 2026-07-04 (多成品行静默丢量修复, live 复验 F006): 一次小结含 2+ 条成品行时, 旧代码 FG
+        //   batchNumber 仅按 (plan, seq) 定位 → 第 2+ 行撞同批号, createFinishedGoodsForInterim 命中已存在批次
+        //   原样返回 (只入首行数量), 但 finishedQuantity 无条件累加全部 → summary 假报产量而 FG 实为首行量
+        //   (第 2+ 行数量凭空蒸发, 无报错, 发货无货)。若行间 productType 不同, 第 2 行的量还被错记到首行产品批次上。
+        //   修复: 先按 productTypeId 聚合本次全部未结成品行 —— 同产品多行「累加」(数量求和 + 加权平均成本),
+        //   不同产品「各自独立 FG 批次」(batchNumber 含 productType8, 见 finishedGoodsBatchNumber)。每个产品批次
+        //   一次性以聚合后的全量 producedQuantity 入库 → summary.finishedQuantity 恒等于实际 FG 库存总量。
         List<String> finishedBatchNumbers = new ArrayList<>();
         BigDecimal finishedQuantity = BigDecimal.ZERO;
-        // 撤销明细: 每个成品批次实际入库量 (dedupe by batchNumber — createFinishedGoodsForInterim 对同一
-        //   session batchNumber orElseGet 只首行入库, 故只记首次 = 批次实际 producedQuantity) → reverseInterimCreate 逆转。
         List<Map<String, Object>> fgCreatedDetail = new ArrayList<>();
-        Set<String> fgCreatedSeen = new HashSet<>();
+        // per-productType 聚合 (LinkedHashMap 保录入序 → 稳定批号生成序 + 可预期 summary)。
+        Map<String, FinishedAgg> finishedByProduct = new LinkedHashMap<>();
         for (UnsettledRow ur : unsettledRows) {
             if (!ur.req.isFinished()) {
                 continue;
@@ -372,20 +378,48 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 continue;
             }
             String unit = useWeight ? "kg" : (ur.req.getUnit() != null ? ur.req.getUnit() : "kg");
-            // 🔴 成本传导: FG 单位成本 = (本道 ProductionBatch 成本[原料+调料+人工] + SFI 投料成本) / FG 入库量。
-            //   SFI 投料成本不在 ProductionBatch.totalCost 内 (SFI 边不写 MaterialConsumption), 故此处补进。
-            //   分母用 FG 实际入库量 qty (productWeight/outputQuantity), 与库存计量口径一致 (盒/kg 皆按本量摊)。
-            //   诚实 null: 任一 SFI 投料 unitCost 未知 → fgUnitCost 为 null (成品成本未知, 不伪造 ¥0)。
-            BigDecimal fgUnitCost = computeOutputUnitCost(factoryId, ur, qty, laborRate);
-            FinishedGoodsBatch fg = createFinishedGoodsForInterim(
-                    plan, ur.req.getProductTypeId(), qty, unit, sessionSeq, userId, fgUnitCost);
-            finishedBatchNumbers.add(fg.getBatchNumber());
-            finishedQuantity = finishedQuantity.add(qty);
-            // dedupe: 同 session 多成品道共享 batchNumber, createFinishedGoodsForInterim 只首行实际入库 →
-            //   撤销明细只记首次 (= 批次 producedQuantity), 避免 reverseInterimCreate 重复扣。
-            if (fgCreatedSeen.add(fg.getBatchNumber())) {
-                fgCreatedDetail.add(qtyDetail("batchNumber", fg.getBatchNumber(), qty));
+            // 🔴 成本传导 (逐行): 本行单位成本 = (本道 ProductionBatch 成本[原料+调料+人工] + SFI/FG 投料成本) / 本行入库量。
+            //   诚实 null: 任一投料 unitCost 未知 → 本行成本 null。聚合时任一行 null → 整批 null (不伪造 ¥0)。
+            BigDecimal rowUnitCost = computeOutputUnitCost(factoryId, ur, qty, laborRate);
+            // 分组键 = productTypeId (null/blank 亦成组 → createFinishedGoodsForInterim 统一 loud-fail, 同旧逐行行为)。
+            FinishedAgg agg = finishedByProduct.computeIfAbsent(ur.req.getProductTypeId(),
+                    k -> new FinishedAgg(unit));
+            // 单位一致性守卫 (禁止降级): 同产品同小结须一致计量单位; 混 kg/盒 = 数据异常 → loud-fail,
+            //   绝不静默把不同计量口径的量相加 (会得无意义数字 + 错误库存)。
+            if (!agg.unit.equals(unit)) {
+                throw new BusinessException(409, String.format(
+                        "同一小结内产品 %s 的成品行计量单位不一致 (%s vs %s), 无法合并入库",
+                        ur.req.getProductTypeId(), agg.unit, unit))
+                        .withCode("INTERIM_FG_UNIT_CONFLICT")
+                        .withHint("请统一同一产品各成品行的计量单位 (成品重 kg 或按盒/个) 后重试")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("小结");
             }
+            agg.qty = agg.qty.add(qty);
+            // 加权成本 (诚实 null): 任一行成本未知 → 整批标记未知, 不以已知行伪造均价。
+            if (agg.costKnown) {
+                if (rowUnitCost != null) {
+                    agg.costWeightedSum = agg.costWeightedSum.add(rowUnitCost.multiply(qty));
+                } else {
+                    agg.costKnown = false;
+                }
+            }
+        }
+        // 每个 productType 一个 FG 批次, 一次性入库聚合全量 + 加权成本。
+        for (Map.Entry<String, FinishedAgg> e : finishedByProduct.entrySet()) {
+            String productTypeId = e.getKey();
+            FinishedAgg agg = e.getValue();
+            // 加权平均单位成本 = Σ(行 unitCost × 行 qty) / Σqty (scale-4 HALF_UP, 同 computeOutputUnitCost 口径);
+            //   诚实 null: 任一行成本未知 → null (不伪造)。单行时 = 该行 unitCost (无重舍误差)。
+            BigDecimal fgUnitCost = (agg.costKnown && agg.qty.signum() > 0)
+                    ? agg.costWeightedSum.divide(agg.qty, 4, RoundingMode.HALF_UP)
+                    : null;
+            FinishedGoodsBatch fg = createFinishedGoodsForInterim(
+                    plan, productTypeId, agg.qty, agg.unit, sessionSeq, userId, fgUnitCost);
+            finishedBatchNumbers.add(fg.getBatchNumber());
+            finishedQuantity = finishedQuantity.add(agg.qty);
+            // 撤销明细: 每批次一条, 记聚合全量 → reverseInterimCreate 精确逆转 (含 2+ 行累加量, 撤销不留残)。
+            fgCreatedDetail.add(qtyDetail("batchNumber", fg.getBatchNumber(), agg.qty));
         }
 
         // ── 打戳: 全部未结产出行标记已结 (产出侧幂等) ──
@@ -464,7 +498,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     .withHint("请先补全产品类型")
                     .withHintTarget("小结");
         }
-        String batchNumber = finishedGoodsBatchNumber(plan, sessionSeq);
+        String batchNumber = finishedGoodsBatchNumber(plan, sessionSeq, productTypeId);
         // 幂等防护 (产出行标记已防重, 此处为 batchNumber 撞号二次保险)
         var existing = finishedGoodsBatchRepository
                 .findByFactoryIdAndBatchNumber(plan.getFactoryId(), batchNumber);
@@ -493,7 +527,9 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库(撤销后重做): " + plan.getPlanNumber());
                 return finishedGoodsBatchRepository.save(batch);
             }
-            // 非 REVERSED (同次小结多成品道去重命中 / 真实已产 AVAILABLE/DEPLETED) → 原样返回 (幂等, 不覆盖真实数据)。
+            // 非 REVERSED (真实已产 AVAILABLE/DEPLETED) → 原样返回 (幂等安全网, 不覆盖真实数据)。
+            //   注 (2026-07-04): 同次小结多条成品行的累加已在调用方按 productTypeId 预聚合完成 —— 每个产品的
+            //   批次此处仅创建一次。此分支不再承担"同次多行合并"职责 (旧代码在此合并 = 只入首行 → 丢量, 即本 bug 根因)。
             return batch;
         }
         ProductType productType = productTypeRepository
@@ -555,15 +591,26 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         }
     }
 
-    /** FG-{planNumber}-S{seq}, ≤64 截断 (mirror finishedGoodsBatchNumber :2822-2832). */
-    private String finishedGoodsBatchNumber(ProductionPlan plan, int sessionSeq) {
+    /**
+     * FG-{planNumber}-S{seq}-{productType8}, ≤64 截断 (mirror finishedGoodsBatchNumber :2822-2832).
+     *
+     * <p>🔴🔒🔒 2026-07-04: 批号含 productType 前 8 字符, 使<b>一次小结的不同产品各得独立 FG 批次</b>
+     * (同产品多行则命中同批号 → 由调用方预聚合累加)。旧格式 {@code FG-{plan}-S{seq}} 不含产品维度 →
+     * 一次小结多条成品行 (尤其不同产品) 撞同一批号, 第 2+ 行数量静默丢失 / 错记到首行产品 (本 bug 根因)。
+     *
+     * <p>截断时保留完整 {@code -S{seq}-{pt8}} 尾部 (seq + 产品区分度不丢), 仅截 {@code FG-{planNumber}} 头部。
+     */
+    private String finishedGoodsBatchNumber(ProductionPlan plan, int sessionSeq, String productTypeId) {
         String planNumber = plan.getPlanNumber() != null ? plan.getPlanNumber() : plan.getId();
-        String raw = "FG-" + planNumber + "-S" + sessionSeq;
-        if (raw.length() <= 64) {
-            return raw;
+        String pt = productTypeId == null ? ""
+                : (productTypeId.length() > 8 ? productTypeId.substring(0, 8) : productTypeId);
+        String head = "FG-" + planNumber;
+        String suffix = "-S" + sessionSeq + "-" + pt;
+        if (head.length() + suffix.length() <= 64) {
+            return head + suffix;
         }
-        String suffix = "-S" + sessionSeq;
-        return raw.substring(0, 64 - suffix.length()) + suffix;
+        // 只截头部 (planNumber 过长时), 保留完整 suffix 的产品区分度。suffix 恒短, 64-len 为正。
+        return head.substring(0, 64 - suffix.length()) + suffix;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -774,6 +821,23 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         d.put(keyName, id);
         d.put("qty", nz(qty).toPlainString());
         return d;
+    }
+
+    /**
+     * ④ FG 聚合累加器: 同一 productType 的多条未结成品行 → 数量求和 + 加权成本 (诚实 null) + 单位一致性锚。
+     *
+     * <p>一次小结的不同产品各自一个累加器 (独立 FG 批次); 同产品多行落同一累加器 (合并入一个 FG 批次)。
+     * {@code unit} 由首行确定, 后续行须一致 (混计量单位 loud-fail); {@code costKnown} 任一行成本 null 即 false。
+     */
+    private static final class FinishedAgg {
+        final String unit;                                  // 组内统一计量单位 (首行锚定)
+        BigDecimal qty = BigDecimal.ZERO;                   // 聚合数量 (Σ 行 qty)
+        BigDecimal costWeightedSum = BigDecimal.ZERO;       // Σ(行 unitCost × 行 qty)
+        boolean costKnown = true;                           // 诚实 null: 任一行成本未知即 false
+
+        FinishedAgg(String unit) {
+            this.unit = unit;
+        }
     }
 
     /** 未结行 + 其反序列化 payload 的轻量配对. */

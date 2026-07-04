@@ -162,7 +162,8 @@ class InterimSettleReversalResettleIntegrationTest {
     @Test
     @DisplayName("🔒🔒 撤销→重新小结: FG 尸体真复活为 produced=8 + AVAILABLE + 可售 (fresh fetch), summary 不假报")
     void resettleAfterReversalRevivesFinishedGoodsForReal() {
-        String fgBatchNo = "FG-" + planNumber + "-S1";
+        // 批号含 productType8 (PRODUCT_TYPE_ID="IT-RS-PTYPE" → 前 8 字符 "IT-RS-PT")
+        String fgBatchNo = "FG-" + planNumber + "-S1-" + PRODUCT_TYPE_ID.substring(0, 8);
 
         // ── 阶段 A: 小结 #1 → FG produced=8, AVAILABLE ──
         Map<String, Object> s1 = interimSettleService.interimSettle(FACTORY_ID, planId, operatorId);
