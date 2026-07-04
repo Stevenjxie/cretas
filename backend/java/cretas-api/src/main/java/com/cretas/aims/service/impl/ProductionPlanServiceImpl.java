@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
@@ -2685,34 +2686,76 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         String productTypeId = firstNonBlank(productTypeIdOverride, plan != null ? plan.getProductTypeId() : null);
-        if (isBlank(productTypeId) || bomRecipeRepository == null || bomRecipeItemRepository == null) {
+        BomSettlementEligibility eligibility = resolveBomEligibilityForSettlement(factoryId, productTypeId);
+        if (!eligibility.restricted()) {
             return;
         }
-        Optional<BomRecipe> recipe = bomRecipeRepository
-                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
-        if (recipe.isEmpty()) {
+        if (!eligibility.bomFound()) {
             throw new BusinessException(409, "该产品没有当前 BOM，不能直接核对原料领用")
                     .withCode("PRODUCTION_BOM_REQUIRED")
                     .withHint("请先维护产品 BOM，或由主管确认物料差异后再结单")
                     .withHintTarget(hintTarget);
+        }
+        if (eligibility.materialTypeIds().isEmpty()) {
+            throw new BusinessException(409, "该产品当前 BOM 没有原料明细，不能直接核对原料领用")
+                    .withCode("PRODUCTION_BOM_ITEMS_REQUIRED")
+                    .withHint("请先维护 BOM 原料明细")
+                    .withHintTarget(hintTarget);
+        }
+        if (!eligibility.materialTypeIds().contains(batch.getMaterialTypeId())) {
+            throw new BusinessException(409, "所选原料批次不属于该产品当前 BOM")
+                    .withCode("PRODUCTION_CONSUMPTION_NOT_IN_BOM")
+                    .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
+                    .withHintTarget(hintTarget);
+        }
+    }
+
+    /**
+     * BOM 结单校验结果 (单一 source of truth, 被写路径守卫 {@link #ensureMaterialBatchAllowedForSettlement}
+     * 和只读预过滤端点 {@link #getSettlementBomEligibility} 共用 —— 防止两处判定逻辑各写一份后来漂移不一致)。
+     *
+     * @param restricted      产品是否有 BOM 限制 (false = productTypeId 为空或 BOM 模块未启用, 不受限)
+     * @param bomFound        restricted=true 时, 是否找到该产品当前生效 BOM
+     * @param materialTypeIds BOM 允许的原料 materialTypeId 集合 (restricted=false 时无意义)
+     */
+    private record BomSettlementEligibility(boolean restricted, boolean bomFound, Set<String> materialTypeIds) {
+        private static final BomSettlementEligibility UNRESTRICTED =
+                new BomSettlementEligibility(false, false, Set.of());
+    }
+
+    /**
+     * 解析产品当前 BOM 对结单原料领用的限制 (与写路径守卫判定逻辑 1:1 一致, 详见类上方
+     * {@link #ensureMaterialBatchAllowedForSettlement} 调用处)。
+     */
+    private BomSettlementEligibility resolveBomEligibilityForSettlement(String factoryId, String productTypeId) {
+        if (isBlank(productTypeId) || bomRecipeRepository == null || bomRecipeItemRepository == null) {
+            return BomSettlementEligibility.UNRESTRICTED;
+        }
+        Optional<BomRecipe> recipe = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+        if (recipe.isEmpty()) {
+            return new BomSettlementEligibility(true, false, Set.of());
         }
         Set<String> bomMaterialTypeIds = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.get().getId())
                 .stream()
                 .map(BomRecipeItem::getMaterialTypeId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        if (bomMaterialTypeIds.isEmpty()) {
-            throw new BusinessException(409, "该产品当前 BOM 没有原料明细，不能直接核对原料领用")
-                    .withCode("PRODUCTION_BOM_ITEMS_REQUIRED")
-                    .withHint("请先维护 BOM 原料明细")
-                    .withHintTarget(hintTarget);
-        }
-        if (!bomMaterialTypeIds.contains(batch.getMaterialTypeId())) {
-            throw new BusinessException(409, "所选原料批次不属于该产品当前 BOM")
-                    .withCode("PRODUCTION_CONSUMPTION_NOT_IN_BOM")
-                    .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
-                    .withHintTarget(hintTarget);
-        }
+        return new BomSettlementEligibility(true, true, bomMaterialTypeIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductionSettlementBomEligibilityResponse getSettlementBomEligibility(String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        BomSettlementEligibility eligibility =
+                resolveBomEligibilityForSettlement(factoryId, plan.getProductTypeId());
+        return ProductionSettlementBomEligibilityResponse.builder()
+                .restricted(eligibility.restricted())
+                .bomFound(eligibility.bomFound())
+                .materialTypeIds(new ArrayList<>(eligibility.materialTypeIds()))
+                .build();
     }
 
     private void ensureQuantityWithinAvailable(String label, BigDecimal requested, BigDecimal available, String hintTarget) {

@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
@@ -631,6 +632,26 @@ public class ProductionPlanController {
 
         ProductionSettlementPrefillResponse response = productionPlanService.getSettlementPrefill(factoryId, planId);
         return ApiResponse.success("核对结单预填", response);
+    }
+
+    /**
+     * 防呆 Rule 1: 核对结单「原料领用」下拉 BOM 预过滤。
+     * 只读, 与结单提交写路径守卫共用同一份 BOM 判定逻辑 —— 前端拿到 materialTypeIds 后
+     * 把原料批次下拉预先收窄到 BOM 允许的范围, 用户选不到 BOM 外的批次, 而不是提交后才 409。
+     */
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/{planId}/settlement-bom-eligibility")
+    @Operation(summary = "核对结单原料领用 BOM 预过滤", description = "六扇门: 与结单提交守卫共用判定逻辑, 前端据此预过滤原料批次下拉 (防呆 Rule 1)")
+    public ApiResponse<ProductionSettlementBomEligibilityResponse> getSettlementBomEligibility(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId) {
+
+        ProductionSettlementBomEligibilityResponse response =
+                productionPlanService.getSettlementBomEligibility(factoryId, planId);
+        return ApiResponse.success("核对结单原料领用 BOM 预过滤", response);
     }
 
     /**
