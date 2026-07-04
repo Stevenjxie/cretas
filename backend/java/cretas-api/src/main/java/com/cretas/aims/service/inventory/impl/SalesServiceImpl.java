@@ -1999,7 +1999,18 @@ public class SalesServiceImpl implements SalesService {
         }
         log.info("取消销售订单: orderId={}, orderNumber={}, reason={}",
                 orderId, order.getOrderNumber(), reason);
-        return salesOrderRepository.save(order);
+        SalesOrder saved = salesOrderRepository.save(order);
+
+        // Bug 3 修复 (2026-07-04): 取消订单 → 作废已生成的 SALES_RECEIPT 凭证 (幽灵营收/应收根治)。
+        // AFTER_COMMIT 异步 listener 处理 (SalesOrderVoucherListener.onSalesOrderCancelled), 只在
+        // 取消事务真正提交后才作废凭证; 避免 voidVoucher 内层事务污染取消主事务 (doomed-tx)。
+        try {
+            applicationEventPublisher.publishEvent(
+                    new com.cretas.aims.event.SalesOrderCancelledEvent(this, factoryId, saved.getId(), reason));
+        } catch (Exception e) {
+            log.error("发布SalesOrderCancelledEvent失败(不影响取消): SO={}", saved.getId(), e);
+        }
+        return saved;
     }
 
     /**
