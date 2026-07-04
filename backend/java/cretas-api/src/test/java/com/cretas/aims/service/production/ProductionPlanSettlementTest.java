@@ -1,7 +1,9 @@
 package com.cretas.aims.service.production;
 
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
@@ -111,6 +113,13 @@ class ProductionPlanSettlementTest {
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private OrderCostBreakdownService orderCostBreakdownService;
+    // R2 (2026-07-04): 结单族 process-row SFI/FG 投料扣减依赖 (其它测试不 set → null → deduct no-op, 零回归)
+    @Mock private com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
+    @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+
+    private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     private ProductionPlanServiceImpl service;
 
@@ -242,6 +251,126 @@ class ProductionPlanSettlementTest {
         verify(productionSettlementRepository, never()).save(any());
         verify(materialBatchRepository, never()).save(any());
         verify(materialConsumptionRepository, never()).stampInterimSettledForPlan(any(), any(), any());
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // R2 (2026-07-04): 结单族 process-row SFI/FG 投料严格扣减 (防 phantom 库存腐蚀)
+    // ─────────────────────────────────────────────────────────────
+
+    /** R2 wiring: 注入 process-row / SFI / FG 扣减依赖 + 结单保存链 stubs (plan 已 stub findByIdAndFactoryId)。 */
+    private void wireR2(ProductionPlan plan, ProcessSheetRow... rows) {
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "finishedGoodsFeedService", finishedGoodsFeedService);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-r2")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(rows));
+        // isCrossUnitPlan (validateSettlementRequest) → 空批次列表 → false (跳过超产裸比)
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(new java.util.ArrayList<>());
+    }
+
+    /** 结单请求: 无原料/半成品消耗行 (聚焦 process-row 投料扣减), finished 90 (<计划100, 无需超产原因)。 */
+    private ProductionSettlementRequest r2Request(List<ProductionSettlementRequest.ConsumptionLine> semi) {
+        return ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-r2")
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .rawMaterialConsumptions(new java.util.ArrayList<>())
+                .semiFinishedConsumptions(semi)
+                .materialVarianceReason("无差异")        // 无原料消耗行时过 validateSettlementRequest
+                .laborDeferredReason("工时稍后补录")       // 无工时段时过 validateSettlementRequest
+                .laborSegments(new java.util.ArrayList<>())
+                .build();
+    }
+
+    /** 一行 process-row: 单条 SFI 或 FG 投料 upstreamSource。 */
+    private ProcessSheetRow feedRow(String srcBatchNo, String feedKg, boolean semi, boolean fg) {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId("r-" + srcBatchNo);
+        req.setProcessCode("qidiao");
+        req.setProcessOrder(9);
+        req.setProductTypeId("PT-1");
+        req.setFinished(fg);
+        req.setOutputQuantity(new BigDecimal("10"));
+        ProcessSheetRowRequest.UpstreamRef ref = new ProcessSheetRowRequest.UpstreamRef();
+        ref.setSourceBatchNumber(srcBatchNo);
+        ref.setFeedQuantityKg(new BigDecimal(feedKg));
+        ref.setSemiFinished(semi);
+        ref.setFinishedGoods(fg);
+        req.setUpstreamSources(List.of(ref));
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(FACTORY_ID);
+        row.setPlanId(PLAN_ID);
+        row.setBatchId(555L);
+        row.setBatchNumber("CLK-B-" + srcBatchNo);
+        row.setRowStatus("SAVED");
+        try {
+            row.setRowPayload(r2Mapper.writeValueAsString(req));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return row;
+    }
+
+    @Test
+    @DisplayName("R2 结单族: process-row 的 SFI/FG 投料被严格扣减 (防 phantom); prefill 留空的投料不再永不扣")
+    void settleProduction_deductsProcessSheetSfiAndFgFeeds() {
+        wireR2(plan(),
+                feedRow("SFI-STOCK", "30", true, false),
+                feedRow("FG-STOCK", "20", false, true));
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), eq("SFI-STOCK"), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(2));
+
+        // 无手工 SFI 领用 → 自动从 process-row 扣
+        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
+
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+    }
+
+    @Test
+    @DisplayName("R2 防双扣: 结单请求带手工 SFI 领用 → 跳过 process-row SFI 自动扣 (FG 仍扣)")
+    void settleProduction_manualSemiSkipsAutoSfiButStillFg() {
+        wireR2(plan(),
+                feedRow("SFI-STOCK", "30", true, false),
+                feedRow("FG-STOCK", "20", false, true));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(2));
+        // 手工 SFI 领用行 (postSemiFinishedConsumption 走另一路径, 此处仅测跳过自动扣)
+        SemiFinishedInventory wip = wip();
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        List<ProductionSettlementRequest.ConsumptionLine> manual = List.of(
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L).quantity(new BigDecimal("5")).unit("kg").build());
+
+        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
+
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+    }
+
+    @Test
+    @DisplayName("R2 守卫: SAFETY_STOCK 计划走结单不自动扣 process-row 投料 (扣减由小结完成, 防双扣)")
+    void settleProduction_safetyStockDoesNotAutoDeductFeeds() {
+        ProductionPlan plan = plan();
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+        wireR2(plan, feedRow("SFI-STOCK", "30", true, false));
+
+        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
+
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
+        verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any());
     }
 
     @Test

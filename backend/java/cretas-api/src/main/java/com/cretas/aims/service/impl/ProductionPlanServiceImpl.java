@@ -147,6 +147,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
 
+    /** R2 (2026-07-04): 结单族 process-row 的 SFI/FG 投料严格扣减 (防 phantom). required=false 兼容单测. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+
     /** SP12 T3: 生产撤回审批流引擎. required=false 兼容无 WorkflowEngine 环境 (e.g. 单测). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngine;
@@ -1595,6 +1599,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setSettlementId(settlement.getId());
         }
         postConsumptionToInventory(factoryId, consumptionLines);
+        // 🔴🔒 R2 (2026-07-04): 结单族 process-row 的 SFI/FG 投料<b>严格扣减</b> (防 phantom 库存腐蚀)。
+        //   逐道录入把常驻半成品(SFI)/成品(FG)作投料记在 process_sheet_rows.upstreamSources, 但结单预填
+        //   把 semiFinishedConsumptions 留空 (让文员"手工再加"), 且 FG 投料结单请求无对应字段 → 这些投料
+        //   此前<b>从不扣减</b> = SFI/FG 可用量不降 (幻库存: 消耗了却还在库, 可被重复领用/发货)。此处按 process-row
+        //   直接严格扣减 (缺失/不足即抛, 整事务回滚, 禁止降级)。成本侧由 R4 computeByPlan (含 SFI/FG 投料桶)
+        //   在仓库确认实收创建 FG 时补入, 此处仅补扣减。仅结单族 (SAFETY_STOCK 走小结扣减, 内部守卫)。
+        deductProcessSheetStockFeeds(factoryId, plan, request);
         productionSettlementConsumptionRepository.saveAll(consumptionLines);
         productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), request.getLaborSegments()));
 
@@ -2769,6 +2780,85 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 ? SemiFinishedInventory.Status.DEPLETED
                 : SemiFinishedInventory.Status.AVAILABLE);
         semiFinishedInventoryRepository.save(inventory);
+    }
+
+    /**
+     * 🔴🔒 R2 (2026-07-04): 结单族 —— 按 process-row 严格扣减常驻 SFI/FG 投料 (防 phantom 库存腐蚀)。
+     *
+     * <p>逐道录入把常驻半成品(SFI, {@code semiFinished=true})/成品(FG, {@code finishedGoods=true})作投料记在
+     * {@code process_sheet_rows.upstreamSources}。这些投料边<b>不写</b> MaterialConsumption (投的是外部常驻库存,
+     * 非本计划在制 WIP), 且结单预填把 {@code semiFinishedConsumptions} 留空 + FG 投料结单请求无字段 → 此前
+     * 永不扣减 = 幻库存 (消耗了却不减可用量)。此处严格扣减 (镜像小结 §②/(C) 的 consumeClerkSemiStrict /
+     * consumeForFeedStrict, 缺失/不足即抛 → 整 {@code settleProduction @Transactional} 回滚, 禁止降级)。
+     *
+     * <ul>
+     *   <li><b>仅结单族</b>: SAFETY_STOCK 走小结 (interimSettle) 扣减, 此处守卫跳过避免双扣。</li>
+     *   <li><b>防双扣</b>: 若结单请求带手工 {@code semiFinishedConsumptions} (文员手工管理 SFI 领用) → 尊重手工,
+     *       跳过 SFI 自动扣; FG 投料无手工字段, 照常自动扣。</li>
+     *   <li><b>幂等</b>: {@code settleProduction} 已阻断重复结单 (PRODUCTION_ALREADY_SETTLED + idempotencyKey),
+     *       故本扣减每个计划恰执行一次。</li>
+     * </ul>
+     */
+    private void deductProcessSheetStockFeeds(String factoryId, ProductionPlan plan,
+                                              ProductionSettlementRequest request) {
+        if (plan == null || plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
+            return;   // SAFETY_STOCK 由小结扣减
+        }
+        if (processSheetRowRepository == null || isBlank(plan.getId())) {
+            return;
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
+        if (isEmpty(rows)) {
+            return;
+        }
+        boolean manualSemi = request != null && !isEmpty(request.getSemiFinishedConsumptions());
+        BigDecimal sfiOut = BigDecimal.ZERO;
+        BigDecimal fgOut = BigDecimal.ZERO;
+        int sfiCount = 0;
+        int fgCount = 0;
+        List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
+        for (ProcessSheetRow row : rows) {
+            if (!isUsableProcessSheetRow(row)) {
+                continue;
+            }
+            ProcessSheetRowRequest req = parseProcessSheetRowPayload(row, ignore);
+            if (req == null || isEmpty(req.getUpstreamSources())) {
+                continue;
+            }
+            for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                BigDecimal feed = zeroIfNull(ref.getFeedQuantityKg());
+                if (feed.compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                String srcBatchNo = ref.getSourceBatchNumber();
+                if (ref.isFinishedGoods()) {
+                    if (finishedGoodsFeedService == null) {
+                        // 禁止降级: 有 FG 投料却无扣减服务 → loud-fail (绝不静默留 phantom)
+                        throw new BusinessException(500, "成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
+                                + srcBatchNo + ")").withHintTarget("核对结单");
+                    }
+                    BigDecimal drawn = finishedGoodsFeedService.consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
+                    fgOut = fgOut.add(zeroIfNull(drawn));
+                    fgCount++;
+                } else if (ref.isSemiFinished()) {
+                    if (manualSemi) {
+                        continue;   // 文员手工管理 SFI 领用, 不自动扣 (防双扣)
+                    }
+                    if (wipInventoryService == null) {
+                        throw new BusinessException(500, "半成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
+                                + srcBatchNo + ")").withHintTarget("核对结单");
+                    }
+                    BigDecimal drawn = wipInventoryService.consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
+                    sfiOut = sfiOut.add(zeroIfNull(drawn));
+                    sfiCount++;
+                }
+            }
+        }
+        if (sfiCount > 0 || fgCount > 0) {
+            log.info("结单族 SFI/FG 投料扣减 (R2): factoryId={}, planId={}, SFI {} 笔 ({}), FG {} 笔 ({}){}",
+                    factoryId, plan.getId(), sfiCount, sfiOut, fgCount, fgOut,
+                    manualSemi ? " [SFI 手工管理, 已跳过自动扣]" : "");
+        }
     }
 
     private List<ProductionSettlementLabor> toLaborLines(String factoryId, String planId, String settlementId,

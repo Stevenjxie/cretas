@@ -320,6 +320,19 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             BigDecimal withinFeed = withinSessionFeedByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
             BigDecimal net = outQty.subtract(withinFeed); // 净结余 = 产出 − 同小结内被下游投入
             if (net.signum() <= 0) {
+                // 🔴 R3 (2026-07-04): 全消耗 (net<=0) 的中间道若吃了外部 SFI/FG 投料, 其投料成本随该道
+                //   "瞬态在制不入库" 而对下游<b>静默漏计</b> —— 下游经在制 WIP MaterialConsumption 边 (unitPrice=
+                //   本道 ProductionBatch.totalCost/outQty, 不含 SFI/FG 投料成本, 投料边不写 MaterialConsumption)
+                //   继承本道成本 → 下游 FG 成本低估 (原 net>0 部分消耗有 #1 告警, 全消耗分支此前在 continue 前
+                //   零日志 = 静默腐蚀)。此处补齐 loud 告警使损失可见 (与 #1 同级 option-b)。真正把成本流进下游需
+                //   回改保存期已冻结的 MaterialConsumption 边单价 (invasive, 牵动整条下游成本图) → 留文档化限制,
+                //   精确核算请拆分录入或经常驻 SFI 中转 (走 semiFinished 投料的 getSemiUnitCost 移动均价传导)。
+                if (withinFeed.signum() > 0 && hasSemiFinishedFeed(ur.req)) {
+                    log.warn("[interim-settle] 全消耗中间道 SFI/FG 投料成本漏计 (#1 R3): batchNo={} 吃外部 SFI/FG 投料"
+                                    + "且被同小结下游全消耗 (net={}<=0, 瞬态不入库), 其投料成本经在制 WIP 单价继承 → 对下游 FG"
+                                    + "成本低估 (投料边不写 MaterialConsumption 无法回改). 精确核算请拆分录入或经 SFI 中转",
+                            batchNo, net.stripTrailingZeros().toPlainString());
+                }
                 continue; // 全部被同小结下游消耗 → 瞬态在制, 不入库 (防双重入库)
             }
             // Fix2 (#1, option b — 文档化窄拓扑): 物化道同时 (a) 吃常驻 SFI 投料 且 (b) 被同小结内下游在制道

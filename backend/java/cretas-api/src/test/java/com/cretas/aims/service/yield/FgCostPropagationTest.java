@@ -160,6 +160,11 @@ class FgCostPropagationTest {
                 .thenAnswer(inv -> inv.getArgument(2));
         when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
+        // 盒⇄kg 折算: 本测全部 kg 源 → 原值 (与扣减折算同源; computeOutputUnitCost 用其算投料成本)。
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
         // 无未结原料消耗 (本测聚焦 FG 成本, 不测原料扣减侧)
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>());
@@ -444,6 +449,84 @@ class FgCostPropagationTest {
         s.setEndTime(end);
         s.setWorkerCount(workers);
         return s;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // R3 (2026-07-04): 全消耗 (net<=0) 的中间道吃外部 SFI 投料 → loud 告警 (投料成本对下游漏计不再静默)
+    // ─────────────────────────────────────────────────────────────
+
+    /** 非成品中间道 (finished=false, batchId 物化), 吃 SFI 投料。 */
+    private ProcessSheetRow intermediateSfiRow(Long id, String batchNumber, String outputQty,
+                                               String sfiBatchNo, String feedKg) {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId("c" + id);
+        req.setProcessCode("p" + id);
+        req.setProcessOrder(1);
+        req.setProductTypeId(PRODUCT_TYPE);
+        req.setBatchNumber(batchNumber);
+        req.setFinished(false);
+        req.setOutputQuantity(new BigDecimal(outputQty));
+        req.setUnit("kg");
+        req.setUpstreamSources(upstreamSemi(sfiBatchNo, feedKg));   // semiFinished 投料
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setId(id);
+        row.setFactoryId(FACTORY);
+        row.setPlanId(PLAN_ID);
+        row.setProcessCode(req.getProcessCode());
+        row.setProcessOrder(2);
+        row.setClientRowId("c" + id);
+        row.setBatchId(id);
+        row.setBatchNumber(batchNumber);
+        row.setRowStatus("SAVED");
+        row.setRowPayload(toJson(req));
+        return row;
+    }
+
+    /** 下游成品道: 经<b>在制 WIP</b> (非 semiFinished) 全消耗上游中间道 batchNumber。 */
+    private ProcessSheetRow finishedRowConsumingWip(Long id, String batchNumber, String outputQty,
+                                                    String upstreamBatchNo, String feedKg) {
+        UpstreamRef wipRef = new UpstreamRef();
+        wipRef.setSourceBatchNumber(upstreamBatchNo);
+        wipRef.setFeedQuantityKg(new BigDecimal(feedKg));   // semiFinished=false (在制 WIP)
+        ProcessSheetRow row = materializedFinishedRow(id, batchNumber,
+                new BigDecimal(outputQty), new BigDecimal(outputQty), new ArrayList<>(List.of(wipRef)));
+        // materializedFinishedRow processOrder=1; 让下游序 > 中间道 (语义清晰, 不影响本测)
+        return row;
+    }
+
+    @Test
+    @DisplayName("R3 loud 告警: 中间道吃 SFI 投料(40)且被同小结下游在制 WIP 全消耗(net=0) → 不入 SFI + WARN 记录漏计 (不再静默)")
+    void fullyConsumedIntermediateWithSfiFeedLogsLoudWarn() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(InterimSettleServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            ProcessSheetRow intermediate = intermediateSfiRow(310L, "INT-310", "40", "SFI-X", "40");
+            ProcessSheetRow downstream = finishedRowConsumingWip(311L, "FGD-311", "10", "INT-310", "40");
+            when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                    .thenReturn(List.of(intermediate, downstream));
+            stubBatch(311L, new BigDecimal("200.00"));   // 下游 base
+            when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-X")).thenReturn(new BigDecimal("5"));
+
+            service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+            // 中间道 net=0 → 不入 SFI (postClerkOutput 从不为该中间道锚调用)
+            verify(wipInventoryService, org.mockito.Mockito.never())
+                    .postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
+            // 但 SFI-X 投料仍严格出库 (库存扣减照常, 只是成本对下游漏计)
+            verify(wipInventoryService).consumeClerkSemiStrict(FACTORY, "SFI-X", new BigDecimal("40"));
+            // 🔴 R3: 漏计不再静默 — WARN 记录 (含 R3 标记 + 中间道 batchNo)
+            boolean warned = appender.list.stream()
+                    .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                    .anyMatch(e -> e.getFormattedMessage().contains("R3")
+                            && e.getFormattedMessage().contains("INT-310"));
+            assertThat(warned).as("net<=0 中间道 SFI 投料漏计应记 loud WARN").isTrue();
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     private ProcessSheetRowRequest deserialize(ProcessSheetRow row) {

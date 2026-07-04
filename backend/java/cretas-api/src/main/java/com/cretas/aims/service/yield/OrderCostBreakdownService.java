@@ -51,6 +51,14 @@ public class OrderCostBreakdownService {
     private final MaterialBatchRepository materialBatchRepository;
     private final com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
     private final YieldReportService yieldReportService;
+    // ── R4 (2026-07-04): SFI/FG 投料成本补计 (投料边不写 MaterialConsumption → traceCost 失明) ──
+    //   与小结 InterimSettleServiceImpl.computeOutputUnitCost 同口径同源服务。@Autowired(required=false)
+    //   + null-guard: 既有纯 Mockito 单测 (@InjectMocks 不提供这些 mock) 下为 null → SFI 补计整体跳过
+    //   (那些测试本就无 SFI/FG 投料, 零回归)。
+    private final com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
+    private final com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    private final com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final int MAX_DEPTH = 10;
@@ -120,6 +128,13 @@ public class OrderCostBreakdownService {
         LinkedHashMap<String, OrderCostBreakdownDTO.AuxiliaryAllocation> auxAllocAcc = new LinkedHashMap<>();
         // ★ 严格审计 2026-06-25: 上游 WIP 链传播来的副产回收 (本批自身副产已由 byproductAcc 计入)
         BigDecimal upstreamByproductCredit = BigDecimal.ZERO;
+        // ── R4 (2026-07-04): 外部库存投料 (SFI/FG) 成本补计 ──
+        //   semiFeedCost = Σ(feedInSourceUnit × 输入 SFI/FG.unitCost) 跨本次全部批次 process-row 投料边。
+        //   anySemiFeed = 存在任一 SFI/FG 投料边 (决定 DTO.semiFeedCost 是否为 null=N/A)。
+        //   semiFeedUnknown = 任一投料的 unitCost/折算未知 → 诚实 null (整批成本未知, 见 costComplete)。
+        BigDecimal semiFeedCost = BigDecimal.ZERO;
+        boolean anySemiFeed = false;
+        boolean semiFeedUnknown = false;
 
         for (ProductionBatch b : batches) {
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
@@ -206,6 +221,13 @@ public class OrderCostBreakdownService {
                 seasoning = seasoning.add(up[1]);
                 upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
             }
+
+            // ── R4: 本批 process-row 的 SFI/FG 投料成本 (MaterialConsumption 之外的边) ──
+            //   返回 [knownCost, anyFlag(0/1), unknownFlag(0/1)]。null-guard: 新注入依赖缺失 → 全 0 (跳过)。
+            BigDecimal[] feed = accumulateStockFeedCost(factoryId, b);
+            semiFeedCost = semiFeedCost.add(feed[0]);
+            anySemiFeed = anySemiFeed || feed[1].signum() > 0;
+            semiFeedUnknown = semiFeedUnknown || feed[2].signum() > 0;
         }
 
         // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
@@ -214,7 +236,10 @@ public class OrderCostBreakdownService {
         if (packaging.signum() == 0 && !packagingAcc.isEmpty()) {
             packaging = packagingAcc.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         }
-        BigDecimal total = labor.add(seasoning).add(packaging).add(raw);
+        // R4: total 含 SFI/FG 投料成本 (已知部分)。诚实 null: 有 SFI/FG 投料但任一成本未知 →
+        //   costComplete=false, 下方派生成本字段 (total/perBox/net.../semiFeedCost) 全置 null (不伪造 ¥0)。
+        boolean costComplete = !semiFeedUnknown;
+        BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
         List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
@@ -256,6 +281,8 @@ public class OrderCostBreakdownService {
                 .laborCost(labor)
                 .seasoningCost(seasoning)
                 .packagingCost(packaging)
+                .semiFeedCost(anySemiFeed ? semiFeedCost : null)   // null = 无 SFI/FG 投料 (N/A)
+                .costComplete(costComplete)
                 .totalCost(total)
                 .perBoxCost(perBox)
                 .byproductCredit(byproductCredit)
@@ -270,10 +297,103 @@ public class OrderCostBreakdownService {
                 .auxiliaryAllocations(auxiliaryAllocations)
                 .sources(sources)
                 .build();
+        // R4 诚实 null: 有 SFI/FG 投料但成本未知 → 派生成本字段全 null (不伪造 ¥0 稀释),
+        //   与小结 computeOutputUnitCost null 传播对齐。已知的料/工/调/包分桶仍保留展示。
+        if (!costComplete) {
+            nullIncompleteCosts(dto);
+        }
         if (maskPrice) {
             maskCosts(dto);
         }
         return dto;
+    }
+
+    /**
+     * R4 (2026-07-04): 读某物化批次 process-row 的 SFI/FG 投料边, 返回其成本贡献。
+     * 返回 {@code [knownCost, anyFlag(0/1), unknownFlag(0/1)]}:
+     * <ul>
+     *   <li>knownCost = Σ(feedInSourceUnit × 输入 unitCost) — 仅成本已知的投料累加。</li>
+     *   <li>anyFlag = 存在任一 SFI/FG 投料边 (feed&gt;0) → 1。</li>
+     *   <li>unknownFlag = 任一投料的折算/unitCost 未知 → 1 (诚实 null 触发)。</li>
+     * </ul>
+     * 与小结 {@code computeOutputUnitCost} 同口径同源服务 (resolveFeedQtyInSourceUnit + getSemiUnitCost/
+     * getFeedUnitCost)。null-guard: 新注入依赖任一缺失 (纯 Mockito 单测) → 全 0 (跳过, 零回归)。
+     *
+     * <p>不与 {@code traceCost} 双计: SFI/FG 投料边<b>不写</b> MaterialConsumption (投常驻外部库存, 非本计划
+     * 在制 WIP), traceCost/aggregateUpstreamLaborSeasoning 只沿 MaterialConsumption→PRODUCTION_BATCH 链走,
+     * 永远看不到这些边。扁平查表 (无递归), 无环风险。
+     */
+    private BigDecimal[] accumulateStockFeedCost(String factoryId, ProductionBatch b) {
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        if (processSheetRowRepository == null || wipInventoryService == null
+                || finishedGoodsFeedService == null || objectMapper == null
+                || b == null || b.getId() == null) {
+            return zero;
+        }
+        BigDecimal known = BigDecimal.ZERO;
+        boolean any = false;
+        boolean unknown = false;
+        for (com.cretas.aims.entity.processentry.ProcessSheetRow row :
+                processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, b.getId())) {
+            com.cretas.aims.dto.processentry.ProcessSheetRowRequest req = parseRowPayload(row.getRowPayload());
+            if (req == null || req.getUpstreamSources() == null) {
+                continue;
+            }
+            for (com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                boolean semi = ref.isSemiFinished();
+                boolean fg = ref.isFinishedGoods();
+                if (!semi && !fg) {
+                    continue;   // 在制 WIP 投料成本已在 traceCost (MaterialConsumption 边) 内
+                }
+                BigDecimal feed = nz(ref.getFeedQuantityKg());
+                if (feed.signum() <= 0) {
+                    continue;
+                }
+                any = true;
+                String srcBatchNo = ref.getSourceBatchNumber();
+                // 盒⇄kg 折算 (计数单位来源缺每盒克重 → null → 诚实 unknown); 与扣减/小结成本同源。
+                BigDecimal feedInSourceUnit = fg
+                        ? finishedGoodsFeedService.resolveFeedQtyInSourceUnit(factoryId, srcBatchNo, feed)
+                        : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, srcBatchNo, feed);
+                if (feedInSourceUnit == null) {
+                    unknown = true;
+                    continue;
+                }
+                BigDecimal inputUnitCost = fg
+                        ? finishedGoodsFeedService.getFeedUnitCost(factoryId, srcBatchNo)
+                        : wipInventoryService.getSemiUnitCost(factoryId, srcBatchNo);
+                if (inputUnitCost == null) {
+                    unknown = true;   // 输入 SFI/FG 无成本 → 本批产出成本未知
+                    continue;
+                }
+                known = known.add(feedInSourceUnit.multiply(inputUnitCost));
+            }
+        }
+        return new BigDecimal[]{known, any ? BigDecimal.ONE : BigDecimal.ZERO,
+                unknown ? BigDecimal.ONE : BigDecimal.ZERO};
+    }
+
+    private com.cretas.aims.dto.processentry.ProcessSheetRowRequest parseRowPayload(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payload,
+                    com.cretas.aims.dto.processentry.ProcessSheetRowRequest.class);
+        } catch (Exception e) {
+            log.warn("[M67CostBreakdown] 无法解析 process_sheet_row payload (SFI/FG 投料成本跳过): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** R4 诚实 null: 成本不完整 (未计价 SFI/FG 投料) → 派生成本字段全置 null (料/工/调/包已知分桶保留)。 */
+    private void nullIncompleteCosts(OrderCostBreakdownDTO dto) {
+        dto.setSemiFeedCost(null);
+        dto.setTotalCost(null);
+        dto.setPerBoxCost(null);
+        dto.setNetTotalCost(null);
+        dto.setNetPerBoxCost(null);
+        dto.setSellablePerBoxCost(null);
     }
 
     /**
@@ -578,6 +698,7 @@ public class OrderCostBreakdownService {
         dto.setLaborCost(null);
         dto.setSeasoningCost(null);
         dto.setPackagingCost(null);
+        dto.setSemiFeedCost(null);
         dto.setTotalCost(null);
         dto.setPerBoxCost(null);
         dto.setByproductCredit(null);
