@@ -1256,6 +1256,17 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         log.info("确认入库: receiveId={}, receiveNumber={}, batchesCreated={}", receiveId, record.getReceiveNumber(), record.getItems().size());
 
+        // Bug 4 修复 (2026-07-04): PURCHASE_PAYMENT 凭证生成时点从"入库单 DRAFT 创建"迁到此处
+        // "确认入库"。每张入库单只发一次 (对比逐物料行的 MaterialReceivedEvent), 供 PurchaseOrderVoucherListener
+        // 生成凭证。AFTER_COMMIT 触发 → 未确认/放弃的草稿入库不再生成幽灵凭证。
+        try {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.PurchaseReceiveConfirmedEvent(
+                    this, factoryId, record.getId(), record.getReceiveNumber(),
+                    record.getPurchaseOrderId(), record.getTotalAmount()));
+        } catch (Exception e) {
+            log.warn("Publish PurchaseReceiveConfirmedEvent failed for {}: {}", record.getId(), e.getMessage());
+        }
+
         // 自动创建应付账款（采购入库 → AP_INVOICE）
         // 🔒 doomed-tx 修复 (2026-07-02): 必须用 recordPayableIfAbsent (幂等、不抛)。
         // 旧代码用 recordPayable 并 try/catch(BusinessException) 吞"重复挂账"异常 —— 但 recordPayable

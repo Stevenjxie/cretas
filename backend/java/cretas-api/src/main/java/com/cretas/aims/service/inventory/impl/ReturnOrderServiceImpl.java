@@ -408,7 +408,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
         log.info("财务驳回退货单: returnOrderId={}, returnNumber={}, financeUserId={}",
                 returnOrderId, order.getReturnNumber(), financeUserId);
-        return returnOrderRepository.save(order);
+        ReturnOrder saved = returnOrderRepository.save(order);
+        publishReturnOrderRejected(factoryId, saved.getId());
+        return saved;
     }
 
     @Override
@@ -421,7 +423,22 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         }
         order.setStatus(ReturnOrderStatus.REJECTED);
         log.info("驳回退货单: returnOrderId={}, returnNumber={}", returnOrderId, order.getReturnNumber());
-        return returnOrderRepository.save(order);
+        ReturnOrder saved = returnOrderRepository.save(order);
+        publishReturnOrderRejected(factoryId, saved.getId());
+        return saved;
+    }
+
+    /**
+     * Bug 9 修复 (2026-07-04): 发布退货单驳回事件 → AFTER_COMMIT listener 作废对应 RETURN 凭证。
+     * fail-soft: 发布失败不影响驳回主流程。
+     */
+    private void publishReturnOrderRejected(String factoryId, String returnOrderId) {
+        try {
+            applicationEventPublisher.publishEvent(
+                    new com.cretas.aims.event.ReturnOrderRejectedEvent(this, factoryId, returnOrderId));
+        } catch (Exception e) {
+            log.error("发布ReturnOrderRejectedEvent失败(不影响驳回): RO={}", returnOrderId, e);
+        }
     }
 
     @Override

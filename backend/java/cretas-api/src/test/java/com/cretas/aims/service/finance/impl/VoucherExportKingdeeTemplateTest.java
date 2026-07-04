@@ -162,6 +162,35 @@ class VoucherExportKingdeeTemplateTest {
     }
 
     @Test
+    @DisplayName("🔒🔒 outflow gate: 金蝶 import template carries POSTED only — DRAFT + VOID excluded")
+    void exportKingdeeImportTemplate_postedOnly_excludesDraftAndVoid() throws Exception {
+        when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(FACTORY_ID, VoucherTargetSystem.KINGDEE_YXSKY))
+                .thenReturn(Optional.empty());
+        Voucher posted = voucherWithStatus("V-POSTED", "1001", LocalDate.of(2026, 5, 10), VoucherStatus.POSTED);
+        Voucher draft = voucherWithStatus("V-DRAFT", "1002", LocalDate.of(2026, 5, 11), VoucherStatus.DRAFT);
+        Voucher voided = voucherWithStatus("V-VOID", "1003", LocalDate.of(2026, 5, 12), VoucherStatus.VOID);
+        when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END))
+                .thenReturn(List.of(posted, draft, voided));
+        // Only the POSTED voucher's entries are ever loaded (filter runs before entry fetch).
+        when(entryRepo.findByVoucherIdAndDeletedAtIsNullOrderByLineNoAsc("V-POSTED"))
+                .thenReturn(List.of(entry("E-P", 1, "1002", "银行存款", "已过账凭证", "100.00", "0.00", "")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportKingdeeImportTemplate(FACTORY_ID, buildReq(), USER_ID, out);
+
+        Sheet sheet = readFirstSheet(out.toByteArray());
+        // Header (row 0) + exactly one data row (the POSTED voucher's single entry).
+        assertEquals(1, sheet.getLastRowNum(), "only the POSTED voucher's row must be exported");
+        assertEquals("1001", cellAsString(sheet.getRow(1).getCell(1)), "exported row is the POSTED voucher (1001)");
+
+        ArgumentCaptor<VoucherExportRecord> record = ArgumentCaptor.forClass(VoucherExportRecord.class);
+        verify(exportRecordRepo).save(record.capture());
+        assertEquals(1, record.getValue().getRowCount(),
+                "DRAFT (1002) and VOID (1003) must NOT leak into the customer's real 金蝶 books");
+    }
+
+    @Test
     @DisplayName("KINGDEE_YXSKY config overrides reusable column names")
     void exportKingdeeImportTemplate_configOverride_changesReusableHeaders() throws Exception {
         VoucherExportConfig config = VoucherExportConfig.builder()
@@ -517,6 +546,10 @@ class VoucherExportKingdeeTemplateTest {
     }
 
     private Voucher voucher(String id, String number, LocalDate date) {
+        return voucherWithStatus(id, number, date, VoucherStatus.POSTED);
+    }
+
+    private Voucher voucherWithStatus(String id, String number, LocalDate date, VoucherStatus status) {
         return Voucher.builder()
                 .id(id)
                 .factoryId(FACTORY_ID)
@@ -527,7 +560,7 @@ class VoucherExportKingdeeTemplateTest {
                 .sourceBusinessId(id)
                 .totalDebit(BigDecimal.ZERO)
                 .totalCredit(BigDecimal.ZERO)
-                .status(VoucherStatus.POSTED)
+                .status(status)
                 .build();
     }
 

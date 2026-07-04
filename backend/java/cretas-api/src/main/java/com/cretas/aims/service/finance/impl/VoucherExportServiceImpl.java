@@ -1188,8 +1188,20 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     }
 
     private List<VoucherImportLine> loadVoucherImportLines(String factoryId, VoucherExportRequestDTO req) {
+        // 🔒🔒 出货闸 (2026-07-04): 金蝶导入模板只能携带业务确已过账 (POSTED) 的凭证。
+        //
+        // 旧行为无状态过滤 → DRAFT (未财审) / VOID (作废) / 幽灵凭证 全部被喂进客户真实金蝶账套。
+        // 对比 loadVoucherLines (序时账) 只排 VOID (因为序时账是本系统内的账簿视图, DRAFT/REVERSED 仍应可见)。
+        // 但金蝶导入模板是把数据写进客户外部真实账套 — 只有业务真正过账的凭证才允许流出:
+        //   - DRAFT: generator 刚生成、财务未审核 → 绝不能进真实账套 (否则未复核草稿泄漏)
+        //   - VOID:  已作废 (对应取消的订单/退货) → 幽灵, 绝不能进真实账套
+        //   - REVERSED: 已被红字冲销的原凭证 → 冲销凭证 (POSTED) 自身仍会被导出对冲, 原凭证不再重复流出
+        // 凭证生命周期: DRAFT (createFromBusiness) → POSTED (finance post) / 直建 POSTED (结转/红冲)。
+        // 故导入模板锁定 POSTED-only。
         List<Voucher> vouchers = voucherRepo.findByFactoryIdAndDateRange(
-                factoryId, req.getStartDate(), req.getEndDate());
+                        factoryId, req.getStartDate(), req.getEndDate()).stream()
+                .filter(v -> v.getStatus() == VoucherStatus.POSTED)
+                .toList();
 
         List<VoucherImportLine> lines = new ArrayList<>();
         for (Voucher voucher : vouchers) {
