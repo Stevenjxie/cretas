@@ -656,6 +656,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   而其 hint「请先小结」指向的小结端对结单族 400 (仅存货生产可小结) → 死路。故仅在计划确为 SAFETY_STOCK
         //   (真存在「小结-待结算」窗口) 时才 count-and-block; 计划非 SAFETY_STOCK / 无 planId / 计划查不到 →
         //   无该窗口, 守卫不触发, 结单族领料单正常关单退料。
+        //
+        //   ⓘ 2026-07-04 根修后 (MaterialConsumptionRepository.stampInterimSettledForPlan): 结单族计划结单时
+        //   已给其报工消耗行打戳 → 残留 #2 (跨计划投料把结单族未结行留在他单 WKS 批次 → 本守卫误 count 永久 409)
+        //   随结单族结单即闭合。此处 isInterimSettlePlan 收窄门控退化为「冗余而安全」(结单族行结单后非 null, 天然
+        //   不被 countUnsettledConsumptionByBatchIds 统计), 保留以防结单前跨计划窗口 + 语义清晰, 本 PR 不移除。
         if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
             List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
             if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {

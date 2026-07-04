@@ -1593,6 +1593,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setActualQuantity(settlement.getActualFinishedQuantity());
         productionPlanRepository.save(plan);
 
+        // 🔴🔒🔒 结单族「扣减即打戳」根修 (bug fix 2026-07-04, #1216↔#1217 姊妹流根因闭合):
+        //   延迟扣减设计下, 报工写的 MaterialConsumption 行恒 interimSettledAt IS NULL; SAFETY_STOCK 走
+        //   「小结」逐笔扣 usedQuantity 时原子盖戳, 而结单族 (非 SAFETY_STOCK) 走本「结单」路径扣减 usedQuantity
+        //   却从不盖戳 → 其报工消耗行永久停留 IS NULL, 使该谓词对结单族失去「待扣减」语义 (#1216 盘点 SUM /
+        //   #1215 关单 count 守卫此前各自把结单族门控排除来绕开)。此处在结单时补盖戳, 令 interimSettledAt IS NULL
+        //   对所有计划族统一 = 「尚未扣减」→ 两处门控退化为冗余而安全; 残留 #2 (跨计划投料把结单族未结行留在他单
+        //   WKS 批次 → 关单守卫误 409 永久卡死) 随之闭合。⚠️ 仅结单族 (非 SAFETY_STOCK) 打戳: SAFETY_STOCK
+        //   的打戳由小结原子完成, 提前打戳会让小结 §① 漏扣 → 幻库存 (故此处 sourceType 守卫不可去)。
+        //   按 productionBatchId ∈ 本计划 process_sheet_rows.batch_id 定位 (非 mc.production_plan_id —— 非末道行
+        //   plan_id 故意 null, 会漏), 与小结 §① / 撤销侧同 key。幂等 (已戳不再戳), factory-scoped。
+        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
+            int stamped = materialConsumptionRepository
+                    .stampInterimSettledForPlan(factoryId, planId, settlement.getSettledAt());
+            if (stamped > 0) {
+                log.info("结单族消耗打戳: factoryId={}, planId={}, sourceType={}, 打戳 {} 笔报工消耗 "
+                                + "(interimSettledAt IS NULL 现统一=待扣减)",
+                        factoryId, planId, plan.getSourceType(), stamped);
+            }
+        }
+
         if (applicationEventPublisher != null) {
             applicationEventPublisher.publishEvent(new com.cretas.aims.event.ProductionSettledEvent(
                     this, factoryId, plan.getId(), plan.getPlanNumber(), plan.getProductTypeId(),

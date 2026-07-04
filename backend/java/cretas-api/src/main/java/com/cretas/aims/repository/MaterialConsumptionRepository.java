@@ -251,6 +251,12 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
      * 已按单一计划族门控 (仅 SAFETY_STOCK 领料单才 count), 且只查该单 WKS 批次 → 无需查内族过滤。本 SUM 版被
      * 盘点<b>跨整仓多批次</b>调用 (这些批次可能横跨多个不同族计划), 无法在调用点门控 → 必须在查询内按族过滤。
      * Factory-scoped 防跨租户。
+     *
+     * <p><b>2026-07-04 根修后: SAFETY_STOCK 子查询已冗余而安全</b> —— 结单族消耗行现在结单时经
+     * {@link #stampInterimSettledForPlan} 打戳, 结单后 {@code interimSettledAt IS NOT NULL} 天然落在
+     * {@code interimSettledAt IS NULL} 谓词外, 不再需子查询排除。<b>保留</b>子查询是因为它对结单<b>前</b>
+     * (mid-production, 结单族行尚未打戳) 仍必要 —— 该窗口结单族行是否应减取决于其扣减模型, #1216 口径为
+     * 「不减」(matching), 子查询正实现此。故本 PR 不移除, 留待未来若统一 mid-production 口径再简化。
      */
     @Query("SELECT m.batchId, SUM(m.quantity) FROM MaterialConsumption m WHERE m.factoryId = :factoryId "
             + "AND m.batchId IN :batchIds AND m.interimSettledAt IS NULL AND m.quantity > 0 "
@@ -262,6 +268,55 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             + "GROUP BY m.batchId")
     List<Object[]> sumUnsettledConsumptionGroupedByBatch(@Param("factoryId") String factoryId,
                                                          @Param("batchIds") List<String> batchIds);
+
+    /**
+     * 🔴🔒🔒 结单族「扣减即打戳」根修 (bug fix 2026-07-04, #1216↔#1217 姊妹流的<b>根因闭合</b>):
+     * 把指定计划全部道 (process_sheet_rows.batch_id) 上尚未打戳的正向报工消耗行 {@code interim_settled_at}
+     * 一次性盖为 {@code settledAt} (= 结单时间戳)。返回受影响行数。
+     *
+     * <p><b>背景 (为何非 SAFETY_STOCK 族的消耗行需在结单时打戳)</b>: 物料消耗采「延迟扣减」设计 —— 报工
+     * ({@code ClerkProcessEntryServiceImpl.writeConsumption}) 写 {@link MaterialConsumption} (未结,
+     * {@code interimSettledAt IS NULL}) 但不即时扣 {@code usedQuantity}。SAFETY_STOCK (存货生产) 计划走
+     * 「小结」({@code InterimSettleServiceImpl §①}) 逐笔扣 {@code usedQuantity} + 同事务盖
+     * {@code interimSettledAt} —— 故其 {@code interimSettledAt IS NULL} 精确代表「待扣减」。而结单族
+     * (CUSTOMER_ORDER / MANUAL / …) 走「结单」({@code ProductionPlanServiceImpl.settleProduction}) 在结单时
+     * 扣减 {@code usedQuantity} 却<b>从不</b>回头盖其报工消耗行的 {@code interimSettledAt} → 这些行<b>永久</b>
+     * 停留 {@code interimSettledAt IS NULL}, 使该谓词对结单族<b>失去</b>「待扣减」语义。
+     *
+     * <p>此前 #1216/#1219 (盘点 SUM) 与 #1215/#1217 (关单 count 守卫) 各自<b>把结单族行门控排除</b>
+     * (SUM 内加 SAFETY_STOCK 子查询 / count 调用点按 {@code isInterimSettlePlan} 收窄) 来绕开这个失真 ——
+     * 但那是<b>绕</b>而非<b>治</b>。本方法在结单时打戳, 使 {@code interimSettledAt IS NULL} 对<b>所有</b>计划族
+     * 统一 = 「尚未扣减」→ 两处门控退化为<b>冗余而安全</b> (结单族行结单后即非 null, 天然落在谓词外)。
+     * 残留 #2 (跨计划投料把结单族未结行留在他单 WKS 批次 → 关单 count 守卫误 409 永久卡死) 亦随之闭合:
+     * 结单族计划一旦结单, 其消耗行即被打戳, 不再被 count 守卫统计。
+     *
+     * <p><b>为何按 productionBatchId ∈ process_sheet_rows.batch_id 定位 (而非 mc.production_plan_id)</b>:
+     * 逐工序非末道消耗行 {@code mc.production_plan_id} <b>故意为 null</b> (仅末道/成品挂计划, 防成本双计,
+     * 见 {@code ProcessSheetServiceImpl} {@code req.isFinished() ? planId : null})。按 production_plan_id 打戳
+     * 会漏掉这些 null-plan 非末道行 → 它们仍 {@code interimSettledAt IS NULL} → 关单 count 守卫仍误统计。
+     * 唯一可靠链 = {@code mc.production_batch_id ∈ 本计划 process_sheet_rows.batch_id} —— 与
+     * {@code InterimSettleServiceImpl §①} / 撤销侧定位待扣减行的<b>同一 key</b>。
+     *
+     * <p><b>调用方 (仅结单族) 保证族安全</b>: 由 {@code settleProduction} 在 {@code plan.sourceType != SAFETY_STOCK}
+     * 时调用 —— 绝不对 SAFETY_STOCK 计划打戳 (那族的打戳由小结原子完成, 提前打戳会让小结 §① 漏扣 → 幻库存)。
+     * 即便跨计划投料把某 SAFETY_STOCK 计划的未结行落在结单族计划的道批次上, 本查询按<b>结单族计划自身</b>的
+     * process_sheet_rows.batch_id 定位 (该 SAFETY_STOCK 行的 production_batch_id 属其自身道批次, 不在结单族计划
+     * batchId 集内) → 不会误打戳该 SAFETY_STOCK 待扣减行。
+     *
+     * <p>{@code quantity > 0} 排除退料回库负数留痕 (MATERIAL_RETURN); {@code deleted_at IS NULL} 显式附加
+     * (bulk UPDATE 不经类级 {@code @Where} 过滤); {@code interimSettledAt IS NULL} 使重复结单幂等 (已戳不再戳,
+     * 时间戳不被覆盖)。Factory-scoped 防跨租户。
+     */
+    @Modifying
+    @Query("UPDATE MaterialConsumption m SET m.interimSettledAt = :settledAt "
+            + "WHERE m.factoryId = :factoryId AND m.interimSettledAt IS NULL "
+            + "AND m.quantity > 0 AND m.deletedAt IS NULL "
+            + "AND m.productionBatchId IN ("
+            + "  SELECT r.batchId FROM ProcessSheetRow r "
+            + "  WHERE r.factoryId = :factoryId AND r.planId = :planId AND r.batchId IS NOT NULL)")
+    int stampInterimSettledForPlan(@Param("factoryId") String factoryId,
+                                   @Param("planId") String planId,
+                                   @Param("settledAt") LocalDateTime settledAt);
 
     /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
