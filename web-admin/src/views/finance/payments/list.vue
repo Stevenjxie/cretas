@@ -183,7 +183,14 @@ async function handleRecordSubmit() {
     ElMessage.warning('请填写订单ID和收款金额'); return;
   }
   if (recordOverLimit.value) {
-    ElMessage.warning(`收款金额超过可收余额 ¥${remainingAmount.value.toFixed(2)}, 请调低`); return;
+    // sticky (duration:0 + showClose): 绕开 UI disable 的最后防线, 别让消息一闪而过.
+    ElMessage({
+      type: 'error',
+      duration: 0,
+      showClose: true,
+      message: `收款金额超过可收余额 ¥${remainingAmount.value.toFixed(2)}, 请调低`,
+    });
+    return;
   }
   submitting.value = true;
   try {
@@ -334,12 +341,19 @@ async function handleRecordSubmit() {
           </template>
         </el-alert>
         <el-form-item v-if="canViewPrice" label="收款金额" required>
+          <!-- fool-proof-design Rule 1 (block-not-clamp fix, 2026-07-04): 原 E-FP-3 retrofit
+               绑了 :max, 但 ElementPlus InputNumber 会在每次按键时把 modelValue 静默 clamp 回
+               max (input-number.js handleInput→setCurrentValue(newVal,false)→verifyValue),
+               仓管输入 300 在还没看到下面 recordOverLimit 红字前, v-model 已被悄悄纠正成
+               remainingAmount, 令 recordOverLimit 恒为 false、提交按钮从未真正被 disable 过。
+               去掉 :max, 只留 :min, 超限判断完全交给 recordOverLimit (已存在), 保证输入原始值
+               可见 + 真实触发红框/红字/禁用提交. -->
           <el-input-number
             v-model="recordForm.amount"
             :min="0"
-            :max="selectedSO && remainingAmount > 0 ? remainingAmount : undefined"
             :precision="2"
             style="width:100%"
+            :class="{ 'over-limit-input': recordOverLimit }"
           />
           <span v-if="recordOverLimit" style="color:#f56c6c;margin-left:8px;font-size:12px">
             超过可收余额 ¥{{ remainingAmount.toFixed(2) }}, 请调低
@@ -372,3 +386,11 @@ async function handleRecordSubmit() {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+/* fool-proof-design Rule 1: 收款金额超限红框 (与 recordOverLimit 红字 + 提交禁用三重防御,
+   不再依赖 el-input-number :max 静默 clamp) */
+:deep(.over-limit-input .el-input__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
+}
+</style>
