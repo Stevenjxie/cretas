@@ -467,10 +467,16 @@ async function handleSubmit() {
   if (hasOverLimitItem.value) {
     const idx = overLimitRowIndex.value;
     const row = form.value.items[idx];
-    ElMessage.warning(
-      `第 ${idx + 1} 行「${row.materialName || '该物料'}」到货数量超出本次可收上限 ` +
-      `${row._maxAllowed?.toFixed(3).replace(/\.?0+$/, '')}${row.unit || ''} (含30%超收), 请调整或分单另采购`
-    );
+    // fool-proof-design 4位一体: 提交禁用之外的最后防线 (绕开 UI 直调 handleSubmit 等边界),
+    // sticky (duration:0 + showClose) — 别让用户没看清就自动消失.
+    ElMessage({
+      type: 'error',
+      duration: 0,
+      showClose: true,
+      message:
+        `第 ${idx + 1} 行「${row.materialName || '该物料'}」到货数量超出本次可收上限 ` +
+        `${row._maxAllowed?.toFixed(3).replace(/\.?0+$/, '')}${row.unit || ''} (含30%超收), 请调整或分单另采购`,
+    });
     return;
   }
   submitting.value = true;
@@ -899,9 +905,16 @@ onMounted(() => { loadData(); loadOptions(); });
           <el-table-column label="到货数量" width="160">
             <template #header><span class="req-star">*</span>到货数量</template>
             <template #default="{ row }">
+              <!-- fool-proof-design Rule 1 (block-not-clamp fix): 故意不绑定 el-input-number 的
+                   :max prop — ElementPlus InputNumber 在 handleInput 时会对每个按键自行 clamp
+                   modelValue 到 max (input-number.js verifyValue), 值在用户看到红字/disable 前
+                   就已被静默纠正回上限, 令下面 isOverLimit/hasOverLimitItem 判断永远读不到超限值
+                   (仓管以为录入了 140, 实际早被吞成 130, 且全程无红字无提示). 改为只用 :min 硬下限
+                   (下限纠正无歧义, 非本反模式), 超限判定完全交给下方 isOverLimit computed, 保证用户
+                   输入的原始数值可见 + 真触发红框/红字/禁用提交. -->
               <el-input-number
                 v-model="row.receivedQuantity"
-                :min="0.001" :max="row._maxAllowed" :precision="3" :controls="false"
+                :min="0.001" :precision="3" :controls="false"
                 size="small" style="width:100%"
                 :class="{ 'over-limit-input': isOverLimit(row) }"
               />

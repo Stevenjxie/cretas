@@ -926,6 +926,14 @@ function computedRemainingAmount() {
   return Math.max(0, total - paid);
 }
 
+// fool-proof-design Rule 1 (block-not-clamp fix): 登记收款此前完全无上限 — 只显示 "待收 X"
+// 文案, 提交只检查 amount>0, 没有任何上限校验 (客户真实反馈: 输入 300 超过待收 150 也能提交,
+// 无红字无禁用). 未发现后端/业务上有"预收款/超额收款"合法场景 (PaymentRecordServiceImpl /
+// PaymentRecordController 均无相关上限或分支处理), 故默认硬阻断, 不做"确认超额"放行口子.
+const paymentOverLimit = computed(
+  () => Number(paymentForm.value.amount || 0) > computedRemainingAmount() + 0.001,
+);
+
 // 防呆 Rule 1 (fool-proof-design): 开票申请 上限展示 — 订单总额 / 已开票 / 可开票.
 // 缺失导致六膳门全生命周期测试踩坑: 收款登记已有对等 computedRemainingAmount() 上限,
 // 开票申请此前无任何上限展示 (mirror finance/invoices/list.vue R1+R2 retrofit 2026-05-17
@@ -1117,6 +1125,16 @@ async function handleCreatePayment() {
   if (submitting.value) return;
   if (!paymentForm.value.amount || paymentForm.value.amount <= 0) {
     return ElMessage.warning('收款金额必须 > 0');
+  }
+  // fool-proof-design Rule 1 defense-in-depth (UI 已 :disabled 提交按钮) — sticky 防绕开.
+  if (paymentOverLimit.value) {
+    ElMessage({
+      type: 'error',
+      duration: 0,
+      showClose: true,
+      message: `收款金额超过待收余额 ${formatAmount(computedRemainingAmount())}, 请调低`,
+    });
+    return;
   }
   submitting.value = true;
   try {
@@ -1833,8 +1851,20 @@ async function handleQuickPayFull() {
     <el-dialog v-model="paymentDialogVisible" title="登记收款" width="520px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item v-if="canViewPrice" label="收款金额" required>
-          <el-input-number v-model="paymentForm.amount" :min="0" :precision="2" style="width: 200px" />
+          <!-- fool-proof-design Rule 1 (block-not-clamp fix): 不绑定 :max — ElementPlus
+               InputNumber 会在按键时静默 clamp modelValue 到 max (见 procurement/receives/list.vue
+               同款修复注释), 这里改用 paymentOverLimit computed 驱动红框 + 红字 + 禁用提交. -->
+          <el-input-number
+            v-model="paymentForm.amount"
+            :min="0"
+            :precision="2"
+            style="width: 200px"
+            :class="{ 'over-limit-input': paymentOverLimit }"
+          />
           <span style="margin-left: 12px; color: #909399">待收 {{ formatAmount(computedRemainingAmount()) }}</span>
+          <div v-if="paymentOverLimit" class="over-limit-hint over-limit-hint--danger">
+            超出待收余额 {{ formatAmount(computedRemainingAmount()) }}, 请调低
+          </div>
         </el-form-item>
         <el-form-item label="收款方式">
           <el-select v-model="paymentForm.paymentMethod" style="width: 200px">
@@ -1873,7 +1903,12 @@ async function handleQuickPayFull() {
       </el-form>
       <template #footer>
         <el-button @click="paymentDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreatePayment">登记收款</el-button>
+        <el-button
+          type="primary"
+          :loading="submitting"
+          :disabled="!paymentForm.amount || paymentForm.amount <= 0 || paymentOverLimit"
+          @click="handleCreatePayment"
+        >登记收款</el-button>
       </template>
     </el-dialog>
 
@@ -2021,5 +2056,20 @@ async function handleQuickPayFull() {
     .timeline-notes { margin-top: 6px; padding: 6px 8px; background: #fafafa; border-radius: 4px;
       color: #909399; font-size: 12px; }
   }
+}
+
+// fool-proof-design Rule 1: 收款/超限灰字提示 (正常) / 超限变红 (与 :class 前置拦截 +
+// 提交禁用二重防御, 不用 el-input-number :max 静默 clamp)
+.over-limit-hint {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.over-limit-hint--danger {
+  color: #f56c6c;
+}
+:deep(.over-limit-input .el-input__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
 }
 </style>
