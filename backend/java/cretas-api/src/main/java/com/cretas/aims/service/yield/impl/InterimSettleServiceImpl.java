@@ -11,6 +11,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
@@ -102,6 +103,19 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             throw new BusinessException(400, "仅存货生产计划可小结, 当前来源类型: "
                     + plan.getSourceType())
                     .withHint("非存货生产计划请走「结单」")
+                    .withHintTarget("小结");
+        }
+        // 🔒🔒 (2026-07-04) 计划状态守卫: 不能小结已终结的计划。停产/完工均 → COMPLETED, 取消 → CANCELLED,
+        //   撤回审批中 → PENDING_APPROVAL。此前仅守卫 sourceType 不守卫 status → 已停产(纯状态翻转, 零扣减)
+        //   的计划仍可被再次小结。配合 stopProduction 的"未结报工消耗"前置拦截, 双向堵死幻库存: 停产前必须
+        //   已小结干净, 停产后不能再小结。
+        ProductionPlanStatus status = plan.getStatus();
+        if (status == ProductionPlanStatus.COMPLETED
+                || status == ProductionPlanStatus.CANCELLED
+                || status == ProductionPlanStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "该计划已" + status.getDisplayName() + ", 不能再小结")
+                    .withCode("INTERIM_SETTLE_BLOCKED_TERMINAL")
+                    .withHint("已停产/完工/取消或撤回审批中的计划无法小结")
                     .withHintTarget("小结");
         }
 

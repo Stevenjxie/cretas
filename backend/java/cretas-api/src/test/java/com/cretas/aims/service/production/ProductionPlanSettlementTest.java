@@ -220,8 +220,11 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
-    @DisplayName("结单族根修: SAFETY_STOCK 计划结单不打戳消耗 (其打戳由小结原子完成, 提前打戳会漏扣→幻库存)")
-    void settleProduction_safetyStockPlan_doesNotStampConsumption() {
+    @DisplayName("🔒🔒 Gap1: SAFETY_STOCK 存货计划走结单 → 400 拒绝 (须走小结; 结单的 postConsumptionToInventory 会再扣一次=原料双重扣减)")
+    void settleProduction_safetyStockPlan_rejected() {
+        // 存货生产 (SAFETY_STOCK) 逐批小结已扣 usedQuantity; 若放行结单, postConsumptionToInventory 再扣一次
+        //   → 原料双重扣减 + 财务口径腐蚀。UI 隐藏结单按钮但 API 开放, 服务层必须锁死。此前只有 line 1619
+        //   的防御性"不打戳"分支 (提前打戳会漏扣), 现在从前门直接 400 拒收, 该分支对 SAFETY_STOCK 不再可达。
         ProductionPlan plan = plan();
         plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
@@ -229,22 +232,15 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
-        MaterialBatch batch = materialBatch();
-        SemiFinishedInventory wip = wip();
-        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
-        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
-        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
-        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
-        stubCurrentBom("RM-1");
-        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
 
+        assertEquals(400, ex.getCode(), "存货计划结单应 400");
+        assertEquals("SAFETY_STOCK_MUST_INTERIM_SETTLE", ex.getErrorCode());
+        // 关键: 越过守卫前就拒收 — 无任何扣减/入库/打戳副作用
+        verify(productionSettlementRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
         verify(materialConsumptionRepository, never()).stampInterimSettledForPlan(any(), any(), any());
     }
 

@@ -2513,6 +2513,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     private void validateSettlementRequest(ProductionPlan plan, ProductionSettlementRequest request) {
+        // 🔒🔒 (2026-07-04) sourceType 守卫: 存货生产(SAFETY_STOCK) 走「小结」逐批扣减入库, 严禁「结单」。
+        //   结单的 postConsumptionToInventory 会再次扣减原料; 而 SAFETY_STOCK 的 interimSettle 早已逐笔
+        //   扣过 usedQuantity → 若放行结单 = 原料双重扣减 + 财务口径腐蚀 (幻库存)。UI 隐藏了结单按钮,
+        //   但 POST /production-plans/{id}/settle 是开放的 API, 必须在服务层锁死。与 interimSettle 反向对称
+        //   (interimSettle 拒绝非 SAFETY_STOCK), 使每条结算路径按计划族锁死。
+        if (plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
+            throw new BusinessException(400, "存货生产计划不能结单, 请走「小结」逐批结算")
+                    .withCode("SAFETY_STOCK_MUST_INTERIM_SETTLE")
+                    .withHint("存货生产(SAFETY_STOCK)按小结逐批扣减入库; 结单会造成原料重复扣减")
+                    .withHintTarget("小结");
+        }
         if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
                 && plan.getStatus() != ProductionPlanStatus.PENDING) {
             throw new BusinessException(409, "只能结单未完成的生产计划")
@@ -4141,6 +4152,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
             throw new BusinessException(400, "仅存货生产计划可停产");
         }
+        // 🔒🔒 (2026-07-04) 幻库存守卫: 停产是纯状态翻转 (→ COMPLETED, 零扣减)。延迟扣减设计下, 报工写的
+        //   MaterialConsumption 行恒 interimSettledAt IS NULL, 仅在「小结」时才逐笔扣减 usedQuantity。若计划
+        //   尚有未结报工消耗却直接停产 → 状态变 COMPLETED → 小结守卫 (interimSettle 拒绝终态) 从此拦截 →
+        //   这些原料永远不被扣减 = 幻库存 (物料实际消耗但库存从不减)。故停产前必须拦截: 有未结报工消耗时
+        //   loud-block, 导向"先小结再停产"。检测口径与 interimSettle 完全一致 (按 process_sheet_rows.batch_id
+        //   ∈ 本计划各道 → material_consumptions.production_batch_id, interim_settled_at IS NULL), 因逐工序
+        //   在制道消耗 production_plan_id 故意为 null, 只能靠 batchId 定位。
+        List<MaterialConsumption> unsettled = findUnsettledPlanConsumptions(factoryId, planId);
+        if (!unsettled.isEmpty()) {
+            throw new BusinessException(409, "该计划仍有 " + unsettled.size() + " 笔未结报工消耗, 请先小结再停产")
+                    .withCode("STOP_BLOCKED_UNSETTLED_CONSUMPTION")
+                    .withHint("停产不扣料; 若此时停产, 已报工消耗的原料将永不扣减 (幻库存)。请先「小结」结算这些消耗")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("小结");
+        }
         plan.setStatus(ProductionPlanStatus.COMPLETED);
         plan.setEndTime(LocalDateTime.now());
         if (plan.getStartTime() == null) {
@@ -4149,5 +4175,34 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         productionPlanRepository.save(plan);
         log.info("停产 (存货生产纯状态关闭, 无扣料无事件): factoryId={}, planId={}", factoryId, planId);
         // NO completeProduction, NO settleProduction, NO BatchCompletedEvent, NO consumption posting.
+    }
+
+    /**
+     * 🔒🔒 (2026-07-04) 查本计划待结算 (interimSettledAt IS NULL) 的报工消耗。
+     *
+     * <p>检测口径与 {@code InterimSettleServiceImpl.interimSettle} 的扣减侧完全一致: 按
+     * {@code process_sheet_rows.batch_id} (物化后的 per-道 ProductionBatch.id) ∈ 本计划各道, 反查
+     * {@code material_consumptions.production_batch_id + interim_settled_at IS NULL}。不能按
+     * production_plan_id 查 —— 逐工序首/中间道写的 raw 消耗其 production_plan_id 故意为 null (防成本双计),
+     * 只有 production_batch_id 恒有值。
+     *
+     * <p>{@code processSheetRowRepository} 为 {@code @Autowired(required=false)}, 生产环境恒存在;
+     * 若缺失 (某些精简测试上下文) 则返回空集 (与既有 helper line ~1785/~3184 的 null-guard 同策略)。
+     */
+    private List<MaterialConsumption> findUnsettledPlanConsumptions(String factoryId, String planId) {
+        if (processSheetRowRepository == null || isBlank(planId)) {
+            return List.of();
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        List<Long> planBatchIds = rows.stream()
+                .map(ProcessSheetRow::getBatchId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        if (planBatchIds.isEmpty()) {
+            return List.of();
+        }
+        return materialConsumptionRepository
+                .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(factoryId, planBatchIds);
     }
 }
