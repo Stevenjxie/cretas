@@ -35,7 +35,27 @@ const hasGoldKpi = computed(() =>
   goldKpiCards.value.some(c => (c.rawValue ?? 0) > 0)
 );
 
-// UX Round 5: 新工厂 onboarding — 所有 KPI 都为 0 且无 gold 数据时显示快速开始引导
+// Bug 2 (2026-07 现场走查): 有 296 个产品/上百张凭证的真实租户仍每次登录看到
+// "暂无数据"引导 — 之前的判定只看"今天"的运营 KPI(todayOutput/completedBatches 等),
+// 不代表工厂"从未建过数据"。补一个轻量的真实数据存在性检查(产品档案总数),
+// 与今日 KPI 信号并列, 任一命中即视为"已有数据"不再显示引导。
+const hasProductData = ref(false);
+const hasProductDataChecked = ref(false);
+async function checkHasProductData() {
+  if (!factoryId.value) { hasProductDataChecked.value = true; return; }
+  try {
+    const res = await get<{ totalElements?: number }>(`/${factoryId.value}/product-types`, {
+      params: { page: 1, size: 1 },
+    });
+    hasProductData.value = res.success ? (res.data?.totalElements ?? 0) > 0 : false;
+  } catch {
+    // 静默失败: 查询本身出错不代表"无数据", 维持既有 KPI 信号判定, 不误导用户
+  } finally {
+    hasProductDataChecked.value = true;
+  }
+}
+
+// UX Round 5: 新工厂 onboarding — 所有 KPI 都为 0 且无 gold 数据且无真实产品数据时才显示快速开始引导
 const isNewFactory = computed(() => {
   const todayOutput = overview.value?.todayOutput ?? 0;
   const completedBatches = overview.value?.completedBatches ?? 0;
@@ -43,6 +63,8 @@ const isNewFactory = computed(() => {
   const activeAlerts = equipmentStats.value?.activeAlerts ?? 0;
   return !loading.value
     && !goldKpiLoading.value
+    && hasProductDataChecked.value
+    && !hasProductData.value
     && todayOutput === 0
     && completedBatches === 0
     && running === 0
@@ -52,6 +74,7 @@ const isNewFactory = computed(() => {
 const shouldShowOnboarding = computed(() => isNewFactory.value && !authStore.isLiushanmenFactory);
 
 const onboardingSteps = [
+ { title: '期初建账', desc: '录入期初库存/物料, 后续报工与成本从此起算(最重要的第一步)', route: '/warehouse/stocktakes?openEntry=1', icon: '' },
  { title: '上传 Excel 数据', desc: '财务/销售/采购报表导入 AI 分析', route: '/smart-bi/analysis', icon: '' },
  { title: '配置工厂模块', desc: '按业务启用/禁用功能模块', route: '/system/features', icon: '️' },
  { title: '添加登录账号', desc: '邀请团队成员登录协作', route: '/system/users', icon: '' },
@@ -111,8 +134,8 @@ const quickActions = [
 ];
 
 onMounted(async () => {
-  // 并行加载制造业运营数据 + SmartBI Gold KPI (互不依赖)
-  await Promise.all([loadDashboardData(), loadGoldKpi()]);
+  // 并行加载制造业运营数据 + SmartBI Gold KPI + 真实产品数据存在性检查 (互不依赖)
+  await Promise.all([loadDashboardData(), loadGoldKpi(), checkHasProductData()]);
 });
 
 // SmartBI Gold KPI: 调 executive 端点拿 kpiCards, 与经营驾驶舱同源。
@@ -259,8 +282,8 @@ function navigateTo(route: string) {
       <div class="onboarding-header">
  <span class="onboarding-icon"></span>
         <div>
-          <h3>快速开始 3 步, 激活您的 AI 工厂</h3>
-          <p>当前工厂暂无数据。跟着这 3 步上手, 几分钟见 AI 分析效果.</p>
+          <h3>快速开始 {{ onboardingSteps.length }} 步, 激活您的 AI 工厂</h3>
+          <p>当前工厂暂无数据。跟着这 {{ onboardingSteps.length }} 步上手, 先建期初账再看 AI 分析效果.</p>
         </div>
       </div>
       <div class="onboarding-steps">

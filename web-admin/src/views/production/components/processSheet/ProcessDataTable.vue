@@ -31,6 +31,12 @@ const props = withDefaults(defineProps<{
   processCode: string;
   processOrder: number;
   productTypeId: string;
+  /** 本工序真实显示名 (来自 G0 动态工序链 ProductWorkProcess.processName, 如"去舌胎膜"); 与
+   * archetype processCode 不同 —— processCode 只是列定义 key, 可能多个真实工序共享同一 archetype。 */
+  processLabel?: string;
+  /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
+   * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
+  upstreamProcessLabel?: string;
   /** WIP inventory items from the upstream process (for dropdown + remaining calc) */
   upstreamItems?: ProcessSheetInventoryItem[];
   /** WIP inventory items for THIS process (for grid 剩余 column on saved rows) */
@@ -107,6 +113,13 @@ const isSingleUpstream = computed(() =>
 );
 const isQuSheTou = computed(() => props.processCode === 'qushetou');
 const isQidiao = computed(() => props.processCode === 'qidiao');
+
+// Bug 1 修复: 来源批次选择器的 label 必须反映真实工序链, 不能按 archetype processCode 硬编码
+// (硬编码在 role-mode / 关键词回退下必错 —— 同一 archetype 可能对应不同真实工序名)。
+/** 本工序真实显示名 (缺省兜底用 processCode, 理论上父组件总会传, 兜底只防御性)。 */
+const ownProcessName = computed(() => props.processLabel || props.processCode);
+/** 上游(前置)工序真实显示名; 链起步道(无上游)兜底通用「上游」。 */
+const upstreamProcessName = computed(() => props.upstreamProcessLabel || '上游');
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -650,14 +663,14 @@ function saveDisabledReason(row: SheetRow): string | null {
     if (row.rawBatchQty == null) return '请填写出库重量';
     if ((row.fields['output'] as number) == null) return '请填写产出数量';
   } else if (isSingleUpstream.value) {
-    // 焯水 + 滚揉: before/after 校验
-    const processLabel = props.processCode === 'gunrou' ? '滚揉' : '焯水';
-    const upstreamLabel = props.processCode === 'gunrou' ? '修油批次' : '上游批次';
+    // 焯水 + 滚揉: before/after 校验 — label 用真实工序名 (Bug 1 修复, 不再按 archetype 硬编码)
+    const processLabel = ownProcessName.value;
+    const upstreamLabel = `${upstreamProcessName.value}批次`;
     if (!row.upstreamBatch) return `请选择${upstreamLabel}`;
     if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
     if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
   } else if (isQuSheTou.value) {
-    if (!row.upstreamBatch) return '请选择上游批次';
+    if (!row.upstreamBatch) return `请选择${upstreamProcessName.value}批次`;
     if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
     if ((row.fields['output'] as number) == null) return '请填写产出重量';
   } else if (isShuZhi.value) {
@@ -669,7 +682,7 @@ function saveDisabledReason(row: SheetRow): string | null {
       if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
     }
   } else if (isQidiao.value) {
-    if (row.upstreamSources.length === 0) return '请添加熟制来源批';
+    if (row.upstreamSources.length === 0) return `请添加${upstreamProcessName.value}来源批`;
     if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
     if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
     if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
@@ -1033,6 +1046,55 @@ async function loadSfiOptions() {
   }
 }
 
+// -------------------------------------------------------------------------
+// Bug 3 (2026-07 现场走查): 来源批次下拉默认列出同族全部批次 (即便已按产品族/阶段
+// 过滤, 大厂仍可能有几百条同族在库批次), 低文化素质操作员被淹没。
+// 方案: 未搜索时只显示按生产日期倒序最近 N 条 (最可能用到的排前面); 打字搜索时
+// 对全量按下拉展示文案(品名/批号/日期)子串过滤。WIP(本计划在制半成品)本就计划域
+// 内很小, 不裁剪数量, 但同样纳入统一查询词过滤 (自定义 filter-method 会关闭 el-select
+// 原生过滤, 三组都要手动过滤, 否则 WIP 组会变成"打字也不过滤"的倒退)。
+// 多个 el-select 实例(每行/每来源一个)共享同一个查询词 ref; 下拉打开时重置, 避免上一个
+// 下拉的过滤态串到下一个实例。
+// -------------------------------------------------------------------------
+const BATCH_OPTION_DEFAULT_LIMIT = 30;
+const batchSearchQuery = ref('');
+
+function sortByRecentDesc<T extends { productionDate?: string | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (b.productionDate || '').localeCompare(a.productionDate || ''));
+}
+
+const wipOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return props.upstreamItems;
+  return props.upstreamItems.filter((item) => wipLabel(item).toLowerCase().includes(q));
+});
+const sfiOptionsSorted = computed(() => sortByRecentDesc(sfiOptions.value));
+const sfiOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return sfiOptionsSorted.value.slice(0, BATCH_OPTION_DEFAULT_LIMIT);
+  return sfiOptionsSorted.value.filter((s) => sfiLabel(s).toLowerCase().includes(q));
+});
+const fgOptionsSorted = computed(() => sortByRecentDesc(fgOptions.value));
+const fgOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return fgOptionsSorted.value.slice(0, BATCH_OPTION_DEFAULT_LIMIT);
+  return fgOptionsSorted.value.filter((f) => fgLabel(f).toLowerCase().includes(q));
+});
+/** 组标题显示 "总数/已限N条", 让用户知道还有更多、该打字搜索 (Rule 1: 预先显示边界)。 */
+const sfiGroupLabel = computed(() => sfiOptions.value.length > sfiOptionsDisplay.value.length
+  ? `半成品库存 (可直接产成品, 显示最近${BATCH_OPTION_DEFAULT_LIMIT}/共${sfiOptions.value.length}条, 可搜索品名/批号)`
+  : '半成品库存 (可直接产成品)');
+const fgGroupLabel = computed(() => fgOptions.value.length > fgOptionsDisplay.value.length
+  ? `成品库存 (可直接产成品, 显示最近${BATCH_OPTION_DEFAULT_LIMIT}/共${fgOptions.value.length}条, 可搜索品名/批号)`
+  : '成品库存 (可直接产成品)');
+
+function onBatchSelectFilter(query: string) {
+  batchSearchQuery.value = query;
+}
+function onBatchSelectVisibleChange(visible: boolean) {
+  if (visible) batchSearchQuery.value = '';
+}
+
 /**
  * 当前来源行的复合下拉值 (从已存的 src 反推, 供 :model-value 显示选中项)。
  * semiFinished 标记由 src 自身携带 (保存往返保留), 不按字符串值反查 → 无 WIP↔SFI 碰撞。
@@ -1274,31 +1336,33 @@ defineExpose({ hasUnsavedRows });
           <!-- 焯水 + 滚揉: single upstream dropdown (结构相同) — 含半成品库存(SFI)选项 -->
           <template v-else-if="isSingleUpstream">
             <div class="sp-card-field">
-              <label class="sp-card-label">{{ processCode === 'gunrou' ? '修油批次' : '滚揉批次' }}</label>
+              <label class="sp-card-label">{{ upstreamProcessName }}批次</label>
               <el-select
                 :model-value="singleUpstreamSelectKey(row)"
                 @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                :placeholder="processCode === 'gunrou' ? '选修油批次/半成品' : '选滚揉批次/半成品'"
+                :placeholder="`选${upstreamProcessName}批次/半成品`"
                 filterable clearable
+                :filter-method="onBatchSelectFilter"
+                @visible-change="onBatchSelectVisibleChange"
                 :loading="sfiLoading"
                 style="width:100%" size="small">
-                <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                   <el-option
-                    v-for="item in upstreamItems" :key="item.batchNumber"
+                    v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                     :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
                     :disabled="item.remaining <= 0" />
                 </el-option-group>
-                <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                   <el-option
-                    v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                    v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                     :disabled="sfiAvailable(s) <= 0" />
                 </el-option-group>
-                <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                   <el-option
-                    v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                    v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                     :label="fgLabel(f)"
                     :value="srcKey(SRC_FG, f.batchNumber)"
                     :disabled="fgAvailable(f) <= 0" />
@@ -1310,31 +1374,33 @@ defineExpose({ hasUnsavedRows });
           <!-- 去舌苔: single upstream dropdown — 含半成品库存(SFI)选项 -->
           <template v-else-if="isQuSheTou">
             <div class="sp-card-field">
-              <label class="sp-card-label">焯水批次</label>
+              <label class="sp-card-label">{{ upstreamProcessName }}批次</label>
               <el-select
                 :model-value="singleUpstreamSelectKey(row)"
                 @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                placeholder="选焯水批次/半成品"
+                :placeholder="`选${upstreamProcessName}批次/半成品`"
                 filterable clearable
+                :filter-method="onBatchSelectFilter"
+                @visible-change="onBatchSelectVisibleChange"
                 :loading="sfiLoading"
                 style="width:100%" size="small">
-                <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                   <el-option
-                    v-for="item in upstreamItems" :key="item.batchNumber"
+                    v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                     :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
                     :disabled="item.remaining <= 0" />
                 </el-option-group>
-                <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                   <el-option
-                    v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                    v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                     :disabled="sfiAvailable(s) <= 0" />
                 </el-option-group>
-                <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                   <el-option
-                    v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                    v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                     :label="fgLabel(f)"
                     :value="srcKey(SRC_FG, f.batchNumber)"
                     :disabled="fgAvailable(f) <= 0" />
@@ -1346,7 +1412,7 @@ defineExpose({ hasUnsavedRows });
           <!-- 熟制 / 气调: multi-source expander -->
           <template v-else-if="isShuZhi || isQidiao">
             <div class="sp-card-field sp-card-field-full">
-              <label class="sp-card-label">{{ isShuZhi ? '焯水来源(混锅)' : '熟制来源(混锅)' }}</label>
+              <label class="sp-card-label">{{ upstreamProcessName }}来源(混锅)</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
                 <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
                 {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
@@ -1355,7 +1421,7 @@ defineExpose({ hasUnsavedRows });
             <!-- Mix expanded inline -->
             <div v-if="row.mixExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
               <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                <span style="font-size:12px;font-weight:600;color:#303133">{{ isShuZhi ? '焯水来源批 (混锅)' : '熟制来源批 (混锅)' }}</span>
+                <span style="font-size:12px;font-weight:600;color:#303133">{{ upstreamProcessName }}来源批 (混锅)</span>
                 <el-button size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
               </div>
               <div v-for="(src, si) in row.upstreamSources" :key="si"
@@ -1363,26 +1429,28 @@ defineExpose({ hasUnsavedRows });
                 <el-select
                   :model-value="srcSelectKey(src)"
                   @change="(v: string) => onUpstreamSelect(src, v)"
-                  :placeholder="isShuZhi ? '选焯水批次' : '选熟制批次'" filterable clearable
+                  :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                  :filter-method="onBatchSelectFilter"
+                  @visible-change="onBatchSelectVisibleChange"
                   :loading="sfiLoading"
                   style="width:220px" size="small">
                   <el-option-group label="本计划在制半成品">
                     <el-option
-                      v-for="item in upstreamItems" :key="item.batchNumber"
+                      v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                       :label="wipLabel(item)"
                       :value="srcKey(SRC_WIP, item.batchNumber)"
                       :disabled="item.remaining <= 0" />
                   </el-option-group>
-                  <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                  <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                     <el-option
-                      v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                      v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                       :label="sfiLabel(s)"
                       :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                       :disabled="sfiAvailable(s) <= 0" />
                   </el-option-group>
-                  <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                  <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                     <el-option
-                      v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                      v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                       :label="fgLabel(f)"
                       :value="srcKey(SRC_FG, f.batchNumber)"
                       :disabled="fgAvailable(f) <= 0" />
@@ -1547,22 +1615,22 @@ defineExpose({ hasUnsavedRows });
 
             <!-- 焯水 + 滚揉: upstream single-select -->
             <template v-else-if="isSingleUpstream">
-              <th class="sp-th">{{ processCode === 'gunrou' ? '修油批次' : '滚揉批次' }}</th>
+              <th class="sp-th">{{ upstreamProcessName }}批次</th>
             </template>
 
             <!-- 去舌苔: upstream single-select -->
             <template v-else-if="isQuSheTou">
-              <th class="sp-th">焯水批次</th>
+              <th class="sp-th">{{ upstreamProcessName }}批次</th>
             </template>
 
             <!-- 熟制: multi-source (rendered as expander cell) -->
             <template v-else-if="isShuZhi">
-              <th class="sp-th">焯水来源(混锅)</th>
+              <th class="sp-th">{{ upstreamProcessName }}来源(混锅)</th>
             </template>
 
             <!-- 气调: multi-source (rendered as expander cell) -->
             <template v-else-if="isQidiao">
-              <th class="sp-th">熟制来源(混锅)</th>
+              <th class="sp-th">{{ upstreamProcessName }}来源(混锅)</th>
             </template>
 
             <!-- Generic cols from config (skip special-cased keys) -->
@@ -1696,28 +1764,30 @@ defineExpose({ hasUnsavedRows });
                   <el-select
                     :model-value="singleUpstreamSelectKey(row)"
                     @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                    :placeholder="processCode === 'gunrou' ? '选修油批次/半成品' : '选滚揉批次/半成品'"
+                    :placeholder="`选${upstreamProcessName}批次/半成品`"
                     filterable clearable
+                    :filter-method="onBatchSelectFilter"
+                    @visible-change="onBatchSelectVisibleChange"
                     :loading="sfiLoading"
                     style="width:200px" size="small">
-                    <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                    <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                       <el-option
-                        v-for="item in upstreamItems"
+                        v-for="item in wipOptionsDisplay"
                         :key="item.batchNumber"
                         :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
                         :disabled="item.remaining <= 0" />
                     </el-option-group>
-                    <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                    <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                       <el-option
-                        v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                        v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                         :disabled="sfiAvailable(s) <= 0" />
                     </el-option-group>
-                    <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                    <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                       <el-option
-                        v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                        v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                         :label="fgLabel(f)"
                         :value="srcKey(SRC_FG, f.batchNumber)"
                         :disabled="fgAvailable(f) <= 0" />
@@ -1732,28 +1802,30 @@ defineExpose({ hasUnsavedRows });
                   <el-select
                     :model-value="singleUpstreamSelectKey(row)"
                     @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                    placeholder="选焯水批次/半成品"
+                    :placeholder="`选${upstreamProcessName}批次/半成品`"
                     filterable clearable
+                    :filter-method="onBatchSelectFilter"
+                    @visible-change="onBatchSelectVisibleChange"
                     :loading="sfiLoading"
                     style="width:200px" size="small">
-                    <el-option-group v-if="upstreamItems.length" label="本计划在制半成品">
+                    <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
                       <el-option
-                        v-for="item in upstreamItems"
+                        v-for="item in wipOptionsDisplay"
                         :key="item.batchNumber"
                         :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
                         :disabled="item.remaining <= 0" />
                     </el-option-group>
-                    <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                    <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                       <el-option
-                        v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                        v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                         :disabled="sfiAvailable(s) <= 0" />
                     </el-option-group>
-                    <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                    <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                       <el-option
-                        v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                        v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                         :label="fgLabel(f)"
                         :value="srcKey(SRC_FG, f.batchNumber)"
                         :disabled="fgAvailable(f) <= 0" />
@@ -1918,7 +1990,7 @@ defineExpose({ hasUnsavedRows });
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
                   <div class="sp-expand-title">
-                    焯水来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
+                    {{ upstreamProcessName }}来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
                     <el-button size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
                       + 来源批
                     </el-button>
@@ -1930,26 +2002,28 @@ defineExpose({ hasUnsavedRows });
                     <el-select
                       :model-value="srcSelectKey(src)"
                       @change="(v: string) => onUpstreamSelect(src, v)"
-                      placeholder="选焯水批次" filterable clearable
+                      :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                      :filter-method="onBatchSelectFilter"
+                      @visible-change="onBatchSelectVisibleChange"
                       :loading="sfiLoading"
                       style="width:220px" size="small">
                       <el-option-group label="本计划在制半成品">
                         <el-option
-                          v-for="item in upstreamItems" :key="item.batchNumber"
+                          v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                           :label="wipLabel(item)"
                           :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
-                      <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                      <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                         <el-option
-                          v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                          v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                           :label="sfiLabel(s)"
                           :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
                       </el-option-group>
-                      <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                      <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                         <el-option
-                          v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                          v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                           :label="fgLabel(f)"
                           :value="srcKey(SRC_FG, f.batchNumber)"
                           :disabled="fgAvailable(f) <= 0" />
@@ -1999,7 +2073,7 @@ defineExpose({ hasUnsavedRows });
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
                   <div class="sp-expand-title">
-                    熟制来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
+                    {{ upstreamProcessName }}来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
                     <el-button size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
                       + 来源批
                     </el-button>
@@ -2011,26 +2085,28 @@ defineExpose({ hasUnsavedRows });
                     <el-select
                       :model-value="srcSelectKey(src)"
                       @change="(v: string) => onUpstreamSelect(src, v)"
-                      placeholder="选熟制批次" filterable clearable
+                      :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                      :filter-method="onBatchSelectFilter"
+                      @visible-change="onBatchSelectVisibleChange"
                       :loading="sfiLoading"
                       style="width:220px" size="small">
                       <el-option-group label="本计划在制半成品">
                         <el-option
-                          v-for="item in upstreamItems" :key="item.batchNumber"
+                          v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                           :label="wipLabel(item)"
                           :value="srcKey(SRC_WIP, item.batchNumber)"
                           :disabled="item.remaining <= 0" />
                       </el-option-group>
-                      <el-option-group v-if="sfiOptions.length" label="半成品库存 (可直接产成品)">
+                      <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                         <el-option
-                          v-for="s in sfiOptions" :key="'sfi-' + s.intermediateBatchNo"
+                          v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                           :label="sfiLabel(s)"
                           :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
                           :disabled="sfiAvailable(s) <= 0" />
                       </el-option-group>
-                      <el-option-group v-if="fgOptions.length" label="成品库存 (可直接产成品)">
+                      <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                         <el-option
-                          v-for="f in fgOptions" :key="'fg-' + f.batchNumber"
+                          v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
                           :label="fgLabel(f)"
                           :value="srcKey(SRC_FG, f.batchNumber)"
                           :disabled="fgAvailable(f) <= 0" />
