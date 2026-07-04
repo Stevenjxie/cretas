@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
@@ -8,6 +9,7 @@ import { Plus, Search } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 import { RowActionMenu, TableFooter } from '@/components/list';
+import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
@@ -17,7 +19,14 @@ import type { ListSummaryRequest } from '@/types/listSummary';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
+
+// Issue 1 (仓管走查 2026-07): 引导到会扣减成品库存的正式发货流程 (销售订单 → 创建发货单 → 仓库确认).
+function goToSalesOrders(): void {
+  createDialogVisible.value = false;
+  router.push('/sales/orders');
+}
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
@@ -255,7 +264,8 @@ async function submitCreateForm() {
     if (!payload.unitPrice) delete payload.unitPrice;
     const res = await post(`/${factoryId.value}/shipments`, payload);
     if (res.success) {
-      ElMessage.success('出货记录已创建');
+      // 明示不扣库存 (仓管走查 2026-07): 避免误以为已扣减成品库存.
+      ElMessage.success('手工出货登记已创建 (未扣减成品库存)');
       createDialogVisible.value = false;
       loadData();
     } else {
@@ -272,10 +282,25 @@ async function submitCreateForm() {
 
 <template>
   <div class="page-container">
+    <!--
+      仓管现场走查 (2026-07): 在此「新建出货」成功后, 成品库存 (销售 → 成品库存) 可用量不变,
+      误导仓管以为已发货扣了库存。此页 = 遗留「手工出货登记」(ShipmentRecord, 自由文本产品名/
+      无批次/无仓库), 只记台账不扣库存。真正扣减成品库存的正式发货走「销售订单 → 创建发货单」
+      → 仓库确认 (FEFO 批次分配 + 扣减)。此处明确辨析 + 跳转, 不在这条自由文本链上再造一个会
+      扣库存的平行台账 (会与销售发货单双重扣减)。
+    -->
+    <ConceptDisambiguationAlert
+      here-name="手工出货登记"
+      here="只登记出货台账 (客户 / 产品名称 / 数量)，不扣减成品库存，也不关联生产批次"
+      other="要真正扣减成品库存的正式发货 (按批次 FEFO 分配)"
+      other-name="销售订单 → 创建发货单"
+      other-path="/sales/orders"
+      consequence="此处登记不会改变「成品库存」可用量，仓管请勿据此判断可发数量"
+    />
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>出货记录管理</span>
+          <span>手工出货登记<span style="font-size:12px;color:#e6a23c;font-weight:400;margin-left:8px">(不扣减成品库存)</span></span>
           <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
             <el-input
               v-model="searchKeyword"
@@ -343,7 +368,21 @@ async function submitCreateForm() {
       </el-table>
 
       <!-- 新建出货 -->
-      <el-dialog v-model="createDialogVisible" title="新建出货" width="560px" :close-on-click-modal="false" destroy-on-close>
+      <el-dialog v-model="createDialogVisible" title="新建手工出货登记" width="560px" :close-on-click-modal="false" destroy-on-close>
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          title="此为手工出货登记，不扣减成品库存"
+        >
+          <template #default>
+            <span style="font-size: 13px">
+              仅记录出货台账 (自由填产品名 / 数量)。要按批次扣减「成品库存」的正式发货，请到
+              <el-link type="primary" underline="never" style="font-weight: 600" @click="goToSalesOrders">销售订单 → 创建发货单</el-link>。
+            </span>
+          </template>
+        </el-alert>
         <el-form ref="formRef" :model="createForm" :rules="createFormRules" label-width="100px">
           <el-form-item label="客户" prop="customerId">
             <el-select v-model="createForm.customerId" filterable placeholder="选择客户" style="width: 100%">
