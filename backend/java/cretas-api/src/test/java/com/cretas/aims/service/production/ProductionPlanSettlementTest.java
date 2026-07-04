@@ -64,6 +64,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -207,6 +208,38 @@ class ProductionPlanSettlementTest {
                         && PLAN_ID.equals(settled.getPlanId())
                         && "PT-1".equals(settled.getProductTypeId())
                         && settled.getSettlementId() != null));
+        // 结单族根修 (#1216↔#1217): plan() sourceType=null (非 SAFETY_STOCK) → 结单时给报工消耗行打戳,
+        //   使 interimSettledAt IS NULL 统一 = 待扣减 (关单守卫/盘点减除据此对结单族不再误判)。
+        verify(materialConsumptionRepository).stampInterimSettledForPlan(eq(FACTORY_ID), eq(PLAN_ID), any());
+    }
+
+    @Test
+    @DisplayName("结单族根修: SAFETY_STOCK 计划结单不打戳消耗 (其打戳由小结原子完成, 提前打戳会漏扣→幻库存)")
+    void settleProduction_safetyStockPlan_doesNotStampConsumption() {
+        ProductionPlan plan = plan();
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        MaterialBatch batch = materialBatch();
+        SemiFinishedInventory wip = wip();
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
+
+        verify(materialConsumptionRepository, never()).stampInterimSettledForPlan(any(), any(), any());
     }
 
     @Test

@@ -71,9 +71,22 @@ public class MaterialConsumption extends BaseEntity {
     private String sourceType;
 
     /**
-     * 标记本消耗行已被哪次小结 (interim settlement) 处理。
-     * NULL = 尚未小结 (待扣减)；非 NULL = 已计入某次小结，不可重复扣减。
-     * Task 3 (小结 Service) 在原子事务内批量设置此字段 + 写 production_interim_settlement 行。
+     * 「已扣减」标记 (deducted-at marker)。
+     * <b>NULL = 尚未扣减 (待处理)；非 NULL = usedQuantity 已扣减, 不可重复扣减。</b>
+     *
+     * <p>语义按计划族由两条扣减路径盖戳, 但含义<b>统一</b> (NULL 恒 = 待扣减):
+     * <ul>
+     *   <li><b>SAFETY_STOCK (存货生产)</b>: 「小结」({@code InterimSettleServiceImpl §①}) 在原子事务内逐笔扣
+     *       {@code MaterialBatch.usedQuantity} + 盖此戳 (= 小结 postedAt) + 写 production_interim_settlement 行。
+     *       「撤销小结」按 {@code interim_settled_at == postedAt} 逆转并清戳。</li>
+     *   <li><b>结单族 (CUSTOMER_ORDER / MANUAL / …)</b>: 「结单」({@code ProductionPlanServiceImpl.settleProduction}
+     *       → {@code MaterialConsumptionRepository.stampInterimSettledForPlan}) 在结单时盖此戳 (= settledAt)。
+     *       此族不走小结/撤销, 故戳的时间戳值仅作「已扣减」布尔标记, 不被任何 postedAt 逆转匹配。</li>
+     * </ul>
+     *
+     * <p>统一语义使 {@code interim_settled_at IS NULL} 谓词对所有族一致代表「待扣减」: 盘点账面减除
+     * ({@code sumUnsettledConsumptionGroupedByBatch}) 与关单-前守卫 ({@code countUnsettledConsumptionByBatchIds})
+     * 据此判定, 无族错配 (2026-07-04 结单族根修前, 结单族行永久 NULL 使谓词失真, 靠 SAFETY_STOCK 族门控绕开)。
      */
     @Column(name = "interim_settled_at")
     private LocalDateTime interimSettledAt;
