@@ -109,10 +109,11 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
         });
         when(receiveRecordRepository.save(any(PurchaseReceiveRecord.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        // 幂等挂账: PO 已有应付 → 返回已存在记录, 不抛异常 (模拟修复后的服务行为)。
+        // 幂等挂账: 该入库单已有应付 → 返回已存在记录, 不抛异常 (模拟修复后的服务行为)。
         ArApTransaction existingAp = new ArApTransaction();
         existingAp.setId("AP-EXISTING");
         when(arApService.recordPayableIfAbsent(eq(FACTORY), eq(SUPPLIER_ID), eq(PO_ID),
+                eq("PURCHASE_RECEIVE"), eq(RECEIVE_ID),
                 any(BigDecimal.class), any(LocalDate.class), any(), anyString()))
                 .thenReturn(existingAp);
 
@@ -125,7 +126,9 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
         verify(materialBatchRepository).save(any(MaterialBatch.class));
 
         // 用的是不抛异常的幂等方法, 绝不调用会抛 409 doom 事务的 recordPayable。
+        // per-receive 幂等键 = (PURCHASE_RECEIVE, receiveId), 金额 = 入库单实收值。
         verify(arApService).recordPayableIfAbsent(eq(FACTORY), eq(SUPPLIER_ID), eq(PO_ID),
+                eq("PURCHASE_RECEIVE"), eq(RECEIVE_ID),
                 any(BigDecimal.class), any(LocalDate.class), any(), anyString());
         verify(arApService, never()).recordPayable(anyString(), anyString(), anyString(),
                 any(BigDecimal.class), any(LocalDate.class), any(), anyString());
@@ -150,6 +153,8 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
         item.setUnit("kg");
         item.setUnitPrice(new BigDecimal("8.20"));
         record.getItems().add(item);
+        // 实收值 = 12.5 × 8.20 = 102.50 (per-receive 挂账用此金额, 非 PO 计划总额)。
+        record.setTotalAmount(new BigDecimal("102.50"));
         return record;
     }
 

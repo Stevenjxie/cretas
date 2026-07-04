@@ -28,22 +28,39 @@ public interface ArApService {
      * 幂等、不抛异常的采购入库应付挂账 — 供与调用方共享事务的自动化调用方使用
      * （如 confirmReceive 对同一 PO 多次分批入库的自动挂账）。
      *
+     * <p><b>金额口径 (🔴🔒 2026-07-03 修复)</b>: {@code amount} 必须传<b>本次入库的实收金额</b>
+     * (Σ 实收数量 × 单价, 即 {@code PurchaseReceiveRecord.totalAmount})，<b>不是</b> PO 的
+     * 计划总额 {@code order.getTotalAmount()}。旧实现按 PO 计划总额挂账 —— 六膳门超收 130kg
+     * (计划 100kg) 时应付被低计 (只挂 100×20=2000, 实收 130×20=2600, 差 600 永久漏挂)。
+     * 现按每次入库单实收值分笔挂账 (per-receive incremental)，多次分批各挂各的实收值，
+     * 累计 = 实收总额；超收/少收都据实反映。
+     *
+     * <p><b>幂等键改为 (sourceType, sourceId) = 每张入库单</b> (旧实现按 PO 幂等 → 分批只挂
+     * 首笔全额)。同一入库单重复确认返回已存在记录，不重复挂账；不同入库单各挂各的实收值。
+     *
      * <p>与 {@link #recordPayable} 不同，本方法对"预期的跳过条件"<b>绝不抛异常</b>：
      * 在共享 {@code @Transactional} 内抛异常会把事务标记为 rollback-only，调用方外层 commit
      * 会抛 {@code UnexpectedRollbackException}（doomed-tx，客户看到误导性 409）。因此本方法：
      * <ul>
-     *   <li>当该 PO 已有 AP_INVOICE 时返回<b>已存在的记录</b>（幂等 — 一个 PO 一条应付，
-     *       首次入库时挂账，后续分批入库跳过，不重复挂账，金额不双计）；</li>
-     *   <li>当金额缺失/非正、供应商不存在、或采购订单状态不允许挂账时返回 {@code null}（跳过）
-     *       —— 收货入库不能被应付侧的前置条件阻塞；</li>
-     *   <li>否则创建并返回新的 AP_INVOICE（与 recordPayable 成功路径一致）。</li>
+     *   <li>当该 (sourceType, sourceId) 已有 AP_INVOICE 时返回<b>已存在的记录</b>（幂等 —
+     *       同一入库单只挂一次，防双击/重复确认，金额不双计）；</li>
+     *   <li>当金额缺失/非正（如入库单无单价、实收值为 0）、供应商不存在、或采购订单状态不允许
+     *       挂账时返回 {@code null}（跳过）—— 收货入库不能被应付侧的前置条件阻塞，
+     *       且金额缺失时诚实不挂 (不伪造 0 应付)；</li>
+     *   <li>否则创建并返回新的 AP_INVOICE（与 recordPayable 成功路径一致），同时写入
+     *       {@code purchaseOrderId} (PO 溯源) 与 {@code sourceType/sourceId} (幂等键)。</li>
      * </ul>
      *
      * <p>手工挂账入口（ArApController /payable）仍用 {@link #recordPayable}，保留 409 防重复的
      * 防呆提示；本方法仅用于收货自动挂账这类"不得阻塞主流程"的共享事务场景。
+     *
+     * @param amount 本次入库单实收金额 (Σ 实收数量 × 单价)，非 PO 计划总额
+     * @param sourceType 幂等来源类型，收货挂账固定传 {@code "PURCHASE_RECEIVE"}
+     * @param sourceId   幂等来源 ID，传入库单 ID ({@code PurchaseReceiveRecord.id})
      */
     ArApTransaction recordPayableIfAbsent(String factoryId, String supplierId,
-                                          String purchaseOrderId, BigDecimal amount,
+                                          String purchaseOrderId, String sourceType, String sourceId,
+                                          BigDecimal amount,
                                           LocalDate dueDate, Long operatedBy, String remark);
 
     /** Non-PO payable source, e.g. restaurant supplier delivery note. Idempotent by sourceType/sourceId. */

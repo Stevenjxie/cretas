@@ -185,7 +185,7 @@ public class ArApServiceImpl implements ArApService {
             validatePayableStatus(purchaseOrderId, factoryId);
         }
 
-        return persistPayable(factoryId, supplier, supplierId, purchaseOrderId, amount, dueDate, operatedBy, remark);
+        return persistPayable(factoryId, supplier, supplierId, purchaseOrderId, null, null, amount, dueDate, operatedBy, remark);
     }
 
     /**
@@ -197,31 +197,36 @@ public class ArApServiceImpl implements ArApService {
      * 外层 commit 抛 {@code UnexpectedRollbackException}，被 doomed-tx 兜底网转成误导性通用 409，导致
      * 第 2 次及以后的分批入库<b>永久无法确认</b>（虽然数据一致，干净回滚）。
      *
-     * <p>财务语义: 自动挂账用的是 PO 的<b>整单 totalAmount</b>（非本次分批金额），因此一个 PO 只应挂账一次
-     * （首次入库时）。后续分批入库必须<b>跳过</b>而非累加（累加会把整单金额双计/多计）。故本方法幂等跳过，
-     * 不抛异常。见 {@link ArApService#recordPayableIfAbsent} javadoc。
+     * <p>财务语义 (🔴🔒 2026-07-03 修复): 自动挂账用的是<b>本次入库单的实收金额</b>
+     * ({@code PurchaseReceiveRecord.totalAmount} = Σ 实收数量 × 单价)，<b>非</b> PO 计划总额。
+     * 幂等键 = {@code (sourceType, sourceId)} = 每张入库单 —— 同一入库单重复确认返回既有记录 (防双击)，
+     * 不同入库单 (分批) 各挂各的实收值，累计 = 实收总额 (超收/少收据实反映)。旧实现按 PO 计划总额 +
+     * 按 PO 幂等 → 分批只挂首笔全额、超收漏挂差额。故本方法幂等跳过，不抛异常。
+     * 见 {@link ArApService#recordPayableIfAbsent} javadoc。
      */
     @Override
     @Transactional
     public ArApTransaction recordPayableIfAbsent(String factoryId, String supplierId,
-                                                 String purchaseOrderId, BigDecimal amount,
+                                                 String purchaseOrderId, String sourceType, String sourceId,
+                                                 BigDecimal amount,
                                                  LocalDate dueDate, Long operatedBy, String remark) {
         // 所有跳过条件都是 READ / 校验，绝不写库、绝不抛 —— 保证共享事务不被 doom。
 
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("自动应付挂账跳过(金额缺失或非正): factoryId={}, purchaseOrderId={}, amount={}",
-                    factoryId, purchaseOrderId, amount);
+            // 诚实不挂: 入库单无单价 / 实收金额为 0 时不伪造应付。
+            log.warn("自动应付挂账跳过(金额缺失或非正): factoryId={}, purchaseOrderId={}, sourceId={}, amount={}",
+                    factoryId, purchaseOrderId, sourceId, amount);
             return null;
         }
 
-        // 幂等: 该 PO 已有应付 → 返回已存在记录, 不重复挂账 (一个 PO 一条应付, 首次入库时挂)。
-        if (purchaseOrderId != null) {
+        // 幂等: 该入库单 (sourceType, sourceId) 已挂账 → 返回既有记录, 不重复挂账 (防双击/重复确认)。
+        if (sourceType != null && sourceId != null) {
             Optional<ArApTransaction> existing =
-                    transactionRepository.findFirstByFactoryIdAndPurchaseOrderIdAndTransactionType(
-                            factoryId, purchaseOrderId, ArApTransactionType.AP_INVOICE);
+                    transactionRepository.findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
+                            factoryId, sourceType, sourceId, ArApTransactionType.AP_INVOICE);
             if (existing.isPresent()) {
-                log.info("自动应付挂账幂等命中(该 PO 已挂账, 跳过): factoryId={}, purchaseOrderId={}, transactionId={}",
-                        factoryId, purchaseOrderId, existing.get().getId());
+                log.info("自动应付挂账幂等命中(该入库单已挂账, 跳过): factoryId={}, sourceType={}, sourceId={}, transactionId={}",
+                        factoryId, sourceType, sourceId, existing.get().getId());
                 return existing.get();
             }
         }
@@ -246,12 +251,13 @@ public class ArApServiceImpl implements ArApService {
         }
 
         return persistPayable(factoryId, supplierOpt.get(), supplierId, purchaseOrderId,
-                amount, dueDate, operatedBy, remark);
+                sourceType, sourceId, amount, dueDate, operatedBy, remark);
     }
 
     /** 应付挂账写库尾段: 更新供应商余额 + 建交易记录 + 持久化。recordPayable / recordPayableIfAbsent 共用。 */
     private ArApTransaction persistPayable(String factoryId, Supplier supplier, String supplierId,
-                                           String purchaseOrderId, BigDecimal amount,
+                                           String purchaseOrderId, String sourceType, String sourceId,
+                                           BigDecimal amount,
                                            LocalDate dueDate, Long operatedBy, String remark) {
         BigDecimal newBalance = (supplier.getCurrentBalance() != null ? supplier.getCurrentBalance() : BigDecimal.ZERO)
                 .add(amount);
@@ -263,9 +269,12 @@ public class ArApServiceImpl implements ArApService {
                 CounterpartyType.SUPPLIER, supplierId, supplier.getName(),
                 amount, newBalance, dueDate, operatedBy, remark);
         transaction.setPurchaseOrderId(purchaseOrderId);
+        // per-receive 幂等键 (可空: recordPayable 手工挂账无 source, 走 PO 级 409 防重复)。
+        if (sourceType != null) transaction.setSourceType(sourceType);
+        if (sourceId != null) transaction.setSourceId(sourceId);
 
-        log.info("应付挂账: factoryId={}, supplierId={}, amount={}, balance={}",
-                factoryId, supplierId, amount, newBalance);
+        log.info("应付挂账: factoryId={}, supplierId={}, sourceId={}, amount={}, balance={}",
+                factoryId, supplierId, sourceId, amount, newBalance);
         return transactionRepository.save(transaction);
     }
 
