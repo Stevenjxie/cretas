@@ -61,10 +61,19 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
-// U-FOOTER-1
-const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('returnOrder', summaryRequest);
 const filterStatus = ref('');
+
+// U-FOOTER-1
+// KPI-vs-list drift fix (2026-07): filterStatus MUST be declared BEFORE this
+// computed (TDZ — see sales/shipments/list.vue Issue #716). Previously this
+// was a static `{ filterConditions: {} }` so the footer "共" always showed
+// the ALL-status total while loadData() sends `params.status = filterStatus`
+// to /return-orders — footer and paginator would diverge as soon as a
+// status filter was applied. Fix: mirror the same status filter.
+const summaryRequest = computed<ListSummaryRequest>(() => ({
+  filterConditions: filterStatus.value ? { status: filterStatus.value } : {},
+}));
+const { summary: footerSummary, loading: footerLoading } = useListSummary('returnOrder', summaryRequest);
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },

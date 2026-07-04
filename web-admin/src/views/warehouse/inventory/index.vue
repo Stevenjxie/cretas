@@ -96,7 +96,16 @@ const searchKeyword = ref('');
 const statusFilter = ref('');
 
 // U-FOOTER-1
-const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
+// KPI-vs-list drift fix (2026-07): previously static `{ filterConditions: {} }`
+// so footer "共"/"可用数量"/"总价值" always reflected ALL batches while
+// loadData() sends `params.status = statusFilter` to /material-batches —
+// footer and paginator would diverge as soon as a status filter was applied.
+// (低库存预警 stat is separately sourced from loadStatistics(), which is
+// intentionally factory-wide/unfiltered — see MaterialBatchServiceImpl
+// getLowStockWarnings; not affected by this filter mirror.)
+const summaryRequest = computed<ListSummaryRequest>(() => ({
+  filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
+}));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('inventory', summaryRequest);
 
 // 库存统计
