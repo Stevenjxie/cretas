@@ -6,6 +6,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
+import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementResponse;
@@ -146,6 +147,15 @@ public interface ProductionPlanService {
      * derive 宁可少填不可瞎填: 拿不准的字段留空并在 audit.issues 标出让人补。
      */
     ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId);
+
+    /**
+     * 防呆 Rule 1: 核对结单「原料领用」下拉 BOM 预过滤。
+     *
+     * <p>只读, 把结单提交时写路径守卫 (ensureMaterialBatchAllowedForSettlement) 判定该产品
+     * BOM 允许哪些 materialTypeId 的同一份逻辑提前暴露给前端, 让下拉在用户选择<b>之前</b>
+     * 就只列出 BOM 允许的原料批次, 而不是提交后才 409 告诉他选错了。
+     */
+    ProductionSettlementBomEligibilityResponse getSettlementBomEligibility(String factoryId, String planId);
 
     ProductionSettlementResponse getProductionSettlement(String factoryId, String planId);
 

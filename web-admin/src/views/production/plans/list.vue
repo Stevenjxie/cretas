@@ -959,6 +959,46 @@ function settlementFieldHasIssue(field: string): boolean {
 const materialBatchListLoading = ref(false);
 const materialBatchOptions = ref<MaterialBatchOption[]>([]);
 const rawWarehouseId = ref('');
+
+// ===== 防呆 Rule 1: 原料领用下拉 BOM 预过滤 (#结单原料越权 fix) =====
+// 后端结单提交守卫 (ensureMaterialBatchAllowedForSettlement) 会在提交后才 409 拒绝不属于
+// 产品当前 BOM 的原料批次。这里提前拿到同一份判定结果，把下拉预先收窄到 BOM 允许的批次，
+// 用户选不到 BOM 外的批次，而不是提交后才被告知选错了。后端 409 守卫原样保留作兜底 (defense in depth)。
+interface SettlementBomEligibilityResponse {
+  restricted: boolean;
+  bomFound: boolean;
+  materialTypeIds: string[];
+}
+// null = 尚未加载/加载失败 → 视为不限制 (回退显示全部批次, 后端 409 仍兜底校验)
+const settlementBomEligibility = ref<SettlementBomEligibilityResponse | null>(null);
+const bomFilteredMaterialBatchOptions = computed(() => {
+  const eligibility = settlementBomEligibility.value;
+  if (!eligibility || !eligibility.restricted) {
+    return materialBatchOptions.value;
+  }
+  if (!eligibility.bomFound || eligibility.materialTypeIds.length === 0) {
+    return [];
+  }
+  const allowed = new Set(eligibility.materialTypeIds.map(String));
+  return materialBatchOptions.value.filter(
+    (batch) => !!batch.materialTypeId && allowed.has(String(batch.materialTypeId)),
+  );
+});
+// Rule 5 (dead-end → next action): 产品无生效 BOM / BOM 无原料明细时，说明原因 + 引导去配置 BOM
+const bomFilterBlockedMessage = computed(() => {
+  const eligibility = settlementBomEligibility.value;
+  if (!eligibility || !eligibility.restricted) return '';
+  if (!eligibility.bomFound) {
+    return '该产品当前没有生效 BOM，不能核对原料领用；请先配置该产品的 BOM 配方。';
+  }
+  if (eligibility.materialTypeIds.length === 0) {
+    return '该产品当前 BOM 没有原料明细，不能核对原料领用；请先维护 BOM 原料明细。';
+  }
+  return '';
+});
+function goConfigBomFromSettlement() {
+  router.push('/production/bom');
+}
 const completeForm = ref<SettlementCompleteForm>({
   actualQuantity: 0,
   semiFinishedOutputQuantity: 0,
@@ -1133,6 +1173,8 @@ async function loadSettlementInventoryOptions(row: TableRow) {
   if (!factoryId.value) return;
   materialBatchListLoading.value = true;
   wipListLoading.value = true;
+  settlementBomEligibility.value = null;
+  const planId = row.id ? String(row.id) : '';
   try {
     const warehouseId = await ensureRawWarehouseId();
     if (!warehouseId) {
@@ -1140,7 +1182,12 @@ async function loadSettlementInventoryOptions(row: TableRow) {
       wipList.value = [];
       return;
     }
-    const [materialRes, wipRes] = await Promise.allSettled([
+    const bomEligibilityPromise = planId
+      ? get<SettlementBomEligibilityResponse>(
+          `/${factoryId.value}/production-plans/${planId}/settlement-bom-eligibility`,
+        )
+      : Promise.resolve(null);
+    const [materialRes, wipRes, bomRes] = await Promise.allSettled([
       get<unknown>(`/${factoryId.value}/material-batches/status/AVAILABLE`, {
         params: {
           warehouseId,
@@ -1148,6 +1195,7 @@ async function loadSettlementInventoryOptions(row: TableRow) {
         },
       }),
       listAvailableWip(factoryId.value),
+      bomEligibilityPromise,
     ]);
     if (materialRes.status === 'fulfilled' && materialRes.value.success) {
       materialBatchOptions.value = extractMaterialBatchRows(materialRes.value.data)
@@ -1161,6 +1209,21 @@ async function loadSettlementInventoryOptions(row: TableRow) {
     } else {
       wipList.value = [];
       ElMessage({ message: '半成品可用库存加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    }
+    // 防呆 Rule 1: BOM 预过滤加载失败时不阻塞结单 —— 回退为不限制显示全部批次，
+    // 后端结单提交守卫仍会 409 兜底校验 BOM (defense in depth)，只是失去"预先显示边界"的效果。
+    if (bomRes.status === 'fulfilled' && bomRes.value && bomRes.value.success && bomRes.value.data) {
+      settlementBomEligibility.value = bomRes.value.data;
+    } else {
+      settlementBomEligibility.value = null;
+      if (planId) {
+        ElMessage({
+          message: '原料 BOM 预过滤加载失败，暂显示全部批次；提交时仍会校验 BOM，请核对无误后再提交。',
+          type: 'warning',
+          duration: 0,
+          showClose: true,
+        });
+      }
     }
   } finally {
     materialBatchListLoading.value = false;
@@ -3381,7 +3444,17 @@ function handleAiFill(params: TableRow) {
           </span>
           <el-button size="small" :icon="Plus" @click="addRawConsumptionLine">增加原料行</el-button>
         </div>
-        <div v-if="materialBatchOptions.length === 0 && !materialBatchListLoading" class="settlement-empty">
+        <div
+          v-if="bomFilterBlockedMessage && !materialBatchListLoading"
+          class="settlement-empty"
+        >
+          {{ bomFilterBlockedMessage }}
+          <el-button size="small" type="primary" link @click="goConfigBomFromSettlement">去配置 BOM</el-button>
+        </div>
+        <div
+          v-else-if="bomFilteredMaterialBatchOptions.length === 0 && !materialBatchListLoading"
+          class="settlement-empty"
+        >
           暂无可用原料批次；不能伪造领用，请先完成仓库入库或选择正确产品/BOM。
         </div>
         <div
@@ -3392,12 +3465,12 @@ function handleAiFill(params: TableRow) {
           <el-select
             v-model="line.materialBatchId"
             filterable
-            placeholder="选择原料批次"
+            placeholder="选择原料批次 (已按产品 BOM 预过滤)"
             :loading="materialBatchListLoading"
             class="consumption-select"
           >
             <el-option
-              v-for="batch in materialBatchOptions"
+              v-for="batch in bomFilteredMaterialBatchOptions"
               :key="batch.id"
               :label="materialBatchLabel(batch)"
               :value="batch.id"
