@@ -257,6 +257,15 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
   return inventoryMap.value[upKey] || [];
 }
 
+// Bug 1 (2026-07 现场走查): 来源批次下拉的 label 曾在 ProcessDataTable 内部按 archetype
+// processCode 硬编码(如"gunrou → 修油批次"), 与 G0 动态工序链的真实前置工序名不符——
+// role-mode/关键词回退下同一 archetype 可能对应不同真实工序名, 硬编码必错。改为按 PROCESSES
+// 实际顺序取前一道的真实 label(工序真实名称), 传给子组件动态渲染, 不再由子组件自己猜测。
+function upstreamLabelOf(proc: ProcEntry): string | undefined {
+  const idx = PROCESSES.value.findIndex((p) => procKey(p) === procKey(proc));
+  return idx > 0 ? PROCESSES.value[idx - 1].label : undefined;
+}
+
 // -------------------------------------------------------------------------
 // 未保存草稿聚合 (防呆): 任一工序 tab 有未保存草稿行 → 整个抽屉视为 dirty，
 // 父组件 (list.vue 抽屉) 关闭前据此二次确认。
@@ -322,6 +331,8 @@ defineExpose({ hasUnsavedRows });
             :plan-id="planId"
             :process-code="proc.code"
             :process-order="proc.order"
+            :process-label="proc.label"
+            :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
             :own-inventory-items="inventoryMap[procKey(proc)]"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import request, { get, post, put } from '@/api/request';
@@ -20,6 +21,7 @@ function wBadgeLabel(type: unknown): string | undefined {
 // ────────────────────────────────────────────────────────────────────────────
 // Auth / permissions
 // ────────────────────────────────────────────────────────────────────────────
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -652,6 +654,11 @@ async function applyDiff(row: TableRow) {
 onMounted(async () => {
   await loadWarehouses();
   await loadData();
+  // Dashboard onboarding 引导「期初建账」深链 (?openEntry=1) — 直接弹出期初建账对话框,
+  // 不用新用户自己再摸索"批量导入盘点"里那个不起眼的勾选框 (fool-proof Rule 5)。
+  if (route.query.openEntry === '1' && canWrite.value) {
+    openOpeningEntry();
+  }
 });
 </script>
 
