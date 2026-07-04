@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.dto.finance.VoucherBatchPostResultDTO;
 import com.cretas.aims.entity.enums.VoucherFlag;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherType;
@@ -25,9 +26,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -49,6 +53,7 @@ class VoucherServiceImplTest {
     @Mock private PayrollRecordRepository payrollRecordRepo;
     @Mock private ProductionPlanRepository productionPlanRepo;
     @Mock private LinkArrayService linkArrayService;
+    @Mock private PlatformTransactionManager transactionManager;
 
     @InjectMocks
     private VoucherServiceImpl service;
@@ -458,5 +463,73 @@ class VoucherServiceImplTest {
 
         assertSame(existing, result);
         verify(voucherRepo, never()).save(any());
+    }
+
+    // ==================== batchPost (Part 2 follow-up to #1228) ====================
+
+    private void stubTransactionManagerRunsCallback() {
+        TransactionStatus status = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(status);
+    }
+
+    @Test
+    void batchPostPostsAllDraftVouchers() {
+        stubTransactionManagerRunsCallback();
+        Voucher v1 = Voucher.builder().id("v-1").factoryId("F001").voucherNumber("V-2026-0001").status(VoucherStatus.DRAFT).build();
+        Voucher v2 = Voucher.builder().id("v-2").factoryId("F001").voucherNumber("V-2026-0002").status(VoucherStatus.DRAFT).build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(v1));
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-2", "F001")).thenReturn(Optional.of(v2));
+        when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        List<VoucherBatchPostResultDTO> results = service.batchPost("F001", List.of("v-1", "v-2"), 42L);
+
+        assertEquals(2, results.size());
+        assertTrue(results.stream().allMatch(VoucherBatchPostResultDTO::isSuccess));
+        assertTrue(results.stream().noneMatch(VoucherBatchPostResultDTO::isSkipped));
+        assertEquals(VoucherStatus.POSTED, v1.getStatus());
+        assertEquals(VoucherStatus.POSTED, v2.getStatus());
+        assertEquals(42L, v1.getApprovedBy());
+        verify(voucherRepo, times(2)).save(any());
+    }
+
+    @Test
+    void batchPostSkipsAlreadyPostedIdempotently() {
+        stubTransactionManagerRunsCallback();
+        Voucher draft = Voucher.builder().id("v-1").factoryId("F001").voucherNumber("V-2026-0001").status(VoucherStatus.DRAFT).build();
+        Voucher alreadyPosted = Voucher.builder().id("v-2").factoryId("F001").voucherNumber("V-2026-0002").status(VoucherStatus.POSTED).build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(draft));
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-2", "F001")).thenReturn(Optional.of(alreadyPosted));
+        when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        List<VoucherBatchPostResultDTO> results = service.batchPost("F001", List.of("v-1", "v-2"), 42L);
+
+        VoucherBatchPostResultDTO r1 = results.stream().filter(r -> "v-1".equals(r.getVoucherId())).findFirst().orElseThrow();
+        VoucherBatchPostResultDTO r2 = results.stream().filter(r -> "v-2".equals(r.getVoucherId())).findFirst().orElseThrow();
+        assertTrue(r1.isSuccess());
+        assertFalse(r1.isSkipped());
+        assertTrue(r2.isSuccess(), "已过账凭证幂等跳过, 不视为失败");
+        assertTrue(r2.isSkipped());
+        // 已过账的 v-2 不应再次 save (幂等, 不重复过账动作)
+        verify(voucherRepo, times(1)).save(any());
+    }
+
+    @Test
+    void batchPostOneBadVoucherDoesNotBlockRest() {
+        stubTransactionManagerRunsCallback();
+        Voucher good = Voucher.builder().id("v-1").factoryId("F001").voucherNumber("V-2026-0001").status(VoucherStatus.DRAFT).build();
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-1", "F001")).thenReturn(Optional.of(good));
+        // v-missing 不存在 → 该项失败, 但不应阻断 v-1 的过账
+        when(voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull("v-missing", "F001")).thenReturn(Optional.empty());
+        when(voucherRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        List<VoucherBatchPostResultDTO> results = service.batchPost("F001", List.of("v-missing", "v-1"), 42L);
+
+        assertEquals(2, results.size());
+        VoucherBatchPostResultDTO missing = results.stream().filter(r -> "v-missing".equals(r.getVoucherId())).findFirst().orElseThrow();
+        VoucherBatchPostResultDTO ok = results.stream().filter(r -> "v-1".equals(r.getVoucherId())).findFirst().orElseThrow();
+        assertFalse(missing.isSuccess());
+        assertNotNull(missing.getMessage());
+        assertTrue(ok.isSuccess(), "一张失败不应阻断其余凭证的过账结果");
+        assertEquals(VoucherStatus.POSTED, good.getStatus());
     }
 }

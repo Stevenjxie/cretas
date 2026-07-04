@@ -117,6 +117,38 @@ export async function postVoucher(factoryId: string, voucherId: string): Promise
   return res.data;
 }
 
+/**
+ * 批量过账结果 — 单张凭证 (follow-up to #1228 finding: 人工审核制下逐张过账负担太大).
+ */
+export interface VoucherBatchPostResult {
+  voucherId: string;
+  success: boolean;
+  skipped: boolean;
+  voucherNumber?: string | null;
+  message?: string | null;
+}
+
+export interface VoucherBatchPostResponse {
+  results: VoucherBatchPostResult[];
+  total: number;
+  successCount: number;
+  failureCount: number;
+}
+
+/** 批量过账 — 一次性提交一批 DRAFT voucherId, 逐张过账 (一张失败不影响其余). */
+export async function batchPostVouchers(
+  factoryId: string,
+  voucherIds: string[],
+): Promise<VoucherBatchPostResponse> {
+  const res = await post<VoucherBatchPostResponse>(`/${factoryId}/finance/vouchers/batch-post`, {
+    voucherIds,
+  });
+  if (!res.success || !res.data) {
+    throw new ApiError(res.message || '批量过账失败', res.code);
+  }
+  return res.data;
+}
+
 export async function voidVoucher(
   factoryId: string,
   voucherId: string,

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.finance;
 
 import com.cretas.aims.dto.finance.report.CashFlowDTO;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.finance.VoucherEntry;
@@ -90,8 +91,12 @@ public class CashFlowService {
         Map<String, String> nameByCode = new HashMap<>();
 
         for (Voucher v : cashVouchers) {
-            if (v.getStatus() != null
-                    && "VOID".equals(v.getStatus().name())) continue;
+            // F006 财务审计 Bug 6 follow-up (2026-07-04, #1228 CashFlow sibling): 现金流量表
+            // 官方报表口径统一 POSTED-only — 排除 VOID (作废) 和 DRAFT (未财审草稿, 人工审核制
+            // 下不算"已发生"现金流动), 但 REVERSED (已过账后红字冲销) 必须保留计入 —— 原凭证的
+            // 现金流仍算发生过, 配合红字冲销镜像凭证 (同为 POSTED) 才能正确互相抵消归零, 与
+            // BalanceSheetService/aggregateBySubjectExcludingDraft 同一原则 (见其 javadoc)。
+            if (v.getStatus() == VoucherStatus.VOID || v.getStatus() == VoucherStatus.DRAFT) continue;
             // 一张 voucher 内: 找现金 entries + 非现金 entries
             List<VoucherEntry> entries = v.getEntries();
             if (entries == null || entries.isEmpty()) continue;
@@ -197,6 +202,12 @@ public class CashFlowService {
         BigDecimal beginningCash = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         BigDecimal endingCash = beginningCash.add(netIncrease).setScale(2, RoundingMode.HALF_UP);
 
+        // F006 财务审计 Bug 6 follow-up (2026-07-04): 待过账 (DRAFT) 凭证数 — 现金流量表已切
+        // POSTED-only 口径, 用此字段告知财务人员"报表数字看着少"的原因 (fool-proof Rule 5),
+        // 而非悄悄漏算不说明. 与 BalanceSheetDTO/IncomeStatementDTO.pendingDraftVoucherCount 同一原则.
+        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, startDate, endDate);
+
         return CashFlowDTO.builder()
                 .factoryId(factoryId)
                 .startYear(startYear)
@@ -213,6 +224,7 @@ public class CashFlowService {
                 .beginningCash(beginningCash)
                 .endingCash(endingCash)
                 .generatedAt(LocalDateTime.now().toString())
+                .pendingDraftVoucherCount(pendingDraftCount)
                 .build();
     }
 
@@ -254,6 +266,15 @@ public class CashFlowService {
                 amountText(dto.getNetIncreaseInCash())));
         rows.add(List.of("", "", "期初现金余额", "", "", amountText(dto.getBeginningCash())));
         rows.add(List.of("", "", "期末现金余额", "", "", amountText(dto.getEndingCash())));
+
+        // F006 财务审计 Bug 6 follow-up (2026-07-04): 待过账提示 footer 行 — 与
+        // BalanceSheetService/IncomeStatementService 导出的 footer 一致, 告知财务人员
+        // 本表仅含已过账 (POSTED) 凭证, 避免"数字看着少却不知道为什么".
+        long pending = dto.getPendingDraftVoucherCount() != null ? dto.getPendingDraftVoucherCount() : 0L;
+        if (pending > 0) {
+            rows.add(List.of("", "", "", "", "", ""));
+            rows.add(List.of("", "", "注: 本表仅含已过账(POSTED)凭证, 另有 " + pending + " 张凭证待过账(未计入本表)", "", "", ""));
+        }
 
         return rows;
     }

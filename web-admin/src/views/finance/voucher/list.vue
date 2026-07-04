@@ -7,12 +7,14 @@ import { usePermissionStore } from '@/store/modules/permission';
 import {
   listVouchers,
   postVoucher,
+  batchPostVouchers,
   voidVoucher,
   VOUCHER_STATUS_LABEL,
   VOUCHER_TYPE_LABEL,
   type Voucher,
   type VoucherStatus,
   type VoucherType,
+  type VoucherBatchPostResponse,
 } from '@/api/voucher';
 import { formatAmount } from '@/utils/tableFormatters';
 
@@ -41,6 +43,12 @@ const voiding = ref(false);
 
 // 防呆 Rule 4: 过账是财务写操作(不可逆), 无 loading 保护时双击可能重复提交过账请求。
 const postingIds = ref<Set<string>>(new Set());
+
+// 批量过账 (Part 2 follow-up to #1228): 人工审核制下逐张过账负担太大, 支持多选批量过账。
+const selectedRows = ref<Voucher[]>([]);
+const batchPosting = ref(false);
+const batchResultVisible = ref(false);
+const batchResult = ref<VoucherBatchPostResponse | null>(null);
 
 // Rule 3: 作废原因标准选项
 const VOID_REASON_OPTIONS = [
@@ -138,6 +146,56 @@ async function handlePost(id: string) {
   }
 }
 
+// ==================== 批量过账 (Part 2 follow-up to #1228) ====================
+
+/** 只有 DRAFT 凭证可被选中批量过账 (POSTED/VOID/REVERSED 不可再过账). */
+function isRowSelectable(row: Voucher) {
+  return row.status === 'DRAFT';
+}
+
+function handleSelectionChange(rows: Voucher[]) {
+  selectedRows.value = rows;
+}
+
+// Rule 1 (fool-proof-design): 预先显示边界 — 借方合计, 让财务人员过账前就知道总金额.
+const selectedTotalDebit = computed(() =>
+  selectedRows.value.reduce((sum, r) => sum + Number(r.totalDebit || 0), 0),
+);
+
+async function handleBatchPost() {
+  if (selectedRows.value.length === 0 || batchPosting.value) return;
+  try {
+    // Rule 2 (fool-proof-design): 携带数量 + 金额 context, 不是笼统的"确认批量过账?"
+    await ElMessageBox.confirm(
+      `确认批量过账选中的 ${selectedRows.value.length} 张凭证 (借方合计 ¥${formatAmount(
+        selectedTotalDebit.value,
+      )})？过账后不可直接编辑, 已过账的凭证会自动跳过。`,
+      '批量过账确认',
+      { confirmButtonText: '确认过账', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  batchPosting.value = true;
+  try {
+    const ids = selectedRows.value.map((r) => r.id);
+    const result = await batchPostVouchers(factoryId.value, ids);
+    batchResult.value = result;
+    batchResultVisible.value = true;
+    selectedRows.value = [];
+    loadData();
+  } catch (e: unknown) {
+    ElMessage({
+      message: e instanceof Error ? e.message : '批量过账失败，请检查网络',
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    batchPosting.value = false;
+  }
+}
+
 function openVoidDialog(row: Voucher) {
   voidTargetId.value = row.id;
   voidTargetRow.value = row; // Rule 2: 保存完整行供 dialog 显示
@@ -222,6 +280,15 @@ onMounted(() => loadData());
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>
+            <el-button
+              v-if="canWrite"
+              type="success"
+              :disabled="selectedRows.length === 0"
+              :loading="batchPosting"
+              @click="handleBatchPost"
+            >
+              批量过账{{ selectedRows.length > 0 ? `(${selectedRows.length})` : '' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -233,7 +300,8 @@ onMounted(() => loadData());
         style="padding:40px 0"
       />
 
-      <el-table v-else :data="tableData" border stripe>
+      <el-table v-else :data="tableData" border stripe @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="45" :selectable="isRowSelectable" />
         <el-table-column prop="voucherNumber" label="凭证字号" width="160" />
         <el-table-column prop="voucherType" label="类型" width="120" align="center">
           <template #default="{ row }">
@@ -362,6 +430,43 @@ onMounted(() => loadData());
         >
           确认作废
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量过账结果 dialog (Part 2 follow-up to #1228): N 成功, M 失败 + 原因 -->
+    <el-dialog
+      v-model="batchResultVisible"
+      title="批量过账结果"
+      width="560px"
+      destroy-on-close
+    >
+      <el-alert
+        v-if="batchResult"
+        :type="batchResult.failureCount === 0 ? 'success' : 'warning'"
+        :closable="false"
+        show-icon
+        :title="`共 ${batchResult.total} 张：${batchResult.successCount} 成功，${batchResult.failureCount} 失败`"
+        style="margin-bottom:16px"
+      />
+      <template v-if="batchResult && batchResult.failureCount > 0">
+        <div style="margin-bottom:8px;color:#606266;font-size:13px">失败明细：</div>
+        <el-table
+          :data="batchResult.results.filter((r) => !r.success)"
+          border
+          size="small"
+          max-height="300"
+        >
+          <el-table-column prop="voucherId" label="凭证 ID" width="220" show-overflow-tooltip />
+          <el-table-column prop="message" label="失败原因" show-overflow-tooltip />
+        </el-table>
+      </template>
+      <template v-if="batchResult && batchResult.results.some((r) => r.skipped)">
+        <div style="margin-top:12px;color:#909399;font-size:12px">
+          {{ batchResult.results.filter((r) => r.skipped).length }} 张已过账，已自动跳过。
+        </div>
+      </template>
+      <template #footer>
+        <el-button type="primary" @click="batchResultVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>

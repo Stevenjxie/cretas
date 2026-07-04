@@ -1,5 +1,6 @@
 package com.cretas.aims.service.voucher.impl;
 
+import com.cretas.aims.dto.finance.VoucherBatchPostResultDTO;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.PayrollRecord;
 import com.cretas.aims.entity.ProductionPlan;
@@ -32,11 +33,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,6 +58,9 @@ public class VoucherServiceImpl implements VoucherService {
     private final VoucherRepository voucherRepo;
     private final VoucherGeneratorRegistry registry;
     private final LinkArrayService linkArrayService;
+
+    /** Part 2 批量过账 (2026-07-04): 每张凭证独立 REQUIRES_NEW 事务, 见 {@link #batchPost}. */
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * Sprint 7 T2 F-PERIOD: 期间结账 gate.
@@ -188,6 +196,15 @@ public class VoucherServiceImpl implements VoucherService {
     @Override
     @Transactional
     public Voucher post(String factoryId, String voucherId, Long userId) {
+        return doPost(factoryId, voucherId, userId);
+    }
+
+    /**
+     * 过账实际逻辑 (DRAFT → POSTED), 由 {@link #post} 和
+     * {@link #batchPost(String, List, Long)} 共用同一校验 (借贷已在生成时校验平衡,
+     * 此处校验 DRAFT 状态 + 期间结账 gate) — 批量过账不重复实现一套弱化版规则.
+     */
+    private Voucher doPost(String factoryId, String voucherId, Long userId) {
         // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权过账别厂凭证)
         Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
@@ -200,6 +217,50 @@ public class VoucherServiceImpl implements VoucherService {
         v.setApprovedBy(userId);
         v.setApprovedAt(LocalDateTime.now());
         return voucherRepo.save(v);
+    }
+
+    @Override
+    public List<VoucherBatchPostResultDTO> batchPost(String factoryId, List<String> voucherIds, Long userId) {
+        List<VoucherBatchPostResultDTO> results = new ArrayList<>();
+        // 每张凭证独立事务 (REQUIRES_NEW): 一张不平/已锁期间的凭证过账失败, 不影响其余凭证的过账
+        // 结果 (批量过账不是"全有全无"事务, 人工审核制下财务需要看到哪几张成功哪几张失败+原因)。
+        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        for (String voucherId : voucherIds) {
+            try {
+                Optional<Voucher> existing = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId);
+                if (existing.isEmpty()) {
+                    results.add(VoucherBatchPostResultDTO.builder()
+                            .voucherId(voucherId).success(false).skipped(false)
+                            .message("凭证不存在").build());
+                    continue;
+                }
+                Voucher v = existing.get();
+                // 幂等 (fool-proof Rule 4): 已过账凭证跳过, 不视为失败 — 批量重试/重复选中同一批
+                // 凭证时不应报错, 应告知"已过账无需重复操作".
+                if (v.getStatus() == VoucherStatus.POSTED) {
+                    results.add(VoucherBatchPostResultDTO.builder()
+                            .voucherId(voucherId).success(true).skipped(true)
+                            .voucherNumber(v.getVoucherNumber())
+                            .message("已过账, 跳过").build());
+                    continue;
+                }
+                final String id = voucherId;
+                Voucher posted = tt.execute(status -> doPost(factoryId, id, userId));
+                results.add(VoucherBatchPostResultDTO.builder()
+                        .voucherId(voucherId).success(true).skipped(false)
+                        .voucherNumber(posted != null ? posted.getVoucherNumber() : null)
+                        .message("过账成功").build());
+            } catch (Exception e) {
+                log.warn("批量过账失败: factoryId={}, voucherId={} — {}", factoryId, voucherId, e.getMessage());
+                results.add(VoucherBatchPostResultDTO.builder()
+                        .voucherId(voucherId).success(false).skipped(false)
+                        .message(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+                        .build());
+            }
+        }
+        return results;
     }
 
     @Override
