@@ -243,11 +243,13 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
-    @DisplayName("结单原料批次不在原料仓时拒绝扣料")
-    void settleProduction_rawBatchOutsideLogisticsWarehouse_rejected() {
+    @DisplayName("结单原料批次在无关仓库 (成品仓/研发库) 时拒绝扣料")
+    void settleProduction_rawBatchInUnrelatedWarehouse_rejected() {
+        // 无关仓库 = 非原料仓/物流仓 (isRawOrLogisticsWarehouse=false) 且非生产仓 (isWorkshopWarehouse=false),
+        // 如成品仓 (FINISHED) / 研发库 (RD)。结单闸仍须拒收, 防结单从无关仓库扣错料。
         ProductionPlan plan = plan();
         MaterialBatch batch = materialBatch();
-        batch.setWarehouseId("WH-WKS-ID");
+        batch.setWarehouseId("WH-FG-ID");
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
@@ -255,6 +257,8 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
         when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
         when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, "WH-FG-ID")).thenReturn(false);
+        when(warehouseResolver.isWorkshopWarehouse(FACTORY_ID, "WH-FG-ID")).thenReturn(false);
         stubCurrentBom("RM-1");
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -262,6 +266,47 @@ class ProductionPlanSettlementTest {
 
         assertEquals("PRODUCTION_RAW_WAREHOUSE_REQUIRED", ex.getErrorCode());
         verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("结单接受生产仓 (WORKSHOP/WH-WKS) 批次 — 领料→调拨→生产仓→报工→结单 料流打通")
+    void settleProduction_workshopBatchFromRequisition_accepted() {
+        // 料流对齐 (2026-07-03): 生产领料把原料从原料仓迁到生产仓 (WORKSHOP/WH-WKS) 后, 结单预填从报工
+        //   materialBatchRefs 带入的正是该 WKS 批次。此前结单闸只认原料仓单一仓 → 自我 409 拒收 (预填产出被
+        //   结单拒绝的矛盾)。现结单闸放行 WORKSHOP 类型仓批次, 与逐道报工闸 (ensureRawMaterialWarehouse) 对齐。
+        ProductionPlan plan = plan();
+        MaterialBatch batch = materialBatch();
+        batch.setWarehouseId("WH-WKS-ID");
+        SemiFinishedInventory wip = wip();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        // 生产仓批次: isRawOrLogisticsWarehouse=false, isWorkshopWarehouse=true → 放行。
+        when(warehouseResolver.isRawOrLogisticsWarehouse(FACTORY_ID, "WH-WKS-ID")).thenReturn(false);
+        when(warehouseResolver.isWorkshopWarehouse(FACTORY_ID, "WH-WKS-ID")).thenReturn(true);
+        stubCurrentBom("RM-1");
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
+
+        // 结单成功 (200, 非 409): 计划完成 + WKS 批次精确扣减 (4 已用 + 12 本次 = 16)。
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        assertEquals(new BigDecimal("90"), response.getActualFinishedQuantity());
+        assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+        verify(materialBatchRepository).save(batch);
+        // #1220 结单族打戳仍触发 (plan sourceType=null 非 SAFETY_STOCK)。
+        verify(materialConsumptionRepository).stampInterimSettledForPlan(eq(FACTORY_ID), eq(PLAN_ID), any());
     }
 
     @Test

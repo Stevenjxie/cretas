@@ -2630,10 +2630,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请先维护工厂仓库配置")
                     .withHintTarget(hintTarget);
         }
-        if (isBlank(batch.getWarehouseId()) || !rawWarehouseId.equals(batch.getWarehouseId())) {
-            throw new BusinessException(409, "生产结单原料只能从原料仓/物流仓领用，不能从其他仓库扣减")
+        // 2026-07-03 料流对齐修复: 生产领料 (transferToFactory) 把原料从原料仓 (WH-LOG) 物理迁到
+        //   生产仓 (WORKSHOP/WH-WKS) 后, 逐道报工的 ensureRawMaterialWarehouse 已放行 WORKSHOP 批次
+        //   (ProcessSheetServiceImpl 2026-07-03), 但本结单闸 (2026-06-13, 早于领料→生产仓模型) 仍只认
+        //   原料仓/物流仓单一仓 → 结单预填自 WKS 批次带入的行被自己的结单闸 409 拒收, 阻断
+        //   领料→调拨→生产仓→报工→结单 标准料流。现与报工闸对齐: 除配置原料仓外, 也放行本工厂
+        //   RAW/LOGISTICS 类型仓 及 WORKSHOP 类型仓 (料合法落点) 的批次。
+        //   诚实-null: batch 无仓 / 仓非 RAW/LOGISTICS/WORKSHOP (如 成品仓 FINISHED / 研发库 RD) → loud-fail 409。
+        String batchWarehouseId = batch.getWarehouseId();
+        boolean warehouseAllowed = !isBlank(batchWarehouseId)
+                && (rawWarehouseId.equals(batchWarehouseId)
+                    || warehouseResolver.isRawOrLogisticsWarehouse(factoryId, batchWarehouseId)
+                    || warehouseResolver.isWorkshopWarehouse(factoryId, batchWarehouseId));
+        if (!warehouseAllowed) {
+            throw new BusinessException(409, "生产结单原料只能从原料仓/物流仓/生产仓领用，不能从其他仓库扣减")
                     .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")
-                    .withHint("请重新选择原料仓批次后再提交")
+                    .withHint("请重新选择原料仓/物流仓/生产仓批次后再提交")
                     .withHintTarget(hintTarget);
         }
 
