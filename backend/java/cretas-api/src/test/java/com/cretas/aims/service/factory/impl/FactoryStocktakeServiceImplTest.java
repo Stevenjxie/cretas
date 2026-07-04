@@ -607,6 +607,148 @@ class FactoryStocktakeServiceImplTest {
     }
 
     // -------------------------------------------------------
+    // 6h (🔒🔒 reserved-overshoot, 修 #1201 overshoot). initiate 快照「货架实物量」= receipt − used,
+    //   绝不扣 reserved: 批次 receipt=100 / used=0 / reserved=30 → 货架实物=100 (预留货物物理仍在货架)。
+    //   快照 systemQty 必须=100 (不是可用量 70), 否则每个有预留的批次凭空产生 30 的假盘盈。
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6h (🔒🔒): initiate 对 receipt=100/used=0/reserved=30 的批次快照 systemQty=100 (货架实物, 非可用量 70)")
+    void initiate_snapshotsPhysicalShelf_notSubtractingReserved() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1); // 跳过月底约束
+
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-RESERVED");
+        batch.setMaterialTypeId("MT-1");
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(new BigDecimal("30.00")); // 预留 30 — 货物物理仍在货架
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(batch));
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.initiate(FACTORY_ID, req, USER_ID);
+
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        List<FactoryStocktakeItem> items = captor.getValue().getItems();
+        assertThat(items).hasSize(1);
+        // 账面 = 货架实物 100 (receipt − used), 绝不是可用量 70 (receipt − used − reserved)
+        assertThat(items.get(0).getSystemQty()).isEqualByComparingTo("100.0000");
+    }
+
+    // -------------------------------------------------------
+    // 6i (🔒🔒 reserved-overshoot). 有预留的批次 (reserved=30) 实盘=货架实物 100 → 零差异:
+    //   无假盘盈, 无 借1403/贷6301 营业外收入凭证, 漂移守卫不误判 (live/snapshot 同为货架实物)。
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6i (🔒🔒): 有预留批次 (receipt=100/reserved=30) 实盘=100 → 零差异, 无幻影盘盈/无6301凭证")
+    void apply_reservedBatch_countMatchesPhysical_noPhantomSurplus() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-RESERVED");
+        item.setSystemQty(new BigDecimal("100.0000")); // 快照 = 货架实物 (receipt − used)
+        item.setActualQty(new BigDecimal("100.0000"));  // 实盘 = 货架实物
+        item.setDifferenceQty(BigDecimal.ZERO);
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.MATCH);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setImportMode(FactoryStocktake.ImportMode.NORMAL); // 若有差异会触发过账 (证明确实零差异)
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+        // 差异=0 的行不进漂移守卫/主循环 → 无需 stub materialBatchRepo.findById
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        // 零差异: 不写任何调整/不动批次/不过账 (预留量绝不产生凭空盘盈 + 6301 假收入)
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+        ArgumentCaptor<FactoryStocktake> stCaptor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo, atLeastOnce()).save(stCaptor.capture());
+        assertThat(stCaptor.getAllValues()).anyMatch(st -> st.getStatus() == FactoryStocktake.Status.APPLIED);
+    }
+
+    // -------------------------------------------------------
+    // 6j (🔒🔒 reserved-overshoot). 有预留批次真实短缺: receipt=100/used=0/reserved=30, 实盘=95
+    //   → 真实短缺 5 (差异 -5), 绝非把 reserved 算进去的幻影盘盈 +25 或幻影短缺 -35。
+    //   apply delta 落 receiptQuantity: receipt 100→95, 货架实物 95=实盘, 可用量 95−30=65 (随之扣减)。
+    //   漂移守卫用货架实物口径 (live 100 = snapshot 100), 不误判。
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6j (🔒🔒): 有预留批次 (receipt=100/reserved=30) 实盘=95 → 真实短缺 5 (非幻影 +25/-35), 凭证盘亏 5×价")
+    void apply_reservedBatch_realShortage_notPhantom() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-RESERVED");
+        item.setSystemQty(new BigDecimal("100.0000")); // 货架实物快照
+        item.setActualQty(new BigDecimal("95.0000"));
+        item.setDifferenceQty(new BigDecimal("-5.0000"));
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SHORTAGE);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setImportMode(FactoryStocktake.ImportMode.NORMAL); // 触发过账
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-RESERVED");
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(new BigDecimal("30.00")); // live 货架实物 = 100 = snapshot → 无漂移
+        batch.setUnitPrice(new BigDecimal("10.00"));
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+        when(materialBatchRepo.findById("BATCH-RESERVED")).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        // 调整量 = 真实短缺 -5 (非幻影)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getAdjustmentQuantity()).isEqualByComparingTo("-5.00");
+
+        // receiptQuantity: 100 + (-5) = 95 ⇒ 货架实物 = 95 = 实盘; 可用量 = 95 − 30 = 65 (预留不变)
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getReceiptQuantity()).isEqualByComparingTo("95.00");
+        assertThat(saved.getPhysicalQuantity()).isEqualByComparingTo("95.00"); // 货架实物落到实盘真值
+        assertThat(saved.getCurrentQuantity()).isEqualByComparingTo("65.00");   // 可用量随之扣 5, 预留 30 保留
+
+        // 盘亏凭证价值 = 真实短缺 5 × 单价 10 = 50 (非幻影 25 或 35)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> cap = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), cap.capture(), eq("FACTORY_STOCKTAKE"), any(), any(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = cap.getValue();
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("6602");
+            assertThat(e.debit()).isEqualByComparingTo("50.00");
+        });
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("1403");
+            assertThat(e.credit()).isEqualByComparingTo("50.00");
+        });
+    }
+
+    // -------------------------------------------------------
     // 7. approve 角色校验: 错误角色 → 403
     // approve() checks role BEFORE calling findAndValidate, so no repo stub needed
     // -------------------------------------------------------

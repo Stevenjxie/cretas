@@ -74,9 +74,11 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             row.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
             row.setBatchNumber(batch.getBatchNumber());
             row.setWarehouseName(warehouse.getName());
-            // 🔴 Fix (🔒🔒 phantom-variance): 模板「账面数量」= 当前可用量 (receipt − used − reserved),
-            // 与 initiate() 快照同口径。用 gross receiptQuantity 会让仓管照着虚高账面盘, 已领用量被误计为盘亏。
-            row.setSystemQty(scale4(batch.getCurrentQuantity()));
+            // 🔴 Fix (🔒🔒 phantom-variance): 模板「账面数量」= 货架实物量 (receipt − used), 与 initiate()
+            // 快照同口径。不用 gross receiptQuantity (已领用量会被误计为盘亏, #1201), 也不用可用量
+            // getCurrentQuantity()(含 −reserved)(预留量会被误计为盘盈, #1201 overshoot 本次修):
+            // 预留货物物理仍在货架, 仓管照实物数, 账面须= receipt − used (见 MaterialBatch.getPhysicalQuantity)。
+            row.setSystemQty(scale4(batch.getPhysicalQuantity()));
             row.setUnit(batch.getQuantityUnit());
             row.setActualQty(null); // 留空待仓管填写
             rows.add(row);
@@ -254,10 +256,11 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                 line.setBatchNumber(batchNo);
                 line.setMaterialName(nameById.getOrDefault(batch.getMaterialTypeId(), batch.getMaterialTypeId()));
                 line.setUnit(batch.getQuantityUnit());
-                // 🔴 Fix (🔒🔒 phantom-variance): 预览「账面数量」+ 差异计算基准 = 当前可用量
-                // (receipt − used − reserved), 与 initiate() 快照 + updateItems() 重算口径一致。
-                // 否则预览显示的差异 (基于 gross) 与 apply 实际生效的差异 (基于可用量) 不一致 → 误导仓管 + 假盘亏。
-                BigDecimal systemQty = scale4(batch.getCurrentQuantity());
+                // 🔴 Fix (🔒🔒 phantom-variance): 预览「账面数量」+ 差异计算基准 = 货架实物量
+                // (receipt − used), 与 initiate() 快照 + updateItems() 重算 + apply 生效口径一致。
+                // 不用 gross (已领用误计盘亏, #1201), 也不用可用量 getCurrentQuantity()(预留误计盘盈,
+                // #1201 overshoot 本次修) —— 否则预览差异与 apply 实际生效差异不一致, 误导仓管 + 假盘盈/盘亏。
+                BigDecimal systemQty = scale4(batch.getPhysicalQuantity());
                 line.setSystemQty(systemQty);
                 if (actual == null) {
                     line.setActualQty(null);
