@@ -22,5 +22,12 @@ public enum VoucherType {
     /** 结转损益凭证 (期末自动). */
     PL_CLOSING,
     /** 库存盘点差异 — 半成品/仓库盘点生效: 盘盈=收入(6301)/盘亏=损耗(6602.01), 库存(1405)增减. */
-    INVENTORY_STOCKTAKE
+    INVENTORY_STOCKTAKE,
+    /**
+     * 结转成本凭证 (期末自动) — 分阶段期末权责化销售成本 (phased period-end COGS)。
+     * 借 6401 主营业务成本 / 贷 1405 库存商品 = 期内已发货成品 (发货数量 × 批次单位成本)。
+     * 让 6401 有真实发生额, 经 {@code PL_CLOSING} 结转进 4103, 修复"毛利=收入"缺口;
+     * 同时释放 1405, 使其反映真实剩余存货 (采购已借 1405, COGS 结转贷 1405)。
+     */
+    COST_CARRYOVER
 }

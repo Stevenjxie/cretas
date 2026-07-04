@@ -116,6 +116,16 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
      * 若不排 PL_CLOSING, 该镜像的 6xxx 分录会漏进聚合 → 再结转时把 6xxx 双计
      * (原结转 REVERSED 被排, 镜像 POSTED 被计, 二者不相抵)。排除 PL_CLOSING 后,
      * 聚合永远只看业务 6xxx, reopen→reclose 任意多次都得正确净额。
+     *
+     * <p><b>COST_CARRYOVER (结转成本) 的差异化处理</b>: 与 PL_CLOSING 不同, COST_CARRYOVER
+     * 的主凭证 (借 6401 主营业务成本 / 贷 1405) 是<b>真实业务发生额</b> (期末权责化的销售成本),
+     * <b>必须</b>被本聚合计入 → 让 6401 经结转损益进 4103 (修复"毛利=收入")。
+     * 但它的<b>红冲镜像</b> (反结账产生, originalVoucherId 非空, voucherType 仍是 COST_CARRYOVER,
+     * status=POSTED) 会重蹈 PL_CLOSING 的双计覆辙 (原 COST_CARRYOVER 置 REVERSED 被排,
+     * 镜像 POSTED 被计, 二者不相抵) → reopen→reclose 时 6401 被镜像抵消回 0。
+     * 故这里<b>只排 COST_CARRYOVER 的红冲镜像</b> (originalVoucherId IS NOT NULL),
+     * 保留其主凭证。这样 first-close 时 6401 计入, reopen→reclose 时 (原→REVERSED 排 +
+     * 镜像→本条排 + 新主凭证→计) 净额恒等于新一轮的真实 COGS。
      */
     @Query("SELECT new com.cretas.aims.dto.finance.SubjectAggregateRow(" +
             "  e.subjectCode, MAX(e.subjectName), " +
@@ -126,6 +136,8 @@ public interface VoucherEntryRepository extends JpaRepository<VoucherEntry, Stri
             "  AND v.voucherDate BETWEEN :startDate AND :endDate " +
             "  AND v.status = com.cretas.aims.entity.enums.VoucherStatus.POSTED " +
             "  AND v.voucherType <> com.cretas.aims.entity.enums.VoucherType.PL_CLOSING " +
+            "  AND NOT (v.voucherType = com.cretas.aims.entity.enums.VoucherType.COST_CARRYOVER " +
+            "           AND v.originalVoucherId IS NOT NULL) " +
             "  AND v.deletedAt IS NULL " +
             "GROUP BY e.subjectCode " +
             "ORDER BY e.subjectCode ASC")

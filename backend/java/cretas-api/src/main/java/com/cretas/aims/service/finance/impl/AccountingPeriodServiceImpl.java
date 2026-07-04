@@ -58,6 +58,16 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
     @Autowired(required = false)
     private com.cretas.aims.service.finance.ProfitLossClosingService profitLossClosingService;
 
+    /**
+     * 结转成本 (期末 COGS 权责化, 可选注入)。**@Lazy 必需** — 同 profitLossClosingService,
+     * 打破 VoucherService → AccountingPeriodService → CostCarryover →(构造器) VoucherService 循环。
+     * forceLockAndClose 里<b>先于</b> closePeriod 调 carryCost (让 6401 结转成本进 4103);
+     * reopenPeriod 里连同结转损益一起红冲。
+     */
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.service.finance.CostCarryoverService costCarryoverService;
+
     @Override
     @Transactional
     public AccountingPeriod openPeriod(String factoryId, Integer year, Integer month, Long userId) {
@@ -178,10 +188,15 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
         p.setReopenReason(reason.trim());
         AccountingPeriod saved = repo.save(p);
 
-        // 结转损益: 若已结转, 红冲结转凭证。必须在 setStatus(OPEN)+save 之后 —
+        // 结转损益 + 结转成本: 若已结转, 红冲结转凭证。必须在 setStatus(OPEN)+save 之后 —
         // 红冲走 reversePostedVoucher → assertPeriodOpen, 期间须已 OPEN 才放行 (否则 PeriodClosedException)。
-        if (profitLossClosingService != null && hadClosing) {
-            profitLossClosingService.reversePeriodClosing(factoryId, year, month, userId);
+        if (hadClosing) {
+            if (profitLossClosingService != null) {
+                profitLossClosingService.reversePeriodClosing(factoryId, year, month, userId);
+            }
+            if (costCarryoverService != null) {
+                costCarryoverService.reverseCostCarryover(factoryId, year, month, userId);
+            }
             saved.setClosingPostedAt(null);
             saved = repo.save(saved);
         }
@@ -206,7 +221,13 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
             return p; // 幂等: 已结转
         }
         p.setAdjustDeadline(LocalDateTime.now()); // 强制 LOCKED
-        // closePeriod 经 createManual 直建 POSTED (绕期间 gate), 故 CLOSED 期间也能过结转凭证。
+        // createManual 直建 POSTED (绕期间 gate), 故 CLOSED 期间也能过结转凭证。
+        // ⚠️ 顺序关键: 结转成本 (借 6401/贷 1405) 必须<b>先于</b>结转损益 —
+        //   这样 6401 主营业务成本的发生额才会被 closePeriod 的 aggregateBySubjectPosted 聚合进 4103,
+        //   修复"毛利=收入"。二者同一 @Transactional, 任一失败整体回滚, closingPostedAt 不落 → 原子。
+        if (costCarryoverService != null) {
+            costCarryoverService.carryCost(factoryId, year, month, userId);
+        }
         if (profitLossClosingService != null) {
             profitLossClosingService.closePeriod(factoryId, year, month, userId);
         }
