@@ -32,6 +32,7 @@ import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.finance.VoucherExportConfigRepository;
 import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -76,6 +77,7 @@ class VoucherExportServiceTest {
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepo;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private SalesDeliveryItemRepository salesDeliveryItemRepo;
     @Mock private CustomerRepository customerRepo;
     @Mock private SupplierRepository supplierRepo;
     @Mock private DepartmentRepository departmentRepo;
@@ -94,6 +96,7 @@ class VoucherExportServiceTest {
         service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
                 accountingPeriodRepo, exportConfigRepo, exportRecordRepo,
                 materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo,
+                salesDeliveryItemRepo,
                 customerRepo, supplierRepo, departmentRepo, productTypeRepo, userRepo);
     }
 
@@ -247,6 +250,103 @@ class VoucherExportServiceTest {
         batch.setWarehouseId("WH-LOG");
         batch.setCreatedBy(USER_ID);
         return batch;
+    }
+
+    /** FG batch with an explicit propagated unitCost (Bug 7: ledger must value at cost, not price). */
+    private FinishedGoodsBatch finishedGoodsWithCost(String id, String batchNo, String productTypeId,
+                                                     String productionDate, String produced,
+                                                     String unitPrice, String unitCost) {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setBatchNumber(batchNo);
+        batch.setProductTypeId(productTypeId);
+        batch.setProductName("成品-" + productTypeId);
+        batch.setProductionDate(LocalDate.parse(productionDate));
+        batch.setProducedQuantity(new BigDecimal(produced));
+        batch.setShippedQuantity(BigDecimal.ZERO); // 发出流水现来自 SalesDeliveryItem, 不再读此累计列
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit("kg");
+        batch.setUnitPrice(new BigDecimal(unitPrice));
+        if (unitCost != null) {
+            batch.setUnitCost(new BigDecimal(unitCost));
+        }
+        batch.setWarehouseId("WH-LOG");
+        batch.setCreatedBy(USER_ID);
+        return batch;
+    }
+
+    /** One row shaped exactly like SalesDeliveryItemRepository.findShippedMovementsForLedger returns. */
+    private Object[] shipmentRow(String deliveryDate, String deliveredQty, String unitCost,
+                                 String productTypeId, String batchNumber, String deliveryNumber) {
+        return new Object[]{
+                LocalDate.parse(deliveryDate),
+                new BigDecimal(deliveredQty),
+                unitCost == null ? null : new BigDecimal(unitCost),
+                productTypeId,
+                batchNumber,
+                "成品-" + productTypeId,
+                deliveryNumber
+        };
+    }
+
+    @Test
+    @DisplayName("Bug 7: 成品收发存按成本(unitCost)计价、发出按逐笔发货真实日期 — 非售价/非累计盖生产日期")
+    void exportQuantityAmountLedger_finishedGoods_costBasisAndPerShipmentDate() throws Exception {
+        // 生产 05-05 产 10 (成本 18, 售价 30 应被忽略); 发货 05-20 发 4 (成本 18)。
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(finishedGoodsWithCost("FG-001", "FG20260505001", "FG-SAUCE",
+                        "2026-05-05", "10.000", "30.00", "18.00"))));
+        when(salesDeliveryItemRepo.findShippedMovementsForLedger(eq(FACTORY_ID), any(), any()))
+                .thenReturn(java.util.Collections.singletonList(shipmentRow("2026-05-20", "4.000", "18.00",
+                        "FG-SAUCE", "FG20260505001", "DLV-20260520-001")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<List<String>> rows = readXlsx(out.toByteArray());
+
+        // rows: [header, FG入库(05-05), FG发出(05-20), footer]
+        List<String> in = rows.get(1);
+        assertEquals("2026-05-05", in.get(0));
+        assertEquals(0, new BigDecimal("10.000").compareTo(decimalAt(in, 3)), "收入数量=产量");
+        assertEquals(0, new BigDecimal("18.00").compareTo(decimalAt(in, 4)), "收入单价=成本(非售价30)");
+        assertEquals(0, new BigDecimal("180.00").compareTo(decimalAt(in, 5)), "收入金额=10×18(非10×30)");
+        assertEquals(0, new BigDecimal("10.000").compareTo(decimalAt(in, 9)), "结存数量");
+        assertEquals(0, new BigDecimal("180.00").compareTo(decimalAt(in, 11)), "结存金额=成本口径");
+
+        List<String> outRow = rows.get(2);
+        assertEquals("2026-05-20", outRow.get(0), "发出日期=逐笔发货真实日期(非生产日05-05)");
+        assertEquals(0, new BigDecimal("4.000").compareTo(decimalAt(outRow, 6)), "发出数量=本笔发货量");
+        assertEquals(0, new BigDecimal("18.00").compareTo(decimalAt(outRow, 7)), "发出单价=成本");
+        assertEquals(0, new BigDecimal("72.00").compareTo(decimalAt(outRow, 8)), "发出金额=4×18");
+        // 期初(0)+入(180)-出(72)=期末(108); 数量 10-4=6
+        assertEquals(0, new BigDecimal("6.000").compareTo(decimalAt(outRow, 9)), "结存数量=10-4");
+        assertEquals(0, new BigDecimal("108.00").compareTo(decimalAt(outRow, 11)), "结存金额=180-72");
+    }
+
+    @Test
+    @DisplayName("Bug 7: 成品成本未知 → 诚实 null(金额/结存显示 —), 绝不按售价或 ¥0 伪造")
+    void exportQuantityAmountLedger_finishedGoods_honestNullWhenCostMissing() throws Exception {
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(finishedGoodsWithCost("FG-002", "FG20260506001", "FG-NOCOST",
+                        "2026-05-06", "8.000", "25.00", null)))); // unitCost 缺失
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<List<String>> rows = readXlsx(out.toByteArray());
+
+        List<String> in = rows.get(1);
+        assertEquals("2026-05-06", in.get(0));
+        assertEquals(0, new BigDecimal("8.000").compareTo(decimalAt(in, 3)), "数量仍真实呈现");
+        assertEquals("—", in.get(4), "收入单价诚实 null(非售价25)");
+        assertEquals("—", in.get(5), "收入金额诚实 null(非¥0)");
+        assertEquals("—", in.get(11), "结存金额一旦有未知成本即诚实 null");
     }
 
     private List<List<String>> readXlsx(byte[] bytes) {

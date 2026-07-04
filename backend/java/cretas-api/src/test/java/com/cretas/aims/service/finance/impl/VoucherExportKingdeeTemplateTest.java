@@ -72,6 +72,7 @@ class VoucherExportKingdeeTemplateTest {
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepo;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private com.cretas.aims.repository.inventory.SalesDeliveryItemRepository salesDeliveryItemRepo;
     @Mock private CustomerRepository customerRepo;
     @Mock private SupplierRepository supplierRepo;
     @Mock private DepartmentRepository departmentRepo;
@@ -90,6 +91,7 @@ class VoucherExportKingdeeTemplateTest {
         service = new VoucherExportServiceImpl(voucherRepo, entryRepo, accountRepo,
                 accountingPeriodRepo, exportConfigRepo, exportRecordRepo,
                 materialBatchRepo, materialConsumptionRepo, semiFinishedInventoryRepo, finishedGoodsBatchRepo,
+                salesDeliveryItemRepo,
                 customerRepo, supplierRepo, departmentRepo, productTypeRepo, userRepo);
     }
 

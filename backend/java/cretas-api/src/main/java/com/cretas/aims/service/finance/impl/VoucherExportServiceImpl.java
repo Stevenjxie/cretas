@@ -41,6 +41,7 @@ import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.finance.VoucherExportConfigRepository;
 import com.cretas.aims.repository.finance.VoucherExportRecordRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.service.finance.VoucherExportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -93,6 +94,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private static final LocalDate EPOCH_START = LocalDate.of(1970, 1, 1);
     private static final int INVENTORY_EXPORT_PAGE_SIZE = 10_000;
     private static final String SOURCE_FOOTER_TEXT = "凭证来源口径=待财务确认";
+    // 收发存(数量金额账)成本未知时的诚实 null 占位 — 有实物数量但无成本(unitCost 缺失), 绝不伪造 ¥0 或售价。
+    private static final String HONEST_NULL_TEXT = "—";
     private static final String VOUCHER_SOURCE_CALIBER_PENDING = "待财务确认";
     private static final String KINGDEE_CLOUD_VOUCHER_WORD = "记";
     private static final String KINGDEE_CLOUD_CURRENCY = "人民币";
@@ -118,6 +121,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private final MaterialConsumptionRepository materialConsumptionRepo;
     private final SemiFinishedInventoryRepository semiFinishedInventoryRepo;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    private final SalesDeliveryItemRepository salesDeliveryItemRepo;
     // 辅助核算 (核算名称/核算类别) 名称解析 — 把 auxiliaryEntityId (UUID/PK) 翻成实体显示名, 见 buildAuxIndex.
     private final CustomerRepository customerRepo;
     private final SupplierRepository supplierRepo;
@@ -802,20 +806,29 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             RunningInventoryBalance running = runningByItem.computeIfAbsent(movement.itemKey(),
                     ignored -> new RunningInventoryBalance());
             running.quantity = running.quantity.add(nvl(movement.inQuantity())).subtract(nvl(movement.outQuantity()));
-            running.amount = running.amount.add(nvl(movement.inAmount())).subtract(nvl(movement.outAmount()));
+            // 诚实 null: 有实物数量但成本未知 (inAmount/outAmount == null) → 不按 ¥0 累加, 标记结存金额不可靠。
+            boolean inUnknownCost = nvl(movement.inQuantity()).compareTo(BigDecimal.ZERO) > 0
+                    && movement.inAmount() == null;
+            boolean outUnknownCost = nvl(movement.outQuantity()).compareTo(BigDecimal.ZERO) > 0
+                    && movement.outAmount() == null;
+            if (inUnknownCost || outUnknownCost) {
+                running.amountReliable = false;
+            } else {
+                running.amount = running.amount.add(nvl(movement.inAmount())).subtract(nvl(movement.outAmount()));
+            }
             rows.add(List.of(
                     movement.date() == null ? "" : movement.date().toString(),
                     nvlStr(movement.voucherNo()),
                     nvlStr(movement.summary()),
                     quantityText(movement.inQuantity()),
-                    amountText(movement.inUnitPrice()),
-                    amountText(movement.inAmount()),
+                    amountTextNullable(movement.inUnitPrice()),
+                    amountTextNullable(movement.inAmount()),
                     quantityText(movement.outQuantity()),
-                    amountText(movement.outUnitPrice()),
-                    amountText(movement.outAmount()),
+                    amountTextNullable(movement.outUnitPrice()),
+                    amountTextNullable(movement.outAmount()),
                     quantityText(running.quantity),
-                    amountText(running.unitPrice()),
-                    amountText(running.amount)
+                    running.amountReliable ? amountText(running.unitPrice()) : HONEST_NULL_TEXT,
+                    running.amountReliable ? amountText(running.amount) : HONEST_NULL_TEXT
             ));
         }
 
@@ -914,6 +927,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             ));
         }
 
+        // 半成品(WIP)收发存: 金额已按单位成本 unitCost (非售价), 无 Bug 7 的售价问题。
+        // 已知口径限制 (诚实标注, 无干净数据源): producedQuantity / consumedQuantity 是 SFI 的<b>累计</b>计数器,
+        // 均锚在 SFI 创建日期 createdAt。产出(入)锚在创建日期本就正确; 但消耗(出)是后续逐次投料下游累加的,
+        // 并无按日期可查的逐笔消耗流水 (consumedQuantity 就地累加, 无 dated 事件表), 故消耗时点被折进创建当期。
+        // 期内数量净额 (入=产量, 出=累计消耗) 与真实在库一致, 仅消耗的逐期分布不精确 — 待有逐笔投料流水后再细化。
         for (SemiFinishedInventory wip : semiFinishedInventoryRepo.findByFactoryIdForWeightView(factoryId)) {
             LocalDate date = wip.getCreatedAt() == null ? null : wip.getCreatedAt().toLocalDate();
             if (!within(date, req.getStartDate(), req.getEndDate())) {
@@ -935,6 +953,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             }
         }
 
+        // 成品入库(生产)流水: 按生产日期归期, 金额按成品单位<b>成本</b> unitCost (G3 成本传导, 诚实 null),
+        // 不是售价 unitPrice —— F006 财务审计 Bug 7: 旧实现用 batch.getUnitPrice()(售价)虚增成品库存价值、
+        // 掩盖 COGS 口径 (见 FinishedGoodsFeedServiceImpl "按售价计入…污染 COGS 口径")。
+        // 诚实 null: unitCost 缺失时金额留空, 绝不回落售价或 ¥0。
+        // 已知口径限制: producedQuantity 为批次当前(含后续 disposal/feed/退货调整后)累计产量, 锚在生产日期;
+        // 逐笔调整(FinishedGoodsAdjustmentLog)未按其真实日期单列, 故批次生命周期内的调整时点被折进生产当期,
+        // 但期内数量净额仍正确 (入=当前产量, 出=逐笔发货) — 逐期数量净额与真实在库一致。
         for (FinishedGoodsBatch batch : finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(
                 factoryId, PageRequest.of(0, INVENTORY_EXPORT_PAGE_SIZE)).getContent()) {
             LocalDate date = batch.getProductionDate();
@@ -942,19 +967,37 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 continue;
             }
             String itemKey = "FG:" + firstNonBlank(batch.getProductTypeId(), batch.getBatchNumber());
-            BigDecimal unitPrice = nvl(batch.getUnitPrice());
+            BigDecimal unitCost = batch.getUnitCost(); // 诚实 null: 不 nvl 成 0, 不回落售价
             BigDecimal produced = nvl(batch.getProducedQuantity());
             if (produced.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal amount = unitCost == null ? null : produced.multiply(unitCost);
                 movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
                         "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()),
-                        itemKey, produced, unitPrice, produced.multiply(unitPrice)));
+                        itemKey, produced, unitCost, amount));
             }
-            BigDecimal shipped = nvl(batch.getShippedQuantity());
-            if (shipped.compareTo(BigDecimal.ZERO) > 0) {
-                movements.add(InventoryMovement.outbound(date, batch.getBatchNumber(),
-                        "成品发出 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()),
-                        itemKey, shipped, unitPrice, shipped.multiply(unitPrice)));
+        }
+
+        // 成品发出流水: 逐笔真实发货 (SalesDeliveryItem, 按发货单 delivery_date 归期), 金额按 unitCost (诚实 null)。
+        // F006 财务审计 Bug 7: 旧实现读 batch.shippedQuantity(生命周期累计)并盖在生产日期上 × 售价,
+        // 把跨月的全部发货历史都记进生产当月 → 逐期收发存被污染。改为逐笔发货 + 各自真实发货日 + 成本口径。
+        for (Object[] row : salesDeliveryItemRepo.findShippedMovementsForLedger(
+                factoryId, req.getStartDate(), req.getEndDate())) {
+            LocalDate shipDate = (LocalDate) row[0];
+            BigDecimal shippedQty = nvl((BigDecimal) row[1]);
+            if (shippedQty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
             }
+            BigDecimal unitCost = (BigDecimal) row[2]; // 诚实 null (发货行未关联批次 或 批次成本未知)
+            String productTypeId = (String) row[3];
+            String batchNumber = (String) row[4];
+            String productName = (String) row[5];
+            String deliveryNumber = (String) row[6];
+            String itemKey = "FG:" + firstNonBlank(productTypeId, batchNumber);
+            BigDecimal amount = unitCost == null ? null : shippedQty.multiply(unitCost);
+            movements.add(InventoryMovement.outbound(shipDate,
+                    firstNonBlank(deliveryNumber, batchNumber),
+                    "成品发出 " + firstNonBlank(productName, productTypeId),
+                    itemKey, shippedQty, unitCost, amount));
         }
         return movements;
     }
@@ -1669,6 +1712,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         return scale2(v).toPlainString();
     }
 
+    /** 诚实 null 版金额文本: null(成本未知) → "—"(占位), 绝不显示 0.00; 非 null 走常规 scale2。 */
+    private String amountTextNullable(BigDecimal v) {
+        return v == null ? HONEST_NULL_TEXT : amountText(v);
+    }
+
     private BigDecimal scale3(BigDecimal v) {
         if (v == null) return BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP);
         return v.setScale(3, RoundingMode.HALF_UP);
@@ -1830,6 +1878,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private static class RunningInventoryBalance {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal amount = BigDecimal.ZERO;
+        /** 一旦某物料出现一笔成本未知(诚实 null)的收/发, 结存金额/单价不再可靠 → 以诚实 null 呈现, 不伪造。 */
+        private boolean amountReliable = true;
 
         private BigDecimal unitPrice() {
             if (quantity.compareTo(BigDecimal.ZERO) == 0) {
