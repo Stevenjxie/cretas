@@ -12,6 +12,7 @@ import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -37,6 +38,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -68,6 +70,7 @@ class FactoryStocktakeServiceImplTest {
     @Mock private FactoryStocktakeItemRepository stocktakeItemRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private VoucherService voucherService;
 
@@ -746,6 +749,169 @@ class FactoryStocktakeServiceImplTest {
             assertThat(e.subjectCode()).isEqualTo("1403");
             assertThat(e.credit()).isEqualByComparingTo("50.00");
         });
+    }
+
+    // -------------------------------------------------------
+    // 6k-6n (🔴🔒🔒 生产仓「延迟扣减」盘点盲区, 2026-07-04). 报工写「未小结」MaterialConsumption 但不扣
+    //   usedQuantity (小结才扣) → 生产仓 WKS 批次 getPhysicalQuantity()(=receipt−used) 仍含「已投产账面未扣」量,
+    //   高于货架真实实物。盘点快照/漂移须再减去未小结报工消耗, 否则假盘亏 + 假 6602 凭证 + 小结对已划空批次
+    //   扣减 409 永久卡死 (关单亦 409, 双向死锁)。
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6k (🔒🔒 生产仓延迟扣减): initiate 对 WKS 批次 receipt=10/used=0 + 6 未小结报工 → 快照 systemQty=4 (非 physical 10)")
+    void initiate_wksBatchWithUnsettledConsumption_snapshotsShelfMinusUnsettled() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        MaterialBatch wks = new MaterialBatch();
+        wks.setId("BATCH-WKS");
+        wks.setMaterialTypeId("MT-1");
+        wks.setReceiptQuantity(new BigDecimal("10.00"));
+        wks.setUsedQuantity(BigDecimal.ZERO);          // physical = 10, 但 6 已报工投产 (未小结)
+        wks.setReservedQuantity(BigDecimal.ZERO);
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID)).thenReturn(List.of(wks));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.<Object[]>singletonList(new Object[]{"BATCH-WKS", new BigDecimal("6.00")}));
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.initiate(FACTORY_ID, req, USER_ID);
+
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        List<FactoryStocktakeItem> items = captor.getValue().getItems();
+        assertThat(items).hasSize(1);
+        // 货架实物 = physical(10) − 未小结报工(6) = 4; 仓管数到 4 → 零差异
+        assertThat(items.get(0).getSystemQty()).isEqualByComparingTo("4.0000");
+    }
+
+    @Test
+    @DisplayName("T6l (🔒🔒 生产仓延迟扣减): WKS 快照=4 实盘=4 → 零差异, 无假盘亏/无6602凭证/不平移 receipt (小结不 409 前提)")
+    void apply_wksBatch_countMatchesShelf_zeroVariance_noReceiptShift() {
+        // 快照货架实物=4 (physical10 − 未结6), 仓管诚实数 4 → 差异 0
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-WKS");
+        item.setSystemQty(new BigDecimal("4.0000"));
+        item.setActualQty(new BigDecimal("4.0000"));
+        item.setDifferenceQty(BigDecimal.ZERO);
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.MATCH);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setImportMode(FactoryStocktake.ImportMode.NORMAL); // 若有差异会过账 (证明确实零差异)
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+        // 差异=0 → 不进漂移守卫/主循环 → 不查未结消耗, 不动 receipt
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        // 零差异: 不写调整/不动 receipt/不过账 → receipt 保持 10 → 后续小结 usedQuantity+=6 → physical=4 ≥0, 不 409
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+        ArgumentCaptor<FactoryStocktake> stCaptor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo, atLeastOnce()).save(stCaptor.capture());
+        assertThat(stCaptor.getAllValues()).anyMatch(st -> st.getStatus() == FactoryStocktake.Status.APPLIED);
+    }
+
+    @Test
+    @DisplayName("T6m (🔒🔒 生产仓延迟扣减): WKS receipt=10/used=0 + 6未结, 实盘=3 → 真实盘亏 1 (非幻影 7), 漂移守卫不误判, receipt 10→9")
+    void apply_wksBatch_genuineShortageBeyondUnsettled_notPhantom() {
+        // 快照货架实物=4 (physical10 − 未结6); 仓管数 3 → 真实短缺 1 (差异 -1), 绝非把未结 6 算进去的 -7
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-WKS");
+        item.setSystemQty(new BigDecimal("4.0000"));
+        item.setActualQty(new BigDecimal("3.0000"));
+        item.setDifferenceQty(new BigDecimal("-1.0000"));
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SHORTAGE);
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setImportMode(FactoryStocktake.ImportMode.NORMAL); // 触发过账
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("BATCH-WKS");
+        batch.setReceiptQuantity(new BigDecimal("10.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);         // physical=10; live 货架实物 = 10 − 6未结 = 4 = snapshot → 无漂移
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnitPrice(new BigDecimal("10.00"));
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE);
+        when(materialBatchRepo.findById("BATCH-WKS")).thenReturn(Optional.of(batch));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.<Object[]>singletonList(new Object[]{"BATCH-WKS", new BigDecimal("6.00")}));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(stocktakeRepo.save(any())).thenReturn(stocktake);
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        // 调整量 = 真实短缺 -1 (非幻影 -7)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getAdjustmentQuantity()).isEqualByComparingTo("-1.00");
+
+        // receipt 10 + (-1) = 9 ⇒ 后续小结 usedQuantity+=6 后 physical = 9 − 6 = 3 = 实盘 (真实短缺已扣, 未结正常小结)
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        assertThat(batchCaptor.getValue().getReceiptQuantity()).isEqualByComparingTo("9.00");
+
+        // 盘亏凭证 = 真实短缺 1 × 单价 10 = 10 (非幻影 7×10=70)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<VoucherEntrySpec>> cap = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(eq(FACTORY_ID), eq(VoucherType.INVENTORY_STOCKTAKE),
+                any(), cap.capture(), eq("FACTORY_STOCKTAKE"), any(), any(), eq(USER_ID));
+        List<VoucherEntrySpec> entries = cap.getValue();
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("6602");
+            assertThat(e.debit()).isEqualByComparingTo("10.00");
+        });
+        assertThat(entries).anySatisfy(e -> {
+            assertThat(e.subjectCode()).isEqualTo("1403");
+            assertThat(e.credit()).isEqualByComparingTo("10.00");
+        });
+    }
+
+    @Test
+    @DisplayName("T6n (回归 #1201/#1213): 原料仓批次无未结报工消耗 (sum→空) → 快照 = physical 不变")
+    void initiate_rawBatchNoUnsettled_snapshotUnchanged() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId("BATCH-RAW");
+        raw.setMaterialTypeId("MT-1");
+        raw.setReceiptQuantity(new BigDecimal("100.00"));
+        raw.setUsedQuantity(new BigDecimal("40.00")); // 领料即时扣减, 无未结消耗
+        raw.setReservedQuantity(BigDecimal.ZERO);
+
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID)).thenReturn(List.of(raw));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList()); // 无未结消耗行
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.initiate(FACTORY_ID, req, USER_ID);
+
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        // physical = 100 − 40 = 60, 无未结消耗 → 快照仍 60 (#1201/#1213 口径不变)
+        assertThat(captor.getValue().getItems().get(0).getSystemQty()).isEqualByComparingTo("60.0000");
     }
 
     // -------------------------------------------------------
