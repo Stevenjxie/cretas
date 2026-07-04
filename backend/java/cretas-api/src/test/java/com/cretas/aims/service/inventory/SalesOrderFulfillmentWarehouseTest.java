@@ -210,20 +210,23 @@ class SalesOrderFulfillmentWarehouseTest {
     // ============================================================
 
     @Test
-    @DisplayName("getAvailableBatches: 仅返回 WH-LOG 批次 (供 UI 库存查询)")
-    void getAvailableBatches_returnsWhLogOnly() {
-        FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("100"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
-                .thenReturn(List.of(whLogBatch));
+    @DisplayName("🔴 getAvailableBatches: blank source → 跨全部可售仓 (除 WH-RD), 与 recommend-fifo (G1) 同口径")
+    void getAvailableBatches_returnsAllSellableWarehouses() {
+        // 2026-07-04: blank source 不再单仓 WH-LOG (成品落生产仓 WH-WKS 时库存查询假报无货) —
+        //   跨全部可售仓 (findAvailableBatchesFefoAllWarehousesExcluding, 排 WH-RD), 与发货推荐/扣减 G1 一致。
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", "wh-wks-f001", new BigDecimal("100"));
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(wksBatch));
 
         List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE);
 
         assertEquals(1, batches.size());
-        assertEquals(WH_LOG_ID, batches.get(0).getWarehouseId());
-        // 验证调用走 WH-LOG 过滤路径
-        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
+        assertEquals("wh-wks-f001", batches.get(0).getWarehouseId());
+        // blank source 不解析单仓, 直接跨全可售仓查询。
+        verify(warehouseResolver, never()).resolveSalesOutboundWh(anyString());
         verify(finishedGoodsBatchRepository, times(1))
-                .findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID);
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
     }
 
     @Test
@@ -341,29 +344,32 @@ class SalesOrderFulfillmentWarehouseTest {
     }
 
     @Test
-    @DisplayName("Phase B-1: getAvailableBatches(sourceWarehouseCode=null) → 回落 WH-LOG (D5 默认)")
-    void getAvailableBatches_nullSourceWarehouseCode_fallsBackToWhLog() {
+    @DisplayName("getAvailableBatches(sourceWarehouseCode=null) → 跨全部可售仓 (除 WH-RD)")
+    void getAvailableBatches_nullSourceWarehouseCode_allSellable() {
         FinishedGoodsBatch logBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("100"));
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(List.of(logBatch));
 
         List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE, null);
 
         assertEquals(1, batches.size());
         assertEquals(WH_LOG_ID, batches.get(0).getWarehouseId());
-        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
+        verify(warehouseResolver, never()).resolveSalesOutboundWh(anyString());
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("Phase B-1: getAvailableBatches(sourceWarehouseCode=空字符串) → blank-safe fallback")
-    void getAvailableBatches_blankSourceWarehouseCode_fallsBackToWhLog() {
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+    @DisplayName("getAvailableBatches(sourceWarehouseCode=空字符串) → blank-safe 跨全部可售仓")
+    void getAvailableBatches_blankSourceWarehouseCode_allSellable() {
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(Collections.emptyList());
 
         salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE, "   ");
 
-        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
+        verify(finishedGoodsBatchRepository, times(1))
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 
@@ -432,16 +438,17 @@ class SalesOrderFulfillmentWarehouseTest {
     }
 
     @Test
-    @DisplayName("Phase B-1: getAvailableBatches 二参旧路径 → 委托走 null fallback (向后兼容)")
-    void getAvailableBatches_legacyTwoArg_delegatesToFallback() {
-        // 这个 case 覆盖 SalesServiceImpl line 808-810 旧签名委托新签名的逻辑.
-        // 与 getAvailableBatches_returnsWhLogOnly 类似, 但显式断言"未传 code → 走 fallback".
-        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_LOG_ID))
+    @DisplayName("getAvailableBatches 二参旧路径 → 委托走 null(blank) → 跨全部可售仓 (向后兼容)")
+    void getAvailableBatches_legacyTwoArg_delegatesToAllSellable() {
+        // 覆盖旧签名委托新签名的逻辑: 未传 code → blank → 跨全可售仓查询 (非单仓 WH-LOG)。
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
                 .thenReturn(Collections.emptyList());
 
         salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE);
 
-        verify(warehouseResolver, times(1)).resolveSalesOutboundWh(FACTORY_A);
+        verify(finishedGoodsBatchRepository, times(1))
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
         verify(warehouseResolver, never()).resolveId(anyString(), anyString());
     }
 }

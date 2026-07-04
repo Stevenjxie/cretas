@@ -69,6 +69,24 @@ public class OrderCostBreakdownService {
     }
 
     /**
+     * 按生产计划查单盒成本 (结单族 CUSTOMER_ORDER 成品入库成本传导用).
+     *
+     * <p>{@link #compute}(by-order) 走 sourceOrderId→planIds→batches; 本方法直接以单个 planId 取
+     * 该计划全部生产批次, 复用同一 {@link #computeForBatches} 内核 (单一权威成本: 原料沿
+     * MaterialConsumption 边回溯 + 逐道人工/调料/包装, diamond-safe)。给
+     * {@code createFinishedGoodsFromReceipt} 提供成品单位成本基准, 与 出厂核算/汇总页字节一致。
+     *
+     * <p>DTO.orderId 字段填 planId (仅作展示 label)。无批次 → hasData=false (诚实, 不造 0 行)。
+     */
+    public OrderCostBreakdownDTO computeByPlan(String factoryId, String planId, boolean maskPrice) {
+        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        if (batches == null || batches.isEmpty()) {
+            return empty(planId, maskPrice);
+        }
+        return computeForBatches(factoryId, planId, batches, maskPrice);
+    }
+
+    /**
      * SP-C: 按批次号查单盒成本 (存货生产无订单号场景).
      * findByFactoryIdAndBatchNumber 是 factory-scoped — 跨租户安全。
      * DTO.orderId 字段填 batchNumber (前端仅作展示 label)。

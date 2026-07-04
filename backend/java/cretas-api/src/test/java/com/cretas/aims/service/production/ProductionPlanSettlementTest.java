@@ -40,13 +40,16 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
+import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -60,6 +63,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -106,6 +110,7 @@ class ProductionPlanSettlementTest {
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
+    @Mock private OrderCostBreakdownService orderCostBreakdownService;
 
     private ProductionPlanServiceImpl service;
 
@@ -128,6 +133,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
+        ReflectionTestUtils.setField(service, "orderCostBreakdownService", orderCostBreakdownService);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -425,6 +431,68 @@ class ProductionPlanSettlementTest {
         assertEquals(null, response.getTransitLedgerId());
         assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
         verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🔴 结单族成本传导: 仓库确认实收成品 unitCost = 计划权威生产成本 / 入库量 (非 null)")
+    void confirmWarehouseReceipt_propagatesUnitCost() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        // 权威生产成本 900, 入库 90 → unitCost = 900/90 = 10.0000 (与 SAFETY_STOCK 小结同基准)。
+        when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
+                .thenReturn(OrderCostBreakdownDTO.builder()
+                        .hasData(true).totalCost(new BigDecimal("900")).build());
+        ArgumentCaptor<FinishedGoodsBatch> captor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        when(finishedGoodsBatchRepository.save(captor.capture())).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-1");
+            return batch;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
+
+        FinishedGoodsBatch saved = captor.getValue();
+        assertEquals(0, new BigDecimal("10.0000").compareTo(saved.getUnitCost()),
+                "结单族成品应携带传导成本 10.0000, 而非 null");
+    }
+
+    @Test
+    @DisplayName("🔴 结单族成本传导诚实 null: 计划无成本基准 (总成本≤0 / 全未定价) → unitCost null 不伪造 ¥0")
+    void confirmWarehouseReceipt_honestNullWhenNoCostBasis() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        // 权威成本 0 (全部投入未定价 / 无批次) → 诚实 null, 期末 COGS 结转 honest-null 排除。
+        when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
+                .thenReturn(OrderCostBreakdownDTO.builder()
+                        .hasData(true).totalCost(BigDecimal.ZERO).build());
+        ArgumentCaptor<FinishedGoodsBatch> captor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        when(finishedGoodsBatchRepository.save(captor.capture())).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-1");
+            return batch;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
+
+        assertNull(captor.getValue().getUnitCost(), "无成本基准时 unitCost 必须诚实 null, 不伪造 ¥0");
     }
 
     @Test

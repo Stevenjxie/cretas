@@ -2551,14 +2551,18 @@ public class SalesServiceImpl implements SalesService {
     public List<FinishedGoodsBatch> getAvailableBatches(String factoryId, String productTypeId,
                                                         String sourceWarehouseCode) {
         // T4-D5 #572 Phase B-1: honor caller-supplied sourceWarehouseCode (PR #547/#564 chain).
-        // null/blank → WH-LOG fallback (D5 默认行为, Phase A 一致).
-        // 用途拆分 (2026-07-02): 默认来源走 resolveSalesOutboundWh (SALES_OUTBOUND_DEFAULT),
-        // 未配置回退 WH-LOG = 现状。
-        String warehouseId = (sourceWarehouseCode != null && !sourceWarehouseCode.isBlank())
-                ? warehouseResolver.resolveId(factoryId, sourceWarehouseCode)
-                : warehouseResolver.resolveSalesOutboundWh(factoryId);
+        //   - EXPLICIT sourceWarehouseCode → 仅该仓 (尊重显式来源选择).
+        //   - BLANK (最常见) → 🔴 (2026-07-04) 跨全部可售仓 (FEFO, 排除 WH-RD), 与 recommend-fifo (G1)
+        //     同口径。旧逻辑 blank 硬默认单一 WH-LOG/SALES_OUTBOUND_DEFAULT → 成品落生产仓 WH-WKS 时
+        //     "库存查询" 假报无货 (推荐/发货能找到, 但可用性查询查不到 → 用户困惑). 可用性语义不变
+        //     (仍减 reserved), 仅放宽仓库范围。
+        if (sourceWarehouseCode != null && !sourceWarehouseCode.isBlank()) {
+            String warehouseId = warehouseResolver.resolveId(factoryId, sourceWarehouseCode);
+            return finishedGoodsBatchRepository
+                    .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId);
+        }
         return finishedGoodsBatchRepository
-                .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId);
+                .findAvailableBatchesFefoAllWarehousesExcluding(factoryId, productTypeId, WarehouseCodes.WH_RD);
     }
 
     @Override
