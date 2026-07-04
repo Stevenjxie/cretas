@@ -77,6 +77,11 @@ interface ReceiveItem {
   // UI-only (not sent to backend, stripped in handleSubmit): 客户张权反馈 (2026-07-02) 大类筛选,
   // 让仓管先选 原料/辅料/调料/包材 再选具体物料, 而不是在一个混杂几十项的大下拉里翻找。
   _bigCategory?: BigCategory | '';
+  // UI-only (fool-proof-design Rule 1, 2026-07-04): 仅 PO 带入行有值 — 本行「待收量」(下单量-已收累计)
+  // + 本次可收上限 (待收量所在 PO 行下单量 × (1+超收率) - 已收累计), 供 el-input-number :max 前置拦截 +
+  // 灰字提示, 别等 confirm 阶段撞后端 409 才知道超收. 手动加行(非 PO 带入)无值 = 无前端上限 (后端仍兜底).
+  _pendingQty?: number;
+  _maxAllowed?: number;
 }
 
 interface SupplierOption { id: string; name: string }
@@ -254,6 +259,16 @@ function defaultRawWarehouseId(list: FactoryWarehouse[]): string {
   return raw ? raw.id : '';
 }
 
+/**
+ * 抄收上限率 — 与后端 PurchaseServiceImpl.overReceiveRate 默认值一致
+ * (application.properties: cretas.purchase.over-receive-rate, 默认 0.30)。
+ *
+ * fool-proof-design Rule 1: 前端只用这个值做「上限提示 + :max 前置拦截」，权威校验仍在后端
+ * (checkOverReceiveCap)。极少数 ops 临时调宽后端 rate 的场景下，前端提示会偏保守 (仍按 30% 算)，
+ * 但不会误挡合法收货 — 后端才是唯一真相源，前端算出来的 :max 只是"不用等 409 才知道"的体验层。
+ */
+const OVER_RECEIVE_RATE = 0.3;
+
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
@@ -353,10 +368,18 @@ async function handlePoChange(poId: string) {
         // 已知具体物料 (来自 PO 明细) → 大类跟随该物料实际类别, 而非强制"原料",
         // 避免选了辅料/包材的 PO 行后大类下拉把刚带入的物料筛没了.
         const matched = materialOptions.value.find((m) => m.id === materialTypeId);
+        const orderedQty = Number(it.quantity || 0);
+        const alreadyReceived = Number(it.receivedQuantity || 0); // PO 行累计已收 (非本次到货数量)
+        const pendingQty = Number(it.pendingQuantity ?? Math.max(orderedQty - alreadyReceived, 0));
+        // fool-proof-design Rule 1: 本次最多可收 = 下单量×(1+超收率) - 已收累计. 早显给仓管,
+        // 不等 confirm 阶段撞后端 409「超出可入库上限」才知道.
+        const maxAllowed = orderedQty > 0
+          ? Math.max(orderedQty * (1 + OVER_RECEIVE_RATE) - alreadyReceived, 0)
+          : undefined;
         return {
           materialTypeId,
           materialName: String(it.materialName || ''),
-          receivedQuantity: Number(it.pendingQuantity ?? it.quantity ?? 0),
+          receivedQuantity: pendingQty,
           unit: String(it.unit || 'kg'),
           unitPrice: it.unitPrice != null ? Number(it.unitPrice) : undefined,
           qcResult: '',
@@ -364,6 +387,8 @@ async function handlePoChange(poId: string) {
           originPlace: '',
           remark: '',
           _bigCategory: matched ? bigCategoryOf(matched.category) : '',
+          _pendingQty: pendingQty,
+          _maxAllowed: maxAllowed,
         };
       });
       ElMessage.success(`已带入 ${items.length} 项待收物料 (默认实收=待收量)，请核对实收数量与厂号/产地`);
@@ -390,6 +415,13 @@ function addItem() {
 function removeItem(idx: number) {
   form.value.items.splice(idx, 1);
 }
+
+// fool-proof-design Rule 1: 逐行判断是否超出「本次可收上限」— 供 :max 提示 + 提交前置拦截共用.
+function isOverLimit(row: ReceiveItem): boolean {
+  return row._maxAllowed != null && Number(row.receivedQuantity) > row._maxAllowed;
+}
+const overLimitRowIndex = computed(() => form.value.items.findIndex(isOverLimit));
+const hasOverLimitItem = computed(() => overLimitRowIndex.value >= 0);
 
 function handleMaterialChange(idx: number, materialId: string) {
   const m = materialOptions.value.find(o => o.id === materialId);
@@ -430,12 +462,24 @@ async function handleSubmit() {
     ElMessage.warning(`第 ${noUnitIdx + 1} 行请填写单位`);
     return;
   }
+  // fool-proof-design Rule 1 前置拦截 (与 :max + 提交按钮 disable 三重防御,
+  // 防止绕开 UI 直接调用 handleSubmit / :max 未及时响应式更新等边界情况).
+  if (hasOverLimitItem.value) {
+    const idx = overLimitRowIndex.value;
+    const row = form.value.items[idx];
+    ElMessage.warning(
+      `第 ${idx + 1} 行「${row.materialName || '该物料'}」到货数量超出本次可收上限 ` +
+      `${row._maxAllowed?.toFixed(3).replace(/\.?0+$/, '')}${row.unit || ''} (含30%超收), 请调整或分单另采购`
+    );
+    return;
+  }
   submitting.value = true;
   try {
     const payload = {
       ...form.value,
-      // _bigCategory 是纯前端筛选状态 (Req 2), 不是后端 CreateReceiveRecordRequest 契约字段, 剥离掉.
-      items: form.value.items.map(({ _bigCategory, ...item }) => item),
+      // _bigCategory/_pendingQty/_maxAllowed 是纯前端筛选/防呆提示状态 (Req 2 / fool-proof-design
+      // Rule 1), 不是后端 CreateReceiveRecordRequest 契约字段, 剥离掉.
+      items: form.value.items.map(({ _bigCategory, _pendingQty, _maxAllowed, ...item }) => item),
     };
     if (!payload.purchaseOrderId) delete (payload as Record<string, unknown>).purchaseOrderId;
     const res = await post<ReceiveRow>(`/${factoryId.value}/purchase/receives`, payload);
@@ -844,10 +888,26 @@ onMounted(() => { loadData(); loadOptions(); });
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="到货数量" width="120">
+          <!-- fool-proof-design Rule 1: PO 带入行显「待收量」(下单-已收), 仓管核对用, 不是硬上限
+               (硬上限是含30%超收的 _maxAllowed, 体现在右侧到货数量列的 :max + 灰字提示). -->
+          <el-table-column label="待收量" width="100" align="right">
+            <template #default="{ row }">
+              <span v-if="row._pendingQty != null">{{ Number(row._pendingQty).toFixed(3).replace(/\.?0+$/, '') }}</span>
+              <span v-else class="price-masked">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="到货数量" width="160">
             <template #header><span class="req-star">*</span>到货数量</template>
             <template #default="{ row }">
-              <el-input-number v-model="row.receivedQuantity" :min="0.001" :precision="3" :controls="false" size="small" style="width:100%" />
+              <el-input-number
+                v-model="row.receivedQuantity"
+                :min="0.001" :max="row._maxAllowed" :precision="3" :controls="false"
+                size="small" style="width:100%"
+                :class="{ 'over-limit-input': isOverLimit(row) }"
+              />
+              <div v-if="row._maxAllowed != null" class="over-limit-hint" :class="{ 'over-limit-hint--danger': isOverLimit(row) }">
+                可收上限 {{ Number(row._maxAllowed).toFixed(3).replace(/\.?0+$/, '') }}{{ row.unit || '' }} (含30%超收)
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="单位" width="80">
@@ -906,7 +966,10 @@ onMounted(() => { loadData(); loadOptions(); });
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">创建</el-button>
+        <el-button
+          type="primary" :loading="submitting" :disabled="hasOverLimitItem"
+          @click="handleSubmit"
+        >创建</el-button>
       </template>
     </el-dialog>
 
@@ -1059,4 +1122,19 @@ onMounted(() => { loadData(); loadOptions(); });
 }
 
 .req-star { color: #f56c6c; margin-right: 2px; }
+
+/* fool-proof-design Rule 1: 到货数量灰字上限提示 (正常) / 超限变红 (与 :max 前置拦截 + 提交禁用三重防御) */
+.over-limit-hint {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
+  margin-top: 2px;
+  white-space: normal;
+}
+.over-limit-hint--danger {
+  color: #f56c6c;
+}
+:deep(.over-limit-input .el-input__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
+}
 </style>

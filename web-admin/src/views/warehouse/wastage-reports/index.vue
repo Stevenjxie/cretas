@@ -1,12 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Plus, Search, Refresh, View, Check, Close, Picture } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, View, Check, Close, Picture, Paperclip, CircleCloseFilled } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
+// Rule 5 (fool-proof-design): 报损照片证据改真实拍照/文件上传, 不再要求仓管员手打 URL 粘贴到文本框
+// (低技术素养用户根本无法生成一个图片 URL). WastageReport 在后端要求创建时 photoUrls 已非空
+// (WastageReportServiceImpl#validatePhotos), 此时报损单实体还不存在, 无法用需要 entityId 的
+// AttachmentUploadButton/uploadAndRegister (会注册 Attachment 记录挂在一个还不存在的 entityId 上)。
+// 改用底层 getUploadUrl + 直传 OSS (与 uploadAndRegister 内部一致, 跳过 register 步骤), 拿到
+// fileUrl 后推入 createForm.photoUrls — 提交时序不变 (仍是 photoUrls: string[] JSON.stringify)。
+import { getUploadUrl } from '@/api/attachment';
 
 // Safe helpers — Vue template compiler does not support optional chaining (?.)
 // in attribute bindings; delegate to these plain functions instead.
@@ -189,19 +196,41 @@ const createForm = ref({
   notes: '',
 });
 
-// Photo URL input (comma or newline separated)
-const photoInput = ref('');
+// 报损照片 — 真实拍照/文件上传 (Rule 5), 替代原 URL 粘贴文本框.
+const photoUploading = ref(false);
 
-function parsePhotoUrls(raw: string): string[] {
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+function beforePhotoUpload(file: File): boolean {
+  const maxSize = 20 * 1024 * 1024;
+  if (file.size > maxSize) {
+    ElMessage.error('照片超出上限 20MB');
+    return false;
+  }
+  return true;
 }
 
-watch(photoInput, (v) => {
-  createForm.value.photoUrls = parsePhotoUrls(v);
-});
+async function handlePhotoUpload(opts: { file: File }): Promise<void> {
+  photoUploading.value = true;
+  try {
+    const urlResp = await getUploadUrl(opts.file.name, opts.file.type, factoryId.value);
+    const { uploadUrl, fileUrl } = urlResp.data;
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': opts.file.type },
+      body: opts.file,
+    });
+    if (!putRes.ok) throw new Error(`上传失败 HTTP ${putRes.status}`);
+    createForm.value.photoUrls.push(fileUrl);
+    ElMessage.success('照片上传成功');
+  } catch (e) {
+    ElMessage.error(String((e as Error).message || '照片上传失败'));
+  } finally {
+    photoUploading.value = false;
+  }
+}
+
+function removePhoto(idx: number) {
+  createForm.value.photoUrls.splice(idx, 1);
+}
 
 function openCreateDialog() {
   createForm.value = {
@@ -214,7 +243,6 @@ function openCreateDialog() {
     photoUrls: [],
     notes: '',
   };
-  photoInput.value = '';
   createDialogVisible.value = true;
 }
 
@@ -243,7 +271,7 @@ async function submitCreate() {
     return;
   }
   if (form.photoUrls.length === 0) {
-    ElMessage({ message: '至少需要上传1张照片证据（请填写照片URL）', type: 'warning', duration: 3000 });
+    ElMessage({ message: '至少需要拍照/上传1张照片证据', type: 'warning', duration: 3000 });
     return;
   }
   createLoading.value = true;
@@ -481,8 +509,9 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="提交人" prop="submittedBy" width="100">
-          <template #default="{ row }">{{ row.submittedBy || '—' }}</template>
+        <!-- fool-proof-design Rule 2: 后端已批量解析 submittedByName (userId→姓名), 不再显裸 userId. -->
+        <el-table-column label="提交人" width="100">
+          <template #default="{ row }">{{ row.submittedByName || row.submittedBy || '—' }}</template>
         </el-table-column>
         <el-table-column label="创建时间" prop="createdAt" min-width="150">
           <template #default="{ row }">
@@ -601,13 +630,37 @@ onMounted(async () => {
           <el-input v-model="createForm.reasonDetail" type="textarea" :rows="2" placeholder="请填写具体原因" />
         </el-form-item>
         <el-form-item label="照片证据" required>
-          <el-input
-            v-model="photoInput"
-            type="textarea"
-            :rows="3"
-            placeholder="每行或逗号分隔填写照片URL（至少1张）"
-          />
-          <el-text type="info" style="font-size: 12px">已录入 {{ createForm.photoUrls.length }} 张</el-text>
+          <div style="width: 100%">
+            <el-upload
+              :show-file-list="false"
+              :auto-upload="true"
+              :before-upload="beforePhotoUpload"
+              :http-request="handlePhotoUpload"
+              :disabled="photoUploading"
+              accept="image/*"
+            >
+              <el-button type="primary" :icon="Paperclip" :loading="photoUploading" :disabled="photoUploading">
+                拍照 / 上传照片
+              </el-button>
+            </el-upload>
+            <div v-if="createForm.photoUrls.length" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+              <div v-for="(url, i) in createForm.photoUrls" :key="url + i" style="position:relative">
+                <el-image
+                  :src="url"
+                  fit="cover"
+                  style="width:72px;height:72px;border-radius:4px;border:1px solid #dcdfe6"
+                  :preview-src-list="createForm.photoUrls"
+                  :initial-index="i"
+                />
+                <el-icon
+                  style="position:absolute;top:-6px;right:-6px;background:#fff;border-radius:50%;cursor:pointer;color:#f56c6c"
+                  :size="18"
+                  @click="removePhoto(i)"
+                ><CircleCloseFilled /></el-icon>
+              </div>
+            </div>
+            <el-text type="info" style="font-size: 12px;display:block;margin-top:4px">已上传 {{ createForm.photoUrls.length }} 张（至少1张）</el-text>
+          </div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="createForm.notes" type="textarea" :rows="2" placeholder="可选" />
@@ -632,7 +685,7 @@ onMounted(async () => {
           <el-descriptions-item label="仓库">{{ warehouseName(String(approveRow.warehouseId)) }}</el-descriptions-item>
           <el-descriptions-item label="报损数量">{{ approveRow.wastageQty }}</el-descriptions-item>
           <el-descriptions-item label="报损原因">{{ reasonLabel(String(approveRow.wastageReason)) }}</el-descriptions-item>
-          <el-descriptions-item label="提交人">{{ approveRow.submittedBy || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="提交人">{{ approveRow.submittedByName || approveRow.submittedBy || '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <!-- Photo thumbnails: photoUrls is a JSON string from the backend DTO -->

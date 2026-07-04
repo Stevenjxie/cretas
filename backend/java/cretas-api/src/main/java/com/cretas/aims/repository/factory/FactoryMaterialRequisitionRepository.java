@@ -17,6 +17,9 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
 
     Optional<FactoryMaterialRequisition> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    // 防呆 Rule 2 (fool-proof-design): 支持按人类可读的需求单号查询 (前端不该要求仓管员手填 UUID).
+    Optional<FactoryMaterialRequisition> findByFactoryIdAndRequisitionNoAndDeletedAtIsNull(String factoryId, String requisitionNo);
+
     Page<FactoryMaterialRequisition> findByFactoryIdAndDeletedAtIsNull(String factoryId, Pageable pageable);
 
     Page<FactoryMaterialRequisition> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, Status status, Pageable pageable);

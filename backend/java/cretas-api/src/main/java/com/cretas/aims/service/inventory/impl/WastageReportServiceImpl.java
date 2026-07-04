@@ -7,9 +7,11 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.inventory.WastageReport;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.WastageReportRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.inventory.WastageReportService;
@@ -29,8 +31,13 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 报损单服务实现 (SP7 §5.2).
@@ -58,6 +65,8 @@ public class WastageReportServiceImpl implements WastageReportService {
     private final WastageReportRepository wastageReportRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+    // fool-proof-design Rule 2: 提交人/审批人 userId → 姓名批量解析 (与 ReportReversalLogServiceImpl 同款范式).
+    private final UserRepository userRepository;
 
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
@@ -215,14 +224,18 @@ public class WastageReportServiceImpl implements WastageReportService {
     @Override
     public Page<WastageReportDTO> list(String factoryId, WastageReport.TrackType trackType,
                                         WastageReport.Status status, Pageable pageable) {
-        return wastageReportRepo.findByFactoryIdWithFilters(factoryId, trackType, status, pageable)
+        Page<WastageReportDTO> page = wastageReportRepo.findByFactoryIdWithFilters(factoryId, trackType, status, pageable)
                 .map(WastageReportDTO::from);
+        enrichUserNames(page.getContent());
+        return page;
     }
 
     @Override
     public WastageReportDTO getDetail(String reportId, String factoryId) {
         WastageReport report = findAndValidate(reportId, factoryId);
-        return WastageReportDTO.from(report);
+        WastageReportDTO dto = WastageReportDTO.from(report);
+        enrichUserNames(List.of(dto));
+        return dto;
     }
 
     /**
@@ -249,14 +262,43 @@ public class WastageReportServiceImpl implements WastageReportService {
         } else {
             return Page.empty(pageable);
         }
-        return wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+        Page<WastageReportDTO> page = wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 factoryId, WastageReport.Status.PENDING_APPROVAL, visibleTracks, pageable)
                 .map(WastageReportDTO::from);
+        enrichUserNames(page.getContent());
+        return page;
     }
 
     // -------------------------------------------------------
     // private helpers
     // -------------------------------------------------------
+
+    /**
+     * fool-proof-design Rule 2 (2026-07-04, F006 反馈: 报损/调拨提交人显裸 userId 仓管员看不懂):
+     * 批量加载 submittedBy/approvedBy 姓名, 一次 IN query 填充, 禁止 N+1
+     * (与 ReportReversalServiceImpl.listReversals 同款范式).
+     */
+    private void enrichUserNames(List<WastageReportDTO> dtos) {
+        if (dtos.isEmpty()) return;
+        List<Long> userIds = dtos.stream()
+                .flatMap(d -> Stream.of(d.getSubmittedBy(), d.getApprovedBy()))
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (userIds.isEmpty()) return;
+        Map<Long, User> userMap = userRepository.findAllById(userIds).stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
+        for (WastageReportDTO dto : dtos) {
+            if (dto.getSubmittedBy() != null) {
+                User u = userMap.get(dto.getSubmittedBy());
+                dto.setSubmittedByName(u != null ? u.getFullName() : null);
+            }
+            if (dto.getApprovedBy() != null) {
+                User u = userMap.get(dto.getApprovedBy());
+                dto.setApprovedByName(u != null ? u.getFullName() : null);
+            }
+        }
+    }
 
     private WastageReport findAndValidate(String reportId, String factoryId) {
         WastageReport report = wastageReportRepo.findById(reportId)

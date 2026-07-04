@@ -170,4 +170,13 @@ public class InternalTransfer extends BaseEntity {
 
     @OneToMany(mappedBy = "transfer", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<InternalTransferItem> items = new ArrayList<>();
+
+    // fool-proof-design Rule 2 (2026-07-04): 申请人/审批人 userId → 姓名. requestedByUser/approvedByUser
+    // 关联本身是 @JsonIgnore (避免暴露 User 全字段含 passwordHash), 由 TransferServiceImpl#getTransferById
+    // 在事务内取 fullName 填充这两个非-JsonIgnore transient 字段供前端展示, 同 ReportReversalLog 范式。
+    @Transient
+    private String requestedByName;
+
+    @Transient
+    private String approvedByName;
 }

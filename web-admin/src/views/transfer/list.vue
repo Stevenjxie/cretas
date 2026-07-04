@@ -73,7 +73,7 @@ const submitting = ref(false);
 const formRef = ref();
 const today = () => new Date().toISOString().slice(0, 10);
 const form = ref({
-  transferType: 'BRANCH_TO_HQ' as 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ',
+  transferType: 'BRANCH_TO_HQ' as 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ' | 'WAREHOUSE_TO_WAREHOUSE',
   targetFactoryId: '',
   sourceWarehouseId: '',
   targetWarehouseId: '',
@@ -369,6 +369,9 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
                 <el-option label="总部→分部 (HQ_TO_BRANCH)" value="HQ_TO_BRANCH" />
                 <el-option label="分部→分部 (BRANCH_TO_BRANCH)" value="BRANCH_TO_BRANCH" />
                 <el-option label="分部→总部 (BRANCH_TO_HQ)" value="BRANCH_TO_HQ" />
+                <!-- Fool-proof gap fix: 同厂仓库间调拨 (如原料仓→生产仓领料/退料) 之前只有 typeMap
+                     认识, create 下拉没提供, 用户无法手动建这类单. -->
+                <el-option label="仓库间调拨 (同厂, WAREHOUSE_TO_WAREHOUSE)" value="WAREHOUSE_TO_WAREHOUSE" />
               </el-select>
             </el-form-item>
           </el-col>
