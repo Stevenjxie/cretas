@@ -81,6 +81,11 @@ export interface CashFlowDTO {
   beginningCash: number;
   endingCash: number;
   generatedAt: string;
+  /**
+   * F006 财务审计 Bug 6 follow-up (2026-07-04): 期间内待过账 (DRAFT) 凭证数, 见
+   * BalanceSheetDTO 同名字段.
+   */
+  pendingDraftVoucherCount?: number;
 }
 
 /**

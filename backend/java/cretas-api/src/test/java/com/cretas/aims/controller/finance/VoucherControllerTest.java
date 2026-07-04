@@ -1,15 +1,18 @@
 package com.cretas.aims.controller.finance;
 
+import com.cretas.aims.dto.finance.VoucherBatchPostResultDTO;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.repository.VoucherEntryRepository;
 import com.cretas.aims.repository.VoucherRepository;
 import com.cretas.aims.service.voucher.VoucherService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
@@ -17,10 +20,12 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -121,5 +126,36 @@ class VoucherControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value("V-1"))
                 .andExpect(jsonPath("$.data.voucherNumber").value("V-2026-0001"));
+    }
+
+    // ==================== POST /batch-post (Part 2 follow-up to #1228) ====================
+
+    @Test
+    @DisplayName("POST /batch-post → 返回每张凭证过账结果 + 汇总 successCount/failureCount")
+    void batchPost_returnsPerVoucherResultsAndSummary() throws Exception {
+        List<VoucherBatchPostResultDTO> serviceResult = List.of(
+                VoucherBatchPostResultDTO.builder()
+                        .voucherId("v-1").success(true).skipped(false)
+                        .voucherNumber("V-2026-0001").message("过账成功").build(),
+                VoucherBatchPostResultDTO.builder()
+                        .voucherId("v-2").success(false).skipped(false)
+                        .message("仅 DRAFT 凭证可过账, 当前=POSTED").build());
+        when(voucherService.batchPost(
+                ArgumentMatchers.eq(FACTORY_ID), ArgumentMatchers.eq(List.of("v-1", "v-2")), ArgumentMatchers.any()))
+                .thenReturn(serviceResult);
+
+        String body = new ObjectMapper().writeValueAsString(
+                java.util.Map.of("voucherIds", List.of("v-1", "v-2")));
+
+        mockMvc.perform(post("/api/mobile/" + FACTORY_ID + "/finance/vouchers/batch-post")
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.successCount").value(1))
+                .andExpect(jsonPath("$.data.failureCount").value(1))
+                .andExpect(jsonPath("$.data.results[0].voucherId").value("v-1"))
+                .andExpect(jsonPath("$.data.results[1].message").value("仅 DRAFT 凭证可过账, 当前=POSTED"));
     }
 }

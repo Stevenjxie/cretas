@@ -70,6 +70,14 @@ public class CashFlowDTO {
     private String generatedAt;
 
     /**
+     * F006 财务审计 Bug 6 follow-up (2026-07-04): 期间内待过账 (DRAFT, 未财审) 凭证数. 报表口径
+     * 已切到 POSTED-only (人工审核制: DRAFT 不计入官方报表), 本字段让财务人员看到"为什么数字比
+     * 预期少" — 而不是悄悄少算却不说明. 0 = 无待办. 与 BalanceSheetDTO/IncomeStatementDTO 同名
+     * 字段同一原则.
+     */
+    private Long pendingDraftVoucherCount;
+
+    /**
      * 单笔现金活动 — 对手科目 + 流入流出.
      */
     @Data

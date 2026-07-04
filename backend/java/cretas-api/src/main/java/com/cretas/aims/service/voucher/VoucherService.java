@@ -34,6 +34,16 @@ public interface VoucherService {
     /** 过账: DRAFT → POSTED. factoryId 用于跨租户校验 (凭证须属于该工厂)。 */
     Voucher post(String factoryId, String voucherId, Long userId);
 
+    /**
+     * 批量过账 (follow-up to #1228 finding): 逐张校验+过账 (与 {@link #post} 同一套规则:
+     * DRAFT 状态 + 期间结账 gate), 每张独立事务 — 一张失败 (不平/期间已锁/凭证不存在) 不影响
+     * 其余凭证的过账结果。幂等: 已 POSTED 的凭证跳过 (不视为失败)。
+     *
+     * @return 每个 voucherId 对应的过账结果 (成功/跳过/失败+原因), 与入参顺序一致
+     */
+    List<com.cretas.aims.dto.finance.VoucherBatchPostResultDTO> batchPost(
+            String factoryId, List<String> voucherIds, Long userId);
+
     /** 作废: → VOID, 不可逆 (从代码层; DB 仍可改). factoryId 用于跨租户校验。 */
     void voidVoucher(String factoryId, String voucherId, String reason, Long userId);
 

@@ -1,8 +1,26 @@
 package com.cretas.aims.service.finance;
 
+import com.cretas.aims.dto.finance.report.CashFlowDTO;
+import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.repository.AccountRepository;
+import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 /**
  * CashFlowService.classifyActivity unit tests.
@@ -12,7 +30,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * 应交税费 / 其他应付) 错归筹资; 同时漏了短期借款 (2001, 前缀 20) 应属筹资. 本测试钉死正确分类:
  * 筹资 = 借款/债券/应付利息股利/长期应付 + 权益(4xxx); 经营 = 流动经营往来/收入/成本; 投资 = 14-19.
  */
+@ExtendWith(MockitoExtension.class)
 class CashFlowServiceTest {
+
+    private static final String FACTORY = "F001";
+
+    @Mock
+    private VoucherRepository voucherRepo;
+    @Mock
+    private VoucherEntryRepository voucherEntryRepo;
+    @Mock
+    private AccountRepository accountRepo;
 
     private final CashFlowService service = new CashFlowService(null, null, null);
 
@@ -68,5 +96,101 @@ class CashFlowServiceTest {
     void nullOrShortCode_defaultsOperating() {
         assertEquals("OPERATING", service.classifyActivity(null));
         assertEquals("OPERATING", service.classifyActivity("1"));
+    }
+
+    // -------------------------------------------------------------------------
+    // F006 财务审计 Bug 6 follow-up (2026-07-04, #1228 CashFlow sibling): POSTED-only 口径
+    // -------------------------------------------------------------------------
+
+    private VoucherEntry entry(String subjectCode, String subjectName, BigDecimal debit, BigDecimal credit) {
+        return VoucherEntry.builder()
+                .subjectCode(subjectCode)
+                .subjectName(subjectName)
+                .debit(debit)
+                .credit(credit)
+                .build();
+    }
+
+    private Voucher voucher(VoucherStatus status, VoucherEntry... entries) {
+        return Voucher.builder()
+                .factoryId(FACTORY)
+                .voucherDate(LocalDate.of(2026, 1, 15))
+                .status(status)
+                .entries(List.of(entries))
+                .build();
+    }
+
+    @Test
+    void generate_excludesDraftVouchersFromCashFlow() {
+        // DRAFT (未财审) 凭证: 现金借 1000 / 对手贷 1000 (收入) — 必须被排除, 不计入经营活动流入
+        Voucher draft = voucher(VoucherStatus.DRAFT,
+                entry("1002", "银行存款", new BigDecimal("1000.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("1000.00")));
+        // POSTED 凭证: 现金借 500 / 对手贷 500 (收入) — 应计入
+        Voucher posted = voucher(VoucherStatus.POSTED,
+                entry("1002", "银行存款", new BigDecimal("500.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("500.00")));
+
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(draft, posted));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(1L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 2026, 1, 2026, 1);
+
+        // 只有 POSTED 的 500 计入 — 若 DRAFT 未被排除, 会变成 1500
+        assertEquals(new BigDecimal("500.00"), dto.getOperatingNetCashFlow(),
+                "DRAFT 凭证不应计入现金流量表 (人工审核制, 未财审草稿不算已发生现金流动)");
+        assertEquals(1L, dto.getPendingDraftVoucherCount(), "待过账凭证数须透出告知财务人员");
+    }
+
+    @Test
+    void generate_keepsReversedVouchersSoRedLetterOffsetIsCorrect() {
+        // 已过账原凭证(REVERSED, 金蝶红字冲销规范): 现金贷 200 / 对手借 200 — 财务效应必须保留计入
+        Voucher reversedOriginal = voucher(VoucherStatus.REVERSED,
+                entry("1002", "银行存款", null, new BigDecimal("200.00")),
+                entry("6001", "主营业务收入", new BigDecimal("200.00"), null));
+        // 红字冲销镜像凭证 (POSTED, 借贷互换): 现金借 200 / 对手贷 200 — 二者相加应完全抵消归零
+        Voucher reversalMirror = voucher(VoucherStatus.POSTED,
+                entry("1002", "银行存款", new BigDecimal("200.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("200.00")));
+
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(reversedOriginal, reversalMirror));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(0L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 2026, 1, 2026, 1);
+
+        // REVERSED 若被误排除(像 aggregateBySubjectPosted 那样), 净额会变成 "倍数冲销"
+        // (只剩镜像凭证的 +200 流入 而不是原凭证的 -200 流出被抵消); 保留 REVERSED 应精确归零.
+        assertEquals(new BigDecimal("0.00"), dto.getOperatingNetCashFlow(),
+                "REVERSED 原凭证必须保留计入, 配合红字冲销镜像才能正确抵消归零");
+        assertEquals(0L, dto.getPendingDraftVoucherCount());
+    }
+
+    @Test
+    void generate_excludesVoidVouchers() {
+        Voucher voided = voucher(VoucherStatus.VOID,
+                entry("1002", "银行存款", new BigDecimal("999.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("999.00")));
+
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(voided));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(0L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 2026, 1, 2026, 1);
+
+        assertEquals(new BigDecimal("0.00"), dto.getOperatingNetCashFlow(), "VOID 凭证不计入 (既有行为, 回归测试)");
     }
 }

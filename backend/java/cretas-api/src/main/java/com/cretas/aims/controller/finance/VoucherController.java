@@ -3,6 +3,8 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.finance.AuxiliaryAggregateRow;
 import com.cretas.aims.dto.finance.VoucherBatchGenerateRequest;
+import com.cretas.aims.dto.finance.VoucherBatchPostRequest;
+import com.cretas.aims.dto.finance.VoucherBatchPostResultDTO;
 import com.cretas.aims.dto.finance.VoucherGenerateRequest;
 import com.cretas.aims.dto.finance.VoucherVoidRequest;
 import com.cretas.aims.entity.enums.AuxiliaryType;
@@ -37,6 +39,7 @@ import java.util.Optional;
  *   POST /generate                - single generate (idempotent)
  *   POST /batch-generate          - batch UNCREATED → CREATED
  *   POST /{id}/post               - DRAFT → POSTED
+ *   POST /batch-post              - batch DRAFT → POSTED (per-id result, follow-up to #1228)
  *   POST /{id}/void               - any → VOID
  *
  * Class-level RBAC: finance:read (view). Per-method RBAC raises bar for writes.
@@ -152,6 +155,30 @@ public class VoucherController {
             @RequestAttribute(value = "userId", required = false) Long userId) {
         Voucher v = voucherService.post(factoryId, id, userId);
         return ResponseEntity.ok(Map.of("success", true, "data", v, "message", "凭证已过账"));
+    }
+
+    /**
+     * 批量过账 (follow-up to #1228 finding): 人工审核制下逐张过账对财务人员是负担, 支持一次性
+     * 提交一批 voucherId → 逐张校验+过账 (与单张 {@link #post} 同一套规则), 每张独立结果返回
+     * (成功/幂等跳过/失败+原因), 一张失败不影响其余凭证。
+     */
+    @PostMapping("/batch-post")
+    @RequirePermission("finance:read_write")
+    public ResponseEntity<?> batchPost(
+            @PathVariable String factoryId,
+            @Valid @RequestBody VoucherBatchPostRequest req,
+            @RequestAttribute(value = "userId", required = false) Long userId) {
+        List<VoucherBatchPostResultDTO> results = voucherService.batchPost(factoryId, req.getVoucherIds(), userId);
+        long successCount = results.stream().filter(VoucherBatchPostResultDTO::isSuccess).count();
+        long failureCount = results.size() - successCount;
+        Map<String, Object> data = new HashMap<>();
+        data.put("results", results);
+        data.put("total", results.size());
+        data.put("successCount", successCount);
+        data.put("failureCount", failureCount);
+        return ResponseEntity.ok(Map.of(
+                "success", true, "data", data,
+                "message", String.format("批量过账完成: %d 成功, %d 失败", successCount, failureCount)));
     }
 
     @PostMapping("/{id}/void")
