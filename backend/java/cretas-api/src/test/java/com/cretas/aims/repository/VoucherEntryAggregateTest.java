@@ -196,8 +196,64 @@ class VoucherEntryAggregateTest {
         assertFalse(byCode.containsKey("4103"), "4103 仅在结转凭证里, 排除后聚合不应出现");
     }
 
+    @Test
+    @DisplayName("aggregateBySubjectPosted 差异化 COST_CARRYOVER — 主凭证 6401 计入 (进 4103), 红冲镜像排除 (reopen→reclose 不抵消)")
+    void aggregateBySubjectPosted_includesCostCarryoverPrimary_excludesMirror() {
+        final String F = "F-CCX";
+        final LocalDate end = LocalDate.of(2026, 5, 31);
+
+        // 结转成本 主凭证 (POSTED, originalVoucherId=null): 借6401 600 / 贷1405 600 — 真实 COGS, 必须计入
+        persistPnl(F, VoucherType.COST_CARRYOVER, VoucherStatus.POSTED, end,
+                line("6401", "600", "0"), line("1405", "0", "600"));
+        // 结转成本 红冲镜像 (POSTED, originalVoucherId 非空, reopen 反结账产生): 借1405 600 / 贷6401 600
+        //   旧隐患: 若不排镜像, 再结转时 6401 的 贷600 会抵消主凭证的 借600 → 净 0, COGS 丢失
+        persistPnlWithOriginal(F, VoucherType.COST_CARRYOVER, VoucherStatus.POSTED, end, "orig-cc-1",
+                line("6401", "0", "600"), line("1405", "600", "0"));
+
+        List<SubjectAggregateRow> rows = entryRepo.aggregateBySubjectPosted(
+                F, LocalDate.of(2026, 5, 1), end);
+        Map<String, SubjectAggregateRow> byCode = rows.stream()
+                .collect(Collectors.toMap(SubjectAggregateRow::getSubjectCode, r -> r));
+
+        // 6401: 只剩主凭证的 借 600 (镜像的贷 600 被排), 净额供结转损益进 4103
+        assertNotNull(byCode.get("6401"), "6401 主凭证应计入 (COGS 进 4103)");
+        assertEquals(0, new BigDecimal("600").compareTo(byCode.get("6401").getTotalDebit()),
+                "6401 借=600 (主凭证计入)");
+        assertEquals(0, BigDecimal.ZERO.compareTo(byCode.get("6401").getTotalCredit()),
+                "6401 贷=0 (红冲镜像被排, 不抵消主凭证 → reopen→reclose 不丢 COGS)");
+        // 1405: 同理只剩主凭证的 贷 600
+        assertEquals(0, new BigDecimal("600").compareTo(byCode.get("1405").getTotalCredit()),
+                "1405 贷=600 (主凭证)");
+        assertEquals(0, BigDecimal.ZERO.compareTo(byCode.get("1405").getTotalDebit()),
+                "1405 借=0 (镜像被排)");
+    }
+
     private String[] line(String code, String debit, String credit) {
         return new String[]{code, debit, credit};
+    }
+
+    /** 持久化一个带 originalVoucherId 的凭证 (模拟红冲镜像). */
+    @SafeVarargs
+    private void persistPnlWithOriginal(String factoryId, VoucherType type, VoucherStatus status,
+            LocalDate date, String originalVoucherId, String[]... lines) {
+        Voucher v = makeVoucher(factoryId, date, status);
+        v.setVoucherType(type);
+        v.setOriginalVoucherId(originalVoucherId);
+        List<VoucherEntry> entries = new ArrayList<>();
+        BigDecimal td = BigDecimal.ZERO, tc = BigDecimal.ZERO;
+        int ln = 1;
+        for (String[] l : lines) {
+            BigDecimal d = new BigDecimal(l[1]);
+            BigDecimal c = new BigDecimal(l[2]);
+            entries.add(VoucherEntry.builder().lineNo(ln++).subjectCode(l[0]).subjectName(l[0])
+                    .debit(d).credit(c).voucher(v).build());
+            td = td.add(d);
+            tc = tc.add(c);
+        }
+        v.setTotalDebit(td);
+        v.setTotalCredit(tc);
+        v.setEntries(entries);
+        voucherRepo.saveAndFlush(v);
     }
 
     /** 持久化一个 P&L 凭证 (指定 voucherType/status + 任意分录行). */

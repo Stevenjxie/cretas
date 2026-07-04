@@ -65,4 +65,21 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
             "AND v.originalVoucherId IS NULL " +
             "AND v.deletedAt IS NULL")
     long countClosingBatches(String factoryId, String sourceIdPrefix);
+
+    /** 结转成本: 某期 active 结转成本凭证 (POSTED + 非红冲镜像), 反结账时红冲它们。?2 = sourceBusinessId LIKE 前缀。 */
+    @Query("SELECT v FROM Voucher v WHERE v.factoryId = ?1 " +
+            "AND v.sourceBusinessType = 'COST_CARRYOVER' " +
+            "AND v.sourceBusinessId LIKE ?2 " +
+            "AND v.status = com.cretas.aims.entity.enums.VoucherStatus.POSTED " +
+            "AND v.originalVoucherId IS NULL " +
+            "AND v.deletedAt IS NULL")
+    List<Voucher> findActiveCostCarryoverVouchers(String factoryId, String sourceIdPrefix);
+
+    /** 结转成本: 某期历史结转批次数 (含 REVERSED, 排红冲镜像) — 算 revision。?2 = sourceBusinessId LIKE 前缀。 */
+    @Query("SELECT COUNT(v) FROM Voucher v WHERE v.factoryId = ?1 " +
+            "AND v.sourceBusinessType = 'COST_CARRYOVER' " +
+            "AND v.sourceBusinessId LIKE ?2 " +
+            "AND v.originalVoucherId IS NULL " +
+            "AND v.deletedAt IS NULL")
+    long countCostCarryoverBatches(String factoryId, String sourceIdPrefix);
 }
