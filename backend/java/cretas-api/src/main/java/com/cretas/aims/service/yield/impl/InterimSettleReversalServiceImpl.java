@@ -54,6 +54,14 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     private final WipInventoryService wipInventoryService;
     private final FinishedGoodsFeedService finishedGoodsFeedService;
 
+    /**
+     * 🔴🔒🔒 sister #4 防呆: 撤销小结前检测本计划领料单是否已关单。{@code @Autowired(required=false)} 兼容
+     * 既有 7 参构造单测 (Lombok 仅纳入 final 字段, 非 final 不进构造器 → 纯 mock 测试不受影响), 缺失时降级
+     * (不阻断, 与老行为一致 —— 纯原料/无领料闸的计划本无关单交互)。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
+
     @Override
     @Transactional
     public Map<String, Object> reverseInterimSettle(String factoryId, String planId,
@@ -63,6 +71,28 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
             throw new BusinessException(400, "仅存货生产计划可撤销小结, 当前来源类型: " + plan.getSourceType())
                     .withHintTarget("撤销小结");
+        }
+
+        // 🔴🔒🔒 2026-07-04 sister #4 防呆 (关单后撤销小结 → 生产仓幻库存): 领料单关单 close() 时按
+        //   「WKS 现存 = issued − 已小结实耗」把未消耗料退回原料仓 + drawDown 划平生产仓 WKS 批次 (归零)。
+        //   若此后撤销小结, 步骤 ⑤ 会对消耗来源批次 (mc.batchId = 已被 close 划平的 WKS 批次) 还回
+        //   usedQuantity → WKS 批次凭空出现正现存 = CLOSED 领料单上的幻库存 (料已实际退回原料仓/消耗, 生产仓
+        //   却又冒出一份)。关单是领料料流的终态: 一旦关单, 该计划的小结不应再撤销。fail-fast (在任何库存变更前
+        //   loud-block, 保持撤销原子性)。领料单已关单 → 该改的只能是新开领料 + 重新报工小结, 不是撤旧小结。
+        //   无领料闸的计划 (F006 直接从原料仓消耗, 无 WKS 物化) → 无 CLOSED 领料单 → 不触发 (行为不变)。
+        if (requisitionRepository != null) {
+            boolean hasClosedRequisition = requisitionRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                    .stream()
+                    .anyMatch(r -> r.getStatus() == com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED);
+            if (hasClosedRequisition) {
+                throw new BusinessException(409,
+                        "撤销小结失败: 本生产计划的领料单已关单退料, 关单后不可再撤销小结 (避免生产仓幻库存)")
+                        .withCode("INTERIM_REVERSE_REQUISITION_CLOSED")
+                        .withHint("如需调整, 请新开领料单并重新报工小结; 已关单的领料料流不可逆")
+                        .withHintTarget("撤销小结")
+                        .withSeverity("BLOCKING");
+            }
         }
 
         // ── 定位目标小结 (指定 seq / 默认最近一次); 已撤销 (硬删) → empty → 双撤幂等拒绝 ──

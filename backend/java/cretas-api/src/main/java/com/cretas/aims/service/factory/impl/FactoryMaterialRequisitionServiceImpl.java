@@ -634,6 +634,33 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许关单")
                     .withHint("请刷新物料需求单列表查看最新状态");
         }
+
+        // 🔴🔒🔒 2026-07-04 关单-前-小结 防呆 (幻库存 + 永久卡死 修复, F006 live 复现):
+        //   物料消耗采「延迟扣减」设计 — 报工时写 MaterialConsumption (未结, batchId=生产仓 WKS 批次) 但
+        //   不扣 WKS.usedQuantity; 直到「小结」才逐笔扣 WKS.usedQuantity。若在小结前关单:
+        //     ① computeWorkshopRemaining 读到 WKS.currentQuantity 仍 = 全额 issued (扣减尚未落地) →
+        //        误判「未消耗剩余 = 全额」→ 把已被报工消耗的料一并退回原料仓 (幻库存 +已报工量) +
+        //        drawDownWorkshopBatchesForItem 把 WKS 批次划空;
+        //     ② 随后「小结」对已被划空的 WKS 批次扣减 → afterCurrent < 0 → 「批次可用不足」409;
+        //        CLOSED 不能 reopen、cancel() 拒绝 CLOSED → 永久卡死, 真实报工消耗永远无法结算。
+        //   防呆 (fool-proof Rule 5 明确下一步 + Rule 2 显示条数): 本单 WKS 批次尚有未结报工消耗时
+        //   loud-block 关单, 引导先完成小结。小结后关单 (WKS.currentQuantity 已 = issued − 实耗) 走既有
+        //   正确路径 (#1202 post-settle), 不受影响; 无 WKS 物化批次的老单/未走物理迁移单不触发 (行为不变);
+        //   未报工即关单 (无未结消耗) 亦正常退全额 (issued 未被消耗, 应退回)。
+        List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
+        if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
+            long unsettled = materialConsumptionRepository
+                    .countUnsettledConsumptionByBatchIds(factoryId, workshopBatchIds);
+            if (unsettled > 0) {
+                throw new BusinessException(409, String.format(
+                        "关单失败: 本领料单尚有 %d 笔报工消耗未小结, 无法关单退料", unsettled))
+                        .withCode("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLE")
+                        .withHint("请先在「生产计划 → 小结」完成本次报工消耗的结算, 再回到本单关单退料")
+                        .withHintTarget(mr.getId())
+                        .withSeverity("BLOCKING");
+            }
+        }
+
         // 自动计算退料 returned = 生产仓未消耗剩余 − 损耗
         Map<String, BigDecimal> wastageByItemId = parseWastageByItemId(closeItems);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
@@ -714,6 +741,27 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     // ---------- helpers ----------
+
+    /**
+     * 收集本领料单全部行在生产仓 (WKS) 物化的批次 id (领料迁移时回写进 {@code batchNumbers[*].workshopBatchId})。
+     * 关单-前-小结 防呆据此定位「小结将扣减、关单将划空」的同一批次集合。无 WKS 锚 (老单/未走物理迁移) → 空集。
+     */
+    private List<String> collectWorkshopBatchIds(FactoryMaterialRequisition mr) {
+        List<String> ids = new ArrayList<>();
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            List<Map<String, Object>> rows = it.getBatchNumbers();
+            if (rows == null) {
+                continue;
+            }
+            for (Map<String, Object> row : rows) {
+                Object wks = row.get("workshopBatchId");
+                if (wks != null && !wks.toString().isBlank()) {
+                    ids.add(wks.toString());
+                }
+            }
+        }
+        return ids;
+    }
 
     private Map<String, BigDecimal> parseWastageByItemId(List<Map<String, Object>> closeItems) {
         Map<String, BigDecimal> result = new HashMap<>();

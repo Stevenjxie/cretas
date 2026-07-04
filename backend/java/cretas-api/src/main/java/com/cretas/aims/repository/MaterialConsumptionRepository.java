@@ -187,6 +187,23 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             String factoryId, List<Long> productionBatchIds, LocalDateTime interimSettledAt);
 
     /**
+     * 🔴🔒🔒 关单-前-小结 防呆 (bug fix 2026-07-04): 统计指定批次集合上尚未小结的正向消耗笔数。
+     *
+     * <p>物料消耗采「延迟扣减」设计: 报工时写 {@link MaterialConsumption} (未结, {@code interimSettledAt}
+     * IS NULL, {@code batchId} = 生产仓 WKS 批次) 但不扣 WKS.usedQuantity; 直到「小结」才逐笔扣减。
+     * 领料单关单 {@code FactoryMaterialRequisitionServiceImpl.close} 若在小结前执行, 会把「未消耗剩余」
+     * 误判为全额发出量 → 幻库存退回 + 划空 WKS → 随后小结对已划空批次扣减 409 永久卡死。关单前用本查询
+     * 检测本单 WKS 批次是否尚有未结报工消耗, 有则 loud-block 引导先小结。
+     *
+     * <p>{@code quantity > 0} 排除退料回库写的负数留痕 (那些引用原料仓源批次, 非 WKS, 本已不在集合内,
+     * 此为双保险)。类级 {@code @Where(deleted_at IS NULL)} 自动附加软删除过滤。Factory-scoped 防跨租户。
+     */
+    @Query("SELECT COUNT(m) FROM MaterialConsumption m WHERE m.factoryId = :factoryId "
+            + "AND m.batchId IN :batchIds AND m.interimSettledAt IS NULL AND m.quantity > 0")
+    long countUnsettledConsumptionByBatchIds(@Param("factoryId") String factoryId,
+                                             @Param("batchIds") List<String> batchIds);
+
+    /**
      * SP-F: 软删除某消耗批次(productionBatchId)的全部消耗边记录。
      * 用于 re-save/delete 时逆向清除已物化的消耗 edges，factory-scoped 防跨租户。
      */

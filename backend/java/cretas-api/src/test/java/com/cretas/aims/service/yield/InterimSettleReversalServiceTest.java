@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -13,9 +14,11 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.InterimSettleReversalServiceImpl;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -368,6 +371,53 @@ class InterimSettleReversalServiceTest {
         assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("仅存货生产计划可撤销小结");
+    }
+
+    // ── 🔴🔒🔒 sister #4: 关单后撤销小结被拦 (避免生产仓幻库存) ──
+    @Test
+    @DisplayName("sister #4: 领料单已关单 → 撤销小结 409 INTERIM_REVERSE_REQUISITION_CLOSED (关单前, 任何库存变更前 loud-block)")
+    void blocksReversalWhenRequisitionClosed() {
+        // close() 已按「WKS 现存 = issued − 实耗」退料 + 划平 WKS 批次。此后撤销小结会对已划平的 WKS
+        // 批次还回 usedQuantity → 生产仓幻库存。故有 CLOSED 领料单时必须在任何逆转动作前 loud-block。
+        FactoryMaterialRequisitionRepository requisitionRepository =
+                org.mockito.Mockito.mock(FactoryMaterialRequisitionRepository.class);
+        ReflectionTestUtils.setField(service, "requisitionRepository", requisitionRepository);
+        FactoryMaterialRequisition closed = new FactoryMaterialRequisition();
+        closed.setStatus(FactoryMaterialRequisition.Status.CLOSED);
+        when(requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
+                .thenReturn(List.of(closed));
+
+        assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已关单")
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo("INTERIM_REVERSE_REQUISITION_CLOSED"));
+
+        // fail-fast: 逆转发生前即拦, 无任何库存动作 / 不硬删小结。
+        verify(wipInventoryService, never()).reverseClerkOutput(any(), any(), any(), any(), any());
+        verify(materialBatchRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        verify(settlementRepository, never()).hardDeleteById(any());
+    }
+
+    @Test
+    @DisplayName("sister #4 反面: 领料单未关单 (ISSUED) → 撤销小结正常进行 (不误拦)")
+    void allowsReversalWhenRequisitionNotClosed() {
+        FactoryMaterialRequisitionRepository requisitionRepository =
+                org.mockito.Mockito.mock(FactoryMaterialRequisitionRepository.class);
+        ReflectionTestUtils.setField(service, "requisitionRepository", requisitionRepository);
+        FactoryMaterialRequisition issued = new FactoryMaterialRequisition();
+        issued.setStatus(FactoryMaterialRequisition.Status.ISSUED);
+        when(requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
+                .thenReturn(List.of(issued));
+
+        LocalDateTime postedAt = LocalDateTime.now();
+        Map<String, Object> detail = detail(List.of(sfiIn(ANCHOR, "60", "900")), List.of(), List.of(), List.of(), List.of());
+        stubTarget(1, settlement("s1", 1, postedAt, detail));
+
+        Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L);
+
+        assertThat(r.get("reversedSessionSeq")).isEqualTo(1);
+        verify(settlementRepository, times(1)).hardDeleteById("s1");
     }
 
     // ── 缺省 seq → 撤销最近一次 ──

@@ -443,6 +443,81 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertNull(mr.getReturnTransferId());
     }
 
+    // ==================== close-before-settle guard (🔴🔒🔒 phantom + 409-deadlock) ====================
+
+    @Test
+    @DisplayName("bug: close BEFORE settle is loud-blocked (unsettled 报工 consumption on WKS batch) — no phantom return, no 409-deadlock")
+    void close_beforeSettle_isBlocked_noPhantom() {
+        // Deferred-deduction: 领料 issue 10 → 报工 consume 6 (MaterialConsumption unposted, batchId=wks-1),
+        // but WKS still used=0/current=10 pre-settle (deduction not yet applied). Closing now would
+        // (bug) return full 10 to raw (+6 phantom) + drain WKS, then settle would 409 forever.
+        batchStore.put("raw-1", batch("raw-1", "MAT-001", WH_LOGISTICS, "100.00", "10.00", "3.00"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "0.00", "3.00"));
+
+        FactoryMaterialRequisition mr = new FactoryMaterialRequisition();
+        mr.setId(MR_ID);
+        mr.setFactoryId(FACTORY_ID);
+        mr.setProductionPlanId(PLAN_ID);
+        mr.setStatus(Status.ISSUED);
+        mr.setSourceWarehouseId(WH_LOGISTICS);
+        mr.setTargetWarehouseId(WH_WORKSHOP);
+        FactoryMaterialRequisitionItem it = new FactoryMaterialRequisitionItem();
+        it.setId("it-1");
+        it.setRequisition(mr);
+        it.setMaterialTypeId("MAT-001");
+        it.setMaterialName("Material A");
+        it.setUnit("kg");
+        it.setIssuedQty(new BigDecimal("10.00"));
+        it.setBatchNumbers(new ArrayList<>(List.of(mutableRow("raw-1", "10.00", "wks-1"))));
+        List<FactoryMaterialRequisitionItem> items = new ArrayList<>();
+        items.add(it);
+        mr.setItems(items);
+
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        // 1 unsettled 报工 consumption still references the WKS batch → close must be blocked.
+        when(materialConsumptionRepository.countUnsettledConsumptionByBatchIds(FACTORY_ID, List.of("wks-1")))
+                .thenReturn(1L);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.close(FACTORY_ID, MR_ID, OPERATOR, List.of()));
+        assertTrue(ex.getMessage().contains("未小结"), "message must tell 仓管 to settle first: " + ex.getMessage());
+        assertEquals("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLE", ex.getErrorCode());
+
+        // No state change: status stays ISSUED, no phantom return, no batch mutation, no return ledger.
+        assertEquals(Status.ISSUED, mr.getStatus());
+        assertEquals(new BigDecimal("10.00"), batchStore.get("raw-1").getUsedQuantity()); // NOT restored (no phantom +10)
+        assertEquals(new BigDecimal("10.00"), batchStore.get("wks-1").getCurrentQuantity()); // NOT drained
+        verify(repository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+        verify(materialConsumptionRepository, never()).save(any());
+        verify(productionMaterialReturnRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("settled-then-close still works: guard queries WKS batch ids, count 0 → close proceeds (no regression on #1202 good path)")
+    void close_afterSettle_stillWorks() {
+        // Post-settle: WKS used=8 (deduction landed), current=2 → returned = 2 − 0 = 2 (correct #1202 path).
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "10.00", "3.50"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "8.00", "3.50"));
+
+        FactoryMaterialRequisition mr = buildMrInIssued(
+                new BigDecimal("10.00"), new BigDecimal("8.00"),
+                new BigDecimal("0.50"), new BigDecimal("0.50"), "wks-1", null);
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // all consumption already settled → 0 unsettled on the WKS batch.
+        when(materialConsumptionRepository.countUnsettledConsumptionByBatchIds(FACTORY_ID, List.of("wks-1")))
+                .thenReturn(0L);
+
+        service.close(FACTORY_ID, MR_ID, OPERATOR, List.of());
+
+        // guard consulted with the WKS batch ids; close proceeded down the correct post-settle path.
+        verify(materialConsumptionRepository).countUnsettledConsumptionByBatchIds(FACTORY_ID, List.of("wks-1"));
+        assertEquals(Status.CLOSED, mr.getStatus());
+        assertEquals(new BigDecimal("2.00"), mr.getItems().get(0).getReturnedQty());
+        assertEquals(new BigDecimal("0.00"), batchStore.get("wks-1").getCurrentQuantity());
+    }
+
     // ==================== builders ====================
 
     private FactoryMaterialRequisition buildMrInPicking() {
