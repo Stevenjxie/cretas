@@ -228,6 +228,79 @@ class VoucherEntryAggregateTest {
                 "1405 借=0 (镜像被排)");
     }
 
+    @Test
+    @DisplayName("F006 财务审计 Bug 6 (2026-07-04): aggregateBySubjectExcludingDraft 排除 DRAFT, 保留 REVERSED+红冲镜像正确抵消")
+    void aggregateBySubjectExcludingDraft_excludesDraftButKeepsReversedPairNetting() {
+        final String F = "F-EXDRAFT";
+        final LocalDate d = LocalDate.of(2026, 5, 10);
+
+        // 业务凭证 (POSTED): 1001 借 1000 — 必须计入
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.POSTED, d,
+                line("1001", "1000", "0"), line("6001", "0", "1000"));
+
+        // 已红字冲销的原凭证 (REVERSED, 金蝶规范: 财务效应不清零, 必须计入) + 其冲销镜像 (POSTED, 借贷互换)
+        // 二者合起来应净额为 0 (等价于"该笔交易从未发生"), 而不是被 REVERSED 状态整体排除.
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.REVERSED, d,
+                line("1001", "500", "0"), line("6001", "0", "500"));
+        persistPnlWithOriginal(F, VoucherType.SALES_RECEIPT, VoucherStatus.POSTED, d, "orig-reversed-1",
+                line("1001", "0", "500"), line("6001", "500", "0"));
+
+        // 待审草稿 (DRAFT): 1001 借 9999 — 未经财务审核, 绝不能计入官方报表
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.DRAFT, d,
+                line("1001", "9999", "0"), line("6001", "0", "9999"));
+
+        List<SubjectAggregateRow> rows = entryRepo.aggregateBySubjectExcludingDraft(
+                F, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31));
+        Map<String, SubjectAggregateRow> byCode = rows.stream()
+                .collect(Collectors.toMap(SubjectAggregateRow::getSubjectCode, r -> r));
+
+        SubjectAggregateRow acc1001 = byCode.get("1001");
+        assertNotNull(acc1001, "1001 应有聚合行");
+        // debit = 1000 (业务) + 500 (REVERSED 原凭证, 仍计入) = 1500; DRAFT 的 9999 绝不计入
+        assertEquals(0, new BigDecimal("1500").compareTo(acc1001.getTotalDebit()),
+                "1001 借方 = 1000(业务) + 500(REVERSED 原凭证) — 不含 DRAFT 的 9999");
+        // credit = 500 (冲销镜像)
+        assertEquals(0, new BigDecimal("500").compareTo(acc1001.getTotalCredit()),
+                "1001 贷方 = 500(冲销镜像)");
+        // net = 1500 - 500 = 1000 = 纯业务发生额 (红字冲销那笔净额归零, 未被"倍数冲销")
+        assertEquals(0, new BigDecimal("1000").compareTo(
+                        acc1001.getTotalDebit().subtract(acc1001.getTotalCredit())),
+                "净额=1000, 证明 REVERSED+镜像正确抵消为0, 不是被排除REVERSED后镜像单边多计成'倍数冲销'");
+    }
+
+    @Test
+    @DisplayName("F006 财务审计 Bug 6 (2026-07-04): aggregateBySubjectExcludingDraftAndClosing 排除结转噪音, 保留 REVERSED 抵消")
+    void aggregateBySubjectExcludingDraftAndClosing_excludesClosingAndDraft_keepsReversedPair() {
+        final String F = "F-EXDRAFTCLOSE";
+        final LocalDate may = LocalDate.of(2026, 5, 15);
+        final LocalDate end = LocalDate.of(2026, 5, 31);
+
+        // 业务凭证: 收入 6001 贷 1000
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.POSTED, may,
+                line("6001", "0", "1000"), line("1122", "1000", "0"));
+
+        // 结转凭证 (PL_CLOSING POSTED): 借6001 1000 — 结转产物, 必须排除 (否则已结账期利润表显示营收=0)
+        persistPnl(F, VoucherType.PL_CLOSING, VoucherStatus.POSTED, end,
+                line("6001", "1000", "0"), line("4103", "0", "1000"));
+
+        // 待审草稿: 6001 贷 9999 — 不计入
+        persistPnl(F, VoucherType.SALES_RECEIPT, VoucherStatus.DRAFT, may,
+                line("6001", "0", "9999"), line("1122", "9999", "0"));
+
+        List<SubjectAggregateRow> rows = entryRepo.aggregateBySubjectExcludingDraftAndClosing(
+                F, LocalDate.of(2026, 5, 1), end);
+        Map<String, SubjectAggregateRow> byCode = rows.stream()
+                .collect(Collectors.toMap(SubjectAggregateRow::getSubjectCode, r -> r));
+
+        SubjectAggregateRow acc6001 = byCode.get("6001");
+        assertNotNull(acc6001, "6001 应有业务行 (未被结转清零, 未含 DRAFT)");
+        assertEquals(0, new BigDecimal("1000").compareTo(acc6001.getTotalCredit()),
+                "6001 贷=1000 (纯业务, 不含 DRAFT 的 9999)");
+        assertEquals(0, BigDecimal.ZERO.compareTo(acc6001.getTotalDebit()),
+                "6001 借=0 (结转凭证的借1000被voucherType排除, 不是被状态排除)");
+        assertFalse(byCode.containsKey("4103"), "4103 仅出现在结转凭证 — 排除后不应出现");
+    }
+
     private String[] line(String code, String debit, String credit) {
         return new String[]{code, debit, credit};
     }

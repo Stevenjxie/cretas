@@ -6,8 +6,10 @@ import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.AccountingPeriod;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.repository.AccountRepository;
 import com.cretas.aims.repository.VoucherEntryRepository;
+import com.cretas.aims.repository.VoucherRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,7 @@ import java.util.Map;
 public class BalanceSheetService {
 
     private final VoucherEntryRepository voucherEntryRepo;
+    private final VoucherRepository voucherRepo;
     private final AccountRepository accountRepo;
     private final AccountingPeriodService accountingPeriodService;
 
@@ -74,7 +77,9 @@ public class BalanceSheetService {
                 factoryId, year, month, endDate);
 
         // Step 1: 聚合 subjectCode → totalDebit/totalCredit
-        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubject(
+        // F006 财务审计 Bug 6 (2026-07-04): 官方报表切到 POSTED-only 口径 (人工审核制,
+        // DRAFT=待财务审核不计入官方报表, 与 结转损益/COST_CARRYOVER 保持一致), 见方法 javadoc。
+        List<SubjectAggregateRow> aggregates = voucherEntryRepo.aggregateBySubjectExcludingDraft(
                 factoryId, EPOCH_START, endDate);
 
         // Step 2: 一次性预取 factory 全部可见 Account, 建 code → Account 索引
@@ -193,6 +198,11 @@ public class BalanceSheetService {
         // Step 7: 期间结账状态 (Rule 5 dead-end — UI 显示 "未结账" 警告)
         AccountingPeriod.Status periodStatus = accountingPeriodService.getStatus(factoryId, year, month);
 
+        // Step 8: 待过账 (DRAFT) 凭证数 — 官方报表已切 POSTED-only, 用此字段告知财务
+        // "报表数字看着少/为0" 的原因 (而不是悄悄漏算不说明). 见 pendingDraftVoucherCount javadoc.
+        long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                factoryId, VoucherStatus.DRAFT, EPOCH_START, endDate);
+
         return BalanceSheetDTO.builder()
                 .factoryId(factoryId)
                 .year(year)
@@ -207,6 +217,7 @@ public class BalanceSheetService {
                 .totalLiabilitiesAndEquity(totalLiabilitiesAndEquity)
                 .balanceCheck(balanced)
                 .generatedAt(LocalDateTime.now().toString())
+                .pendingDraftVoucherCount(pendingDraftCount)
                 .build();
     }
 

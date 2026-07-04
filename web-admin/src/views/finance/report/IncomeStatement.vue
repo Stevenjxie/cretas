@@ -32,6 +32,19 @@
         <el-empty description="暂无数据 — 请选择期间后点击刷新" />
       </div>
       <div v-else class="statement-body">
+        <!-- F006 财务审计 Bug 6 (2026-07-04): 待过账提示 — 官方报表已切 POSTED-only. -->
+        <el-alert
+          v-if="(data.pendingDraftVoucherCount ?? 0) > 0"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 16px;"
+        >
+          <template #title>
+            本报表仅含已过账 (POSTED) 凭证; 另有 {{ data.pendingDraftVoucherCount }} 张凭证待过账 (未计入本报表)
+          </template>
+        </el-alert>
+
         <!-- 4 张关键 KPI 卡片 -->
         <el-row :gutter="16" class="kpi-row">
           <el-col :span="6">

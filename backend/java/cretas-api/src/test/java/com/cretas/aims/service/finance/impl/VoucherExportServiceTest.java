@@ -345,7 +345,7 @@ class VoucherExportServiceTest {
                 .totalCredit(new BigDecimal("30000.00"))
                 .entryCount(5L)
                 .build();
-        when(entryRepo.aggregateBySubject(FACTORY_ID, START, END)).thenReturn(List.of(row));
+        when(entryRepo.aggregateBySubjectExcludingDraft(FACTORY_ID, START, END)).thenReturn(List.of(row));
         when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -397,7 +397,7 @@ class VoucherExportServiceTest {
         // 没有配置 — 走 orElseGet 分支
         when(exportConfigRepo.findByFactoryIdAndTargetSystemAndDeletedAtIsNull(any(), any()))
                 .thenReturn(Optional.empty());
-        when(entryRepo.aggregateBySubject(any(), any(), any())).thenReturn(List.of());
+        when(entryRepo.aggregateBySubjectExcludingDraft(any(), any(), any())).thenReturn(List.of());
         when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -415,9 +415,9 @@ class VoucherExportServiceTest {
                 .thenReturn(Optional.of(defaultConfig()));
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.of(closedPeriod(2026, 4)));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
                 .thenReturn(List.of(aggregate("1002", "Bank", "1000.00", "200.00")));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(START), eq(END)))
                 .thenReturn(List.of(aggregate("1002", "Bank", "200.00", "50.00")));
         when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
                 .thenReturn(List.of(account("1002", "Bank", AccountBalanceType.DEBIT_NORMAL)));
@@ -427,7 +427,8 @@ class VoucherExportServiceTest {
         service.exportSubjectBalance(FACTORY_ID, buildReq(), USER_ID, out);
 
         List<List<String>> rows = readXlsx(out.toByteArray());
-        assertEquals(2, rows.size(), "header + one subject row");
+        // header + one subject row + F006 财务审计 Bug 6 (2026-07-04) 新增的待过账提示行
+        assertEquals(3, rows.size(), "header + one subject row + pending-draft footer");
         List<String> data = rows.get(1);
         assertEquals("1002", data.get(0));
         assertEquals(0, new BigDecimal("800.00").compareTo(decimalAt(data, 2)), "opening = 1000 - 200");
@@ -446,7 +447,7 @@ class VoucherExportServiceTest {
                 .thenReturn(Optional.of(defaultConfig()));
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.empty());
-        when(entryRepo.aggregateBySubject(FACTORY_ID, START, END))
+        when(entryRepo.aggregateBySubjectExcludingDraft(FACTORY_ID, START, END))
                 .thenReturn(List.of(aggregate("1002", "Bank", "100.00", "25.00")));
         when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
                 .thenReturn(List.of(account("1002", "Bank", AccountBalanceType.DEBIT_NORMAL)));
@@ -458,7 +459,7 @@ class VoucherExportServiceTest {
         List<String> data = readXlsx(out.toByteArray()).get(1);
         assertEquals(0, BigDecimal.ZERO.compareTo(decimalAt(data, 2)), "opening stays 0 without previous close");
         assertEquals(0, new BigDecimal("75.00").compareTo(decimalAt(data, 5)), "closing = 0 + 100 - 25");
-        verify(entryRepo, never()).aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), any());
+        verify(entryRepo, never()).aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), any());
     }
 
     @Test
@@ -470,9 +471,9 @@ class VoucherExportServiceTest {
                 .thenReturn(Optional.of(defaultConfig()));
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.of(closedPeriod(2026, 4)));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
                 .thenReturn(List.of(aggregate("2202", "AP", "100.00", "500.00")));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(START), eq(END)))
                 .thenReturn(List.of(aggregate("2202", "AP", "50.00", "300.00")));
         when(accountRepo.findByCodeForFactory(FACTORY_ID, "2202"))
                 .thenReturn(List.of(account("2202", "AP", AccountBalanceType.CREDIT_NORMAL)));
@@ -544,17 +545,17 @@ class VoucherExportServiceTest {
     void exportGeneralLedger_usesDebitAndCreditNormalDirections() throws Exception {
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.of(closedPeriod(2026, 4)));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
                 .thenReturn(List.of(
                         aggregate("1002", "银行存款", "1000.00", "200.00"),
                         aggregate("2202", "应付账款", "100.00", "500.00")
                 ));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(START), eq(END)))
                 .thenReturn(List.of(
                         aggregate("1002", "银行存款", "200.00", "50.00"),
                         aggregate("2202", "应付账款", "50.00", "300.00")
                 ));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
                 .thenReturn(List.of(
                         aggregate("1002", "银行存款", "1200.00", "250.00"),
                         aggregate("2202", "应付账款", "150.00", "800.00")
@@ -579,7 +580,7 @@ class VoucherExportServiceTest {
     void exportSubsidiaryLedger_writesSubjectSectionsAndTotals() throws Exception {
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.of(closedPeriod(2026, 4)));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
                 .thenReturn(List.of(aggregate("1002", "银行存款", "1000.00", "200.00")));
         when(voucherRepo.findByFactoryIdAndDateRange(FACTORY_ID, START, END))
                 .thenReturn(List.of(voucher("V-001", "记-001", LocalDate.of(2026, 5, 1))));
@@ -609,12 +610,12 @@ class VoucherExportServiceTest {
     void exportTrialBalance_balancedWritesOpeningPeriodAndClosingTotals() throws Exception {
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.of(closedPeriod(2026, 4)));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(LocalDate.of(1970, 1, 1)), eq(LocalDate.of(2026, 4, 30))))
                 .thenReturn(List.of(
                         aggregate("1002", "银行存款", "1000.00", "0.00"),
                         aggregate("2202", "应付账款", "0.00", "1000.00")
                 ));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY_ID), eq(START), eq(END)))
                 .thenReturn(List.of(
                         aggregate("1002", "银行存款", "0.00", "100.00"),
                         aggregate("2202", "应付账款", "100.00", "0.00")
@@ -647,7 +648,7 @@ class VoucherExportServiceTest {
     void exportTrialBalance_unbalancedThrowsWithSubjectsAndDifference() {
         when(accountingPeriodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY_ID, 2026, 4))
                 .thenReturn(Optional.empty());
-        when(entryRepo.aggregateBySubject(FACTORY_ID, START, END))
+        when(entryRepo.aggregateBySubjectExcludingDraft(FACTORY_ID, START, END))
                 .thenReturn(List.of(aggregate("1002", "银行存款", "100.00", "0.00")));
         when(accountRepo.findByCodeForFactory(FACTORY_ID, "1002"))
                 .thenReturn(List.of(account("1002", "银行存款", AccountBalanceType.DEBIT_NORMAL)));
@@ -665,13 +666,13 @@ class VoucherExportServiceTest {
     @Test
     @DisplayName("Income statement export writes period formulas and year-to-date totals")
     void exportIncomeStatement_writesPeriodAndYearToDateFormulaRows() throws Exception {
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(START), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY_ID), eq(START), eq(END)))
                 .thenReturn(List.of(
                         aggregate("6001", "主营业务收入", "0.00", "1000.00"),
                         aggregate("6401", "主营业务成本", "400.00", "0.00"),
                         aggregate("6601", "销售费用", "50.00", "0.00")
                 ));
-        when(entryRepo.aggregateBySubject(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
+        when(entryRepo.aggregateBySubjectExcludingDraftAndClosing(eq(FACTORY_ID), eq(LocalDate.of(2026, 1, 1)), eq(END)))
                 .thenReturn(List.of(
                         aggregate("6001", "主营业务收入", "0.00", "3000.00"),
                         aggregate("6401", "主营业务成本", "1200.00", "0.00"),

@@ -79,4 +79,10 @@ public class IncomeStatementDTO {
 
     /** 报表生成时间戳. */
     private String generatedAt;
+
+    /**
+     * F006 财务审计 Bug 6 (2026-07-04): 期间内待过账 (DRAFT, 未财审) 凭证数. 报表口径已切到
+     * POSTED-only, 本字段让财务人员看到"为什么数字比预期少". 0 = 无待办.
+     */
+    private Long pendingDraftVoucherCount;
 }
