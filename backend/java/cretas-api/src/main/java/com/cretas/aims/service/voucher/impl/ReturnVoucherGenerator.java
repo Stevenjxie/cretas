@@ -24,8 +24,9 @@ import java.util.List;
  * <p>采购退货 (PURCHASE_RETURN):
  * <pre>
  * 借: 2202 应付账款 (冲减供应商欠款) — 辅助核算 SUPPLIER=counterpartyId
- * 贷: 1405 库存商品 (库存减少)
+ * 贷: 1403 原材料 (原料退回供应商, 库存减少) — 整单皆产成品时退化为 1405 库存商品
  * </pre>
+ * (#4 fix: 采购退货退的是原料 → 1403, 与报损/盘点/期初 raw=1403 口径统一; 旧值 1405 已修正。)
  *
  * <p>业务: ReturnOrder 审批通过 → 财务反向冲销原销售/采购凭证.
  *
@@ -82,11 +83,16 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
         // PURCHASE_RETURN: AP 在借方 (冲减供应商欠款), SUPPLIER 辅助核算
         // null returnType → 走 legacy SALES_RETURN 行为 (向后兼容)
         if (returnType == ReturnType.PURCHASE_RETURN) {
+            // #4 fix: 采购退货退的是【原料】(退回供应商) → 贷 1403 原材料, 与本轮 campaign 报损/盘点/期初
+            // 统一的 raw=1403 口径一致 (此前误用 1405 库存商品=产成品科目, 与原料入库/报损口径打架)。
+            // 仅当退货整单都是产成品 (罕见: 外购成品转售退货) 才用 1405。honest-null: 无 items / 惰性加载
+            // 失败时默认按原料 1403 (采购退货在本 ERP 语义即原料)。
+            String[] subject = resolvePurchaseReturnInventorySubject(r);
             return List.of(
                     // 应付账款按供应商分账 (R-HJ Round 11 §G.1 供应商应付明细账冲销)
                     debitEntryWithAuxiliary(1, "2202", "应付账款", amount, "采购退货冲减应付 " + r.getReturnNumber(),
                             counterpartyId != null ? AuxiliaryType.SUPPLIER : null, counterpartyId),
-                    creditEntry(2, "1405", "库存商品", amount, "退货库存减少")
+                    creditEntry(2, subject[0], subject[1], amount, "退货库存减少")
             );
         }
         // SALES_RETURN (默认 / 老数据无 type)
@@ -96,6 +102,39 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
                 creditEntryWithAuxiliary(2, "1122", "应收账款", amount, "客户应收冲减",
                         counterpartyId != null ? AuxiliaryType.CUSTOMER : null, counterpartyId)
         );
+    }
+
+    /** 原材料科目 (raw, 与报损/盘点/期初一致)。 */
+    static final String SUBJECT_RAW_MATERIAL_CODE = "1403";
+    static final String SUBJECT_RAW_MATERIAL_NAME = "原材料";
+    /** 库存商品科目 (finished goods)。 */
+    static final String SUBJECT_FINISHED_GOODS_CODE = "1405";
+    static final String SUBJECT_FINISHED_GOODS_NAME = "库存商品";
+
+    /**
+     * #4: 采购退货贷方存货科目 = raw (1403) 还是 finished (1405)。
+     *
+     * <p>采购退货在本 ERP 语义即"原料退回供应商" → 默认 1403。仅当退货整单每一行都是产成品
+     * (productTypeId 非空且 materialTypeId 为空, 罕见的外购成品转售退货) 才用 1405。
+     * items 惰性加载失败 / 为空 → honest 默认按原料 1403 (不臆断成产成品)。
+     *
+     * @return [code, name]
+     */
+    private String[] resolvePurchaseReturnInventorySubject(ReturnOrder r) {
+        boolean allFinished = false;
+        try {
+            java.util.List<com.cretas.aims.entity.inventory.ReturnOrderItem> items = r.getItems();
+            if (items != null && !items.isEmpty()) {
+                allFinished = items.stream().allMatch(it ->
+                        it.getProductTypeId() != null && it.getMaterialTypeId() == null);
+            }
+        } catch (RuntimeException e) {
+            // LazyInitializationException 等 → 默认按原料 (采购退货主流即原料)。
+            allFinished = false;
+        }
+        return allFinished
+                ? new String[]{SUBJECT_FINISHED_GOODS_CODE, SUBJECT_FINISHED_GOODS_NAME}
+                : new String[]{SUBJECT_RAW_MATERIAL_CODE, SUBJECT_RAW_MATERIAL_NAME};
     }
 
     /**

@@ -120,6 +120,32 @@ public interface ArApService {
                                       Long operatedBy, String remark);
 
     /**
+     * #3(a) 退货资金链: 同 {@link #recordAdjustment(String, CounterpartyType, String, BigDecimal, Long, String)}
+     * 但把调整挂到来源单据 ({@code sourceType}/{@code sourceId}), 使父单据被驳回时可级联撤销这条
+     * 挂起的 PENDING 调整 (见 {@link #cancelPendingAdjustmentsBySource}). 余额同样在审批前不变动。
+     */
+    ArApTransaction recordAdjustment(String factoryId, CounterpartyType counterpartyType,
+                                      String counterpartyId, BigDecimal amount,
+                                      Long operatedBy, String remark,
+                                      String sourceType, String sourceId);
+
+    /**
+     * #3(a) 退货资金链: 级联撤销某来源单据 (如退货单) 下所有<b>挂起 (PENDING)</b> 的 AR/AP 调整。
+     *
+     * <p>触发场景: 无货退款单在业务审批时已 {@link #recordAdjustment} 挂起一条 PENDING 冲减,
+     * 若财务随后驳回该退货单, 这条 PENDING 调整必须一并作废, 否则它仍留在审批队列可被第 2 位
+     * 审批人通过 → 为一张已驳回的退货单变动客户/供应商余额 (资金泄漏)。
+     *
+     * <p>语义: 系统级联作废, <b>非</b>手工 4-眼驳回 (不校验 operatedBy≠approvedBy), 因为这是父单据
+     * 状态机驱动的撤销而非双人复核。余额不动, 调整行置 {@code REJECTED} (无 CANCELLED 枚举, 复用
+     * REJECTED 保持 DB CHECK 兼容), remark 追加撤销原因。幂等: 无匹配 PENDING 行 → 返回 0, no-op。
+     *
+     * @return 被撤销的调整数量 (通常 0 或 1)
+     */
+    int cancelPendingAdjustmentsBySource(String factoryId, String sourceType, String sourceId,
+                                         Long operatedBy, String reason);
+
+    /**
      * R23 audit C2: approve a PENDING adjustment. Applies amount delta to counterparty
      * balance + flips approval_status to APPROVED. Requires elevated permission
      * (controller enforces 'finance:approve_adjustment'). Approver must differ from

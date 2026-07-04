@@ -691,15 +691,58 @@ class VoucherGeneratorsTest {
         Voucher v = gen.generate("F001", r);
         assertEquals(HUNDRED, v.getTotalDebit());
         assertEquals(HUNDRED, v.getTotalCredit());
-        // 借应付账款 + 贷库存
+        // 借应付账款 + 贷原材料 (#4: 采购退货退原料 → 1403, 非 1405 库存商品)
         assertEquals("2202", v.getEntries().get(0).getSubjectCode());
-        assertEquals("1405", v.getEntries().get(1).getSubjectCode());
+        assertEquals("1403", v.getEntries().get(1).getSubjectCode());
         // AP 借方挂 SUPPLIER
         VoucherEntry apLine = v.getEntries().get(0);
         assertEquals(AuxiliaryType.SUPPLIER, apLine.getAuxiliaryType());
         assertEquals("sup-300", apLine.getAuxiliaryEntityId());
         // 库存 line 不挂供应商 (库存按 batch/SKU 维度独立)
         assertNull(v.getEntries().get(1).getAuxiliaryType());
+    }
+
+    @Test
+    void returnGeneratorPurchaseReturnRawMaterialCredits1403() {
+        // #4: 采购退货退【原料】(item 带 materialTypeId) → 贷 1403 原材料, 与报损/盘点/期初 raw 口径一致。
+        ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
+        ReturnOrder r = new ReturnOrder();
+        r.setId("ro-pr-raw");
+        r.setReturnNumber("RT-PR-RAW");
+        r.setReturnDate(LocalDate.of(2026, 5, 16));
+        r.setTotalAmount(HUNDRED);
+        r.setReturnType(ReturnType.PURCHASE_RETURN);
+        r.setCounterpartyId("sup-300");
+        com.cretas.aims.entity.inventory.ReturnOrderItem raw = new com.cretas.aims.entity.inventory.ReturnOrderItem();
+        raw.setMaterialTypeId("MT-1");
+        raw.setQuantity(java.math.BigDecimal.ONE);
+        r.setItems(java.util.List.of(raw));
+
+        Voucher v = gen.generate("F001", r);
+        assertEquals("2202", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1403", v.getEntries().get(1).getSubjectCode());  // 原材料
+        assertEquals("原材料", v.getEntries().get(1).getSubjectName());
+    }
+
+    @Test
+    void returnGeneratorPurchaseReturnAllFinishedGoodsCredits1405() {
+        // #4: 罕见外购成品转售退货 (整单每行都是产成品: productTypeId 非空 & materialTypeId 空) → 1405。
+        ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
+        ReturnOrder r = new ReturnOrder();
+        r.setId("ro-pr-fg");
+        r.setReturnNumber("RT-PR-FG");
+        r.setReturnDate(LocalDate.of(2026, 5, 16));
+        r.setTotalAmount(HUNDRED);
+        r.setReturnType(ReturnType.PURCHASE_RETURN);
+        r.setCounterpartyId("sup-300");
+        com.cretas.aims.entity.inventory.ReturnOrderItem fg = new com.cretas.aims.entity.inventory.ReturnOrderItem();
+        fg.setProductTypeId("PT-1");
+        fg.setQuantity(java.math.BigDecimal.ONE);
+        r.setItems(java.util.List.of(fg));
+
+        Voucher v = gen.generate("F001", r);
+        assertEquals("2202", v.getEntries().get(0).getSubjectCode());
+        assertEquals("1405", v.getEntries().get(1).getSubjectCode());  // 库存商品
     }
 
     // ==================== DepreciationVoucherGenerator ====================

@@ -80,6 +80,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
 
     private static final String FACTORY = "F001";
     private static final String WH_LOG = "wh-log-f001";
+    private static final String WH_RAW = "wh-raw-f001"; // 采购入库仓 (原料仓) — #2 warehouse-scoped 扣减目标
     private static final String MATERIAL_TYPE = "MT-001";
     private static final Long APPROVER = 22L;
 
@@ -94,6 +95,8 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         ReflectionTestUtils.setField(service, "materialBatchAdjustmentRepository", materialBatchAdjustmentRepository);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
+        // #2 fix: 采购退货从采购入库仓 (原料仓) warehouse-scoped 扣减。resolver 解析出原料仓。
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY)).thenReturn(WH_RAW);
     }
 
     // ===== helpers =====
@@ -154,7 +157,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     void purchaseReturnWithGoods_deductsFromExistingBatch_netDeduct() {
         // 收货时已入库 130 (含超收 30), 退货 30 → 净扣 30 → currentQuantity 130→100。
         MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("130.00"));
-        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW))
                 .thenReturn(new ArrayList<>(List.of(batch)));
 
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
@@ -185,14 +188,23 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         assertThat(adj.getQuantityAfter()).isEqualByComparingTo(new BigDecimal("100.00"));
         assertThat(adj.getMaterialBatchId()).isEqualTo("B1");
 
-        // AP 冲减 (deferred from approve) 触发一次。
+        // #2: 从采购入库仓 warehouse-scoped 扣减 (不走跨仓 FEFO — 避免吃掉车间仓 WH-WKS 领料搬库批次)。
+        verify(materialBatchRepository, times(1)).findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW);
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFO(anyString(), anyString());
+
+        // AP 冲减 (deferred from approve) 触发一次, 并挂到退货单来源 (#3a link, 7-arg overload)。
         verify(arApService, times(1)).recordAdjustment(
                 eqStr(FACTORY),
                 org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER),
                 org.mockito.ArgumentMatchers.eq("SUP-001"),
                 org.mockito.ArgumentMatchers.any(BigDecimal.class),
                 org.mockito.ArgumentMatchers.eq(APPROVER),
-                org.mockito.ArgumentMatchers.contains("采购退货冲减(实物已入库)"));
+                org.mockito.ArgumentMatchers.contains("采购退货冲减(实物已入库)"),
+                org.mockito.ArgumentMatchers.eq("RETURN_ORDER"),
+                org.mockito.ArgumentMatchers.eq(order.getId()));
+
+        // #3(b): completion-path 冲减是 PENDING → 响应带出"待财务审批"提示 (防呆 Rule 2/5)。
+        assertThat(result.getCompletionHint()).isNotNull().contains("待财务审批");
     }
 
     @Test
@@ -200,7 +212,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
     void purchaseReturnWithGoods_insufficientStock_throws409_notCompleted() {
         // 可用仅 10, 退货要 30 → 不足。
         MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("10.00"));
-        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW))
                 .thenReturn(new ArrayList<>(List.of(batch)));
 
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
@@ -224,7 +236,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         // 退 30: 批1 仅 20 (扣空→USED_UP), 批2 100 (扣 10)。
         MaterialBatch b1 = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("20.00"));
         MaterialBatch b2 = availableBatch("B2", MATERIAL_TYPE, new BigDecimal("100.00"));
-        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW))
                 .thenReturn(new ArrayList<>(List.of(b1, b2)));
 
         List<ReturnOrderItem> items = List.of(item(MATERIAL_TYPE, new BigDecimal("30.00"), "超收退回"));
@@ -260,7 +272,7 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.COMPLETED);
         // No-goods path — 不扣库存, 不查 FEFO, AR/AP 已在 approve 触发。
         verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
-        verify(materialBatchRepository, never()).findAvailableBatchesFEFO(anyString(), anyString());
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFOByWarehouse(anyString(), anyString(), anyString());
         verify(materialBatchAdjustmentRepository, never()).save(org.mockito.ArgumentMatchers.any());
         verify(arApService, never()).recordAdjustment(
                 org.mockito.ArgumentMatchers.anyString(),
@@ -290,14 +302,14 @@ class ReturnOrderPurchaseReturnDefectiveTest {
         // SALES_RETURN 加库存到 FinishedGoodsBatch, 不触发 MaterialBatch 扣减。
         verify(finishedGoodsBatchRepository, times(1)).save(org.mockito.ArgumentMatchers.any());
         verify(materialBatchRepository, never()).save(org.mockito.ArgumentMatchers.any());
-        verify(materialBatchRepository, never()).findAvailableBatchesFEFO(anyString(), anyString());
+        verify(materialBatchRepository, never()).findAvailableBatchesFEFOByWarehouse(anyString(), anyString(), anyString());
     }
 
     @Test
     @DisplayName("PURCHASE_RETURN with-goods: skip 行缺 materialTypeId / 零数量, 只扣 valid 行")
     void purchaseReturnWithGoods_skipsInvalidItems() {
         MaterialBatch batch = availableBatch("B1", MATERIAL_TYPE, new BigDecimal("100.00"));
-        when(materialBatchRepository.findAvailableBatchesFEFO(FACTORY, MATERIAL_TYPE))
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY, MATERIAL_TYPE, WH_RAW))
                 .thenReturn(new ArrayList<>(List.of(batch)));
 
         List<ReturnOrderItem> items = new ArrayList<>();

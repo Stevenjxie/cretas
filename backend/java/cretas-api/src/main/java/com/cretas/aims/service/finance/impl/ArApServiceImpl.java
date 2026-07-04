@@ -572,6 +572,16 @@ public class ArApServiceImpl implements ArApService {
     public ArApTransaction recordAdjustment(String factoryId, CounterpartyType counterpartyType,
                                              String counterpartyId, BigDecimal amount,
                                              Long operatedBy, String remark) {
+        return recordAdjustment(factoryId, counterpartyType, counterpartyId, amount,
+                operatedBy, remark, null, null);
+    }
+
+    @Override
+    @Transactional
+    public ArApTransaction recordAdjustment(String factoryId, CounterpartyType counterpartyType,
+                                             String counterpartyId, BigDecimal amount,
+                                             Long operatedBy, String remark,
+                                             String sourceType, String sourceId) {
         // R23 audit C2: Pre-R23 this immediately mutated balance and saved APPROVED — bypass
         // of dual-control. R23: insert PENDING + DO NOT mutate balance. Customer/supplier
         // balance changes only on approveAdjustment() by a 2nd user with elevated permission.
@@ -599,10 +609,55 @@ public class ArApServiceImpl implements ArApService {
                 factoryId, type, counterpartyType, counterpartyId, counterpartyName,
                 amount, currentBalance, null, operatedBy, remark);
         transaction.setApprovalStatus(com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING);
+        // #3(a): link to originating document so a rejected parent (退货单) can cascade-cancel it.
+        transaction.setSourceType(sourceType);
+        transaction.setSourceId(sourceId);
 
-        log.info("手工调整 (PENDING): factoryId={}, type={}, counterpartyId={}, amount={}, currentBalance={}, operatedBy={}",
-                factoryId, counterpartyType, counterpartyId, amount, currentBalance, operatedBy);
+        log.info("手工调整 (PENDING): factoryId={}, type={}, counterpartyId={}, amount={}, currentBalance={}, operatedBy={}, source={}/{}",
+                factoryId, counterpartyType, counterpartyId, amount, currentBalance, operatedBy, sourceType, sourceId);
         return transactionRepository.save(transaction);
+    }
+
+    @Override
+    @Transactional
+    public int cancelPendingAdjustmentsBySource(String factoryId, String sourceType, String sourceId,
+                                                Long operatedBy, String reason) {
+        if (sourceType == null || sourceType.isBlank() || sourceId == null || sourceId.isBlank()) {
+            return 0; // honest no-op — nothing to look up.
+        }
+        List<ArApTransaction> pending = transactionRepository
+                .findByFactoryIdAndSourceTypeAndSourceIdAndApprovalStatusAndDeletedAtIsNull(
+                        factoryId, sourceType, sourceId,
+                        com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING);
+        int cancelled = 0;
+        for (ArApTransaction txn : pending) {
+            // Only adjustment types carry PENDING; guard anyway (belt & suspenders).
+            if (txn.getTransactionType() != ArApTransactionType.AR_ADJUSTMENT
+                    && txn.getTransactionType() != ArApTransactionType.AP_ADJUSTMENT) {
+                continue;
+            }
+            // System cascade cancel — NO 4-eyes (not a manual dual-control reject). Balance untouched.
+            // No CANCELLED enum value exists (DB CHECK) → reuse REJECTED, which by definition never
+            // mutates balance and persists as historical evidence.
+            String existingRemark = txn.getRemark() != null ? txn.getRemark() : "";
+            String suffix = " [CANCELLED (来源单据驳回) by " + operatedBy + ": "
+                    + (reason != null && !reason.isBlank() ? reason : "(无原因)") + "]";
+            String newRemark = existingRemark + suffix;
+            if (newRemark.length() > 500) {
+                newRemark = newRemark.substring(0, 500);
+            }
+            txn.setRemark(newRemark);
+            txn.setApprovalStatus(com.cretas.aims.entity.enums.ArApApprovalStatus.REJECTED);
+            txn.setApprovedBy(operatedBy);
+            txn.setApprovedAt(java.time.LocalDateTime.now());
+            transactionRepository.save(txn);
+            cancelled++;
+        }
+        if (cancelled > 0) {
+            log.info("级联撤销挂起调整: factoryId={}, source={}/{}, cancelled={}, by={}",
+                    factoryId, sourceType, sourceId, cancelled, operatedBy);
+        }
+        return cancelled;
     }
 
     @Override

@@ -173,6 +173,39 @@ class ReturnOrderFinanceApprovalGateTest {
     }
 
     @Test
+    @DisplayName("#3(a): financeReject 级联撤销退货单挂起的 PENDING 冲减 (RETURN_ORDER + orderId)")
+    void financeReject_cancelsLinkedPendingAdjustment() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, ReturnOrderStatus.APPROVED);
+        stub(order);
+        when(arApService.cancelPendingAdjustmentsBySource(anyString(), anyString(), anyString(), any(), anyString()))
+                .thenReturn(1);
+
+        ReturnOrder result = service.financeRejectReturnOrder(FACTORY, order.getId(), FINANCE_USER);
+
+        assertThat(result.getStatus()).isEqualTo(ReturnOrderStatus.REJECTED);
+        // 关键: 撤销挂起冲减被调用, source 精确锚定到本退货单 → 第 2 位审批人无法再通过它变动余额。
+        verify(arApService).cancelPendingAdjustmentsBySource(
+                org.mockito.ArgumentMatchers.eq(FACTORY),
+                org.mockito.ArgumentMatchers.eq("RETURN_ORDER"),
+                org.mockito.ArgumentMatchers.eq(order.getId()),
+                org.mockito.ArgumentMatchers.eq(FINANCE_USER),
+                anyString());
+    }
+
+    @Test
+    @DisplayName("#3(a): 撤销挂起冲减失败 → financeReject fail-loud (不静默保留可通过的冲减)")
+    void financeReject_cancelFailure_failsLoud() {
+        ReturnOrder order = buildOrder(ReturnType.PURCHASE_RETURN, ReturnOrderStatus.APPROVED);
+        stub(order);
+        when(arApService.cancelPendingAdjustmentsBySource(anyString(), anyString(), anyString(), any(), anyString()))
+                .thenThrow(new RuntimeException("db down"));
+
+        assertThatThrownBy(() -> service.financeRejectReturnOrder(FACTORY, order.getId(), FINANCE_USER))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("撤销");
+    }
+
+    @Test
     @DisplayName("SALES_RETURN 同样受财务门约束 (未财务审批 complete 拒绝)")
     void salesReturn_alsoGatedByFinance() {
         ReturnOrder order = buildOrder(ReturnType.SALES_RETURN, ReturnOrderStatus.APPROVED);

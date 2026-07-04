@@ -45,6 +45,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
     private static final Logger log = LoggerFactory.getLogger(ReturnOrderServiceImpl.class);
 
+    /** #3(a): 挂在 AR/AP 调整上的来源单据类型, 使退货单驳回时可级联撤销挂起调整. 与 ReturnVoucherGenerator.BUSINESS_TYPE 一致. */
+    private static final String ADJUSTMENT_SOURCE_TYPE = "RETURN_ORDER";
+
     private final ReturnOrderRepository returnOrderRepository;
     private final ReturnOrderItemRepository returnOrderItemRepository;
     private final ArApService arApService;
@@ -315,12 +318,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             // No-goods path: AR/AP adjustment immediately on approve (current behavior).
             try {
                 if (order.getReturnType() == ReturnType.PURCHASE_RETURN) {
+                    // #3(a): link adjustment → 退货单 (sourceType/sourceId) so financeReject can cascade-cancel it.
                     arApService.recordAdjustment(factoryId,
                             com.cretas.aims.entity.enums.CounterpartyType.SUPPLIER,
                             order.getCounterpartyId(),
                             order.getTotalAmount().negate(),
                             approverId,
-                            "采购退货冲减(无货)-" + order.getReturnNumber());
+                            "采购退货冲减(无货)-" + order.getReturnNumber(),
+                            ADJUSTMENT_SOURCE_TYPE, order.getId());
                     log.info("采购退货冲减应付(无货, 审批立即触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
                 } else if (order.getReturnType() == ReturnType.SALES_RETURN) {
                     arApService.recordAdjustment(factoryId,
@@ -328,7 +333,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                             order.getCounterpartyId(),
                             order.getTotalAmount().negate(),
                             approverId,
-                            "销售退货冲减(无货)-" + order.getReturnNumber());
+                            "销售退货冲减(无货)-" + order.getReturnNumber(),
+                            ADJUSTMENT_SOURCE_TYPE, order.getId());
                     log.info("销售退货冲减应收(无货, 审批立即触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
                 }
             } catch (Exception e) {
@@ -382,6 +388,24 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         order.setStatus(ReturnOrderStatus.REJECTED);
         order.setFinanceApprovedBy(financeUserId);
         order.setFinanceApprovedAt(LocalDateTime.now());
+
+        // #3(a): 无货退款单在业务审批时已挂起一条 PENDING AR/AP 冲减 (recordAdjustment)。财务驳回退货单
+        // 后, 这条挂起调整必须一并作废, 否则它仍留在审批队列可被第 2 位审批人通过 → 为已驳回退货单变动
+        // 客户/供应商余额 (资金泄漏)。系统级联撤销 (非手工 4-眼), 幂等 (有货 path 无挂起调整 → 0 no-op)。
+        try {
+            int cancelled = arApService.cancelPendingAdjustmentsBySource(factoryId,
+                    ADJUSTMENT_SOURCE_TYPE, order.getId(), financeUserId,
+                    "退货单财务驳回, 撤销待审批冲减-" + order.getReturnNumber());
+            if (cancelled > 0) {
+                log.info("财务驳回退货单级联撤销挂起冲减: returnOrderId={}, cancelled={}", returnOrderId, cancelled);
+            }
+        } catch (Exception e) {
+            // 撤销失败必须 fail-loud — 否则一条能被通过的挂起冲减留在队列 = 资金泄漏隐患。
+            log.error("财务驳回退货单撤销挂起冲减失败: returnOrderId={}", returnOrderId, e);
+            throw new BusinessException(500, "退货单驳回失败: 关联的待审批冲减撤销失败, 请重试")
+                    .withHint("为避免已驳回退货单的余额被误变动, 系统未提交驳回。请稍后重试或联系管理员。");
+        }
+
         log.info("财务驳回退货单: returnOrderId={}, returnNumber={}, financeUserId={}",
                 returnOrderId, order.getReturnNumber(), financeUserId);
         return returnOrderRepository.save(order);
@@ -420,6 +444,10 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         boolean withGoods = Boolean.TRUE.equals(order.getWithGoods());
         if (withGoods) {
             // Deferred AR/AP冲减 from approve.
+            // #3(b): 不再吞异常。此前 catch(Exception) log.error 会让"冲减失败"却仍 COMPLETE + 移库存,
+            // 客户/供应商余额永远不冲减且无人知晓 (silent finance hole)。改为 fail-loud: 冲减失败整体
+            // 回滚 (退货单不 COMPLETED, 库存不动), 让操作员看到明确错误并重试。
+            boolean adjustmentRecorded = false;
             try {
                 if (order.getReturnType() == ReturnType.PURCHASE_RETURN) {
                     arApService.recordAdjustment(factoryId,
@@ -427,7 +455,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                             order.getCounterpartyId(),
                             order.getTotalAmount().negate(),
                             order.getApprovedBy(),
-                            "采购退货冲减(实物已入库)-" + order.getReturnNumber());
+                            "采购退货冲减(实物已入库)-" + order.getReturnNumber(),
+                            ADJUSTMENT_SOURCE_TYPE, order.getId());
+                    adjustmentRecorded = true;
                     log.info("采购退货冲减应付(实物已入库, completion 触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
                 } else if (order.getReturnType() == ReturnType.SALES_RETURN) {
                     arApService.recordAdjustment(factoryId,
@@ -435,11 +465,24 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                             order.getCounterpartyId(),
                             order.getTotalAmount().negate(),
                             order.getApprovedBy(),
-                            "销售退货冲减(实物已入库)-" + order.getReturnNumber());
+                            "销售退货冲减(实物已入库)-" + order.getReturnNumber(),
+                            ADJUSTMENT_SOURCE_TYPE, order.getId());
+                    adjustmentRecorded = true;
                     log.info("销售退货冲减应收(实物已入库, completion 触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
                 }
+            } catch (BusinessException e) {
+                throw e; // 明确业务错误原样上抛 (客户/供应商不存在等), 保留 message + hint。
             } catch (Exception e) {
-                log.error("退货AR/AP冲减失败 (有货 completion path): returnOrderId={}", returnOrderId, e);
+                log.error("退货AR/AP冲减失败 (有货 completion path, fail-loud 回滚): returnOrderId={}", returnOrderId, e);
+                throw new BusinessException(500, "退货完成失败: 应收/应付冲减未成功, 退货单未完成")
+                        .withHint("退货涉及资金, 余额冲减失败时不能完成出货。请稍后重试或联系财务/管理员核实。");
+            }
+            // 防呆 Rule 2/5: recordAdjustment 建的是 PENDING 冲减 (余额未变, 待财务审批调整)。
+            // 完成响应必须提示操作员余额尚未变动, 避免误以为客户/供应商欠款已冲平。
+            if (adjustmentRecorded) {
+                order.setCompletionHint("退货已完成并移库。余额冲减 " + order.getTotalAmount().stripTrailingZeros().toPlainString()
+                        + " 元已提交, 待财务审批后才会变动"
+                        + (order.getReturnType() == ReturnType.PURCHASE_RETURN ? "供应商应付" : "客户应收") + "余额。");
             }
             // T-RTA Phase C (issue #571): SALES_RETURN with-goods → create DEFECTIVE
             // FinishedGoodsBatch in WH-LOG. status='DEFECTIVE' auto-excludes from existing
@@ -504,6 +547,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                 // 使 currentQuantity = receiptQuantity - usedQuantity - reservedQuantity 正确反映,
                 // 并写 MaterialBatchAdjustment 负数留痕。源批次按 FEFO 跨同物料类型批次扣减
                 // (ReturnOrderItem 不可靠引用单一批次; 退货物料 = exceptionQty 的同物料类型库存)。
+                // #2 fix: 采购退货 = 原料退回供应商, 必须从【原料仓/采购入库仓】扣减, 而非跨所有仓 FEFO。
+                // 跨仓 FEFO (findAvailableBatchesFEFO) 只排除了 PRODUCTION_BATCH (WIP), 未排除 #1171 领料搬库
+                // 到车间仓 (WH-WKS) 的 sourceDocType='MATERIAL_REQUISITION' 批次 (status=AVAILABLE, 继承源
+                // expireDate 常排 FEFO 最前) → 采购退货会优先吃掉生产在库的车间仓库存而非物理退回供应商的
+                // 原料仓库存, 造成跨仓账实背离 + 报工待拣批次凭空消失。改用 warehouse-scoped FEFO 锁定采购
+                // 入库仓 (resolvePurchaseInboundWh, 默认 WH-LOG), 车间仓批次天然不在此仓范围内。
+                String rawWarehouseId = warehouseResolver != null
+                        ? warehouseResolver.resolvePurchaseInboundWh(factoryId) : null;
                 try {
                     int deducted = 0;
                     for (ReturnOrderItem item : order.getItems()) {
@@ -512,7 +563,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                             // Skip 行: PURCHASE_RETURN items 必须有 materialTypeId。
                             continue;
                         }
-                        deductMaterialForPurchaseReturn(factoryId, order, item);
+                        deductMaterialForPurchaseReturn(factoryId, order, item, rawWarehouseId);
                         deducted++;
                     }
                     log.info("采购退货 库存扣减完成 (BLOCKER 2): returnNumber={}, lines={}/{} items, 货退回供应商",
@@ -547,14 +598,20 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
      * 使 {@code currentQuantity = receiptQuantity - usedQuantity - reservedQuantity} 正确反映,
      * 并写 {@link MaterialBatchAdjustment} 负数留痕。库存不足抛 409 (账面/物理不一致, fail-loud)。
      *
+     * @param rawWarehouseId 采购入库仓 (原料仓) id — 退货从此仓扣减。null 时回退跨仓 FEFO
+     *                       (仅 warehouseResolver 未注入的单测场景; 生产环境恒非 null)。
      * @throws BusinessException 库存不足 (409) — 阻断退货完成, 不扣成负数
      */
-    private void deductMaterialForPurchaseReturn(String factoryId, ReturnOrder order, ReturnOrderItem item) {
+    private void deductMaterialForPurchaseReturn(String factoryId, ReturnOrder order, ReturnOrderItem item,
+                                                 String rawWarehouseId) {
         BigDecimal returnQty = item.getQuantity().setScale(2, RoundingMode.HALF_UP);
 
-        // FEFO 可用批次 (status='AVAILABLE' AND currentQuantity > 0), 按到期/入库排序。
-        List<MaterialBatch> batches =
-                materialBatchRepository.findAvailableBatchesFEFO(factoryId, item.getMaterialTypeId());
+        // #2 fix: 优先按【采购入库仓】warehouse-scoped FEFO 取批次 — 排除车间仓 (WH-WKS) 领料搬库批次,
+        // 只扣物理退回供应商的原料仓库存。rawWarehouseId 为 null (单测无 resolver) 才回退跨仓 FEFO。
+        List<MaterialBatch> batches = rawWarehouseId != null
+                ? materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
+                        factoryId, item.getMaterialTypeId(), rawWarehouseId)
+                : materialBatchRepository.findAvailableBatchesFEFO(factoryId, item.getMaterialTypeId());
 
         // 先校验总可用量 >= 退货量, 不足则整体阻断 (不部分扣减留下不一致)。
         BigDecimal totalAvailable = batches.stream()
