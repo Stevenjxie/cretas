@@ -24,6 +24,7 @@ import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer
 import {
   getCumulativeReceived,
   getOrderReceiveSequence,
+  getPurchaseInboundDefaultWarehouse,
   type CumulativeReceived,
   type ReceiveSequenceEntry,
 } from '@/api/purchaseReceive';
@@ -185,7 +186,7 @@ function handleAiFill(params: Record<string, unknown>) {
     : loadOptions();
   optionsReady.then(() => {
     if (!form.value.warehouseId) {
-      form.value.warehouseId = defaultRawWarehouseId(warehouseOptions.value);
+      form.value.warehouseId = defaultReceiveWarehouseId(warehouseOptions.value);
     }
   });
   createVisible.value = true;
@@ -224,6 +225,10 @@ const materialOptions = ref<MaterialTypeOption[]>([]);
 const purchaseOrderOptions = ref<PurchaseOrderOption[]>([]);
 const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
 const warehouseOptions = ref<FactoryWarehouse[]>([]);
+// 客户张权反馈 (2026-07-02→07-04): 入库仓库应默认工厂配置的「采购入库默认仓」(PURCHASE_INBOUND_DEFAULT),
+// 而非硬编码物流仓。后端 GET /purchase/receives/default-warehouse 解析该配置 (未配置回退 WH-LOG)。
+// 六扇门(F006) 已配采购入库默认仓=原料仓 → 仓管不用每次手动改选。null = 未拿到 (回退本地默认逻辑)。
+const inboundDefaultWarehouse = ref<FactoryWarehouse | null>(null);
 
 /**
  * 客户张权反馈 (2026-07-02): 入库仓库下拉不该列出成品仓/半成品仓/车间/研发库这些采购收货用不到的仓,
@@ -239,22 +244,37 @@ const warehouseOptions = ref<FactoryWarehouse[]>([]);
  * TEMP/QC/LINESIDE/RETURNS/SCRAP/OUTSOURCE/TRANSFER/OTHER 同理，都是专项流转仓非常规采购收货目标。
  */
 const RAW_RECEIVABLE_WAREHOUSE_TYPES: WarehouseType[] = ['RAW', 'SALTED', 'LOGISTICS'];
-const rawReceivableWarehouses = computed(() =>
-  warehouseOptions.value.filter((w) => RAW_RECEIVABLE_WAREHOUSE_TYPES.includes(w.type))
-);
+const rawReceivableWarehouses = computed(() => {
+  const list = warehouseOptions.value.filter((w) => RAW_RECEIVABLE_WAREHOUSE_TYPES.includes(w.type));
+  // 若工厂把「采购入库默认仓」配到了白名单之外的仓型 (e.g. 半成品仓), 也把它并入候选,
+  // 否则预填的默认值在下拉里没有匹配 option → el-select 显示空白 (仓管以为没选仓)。
+  const cfg = inboundDefaultWarehouse.value;
+  if (cfg && cfg.isActive !== false && !list.some((w) => w.id === cfg.id)) {
+    list.push(cfg);
+  }
+  return list;
+});
 
 /**
- * 原料入库推荐仓。默认 **物流仓(LOGISTICS/WH-LOG)** — 与 WarehouseResolver.resolveLogisticsId 落点一致,
- * 保证采购入库落点 == 生产报工消耗仓(ensureRawMaterialWarehouse) == 销售 FIFO 默认仓, 全链一致。
+ * 原料入库推荐仓。优先用工厂配置的「采购入库默认仓」(PURCHASE_INBOUND_DEFAULT, 后端解析),
+ * 未配置/未拿到时回退 **物流仓(LOGISTICS/WH-LOG)** — 与 WarehouseResolver.resolvePurchaseInboundWh
+ * 的 fallback 一致, 保证前端预选 == 后端未传 warehouseId 时的实际落点。
  *
- * ⚠️ 2026-07-02 回退: 原先默认 WH-RAW(原料仓), 但 resolveLogisticsId 被采购/生产/销售三语义共用,
- * 料落原料仓会导致生产报工挡("只能从原料仓/物流仓领用" 实际只认物流仓) + 销售 FIFO 查空(FG 落物流仓)。
- * 改回默认物流仓止血。"采购进主仓" 的正确做法是拆分三个 purpose + 接领料单 gate (见后续 spec), 不是改这里的默认。
- * RAW/SALTED 仍在候选(用户可手选), 只是不再作默认。
+ * 防呆 Rule 1 (2026-07-04): 六扇门(F006) 已配采购入库默认仓=原料仓, 但前端此前硬编码默认物流仓,
+ * 导致仓管每次新建入库都要手动改选。改为读后端解析后的默认仓 → 常见场景零手动重选。
+ *
+ * ⚠️ 历史 (2026-07-02): resolveLogisticsId 曾被采购/生产/销售三语义共用, 改这里默认会连坐生产/销售;
+ * 现后端已拆出独立 PURCHASE_INBOUND_DEFAULT purpose (只影响采购入库落点), 前端跟随配置安全无连坐。
+ * RAW/SALTED 仍在候选(用户可手选)。
  */
-function defaultRawWarehouseId(list: FactoryWarehouse[]): string {
+function defaultReceiveWarehouseId(list: FactoryWarehouse[]): string {
+  // 1) 工厂配置的采购入库默认仓 (后端解析), 且仍是本页可选的有效仓。
+  const cfg = inboundDefaultWarehouse.value;
+  if (cfg && cfg.isActive !== false) return cfg.id;
+  // 2) 回退物流仓 (与后端 resolvePurchaseInboundWh fallback 一致)。
   const logistics = list.find((w) => w.type === 'LOGISTICS' && w.isActive !== false);
   if (logistics) return logistics.id;
+  // 3) 再兜底原料仓。
   const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
   return raw ? raw.id : '';
 }
@@ -288,7 +308,7 @@ async function loadData() {
 async function loadOptions() {
   if (!factoryId.value) return;
   try {
-    const [sup, mat, po, manufacturers, warehouses] = await Promise.all([
+    const [sup, mat, po, manufacturers, warehouses, inboundDefault] = await Promise.all([
       get<{ content: SupplierOption[] } | SupplierOption[]>(
         `/${factoryId.value}/reference-data/suppliers?usage=active`
       ),
@@ -305,6 +325,9 @@ async function loadOptions() {
       ),
       listManufacturers(factoryId.value, true),
       listWarehouses(factoryId.value),
+      // 采购入库默认仓 (后端解析 PURCHASE_INBOUND_DEFAULT 配置)。失败不阻断整体加载 —
+      // honest-null → defaultReceiveWarehouseId 回退物流仓本地逻辑。
+      getPurchaseInboundDefaultWarehouse(factoryId.value).catch(() => ({ success: false, data: null })),
     ]);
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);
@@ -325,6 +348,8 @@ async function loadOptions() {
     }));
     manufacturerOptions.value = ext<ManufacturerRegistry>(manufacturers);
     warehouseOptions.value = (warehouses?.data || []).filter((w) => w.isActive !== false);
+    // data 可能为 null (工厂缺仓库 seed / 解析失败) → 保持 null, 走 defaultReceiveWarehouseId 回退。
+    inboundDefaultWarehouse.value = inboundDefault?.data ?? null;
   } catch { /* interceptor */ }
 }
 
@@ -333,15 +358,15 @@ function handleCreate() {
     purchaseOrderId: '',
     supplierId: '',
     receiveDate: new Date().toISOString().slice(0, 10),
-    // 默认物流仓(WH-LOG, 与 resolveLogisticsId 一致), 无则原料仓; loadOptions() 完成后回填 (见下 .then)
+    // 默认 = 工厂配置的采购入库默认仓 (无配置回退物流仓); loadOptions() 完成后回填 (见下 .then)
     warehouseId: '',
     remark: '',
     items: [],
   };
   loadOptions().then(() => {
-    // Rule 1 (fool-proof-design): 预填推荐仓, 用户仍可改选; 不选也不阻塞(后端兜底物流仓)。
+    // Rule 1 (fool-proof-design): 预填工厂配置的采购入库默认仓, 用户仍可改选; 不选也不阻塞(后端兜底)。
     if (!form.value.warehouseId) {
-      form.value.warehouseId = defaultRawWarehouseId(warehouseOptions.value);
+      form.value.warehouseId = defaultReceiveWarehouseId(warehouseOptions.value);
     }
   });
   createVisible.value = true;
@@ -845,14 +870,15 @@ onMounted(() => { loadData(); loadOptions(); });
           <el-date-picker v-model="form.receiveDate" type="date" value-format="YYYY-MM-DD" style="width:200px" />
         </el-form-item>
         <!--
-          客户张权反馈 (2026-07-02): 入库单没法选仓库, 之前都默认进物流仓(WH-LOG)。
-          不选也不阻塞 — 后端 CreateReceiveRecordRequest.warehouseId 未传时兜底物流仓
-          (PurchaseServiceImpl L2062-2066)。选了 WIP/成品仓会被后端 422 拦(assertCanReceive)。
+          客户张权反馈 (2026-07-02→07-04): 入库单没法选仓库, 之前硬编码默认物流仓(WH-LOG)。
+          现默认 = 工厂配置的「采购入库默认仓」(PURCHASE_INBOUND_DEFAULT, 后端解析; 六扇门=原料仓),
+          未配置回退物流仓。不选也不阻塞 — 后端 CreateReceiveRecordRequest.warehouseId 未传时同样
+          兜底 resolvePurchaseInboundWh。选了 WIP/成品仓会被后端 422 拦(assertCanReceive)。
         -->
         <el-form-item label="入库仓库">
-          <!-- Req 1 (2026-07-02): 只列能收原料的仓 (原料仓/盐化仓/物流仓), 不列成品仓/半成品仓/
-               车间/研发库 — 见 rawReceivableWarehouses 定义处注释. -->
-          <el-select v-model="form.warehouseId" placeholder="(可选,默认物流仓) 选择入库仓库" clearable filterable style="width:100%">
+          <!-- Req 1 (2026-07-02): 只列能收原料的仓 (原料仓/盐化仓/物流仓) + 工厂配置的采购入库默认仓,
+               不列成品仓/半成品仓/车间/研发库 — 见 rawReceivableWarehouses 定义处注释. -->
+          <el-select v-model="form.warehouseId" placeholder="(可选,默认采购入库仓) 选择入库仓库" clearable filterable style="width:100%">
             <el-option
               v-for="w in rawReceivableWarehouses" :key="w.id"
               :label="`${w.name} (${w.code})`"

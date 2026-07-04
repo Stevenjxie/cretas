@@ -7,6 +7,7 @@
 // axios baseURL = '/api/mobile' so caller-side URLs start at "/{factoryId}/...".
 // 同 orderCopy.ts 模式 (不带 /mobile/ 前缀).
 import { get } from './request';
+import type { FactoryWarehouse } from './factoryWarehouse';
 
 /** 累计已收 — 单行明细 (后端 PurchaseServiceImpl.getCumulativeReceived lines). */
 export interface CumulativeReceivedLine {
@@ -63,5 +64,16 @@ export function getCumulativeReceived(factoryId: string, orderId: string) {
 export function getOrderReceiveSequence(factoryId: string, orderId: string) {
   return get<ReceiveSequenceEntry[]>(
     `/${factoryId}/purchase/orders/${orderId}/receives`
+  );
+}
+
+/**
+ * 采购入库默认仓 — 后端解析本工厂 PURCHASE_INBOUND_DEFAULT 配置 (未配置回退物流仓 WH-LOG)。
+ * 供「新建入库单」预填入库仓库 (防呆 Rule 1)。data 为 null = 工厂缺仓库 seed → 前端回退本地默认逻辑。
+ * 权限对齐入库单读取, 实际收货的仓管/采购员均可读 (不像超管专属的 /factory/warehouse-defaults)。
+ */
+export function getPurchaseInboundDefaultWarehouse(factoryId: string) {
+  return get<FactoryWarehouse | null>(
+    `/${factoryId}/purchase/receives/default-warehouse`
   );
 }

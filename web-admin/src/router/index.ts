@@ -780,7 +780,8 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'shipments',
             name: 'SalesShipments',
             component: () => import('@/views/sales/shipments/list.vue'),
-            meta: { requiresAuth: true, title: '出货记录', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
+            // 手工出货登记 (ShipmentRecord, 不扣库存) — 与「销售订单→发货单→仓库确认」(扣库存) 区分.
+            meta: { requiresAuth: true, title: '手工出货登记', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
           },
           {
             path: 'vehicles',

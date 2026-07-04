@@ -58,6 +58,8 @@ public class PurchaseController {
     private final MobileService mobileService;
     private final PermissionService permissionService;
     private final UserRepository userRepository;
+    private final com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
+    private final com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
 
     /**
      * Phase 2 issue #13 — workflow-scoped RBAC for {@link #approveOrder}.
@@ -383,6 +385,36 @@ public class PurchaseController {
         log.info("创建入库单: factoryId={}, supplierId={}", factoryId, request.getSupplierId());
         PurchaseReceiveRecord record = purchaseService.createReceiveRecord(factoryId, request, userId);
         return ApiResponse.success("入库单创建成功", record);
+    }
+
+    /**
+     * 采购入库默认仓 — 解析本工厂配置的 {@code PURCHASE_INBOUND_DEFAULT} 默认仓, 供前端「新建入库单」
+     * 预填入库仓库 (防呆 Rule 1: 别让仓管每次手动重选)。
+     *
+     * <p>返回 {@link FactoryWarehouse} (含 code/name/type), 前端据此预选。honest-null: 若工厂缺少
+     * 仓库 seed (resolver 抛异常) 或解析出的仓库已失效, 返回 {@code data=null} → 前端回退本地默认逻辑,
+     * 不 500 阻断新建入库。
+     *
+     * <p>权限对齐入库单读取 (procurement read/write + inventory:write), 让实际收货的仓管/采购员
+     * 都能拿到默认仓 —— 不像 {@code /factory/warehouse-defaults} 仅超管可读。read-only, 不改任何库存。
+     */
+    @GetMapping("/receives/default-warehouse")
+    @Operation(summary = "采购入库默认仓 (解析 PURCHASE_INBOUND_DEFAULT 配置)")
+    @RequirePermission({"procurement:read_write", "procurement:read", "inventory:write"})
+    public ApiResponse<com.cretas.aims.entity.factory.FactoryWarehouse> getDefaultReceiveWarehouse(
+            @PathVariable @NotBlank String factoryId) {
+        com.cretas.aims.entity.factory.FactoryWarehouse warehouse = null;
+        try {
+            String warehouseId = warehouseResolver.resolvePurchaseInboundWh(factoryId);
+            warehouse = factoryWarehouseRepository
+                    .findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId)
+                    .orElse(null);
+        } catch (BusinessException e) {
+            // 工厂缺 WH-LOG 兜底 seed (resolvePurchaseInboundWh fallback resolveId 抛 500) —
+            // honest-null 返回, 让前端回退本地默认仓逻辑, 不阻断新建入库。
+            log.warn("解析采购入库默认仓失败 factoryId={}: {}", factoryId, e.getMessage());
+        }
+        return ApiResponse.success("查询成功", warehouse);
     }
 
     @GetMapping("/receives")
