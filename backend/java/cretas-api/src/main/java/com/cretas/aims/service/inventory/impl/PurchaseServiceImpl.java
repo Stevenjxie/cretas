@@ -2084,8 +2084,26 @@ public class PurchaseServiceImpl implements PurchaseService {
         batch.setPurchaseDate(record.getReceiveDate());
         batch.setFactoryNumber(item.getFactoryNumber());
         batch.setOriginPlace(item.getOriginPlace());
-        batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        // 🔒🔒 QC 入库门 (食品安全, 2026-07-04): 质检结果非 PASS 的收货行不得直接进可用库存,
+        // 自动隔离为 DEFECTIVE (不良品) — FEFO/领料/销售查询均过滤 status='AVAILABLE', 自动排除
+        // DEFECTIVE。质检经理后续用 ReleaseDecisionTool 复核放行(→AVAILABLE)/退货(→保持DEFECTIVE)。
+        // 防呆 (客户原话"仓管年纪大文化素质低, 不能依赖人工判断"): 系统在入库时即拦截不合格料, 不靠仓管
+        // 手工冻结 —— 一旦 qcResult 标 DAMAGED/PARTIAL_LOST/OTHER, 这批料对生产/销售不可见, 从源头堵住
+        // 不合格料流入生产消耗/销售。
+        // qcResult 语义 (PurchaseReceiveItem.qcResult, 值域 PASS/PARTIAL_LOST/DAMAGED/OTHER):
+        //   - null/空 = 该流程未做入库质检 (现状默认, 多数工厂未启用入库质检) → 按 AVAILABLE 通过。
+        //     不因"未质检"就把正常收货全部隔离 (否则未启用质检的工厂无法正常收货)。
+        //   - PASS/PASSED/QUALIFIED (合格) → AVAILABLE。
+        //   - 其余任何显式非 PASS 值 (含 PARTIAL_LOST 部分丢失/DAMAGED 损坏/OTHER) → DEFECTIVE (over-safe)。
+        //     ⚠️ PurchaseReceiveItem 未建"良品数/不良品数"拆分列, 整行按单一 qcResult 计, 故任何非 PASS
+        //     整行隔离; 质检经理如判部分可用, 经 ReleaseDecisionTool 复核放行。
+        boolean qcFail = isQcFail(item.getQcResult());
+        batch.setStatus(qcFail ? MaterialBatchStatus.DEFECTIVE : MaterialBatchStatus.AVAILABLE);
         batch.setCreatedBy(userId);
+        if (qcFail) {
+            log.warn("QC 入库隔离: batchNumber={}, materialTypeId={}, qcResult={} → DEFECTIVE (不进可用库存, 不参与生产/销售, 待质检复核放行)",
+                    batchNumber, item.getMaterialTypeId(), item.getQcResult());
+        }
         // D1: 采购入库默认 WH-LOG (物流仓). per PR #310 spec — raw material persistent in logistics warehouse.
         // 用途拆分 (2026-07-02): 采购入库落点走独立 resolvePurchaseInboundWh (PURCHASE_INBOUND_DEFAULT),
         // 未配置回退 WH-LOG = 现状; 让「采购进主仓/原料仓」可单独配置, 不影响销售 FIFO / 生产报工。
@@ -2106,9 +2124,30 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         batch = materialBatchRepository.save(batch);
-        log.debug("创建物料批次: batchId={}, batchNumber={}, materialTypeId={}, qty={}",
-                batch.getId(), batchNumber, item.getMaterialTypeId(), item.getReceivedQuantity());
+        log.debug("创建物料批次: batchId={}, batchNumber={}, materialTypeId={}, qty={}, status={}",
+                batch.getId(), batchNumber, item.getMaterialTypeId(), item.getReceivedQuantity(), batch.getStatus());
         return batch;
+    }
+
+    /**
+     * 🔒🔒 QC 入库门 (食品安全): 判定收货行质检结果是否为"不合格", 决定物料批次入库状态。
+     *
+     * <p>值域来自 {@code PurchaseReceiveItem.qcResult} (ReceiveConfirmCreateTool.ALLOWED_RECEIVE_STATUSES =
+     * PASS / PARTIAL_LOST / DAMAGED / OTHER)。
+     *
+     * @param qcResult 收货行质检结果字符串
+     * @return true = 不合格 (需隔离为 DEFECTIVE); false = 合格或未质检 (AVAILABLE 通过)
+     */
+    private boolean isQcFail(String qcResult) {
+        // null / 空 = 该流程未做入库质检 (现状默认) → 不隔离, 按 AVAILABLE 通过。
+        if (qcResult == null || qcResult.isBlank()) {
+            return false;
+        }
+        String v = qcResult.trim();
+        // 合格同义词 (防御性: 实际收货路径只写 PASS) → 通过。其余任何显式值 → 隔离 (over-safe)。
+        return !("PASS".equalsIgnoreCase(v)
+                || "PASSED".equalsIgnoreCase(v)
+                || "QUALIFIED".equalsIgnoreCase(v));
     }
 
     /**

@@ -38,6 +38,13 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionBatchRepository productionBatchRepository;
 
+    /**
+     * 🔒🔒 QC 生产门 (食品安全): 质检判 FAILED 时用于隔离该生产计划已入库的可售成品批次。
+     * optional (required=false) 保持与 productionBatchRepository 一致, 不破坏未 wire 该 bean 的单测。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -161,10 +168,51 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
                 if (newStatus == null) return;
                 batch.setQualityStatus(newStatus);
                 productionBatchRepository.save(batch);
+                // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 质检判 FAILED → 该生产计划已入库的可售成品批次
+                // 立即隔离为 DEFECTIVE (不可售)。覆盖"先小结产出可售成品, 后质检失败"的时序。成品可售/FEFO
+                // 查询过滤 status='AVAILABLE' 自动排除 DEFECTIVE。质检经理复核后可放行(→AVAILABLE)。
+                if (newStatus == QualityStatus.FAILED) {
+                    quarantineFinishedGoodsForFailedBatch(batch);
+                }
             });
         } catch (Exception e) {
             log.warn("Batch writeback failed for inspection {} → batch {}: {}",
                     inspection.getId(), batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * 🔒🔒 QC 生产门 (食品安全): 生产批次质检 FAILED → 隔离该生产计划下所有可售成品批次。
+     *
+     * <p>追溯链: {@code QualityInspection.productionBatchId → ProductionBatch.productionPlanId →
+     * FinishedGoodsBatch.productionPlanId}。一个生产计划可跨多次「小结」产出多个成品批次 (1:N),
+     * 故按 productionPlanId 批量隔离。只把 AVAILABLE 的可售批次改 DEFECTIVE (不动 DEPLETED/EXPIRED/
+     * REVERSED/FROZEN 等非可售终态)。已发货部分不回退, 但剩余可售库存立即冻结, 阻止不合格品继续售出。
+     *
+     * <p>fail-soft: 隔离失败仅记 error 日志, 不回滚质检结果写回 (质检记录是权威食品安全事件, 必须落库)。
+     */
+    private void quarantineFinishedGoodsForFailedBatch(ProductionBatch batch) {
+        if (finishedGoodsBatchRepository == null) return;
+        String planId = batch.getProductionPlanId();
+        if (planId == null || planId.isBlank()) return;
+        try {
+            var fgBatches = finishedGoodsBatchRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
+            int quarantined = 0;
+            for (var fg : fgBatches) {
+                if ("AVAILABLE".equals(fg.getStatus())) {
+                    fg.setStatus("DEFECTIVE");
+                    finishedGoodsBatchRepository.save(fg);
+                    quarantined++;
+                }
+            }
+            if (quarantined > 0) {
+                log.warn("QC 失败隔离成品: productionBatchId={}, planId={}, 隔离 {} 个可售成品批次 → DEFECTIVE (不可售, 待质检复核)",
+                        batch.getId(), planId, quarantined);
+            }
+        } catch (Exception e) {
+            log.error("QC 失败隔离成品异常 (不阻断质检结果落库): productionBatchId={}, planId={}: {}",
+                    batch.getId(), planId, e.getMessage());
         }
     }
 

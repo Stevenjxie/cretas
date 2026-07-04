@@ -140,11 +140,17 @@ public class FinishedGoodsBatch extends BaseEntity {
         public static final String FROZEN     = "FROZEN";
         /** SP2 整单撤回完成后置为此状态 */
         public static final String REVERSED   = "REVERSED";
+        /**
+         * 不良品 — 销售退货入库 (ReturnOrderServiceImpl) 及 QC 失败隔离 (生产质检判 FAILED) 共用。
+         * 现有可售/FEFO 查询均过滤 status='AVAILABLE', 自动排除 DEFECTIVE, 无需 repository 重构。
+         * 质检经理复核后可改回 AVAILABLE。
+         */
+        public static final String DEFECTIVE  = "DEFECTIVE";
 
         private Status() {}
     }
 
-    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN / REVERSED(SP2撤回) */
+    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN / REVERSED(SP2撤回) / DEFECTIVE(不良品/QC隔离) */
     @Column(name = "status", nullable = false, length = 32)
     private String status = "AVAILABLE";
 

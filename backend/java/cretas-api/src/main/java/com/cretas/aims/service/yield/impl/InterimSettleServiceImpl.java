@@ -11,6 +11,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -514,8 +515,30 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         batch.setStorageLocation("库存生产小结入库");
         batch.setProductionPlanId(plan.getId());
         batch.setWarehouseId(warehouseResolver.resolveWorkshopId(plan.getFactoryId()));
-        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 若该生产计划下任一生产批次质检已判 FAILED, 小结产出的
+        // 成品批次不得直接可售 —— 隔离为 DEFECTIVE。覆盖"先质检失败, 后小结产出"的时序 (与
+        // QualityInspectionServiceImpl.quarantineFinishedGoodsForFailedBatch 覆盖的反向时序互补)。
+        // 成品可售/FEFO 查询过滤 status='AVAILABLE' 自动排除 DEFECTIVE, 质检经理复核后可放行。
+        batch.setStatus(isPlanQcFailed(plan.getFactoryId(), plan.getId())
+                ? FinishedGoodsBatch.Status.DEFECTIVE
+                : FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(userId != null ? userId : 0L);
+    }
+
+    /**
+     * 🔒🔒 QC 生产门 (食品安全): 该生产计划下是否已有任一生产批次质检判 FAILED。
+     * true → 小结产出的成品隔离为 DEFECTIVE (不可售)。fail-soft: 查询异常按"未失败"处理
+     * (不隔离), 因反向时序由 QC 传播路径 quarantineFinishedGoodsForFailedBatch 兜底。
+     */
+    private boolean isPlanQcFailed(String factoryId, String planId) {
+        if (batchRepository == null || planId == null || planId.isBlank()) return false;
+        try {
+            return batchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId).stream()
+                    .anyMatch(b -> b.getQualityStatus() == QualityStatus.FAILED);
+        } catch (Exception e) {
+            log.warn("QC 生产门检查异常 (planId={}): {} — 按未失败处理 (反向时序由 QC 传播兜底)", planId, e.getMessage());
+            return false;
+        }
     }
 
     /** FG-{planNumber}-S{seq}, ≤64 截断 (mirror finishedGoodsBatchNumber :2822-2832). */

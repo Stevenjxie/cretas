@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
@@ -317,6 +318,33 @@ class InterimSettleServiceTest {
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         // 行已打戳
         assertThat(rX.getInterimSettledAt()).isNotNull();
+        // QC 生产门: 无 FAILED 生产批次 → 成品 AVAILABLE (正常可售)
+        assertThat(fgCap.getValue().getStatus()).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    @DisplayName("🔒🔒 QC 生产门: 计划已有 FAILED 生产批次 → 小结产出的成品批次隔离为 DEFECTIVE (不可售)")
+    void planWithFailedQc_settlesFinishedGoodsAsDefective() {
+        ProcessSheetRow rX = row(24L, 1, "CLK-B-QC", reqFinished(1, "CLK-B-QC", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamSemi("SFI-QC-1", "20")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        // 该生产计划下存在质检判 FAILED 的生产批次 → 小结产出成品必须隔离
+        ProductionBatch failed = new ProductionBatch();
+        failed.setId(99L);
+        failed.setFactoryId(FACTORY);
+        failed.setProductionPlanId(PLAN_ID);
+        failed.setQualityStatus(QualityStatus.FAILED);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(failed));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getStatus()).isEqualTo("DEFECTIVE");
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
     }
 
     @Test
