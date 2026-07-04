@@ -36,6 +36,14 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
             String factoryId, String planId);
 
     /**
+     * R4 (2026-07-04): 按物化后的 {@code batchId} (= ProductionBatch.id) 查行 —— 成本拆分
+     * ({@code OrderCostBreakdownService}) 逐批读该批 process-row 的 SFI/FG 投料边, 补计投料成本。
+     * factory-scoped 🔒。纯 SFI 中间道 (SAVED_SFI, batchId==null) 不物化, 不在此集合内 (其成本经
+     * 下游道 semiFinished 投料的 getSemiUnitCost 移动均价传导, 无需在此单独读)。
+     */
+    List<ProcessSheetRow> findByFactoryIdAndBatchId(String factoryId, Long batchId);
+
+    /**
      * SP-F Task 1.8: 按 (factory, plan, clientRowId) 查行 —— delete 端点路径不含 processCode。
      * 正常情况下 clientRowId 在同一 plan 内跨工序不重复，返回 1 条；边缘情形返多条则全删。
      */

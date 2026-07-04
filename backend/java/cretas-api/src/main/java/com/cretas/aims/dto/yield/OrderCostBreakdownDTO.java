@@ -34,6 +34,17 @@ public class OrderCostBreakdownDTO {
     private BigDecimal laborCost;
     private BigDecimal seasoningCost;
     private BigDecimal packagingCost;
+    /**
+     * 外部库存投料成本 (半成品 SFI + 成品 FG 作投料; R4 2026-07-04)。
+     *
+     * <p>SFI/FG 投料边 <b>不写</b> {@link com.cretas.aims.entity.MaterialConsumption} (投料的是常驻外部
+     * 库存, 非本计划在制 WIP), 故原料谱系遍历 {@code traceCost} 看不到它们 → 此前 totalCost 对 SFI/FG
+     * 投料成本失明, 与小结算的 {@code FinishedGoodsBatch.unitCost} (含 SFI/FG 投料) 差一个投料桶。此字段
+     * 补齐: Σ(feedInSourceUnit × 输入 SFI/FG.unitCost), 与小结 {@code computeOutputUnitCost} 同口径同源服务。
+     *
+     * <p>null = 该批无 SFI/FG 投料 (常规生产, 零回归) 或 脱敏 或 {@link #costComplete}=false (成本不完整)。
+     */
+    private BigDecimal semiFeedCost;
     private BigDecimal totalCost;
     private BigDecimal perBoxCost;
 
@@ -67,6 +78,15 @@ public class OrderCostBreakdownDTO {
     private boolean priceMasked;
     /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */
     private boolean hasData;
+    /**
+     * 成本是否完整 (R4 2026-07-04, 诚实 null)。false = 存在<b>未计价</b>的 SFI/FG 投料
+     * (输入半成品/成品 unitCost 未知, 或计数单位来源缺每盒克重无法折算) → 整批产出成本未知,
+     * {@code totalCost/perBoxCost/netTotalCost/netPerBoxCost/sellablePerBoxCost/semiFeedCost} 全置 null
+     * (与小结 {@code computeOutputUnitCost} 诚实 null 同口径, 绝不伪造 ¥0 稀释)。已知的
+     * {@code rawMaterialCost/laborCost/seasoningCost/packagingCost} 仍保留展示。默认 true。
+     */
+    @Builder.Default
+    private boolean costComplete = true;
 
     /** 上游来源明细 (混批各批次)。 */
     private List<SourceCost> sources;
