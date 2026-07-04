@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
@@ -30,6 +31,7 @@ import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
@@ -139,6 +141,10 @@ async function handleActivateRecipe(recipe: BomRecipeSummary) {
 const loading = ref(false);
 const changeLogVisible = ref(false)
 const selectedProductTypeId = ref<string>('');
+// :key 强制 el-select 重新挂载 —— element-plus 的 currentLabel 是渲染时按当前 options
+// 匹配一次后缓存的, 异步 (route 带 productTypeId 跳转) 补写 options + modelValue 不会
+// 触发它重新求值, 导致选中态生效但下拉框标签显示空白 (同款坑见 ReferenceSelector.vue)。
+const bomProductSelectKey = ref(0);
 const productTypes = ref<TableRow[]>([]);
 const costSummary = ref<TableRow | null>(null);
 const selectedProductName = computed(() => {
@@ -661,7 +667,16 @@ async function handleApplyRecalc() {
 }
 
 onMounted(async () => {
-  await loadProductTypes();
+  await loadProductTypes(); // 只用来抽取「半成品」列表 (semiFinishedRefCode 下拉)
+  await fetchProductTypeOptions(''); // 主产品下拉默认展示前 N 个成品
+  // 防呆 #1236 系列: 从「产品新建」页跳过来带 ?productTypeId= 时直接定位到该产品,
+  // 不需要用户在几百条里翻找刚建的 SKU (Rule 1 预先显示边界 / Rule 5 导航直达)。
+  const routeProductTypeId = route.query.productTypeId;
+  if (typeof routeProductTypeId === 'string' && routeProductTypeId) {
+    await selectProductFromRoute(routeProductTypeId);
+  } else if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
+    selectedProductTypeId.value = productTypes.value[0].id;
+  }
   await loadMaterialTypes();
   await loadOverheadCosts();
   await loadAllLaborCosts();
@@ -682,28 +697,95 @@ watch(selectedProductTypeId, async (newVal) => {
 });
 
 // ========== Product Types ==========
+// 🔴 防呆 #1 (production/warehouse walk): 主产品下拉原来一次性拉全部 active 产品
+// (some 工厂 300+ 条) 塞进 filterable el-select — 刚建的新 SKU 渲染慢/沉在长列表里
+// 找不到, 客户配 BOM 时卡住。改为: loadProductTypes() 只负责取「半成品」列表 (给
+// semiFinishedRefCode 下拉用, 半成品数量通常不大), 主产品下拉改走
+// fetchProductTypeOptions() 远程搜索 (见下), 默认只拉一页 + 按关键词服务端过滤。
 async function loadProductTypes() {
   if (!factoryId.value) return;
   try {
     const response = await get(`/${factoryId.value}/product-types/active`);
     if (response.success && response.data) {
-      // Issue 7: Only show finished products in BOM dropdown
       const allProducts = response.data as TableRow[];
-      productTypes.value = allProducts.filter(
-        (p: TableRow) => p.productCategory === 'FINISHED_PRODUCT' || p.category === '成品' || !p.productCategory
-      );
       // SP8: 半成品列表 (用于 semiFinishedRefCode 下拉)
       semiFinishedTypes.value = allProducts.filter(
         (p: TableRow) => p.productCategory === 'SEMI_FINISHED' || p.category === '半成品'
       );
-      // Select first product if available
-      if (productTypes.value.length > 0 && !selectedProductTypeId.value) {
-        selectedProductTypeId.value = productTypes.value[0].id;
-      }
     }
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) ElMessage.error('加载产品类型失败');
+  }
+}
+
+// 主产品下拉 remote search 状态
+const productSearchLoading = ref(false);
+let productSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 按关键词向后端搜索成品 (分页, 默认 50 条), 取代一次性拉全量。 */
+async function fetchProductTypeOptions(keyword: string) {
+  if (!factoryId.value) return;
+  productSearchLoading.value = true;
+  try {
+    const response = await get<{ content: TableRow[]; totalElements?: number }>(
+      `/${factoryId.value}/product-types`,
+      {
+        params: {
+          productCategory: 'FINISHED_PRODUCT',
+          keyword: keyword || undefined,
+          page: 1,
+          size: 50,
+        },
+      }
+    );
+    if (response.success && response.data) {
+      const content = response.data.content || [];
+      // 保留当前已选产品可见: 换关键词搜索后, 若已选产品不在这一页结果里,
+      // el-select 会因为找不到匹配 option 而显示不出标签 (看起来像选择丢失)。
+      const selected = productTypes.value.find((p) => p.id === selectedProductTypeId.value);
+      if (selected && selectedProductTypeId.value && !content.some((p) => p.id === selected.id)) {
+        content.unshift(selected);
+      }
+      productTypes.value = content;
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) ElMessage.error('搜索产品失败');
+  } finally {
+    productSearchLoading.value = false;
+  }
+}
+
+/** el-select remote-method — 防抖 300ms 再请求，避免每敲一个字就打后端。 */
+function handleProductTypeRemoteSearch(query: string) {
+  if (productSearchDebounceTimer) clearTimeout(productSearchDebounceTimer);
+  productSearchDebounceTimer = setTimeout(() => {
+    fetchProductTypeOptions(query.trim());
+  }, 300);
+}
+
+/**
+ * 从「产品新建」页带 ?productTypeId= 跳转过来时, 按 id 单独取回该产品并自动选中
+ * (即使它不在默认前 50 条搜索结果里), 让"建 SKU → 配 BOM"一步到位。
+ */
+async function selectProductFromRoute(productTypeId: string) {
+  if (!factoryId.value || !productTypeId) return;
+  try {
+    const response = await get<TableRow>(`/${factoryId.value}/product-types/${productTypeId}`);
+    if (response.success && response.data) {
+      const product = response.data;
+      if (!productTypes.value.some((p) => p.id === product.id)) {
+        productTypes.value = [product, ...productTypes.value];
+      }
+      selectedProductTypeId.value = String(product.id);
+      bomProductSelectKey.value += 1; // 强制重渲染, 让下拉标签显示新选中的产品名
+    } else {
+      ElMessage.warning('未找到指定产品，请手动搜索选择');
+    }
+  } catch (error: unknown) {
+    const err = error as { actionHint?: string };
+    if (!err?.actionHint) ElMessage.warning('未找到指定产品，请手动搜索选择');
   }
 }
 
@@ -1628,10 +1710,15 @@ async function handleAdjustConfirm() {
         <div class="header-left">
           <h2 class="page-title">BOM成本管理</h2>
           <el-select
+            :key="bomProductSelectKey"
             v-model="selectedProductTypeId"
-            placeholder="选择产品"
+            placeholder="输入产品名称搜索并选择"
             style="width: 280px; margin-left: 20px;"
             filterable
+            remote
+            reserve-keyword
+            :remote-method="handleProductTypeRemoteSearch"
+            :loading="productSearchLoading"
           >
             <el-option
               v-for="product in productTypes"

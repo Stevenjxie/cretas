@@ -62,6 +62,19 @@ const customerMap = computed(() => {
   return map;
 });
 
+// 防呆 Rule 1 (production/warehouse walk): 数量输入框原来无上限, 用户可填任意大数量。
+// 选中批次后, 用该批次良品/实际产量作上限 + 显示提示, 避免超发货。
+const selectedShipmentBatch = computed(() => {
+  if (!shipmentForm.value.productBatchId) return null;
+  return productBatches.value.find((b) => String(b.id) === String(shipmentForm.value.productBatchId)) || null;
+});
+const selectedShipmentBatchMaxQty = computed(() => {
+  const b = selectedShipmentBatch.value;
+  if (!b) return undefined;
+  const n = Number(b.goodQuantity ?? b.actualQuantity ?? b.quantity);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+});
+
 onMounted(() => {
   // Issue #740: 默认加载销售待确认 queue
   loadPendingSalesDeliveries();
@@ -731,7 +744,15 @@ function getStatusText(status: string) {
           <el-date-picker v-model="shipmentForm.shipmentDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
         </el-form-item>
         <el-form-item label="数量" required>
-          <el-input-number v-model="shipmentForm.quantity" :min="1" style="width: 100%" />
+          <el-input-number
+            v-model="shipmentForm.quantity"
+            :min="1"
+            :max="selectedShipmentBatchMaxQty"
+            style="width: 100%"
+          />
+          <div v-if="selectedShipmentBatchMaxQty != null" style="font-size: 12px; color: #909399; margin-top: 4px;">
+            该批次产量 {{ selectedShipmentBatchMaxQty }} {{ selectedShipmentBatch?.unit || '' }}，最多可发此数量
+          </div>
         </el-form-item>
         <el-form-item label="车牌号">
           <el-input v-model="shipmentForm.vehicleNumber" placeholder="请输入车牌号" />
