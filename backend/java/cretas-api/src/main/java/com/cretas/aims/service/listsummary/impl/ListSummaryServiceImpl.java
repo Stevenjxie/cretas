@@ -3,10 +3,12 @@ package com.cretas.aims.service.listsummary.impl;
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse.SummaryStat;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +33,21 @@ import java.util.Set;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ListSummaryServiceImpl implements ListSummaryService {
 
     @PersistenceContext
     private EntityManager em;
+
+    // KPI-vs-list drift fix (2026-07): 低库存 footer stat must use the SAME
+    // definition as the 低库存预警 KPI card on warehouse/inventory/index.vue
+    // (materialType-level, compared against RawMaterialType.minStock threshold
+    // via MaterialBatchServiceImpl#getLowStockWarnings). The previous inline
+    // SQL here counted individual BATCHES with available qty < a hardcoded 10
+    // units — an unrelated, arbitrary definition that produced wildly
+    // different numbers (e.g. footer "808项" vs KPI card near-zero) even
+    // though both claim to show "低库存".
+    private final MaterialBatchService materialBatchService;
 
     private static final Set<String> SUPPORTED = Set.of(
             "salesOrder", "purchaseOrder", "inventory", "wastage", "attendance",
@@ -121,8 +134,7 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), " +
                 "       COALESCE(SUM(receipt_quantity - used_quantity - reserved_quantity), 0) AS avail_qty, " +
-                "       COALESCE(SUM((receipt_quantity - used_quantity - reserved_quantity) * COALESCE(unit_price, 0)), 0) AS total_value, " +
-                "       COUNT(*) FILTER (WHERE (receipt_quantity - used_quantity - reserved_quantity) < 10) AS low_stock " +
+                "       COALESCE(SUM((receipt_quantity - used_quantity - reserved_quantity) * COALESCE(unit_price, 0)), 0) AS total_value " +
                 "FROM material_batches WHERE factory_id = :fid AND deleted_at IS NULL");
         appendStatusFilter(sql, filter);
         Query q = em.createNativeQuery(sql.toString());
@@ -131,7 +143,12 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         long count = ((Number) row[0]).longValue();
         BigDecimal availQty = (BigDecimal) row[1];
         BigDecimal totalValue = (BigDecimal) row[2];
-        long lowStock = ((Number) row[3]).longValue();
+        // KPI-vs-list drift fix: delegate to the exact same materialType-level
+        // minStock-threshold definition used by the 低库存预警 KPI card
+        // (getInventoryStatistics -> getLowStockWarnings), instead of a
+        // hardcoded per-batch "<10 units" threshold that had no relation to
+        // any configured business threshold.
+        long lowStock = materialBatchService.getLowStockWarnings(factoryId).size();
         List<SummaryStat> stats = new ArrayList<>();
         stats.add(stat("共", count, "number", "批", false));
         stats.add(stat("可用数量", availQty, "number", "", false));
@@ -144,12 +161,24 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     private ListSummaryResponse computeWastageSummary(String factoryId, Map<String, Object> filter,
                                                        LocalDate from, LocalDate to) {
+        // KPI-vs-list drift fix (2026-07): restaurant/wastage/list.vue's loadData()
+        // sends status + type + date-range to getWastageRecords(), but this method
+        // previously only applied the date range — status/type filters selected in
+        // the UI were silently dropped here, so the footer "共" count would diverge
+        // from the paginator total as soon as a filter was applied.
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), COALESCE(SUM(quantity), 0) FROM wastage_records " +
                 "WHERE factory_id = :fid AND deleted_at IS NULL");
+        appendStatusFilter(sql, filter);
+        if (filter.containsKey("type") && filter.get("type") != null) {
+            sql.append(" AND UPPER(type) = UPPER(:typeFilter)");
+        }
         appendDateRange(sql, "wastage_date", from, to);
         Query q = em.createNativeQuery(sql.toString());
         bindParams(q, factoryId, filter, from, to);
+        if (filter.containsKey("type") && filter.get("type") != null) {
+            q.setParameter("typeFilter", String.valueOf(filter.get("type")));
+        }
         Object[] row = (Object[]) q.getSingleResult();
         long count = ((Number) row[0]).longValue();
         BigDecimal totalQty = (BigDecimal) row[1];
@@ -293,13 +322,31 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     private ListSummaryResponse computeShipmentSummary(String factoryId, Map<String, Object> filter,
                                                         LocalDate from, LocalDate to) {
+        // KPI-vs-list drift fix (2026-07): 出货记录 page (sales/shipments/list.vue,
+        // GET /{factoryId}/shipments) is backed by ShipmentController ->
+        // ShipmentRecordService -> the `shipment_records` table (plain lowercase
+        // status string: pending/shipped/delivered/returned/cancelled).
+        //
+        // This method previously queried `sales_delivery_records` instead — an
+        // entirely DIFFERENT entity (SalesDeliveryRecord, used by the separate
+        // 仓库确认发货 flow, enum values DRAFT/PENDING_WAREHOUSE_CONFIRM/PICKED/
+        // SHIPPED/DELIVERED/RETURNED) filtered against status literals
+        // ('PENDING','SUBMITTED','COMPLETED') that don't even exist in EITHER
+        // entity's vocabulary. Result: the footer "共" count reflected a
+        // completely unrelated table (explaining "共41条" vs paginator "共7条"),
+        // and "待发货"/"已完成" were always 0 regardless of real data.
+        //
+        // Fix: query the actual list-backing table, and case-insensitively
+        // match status (UPPER()) since the frontend status <el-select> sends
+        // uppercase values (PENDING/SHIPPED/...) while shipment_records.status
+        // is stored lowercase.
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), COALESCE(SUM(total_amount), 0), " +
-                "       COUNT(*) FILTER (WHERE status IN ('PENDING','SUBMITTED')) AS pending_cnt, " +
-                "       COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed_cnt " +
-                "FROM sales_delivery_records WHERE factory_id = :fid AND deleted_at IS NULL");
+                "       COUNT(*) FILTER (WHERE UPPER(status) = 'PENDING') AS pending_cnt, " +
+                "       COUNT(*) FILTER (WHERE UPPER(status) = 'DELIVERED') AS completed_cnt " +
+                "FROM shipment_records WHERE factory_id = :fid AND deleted_at IS NULL");
         appendStatusFilter(sql, filter);
-        appendDateRange(sql, "delivery_date", from, to);
+        appendDateRange(sql, "shipment_date", from, to);
         Query q = em.createNativeQuery(sql.toString());
         bindParams(q, factoryId, filter, from, to);
         Object[] row = (Object[]) q.getSingleResult();
@@ -319,7 +366,14 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     private static void appendStatusFilter(StringBuilder sql, Map<String, Object> filter) {
         if (filter.containsKey("status") && filter.get("status") != null) {
-            sql.append(" AND status = :status");
+            // UPPER() on both sides: case-insensitive match. Some tables store
+            // status as a plain lowercase string (e.g. shipment_records.status:
+            // "pending"/"shipped"/...) while the frontend <el-select> always
+            // sends uppercase filter values (PENDING/SHIPPED/...) shared across
+            // pages. Functionally identical to `status = :status` for tables
+            // that already store uppercase enum names (no behavior change
+            // there); fixes the mismatch for lowercase-stored tables.
+            sql.append(" AND UPPER(status) = UPPER(:status)");
         }
     }
 

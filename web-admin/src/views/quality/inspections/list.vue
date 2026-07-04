@@ -26,11 +26,22 @@ const submitting = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
-// U-FOOTER-1
-const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('qualityInspection', summaryRequest);
 const searchKeyword = ref('');
 const filterResult = ref('');
+
+// U-FOOTER-1
+// KPI-vs-list drift fix (2026-07): filterResult MUST be declared BEFORE this
+// computed (TDZ — see sales/shipments/list.vue Issue #716). Previously this
+// was a static `{ filterConditions: {} }` so the footer "共"/"合格"/"不合格"
+// always showed the ALL-result totals while loadData() sends
+// `result: filterResult.value` to /processing/quality/inspections — footer
+// and paginator would diverge as soon as a result filter was applied.
+// NOTE: key is "result" (not "status") — matches computeQualityInspectionSummary,
+// which reads filter.get("result") since this entity has no generic status field.
+const summaryRequest = computed<ListSummaryRequest>(() => ({
+  filterConditions: filterResult.value ? { result: filterResult.value } : {},
+}));
+const { summary: footerSummary, loading: footerLoading } = useListSummary('qualityInspection', summaryRequest);
 
 // 新建对话框
 const dialogVisible = ref(false);

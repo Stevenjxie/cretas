@@ -255,10 +255,6 @@ const canWrite = computed(() => permissionStore.canWrite('restaurant'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
 
-// U-FOOTER-1
-const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('wastage', summaryRequest);
-
 const boardVisible = ref(false);
 
 // Wave2 责任人下拉 + 姓名映射（dropdown 选择，非自由文本）
@@ -325,6 +321,26 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const filterStatus = ref('');
 const filterType = ref('');
 const filterDateRange = ref<[string, string] | null>(null);
+
+// U-FOOTER-1
+// KPI-vs-list drift fix (2026-07): filterStatus/filterType/filterDateRange
+// MUST be declared BEFORE this computed (TDZ — see sales/shipments/list.vue
+// Issue #716). Previously this was a static `{ filterConditions: {} }` so the
+// footer "共" always showed the ALL-filter total while loadData() sends
+// status/type/startDate/endDate to getWastageRecords() — footer and
+// paginator would diverge as soon as any filter was applied. Fix: mirror the
+// exact same filters (backend companion fix in ListSummaryServiceImpl
+// computeWastageSummary, which previously silently ignored all of these).
+const summaryRequest = computed<ListSummaryRequest>(() => ({
+  filterConditions: {
+    ...(filterStatus.value ? { status: filterStatus.value } : {}),
+    ...(filterType.value ? { type: filterType.value } : {}),
+  },
+  dateFrom: filterDateRange.value?.[0] || undefined,
+  dateTo: filterDateRange.value?.[1] || undefined,
+}));
+const { summary: footerSummary, loading: footerLoading } = useListSummary('wastage', summaryRequest);
+
 const dialogVisible = ref(false);
 const detailVisible = ref(false);
 const detailData = ref<WastageRecord | null>(null);

@@ -20,9 +20,6 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
-// U-FOOTER-1
-const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('attendance', summaryRequest);
 // 默认查询最近30天
 const getDefaultDateRange = (): [Date, Date] => {
   const end = new Date();
@@ -36,6 +33,29 @@ const searchForm = ref({
   dateRange: getDefaultDateRange(),
   status: ''
 });
+
+// U-FOOTER-1
+// KPI-vs-list drift fix (2026-07): searchForm MUST be declared BEFORE this
+// computed (see sales/shipments/list.vue Issue #716 for the TDZ pitfall).
+// Previously this was a static `{ filterConditions: {} }` — the footer
+// "共" count was an ALWAYS all-time aggregate while loadData() always sends
+// startDate/endDate (default last 30 days) to /timeclock/admin/history.
+// That guaranteed a footer-vs-paginator mismatch on every page load (footer
+// = all-time, list = last 30 days). Fix: mirror the same date range.
+// NOTE: `searchForm.value.status` is intentionally NOT forwarded here —
+// getAllEmployeesClockHistory() (TimeClockController#admin/history) has no
+// `status` @RequestParam at all, so that filter is already a no-op on the
+// list side; forwarding it to the footer would filter time_clock_records.status
+// (an unrelated clock-in/out column, not the NORMAL/LATE/... attendance_status
+// the dropdown implies) and make footer/list diverge in a NEW way. Separate
+// pre-existing bug (status dropdown non-functional on this page), out of
+// scope for this stat-card fix.
+const summaryRequest = computed<ListSummaryRequest>(() => ({
+  filterConditions: {},
+  dateFrom: searchForm.value.dateRange ? formatDate(searchForm.value.dateRange[0]) : undefined,
+  dateTo: searchForm.value.dateRange ? formatDate(searchForm.value.dateRange[1]) : undefined,
+}));
+const { summary: footerSummary, loading: footerLoading } = useListSummary('attendance', summaryRequest);
 
 // 统计数据
 const statistics = ref({
