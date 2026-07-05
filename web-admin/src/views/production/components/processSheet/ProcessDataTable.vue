@@ -1225,7 +1225,28 @@ watch(
 // "本工序有未保存草稿行" 的信号，供父组件(ProcessSheet → list.vue 抽屉)聚合。
 const hasUnsavedRows = computed(() => rows.value.some((r) => r.rowStatus === 'UNSAVED'));
 
-defineExpose({ hasUnsavedRows });
+// -------------------------------------------------------------------------
+// Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
+// 原料批次余量是全局共享的常驻库存 (可被任意其它 process tab 选作投料来源), 但上面的 watch
+// 只在本组件挂载 / (factoryId, processCode, productTypeId) 变化时加载一次 —— 逐工序对话框内
+// 各 process tab 的 ProcessDataTable 实例长期挂载不销毁 (el-tabs 只是切换可见性), 这三份 key
+// 此后永不再变, 于是 sfiOptions/fgOptions/rawBatchOptions 从首次加载后就再没刷新过。
+//
+// 若另一 tab 保存了一行改变这些余量的产出 (如 焯水 postSfiOutput 把 SFI 锚余量从
+// 1.05kg 推到 2.03kg), 本 tab 的下拉/校验 (upstreamWarning) 仍读旧的 1.05kg → 假阳性拦截
+// "用量 2.03kg 超出半成品库存余 1.05kg"。真实 Postgres 数据从未错，纯前端缓存未失效，
+// 手动整页刷新才能看到新值 —— 违反 fool-proof-design Rule 1 (预先显示正确边界)。
+//
+// ProcessSheet.vue 在任一 tab 保存后, 对全部 process tab 的 ProcessDataTable 实例调用此方法,
+// 重新拉取三类共享余量 (不清空现有值, 避免刷新期间下拉短暂清空/跳动), 消除跨 tab 假阳性拦截。
+// -------------------------------------------------------------------------
+function refreshSharedInventories() {
+  if (isXiuYou.value) void loadRawBatches();
+  if (showSfi.value) void loadSfiOptions();
+  if (showFg.value) void loadFgOptions();
+}
+
+defineExpose({ hasUnsavedRows, refreshSharedInventories });
 </script>
 
 <template>

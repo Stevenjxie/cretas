@@ -247,6 +247,14 @@ async function onRowSaved(savedProc: ProcEntry) {
   );
   // Also trigger the InventoryTable component's refresh if in view (keyed by procKey)
   inventoryTableRefs.value[procKey(savedProc)]?.refresh?.();
+  // Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
+  // 原料批次余量是跨 process tab 共享的常驻库存, 每个 tab 的 ProcessDataTable 只在挂载时加载
+  // 一次 (el-tabs 不销毁其它 tab)。一个 tab 保存了改变这些余量的产出后, 其它 tab (甚至同一
+  // tab 下次录入) 的下拉/校验仍停在旧余量, 造成假阳性"用量超出库存"拦截。这里对全部 tab
+  // (不仅是刚保存的 savedProc) 触发刷新, 因为 SFI/FG 可能被任意后续工序选作投料来源。
+  for (const p of PROCESSES.value) {
+    dataTableRefs.value[procKey(p)]?.refreshSharedInventories?.();
+  }
   // F006 双出成率总览: 保存后刷新全工序汇总卡 (出成率随录入更新)
   yieldCardRef.value?.refresh?.();
 }
