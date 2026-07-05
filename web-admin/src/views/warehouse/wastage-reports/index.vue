@@ -121,9 +121,16 @@ async function loadWarehouses() {
   } catch { /* silent */ }
 }
 
-function warehouseName(id: string) {
+// P2-7 fix: 生产报损(FACTORY trackType)行没有仓库(报损发生在生产环节, 非仓库),
+// row.warehouseId 是 null/undefined。之前 template 用 String(row.warehouseId) 预先
+// 转成字面量字符串 "null" 再传入本函数, find 找不到匹配后原样返回 "null" 字符串,
+// 表格仓库列显示刺眼的字面 "null" 而非空态占位。改为接受 nullable 输入, 空值/无匹配
+// 一律显示 "—"（不显示原始 ID 或 "null"/"undefined" 字面量）。
+function warehouseName(id: string | number | null | undefined): string {
+  if (id == null || id === '') return '—';
   const w = warehouses.value.find((x) => String(x.id) === String(id));
-  return w ? String(w.name || id) : id;
+  if (w) return String(w.name || id);
+  return String(id);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -531,7 +538,7 @@ onMounted(async () => {
       <el-table v-loading="loading" :data="tableData" row-key="id" stripe>
         <el-table-column label="报损单号" prop="reportNo" min-width="150" />
         <el-table-column label="仓库" min-width="110">
-          <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
+          <template #default="{ row }">{{ warehouseName(row.warehouseId) }}</template>
         </el-table-column>
         <el-table-column label="批次" prop="materialBatchId" min-width="180">
           <template #default="{ row }">{{ batchLabel(row.materialBatchId) }}</template>
@@ -728,7 +735,7 @@ onMounted(async () => {
               {{ activeTab === 'WAREHOUSE' ? '仓库报损 → 财务审批' : '生产报损 → 厂长审批' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="仓库">{{ warehouseName(String(approveRow.warehouseId)) }}</el-descriptions-item>
+          <el-descriptions-item label="仓库">{{ warehouseName(approveRow?.warehouseId) }}</el-descriptions-item>
           <el-descriptions-item label="报损数量">{{ approveRow.wastageQty }}</el-descriptions-item>
           <el-descriptions-item label="报损原因">{{ reasonLabel(String(approveRow.wastageReason)) }}</el-descriptions-item>
           <el-descriptions-item label="提交人">{{ approveRow.submittedByName || approveRow.submittedBy || '—' }}</el-descriptions-item>
@@ -768,7 +775,7 @@ onMounted(async () => {
       <template v-if="rejectRow">
         <el-descriptions :column="2" border style="margin-bottom: 16px">
           <el-descriptions-item label="报损单号">{{ rejectRow.reportNo }}</el-descriptions-item>
-          <el-descriptions-item label="仓库">{{ warehouseName(String(rejectRow.warehouseId)) }}</el-descriptions-item>
+          <el-descriptions-item label="仓库">{{ warehouseName(rejectRow?.warehouseId) }}</el-descriptions-item>
           <el-descriptions-item label="报损数量">{{ rejectRow.wastageQty }}</el-descriptions-item>
           <el-descriptions-item label="原因">{{ reasonLabel(String(rejectRow.wastageReason)) }}</el-descriptions-item>
         </el-descriptions>

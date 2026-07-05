@@ -573,6 +573,7 @@ public class CanvasFactoryConfigController {
                             "timezone", "Asia/Shanghai",
                             "currency", "CNY",
                             "skipProcessReportingDefault", false,
+                            "requireRequisitionBeforeReport", false,
                             "version", 0));
         }
         return ApiResponse.success("操作成功", serializeFactorySettings(opt.get()));
@@ -627,6 +628,14 @@ public class CanvasFactoryConfigController {
         applyBooleanField(body, "requireAdminApproval", settings::setRequireAdminApproval);
         if (body.containsKey("skipProcessReportingDefault")) {
             settings.setSkipProcessReportingDefault(booleanField(body, "skipProcessReportingDefault", false));
+        }
+        // 🔴 fix(silent-drop): requireRequisitionBeforeReport (② Part B 生产领料单 Gate) was
+        // read in serializeFactorySettings() intent but never written back here — PUT returned
+        // 200 + bumped version while silently discarding the toggle, so 张权's 仓管员领料红线
+        // could never be turned on via the Canvas Factory Config Hub UI (FactorySettingsPanel.vue).
+        if (body.containsKey("requireRequisitionBeforeReport")) {
+            settings.setRequireRequisitionBeforeReport(
+                    booleanField(body, "requireRequisitionBeforeReport", false));
         }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
@@ -782,6 +791,7 @@ public class CanvasFactoryConfigController {
         m.put("allowSelfRegistration", s.getAllowSelfRegistration());
         m.put("requireAdminApproval", s.getRequireAdminApproval());
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
+        m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());

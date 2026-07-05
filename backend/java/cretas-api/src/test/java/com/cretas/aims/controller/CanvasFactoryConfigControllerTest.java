@@ -394,6 +394,7 @@ class CanvasFactoryConfigControllerTest {
         assertEquals("F006", resp.getData().get("factoryId"));
         assertEquals("zh-CN", resp.getData().get("language"));
         assertEquals(false, resp.getData().get("skipProcessReportingDefault"));
+        assertEquals(false, resp.getData().get("requireRequisitionBeforeReport"));
     }
 
     @Test
@@ -452,5 +453,78 @@ class CanvasFactoryConfigControllerTest {
         assertFalse(resp.getSuccess());
         assertEquals(400, resp.getCode());
         assertEquals("VERSION_MISSING", resp.getErrorCode());
+    }
+
+    // ==================== requireRequisitionBeforeReport 🔴 silent-drop regression ====================
+    // Confirmed live on F006 + prod DB: PUT returned 200 + bumped version but the toggle was
+    // never written back (missing from updateSettings()) nor read back (missing from
+    // serializeFactorySettings()), so 张权's 仓管员领料红线 (报工前必须领料确认) could never
+    // actually be turned on via the Canvas Factory Config Hub settings panel.
+
+    @Test
+    @DisplayName("updateSettings requireRequisitionBeforeReport=true 新建时持久化且可读回")
+    void updateSettings_requireRequisitionBeforeReport_persistsAndIsReadable() {
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> {
+            FactorySettings s = inv.getArgument(0);
+            s.setId(1);
+            s.setVersion(0L);
+            return s;
+        });
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("factoryName", "测试工厂");
+        body.put("requireRequisitionBeforeReport", true);
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        // Read-back must reflect the persisted value (was previously absent from the response
+        // entirely, which meant the frontend's Object.assign(form, res.data) never overwrote the
+        // optimistic local toggle state — masking the silent drop with a false "saved" UI state).
+        assertEquals(true, resp.getData().get("requireRequisitionBeforeReport"));
+    }
+
+    @Test
+    @DisplayName("updateSettings 部分PUT不携带requireRequisitionBeforeReport时不清空已有值")
+    void updateSettings_partialPut_doesNotWipeExistingRequireRequisitionBeforeReport() {
+        FactorySettings s = new FactorySettings();
+        s.setId(1);
+        s.setFactoryId("F006");
+        s.setVersion(2L);
+        s.setRequireRequisitionBeforeReport(true);
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.of(s));
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 2L);
+        body.put("factoryName", "改个名字"); // unrelated field only — key absent for the gate toggle
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(true, resp.getData().get("requireRequisitionBeforeReport"));
+        assertEquals("改个名字", resp.getData().get("factoryName"));
+    }
+
+    @Test
+    @DisplayName("updateSettings requireRequisitionBeforeReport 显式null重置为false")
+    void updateSettings_requireRequisitionBeforeReportExplicitNull_setsFalse() {
+        FactorySettings s = new FactorySettings();
+        s.setId(1);
+        s.setFactoryId("F006");
+        s.setVersion(2L);
+        s.setRequireRequisitionBeforeReport(true);
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.of(s));
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 2L);
+        body.put("requireRequisitionBeforeReport", null);
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(false, resp.getData().get("requireRequisitionBeforeReport"));
     }
 }
