@@ -136,8 +136,9 @@ export function WHOperationLogScreen() {
 
       // 并行获取入库批次和出货记录
       const [batchesResponse, shipmentsResponse] = await Promise.all([
+        // 物料批次后端 1-based (PageRequest DTO page>=1); 出货记录后端 0-based → 减 1
         materialBatchApiClient.getMaterialBatches({ page: pageNum, size: 10 }),
-        shipmentApiClient.getShipments({ page: pageNum, size: 10 }),
+        shipmentApiClient.getShipments({ page: pageNum - 1, size: 10 }),
       ]) as [
         { data?: { content?: MaterialBatch[] } | MaterialBatch[] },
         { data?: { content?: ShipmentRecord[] } | ShipmentRecord[] }

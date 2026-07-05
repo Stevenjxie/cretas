@@ -88,17 +88,20 @@ export function WHPackingScreen() {
         try {
           const goodsResp = await salesApiClient.getFinishedGoods({ page: 1, size: 50 });
           if (goodsResp?.success && goodsResp.data?.content) {
-            const productName = shipment.productName || '';
+            const productName = (shipment.productName || '').trim();
             let batches = goodsResp.data.content.filter(
               (b: FinishedGoodsBatch) => b.availableQuantity > 0
             );
 
-            // Filter by product name if available
+            // 按出货单产品名过滤批次。
+            // ⚠️ 修复: 之前 "matched 为空则保留全部批次" 会导致展示与出货单无关的批次
+            //    (如退货 RTN-* 批次 30kg 对着 2kg 目标 → "已打包 30/2kg" 无警告)。
+            //    现在: 有产品名时严格只显示匹配批次; 无匹配则显示空态 (诚实, 不打包错误批次)。
+            //    仅当出货单没有产品名 (无法关联) 时才回落到全部可用批次。
             if (productName) {
-              const matched = batches.filter((b: FinishedGoodsBatch) =>
+              batches = batches.filter((b: FinishedGoodsBatch) =>
                 b.productTypeName?.toLowerCase().includes(productName.toLowerCase())
               );
-              if (matched.length > 0) batches = matched;
             }
 
             // Sort by expiryDate ASC (FEFO — earliest expiry first, nulls last)
@@ -157,6 +160,13 @@ export function WHPackingScreen() {
   const progress = totalCount > 0 ? packedCount / totalCount : 0;
   const allPacked = totalCount > 0 && packedCount === totalCount;
 
+  // Rule 1 (防呆): 预先显示边界 + 超量警告。成品批次按整批勾选, 已打包重量可能超出出货目标。
+  const packedWeight = packingItems
+    .filter((i) => i.packed)
+    .reduce((sum, i) => sum + i.quantity, 0);
+  const targetQuantity = orderInfo?.totalQuantity ?? 0;
+  const overLimit = targetQuantity > 0 && packedWeight > targetQuantity + 0.001;
+
   // 完成打包操作
   const completePacking = async () => {
     if (!shipmentId) {
@@ -180,6 +190,19 @@ export function WHPackingScreen() {
   const handleComplete = () => {
     if (!allPacked) {
       Alert.alert("提示", "请完成所有商品打包");
+      return;
+    }
+
+    // Rule 1 (防呆): 超量二次确认 — 已打包重量超过出货目标时明确告知边界, 让仓管确认后再提交
+    if (overLimit) {
+      Alert.alert(
+        "超出出货数量",
+        `出货目标 ${targetQuantity} kg, 当前已打包批次合计 ${packedWeight} kg (超出 ${(packedWeight - targetQuantity).toFixed(2)} kg)。\n成品批次按整批出货, 请核对是否确实按此发出。`,
+        [
+          { text: "返回核对", style: "cancel" },
+          { text: "仍要完成", style: "destructive", onPress: completePacking },
+        ]
+      );
       return;
     }
 
@@ -386,13 +409,18 @@ export function WHPackingScreen() {
           <Text style={styles.summaryText}>
             已打包: {packedCount}/{totalCount} 件
           </Text>
-          <Text style={styles.summaryWeight}>
-            {packingItems
-              .filter((i) => i.packed)
-              .reduce((sum, i) => sum + i.quantity, 0)}{" "}
-            / {orderInfo.totalQuantity} kg
+          <Text style={[styles.summaryWeight, overLimit && styles.summaryWeightOver]}>
+            {packedWeight} / {orderInfo.totalQuantity} kg
           </Text>
         </View>
+        {overLimit && (
+          <View style={styles.overLimitBanner}>
+            <MaterialCommunityIcons name="alert-circle" size={16} color="#d32f2f" />
+            <Text style={styles.overLimitText}>
+              已打包批次合计超出出货目标 {(packedWeight - targetQuantity).toFixed(2)} kg, 请核对
+            </Text>
+          </View>
+        )}
         <Button
           mode="contained"
           onPress={handleComplete}
@@ -634,6 +662,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#4CAF50",
     fontWeight: "600",
+  },
+  summaryWeightOver: {
+    color: "#d32f2f",
+  },
+  overLimitBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffebee",
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 12,
+    gap: 6,
+  },
+  overLimitText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#d32f2f",
   },
   completeButton: {
     borderRadius: 8,
