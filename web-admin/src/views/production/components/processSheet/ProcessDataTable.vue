@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock } from '@element-plus/icons-vue';
+import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading } from '@element-plus/icons-vue';
 import {
   saveRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
   getFinishedGoodsInventory,
@@ -1320,8 +1320,16 @@ defineExpose({ hasUnsavedRows });
                   v-for="b in rawBatchOptions" :key="b.id"
                   :label="rawBatchLabel(b)" :value="b.id"
                   :disabled="rawBatchAvailable(b) <= 0" />
+                <!-- 防呆(load-race 修复): loading 时用独立 #loading slot, 不落回 #empty —— 否则
+                     el-select 内部逻辑 (loading || 无选项 → 渲染 #empty) 会在"还在加载"时也显示
+                     "暂无可用批次", 让操作员误以为真无库存, 首次打开必闪现空态。 -->
+                <template #loading>
+                  <span style="padding:8px;color:#909399;font-size:12px">
+                    <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
+                  </span>
+                </template>
                 <template #empty>
-                  <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次</span>
+                  <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
                 </template>
               </el-select>
               <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
@@ -1743,8 +1751,14 @@ defineExpose({ hasUnsavedRows });
                       :label="rawBatchLabel(b)"
                       :value="b.id"
                       :disabled="rawBatchAvailable(b) <= 0" />
+                    <!-- 防呆(load-race 修复): 见卡片视图同款注释 — 独立 #loading slot 防"加载中"误显"暂无" -->
+                    <template #loading>
+                      <span style="padding:8px;color:#909399;font-size:12px">
+                        <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
+                      </span>
+                    </template>
                     <template #empty>
-                      <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次</span>
+                      <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
                     </template>
                   </el-select>
                   <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
