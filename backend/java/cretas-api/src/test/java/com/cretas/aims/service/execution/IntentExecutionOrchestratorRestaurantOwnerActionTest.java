@@ -66,4 +66,18 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.isRestaurantOwnerActionFactory("F006", "FACTORY")).isFalse();
         assertThat(orchestrator.isRestaurantOwnerActionFactory(null, null)).isFalse();
     }
+
+    @Test
+    void matchesBossDecisionQuestionsWithUnicodeSafeKeywords() {
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u8fd9\u4e2a\u661f\u671f\u8425\u6536\u6bd4\u4e0a\u5468\u4f4e\uff0c\u7ed3\u5408\u8bc4\u8bba\u548c\u83dc\u54c1\u6bdb\u5229\u7ed9\u6211\u76f4\u63a5\u5efa\u8bae"))
+                .isTrue();
+
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u67e5\u4e00\u4e0b\u8ba2\u5355\u660e\u7ec6"))
+                .isFalse();
+    }
 }
