@@ -35,6 +35,14 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     private final DecisionAuditService decisionAuditService;
     private final UserRepository userRepository;
 
+    /**
+     * 质检处置 → 库存桥接。放行 (RELEASE/CONDITIONAL_RELEASE) 时把本次质检隔离的成品/原料批次翻回
+     * AVAILABLE, 报废 (SCRAP) 时把原料置 SCRAPPED —— 让「人的处置决策」真正执行到库存, 而非只写审计日志。
+     * {@code required=false} 以不破坏未 wire 该 bean 的单测; 缺失时 graceful skip。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.QualityDispositionInventoryService dispositionInventoryService;
+
     // ===================== 阈值配置（未来可配置化） =====================
     private static final BigDecimal PASS_RATE_THRESHOLD_RELEASE = new BigDecimal("95.00");
     private static final BigDecimal PASS_RATE_THRESHOLD_CONDITIONAL = new BigDecimal("85.00");
@@ -214,6 +222,20 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
 
             auditLogId = auditLog.getId();
             newStatus = mapActionToStatus(action);
+
+            // 🔒 库存桥接: 只在<b>最终直接执行</b>分支翻转库存 (非 approval-initiated 分支)。
+            // 未审批申请 / 被拒审批不会走到这里, 保证「审批门禁」—— 翻转发生在最终执行/审批通过, 不在提交时。
+            // 在同一 @Transactional 内, 与审计日志一起提交/回滚。放行→隔离批次回 AVAILABLE。
+            if (dispositionInventoryService != null) {
+                try {
+                    dispositionInventoryService.applyDisposition(inspection, action);
+                } catch (Exception e) {
+                    // 库存翻转失败必须让整个处置事务回滚 (审计日志与库存状态不能不一致): 食安关键路径, fail-loud。
+                    log.error("质检处置库存桥接失败, 回滚整个处置: inspectionId={}, action={}: {}",
+                            inspection.getId(), action, e.getMessage(), e);
+                    throw e;
+                }
+            }
 
             log.info("质检处置已执行: action={}, newStatus={}", action, newStatus);
         }

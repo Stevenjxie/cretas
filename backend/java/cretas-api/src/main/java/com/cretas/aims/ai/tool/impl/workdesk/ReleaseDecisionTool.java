@@ -5,6 +5,8 @@ import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.service.quality.QualityDispositionInventoryService;
+import com.cretas.aims.service.quality.QualityDispositionInventoryService.FlipDecision;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -56,14 +58,12 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
     /** R3 valid decisions (dropdown, not free text). */
     private static final Set<String> VALID_DECISIONS = Set.of("RELEASED", "REJECTED");
 
-    /** 可放行/拒收的源 status — DEFECTIVE / USED_UP 等已是终态不可改. */
-    private static final Set<MaterialBatchStatus> RELEASABLE_FROM = Set.of(
-            MaterialBatchStatus.INSPECTING,
-            MaterialBatchStatus.FRESH,
-            MaterialBatchStatus.FROZEN,
-            MaterialBatchStatus.IN_STOCK,
-            MaterialBatchStatus.RESERVED
-    );
+    /**
+     * 可放行/拒收的源 status 白名单 — 与质检处置→库存桥接 {@link QualityDispositionInventoryService#RELEASABLE_FROM}
+     * <b>共用同一 single source of truth</b> (防两条放行路径逻辑漂移)。DEFECTIVE / USED_UP 等已是终态不可改。
+     */
+    private static final Set<MaterialBatchStatus> RELEASABLE_FROM =
+            QualityDispositionInventoryService.RELEASABLE_FROM;
 
     @Autowired
     private MaterialBatchRepository materialBatchRepository;
@@ -259,8 +259,9 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
                 ? MaterialBatchStatus.AVAILABLE
                 : MaterialBatchStatus.DEFECTIVE;
 
-        // R4 幂等
-        if (prevStatus == newStatus) {
+        // R4 幂等 + 终态校验 — 复用与质检处置桥接共享的纯函数守卫 (single source of truth, 防漂移)
+        FlipDecision flip = QualityDispositionInventoryService.evaluateMaterialFlip(prevStatus, newStatus);
+        if (flip == FlipDecision.ALREADY_IN_TARGET) {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "RELEASED".equals(decision) ? "ALREADY_RELEASED" : "ALREADY_REJECTED");
             data.put("batchNumber", batchNumber);
@@ -269,13 +270,10 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
                     "ℹ️ 批次 %s 已是 %s, 决策未重复执行", batchNumber, prevStatus.name()));
             return data;
         }
-
-        // 终态校验
-        if (prevStatus != null && !RELEASABLE_FROM.contains(prevStatus)
-                && prevStatus != MaterialBatchStatus.AVAILABLE
-                && prevStatus != MaterialBatchStatus.DEFECTIVE) {
+        if (flip == FlipDecision.INVALID_TERMINAL) {
             throw new IllegalStateException(String.format(
-                    "批次 %s 当前 status=%s 不可改 (终态)", batchNumber, prevStatus.name()));
+                    "批次 %s 当前 status=%s 不可改 (终态)", batchNumber,
+                    prevStatus != null ? prevStatus.name() : "UNKNOWN"));
         }
 
         batch.setStatus(newStatus);
