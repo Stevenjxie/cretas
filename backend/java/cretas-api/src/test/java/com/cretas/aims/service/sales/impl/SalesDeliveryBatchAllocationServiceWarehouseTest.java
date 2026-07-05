@@ -5,6 +5,7 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
@@ -47,6 +48,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     @Mock SalesDeliveryItemRepository deliveryItemRepository;
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock WarehouseResolver warehouseResolver;
+    @Mock ProductTypeRepository productTypeRepository;
 
     @InjectMocks SalesDeliveryBatchAllocationServiceImpl service;
 
@@ -169,7 +171,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(finishedGoodsBatchRepository.findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_WKS_ID))
                 .thenReturn(List.of());
 
-        service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "WH-WKS");
+        service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null, "WH-WKS");
 
         verify(warehouseResolver).resolveId(FID, "WH-WKS");
         verify(finishedGoodsBatchRepository).findAvailableBatchesFifoByWarehouse(FID, PRODUCT_ID, WH_WKS_ID);
@@ -186,7 +188,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
                 .thenReturn(List.of(wksBatch));
 
-        var result = service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null);
+        var result = service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null, null);
 
         assertEquals(1, result.size(), "FG in WH-WKS must be discovered under a blank source (bug repro)");
         assertEquals("BATCH-b1", result.get(0).get("batchNumber"));
@@ -202,7 +204,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
                 .thenReturn(List.of());
 
-        service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "  ");
+        service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), null, "  ");
 
         verify(finishedGoodsBatchRepository).findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD");
         verify(warehouseResolver, never()).resolveId(eq(FID), any());
@@ -219,5 +221,126 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         assertEquals(List.of("WH-WKS", "WH-LOG"), codes);
         verify(finishedGoodsBatchRepository).findWarehouseCodesWithAvailableStock(FID, PRODUCT_ID, "WH-RD");
+    }
+
+    // ─────────────── 🔴 C1 (2026-07-05): unit-aware FEFO / allocation ───────────────
+    // F006 现场确认: 同一产品的成品批次可能记录在不同单位 (一批小结填了 productWeight → kg,
+    // 另一批未填 → 盒). 以下测试锁定「换算后再比较/求和」, 不再把跨单位数字裸相加/比较.
+
+    private com.cretas.aims.entity.ProductType productTypeWithGramsPerUnit(BigDecimal gramsPerUnit, String unit) {
+        com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+        pt.setId(PRODUCT_ID);
+        pt.setGramsPerUnit(gramsPerUnit);
+        pt.setUnit(unit);
+        return pt;
+    }
+
+    @Test
+    void recommendFifo_unitParam_convertsBatchNativeUnitIntoTargetUnit() {
+        // 每盒 15g. 一批 4454.5 盒 (未小结 productWeight), 换算到 kg = 66.8175kg.
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(new BigDecimal("15"), "盒")));
+        FinishedGoodsBatch boxBatch = batch("b1", WH_WKS_ID, new BigDecimal("4454.5"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
+                .thenReturn(List.of(boxBatch));
+
+        // 目标(发货行)单位 = kg, 需求 10kg — 远小于该批换算后的 66.8175kg 可用量.
+        var result = service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "kg", null);
+
+        assertEquals(1, result.size());
+        assertEquals("kg", result.get(0).get("unit"));
+        assertEquals("盒", result.get(0).get("batchNativeUnit"));
+        BigDecimal available = (BigDecimal) result.get(0).get("availableQuantity");
+        BigDecimal recommended = (BigDecimal) result.get(0).get("recommendedQuantity");
+        assertEquals(0, new BigDecimal("66.8175").compareTo(available));
+        // 只需 10kg, 换算后单批可用 66.8175kg 已够 — 推荐量 = 10 (未超发, 未把裸盒数当 kg 用).
+        assertEquals(0, new BigDecimal("10").compareTo(recommended));
+    }
+
+    @Test
+    void recommendFifo_unitMismatchWithoutGramsPerUnit_skipsBatchHonestly() {
+        // 产品无 gramsPerUnit 配置 → 该 kg 批次无法换算到目标单位 盒, 应被跳过 (诚实 null), 不裸混入.
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(null, "盒")));
+        FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("0.45"));
+        kgBatch.setUnit("kg");
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(FID, PRODUCT_ID, "WH-RD"))
+                .thenReturn(List.of(kgBatch));
+
+        var result = service.recommendFifo(FID, PRODUCT_ID, new BigDecimal("10"), "盒", null);
+
+        assertEquals(0, result.size(), "单位不可换算的批次不应出现在推荐列表里 (诚实空态, 不裸混入)");
+    }
+
+    @Test
+    void allocateBatches_convertsBatchNativeUnitForAvailabilityCheck_accepts() {
+        // 发货行单位=盒, 批次原生单位=kg (produced=1kg), 每盒15g → 可用换算 = 1000/15 = 66.67盒.
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("60"));
+        item.setUnit("盒");
+        item.setProductTypeId(PRODUCT_ID);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(new BigDecimal("15"), "盒")));
+
+        FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
+        kgBatch.setUnit("kg");
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("60")); // 60盒 < 66.67盒 可用 → 应通过
+
+        assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+    }
+
+    @Test
+    void allocateBatches_convertsBatchNativeUnitForAvailabilityCheck_rejectsWhenInsufficient() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("70"));
+        item.setUnit("盒");
+        item.setProductTypeId(PRODUCT_ID);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(new BigDecimal("15"), "盒")));
+
+        FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
+        kgBatch.setUnit("kg");
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("70")); // 70盒 > 66.67盒 可用 → 应 409
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("可用库存不足"));
+    }
+
+    @Test
+    void allocateBatches_unitMismatchWithoutGramsPerUnit_throws409WithHint() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("10"));
+        item.setUnit("盒");
+        item.setProductTypeId(PRODUCT_ID);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+        // 产品无 gramsPerUnit 配置 → 无法把 kg 批次换算为 盒
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(null, "盒")));
+
+        FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
+        kgBatch.setUnit("kg");
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("10"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("单位"));
     }
 }

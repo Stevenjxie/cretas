@@ -106,6 +106,15 @@ function onFailChange(v: number | null | undefined) {
   }
 }
 
+// UX1 (2026-07-05 F006 现场确认): el-input-number 底层 <input> 聚焦时不会全选已有内容 —
+// 用户点回一个已有数值的字段重新输入(如把 "10" 改成别的数)时, 新数字会插入光标处而非替换,
+// 两次 "10" 会拼成 DOM 文本 "1010", 失焦后按该文本解析成 1010 (而非用户预期的 10),
+// 触发"剩余 1000 件未分类"这类困惑报错(依据本仓 fool-proof-design.md: 仓管/质检员操作
+// 不应依赖用户自己先清空再输入)。修复: 聚焦时 select() 全选原值, 使任何后续输入直接替换。
+function selectAllOnFocus(e: FocusEvent) {
+  (e.target as HTMLInputElement | null)?.select();
+}
+
 // 派生显示: 是否一致 + 提示文案
 // Issue #825 fix (2026-05-17): under-balance (sum<sample) was previously ok:true
 // with informational "剩余 N 件" message — user could still submit incomplete
@@ -386,7 +395,8 @@ function showDetail(row: TableRow) {
             :min="0"
             :controls="false"
             style="width: 100%"
-            @change="onSampleChange" />
+            @change="onSampleChange"
+            @focus="selectAllOnFocus" />
         </el-form-item>
         <el-form-item label="合格数" required>
           <el-input-number
@@ -394,7 +404,8 @@ function showDetail(row: TableRow) {
             :min="0"
             :controls="false"
             style="width: 100%"
-            @change="onPassChange" />
+            @change="onPassChange"
+            @focus="selectAllOnFocus" />
         </el-form-item>
         <el-form-item label="不合格数" required>
           <el-input-number
@@ -402,7 +413,8 @@ function showDetail(row: TableRow) {
             :min="0"
             :controls="false"
             style="width: 100%"
-            @change="onFailChange" />
+            @change="onFailChange"
+            @focus="selectAllOnFocus" />
         </el-form-item>
         <el-form-item label=" ">
           <el-tag

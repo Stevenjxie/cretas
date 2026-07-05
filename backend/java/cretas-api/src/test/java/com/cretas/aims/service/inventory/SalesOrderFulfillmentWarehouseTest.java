@@ -437,6 +437,88 @@ class SalesOrderFulfillmentWarehouseTest {
         assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
     }
 
+    // ============================================================
+    // 🔴 C1 (2026-07-05): 跨单位批次扣减 — F006 现场确认同产品批次可记录在不同单位
+    // (一批小结填了 productWeight → kg, 另一批未填 → 盒/件). 扣减必须换算, 不裸相减.
+    // ============================================================
+
+    @Test
+    @DisplayName("🔴 C1: 发货行单位=kg, 批次原生单位=盒 → 扣减前先换算, 不裸减")
+    void deduct_mixedUnitBatch_convertsBeforeDeducting() throws Exception {
+        var ptRepo = org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+        pt.setId(PRODUCT_TYPE);
+        pt.setGramsPerUnit(new BigDecimal("15")); // 15g/盒 (F006 现场量级)
+        when(ptRepo.findById(PRODUCT_TYPE)).thenReturn(java.util.Optional.of(pt));
+
+        SalesServiceImpl mixedUnitService = new SalesServiceImpl(
+                null, null, null, finishedGoodsBatchRepository, null, ptRepo, null, null);
+        ReflectionTestUtils.setField(mixedUnitService, "warehouseResolver", warehouseResolver);
+
+        // 批次记录单位=盒, produced=4454.5盒 → 换算 kg = 4454.5 × 15 / 1000 = 66.8175kg 可用.
+        FinishedGoodsBatch boxBatch = buildAvailableBatch("B-BOX-001", WH_LOG_ID, new BigDecimal("4454.5"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(boxBatch));
+
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId(PRODUCT_TYPE);
+        item.setDeliveredQuantity(new BigDecimal("10")); // 发货行要 10kg
+        item.setUnit("kg");
+
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+        m.setAccessible(true);
+        m.invoke(mixedUnitService, FACTORY_A, item);
+
+        // 10kg 目标量换算回批次原生单位(盒): 10 × 1000 / 15 = 666.6666... → HALF_UP scale2 → 666.67盒
+        assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
+        // 66.8175kg 可用 >> 10kg 需求 → 一批即够, 未误报库存不足.
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(boxBatch));
+    }
+
+    @Test
+    @DisplayName("🔴 C1: 单位不同且产品缺 gramsPerUnit → 该批跳过(诚实null), 未裸误扣")
+    void deduct_mixedUnitBatch_missingGramsPerUnit_skipsBatch() throws Exception {
+        var ptRepo = org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+        pt.setId(PRODUCT_TYPE);
+        pt.setGramsPerUnit(null); // 缺克重配置 → 无法换算
+        when(ptRepo.findById(PRODUCT_TYPE)).thenReturn(java.util.Optional.of(pt));
+
+        SalesServiceImpl mixedUnitService = new SalesServiceImpl(
+                null, null, null, finishedGoodsBatchRepository, null, ptRepo, null, null);
+        ReflectionTestUtils.setField(mixedUnitService, "warehouseResolver", warehouseResolver);
+
+        FinishedGoodsBatch boxBatch = buildAvailableBatch("B-BOX-002", WH_LOG_ID, new BigDecimal("4454.5"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(boxBatch));
+
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId(PRODUCT_TYPE);
+        item.setDeliveredQuantity(new BigDecimal("10"));
+        item.setUnit("kg");
+
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+        m.setAccessible(true);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> {
+                    try {
+                        m.invoke(mixedUnitService, FACTORY_A, item);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        if (e.getCause() instanceof RuntimeException re) throw re;
+                        throw new RuntimeException(e);
+                    }
+                });
+        // 批次不可换算 → 被跳过, 视为"无可用库存" → 报库存不足 (而不是裸误扣该批 10 单位).
+        assertEquals(true, ex.getMessage().contains("成品库存不足"));
+        assertEquals(0, BigDecimal.ZERO.compareTo(boxBatch.getShippedQuantity()));
+    }
+
     @Test
     @DisplayName("getAvailableBatches 二参旧路径 → 委托走 null(blank) → 跨全部可售仓 (向后兼容)")
     void getAvailableBatches_legacyTwoArg_delegatesToAllSellable() {
