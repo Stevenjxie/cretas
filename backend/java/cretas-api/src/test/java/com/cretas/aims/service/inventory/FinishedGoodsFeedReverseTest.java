@@ -264,6 +264,40 @@ class FinishedGoodsFeedReverseTest {
         assertThat(main.getProducedQuantity()).isEqualByComparingTo("60"); // 未改
     }
 
+    @Test
+    @DisplayName("reverseInterimCreate: 成品已报废(SCRAP, shipped=0/reserved=0) → 消息点名'已报废'而非'下游生产领用', "
+            + "数字对齐 (入库10-报废8=可撤销仅2)")
+    void reverseInterimCreateNamesScrapNotDownstreamProduction() {
+        // 小结产 10, 之后人工报废 8 (adjustFinishedGoodsQuantity, ReferenceType=SCRAP) → producedQuantity 已被减到 2。
+        FinishedGoodsBatch main = fg(new BigDecimal("2"), BigDecimal.ZERO, BigDecimal.ZERO);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(main));
+        com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog scrapLog =
+                com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog.builder()
+                        .factoryId(FACTORY)
+                        .batchId("fg-id")
+                        .adjustmentQuantity(new BigDecimal("-8"))
+                        .beforeProduced(new BigDecimal("10"))
+                        .afterProduced(new BigDecimal("2"))
+                        .reason("报废")
+                        .referenceType("SCRAP")
+                        .build();
+        when(finishedGoodsAdjustmentLogRepository.findByBatchIdOrderByCreatedAtDesc("fg-id"))
+                .thenReturn(List.of(scrapLog));
+
+        assertThatThrownBy(() -> service.reverseInterimCreate(FACTORY, BATCH, new BigDecimal("10"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_DOWNSTREAM_CONSUMED");
+                    // 真因是报废, 不是下游生产领用 (shipped=0/reserved=0, 没有任何下游单据可撤销)
+                    assertThat(ex.getMessage()).contains("已报废 8").contains("报废量无法通过撤销恢复");
+                    assertThat(ex.getMessage()).doesNotContain("下游生产领用");
+                    // 数字必须对齐: 入库10 − 报废8 = 可撤销仅2
+                    assertThat(ex.getMessage()).contains("仅 2 可回收");
+                });
+        assertThat(main.getProducedQuantity()).isEqualByComparingTo("2"); // 未再改
+    }
+
     // ── restoreForFeed (成品投料还回) ──
 
     @Test

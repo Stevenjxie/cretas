@@ -360,6 +360,35 @@ class WipClerkOutputTest {
     }
 
     @Test
+    @DisplayName("reverseClerkOutput: 盘亏(adjustmentQuantity<0, consumed=0) → 消息点名'盘亏'而非'下游消耗', 数字对齐 (produced3-adj盘亏2=可撤销1)")
+    void reverseClerkOutputStocktakeLossNamesRealCause() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("3"));
+        row.setConsumedQuantity(BigDecimal.ZERO);       // 未被下游消耗
+        row.setAdjustmentQuantity(new BigDecimal("-2")); // 半成品盘点盘亏 2
+        row.setAvailableQuantity(new BigDecimal("1"));   // 3 - 0 - 2 = 1
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.reverseClerkOutput(FACTORY, ANCHOR, new BigDecimal("3"), null, 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    // 真实原因是盘亏, 消息必须点名"盘亏", 不能再误报"已被下游消耗 0"(consumed 恒为 0 时对用户毫无意义)
+                    assertThat(ex.getMessage()).contains("已发生半成品盘亏 2").contains("盘点损耗");
+                    assertThat(ex.getMessage()).doesNotContain("已被下游消耗");
+                    // 数字必须对齐: 可撤销上限 = produced - consumed + adj = 3 - 0 - 2 = 1 (旧版错误算成 produced-consumed=3)
+                    assertThat(ex.getMessage()).contains("当前可撤销入库仅 1");
+                    // 不能再给"请先撤销下游消耗"这个不存在的补救路径 (dead-end)
+                    assertThat(ex.getMessage()).doesNotContain("请先撤销下游消耗");
+                    assertThat(ex.getMessage()).contains("盘亏已过账");
+                });
+        // 未改库存 (抛前不动)
+        assertThat(row.getProducedQuantity()).isEqualByComparingTo("3");
+        verify(wipRepo, never()).save(any());
+    }
+
+    @Test
     @DisplayName("reverseClerkOutput: 行缺失 → 抛 SFI_NOT_FOUND")
     void reverseClerkOutputMissingThrows() {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))

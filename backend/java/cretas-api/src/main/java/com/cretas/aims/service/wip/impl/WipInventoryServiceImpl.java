@@ -624,14 +624,36 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal newProduced = produced.subtract(qty);
         BigDecimal newAvailable = newProduced.subtract(consumed).add(adj);
         if (newAvailable.signum() < 0) {
-            // 🔴 下游已消耗守卫 (禁止降级): 冲销会致负库存 → loud-fail, 不产 phantom。
-            BigDecimal reversible = produced.subtract(consumed).max(BigDecimal.ZERO);
-            throw new BusinessException(409, "半成品 " + intermediateBatchNo + " 已被下游消耗 "
-                    + consumed.stripTrailingZeros().toPlainString() + ", 可撤销入库仅 "
-                    + reversible.stripTrailingZeros().toPlainString()
-                    + " (需撤销 " + qty.stripTrailingZeros().toPlainString() + "), 无法撤销小结; 请先撤销下游消耗")
+            // 🔴 冲销会致负库存 (禁止降级): loud-fail, 不产 phantom。
+            // 消息准确性修复 (fool-proof Rule 4/5): 短缺真实原因可能是 下游已消耗(consumed>0) 和/或
+            // 盘点已发生盘亏(adjustmentQuantity<0, adj) —— 旧版只报"已被下游消耗", 在纯盘亏场景(consumed=0
+            // 而 adj<0)会把真因错报给不存在的"下游消耗", remedy("请先撤销下游消耗")也是不存在的 dead-end。
+            // 可撤销上限 = 撤销前当前可用量 = produced − consumed + adj (不能只减 consumed)。
+            BigDecimal reversibleNow = produced.subtract(consumed).add(adj).max(BigDecimal.ZERO);
+            StringBuilder cause = new StringBuilder();
+            if (consumed.signum() > 0) {
+                cause.append("已被下游消耗 ").append(consumed.stripTrailingZeros().toPlainString());
+            }
+            if (adj.signum() < 0) {
+                if (cause.length() > 0) {
+                    cause.append("、");
+                }
+                cause.append("已发生半成品盘亏 ").append(adj.negate().stripTrailingZeros().toPlainString())
+                        .append(" (盘点损耗)");
+            }
+            if (cause.length() == 0) {
+                // 防御性兜底: 理论上不该到这 (newAvailable<0 必由 consumed>0 或 adj<0 导致)。
+                cause.append("可用余量不足");
+            }
+            String remedyHint = (adj.signum() < 0)
+                    ? ("盘亏已过账 (不随撤销自动冲销), 无法通过撤销小结恢复"
+                        + (consumed.signum() > 0 ? "; 下游消耗部分请先撤销下游相关小结" : ""))
+                    : "该批次半成品已被后续工序/计划领用, 请先撤销下游相关小结再重试";
+            throw new BusinessException(409, "半成品 " + intermediateBatchNo + " " + cause
+                    + ", 当前可撤销入库仅 " + reversibleNow.stripTrailingZeros().toPlainString()
+                    + " (需撤销 " + qty.stripTrailingZeros().toPlainString() + "), 无法撤销小结; " + remedyHint)
                     .withCode("SFI_DOWNSTREAM_CONSUMED")
-                    .withHint("该批次半成品已被后续工序/计划领用, 请先撤销下游相关小结再重试")
+                    .withHint(remedyHint)
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
