@@ -104,4 +104,44 @@ describe('AIQuery restaurant owner-action routing', () => {
       },
     });
   });
+
+  it('does not send owner-action context for ordinary revenue or review questions', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'report-s1',
+      intentCode: 'RESTAURANT_REPORT_QUERY',
+      message: 'ok',
+      resultData: {},
+    });
+
+    await ask('\u67e5\u8be2\u672c\u5468\u8425\u6536');
+    await ask('\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(2);
+    expect(executeIntentMock.mock.calls[0][2]?.context).toBeUndefined();
+    expect(executeIntentMock.mock.calls[1][2]?.context).toBeUndefined();
+  });
+
+  it('sends package scenario only when the user asks for a calculated owner action', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'owner-action-s2',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: 'ok',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'package',
+        answer: 'ok',
+      },
+    });
+
+    await ask('\u6839\u636e\u83dc\u54c1\u6bdb\u5229\u548c\u6210\u672c\uff0c\u5e2e\u6211\u7b97\u4e00\u4e2a\u9002\u5408\u4eca\u5929\u63a8\u7684\u5c0f\u5957\u9910');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(1);
+    expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
+      context: {
+        ownerActionScenario: 'package',
+      },
+    });
+  });
 });

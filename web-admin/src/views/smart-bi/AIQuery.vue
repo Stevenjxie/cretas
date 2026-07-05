@@ -580,6 +580,13 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     ],
   },
   {
+    scenario: 'package',
+    terms: [
+      '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
+      '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
+    ],
+  },
+  {
     scenario: 'cost_margin',
     terms: [
       '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', '\u5e93\u5b58',
@@ -594,13 +601,6 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     ],
   },
   {
-    scenario: 'package',
-    terms: [
-      '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
-      '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
-    ],
-  },
-  {
     scenario: 'external_event_response',
     terms: [
       '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
@@ -610,8 +610,11 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
 ];
 
 const OWNER_ACTION_DECISION_TERMS = [
-  '\u51b3\u7b56', '\u5efa\u8bae', '\u600e\u4e48\u63d0\u9ad8', '\u600e\u4e48\u4f18\u5316',
-  '\u600e\u4e48\u505a', '\u52a8\u4f5c', '\u843d\u5730', '\u8425\u6536', '\u8001\u677f',
+  '\u51b3\u7b56', '\u5efa\u8bae', '\u76f4\u63a5\u5efa\u8bae', '\u600e\u4e48\u63d0\u9ad8',
+  '\u600e\u4e48\u4f18\u5316', '\u600e\u4e48\u505a', '\u600e\u4e48\u8c03', '\u600e\u4e48\u6392',
+  '\u600e\u4e48\u6539', '\u600e\u4e48\u5b89\u6392', '\u5982\u4f55\u63d0\u9ad8',
+  '\u5982\u4f55\u4f18\u5316', '\u52a8\u4f5c', '\u843d\u5730', '\u5148\u505a', '\u5148\u6539',
+  '\u5e2e\u6211\u7b97', '\u63a8\u8350', '\u4e3b\u63a8', '\u8981\u4e0d\u8981',
 ];
 
 function includesAny(text: string, terms: string[]): boolean {
@@ -621,6 +624,7 @@ function includesAny(text: string, terms: string[]): boolean {
 function inferOwnerActionScenario(query: string): string {
   const text = query.trim();
   if (!text) return '';
+  if (!includesAny(text, OWNER_ACTION_DECISION_TERMS)) return '';
   for (const entry of OWNER_ACTION_SCENARIO_TERMS) {
     if (includesAny(text, entry.terms)) {
       return entry.scenario;

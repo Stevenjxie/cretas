@@ -78,9 +78,21 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u8fd9\u4e2a\u661f\u671f\u8425\u6536\u6bd4\u4e0a\u5468\u4f4e\uff0c\u7ed3\u5408\u8bc4\u8bba\u548c\u83dc\u54c1\u6bdb\u5229\u7ed9\u6211\u76f4\u63a5\u5efa\u8bae"))
                 .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u6839\u636e\u83dc\u54c1\u6bdb\u5229\u548c\u6210\u672c\uff0c\u5e2e\u6211\u7b97\u4e00\u4e2a\u9002\u5408\u4eca\u5929\u63a8\u7684\u5c0f\u5957\u9910"))
+                .isTrue();
 
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u67e5\u4e00\u4e0b\u8ba2\u5355\u660e\u7ec6"))
+                .isFalse();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u67e5\u8be2\u672c\u5468\u8425\u6536"))
+                .isFalse();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u4eca\u5929\u67e5\u8ba2\u5355"))
+                .isFalse();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837"))
                 .isFalse();
     }
 
@@ -95,6 +107,22 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "F006",
                 "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f",
+                Collections.emptyMap()))
+                .isFalse();
+
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u67e5\u8be2\u672c\u5468\u8425\u6536",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u4eca\u5929\u67e5\u8ba2\u5355",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837",
                 Collections.emptyMap()))
                 .isFalse();
     }
