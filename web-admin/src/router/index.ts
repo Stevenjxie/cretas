@@ -157,17 +157,19 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'procurement'
         }
       },
-      // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
+      // Sprint 8 P4c — 质检组长工作台 (QualityChiefWorkdesk)
       // 5 Tool: quality_check_summary + haccp_status_query + additive_compliance_check_quality
       // + customer_quality_standard + release_decision (WRITE + Preview 灵魂 Tool)
       // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?" — 1 页面综合判断 vs HJ 4 菜单
+      // IA fix (菜单审计): 与 quality-manager (食品安全召回) 原来同名"质量主管工作台",
+      // 侧边栏出现两个一模一样的项无法区分 — 按实际职能(批次放行决策)改名。
       {
         path: 'workdesk/quality-chief',
         name: 'QualityChiefWorkdesk',
         component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
         meta: {
           requiresAuth: true,
-          title: '质量主管工作台',
+          title: '质检组长工作台',
           icon: 'Aim',
           module: 'quality'
         }

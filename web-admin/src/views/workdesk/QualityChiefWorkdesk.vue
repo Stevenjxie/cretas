@@ -1,5 +1,5 @@
 <!--
-  QualityChiefWorkdesk.vue — Sprint 8 P4c 质量主管 Workdesk
+  QualityChiefWorkdesk.vue — Sprint 8 P4c 质检组长 Workdesk (批次放行决策)
 
   F006 真场景 (Boss 演示弹药 #5): 质量主管李工程师早上打开 Cretas, 说
   "这批卤猪蹄能放行吗?" → AI 综合 质检 + HACCP + 添加剂合规 + 客户标准
@@ -24,7 +24,7 @@
     <div class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
-        <span class="title-text">质量主管工作台</span>
+        <span class="title-text">质检组长工作台</span>
         <el-tag size="small" type="primary">Sprint 8 P4c (2026-05-20)</el-tag>
       </div>
       <div class="header-actions">
