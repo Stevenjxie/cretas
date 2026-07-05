@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
@@ -10,8 +11,24 @@ import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canWriteProcurement = computed(() => permissionStore.canWrite('procurement'));
+
+// 🔴 fool-proof-design Rule 5 fix (2026-07-05): 应付账款是只读交易台账，之前没有任何按钮
+// 能跳到付款申请（PaymentRequestServiceImpl.markPaidPurchase 三写原子已在生产生效，但从这里
+// 走不到）。跳转带上供应商 + 关联采购单（若该行有），落地页自动预填打开新建弹窗。
+function goRequestPayment(row: TableRow) {
+  router.push({
+    path: '/procurement/payment-requests',
+    query: {
+      open: 'create',
+      supplierId: row.counterpartyId,
+      poId: row.purchaseOrderId || undefined
+    }
+  });
+}
 
 const activeTab = ref('overview');
 const loading = ref(false);
@@ -240,6 +257,20 @@ function handleAgingTypeChange() { loadAging(); }
             </el-table-column>
             <el-table-column prop="transactionDate" label="日期" width="120" />
             <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
+            <!-- 🔴 fool-proof-design Rule 5 fix: 之前应付账款是纯只读台账，供应商欠款只能看
+                 不能付 — 加"去申请付款"跳到 SP6 付款申请流程（同一供应商预填，进入现有
+                 create→submit→finance-approve→mark-paid 状态机，不重复造轮子）。 -->
+            <el-table-column label="操作" width="120" align="center" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="canWriteProcurement && row.counterpartyId"
+                  type="primary"
+                  link
+                  size="small"
+                  @click="goRequestPayment(row)"
+                >去申请付款</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
 

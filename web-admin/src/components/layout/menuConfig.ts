@@ -28,7 +28,12 @@ export const financeManagerMenu: MenuItem[] = [
   // Smoke v2 Bug #2: 财务审核采购单 — finance_manager 是该列表的主审核人
   { path: '/procurement/finance-review', title: '财务待审采购单', icon: 'ShoppingCart', module: 'finance' },
   // Sprint4-H F-AR-1: 财务审核销售单 — finance_manager 复核成本/利润/BOM 标准
-  { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' }
+  { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' },
+  // 🔴 fool-proof-design Rule 5 fix (2026-07-05): financeManagerMenu 是完全独立的精简数组
+  // (AppSidebar.vue: roleCode==='finance_manager' 时 *只* 用这个, 不 fallback 到 rawMenuConfig
+  // 的 /procurement/payment-requests 项) — finance_manager 是付款申请的审批人 (isFinanceManager
+  // role check), 之前在此数组里 0 入口, 只能靠深链, 找不到"去哪审批供应商付款"。
+  { path: '/procurement/payment-requests', title: '采购付款申请', icon: 'Money', module: 'finance' }
 ];
 
 const rawMenuConfig: MenuItem[] = [
@@ -135,6 +140,13 @@ const rawMenuConfig: MenuItem[] = [
       // reachable via a PO row's "更多→退货" dropdown or direct URL. Mirrors the /sales/returns
       // entry added for the same gap on the sales side (see T-RTA fix comment below).
       { path: '/procurement/returns', title: '采购退货', icon: '', module: 'procurement' },
+      // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 路由 (router/index.ts) 早已注册
+      // /procurement/payment-requests (采购付款申请 PENDING→FINANCE_REVIEW→APPROVED→PAID
+      // 状态机, 后端 markPaidPurchase 三写原子已生效, prod 已有 AP_PAYMENT 数据), 但从未加入
+      // 侧边栏 — 财务/出纳/采购员只能靠深链访问, 应付账款台账/采购单详情也无入口跳转过来,
+      // 用户找不到"怎么给供应商付款"。roles 镜像 router/index.ts PaymentRequests meta.
+      { path: '/procurement/payment-requests', title: '付款申请', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]
@@ -207,6 +219,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/ar-ap', title: '应收应付', icon: '', module: 'finance' },
       { path: '/finance/invoices', title: '开票管理', icon: '', module: 'finance' },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
+      // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 镜像加一份到财务管理组 (与
+      // procurement/finance-review / sales/finance-review 的镜像模式一致) — 出纳/财务主管
+      // 习惯从"财务管理"找付款相关操作, 采购管理组下的入口对他们不够直觉。
+      { path: '/procurement/payment-requests', title: '采购付款申请', icon: '', module: 'finance',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance' },
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance' }
