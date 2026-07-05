@@ -130,6 +130,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement' },
       { path: '/procurement/receives', title: '采购入库', icon: '', module: 'procurement' },
       { path: '/procurement/finance-review', title: '财务待审采购单', icon: '', module: 'finance' },
+      // F006 采购 audit fix (Bug 1, fool-proof-design Rule 5): /procurement/returns route
+      // existed (router/index.ts PurchaseReturns) but was never surfaced in sidebar — only
+      // reachable via a PO row's "更多→退货" dropdown or direct URL. Mirrors the /sales/returns
+      // entry added for the same gap on the sales side (see T-RTA fix comment below).
+      { path: '/procurement/returns', title: '采购退货', icon: '', module: 'procurement' },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]

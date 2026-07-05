@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 
@@ -39,6 +39,20 @@ const paymentMethodMap: Record<string, string> = {
   CASH: '现金', BANK_TRANSFER: '银行转账', WECHAT: '微信', ALIPAY: '支付宝',
   CHECK: '支票', CREDIT: '赊账', POS: 'POS', OTHER: '其他',
 };
+
+// 🟡 F006 采购 audit fix (Bug 3): AR/AP_ADJUSTMENT 行在 approval_status=PENDING 时
+// balanceAfter 有意保持"提交前快照"不变 (dual-control, 见 ArApServiceImpl.recordAdjustment
+// 注释) — 审批通过后才会被 approveAdjustment() 重算. 但本页此前完全不显示 approvalStatus,
+// 用户看到"余额没变"会误以为是 bug. 加状态标签让"待审批"一目了然 (fool-proof-design Rule 2:
+// 上下文必带身份信息). 非调整类型交易 approval_status 恒为 APPROVED (自动过账), 不需要显眼展示.
+const approvalStatusMap: Record<string, { text: string; type: string }> = {
+  PENDING: { text: '待审批', type: 'warning' },
+  APPROVED: { text: '已审批', type: 'success' },
+  REJECTED: { text: '已驳回', type: 'danger' },
+};
+function isAdjustmentRow(row: TableRow): boolean {
+  return row.transactionType === 'AR_ADJUSTMENT' || row.transactionType === 'AP_ADJUSTMENT';
+}
 
 onMounted(() => {
   loadOverview();
@@ -122,12 +136,14 @@ function handleAgingTypeChange() { loadAging(); }
             <el-card class="stat-card ar" shadow="hover">
               <div class="stat-label">应收总额</div>
               <div class="stat-value">{{ formatAmount(overview.totalReceivable) }}</div>
-              <div class="stat-sub">{{ overview.receivableCount || 0 }} 笔未收</div>
+              <!-- 🟡 F006 采购 audit fix (Bug 2): 后端按交易对手(客户/供应商)聚合欠款笔数, 非单据/发票行数
+                   (ar_ap_transactions 是流水式台账, 无法干净拆出"未结发票行"概念). 文案改"家"避免误导. -->
+              <div class="stat-sub">{{ overview.receivableCount || 0 }} 家客户未结</div>
             </el-card>
             <el-card class="stat-card ap" shadow="hover">
               <div class="stat-label">应付总额</div>
               <div class="stat-value">{{ formatAmount(overview.totalPayable) }}</div>
-              <div class="stat-sub">{{ overview.payableCount || 0 }} 笔未付</div>
+              <div class="stat-sub">{{ overview.payableCount || 0 }} 家供应商未结</div>
             </el-card>
             <el-card class="stat-card net" shadow="hover">
               <div class="stat-label">净额 (应收-应付)</div>
@@ -162,7 +178,21 @@ function handleAgingTypeChange() { loadAging(); }
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
             <el-table-column prop="balanceAfter" label="余额" width="130" align="right">
-              <template #default="{ row }">{{ formatAmount(row.balanceAfter) }}</template>
+              <template #default="{ row }">
+                {{ formatAmount(row.balanceAfter) }}
+                <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
+                  content="调整待审批, 余额为提交前快照; 审批通过后才会更新" placement="top">
+                  <el-icon style="color:#E6A23C;margin-left:4px;vertical-align:middle"><WarningFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
+                  {{ approvalStatusMap[row.approvalStatus]?.text || row.approvalStatus }}
+                </el-tag>
+                <span v-else>-</span>
+              </template>
             </el-table-column>
             <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
               <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || row.paymentMethod : '-' }}</template>
@@ -189,7 +219,21 @@ function handleAgingTypeChange() { loadAging(); }
               <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
             </el-table-column>
             <el-table-column prop="balanceAfter" label="余额" width="130" align="right">
-              <template #default="{ row }">{{ formatAmount(row.balanceAfter) }}</template>
+              <template #default="{ row }">
+                {{ formatAmount(row.balanceAfter) }}
+                <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
+                  content="调整待审批, 余额为提交前快照; 审批通过后才会更新" placement="top">
+                  <el-icon style="color:#E6A23C;margin-left:4px;vertical-align:middle"><WarningFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
+                  {{ approvalStatusMap[row.approvalStatus]?.text || row.approvalStatus }}
+                </el-tag>
+                <span v-else>-</span>
+              </template>
             </el-table-column>
             <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
               <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || row.paymentMethod : '-' }}</template>

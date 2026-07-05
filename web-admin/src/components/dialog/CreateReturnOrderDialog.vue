@@ -137,6 +137,13 @@ const typeLabel = computed(() =>
 const counterpartyLabel = computed(() =>
   props.returnType === 'PURCHASE_RETURN' ? '供应商' : '客户',
 );
+// 🟡 F006 采购 audit fix (Bug 1): 之前提示"请到退货管理菜单"但侧边栏根本没有这个菜单项
+// (采购侧只有 PO 行内"更多→退货"入口, 用户无处可去). 现改为指向真实存在的菜单路径
+// (采购管理→采购退货 / 销售管理→销售退货, 见 menuConfig.ts). 采购侧同时补了缺失的
+// 侧边栏入口 (镜像销售退货已有的入口, 见 T-RTA fix 注释).
+const menuPathLabel = computed(() =>
+  props.returnType === 'PURCHASE_RETURN' ? '采购管理 → 采购退货' : '销售管理 → 销售退货',
+);
 
 const selectedRows = computed(() =>
   form.value.items.filter((i) => i.selected && i.quantity > 0),
@@ -244,7 +251,7 @@ async function handleSubmit(): Promise<void> {
     });
 
     ElMessage.success(
-      `退货单已创建 (DRAFT 草稿, ${created.returnNumber}). 请到退货管理菜单提交审批.`,
+      `退货单已创建 (DRAFT 草稿, ${created.returnNumber}). 请到 ${menuPathLabel.value} 菜单提交审批.`,
     );
     emit('success', created);
     emit('update:modelValue', false);
@@ -280,7 +287,7 @@ async function handleSubmit(): Promise<void> {
       :closable="false"
       style="margin-bottom: 12px"
       :title="`源单: ${sourceOrderNumber || sourceOrderId} ｜ ${counterpartyLabel}: ${counterpartyName || counterpartyId}`"
-      description="提交后退货单为 DRAFT 草稿. 请到 退货管理 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量."
+      :description="`提交后退货单为 DRAFT 草稿. 请到 ${menuPathLabel} 菜单提交审批; 财务/管理员审批通过后才会触发库存或退款动作. 退货数量不能超过源单数量.`"
     />
 
     <el-form
