@@ -1035,6 +1035,25 @@ public class ArApServiceImpl implements ArApService {
         overview.put("overdueARCount", overdueAR.size());
         overview.put("overdueAPCount", overdueAP.size());
 
+        // 🟡 F006 采购 audit fix (Bug 2): payableCount/receivableCount were never populated here —
+        // FE (ar-ap/index.vue) reads `overview.payableCount || 0`, so the "N 笔未付" stat silently
+        // showed 0 regardless of real data. ar_ap_transactions is a bank-statement-style running
+        // ledger (not a per-invoice table), so there's no clean "unpaid invoice line" count to expose.
+        // The most honest, already-hardened source is sumByCounterparty (same sign-agnostic +
+        // approval-gated aggregation as sumPayables/sumReceivables above) — count counterparties
+        // whose net balance is still outstanding (>0). FE label changed to "N 家未结" to match
+        // what's actually counted (counterparties, not individual transaction lines).
+        long payableCounterpartyCount = transactionRepository.sumByCounterparty(factoryId, CounterpartyType.SUPPLIER)
+                .stream()
+                .filter(row -> row[2] != null && ((BigDecimal) row[2]).compareTo(BigDecimal.ZERO) > 0)
+                .count();
+        long receivableCounterpartyCount = transactionRepository.sumByCounterparty(factoryId, CounterpartyType.CUSTOMER)
+                .stream()
+                .filter(row -> row[2] != null && ((BigDecimal) row[2]).compareTo(BigDecimal.ZERO) > 0)
+                .count();
+        overview.put("payableCount", payableCounterpartyCount);
+        overview.put("receivableCount", receivableCounterpartyCount);
+
         // 按类型统计
         List<Object[]> stats = transactionRepository.statisticsByType(factoryId);
         List<Map<String, Object>> typeStats = new ArrayList<>();
