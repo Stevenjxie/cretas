@@ -90,10 +90,17 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
      * 应收余额 = 挂账增加 - 收款减少 - 退货冲减.
      * R42 BUG-13 fix: 之前 SUM(amount) 把 AR_INVOICE + AR_PAYMENT 全加, 导致 ¥1,457K + ¥620K = ¥2,077K
      * (错误地翻倍). 正确应是 1,457K - 620K = 837K.
+     *
+     * <p>🔒 4-eyes fix (2026-07): AR_ADJUSTMENT 只在 approval_status='APPROVED' 时计入。此前无审批状态
+     * 过滤 → PENDING (未审批) 调整立即污染看板总额, 且 REJECTED (被驳回但金额未清零) 调整永久污染,
+     * 双双绕过 dual-control 闸 (recordAdjustment 故意不改 currentBalance, 直到 approveAdjustment 才改)。
+     * 非调整类型 (AR_INVOICE / AR_PAYMENT / AR_CREDIT_NOTE) 自动过账, 默认即 APPROVED, 恒计入 (不受此闸阻挡)。
+     * 修后 sumReceivables 与 gated ledger (Σ Customer.currentBalance) 口径一致。
      */
     @Query("SELECT COALESCE(SUM(CASE " +
-            "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE, " +
-            "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT) THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT " +
+            "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
             "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE) THEN -t.amount " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
@@ -103,20 +110,33 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     /**
      * 应付余额 = 挂账增加 - 付款减少 - 退货冲减.
      * R42 BUG-13 fix: 同 sumReceivables, 之前 SUM 全加 ¥247K + ¥197K = ¥444K (错). 正确是 50K.
+     *
+     * <p>🔒 4-eyes fix (2026-07): AP_ADJUSTMENT 同 sumReceivables —— 只在 APPROVED 时计入, PENDING/REJECTED
+     * 不污染看板。非调整类型恒计入。
      */
     @Query("SELECT COALESCE(SUM(CASE " +
-            "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AP_INVOICE, " +
-            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT) THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_INVOICE THEN t.amount " +
+            "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT " +
+            "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AP_PAYMENT, " +
             "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_CREDIT_NOTE) THEN -t.amount " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = 'SUPPLIER'")
     BigDecimal sumPayables(@Param("factoryId") String factoryId);
 
-    /** 按交易对手汇总余额 */
+    /**
+     * 按交易对手汇总余额。
+     *
+     * <p>🔒 4-eyes fix (2026-07): 与 sumReceivables/sumPayables 同类 —— 排除 PENDING/REJECTED 调整,
+     * 避免 per-customer 应收/应付明细把未审批/被驳回的调整算进去。非调整类型全部计入 (approval_status
+     * 默认 APPROVED, 此 predicate 对它们恒真)。
+     */
     @Query("SELECT t.counterpartyId, t.counterpartyName, SUM(t.amount) " +
             "FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = :type " +
+            "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
+            "                                com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT) " +
+            "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "GROUP BY t.counterpartyId, t.counterpartyName " +
             "ORDER BY SUM(t.amount) DESC")
     List<Object[]> sumByCounterparty(
