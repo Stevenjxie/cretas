@@ -347,6 +347,23 @@ public class MaterialBatchController {
     }
 
     /**
+     * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 批量查未小结报工消耗量,
+     * 供 报损/调拨 弹窗算「货架实物」= availableQuantity − 未小结消耗 提示, 让仓管员在报损/调拨前
+     * 就看到真实可动用量, 而不是账面未扣的 stale-high 可用量。⛔ 只读, 不改任何库存/gate/校验。
+     */
+    @GetMapping("/unsettled-consumption")
+    @Operation(summary = "批量查批次未小结报工消耗量 (报损/调拨货架实物提示, 只读)")
+    public ApiResponse<Map<String, java.math.BigDecimal>> getUnsettledConsumptionByBatchIds(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID列表 (逗号分隔)", required = true)
+            @RequestParam List<String> batchIds) {
+        Map<String, java.math.BigDecimal> result =
+                materialBatchService.getUnsettledConsumptionByBatchIds(factoryId, batchIds);
+        return ApiResponse.success(result);
+    }
+
+    /**
      * 按材料类型获取批次
      */
     @GetMapping("/material-type/{materialTypeId}")

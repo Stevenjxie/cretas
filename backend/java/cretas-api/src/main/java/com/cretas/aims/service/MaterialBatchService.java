@@ -166,6 +166,18 @@ public interface MaterialBatchService {
       */
     List<Map<String, Object>> getLowStockWarnings(String factoryId);
      /**
+     * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 批量查未小结报工消耗量,
+     * 供 报损/调拨 等前端弹窗预先算出「货架实物」= availableQuantity − 未小结消耗, 让仓管员在
+     * 报损/调拨前就看到真实可动用量 (而不是账面未扣的 stale-high availableQuantity)。
+     * 与 FactoryStocktakeServiceImpl#loadUnsettledByBatch 同一 SQL / 同一门控口径, 无待扣的批次
+     * 不在返回 map 中 (调用方按 0 处理)。⛔ 只读, 不改任何库存/gate。
+     * default 空 map 实现 (honest-null fallback): 其它测试用 stub 实现无需跟着改, 缺失时调用方
+     * 按 0 处理, 只是不显示提示, 不影响任何既有行为。
+      */
+    default Map<String, BigDecimal> getUnsettledConsumptionByBatchIds(String factoryId, List<String> batchIds) {
+        return new java.util.HashMap<>();
+    }
+     /**
      * 批量入库
       */
     List<MaterialBatchDTO> batchCreateMaterialBatches(String factoryId, List<CreateMaterialBatchRequest> requests, Long userId);
