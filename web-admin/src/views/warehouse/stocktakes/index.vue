@@ -5,9 +5,11 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import request, { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, View, Edit, Check, Close, Upload, Download } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, View, Edit, Check, Close, Upload, Download, Delete } from '@element-plus/icons-vue';
+import * as XLSX from 'xlsx';
 import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
+import { BIG_CATEGORY_OPTIONS, filterOptionsByBigCategory, type BigCategory } from '@/utils/materialCategory';
 
 // Safe helpers — Vue template compiler does not support optional chaining (?.)
 // in attribute bindings; delegate to these plain functions instead.
@@ -273,7 +275,18 @@ function openBulkDialog() {
   bulkForm.openingMode = false;
   bulkFile.value = null;
   bulkPreview.value = null;
+  openingEntryMode.value = 'ROWS';
+  resetOpeningRows();
   bulkDialogVisible.value = true;
+}
+
+// 期初建账勾选框可以在两个入口摸到（顶层「期初建账/期初入库」按钮 或 「批量导入盘点」弹窗里勾选），
+// 两处都要能用「逐条录入」— 用户勾上时才去按需加载物料下拉数据（避免每次开弹窗都请求一次）。
+function onOpeningModeChange(checked: boolean) {
+  bulkPreview.value = null;
+  if (checked && materialOptions.value.length === 0) {
+    void loadMaterialOptions();
+  }
 }
 
 // fool-proof Rule 5 (无 dead-end): 期初建账此前只能靠"批量导入盘点"弹窗里一个不起眼的
@@ -288,6 +301,161 @@ const bulkDialogTitle = computed(() =>
 function openOpeningEntry() {
   openBulkDialog();
   bulkForm.openingMode = true;
+  openingEntryMode.value = 'ROWS';
+  resetOpeningRows();
+  if (materialOptions.value.length === 0) void loadMaterialOptions();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 期初建账 — 逐条录入 (IN-APP row-by-row entry, 不需要 Excel)
+//
+// 客户反馈: 仓管/工厂主文化素质参差不齐, Excel 导出→填→再导入 对他们太难。加一个"添加一行"式
+// 的表格录入 —— 选物料 + 填数量(+单价可选), 逐条加。提交时不新建后端逻辑, 而是在浏览器内生成
+// 一份跟"导出模板"列结构完全一致的虚拟 Excel (复用 xlsx 库, 参考 production/bom/index.vue 的
+// 用法), 再喂给已经跑通的 doBulkPreview / doBulkConfirm（跟用户手填 Excel 上传走的是同一段
+// 后端代码：建壳 create-if-missing → initiate 快照 → apply 盘盈 → 借1403/贷4001 凭证）。
+// 这样零后端改动、零新流程分叉 —— 只是把"怎么产生这份 Excel"从"用户自己在 Excel 里操作"
+// 换成"页面表格帮用户生成"。
+// ────────────────────────────────────────────────────────────────────────────
+type OpeningEntryMode = 'ROWS' | 'EXCEL';
+const openingEntryMode = ref<OpeningEntryMode>('ROWS');
+
+interface OpeningMaterialOption {
+  id: string;
+  name: string;
+  code: string;
+  unit: string;
+  category?: string;
+}
+const materialOptions = ref<OpeningMaterialOption[]>([]);
+const materialOptionsLoading = ref(false);
+
+async function loadMaterialOptions() {
+  if (!factoryId.value) return;
+  materialOptionsLoading.value = true;
+  try {
+    const res = await get<OpeningMaterialOption[] | { content: OpeningMaterialOption[] }>(
+      `/${factoryId.value}/raw-material-types/active`
+    );
+    if (res.success && res.data) {
+      const data = res.data;
+      materialOptions.value = Array.isArray(data) ? data : (data.content || []);
+    }
+  } catch {
+    // 静默失败: 逐条录入下拉物料为空时, 用户仍可切到「Excel 批量导入」tab
+  } finally {
+    materialOptionsLoading.value = false;
+  }
+}
+
+interface OpeningRow {
+  materialTypeId: string;
+  materialName: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  unit: string;
+  _bigCategory: BigCategory | '';
+}
+
+function newOpeningRow(): OpeningRow {
+  return { materialTypeId: '', materialName: '', quantity: null, unitPrice: null, unit: 'kg', _bigCategory: '原料' };
+}
+
+const openingRows = ref<OpeningRow[]>([newOpeningRow()]);
+
+function resetOpeningRows() {
+  openingRows.value = [newOpeningRow()];
+}
+
+function addOpeningRow() {
+  openingRows.value.push(newOpeningRow());
+}
+
+function removeOpeningRow(idx: number) {
+  openingRows.value.splice(idx, 1);
+  if (openingRows.value.length === 0) addOpeningRow(); // 防呆: 表格至少留一行, 不留空白死状态
+}
+
+function materialsForOpeningRow(row: OpeningRow): OpeningMaterialOption[] {
+  return filterOptionsByBigCategory(materialOptions.value, row._bigCategory);
+}
+
+function handleOpeningMaterialChange(idx: number, materialId: string) {
+  const row = openingRows.value[idx];
+  const m = materialOptions.value.find((o) => o.id === materialId);
+  if (row && m) {
+    row.materialName = m.name;
+    if (m.unit) row.unit = m.unit;
+  }
+}
+
+// fool-proof Rule 1: 提交前先在页面上校验清楚, 不要点了「提交」才报"服务器错误"
+function validateOpeningRows(): string | null {
+  if (!bulkForm.warehouseId) return '请先选择仓库';
+  if (!bulkForm.periodMonth) return '请填写月份';
+  const filled = openingRows.value.filter((r) => r.materialTypeId && r.quantity != null && Number(r.quantity) > 0);
+  if (filled.length === 0) return '请至少填写一行：选择物料 + 填写数量（大于 0）';
+  return null;
+}
+
+// 把逐条录入的行, 在浏览器里打包成一份跟「下载模板」列结构完全一致的虚拟 Excel 文件,
+// 复用既有的 doBulkPreview / doBulkConfirm（同一段后端代码, 见上方大注释）。
+// 列顺序必须跟 StocktakeImportRowDTO 的 @ExcelProperty index 完全对应（后端按位置读, 不按表头文字）：
+// 0 物料名称 / 1 批次号*(留空=新物料) / 2 仓库 / 3 账面数量(忽略) / 4 单位 / 5 实盘数量 / 6 单价(可空)
+function buildOpeningRowsFile(): File | null {
+  const err = validateOpeningRows();
+  if (err) {
+    ElMessage({ message: err, type: 'warning', duration: 3000 });
+    return null;
+  }
+  const wname = warehouseName(bulkForm.warehouseId);
+  const header = ['物料名称', '批次号*', '仓库', '账面数量', '单位', '实盘数量', '单价(期初建账新建填写,可空)'];
+  const dataRows = openingRows.value
+    .filter((r) => r.materialTypeId && r.quantity != null && Number(r.quantity) > 0)
+    .map((r) => [
+      r.materialName,
+      '', // 批次号留空 → 后端按"新物料"从 0 盘盈建账
+      wname,
+      '',
+      r.unit || 'kg',
+      Number(r.quantity),
+      r.unitPrice != null ? Number(r.unitPrice) : '',
+    ]);
+  const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '库存盘点');
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new File([wbout], `期初建账-逐条录入-${bulkForm.periodMonth}.xlsx`, {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
+
+async function doOpeningRowsPreview() {
+  const file = buildOpeningRowsFile();
+  if (!file) return;
+  bulkFile.value = file;
+  await doBulkPreview();
+}
+
+async function doOpeningRowsConfirm() {
+  const file = buildOpeningRowsFile();
+  if (!file) return;
+  bulkFile.value = file;
+  await doBulkConfirm();
+}
+
+// 弹窗底部「预览比对」/「确认导入」按钮统一入口 — 期初建账+逐条录入 时走行数据打包,
+// 其余情况(常规批量导入 / 期初建账+Excel tab) 走既有的 Excel 上传路径。
+const isOpeningRowsMode = computed(() => bulkForm.openingMode && openingEntryMode.value === 'ROWS');
+
+async function runBulkPreview() {
+  if (isOpeningRowsMode.value) await doOpeningRowsPreview();
+  else await doBulkPreview();
+}
+
+async function runBulkConfirm() {
+  if (isOpeningRowsMode.value) await doOpeningRowsConfirm();
+  else await doBulkConfirm();
 }
 
 // 下载当前库存填报模板（blob）
@@ -896,33 +1064,108 @@ onMounted(async () => {
           <span style="margin-left: 8px; color: #909399; font-size: 12px">格式: 2026-06</span>
         </el-form-item>
         <el-form-item label="期初建账">
-          <el-checkbox v-model="bulkForm.openingMode" @change="bulkPreview = null">
-            本次为期初建账导入
+          <el-checkbox v-model="bulkForm.openingMode" @change="onOpeningModeChange">
+            本次为期初建账（第一次给系统录入库存）
           </el-checkbox>
-          <el-tooltip
-            content="期初建账：生效后按 借1403原材料/贷4001实收资本 过账（不计营业外收入，避免虚增建账当期损益）。常规月度盘点请不要勾选。"
-            placement="top"
-          >
-            <span style="margin-left: 8px; color: #e6a23c; font-size: 12px">这是什么？</span>
-          </el-tooltip>
         </el-form-item>
-        <!-- 期初建账已并入盘点：勾选后可在同一张表里【新增物料行】(从 0 建账) + 校正既有批次 -->
-        <el-alert
-          v-if="bulkForm.openingMode"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin: 0 0 12px 110px; max-width: 760px"
-        >
-          <template #title>
-            <b>首次使用</b>：录入原料/调料的<b>期初库存</b>（开业/上线时<b>已经存在</b>的库存）——
-            在模板里对<b>新物料</b>直接新增行（填「物料名称/编码 + 实盘数量(=期初数量) + 单价」，批次号留空自动生成），
-            系统会<b>新建批次并从 0 盘盈建账</b>；对<b>已存在的批次</b>行则按实盘数量校正。
-            生效后按 <b>借 1403 原材料 / 贷 4001 实收资本</b> 记一笔期初凭证，<b>不产生采购应付款</b>
-            （与「采购入库」的本质区别）。诚实-null：无单价的行只建数量、不计入凭证金额。
-          </template>
-        </el-alert>
-        <el-form-item label="填好的表格" required>
+        <!-- fool-proof Rule 3: 说人话在前, 会计术语收进可展开的次要说明里 (不是主文案) -->
+        <div v-if="bulkForm.openingMode" style="margin: 0 0 12px 110px; max-width: 760px; color: #606266; font-size: 13px; line-height: 1.7">
+          期初建账 = 告诉系统你工厂<b>现在仓库里已经有多少</b>原料/调料，系统从这个数量开始记账。
+          只要填 <b>物料 + 数量</b> 就行（单价可以不填，不填就只记数量、不算钱），<b>不会产生要付的钱（应付款）</b>——
+          跟「采购入库」不一样，这只是把你已经有的库存"登记"进系统。
+          <el-popover placement="right" width="380" trigger="click">
+            <template #reference>
+              <el-link type="primary" :underline="false" style="font-size: 12px; margin-left: 4px">会计科目说明 ▸</el-link>
+            </template>
+            <div style="font-size: 12px; color: #606266; line-height: 1.7">
+              系统内部会自动记一笔期初凭证：<b>借 1403 原材料 / 贷 4001 实收资本</b>。
+              不计入营业外收入（不会虚增本期利润），也不产生采购应付款。
+              诚实-null：没填单价的物料只建数量，不计入凭证金额。
+            </div>
+          </el-popover>
+        </div>
+
+        <!-- 期初建账: 两种录入方式 — 逐条录入(推荐, 不用 Excel) / Excel 批量导入(一次导入很多条) -->
+        <template v-if="bulkForm.openingMode">
+          <el-tabs v-model="openingEntryMode" style="margin: 0 0 4px 110px">
+            <el-tab-pane label="逐条录入（推荐，不用 Excel）" name="ROWS">
+              <el-alert type="info" :closable="false" show-icon style="margin-bottom: 10px">
+                一条一条填：选物料、填数量，点「添加一行」可以继续填下一个。填完点下面「预览比对」核对，再「确认导入」。
+              </el-alert>
+              <el-table :data="openingRows" size="small" border style="margin-bottom: 10px">
+                <el-table-column label="大类" width="100">
+                  <template #default="{ row }">
+                    <el-select v-model="row._bigCategory" size="small" style="width: 100%">
+                      <el-option v-for="opt in BIG_CATEGORY_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="物料" min-width="200">
+                  <template #header><span style="color: #f56c6c">*</span> 物料</template>
+                  <template #default="{ row, $index }">
+                    <el-select
+                      v-model="row.materialTypeId"
+                      placeholder="选择物料"
+                      filterable
+                      size="small"
+                      style="width: 100%"
+                      :loading="materialOptionsLoading"
+                      @change="(val: string) => handleOpeningMaterialChange($index, val)"
+                    >
+                      <el-option
+                        v-for="m in materialsForOpeningRow(row)"
+                        :key="m.id"
+                        :label="`${m.name} (${m.code})`"
+                        :value="m.id"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="数量" width="150">
+                  <template #header><span style="color: #f56c6c">*</span> 数量</template>
+                  <template #default="{ row }">
+                    <el-input-number v-model="row.quantity" :min="0" :precision="3" size="small" style="width: 130px" placeholder="期初数量" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="单位" width="90">
+                  <template #default="{ row }">
+                    <el-input v-model="row.unit" size="small" placeholder="kg" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="单价（可不填）" width="150">
+                  <template #default="{ row }">
+                    <el-input-number v-model="row.unitPrice" :min="0" :precision="2" size="small" style="width: 130px" placeholder="不填=不算钱" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="" width="60" fixed="right">
+                  <template #default="{ $index }">
+                    <el-button size="small" text type="danger" :icon="Delete" @click="removeOpeningRow($index)" />
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-button :icon="Plus" @click="addOpeningRow">添加一行</el-button>
+            </el-tab-pane>
+            <el-tab-pane label="Excel 批量导入（一次导入很多条）" name="EXCEL">
+              <el-form-item label="填好的表格" label-width="90px">
+                <el-upload
+                  :auto-upload="false"
+                  :limit="1"
+                  accept=".xlsx,.xls"
+                  :on-change="onBulkFileChange"
+                  :on-exceed="() => ElMessage({ message: '一次只能上传一个文件', type: 'warning' })"
+                >
+                  <el-button :icon="Upload">选择文件</el-button>
+                  <template #tip>
+                    <span style="color: #909399; font-size: 12px">仅 .xlsx/.xls，请使用上方「下载当前库存模板」的文件填写「实盘数量」列</span>
+                  </template>
+                </el-upload>
+              </el-form-item>
+            </el-tab-pane>
+          </el-tabs>
+        </template>
+
+        <!-- 常规批量导入盘点 (非期初建账): 只有 Excel 一种方式, 保持原样 -->
+        <el-form-item v-if="!bulkForm.openingMode" label="填好的表格" required>
           <el-upload
             :auto-upload="false"
             :limit="1"
@@ -1005,12 +1248,12 @@ onMounted(async () => {
 
       <template #footer>
         <el-button @click="bulkDialogVisible = false">取消</el-button>
-        <el-button :loading="bulkLoading" @click="doBulkPreview">预览比对</el-button>
+        <el-button :loading="bulkLoading" @click="runBulkPreview">预览比对</el-button>
         <el-button
           type="primary"
           :loading="bulkLoading"
           :disabled="!bulkPreview || bulkPreview.matchedCount === 0"
-          @click="doBulkConfirm"
+          @click="runBulkConfirm"
         >
           确认导入（创建盘点）
         </el-button>
