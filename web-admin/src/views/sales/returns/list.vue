@@ -20,7 +20,8 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { submitReturnOrder, approveReturnOrder, rejectReturnOrder } from '@/api/returnOrder';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -37,6 +38,8 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+// 六扇门 Tier0 #16: 销售退货业务审批 (approve/reject) 需 sales 写权限.
+const canApprove = computed(() => permissionStore.canWrite('sales'));
 
 function rowActionsFor(row: TableRow) {
   return computeRowActions(
@@ -45,11 +48,67 @@ function rowActionsFor(row: TableRow) {
     { canViewPrice: canViewPrice.value }
   );
 }
+
+// Bug fix (2026-07): 'submit'/'approve'/'reject' row actions (from rowActionsConfig
+// returnOrder DRAFT/SUBMITTED/PENDING_APPROVAL) fell through to the `default` no-op
+// branch below — no network call, no state change, return order stuck in DRAFT
+// forever. 采购退货 (procurement/returns/list.vue) wires these to real endpoints;
+// mirror that here using the same typed api/returnOrder.ts client.
+const submittingAction = ref(false);
+
+async function runRowAction(
+  row: TableRow,
+  actionLabel: string,
+  confirmText: string,
+  fn: (factoryId: string, returnOrderId: string) => Promise<unknown>,
+) {
+  try {
+    await ElMessageBox.confirm(
+      `退货单 ${row.returnNumber || '-'}　金额 ¥${row.totalAmount ?? '-'}\n${confirmText}`,
+      `${actionLabel}`,
+      { type: 'warning' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  submittingAction.value = true;
+  try {
+    await fn(factoryId.value, String(row.id));
+    ElMessage.success(`${actionLabel}成功`);
+    await loadData();
+  } catch (err: unknown) {
+    // 4位一体: 原样透传后端 message (含状态机/防呆 hint), sticky 不自动消失.
+    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      || (err as Error)?.message || `${actionLabel}失败`;
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    submittingAction.value = false;
+  }
+}
+
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': router.push(`/sales/returns/${row.id}`); break;
     // Sales return 复用 sales-order 模板 (后端 RBAC 仍校验 sales:read)
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售退货单_${row.returnNumber || row.id}` }); break;
+    case 'submit':
+      void runRowAction(row, '提交审核', '确认提交本退货单进入审批?', submitReturnOrder);
+      break;
+    case 'approve':
+      if (!canApprove.value) { ElMessage({ message: '无业务审批权限 (需 sales 写权限)', type: 'error', duration: 0, showClose: true }); break; }
+      void runRowAction(row, '审批通过', '审批通过后, 退货单状态推进. 确认审批?', approveReturnOrder);
+      break;
+    case 'reject':
+      if (!canApprove.value) { ElMessage({ message: '无业务审批权限 (需 sales 写权限)', type: 'error', duration: 0, showClose: true }); break; }
+      void runRowAction(row, '驳回', '驳回后退货单状态置为已驳回, 不再处理. 确认驳回?', rejectReturnOrder);
+      break;
+    // 'edit'/'delete' (DRAFT/REJECTED 状态可配置项): 后端暂无对应写接口 — Rule 5
+    // (dead-end 改导航) 引导用户到详情页处理, 不留静默无效按钮.
+    case 'edit':
+    case 'delete':
+      ElMessage.info('该操作请前往详情页处理');
+      router.push(`/sales/returns/${row.id}`);
+      break;
     default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
 }

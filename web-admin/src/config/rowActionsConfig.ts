@@ -154,17 +154,27 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
     RETURNED: ['print-pdf', 'view-detail'],
     CANCELLED: ['view-detail'],
   },
-  // 'returnOrder' backs sales/returns/list.vue (read-only list: only view-detail +
-  // print-pdf are ever handled there — edit/submit/delete/approve/reject/undo-approval
-  // have zero case in that screen's handleRowActionClick, write actions on returns
-  // live on the detail route). ReturnOrderStatus.java real values match the page's
-  // own STATUS_OPTIONS exactly: DRAFT/SUBMITTED/APPROVED/FINANCE_APPROVED/REJECTED/
-  // PROCESSING/COMPLETED. Old table was missing 'FINANCE_APPROVED' (real value) —
-  // those rows (financially approved, 可交仓管出货完成) fell to 仅详情, losing 打印.
-  // 'PENDING_APPROVAL' never fires (not a real value; SUBMITTED already covers it).
+  // 'returnOrder' backs sales/returns/list.vue. PR #1208 (2026-07-03) found
+  // submit/edit/delete/approve/reject/undo-approval had zero case in that
+  // screen's handleRowActionClick (dead-menu bug class — clicking "提交审核"
+  // silently no-op'd: zero network request, zero state change) and fixed it
+  // by REMOVING those ids from this config — hiding the broken control
+  // rather than wiring it, forcing all writes through the detail route.
+  // 2026-07-05 fix: list.vue now has real handleRowActionClick cases for
+  // 'submit'/'approve'/'reject' (typed api/returnOrder.ts calls, mirroring
+  // procurement/returns/list.vue's inline-button UX) — restore those ids so
+  // 销售退货 list rows can submit/approve/reject directly, not just via
+  // detail.vue. 'edit'/'delete' stay OUT: no backend edit/delete endpoint
+  // exists for ReturnOrder (verified against ReturnOrderController) — adding
+  // those ids back would recreate the same dead-menu bug class this file's
+  // own rule (see file header) forbids.
+  // ReturnOrderStatus.java real values match the page's own STATUS_OPTIONS
+  // exactly: DRAFT/SUBMITTED/APPROVED/FINANCE_APPROVED/REJECTED/PROCESSING/
+  // COMPLETED. 'PENDING_APPROVAL' never fires (not a real value; SUBMITTED
+  // already covers it).
   returnOrder: {
-    DRAFT: ['view-detail'],
-    SUBMITTED: ['view-detail'],
+    DRAFT: ['submit', 'view-detail'],
+    SUBMITTED: ['approve', 'reject', 'view-detail'],
     APPROVED: ['view-detail'],
     FINANCE_APPROVED: ['print-pdf', 'view-detail'],
     REJECTED: ['view-detail'],
