@@ -121,6 +121,30 @@ async function loadReceives() {
   } catch { /* ignore */ }
 }
 
+// 🔴 fool-proof-design Rule 5 fix: 申请付款入口的显示条件，镜像后端 D-9 G2
+// (PaymentRequestServiceImpl.create) 的入库前置检查 — PREPAID 结算方式不限状态；
+// 其余结算方式需订单已全量入库（COMPLETED）才能申请付款。
+const canRequestPayment = computed(() => {
+  if (!order.value) return false;
+  if (order.value.settlementType === 'PREPAID') return true;
+  return order.value.status === 'COMPLETED';
+});
+
+// 跳转到付款申请页并预填供应商/采购单/金额，自动打开新建弹窗（Rule 2: 带上下文，不让用户
+// 落地后从零开始选）。
+function goRequestPayment() {
+  if (!order.value) return;
+  router.push({
+    path: '/procurement/payment-requests',
+    query: {
+      open: 'create',
+      supplierId: order.value.supplierId,
+      poId: order.value.id,
+      amount: order.value.totalAmount != null ? String(order.value.totalAmount) : undefined
+    }
+  });
+}
+
 async function handleAction(action: string) {
   if (submitting.value) return;
   const map: Record<string, { label: string; url: string }> = {
@@ -339,6 +363,15 @@ async function confirmReceive(receiveId: string) {
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="handleAction('financeApprove')">财务通过</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="handleAction('financeReject')">财务驳回</el-button>
             <el-button v-if="['FINANCE_APPROVED','PARTIAL_RECEIVED'].includes(order.status)" type="primary" :loading="submitting" @click="openReceiveDialog">{{ label('receive') }}</el-button>
+            <!-- 🔴 fool-proof-design Rule 5 fix (2026-07-05): 之前 PO 详情页无任何入口跳到
+                 付款申请 — 结算方式为【预付款】的订单不限状态可申请；其余需全量入库完成
+                 （与 PaymentRequestServiceImpl.create() 的 D-9 G2 检查口径一致，未满足时
+                 提交会由后端返回具体提示，此处只做正向引导，不重复校验业务规则）。 -->
+            <el-button
+              v-if="canRequestPayment"
+              type="success"
+              @click="goRequestPayment"
+            >申请付款</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(order.status)" type="danger" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
             </template>
           </div>

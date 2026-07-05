@@ -55,6 +55,14 @@
           <el-button type="primary" @click="handleFilterChange">查询</el-button>
           <el-button @click="resetFilter">重置</el-button>
         </el-col>
+        <el-col :span="5" style="text-align: right">
+          <!-- 🔴 fool-proof-design Rule 5 fix: 之前本页只能对已有申请单 提交/审批/付款,
+               没有任何入口能创建新的采购付款申请 (对比销售侧 sales/payment-requests 早有
+               "+新建销售付款申请")。canWrite('procurement') 与提交审核按钮同权限口径。 -->
+          <el-button v-if="canWrite" type="success" @click="openCreateDialog()">
+            + 新建付款申请
+          </el-button>
+        </el-col>
       </el-row>
     </el-card>
 
@@ -153,6 +161,105 @@
         />
       </div>
     </el-card>
+
+    <!-- ===== 新建付款申请 Dialog ===== -->
+    <!-- Rule 2: 含供应商/采购单上下文; Rule 1: 申请金额默认预填采购单总额，可调整（部分付款） -->
+    <el-dialog
+      v-model="createDialogVisible"
+      title="新建付款申请"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+        对供应商的采购付款。先选供应商，再选该供应商的采购单（结算方式为【预付款】的订单不限状态；
+        其余需订单状态为【已完成】，即全量入库后才可申请，否则提交时会提示原因）。
+      </el-alert>
+
+      <el-form
+        ref="createFormRef"
+        :model="createForm"
+        :rules="createRules"
+        label-width="100px"
+      >
+        <el-form-item label="供应商" prop="supplierId">
+          <el-select
+            v-model="createForm.supplierId"
+            placeholder="请选择供应商"
+            filterable
+            style="width: 100%"
+            :disabled="lockSupplier"
+            @change="onSupplierChange"
+          >
+            <el-option
+              v-for="s in supplierOptions"
+              :key="s.id"
+              :label="s.name"
+              :value="s.id"
+            />
+            <template #empty>
+              <div style="padding: 8px 12px; color: #909399">暂无供应商，请先在供应商管理中新建</div>
+            </template>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="采购单" prop="purchaseOrderId">
+          <el-select
+            v-model="createForm.purchaseOrderId"
+            placeholder="请选择采购单"
+            filterable
+            style="width: 100%"
+            :disabled="lockPurchaseOrder || !createForm.supplierId"
+            @change="onPurchaseOrderChange"
+          >
+            <el-option
+              v-for="po in supplierPurchaseOrders"
+              :key="po.id"
+              :label="`${po.orderNumber} · ${statusLabelForPo(po.status)} · ¥${formatAmount(po.totalAmount)}`"
+              :value="po.id"
+            />
+            <template #empty>
+              <div style="padding: 8px 12px; color: #909399">
+                {{ createForm.supplierId ? '该供应商暂无采购单' : '请先选择供应商' }}
+              </div>
+            </template>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="申请金额" prop="amount">
+          <el-input-number
+            v-model="createForm.amount"
+            :min="0.01"
+            :precision="2"
+            :step="100"
+            style="width: 100%"
+            placeholder="申请金额（元，可部分付款）"
+          />
+        </el-form-item>
+        <!-- Rule 3: 付款方式 dropdown -->
+        <el-form-item label="付款方式" prop="paymentMethod">
+          <el-select v-model="createForm.paymentMethod" placeholder="请选择付款方式" style="width: 100%">
+            <el-option label="银行转账" value="BANK_TRANSFER" />
+            <el-option label="现金" value="CASH" />
+            <el-option label="微信" value="WECHAT" />
+            <el-option label="支付宝" value="ALIPAY" />
+            <el-option label="支票" value="CHECK" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注" prop="remark">
+          <el-input
+            v-model="createForm.remark"
+            type="textarea"
+            :rows="2"
+            placeholder="付款用途说明（建议填写，便于财务审批）"
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="createSubmitting" @click="doCreate">
+          提交申请
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 提交审核 Dialog -->
     <el-dialog
@@ -330,6 +437,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { get, post, put } from '@/api/request'
@@ -359,9 +467,25 @@ interface PaymentRequestRow {
   updatedAt: string | null
 }
 
+// 🔴 新建付款申请所需的供应商/采购单选项（复用现有 /suppliers、/purchase/orders 列表端点，
+// 不新增后端接口）
+interface SupplierOption {
+  id: string
+  name: string
+}
+interface PurchaseOrderOption {
+  id: string
+  orderNumber: string
+  supplierId: string
+  status: string
+  totalAmount: number | null
+}
+
 // ─── Store ────────────────────────────────────────────────────
 const authStore = useAuthStore()
 const permStore = usePermissionStore()
+const route = useRoute()
+const router = useRouter()
 const factoryId = computed(() => authStore.factoryId)
 const canWrite = computed(() => permStore.canWrite('procurement'))
 
@@ -386,11 +510,38 @@ const filterStatus = ref('')
 const filterSettlementType = ref('')
 const filterKeyword = ref('')
 
+const createDialogVisible = ref(false)
+const createSubmitting = ref(false)
 const submitDialogVisible = ref(false)
 const approveDialogVisible = ref(false)
 const markPaidDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const currentRow = ref<PaymentRequestRow | null>(null)
+
+// ─── 新建付款申请：供应商 + 采购单选项（来自 PO 详情/应付账款台账跳转时携带 query 预填） ──
+const supplierOptions = ref<SupplierOption[]>([])
+const purchaseOrders = ref<PurchaseOrderOption[]>([])
+const lockSupplier = ref(false)       // 从 PO 详情跳转过来时锁定供应商，避免用户改错
+const lockPurchaseOrder = ref(false)  // 从 PO 详情跳转过来时锁定采购单
+
+const createFormRef = ref<FormInstance>()
+const createForm = ref({
+  supplierId: '',
+  purchaseOrderId: '',
+  amount: undefined as number | undefined,
+  paymentMethod: '',
+  remark: ''
+})
+const createRules: FormRules = {
+  supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  purchaseOrderId: [{ required: true, message: '请选择采购单', trigger: 'change' }],
+  amount: [{ required: true, message: '请输入申请金额', trigger: 'blur' }],
+  paymentMethod: [{ required: true, message: '请选择付款方式', trigger: 'change' }]
+}
+
+const supplierPurchaseOrders = computed(() =>
+  purchaseOrders.value.filter(po => po.supplierId === createForm.value.supplierId)
+)
 
 // 审批表单
 const approveFormRef = ref<FormInstance>()
@@ -454,6 +605,15 @@ function formatDate(dt: string | null): string {
   })
 }
 
+function statusLabelForPo(s: string): string {
+  const map: Record<string, string> = {
+    DRAFT: '草稿', SUBMITTED: '已提交', APPROVED: '已审批',
+    PARTIAL_RECEIVED: '部分收货', COMPLETED: '已完成',
+    CANCELLED: '已取消', CLOSED: '已关闭'
+  }
+  return map[s] ?? s
+}
+
 // ─── 数据加载 ────────────────────────────────────────────────
 async function fetchData() {
   if (!factoryId.value) return
@@ -495,6 +655,96 @@ function resetFilter() {
   filterSettlementType.value = ''
   filterKeyword.value = ''
   handleFilterChange()
+}
+
+// ─── 新建付款申请：加载供应商 / 采购单选项 ─────────────────────
+async function loadSupplierOptions() {
+  if (!factoryId.value) return
+  try {
+    const res = await get(`/${factoryId.value}/suppliers`, { params: { page: 1, size: 200 } })
+    if (res.success && res.data) {
+      const list = Array.isArray(res.data) ? res.data : (res.data as { content?: SupplierOption[] })?.content ?? []
+      supplierOptions.value = list as SupplierOption[]
+    }
+  } catch (err) {
+    console.error('获取供应商列表失败', err)
+  }
+}
+
+async function loadPurchaseOrders() {
+  if (!factoryId.value) return
+  try {
+    const res = await get(`/${factoryId.value}/purchase/orders`, { params: { page: 1, size: 200 } })
+    if (res.success && res.data) {
+      const list = Array.isArray(res.data) ? res.data : (res.data as { content?: PurchaseOrderOption[] })?.content ?? []
+      purchaseOrders.value = list as PurchaseOrderOption[]
+    }
+  } catch (err) {
+    console.error('获取采购单列表失败', err)
+  }
+}
+
+// 供应商变更时清空已选采购单（除非是来自 PO 详情跳转的初始预填，那种情况锁定不联动清空）
+function onSupplierChange() {
+  if (lockPurchaseOrder.value) return
+  createForm.value.purchaseOrderId = ''
+  createForm.value.amount = undefined
+}
+
+// 选中采购单后，Rule 1：预填申请金额为采购单总额（用户可改为部分付款）
+function onPurchaseOrderChange() {
+  const po = purchaseOrders.value.find(p => p.id === createForm.value.purchaseOrderId)
+  if (po && (!createForm.value.amount || createForm.value.amount === 0)) {
+    createForm.value.amount = po.totalAmount ?? undefined
+  }
+}
+
+// ─── 新建付款申请 ────────────────────────────────────────────
+// prefill: 从采购单详情页 "申请付款" 按钮跳转过来时携带 (poId/supplierId/amount query),
+// 或从应付账款台账 "去申请付款" 按钮跳转过来时携带 (仅 supplierId)。
+function openCreateDialog(prefill?: { supplierId?: string; purchaseOrderId?: string; amount?: number }) {
+  createForm.value = {
+    supplierId: prefill?.supplierId || '',
+    purchaseOrderId: prefill?.purchaseOrderId || '',
+    amount: prefill?.amount,
+    paymentMethod: '',
+    remark: ''
+  }
+  lockSupplier.value = !!prefill?.supplierId
+  lockPurchaseOrder.value = !!prefill?.purchaseOrderId
+  createFormRef.value?.resetFields()
+  createDialogVisible.value = true
+}
+
+async function doCreate() {
+  if (!createFormRef.value || !factoryId.value) return
+  await createFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    createSubmitting.value = true
+    try {
+      const body: Record<string, unknown> = {
+        purchaseOrderId: createForm.value.purchaseOrderId,
+        supplierId: createForm.value.supplierId,
+        amount: createForm.value.amount,
+        paymentMethod: createForm.value.paymentMethod
+      }
+      if (createForm.value.remark) body.remark = createForm.value.remark
+
+      const res = await post(`/${factoryId.value}/payment-requests`, body)
+      if (res.success) {
+        ElMessage({ message: '付款申请已创建', type: 'success', duration: 3000 })
+        createDialogVisible.value = false
+        fetchData()
+      } else {
+        ElMessage({ message: res.message || '创建失败', type: 'error', duration: 0, showClose: true })
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || '创建失败，请检查网络'
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true })
+    } finally {
+      createSubmitting.value = false
+    }
+  })
 }
 
 // ─── 提交审核 ────────────────────────────────────────────────
@@ -613,7 +863,25 @@ function openDetailDialog(row: PaymentRequestRow) {
 }
 
 // ─── 生命周期 ────────────────────────────────────────────────
-onMounted(fetchData)
+// 🔴 fool-proof-design Rule 5 fix: 应付账款台账 / 采购单详情的 "去申请付款" 按钮通过
+// query (?open=create&supplierId=..&poId=..&amount=..) 跳转过来时，自动预填并打开新建弹窗，
+// 而不是让用户落地后还要自己再从头选供应商/采购单。
+onMounted(async () => {
+  await Promise.all([fetchData(), loadSupplierOptions(), loadPurchaseOrders()])
+
+  if (route.query.open === 'create') {
+    const supplierId = typeof route.query.supplierId === 'string' ? route.query.supplierId : undefined
+    const purchaseOrderId = typeof route.query.poId === 'string' ? route.query.poId : undefined
+    const amountRaw = typeof route.query.amount === 'string' ? Number(route.query.amount) : undefined
+    openCreateDialog({
+      supplierId,
+      purchaseOrderId,
+      amount: amountRaw !== undefined && !Number.isNaN(amountRaw) ? amountRaw : undefined
+    })
+    // 清掉 query，避免用户刷新页面时弹窗重复弹出
+    router.replace({ path: route.path })
+  }
+})
 </script>
 
 <style scoped>
