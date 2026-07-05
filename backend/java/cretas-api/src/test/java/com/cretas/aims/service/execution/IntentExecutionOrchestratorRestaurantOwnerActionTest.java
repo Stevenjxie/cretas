@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -96,5 +97,13 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f",
                 Collections.emptyMap()))
                 .isFalse();
+    }
+
+    @Test
+    void acceptsRestaurantDemoContextSignalWhenFactoryIdWasRewritten() {
+        assertThat(orchestrator.hasRestaurantOwnerActionSignal(
+                "F_DEMO",
+                Map.of("storeName", "\u9752\u82b1\u6912\u6f14\u793a\u5e97")))
+                .isTrue();
     }
 }

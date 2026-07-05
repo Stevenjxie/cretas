@@ -245,7 +245,7 @@ public class IntentExecutionOrchestrator {
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
         String userInput = request.getUserInput();
-        if (isRestaurantOwnerActionFactory(factoryId, null) && matchesOwnerActionKeywordHeuristic(userInput)) {
+        if (hasRestaurantOwnerActionSignal(factoryId, request.getContext()) && matchesOwnerActionKeywordHeuristic(userInput)) {
             log.info("[restaurant-owner-action] force-route before preprocessor: factoryId={}, input={}",
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
@@ -1734,6 +1734,27 @@ public class IntentExecutionOrchestrator {
         return "DEMO_REST".equals(normalized)
                 || normalized.startsWith("RES_")
                 || normalized.startsWith("REST_");
+    }
+
+    boolean hasRestaurantOwnerActionSignal(String factoryId, Map<String, Object> context) {
+        if (isRestaurantOwnerActionFactory(factoryId, null)) {
+            return true;
+        }
+        if (context == null || context.isEmpty()) {
+            return false;
+        }
+        String storeName = stringValue(context.get("storeName"));
+        String subSector = stringValue(context.get("subSector"));
+        String businessType = stringValue(context.get("businessType"));
+        String demoTenant = stringValue(context.get("tenant"));
+        return isNonBlank(storeName)
+                || isNonBlank(subSector)
+                || "restaurant".equalsIgnoreCase(businessType)
+                || "rest".equalsIgnoreCase(demoTenant);
+    }
+
+    private boolean isNonBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     private boolean hasOwnerActionContinuationContext(Map<String, Object> context) {
