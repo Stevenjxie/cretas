@@ -46,8 +46,17 @@ public interface SalesDeliveryBatchAllocationService {
      * <p>T4-D5 (#572): {@code sourceWarehouseCode} honors per-line source warehouse
      * declared on SalesOrderItem → SalesDeliveryItem (PR #564 data contract).
      * When null/blank, falls back to WH-LOG (legacy D5 default).
+     *
+     * <p>🔴 C1 (2026-07-05): {@code unit} is the requesting delivery line's unit (e.g.
+     * {@code SalesDeliveryItem.unit}). FG batches for the same product may be recorded in
+     * DIFFERENT native units (one 小结'd with productWeight → kg, another without → 盒/件).
+     * {@code availableQuantity}/{@code recommendedQuantity} in the result are converted into
+     * {@code unit} (via {@code ProductType.gramsPerUnit}) so cross-unit batches are never
+     * summed/compared as raw numbers. When {@code unit} is blank/null, falls back to the
+     * product's default unit; a batch whose native unit can't be converted to the target unit
+     * is skipped from the recommendation (honest-null, never silently mixed in).
      */
-    List<Map<String, Object>> recommendFifo(String factoryId, String productTypeId, BigDecimal requiredQty, String sourceWarehouseCode);
+    List<Map<String, Object>> recommendFifo(String factoryId, String productTypeId, BigDecimal requiredQty, String unit, String sourceWarehouseCode);
 
     /**
      * 🔴 G1 (2026-07-03): 该产品当前有可用成品库存的仓库 code 清单 (去重, 排除研发/中试库)。

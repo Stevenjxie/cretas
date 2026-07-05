@@ -2921,17 +2921,42 @@ public class SalesServiceImpl implements SalesService {
                             factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD);
         }
 
+        // 🔴 C1 (2026-07-05): FG batches for one product may be recorded in DIFFERENT native units
+        // (one 小结'd with productWeight → kg, another without → 盒/件, F006 confirmed live). All
+        // arithmetic below runs in the delivery line's unit (targetUnit); each batch's native
+        // available/reserved is converted INTO targetUnit for comparison, and the resulting
+        // deduct amount is converted BACK to that batch's native unit before mutating it (batch
+        // fields are persisted in native unit — see applyShipment). A batch whose native unit can't
+        // be converted (缺 gramsPerUnit) is skipped — honest-null, never silently mixed in.
+        String targetUnit = item.getUnit();
+        // Defensive null-check: some legacy unit tests construct SalesServiceImpl with a null
+        // productTypeRepository (see SalesOrderFulfillmentWarehouseTest) — mirrors the existing
+        // Autowired(required=false) null-guard pattern used elsewhere in this class.
+        BigDecimal gramsPerUnit = productTypeRepository != null
+                ? productTypeRepository.findById(item.getProductTypeId()).map(ProductType::getGramsPerUnit).orElse(null)
+                : null;
+
         BigDecimal remaining = item.getDeliveredQuantity();
 
         // Pass 1: 先扣未被预留的可用量 (available = produced - shipped - reserved) —— 不动任何预留。
         for (FinishedGoodsBatch batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
-            BigDecimal available = batch.getAvailableQuantity();
-            if (available.compareTo(BigDecimal.ZERO) <= 0) continue;
-            BigDecimal deduct = remaining.min(available);
-            applyShipment(batch, deduct, BigDecimal.ZERO);  // 不释放预留 (扣的是未预留部分)
+            BigDecimal availableNative = batch.getAvailableQuantity();
+            if (availableNative.compareTo(BigDecimal.ZERO) <= 0) continue;
+            BigDecimal availableInTargetUnit = com.cretas.aims.service.inventory.FgQuantityUnitConverter
+                    .convert(availableNative, batch.getUnit(), targetUnit, gramsPerUnit);
+            if (availableInTargetUnit == null) {
+                log.warn("发货扣减跳过批次(单位不可换算): factoryId={}, batchId={}, batchUnit={}, targetUnit={}, gramsPerUnit={}",
+                        factoryId, batch.getId(), batch.getUnit(), targetUnit, gramsPerUnit);
+                continue;
+            }
+            if (availableInTargetUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+            BigDecimal deductInTargetUnit = remaining.min(availableInTargetUnit);
+            BigDecimal deductNative = toNativeDeductAmount(deductInTargetUnit, targetUnit, batch.getUnit(), gramsPerUnit, availableNative);
+            if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
+            applyShipment(batch, deductNative, BigDecimal.ZERO);  // 不释放预留 (扣的是未预留部分)
             recordDeductedBatch(item, batch);
-            remaining = remaining.subtract(deduct);
+            remaining = remaining.subtract(deductInTargetUnit);
         }
 
         // Pass 2: 仍不足 → 动用<b>本批被预留</b>的物理库存 (即本 SO 自己的预留), 发货同时释放对应 reserved。
@@ -2944,12 +2969,22 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal physicalUnshipped = batch.getProducedQuantity()
                         .subtract(batch.getShippedQuantity() != null ? batch.getShippedQuantity() : BigDecimal.ZERO);
                 // 本批可从预留中发出的物理量 = min(reserved, 物理未发量)
-                BigDecimal fromReserved = reserved.min(physicalUnshipped);
-                if (fromReserved.compareTo(BigDecimal.ZERO) <= 0) continue;
-                BigDecimal deduct = remaining.min(fromReserved);
-                applyShipment(batch, deduct, deduct);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
+                BigDecimal fromReservedNative = reserved.min(physicalUnshipped);
+                if (fromReservedNative.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal fromReservedInTargetUnit = com.cretas.aims.service.inventory.FgQuantityUnitConverter
+                        .convert(fromReservedNative, batch.getUnit(), targetUnit, gramsPerUnit);
+                if (fromReservedInTargetUnit == null) {
+                    log.warn("发货扣减(预留)跳过批次(单位不可换算): factoryId={}, batchId={}, batchUnit={}, targetUnit={}, gramsPerUnit={}",
+                            factoryId, batch.getId(), batch.getUnit(), targetUnit, gramsPerUnit);
+                    continue;
+                }
+                if (fromReservedInTargetUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal deductInTargetUnit = remaining.min(fromReservedInTargetUnit);
+                BigDecimal deductNative = toNativeDeductAmount(deductInTargetUnit, targetUnit, batch.getUnit(), gramsPerUnit, fromReservedNative);
+                if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
+                applyShipment(batch, deductNative, deductNative);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
                 recordDeductedBatch(item, batch);
-                remaining = remaining.subtract(deduct);
+                remaining = remaining.subtract(deductInTargetUnit);
             }
         }
 
@@ -2960,6 +2995,27 @@ public class SalesServiceImpl implements SalesService {
                 .withHint("请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
                 .withHintTarget("生产计划");
         }
+    }
+
+    /**
+     * 🔴 C1 (2026-07-05): 把「目标单位(targetUnit)算出的扣减量」换算回该批次的<b>原生单位</b>
+     * (batch.getShippedQuantity()/reservedQuantity 是按原生单位持久化的, 不能直接写入目标单位的量)。
+     *
+     * <p>换算是双向的 (targetUnit → nativeUnit 与 nativeUnit → targetUnit 互为逆运算), HALF_UP
+     * 舍入两端各一次可能引入亚分/亚克的漂移 —— 用 {@code nativeCap}(该批在原生单位下的可扣上限,
+     * 即调用方已经算好的 availableNative/fromReservedNative) 兜底 {@code min}, 保证换算漂移<b>绝不</b>
+     * 让本次扣减超过该批次原生单位下真实剩余的物理量。
+     *
+     * @return 原生单位下的扣减量; 换算失败 (缺 gramsPerUnit / 单位不兼容) 返回 {@code null}
+     */
+    private BigDecimal toNativeDeductAmount(BigDecimal deductInTargetUnit, String targetUnit,
+                                             String nativeUnit, BigDecimal gramsPerUnit, BigDecimal nativeCap) {
+        BigDecimal deductNative = com.cretas.aims.service.inventory.FgQuantityUnitConverter
+                .convert(deductInTargetUnit, targetUnit, nativeUnit, gramsPerUnit);
+        if (deductNative == null) {
+            return null;
+        }
+        return deductNative.min(nativeCap);
     }
 
     /**

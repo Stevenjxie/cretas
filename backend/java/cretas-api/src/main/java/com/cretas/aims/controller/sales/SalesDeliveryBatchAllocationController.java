@@ -53,14 +53,17 @@ public class SalesDeliveryBatchAllocationController {
 
     @GetMapping("/recommend-fifo")
     @Operation(summary = "FIFO 成品批次推荐（按生产日期升序）",
-            description = "T4-D5 (#572): sourceWarehouseCode 可选 — 指定则从对应仓库 FIFO 推荐, 缺省 = WH-LOG.")
+            description = "T4-D5 (#572): sourceWarehouseCode 可选 — 指定则从对应仓库 FIFO 推荐, 缺省 = WH-LOG. "
+                    + "🔴 C1 (2026-07-05): unit 可选 — 发货行单位(如 SalesDeliveryItem.unit), 用于把跨单位的成品批次"
+                    + "(如同产品一批 kg 一批盒)统一换算为该单位比较/推荐; 缺省回落产品默认单位.")
     public ApiResponse<List<Map<String, Object>>> recommendFifo(
             @PathVariable String factoryId,
             @RequestParam String productTypeId,
             @RequestParam BigDecimal requiredQty,
+            @RequestParam(required = false) String unit,
             @RequestParam(required = false) String sourceWarehouseCode) {
         return ApiResponse.success("FIFO 推荐 (按生产日期升序)",
-                service.recommendFifo(factoryId, productTypeId, requiredQty, sourceWarehouseCode));
+                service.recommendFifo(factoryId, productTypeId, requiredQty, unit, sourceWarehouseCode));
     }
 
     @GetMapping("/stock-warehouses")

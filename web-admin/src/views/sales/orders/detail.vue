@@ -74,10 +74,13 @@ const returnForm = ref<{ returnDate: string; reason: string; remark: string; wit
 // 批次分配对话框 (P0-13 强制批次追溯 — R16 深度测试后补完)
 const batchAllocDialogVisible = ref(false);
 const batchAllocLoading = ref(false);
-type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number };
+// 🔴 C1 (2026-07-05): unit = 该行数量的计量单位 (与发货行 item.unit 同口径, 后端已按此换算过
+// availableQuantity/allocatedQty — 见 recommendFifo unit 参数)。batchNativeUnit = 该批次入库时
+// 记录的原生单位, 与 unit 不同时说明后端做了跨单位换算 (如批次按 kg 入库, 发货按 盒 结算)。
+type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number; unit: string; batchNativeUnit: string };
 // 🔴 G1: sourceWarehouseCode (发货行声明的来源仓, 空=未声明) + stockWarehouses (该产品实际有货的仓库 code,
 // 仅在无推荐批次时查, 用于诚实空态提示「成品在 X 仓」而非误导的「请先生产」)。
-type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[] };
+type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[] };
 const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: AllocItem[] }>({
   deliveryId: '', deliveryNumber: '', items: [],
 });
@@ -662,6 +665,9 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
       const deliveredQuantity = Number(it.deliveredQuantity || 0);
       const productName = (it.productName as string) || ((it.productType as TableRow)?.name as string) || '未命名产品';
       const deliveryItemId = it.id as string;
+      // 🔴 C1 (2026-07-05): 该行的计量单位 — 传给 recommend-fifo 让后端把跨单位的成品批次
+      // (同产品一批记 kg 一批记 盒, F006 现场确认) 统一换算为该单位再比较/推荐, 不再裸相加.
+      const unit = (it.unit as string) || '';
       // R6 #7: 传该行的 sourceWarehouseCode 给 recommend-fifo, 使预填的 FEFO 推荐与
       // 后端 commit/deduct 用同一仓库 (后端 recommendFifo 已 honor 该参数; 不传则 default WH-LOG,
       // 与按行仓库发货的批次会对不上)。空值省略, 走后端默认。
@@ -673,8 +679,9 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
         const swcParam = sourceWarehouseCode
           ? `&sourceWarehouseCode=${encodeURIComponent(sourceWarehouseCode)}`
           : '';
+        const unitParam = unit ? `&unit=${encodeURIComponent(unit)}` : '';
         const recRes = await get<Array<TableRow>>(
-          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}${swcParam}`
+          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}${unitParam}${swcParam}`
         );
         if (recRes.success && Array.isArray(recRes.data)) {
           allocations = recRes.data.map(r => ({
@@ -683,6 +690,8 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
             productionDate: String(r.productionDate || ''),
             availableQuantity: Number(r.availableQuantity || 0),
             allocatedQty: Number(r.recommendedQuantity || 0),
+            unit: String(r.unit || unit || ''),
+            batchNativeUnit: String(r.batchNativeUnit || ''),
           }));
         }
         // 🔴 G1: 无推荐批次时查该产品实际有货的仓库, 供诚实空态提示 (成品在 X 仓 vs 真的没货).
@@ -695,7 +704,7 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
           } catch { /* 非关键: 查不到就退回通用提示 */ }
         }
       }
-      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, sourceWarehouseCode, allocations, stockWarehouses });
+      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, unit, sourceWarehouseCode, allocations, stockWarehouses });
     }
     batchAllocForm.value = { deliveryId, deliveryNumber, items };
     batchAllocDialogVisible.value = true;
@@ -1729,21 +1738,31 @@ async function handleQuickPayFull() {
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
           <span style="font-weight: 500;">{{ item.productName }}</span>
           <span>
-            发货数量: <strong>{{ item.deliveredQuantity }}</strong>
+            发货数量: <strong>{{ item.deliveredQuantity }}{{ item.unit }}</strong>
             <span style="margin-left: 16px;" :style="{ color: Math.abs(sumAllocated(item) - item.deliveredQuantity) < 0.001 ? '#67c23a' : '#f56c6c' }">
-              分配合计: <strong>{{ sumAllocated(item) }}</strong>
+              分配合计: <strong>{{ sumAllocated(item) }}{{ item.unit }}</strong>
             </span>
           </span>
         </div>
+        <!-- 🔴 C1 (2026-07-05): 同一产品的成品批次可能记录在不同单位(如同产品一批 kg 一批 盒,
+             F006 现场确认) — 可用/分配数量已由后端换算为本行单位(item.unit); 当某批次的入库
+             原生单位(batchNativeUnit)与本行单位不同, 额外标注原生单位, 避免仓管/销售误判"批次
+             实际按什么单位入库的" (fool-proof Rule 2: 上下文必带身份信息)。 -->
         <el-table v-if="item.allocations.length > 0" :data="item.allocations" border size="small">
           <el-table-column prop="batchNumber" label="批次号" width="200" />
           <el-table-column prop="productionDate" label="生产日期" width="120" />
-          <el-table-column label="可用数量" width="110" align="right">
-            <template #default="{ row }">{{ row.availableQuantity }}</template>
-          </el-table-column>
-          <el-table-column label="分配数量" width="180" align="center">
+          <el-table-column label="可用数量" width="150" align="right">
             <template #default="{ row }">
-              <el-input-number v-model="row.allocatedQty" :min="0" :max="row.availableQuantity" :precision="2" :step="1" size="small" style="width: 150px" />
+              {{ row.availableQuantity }}{{ row.unit || item.unit }}
+              <div v-if="row.batchNativeUnit && row.batchNativeUnit !== (row.unit || item.unit)" style="font-size: 12px; color: #909399;">
+                (批次入库单位: {{ row.batchNativeUnit }})
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="分配数量" width="200" align="center">
+            <template #default="{ row }">
+              <el-input-number v-model="row.allocatedQty" :min="0" :max="row.availableQuantity" :precision="2" :step="1" size="small" style="width: 120px" />
+              <span style="margin-left: 4px;">{{ row.unit || item.unit }}</span>
             </template>
           </el-table-column>
         </el-table>
