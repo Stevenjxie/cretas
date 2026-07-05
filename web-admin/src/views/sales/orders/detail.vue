@@ -63,13 +63,27 @@ type ReturnDialogItem = {
 // T-RTA business logic (issue #571): withGoods toggle drives backend branching.
 //   true  = 有食物退货 → 库存入库总仓 + 不良品 (Phase C TODO) → AR冲减 at completion
 //   false = 无食物退货 → 直接退款, 无库存动作 → AR冲减 immediate on approve
-const returnForm = ref<{ returnDate: string; reason: string; remark: string; withGoods: boolean; items: ReturnDialogItem[] }>({
+const returnForm = ref<{ returnDate: string; reasonCategory: string; reason: string; remark: string; withGoods: boolean; items: ReturnDialogItem[] }>({
   returnDate: new Date().toISOString().slice(0, 10),
+  reasonCategory: '',
   reason: '',
   remark: '',
   withGoods: true, // default 实物退货 (customer's primary case per 第四次:956-1037)
   items: [],
 });
+
+// fool-proof-design Rule 3 (约束选择而非自由翻找): 退货原因改标准 enum 下拉, 选"其他"才展开
+// textarea 补充说明. Mirror components/dialog/CreateReturnOrderDialog.vue's pattern —
+// reasonCategory !== 其他 时, reasonCategory 本身就是提交的 reason 文本; 选"其他"时
+// returnForm.reason 走独立 textarea (必填).
+const RETURN_REASON_OPTIONS = ['客户验收不合格', '包装破损', '滞销退仓', '质量问题', '其他'] as const;
+function onReturnReasonCategoryChange(val: string): void {
+  if (val && val !== '其他') {
+    returnForm.value.reason = val;
+  } else {
+    returnForm.value.reason = '';
+  }
+}
 
 // 批次分配对话框 (P0-13 强制批次追溯 — R16 深度测试后补完)
 const batchAllocDialogVisible = ref(false);
@@ -534,6 +548,7 @@ function openReturnDialog() {
   }
   returnForm.value = {
     returnDate: new Date().toISOString().slice(0, 10),
+    reasonCategory: '',
     reason: '',
     remark: '',
     withGoods: true, // default 实物退货
@@ -557,6 +572,10 @@ async function handleCreateReturn() {
   const selectedItems = returnForm.value.items.filter((i) => i.selected && i.quantity > 0);
   if (selectedItems.length === 0) {
     ElMessage.warning('请至少选择一行并填写退货数量');
+    return;
+  }
+  if (!returnForm.value.reasonCategory) {
+    ElMessage.warning('请选择退货原因');
     return;
   }
   if (!returnForm.value.reason.trim()) {
@@ -1685,10 +1704,28 @@ async function handleQuickPayFull() {
           </el-col>
           <el-col :span="12">
             <el-form-item label="退货原因" required>
-              <el-input v-model="returnForm.reason" placeholder="如: 客户验收不合格 / 包装破损 / 滞销退仓" maxlength="500" show-word-limit />
+              <el-select
+                v-model="returnForm.reasonCategory"
+                placeholder="请选择退货原因"
+                style="width: 100%"
+                @change="onReturnReasonCategoryChange"
+              >
+                <el-option v-for="opt in RETURN_REASON_OPTIONS" :key="opt" :label="opt" :value="opt" />
+              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
+        <!-- fool-proof-design Rule 3: 选"其他"才展开自由文本 -->
+        <el-form-item v-if="returnForm.reasonCategory === '其他'" label="其他原因说明" required>
+          <el-input
+            v-model="returnForm.reason"
+            type="textarea"
+            :rows="2"
+            placeholder="请具体说明退货原因"
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="returnForm.remark" type="textarea" :rows="2" maxlength="1000" show-word-limit />
         </el-form-item>

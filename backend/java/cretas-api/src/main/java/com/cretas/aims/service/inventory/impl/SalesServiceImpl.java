@@ -3066,6 +3066,19 @@ public class SalesServiceImpl implements SalesService {
         boolean anyDelivered = orderItems.stream().anyMatch(item ->
                 item.getDeliveredQuantity().compareTo(BigDecimal.ZERO) > 0);
 
+        // Bug fix (2026-07): 订单头部「已发货金额」汇总回写 —— 之前 actualShippedAmount
+        // 字段从未被写入(定义了但无 writer), 前端永远显示 ¥0.00。逐行 getShippedAmount()
+        // (已发货数量 × 折后单价) 求和; unitPrice 为 null (空价行/@PriceSensitive 脱敏) 时该行
+        // 贡献 0 —— 与 createSalesOrder/updateSalesOrder 对 totalAmount 的既有 null-safe 累加
+        // 惯例保持一致 (line ~1945: "unitPrice null → getLineAmount() null, 该行贡献 0"), 不额外
+        // 发明"整单隐藏"新语义。
+        BigDecimal totalShipped = BigDecimal.ZERO;
+        for (SalesOrderItem item : orderItems) {
+            BigDecimal lineShipped = item.getShippedAmount();
+            totalShipped = totalShipped.add(lineShipped != null ? lineShipped : BigDecimal.ZERO);
+        }
+        order.setActualShippedAmount(totalShipped);
+
         if (allDelivered) {
             order.setStatus(SalesOrderStatus.COMPLETED);
             // P0-9: 全部发货完成 → transportPlanStatus = DELIVERED
