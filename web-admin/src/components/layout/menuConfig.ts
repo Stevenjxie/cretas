@@ -44,7 +44,9 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/workdesk/quality-manager', title: '质量主管工作台', icon: '', module: 'quality' },
       { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse' },
       { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
-      { path: '/workdesk/quality-chief', title: '质量主管工作台', icon: '', module: 'quality' },
+      // IA fix: 与 quality-manager (食品安全召回) 同名"质量主管工作台"造成侧边栏两项无法区分
+      // (per 菜单审计) — 按实际职能改名区分: quality-chief = 批次放行决策 (release_decision Tool)
+      { path: '/workdesk/quality-chief', title: '质检组长工作台', icon: '', module: 'quality' },
       { path: '/workdesk/production-manager', title: '生产经理工作台', icon: '', module: 'production' },
     ],
   },
@@ -93,6 +95,9 @@ const rawMenuConfig: MenuItem[] = [
       // SP7 六扇门 ERP-lite — 盘点任务(批量导入/期初建账/审批应用), 与上面"盘点管理"是不同页面,
       // 之前只在 router 里注册没进侧边栏, 用户无法自助发现 (fool-proof-design Rule 5: dead-end 改导航)
       { path: '/warehouse/stocktakes', title: '批量盘点/建账', icon: '', module: 'warehouse' },
+      // IA fix (菜单审计): 半成品盘点路由早已注册 (router index.ts) 但从未加入侧边栏 —
+      // 只能靠深链访问, 违反 fool-proof-design Rule 5 (dead-end 改导航)。放在盘点管理旁边。
+      { path: '/warehouse/semi-finished-stocktakes', title: '半成品盘点', icon: '', module: 'warehouse' },
       { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse' },
       // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
       { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
@@ -137,7 +142,10 @@ const rawMenuConfig: MenuItem[] = [
       // 成品/库存归仓储管理口径; 路由 /sales/finished-goods 保留 (深链可达), 仅撤销售侧入口。
       // Apr 24 UX: /sales/shipments 等 manufacturing-only 概念对餐饮隐藏 (无批次/发货)。
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
-      { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
+      // IA fix (菜单审计): #1236 已把页面/router title 改成「手工出货登记」(与仓储管理→出货管理
+      // 的扣库存流程区分), 但侧边栏标签当时漏改, 仍显示旧名「出货记录」造成菜单与页面标题不一致。
+      // 现同步为「手工出货登记(不扣库存)」, 双出货入口标签在菜单层面即可区分。
+      { path: '/sales/shipments', title: '手工出货登记(不扣库存)', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by
       // PR #549 but NEVER surfaced in sidebar — customer service / finance roles
@@ -203,6 +211,12 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/system', title: '系统管理', icon: 'Setting', module: 'system',
     children: [
+      // IA fix (菜单审计): 账号管理/角色权限此前只挂在「人事管理」下 —
+      // 超管建厂时习惯去「系统管理」找"开账号", 找不到就以为功能缺失。
+      // 镜像加一份到系统管理 (同 path, 与 procurement/sales 的 finance-review 镜像模式一致),
+      // 人事管理下的原入口保留 (HR 场景仍成立)。module 保持 'system' 与 router meta 一致, RBAC 门控不变。
+      { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
+      { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
       { path: '/system/logs', title: '操作日志', icon: '', module: 'system' },
       { path: '/system/settings', title: '系统设置', icon: '', module: 'system' },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system' },
