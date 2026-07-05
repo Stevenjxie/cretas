@@ -327,7 +327,8 @@ async function loadOptions() {
       listWarehouses(factoryId.value),
       // 采购入库默认仓 (后端解析 PURCHASE_INBOUND_DEFAULT 配置)。失败不阻断整体加载 —
       // honest-null → defaultReceiveWarehouseId 回退物流仓本地逻辑。
-      getPurchaseInboundDefaultWarehouse(factoryId.value).catch(() => ({ success: false, data: null })),
+      getPurchaseInboundDefaultWarehouse(factoryId.value)
+        .catch(() => ({ success: false, data: null as FactoryWarehouse | null, message: '' })),
     ]);
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     supplierOptions.value = ext<SupplierOption>(sup);

@@ -151,7 +151,8 @@ async function loadPlanOptions() {
     const openStatuses = ['PLANNED', 'PENDING', 'IN_PROGRESS', 'PAUSED'];
     const results = await Promise.all(
       openStatuses.map((status) =>
-        get(`/${factoryId.value}/production-plans/status/${status}`).catch(() => ({ success: false, data: [] })),
+        get<PlanOption[]>(`/${factoryId.value}/production-plans/status/${status}`)
+          .catch(() => ({ success: false, data: [] as PlanOption[], message: '' })),
       ),
     );
     const merged: PlanOption[] = [];

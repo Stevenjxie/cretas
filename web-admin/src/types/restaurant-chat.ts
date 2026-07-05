@@ -2,7 +2,7 @@
  * Restaurant chat panel types (P5 Task 5.1).
  *
  * Data flow:
- *   User input → ChatQueryRequest → Java endpoint → ChatQueryResponse
+ *   User input → ChatQueryRequest → Java /ai-intents/execute → ChatQueryResponse
  *   → ChatTurn[] in panel state → rendered as ChatBubble with SectionPayload[]
  */
 
@@ -32,23 +32,27 @@ export interface ChatTurn {
   error?: string;
 }
 
-/** Request to Java chat endpoint */
+/** Request to the unified Java intent endpoint. */
 export interface ChatQueryRequest {
   query: string;
   factoryId: string;
   userId: string;
   subSector?: string;
   uploadId?: string;
+  sessionId?: string;
+  ownerActionScenario?: string;
 }
 
-/** Response from Java chat endpoint */
+/** Normalized response consumed by the legacy restaurant chat drawer. */
 export interface ChatQueryResponse {
   success: boolean;
-  intentCode: string;
+  intentCode: string | null;
   toolName?: string;
   skillName?: string;
   message?: string;
-  sections: SectionPayload[];
+  sessionId?: string | null;
+  ownerActionScenario?: string | null;
+  sections?: SectionPayload[];
   followUpChips?: string[];
   error?: string;
 }

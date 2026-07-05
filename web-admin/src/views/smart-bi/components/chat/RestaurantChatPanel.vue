@@ -4,10 +4,7 @@ import { ElInput, ElButton, ElMessage } from 'element-plus';
 import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
 import SectionCardRenderer from './SectionCardRenderer.vue';
-import {
-  askRestaurantQuestion,
-  clearRestaurantConversation,
-} from '@/api/smartbi/restaurant-chat';
+import { askRestaurantQuestion } from '@/api/smartbi/restaurant-chat';
 import type { ChatTurn } from '@/types/restaurant-chat';
 import { useAuthStore } from '@/store/modules/auth';
 
@@ -22,6 +19,8 @@ const turns = ref<ChatTurn[]>([]);
 const isTyping = ref(false);
 const inputText = ref('');
 const chatContainer = ref<HTMLElement | null>(null);
+const sessionId = ref<string | null>(null);
+const ownerActionScenario = ref<string | null>(null);
 
 /**
  * Get current user ID.
@@ -57,7 +56,11 @@ async function sendMessage(text?: string) {
       userId: getUserId(),
       subSector: props.subSector,
       uploadId: props.uploadId,
+      sessionId: sessionId.value ?? undefined,
+      ownerActionScenario: ownerActionScenario.value ?? undefined,
     });
+    sessionId.value = response.sessionId ?? sessionId.value;
+    ownerActionScenario.value = response.ownerActionScenario ?? ownerActionScenario.value;
 
     const aiTurn: ChatTurn = {
       id: crypto.randomUUID(),
@@ -95,11 +98,8 @@ async function scrollToBottom() {
 }
 
 async function clearConversation() {
-  try {
-    await clearRestaurantConversation(props.factoryId, getUserId());
-  } catch {
-    // non-fatal — local state clear always succeeds
-  }
+  sessionId.value = null;
+  ownerActionScenario.value = null;
   turns.value = [];
   ElMessage.success('对话已清空');
 }

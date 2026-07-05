@@ -1,61 +1,82 @@
 /**
- * Restaurant Chat API Client (P5 Task 5.1).
+ * Restaurant chat adapter.
  *
- * Calls the Java AIIntentService chat endpoint, which routes through
- * the Tool-Skill pipeline and (optionally) invokes Python sections.
- *
- * post<T>(url, data?, config?) returns Promise<ApiResponse<T>>.
- * The request interceptor in api/request.ts unwraps ApiResponse automatically:
- * if response.success is false it throws ApiError, otherwise returns the
- * ApiResponse object. So we cast to ChatQueryResponse directly.
+ * The restaurant drawer used to call a separate restaurant query endpoint. Keep
+ * the small UI-specific response shape here, but route all questions through
+ * the unified Java intent executor so AIQuery and RestaurantV2 share one
+ * Tool-Skill path.
  */
+import { executeIntent } from './intent-chat';
 import type {
   ChatQueryRequest,
   ChatQueryResponse,
+  SectionPayload,
 } from '@/types/restaurant-chat';
-import { post } from './common';
 
-/**
- * Send a natural language query to the restaurant diagnostic chat.
- * Routes through Java AIIntentService (layers 1-8: exact/phrase/regex/
- * keyword/semantic/classifier/fusion/LLM) → Tool or Skill execution →
- * (optionally) Python section endpoints for deep analysis.
- */
+type FollowupLike = string | {
+  label?: unknown;
+  question?: unknown;
+  text?: unknown;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeSections(value: unknown): SectionPayload[] {
+  return Array.isArray(value) ? value as SectionPayload[] : [];
+}
+
+function normalizeFollowups(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item: FollowupLike) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        const question = item.question ?? item.text ?? item.label;
+        return typeof question === 'string' ? question : '';
+      }
+      return '';
+    })
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
 export async function askRestaurantQuestion(
   request: ChatQueryRequest,
 ): Promise<ChatQueryResponse> {
-  const response = await post<ChatQueryResponse>(
-    `/${request.factoryId}/smart-bi/query`,
-    {
-      query: request.query,
-      userId: request.userId,
-      context: {
-        subSector: request.subSector,
-        uploadId: request.uploadId,
-      },
+  const response = await executeIntent(request.factoryId, request.query, {
+    sessionId: request.sessionId,
+    context: {
+      subSector: request.subSector,
+      uploadId: request.uploadId,
+      ownerActionSessionId: request.sessionId,
+      ownerActionScenario: request.ownerActionScenario,
     },
-    // BUG #7 fix (Apr 15 2026): 全局 axios 30s 超时 < LLM responseText 生成耗时 (5-60s, median 31s).
-    // 覆盖为 90s 保 LLM 慢查询通过 (qwen3.5-plus tail latency).
-    { timeout: 90000 },
-  );
-  // post<T> returns ApiResponse<T>; data holds the ChatQueryResponse.
-  // If backend wraps response in { success, data }, unwrap it here.
-  // If backend returns ChatQueryResponse directly (success field inline), use as-is.
-  const raw = response as unknown as { data?: ChatQueryResponse } & ChatQueryResponse;
-  return raw.data ?? raw;
-}
+  });
 
-/**
- * Clear conversation state for the current user session.
- * Calls the Java conversation clear endpoint which delegates to
- * ConversationStateService.clear(factoryId, userId).
- */
-export async function clearRestaurantConversation(
-  factoryId: string,
-  userId: string,
-): Promise<void> {
-  await post<void>(
-    `/${factoryId}/conversation/clear?userId=${encodeURIComponent(userId)}`,
-    {},
-  );
+  const resultData = asRecord(response.resultData);
+  const nestedData = asRecord(resultData.data);
+  const scenario = resultData.scenario ?? nestedData.scenario;
+  const sections = normalizeSections(resultData.sections ?? nestedData.sections);
+  const followUpChips = [
+    ...normalizeFollowups(resultData.suggestedFollowups),
+    ...normalizeFollowups(resultData.followUpSuggestions),
+    ...normalizeFollowups(nestedData.suggestedFollowups),
+    ...normalizeFollowups(response.clarificationQuestions),
+  ].filter((item, index, all) => all.indexOf(item) === index).slice(0, 4);
+
+  return {
+    success: response.status === 'SUCCESS',
+    intentCode: response.intentCode ?? null,
+    message: response.message || response.formattedText || '已完成分析',
+    sessionId: response.sessionId ?? null,
+    ownerActionScenario: typeof scenario === 'string' ? scenario : null,
+    sections,
+    followUpChips,
+    error: response.status === 'ERROR' ? (response.message || '查询失败') : undefined,
+  };
 }
