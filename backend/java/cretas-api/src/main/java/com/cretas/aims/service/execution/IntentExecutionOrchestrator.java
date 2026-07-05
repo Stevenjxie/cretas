@@ -586,7 +586,7 @@ public class IntentExecutionOrchestrator {
         String intentCode = request.getIntentCode();
         log.info("使用显式意图代码执行: intentCode={}, factoryId={}", intentCode, factoryId);
 
-        Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+        Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, intentCode);
         if (intentOpt.isEmpty()) {
             return IntentExecuteResponse.builder()
                     .intentRecognized(false)

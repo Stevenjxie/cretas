@@ -4,6 +4,7 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -47,6 +48,9 @@ class RestaurantOpsGoldRouteTest {
     private IntentExecutionOrchestrator orchestrator;
     private AIIntentService aiIntentService;
     private ToolRegistry toolRegistry;
+    private ToolDispatchService toolDispatchService;
+    private BusinessTypeGate businessTypeGate;
+    private WriteGuardService writeGuardService;
     private QueryPreprocessorService queryPreprocessorService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -54,6 +58,9 @@ class RestaurantOpsGoldRouteTest {
     void setUp() {
         aiIntentService = mock(AIIntentService.class);
         toolRegistry = mock(ToolRegistry.class);
+        toolDispatchService = mock(ToolDispatchService.class);
+        businessTypeGate = mock(BusinessTypeGate.class);
+        writeGuardService = mock(WriteGuardService.class);
         queryPreprocessorService = mock(QueryPreprocessorService.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,
@@ -73,9 +80,13 @@ class RestaurantOpsGoldRouteTest {
                 mock(AgentOrchestrator.class),
                 mock(AgenticRAGRouterService.class),
                 mock(ResultValidatorService.class),
-                mock(ToolDispatchService.class),
+                toolDispatchService,
                 mock(DynamicToolSelectionService.class),
                 queryPreprocessorService);
+        ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
+        ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuardService);
+        when(businessTypeGate.check(any(), any())).thenReturn(Optional.empty());
+        when(writeGuardService.isWriteIntent(any())).thenReturn(false);
     }
 
     @Test
@@ -372,5 +383,62 @@ class RestaurantOpsGoldRouteTest {
         assertThat(restaurantOpsResult).isNotNull();
         assertThat(restaurantOpsResult.getBestMatch().getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(restaurantOpsResult.getBestMatch().getToolName()).isEqualTo("restaurant_ops_gold_analysis");
+    }
+
+    @Test
+    @DisplayName("explicit restaurant report execution falls back to platform intent config")
+    void explicitRestaurantReportExecutionUsesPlatformFallback() {
+        AIIntentConfig salesSummary = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                .intentName("Restaurant sales summary")
+                .intentCategory("SMARTBI")
+                .toolName("restaurant_ops_gold_analysis")
+                .businessType("RESTAURANT")
+                .build();
+        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.of(salesSummary));
+        when(aiIntentService.hasPermission(eq("RESTAURANT_OPS_SALES_SUMMARY"), eq("admin")))
+                .thenReturn(true);
+
+        ToolExecutor goldTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_ops_gold_analysis"))
+                .thenReturn(Optional.of(goldTool));
+        when(toolDispatchService.executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any()))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                        .intentName("Restaurant sales summary")
+                        .status("SUCCESS")
+                        .message("本周营收已按餐饮报表汇总")
+                        .resultData(Map.of("source", "restaurant_ops_gold_analysis"))
+                        .build());
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("查询本周营收")
+                .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                .build();
+
+        IntentExecuteResponse response = orchestrator.executeWithExplicitIntent("DEMO_REST", request, 7L, "admin");
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(response.getMessage()).contains("餐饮报表");
+        verify(toolDispatchService).executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any());
     }
 }
