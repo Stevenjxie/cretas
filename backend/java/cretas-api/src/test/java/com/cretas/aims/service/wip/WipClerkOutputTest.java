@@ -100,6 +100,45 @@ class WipClerkOutputTest {
         verify(wipRepo, never()).save(any());
     }
 
+    // ── Bug 2 investigation (fix/process-entry-cache-and-blend-cost, F006 headed test):
+    //    熟制(卤制) 混锅(多来源, 全部 SFI/FG) 保存后 SFI 锚 unitCost 变 null, accumulatedCost
+    //    (186.88 类) 不变。verdict: 与 ProcessSheetInjectionCostTest 已证实的调味道保存时
+    //    honest-null (computeInjectionOutputUnitCost 对熟制/卤制固定返 null, 不现算调料桶)
+    //    是同一由设计决定的行为 —— 不是 bug。这里补齐"落到 postClerkOutput/applyMovingAverageIn
+    //    累加层"的一步: 既有锚已有真实成本 (accumulatedCost 已知, unitCost 已知) 时, 后续一次
+    //    inUnitCost=null 的 IN (卤制混锅保存时的产出) 必须让 unitCost 诚实置 null, 且
+    //    accumulatedCost 保持不变 (不因这次未知成本贡献而被"稀释"/也不凭空增长) ──
+    //    禁止把 accumulatedCost/producedQuantity 硬算出一个 unitCost 显示 (那会把"未知成本部分"
+    //    也摊薄进已知成本里, 违反项目 honest-null 红线, 见 CLAUDE.md 核心原则①禁止降级处理)。 ──
+
+    @Test
+    @DisplayName("Bug 2 (熟制/卤制 混锅): 既有 SFI 锚已知成本(100kg@¥1.8688→accumulatedCost≈186.88) "
+            + "+ 本次卤制混锅产出 40kg 成本未知(inUnitCost=null) → unitCost 诚实置 null, "
+            + "accumulatedCost 不变仍是 186.88 (不被稀释, 也不凭空累加) — by-design, 非 bug")
+    void postClerkOutput_seasoningBlendUnknownCost_unitCostGoesNullAccumulatedCostUnchanged() {
+        SemiFinishedInventory row = freshRow();
+        row.setProducedQuantity(new BigDecimal("100"));
+        row.setAvailableQuantity(new BigDecimal("100"));
+        row.setAccumulatedCost(new BigDecimal("186.88"));
+        row.setUnitCost(new BigDecimal("1.8688"));
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        // 镜像 ProcessSheetServiceImpl.postSfiOutput: 卤制(熟制)混锅 SAVED_SFI 行保存时,
+        // computeInjectionOutputUnitCost 对调味道固定返回 null (无法现算调料成本, 见
+        // ProcessSheetInjectionCostTest.saveSeasoningStepByNameReturnsNull) → 这里以
+        // inUnitCost=null 调用 postClerkOutput, 与保存层行为一致。
+        service.postClerkOutput(FACTORY, ANCHOR, "PT1", new BigDecimal("40"), "kg", null, null, 2);
+
+        assertThat(row.getProducedQuantity()).isEqualByComparingTo("140"); // 100 + 40
+        // 🔴 关键: 本次 40kg 成本未知 (卤制混锅, honest-null) → 整体 unitCost 必须诚实 null,
+        //   不能是 186.88/140=1.3349 (把未知成本当 ¥0 稀释已知成本)。
+        assertThat(row.getUnitCost()).isNull();
+        // accumulatedCost 保持 186.88 不变 (totalCost 本次为 null → nullSafeAdd 不加不减)。
+        //   不是 0 (未把已知成本清零), 也不是凭空变成别的值 (未虚构本次成本贡献)。
+        assertThat(row.getAccumulatedCost()).isEqualByComparingTo("186.88");
+    }
+
     @Test
     @DisplayName("consumeClerkSemi: 扣减 + available 升降 + DEPLETED")
     void consumeClerkSemiDrawsDown() {
