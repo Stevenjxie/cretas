@@ -174,6 +174,23 @@ public class ReturnOrder extends BaseEntity {
     @Transient
     private String completionHint;
 
+    // ==================== Bug 4 fix (2026-07): 详情页名称解析 ====================
+    // ReturnOrder 只存 counterpartyId / sourceOrderId / approvedBy (user id) —— 详情页此前
+    // 直接显示这些原始 UUID/user id (fool-proof-design Rule 2: 上下文必带身份信息)。
+    // 这几个字段由 ReturnOrderServiceImpl#getReturnOrderDetail 读时按需 enrich, 非持久化。
+
+    /** 对方名称 (客户名/供应商名, 按 returnType 解析 counterpartyId). null = 未解析或查无. */
+    @Transient
+    private String counterpartyName;
+
+    /** 源销售单号 (sourceOrderId 解析). null = 无源订单或查无. */
+    @Transient
+    private String sourceOrderNumber;
+
+    /** 业务审批人姓名 (approvedBy 解析). null = 尚未审批或查无. */
+    @Transient
+    private String approvedByName;
+
     // ==================== 计算属性 ====================
 
     @Transient

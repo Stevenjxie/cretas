@@ -77,6 +77,9 @@ class PaymentRecordServiceImplCrossTenantTest {
         so.setId("so-1");
         so.setFactoryId("F001");
         so.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
+        // Bug 5 fix (defense-in-depth, 2026-07): recordPayment 现有服务端超额收款拦截,
+        // 需要 totalAmount 足够大, 让本测试实际触发的是"重复"分支 (409) 而非"超额"分支.
+        so.setTotalAmount(new java.math.BigDecimal("500.00"));
         when(salesOrderRepository.findByIdAndFactoryIdForUpdate("so-1", "F001")).thenReturn(Optional.of(so));
 
         PaymentRecord existing = new PaymentRecord();
@@ -112,6 +115,9 @@ class PaymentRecordServiceImplCrossTenantTest {
         so.setFactoryId("F001");
         so.setCustomerId("cust-1");
         so.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
+        // Bug 5 fix (defense-in-depth, 2026-07): recordPayment 现有服务端超额收款拦截, 需要
+        // totalAmount 覆盖本测试录入的 200.00, 否则会被新增的超额校验拦成 409 而非走到 save().
+        so.setTotalAmount(new java.math.BigDecimal("500.00"));
         when(salesOrderRepository.findByIdAndFactoryIdForUpdate("so-2", "F001")).thenReturn(Optional.of(so));
         when(paymentRecordRepository.findRecentDuplicatePayments(
                 org.mockito.ArgumentMatchers.eq("F001"), org.mockito.ArgumentMatchers.eq("so-2"),

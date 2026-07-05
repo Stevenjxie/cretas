@@ -98,6 +98,22 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
 
+    // Bug 4 fix (2026-07): 详情页名称解析 (fool-proof-design Rule 2 — 上下文必带身份信息).
+    // ReturnOrder 只存 counterpartyId/sourceOrderId/approvedBy(userId), 详情页此前直接显示
+    // 原始 UUID/user id。required=false 兼容既有单元测试 mock 场景 (无这些 repo 时优雅降级为
+    // 不 enrich, 而非 NPE — fail-soft, 因为名称展示不是退货单状态机的关键路径).
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.CustomerRepository customerRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SupplierRepository supplierRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     public ReturnOrderServiceImpl(ReturnOrderRepository returnOrderRepository,
                                    ReturnOrderItemRepository returnOrderItemRepository,
                                    ArApService arApService,
@@ -224,6 +240,49 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         if (!order.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权访问该退货单")
                     .withHint("当前退货单不属于该工厂, 无法访问");
+        }
+        return order;
+    }
+
+    /**
+     * Bug 4 fix (2026-07): 详情页专用 — getReturnOrderById 的结果基础上 enrich 只读展示字段
+     * (对方名称/源销售单号/审批人姓名), 供 ReturnOrderController#getReturnOrder 使用。
+     * 不影响 getReturnOrderById 本身 (状态机 transition 方法仍走原始无 enrich 版本, 避免给
+     * 写路径徒增查询)。任一 enrich 查询失败 fail-soft (log only) —— 名称展示不阻断详情页加载。
+     */
+    @Override
+    public ReturnOrder getReturnOrderDetail(String factoryId, String returnOrderId) {
+        ReturnOrder order = getReturnOrderById(factoryId, returnOrderId);
+        try {
+            if (order.getCounterpartyId() != null) {
+                if (order.getReturnType() == ReturnType.SALES_RETURN && customerRepository != null) {
+                    customerRepository.findById(order.getCounterpartyId())
+                            .ifPresent(c -> order.setCounterpartyName(c.getName()));
+                } else if (order.getReturnType() == ReturnType.PURCHASE_RETURN && supplierRepository != null) {
+                    supplierRepository.findById(order.getCounterpartyId())
+                            .ifPresent(s -> order.setCounterpartyName(s.getName()));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("退货单详情 enrich 对方名称失败 (不阻断详情加载): returnOrderId={}", returnOrderId, e);
+        }
+        try {
+            if (order.getSourceOrderId() != null && salesOrderRepository != null) {
+                salesOrderRepository.findById(order.getSourceOrderId())
+                        .ifPresent(so -> order.setSourceOrderNumber(so.getOrderNumber()));
+            }
+        } catch (Exception e) {
+            log.warn("退货单详情 enrich 源订单号失败 (不阻断详情加载): returnOrderId={}", returnOrderId, e);
+        }
+        try {
+            if (order.getApprovedBy() != null && userRepository != null) {
+                userRepository.findById(order.getApprovedBy())
+                        .ifPresent(u -> order.setApprovedByName(
+                                u.getFullName() != null && !u.getFullName().isBlank()
+                                        ? u.getFullName() : u.getUsername()));
+            }
+        } catch (Exception e) {
+            log.warn("退货单详情 enrich 审批人姓名失败 (不阻断详情加载): returnOrderId={}", returnOrderId, e);
         }
         return order;
     }

@@ -64,7 +64,9 @@ public class ReturnOrderController {
     public ApiResponse<ReturnOrder> getReturnOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String returnOrderId) {
-        ReturnOrder order = returnOrderService.getReturnOrderById(factoryId, returnOrderId);
+        // Bug 4 fix (2026-07): 详情页用 enrich 版本 (对方名称/源订单号/审批人姓名),
+        // 避免前端显示原始 UUID/user id.
+        ReturnOrder order = returnOrderService.getReturnOrderDetail(factoryId, returnOrderId);
         return ApiResponse.success("查询成功", order);
     }
 
