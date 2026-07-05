@@ -1096,6 +1096,13 @@ public class IntentExecutionOrchestrator {
         if (!"RESTAURANT".equalsIgnoreCase(businessDomain) || normalizedInput == null || normalizedInput.isBlank()) {
             return Optional.empty();
         }
+        String unicodeSafeInput = normalizedInput.replaceAll("\\s+", "");
+        if (containsAny(unicodeSafeInput, "\u8425\u6536", "\u8425\u4e1a\u989d", "\u9500\u552e\u989d", "\u9500\u552e", "\u5ba2\u5355\u4ef7", "\u8ba2\u5355")
+                && containsAny(unicodeSafeInput, "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u770b\u4e00\u4e0b", "\u770b\u770b",
+                        "\u672c\u5468", "\u8fd9\u5468", "\u4eca\u5929", "\u672c\u6708", "\u8868\u73b0", "\u600e\u4e48\u6837",
+                        "\u60c5\u51b5", "\u6574\u4f53", "\u603b", "\u6c47\u603b", "\u591a\u5c11", "\u5206\u6790")) {
+            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+        }
         String q = normalizedInput
                 .replaceAll("\\s+", "")
                 .replace('，', ',')
