@@ -257,6 +257,8 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        applyRestaurantReportIntentShortcut(factoryId, request);
+
         log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
                 factoryId,
                 request.getUserInput().length() > 30 ?
@@ -265,6 +267,90 @@ public class AIIntentConfigController {
 
         IntentExecuteResponse response = intentExecutorService.execute(factoryId, request, userId, userRole);
         return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    private void applyRestaurantReportIntentShortcut(String factoryId, IntentExecuteRequest request) {
+        if (request == null || (request.getIntentCode() != null && !request.getIntentCode().isBlank())) {
+            return;
+        }
+        if (!isRestaurantFactoryId(factoryId)) {
+            return;
+        }
+        String input = request.getUserInput();
+        if (input == null || input.isBlank() || hasExplicitReadVeto(input)) {
+            return;
+        }
+        String q = input.replaceAll("\\s+", "");
+        boolean reportMetric = containsAny(q,
+                "\u8425\u6536",
+                "\u8425\u4e1a\u989d",
+                "\u9500\u552e\u989d",
+                "\u9500\u552e",
+                "\u5ba2\u5355\u4ef7",
+                "\u8ba2\u5355",
+                "\u8bc4\u4ef7",
+                "\u8bc4\u8bba",
+                "\u8bc4\u5206",
+                "\u5927\u4f17\u70b9\u8bc4");
+        boolean reportAction = containsAny(q,
+                "\u67e5",
+                "\u67e5\u8be2",
+                "\u770b",
+                "\u770b\u770b",
+                "\u4eca\u5929",
+                "\u672c\u5468",
+                "\u8fd9\u5468",
+                "\u672c\u6708",
+                "\u600e\u4e48\u6837",
+                "\u60c5\u51b5",
+                "\u6c47\u603b",
+                "\u7edf\u8ba1",
+                "\u5206\u6790");
+        if (reportMetric && reportAction) {
+            request.setIntentCode("RESTAURANT_OPS_SALES_SUMMARY");
+            log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+        }
+    }
+
+    private boolean isRestaurantFactoryId(String factoryId) {
+        return factoryId != null && (factoryId.startsWith("RES_") || "DEMO_REST".equalsIgnoreCase(factoryId));
+    }
+
+    private boolean hasExplicitReadVeto(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String q = input.replaceAll("\\s+", "");
+        return containsAny(q,
+                "\u4e0d\u8981\u67e5",
+                "\u4e0d\u8981\u770b",
+                "\u522b\u67e5",
+                "\u522b\u770b",
+                "\u4e0d\u7528\u67e5",
+                "\u4e0d\u7528\u770b",
+                "\u4e0d\u9700\u8981\u67e5",
+                "\u4e0d\u9700\u8981\u770b",
+                "\u4e0d\u60f3\u67e5",
+                "\u4e0d\u60f3\u770b",
+                "\u5148\u522b\u67e5",
+                "\u5148\u522b\u770b",
+                "\u65e0\u9700\u67e5",
+                "\u65e0\u9700\u770b",
+                "\u4e0d\u67e5",
+                "\u4e0d\u770b");
+    }
+
+    private boolean containsAny(String input, String... terms) {
+        if (input == null || terms == null) {
+            return false;
+        }
+        for (String term : terms) {
+            if (term != null && !term.isBlank() && input.contains(term)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
