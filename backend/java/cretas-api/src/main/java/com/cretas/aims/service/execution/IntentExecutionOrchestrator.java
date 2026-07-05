@@ -245,6 +245,11 @@ public class IntentExecutionOrchestrator {
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
         String userInput = request.getUserInput();
+        if (isRestaurantOwnerActionFactory(factoryId, null) && matchesOwnerActionKeywordHeuristic(userInput)) {
+            log.info("[restaurant-owner-action] force-route before preprocessor: factoryId={}, input={}",
+                    factoryId, userInput);
+            return executeRestaurantOwnerActionChat(factoryId, request, userId);
+        }
         String vInput = request.getUserInput();
         if (vInput != null && !vInput.isEmpty()) {
             QueryPreprocessorService.NegationKind vk;
