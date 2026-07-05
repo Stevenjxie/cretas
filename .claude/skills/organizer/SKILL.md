@@ -30,6 +30,12 @@ description: 把当前 chat 引导为本项目的 Thin-Opus Organizer（唯一 i
 - 你不能自己中途升 effort。遇到 gnarly 判断，提醒 Steve 在那条消息加 `ultrathink`（只点一轮，最省）。
 - 绝不建议常驻 max effort。
 
+## fable 提醒（model 轴破玻璃顶层 — 别过省）
+- fable = 2x Opus，稀缺，但**稀缺 ≠ 攒着不用**。earned 车道清楚命中就**主动派**，别等 Steve 点、别为省周额度硬留 Opus（2026-07-06 Steve 校准："改用 fable 的时候就用 fable，不要太省"）。
+- 最常命中的同族前科（预授权直通）：**大批修复刚落地 → 派 `fable` read-only 读全 diff 逮修复架空/姊妹流回归/叠加造洞**（headed 单走 + 单测结构性照不出）。这是 fable 性价比最高的落点，不是最差的（大 diff 终审才是最差）。
+- 两个闸方向相反都要守：**上闸**防预测式滥用（没观察到卡住就升 / 拿 model 轴掩盖 brief 没写清 → 回去修 brief）；**下闸**防过省荒废（earned 命中要用）。"个位数次/session"是**上限不是配额** —— 命中就用满，别把自检变成"能不用就不用"的借口。
+- 详见 `.claude/rules/organizer-protocol.md` §Fable 门槛 + memory `feedback_fable_dont_be_too_stingy` / `feedback_fable_blocking_bug_hunt_from_diffs`。
+
 ## 引导完成后向用户汇报
 - "✅ Organizer 已就位（Opus / high effort）"
 - 台账状态：N 个在飞任务、几个 blocked、有哪些 scope 锁（读 ACTIVE.md 得出）。

@@ -51,6 +51,8 @@ Composer 2.5   = 独立 UI / 样式 / lint / 补测试 (Cursor 内便宜耐用)
 
 **频次闸(对标 max effort 的"几乎不用")**: Fable 5 应是 **session 内个位数次**的破玻璃动作, 不是每个 risky 任务都点。**想点第 2 次就停下自检**: 是不是在用 model 轴掩盖 brief 没写清 / 需求没框清 —— 那应该回去修 brief, 不是升模型。
 
+**⚖️ 防过省校准 (2026-07-06 Steve: "改用 fable 的时候就用 fable, 不要太省")**: 频次闸"个位数次"是**上限不是配额**。防滥用闸防的是**预测式**滥用(没观察到卡住就升 / 拿 model 轴掩盖 brief 没写清), **不是**压制 earned 命中 —— 别把"想点第 2 次先自检"退化成"能不用就不用"。earned 车道清楚命中(尤其**大批修复刚落地 → `fable` read-only diff-hunt** 这条同族前科预授权直通)就**主动派, 别等 Steve 点、别为省周额度硬留 Opus**。上闸(别预测式滥用)+下闸(别过省荒废)方向相反都要守。实证: 2026-07-06 无限测试 campaign Wave 1 该主动派 diff-hunt 却等 Steve 点才派 = 过省。见 memory `feedback_fable_dont_be_too_stingy`。
+
 **防荒废(别变死信)**: 上面 ① 是 **affirmative "应当升"** —— Opus 修 2 轮没好时**别为省额度硬留 Opus**, 那是 Fable 5 存在的意义。worked examples:
 - ✅ **会点**: 5/30 RBAC 角色转发那种"改对一处 / prod 营收归零"的 permission 判断, Opus xhigh 给了两版互相矛盾的结论 → 派 1 个 `fable` subagent 单点定夺。
 - ✅ **会点(⑤ 战略纠偏)**: 6/10 chart-insight 程序多线(铺开/seeding/M4/自有模型)将投大 effort 前, Steve 点"审一下接下来怎么做" → `fable` 战略 review 抓出**资源分配反转**(重心飘向 flywheel/自有模型, 而最高价值"铺到36面"没开工) + **找回被遗忘的 May-31 vertical-model verdict**(自训模型早已 trigger-gated) + **砍 exotic-6/seeder 扩量/模型工作流**。比 Opus 自己规划多了"独立顶层视角戳穿沉没成本惯性"。

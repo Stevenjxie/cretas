@@ -207,6 +207,7 @@ Fable 5 = **2x Opus 消耗 → 比 Opus 还稀缺**。它不是"更好的 Opus o
 - ✅ **⑤ 战略纠偏审计（前瞻型，2026-06-10 Steve 加）**: 多线程程序**投入大 effort 前**的战略拐点（重心疑似飘 / ROI 不确定 / 需 reconcile 历史决策），或 **Steve 点名"审一下接下来怎么做"** → 派 `fable` **read-only 战略 review**（给全程序状态+历史决策指针让它 reconcile）。专抓 **优先级反转 + 找回被遗忘的历史决策 + 剪 over-engineering**（实证 6/10：抓 chart-insight 重心飘向 seeding/自有模型 + 找回 May-31 vertical-model verdict + 砍 exotic-6）。**①-④ 反应型（Opus 试过/卡住/风险），⑤ 前瞻型（投大 effort 前先验方向纠偏）**。仍 earned（真拐点非例行 planning）+ 频次闸。
 - ⛔ **不升**: 预授权之外没观察到 Opus 卡住；任何执行 / 分诊 / 批量 / fan-out；**大 diff 终审**（organizer 本体已持 context，交全新 `fable` subagent = 2x 费率 + rediscovery 双重惩罚 → 用 Opus + 对抗 fan-out 更划算）；**⑤ 也不是每次出计划都点**（例行 planning Opus 自己做，只在真拐点）。
 - **频次闸**: Fable 5 是 session 内**个位数次**破玻璃；想点第 2 次先自检是不是 brief / 需求没框清（回去修 brief，不是升模型）。
+- ⚖️ **防过省校准 (2026-07-06 Steve: "改用 fable 的时候就用 fable，不要太省")**: 频次闸是**上限不是配额** —— earned 车道清楚命中就**主动派**，别等 Steve 点、别为省周额度硬留 Opus。防滥用闸防的是**预测式**滥用（没观察到卡住就升 / 拿 model 轴掩盖 brief 没写清），**不是**压制 earned 命中。上闸（别预测式滥用）+ 下闸（别过省荒废）方向相反都要守；别把"想点第 2 次先自检"退化成"能不用就不用"。最常被漏派的 earned 命中 = **大批修复刚落地 → `fable` read-only diff-hunt**（同族前科预授权直通，见 [[feedback_fable_dont_be_too_stingy]] / [[feedback_fable_blocking_bug_hunt_from_diffs]]）。
 - **经济学根据**: 设 Opus 轮=1、Fable 轮=2，p=Opus 1-2 轮解掉的概率 → earned 期望成本 ≈ p×1+(1-p)×4，p>~50% 时 earned 更省；本项目实证 base rate 高（绝大多数"看着难"的问题 Opus 一轮即倒）。预授权三类 = p 已知很低、或失败代价不在 token 维度。
 
 详见 [`multi-model-dispatch.md`](./multi-model-dispatch.md) §Fable 5 定位铁律（含 worked examples）。
