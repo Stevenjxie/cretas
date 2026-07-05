@@ -256,6 +256,8 @@ public class IntentExecutionOrchestrator {
             }
             if (vk == QueryPreprocessorService.NegationKind.VETO_READ
                     && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+                log.info("[restaurant-owner-action] route before VETO_READ clarification: factoryId={}, input={}",
+                        factoryId, userInput);
                 return executeRestaurantOwnerActionChat(factoryId, request, userId);
             }
             if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
@@ -273,6 +275,8 @@ public class IntentExecutionOrchestrator {
         // pre-processing marks the wording as VETO_WRITE; otherwise it falls into a
         // low-level report intent and returns "missing month_summary" instead of a decision.
         if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+            log.info("[restaurant-owner-action] route before generic intent matching: factoryId={}, input={}",
+                    factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
 
@@ -1658,7 +1662,7 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput, Map<String, Object> context) {
+    boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput, Map<String, Object> context) {
         if (userInput == null || userInput.isBlank()) {
             return false;
         }

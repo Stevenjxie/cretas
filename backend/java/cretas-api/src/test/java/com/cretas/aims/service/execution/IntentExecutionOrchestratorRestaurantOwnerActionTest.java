@@ -22,6 +22,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
@@ -78,6 +80,21 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
 
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u67e5\u4e00\u4e0b\u8ba2\u5355\u660e\u7ec6"))
+                .isFalse();
+    }
+
+    @Test
+    void routesDemoRestaurantBossQuestionBeforeGenericClarification() {
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f",
+                Collections.emptyMap()))
+                .isTrue();
+
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "F006",
+                "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f",
+                Collections.emptyMap()))
                 .isFalse();
     }
 }
