@@ -37,6 +37,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { isAxiosError } from 'axios';
 
 import { WHInboundStackParamList } from '../../../types/navigation';
 import {
@@ -45,6 +46,64 @@ import {
 } from '../../../services/api/purchaseApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
+
+/** 加载失败态 (区别于"真的没有待收货采购单"的正常空态) */
+interface LoadFailure {
+  title: string;
+  message: string;
+  hint?: string;
+  isPermission: boolean;
+}
+
+/**
+ * 把三路 getOrdersByStatus 请求全部失败的原因翻成仓管员看得懂的话.
+ *
+ * fool-proof-design 4位一体: message 用后端原话 (PermissionInterceptor 403 body 的
+ * message/actionHint 字段), 不用 axios 通用 "Request failed with status code 403".
+ * 这里专门区分 403(权限) vs 其他(网络/5xx), 避免用户把"没权限"误当"工厂没有待收货单".
+ */
+function describeListFailure(reason: unknown): LoadFailure {
+  if (isAxiosError(reason)) {
+    const status = reason.response?.status;
+    const data = reason.response?.data as { message?: string; actionHint?: string } | undefined;
+    const backendMsg = data?.message;
+    const actionHint = data?.actionHint;
+
+    if (!reason.response) {
+      return {
+        title: '网络连接失败',
+        message: '手机暂时连不上服务器，请检查网络后重试。',
+        isPermission: false,
+      };
+    }
+    if (status === 403) {
+      return {
+        title: '无采购收货权限',
+        message: backendMsg || '您的账号无权限查看待收货采购单。',
+        hint: actionHint || '请联系工厂管理员开通 [采购管理] 或 [仓储管理] 权限',
+        isPermission: true,
+      };
+    }
+    if (status === 401) {
+      return {
+        title: '登录已过期',
+        message: '请重新登录后再试。',
+        isPermission: false,
+      };
+    }
+    return {
+      title: '加载待收货采购单失败',
+      message: backendMsg || `服务器返回错误 (${status ?? '未知'})，请稍后重试。`,
+      hint: actionHint,
+      isPermission: false,
+    };
+  }
+  return {
+    title: '加载待收货采购单失败',
+    message: reason instanceof Error ? reason.message : '未知错误，请重试。',
+    isPermission: false,
+  };
+}
 
 type Nav = NativeStackNavigationProp<WHInboundStackParamList, 'WHPurchaseReceiveList'>;
 
@@ -72,6 +131,8 @@ export default function WHPurchaseReceiveListScreen() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 区分"请求失败"(权限/网络/服务器) vs "请求成功但确实没有待收货单" — 前者绝不能静默当空态显示.
+  const [loadError, setLoadError] = useState<LoadFailure | null>(null);
 
   const PAGE_SIZE = 20;
 
@@ -90,6 +151,37 @@ export default function WHPurchaseReceiveListScreen() {
             ),
           ),
         );
+
+        const rejectedResults = results.filter(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        );
+        const fulfilledCount = results.length - rejectedResults.length;
+        const firstRejected = rejectedResults[0];
+
+        // 全部 3 个状态的请求都失败 (而不是"某状态碰巧没有单据") — 这是请求本身失败
+        // (权限不足 / 网络 / 服务器错误), 不是"工厂真的没有待收货采购单". Promise.allSettled
+        // 会吞掉每个 rejection 静默过滤, 之前这里直接当空结果处理 → 仓库员被 403 拒绝时
+        // 页面显示"暂无待收货采购单", 看不出是权限问题 (fool-proof-design 4位一体违规:
+        // 静默降级、无 next-action). 现在显式区分, loud 展示且不清空已有数据(翻页场景).
+        if (fulfilledCount === 0 && firstRejected) {
+          const info = describeListFailure(firstRejected.reason);
+          if (append) {
+            // 翻页失败: 保留已加载列表，只提示，不清空
+            handleError(firstRejected.reason, {
+              title: info.title,
+              customMessage: info.hint ? `${info.message}\n${info.hint}` : info.message,
+            });
+          } else {
+            setLoadError(info);
+            setOrders([]);
+          }
+          setHasMore(false);
+          return;
+        }
+
+        if (!append) {
+          setLoadError(null);
+        }
 
         const merged: PurchaseOrder[] = [];
         results.forEach((r) => {
@@ -332,6 +424,35 @@ export default function WHPurchaseReceiveListScreen() {
   );
 
   // ============================================================
+  // 加载失败态 — 与"暂无待收货采购单"视觉上明确区分 (红色警示图标 + 具体后端原因 +
+  // next-action 提示), 防止仓库员把"无权限"误当"工厂没有待收货单据". (fool-proof-design
+  // Rule 5 + 4位一体)
+  // ============================================================
+  const LoadErrorView = useCallback(() => {
+    if (!loadError) return null;
+    return (
+      <View style={styles.errorContainer}>
+        <MaterialCommunityIcons
+          name={loadError.isPermission ? 'lock-alert-outline' : 'alert-circle-outline'}
+          size={56}
+          color="#c62828"
+        />
+        <Text style={styles.errorTitle}>{loadError.title}</Text>
+        <Text style={styles.errorMessage}>{loadError.message}</Text>
+        {loadError.hint && <Text style={styles.errorHint}>{loadError.hint}</Text>}
+        <Button
+          mode="contained"
+          icon="refresh"
+          onPress={onRefresh}
+          style={{ marginTop: 16 }}
+        >
+          重试
+        </Button>
+      </View>
+    );
+  }, [loadError, onRefresh]);
+
+  // ============================================================
   // Render
   // ============================================================
   return (
@@ -349,6 +470,8 @@ export default function WHPurchaseReceiveListScreen() {
           <ActivityIndicator size="large" />
           <Text style={styles.loadingText}>加载待收货采购单中...</Text>
         </View>
+      ) : loadError ? (
+        <LoadErrorView />
       ) : (
         <FlatList
           data={orders}
@@ -438,6 +561,30 @@ const styles = StyleSheet.create({
   emptyHint: {
     fontSize: 13,
     color: '#718096',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 8,
+  },
+
+  // 加载失败态 (403/网络/服务器) — 红色警示, 与上方中性灰的"暂无数据"空态明确区分.
+  errorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 60,
+    paddingHorizontal: 32,
+  },
+  errorTitle: { fontSize: 16, fontWeight: '700', color: '#c62828', marginTop: 16 },
+  errorMessage: {
+    fontSize: 14,
+    color: '#4a5568',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 8,
+  },
+  errorHint: {
+    fontSize: 13,
+    color: '#e65100',
     textAlign: 'center',
     lineHeight: 20,
     marginTop: 8,
