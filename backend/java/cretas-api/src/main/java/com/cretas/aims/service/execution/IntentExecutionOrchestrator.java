@@ -1734,7 +1734,7 @@ public class IntentExecutionOrchestrator {
         Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
         normalizeOwnerActionSource(data);
         data.put("suggestedFollowups", normalizeOwnerActionFollowups(
-                data.get("followUpSuggestions"),
+                firstNonNull(data.get("suggestedFollowups"), data.get("followUpSuggestions")),
                 stringValue(data.get("scenario"))));
 
         String answer = firstNonBlank(
@@ -1819,21 +1819,38 @@ public class IntentExecutionOrchestrator {
         return fallback;
     }
 
+    private Object firstNonNull(Object first, Object second) {
+        return first != null ? first : second;
+    }
+
     private List<Map<String, Object>> normalizeOwnerActionFollowups(Object followUps, String scenario) {
         if (!(followUps instanceof List<?> items)) {
             return Collections.emptyList();
         }
         List<Map<String, Object>> normalized = new ArrayList<>();
         for (Object item : items) {
-            String question = stringValue(item);
+            String question;
+            String label;
+            String itemScenario = scenario;
+            if (item instanceof Map<?, ?> followupMap) {
+                question = firstNonBlank(
+                        stringValue(followupMap.get("question")),
+                        stringValue(followupMap.get("text")),
+                        stringValue(followupMap.get("label")));
+                label = firstNonBlank(stringValue(followupMap.get("label")), question, question);
+                itemScenario = firstNonBlank(stringValue(followupMap.get("ownerActionScenario")), scenario, scenario);
+            } else {
+                question = stringValue(item);
+                label = question;
+            }
             if (question == null || question.isBlank()) {
                 continue;
             }
             Map<String, Object> followup = new LinkedHashMap<>();
-            followup.put("label", question.length() > 18 ? question.substring(0, 18) + "..." : question);
+            followup.put("label", label != null && label.length() > 18 ? label.substring(0, 18) + "..." : label);
             followup.put("question", question);
-            if (scenario != null && !scenario.isBlank()) {
-                followup.put("ownerActionScenario", scenario);
+            if (itemScenario != null && !itemScenario.isBlank()) {
+                followup.put("ownerActionScenario", itemScenario);
             }
             normalized.add(followup);
             if (normalized.size() >= 4) {
