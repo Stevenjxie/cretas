@@ -472,10 +472,10 @@ class ProcessSheetServiceImplTest {
 
         ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
 
-        // option F: 不物化 raw-lineage WIP (SFI 只有 product-type 维度), 产出直接入 SFI
-        assertThat(result.isMaterialized()).as("纯 SFI 中间道不物化 WIP").isFalse();
+        // #1252 中段起步: 不物化 raw-lineage WIP (SFI 只有 product-type 维度), 但产出<b>保存时</b>即入 SFI 库 → materialized=true
+        assertThat(result.isMaterialized()).as("产出保存时即入 SFI 库 (下游可选) → materialized").isTrue();
         assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
-        // batchNumber = SFI 锚 (小结 SFI IN 定位), yieldRate 仍算 (40/50*100=80), 成本诚实 null
+        // batchNumber = SFI 锚 (SFI IN 定位), yieldRate 仍算 (40/50*100=80), 成本诚实 null
         String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
                 .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
         assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
@@ -486,6 +486,15 @@ class ProcessSheetServiceImplTest {
         assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", "0"))
                 .as("不物化 → 无 WIP (探测无副作用)").isEmpty();
+
+        // #1252 核心 oracle: 产出已 SFI IN 入库 → 锚 SFI 行 producedQuantity=40, 阶段序=本道 (下游道保存期可选)
+        SemiFinishedInventory posted = sfiRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, expectedAnchor)
+                .orElseThrow();
+        assertThat(posted.getProducedQuantity()).as("产出保存时即入 SFI 库").isEqualByComparingTo("40");
+        assertThat(posted.getAvailableQuantity()).isEqualByComparingTo("40");
+        assertThat(posted.getProcessOrder()).as("阶段序落值供 picker 可见性过滤").isEqualTo(2);
+        assertThat(posted.getUnitCost()).as("输入 SFI 成本未接通 → 产出成本诚实 null").isNull();
 
         // 行持久化: rowStatus=SAVED_SFI, batchNumber=锚, 未物化, payload 保 semiFinished
         var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
@@ -515,7 +524,7 @@ class ProcessSheetServiceImplTest {
         ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
 
         assertThat(result.isUpdated()).as("resave → updated=true").isTrue();
-        assertThat(result.isMaterialized()).as("纯 SFI → 不物化").isFalse();
+        assertThat(result.isMaterialized()).as("纯 SFI 产出保存时入 SFI 库 → materialized").isTrue();
         assertThat(result.getBatchId()).isNull();
         String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
                 .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
@@ -523,6 +532,9 @@ class ProcessSheetServiceImplTest {
         var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
         assertThat(views).hasSize(1);
         assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        // DRAFT→SFI 只入库一次 (DRAFT 阶段无入库, 无冲销) → 产出 40 (非 0/80)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, expectedAnchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
     }
 
     @Test
@@ -559,8 +571,8 @@ class ProcessSheetServiceImplTest {
 
         ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
 
-        // 纯 SFI 单上游道: 不物化 raw-lineage WIP, 产出直接入 SFI (option F)
-        assertThat(result.isMaterialized()).as("纯 SFI 单上游道不物化 WIP").isFalse();
+        // 纯 SFI 单上游道: 不物化 raw-lineage WIP, 产出保存时即入 SFI (#1252)
+        assertThat(result.isMaterialized()).as("纯 SFI 单上游道产出入 SFI 库 → materialized").isTrue();
         assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
         String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
                 .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
@@ -578,6 +590,90 @@ class ProcessSheetServiceImplTest {
         UpstreamRef persisted = views.get(0).getPayload().getUpstreamSources().get(0);
         assertThat(persisted.getSourceBatchNumber()).isEqualTo("SFI-STANDING-GR");
         assertThat(persisted.isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-6 (#1252 核心 oracle): 从中段起步 — 滚揉(注入)产出保存即入 SFI → 下游 焯水 能引用其产出保存成功 (链不再阻断)")
+    void injectionMidChain_downstreamCanReferenceOutput_chainNotBlocked() {
+        // 从仓库 SFI 起步: 滚揉(order=2, 注入)吃外部 SFI → 产出 40 保存时入 SFI 锚
+        seedSfi("SFI-WAREHOUSE-6", "50");
+        ProcessSheetRowRequest gunrou = baseReq("row-inj-gunrou", "gunrou", 2, "40");
+        gunrou.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-6", "50");
+        src.setSemiFinished(true);
+        gunrou.setUpstreamSources(List.of(src));
+        ProcessSheetRowResult gr = processSheetService.saveRow(FACTORY_ID, planId, gunrou, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(gr.getBatchNumber()).isEqualTo(anchor);
+        // 产出已入 SFI 锚 (下游保存期解析上游能命中 → 不再 SFI_NOT_FOUND 阻断)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("40");
+
+        // 下游 焯水(order=3) 引用 滚揉 的产出 (= SFI 锚, semiFinished) → 保存成功 (修复前会 409 SFI_NOT_FOUND)
+        ProcessSheetRowRequest chaoshui = baseReq("row-inj-chaoshui", "chaoshui", 3, "35");
+        chaoshui.setInputQuantity(new BigDecimal("40"));
+        UpstreamRef up = upstreamRef(anchor, "40");
+        up.setSemiFinished(true);
+        chaoshui.setUpstreamSources(List.of(up));
+        ProcessSheetRowResult cs = processSheetService.saveRow(FACTORY_ID, planId, chaoshui, operatorId);
+
+        assertThat(cs).as("下游道保存成功 → 链不再阻断").isNotNull();
+        assertThat(cs.getBatchNumber()).as("焯水 亦纯 SFI 喂 → 产出同锚").isEqualTo(anchor);
+        // 焯水 产出 35 亦保存时入锚 (滚揉 40 + 焯水 35, 保存期不扣输入 → 阶段性叠加, 小结 SFI OUT 扣减)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("75");
+    }
+
+    @Test
+    @DisplayName("SFI-7 (#1252): 删除注入行 → 冲销保存时的 SFI IN (无幽灵库存)")
+    void deleteInjectionRow_reversesSfiOutput() {
+        seedSfi("SFI-WAREHOUSE-7", "50");
+        ProcessSheetRowRequest req = baseReq("row-inj-del", "gunrou", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-7", "50");
+        src.setSemiFinished(true);
+        req.setUpstreamSources(List.of(src));
+        processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
+
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-inj-del", operatorId);
+
+        // 冲销后 producedQuantity 归 0 (无幽灵库存); 行软删
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(processSheetService.getRows(FACTORY_ID, planId, "gunrou", 2)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SFI-8 (#1252): 重存注入行改产出 → 冲销旧 SFI IN + 重新入库 (不叠加双计)")
+    void resaveInjectionRow_reversesThenReposts() {
+        seedSfi("SFI-WAREHOUSE-8", "80");
+        ProcessSheetRowRequest req = baseReq("row-inj-resave", "gunrou", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-8", "50");
+        src.setSemiFinished(true);
+        req.setUpstreamSources(List.of(src));
+        processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
+
+        // 重存: 产出改 60 (同 clientRowId)
+        ProcessSheetRowRequest req2 = baseReq("row-inj-resave", "gunrou", 2, "60");
+        req2.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src2 = upstreamRef("SFI-WAREHOUSE-8", "50");
+        src2.setSemiFinished(true);
+        req2.setUpstreamSources(List.of(src2));
+        processSheetService.saveRow(FACTORY_ID, planId, req2, operatorId);
+
+        // 冲销旧 40 + 重入 60 → 60 (不是 40+60=100 双计)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).as("冲销旧入库后重入 → 不叠加").isEqualByComparingTo("60");
     }
 
     // ─────────────────────────────────────────────────────────────

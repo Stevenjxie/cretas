@@ -315,6 +315,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             if (ur.req.isFinished()) {
                 continue; // 成品道走 FG, 不入 SFI
             }
+            // #1252 中段起步: 纯外部库存 (SFI/FG) 喂的非成品中间道 (SAVED_SFI, batchId==null) 产出已在
+            //   <b>保存时</b>即 SFI IN 入库 (ProcessSheetServiceImpl.postSfiOutput), 使下游道小结前即可选到 →
+            //   此处不再重复入库 (否则双重 SFI IN 造幽灵库存)。其输入 SFI/FG 的 SFI OUT 扣减仍在上方 ② 完成。
+            //   物化中间道 (batchId != null) 照旧在此按净结余 SFI IN (行为不变)。
+            if (ur.row.getBatchId() == null) {
+                continue;
+            }
             String batchNo = ur.row.getBatchNumber();
             BigDecimal outQty = nz(ur.req.getOutputQuantity());
             BigDecimal withinFeed = withinSessionFeedByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);

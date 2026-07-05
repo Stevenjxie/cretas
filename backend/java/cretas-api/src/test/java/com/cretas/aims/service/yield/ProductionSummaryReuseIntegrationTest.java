@@ -61,6 +61,8 @@ class ProductionSummaryReuseIntegrationTest {
     @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock ProductTypeRepository productTypeRepo;
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    @Mock com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     // ProductionSummaryService 依赖
     @Mock ProductionBatchRepository summaryBatchRepo;
@@ -78,7 +80,8 @@ class ProductionSummaryReuseIntegrationTest {
         processSheetService = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo, consumptionRepo,
                 reportRepo, productionPlanRepository, changeLogRepo, mapper, wipRepo, taskRepo,
-                processRepo, productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo);
+                processRepo, productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo,
+                wipInventoryService, finishedGoodsFeedService);
         summaryService = new ProductionSummaryService(
                 processSheetService, summaryBatchRepo, orderCostBreakdownService, reusedSemiLineageService);
     }

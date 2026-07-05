@@ -572,10 +572,11 @@ class InterimSettleServiceTest {
     }
 
     @Test
-    @DisplayName("option F: 纯 SFI 中间道小结 → 产出入 SFI(postClerkOutput 锚+productType+净量) + 输入 SFI 扣减(consumeClerkSemiStrict)")
+    @DisplayName("#1252: 纯 SFI 中间道小结 → 产出已在保存时入 SFI (小结不再重复 postClerkOutput), 仅输入 SFI 扣减(consumeClerkSemiStrict)")
     void pureSfiMiddleStepPostsOutputAndDrawsInput() {
-        // 道M: 非成品, 纯 SFI 投料 (吃常驻 SFI-IN-A feed 50), 产出 40 → 入本计划 SFI 锚。
-        //   batchId=null (option F 不物化 WIP), batchNumber=锚, rowStatus=SAVED_SFI。
+        // 道M: 非成品, 纯 SFI 投料 (吃常驻 SFI-IN-A feed 50), 产出 40。
+        //   #1252: 产出 40 已在 ProcessSheetService.saveRow 保存时 postClerkOutput 入 SFI 锚 → 小结不再重复入库。
+        //   batchId=null (SAVED_SFI 不物化 WIP), batchNumber=锚。
         String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
         ProcessSheetRow rM = pureSfiRow(30L, 1, anchor,
                 reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-IN-A", "50")));
@@ -585,17 +586,17 @@ class InterimSettleServiceTest {
 
         Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
 
-        // 输入 SFI 扣减 (严格版, 禁止降级)
+        // 输入 SFI 扣减 (严格版, 禁止降级) —— 仍在小结完成 (延迟扣减不变)
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-A"), eq(new BigDecimal("50")));
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
-        // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null), any());
-        assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
+        // #1252: 产出 SFI IN 已在保存时完成 → 小结不再 postClerkOutput (避免双重入库)
+        verify(wipInventoryService, never()).postClerkOutput(
+                any(), any(), any(), any(), any(), any(), any(), any());
+        assertThat((BigDecimal) s.get("semiInQuantity")).isEqualByComparingTo(BigDecimal.ZERO);
         @SuppressWarnings("unchecked")
         List<String> semiIn = (List<String>) s.get("semiInBatchNumbers");
-        assertThat(semiIn).containsExactly(anchor);
+        assertThat(semiIn).isEmpty();
         // 非成品 → 不进 FG
         verify(finishedGoodsBatchRepository, never()).save(any());
         // 行已打戳 (产出侧幂等)
@@ -618,14 +619,14 @@ class InterimSettleServiceTest {
 
         Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
 
-        // 输入 SFI 严格扣减 (禁止降级)
+        // 输入 SFI 严格扣减 (禁止降级) —— 仍在小结完成
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-GR"), eq(new BigDecimal("50")));
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
-        // 产出入 SFI: 锚 = 本计划 per-(plan,productType), 净量 = 40 (无同小结下游消耗)
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(), eq(null), eq(null), any());
-        assertThat(s.get("semiInQuantity")).isEqualTo(new BigDecimal("40"));
+        // #1252: 产出已在保存时入 SFI → 小结不再重复 postClerkOutput
+        verify(wipInventoryService, never()).postClerkOutput(
+                any(), any(), any(), any(), any(), any(), any(), any());
+        assertThat((BigDecimal) s.get("semiInQuantity")).isEqualByComparingTo(BigDecimal.ZERO);
         // 非成品 → 不进 FG
         verify(finishedGoodsBatchRepository, never()).save(any());
         assertThat(rM.getInterimSettledAt()).isNotNull();
@@ -649,71 +650,36 @@ class InterimSettleServiceTest {
                 .thenReturn(new ArrayList<>())
                 .thenReturn(new ArrayList<>());
 
-        // ── 小结1: 道A 产出入 anchorY (+60), 输入 SFI-RAW 严格扣 100 ──
+        // ── 小结1: 道A 产出已在保存时入 anchorY (小结不再 postClerkOutput), 输入 SFI-RAW 严格扣 100 ──
         Map<String, Object> s1 = service.interimSettle(FACTORY, PLAN_ID, 7L);
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-RAW"), eq(new BigDecimal("100")));
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchorY), eq(PRODUCT_TYPE), eq(new BigDecimal("60")), any(), eq(null), eq(null), any());
-        assertThat(s1.get("semiInQuantity")).isEqualTo(new BigDecimal("60"));
+        // #1252: 道A 产出已保存时入 SFI → 小结不 postClerkOutput
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
+        assertThat((BigDecimal) s1.get("semiInQuantity")).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(rA.getInterimSettledAt()).isNotNull();
 
         // ── 小结2: 道B 吃 anchorY (-60, 严格扣减), 成品 → FG ──
         Map<String, Object> s2 = service.interimSettle(FACTORY, PLAN_ID, 7L);
         assertThat(s2.get("sessionSeq")).isEqualTo(2);
-        // anchorY 被严格扣减 60 (先升后降净平)
+        // anchorY 被严格扣减 60 (保存时入的 60 在此被消耗, 先升后降净平)
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq(anchorY), eq(new BigDecimal("60")));
-        // 小结2 无新 SFI IN (道B 成品), postClerkOutput 累计仍 1 次 (仅来自小结1)
-        verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
+        // #1252: 全程小结从不 postClerkOutput (道A 保存时入, 道B 成品走 FG)
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         // 道B 成品 → FG 入库
         verify(finishedGoodsBatchRepository, times(1)).save(any());
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // 🔴 成本传导 (G3 SFI cost transmission) — 诚实 null
-    // ─────────────────────────────────────────────────────────────
-
     @Test
-    @DisplayName("成本传导(a): 纯SFI中间道 (吃 costed SFI + 人工) → postClerkOutput 带真实 unitCost (非 null)")
-    void sfiInCarriesRealMovingAverageCost() {
-        // 道M: SAVED_SFI, 吃常驻 SFI-A (unitCost=10) feed 50 + 本道人工 100 → 产出 40。
-        //   outputTotalCost = 人工100 + 50×10(=500) = 600; outputUnitCost = 600/40 = 15.0000。
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
-        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));  // 现算人工 (mock 覆写为 100)
-        ProcessSheetRow rM = pureSfiRow(50L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        // costed 输入 SFI + 本道人工现算
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
-        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
-
-        service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        // 输入 SFI 扣减 (严格)
-        verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-A"), eq(new BigDecimal("50")));
-        // 产出入 SFI: net 40 @ unitCost 15 (真实成本传导, 非 null)
-        ArgumentCaptor<BigDecimal> unitCostCap = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                unitCostCap.capture(), eq(null), any());
-        assertThat(unitCostCap.getValue()).isNotNull();
-        assertThat(unitCostCap.getValue()).isEqualByComparingTo("15");
-    }
-
-    @Test
-    @DisplayName("成本传导(b) 链: 半成品A(costed) → 道 → SFI-B → 气调成品(FG) → FG.unitCost 含传导成本")
+    @DisplayName("成本传导 链 (FG 侧不变): 半成品B(costed anchorB) → 气调成品(FG) → FG.unitCost 含传导成本 54 (#1252: 道A 保存时入库, 小结不 postClerkOutput)")
     void chainTransmitsCostThroughToFinishedGoods() {
         String anchorB = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        // 小结1: 道A (SAVED_SFI) 吃 RAW-SEMI(unitCost 5) feed 100, 无人工 → 产出 80 → 入 anchorB。
-        //   outputUnitCost = (0 + 100×5)/80 = 500/80 = 6.25
+        // 道A (SAVED_SFI): 产出 80 已在保存时入 anchorB @ 6.25 (小结不再 postClerkOutput)。
         ProcessSheetRow rA = pureSfiRow(60L, 1, anchorB,
                 reqNonFinished(1, anchorB, new BigDecimal("80"), upstreamSemi("RAW-SEMI", "100")));
-        // 小结2: 道C 成品, 吃 anchorB(=半成品B, semiFinished) feed 80, productWeight 10kg → FG。
-        //   pb.totalCost(人工/调料) = 40; FG total = 40 + 80×6.25(=500) = 540; FG unitCost = 540/10 = 54。
+        // 道C 成品, 吃 anchorB(=半成品B, semiFinished) feed 80, productWeight 10kg → FG。
+        //   pb.totalCost(人工/调料)=40; FG total = 40 + 80×6.25(=500) = 540; FG unitCost = 540/10 = 54。
         ProcessSheetRow rC = row(61L, 2, "CLK-B-C", reqFinished(2, "CLK-B-C", new BigDecimal("50"),
                 new BigDecimal("10"), upstreamSemi(anchorB, "80")));
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
@@ -721,25 +687,19 @@ class InterimSettleServiceTest {
                 .thenReturn(List.of(rA, rC));        // 小结2
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>()).thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "RAW-SEMI")).thenReturn(new BigDecimal("5"));
-        // 半成品B 的移动均价 (小结1 postClerkOutput 6.25 累加后; postClerkOutput 已 mock, 故此处代表其结果)
+        // anchorB 移动均价 (道A 保存时入库累加后的结果; 由 getSemiUnitCost mock 提供供 FG 成本传导)
         when(wipInventoryService.getSemiUnitCost(FACTORY, anchorB)).thenReturn(new BigDecimal("6.25"));
-        // 道C 成品的 ProductionBatch 成本 (人工/调料, 不含 SFI 投料)
         ProductionBatch pbC = new ProductionBatch();
         pbC.setId(61L);
         pbC.setFactoryId(FACTORY);
         pbC.setTotalCost(new BigDecimal("40.00"));
         when(batchRepository.findByIdAndFactoryId(61L, FACTORY)).thenReturn(Optional.of(pbC));
 
-        // ── 小结1: 道A 产出入 anchorB @ 6.25 ──
+        // ── 小结1: 道A 产出已保存时入库 → 小结不 postClerkOutput ──
         service.interimSettle(FACTORY, PLAN_ID, 7L);
-        ArgumentCaptor<BigDecimal> ucA = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchorB), eq(PRODUCT_TYPE), eq(new BigDecimal("80")), any(),
-                ucA.capture(), eq(null), any());
-        assertThat(ucA.getValue()).isEqualByComparingTo("6.25");
+        verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
 
-        // ── 小结2: 道C 成品 → FG.unitCost 含传导成本 = 54 ──
+        // ── 小结2: 道C 成品 → FG.unitCost 含传导成本 = 54 (FG 成本传导路径不变) ──
         service.interimSettle(FACTORY, PLAN_ID, 7L);
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
@@ -749,103 +709,14 @@ class InterimSettleServiceTest {
         assertThat(fg.getUnitCost()).isEqualByComparingTo("54"); // (40 + 80×6.25) / 10
     }
 
-    @Test
-    @DisplayName("成本传导(c) 诚实null: 输入 SFI 无成本(unitCost=null) → 产出 unitCost null (不伪造 ¥0), 即便本道有人工")
-    void nullCostSfiInputPoisonsOutputToNull() {
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("LEGACY-SFI", "50"));
-        req.setLaborSegments(List.of(seg("08:00", "10:00", 2)));  // 有人工, 但输入 SFI 无成本 → 整体诚实 null
-        ProcessSheetRow rM = pureSfiRow(70L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        // 旧库存: 输入 SFI unitCost 为 null (未接通成本)
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "LEGACY-SFI")).thenReturn(null);
-        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("50"));
-
-        service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        // 🔴 诚实 null: 输入无成本 → postClerkOutput 收到 unitCost = null (不因有人工而伪造部分成本)
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null), any());
-    }
-
-    @Test
-    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(isSeasoningStep) → 产出 null (不漏调料桶=禁止降级), 即便SFI成本+人工皆已知")
-    void pureSfiSeasoningStepByFlagReturnsNull() {
-        // 纯 SFI 调味道: SFI 投料有成本(10) + 人工有(100), 但调味道调料成本无处可算 → 整道诚实 null。
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
-        req.setSeasoningStep(true);                             // 前端显式调味标志
-        req.setLaborSegments(List.of(seg("08:00", "10:00", 1)));
-        ProcessSheetRow rM = pureSfiRow(80L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
-        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
-
-        service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        // 🔴 调味道调料桶未知 → null (不降级成 labor-only=(100+500)/40=15 假数据)
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null), any());
-    }
-
-    @Test
-    @DisplayName("成本传导(Fix1 #7) 诚实null: 纯SFI调味道(工序名'卤制'匹配) → 产出 null (工序名口径同 buildStepEntry)")
-    void pureSfiSeasoningStepByNameReturnsNull() {
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
-        req.setProcessName("卤制");                              // 工序名匹配 熟/卤/煮/腌/注射/入味/调味
-        ProcessSheetRow rM = pureSfiRow(81L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
-
-        service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                eq(null), eq(null), any());
-    }
-
-    @Test
-    @DisplayName("成本传导(Fix1 #7): 纯SFI非调味道(工序名'切片'不匹配) → 仍走 labor+SFI 成本 (不误伤非调味道)")
-    void pureSfiNonSeasoningStepStillCosted() {
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
-        req.setProcessName("切片");                              // 非调味 → 仍现算成本
-        req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));
-        ProcessSheetRow rM = pureSfiRow(82L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
-        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
-
-        service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        // 非调味道: (人工100 + 50×10) / 40 = 15 (成本正常传导, 不被 Fix1 误伤)
-        ArgumentCaptor<BigDecimal> uc = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(wipInventoryService, times(1)).postClerkOutput(
-                eq(FACTORY), eq(anchor), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                uc.capture(), eq(null), any());
-        assertThat(uc.getValue()).isEqualByComparingTo("15");
-    }
-
     // ─────────────────────────────────────────────────────────────
     // 撤销明细 (reversalDetail) — settle 写入供「撤销小结」精确逆转
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("撤销明细: 小结 summary 写 reversalDetail (sfiIn anchor/qty/totalCost 字符串 + sfiOutStrict)")
+    @DisplayName("撤销明细 (#1252 更新): 纯 SFI 中间道产出保存时入库 → 小结 reversalDetail.sfiIn 为空 (小结不再 SFI IN); sfiOutStrict 仍记输入扣减")
     void settleWritesReversalDetail() {
-        // 道M: SAVED_SFI, 吃常驻 SFI-A(unitCost 10) feed 50 + 人工 100 → 产出 40。
-        //   outputUnitCost = (100 + 50×10)/40 = 15; totalCost 记 15×40 = 600。
+        // 道M: SAVED_SFI, 吃常驻 SFI-A feed 50 → 产出 40 (产出已在保存时 SFI IN, 不在小结)。
         String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
         ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("SFI-A", "50"));
         req.setLaborSegments(List.of(seg("08:00", "13:00", 1)));
@@ -853,48 +724,22 @@ class InterimSettleServiceTest {
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
-        when(clerkProcessEntryService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
 
         Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
         assertThat(rd).isNotNull();
+        // #1252: 小结不再 SFI IN → reversalDetail.sfiIn 为空 (保存时的入库由 delete/resave 冲销, 不属小结撤销范围)
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> sfiIn = (List<Map<String, Object>>) rd.get("sfiIn");
-        assertThat(sfiIn).hasSize(1);
-        assertThat(sfiIn.get(0).get("anchor")).isEqualTo(anchor);
-        assertThat(sfiIn.get(0).get("qty")).isEqualTo("40");
-        // totalCost = outputUnitCost(15.0000) × net(40) = "600.0000" (= postClerkOutput 内 totalCost, scale-agnostic 比对)
-        assertThat(new BigDecimal((String) sfiIn.get(0).get("totalCost"))).isEqualByComparingTo("600");
+        assertThat(sfiIn).isEmpty();
+        // 输入 SFI 扣减仍在小结 → sfiOutStrict 记录 (撤销时 restoreClerkSemi 还回)
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> sfiOutStrict = (List<Map<String, Object>>) rd.get("sfiOutStrict");
         assertThat(sfiOutStrict).hasSize(1);
         assertThat(sfiOutStrict.get(0).get("batchNo")).isEqualTo("SFI-A");
         assertThat(sfiOutStrict.get(0).get("qty")).isEqualTo("50");
-    }
-
-    @Test
-    @DisplayName("撤销明细: SFI IN 成本诚实 null → reversalDetail.sfiIn.totalCost = null (撤销时不减 accumulatedCost)")
-    void settleReversalDetailNullCost() {
-        String anchor = WipInventoryService.clerkSemiAnchor(PLAN_ID, PRODUCT_TYPE);
-        ProcessSheetRowRequest req = reqNonFinished(1, anchor, new BigDecimal("40"), upstreamSemi("LEGACY-SFI", "50"));
-        ProcessSheetRow rM = pureSfiRow(201L, 1, anchor, req);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rM));
-        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
-                .thenReturn(new ArrayList<>());
-        when(wipInventoryService.getSemiUnitCost(FACTORY, "LEGACY-SFI")).thenReturn(null);
-
-        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> sfiIn = (List<Map<String, Object>>) rd.get("sfiIn");
-        assertThat(sfiIn).hasSize(1);
-        assertThat(sfiIn.get(0).get("qty")).isEqualTo("40");
-        assertThat(sfiIn.get(0).get("totalCost")).isNull();   // 诚实 null
     }
 
     @Test
