@@ -110,7 +110,9 @@ export function WHOutboundListScreen() {
   const loadData = useCallback(async () => {
     try {
       const [shipmentsResult, statsResult] = await Promise.allSettled([
-        shipmentApiClient.getShipments({ page: 1, size: 50 }),
+        // /shipments 后端是 0-based 分页 (defaultValue="0"); 传 page:1 会返回空 content
+        // (仅 8 条记录全在 page 0), 导致列表空但统计头显示"待出货 N 单".
+        shipmentApiClient.getShipments({ page: 0, size: 50 }),
         shipmentApiClient.getShipmentStats(),
       ]);
 
