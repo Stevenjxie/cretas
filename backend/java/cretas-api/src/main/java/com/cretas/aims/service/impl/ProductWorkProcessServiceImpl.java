@@ -76,6 +76,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .responsibleWorkerId(normalizedRw)
                 // Wave2 可配置报工粒度: null → 默认 true (逐道报, 向后兼容); 显式 false → 免报。
                 .reportingRequired(dto.getReportingRequired() == null ? Boolean.TRUE : dto.getReportingRequired())
+                // 半成品注入工序 (张权 R4): null → 默认 false (普通工序); 显式 true → 逐道录入可选 SFI/FG。
+                .allowSemiFinishedInjection(
+                        dto.getAllowSemiFinishedInjection() == null ? Boolean.FALSE : dto.getAllowSemiFinishedInjection())
                 // 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别)
                 .defaultCostCategory(dto.getDefaultCostCategory())
                 .packagingTemplate(dto.getPackagingTemplate())
@@ -150,6 +153,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getEstimatedMinutesOverride() != null) entity.setEstimatedMinutesOverride(dto.getEstimatedMinutesOverride());
         // Wave2 可配置报工粒度: null → no-change (partial update 不动现有值); 非 null → set (true/false 均可显式设)。
         if (dto.getReportingRequired() != null) entity.setReportingRequired(dto.getReportingRequired());
+        // 半成品注入工序 partial update: null → no-change; 非 null → set (true/false 均可显式设)。
+        if (dto.getAllowSemiFinishedInjection() != null) entity.setAllowSemiFinishedInjection(dto.getAllowSemiFinishedInjection());
         // 工序成本配置 partial update: null → no-change; 非 null → set
         if (dto.getDefaultCostCategory() != null) entity.setDefaultCostCategory(dto.getDefaultCostCategory());
         if (dto.getPackagingTemplate() != null) entity.setPackagingTemplate(dto.getPackagingTemplate());
@@ -243,6 +248,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                     // 防呆: 不复制人员指派 (各产品班组不同) — responsibleWorkerId/assignees 留空, 由用户另配
                     .responsibleWorkerId(null)
                     .reportingRequired(src.getReportingRequired())
+                    .allowSemiFinishedInjection(src.getAllowSemiFinishedInjection())
                     .defaultCostCategory(src.getDefaultCostCategory())
                     .packagingTemplate(src.getPackagingTemplate())
                     .auxAllocMethod(src.getAuxAllocMethod())
@@ -275,6 +281,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .assigneeWorkerIds(assigneeIds.isEmpty() ? null : assigneeIds)
                 .isActive(entity.getIsActive())
                 .reportingRequired(entity.getReportingRequired())
+                .allowSemiFinishedInjection(entity.getAllowSemiFinishedInjection())
                 .defaultCostCategory(entity.getDefaultCostCategory())
                 .packagingTemplate(entity.getPackagingTemplate())
                 .auxAllocMethod(entity.getAuxAllocMethod())

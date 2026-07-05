@@ -223,6 +223,12 @@ export interface ProductWorkProcessItem {
    * 六扇门只在领料/产出两点报工, 中间工序标 false。
    */
   reportingRequired?: boolean;
+  /**
+   * 半成品注入工序 (张权 R4): 是否可从中段起步选库里已有半成品(SFI)/成品(FG) 直接投料。
+   * true = 该工序逐道录入显示 SFI/FG 选择器 (跳过前段工序接续生产);
+   * false/undefined (默认) = 普通工序 (仅现有 archetype 兜底会显 picker)。
+   */
+  allowSemiFinishedInjection?: boolean;
   /** 工序默认成本类别 (报工自动继承; 防呆: 操作员不手填)。RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER */
   defaultCostCategory?: string | null;
   /** 工序默认包装明细模板 [{name,cost}] (膜/气体/标签/其他); 报工自动继承。 */

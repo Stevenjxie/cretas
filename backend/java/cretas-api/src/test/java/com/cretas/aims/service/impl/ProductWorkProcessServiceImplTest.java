@@ -258,6 +258,56 @@ class ProductWorkProcessServiceImplTest {
                     "显式 false → 持久化 false (免报)");
             assertEquals(Boolean.FALSE, result.getReportingRequired());
         }
+
+        // ===== 张权 R4: allowSemiFinishedInjection DTO 往返 =====
+
+        @Test
+        @DisplayName("UT-PWP-01g: create() allowSemiFinishedInjection 省略 (null) → 默认 false (普通工序)")
+        void testCreateAllowInjectionDefaultsFalse() {
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(1)
+                    .build();   // allowSemiFinishedInjection omitted
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.FALSE, entityCaptor.getValue().getAllowSemiFinishedInjection(),
+                    "省略 allowSemiFinishedInjection → 持久化 false (普通工序)");
+            assertEquals(Boolean.FALSE, result.getAllowSemiFinishedInjection(),
+                    "toDTO 应回填 allowSemiFinishedInjection=false");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-01h: create() allowSemiFinishedInjection=true → 半成品注入工序持久化 true + toDTO 回填")
+        void testCreateAllowInjectionTrue() {
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(2)
+                    .allowSemiFinishedInjection(true)
+                    .build();
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getAllowSemiFinishedInjection(),
+                    "显式 true → 持久化 true (半成品注入工序)");
+            assertEquals(Boolean.TRUE, result.getAllowSemiFinishedInjection());
+        }
     }
 
     @Nested
@@ -301,6 +351,45 @@ class ProductWorkProcessServiceImplTest {
             assertEquals(Boolean.FALSE, entityCaptor.getValue().getReportingRequired(),
                     "显式 false → 设为免报");
             assertEquals(Boolean.FALSE, result.getReportingRequired());
+        }
+
+        @Test
+        @DisplayName("UT-PWP-03g: update() allowSemiFinishedInjection=null → no-change (保留现有 true)")
+        void testUpdateAllowInjectionNullNoChange() {
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setAllowSemiFinishedInjection(true);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L)).thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .processOrder(5)
+                    .build();   // allowSemiFinishedInjection omitted
+
+            service.update(FACTORY_ID, 1L, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getAllowSemiFinishedInjection(),
+                    "allowSemiFinishedInjection 省略 → 不动现有值 (partial update no-change)");
+        }
+
+        @Test
+        @DisplayName("UT-PWP-03h: update() allowSemiFinishedInjection=true → 把现有 false 标为半成品注入工序")
+        void testUpdateAllowInjectionToTrue() {
+            ProductWorkProcess existing = buildDefaultAssociation();
+            existing.setAllowSemiFinishedInjection(false);
+            when(repository.findByFactoryIdAndId(FACTORY_ID, 1L)).thenReturn(Optional.of(existing));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .allowSemiFinishedInjection(true)
+                    .build();
+
+            ProductWorkProcessDTO result = service.update(FACTORY_ID, 1L, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getAllowSemiFinishedInjection(),
+                    "显式 true → 设为半成品注入工序");
+            assertEquals(Boolean.TRUE, result.getAllowSemiFinishedInjection());
         }
     }
 

@@ -46,7 +46,7 @@ const emit = defineEmits<{
 // (修油/滚揉/焯水/去舌苔) 可全映射到同一 archetype code (如 'chaoshui')。用 order
 // (产品工序链内唯一) 作唯一 key, code 仅用于①查列定义 PROCESS_SHEET_CONFIG[code]
 // ②透传给后端作 process_code 列 + 双键过滤的 archetype 分量。
-type ProcEntry = { code: string; order: number; label: string };
+type ProcEntry = { code: string; order: number; label: string; allowInjection: boolean };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
 function procKey(p: ProcEntry): string {
@@ -79,9 +79,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油' },
-  { code: 'chaoshui', order: 2, label: '焯水' },
-  { code: 'shuzhi',   order: 3, label: '熟制' },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -150,7 +150,8 @@ async function resolveProcesses() {
             code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';
           }
         }
-        return { code, order: it.processOrder, label: it.processName };
+        // 张权 R4: 该工序是否被配置为「半成品注入工序」→ 透传给 ProcessDataTable 作 config-driven picker gating。
+        return { code, order: it.processOrder, label: it.processName, allowInjection: it.allowSemiFinishedInjection === true };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
       // Filter only truly missing config entries (should not happen, but defensive).
@@ -332,6 +333,7 @@ defineExpose({ hasUnsavedRows });
             :process-code="proc.code"
             :process-order="proc.order"
             :process-label="proc.label"
+            :allow-semi-finished-injection="proc.allowInjection"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
