@@ -250,6 +250,23 @@ public class IntentExecutionOrchestrator {
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
+        if (userInput != null && !userInput.isEmpty() && !hasExplicitReadVeto(userInput)) {
+            IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
+            if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
+                AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
+                log.info("[RestaurantOpsGoldRoute] Pre-preprocessor phrase shortcut: input='{}', intentCode={}",
+                        userInput, phraseIntent.getIntentCode());
+                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
+                        .userInput(userInput)
+                        .intentCode(phraseIntent.getIntentCode())
+                        .sessionId(request.getSessionId())
+                        .enableThinking(request.getEnableThinking())
+                        .thinkingBudget(request.getThinkingBudget())
+                        .context(request.getContext())
+                        .build();
+                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+            }
+        }
         String vInput = request.getUserInput();
         if (vInput != null && !vInput.isEmpty()) {
             QueryPreprocessorService.NegationKind vk;
@@ -1182,6 +1199,30 @@ public class IntentExecutionOrchestrator {
             }
         }
         return false;
+    }
+
+    private boolean hasExplicitReadVeto(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String q = input.replaceAll("\\s+", "");
+        return containsAny(q,
+                "\u4e0d\u8981\u67e5",
+                "\u4e0d\u8981\u770b",
+                "\u522b\u67e5",
+                "\u522b\u770b",
+                "\u4e0d\u7528\u67e5",
+                "\u4e0d\u7528\u770b",
+                "\u4e0d\u9700\u8981\u67e5",
+                "\u4e0d\u9700\u8981\u770b",
+                "\u4e0d\u60f3\u67e5",
+                "\u4e0d\u60f3\u770b",
+                "\u5148\u522b\u67e5",
+                "\u5148\u522b\u770b",
+                "\u65e0\u9700\u67e5",
+                "\u65e0\u9700\u770b",
+                "\u4e0d\u67e5",
+                "\u4e0d\u770b");
     }
 
     // ==================== 分析流程 ====================

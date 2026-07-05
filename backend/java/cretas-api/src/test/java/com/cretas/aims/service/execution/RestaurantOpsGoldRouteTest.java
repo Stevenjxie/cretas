@@ -441,4 +441,119 @@ class RestaurantOpsGoldRouteTest {
                 eq("admin"),
                 any());
     }
+
+    @Test
+    @DisplayName("natural restaurant revenue question routes through gold report intent")
+    void naturalRestaurantRevenueQuestionRoutesThroughGoldReportIntent() {
+        AIIntentConfig salesSummary = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                .intentName("Restaurant sales summary")
+                .intentCategory("SMARTBI")
+                .toolName("restaurant_ops_gold_analysis")
+                .businessType("RESTAURANT")
+                .build();
+        when(queryPreprocessorService.detectNegationVeto(any(), any()))
+                .thenReturn(QueryPreprocessorService.NegationKind.NONE);
+        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.of(salesSummary));
+        when(aiIntentService.hasPermission(eq("RESTAURANT_OPS_SALES_SUMMARY"), eq("admin")))
+                .thenReturn(true);
+
+        ToolExecutor goldTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_ops_gold_analysis"))
+                .thenReturn(Optional.of(goldTool));
+        when(toolDispatchService.executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any()))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                        .intentName("Restaurant sales summary")
+                        .status("SUCCESS")
+                        .message("本周营收已按餐饮报表汇总")
+                        .resultData(Map.of("source", "restaurant_ops_gold_analysis"))
+                        .build());
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("查询本周营收")
+                .build();
+
+        IntentExecuteResponse response = orchestrator.execute("DEMO_REST", request, 7L, "admin");
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(response.getMessage()).contains("餐饮报表");
+        verify(toolDispatchService).executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any());
+    }
+
+    @Test
+    @DisplayName("positive restaurant report phrase routes before preprocessor veto noise")
+    void positiveRestaurantReportPhraseRoutesBeforePreprocessorVetoNoise() {
+        AIIntentConfig salesSummary = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                .intentName("Restaurant sales summary")
+                .intentCategory("SMARTBI")
+                .toolName("restaurant_ops_gold_analysis")
+                .businessType("RESTAURANT")
+                .build();
+        when(queryPreprocessorService.detectNegationVeto(any(), any()))
+                .thenReturn(QueryPreprocessorService.NegationKind.VETO_WRITE);
+        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.of(salesSummary));
+        when(aiIntentService.hasPermission(eq("RESTAURANT_OPS_SALES_SUMMARY"), eq("admin")))
+                .thenReturn(true);
+
+        ToolExecutor goldTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_ops_gold_analysis"))
+                .thenReturn(Optional.of(goldTool));
+        when(toolDispatchService.executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any()))
+                .thenReturn(IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode("RESTAURANT_OPS_SALES_SUMMARY")
+                        .intentName("Restaurant sales summary")
+                        .status("SUCCESS")
+                        .message("本周营收已按餐饮报表汇总")
+                        .resultData(Map.of("source", "restaurant_ops_gold_analysis"))
+                        .build());
+
+        IntentExecuteResponse response = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput("查询本周营收").build(),
+                7L,
+                "admin");
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
+        verify(toolDispatchService).executeWithTool(
+                eq(goldTool),
+                eq("DEMO_REST"),
+                any(IntentExecuteRequest.class),
+                eq(salesSummary),
+                eq(7L),
+                eq("admin"),
+                any());
+    }
 }
