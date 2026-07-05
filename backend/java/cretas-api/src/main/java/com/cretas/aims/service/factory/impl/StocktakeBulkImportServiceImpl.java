@@ -83,6 +83,22 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             row.setActualQty(null); // 留空待仓管填写
             rows.add(row);
         }
+        // 期初建账 fool-proof (低文化用户): 仓库当前没有任何批次(通常是新工厂第一次建账)时,
+        // 模板只有表头一片空白, 用户不知道"新物料怎么填"。加一行示例(批次号留空 = 新物料),
+        // 直接演示"物料名称+数量+单价"三格怎么填。示例行物料名称含提示文字, 若用户没删除就导入,
+        // 会在物料字典里查不到而诚实报错(不是静默生效), 前端预览表已能展示该错误行 + 原因,
+        // 用户看得到"这行有问题"而不是无声失败。
+        if (rows.isEmpty()) {
+            StocktakeImportRowDTO example = new StocktakeImportRowDTO();
+            example.setMaterialName("示例：白砂糖（请改成你的物料名称，删掉本行示例后再导入）");
+            example.setBatchNumber(""); // 留空 = 新物料，从 0 建账
+            example.setWarehouseName(warehouse.getName());
+            example.setSystemQty(BigDecimal.ZERO);
+            example.setUnit("kg");
+            example.setActualQty(new BigDecimal("100")); // 示例：期初库存 100 kg
+            example.setUnitPrice(new BigDecimal("6.50")); // 示例单价，可留空
+            rows.add(example);
+        }
         log.info("盘点批量导入: 导出模板 factoryId={} warehouseId={} rows={}", factoryId, warehouseId, rows.size());
         return excelUtil.exportToExcel(rows, StocktakeImportRowDTO.class, SHEET_NAME);
     }
