@@ -662,6 +662,22 @@ def test_owner_action_chat_routes_overstock_question_to_cost_margin() -> None:
     assert "缺" not in data["answer"]
 
 
+def test_owner_action_chat_cost_margin_mentions_review_and_quality_risk() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_COST_REVIEW_FUSION",
+            message="这个星期营收比上周有什么问题，结合评论和菜品毛利给我直接建议",
+            demo_scenario="cost_margin",
+        )
+    )
+
+    answer = response["data"]["answer"]
+    assert response["data"]["scenario"] == "cost_margin"
+    assert "差评" in answer or "评价" in answer
+    assert "BOM" in answer
+    assert "毛利" in answer
+
+
 def test_owner_action_chat_routes_bom_variance_question_to_cost_margin() -> None:
     cases = [
         ("BOM理论用量和实际用量不一致，先查什么？", "cost_margin"),
@@ -684,6 +700,22 @@ def test_owner_action_chat_routes_bom_variance_question_to_cost_margin() -> None
         assert data["scenario"] == expected_scenario
         assert "一句话结论" in data["answer"]
         assert "缺" not in data["answer"]
+
+
+def test_owner_action_chat_seating_mix_gives_table_level_action() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_SEATING_TABLE_DETAIL",
+            message="今天桌型和排班怎么调，二人桌四人桌怎么安排？",
+        )
+    )
+
+    answer = response["data"]["answer"]
+    assert response["data"]["scenario"] == "seating_mix"
+    assert "2 张四人桌" in answer
+    assert "2 人客" in answer
+    assert "3-4 人客" in answer
+    assert "四人桌被二人客占用" in answer
 
 
 def test_owner_action_chat_routes_returned_dish_rework_question_to_kitchen() -> None:

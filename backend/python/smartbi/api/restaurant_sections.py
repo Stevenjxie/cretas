@@ -414,14 +414,14 @@ def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> 
         return "staff_training"
     if any(keyword in message for keyword in ("厨师长、仓管、前台", "仓管厨师长前台", "分别盯什么", "分别要做什么", "各岗位", "谁做什么")):
         return "operations_dispatch"
+    if any(keyword in message for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
+        return "seating_mix"
     if any(keyword in message for keyword in ("几段班", "员工工时", "工时", "午市", "晚市", "排班", "人效")):
         return "staffing_schedule"
     if any(keyword in message for keyword in ("商场今天有活动", "商场活动", "商圈活动", "周边活动", "天气", "下雨", "雨天", "天气不好", "高温", "天气热", "节日", "外部活动")):
         return "external_event_response"
     if "套餐" in message and any(keyword in message for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备")):
         return "package"
-    if any(keyword in message for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
-        return "seating_mix"
     if any(keyword in message for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢")) and not any(keyword in message for keyword in ("备菜", "备货", "补货", "库存")):
         return "kitchen_quality"
     if any(keyword in message for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "盘点", "月盘点", "损耗", "采购价格", "盈利")):
@@ -651,8 +651,17 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
     if scenario == "cost_margin":
         food_cost = _owner_pct(financial.get("foodCostRatio"))
         gross = financial.get("grossMarginPct")
+        review = params.get("review_summary") if isinstance(params.get("review_summary"), dict) else {}
         losses = "、".join(str(item) for item in (stocktake.get("topLossItems") or [])[:2])
         variance = "、".join(str(item) for item in (stocktake.get("varianceItems") or [])[:2])
+        negative_themes = "、".join(
+            str(item.get("theme")) for item in (review.get("negativeThemes") or [])[:2]
+            if isinstance(item, dict) and item.get("theme")
+        )
+        negative_dishes = "、".join(
+            str(item.get("name")) for item in (review.get("negativeDishMentions") or [])[:2]
+            if isinstance(item, dict) and item.get("name")
+        )
         parts = []
         if food_cost is not None:
             parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross or 51}%，比健康状态更紧。")
@@ -660,7 +669,12 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
             parts.append(f"盘点先指向 {losses} 这些损耗点。")
         if variance:
             parts.append(f"BOM 和实际用量差异主要在 {variance}。")
-        parts.append("所以今天先查采购价、BOM 用量和后厨损耗，不要只让前厅多卖。")
+        if negative_dishes or negative_themes:
+            parts.append(
+                f"评价里还点到了 {negative_dishes or '招牌菜'}"
+                f"{' 和 ' + negative_themes if negative_themes else ''}，说明不能只压成本，也要避免出品和服务把复购打掉。"
+            )
+        parts.append("所以今天先查采购价、BOM 用量、后厨损耗和差评菜品，不要只让前厅多卖。")
         return "".join(parts)
 
     return fallback
@@ -690,9 +704,16 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
             "收银和门迎今天专门盯核销客：进店先确认券、引导点招牌；同时看顾客评论和差评，别把上菜慢、服务解释不清的问题带到新客身上。",
         ]
     if scenario == "seating_mix":
+        segments = pos.get("customerSegments") if isinstance(pos.get("customerSegments"), list) else []
+        two_person_share = next((
+            _owner_pct(item.get("share"))
+            for item in segments
+            if isinstance(item, dict) and ("2" in str(item.get("segment")) or "二" in str(item.get("segment")))
+        ), None)
+        two_person_text = f"当前两人客大约占 {two_person_share}%，" if two_person_share is not None else ""
         return [
-            "午市和晚高峰先把 2 张四人桌改成可拼可拆：两人客来了不要占死四人桌，四人客来了再拼回去。",
-            "前厅今天按“先看人数、再引导桌型、再推荐双人/四人套餐”走，避免排队多但客单价没起来。",
+            f"{two_person_text}午市和晚高峰先把 2 张四人桌改成可拼可拆：两人客来了不要占死四人桌，四人客来了再拼回去。",
+            "前厅今天按“先看人数、再引导桌型、再推荐双人/四人套餐”走；2 人客优先落两人位或拼拆位，3-4 人客再合桌，不要让大桌被小桌占死。",
             "先别直接加排班或催厨房；如果桌型错了，加员工和提出餐速度也只是把堵点往后移。服务和上菜差评仍然要看，但今天先用翻台数据判断是不是桌型堵住了。",
         ]
     if scenario == "staffing_schedule":
@@ -774,13 +795,13 @@ def _owner_watch_numbers(owner_page: dict[str, Any], scenario: str) -> str:
     focus = owner_page.get("decisionFocus") if isinstance(owner_page.get("decisionFocus"), dict) else {}
     action_type = focus.get("primaryActionType")
     if action_type == "seating_mix":
-        return "今天看三个数：二人客等位多久、翻台次数、空桌时间。等位少了、空桌少了，桌型就调对了。"
+        return "今天看四个数：二人客等位多久、四人桌被二人客占用几次、翻台次数、空桌时间。等位少了、四人桌被占少了、空桌少了，桌型就调对了。"
     if action_type == "staffing_schedule":
         return "今天看三个数：高峰等位、上菜时长、差评关键词。等位和上菜时间降下来，排班就有用。"
     if action_type == "package":
         return "今天看三个数：套餐卖了多少份、有没有拉高客单、毛利有没有守住。只卖得多但毛利掉了，就不是好套餐。"
     if scenario == "cost_margin":
-        return "今天看三个数：活鱼采购价、BOM 实际偏差、盘点损耗金额。三项收窄，毛利才是真的补回来了。"
+        return "今天看四个数：活鱼采购价、BOM 实际偏差、盘点损耗金额、差评里被点名的菜品。前三项收窄且差评没变多，毛利才是真的补回来了。"
     if scenario == "store_compare":
         return "今天看三个数：工作日午市收入、双人套餐占比、客单价。它们追上对标店，说明复制动作有效。"
     return "今天看三个数：订单数、客单价、差评关键词。先看动作有没有让生意变好，再决定要不要扩大。"

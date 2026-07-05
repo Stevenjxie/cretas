@@ -19,8 +19,10 @@ import com.cretas.aims.dto.intent.ValidationResult;
 import com.cretas.aims.entity.AIAnalysisResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.conversation.ConversationSession;
+import com.cretas.aims.entity.intent.IntentMatchRecord;
 import com.cretas.aims.exception.LlmSchemaValidationException;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
+import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
@@ -33,6 +35,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -120,6 +123,9 @@ public class IntentExecutionOrchestrator {
 
     @Autowired(required = false)
     private ProductTypeRepository productTypeRepository;
+
+    @Autowired(required = false)
+    private IntentMatchRecordRepository intentMatchRecordRepository;
 
     @Autowired(required = false)
     private SlotFillingService slotFillingService;
@@ -1743,7 +1749,7 @@ public class IntentExecutionOrchestrator {
                 "已生成老板决策建议。");
         String sessionId = stringValue(data.get("sessionId"));
 
-        return IntentExecuteResponse.builder()
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode("RESTAURANT_OWNER_ACTION_CHAT")
                 .intentName("餐饮老板动作建议")
@@ -1759,6 +1765,49 @@ public class IntentExecutionOrchestrator {
                 .sessionId(sessionId)
                 .metadata(ownerActionMetadata(userId))
                 .build();
+        recordOwnerActionIntentMatch(factoryId, request, userId, response);
+        return response;
+    }
+
+    private void recordOwnerActionIntentMatch(String factoryId,
+                                              IntentExecuteRequest request,
+                                              Long userId,
+                                              IntentExecuteResponse response) {
+        if (intentMatchRecordRepository == null || request == null || response == null
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return;
+        }
+        try {
+            String sessionId = firstNonBlank(
+                    response.getSessionId(),
+                    request.getSessionId(),
+                    stringValue(request.getContext() != null ? request.getContext().get("ownerActionSessionId") : null));
+            IntentMatchRecord record = new IntentMatchRecord();
+            record.setFactoryId(factoryId != null ? factoryId : "DEFAULT");
+            record.setUserId(userId != null ? userId : 0L);
+            record.setSessionId(sessionId);
+            record.setUserInput(request.getUserInput());
+            record.setNormalizedInput(request.getUserInput().toLowerCase(Locale.ROOT).trim());
+            record.setMatchedIntentCode("RESTAURANT_OWNER_ACTION_CHAT");
+            record.setMatchedIntentName("餐饮老板动作建议");
+            record.setMatchedIntentCategory("RESTAURANT");
+            record.setConfidenceScore(BigDecimal.valueOf(0.99));
+            record.setMatchMethod(IntentMatchRecord.MatchMethod.PHRASE_MATCH);
+            record.setLlmCalled(false);
+            record.setExecutionStatus(IntentMatchRecord.ExecutionStatus.EXECUTED);
+            record.setExecutionResult(truncateForRecord(response.getMessage(), 1000));
+            record.setExecutedAt(LocalDateTime.now());
+            intentMatchRecordRepository.save(record);
+        } catch (Exception e) {
+            log.warn("Record restaurant owner-action intent match failed: {}", e.getMessage());
+        }
+    }
+
+    private String truncateForRecord(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private IntentExecuteResponse buildRestaurantOwnerActionError(String message, Long userId) {
