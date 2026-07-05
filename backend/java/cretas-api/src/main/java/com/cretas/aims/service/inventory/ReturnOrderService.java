@@ -14,6 +14,13 @@ public interface ReturnOrderService {
 
     ReturnOrder getReturnOrderById(String factoryId, String returnOrderId);
 
+    /**
+     * Bug 4 fix (2026-07): 详情页专用 — 在 getReturnOrderById 基础上 enrich 只读展示字段
+     * (counterpartyName / sourceOrderNumber / approvedByName), 避免前端直接显示原始 UUID/user id
+     * (fool-proof-design Rule 2: 上下文必带身份信息).
+     */
+    ReturnOrder getReturnOrderDetail(String factoryId, String returnOrderId);
+
     PageResponse<ReturnOrder> getReturnOrders(String factoryId, ReturnType returnType,
                                                ReturnOrderStatus status, int page, int size);
 

@@ -403,11 +403,26 @@ function availableQty(row: TableRow) {
   return (Number(row.producedQuantity) || 0) - (Number(row.shippedQuantity) || 0) - (Number(row.reservedQuantity) || 0);
 }
 
+// Bug 2 fix (fool-proof-design Rule 1): 此前状态列纯按数量算 (充足/紧张/缺货), 从不读
+// row.status —— 一个 DEFECTIVE (不良品/已隔离, 如退货入库批次) 的批次数量算下来会显示"充足",
+// 与正常可售批次视觉上一模一样, 仓管员误以为可正常出货。后端已把它排除在 FEFO/可售查询外
+// (status !== 'AVAILABLE'), 这里只是显示诚实化 —— 状态优先于数量判断。
+function isDefective(row: TableRow): boolean {
+  return String((row as Record<string, unknown>).status || '').toUpperCase() === 'DEFECTIVE';
+}
 function statusType(row: TableRow) {
+  if (isDefective(row)) return 'danger';
   const avail = availableQty(row);
   if (avail <= 0) return 'danger';
   if (avail < (Number(row.producedQuantity) || 1) * 0.2) return 'warning';
   return 'success';
+}
+function statusLabel(row: TableRow) {
+  if (isDefective(row)) return '不良品(已隔离)';
+  const avail = availableQty(row);
+  if (avail <= 0) return '已售罄';
+  if (avail < (Number(row.producedQuantity) || 1) * 0.2) return '库存低';
+  return '充足';
 }
 </script>
 
@@ -477,7 +492,7 @@ function statusType(row: TableRow) {
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="statusType(row)" size="small">
-              {{ availableQty(row) <= 0 ? '已售罄' : availableQty(row) < (Number(row.producedQuantity) || 1) * 0.2 ? '库存低' : '充足' }}
+              {{ statusLabel(row) }}
             </el-tag>
           </template>
         </el-table-column>

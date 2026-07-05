@@ -80,8 +80,13 @@ async function handleAction(action: 'submit' | 'approve' | 'finance-approve' | '
     : '审批通过后, 立即触发 AR/AP 冲减 (无库存动作). 后续需财务审批 + 完成标记状态. 确认审批?';
   // 六扇门 Tier0 #16: 退货跟钱有关, 业务审批后必须财务审批才能完成/出货.
   const financeMsg = '财务审批通过后, 退货单状态置为 财务已审, 可交仓管完成出货. 确认财务审批?';
+  // Bug 1 fix (2026-07): issue #571 Phase C 库存自动入库已实现 (completeReturnOrder 自动创建
+  // 不良品批次入总仓/WH-LOG). 旧文案说"暂未自动实现, 需仓管员手动入库"是过时信息 —— 若仓管员按
+  // 旧文案手动补录一笔, 会与系统自动生成的批次重复计数 (double-count). 改为如实告知"已自动完成".
   const completeMsg = withGoods
-    ? '标记完成: 触发 AR/AP 冲减. 注意: 库存入库到总仓 + 不良品状态 暂未自动实现 (issue #571 Phase C), 需仓管员手动入库. 确认完成?'
+    ? (order.value?.returnType === 'PURCHASE_RETURN'
+        ? '标记完成: 触发 AR/AP 冲减 + 系统自动从库存扣减对应原料(退回供应商), 无需仓管员手动操作. 确认完成?'
+        : '标记完成: 触发 AR/AP 冲减 + 系统自动将退货批次(不良品状态)入库总仓, 无需仓管员手动入库. 确认完成?')
     : '标记完成: 仅状态置为已完成. AR/AP 冲减已在审批时完成. 确认?';
   const messages: Record<string, string> = {
     submit: '确认提交本退货单进入审批?',
@@ -97,7 +102,15 @@ async function handleAction(action: 'submit' | 'approve' | 'finance-approve' | '
   try {
     const res = await post(`/${factoryId.value}/return-orders/${returnOrderId.value}/${action}`, {});
     if (res.success) {
-      ElMessage.success('操作成功');
+      // Bug 1 follow-through: 后端 completeReturnOrder 会算出 completionHint (如"余额冲减待
+      // 财务审批")但此前前端从未展示过 —— 补上, 避免 4 位一体铁律 (b) "toast 文案含真实业务提示"缺失.
+      const hint = (res.data as TableRow | undefined)?.completionHint;
+      ElMessage({
+        message: hint ? `操作成功. ${hint}` : '操作成功',
+        type: 'success',
+        duration: hint ? 6000 : 3000,
+        showClose: !!hint,
+      });
       await loadData();
     }
   } catch { /* interceptor 透传后端 message (含 409 状态机/防呆 hint) */ }

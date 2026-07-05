@@ -71,6 +71,20 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
                     .withHintTarget("销售订单");
         }
 
+        // Bug 5 fix (defense-in-depth, 2026-07): 超额收款此前只有前端 computedRemainingAmount()
+        // 拦截 —— 非 UI 客户端 (直接调 API) 可绕过。镜像前端 paymentOverLimit 的上限逻辑,
+        // 服务端也拒绝 amount > 待收余额 (totalAmount - paidAmount), 与 400/409 loud-fail 一致。
+        BigDecimal totalAmount = so.getTotalAmount() != null ? so.getTotalAmount() : BigDecimal.ZERO;
+        BigDecimal paidAmount = so.getPaidAmount() != null ? so.getPaidAmount() : BigDecimal.ZERO;
+        BigDecimal remaining = totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
+        if (amount != null && amount.compareTo(remaining) > 0) {
+            throw new com.cretas.aims.exception.BusinessException(409, String.format(
+                    "收款金额 ¥%s 超过该订单待收余额 ¥%s, 请调低",
+                    amount.stripTrailingZeros().toPlainString(), remaining.stripTrailingZeros().toPlainString()))
+                    .withHint("待收余额 = 订单总额 - 已收金额, 请核实收款金额后重试")
+                    .withHintTarget(salesOrderId);
+        }
+
         // 防呆 R4 (幂等防双击/重试): 60s 窗口内同 工厂/销售单/金额 的待核收款 → 409 + 已有单号。
         // 金额双计入 SO paidAmount 是资金完整性 bug (edge-case 审计 2026-06-24 抓: 双击建 2 条 PENDING)。
         // 窗口取 60s (非 5min): 双击/网络重试是亚秒级, 60s 足够拦截; 同时把"60s 内两笔真实等额分期"

@@ -454,22 +454,28 @@ async function handleRequestSubmit() {
             该订单已全额开票, 无需再次申请
           </template>
         </el-alert>
+        <!-- fool-proof-design Rule 1 (block-not-clamp fix): 不绑定 :max — ElementPlus
+             InputNumber 会在按键时静默 clamp modelValue 到 max (见 sales/orders/detail.vue
+             收款对话框同款修复注释), 之前这里绑了 :max 导致 requestOverLimit 永远算不出
+             true (值还没来得及超限就被静默拉回), 红字警示 v-if="requestOverLimit" 死代码
+             永不触发 —— 用户体验是"输入超限金额被悄悄改小", 跟收款对话框行为不一致。
+             改用 over-limit-input/over-limit-hint 显式红框 + 红字 + 禁用提交 三重防御. -->
         <el-form-item v-if="canViewPrice" label="不含税金额" required>
           <el-input-number
             v-model="requestForm.amount"
             :min="0"
-            :max="unbilledAmount > 0 ? unbilledAmount : undefined"
             :precision="2"
             style="width:100%"
+            :class="{ 'over-limit-input': requestOverLimit }"
           />
         </el-form-item>
         <el-form-item v-if="canViewPrice" label="税额">
           <el-input-number
             v-model="requestForm.taxAmount"
             :min="0"
-            :max="unbilledAmount > 0 ? unbilledAmount : undefined"
             :precision="2"
             style="width:100%"
+            :class="{ 'over-limit-input': requestOverLimit }"
           />
         </el-form-item>
         <!-- 防呆 R1: 实时显示 价税合计 vs 未开 上限 + 超限警示 -->
@@ -477,9 +483,9 @@ async function handleRequestSubmit() {
           <span :style="{ color: requestOverLimit ? '#f56c6c' : '#303133', fontWeight: 'bold' }">
             ¥{{ (Number(requestForm.amount || 0) + Number(requestForm.taxAmount || 0)).toFixed(2) }}
           </span>
-          <span v-if="requestOverLimit" style="color:#f56c6c;margin-left:8px;font-size:12px">
+          <div v-if="requestOverLimit" class="over-limit-hint over-limit-hint--danger">
             超过未开金额 ¥{{ unbilledAmount.toFixed(2) }}, 请调低
-          </span>
+          </div>
         </el-form-item>
         <el-form-item label="发票类型">
           <el-select v-model="requestForm.invoiceType" style="width:100%">
@@ -552,3 +558,20 @@ async function handleRequestSubmit() {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+/* fool-proof-design Rule 1: 开票超限提示 (与 sales/orders/detail.vue 收款对话框同款,
+   不用 el-input-number :max 静默 clamp — 显式红框 + 红字 + 禁用提交). */
+.over-limit-hint {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.over-limit-hint--danger {
+  color: #f56c6c;
+}
+:deep(.over-limit-input .el-input__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
+}
+</style>
