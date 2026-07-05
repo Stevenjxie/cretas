@@ -2044,11 +2044,16 @@ async function handleInterimSettle(row: TableRow) {
  */
 async function handleReverseInterimSettle(row: TableRow) {
   const planId = String(row.id);
-  const planLabel = String(row.planName || row.planNumber || planId);
+  // 防呆 Rule 2 (UX 修复): 之前 planLabel 落回 row.planNumber, 再与后面拼接的 (${row.planNumber})
+  // 撞在一起 → 弹窗标题/正文变成「PLAN-XXX」(PLAN-XXX) 计划号显示两次, 没有品名。改用与
+  // handleInterimSettle (确认小结) 同款拼法: 品名 (计划号)，没有品名时才退化为纯计划号。
+  const productLabel = String(row.productTypeName || row.productName || row.productTypeId || '');
+  const planNumberLabel = String(row.planNumber || planId);
+  const planLabel = productLabel ? `${productLabel} (${planNumberLabel})` : planNumberLabel;
   let reason = '';
   try {
     const { value } = await ElMessageBox.prompt(
-      `申请撤销「${planLabel}」(${row.planNumber}) 的最近一次小结。撤销需审批，通过后才逆转入库并还回消耗（误结的逐道行恢复可编辑）；仅限小结后24小时内。请填写撤销原因：`,
+      `申请撤销「${planLabel}」的最近一次小结。撤销需审批，通过后才逆转入库并还回消耗（误结的逐道行恢复可编辑）；仅限小结后24小时内。请填写撤销原因：`,
       '撤销小结-申请',
       {
         type: 'warning',

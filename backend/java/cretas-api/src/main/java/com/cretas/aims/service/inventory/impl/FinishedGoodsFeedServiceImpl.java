@@ -315,15 +315,70 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
             }
             BigDecimal gone = qty.subtract(recoverable);
             BigDecimal explained = shipped.add(childShippedReserved).add(reserved).add(inTransitQty);
+            // 🔴 消息准确性修复 (fool-proof Rule 4/5): 剩余缺口不再笼统归咎"下游生产领用" —
+            //   producedQuantity 也可能被人工调整(报废 SCRAP / 盘点 STOCKTAKE / 其它 OTHER, 见
+            //   AdjustFinishedGoodsRequest.ReferenceType)直接减掉, 那种场景下"请先撤销下游领用"是
+            //   不存在的补救路径(dead-end)。查主批调整流水精确点名真实原因 + 给诚实的下一步。
+            boolean hasIrrecoverableLoss = false;   // SCRAP/STOCKTAKE/OTHER 减量: 无法通过撤销恢复
             if (gone.compareTo(explained) > 0) {
-                cause.append(" 部分成品已被下游生产领用, 请先撤销下游领用;");
+                BigDecimal unexplained = gone.subtract(explained);
+                List<FinishedGoodsAdjustmentLog> logs =
+                        finishedGoodsAdjustmentLogRepository.findByBatchIdOrderByCreatedAtDesc(fg.getId());
+                BigDecimal feedConsumed = BigDecimal.ZERO;
+                BigDecimal scrapLoss = BigDecimal.ZERO;
+                BigDecimal stocktakeLoss = BigDecimal.ZERO;
+                BigDecimal otherLoss = BigDecimal.ZERO;
+                for (FinishedGoodsAdjustmentLog l : logs) {
+                    BigDecimal q = l.getAdjustmentQuantity();
+                    String rt = l.getReferenceType();
+                    if (q == null || q.signum() >= 0 || REF_INTERIM_REVERSAL.equals(rt)) {
+                        continue;   // 只算"减少 produced"且非本次撤销自身记账的流水
+                    }
+                    BigDecimal loss = q.negate();
+                    if (REF_PRODUCTION_FEED.equals(rt)) {
+                        feedConsumed = feedConsumed.add(loss);
+                    } else if ("SCRAP".equals(rt)) {
+                        scrapLoss = scrapLoss.add(loss);
+                    } else if ("STOCKTAKE".equals(rt)) {
+                        stocktakeLoss = stocktakeLoss.add(loss);
+                    } else {
+                        otherLoss = otherLoss.add(loss);
+                    }
+                }
+                if (feedConsumed.signum() > 0) {
+                    cause.append(" 已被下游生产领用 ").append(feedConsumed.stripTrailingZeros().toPlainString()).append(";");
+                }
+                if (scrapLoss.signum() > 0) {
+                    cause.append(" 已报废 ").append(scrapLoss.stripTrailingZeros().toPlainString())
+                            .append(" (报废量无法通过撤销恢复);");
+                    hasIrrecoverableLoss = true;
+                }
+                if (stocktakeLoss.signum() > 0) {
+                    cause.append(" 盘点已发生盘亏 ").append(stocktakeLoss.stripTrailingZeros().toPlainString())
+                            .append(" (盘亏已过账, 不随撤销自动冲销);");
+                    hasIrrecoverableLoss = true;
+                }
+                if (otherLoss.signum() > 0) {
+                    cause.append(" 其它人工调整减少 ").append(otherLoss.stripTrailingZeros().toPlainString())
+                            .append(" (该调整不随撤销自动冲销);");
+                    hasIrrecoverableLoss = true;
+                }
+                BigDecimal stillUnexplained = unexplained.subtract(feedConsumed).subtract(scrapLoss)
+                        .subtract(stocktakeLoss).subtract(otherLoss);
+                if (stillUnexplained.signum() > 0) {
+                    cause.append(" 另有 ").append(stillUnexplained.stripTrailingZeros().toPlainString())
+                            .append(" 缺口原因不明 (请核实批次调整流水);");
+                }
             }
+            String remedyHint = hasIrrecoverableLoss
+                    ? "该批次成品部分已报废/盘亏/人工调整, 对应数量无法通过撤销小结恢复; 如另涉及下游发货/预留/调拨/生产领用, 请先撤销对应下游单据"
+                    : "该批次成品部分已发货/预留/调拨在途/下游领用, 请先撤销对应下游单据再重试";
             throw new BusinessException(409, "成品批次 " + batchNumber + " 无法撤销小结入库 "
                     + qty.stripTrailingZeros().toPlainString() + " (仅 "
                     + recoverable.stripTrailingZeros().toPlainString() + " 可回收):"
-                    + (cause.length() > 0 ? cause : " 部分成品已流出/消耗;") + " 请先撤销相应下游单据再重试")
+                    + (cause.length() > 0 ? cause : " 部分成品已流出/消耗;") + " " + remedyHint)
                     .withCode("FG_DOWNSTREAM_CONSUMED")
-                    .withHint("该批次成品部分已发货/预留/调拨在途/下游领用, 请先撤销对应下游单据再重试")
+                    .withHint(remedyHint)
                     .withSeverity("BLOCKING")
                     .withHintTarget(batchNumber);
         }
