@@ -21,6 +21,7 @@ import com.cretas.aims.repository.factory.SemiFinishedStocktakeRepository;
 import com.cretas.aims.service.factory.SemiFinishedStocktakeService;
 import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.yield.PendingInterimFeedService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -84,6 +85,16 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
     @Autowired(required = false)
     private InterimSettleReversalRequestRepository reversalRequestRepo;
 
+    /**
+     * 🔴🔒🔒 延迟扣减盲区修复 (sibling of #1216, 2026-07-05): 快照 SFI 账面须减去「待小结投料」——
+     * 报工写待小结 SFI 投料 (upstreamSources.semiFinished) 但小结才 {@code consumeClerkSemiStrict} 扣减,
+     * 窗口内 {@code availableQuantity} stale-high (货已投产, 账面未扣)。不减 → 仓管诚实数少 → 假盘亏 +
+     * 假 借6602/贷1405 凭证, 且随后小结二次扣减 → 库存虚低。optional (required=false): 单测不注入时
+     * 回退旧口径 (不减), 不破坏既有 @InjectMocks / new-构造 单测。prod 恒注入 (@Service)。
+     */
+    @Autowired(required = false)
+    private PendingInterimFeedService pendingInterimFeedService;
+
     // -------------------------------------------------------
     // 盘点差异财务凭证 科目 (China GAAP, 复用 seed V20260701_02 + ExpenseVoucherGenerator 损耗 pattern)
     //   盘盈 (surplus): 借 1405 库存商品 / 贷 6301 营业外收入          (客户张权模型: 盘盈=收入)
@@ -132,6 +143,11 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
         // 快照工厂全部 AVAILABLE 半成品行的当前 availableQuantity
         List<SemiFinishedInventory> rows = sfiRepo.findByFactoryIdAndStatusForStocktake(
                 factoryId, SemiFinishedInventory.Status.AVAILABLE);
+        // 🔴 Fix (🔒🔒 延迟扣减盲区, sibling #1216, 2026-07-05): 整厂一次性预取「待小结 SFI 投料」量,
+        //   快照账面须减去它 = 货架实物。null (单测未注入) → 空 map → 减 0 (旧口径, 向后兼容)。
+        Map<String, BigDecimal> pendingSemiFeed = pendingInterimFeedService != null
+                ? pendingInterimFeedService.pendingSemiFeedByBatchNo(factoryId)
+                : java.util.Collections.emptyMap();
         List<SemiFinishedStocktakeItem> items = new ArrayList<>();
         for (SemiFinishedInventory sfi : rows) {
             SemiFinishedStocktakeItem item = new SemiFinishedStocktakeItem();
@@ -140,7 +156,11 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             item.setIntermediateBatchNo(sfi.getIntermediateBatchNo());
             item.setProductTypeId(sfi.getProductTypeId());
             item.setUnit(sfi.getUnit());
-            item.setSystemQty(nz(sfi.getAvailableQuantity()).setScale(4, RoundingMode.HALF_UP));
+            // 🔴 货架实物 = availableQuantity − 待小结 SFI 投料 (来源原生单位); clamp≥0 防超投场景负账面
+            //   (待扣>可用时小结本身会 SFI_INSUFFICIENT 拦, 此处不产负数误判假盘盈)。无待扣 → 减 0。
+            BigDecimal shelf = physicalShelf(sfi.getAvailableQuantity(),
+                    pendingSemiFeed.get(sfi.getIntermediateBatchNo()));
+            item.setSystemQty(shelf.setScale(4, RoundingMode.HALF_UP));
             items.add(item);
         }
         stocktake.setItems(items);
@@ -657,5 +677,17 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /**
+     * 🔴🔒🔒 货架实物量 = max(0, availableQuantity − 待小结 SFI 投料) (mirror #1216 physicalShelf)。
+     * clamp 到 0 防超投 (待扣 > 可用, 小结本身会 SFI_INSUFFICIENT 拦) 下算出负账面 → 反被仓管数 0
+     * 误判假盘盈。pending=null (无待扣) → 减 0, 口径不变。
+     */
+    private static BigDecimal physicalShelf(BigDecimal available, BigDecimal pending) {
+        BigDecimal a = nz(available);
+        BigDecimal p = nz(pending);
+        BigDecimal shelf = a.subtract(p);
+        return shelf.signum() < 0 ? BigDecimal.ZERO : shelf;
     }
 }

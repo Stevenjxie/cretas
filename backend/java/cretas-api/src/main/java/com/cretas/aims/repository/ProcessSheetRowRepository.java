@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -56,4 +57,25 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
      */
     List<ProcessSheetRow> findByFactoryIdAndPlanIdAndInterimSettledAt(
             String factoryId, String planId, LocalDateTime interimSettledAt);
+
+    /**
+     * 🔴🔒🔒 延迟扣减盲区 (sibling of #1216/#1219, 2026-07-05): 查整厂全部<b>待小结</b>
+     * (interim_settled_at IS NULL) 且属<b>存货生产 (SAFETY_STOCK)</b> 计划的逐工序行。
+     *
+     * <p>用途: 小结前, SFI/FG 投料 (row_payload.upstreamSources 的 semiFinished/finishedGoods 引用)
+     * 已物理消耗常驻半成品/成品库存, 但 {@code availableQuantity/producedQuantity} 要到「小结」
+     * ({@code InterimSettleServiceImpl} §②) 才扣减 —— 与原料 {@code MaterialConsumption} 的延迟扣减同构。
+     * 半成品盘点 / 成品销售发货 / 调拨 须减去这些「待扣」投料量, 否则拿 stale-high 账面 → 假盘亏(SFI)
+     * 双重扣减 或 超发/超调 → 小结阶段 {@code SFI_INSUFFICIENT / FG_INSUFFICIENT} 409 卡死。
+     *
+     * <p><b>族门控 SAFETY_STOCK</b> (同 {@code sumUnsettledConsumptionGroupedByBatch} #1219 口径):
+     * 只有存货生产计划走「小结」延迟扣减; 结单族 (CUSTOMER_ORDER/MANUAL) 走「结单」即时扣, 其行
+     * {@code interim_settled_at} 恒 null 却早已落库 → 若一并计入会二次减同一投料 (假盘盈/超发放行)。
+     * Factory-scoped 防跨租户。
+     */
+    @Query("SELECT r FROM ProcessSheetRow r, ProductionPlan p "
+            + "WHERE r.factoryId = :factoryId AND r.interimSettledAt IS NULL "
+            + "AND r.planId = p.id AND p.factoryId = :factoryId "
+            + "AND p.sourceType = com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK")
+    List<ProcessSheetRow> findUnsettledSafetyStockRows(@org.springframework.data.repository.query.Param("factoryId") String factoryId);
 }
