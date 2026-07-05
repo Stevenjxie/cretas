@@ -94,10 +94,19 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     # "领料趋势" (requires 领料 + 趋势) still wins; a bare "营收趋势" / "同比环比"
     # has no 领料 group-1 keyword so it falls through to here.
     #
-    # Single-group match (any one keyword triggers). Keywords chosen to avoid
-    # the NO_MATCH set: bare "营业" is NOT used (would catch "本月营业额"); we
-    # require the explicit trend/comparison vocabulary 同比 / 环比 / 趋势 / 增长 /
-    # 下降 / 月度变化 / 走势 instead.
+    (
+        "RESTAURANT_OPS_TREND_ANALYSIS",
+        [["同比", "环比", "趋势", "增长", "下降", "月度变化", "走势"]],
+    ),
+    # Natural owner/report phrasing must route here too. Examples:
+    # "查询本周营收", "今天查订单", "本月营业额". These are not free-form LLM
+    # questions; they are direct report reads and should not fall back to the
+    # per-upload template router.
+    (
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        [["营收", "营业额", "销售额", "销售", "销售情况", "客单价", "平均每单", "订单", "单量"],
+         ["查", "查询", "看", "看看", "本周", "这周", "今天", "今日", "本月", "这个月", "最近", "统计", "汇总", "分析", "情况", "怎么样"]],
+    ),
     (
         "RESTAURANT_OPS_SALES_SUMMARY",
         [["营收", "营业额", "销售额", "销售情况", "客单价", "平均每单", "订单", "单量"],
@@ -108,10 +117,6 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["门店", "店", "分店", "店铺", "哪家"],
          ["销售", "营收", "营业额", "业绩", "订单", "单量"],
          ["对比", "比较", "排名", "最好", "最值得复制", "复制", "标杆", "表现"]],
-    ),
-    (
-        "RESTAURANT_OPS_TREND_ANALYSIS",
-        [["同比", "环比", "趋势", "增长", "下降", "月度变化", "走势"]],
     ),
 ]
 

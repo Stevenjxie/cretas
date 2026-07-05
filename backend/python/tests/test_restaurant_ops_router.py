@@ -58,6 +58,9 @@ LEGITIMATE_TRIGGERS = [
     ("总营收和客单价表现怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("整体销售情况怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("门店销售对比，哪家最值得复制", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("查询本周营收", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("今天查订单", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("本月营业额", "RESTAURANT_OPS_SALES_SUMMARY"),
 ]
 
 # Queries that MUST NOT match any ops template (ambiguous or unrelated to ops)
@@ -78,8 +81,8 @@ NO_MATCH_QUERIES = [
     "菜单怎么改",
     "菜价怎么样",
     "菜谱推荐",
-    # Pure POS / time-window queries
-    "本月营业额",
+    # Pure POS wording without a concrete metric should still fall through.
+    "今天查一下",
     "畅销品 Top 5",
     "今天天气怎么样",
     "",
@@ -143,11 +146,9 @@ def test_requisition_trend_still_wins_over_generic_trend():
     assert match_restaurant_ops("领用最多的食材") == "RESTAURANT_OPS_REQUISITION_TREND"
 
 
-def test_revenue_amount_query_still_does_not_match_trend():
-    """本月营业额 must NOT match TREND_ANALYSIS — bare 营业 is deliberately
-    excluded from the trend keyword group so a point-in-time amount query
-    falls through to the POS/template path."""
-    assert match_restaurant_ops("本月营业额") is None
+def test_revenue_amount_query_routes_to_sales_summary_not_trend():
+    """本月营业额 is a point-in-time sales report read, not a trend question."""
+    assert match_restaurant_ops("本月营业额") == "RESTAURANT_OPS_SALES_SUMMARY"
 
 
 # ──────────────────────────────────────────────────────────────────────────
