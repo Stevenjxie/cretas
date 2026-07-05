@@ -8,6 +8,8 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { WHOutboundStackParamList } from "../../types/navigation";
 
 // 导入出货相关页面组件
+import WHDeliveryConfirmListScreen from "../../screens/warehouse/outbound/WHDeliveryConfirmListScreen";
+import WHDeliveryConfirmScreen from "../../screens/warehouse/outbound/WHDeliveryConfirmScreen";
 import WHOutboundListScreen from "../../screens/warehouse/outbound/WHOutboundListScreen";
 import WHOutboundDetailScreen from "../../screens/warehouse/outbound/WHOutboundDetailScreen";
 import WHPackingScreen from "../../screens/warehouse/outbound/WHPackingScreen";
@@ -23,11 +25,22 @@ const Stack = createNativeStackNavigator<WHOutboundStackParamList>();
 export function WHOutboundStackNavigator() {
   return (
     <Stack.Navigator
+      initialRouteName="WHDeliveryConfirmList"
       screenOptions={{
         headerShown: false,
       }}
     >
-      {/* 出货列表 */}
+      {/* 真发货 (DLV-*) — 出货 tab 主入口: 销售发货单待仓库确认 → 确认扣减成品库存 */}
+      <Stack.Screen name="WHDeliveryConfirmList" component={WHDeliveryConfirmListScreen} />
+
+      {/* 发货确认 (填实际数量, 扣库存) */}
+      <Stack.Screen
+        name="WHDeliveryConfirm"
+        component={WHDeliveryConfirmScreen}
+        options={{ title: "发货确认" }}
+      />
+
+      {/* 手工出货登记 (旧 SH-* 流程, 不扣库存) — 降级为二级入口 */}
       <Stack.Screen name="WHOutboundList" component={WHOutboundListScreen} />
 
       {/* 出货详情 */}

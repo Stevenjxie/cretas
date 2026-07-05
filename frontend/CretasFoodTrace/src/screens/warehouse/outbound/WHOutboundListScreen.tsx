@@ -222,9 +222,18 @@ export function WHOutboundListScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
+      {/* Header — 手工出货登记 (旧 SH-* 流程, 不扣库存). 主发货入口是"发货确认"(真 DLV-* 流程). */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>出货管理</Text>
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate("WHDeliveryConfirmList")}
+            testID="wh-manual-back"
+          >
+            <MaterialCommunityIcons name="arrow-left" size={22} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>手工出货登记</Text>
+          <View style={{ width: 22 }} />
+        </View>
         <Text style={styles.headerSubtitle}>
           待处理 {stats.waiting + stats.packing + stats.ready} 单 | 今日出库{" "}
           {stats.todayWeight} kg
@@ -238,15 +247,15 @@ export function WHOutboundListScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        {/* 调度提示 */}
+        {/* 概念澄清: 此页是手工登记的出货单, 不自动扣成品库存 */}
         <Surface style={styles.noticeCard} elevation={1}>
           <MaterialCommunityIcons
-            name="clipboard-text-outline"
+            name="information-outline"
             size={20}
             color="#1976d2"
           />
           <Text style={styles.noticeText}>
-            按调度安排的发出时间排序，请优先处理紧急订单
+            手工登记的出货单 (不自动扣成品库存)。销售发货单的真发货请用"发货确认"入口。
           </Text>
         </Surface>
 
@@ -472,6 +481,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#4CAF50",
     paddingHorizontal: 16,
     paddingVertical: 16,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   headerTitle: {
     fontSize: 20,

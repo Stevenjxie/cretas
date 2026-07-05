@@ -716,6 +716,9 @@ export type WHInboundStackParamList = {
 };
 
 export type WHOutboundStackParamList = {
+  // 真发货 (DLV-*) 流程 — 出货 tab 主入口: 列出销售发货单待仓库确认, 确认扣减成品库存
+  WHDeliveryConfirmList: undefined;
+  WHDeliveryConfirm: { deliveryId: string; deliveryNumber?: string };
   WHOutboundList: undefined;
   WHOutboundDetail: { shipmentId: string };
   WHPacking: { orderId: string };
