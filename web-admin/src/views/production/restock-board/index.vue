@@ -157,7 +157,7 @@ onMounted(load)
         部分产品计划覆盖充足，但 WH-LOG（物流仓）成品不足，尚不可立即发货 —— 需等生产完工 / 反向调拨到物流仓
       </template>
       <template #default>
-        查看各行「可发(WH-LOG)」列了解物流仓现货，或检查车间仓是否有待调拨批次。
+        查看各行「可发(WH-LOG)」列了解物流仓现货，或检查生产仓是否有待调拨批次。
       </template>
     </el-alert>
 
@@ -284,7 +284,7 @@ onMounted(load)
         <template #header>
           <span>可发(WH-LOG)</span>
           <el-tooltip placement="top">
-            <template #content>WH-LOG 物流仓现货（盒），只有此仓成品能直接发货。<br />车间仓（WH-WKS）成品需先调拨到物流仓才可发货。<br />此值 &lt; 总需求时即使区间覆盖充足也无法立即发货。</template>
+            <template #content>WH-LOG 物流仓现货（盒），只有此仓成品能直接发货。<br />生产仓（WH-WKS）成品需先调拨到物流仓才可发货。<br />此值 &lt; 总需求时即使区间覆盖充足也无法立即发货。</template>
             <el-icon class="head-help"><QuestionFilled /></el-icon>
           </el-tooltip>
         </template>
