@@ -226,6 +226,8 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_OPS_STORE_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("总营收和客单价表现怎么样", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent("查询本周营收", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(orchestrator.matchRestaurantOpsIntent("周末周中营业额对比如何", "RESTAURANT"))
                 .contains("RESTAURANT_WEEKDAY_WEEKEND");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪个月营收最高，为什么", "RESTAURANT"))
