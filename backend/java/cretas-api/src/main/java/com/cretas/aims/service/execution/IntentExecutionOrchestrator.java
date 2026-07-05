@@ -402,7 +402,7 @@ public class IntentExecutionOrchestrator {
 
         // 3. 无匹配
         if (!matchResult.hasMatch()) {
-            return buildNoMatchResponse(matchResult, factoryId);
+            return buildNoMatchResponse(matchResult, factoryId, request, userId);
         }
 
         AIIntentConfig intent = matchResult.getBestMatch();
@@ -1444,7 +1444,16 @@ public class IntentExecutionOrchestrator {
         return builder.build();
     }
 
-    private IntentExecuteResponse buildNoMatchResponse(IntentMatchResult matchResult, String factoryId) {
+    private IntentExecuteResponse buildNoMatchResponse(IntentMatchResult matchResult,
+                                                       String factoryId,
+                                                       IntentExecuteRequest request,
+                                                       Long userId) {
+        if (request != null && shouldRouteRestaurantOwnerAction(factoryId, request.getUserInput(), request.getContext())) {
+            log.info("[restaurant-owner-action] route from no-match fallback: factoryId={}, input={}",
+                    factoryId, request.getUserInput());
+            return executeRestaurantOwnerActionChat(factoryId, request, userId);
+        }
+
         Map<String, Object> metadata = new HashMap<>();
         if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
             metadata.put("sessionId", matchResult.getSessionId());
