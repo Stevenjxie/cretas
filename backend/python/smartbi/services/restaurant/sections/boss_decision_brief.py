@@ -1908,6 +1908,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
             items = [str(name) for name in pair.get("items", []) if name in metrics]
             if len(items) < 2:
                 continue
+            if any(BossDecisionBriefHandler._is_low_value_package_filler(name) for name in items):
+                continue
             key = BossDecisionBriefHandler._pair_key(items[0], items[1])
             if key in seen:
                 continue
@@ -1924,7 +1926,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
 
     @staticmethod
     def _fallback_package_pairs(metrics: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        items = sorted(metrics.values(), key=lambda item: item.get("revenue") or 0.0, reverse=True)
+        items = sorted(
+            (
+                item for item in metrics.values()
+                if not BossDecisionBriefHandler._is_low_value_package_filler(str(item.get("name") or ""))
+            ),
+            key=lambda item: item.get("revenue") or 0.0,
+            reverse=True,
+        )
         if len(items) < 2:
             return []
         lead_candidates = items[:3]
@@ -1949,6 +1958,8 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
     @staticmethod
     def _is_likely_addon(lead: dict[str, Any], addon: dict[str, Any]) -> bool:
         addon_name = str(addon.get("name") or "")
+        if BossDecisionBriefHandler._is_low_value_package_filler(addon_name):
+            return False
         addon_price = addon.get("unitRevenue") or 0.0
         lead_price = lead.get("unitRevenue") or 0.0
         addon_tokens = ("饭", "粉", "面", "豆花", "冰粉", "饮", "可乐", "茶", "甜", "小吃", "配菜", "加购")
@@ -1957,6 +1968,29 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         if lead_price > 0 and addon_price > 0 and addon_price <= lead_price * 0.25:
             return True
         return False
+
+    @staticmethod
+    def _is_low_value_package_filler(name: str) -> bool:
+        text = (name or "").strip().lower()
+        if not text:
+            return False
+        filler_terms = (
+            "\u7c73\u996d",
+            "\u767d\u996d",
+            "\u4e3b\u98df",
+            "\u9910\u4f4d",
+            "\u8336\u4f4d",
+            "\u9910\u5177",
+            "\u7eb8\u5dfe",
+            "\u6253\u5305",
+            "\u6253\u5305\u76d2",
+            "\u5916\u5356\u76d2",
+            "\u5c0f\u6599",
+            "\u8638\u6599",
+            "\u8c03\u6599",
+            "\u51b0\u5757",
+        )
+        return any(term in text for term in filler_terms)
 
     @staticmethod
     def _pair_key(left: str, right: str) -> tuple[str, str]:

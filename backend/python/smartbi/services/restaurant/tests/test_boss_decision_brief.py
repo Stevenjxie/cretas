@@ -491,6 +491,52 @@ def test_package_recommendation_can_infer_better_combo_than_existing_pair() -> N
     assert any("招牌鱼锅 + 手作豆花" in action for action in page["doFirst"])
 
 
+def test_package_recommendation_excludes_low_value_fillers() -> None:
+    handler = BossDecisionBriefHandler()
+    fish = "\u62db\u724c\u9752\u82b1\u6912\u9c7c"
+    dessert = "\u624b\u4f5c\u51b0\u8c46\u82b1"
+    rice = "\u7c73\u996d"
+
+    response = handler.compute(
+        SectionRequest(
+            factory_id="F_PACKAGE_FILLER_TEST",
+            upload_id=None,
+            sub_sector="\u9c7c\u7c7b\u9910\u996e",
+            store_name="\u5957\u9910\u8fc7\u6ee4\u6d4b\u8bd5\u5e97",
+            params={
+                "pos_summary": {
+                    "aov": 150,
+                    "weekdayWeekend": {"weekdayAvgDailyRevenue": 10000, "weekendAvgDailyRevenue": 17000, "gapPct": 70},
+                    "customerSegments": [{"segment": "2\u4eba\u684c", "share": 0.55}],
+                },
+                "menu_summary": {
+                    "topProducts": [
+                        {"name": fish, "revenue": 120000, "soldQty": 1000, "foodCost": 46000},
+                        {"name": dessert, "revenue": 32000, "soldQty": 800, "foodCost": 6400},
+                    ],
+                    "products": [
+                        {"name": rice, "revenue": 20000, "soldQty": 2000, "foodCost": 4000},
+                    ],
+                    "basketPairs": [
+                        {"left": fish, "right": rice, "orders": 900},
+                        {"left": fish, "right": dessert, "orders": 600},
+                    ],
+                },
+                "review_summary": {
+                    "positiveDishMentions": [{"name": fish, "count": 80}, {"name": dessert, "count": 45}],
+                    "negativeDishMentions": [],
+                },
+            },
+        ),
+        context={},
+    )
+
+    candidates = response.data["ownerDecisionPage"]["packageRecommendations"]["candidates"]
+    assert candidates
+    assert all(rice not in candidate["items"] for candidate in candidates)
+    assert candidates[0]["items"] == [fish, dessert]
+
+
 def test_boss_decision_brief_registered_in_section_router() -> None:
     from smartbi.api.restaurant_sections import HANDLERS, SECTION_DATA_KIND
 

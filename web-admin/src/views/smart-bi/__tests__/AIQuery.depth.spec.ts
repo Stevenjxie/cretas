@@ -40,7 +40,7 @@ vi.mock('@/api/smartbi', () => ({
 
 // ── auth store + router ──────────────────────────────────────
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'RES_3101_009' }),
+  useAuthStore: () => ({ factoryId: 'RES_3101_009', businessDomain: 'RESTAURANT' }),
 }));
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {} }),

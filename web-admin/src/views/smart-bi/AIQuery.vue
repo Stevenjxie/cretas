@@ -564,9 +564,75 @@ const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURA
 const ownerActionSessionId = ref('');
 const pendingOwnerActionScenario = ref('');
 
+const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> = [
+  {
+    scenario: 'seating_mix',
+    terms: [
+      '\u684c\u578b', '\u684c\u5b50', '\u684c\u6570', '\u4e8c\u4eba\u684c', '\u56db\u4eba\u684c',
+      '\u62fc\u684c', '\u7ffb\u53f0', '\u5ea7\u4f4d', '\u6392\u961f', '\u7b49\u4f4d',
+    ],
+  },
+  {
+    scenario: 'staffing_schedule',
+    terms: [
+      '\u6392\u73ed', '\u4eba\u624b', '\u5458\u5de5', '\u670d\u52a1\u5458', '\u524d\u53f0',
+      '\u53a8\u5e08\u957f', '\u4ed3\u7ba1', '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed',
+    ],
+  },
+  {
+    scenario: 'cost_margin',
+    terms: [
+      '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', '\u5e93\u5b58',
+      'bom', 'BOM', '\u635f\u8017', '\u5907\u8d27', '\u9a8c\u6536', '\u6da8\u4ef7',
+    ],
+  },
+  {
+    scenario: 'review_recovery',
+    terms: [
+      '\u8bc4\u4ef7', '\u5dee\u8bc4', '\u5927\u4f17\u70b9\u8bc4', '\u5c0f\u7ea2\u4e66',
+      '\u53e3\u7891', '\u6295\u8bc9', '\u590d\u8d2d', '\u4f53\u9a8c',
+    ],
+  },
+  {
+    scenario: 'package',
+    terms: [
+      '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
+      '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
+    ],
+  },
+  {
+    scenario: 'external_event_response',
+    terms: [
+      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
+      '\u8282\u65e5', '\u5929\u6c14', '\u4ea4\u901a', '\u5468\u8fb9', '\u5916\u90e8',
+    ],
+  },
+];
+
+const OWNER_ACTION_DECISION_TERMS = [
+  '\u51b3\u7b56', '\u5efa\u8bae', '\u600e\u4e48\u63d0\u9ad8', '\u600e\u4e48\u4f18\u5316',
+  '\u600e\u4e48\u505a', '\u52a8\u4f5c', '\u843d\u5730', '\u8425\u6536', '\u8001\u677f',
+];
+
+function includesAny(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
+function inferOwnerActionScenario(query: string): string {
+  const text = query.trim();
+  if (!text) return '';
+  for (const entry of OWNER_ACTION_SCENARIO_TERMS) {
+    if (includesAny(text, entry.terms)) {
+      return entry.scenario;
+    }
+  }
+  return includesAny(text, OWNER_ACTION_DECISION_TERMS) ? 'cost_margin' : '';
+}
+
 function shouldSendOwnerActionContext(query: string): boolean {
   if (!isRestaurantTenant.value) return false;
   const text = query.trim();
+  if (inferOwnerActionScenario(text)) return true;
   return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
 }
 
@@ -1026,11 +1092,12 @@ async function tryJavaIntentChat(
   if (!factoryId) return 'fall-through';
   try {
     const ownerActionQuery = shouldSendOwnerActionContext(query);
+    const ownerActionScenario = pendingOwnerActionScenario.value || inferOwnerActionScenario(query) || undefined;
     const res = await executeIntent(factoryId, query, {
       sessionId: javaIntentSessionId.value,
       context: ownerActionQuery ? {
         ownerActionSessionId: ownerActionSessionId.value || undefined,
-        ownerActionScenario: pendingOwnerActionScenario.value || undefined,
+        ownerActionScenario,
         storeName: '青花椒上海示范店',
         subSector: '中餐/川味酸菜鱼',
         period: 'this_week',
