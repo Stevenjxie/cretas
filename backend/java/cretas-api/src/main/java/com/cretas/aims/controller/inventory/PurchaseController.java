@@ -109,7 +109,14 @@ public class PurchaseController {
 
     @GetMapping("/orders/by-status")
     @Operation(summary = "按状态查询采购订单")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    // 仓库员(warehouse_worker)收货前必须能浏览"待收货"采购单列表 (APPROVED/FINANCE_APPROVED/
+    // PARTIAL_RECEIVED) — 这是收货流程的必要前置读取, 不构成越权(只读单据, 不能改/审批采购单)。
+    // 之前仅 procurement:read(_write), 仓库员本职只有 warehouse/inventory 权限 → 403,
+    // RN "选采购单收货" 列表页永远拿不到数据 (六扇门 F006 客户张权反馈场景, 2026-07-05)。
+    // 加 warehouse:read(_write) 作为替代分支, 与 getOrderByNumber (扫码收货) 同一设计意图。
+    // PENDING_FINANCE_REVIEW 状态仍走下方独立 FINANCE_REVIEW_VIEW_PERMISSION 白名单二次拦截,
+    // 仓库员不在白名单内, 不会因本次放宽而看到财审敏感单据。
+    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read"})
     public ApiResponse<PageResponse<PurchaseOrder>> listOrdersByStatus(
             @PathVariable @NotBlank String factoryId,
             @RequestParam PurchaseOrderStatus status,
@@ -138,7 +145,9 @@ public class PurchaseController {
 
     @GetMapping("/orders/{orderId}")
     @Operation(summary = "采购订单详情")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    // 同上 listOrdersByStatus 理由: 仓库员选中一张待收货采购单后, RN WHReceiptCreateScreen
+    // 用本接口拉订单明细预填收货行 — 收货流程必经读取, 加 warehouse:read(_write) 替代分支。
+    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read"})
     public ApiResponse<PurchaseOrder> getOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
