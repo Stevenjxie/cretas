@@ -78,6 +78,8 @@ class ProcessSheetYieldCardTest {
     @Mock private ProductWorkProcessRepository productWorkProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
     @Mock private com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     private ProcessSheetServiceImpl service;
 
@@ -87,7 +89,8 @@ class ProcessSheetYieldCardTest {
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
                 objectMapper, wipRepo, taskRepo, processRepo,
-                productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo);
+                productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo,
+                wipInventoryService, finishedGoodsFeedService);
     }
 
     // ─────────────────────────────────────────────────────────────

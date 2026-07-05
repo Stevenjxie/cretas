@@ -44,7 +44,7 @@ class ProcessSheetRequisitionGateTest {
                                             FactoryMaterialRequisitionRepository reqRepo) throws Exception {
         ProcessSheetServiceImpl impl = new ProcessSheetServiceImpl(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
         setField(impl, "warehouseResolver", resolver);
         setField(impl, "factorySettingsRepository", settingsRepo);
         setField(impl, "requisitionRepository", reqRepo);

@@ -40,7 +40,7 @@ class ProcessSheetRawWarehouseGuardTest {
     private ProcessSheetServiceImpl newImpl(WarehouseResolver resolver) throws Exception {
         ProcessSheetServiceImpl impl = new ProcessSheetServiceImpl(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
         Field f = ProcessSheetServiceImpl.class.getDeclaredField("warehouseResolver");
         f.setAccessible(true);
         f.set(impl, resolver);

@@ -100,6 +100,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private final ProductTypeRepository productTypeRepo;
     /** ①c 成品作投料来源 — 保存期 FG 投料存在性 loud-fail 校验 (禁止降级)。 */
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    /**
+     * #1252 半成品注入工序 (中段起步): 纯外部库存 (SFI/FG) 喂的<b>非成品中间道</b>产出须在<b>保存时</b>即
+     * 入常驻半成品库 (SFI IN, {@link WipInventoryService#postClerkOutput}), 使下游道能在小结前就选到本道产出
+     * (否则产出只在小结入库 → 下游道保存期解析上游 SFI 时 SFI_NOT_FOUND → 从中段起步的后段链被阻断)。
+     */
+    private final WipInventoryService wipInventoryService;
+    /** #1252 注入产出成本核算: ①c FG 投料的成本 (feedKg×每单位) + 折算 (盒⇄kg), 与小结 computeOutputUnitCost 同源。 */
+    private final com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     @Autowired(required = false)
     private WarehouseResolver warehouseResolver;
@@ -159,11 +167,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //   持久化, 供小结 ③ SFI IN 定位过账 (见 InterimSettleServiceImpl)。
         //   成品道 (气调) 的纯 SFI 场景走原路径 (materializeBatch finished=true 不建 WIP → FG), 不入此分支。
         if (!req.isFinished() && isPureStockFed(req)) {
-            String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
+            // #1252 中段起步: 产出在<b>保存时</b>即入常驻半成品库 (SFI IN), 使下游道小结前即可选到本道产出
+            //   (原实现只在小结入库 → 下游保存期 SFI_NOT_FOUND → 后段链阻断)。输入 SFI/FG 的扣减仍延迟到小结
+            //   (consumeClerkSemiStrict / consumeForFeedStrict, 不变); 本道产出的 SFI IN 由此 postSfiOutput 承担,
+            //   小结不再重复入库 (见 InterimSettleServiceImpl SFI IN 循环跳过 batchId==null 的 SAVED_SFI 行)。
+            String anchor = postSfiOutput(factoryId, planId, req, warnings);
             persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             logChange(factoryId, planId, req, "CREATE", null, req, userId);
-            // materialized=false: 无 WIP 批 (产出在小结入 SFI); yieldRate 仍可算; 成本诚实 null。
-            return buildResult(req, null, anchor, yieldRate(req), null, null, false, false, warnings);
+            // materialized=true: 产出已入 SFI 库 (下游可选); yieldRate 可算; 成本诚实 (投入未知 → null)。
+            return buildResult(req, null, anchor, yieldRate(req), null, null, false, true, warnings);
         }
 
         // 4. SP-E FK 防线: WIP 批 material_type_id 必从原料或上游 WIP 派生 (空 → 400)
@@ -245,19 +257,25 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // ── CASE A: 之前是 DRAFT (无既有批次) ─────────────────────────
         if (existing.getBatchId() == null) {
+            // #1252 中段起步: 旧行若为 SAVED_SFI (保存时已 SFI IN 入库), 任何重存 (改产出/转 DRAFT/转物化)
+            //   前先冲销旧 SFI IN (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝, 防超扣),
+            //   再按新 req 重新入库 —— 避免重复 SFI IN 造幽灵库存。旧行 DRAFT (无入库) 则无冲销。
+            if (ProcessSheetRow.STATUS_SAVED_SFI.equals(existing.getRowStatus())) {
+                reverseSfiOutput(factoryId, planId, beforeReq);
+            }
             if (!hasOutput) {
                 // 仍是 DRAFT —— 仅更新行 payload, 保持 DRAFT, 不物化。
                 updateRowInPlace(existing, req, null, null, "DRAFT");
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
                 return buildResult(req, null, null, null, null, null, true, false, warnings);
             }
-            // option F: 纯 SFI 非成品道 (output>0) → 更新行为 SAVED_SFI, 不物化 (同 create 路径)。
-            //   产出在小结入 SFI; 输入 SFI 在小结 consumeClerkSemiStrict 扣减。
+            // #1252 纯外部库存 (SFI/FG) 非成品道 (output>0) → 保存时即 SFI IN 入库 (同 create 路径);
+            //   输入 SFI/FG 在小结扣减。产出入库使下游道小结前即可选到。
             if (!req.isFinished() && isPureStockFed(req)) {
-                String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
+                String anchor = postSfiOutput(factoryId, planId, req, warnings);
                 updateRowInPlace(existing, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
-                return buildResult(req, null, anchor, yieldRate(req), null, null, true, false, warnings);
+                return buildResult(req, null, anchor, yieldRate(req), null, null, true, true, warnings);
             }
             // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
             String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
@@ -381,6 +399,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
                 // 逆向物化 (软删边/报工/WIP/ProductionBatch)
                 reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
+            } else if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
+                // #1252 中段起步: SAVED_SFI 行 (batchId==null) 的产出已在保存时 SFI IN 入库 → 删除须冲销该入库
+                //   (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝), 否则删行后 SFI 库存虚高 (幽灵)。
+                reverseSfiOutput(factoryId, planId, tryDeserialize(row.getRowPayload()));
             }
 
             // SP-G P3: DELETE 操作记录 (before = 被删行 payload, after = null)。
@@ -1561,6 +1583,121 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return false;
         }
         return req.getRawMaterialInputs() == null || req.getRawMaterialInputs().isEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #1252 中段起步: 纯外部库存 (SFI/FG) 喂的非成品中间道 —— 保存时 SFI IN 入库
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * #1252: 把纯外部库存 (SFI/FG) 喂的非成品中间道产出<b>在保存时</b>即入常驻半成品库 (SFI IN)。
+     *
+     * <p>锚 = {@link WipInventoryService#clerkSemiAnchor}(planId, productTypeId) (与小结同一真源)。
+     * 入库全产出量 (不做「净结余」扣减 —— 下游道对本产出的消耗走 SFI OUT / consumeClerkSemiStrict, 在小结完成,
+     * 与此 IN 天然互抵, 净额一致)。故小结<b>不再</b>为 SAVED_SFI 行重复 SFI IN
+     * (见 {@code InterimSettleServiceImpl} SFI IN 循环跳过 batchId==null 的 SAVED_SFI 行)。
+     *
+     * <p>成本: 现算本道产出单位成本 (与小结 {@code computeOutputUnitCost} 的 batchId==null 分支同口径), 诚实 null
+     * (任一投入成本未知 / 调味道无法现算调料 → null, 绝不伪造 ¥0)。processOrder 落值供 picker 阶段可见性过滤。
+     *
+     * @return 入库锚 (= 行 batchNumber, 供下游道以 semiFinished 引用)。
+     */
+    private String postSfiOutput(String factoryId, String planId, ProcessSheetRowRequest req,
+                                 List<String> warnings) {
+        String anchor = WipInventoryService.clerkSemiAnchor(planId, req.getProductTypeId());
+        BigDecimal outQty = req.getOutputQuantity();
+        BigDecimal outUnitCost = computeInjectionOutputUnitCost(factoryId, req, warnings);
+        // postClerkOutput: inQty≤0 → no-op (saveRow 上游 gate 已保证 output>0)。
+        wipInventoryService.postClerkOutput(factoryId, anchor, req.getProductTypeId(),
+                outQty, req.getUnit() != null ? req.getUnit() : "kg",
+                outUnitCost, null, req.getProcessOrder());
+        return anchor;
+    }
+
+    /**
+     * #1252: 冲销一条 SAVED_SFI 行保存时的 SFI IN (供重存/删除时避免重复入库造幽灵库存)。
+     *
+     * <p>{@link WipInventoryService#reverseClerkOutput} 自带下游已消耗守卫: 该产出已被下游道消耗 → 抛
+     * 409 {@code SFI_DOWNSTREAM_CONSUMED} (整事务回滚, 禁止降级不产负库存)。totalCost 按旧 payload 现算的
+     * 单位成本 × 产出量 (与保存时 postSfiOutput 同算式) 反冲 accumulatedCost; 成本未知 (null) 则只冲量不冲成本。
+     */
+    private void reverseSfiOutput(String factoryId, String planId, ProcessSheetRowRequest beforeReq) {
+        if (beforeReq == null || beforeReq.getOutputQuantity() == null
+                || beforeReq.getOutputQuantity().signum() <= 0) {
+            return; // 旧行无产出 (理论上 SAVED_SFI 必有 output>0, 防御性跳过)
+        }
+        String anchor = WipInventoryService.clerkSemiAnchor(planId, beforeReq.getProductTypeId());
+        BigDecimal qty = beforeReq.getOutputQuantity();
+        BigDecimal oldUnitCost = computeInjectionOutputUnitCost(factoryId, beforeReq, new ArrayList<>());
+        BigDecimal totalCost = oldUnitCost == null ? null : oldUnitCost.multiply(qty);
+        wipInventoryService.reverseClerkOutput(factoryId, anchor, qty, totalCost, null);
+    }
+
+    /** #1252 调味/熟制道正则 — 与 {@link #buildStepEntry} / InterimSettle isSeasoningRow 同源。 */
+    private static final java.util.regex.Pattern SEASONING_NAME_PATTERN =
+            java.util.regex.Pattern.compile(".*(熟|卤|煮|腌|注射|入味|调味).*");
+
+    /**
+     * #1252 注入产出单位成本 —— 镜像 {@code InterimSettleServiceImpl.computeOutputUnitCost} 的
+     * <b>纯 SFI/FG 道 (batchId==null)</b> 分支 (禁止降级, 诚实 null):
+     * <ul>
+     *   <li>调味/熟制道 → null (SAVED_SFI 不物化 → 无 RecipeCostCalculator 现算调料桶, 不漏计成假数据)。</li>
+     *   <li>base = 本道人工 ({@link ClerkProcessEntryService#computeLaborCost}(laborSegments, laborRate))。</li>
+     *   <li>+ Σ 外部库存投料成本: feedInSourceUnit × 输入 SFI/FG unitCost (盒⇄kg 折算同扣减侧口径)。</li>
+     *   <li>任一投入 unitCost / 折算 为 null → 整道产出成本 null (不当 ¥0 摊薄)。</li>
+     * </ul>
+     * outputQty≤0 → null (无分母, saveRow 上游 gate 已保证 >0)。
+     */
+    private BigDecimal computeInjectionOutputUnitCost(String factoryId, ProcessSheetRowRequest req,
+                                                      List<String> warnings) {
+        BigDecimal outputQty = req.getOutputQuantity();
+        if (outputQty == null || outputQty.signum() <= 0) {
+            return null;
+        }
+        // 调味/熟制道: 调料桶无法现算 → 诚实 null (禁止只算 labor 降级成非-null 假数据)。
+        String name = req.getProcessName();
+        if ((name == null || name.isBlank())
+                && req.getProductTypeId() != null && req.getProcessOrder() != null) {
+            name = resolveProcessNamesByOrder(factoryId, req.getProductTypeId()).get(req.getProcessOrder());
+        }
+        boolean seasoning = req.isSeasoningStep()
+                || (name != null && SEASONING_NAME_PATTERN.matcher(name).matches());
+        if (seasoning) {
+            log.warn("[process-sheet] #1252 纯外部库存投料调味道 (process={}) 无法现算调料成本 → 产出成本诚实 null",
+                    req.getProcessCode());
+            return null;
+        }
+        BigDecimal laborRate = clerkService.resolveLaborRate(factoryId, warnings);
+        BigDecimal baseTotal = nz(clerkService.computeLaborCost(req.getLaborSegments(), laborRate));
+
+        BigDecimal stockFeedCost = BigDecimal.ZERO;
+        if (req.getUpstreamSources() != null) {
+            for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                boolean semi = ref.isSemiFinished();
+                boolean fg = ref.isFinishedGoods();
+                if (!semi && !fg) {
+                    continue; // isPureStockFed 保证全为外部库存, 防御性跳过
+                }
+                BigDecimal feed = nz(ref.getFeedQuantityKg());
+                if (feed.signum() <= 0) {
+                    continue;
+                }
+                BigDecimal feedInSourceUnit = fg
+                        ? finishedGoodsFeedService.resolveFeedQtyInSourceUnit(factoryId, ref.getSourceBatchNumber(), feed)
+                        : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, ref.getSourceBatchNumber(), feed);
+                if (feedInSourceUnit == null) {
+                    return null; // 诚实 null: 盒装来源缺每盒克重 → 无法折算
+                }
+                BigDecimal inputUnitCost = fg
+                        ? finishedGoodsFeedService.getFeedUnitCost(factoryId, ref.getSourceBatchNumber())
+                        : wipInventoryService.getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
+                if (inputUnitCost == null) {
+                    return null; // 诚实 null: 输入半成品/成品无成本 → 本道产出成本未知
+                }
+                stockFeedCost = stockFeedCost.add(feedInSourceUnit.multiply(inputUnitCost));
+            }
+        }
+        return baseTotal.add(stockFeedCost).divide(outputQty, 4, RoundingMode.HALF_UP);
     }
 
     // ─────────────────────────────────────────────────────────────
