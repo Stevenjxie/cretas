@@ -96,13 +96,22 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
      * 双双绕过 dual-control 闸 (recordAdjustment 故意不改 currentBalance, 直到 approveAdjustment 才改)。
      * 非调整类型 (AR_INVOICE / AR_PAYMENT / AR_CREDIT_NOTE) 自动过账, 默认即 APPROVED, 恒计入 (不受此闸阻挡)。
      * 修后 sumReceivables 与 gated ledger (Σ Customer.currentBalance) 口径一致。
+     *
+     * <p>🔒🔒 sign-agnostic fix (2026-07): AR_PAYMENT / AR_CREDIT_NOTE 用 {@code -ABS(t.amount)} (减去金额绝对值),
+     * 而非 {@code -t.amount}。原因：写路径 SIGN 不一致 —— ArApServiceImpl.recordArPayment 存 NEGATIVE
+     * (amount.negate()), 而 PaymentRequestServiceImpl.markPaidSales 的 AR_CREDIT_NOTE 存 POSITIVE。
+     * 旧 {@code -t.amount} 对 POSITIVE 行正确 (减), 但对 NEGATIVE 行算成 -(-X)=+X → 把收款 ADD 进应收 →
+     * 看板虚高 (F006 实测虚高 44%: 应收 ¥276,786 应为 ¥192,581)。{@code -ABS} 对两种存储 SIGN 都正确减去,
+     * 无需数据迁移即自愈现有 mixed-sign 数据。invariant: PAYMENT/CREDIT_NOTE 语义上恒 REDUCE 应收 (客户付款/
+     * 退款返利冲减), 唯一合法的 ADDITIVE 通道是 AR_ADJUSTMENT (保留 signed {@code t.amount})。写路径 SIGN
+     * 归一化是更大的 🔒🔒 follow-up (23 条 prod 负号行 + 多消费者), 不在本 PR。
      */
     @Query("SELECT COALESCE(SUM(CASE " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE THEN t.amount " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT " +
             "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
-            "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE) THEN -t.amount " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE) THEN -ABS(t.amount) " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = 'CUSTOMER'")
     BigDecimal sumReceivables(@Param("factoryId") String factoryId);
@@ -113,13 +122,18 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
      *
      * <p>🔒 4-eyes fix (2026-07): AP_ADJUSTMENT 同 sumReceivables —— 只在 APPROVED 时计入, PENDING/REJECTED
      * 不污染看板。非调整类型恒计入。
+     *
+     * <p>🔒🔒 sign-agnostic fix (2026-07): AP_PAYMENT / AP_CREDIT_NOTE 用 {@code -ABS(t.amount)} 同 sumReceivables。
+     * 写路径 SIGN 不一致 —— ArApServiceImpl.recordApPayment / reverseOpeningPayable 存 NEGATIVE (negate()),
+     * PaymentRequestServiceImpl.markPaidPurchase 的 AP_PAYMENT 存 POSITIVE。{@code -ABS} 对两种 SIGN 都正确减去,
+     * 自愈现有 mixed-sign 数据, 无需迁移。写路径 SIGN 归一化留作 🔒🔒 follow-up。
      */
     @Query("SELECT COALESCE(SUM(CASE " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_INVOICE THEN t.amount " +
             "  WHEN t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT " +
             "       AND t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED THEN t.amount " +
             "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AP_PAYMENT, " +
-            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_CREDIT_NOTE) THEN -t.amount " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_CREDIT_NOTE) THEN -ABS(t.amount) " +
             "  ELSE 0 END), 0) FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = 'SUPPLIER'")
     BigDecimal sumPayables(@Param("factoryId") String factoryId);
@@ -130,15 +144,31 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
      * <p>🔒 4-eyes fix (2026-07): 与 sumReceivables/sumPayables 同类 —— 排除 PENDING/REJECTED 调整,
      * 避免 per-customer 应收/应付明细把未审批/被驳回的调整算进去。非调整类型全部计入 (approval_status
      * 默认 APPROVED, 此 predicate 对它们恒真)。
+     *
+     * <p>🔒🔒 sign-agnostic fix (2026-07): 原 {@code SUM(t.amount)} 直接裸加, 依赖写路径 SIGN 约定
+     * (INVOICE 正 / PAYMENT 负)。写路径 SIGN 不一致时 (见 sumReceivables 注释), POSITIVE 存储的付款/冲减
+     * 会被 ADD 进 per-counterparty 应收/应付明细 → 虚高。改用与 sumReceivables/sumPayables 一致的 sign-agnostic
+     * CASE: PAYMENT/CREDIT_NOTE 恒 {@code -ABS(t.amount)} (减去金额), INVOICE 与已过审 ADJUSTMENT 保留
+     * signed {@code t.amount} (ADJUSTMENT 是唯一合法 ADDITIVE 通道)。ORDER BY 同步用 CASE 保持排序正确。
      */
-    @Query("SELECT t.counterpartyId, t.counterpartyName, SUM(t.amount) " +
+    @Query("SELECT t.counterpartyId, t.counterpartyName, SUM(CASE " +
+            "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_PAYMENT, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_CREDIT_NOTE) THEN -ABS(t.amount) " +
+            "  ELSE t.amount END) " +
             "FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.counterpartyType = :type " +
             "AND (t.transactionType NOT IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_ADJUSTMENT, " +
             "                                com.cretas.aims.entity.enums.ArApTransactionType.AP_ADJUSTMENT) " +
             "     OR t.approvalStatus = com.cretas.aims.entity.enums.ArApApprovalStatus.APPROVED) " +
             "GROUP BY t.counterpartyId, t.counterpartyName " +
-            "ORDER BY SUM(t.amount) DESC")
+            "ORDER BY SUM(CASE " +
+            "  WHEN t.transactionType IN (com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AR_CREDIT_NOTE, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_PAYMENT, " +
+            "                              com.cretas.aims.entity.enums.ArApTransactionType.AP_CREDIT_NOTE) THEN -ABS(t.amount) " +
+            "  ELSE t.amount END) DESC")
     List<Object[]> sumByCounterparty(
             @Param("factoryId") String factoryId,
             @Param("type") CounterpartyType type);
@@ -230,10 +260,15 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
 
     /**
      * Issue #317 fix: sum AR_PAYMENT amounts for a SO so SO.paidAmount/payment_status
-     * can be derived. amounts on AR_PAYMENT rows are stored NEGATIVE (冲减应收), so
-     * we negate before sum to return positive 累计收款.
+     * can be derived. amounts on AR_PAYMENT rows are stored NEGATIVE (冲减应收) by
+     * ArApServiceImpl.recordArPayment.
+     *
+     * <p>🔒🔒 sign-agnostic fix (2026-07): 改 {@code SUM(ABS(t.amount))} 而非 {@code SUM(-t.amount)}。
+     * 若任一 AR_PAYMENT 行以 POSITIVE 存储 (mixed-sign prod 数据), 旧 {@code -t.amount} 会算成负数 →
+     * SO.paidAmount 变负 → payment_status 误判。AR_PAYMENT 语义上恒是收款 (磁盘上 SIGN 不论),
+     * {@code ABS} 取金额绝对值累计得正确的 累计收款, 对两种存储 SIGN 都正确。
      */
-    @Query("SELECT COALESCE(SUM(-t.amount), 0) FROM ArApTransaction t " +
+    @Query("SELECT COALESCE(SUM(ABS(t.amount)), 0) FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId AND t.salesOrderId = :salesOrderId " +
             "AND t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_PAYMENT " +
             "AND t.deletedAt IS NULL")
