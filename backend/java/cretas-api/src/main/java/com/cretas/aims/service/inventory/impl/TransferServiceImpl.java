@@ -12,6 +12,7 @@ import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.*;
@@ -84,6 +85,14 @@ public class TransferServiceImpl implements TransferService {
      */
     @Autowired(required = false)
     private UserRepository userRepository;
+
+    /**
+     * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 用于 getAvailableBatchesForItem
+     * 算「货架实物」提示 (availableQuantity − 未小结报工消耗)。optional field injection (同
+     * warehouseResolver/userRepository 既有 pattern) 避免破坏现有 7 参数构造器单测。
+     */
+    @Autowired(required = false)
+    private MaterialConsumptionRepository materialConsumptionRepository;
 
     public TransferServiceImpl(InternalTransferRepository transferRepository,
                                InternalTransferItemRepository transferItemRepository,
@@ -714,6 +723,14 @@ public class TransferServiceImpl implements TransferService {
                     ? materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
                             sourceFactoryId, item.getMaterialTypeId(), sourceWarehouseId)
                     : materialBatchRepository.findAvailableBatchesFEFO(sourceFactoryId, item.getMaterialTypeId());
+            // 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 预先算出「货架实物」= availableQuantity
+            //   − 未小结报工消耗 (mirror FactoryStocktakeServiceImpl#loadUnsettledByBatch / physicalShelf,
+            //   同数据源 sumUnsettledConsumptionGroupedByBatch), 让调出方在选批次时就看到真实可搬动量 —
+            //   而不是被账面未扣的 stale-high availableQuantity 误导, 事后小结才发现物理不足。
+            //   ⛔ 不改任何 gate/校验: availableQuantity 字段与既有前端超量校验逻辑完全不变, 本字段只是
+            //   额外附加的 honest 提示。materialConsumptionRepository 为 null (单测未注入) → 空 map,
+            //   physicalAvailable 退化为等于 availableQuantity (无回归)。
+            Map<String, BigDecimal> unsettledByBatch = loadUnsettledForBatches(sourceFactoryId, batches);
             for (MaterialBatch b : batches) {
                 BigDecimal available = b.getReceiptQuantity()
                         .subtract(b.getUsedQuantity())
@@ -722,6 +739,7 @@ public class TransferServiceImpl implements TransferService {
                 row.put("batchId", b.getId());
                 row.put("batchNumber", b.getBatchNumber());
                 row.put("availableQuantity", available);
+                row.put("physicalAvailable", physicalShelf(available, unsettledByBatch.get(b.getId())));
                 row.put("expireDate", b.getExpireDate());
                 row.put("warehouseId", b.getWarehouseId());
                 result.add(row);
@@ -742,6 +760,51 @@ public class TransferServiceImpl implements TransferService {
             }
         }
         return result;
+    }
+
+    /**
+     * 🟢 PURE DISPLAY helper (fool-proof-design Rule 1, 2026-07-05): 逐批查未小结报工消耗量,
+     * 供 {@link #getAvailableBatchesForItem} 算「货架实物」提示。与
+     * {@code FactoryStocktakeServiceImpl#loadUnsettledByBatch} 同一 SQL / 同一门控口径
+     * (谓词见 {@link com.cretas.aims.repository.MaterialConsumptionRepository#sumUnsettledConsumptionGroupedByBatch}),
+     * 只是消费方从"盘点快照"换成"调拨发货批次选择"。materialConsumptionRepository 为 null
+     * (existing @InjectMocks-less 单测未注入, 见 TransferShipBatchSelectionTest/TransferReceiveActualQuantityTest
+     * 直接 `new TransferServiceImpl(...)` 7 参数构造器不含此依赖) → 空 map, 调用方按 0 处理,
+     * physicalAvailable 退化为 availableQuantity (无回归)。
+     */
+    private Map<String, BigDecimal> loadUnsettledForBatches(String factoryId, List<MaterialBatch> batches) {
+        Map<String, BigDecimal> map = new HashMap<>();
+        if (materialConsumptionRepository == null || batches == null || batches.isEmpty()) {
+            return map;
+        }
+        List<String> batchIds = batches.stream()
+                .map(MaterialBatch::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (batchIds.isEmpty()) {
+            return map;
+        }
+        for (Object[] row : materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(factoryId, batchIds)) {
+            if (row == null || row.length < 2 || row[0] == null) {
+                continue;
+            }
+            Object sum = row[1];
+            BigDecimal value = sum instanceof BigDecimal ? (BigDecimal) sum : new BigDecimal(String.valueOf(sum));
+            map.put((String) row[0], value);
+        }
+        return map;
+    }
+
+    /**
+     * 货架实物量 = max(0, available − 未结报工消耗)。clamp 到 0 防超投场景算出负账面反被误判。
+     * unsettled=null → 减 0 (mirror FactoryStocktakeServiceImpl#physicalShelf / SemiFinishedStocktakeServiceImpl#physicalShelf)。
+     */
+    private static BigDecimal physicalShelf(BigDecimal available, BigDecimal unsettled) {
+        BigDecimal a = available != null ? available : BigDecimal.ZERO;
+        BigDecimal u = unsettled != null ? unsettled : BigDecimal.ZERO;
+        BigDecimal shelf = a.subtract(u);
+        return shelf.signum() < 0 ? BigDecimal.ZERO : shelf;
     }
 
     /**

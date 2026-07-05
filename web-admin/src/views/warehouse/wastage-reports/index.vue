@@ -142,6 +142,13 @@ function warehouseName(id: string) {
 // ────────────────────────────────────────────────────────────────────────────
 const batches = ref<TableRow[]>([]);
 
+// fool-proof-design Rule 1 (预先显示边界, 2026-07-05): batchId → 未小结报工消耗量 (原生单位)。
+// 半成品/原料报工写「待小结」消耗但账面 usedQuantity 要到小结才扣 — 期间 availableQuantity 是
+// stale-high (账面未扣, 货已投产)。此 map 让仓管员在报损前就看到真实「货架实物」而非账面数。
+// honest-null: 加载失败/物料无待扣 → map 缺该 key → 前端按 0 处理 (退化为原有 availableQuantity 显示,
+// 不阻断/不改变任何已存在的 selectedWastageMax gate)。
+const unsettledByBatch = ref<Record<string, number>>({});
+
 async function loadBatches() {
   if (!factoryId.value) return;
   try {
@@ -149,7 +156,23 @@ async function loadBatches() {
       params: { status: 'AVAILABLE', size: 200 },
     });
     if (res.success && res.data) batches.value = res.data.content || res.data || [];
+    await loadUnsettledConsumption();
   } catch { /* silent — 加载失败时批次下拉为空, 提交仍会被 submitCreate 的必选校验挡住 */ }
+}
+
+// 🟢 PURE DISPLAY: 批量查已加载批次的未小结报工消耗量 (一次性 bulk 查询, 非 N+1)。
+// 只读提示, 不改变 selectedWastageMax 的 gate 逻辑 (Steve 已确认现有 409 保护正确,
+// 本次只加「货架实物」提示, 不动任何校验/gate)。
+async function loadUnsettledConsumption() {
+  if (!factoryId.value || batches.value.length === 0) return;
+  try {
+    const batchIds = batches.value.map((b) => String(b.id)).filter(Boolean);
+    if (batchIds.length === 0) return;
+    const res = await get(`/${factoryId.value}/material-batches/unsettled-consumption`, {
+      params: { batchIds: batchIds.join(',') },
+    });
+    if (res.success && res.data) unsettledByBatch.value = res.data as Record<string, number>;
+  } catch { /* silent — 加载失败时货架实物提示不显示, 仍显示原 availableQuantity, 不阻断报损 */ }
 }
 
 // 按所选仓库过滤批次 (仓库未选则显全部)
@@ -178,6 +201,21 @@ const selectedWastageMax = computed<number | null>(() => {
   if (!b) return null;
   const avail = (b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined;
   return avail != null ? Number(avail) : null;
+});
+
+// fool-proof-design Rule 1: 选中批次的「货架实物」= 可用量 − 未小结报工消耗 (clamp ≥ 0)。
+// 与 selectedWastageMax 一致的选批次口径, 但恒 ≤ selectedWastageMax (纯提示, 不改 :max gate)。
+// null = 未选批次 或 无未小结消耗记录 (与可用量相等, 无需额外提示)。
+const selectedUnsettled = computed<number>(() => {
+  const id = String(createForm.value.materialBatchId || '');
+  if (!id) return 0;
+  const v = unsettledByBatch.value[id];
+  return v != null ? Number(v) : 0;
+});
+const selectedPhysicalAvailable = computed<number | null>(() => {
+  if (selectedWastageMax.value == null) return null;
+  const shelf = selectedWastageMax.value - selectedUnsettled.value;
+  return shelf < 0 ? 0 : shelf;
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -619,6 +657,14 @@ onMounted(async () => {
           />
           <div v-if="selectedWastageMax != null" style="font-size:12px;color:#909399;margin-top:4px">
             该批次可用量 {{ selectedWastageMax }}，报损数量不可超过此值
+          </div>
+          <!-- fool-proof-design Rule 1 (预先显示边界, 2026-07-05): 纯提示, 不改上面的 :max gate。
+               只在有未小结生产占用 (货架实物 < 可用量) 时才显示, 避免无意义噪音。 -->
+          <div
+            v-if="selectedPhysicalAvailable != null && selectedUnsettled > 0"
+            style="font-size:12px;color:#e6a23c;margin-top:4px"
+          >
+            可用(货架实物) {{ selectedPhysicalAvailable }}：可用库存 {{ selectedWastageMax }} − 生产已占用（未小结）{{ selectedUnsettled }}
           </div>
         </el-form-item>
         <el-form-item label="报损原因" required>

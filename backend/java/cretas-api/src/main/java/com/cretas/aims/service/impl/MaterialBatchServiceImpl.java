@@ -1127,6 +1127,37 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     /**
+     * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 批量查未小结报工消耗量,
+     * mirror {@code FactoryStocktakeServiceImpl#loadUnsettledByBatch} 同一 SQL / 同一门控口径
+     * ({@link com.cretas.aims.repository.MaterialConsumptionRepository#sumUnsettledConsumptionGroupedByBatch}),
+     * 只是消费方从"盘点快照"换成"报损/调拨弹窗预警提示"。⛔ 只读聚合, 不修改任何批次/gate。
+     * 无待扣的批次不在返回 map 中 (调用方按 0 处理); 空输入短路返回空 map。
+     */
+    @Override
+    public Map<String, BigDecimal> getUnsettledConsumptionByBatchIds(String factoryId, List<String> batchIds) {
+        Map<String, BigDecimal> map = new HashMap<>();
+        if (batchIds == null || batchIds.isEmpty()) {
+            return map;
+        }
+        List<String> ids = batchIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (ids.isEmpty()) {
+            return map;
+        }
+        for (Object[] row : materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(factoryId, ids)) {
+            if (row == null || row.length < 2 || row[0] == null) {
+                continue;
+            }
+            Object sum = row[1];
+            BigDecimal value = sum instanceof BigDecimal ? (BigDecimal) sum : new BigDecimal(String.valueOf(sum));
+            map.put((String) row[0], value);
+        }
+        return map;
+    }
+
+    /**
      * F-034: after stock decreases, delegate minStock checks and deduped event publishing.
      */
     private void publishStockChangedEventIfApplicable(String factoryId, MaterialBatch batch, String changeType) {

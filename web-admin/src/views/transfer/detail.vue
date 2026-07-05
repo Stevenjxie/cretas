@@ -281,6 +281,11 @@ interface BatchOption {
   batchId: string;
   batchNumber: string;
   availableQuantity: number;
+  // fool-proof-design Rule 1 (预先显示边界, 2026-07-05): 「货架实物」= availableQuantity −
+  // 未小结报工消耗 (backend TransferServiceImpl#getAvailableBatchesForItem 只对
+  // RAW_MATERIAL/PACKAGING_MATERIAL 批次算; 无待扣时后端可能不带此字段 或 与 availableQuantity
+  // 相等 — honest-null: 缺失/相等时不额外提示, 避免噪音)。⛔ 纯展示, 不改任何 :max/gate。
+  physicalAvailable?: number | null;
   expireDate: string | null;
   warehouseId: string;
 }
@@ -324,6 +329,14 @@ async function onBatchChange(itemId: string | number, sourceBatchId: string | nu
 
 function formatBatchLabel(b: BatchOption): string {
   const parts = [b.batchNumber, `可用 ${formatStock(b.availableQuantity)}`];
+  // fool-proof-design Rule 1 (预先显示边界): 只在货架实物 < 可用量 (即有未小结生产占用) 时才附加提示,
+  // 让调出方在选批次时就知道真实可搬动量 — 与批次占用数量的 :max gate 无关, 纯提示。
+  if (
+    b.physicalAvailable != null &&
+    Number(b.physicalAvailable) < Number(b.availableQuantity)
+  ) {
+    parts.push(`货架实物 ${formatStock(b.physicalAvailable)}`);
+  }
   if (b.expireDate) parts.push(`到期 ${b.expireDate}`);
   return parts.join(' · ');
 }
