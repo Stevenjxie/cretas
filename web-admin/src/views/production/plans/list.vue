@@ -440,6 +440,7 @@ onMounted(() => {
   loadCustomers();
   loadReportModeDefault();
   void maybeReopenFromQuery();
+  void maybeOpenProcessEntryFromQuery();
 });
 
 async function loadData() {
@@ -814,6 +815,28 @@ function openProcessEntry(row: any) {
 }
 
 function onEntrySubmitted() { loadData(); }
+
+// Bug2 fix (fool-proof-design.md Rule 5 no-dead-end): 生产批次详情页 (batches/detail.vue)
+// 之前是死胡同 — 没有任何入口能跳到这里的「逐道录入」抽屉。它现在带
+// `?openProcessEntryPlan=<planId>` 跳过来, 这里直接按 id 查计划 (不依赖 tableData 分页,
+// 目标计划可能不在当前页) 并自动打开抽屉, 完了清掉 query 防止刷新重复弹。
+async function maybeOpenProcessEntryFromQuery() {
+  const planId = route.query.openProcessEntryPlan;
+  if (!planId || typeof planId !== 'string' || !factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/production-plans/${planId}`);
+    if (res.success && res.data) {
+      openProcessEntry(res.data);
+    } else {
+      ElMessage.error('未找到对应生产计划，请在下方列表手动查找并点击"逐道录入"');
+    }
+  } catch {
+    // Interceptor already shows sticky toast for ApiError.
+  } finally {
+    const { openProcessEntryPlan: _drop, ...rest } = route.query;
+    router.replace({ query: rest });
+  }
+}
 
 async function handleEntryDrawerBeforeClose(done: () => void) {
   const dirty = processSheetRef.value?.hasUnsavedRows === true;

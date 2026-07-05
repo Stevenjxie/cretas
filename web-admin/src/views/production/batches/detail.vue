@@ -152,6 +152,22 @@ function goBackToListWithEdit() {
   });
 }
 
+// 🔴 Bug2 修复 (fool-proof-design.md Rule 5 no-dead-end): 本页全程只读展示,
+// 工时/工序数据的录入实际在「生产计划 → 逐道录入」抽屉 (plans/list.vue), 而不是这里。
+// 之前用户走 批次→详情 路径完全找不到入口, 无任何提示 — 典型死胡同。
+// 有 productionPlanId 时直接带 query 跳去生产计划页并自动打开对应计划的逐道录入抽屉
+// (见 plans/list.vue::maybeOpenProcessEntryFromQuery); 没有关联计划时退化为跳转列表页
+// + 提示手动查找, 而不是什么都不做。
+function goToProcessEntry() {
+  const planId = batch.value?.productionPlanId as string | undefined;
+  if (planId) {
+    router.push({ path: '/production/plans', query: { openProcessEntryPlan: String(planId) } });
+  } else {
+    ElMessage.info('该批次未关联生产计划，请前往「生产计划」页面手动查找并点击"逐道录入"');
+    router.push('/production/plans');
+  }
+}
+
 function getStatusType(status: string) {
   const map: Record<string, string> = {
     PLANNED: 'info',
@@ -697,9 +713,25 @@ function goToReversalList() {
             plain
             @click="openReversalDialog"
           >撤回整单</el-button>
+          <!-- Bug2 修复: 本页只读, 报工/工时录入入口在生产计划页, 头部加直达按钮 (次入口, 主提示见下方 banner) -->
+          <el-button type="success" plain @click="goToProcessEntry">前往逐道录入</el-button>
           <el-button :icon="Refresh" @click="loadData">刷新</el-button>
         </div>
       </div>
+
+      <!-- Bug2 修复 (fool-proof-design.md Rule 5): 本页全程只读, 明确告知报工/工时录入的真实入口,
+           避免用户走"批次→详情"这条路径却找不到任何写入功能 (死胡同) -->
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      >
+        <template #title>
+          本页仅供查看，录入报工 / 工时数据请前往「生产计划 → 逐道录入」
+          <el-button type="primary" link @click="goToProcessEntry">立即前往 →</el-button>
+        </template>
+      </el-alert>
 
       <!-- KPI Cards -->
       <div class="kpi-row">
