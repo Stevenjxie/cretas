@@ -114,7 +114,9 @@ interface PendingSort { type: 'sort' }
 interface PendingResponsible { type: 'responsible'; serverId: number; assigneeWorkerIds: number[]; productTypeId: string; workProcessId: string }
 /** Wave2: 报工粒度切换 pending op (server item only; draft-only items send reportingRequired on POST) */
 interface PendingReporting { type: 'reporting'; serverId: number; reportingRequired: boolean; productTypeId: string; workProcessId: string }
-type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting;
+/** 张权 R4: 半成品注入工序切换 pending op (server item only; draft-only items send flag on POST) */
+interface PendingInjection { type: 'injection'; serverId: number; allowSemiFinishedInjection: boolean; productTypeId: string; workProcessId: string }
+type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting | PendingInjection;
 const pendingOps = ref<PendingOp[]>([]);
 const recommendationNotice = ref('');
 
@@ -170,6 +172,7 @@ async function handleSave() {
     const toAdd = pendingOps.value.filter((o): o is PendingAdd => o.type === 'add');
     const toResponsible = pendingOps.value.filter((o): o is PendingResponsible => o.type === 'responsible');
     const toReporting = pendingOps.value.filter((o): o is PendingReporting => o.type === 'reporting');
+    const toInjection = pendingOps.value.filter((o): o is PendingInjection => o.type === 'injection');
     const needsSort = pendingOps.value.some(o =>
       o.type === 'sort' || o.type === 'add' || o.type === 'remove'
     );
@@ -186,11 +189,14 @@ async function handleSave() {
       const responsibleWorkerId = draftItem?.responsibleWorkerId ?? undefined;
       // Wave2: 草稿态工序若标了免报, 随 create 一起发 (省略 → 后端默认 true 逐道报)
       const reportingRequired = draftItem?.reportingRequired;
+      // 张权 R4: 草稿态工序若标了半成品注入, 随 create 一起发 (省略 → 后端默认 false 普通工序)
+      const allowSemiFinishedInjection = draftItem?.allowSemiFinishedInjection;
       await createProductWorkProcess(factoryId.value, {
         productTypeId: selectedProductId.value,
         workProcessId: op.wp.id,
         processOrder: 999, // corrected by sort step below
         ...(reportingRequired === false ? { reportingRequired: false } : {}),
+        ...(allowSemiFinishedInjection === true ? { allowSemiFinishedInjection: true } : {}),
         ...(assigneeWorkerIds && assigneeWorkerIds.length > 0
           ? { assigneeWorkerIds }
           : responsibleWorkerId != null ? { responsibleWorkerId } : {}),
@@ -225,6 +231,17 @@ async function handleSave() {
         productTypeId: freshItem.productTypeId,
         workProcessId: freshItem.workProcessId,
         reportingRequired: op.reportingRequired,
+      });
+    }
+
+    // 4c. 张权 R4 半成品注入工序变更 (server items): partial update allowSemiFinishedInjection
+    for (const op of toInjection) {
+      const freshItem = freshByWpId.get(op.workProcessId);
+      if (!freshItem) continue;
+      await updateProductWorkProcess(factoryId.value, freshItem.id, {
+        productTypeId: freshItem.productTypeId,
+        workProcessId: freshItem.workProcessId,
+        allowSemiFinishedInjection: op.allowSemiFinishedInjection,
       });
     }
 
@@ -700,6 +717,34 @@ function handleReportingRequiredChange(item: DraftItem, value: boolean) {
   }
 }
 
+/**
+ * 张权 R4 半成品注入工序: 切换某道工序是否可从库里选已有半成品/成品直接投料。
+ * @param item - 被编辑的 DraftItem
+ * @param value - true=半成品注入工序(逐道录入显 SFI/FG picker); false=普通工序
+ */
+function handleInjectionChange(item: DraftItem, value: boolean) {
+  const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
+  if (idx !== -1) {
+    draftLinked.value[idx] = { ...draftLinked.value[idx], allowSemiFinishedInjection: value };
+  }
+  if (!item.isPending) {
+    // 服务端已存在的工序 — 去重后排队 update op
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'injection' && o.serverId === item.id)
+    );
+    markDirty({
+      type: 'injection',
+      serverId: item.id,
+      allowSemiFinishedInjection: value,
+      productTypeId: item.productTypeId,
+      workProcessId: item.workProcessId,
+    });
+  } else {
+    // 草稿态工序 — 值已记在本地草稿, POST 时随 create 一起发
+    if (!dirty.value) dirty.value = true;
+  }
+}
+
 // ─────────────────────────────────────────────
 // Move up/down (fallback buttons, C1)
 // ─────────────────────────────────────────────
@@ -990,6 +1035,26 @@ async function saveCostConfig() {
                     </el-tooltip>
                   </span>
                   <el-tag v-else-if="item.reportingRequired === false" size="small" type="warning">免报</el-tag>
+                  <!-- 张权 R4 半成品注入工序: 开启后该工序逐道录入可从库里选已有半成品/成品直接投料 -->
+                  <span class="step-injection" v-if="canWrite">
+                    <el-switch
+                      :model-value="item.allowSemiFinishedInjection === true"
+                      size="small"
+                      inline-prompt
+                      active-text="半成品注入"
+                      inactive-text="普通工序"
+                      @change="(val: boolean) => handleInjectionChange(item, val)"
+                    />
+                    <el-tooltip placement="top">
+                      <template #content>
+                        开启后, 此工序录入时可从仓库选已有的半成品/成品直接作为投料来源<br />
+                        (跳过前面的工序, 从这一道接着生产)。<br />
+                        用途: 生产第二个产品时不用重配前段工序, 直接从中段用已有半成品/成品接上。
+                      </template>
+                      <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                  <el-tag v-else-if="item.allowSemiFinishedInjection === true" size="small" type="success">半成品注入</el-tag>
                 </div>
 
                 <!-- C3 / T121 — 多人负责多选下拉 (filterable, multiple) -->

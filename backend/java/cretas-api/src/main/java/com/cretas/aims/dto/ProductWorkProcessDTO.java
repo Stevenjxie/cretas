@@ -64,6 +64,16 @@ public class ProductWorkProcessDTO {
     private Boolean reportingRequired;
 
     /**
+     * 是否「半成品注入工序」(张权 R4 — 从中段起步选库里已有半成品/成品直接投料)。
+     * <ul>
+     *   <li>null (omitted) — create 取默认 false; update 不修改现有值 (no-change 语义)</li>
+     *   <li>true — 该工序逐道录入可选已有半成品(SFI)/成品(FG) 作投料来源, 跳过前段工序接续生产</li>
+     *   <li>false — 普通工序 (仅现有 archetype 兜底会显 picker)</li>
+     * </ul>
+     */
+    private Boolean allowSemiFinishedInjection;
+
+    /**
      * 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别/明细)。
      * partial update 语义: null → 不修改现有值。
      */

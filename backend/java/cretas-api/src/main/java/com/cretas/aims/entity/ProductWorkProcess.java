@@ -63,6 +63,19 @@ public class ProductWorkProcess {
     @Builder.Default
     private Boolean reportingRequired = true;
 
+    /**
+     * 是否「半成品注入工序」(张权 R4 — 从中段起步选库里已有半成品/成品直接投料)。
+     *
+     * <p>DEFAULT false = 普通工序。true = 该工序逐道录入时可从仓库选已有的半成品(SFI)/成品(FG)
+     * 直接作为投料来源, 跳过前面的工序, 从这一道接着生产 (生产第二个产品时不用重配前段工序)。
+     *
+     * <p>逐道录入 SFI/FG picker 的显示条件 = 本 flag=true (config-driven) OR 现有 archetype
+     * 兜底 (熟制/气调/焯水/滚揉/去舌苔) —— 后者保证历史工序零回归, 见 ProcessDataTable.vue showSfi。</p>
+     */
+    @Column(name = "allow_semi_finished_injection", nullable = false)
+    @Builder.Default
+    private Boolean allowSemiFinishedInjection = false;
+
     // ── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ──────────────
     /** 该工序默认成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; 报工未传 costCategory 时继承 (CALC-003) */
     @Column(name = "default_cost_category", length = 20)

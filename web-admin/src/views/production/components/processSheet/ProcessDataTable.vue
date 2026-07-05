@@ -34,6 +34,9 @@ const props = withDefaults(defineProps<{
   /** 本工序真实显示名 (来自 G0 动态工序链 ProductWorkProcess.processName, 如"去舌胎膜"); 与
    * archetype processCode 不同 —— processCode 只是列定义 key, 可能多个真实工序共享同一 archetype。 */
   processLabel?: string;
+  /** 张权 R4: 本工序是否被配置为「半成品注入工序」(ProductWorkProcess.allowSemiFinishedInjection)。
+   * true → 逐道录入显示半成品(SFI)/成品(FG) 投料选择器 (config-driven gating, 见 showSfi)。 */
+  allowSemiFinishedInjection?: boolean;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
    * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
   upstreamProcessLabel?: string;
@@ -46,6 +49,7 @@ const props = withDefaults(defineProps<{
   /** Layout mode toggled in the drawer header. Default: 'grid'. */
   viewMode?: 'grid' | 'card';
 }>(), {
+  allowSemiFinishedInjection: false,
   upstreamItems: () => [],
   ownInventoryItems: () => [],
   initialRows: () => [],
@@ -931,10 +935,16 @@ const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
 
 /**
  * 是否提供「半成品库存(SFI)」投料选项。
- * 原仅限混锅道 (熟制/气调); 现扩到单上游道 (焯水/滚揉/去舌苔) —— 混批原料可选半成品库存
- * 不再限混锅道, 支持"从滚揉起步选半成品" (链起步道 upstreamItems 空, 仅 SFI 可选)。
+ *
+ * config-driven (张权 R4): 该工序被配置为「半成品注入工序」(allowSemiFinishedInjection=true) → 显 picker,
+ * 让客户自己决定注入点 (如把「滚揉」标为注入工序, 从中段起步选库里已有半成品/成品接续生产)。
+ *
+ * archetype 兜底 (back-compat): 现有混锅道 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 保持显 picker,
+ * 保证历史产品工序零回归 —— 即使未配置 flag 也不丢失现有能力。
  */
-const showSfi = computed(() => isMultiSource.value || isSingleUpstream.value || isQuSheTou.value);
+const showSfi = computed(() =>
+  props.allowSemiFinishedInjection || isMultiSource.value || isSingleUpstream.value || isQuSheTou.value,
+);
 /** ①c 是否提供「成品库存(FG)」投料选项 (与 SFI 同工序集: 混锅 + 单上游道)。 */
 const showFg = computed(() => showSfi.value);
 
