@@ -349,6 +349,8 @@ class RestaurantOpsGoldRouteTest {
                 .businessType("RESTAURANT")
                 .build();
         when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                .thenReturn(Optional.empty());
+        when(aiIntentService.getIntentByCode(eq("RESTAURANT_OPS_SALES_SUMMARY")))
                 .thenReturn(Optional.of(salesSummary));
 
         IntentMatchResult result = ReflectionTestUtils.invokeMethod(
@@ -360,5 +362,15 @@ class RestaurantOpsGoldRouteTest {
         assertThat(result).isNotNull();
         assertThat(result.getBestMatch().getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(result.getBestMatch().getToolName()).isEqualTo("restaurant_ops_gold_analysis");
+
+        IntentMatchResult restaurantOpsResult = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "tryRestaurantOpsPhraseShortcut",
+                "查询本周营收",
+                "DEMO_REST");
+
+        assertThat(restaurantOpsResult).isNotNull();
+        assertThat(restaurantOpsResult.getBestMatch().getIntentCode()).isEqualTo("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(restaurantOpsResult.getBestMatch().getToolName()).isEqualTo("restaurant_ops_gold_analysis");
     }
 }

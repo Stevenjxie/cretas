@@ -997,7 +997,7 @@ public class IntentExecutionOrchestrator {
             Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
             if (restaurantOpsMatch.isPresent()) {
                 String matchedCode = restaurantOpsMatch.get();
-                Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+                Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
                 if (intentOpt.isPresent()) {
                     AIIntentConfig phraseIntent = intentOpt.get();
                     log.info("[RestaurantOpsGoldRoute] Orchestrator deterministic route: input='{}', intentCode={}, domain={}",
@@ -1021,7 +1021,7 @@ public class IntentExecutionOrchestrator {
             }
 
             String matchedCode = phraseMatch.get();
-            Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+            Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
             if (intentOpt.isEmpty()) {
                 // Phrase mapped to a code that doesn't exist in this factory's intent config —
                 // skip the shortcut and let the normal pipeline decide.
@@ -1054,7 +1054,7 @@ public class IntentExecutionOrchestrator {
                 return null;
             }
             String matchedCode = restaurantOpsMatch.get();
-            Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, matchedCode);
+            Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
             if (intentOpt.isEmpty()) {
                 log.debug("[RestaurantOpsGoldRoute] matched {} but intent not configured for factory {} — falling through",
                         matchedCode, factoryId);
@@ -1082,6 +1082,14 @@ public class IntentExecutionOrchestrator {
         }
         String businessDomain = resolveFactoryDomainSafe(factoryId);
         return businessDomain == null || businessDomain.isBlank() ? "FACTORY" : businessDomain;
+    }
+
+    private Optional<AIIntentConfig> getIntentByCodeWithPlatformFallback(String factoryId, String intentCode) {
+        Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+        if (intentOpt.isPresent() || factoryId == null || factoryId.isBlank()) {
+            return intentOpt;
+        }
+        return aiIntentService.getIntentByCode(intentCode);
     }
 
     Optional<String> matchRestaurantOpsIntent(String normalizedInput, String businessDomain) {
