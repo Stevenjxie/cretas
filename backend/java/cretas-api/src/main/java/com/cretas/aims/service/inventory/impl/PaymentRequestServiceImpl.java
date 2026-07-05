@@ -6,6 +6,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
+import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.enums.PaymentRequestStatus;
 import com.cretas.aims.entity.enums.PaymentSourceType;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -108,6 +109,22 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
      */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
+
+    /**
+     * 🔒🔒 资金段 GL 桥 (finance audit BUG 2, 2026-07-06)：现金流水事件发布器。
+     *
+     * <p>#1227 建的现金 GL 桥 ({@code CashMovementVoucherListener} 监听
+     * {@link com.cretas.aims.event.CashMovementRecordedEvent}) 原本只挂在
+     * {@code ArApServiceImpl.recordApPayment}。#1262 把所有付款 UI 导流到
+     * {@code markPaidPurchase} —— 该路径写 AP_PAYMENT 子账但不发现金事件，导致每笔采购付款
+     * 都不记 借2202应付/贷1002现金 的 GL 凭证 (资产负债表现金虚高 + 应付虚高、现金流量表漏付款流出)。
+     * 本字段让 {@code markPaidPurchase} 补发 CASH_PAYMENT 事件，镜像 recordApPayment 口径。
+     *
+     * <p>{@code required = false} → 测试 / 未装配时为 null，静默跳过 (与 recordApPayment 一致，
+     * 现金事件发布失败绝不影响付款主流程)。
+     */
+    @Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
     // ─── 活跃状态（幂等性检查用） ────────────────────────────────────────────
 
@@ -503,9 +520,62 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         supplier.setCurrentBalance(newBalance);
         supplierRepository.save(supplier);
 
+        // Step 5: 🔒🔒 资金段 GL (finance audit BUG 2)：发布现金流水事件 → AFTER_COMMIT 监听器
+        // fail-soft 生成 付款凭证 (借 2202 应付账款 [供应商辅助核算] / 贷 1002 银行存款)。
+        // #1262 将所有付款 UI 导流到此方法后遗漏本步，导致采购付款不记 GL。amount 用正数
+        // (pr.getAmount() 恒正)，镜像 ArApServiceImpl.recordApPayment 的 publishCashMovement 口径。
+        // 幂等键 = savedTx.getId() (本次 AP_PAYMENT 子账 id，每次付款唯一)。
+        publishCashPaymentMovement(savedTx, pr.getSupplierId(), supplier.getName(),
+                amount, pr.getPaymentMethod(), userId);
+
         log.info("[SP6] 付款申请单 {} 已标记付款 amount={} supplierBalance → {} tx={}",
                 pr.getRequestNumber(), amount, newBalance, savedTx.getId());
         return savedPr;
+    }
+
+    /**
+     * 🔒🔒 资金段 GL 桥 (finance audit BUG 2)：发布采购付款现金流水事件。
+     *
+     * <p>publisher 为 null (测试 / 未装配) 时静默跳过；发布失败仅告警不影响付款主流程
+     * (镜像 {@code ArApServiceImpl.publishCashMovement} 的 fail-soft 语义)。事件由
+     * {@code CashMovementVoucherListener} 以 {@code @TransactionalEventListener(AFTER_COMMIT)}
+     * 监听，生成 借 2202 应付账款 / 贷 1002 银行存款 (或 1001 库存现金，按 paymentMethod) 凭证。
+     *
+     * @param paymentMethodRaw PaymentRequest.paymentMethod 是自由文本 String，尝试解析为
+     *                         {@link PaymentMethod} 枚举 (决定现金科目 1001/1002)，解析失败传 null
+     *                         → 监听器默认 1002 银行存款 (非现金付款的安全默认)。
+     */
+    private void publishCashPaymentMovement(ArApTransaction savedTx, String supplierId,
+                                            String supplierName, BigDecimal amount,
+                                            String paymentMethodRaw, Long operatedBy) {
+        if (applicationEventPublisher == null) {
+            return;
+        }
+        try {
+            PaymentMethod method = parsePaymentMethod(paymentMethodRaw);
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.CashMovementRecordedEvent(
+                    this, savedTx.getFactoryId(), savedTx.getId(),
+                    com.cretas.aims.entity.enums.VoucherType.CASH_PAYMENT,
+                    supplierId, supplierName,
+                    amount != null ? amount.abs() : BigDecimal.ZERO, method,
+                    savedTx.getTransactionDate() != null ? savedTx.getTransactionDate() : LocalDate.now(),
+                    operatedBy));
+        } catch (Exception e) {
+            log.error("发布 CashMovementRecordedEvent 失败 (不影响付款): txnId={}: {}",
+                    savedTx.getId(), e.getMessage(), e);
+        }
+    }
+
+    /** 自由文本 paymentMethod → {@link PaymentMethod} 枚举；无法匹配返 null (监听器按非现金 → 1002)。 */
+    private PaymentMethod parsePaymentMethod(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return PaymentMethod.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     /**
@@ -563,6 +633,12 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         customer.setCurrentBalance(newBalance);
         customerRepository.save(customer);
 
+        // 🔒🔒 资金段 GL (finance audit BUG 2)：销售方向 (对客户退款/返利/销售费用) 的现金流水 GL
+        // 【暂不发事件 — 待财务/业务定夺】。原因：CashMovementVoucherListener 只有 CASH_RECEIPT
+        // (借现金/贷1122应收) 与 CASH_PAYMENT (借2202应付/贷1002现金) 两个分支，二者都不匹配"对客户
+        // 付现金"的贷方现金 + 借方需按业务性质区分 (退款→借2203预收 / 返利→借6001主营收入红冲或6601销售费用 /
+        // 费用→借6601)。当前数据模型不区分这三种意图，照抄收款镜像会记错科目污染 GL (🔒🔒)。故保持
+        // status-quo (不发事件，无 GL，与 #1262 前一致)，不猜测方向。修法建议见 PR 说明。
         log.info("[#29] 销售付款申请单 {} 已标记付款 amount={} customerBalance → {} tx={}",
                 pr.getRequestNumber(), amount, newBalance, savedTx.getId());
         return savedPr;

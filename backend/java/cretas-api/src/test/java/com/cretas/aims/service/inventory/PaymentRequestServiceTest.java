@@ -78,6 +78,9 @@ class PaymentRequestServiceTest {
     @Mock
     private com.cretas.aims.repository.CustomerRepository customerRepository;
 
+    @Mock
+    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
+
     @InjectMocks
     private PaymentRequestServiceImpl paymentRequestService;
 
@@ -97,6 +100,11 @@ class PaymentRequestServiceTest {
                 });
         // Default: PO not found (降级降级，不阻塞) — override in specific tests
         when(purchaseOrderRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+
+        // @InjectMocks 用构造器注入 (@RequiredArgsConstructor)，不会 field-inject @Autowired 字段。
+        // BUG 2 现金事件发布器是 @Autowired(required=false) 字段 → 手动注入 mock 以验证事件发布。
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                paymentRequestService, "applicationEventPublisher", applicationEventPublisher);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1159,6 +1167,136 @@ class PaymentRequestServiceTest {
                     () -> paymentRequestService.financeApprove(FACTORY_ID, "PR-XT2", 2L, "x"))
                     .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
                     .hasMessageContaining("无权操作");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔒🔒 finance audit BUG 2: markPaidPurchase 必须发现金流水事件 (资金段 GL)
+    // ═══════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("BUG 2: 采购付款补发 CashMovementRecordedEvent (CASH_PAYMENT)")
+    class CashMovementGlBridgeTests {
+
+        private PaymentRequest approvedPurchasePr(String paymentMethod) {
+            PaymentRequest pr = new PaymentRequest();
+            pr.setId("PR-CASH-001");
+            pr.setFactoryId(FACTORY_ID);
+            pr.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.PURCHASE);
+            pr.setSupplierId(SUPPLIER_ID);
+            pr.setPurchaseOrderId(PO_ID);
+            pr.setStatus(PaymentRequestStatus.APPROVED);
+            pr.setAmount(BigDecimal.valueOf(5000));
+            pr.setPaymentMethod(paymentMethod);
+            pr.setRequestNumber("PR-CASH-001");
+            pr.setCreatedBy(1L);
+            return pr;
+        }
+
+        private Supplier makeSupplier(String id, BigDecimal balance) {
+            Supplier s = new Supplier();
+            s.setId(id);
+            s.setName("现金测试供应商");
+            s.setCurrentBalance(balance);
+            return s;
+        }
+
+        @Test
+        @DisplayName("markPaid 采购 → 发布 CASH_PAYMENT 事件 (供应商辅助核算、金额正、tx id 作幂等键)")
+        void markPaidPurchase_publishesCashPaymentEvent() {
+            PaymentRequest pr = approvedPurchasePr("transfer");
+            when(paymentRequestRepository.findById("PR-CASH-001")).thenReturn(Optional.of(pr));
+            when(supplierRepository.findById(SUPPLIER_ID))
+                    .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> {
+                var tx = (com.cretas.aims.entity.finance.ArApTransaction) inv.getArgument(0);
+                if (tx.getId() == null) tx.setId("TX-CASH-1");
+                return tx;
+            });
+
+            paymentRequestService.markPaid(FACTORY_ID, "PR-CASH-001", 3L, "付款截图");
+
+            ArgumentCaptor<com.cretas.aims.event.CashMovementRecordedEvent> evtCaptor =
+                    ArgumentCaptor.forClass(com.cretas.aims.event.CashMovementRecordedEvent.class);
+            verify(applicationEventPublisher).publishEvent(evtCaptor.capture());
+            var evt = evtCaptor.getValue();
+            assertThat(evt.getVoucherType())
+                    .isEqualTo(com.cretas.aims.entity.enums.VoucherType.CASH_PAYMENT);
+            assertThat(evt.getFactoryId()).isEqualTo(FACTORY_ID);
+            assertThat(evt.getArApTransactionId()).isEqualTo("TX-CASH-1");
+            assertThat(evt.getCounterpartyId()).isEqualTo(SUPPLIER_ID);
+            assertThat(evt.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(5000)); // 正数
+            assertThat(evt.getOperatedBy()).isEqualTo(3L);
+            // "transfer" 无法解析为 PaymentMethod → null → 监听器默认 1002 银行存款
+            assertThat(evt.getPaymentMethod()).isNull();
+        }
+
+        @Test
+        @DisplayName("paymentMethod=cash → 事件 PaymentMethod.CASH (监听器走 1001 库存现金)")
+        void markPaidPurchase_cashMethod_parsedToEnum() {
+            PaymentRequest pr = approvedPurchasePr("cash");
+            when(paymentRequestRepository.findById("PR-CASH-001")).thenReturn(Optional.of(pr));
+            when(supplierRepository.findById(SUPPLIER_ID))
+                    .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> {
+                var tx = (com.cretas.aims.entity.finance.ArApTransaction) inv.getArgument(0);
+                if (tx.getId() == null) tx.setId("TX-CASH-2");
+                return tx;
+            });
+
+            paymentRequestService.markPaid(FACTORY_ID, "PR-CASH-001", 3L, null);
+
+            ArgumentCaptor<com.cretas.aims.event.CashMovementRecordedEvent> evtCaptor =
+                    ArgumentCaptor.forClass(com.cretas.aims.event.CashMovementRecordedEvent.class);
+            verify(applicationEventPublisher).publishEvent(evtCaptor.capture());
+            assertThat(evtCaptor.getValue().getPaymentMethod())
+                    .isEqualTo(com.cretas.aims.entity.enums.PaymentMethod.CASH);
+        }
+
+        @Test
+        @DisplayName("采购付款事件在余额扣减之后发布 (子账+余额三写完成才发 GL 事件)")
+        void markPaidPurchase_eventAfterAllWrites() {
+            PaymentRequest pr = approvedPurchasePr("bank");
+            when(paymentRequestRepository.findById("PR-CASH-001")).thenReturn(Optional.of(pr));
+            when(supplierRepository.findById(SUPPLIER_ID))
+                    .thenReturn(Optional.of(makeSupplier(SUPPLIER_ID, BigDecimal.valueOf(10000))));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            paymentRequestService.markPaid(FACTORY_ID, "PR-CASH-001", 3L, null);
+
+            var inOrder = inOrder(arApTransactionRepository, supplierRepository, applicationEventPublisher);
+            inOrder.verify(arApTransactionRepository).save(any());
+            inOrder.verify(supplierRepository).save(any());
+            inOrder.verify(applicationEventPublisher).publishEvent(any());
+        }
+
+        @Test
+        @DisplayName("🔒 销售方向 markPaid 暂不发现金事件 (方向待定夺，不猜测污染 GL)")
+        void markPaidSales_doesNotPublishCashEvent() {
+            PaymentRequest pr = new PaymentRequest();
+            pr.setId("PR-SALES-CASH");
+            pr.setFactoryId(FACTORY_ID);
+            pr.setSourceType(com.cretas.aims.entity.enums.PaymentSourceType.SALES);
+            pr.setSalesOrderId(SO_ID);
+            pr.setCustomerId(CUSTOMER_ID);
+            pr.setStatus(PaymentRequestStatus.APPROVED);
+            pr.setAmount(BigDecimal.valueOf(800));
+            pr.setRequestNumber("PR-SALES-CASH");
+            pr.setCreatedBy(1L);
+
+            com.cretas.aims.entity.Customer customer = new com.cretas.aims.entity.Customer();
+            customer.setId(CUSTOMER_ID);
+            customer.setName("测试客户");
+            customer.setCurrentBalance(BigDecimal.valueOf(5000));
+
+            when(paymentRequestRepository.findById("PR-SALES-CASH")).thenReturn(Optional.of(pr));
+            when(customerRepository.findById(CUSTOMER_ID)).thenReturn(Optional.of(customer));
+            when(arApTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            paymentRequestService.markPaid(FACTORY_ID, "PR-SALES-CASH", 3L, null);
+
+            // 销售路径不发现金事件 (status-quo, 待财务定夺方向)
+            verify(applicationEventPublisher, never()).publishEvent(any());
         }
     }
 }
