@@ -22,6 +22,10 @@ import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog, StartPurchaseDialog, MergePurchaseDialog } from '@/components/dialog';
 // PR #872 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
+// #1290 follow-up — 退货 dead-button fix: wire list-row "退货" action to the
+// same CreateReturnOrderDialog already used by procurement/orders/list.vue +
+// sales/shipments/list.vue (backend ReturnOrderController, 7 endpoints).
+import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import request from '@/api/request';
 import type { ViewMode } from '@/types/viewMode';
 import type { CreateMode } from '@/types/createMode';
@@ -319,6 +323,53 @@ function rowActionsFor(row: TableRow) {
     { canViewPrice: canViewPrice.value }
   );
 }
+
+// #1290 follow-up — 退货 dialog state. Mirrors procurement/orders/list.vue +
+// sales/shipments/list.vue's wiring of the same CreateReturnOrderDialog
+// component (backend ReturnOrderController). Previously the "退货" 更多-menu
+// item for COMPLETED/PARTIAL_DELIVERED/SHIPPED rows had no case in
+// handleRowActionClick and fell through to the generic info toast below —
+// a dead button that looked real but sent no request. The real entry point
+// this mirrors is sales/orders/detail.vue's "申请退货" button (openReturnDialog),
+// which caps each line's return quantity at deliveredQuantity.
+const returnDialogVisible = ref(false);
+const returnDialogRow = ref<TableRow | null>(null);
+const returnDialogItems = computed(() => {
+  const row = returnDialogRow.value;
+  if (!row || !Array.isArray(row.items)) return [];
+  return (row.items as TableRow[]).map((it) => {
+    const delivered = Number(it.deliveredQuantity) || 0;
+    return {
+      id: it.id,
+      materialTypeId: null as string | null,
+      productTypeId: it.productTypeId ? String(it.productTypeId) : null,
+      itemName: String(it.productName || it.productTypeName || '-'),
+      unitPrice: Number(it.unitPrice) || 0,
+      // Cap at delivered qty (can't refund what was never shipped) — same
+      // rule as detail.vue's openReturnDialog.
+      maxQuantity: delivered,
+      batchNumber: it.batchNumber ? String(it.batchNumber) : null,
+    };
+  });
+});
+function openReturnDialog(row: TableRow): void {
+  if (!Array.isArray(row.items) || row.items.length === 0) {
+    ElMessage.warning('订单无明细, 无法发起退货. 请打开订单详情确认.');
+    return;
+  }
+  if (!row.customerId) {
+    ElMessage.warning('该订单缺少客户信息, 无法发起退货.');
+    return;
+  }
+  returnDialogRow.value = row;
+  returnDialogVisible.value = true;
+}
+function handleReturnSuccess(): void {
+  returnDialogVisible.value = false;
+  returnDialogRow.value = null;
+  void loadData();
+}
+
 function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
@@ -331,6 +382,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'print-pdf': void safePrint('sales-order', factoryId.value, String(row.id), { fileName: `销售订单_${row.orderNumber || row.id}` }); break;
     case 'copy': void handleCopyOrder(row); break;
     case 'delete': void handleDeleteOrder(row); break;
+    case 'return': openReturnDialog(row); break;
     case 'convert-to-production':
       ElMessage.info(`请为订单 ${row.orderNumber || row.id} 创建生产计划`);
       void router.push({
@@ -2647,6 +2699,23 @@ function handleMergePurchase() {
       entity-type-label="销售订单"
       :entity-id="forwardEntityId"
       :entity-label="forwardEntityLabel"
+    />
+
+    <!-- #1290 follow-up — 退货 dialog (fixes dead "退货" 更多-menu item for
+         COMPLETED/PARTIAL_DELIVERED/SHIPPED rows; wires existing backend
+         ReturnOrderController, same component as procurement/orders/list.vue
+         + sales/shipments/list.vue). -->
+    <CreateReturnOrderDialog
+      v-if="returnDialogRow"
+      v-model="returnDialogVisible"
+      :factory-id="factoryId || ''"
+      return-type="SALES_RETURN"
+      :source-order-id="String(returnDialogRow.id)"
+      :source-order-number="String(returnDialogRow.orderNumber || returnDialogRow.id)"
+      :counterparty-id="String(returnDialogRow.customerId || '')"
+      :counterparty-name="String(returnDialogRow.customerName || returnDialogRow.customer?.name || returnDialogRow.customerId || '-')"
+      :items="returnDialogItems"
+      @success="handleReturnSuccess"
     />
 
     <!-- E-FP-2 取消原因采集 dialog (fool-proof Rule 3): 标准原因 dropdown + "其他"展 textarea -->
