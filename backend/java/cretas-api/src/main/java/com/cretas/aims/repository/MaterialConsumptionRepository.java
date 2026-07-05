@@ -252,19 +252,28 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
      * 盘点<b>跨整仓多批次</b>调用 (这些批次可能横跨多个不同族计划), 无法在调用点门控 → 必须在查询内按族过滤。
      * Factory-scoped 防跨租户。
      *
-     * <p><b>2026-07-04 根修后: SAFETY_STOCK 子查询已冗余而安全</b> —— 结单族消耗行现在结单时经
-     * {@link #stampInterimSettledForPlan} 打戳, 结单后 {@code interimSettledAt IS NOT NULL} 天然落在
-     * {@code interimSettledAt IS NULL} 谓词外, 不再需子查询排除。<b>保留</b>子查询是因为它对结单<b>前</b>
-     * (mid-production, 结单族行尚未打戳) 仍必要 —— 该窗口结单族行是否应减取决于其扣减模型, #1216 口径为
-     * 「不减」(matching), 子查询正实现此。故本 PR 不移除, 留待未来若统一 mid-production 口径再简化。
+     * <p><b>🔴🔒🔒 2026-07-05 根因闭合: 移除 SAFETY_STOCK <u>族</u>门控 (结单族盘点盲区)</b> —— 上文 #1216
+     * 口径「结单族 mid-production 不减」被证明是<b>漏减</b>: 结单族报工写 {@link MaterialConsumption} (未结,
+     * IS NULL) 但<b>结单前不扣</b> {@code usedQuantity} (延迟扣减, 见 {@code writeConsumption} 不动 used +
+     * {@code settleProduction} 的 {@code postConsumptionToInventory} 才扣)。故结单族 {@code interimSettledAt
+     * IS NULL} 消耗 = <b>结单前、尚未扣减</b> (与 SAFETY_STOCK 待小结同构), 盘点<b>必须减去</b> —— 否则报工-结单
+     * 窗口盘点账面 stale-high → 假盘亏 (借6602/贷1403)。结单后经 {@link #stampInterimSettledForPlan} 打戳 →
+     * {@code interimSettledAt IS NOT NULL} 天然落谓词外, 不双减。故删 {@code p.sourceType = SAFETY_STOCK} 谓词,
+     * IS NULL 现对<b>所有</b>计划族统一 = 「尚未扣减、待减」。
+     *
+     * <p><b>⚠️ 保留</b> {@code productionBatchId ∈ process_sheet_rows.batch_id} 子查询 (仅去掉 ProductionPlan
+     * 族过滤): 它<b>不是</b>族门控, 而是<b>合法性/legacy 门控</b> —— 排除即时扣减 legacy 消耗
+     * ({@code MaterialBatchServiceImpl.consumeBatchMaterial} / {@code ProcessingServiceImpl}: 写正数消耗 +
+     * <b>同步扣</b> {@code usedQuantity} 却 IS NULL, {@code productionBatchId} 恒 null → 不在子查询内 → 不减,
+     * 否则对这些"已扣 used"批次二次减 → 假盘盈)。逐工序报工消耗恒经 {@code writeConsumption} 设
+     * {@code productionBatchId} → 在子查询内 → 正确纳入。honest-null-safe: 孤儿 (productionBatchId null /
+     * 无匹配 process_sheet_row) 不减。
      */
     @Query("SELECT m.batchId, SUM(m.quantity) FROM MaterialConsumption m WHERE m.factoryId = :factoryId "
             + "AND m.batchId IN :batchIds AND m.interimSettledAt IS NULL AND m.quantity > 0 "
             + "AND m.productionBatchId IN ("
-            + "  SELECT r.batchId FROM ProcessSheetRow r, ProductionPlan p "
-            + "  WHERE r.factoryId = :factoryId AND r.batchId IS NOT NULL "
-            + "    AND r.planId = p.id AND p.factoryId = :factoryId "
-            + "    AND p.sourceType = com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK) "
+            + "  SELECT r.batchId FROM ProcessSheetRow r "
+            + "  WHERE r.factoryId = :factoryId AND r.batchId IS NOT NULL) "
             + "GROUP BY m.batchId")
     List<Object[]> sumUnsettledConsumptionGroupedByBatch(@Param("factoryId") String factoryId,
                                                          @Param("batchIds") List<String> batchIds);

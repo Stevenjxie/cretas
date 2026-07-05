@@ -117,11 +117,12 @@ class MaterialConsumptionStampSettledForPlanTest {
     void neverStampsSafetyStockRows() {
         consumptionRepo.stampInterimSettledForPlan(FACTORY_ID, custPlanId, LocalDateTime.now());
 
-        // SAFETY_STOCK 行仍未结 → 仍被盘点 SUM 减除 (family-gated 到 SAFETY_STOCK, 证明未被误打戳)
+        // SAFETY_STOCK 行仍未结 → 仍被盘点 SUM 减除 (未被结单族打戳误触, 证明跨族安全)
         Map<String, BigDecimal> sum = sumUnsettled(List.of(wksCust, wksCust2, wksSafety));
         assertThat(sum).containsKey(wksSafety);
         assertThat(sum.get(wksSafety)).isEqualByComparingTo("50.00");
-        // 结单族批次本就不在 SUM (family gate) — 打戳前后皆不出现
+        // 结单族批次在本次调用前已被上方 stampInterimSettledForPlan 打戳 (interim_settled_at 非空) → 排除。
+        // (2026-07-05: SUM 已去族门控, 结单<b>前</b>结单族本会被计入; 此处因已打戳而排除 —— 打戳=结单后不双减。)
         assertThat(sum).doesNotContainKey(wksCust);
         assertThat(sum).doesNotContainKey(wksCust2);
         // count 视角: SAFETY_STOCK WKS 批次仍有 1 笔未结正向

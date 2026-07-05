@@ -24,30 +24,26 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 🔴🔒🔒 {@link MaterialConsumptionRepository#sumUnsettledConsumptionGroupedByBatch} 计划族门控回归
- * (bug fix 2026-07-04, #1216 ↔ #1217 姊妹流缺口).
+ * 🔴🔒🔒 {@link MaterialConsumptionRepository#sumUnsettledConsumptionGroupedByBatch} 结单族盘点盲区
+ * 根因闭合回归 (2026-07-05, 修 #1216↔#1217 姊妹流的<b>反向</b>错误).
  *
- * <p><b>Bug</b>: #1216 首版按 {@code interimSettledAt IS NULL AND quantity>0} 汇总"待小结"消耗, 被盘点
- * 从每个批次账面 (physical=receipt−used) 减去。但 {@code interimSettledAt IS NULL} 只对 SAFETY_STOCK
- * (存货生产) 计划代表"待小结、账面未扣"; 结单族 (MANUAL / CUSTOMER_ORDER / …) 走「结单」即时扣
- * {@code usedQuantity} 却<b>永不 stamp</b> → 其报工消耗行恒 {@code interimSettledAt IS NULL} 但早已落库扣减。
- * 无族门控地一并减去 → 结单族批次 physical(已扣 used) 被二次减同一消耗 → 账面虚低 → 仓管数到实物 →
- * 假盘盈 + 假 借1403/贷6301 凭证 → 幻库存累积 (每次盘点腐蚀财务)。
+ * <p><b>原 bug (被本 PR 推翻的旧结论)</b>: #1216 加 {@code p.sourceType = SAFETY_STOCK} 族门控, 把结单族
+ * (CUSTOMER_ORDER/MANUAL) 的未结消耗<b>排除</b>, 假设「结单族行早已落库扣减」。<b>实际</b>: 结单族报工写
+ * {@link MaterialConsumption} (未结, IS NULL) 但结单<b>前不扣</b> {@code usedQuantity} (延迟扣减 —
+ * {@code writeConsumption} 不动 used, {@code settleProduction→postConsumptionToInventory} 才扣)。故结单族
+ * IS NULL = 结单前、尚未扣减 (与 SAFETY_STOCK 待小结同构), 盘点<b>必须减去</b>; 排除 → 报工-结单窗口盘点
+ * stale-high → 假盘亏 (借6602/贷1403)。
  *
- * <p><b>Fix</b>: SUM 仅计入<b>真 SAFETY_STOCK 待小结</b>消耗, 门控经 {@code mc.production_batch_id ∈
- * process_sheet_rows.batch_id 且该 row 的 plan_id 对应计划 sourceType=SAFETY_STOCK} —— 与
- * {@code InterimSettleServiceImpl §①} 定位待扣减行的<b>同一 key</b>, 故减除集 == 小结将扣减集。
- *
- * <p><b>为何不经 mc.production_plan_id / ProductionBatch.production_plan_id 门控</b>: 逐工序非末道消耗行
- * {@code mc.production_plan_id} 与其 WIP {@code ProductionBatch.production_plan_id} <b>均故意为 null</b>
- * (防成本双计, 仅末道/成品挂计划)。经二者门控会漏掉<b>真 SAFETY_STOCK 待小结</b>的非末道行 → 重开 #1216
- * 原盲区 (假盘亏)。故本测试特意让 SAFETY_STOCK 场景走"非末道 null-plan"形态, 若改回 ProductionBatch/planId
- * 门控则本测试 T1 会失败。honest-null-safe: 族未知 (无匹配 process_sheet_row / productionBatchId null) → 不减。
+ * <p><b>Fix</b>: 删族门控 (仅去 {@code p.sourceType} 谓词), IS NULL 现对<b>所有族</b>统一 = 「待扣」。结单后经
+ * {@code stampInterimSettledForPlan} 打戳 → IS NOT NULL → 天然落谓词外, 不双减。<b>保留</b>
+ * {@code productionBatchId ∈ process_sheet_rows.batch_id} 子查询 (非族门控, 而是 legacy/孤儿门控): 排除即时
+ * 扣减 legacy 消耗 ({@code consumeBatchMaterial}/{@code ProcessingServiceImpl}: 写正数 + 同步扣 used 却 IS NULL,
+ * productionBatchId 恒 null → 不减, 防对已扣批次二次减 → 假盘盈)。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @Transactional
-@DisplayName("MaterialConsumptionRepository 待小结族门控 (#1216↔#1217 姊妹流缺口)")
+@DisplayName("MaterialConsumptionRepository 待结族门控闭合 (#1216 反向修 — 结单族盘点盲区)")
 class MaterialConsumptionUnsettledFamilyGateTest {
 
     @Autowired private JdbcTemplate jdbcTemplate;
@@ -57,21 +53,20 @@ class MaterialConsumptionUnsettledFamilyGateTest {
 
     private static final String FACTORY_ID = "IT-FAMGATE-F";
 
-    private String rawSafety;      // SAFETY_STOCK 待小结 (应减)
-    private String rawCustomer;    // 结单族 CUSTOMER_ORDER (不应减)
-    private String rawManual;      // 结单族 MANUAL (不应减)
-    private String rawOrphan;      // 无匹配 process_sheet_row (族未知, 不应减)
+    private String rawSafety;         // SAFETY_STOCK 待小结 (应减)
+    private String rawCustomerPre;    // 结单族 CUSTOMER_ORDER 结单前 (未打戳 → 应减)
+    private String rawManualPre;      // 结单族 MANUAL 结单前 (未打戳 → 应减)
+    private String rawCustomerPost;   // 结单族 CUSTOMER_ORDER 结单后 (已打戳 → 不减)
+    private String rawOrphan;         // productionBatchId 无匹配 process_sheet_row (legacy/孤儿, 不应减)
 
     @BeforeEach
     void setUp() {
         jdbcTemplate.execute("SET REFERENTIAL_INTEGRITY FALSE");
 
-        // ── SAFETY_STOCK 计划 + 一道 process_sheet_row (batchId=WIP 批 id) ──
         String safetyPlanId = seedPlan(PlanSourceType.SAFETY_STOCK);
         long pbSafety = 900001L;
         seedRow(safetyPlanId, pbSafety);
 
-        // ── 结单族: CUSTOMER_ORDER + MANUAL 各一计划一道 ──
         String custPlanId = seedPlan(PlanSourceType.CUSTOMER_ORDER);
         long pbCust = 900002L;
         seedRow(custPlanId, pbCust);
@@ -80,63 +75,79 @@ class MaterialConsumptionUnsettledFamilyGateTest {
         long pbManual = 900003L;
         seedRow(manualPlanId, pbManual);
 
-        // 孤儿: pbOrphan 不出现在任何 process_sheet_row
-        long pbOrphan = 900999L;
+        String custPlanPostId = seedPlan(PlanSourceType.CUSTOMER_ORDER);
+        long pbCustPost = 900004L;
+        seedRow(custPlanPostId, pbCustPost);
+
+        long pbOrphan = 900999L;   // 不出现在任何 process_sheet_row
 
         rawSafety = "RAW-SAFE-" + UUID.randomUUID().toString().substring(0, 8);
-        rawCustomer = "RAW-CUST-" + UUID.randomUUID().toString().substring(0, 8);
-        rawManual = "RAW-MAN-" + UUID.randomUUID().toString().substring(0, 8);
+        rawCustomerPre = "RAW-CUSTP-" + UUID.randomUUID().toString().substring(0, 8);
+        rawManualPre = "RAW-MANP-" + UUID.randomUUID().toString().substring(0, 8);
+        rawCustomerPost = "RAW-CUSTS-" + UUID.randomUUID().toString().substring(0, 8);
         rawOrphan = "RAW-ORPH-" + UUID.randomUUID().toString().substring(0, 8);
 
-        // SAFETY_STOCK 待小结: 6kg, plan_id 故意 null (逐工序非末道形态), production_batch_id=pbSafety
+        // SAFETY_STOCK 待小结: 6+4=10kg, plan_id 故意 null (逐工序非末道形态), production_batch_id=pbSafety
         seedConsumption(rawSafety, pbSafety, new BigDecimal("6.00"), null, null);
-        // + 同批次第二笔 4kg → 验证 SUM 聚合 (总应减 10)
         seedConsumption(rawSafety, pbSafety, new BigDecimal("4.00"), null, null);
 
-        // 结单族 CUSTOMER_ORDER: 60kg 已经结单扣减但 interim_settled_at 仍 null (不应再减)
-        seedConsumption(rawCustomer, pbCust, new BigDecimal("60.00"), null, null);
-        // 结单族 MANUAL: 30kg (不应减)
-        seedConsumption(rawManual, pbManual, new BigDecimal("30.00"), null, null);
+        // 结单族 结单前 (未打戳, usedQuantity 尚未扣 → 现应减, 修 stale-high 假盘亏)
+        seedConsumption(rawCustomerPre, pbCust, new BigDecimal("60.00"), null, null);
+        seedConsumption(rawManualPre, pbManual, new BigDecimal("30.00"), null, null);
 
-        // 孤儿 (无 process_sheet_row 匹配): 99kg (族未知 → 不应减, honest-null-safe)
+        // 结单族 结单后 (已打戳 interim_settled_at 非空 → 不减, usedQuantity 结单时已扣)
+        seedConsumption(rawCustomerPost, pbCustPost, new BigDecimal("50.00"), null, LocalDateTime.now());
+
+        // legacy/孤儿 (productionBatchId 无匹配 process_sheet_row → 如 consumeBatchMaterial 即时扣减但 IS NULL):
+        //   不应减 (防对已扣 used 批次二次减 → 假盘盈)
         seedConsumption(rawOrphan, pbOrphan, new BigDecimal("99.00"), null, null);
 
         // 干扰行 (继承既有谓词, 必须排除):
-        //   已结 SAFETY_STOCK 行 (interim_settled_at 非空) → 不计
-        seedConsumption(rawSafety, pbSafety, new BigDecimal("5.00"), null, LocalDateTime.now());
-        //   退料负数留痕 (quantity<0) → 不计
-        seedConsumption(rawSafety, pbSafety, new BigDecimal("-3.00"), null, null);
+        seedConsumption(rawSafety, pbSafety, new BigDecimal("5.00"), null, LocalDateTime.now());  // 已结 → 不计
+        seedConsumption(rawSafety, pbSafety, new BigDecimal("-3.00"), null, null);                 // 退料负数 → 不计
+    }
+
+    private List<String> allBatchIds() {
+        return List.of(rawSafety, rawCustomerPre, rawManualPre, rawCustomerPost, rawOrphan);
     }
 
     @Test
-    @DisplayName("T1: SAFETY_STOCK 非末道 (plan_id=null) 待小结消耗仍被计入 (SUM 聚合=10; #1216 修复保留, 未回退到 ProductionBatch/planId 门控)")
-    void safetyStock_unsettled_isSubtracted_evenWhenPlanIdNull() {
-        Map<String, BigDecimal> byBatch = query(List.of(rawSafety, rawCustomer, rawManual, rawOrphan));
-        // 6 + 4 = 10 (排除已结 5 + 负数 -3)
+    @DisplayName("T1: SAFETY_STOCK 非末道 (plan_id=null) 待小结消耗仍被计入 (SUM=10; 未回退到 planId 门控)")
+    void safetyStock_unsettled_isSubtracted() {
+        Map<String, BigDecimal> byBatch = query(allBatchIds());
         assertThat(byBatch).containsKey(rawSafety);
-        assertThat(byBatch.get(rawSafety)).isEqualByComparingTo("10.00");
+        assertThat(byBatch.get(rawSafety)).isEqualByComparingTo("10.00");   // 6+4, 排除已结 5 + 负数 -3
     }
 
     @Test
-    @DisplayName("T2: 结单族 (CUSTOMER_ORDER / MANUAL) 待小结-null 消耗<b>不</b>被计入 → 无二次减 → 无幻影盘盈")
-    void settleFamily_isNotSubtracted() {
-        Map<String, BigDecimal> byBatch = query(List.of(rawSafety, rawCustomer, rawManual, rawOrphan));
-        assertThat(byBatch).doesNotContainKey(rawCustomer);
-        assertThat(byBatch).doesNotContainKey(rawManual);
+    @DisplayName("T2 (核心修复): 结单族<b>结单前</b>未结消耗<b>现被计入</b> → 减去待扣量 → 无 stale-high 假盘亏")
+    void settleFamily_preSettle_isNowSubtracted() {
+        Map<String, BigDecimal> byBatch = query(allBatchIds());
+        assertThat(byBatch).containsKey(rawCustomerPre);
+        assertThat(byBatch.get(rawCustomerPre)).isEqualByComparingTo("60.00");
+        assertThat(byBatch).containsKey(rawManualPre);
+        assertThat(byBatch.get(rawManualPre)).isEqualByComparingTo("30.00");
     }
 
     @Test
-    @DisplayName("T3: 族未知 (productionBatchId 无匹配 process_sheet_row) → 不减 (honest-null-safe)")
-    void unknownFamily_orphan_isNotSubtracted() {
-        Map<String, BigDecimal> byBatch = query(List.of(rawSafety, rawCustomer, rawManual, rawOrphan));
+    @DisplayName("T3 (防双减): 结单族<b>结单后</b>已打戳 (interim_settled_at 非空) → 不被计入 → 不双减")
+    void settleFamily_postSettle_stamped_isNotSubtracted() {
+        Map<String, BigDecimal> byBatch = query(allBatchIds());
+        assertThat(byBatch).doesNotContainKey(rawCustomerPost);
+    }
+
+    @Test
+    @DisplayName("T4 (legacy/孤儿保护): productionBatchId 无匹配 process_sheet_row (即时扣减 legacy) → 不减 (honest-null-safe)")
+    void legacyOrphan_isNotSubtracted() {
+        Map<String, BigDecimal> byBatch = query(allBatchIds());
         assertThat(byBatch).doesNotContainKey(rawOrphan);
     }
 
     @Test
-    @DisplayName("T4: 混合仓 (SAFETY + 结单族 + 孤儿) 一次查询 → 只返回 SAFETY_STOCK 批次一条")
-    void mixedWarehouse_onlySafetyStockReturned() {
-        Map<String, BigDecimal> byBatch = query(List.of(rawSafety, rawCustomer, rawManual, rawOrphan));
-        assertThat(byBatch).containsOnlyKeys(rawSafety);
+    @DisplayName("T5: 混合仓一次查询 → 返回 SAFETY + 结单族结单前, 排除结单后已戳 + legacy 孤儿")
+    void mixedWarehouse_returnsUnsettledAcrossFamilies() {
+        Map<String, BigDecimal> byBatch = query(allBatchIds());
+        assertThat(byBatch).containsOnlyKeys(rawSafety, rawCustomerPre, rawManualPre);
     }
 
     // ── helpers ──
