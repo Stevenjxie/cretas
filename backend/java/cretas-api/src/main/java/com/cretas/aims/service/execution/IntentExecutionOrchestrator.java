@@ -1663,7 +1663,7 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        if (!"RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+        if (!isRestaurantOwnerActionFactory(factoryId, factoryDomain)) {
             return false;
         }
         if (hasOwnerActionContinuationContext(context)) {
@@ -1677,6 +1677,19 @@ public class IntentExecutionOrchestrator {
         }
         return RESTAURANT_OWNER_ACTION_TOPIC_PATTERN.matcher(userInput).find()
                 && RESTAURANT_OWNER_ACTION_DECISION_PATTERN.matcher(userInput).find();
+    }
+
+    boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
     }
 
     private boolean hasOwnerActionContinuationContext(Map<String, Object> context) {
