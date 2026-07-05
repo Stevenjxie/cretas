@@ -252,6 +252,29 @@ public class SalesOrderItem extends BaseEntity {
         return amount.multiply(taxMultiplier).setScale(2, BigDecimal.ROUND_HALF_UP);
     }
 
+    /**
+     * 已发货金额 = 已发货数量 × 折后单价 (mirror {@link #getLineAmount()} 但用
+     * {@code deliveredQuantity} 代替 {@code quantity}). Price-sensitive: returns
+     * {@code null} when unitPrice stripped — consistent with getLineAmount()。
+     *
+     * <p>Bug fix (2026-07): 之前订单头部「已发货金额」永远显示 ¥0.00 —— 根因是
+     * {@code SalesOrder.actualShippedAmount} 从未被任何 service 写入 (字段定义了但
+     * 无 writer)。这里提供逐行计算, 供 {@code updateOrderDeliveryStatus} 汇总回写。
+     */
+    @Transient
+    @PriceSensitive
+    public BigDecimal getShippedAmount() {
+        if (unitPrice == null) return null;
+        BigDecimal delivered = deliveredQuantity != null ? deliveredQuantity : BigDecimal.ZERO;
+        BigDecimal amount = delivered.multiply(unitPrice).setScale(2, BigDecimal.ROUND_HALF_UP);
+        if (discountRate != null && discountRate.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal discountMultiplier = BigDecimal.ONE.subtract(
+                    discountRate.divide(new BigDecimal("100"), 6, BigDecimal.ROUND_HALF_UP));
+            amount = amount.multiply(discountMultiplier).setScale(2, BigDecimal.ROUND_HALF_UP);
+        }
+        return amount;
+    }
+
     /** 未发货数量 */
     @Transient
     public BigDecimal getPendingQuantity() {

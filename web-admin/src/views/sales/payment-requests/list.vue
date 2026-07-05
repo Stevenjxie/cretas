@@ -181,17 +181,37 @@
         :rules="createRules"
         label-width="110px"
       >
-        <el-form-item label="客户 ID" prop="customerId">
-          <el-input
+        <el-form-item label="客户" prop="customerId">
+          <el-select
             v-model="createForm.customerId"
-            placeholder="客户 ID（必填）"
-          />
+            filterable
+            placeholder="搜索客户名称（必填）"
+            style="width: 100%"
+          >
+            <el-option v-for="c in customerOptions" :key="c.id" :label="c.name" :value="c.id" />
+            <template #empty>
+              <div style="padding:8px 12px;color:#909399">暂无客户，请先在客户管理创建</div>
+            </template>
+          </el-select>
         </el-form-item>
-        <el-form-item label="销售订单 ID" prop="salesOrderId">
-          <el-input
+        <el-form-item label="销售订单" prop="salesOrderId">
+          <el-select
             v-model="createForm.salesOrderId"
-            placeholder="销售订单 ID（选填，无单付款可不填）"
-          />
+            filterable
+            clearable
+            placeholder="搜索订单号（选填，无单付款可不填）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="o in filteredSalesOrderOptions"
+              :key="o.id"
+              :value="o.id"
+              :label="o.customerName ? `${o.orderNumber} · ${o.customerName}` : o.orderNumber"
+            />
+            <template #empty>
+              <div style="padding:8px 12px;color:#909399">暂无销售订单</div>
+            </template>
+          </el-select>
         </el-form-item>
         <el-form-item label="申请金额" prop="amount">
           <el-input-number
@@ -461,10 +481,60 @@ const createForm = ref({
   remark: ''
 })
 const createRules: FormRules = {
-  customerId: [{ required: true, message: '请输入客户 ID', trigger: 'blur' }],
+  customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
   amount: [{ required: true, message: '请输入申请金额', trigger: 'blur' }],
   paymentMethod: [{ required: true, message: '请选择付款方式', trigger: 'change' }]
 }
+
+// fool-proof-design Rule 2 (身份而非裸 UUID): 客户 / 销售订单 由裸 UUID 输入改为按名称/单号
+// 搜索的 el-select — mirror views/sales/shipments/list.vue (customerOptions) 和
+// views/finance/payments/list.vue (salesOrderOptions) 已有的同款 pattern。
+interface CustomerOption { id: string; name: string }
+interface SalesOrderOption { id: string; orderNumber: string; customerId?: string; customerName?: string }
+const customerOptions = ref<CustomerOption[]>([])
+const salesOrderOptions = ref<SalesOrderOption[]>([])
+
+async function loadCustomerOptions() {
+  if (!factoryId.value) return
+  try {
+    const res = await get(`/${factoryId.value}/customers`, { params: { page: 1, size: 200 } })
+    if (res.success && res.data) {
+      const list = (res.data.content || []) as Array<{ id?: string; name?: string }>
+      customerOptions.value = list
+        .filter((c) => c.id && c.name)
+        .map((c) => ({ id: String(c.id), name: String(c.name) }))
+    }
+  } catch { /* fall back to empty select */ }
+}
+
+async function loadSalesOrderOptions() {
+  if (!factoryId.value) return
+  try {
+    // 端点为 /sales/orders (SalesController), 不是 /sales-orders.
+    const res = await get(`/${factoryId.value}/sales/orders`, { params: { page: 1, size: 200 } })
+    if (res.success && res.data) {
+      const list = (res.data.content || []) as Array<{
+        id?: string; orderNumber?: string; customerId?: string; customerName?: string
+      }>
+      salesOrderOptions.value = list
+        .filter((o) => o.id && o.orderNumber)
+        .map((o) => ({
+          id: String(o.id),
+          orderNumber: String(o.orderNumber),
+          customerId: o.customerId ? String(o.customerId) : undefined,
+          customerName: o.customerName ? String(o.customerName) : undefined
+        }))
+    }
+  } catch { /* fall back to empty select */ }
+}
+
+// 选客户后, 销售订单下拉只显示该客户名下的订单 (仍保留全量作为 fallback, 防止 customerId
+// 关联缺失时误藏订单).
+const filteredSalesOrderOptions = computed(() => {
+  if (!createForm.value.customerId) return salesOrderOptions.value
+  const matched = salesOrderOptions.value.filter((o) => o.customerId === createForm.value.customerId)
+  return matched.length > 0 ? matched : salesOrderOptions.value
+})
 
 const approveFormRef = ref<FormInstance>()
 const approveForm = ref({ action: '', rejectReason: '', rejectNote: '', reviewNote: '' })
@@ -568,6 +638,8 @@ function openCreateDialog() {
   }
   createFormRef.value?.resetFields()
   createDialogVisible.value = true
+  if (customerOptions.value.length === 0) loadCustomerOptions()
+  if (salesOrderOptions.value.length === 0) loadSalesOrderOptions()
 }
 
 async function doCreate() {
