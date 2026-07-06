@@ -661,7 +661,7 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
         if segment:
             parts.append(f"路过的人主要是{segment}，他们最在意的是{need or '价格清楚、吃得快、招牌明确'}。")
         if weak_text:
-            parts.append(f"{weak_text} 有人看但下单弱，说明页面、套餐说明或到店核销没有讲清楚。")
+            parts.append(f"{weak_text} 有人看但下单弱，说明页面、套餐说明或到店核销没有讲清楚；抖音团购还要同时看毛利，别把低客单新客做成亏本单。")
         parts.append("同商圈竞品已经在抢这波路过客，今天要把门口引流话术和线上入口承接一起改，不要只等自然客流。")
         return "".join(parts)
 
