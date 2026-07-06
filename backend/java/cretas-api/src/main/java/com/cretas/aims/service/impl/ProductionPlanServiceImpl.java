@@ -1636,6 +1636,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                 + "(interimSettledAt IS NULL 现统一=待扣减)",
                         factoryId, planId, plan.getSourceType(), stamped);
             }
+            // 🔴🔒🔒 结单族 process_sheet_rows「结单即打戳」(2026-07-05, 镜像上方消耗打戳):
+            //   SFI/FG 投料延迟扣减对结单族在上方 deductProcessSheetStockFeeds 已扣, 但 process_sheet_rows
+            //   的 interim_settled_at 若不打戳会永久 IS NULL → 被 findUnsettledStockFeedRows (已去族门控) 永久
+            //   计入 pending → 结单后 (SFI/FG 已扣) 仍被半成品盘点/发货/调拨减去 → 双减幻库存。此处打戳令
+            //   IS NULL 对所有族统一 = 「待扣」。⚠️ 仅结单族 (sourceType 守卫内): SAFETY_STOCK 的 row 打戳由
+            //   小结原子完成, 提前打戳会让小结漏处理产出行。processSheetRowRepository @Autowired(required=false),
+            //   prod 恒存在; 缺失 (精简测试上下文) 则跳过 (与 deductProcessSheetStockFeeds null-guard 同策略)。
+            if (processSheetRowRepository != null) {
+                int rowsStamped = processSheetRowRepository
+                        .stampInterimSettledForPlan(factoryId, planId, settlement.getSettledAt());
+                if (rowsStamped > 0) {
+                    log.info("结单族逐工序行打戳: factoryId={}, planId={}, 打戳 {} 行 "
+                                    + "(process_sheet_rows.interim_settled_at, pending SFI/FG 投料现统一排除)",
+                            factoryId, planId, rowsStamped);
+                }
+            }
         }
 
         if (applicationEventPublisher != null) {
@@ -4293,10 +4309,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   ∈ 本计划各道 → material_consumptions.production_batch_id, interim_settled_at IS NULL), 因逐工序
         //   在制道消耗 production_plan_id 故意为 null, 只能靠 batchId 定位。
         List<MaterialConsumption> unsettled = findUnsettledPlanConsumptions(factoryId, planId);
-        if (!unsettled.isEmpty()) {
-            throw new BusinessException(409, "该计划仍有 " + unsettled.size() + " 笔未结报工消耗, 请先小结再停产")
+        // 🔴🔒🔒 (2026-07-05) 第二检测面 — SFI/FG 中段起步料流盲区: 上方消耗检测只覆盖写了
+        //   MaterialConsumption 且 process_sheet_rows.batch_id 非空的行。但「中段起步」计划纯由外部
+        //   常驻半成品(SFI)/成品(FG)投料喂 (row.upstreamSources semiFinished/finishedGoods), 这些投料边
+        //   <b>不写</b> MaterialConsumption; 且纯 SFI 中间道 (SAVED_SFI) batchId 为 null 被上方 filter 排除 →
+        //   全程零消耗 → 消耗守卫放行 → 停产 COMPLETED → 小结被终态守卫拦死 → 已投 SFI/FG 永不扣减 = 幻库存
+        //   (可重复发货/领用)。故并联检测「本计划有未结产出行 或 未结 SFI/FG 投料行」(见 helper), 任一命中即拦。
+        boolean unsettledStockFeed = hasUnsettledStockFeedOrOutputRows(factoryId, planId);
+        if (!unsettled.isEmpty() || unsettledStockFeed) {
+            String detail = !unsettled.isEmpty()
+                    ? ("该计划仍有 " + unsettled.size() + " 笔未结报工消耗")
+                    : "该计划仍有未小结的半成品/成品投料或产出";
+            throw new BusinessException(409, detail + ", 请先小结再停产")
                     .withCode("STOP_BLOCKED_UNSETTLED_CONSUMPTION")
-                    .withHint("停产不扣料; 若此时停产, 已报工消耗的原料将永不扣减 (幻库存)。请先「小结」结算这些消耗")
+                    .withHint("停产不扣料; 若此时停产, 已报工消耗的原料 / 已投入的半成品(SFI)/成品(FG) 将永不扣减 "
+                            + "(幻库存)。请先「小结」结算这些消耗与投料")
                     .withSeverity("BLOCKING")
                     .withHintTarget("小结");
         }
@@ -4337,5 +4364,47 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         return materialConsumptionRepository
                 .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(factoryId, planBatchIds);
+    }
+
+    /**
+     * 🔴🔒🔒 (2026-07-05) 停产守卫第二检测面 —— 本计划是否存在<b>未结</b> (interim_settled_at IS NULL) 且
+     * 「有产出锚 或 含 SFI/FG 投料」的逐工序行。
+     *
+     * <p>补 {@link #findUnsettledPlanConsumptions} 的两处盲区: (a) 纯 SFI 中间道 (SAVED_SFI) {@code batchId}
+     * 为 null 被消耗守卫的 {@code batchId != null} filter 排除; (b) SFI/FG 投料边根本不写 MaterialConsumption。
+     * 「中段起步」计划全程零消耗但有真实待扣 SFI/FG 投料, 只有靠 process_sheet_rows 才检测得到。
+     *
+     * <p>判据: 行 {@code interim_settled_at IS NULL} 且 (i) {@code batchNumber != null} (有产出/SFI 锚 —— 含
+     * SAVED_SFI, 其 batchId null 但 batchNumber 非空) 或 (ii) upstreamSources 含 {@code semiFinished/finishedGoods}
+     * 且 feed>0 (边缘: 无产出锚但确有外部投料)。命中即代表小结会处理该行 (扣 SFI/FG / 入库产出), 停产会把它
+     * 遗留成幻库存。processSheetRowRepository @Autowired(required=false), 缺失则返回 false (与既有 null-guard 同策略)。
+     */
+    private boolean hasUnsettledStockFeedOrOutputRows(String factoryId, String planId) {
+        if (processSheetRowRepository == null || isBlank(planId)) {
+            return false;
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
+        for (ProcessSheetRow row : rows) {
+            if (row == null || row.getInterimSettledAt() != null) {
+                continue;   // 已结: 小结/结单已处理该行, 停产不会遗留
+            }
+            // (i) 有产出/SFI 锚 (含 SAVED_SFI: batchId null 但 batchNumber 非空 → 消耗守卫盲区)
+            if (trimToNull(row.getBatchNumber()) != null) {
+                return true;
+            }
+            // (ii) 无产出锚但含外部 SFI/FG 投料 (边缘)
+            ProcessSheetRowRequest req = parseProcessSheetRowPayload(row, ignore);
+            if (req == null || isEmpty(req.getUpstreamSources())) {
+                continue;
+            }
+            for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                if ((ref.isSemiFinished() || ref.isFinishedGoods())
+                        && zeroIfNull(ref.getFeedQuantityKg()).compareTo(BigDecimal.ZERO) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

@@ -22,8 +22,10 @@ import static org.mockito.Mockito.*;
 /**
  * 🔴🔒🔒 延迟扣减盲区 — 待小结 SFI 投料聚合核心逻辑单测 (sibling #1216/#1219, 2026-07-05)。
  *
- * <p>覆盖: SAFETY_STOCK 族门控 (repo 层保证); 只聚合 semiFinished 引用 (in-plan WIP / FG 不减);
- * 折算诚实 null 跳过; 折算与 strict 扣减同源 (盒装折盒数); 多行同批次累加。
+ * <p>覆盖: 只聚合 semiFinished 引用 (in-plan WIP / FG 不减); 折算诚实 null 跳过;
+ * 折算与 strict 扣减同源 (盒装折盒数); 多行同批次累加。
+ * (2026-07-05: repo 查询 findUnsettledStockFeedRows 已去 SAFETY_STOCK 族门控, 覆盖所有计划族;
+ * 本服务层聚合逻辑不变 — 仍只对 semiFinished 折算。)
  */
 @DisplayName("PendingInterimFeedServiceImpl — 待小结 SFI 投料聚合")
 class PendingInterimFeedServiceImplTest {
@@ -77,7 +79,7 @@ class PendingInterimFeedServiceImplTest {
     @DisplayName("SFI 投料: 只聚合 semiFinished ref (折算源=resolveSemiFeed); in-plan WIP / FG 引用不计入")
     void pendingSemiFeed_onlySemiFinishedRefs() {
         // 一行含: 1 个常驻 SFI 投料 (387.6), 1 个 FG 投料 (10, 不减), 1 个 in-plan WIP 引用 (5, 不减)
-        when(rowRepository.findUnsettledSafetyStockRows(F)).thenReturn(List.of(
+        when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of(
                 row(ref("SFI-1", "387.6", true, false),
                     ref("FG-1", "10", false, true),
                     ref("WIP-1", "5", false, false))));
@@ -96,7 +98,7 @@ class PendingInterimFeedServiceImplTest {
     @Test
     @DisplayName("盒装 SFI 折算: 20kg → 40 盒 (与 consumeClerkSemiStrict 折算同源)")
     void pendingSemiFeed_countUnitConversion() {
-        when(rowRepository.findUnsettledSafetyStockRows(F)).thenReturn(List.of(
+        when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of(
                 row(ref("SFI-1", "20", true, false))));
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(F, "SFI-1", new BigDecimal("20")))
                 .thenReturn(new BigDecimal("40"));   // 盒数
@@ -107,7 +109,7 @@ class PendingInterimFeedServiceImplTest {
     @Test
     @DisplayName("诚实 null: 折算返回 null (盒装缺每盒克重/批次缺失) → 跳过不减 (不造假差异)")
     void honestNull_conversionNull_skipped() {
-        when(rowRepository.findUnsettledSafetyStockRows(F)).thenReturn(List.of(
+        when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of(
                 row(ref("SFI-1", "100", true, false))));
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(F, "SFI-1", new BigDecimal("100")))
                 .thenReturn(null);   // 诚实 null
@@ -118,7 +120,7 @@ class PendingInterimFeedServiceImplTest {
     @Test
     @DisplayName("多行同批次累加: 两道 SFI 投料同一 intermediateBatchNo → Σ")
     void multipleRows_sameBatch_accumulate() {
-        when(rowRepository.findUnsettledSafetyStockRows(F)).thenReturn(List.of(
+        when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of(
                 row(ref("SFI-1", "100", true, false)),
                 row(ref("SFI-1", "50", true, false))));
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(F, "SFI-1", new BigDecimal("100")))
@@ -132,7 +134,7 @@ class PendingInterimFeedServiceImplTest {
     @Test
     @DisplayName("无待小结行 → 空 map (调用方减 0, 口径不变)")
     void noUnsettledRows_emptyMap() {
-        when(rowRepository.findUnsettledSafetyStockRows(F)).thenReturn(List.of());
+        when(rowRepository.findUnsettledStockFeedRows(F)).thenReturn(List.of());
         assertThat(service.pendingSemiFeedByBatchNo(F)).isEmpty();
     }
 }

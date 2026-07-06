@@ -35,7 +35,7 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
     @Transactional(readOnly = true)
     public Map<String, BigDecimal> pendingSemiFeedByBatchNo(String factoryId) {
         Map<String, BigDecimal> out = new HashMap<>();
-        List<ProcessSheetRow> rows = rowRepository.findUnsettledSafetyStockRows(factoryId);
+        List<ProcessSheetRow> rows = rowRepository.findUnsettledStockFeedRows(factoryId);
         for (ProcessSheetRow row : rows) {
             ProcessSheetRowRequest req = parse(row.getRowPayload());
             if (req == null || req.getUpstreamSources() == null) {

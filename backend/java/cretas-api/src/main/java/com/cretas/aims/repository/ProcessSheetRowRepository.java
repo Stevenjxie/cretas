@@ -59,23 +59,44 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
             String factoryId, String planId, LocalDateTime interimSettledAt);
 
     /**
-     * 🔴🔒🔒 延迟扣减盲区 (sibling of #1216/#1219, 2026-07-05): 查整厂全部<b>待小结</b>
-     * (interim_settled_at IS NULL) 且属<b>存货生产 (SAFETY_STOCK)</b> 计划的逐工序行。
+     * 🔴🔒🔒 延迟扣减盲区 (sibling of #1216/#1219, 2026-07-05 根因闭合): 查整厂全部<b>待结</b>
+     * (interim_settled_at IS NULL) 逐工序行 —— 覆盖<b>所有计划族</b> (SAFETY_STOCK 待小结 + 结单族结单前)。
      *
-     * <p>用途: 小结前, SFI/FG 投料 (row_payload.upstreamSources 的 semiFinished/finishedGoods 引用)
-     * 已物理消耗常驻半成品/成品库存, 但 {@code availableQuantity/producedQuantity} 要到「小结」
-     * ({@code InterimSettleServiceImpl} §②) 才扣减 —— 与原料 {@code MaterialConsumption} 的延迟扣减同构。
+     * <p>用途: 结算前, SFI/FG 投料 (row_payload.upstreamSources 的 semiFinished/finishedGoods 引用)
+     * 已物理消耗常驻半成品/成品库存, 但 {@code availableQuantity/producedQuantity} 要到结算才扣减:
+     * SAFETY_STOCK 走「小结」({@code InterimSettleServiceImpl} §②), 结单族走「结单」
+     * ({@code ProductionPlanServiceImpl.deductProcessSheetStockFeeds}, R2) —— 都是延迟扣减。
      * 半成品盘点 / 成品销售发货 / 调拨 须减去这些「待扣」投料量, 否则拿 stale-high 账面 → 假盘亏(SFI)
-     * 双重扣减 或 超发/超调 → 小结阶段 {@code SFI_INSUFFICIENT / FG_INSUFFICIENT} 409 卡死。
+     * 双重扣减 或 超发/超调 → 结算阶段 {@code SFI_INSUFFICIENT / FG_INSUFFICIENT} 409 卡死。
      *
-     * <p><b>族门控 SAFETY_STOCK</b> (同 {@code sumUnsettledConsumptionGroupedByBatch} #1219 口径):
-     * 只有存货生产计划走「小结」延迟扣减; 结单族 (CUSTOMER_ORDER/MANUAL) 走「结单」即时扣, 其行
-     * {@code interim_settled_at} 恒 null 却早已落库 → 若一并计入会二次减同一投料 (假盘盈/超发放行)。
-     * Factory-scoped 防跨租户。
+     * <p><b>2026-07-05 移除 SAFETY_STOCK <u>族</u>门控</b>: 旧口径把结单族排除, 错误假设「结单族行早已落库扣减」——
+     * 实为结单<b>前</b>尚未扣减 (延迟扣减), 排除 → mid-production 窗口 stale-high 假盘亏。结单族结单时经
+     * {@link #stampInterimSettledForPlan} 打戳 → {@code interim_settled_at IS NOT NULL} 天然落谓词外, 不双减;
+     * SAFETY_STOCK 经小结打戳同理。故 IS NULL 现对所有族统一 = 「尚未结算、待扣」。Factory-scoped 防跨租户。
      */
-    @Query("SELECT r FROM ProcessSheetRow r, ProductionPlan p "
-            + "WHERE r.factoryId = :factoryId AND r.interimSettledAt IS NULL "
-            + "AND r.planId = p.id AND p.factoryId = :factoryId "
-            + "AND p.sourceType = com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK")
-    List<ProcessSheetRow> findUnsettledSafetyStockRows(@org.springframework.data.repository.query.Param("factoryId") String factoryId);
+    @Query("SELECT r FROM ProcessSheetRow r "
+            + "WHERE r.factoryId = :factoryId AND r.interimSettledAt IS NULL")
+    List<ProcessSheetRow> findUnsettledStockFeedRows(@org.springframework.data.repository.query.Param("factoryId") String factoryId);
+
+    /**
+     * 🔴🔒🔒 结单族「结单即打戳」根修 (2026-07-05, 镜像 {@code MaterialConsumptionRepository.stampInterimSettledForPlan}
+     * 的 process_sheet_rows 侧): 把本计划全部<b>未结</b> (interim_settled_at IS NULL) 逐工序行一次性盖为
+     * {@code settledAt} (= 结单时间戳)。返回受影响行数。
+     *
+     * <p><b>为何需要</b>: SFI/FG 投料的延迟扣减对 SAFETY_STOCK 由「小结」打戳产出行 (见
+     * {@code InterimSettleServiceImpl} 逐 UnsettledRow setInterimSettledAt); 结单族走「结单」经
+     * {@code deductProcessSheetStockFeeds} 扣减 SFI/FG 却<b>从不</b>回头给 process_sheet_rows 打戳 → 其行永久
+     * {@code interim_settled_at IS NULL}。若 {@link #findUnsettledStockFeedRows} 去掉族门控却不在结单时打戳,
+     * 结单族行会<b>永久</b>计入 pending → 结单后 (SFI/FG 已扣) 仍被减 → 双减。此处在结单时打戳, 使 IS NULL
+     * 对所有族统一代表「待扣」。⚠️ 仅结单族 (非 SAFETY_STOCK) 调用: SAFETY_STOCK 打戳由小结原子完成,
+     * 提前打戳会让小结漏处理产出行 → 漏入库。幂等 (已戳不再戳), planId 直接定位 (行有 plan_id 列),
+     * factory-scoped 防跨租户。{@code deletedAt IS NULL} 显式附加 (bulk UPDATE 绕过类级 {@code @Where})。
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE ProcessSheetRow r SET r.interimSettledAt = :settledAt "
+            + "WHERE r.factoryId = :factoryId AND r.planId = :planId "
+            + "AND r.interimSettledAt IS NULL AND r.deletedAt IS NULL")
+    int stampInterimSettledForPlan(@org.springframework.data.repository.query.Param("factoryId") String factoryId,
+                                   @org.springframework.data.repository.query.Param("planId") String planId,
+                                   @org.springframework.data.repository.query.Param("settledAt") java.time.LocalDateTime settledAt);
 }

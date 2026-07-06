@@ -209,6 +209,35 @@ class ProductionPlanStopProductionTest {
     }
 
     @Test
+    @DisplayName("🔴🔒🔒 BUG3: 中段起步纯 SFI 投料 (SAVED_SFI, batchId=null, 零 MaterialConsumption) 停产 → 409 拒绝 (消耗守卫盲区, 已投 SFI 会成幻库存)")
+    void stopProduction_midStartPureSfi_noConsumption_blocked() {
+        ProductionPlan plan = byStockPlan();
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+
+        // 纯 SFI 中间道: batchId=null (不物化 WIP), batchNumber=SFI 锚, 未结, 无 MaterialConsumption。
+        // 现有消耗守卫按 batchId 定位 → 此行被 filter(id!=null) 排除 → 零消耗 → 旧逻辑放行 (BUG3)。
+        ProcessSheetRow sfiRow = new ProcessSheetRow();
+        sfiRow.setBatchId(null);
+        sfiRow.setBatchNumber("SFI-MIDSTART-1");
+        sfiRow.setRowStatus(ProcessSheetRow.STATUS_SAVED_SFI);
+        sfiRow.setInterimSettledAt(null);
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(sfiRow));
+        // batchId 全 null → findUnsettledPlanConsumptions 短路返回空 (repo 不被调用) → 消耗守卫放行
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.stopProduction(FACTORY_ID, PLAN_ID));
+
+        assertEquals(409, ex.getCode(), "中段起步 SFI 投料未结应 409 拒绝停产");
+        assertEquals("STOP_BLOCKED_UNSETTLED_CONSUMPTION", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus(), "状态不应变 COMPLETED");
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("Gap2b 反向: 报工消耗已全部小结 (无未结) → 正常停产 → COMPLETED (不误伤干净停产)")
     void stopProduction_allConsumptionSettled_completes() {
         ProductionPlan plan = byStockPlan();
