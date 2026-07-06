@@ -552,6 +552,19 @@ public class GlobalExceptionHandler {
         String raw = e.getMessage() != null ? e.getMessage() : "";
         String method = request != null ? request.getMethod() : null;
 
+        // 🔒 库存超扣 CHECK 约束 (ck_material_batch_no_overconsume): 应用层守卫漏接 / 未来回归时
+        // DB 层最硬兜底触发。映射为友好 409 BATCH_OVER_CONSUMED, 避免裸 500 数据完整性异常
+        // (防呆 Rule 1: 具体可读文案 + next action)。
+        if (raw.contains("ck_material_batch_no_overconsume")) {
+            log.warn("[{}] 库存超扣被 DB CHECK 拦截: method={}, raw={}", traceId, method,
+                    raw.split("\n")[0]);
+            ApiResponse<?> resp = ApiResponse.errorWithCode(409, "BATCH_OVER_CONSUMED",
+                    "库存超扣: 已用 + 预留 超过该批次收货量, 操作被拒绝",
+                    "请核对消耗/预留数量, 或先补充该原料批次库存", "error");
+            resp.setHintTarget("原料批次");
+            return resp;
+        }
+
         // 分级: FK / 唯一约束是客户端操作问题 (e.g. 删引用的产品 / 重复提交), 不是服务端 bug
         // 其他 DataIntegrityException (真的数据损坏) 才 ERROR
         boolean isFkViolation = raw.contains("foreign key") || raw.contains("FOREIGN KEY")

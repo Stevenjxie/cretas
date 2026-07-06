@@ -745,6 +745,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                 (productionBatch.getSupervisorId() != null ? productionBatch.getSupervisorId() :
                  productionBatch.getCreatedBy());
             consumptionRecord.setRecordedBy(recordedBy);
+            // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
+            materialBatch.assertConsumptionInvariant();
             materialBatchRepository.save(materialBatch);
             inventoryLowStockEventPublisher.publishIfLowStock(factoryId, materialBatch, "OUT");
             materialConsumptionRepository.save(consumptionRecord);
