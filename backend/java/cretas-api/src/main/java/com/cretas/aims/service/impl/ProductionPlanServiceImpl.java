@@ -4303,6 +4303,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
             throw new BusinessException(400, "仅存货生产计划可停产");
         }
+        // 🔴 (2026-07-06) plan-status 守卫: 缺此守卫时对已 COMPLETED/CANCELLED 等终态计划重复调用本接口,
+        //   状态置 COMPLETED 是 no-op, 但下方无条件 plan.setEndTime(now()) 仍会执行 → 覆盖原完工时间戳
+        //   (审计腐蚀, 喂生产时长/人效报表); 双击或 API replay 即可复现。允许集 PENDING/IN_PROGRESS 镜像
+        //   前端 web-admin/src/views/production/plans/list.vue isUnfinishedStatus() 白名单 (停产按钮
+        //   仅在这两个状态下渲染) —— PENDING 允许是因为 interimSettle 从不要求 IN_PROGRESS, 存货生产计划
+        //   可能全程停留 PENDING (从未 startProduction) 就直接小结+停产关闭。
+        if (plan.getStatus() != ProductionPlanStatus.PENDING
+                && plan.getStatus() != ProductionPlanStatus.IN_PROGRESS) {
+            throw new BusinessException(409, "只能停产待处理或进行中的生产计划")
+                    .withHint("当前状态: " + plan.getStatus().getDisplayName() + ", 请刷新生产计划列表查看最新状态");
+        }
         // 🔒🔒 (2026-07-04) 幻库存守卫: 停产是纯状态翻转 (→ COMPLETED, 零扣减)。延迟扣减设计下, 报工写的
         //   MaterialConsumption 行恒 interimSettledAt IS NULL, 仅在「小结」时才逐笔扣减 usedQuantity。若计划
         //   尚有未结报工消耗却直接停产 → 状态变 COMPLETED → 小结守卫 (interimSettle 拒绝终态) 从此拦截 →
