@@ -306,6 +306,20 @@ public class AIIntentConfigController {
                 "\u6c47\u603b",
                 "\u7edf\u8ba1",
                 "\u5206\u6790");
+        boolean trendAction = containsAny(q,
+                "\u540c\u6bd4",
+                "\u73af\u6bd4",
+                "\u8d8b\u52bf",
+                "\u8d70\u52bf",
+                "\u589e\u957f",
+                "\u4e0b\u964d",
+                "\u6708\u5ea6\u53d8\u5316");
+        if (reportMetric && trendAction) {
+            request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
+            log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+            return;
+        }
         if (reportMetric && reportAction) {
             request.setIntentCode("RESTAURANT_OPS_SALES_SUMMARY");
             log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",

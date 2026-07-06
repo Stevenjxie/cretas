@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,32 @@ def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> 
     if start_date and end_date:
         return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
     return f"最近 {requested_days} 天"
+
+
+def _resolve_sales_date_range(
+    query: Optional[str],
+    *,
+    today: Optional[date] = None,
+) -> Tuple[Tuple[Optional[date], Optional[date]], str]:
+    """Resolve common owner-facing time phrases for sales summary prompts."""
+    text = (query or "").strip()
+    anchor = today or date.today()
+
+    recent_match = re.search(r"最近\s*(\d{1,3})\s*天", text)
+    if recent_match:
+        days = max(1, min(int(recent_match.group(1)), 365))
+        return (anchor - timedelta(days=days - 1), anchor), f"最近{days}天"
+
+    if any(token in text for token in ("今天", "今日")):
+        return (anchor, anchor), "今天"
+
+    if any(token in text for token in ("本周", "这周", "本星期", "这星期")):
+        return (anchor - timedelta(days=anchor.weekday()), anchor), "本周"
+
+    if any(token in text for token in ("本月", "这个月")):
+        return (anchor.replace(day=1), anchor), "本月"
+
+    return (None, None), "全部历史"
 
 
 async def resolve_wastage_top(
@@ -1021,14 +1049,15 @@ async def resolve_store_margin(
 
 
 async def resolve_sales_summary(
-    smartbi_pool, factory_id: str, *, role: Optional[str] = None,
+    smartbi_pool, factory_id: str, *, role: Optional[str] = None, query: Optional[str] = None,
 ) -> OpsAnswer:
     from smartbi.gold.queries import finance_summary, store_comparison
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
-    summary = await finance_summary(smartbi_pool, factory_id, (None, None), top_n_stores=5)
-    stores_data = await store_comparison(smartbi_pool, factory_id, (None, None))
+    date_range, window_label = _resolve_sales_date_range(query)
+    summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
+    stores_data = await store_comparison(smartbi_pool, factory_id, date_range)
     stores = stores_data.get("stores") or []
     weak_stores = stores_data.get("weakStores") or []
 
@@ -1051,7 +1080,7 @@ async def resolve_sales_summary(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
             answer_text=(
-                "现在还没有可用的 POS 营收和订单数据。建议先确认营业流水已经进入 Gold 层，"
+                f"{window_label}还没有可用的 POS 营收和订单数据。建议先确认营业流水已经进入 Gold 层，"
                 "再看总营收、平均每单和门店差异。"
             ),
             charts=[],
@@ -1072,7 +1101,7 @@ async def resolve_sales_summary(
 
     avg_text = _money(float(avg_bill)) if avg_bill is not None else "暂无"
     answer = (
-        f"整体经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
+        f"{window_label}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
         f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
         f"{top_line}{weak_line}"
         "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
@@ -1112,6 +1141,9 @@ async def resolve_sales_summary(
         meta={
             "day_count": day_count,
             "store_count": store_count,
+            "window_label": window_label,
+            "window_start": date_range[0].isoformat() if date_range[0] else None,
+            "window_end": date_range[1].isoformat() if date_range[1] else None,
             "weak_stores": weak_stores,
             "price_view": can_see_money,
             "store_comparison_count": len(stores),

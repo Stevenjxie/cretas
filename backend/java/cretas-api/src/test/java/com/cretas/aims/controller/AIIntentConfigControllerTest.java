@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -87,6 +89,30 @@ class AIIntentConfigControllerTest {
             "refreshCache",
             "clearCache"
     );
+
+    @Test
+    @DisplayName("restaurant demo report shortcut distinguishes sales summary from trend")
+    void restaurant_demo_report_shortcut_distinguishes_sales_and_trend() throws Exception {
+        AIIntentConfigController controller = new AIIntentConfigController(
+                null, null, null, null, null, null);
+        Method shortcut = AIIntentConfigController.class.getDeclaredMethod(
+                "applyRestaurantReportIntentShortcut",
+                String.class,
+                IntentExecuteRequest.class);
+        shortcut.setAccessible(true);
+
+        IntentExecuteRequest trend = IntentExecuteRequest.builder()
+                .userInput("分析销售额的月度变化趋势")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", trend);
+        assertEquals("RESTAURANT_OPS_TREND_ANALYSIS", trend.getIntentCode());
+
+        IntentExecuteRequest sales = IntentExecuteRequest.builder()
+                .userInput("查询本周营收")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", sales);
+        assertEquals("RESTAURANT_OPS_SALES_SUMMARY", sales.getIntentCode());
+    }
 
     @Test
     @DisplayName("P0 fix: executeIntent MUST NOT have @RequirePermission({\"system:read_write\"})")

@@ -964,7 +964,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             if hasattr(http_request, 'state') else None
                         )
                         ops_answer = await resolve_by_code(
-                            ops_code, pool, factory_id_hdr, role=role_hdr,
+                            ops_code, pool, factory_id_hdr, role=role_hdr, query=query,
                         )
                         if ops_answer:
                             response = GeneralAnalysisResponse(
@@ -1694,7 +1694,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 if hasattr(http_request, 'state') else None
                             )
                             ops_answer = await resolve_by_code(
-                                ops_code, pool, factory_id_hdr, role=_role_hdr,
+                                ops_code, pool, factory_id_hdr, role=_role_hdr, query=user_q,
                             )
                             if ops_answer:
                                 yield _sse_event("status", f"命中餐饮运营模板:{ops_answer.title}")

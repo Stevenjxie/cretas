@@ -17,11 +17,13 @@ remaining margin-specific vocabulary (毛利 / 毛利率 / 赚钱 / 净赚 / 利
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 
 import pytest
 
 from smartbi.gold.restaurant_ops_router import (
     SAMPLE_QUERIES,
+    _resolve_sales_date_range,
     match_restaurant_ops,
     resolve_by_code,
 )
@@ -149,6 +151,23 @@ def test_requisition_trend_still_wins_over_generic_trend():
 def test_revenue_amount_query_routes_to_sales_summary_not_trend():
     """本月营业额 is a point-in-time sales report read, not a trend question."""
     assert match_restaurant_ops("本月营业额") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+@pytest.mark.parametrize(
+    "query,expected_range,expected_label",
+    [
+        ("今天查订单", (date(2026, 7, 6), date(2026, 7, 6)), "今天"),
+        ("查询本周营收", (date(2026, 7, 6), date(2026, 7, 6)), "本周"),
+        ("本月营业额", (date(2026, 7, 1), date(2026, 7, 6)), "本月"),
+        ("最近7天销售情况", (date(2026, 6, 30), date(2026, 7, 6)), "最近7天"),
+        ("总营收和客单价表现怎么样", (None, None), "全部历史"),
+    ],
+)
+def test_resolve_sales_date_range(query, expected_range, expected_label):
+    assert _resolve_sales_date_range(query, today=date(2026, 7, 6)) == (
+        expected_range,
+        expected_label,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────
