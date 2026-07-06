@@ -36,6 +36,7 @@ import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -2901,6 +2902,25 @@ public class SalesServiceImpl implements SalesService {
      * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
     private void deductFinishedGoodsInventory(String factoryId, SalesDeliveryItem item) {
+        // 🔴 (2026-07-06): HONOR the operator's batch allocation. The P0-13 allocation dialog lets
+        // the warehouse pick EXACTLY which FG batches to ship (e.g. 近效期清库存 / 指定批次追溯), and
+        // shipDelivery even HARD-GATES on 「批次分配完成」(isFullyAllocated). Historically the deduction
+        // below re-ran its OWN FIFO/FEFO discovery and IGNORED the allocation table — the operator's
+        // chosen batches were silently overridden, allocation records diverged from the physically
+        // shipped batches (食品溯源失真), and the gate enforced something the deduction never respected.
+        // If this line has allocation records, deduct EXACTLY those batches. No records
+        // (batchAllocationService not wired in legacy unit tests / a line that never went through the
+        // allocation UI) → fall back to the original FIFO/FEFO discovery below (unchanged).
+        if (batchAllocationService != null) {
+            List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations =
+                    batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()));
+            if (allocations != null && !allocations.isEmpty()) {
+                deductByAllocations(factoryId, item, allocations);
+                return;
+            }
+        }
+
+        // ---- FALLBACK: original FIFO/FEFO discovery (no allocation records for this line) ----
         // T4-D5 #572 + 🔴 G1 (2026-07-03): per-row sourceWarehouseCode drives the candidate set.
         //   - EXPLICIT source → deduct only from that warehouse (respect explicit choice).
         //   - BLANK (common case) → deduct FEFO across ALL shippable (non-RD) warehouses. Mirrors
@@ -2994,6 +3014,97 @@ public class SalesServiceImpl implements SalesService {
                 item.getProductTypeId(), warehouseDisplay, remaining.toPlainString()))
                 .withHint("请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
                 .withHintTarget("生产计划");
+        }
+    }
+
+    /**
+     * 🔴 (2026-07-06): 按发货行的<b>批次分配记录</b>精确扣减成品库存 —— 兑现操作员在分配对话框里
+     * 选定的批次身份 (近效期清库存 / 指定批次追溯)。与旧 FIFO 独立重扫的本质区别: 扣的<b>就是</b>
+     * 用户选的批次, 不是 FIFO 另选的一批, 分配记录与实际扣减的成品批次因此一致 (追溯闭环)。
+     *
+     * <p><b>单位</b>: {@code alloc.getAllocatedQty()} 以发货行单位 (item.getUnit()) 记录
+     * (见 {@code allocateBatches} 里 {@code alloc.setUnit(item.getUnit())}); 批次原生单位可能不同
+     * (一批小结填了 productWeight → kg, 另一批未填 → 盒/件, C1)。故换算到发货单位记账, 扣减时再换算
+     * 回批次原生单位写库 —— 与 FIFO 路径同一 {@link FgQuantityUnitConverter} /
+     * {@link #toNativeDeductAmount} 口径, 不裸相减。换算失败 (缺 gramsPerUnit / 不兼容单位) → 诚实
+     * loud-fail, 绝不裸误扣。
+     *
+     * <p><b>容量</b>: 只扣该批<b>可用量</b> (available = produced − shipped − reserved, 与 FIFO Pass1
+     * 同口径, releaseReserved=0, 守 available≥0 不变式)。分配时 (allocateBatches) 已校验 可用≥分配,
+     * 但发货时可能因并发/其它单发货导致可用下降 → 若某批可用已不足以覆盖其分配量 (超出亚单位换算漂移),
+     * loud-fail 409 提示重新分配, <b>绝不静默少发或超发</b>。
+     */
+    private void deductByAllocations(String factoryId, SalesDeliveryItem item,
+            List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations) {
+        String targetUnit = item.getUnit();
+        // Defensive null-check: legacy unit tests may construct with null productTypeRepository.
+        BigDecimal gramsPerUnit = productTypeRepository != null
+                ? productTypeRepository.findById(item.getProductTypeId()).map(ProductType::getGramsPerUnit).orElse(null)
+                : null;
+        // 亚单位换算漂移容差: kg(scale4) / 盒(scale2) 双向 HALF_UP 每端 ~0.005 量级 → 0.01 兜底。
+        final BigDecimal driftEps = new BigDecimal("0.01");
+
+        BigDecimal remaining = item.getDeliveredQuantity();
+        for (com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation alloc : allocations) {
+            FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(alloc.getFinishedGoodsBatchId())
+                    .orElseThrow(() -> new BusinessException(409, "分配的成品批次不存在或已删除: "
+                            + alloc.getBatchNumber())
+                            .withHint("请到「发货记录 → 分配批次」重新分配后再确认发货")
+                            .withHintTarget("发货记录 Tab"));
+            if (!factoryId.equals(batch.getFactoryId())) {
+                throw new BusinessException(403, "分配的成品批次不属于当前工厂: " + alloc.getBatchNumber())
+                        .withHint("跨工厂数据被拒绝, 请重新分配批次").withHintTarget("finishedGoodsBatchId");
+            }
+            String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : targetUnit;
+            // 分配量换算到 targetUnit (通常 allocUnit==targetUnit → 恒等), 统一在发货单位记账。
+            BigDecimal allocQtyInTarget = FgQuantityUnitConverter
+                    .convert(alloc.getAllocatedQty(), allocUnit, targetUnit, gramsPerUnit);
+            if (allocQtyInTarget == null) {
+                throw new BusinessException(409, "分配记录单位(" + allocUnit + ")与发货单位(" + targetUnit
+                        + ")不一致且无法换算 (批次 " + alloc.getBatchNumber() + ")")
+                        .withHint("请在产品资料补「每盒/份标准克重」或改用一致单位后重新分配")
+                        .withHintTarget("finishedGoodsBatchId");
+            }
+            if (allocQtyInTarget.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            // 批次可用量 (与 FIFO Pass1 同口径: produced − shipped − reserved)。
+            BigDecimal availableNative = batch.getAvailableQuantity();
+            BigDecimal availableInTarget = FgQuantityUnitConverter
+                    .convert(availableNative, batch.getUnit(), targetUnit, gramsPerUnit);
+            if (availableInTarget == null) {
+                throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
+                        + " 单位(" + batch.getUnit() + ")与发货单位(" + targetUnit + ")不可换算")
+                        .withHint("请在产品资料补「每盒/份标准克重」或改用一致单位后重新分配")
+                        .withHintTarget("finishedGoodsBatchId");
+            }
+            // 并发/其它单发货导致可用下降到不足覆盖其分配量 → loud-fail (超出亚单位漂移才算真不足)。
+            if (allocQtyInTarget.subtract(availableInTarget).compareTo(driftEps) > 0) {
+                throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
+                        + " 可用库存不足 (可用=" + availableInTarget + targetUnit
+                        + ", 已分配=" + allocQtyInTarget + targetUnit + ")")
+                        .withHint("该批次库存在分配后发生变化 (可能被其它发货单占用), 请到「发货记录 → 分配批次」重新分配")
+                        .withHintTarget("finishedGoodsBatchId");
+            }
+            // 实发 = min(分配量, 可用量): 漂移在容差内时 clamp 到可用, 不超发。
+            BigDecimal shipInTarget = allocQtyInTarget.min(availableInTarget);
+            BigDecimal shipNative = toNativeDeductAmount(shipInTarget, targetUnit, batch.getUnit(), gramsPerUnit, availableNative);
+            if (shipNative == null || shipNative.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            // 扣可用部分 (未预留), releaseReserved=0 — 与 FIFO Pass1 同, 守 available≥0 不变式。
+            applyShipment(batch, shipNative, BigDecimal.ZERO);
+            recordDeductedBatch(item, batch);
+            remaining = remaining.subtract(shipInTarget);
+        }
+
+        // 分配总量在 allocateBatches 时已强校验 == deliveredQuantity → 正常 remaining 归 0。
+        // 若仍 > 漂移容差 → 分配记录与发货行数量不一致 (异常状态), loud-fail 而不是静默少发。
+        if (remaining.compareTo(driftEps) > 0) {
+            throw new BusinessException(409, "按已分配批次发货后仍缺 " + remaining
+                    + (targetUnit != null ? targetUnit : "") + " — 分配记录与发货数量不一致")
+                    .withHint("请到「发货记录 → 分配批次」重新分配, 确保分配总量等于发货数量")
+                    .withHintTarget("发货记录 Tab");
         }
     }
 
