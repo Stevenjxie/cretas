@@ -78,6 +78,37 @@ class RestaurantReviewSummaryDepthTest {
                 .contains("份量小(30)");
     }
 
+    @Test
+    @DisplayName("UT-SUMD-02: focused high-frequency question avoids generic review summary")
+    void focusedHighFrequencyQuestionGetsFocusedAnswer() {
+        Map<String, Object> g = new HashMap<>();
+        g.put("total_reviews", 19845);
+        g.put("avg_star", 4.79);
+        g.put("avg_service", 4.80);
+        g.put("avg_env", 4.79);
+        g.put("avg_taste", 4.79);
+        g.put("low_star_count", 396);
+        g.put("high_star_count", 18139);
+        g.put("vip_count", 2485);
+        g.put("store_count", 28);
+        g.put("city_count", 2);
+        g.put("userInput", "大众点评评论里高频好评和高频差评分别是什么？");
+        g.put("vip_good_tags", List.of(tag("味道好", 200), tag("环境好", 80)));
+        g.put("vip_bad_tags", List.of(tag("太贵", 5)));
+        g.put("normal_good_tags", List.of(tag("实惠", 1500)));
+        g.put("normal_bad_tags", List.of(tag("份量小", 30)));
+
+        Map<String, Object> r = tool.format(g);
+
+        assertThat(r.get("message").toString())
+                .contains("大众点评高频好评/差评词拆解")
+                .contains("老板今天怎么用")
+                .contains("VIP 味道好(200)")
+                .contains("非VIP 实惠(1500)")
+                .contains("份量小(30)")
+                .doesNotContain("客户评价总览");
+    }
+
     private static Map<String, Object> dim(String name, double value) {
         Map<String, Object> m = new HashMap<>();
         m.put("name", name);

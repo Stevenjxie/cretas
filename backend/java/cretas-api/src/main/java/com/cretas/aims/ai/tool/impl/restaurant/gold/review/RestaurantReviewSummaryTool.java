@@ -42,6 +42,7 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
             log.warn("Fetch review high-frequency tags failed, keep summary only: factoryId={}, error={}",
                     factoryId, e.getMessage());
         }
+        summary.put("userInput", getString(params, "userInput"));
         return summary;
     }
 
@@ -77,12 +78,26 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
         List<Map<String, Object>> vipBad = listOfMaps(g.get("vip_bad_tags"));
         List<Map<String, Object>> normalGood = listOfMaps(g.get("normal_good_tags"));
         List<Map<String, Object>> normalBad = listOfMaps(g.get("normal_bad_tags"));
+        String userInput = String.valueOf(g.getOrDefault("userInput", ""));
+        boolean focusedHighFrequency = userInput.contains("高频")
+                && (userInput.contains("好评") || userInput.contains("差评") || userInput.contains("分别"));
         if (!vipGood.isEmpty() || !normalGood.isEmpty() || !vipBad.isEmpty() || !normalBad.isEmpty()) {
-            sb.append("\n· 高频好评词：VIP ").append(joinTags(vipGood))
-                    .append("；非VIP ").append(joinTags(normalGood));
-            sb.append("\n· 高频差评词：VIP ").append(joinTags(vipBad))
-                    .append("；非VIP ").append(joinTags(normalBad));
-            sb.append("\n建议：好评词用于平台首图和门口卖点，差评词当天拆给店长/厨师长/前台整改，不要只看平均分。");
+            if (focusedHighFrequency) {
+                sb = new StringBuilder();
+                sb.append("大众点评高频好评/差评词拆解（共 ").append(total).append(" 条有效评价）：\n");
+                sb.append("· 高频好评词：VIP ").append(joinTags(vipGood))
+                        .append("；非VIP ").append(joinTags(normalGood));
+                sb.append("\n· 高频差评词：VIP ").append(joinTags(vipBad))
+                        .append("；非VIP ").append(joinTags(normalBad));
+                sb.append("\n老板今天怎么用：好评词放到点评/美团首图和门口海报，差评词拆给店长、厨师长、前台分别处理。");
+                sb.append("\n明天只看三项：首图点击有没有涨、相关差评词有没有降、店长是否按差评词完成整改。");
+            } else {
+                sb.append("\n· 高频好评词：VIP ").append(joinTags(vipGood))
+                        .append("；非VIP ").append(joinTags(normalGood));
+                sb.append("\n· 高频差评词：VIP ").append(joinTags(vipBad))
+                        .append("；非VIP ").append(joinTags(normalBad));
+                sb.append("\n建议：好评词用于平台首图和门口卖点，差评词当天拆给店长/厨师长/前台整改，不要只看平均分。");
+            }
         }
 
         List<Map<String, Object>> dims = listOfMaps(g.get("dimension_scores"));
