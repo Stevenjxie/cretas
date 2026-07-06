@@ -349,6 +349,8 @@ public class AIIntentConfigController {
         if (reviewMetric && !salesMetric && reviewAction) {
             if (reviewReplyProgress) {
                 request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
+            } else if (isRestaurantReviewComplaintRemedyQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
             } else if (isRestaurantReviewSummaryQuestion(q)) {
                 request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
             } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
@@ -413,6 +415,18 @@ public class AIIntentConfigController {
             return false;
         }
         return hasTopic && hasDecision;
+    }
+
+    private boolean isRestaurantReviewComplaintRemedyQuestion(String q) {
+        boolean hasComplaintSignal = containsAny(q,
+                "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f");
+        if (!hasComplaintSignal) {
+            return false;
+        }
+        return containsAny(q,
+                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u6539\u5584", "\u5982\u4f55\u6539\u5584",
+                "\u600e\u4e48\u6539", "\u5904\u7406", "\u6539\u5584", "\u6539\u8fdb", "\u89e3\u51b3",
+                "\u5efa\u8bae", "\u5e97\u957f\u4eca\u5929");
     }
 
     private boolean isRestaurantReviewSummaryQuestion(String q) {

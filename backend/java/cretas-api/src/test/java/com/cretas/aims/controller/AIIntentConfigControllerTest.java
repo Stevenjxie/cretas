@@ -161,6 +161,12 @@ class AIIntentConfigControllerTest {
         shortcut.invoke(controller, "DEMO_REST", reviewHighFrequency);
         assertEquals("RESTAURANT_REVIEW_SUMMARY", reviewHighFrequency.getIntentCode());
 
+        IntentExecuteRequest complaintRemedy = IntentExecuteRequest.builder()
+                .userInput("哪些门店差评最多，店长今天怎么处理？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", complaintRemedy);
+        assertEquals("RESTAURANT_REVIEW_COMPLAINT", complaintRemedy.getIntentCode());
+
         IntentExecuteRequest regionalManager = IntentExecuteRequest.builder()
                 .userInput("这家店不是最差但客单价不高，区域经理今天看什么？")
                 .build();
