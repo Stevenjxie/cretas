@@ -125,6 +125,12 @@ class AIIntentConfigControllerTest {
         shortcut.invoke(controller, "DEMO_REST", complaint);
         assertEquals("RESTAURANT_REVIEW_COMPLAINT", complaint.getIntentCode());
 
+        IntentExecuteRequest lowStarReplyRate = IntentExecuteRequest.builder()
+                .userInput("\u4f4e\u661f\u8bc4\u4ef7\u56de\u590d\u7387\u5dee\uff0c\u4eca\u5929\u8981\u5148\u8865\u54ea\u4e9b\u56de\u590d\uff1f")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", lowStarReplyRate);
+        assertEquals("RESTAURANT_REVIEW_REPLY_RATE", lowStarReplyRate.getIntentCode());
+
         IntentExecuteRequest kitchenAction = IntentExecuteRequest.builder()
                 .userInput("厨房出餐慢和差评变多，今天先改哪三个动作？")
                 .build();

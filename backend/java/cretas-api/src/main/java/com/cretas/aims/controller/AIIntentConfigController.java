@@ -334,8 +334,16 @@ public class AIIntentConfigController {
                 "\u589e\u957f",
                 "\u4e0b\u964d",
                 "\u6708\u5ea6\u53d8\u5316");
+        boolean reviewReplyProgress = containsAny(q,
+                "\u56de\u590d\u7387",
+                "\u672a\u56de\u590d",
+                "\u8865\u56de\u590d",
+                "\u8865\u54ea\u4e9b\u56de\u590d",
+                "\u56de\u590d\u8fdb\u5ea6");
         if (reviewMetric && !salesMetric && reviewAction) {
-            if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
+            if (reviewReplyProgress) {
+                request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
+            } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
                 request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
             } else if (trendAction) {
                 request.setIntentCode("RESTAURANT_REVIEW_TREND");

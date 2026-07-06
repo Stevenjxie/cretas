@@ -931,6 +931,181 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
     return ""
 
 
+def _owner_message_specific_actions(
+    owner_page: dict[str, Any],
+    scenario: str,
+    message: str,
+    default_actions: list[str],
+) -> list[str]:
+    text = message or ""
+    package_decision = owner_page.get("packageDecision") if isinstance(owner_page.get("packageDecision"), dict) else {}
+    candidates = package_decision.get("candidates") if isinstance(package_decision.get("candidates"), list) else []
+    candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    package_name = _plain_text(candidate.get("name")) or "招牌鱼双人套餐"
+    package_price = _owner_money(candidate.get("estimatedPackagePrice")) or "270元"
+    package_cost = _owner_money(candidate.get("estimatedFoodCost")) or "100元"
+    package_profit = _owner_money(candidate.get("estimatedGrossProfit")) or "170元"
+    package_margin = _owner_metric(candidate.get("grossMarginPct"), 1)
+    margin_text = f"，毛利率约 {package_margin}%" if package_margin else ""
+
+    if "老板今天就看一眼" in text or "最应该先管" in text:
+        return [
+            "老板今天只派一个主动作：让店长把工作日午市的双人套餐和门口承接先跑起来，不要同时开五个会。",
+            "店长只回报三件事：午市进店人数、套餐卖出份数、套餐毛利；其他报表明天再看。",
+            "如果今晚毛利还被活鱼损耗拖住，再让厨师长查 BOM 和切配；不要老板一上来就亲自盯后厨细节。",
+        ]
+    if "营收" in text and ("哪三个动作" in text or "先做" in text):
+        return [
+            "前台先改入口话术：门口和平台首屏只讲招牌鱼、双人价格、预计用餐时间，让路过客知道为什么进来。",
+            f"店长今天只推一款套餐：{package_name}，售价约 {package_price}，成本约 {package_cost}，一份留下约 {package_profit}{margin_text}。",
+            "仓管和厨师长同步守成本：活鱼和底料按缺口补，晚市后查实际用量有没有继续高过 BOM。",
+        ]
+
+    if scenario == "package":
+        if "米饭" in text or "低价值" in text:
+            return [
+                "先把米饭、餐具、纸巾这类配套项从主推候选里剔除，它们只能做随餐补充，不能占推荐位。",
+                f"主推只保留能讲清卖点的组合：{package_name}；页面写清售价 {package_price}、食材成本 {package_cost}、毛利 {package_profit}{margin_text}。",
+                "服务员推荐时只说招牌鱼和冰豆花的理由，不把米饭当套餐亮点；米饭放在加购或默认搭配里处理。",
+            ]
+        if "外卖" in text:
+            return [
+                f"外卖入口今天只上 {package_name}，页面必须写清辣度、预计出餐时间和适合两人，不用堆满一屏菜名。",
+                f"外卖售价按 {package_price} 试 7 天，包装和平台成本并入 {package_cost}，一份毛利低于 {package_profit} 就停。",
+                "差评风险先控两件事：鱼片口感和汤汁包装；出餐超过阈值时宁可少接单，也不要用差评换销量。",
+            ]
+        if any(keyword in text for keyword in ("算", "毛利", "成本", "售价")):
+            return [
+                f"今天先按这组数试推：{package_name}，售价约 {package_price}，食材成本约 {package_cost}，毛利约 {package_profit}{margin_text}。",
+                "如果要替换菜品，只能用高毛利小食替换低价值配套项；替换后重新算售价、成本、毛利，不能凭感觉换。",
+                "只在工作日午市和低峰测，不上全店长期菜单；明天看卖出份数、客单价、毛利率再决定扩大。",
+            ]
+        if "不想打折" in text or "不要打折" in text or "不打折" in text:
+            return [
+                "今天不做满减和全店折扣，改成“招牌鱼+高毛利小食”的双人理由，让顾客觉得省心而不是便宜。",
+                "门口、点评、美团三处统一一句话：两个人吃什么、多少钱、多久吃完；不要每个平台讲不同卖点。",
+                "晚市结束只看客单价有没有抬、套餐毛利有没有守住；如果只靠低价带单，就立刻停。",
+            ]
+
+    if scenario == "inventory_reorder":
+        if any(keyword in text for keyword in ("不要多备", "别多备", "少备", "报损")):
+            return [
+                "今天不要多备低销量复杂菜和容易过夜变差的配菜；这些菜只留够晚高峰，不做第二轮加备。",
+                "活鱼、青花椒底料按安全库存补，不因为怕报损就把招牌菜断货；临期豆腐和番茄先排进员工餐或小食消耗。",
+                "打烊前让仓管拍一张剩货表：哪些剩、剩多少、明天减多少；明天按这个减备，不等月底才算损耗。",
+            ]
+        if any(keyword in text for keyword in ("库存预警", "备菜", "补货")):
+            return [
+                "仓管今天只拉一张表：当前库存、今晚预测、安全库存；缺口超过安全线的先补，不缺的不要补。",
+                "厨师长按这张表改备菜顺序：招牌鱼原料优先，临期原料优先消耗，低销量复杂菜不加量。",
+                "前台同步避开会消耗紧缺原料的推荐话术，别一边缺货一边继续推。",
+            ]
+
+    if scenario == "cost_margin":
+        if any(keyword in text for keyword in ("理论用量", "实际用量", "BOM")):
+            return [
+                "厨师长今天先称三次：活鱼来料重量、切配后可用重量、出品每份用量，先判断是切配损耗还是份量失控。",
+                "把招牌鱼 BOM 理论用量和今天实际用量逐单对齐，差异超过阈值的单子直接回看制作人和时段。",
+                "今晚不要先涨价，先把底料勺量、鱼片份量和边角料去向拉回标准；明天再看毛利有没有回升。",
+            ]
+        if "月盘点" in text or "损耗" in text:
+            return [
+                "今天先按损耗金额排前两项，不查全仓；活鱼边角和酸菜包材先分清是采购、切配、盘点口径还是报损记录问题。",
+                "仓管当天改一条规则：临期和边角料必须贴红标并当天消耗，不允许打烊后才发现。",
+                "厨师长同步下调容易剩的备料上限；不是所有菜少备，而是先砍损耗高、销量低、复用差的原料。",
+            ]
+        if "采购" in text:
+            return [
+                "采购先拿同规格活鱼和底料的近三次单价比，不只看今天一张采购单。",
+                "如果采购价涨但主菜仍是引流菜，先用高毛利小食带回来，不马上涨主菜价格。",
+                "如果同规格价格连续偏高，再谈换供应商或议价；不要让后厨用量问题伪装成采购问题。",
+            ]
+
+    if scenario == "seating_mix":
+        if "排队" in text or "空桌" in text or "前台引导" in text:
+            return [
+                "前台每 15 分钟报一次：门口等位几组、空桌几张、空的是几人桌；先确认是不是有桌没人坐。",
+                "两人客优先引导到可拼可拆位，四人客再合桌；如果四人桌被两人客占死，店长当场调整。",
+                "今天先改引导规则，不先加员工；如果引导改了还排队，再判断是不是厨房出餐慢。",
+            ]
+        if "二人桌" in text or "四人桌" in text or "桌型" in text:
+            return [
+                "午市前先拿 2 张四人桌改成可拼可拆区，摆位和台卡都改，不只口头交代。",
+                "2 人客到店先落拼拆位，3-4 人客到店再合桌；前台记录四人桌被二人客占用次数。",
+                "今天只试一块区域，避免四人客真的来了没桌；明天看等位和空桌时间再扩大。",
+            ]
+
+    if scenario == "staffing_schedule":
+        if "只能多加一个人" in text or "只能加一个人" in text:
+            return [
+                "18:00 前先看瓶颈：如果门口等位和核销乱，这个人加前厅；如果招牌鱼出餐超过阈值，这个人加后厨。",
+                "今天这家店先把人放在晚市 18:00-20:00，不加全天；这个人只盯一个瓶颈，不兼做杂活。",
+                "打烊复盘看等位和出餐哪个降得更多，明天再决定固定加前厅还是后厨。",
+            ]
+        if "时段" in text or "少排" in text or "排班" in text:
+            return [
+                "午市保稳定班，不额外加人；低峰减少机动人手，但必须留一个人盯迎宾和核销。",
+                "晚市 18:00-20:00 加峰值人手：前厅盯等位和核销，后厨盯招牌鱼出餐。",
+                "店长开班前把谁迎宾、谁催菜、谁处理差评苗头写清楚，不要忙起来才临时分工。",
+            ]
+
+    if scenario == "external_event_response":
+        if "下雨" in text or "雨" in text or "天气" in text:
+            return [
+                "堂食承接商场内客流：门口物料只推热汤鱼和双人套餐，减少顾客犹豫。",
+                "外卖只推配送后口感稳定的组合，避开容易变软、变凉、差评风险高的菜。",
+                "备货只加招牌鱼、底料、热汤小食和包装材料，不因为下雨就全菜单多备。",
+            ]
+        if "商场" in text or "活动" in text or "亲子" in text:
+            return [
+                "活动前 1 小时把门口台卡换成亲子/双人友好文案，不等客人进门才解释。",
+                "前台安排一人专门承接活动客流：确认券、说明两人套餐、提醒预计上菜时间。",
+                "后厨只给活动时段加备招牌鱼和儿童友好小食，低频复杂菜不加量。",
+            ]
+
+    return default_actions
+
+
+def _owner_message_specific_watch_numbers(owner_page: dict[str, Any], scenario: str, message: str, default_watch: str) -> str:
+    text = message or ""
+    if "老板今天就看一眼" in text or "最应该先管" in text:
+        return "明天只看三个数：工作日午市进店人数、双人套餐卖出份数、套餐毛利。三个数有两个变好，老板再扩大动作。"
+    if "营收" in text and ("哪三个动作" in text or "先做" in text):
+        return "明天看三段漏斗：门口/平台进店有没有涨、套餐有没有拉高客单、BOM 差异有没有收窄。三段有一段没动，就不要盲目加活动。"
+    if scenario == "package":
+        if "米饭" in text or "低价值" in text:
+            return "明天看主推套餐里低价值配套项占比、套餐毛利率、加购率。米饭占推荐位越少、加购越高，说明排序改对了。"
+        if "外卖" in text:
+            return "明天看外卖套餐份数、外卖差评关键词、扣除包装平台后的毛利。销量涨但差评或毛利变差，就不要继续放大。"
+        if any(keyword in text for keyword in ("算", "毛利", "成本", "售价")):
+            return "明天看这款套餐的售价接受度、食材成本、毛利额。毛利额能留下来，才说明这套计算有用。"
+        if "不想打折" in text or "不要打折" in text or "不打折" in text:
+            return "明天看客单价、套餐占比、折扣让利金额。客单涨且让利没涨，才说明不是靠打折拉起来。"
+    if scenario == "inventory_reorder":
+        if any(keyword in text for keyword in ("不要多备", "别多备", "少备", "报损")):
+            return "明天只看三个数：低销量菜剩货金额、临期原料报损、招牌菜缺货次数。报损降了但招牌不断货，才是少备成功。"
+        if any(keyword in text for keyword in ("库存预警", "备菜", "补货")):
+            return "明天看缺货次数、紧急补货次数、临期消耗金额。缺货和紧急补货少了，临期也消耗掉，说明补货表有效。"
+    if scenario == "cost_margin":
+        if any(keyword in text for keyword in ("理论用量", "实际用量", "BOM")):
+            return "明天看三项：活鱼实际/理论差异、底料勺量偏差、边角料重量。差异收窄，才说明厨师长查到了真问题。"
+        if "月盘点" in text or "损耗" in text:
+            return "明天看损耗前两项金额、临期红标消耗、备料上限执行情况。损耗金额降下来，才说明不是月底才发现。"
+        if "采购" in text:
+            return "明天看同规格采购单价、菜品毛利、供应商报价差。单价问题和用量问题要分开判断。"
+    if scenario == "seating_mix":
+        if "排队" in text or "空桌" in text or "前台引导" in text:
+            return "今天看等位组数、空桌张数、前台改坐成功次数。排队少了但空桌也少了，说明前台引导有效。"
+        if "二人桌" in text or "四人桌" in text or "桌型" in text:
+            return "今天看二人客等位、四人桌被二人客占用次数、拼拆区翻台。二人客等位降且四人客没被赶走，桌型才算调对。"
+    if scenario == "staffing_schedule":
+        if "只能多加一个人" in text or "只能加一个人" in text:
+            return "今晚只看这个人盯的瓶颈：如果加前厅，看等位和核销；如果加后厨，看出餐时长和催菜次数。不要用全店收入判断一个人的位置。"
+        if "时段" in text or "少排" in text or "排班" in text:
+            return "今天看每小时收入、人手覆盖、上菜时长。忙时覆盖提高、闲时人手下降、上菜没变慢，排班才算合理。"
+    return default_watch
+
+
 def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
     if scenario == "operations_dispatch":
         return "今天先别让每个岗位都自己判断重点，也别临时全员加班。先按仓管、厨师长、前台、店长四张清单跑一晚。"
@@ -1642,8 +1817,10 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     plain_reason = _owner_plain_reason(owner_page, scenario, focus_reason or diagnosis)
     plain_actions = _owner_plain_actions(owner_page, scenario, first_action)
     specific_guidance = _owner_message_specific_guidance(owner_page, scenario, message)
+    plain_actions = _owner_message_specific_actions(owner_page, scenario, message, plain_actions)
     do_not_do = _owner_do_not_do(owner_page, scenario)
     watch_numbers = _owner_watch_numbers(owner_page, scenario)
+    watch_numbers = _owner_message_specific_watch_numbers(owner_page, scenario, message, watch_numbers)
     evidence_text = _owner_plain_evidence(owner_page, scenario)
 
     metric_follow_up = _owner_metric_follow_up_answer(owner_page, scenario, message)
