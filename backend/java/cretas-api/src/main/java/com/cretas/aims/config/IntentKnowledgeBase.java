@@ -7443,6 +7443,10 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("顾客投诉多不多", "RESTAURANT_REVIEW_COMPLAINT");
         restaurantPhraseMapping.put("哪家店评价差", "RESTAURANT_REVIEW_BAD_STORE");
         restaurantPhraseMapping.put("评价最差的门店", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("哪些门店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("差评最多的门店", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("哪个门店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
+        restaurantPhraseMapping.put("哪家店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
         restaurantPhraseMapping.put("哪些菜被吐槽", "RESTAURANT_REVIEW_DISH_ISSUE");
         restaurantPhraseMapping.put("菜品差评怎么样", "RESTAURANT_REVIEW_DISH_ISSUE");
 

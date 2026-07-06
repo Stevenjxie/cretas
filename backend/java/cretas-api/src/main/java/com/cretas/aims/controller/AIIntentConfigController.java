@@ -349,6 +349,8 @@ public class AIIntentConfigController {
         if (reviewMetric && !salesMetric && reviewAction) {
             if (reviewReplyProgress) {
                 request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
+            } else if (isRestaurantReviewBadStoreQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_BAD_STORE");
             } else if (isRestaurantReviewComplaintRemedyQuestion(q)) {
                 request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
             } else if (isRestaurantReviewSummaryQuestion(q)) {
@@ -415,6 +417,15 @@ public class AIIntentConfigController {
             return false;
         }
         return hasTopic && hasDecision;
+    }
+
+    private boolean isRestaurantReviewBadStoreQuestion(String q) {
+        boolean hasStoreSignal = containsAny(q,
+                "\u95e8\u5e97", "\u54ea\u5bb6\u5e97", "\u54ea\u4e2a\u95e8\u5e97", "\u5dee\u8bc4\u6700\u591a",
+                "\u8bc4\u4ef7\u6700\u5dee", "\u53e3\u7891\u5dee");
+        boolean hasReviewSignal = containsAny(q,
+                "\u5dee\u8bc4", "\u4f4e\u661f", "\u8bc4\u4ef7", "\u53e3\u7891");
+        return hasStoreSignal && hasReviewSignal;
     }
 
     private boolean isRestaurantReviewComplaintRemedyQuestion(String q) {

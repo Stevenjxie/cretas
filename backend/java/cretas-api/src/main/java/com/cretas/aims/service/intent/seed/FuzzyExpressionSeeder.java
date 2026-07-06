@@ -103,7 +103,8 @@ public class FuzzyExpressionSeeder implements ApplicationRunner {
         m.put("RESTAURANT_REVIEW_COMPLAINT", List.of(
                 "投诉情况怎么样", "有哪些投诉", "客诉怎么样", "顾客投诉多不多"));
         m.put("RESTAURANT_REVIEW_BAD_STORE", List.of(
-                "哪家店评价差", "哪个门店口碑差", "差评最多的店", "评价最差的门店"));
+                "哪家店评价差", "哪个门店口碑差", "差评最多的店", "评价最差的门店",
+                "哪些门店差评最多", "差评最多的门店", "哪个门店差评最多", "哪家店差评最多"));
         m.put("RESTAURANT_REVIEW_DISH_ISSUE", List.of(
                 "菜品有什么问题", "哪些菜被吐槽", "菜品差评怎么样"));
 

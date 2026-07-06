@@ -133,6 +133,8 @@ class FuzzyExpressionSeederTest {
                         "\u4f4e\u661f\u8bc4\u4ef7\u600e\u4e48\u6539\u5584",
                         "\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584",
                         "\u5dee\u8bc4\u6539\u5584\u5efa\u8bae");
+        assertThat(FuzzyExpressionSeeder.SEEDS.get("RESTAURANT_REVIEW_BAD_STORE"))
+                .contains("哪些门店差评最多", "差评最多的门店", "哪个门店差评最多");
     }
 
     private static <T> T any() {
