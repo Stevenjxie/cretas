@@ -439,7 +439,7 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         return "traffic_conversion"
     if any(keyword in text for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "采购价格", "盈利")):
         return "cost_margin"
-    if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "拉营收", "拉高营收", "提高营收", "提高客单", "提升客单", "客单价")):
+    if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "满减", "拉营收", "拉高营收", "提高营收", "提高客单", "提升客单", "客单价")):
         return "package"
     if any(keyword in text for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢", "退菜", "重做", "口味", "太咸")) and not any(keyword in text for keyword in ("备菜", "备货", "补货", "库存")):
         return "kitchen_quality"
@@ -910,8 +910,8 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
         if any(keyword in text for keyword in ("算", "毛利", "成本", "售价")):
             margin_text = f"、毛利率约 {package_margin}%" if package_margin else ""
             return f"这个套餐不是拍脑袋配菜：先看售价、食材成本和留下来的毛利。当前推荐的 {package_name}，食材成本约 {package_cost}，一份大概留下 {package_profit}{margin_text}；这个毛利撑得住，才值得放到主推位。"
-        if "不想打折" in text or "不要打折" in text:
-            return "不打折时不要把价格往下压，要把“为什么两个人点这套更省心”讲清楚。做法是用招牌菜带一个高毛利小食，把客单抬起来，而不是用满减把利润让出去。"
+        if "不想打折" in text or "不要打折" in text or "满减" in text:
+            return "老板不想打折/不想做满减时，不要把价格往下压，要把“为什么两个人点这套更省心”讲清楚。做法是用招牌菜带一个高毛利小食，把客单抬起来，而不是用满减把利润让出去。"
 
     if scenario == "inventory_reorder":
         if any(keyword in text for keyword in ("不要多备", "别多备", "少备", "报损")):
@@ -1064,9 +1064,9 @@ def _owner_message_specific_actions(
                 "如果要替换菜品，只能用高毛利小食替换低价值配套项；替换后重新算售价、成本、毛利，不能凭感觉换。",
                 "只在工作日午市和低峰测，不上全店长期菜单；明天看卖出份数、客单价、毛利率再决定扩大。",
             ]
-        if "不想打折" in text or "不要打折" in text or "不打折" in text:
+        if "不想打折" in text or "不要打折" in text or "不打折" in text or "满减" in text:
             return [
-                "今天的动作不是满减和全店折扣，而是改成“招牌鱼+高毛利小食”的双人理由，让顾客觉得省心而不是便宜。",
+                "今天的动作不是满减和全店折扣；老板不想打折，就改成“招牌鱼+高毛利小食”的双人理由，让顾客觉得省心而不是便宜。",
                 "门口、点评、美团三处统一一句话：两个人吃什么、多少钱、多久吃完；不要每个平台讲不同卖点。",
                 "晚市结束只看客单价有没有抬、套餐毛利有没有守住；如果只靠低价带单，就立刻停。",
             ]
