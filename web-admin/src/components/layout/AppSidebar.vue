@@ -9,7 +9,7 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork
+  Histogram, KnifeFork, Connection
 } from '@element-plus/icons-vue';
 import { menuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
 
@@ -124,7 +124,7 @@ const iconMap: Record<string, any> = {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork
+  Histogram, KnifeFork, Connection
 };
 
 // 菜单配置已抽到 ./menuConfig.ts (可单测) — MenuItem / menuConfig / financeManagerMenu 由顶部 import 引入
@@ -147,6 +147,13 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
+
+  // 模块化可见性开关 (menuConfig.ts `visible` 字段) — 显式 false 立即隐藏,
+  // 不影响路由/深链, 用于临时下线某功能入口而不用注释代码。
+  // 注意: router meta 的 `showInMenu` 是死代码, 不在这里读取 — 唯一事实源是 menuConfig.ts。
+  if (item.visible === false) {
+    return false;
+  }
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {

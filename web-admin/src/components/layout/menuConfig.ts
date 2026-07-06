@@ -1,6 +1,18 @@
 import type { ModuleName } from '@/store/modules/permission';
 
-// 菜单配置
+// ⚠️ 单一事实源 (single source of truth): 侧边栏菜单只读这个文件 (AppSidebar.vue
+// `filteredMenu` 直接消费 `menuConfig` / `financeManagerMenu`), 不读 router meta。
+//
+// 🔴 router/index.ts 里的 `meta.showInMenu` 是死代码 — 从未被任何组件读取。
+// 新增页面时把 `showInMenu: true` 写进 router meta **不会**让它出现在侧边栏, 必须在
+// 本文件手动登记一个 MenuItem 条目, 否则页面建好也部署了但用户永远点不到 (dead-end)。
+// 新增页面 checklist:
+//   1. router/index.ts 注册路由 (跟以前一样)
+//   2. 本文件 (menuConfig.ts) 里对应模块的 children 数组里加一个 MenuItem
+//   3. 需要限权限的话带上 roles (镜像 router meta.roles) 和/或 hideForFactoryTypes
+//
+// 想临时隐藏/显示某功能 (不删代码, 不改 router) → 加/改该项的 `visible` 字段即可,
+// 不需要注释整段 children 或去 router 改 showInMenu (那个字段没用)。
 export interface MenuItem {
   path: string;
   title: string;
@@ -10,6 +22,13 @@ export interface MenuItem {
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
+  /**
+   * 显式可见性开关 (模块化管理入口)。默认 true (省略即可见)。
+   * 设为 false 立即从侧边栏隐藏该项 (及其 children, 如果是父组), 不影响路由本身
+   * (深链仍可访问, 只是没有菜单入口) —— 用于"功能上线但还不想暴露给所有租户"
+   * 或者"临时下线某功能入口"场景, 不用注释/删代码。
+   */
+  visible?: boolean;
 }
 
 // 财务主管专用菜单 - 简化版
@@ -64,6 +83,9 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
+      // 菜单孤儿 audit fix (2026-07-06): 未完成计划队列 (router: ProductionPendingQueue,
+      // 文员视角按交期升序展示 PENDING+IN_PROGRESS 计划) 早已注册, 从未进侧边栏。
+      { path: '/production/pending-queue', title: '未完成计划队列', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
       // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
       // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
@@ -76,12 +98,20 @@ const rawMenuConfig: MenuItem[] = [
       // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
       // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
       { path: '/production/bom', title: 'BOM/配方维护', icon: '', module: 'production' },
+      // 菜单孤儿 audit fix: BOM 版本管理/工程变更通知/多级BOM展开 (router 早注册, 从未进侧边栏)
+      { path: '/production/bom/tree', title: '多级BOM展开', icon: '', module: 'production' },
+      { path: '/production/bom/versions', title: 'BOM版本管理', icon: '', module: 'production' },
+      { path: '/production/bom/ecns', title: 'ECN工程变更', icon: '', module: 'production' },
       { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
+      // 菜单孤儿 audit fix: 报工撤回审批列表 (router: ProductionReversals)
+      { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
       { path: '/production/bom-achievement', title: 'BOM达成率分析', icon: '', module: 'production' },
       { path: '/production/process-io', title: '工序投入产出对比', icon: '', module: 'production' },
       { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
       { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
       { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
+      // 菜单孤儿 audit fix: 已转样品库 (router: RdConverted, 研发样品转正后的库)
+      { path: '/rd/converted', title: '已转样品库', icon: '', module: 'production' },
       // SP9: 人效双口径对比 (报价 quotedLaborCost vs 实际 actualLaborCost)
       { path: '/production/labor-efficiency', title: '人效双口径对比', icon: '', module: 'production' }
     ]
@@ -95,6 +125,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/material-types', title: '原料类型字典 (新建原料)', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-segments', title: '物料分段字典', icon: '', module: 'warehouse' },
       { path: '/warehouse/materials', title: '原料入库登记 (具体批次)', icon: '', module: 'warehouse' },
+      // 菜单孤儿 audit fix (2026-07-06): 在制品 WIP (router: WarehouseWipBatches) 早注册,
+      // 从未进侧边栏, 放在原料入库登记附近 (同属批次/库存明细类)。
+      { path: '/warehouse/wip-batches', title: '在制品 (WIP)', icon: '', module: 'warehouse' },
+      // 菜单孤儿 audit fix: 半成品重量库存 (router: WarehouseSemiFinished, 只读快照)
+      { path: '/warehouse/semi-finished', title: '半成品重量库存', icon: '', module: 'warehouse' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite — 盘点任务(批量导入/期初建账/审批应用), 与上面"盘点管理"是不同页面,
@@ -108,8 +143,12 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
       { path: '/warehouse/wastage-reports', title: '报损管理', icon: '', module: 'warehouse' },
+      // 菜单孤儿 audit fix: 盐化仓管理 (router: WarehouseSaltedDeductions, F006 对客户代加工独立扣量)
+      { path: '/warehouse/salted-deductions', title: '盐化仓管理', icon: '', module: 'warehouse' },
       { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse' },
-      { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' }
+      { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
+      // 菜单孤儿 audit fix: 中转挂账对账 (router: WarehouseTransitLedger, 六扇门 N10 仓库主管/财务用)
+      { path: '/warehouse/transit-ledger', title: '中转挂账对账', icon: '', module: 'warehouse' }
     ]
   },
   {
@@ -140,6 +179,26 @@ const rawMenuConfig: MenuItem[] = [
       // reachable via a PO row's "更多→退货" dropdown or direct URL. Mirrors the /sales/returns
       // entry added for the same gap on the sales side (see T-RTA fix comment below).
       { path: '/procurement/returns', title: '采购退货', icon: '', module: 'procurement' },
+      // 菜单孤儿 audit fix (2026-07-06): 请购单 3 页 (router: PurchaseRequisitions /
+      // PendingApprovalRequisitions / MyPurchaseRequisitions) 早已注册, 但此前只挂在
+      // 「餐饮运营」组的 /procurement/requisitions/my 一项下 (且该组顶级 hideForFactoryTypes:
+      // ['FACTORY']) —— FACTORY 类型租户 (如 F006) 完全无法从菜单到达请购单功能, 只能靠深链。
+      // 现补进采购管理组 (该组对 FACTORY 可见, 对 RESTAURANT 隐藏, 与餐饮组互不冲突)。
+      { path: '/procurement/requisitions', title: '全部请购单', icon: '', module: 'procurement' },
+      { path: '/procurement/requisitions/my', title: '我的请购', icon: '', module: 'procurement' },
+      // roles 镜像 router/index.ts PendingApprovalRequisitions meta.roles
+      { path: '/procurement/requisitions/pending-approval', title: '待审批请购', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin'] },
+      // 菜单孤儿 audit fix: 核价单 (询价→核价→采购 pipeline, router: InquiryQuoteList)
+      { path: '/procurement/inquiry-quotes', title: '核价单', icon: '', module: 'procurement' },
+      // roles 镜像 router/index.ts PurchaseApprovalRules meta.roles
+      { path: '/procurement/approval-rules', title: '采购审批规则', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'permission_admin', 'procurement_manager', 'finance_manager'] },
+      // 菜单孤儿 audit fix: 入库异常处理 (router: PurchaseExceptions)
+      { path: '/procurement/exceptions', title: '入库异常', icon: '', module: 'procurement' },
+      // roles 镜像 router/index.ts PurchaseInvoices meta.roles
+      { path: '/procurement/invoices', title: '采购发票', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
       // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 路由 (router/index.ts) 早已注册
       // /procurement/payment-requests (采购付款申请 PENDING→FINANCE_REVIEW→APPROVED→PAID
       // 状态机, 后端 markPaidPurchase 三写原子已生效, prod 已有 AP_PAYMENT 数据), 但从未加入
@@ -219,6 +278,14 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/ar-ap', title: '应收应付', icon: '', module: 'finance' },
       { path: '/finance/invoices', title: '开票管理', icon: '', module: 'finance' },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
+      // 菜单孤儿 audit fix (2026-07-06): 凭证列表/期间结账/进销存台账/凭证模板/凭证导出
+      // (router: FinanceVoucherList / FinanceAccountingPeriod / FinanceInventoryLedger /
+      // FinanceVoucherTemplate / FinanceVoucherExport) 早已注册, 从未进侧边栏。
+      { path: '/finance/voucher-list', title: '凭证列表', icon: '', module: 'finance' },
+      { path: '/finance/accounting-period', title: '期间结账', icon: '', module: 'finance' },
+      { path: '/finance/inventory-ledger', title: '进销存台账', icon: '', module: 'finance' },
+      { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance' },
+      { path: '/finance/voucher-export', title: '凭证导出', icon: '', module: 'finance' },
       // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 镜像加一份到财务管理组 (与
       // procurement/finance-review / sales/finance-review 的镜像模式一致) — 出纳/财务主管
       // 习惯从"财务管理"找付款相关操作, 采购管理组下的入口对他们不够直觉。
@@ -266,6 +333,21 @@ const rawMenuConfig: MenuItem[] = [
       // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
       { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
+    ]
+  },
+  // 菜单孤儿 audit fix (2026-07-06): 工作流 4 页 (router 顶级组 /workflow, module: 'system')
+  // 早已注册 (my-created/my-participated/admin-running/rules), 从未进侧边栏 —
+  // 与 /system/workflow-designer (设计流程模板) 是不同功能: 这 4 页是"运行中工作流实例"的
+  // 个人/管理视角 (谁创建的/谁参与的/管理员看全部在跑的/流转规则设置), 独立顶级组更好发现,
+  // 不塞进已经很长的「系统管理」。roles 镜像 router meta (均无角色限制, 只受 module:'system'
+  // 权限门控 — 任何有 system 读权限的用户都能看自己创建/参与的工作流)。
+  {
+    path: '/workflow', title: '工作流', icon: 'Connection', module: 'system',
+    children: [
+      { path: '/workflow/my-created', title: '我创建的工作流', icon: '', module: 'system' },
+      { path: '/workflow/my-participated', title: '我参与的工作流', icon: '', module: 'system' },
+      { path: '/workflow/admin-running', title: '工作流处理', icon: '', module: 'system' },
+      { path: '/workflow/rules', title: '流转规则设置', icon: '', module: 'system' }
     ]
   },
   {
@@ -387,6 +469,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/quality': 80,
   '/smart-bi': 90,
   '/system': 100,
+  '/workflow': 105,
   '/scheduling': 110,
   '/hr': 120,
   '/equipment': 130,

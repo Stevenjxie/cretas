@@ -491,9 +491,13 @@ async function fetchDependencies() {
         `/${factoryId.value}/customers`,
         { params: { page: 1, size: 200 } },
       ),
+      // UserController.getUserList uses the shared `PageRequest` DTO (@Min(1) on `page`,
+      // 1-based — offset = (page-1)*size), unlike SalesOpportunityController's raw
+      // Spring Pageable (0-based). Sending page:0 here violated @Min(1) and surfaced as
+      // "页码必须大于0" (INVALID_PAGE) whenever this dropdown-dependency fetch ran.
       get<{ content: Array<{ id: number; username?: string; realName?: string; fullName?: string }> }>(
         `/${factoryId.value}/users`,
-        { params: { page: 0, size: 200 } },
+        { params: { page: 1, size: 200 } },
       ),
     ]);
     if (custRes.success && custRes.data) {
