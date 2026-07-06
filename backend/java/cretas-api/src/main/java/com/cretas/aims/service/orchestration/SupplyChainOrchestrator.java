@@ -158,9 +158,10 @@ public class SupplyChainOrchestrator {
 
             for (LineItemMatch match : result.getLineItems()) {
                 if (match.isFullySatisfied()) {
-                    // ③a 库存满足 → 预留
+                    // ③a 库存满足 → 预留 (per-SO 台账, 2026-07-06)
                     inventoryMatchingService.reserveStock(
-                            event.getFactoryId(), match.getProductTypeId(), match.getRequiredQuantity());
+                            event.getFactoryId(), event.getSalesOrderId(), match.getSalesOrderItemId(),
+                            match.getProductTypeId(), match.getRequiredQuantity());
                     log.info("库存满足并预留: product={}, qty={}", match.getProductTypeId(), match.getRequiredQuantity());
                 } else {
                     // ③b 库存不足 → 创建生产计划草稿

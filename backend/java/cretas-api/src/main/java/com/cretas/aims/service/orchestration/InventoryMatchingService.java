@@ -10,6 +10,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.FgReservationLedgerService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,7 @@ public class InventoryMatchingService {
     private final SalesOrderRepository salesOrderRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final WarehouseResolver warehouseResolver;
+    private final FgReservationLedgerService reservationLedgerService;
 
     /**
      * A5 集团联销 feature flag (PR #309 A5=C, 2026-05-10).
@@ -106,6 +108,7 @@ public class InventoryMatchingService {
             BigDecimal shortfall = pending.subtract(available).max(BigDecimal.ZERO);
 
             LineItemMatch match = new LineItemMatch();
+            match.setSalesOrderItemId(item.getId() != null ? String.valueOf(item.getId()) : null);
             match.setProductTypeId(item.getProductTypeId());
             match.setProductTypeName(item.getProductName());
             match.setRequiredQuantity(pending);
@@ -128,17 +131,36 @@ public class InventoryMatchingService {
     }
 
     /**
-     * 按 FEFO（先到期先出）策略对指定产品类型的成品批次执行库存预留。
+     * Legacy 3-arg 重载 (test / 无 SO 上下文) —— 不建预留台账, 仅直接累加 batch.reserved。
+     *
+     * @deprecated 生产路径请用 {@link #reserveStock(String, String, String, String, BigDecimal)}
+     *             以建立 per-SO 预留台账 (可精确释放, 防孤儿)。
+     */
+    @Deprecated
+    @Transactional
+    public void reserveStock(String factoryId, String productTypeId, BigDecimal quantity) {
+        reserveStock(factoryId, null, null, productTypeId, quantity);
+    }
+
+    /**
+     * 按 FEFO（先到期先出）策略对指定产品类型的成品批次执行库存预留, <b>并建立 per-SO 预留台账</b>。
      *
      * <p>从到期日最早的批次开始依次预留，直至满足所需数量或批次耗尽。
      * 若可用总量不足，记录 WARN 日志但不抛出异常（调用方可根据 {@link #checkAvailability} 结果决策）。
      *
-     * @param factoryId     工厂 ID
-     * @param productTypeId 产品类型 ID
-     * @param quantity      需要预留的数量
+     * <p>{@code salesOrderId != null} 时, 每笔批次预留写一条 ACTIVE 台账行 (via
+     * {@link FgReservationLedgerService#reserve}) —— 让 SO 取消 / 发货 / 完成能精确释放, 根治孤儿。
+     * {@code salesOrderId == null} (legacy/test) 时退回匿名 reserved 累加, 不建台账。
+     *
+     * @param factoryId         工厂 ID
+     * @param salesOrderId      销售订单 ID (归属主体, null=legacy 匿名)
+     * @param salesOrderItemId  销售订单行 ID (可空)
+     * @param productTypeId     产品类型 ID
+     * @param quantity          需要预留的数量
      */
     @Transactional
-    public void reserveStock(String factoryId, String productTypeId, BigDecimal quantity) {
+    public void reserveStock(String factoryId, String salesOrderId, String salesOrderItemId,
+                             String productTypeId, BigDecimal quantity) {
         // D1: warehouse strategy per PR #310 §5 — sales reserve from WH-LOG fixed (D5).
         // D5 (2026-05-11 PR #316): cross-factory FEFO 预留也只取 WH-LOG 批次.
         List<FinishedGoodsBatch> batches;
@@ -160,20 +182,29 @@ public class InventoryMatchingService {
 
             BigDecimal available = batch.getAvailableQuantity();
             BigDecimal reserve = remaining.min(available);
+            if (reserve.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
 
-            BigDecimal currentReserved = batch.getReservedQuantity() != null
-                    ? batch.getReservedQuantity()
-                    : BigDecimal.ZERO;
-            batch.setReservedQuantity(currentReserved.add(reserve));
-            finishedGoodsBatchRepository.save(batch);
+            if (salesOrderId != null) {
+                // reserved += reserve 且建 ACTIVE 台账行 (原子一致)。
+                reservationLedgerService.reserve(factoryId, salesOrderId, salesOrderItemId, batch, reserve);
+            } else {
+                // legacy 匿名路径 — 仅累加 reserved, 不建台账。
+                BigDecimal currentReserved = batch.getReservedQuantity() != null
+                        ? batch.getReservedQuantity()
+                        : BigDecimal.ZERO;
+                batch.setReservedQuantity(currentReserved.add(reserve));
+                finishedGoodsBatchRepository.save(batch);
+            }
             remaining = remaining.subtract(reserve);
 
-            log.debug("预留库存: batch={}, reserve={}, remaining={}",
-                    batch.getBatchNumber(), reserve, remaining);
+            log.debug("预留库存: SO={}, batch={}, reserve={}, remaining={}",
+                    salesOrderId, batch.getBatchNumber(), reserve, remaining);
         }
 
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-            log.warn("库存预留不完全: productType={}, 仍需={}", productTypeId, remaining);
+            log.warn("库存预留不完全: SO={}, productType={}, 仍需={}", salesOrderId, productTypeId, remaining);
         }
     }
 }

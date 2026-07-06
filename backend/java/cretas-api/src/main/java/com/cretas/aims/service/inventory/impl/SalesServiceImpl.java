@@ -78,6 +78,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService batchAllocationService;
 
+    /** 成品预留台账（2026-07-06；可选注入，legacy 单测无此 bean 时降级为不写台账）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.FgReservationLedgerService reservationLedgerService;
+
     /** Sales shipment auto-AR idempotency guard. Optional for legacy unit tests. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ArApTransactionRepository arApTransactionRepository;
@@ -2332,7 +2336,7 @@ public class SalesServiceImpl implements SalesService {
 
         // FIFO 扣减成品库存
         for (SalesDeliveryItem item : record.getItems()) {
-            deductFinishedGoodsInventory(factoryId, item);
+            deductFinishedGoodsInventory(factoryId, record.getSalesOrderId(), item);
         }
 
         record.setStatus(SalesDeliveryStatus.SHIPPED);
@@ -2901,7 +2905,7 @@ public class SalesServiceImpl implements SalesService {
      * (预留它的 SO = 发货的 SO) 完全正确; 极端并发场景 (同批被多 SO 预留, 某 SO 超发) 理论上可能
      * 释放到他单预留, 这是聚合预留模型的既有局限, 非本修复引入。彻底解需 per-SO 预留台账 (另立项)。
      */
-    private void deductFinishedGoodsInventory(String factoryId, SalesDeliveryItem item) {
+    private void deductFinishedGoodsInventory(String factoryId, String salesOrderId, SalesDeliveryItem item) {
         // 🔴 (2026-07-06): HONOR the operator's batch allocation. The P0-13 allocation dialog lets
         // the warehouse pick EXACTLY which FG batches to ship (e.g. 近效期清库存 / 指定批次追溯), and
         // shipDelivery even HARD-GATES on 「批次分配完成」(isFullyAllocated). Historically the deduction
@@ -3003,6 +3007,11 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal deductNative = toNativeDeductAmount(deductInTargetUnit, targetUnit, batch.getUnit(), gramsPerUnit, fromReservedNative);
                 if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
                 applyShipment(batch, deductNative, deductNative);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
+                // 台账镜像: applyShipment 已把 batch.reserved 减了 deductNative, 这里同步削掉本 SO
+                // 在该批的 ACTIVE 台账行 (只削台账, 不再动 reserved), 维持 reserved == Σ台账 不变式。
+                if (reservationLedgerService != null && salesOrderId != null) {
+                    reservationLedgerService.syncReleaseOnShipment(salesOrderId, batch.getId(), deductNative);
+                }
                 recordDeductedBatch(item, batch);
                 remaining = remaining.subtract(deductInTargetUnit);
             }
@@ -3194,6 +3203,16 @@ public class SalesServiceImpl implements SalesService {
             order.setStatus(SalesOrderStatus.COMPLETED);
             // P0-9: 全部发货完成 → transportPlanStatus = DELIVERED
             order.setTransportPlanStatus("DELIVERED");
+            // 预留台账清扫 (2026-07-06): 整单发完 → 释放该 SO 剩余 ACTIVE 台账行 + 相应削 batch.reserved。
+            // 修"Pass1 从别批发货导致预留批永不释放"的孤儿 —— Pass2 镜像只削已从预留发出的部分,
+            // 若发货走的是别批的 available (Pass1), 本 SO 的预留行会残留, 这里在完成时统一释放。
+            if (reservationLedgerService != null && order.getId() != null) {
+                try {
+                    reservationLedgerService.releaseAllForOrder(order.getId());
+                } catch (Exception e) {
+                    log.error("整单完成预留清扫失败(不影响发货): SO={}", order.getId(), e);
+                }
+            }
         } else if (anyDelivered) {
             order.setStatus(SalesOrderStatus.PARTIAL_DELIVERED);
             // P0-9: 部分发货 → transportPlanStatus = IN_TRANSIT

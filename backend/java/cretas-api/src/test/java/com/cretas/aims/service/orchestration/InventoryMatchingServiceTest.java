@@ -58,6 +58,9 @@ class InventoryMatchingServiceTest {
     @Mock
     private FactoryWarehouseDefaultRepository factoryWarehouseDefaultRepository;
 
+    @Mock
+    private com.cretas.aims.service.inventory.FgReservationLedgerService reservationLedgerService;
+
     private WarehouseResolver warehouseResolver;
 
     private InventoryMatchingService service;
@@ -71,8 +74,9 @@ class InventoryMatchingServiceTest {
         // Real WarehouseResolver wired to mock repos (no default-warehouse config → hardcoded fallback)
         warehouseResolver = new WarehouseResolver(factoryWarehouseRepository, factoryWarehouseDefaultRepository);
 
-        // Use ReflectionTestUtils since Lombok @RequiredArgsConstructor builds a 3-arg ctor
-        service = new InventoryMatchingService(salesOrderRepository, finishedGoodsBatchRepository, warehouseResolver);
+        // Use ReflectionTestUtils since Lombok @RequiredArgsConstructor builds a 4-arg ctor
+        service = new InventoryMatchingService(salesOrderRepository, finishedGoodsBatchRepository,
+                warehouseResolver, reservationLedgerService);
         ReflectionTestUtils.setField(service, "crossFactoryEnabled", false);
 
         FactoryWarehouse whLog = new FactoryWarehouse();

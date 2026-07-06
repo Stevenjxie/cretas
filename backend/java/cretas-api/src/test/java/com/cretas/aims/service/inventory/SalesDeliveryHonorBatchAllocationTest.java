@@ -89,10 +89,10 @@ class SalesDeliveryHonorBatchAllocationTest {
 
     private void invokeDeduct(SalesServiceImpl svc, SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
         try {
-            m.invoke(svc, FACTORY_A, item);
+            m.invoke(svc, FACTORY_A, (String) null, item);
         } catch (java.lang.reflect.InvocationTargetException e) {
             if (e.getCause() instanceof RuntimeException re) throw re;
             throw e;
