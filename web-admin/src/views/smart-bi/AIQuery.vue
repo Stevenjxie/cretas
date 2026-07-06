@@ -587,7 +587,8 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     scenario: 'staffing_schedule',
     terms: [
       '\u6392\u73ed', '\u4eba\u624b', '\u5458\u5de5', '\u670d\u52a1\u5458', '\u524d\u53f0',
-      '\u53a8\u5e08\u957f', '\u4ed3\u7ba1', '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed',
+      '\u524d\u5385', '\u540e\u53a8', '\u53a8\u623f', '\u53a8\u5e08\u957f', '\u4ed3\u7ba1',
+      '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed', '\u52a0\u4eba', '\u591a\u52a0',
     ],
   },
   {
@@ -595,6 +596,7 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     terms: [
       '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
       '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
+      '\u5916\u5356', '\u5e73\u53f0', '\u56e2\u8d2d', '\u7f8e\u56e2', '\u6296\u97f3',
     ],
   },
   {
@@ -602,6 +604,8 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     terms: [
       '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
       '\u8282\u65e5', '\u5929\u6c14', '\u4ea4\u901a', '\u5468\u8fb9', '\u5916\u90e8',
+      '\u4eb2\u5b50', '\u7ade\u54c1', '\u540c\u5546\u5708', '\u5f15\u6d41', '\u95e8\u53e3',
+      '\u66dd\u5149', '\u6838\u9500', '\u627f\u63a5',
     ],
   },
   {
@@ -609,6 +613,8 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     terms: [
       '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', '\u5e93\u5b58',
       'bom', 'BOM', '\u635f\u8017', '\u5907\u8d27', '\u9a8c\u6536', '\u6da8\u4ef7',
+      '\u62a5\u635f', '\u6708\u76d8\u70b9', '\u7406\u8bba\u7528\u91cf', '\u5b9e\u9645\u7528\u91cf',
+      '\u4e8f\u6bdb\u5229',
     ],
   },
   {
@@ -627,6 +633,9 @@ const OWNER_ACTION_DECISION_TERMS = [
   '\u5982\u4f55\u4f18\u5316', '\u52a8\u4f5c', '\u843d\u5730', '\u5148\u505a', '\u5148\u6539',
   '\u5e2e\u6211\u7b97', '\u63a8\u8350', '\u4e3b\u63a8', '\u8981\u4e0d\u8981',
   '\u5f71\u54cd', '\u4f1a\u5f71\u54cd', '\u6709\u4ec0\u4e48\u5f71\u54cd',
+  '\u54ea\u4e09\u4e2a', '\u4e09\u4e2a\u52a8\u4f5c', '\u62c9\u8d77\u6765', '\u5148\u7ba1',
+  '\u5148\u67e5', '\u5148\u770b', '\u4e0d\u8981\u591a\u5907', '\u522b\u4e8f', '\u914d\u5408',
+  '\u8be5\u6539', '\u53ea\u80fd', '\u8fd8\u662f', '\u4e0d\u7528\u7b49', '\u8981\u8003\u8651',
 ];
 
 function includesAny(text: string, terms: string[]): boolean {

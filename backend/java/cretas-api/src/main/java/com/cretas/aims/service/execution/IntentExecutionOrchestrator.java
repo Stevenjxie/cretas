@@ -68,6 +68,7 @@ public class IntentExecutionOrchestrator {
                     + "今天.*做|今天.*推|今天.*放|今天.*讲|今天.*带着推|今晚.*排班|要怎么备货|怎么调|怎么排班|哪个时间段|最需要加人|加前厅|加后厨|帮我算.*套餐|能不能复制|应该复制|复制哪家店|复制.*做法|哪家店.*做法|连锁内部|排名不高|"
                     + "主推|值得主推|低价值|加购|拉动加购|首屏|短视频|最值得学习|"
                     + "怎么优化|怎么解决|优化.*营收|优化.*收入|解决方案|改进建议|怎么做生意|增加营收|增加营业额|提高收入|提升收入|先看哪|先不要|不要做|先训练|训练哪|"
+                    + "哪三个动作|三个动作|先管|先查|先看|该改|拉起来|别亏|亏毛利|怎么别亏|怎么配合|不能多备|不要多备|"
                     + "哪些菜.*备|不适合.*备|少备|备太多|继续备|不能多备|不应该.*推|继续重点推|BOM.*查|理论用量|实际用量|成本毛利|毛利掉|月盘点|损耗高");
 
     private static final Pattern RESTAURANT_OWNER_ACTION_TOPIC_PATTERN = Pattern.compile(
@@ -81,6 +82,7 @@ public class IntentExecutionOrchestrator {
     private static final Pattern RESTAURANT_OWNER_ACTION_FORCE_PATTERN = Pattern.compile(
             "厨师长|仓管|前台|门迎|员工工时|几段班|人效|午市|晚市|分别盯什么|具体补什么|"
                     + "配什么小菜|小菜饮品|别只看销量|厨房备菜|备菜怎么调|商场今天有活动|门口和套餐|"
+                    + "外卖平台|美团曝光|抖音团购|核销少|门口承接|亲子活动|不用等月底|"
                     + "天气热|品类更合适|厨房慢|服务慢");
 
     // ===== 依赖 =====
@@ -245,8 +247,8 @@ public class IntentExecutionOrchestrator {
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
         String userInput = request.getUserInput();
-        if (hasRestaurantOwnerActionSignal(factoryId, request.getContext()) && matchesOwnerActionKeywordHeuristic(userInput)) {
-            log.info("[restaurant-owner-action] force-route before preprocessor: factoryId={}, input={}",
+        if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+            log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId);
         }
@@ -1771,13 +1773,16 @@ public class IntentExecutionOrchestrator {
                 "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
                 "\u5907\u83dc", "\u5907\u8d27", "\u5e93\u5b58", "\u635f\u8017", "bom", "\u6bdb\u5229",
                 "\u6210\u672c", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u5927\u4f17\u70b9\u8bc4",
+                "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d", "\u66dd\u5149", "\u6838\u9500", "\u627f\u63a5",
                 "\u7f8e\u56e2", "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
                 "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5957\u9910", "\u5c0f\u5957\u9910",
                 "\u83dc\u54c1", "\u8425\u6536", "\u6536\u5165", "\u5ba2\u5355",
                 "\u65e5\u5747", "\u5de5\u4f5c\u65e5", "\u540c\u5546\u5708", "\u8fde\u9501",
                 "\u95e8\u5e97", "\u6392\u540d", "\u505a\u6cd5", "\u4f4e\u4ef7\u503c",
                 "\u4f4e\u4ef7\u503c\u83dc", "\u54ea\u4e9b\u83dc", "\u4e3b\u63a8",
-                "\u5355\u54c1", "\u52a0\u8d2d");
+                "\u5355\u54c1", "\u52a0\u8d2d", "\u62a5\u635f", "\u6708\u76d8\u70b9", "\u7406\u8bba\u7528\u91cf",
+                "\u5b9e\u9645\u7528\u91cf", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
+                "\u4eb2\u5b50", "\u95e8\u53e3", "\u5f15\u6d41", "\u7ade\u54c1", "\u6253\u6298");
         boolean hasDecision = containsAny(input,
                 "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392", "\u600e\u4e48\u6539",
                 "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
@@ -1792,7 +1797,11 @@ public class IntentExecutionOrchestrator {
                 "\u590d\u5236\u54ea\u5bb6\u5e97", "\u590d\u5236", "\u5b66\u4e60",
                 "\u95ee\u9898\u5728", "\u6267\u884c", "\u503c\u5f97\u4e3b\u63a8",
                 "\u8981\u6392\u9664", "\u6392\u9664", "\u600e\u4e48\u5224\u65ad",
-                "\u62c9\u52a8", "\u600e\u4e48\u57f9\u8bad", "\u57f9\u8bad");
+                "\u62c9\u52a8", "\u600e\u4e48\u57f9\u8bad", "\u57f9\u8bad",
+                "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u62c9\u8d77\u6765",
+                "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u4e0d\u8981\u591a\u5907",
+                "\u522b\u4e8f", "\u914d\u5408", "\u8be5\u6539", "\u53ea\u80fd", "\u8fd8\u662f",
+                "\u4e0d\u7528\u7b49", "\u54ea\u51e0\u9879", "\u9002\u5408", "\u8981\u8003\u8651");
         return hasTopic && hasDecision;
     }
 
@@ -1809,11 +1818,13 @@ public class IntentExecutionOrchestrator {
                 "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
                 "\u53a8\u623f", "\u51fa\u9910", "\u4e0a\u83dc", "\u670d\u52a1\u5458", "\u8bad\u7ec3", "\u57f9\u8bad",
                 "\u5907\u83dc", "\u5907\u8d27", "\u5e93\u5b58", "\u635f\u8017", "bom", "\u6bdb\u5229",
-                "\u6210\u672c", "\u7f8e\u56e2", "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
+                "\u6210\u672c", "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d", "\u7f8e\u56e2",
+                "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
                 "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5957\u9910", "\u5c0f\u5957\u9910",
                 "\u83dc\u54c1", "\u8425\u6536", "\u6536\u5165", "\u5ba2\u5355",
                 "\u65e5\u5747", "\u5de5\u4f5c\u65e5", "\u540c\u5546\u5708", "\u8fde\u9501",
-                "\u95e8\u5e97", "\u6392\u540d", "\u4e3b\u63a8", "\u5355\u54c1", "\u52a0\u8d2d");
+                "\u95e8\u5e97", "\u6392\u540d", "\u4e3b\u63a8", "\u5355\u54c1", "\u52a0\u8d2d",
+                "\u52a8\u4f5c", "\u98ce\u9669", "\u62a5\u635f", "\u6708\u76d8\u70b9");
         boolean asksRemedy = containsAny(input,
                 "\u600e\u4e48\u6539\u5584", "\u600e\u4e48\u6539", "\u5e94\u8be5\u600e\u4e48",
                 "\u600e\u4e48\u5904\u7406", "\u5982\u4f55\u6539\u5584", "\u89e3\u51b3",

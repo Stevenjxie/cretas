@@ -84,6 +84,39 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u4eca\u5929\u5546\u5708\u5ba2\u6d41\u753b\u50cf\u5bf9\u95e8\u5e97\u7ecf\u8425\u6709\u4ec0\u4e48\u5f71\u54cd\uff1f"))
                 .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "这个星期营收比上周低，今天老板先做哪三个动作？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "如果不想打折，这周营收怎么拉起来？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "外卖平台今天适合推什么双人套餐？要考虑成本和差评风险"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "今天只能多加一个人，是加前厅还是后厨？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "厨房出餐慢和差评变多，今天先改哪三个动作？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "哪些菜今天不要多备？我不想晚上又报损"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "商场今天有亲子活动，备货和门口套餐怎么配合？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "美团曝光有了但核销少，今天该改页面、套餐还是门口承接？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "抖音团购带来的人客单低，怎么别亏毛利？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "老板今天就看一眼，最应该先管哪件事？"))
+                .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "月盘点发现损耗高，今天不用等月底先查哪几项？"))
+                .isTrue();
 
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u67e5\u4e00\u4e0b\u8ba2\u5355\u660e\u7ec6"))
@@ -142,6 +175,21 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
                 "\u4eca\u5929\u5546\u5708\u5ba2\u6d41\u753b\u50cf\u5bf9\u95e8\u5e97\u7ecf\u8425\u6709\u4ec0\u4e48\u5f71\u54cd\uff1f",
+                Collections.emptyMap()))
+                .isTrue();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "外卖平台今天适合推什么双人套餐？要考虑成本和差评风险",
+                Collections.emptyMap()))
+                .isTrue();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "厨房出餐慢和差评变多，今天先改哪三个动作？",
+                Collections.emptyMap()))
+                .isTrue();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "月盘点发现损耗高，今天不用等月底先查哪几项？",
                 Collections.emptyMap()))
                 .isTrue();
     }

@@ -124,6 +124,24 @@ class AIIntentConfigControllerTest {
                 .build();
         shortcut.invoke(controller, "DEMO_REST", complaint);
         assertEquals("RESTAURANT_REVIEW_COMPLAINT", complaint.getIntentCode());
+
+        IntentExecuteRequest kitchenAction = IntentExecuteRequest.builder()
+                .userInput("厨房出餐慢和差评变多，今天先改哪三个动作？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", kitchenAction);
+        assertEquals(null, kitchenAction.getIntentCode());
+
+        IntentExecuteRequest packageAction = IntentExecuteRequest.builder()
+                .userInput("外卖平台今天适合推什么双人套餐？要考虑成本和差评风险")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", packageAction);
+        assertEquals(null, packageAction.getIntentCode());
+
+        IntentExecuteRequest salesAction = IntentExecuteRequest.builder()
+                .userInput("这个星期营收比上周低，今天老板先做哪三个动作？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", salesAction);
+        assertEquals(null, salesAction.getIntentCode());
     }
 
     @Test
