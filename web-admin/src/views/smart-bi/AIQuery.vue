@@ -240,6 +240,17 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   };
 }
 
+function isRestaurantJavaIntentAnswer(message: ChatMessage): boolean {
+  const intentCode = message.feedbackTarget?.intentCode ?? '';
+  return message.source === 'restaurant_owner_action'
+    || message.source === 'restaurant_ops_gold'
+    || intentCode.startsWith('RESTAURANT_');
+}
+
+function shouldRenderAutoChartInsight(message: ChatMessage): boolean {
+  return Boolean(message.chartConfig?.option) && !isRestaurantJavaIntentAnswer(message);
+}
+
 /**
  * Build ChartWithMeta for a single chart in a multi-chart message (P2 charts[] array).
  * Same logic as messageChartWithMeta but operates on ChartConfig directly.
@@ -2349,7 +2360,7 @@ function handleKeydown(event: KeyboardEvent) {
                 </div>
                 <!-- Chart Insight for single-chart message (bar/line/pie wired; exotic→null→renders nothing) -->
                 <ChartInsightProvider
-                  v-if="message.chartConfig && message.chartConfig.option && message.source !== 'restaurant_owner_action'"
+                  v-if="shouldRenderAutoChartInsight(message)"
                   :chart="messageChartWithMeta(message)"
                   :perms="{ canViewFinance: false }"
                   :factory-id="factoryId ?? ''"
@@ -2371,7 +2382,7 @@ function handleKeydown(event: KeyboardEvent) {
                 >
                   <strong>怎么看这几张图：</strong>{{ message.chartGuide }}
                 </div>
-                <template v-if="message.source !== 'restaurant_owner_action' && message.charts && message.charts.length">
+                <template v-if="!isRestaurantJavaIntentAnswer(message) && message.charts && message.charts.length">
                   <ChartInsightProvider
                     v-for="(c, ci) in message.charts"
                     :key="`insight-${message.id}__${ci}`"
