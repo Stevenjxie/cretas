@@ -970,6 +970,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 增加预留数量，减少可用库存
         BigDecimal currentReserved = batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO;
         batch.setReservedQuantity(currentReserved.add(quantity));
+        // 🔒 全局兜底: 增加 reservedQuantity 后断言 used+reserved≤receipt, 防超预留 (误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
 
         materialBatchRepository.save(batch);
         publishStockChangedEventIfApplicable(factoryId, batch, "RESERVE");
@@ -1022,6 +1024,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 注意: currentQuantity 是计算属性，通过增加 usedQuantity 来减少 currentQuantity
         batch.setUsedQuantity(batch.getUsedQuantity().add(quantity));
         batch.setLastUsedAt(LocalDateTime.now());
+        // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
 
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) == 0) {
             batch.setStatus(MaterialBatchStatus.USED_UP);
@@ -1390,6 +1394,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 更新已使用数量 (remainingQuantity 会自动重新计算)
         batch.setUsedQuantity(batch.getUsedQuantity().add(quantity));
         batch.setLastUsedAt(LocalDateTime.now());
+        // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
 
         // 如果用完了，更新状态
         // 注意: getRemainingQuantity() 现在是计算属性
@@ -1512,6 +1518,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // 更新预留数量 (remainingQuantity 会自动重新计算)
         batch.setReservedQuantity(batch.getReservedQuantity().add(quantity));
+        // 🔒 全局兜底: 增加 reservedQuantity 后断言 used+reserved≤receipt, 防超预留 (误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
 
         // 如果剩余量为0，更新状态为DEPLETED
         // 注意: getRemainingQuantity() 现在是计算属性
@@ -1621,6 +1629,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.setReservedQuantity(batch.getReservedQuantity().subtract(quantity));
         batch.setUsedQuantity(batch.getUsedQuantity().add(quantity));
         batch.setLastUsedAt(LocalDateTime.now());
+        // 🔒 全局兜底: 预留转消耗后断言 used+reserved≤receipt (净额不变, 误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
 
         if (batch.getReservedQuantity().compareTo(BigDecimal.ZERO) == 0 &&
             batch.getRemainingQuantity().compareTo(BigDecimal.ZERO) == 0) {

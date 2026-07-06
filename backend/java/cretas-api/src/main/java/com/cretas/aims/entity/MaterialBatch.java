@@ -2,6 +2,7 @@ package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceSensitive;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
@@ -207,6 +208,44 @@ public class MaterialBatch extends BaseEntity {
         BigDecimal used = usedQuantity != null ? usedQuantity : BigDecimal.ZERO;
         BigDecimal reserved = reservedQuantity != null ? reservedQuantity : BigDecimal.ZERO;
         return receiptQuantity.subtract(used).subtract(reserved);
+    }
+
+    /**
+     * 🔒 库存完整性不变式守卫 (全局兜底): {@code usedQuantity + reservedQuantity ≤ receiptQuantity}。
+     *
+     * <p><b>用法</b>: 在<b>任何</b>增加 {@code usedQuantity} 或 {@code reservedQuantity} 的写入点,
+     * 在 mutation <b>之后、save 之前</b>调用。违反即 loud-fail (409 {@code BATCH_OVER_CONSUMED}),
+     * 回滚事务, 拒绝把批次扣成"负库存"(凭空多消耗)。防呆 Rule 1: 预先拦截而非事后腐蚀。
+     *
+     * <p><b>为什么用后置校验 (post-mutation) 而非"预检 used+reserved+newQty≤receipt"</b>:
+     * 后置校验对已 mutation 的实体断言全局不变式, 天然<b>误伤-proof</b> —— 任何合法态 (含
+     * 预留转消耗 {@code reserved−=q; used+=q} 净额不变) 必满足此式; 唯有真超扣才触发。
+     * 无需 caller 知道增量, 对 used / reserved 两侧增量统一生效。
+     *
+     * <p>这是应用层的友好 loud-fail; 数据库层另有 CHECK 约束
+     * {@code ck_material_batch_no_overconsume} 作为任何漏接写入点 / 未来回归的最硬兜底
+     * (见 Flyway {@code V20261027_42})。两层互补: 应用层给具体批次/数量的防呆文案,
+     * DB 层保证物理不可能落库超扣。
+     */
+    public void assertConsumptionInvariant() {
+        BigDecimal receipt = receiptQuantity != null ? receiptQuantity : BigDecimal.ZERO;
+        BigDecimal used = usedQuantity != null ? usedQuantity : BigDecimal.ZERO;
+        BigDecimal reserved = reservedQuantity != null ? reservedQuantity : BigDecimal.ZERO;
+        BigDecimal committed = used.add(reserved);
+        if (committed.compareTo(receipt) > 0) {
+            throw new BusinessException(409, String.format(
+                    "批次 %s 库存超扣: 已用 %s + 预留 %s = %s 超过收货量 %s (超 %s)",
+                    batchNumber,
+                    used.stripTrailingZeros().toPlainString(),
+                    reserved.stripTrailingZeros().toPlainString(),
+                    committed.stripTrailingZeros().toPlainString(),
+                    receipt.stripTrailingZeros().toPlainString(),
+                    committed.subtract(receipt).stripTrailingZeros().toPlainString()))
+                    .withCode("BATCH_OVER_CONSUMED")
+                    .withHint("请核对消耗/预留数量, 或先补充该原料批次库存")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(batchNumber);
+        }
     }
 
     /**

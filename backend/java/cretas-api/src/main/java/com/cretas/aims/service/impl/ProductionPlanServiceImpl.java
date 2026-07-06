@@ -3738,6 +3738,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 注意: currentQuantity 是计算属性，通过增加 usedQuantity 来减少 currentQuantity
         batch.setUsedQuantity(batch.getUsedQuantity().add(quantity));
         batch.setLastUsedAt(LocalDateTime.now());
+        // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
+        batch.assertConsumptionInvariant();
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             batch.setStatus(MaterialBatchStatus.USED_UP);
         }
