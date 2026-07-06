@@ -1064,6 +1064,121 @@ def test_owner_action_chat_matrix_questions_route_to_plain_boss_decisions() -> N
             assert word in answer, f"{message}: missing {word} in {answer}"
 
 
+def test_owner_action_chat_package_variants_answer_different_business_constraints() -> None:
+    cases = [
+        (
+            "根据菜品毛利和成本，帮我算一个适合今天推的小套餐",
+            ("售价", "食材成本", "毛利"),
+        ),
+        (
+            "给我推荐小套餐，但不要把米饭这种低价值单品排进主推",
+            ("米饭", "低价值", "排除"),
+        ),
+        (
+            "外卖平台今天适合推什么双人套餐？要考虑成本和差评风险",
+            ("外卖", "配送", "差评风险"),
+        ),
+    ]
+
+    answers = []
+    for message, expected_words in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_PACKAGE_VARIANT_{len(message)}",
+                message=message,
+                demoScenario="package",
+            )
+        )
+
+        data = response["data"]
+        answer = data["answer"]
+        assert data["scenario"] == "package"
+        answers.append(answer)
+        for word in expected_words:
+            assert word in answer, f"{message}: missing {word} in {answer}"
+
+    assert len(set(answers)) == len(answers)
+
+
+def test_owner_action_chat_inventory_and_cost_variants_keep_distinct_focus() -> None:
+    cases = [
+        (
+            "哪些菜今天不要多备？我不想晚上又报损",
+            "inventory_reorder",
+            ("不要多备", "报损", "低销量"),
+        ),
+        (
+            "活鱼理论用量和实际用量差太多，厨师长今天要查什么？",
+            "cost_margin",
+            ("理论用量", "实际用量", "称重"),
+        ),
+        (
+            "月盘点发现损耗高，今天不用等月底先查哪几项？",
+            "cost_margin",
+            ("月盘点", "月底", "损耗"),
+        ),
+    ]
+
+    answers = []
+    for message, expected_scenario, expected_words in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_COST_INVENTORY_VARIANT_{len(message)}",
+                message=message,
+                demoScenario="package",
+            )
+        )
+
+        data = response["data"]
+        answer = data["answer"]
+        assert data["scenario"] == expected_scenario
+        answers.append(answer)
+        for word in expected_words:
+            assert word in answer, f"{message}: missing {word} in {answer}"
+
+    assert len(set(answers)) == len(answers)
+
+
+def test_owner_action_chat_platform_and_external_variants_keep_distinct_focus() -> None:
+    cases = [
+        (
+            "美团曝光有了但核销少，今天该改页面、套餐还是门口承接？",
+            ("美团", "核销", "曝光"),
+        ),
+        (
+            "抖音团购带来的人客单低，怎么别亏毛利？",
+            ("抖音", "团购", "毛利"),
+        ),
+        (
+            "同商圈酸菜鱼竞品变多，我今天先改产品还是先改引流？",
+            ("同商圈", "竞品", "引流"),
+        ),
+        (
+            "客流画像显示路过人多但进店少，今天先改哪个入口？",
+            ("客流画像", "路过", "进店"),
+        ),
+    ]
+
+    answers = []
+    for message, expected_words in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_TRAFFIC_VARIANT_{len(message)}",
+                message=message,
+                demoScenario="traffic_conversion",
+            )
+        )
+
+        data = response["data"]
+        answer = data["answer"]
+        assert data["scenario"] == "traffic_conversion"
+        answers.append(answer)
+        for word in expected_words:
+            assert word in answer, f"{message}: missing {word} in {answer}"
+
+    assert len(set(answers)) == len(answers)
+
+
 def test_owner_action_chat_new_explicit_question_does_not_follow_previous_session() -> None:
     first = owner_action_chat(
         OwnerActionChatRequest(
