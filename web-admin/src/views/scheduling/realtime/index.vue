@@ -91,12 +91,16 @@ async function loadPlans() {
   if (!factoryId.value) return;
 
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // NOTE: no startDate/endDate filter here on purpose — this call only
+    // populates the "选择调度计划" dropdown (todayPlans) + auto-select below,
+    // it is unrelated to the actual monitoring body data (getRealtimeMonitor /
+    // getSchedulingDashboard below take no date params at all). Filtering by
+    // "today" made confirmed plans dated on other days invisible in the
+    // dropdown — the real bug this fixes. `page` is 0-based per backend
+    // (mirrors scheduling/plans/list.vue which does `page - 1`).
     const response = await getSchedulingPlans(factoryId.value, {
-      startDate: today,
-      endDate: today,
-      page: 1,
-      size: 10
+      page: 0,
+      size: 50
     });
 
     if (response.success && response.data) {
