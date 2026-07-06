@@ -1441,7 +1441,7 @@ def test_owner_action_chat_duplicate_risk_variants_get_direct_answers() -> None:
         ),
         (
             "给我一句话结论，不要讲大段模型逻辑",
-            ("一句话：", "不要先全店打折", "明天只看三个数"),
+            ("一句话结论", "不要先全店打折", "明天只看三个数"),
         ),
         (
             "今天哪些事情先不要做？",
@@ -1462,6 +1462,10 @@ def test_owner_action_chat_duplicate_risk_variants_get_direct_answers() -> None:
         (
             "仓管厨师长前台的动作拆细一点，谁几点做什么？",
             ("10:30 仓管", "15:30 厨师长", "17:30 店长"),
+        ),
+        (
+            "小套餐里能不能加冰豆花，毛利和吸引力怎么算？",
+            ("冰豆花可以加", "高毛利小食", "约 170 元毛利"),
         ),
     ]
 
