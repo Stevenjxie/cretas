@@ -51,10 +51,12 @@ echo "YES-PROD" | ./scripts/deploy/deploy-web-admin.sh --env prod   # web 必须
 - **PR #1282 销售已发货金额历史 backfill**（actual_shipped_amount，#1267 镜像缺口，V47）：gate 过、ROLLBACK 验证。**Flyway 耦合 #1281**（V46 必须先于 V47），跟 #1281 一起部署或（若 #1281 defer）单独部署。
 - **RN 质检缺陷复选框语义**（食安）：勾"有瑕疵/异味/破损"不影响结果也不存储（custom_fields={}）；web-admin 质检是手动下拉无 checklist。决定：(a)只记录 (b)影响结果自动判不合格 (c)删除。Opus 建议 (a)或(c) 与 web 一致。**RN 改动需 OTA。**
 
-## 7. 已 live 部署（本 session，13 修 + 后续 miner）
-BUG1 结单族盘点双扣 / BUG2 付款→资金GL / BUG3 停产SFI盲区 / #1268 死退货 / #1271 菜单孤儿×35+模块化可见性 / #1272 现金流期初现金 / #1273 material_batch超扣DB CHECK+守卫 / #1274 退料漏判DEPLETED库存冻结+计划状态回写 / #1275 停产状态守卫 / #1276 批次分配绑定发货 / #1277 调拨超收封顶+清幽灵 / #1278 采购付款GL backfill / #1279 排程分页0/1-based。全真客户 LIUSHANMEN 零影响。
+## 7. 已 live 部署（本 session，15 修）
+BUG1 结单族盘点双扣 / BUG2 付款→资金GL / BUG3 停产SFI盲区 / #1268 死退货 / #1271 菜单孤儿×35+模块化可见性 / #1272 现金流期初现金 / #1273 material_batch超扣DB CHECK+守卫 / #1274 退料漏判DEPLETED库存冻结+计划状态回写 / #1275 停产状态守卫 / #1276 批次分配绑定发货 / #1277 调拨超收封顶+清幽灵 / #1278 采购付款GL backfill / #1279 排程分页0/1-based / **#1283 生产进度打屏读真实计划状态(原查空production_reports恒显0%; Controller有重复旧逻辑一并修delegate)+质量统计todayInspections/failedBatches字段**。全真客户 LIUSHANMEN 零影响。
 
 ## 8. backlog / 已知非阻塞
+- **经营驾驶舱 (/smart-bi/dashboard) 盲于真实 ERP 销售**：显示"--请传Excel"，但 F006 本月真有 56单¥304,074 sales_orders。SmartBI 只接 Excel 上传管线不读 live `sales_orders`。**SmartBI 域—别测别改**（另一 session 在改 AI/SmartBI），需 Steve/Opus 定 SmartBI 驾驶舱是否该接 live ERP。
+- **财务「确认结账」简单路径不结转 P&L**（非致命）：`AccountingPeriodServiceImpl.confirmClose()` 只翻 status=CLOSED，不调 `profitLossClosingService.closePeriod()`（无 PL_CLOSING 凭证/快照/deadline 全 NULL）。靠每日 03:00 `AccountingPeriodScheduler.finalizeLockedPeriods()` 兜底 + BalanceSheet 动态合成未分配利润不失衡。缺 UI 透明度（财务看不出"已锁定但结转待定 vs 已结转"）+ 调度宕机跨天无告警。reopen→reclose 净额对账本身干净(#1122 修复仍生效)。⚠️ 有 worker 于本 session 对 F006 2026-06 点了一次「确认结账」(PENDING_CLOSE→CLOSED)，预计次日 03:00 被调度自动补结转。
 - ③ 排程完成概率告警 spam（`SchedulingAIServiceImpl` 概率在计划创建时同步算、materialScore=0/manual无aiConfidence→恒落40/55/37%、920条100%未处理）—— 设计缺陷，模块无客户用，需定算法时机/阈值。
 - RN 报工页 N+1（226请求，51条 `E2E-PC-*` 遗留测试批次放大→间歇卡死）→ 后端批量端点 + 清测试污染。
 - quality-disposition.ts:8-13 stale 注释（说不改库存状态，#1250 后已假）→ 一行注释修。
