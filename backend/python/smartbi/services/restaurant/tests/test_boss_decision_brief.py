@@ -991,6 +991,104 @@ def test_owner_action_chat_explicit_keywords_override_previous_follow_up_topic()
     assert "主推单品" in next_turn["data"]["answer"]
 
 
+def test_owner_action_chat_matrix_questions_route_to_plain_boss_decisions() -> None:
+    cases = [
+        (
+            "这个星期营收同比上周下滑，不想打折，今天怎么提高客单？",
+            "package",
+            ("套餐", "客单", "毛利"),
+        ),
+        (
+            "如果今天下雨，堂食和外卖动作应该怎么调？",
+            "external_event_response",
+            ("天气", "堂食", "外卖"),
+        ),
+        (
+            "商场今天有活动，我们怎么备货和接客？",
+            "external_event_response",
+            ("商场", "活动", "备货"),
+        ),
+        (
+            "美团大众点评有人看但核销低，老板今天先改什么？",
+            "traffic_conversion",
+            ("美团", "大众点评", "核销"),
+        ),
+        (
+            "抖音团购曝光高但到店少，今天怎么改？",
+            "traffic_conversion",
+            ("抖音", "团购", "核销"),
+        ),
+        (
+            "厨房出餐慢导致差评，厨师长今天先盯什么？",
+            "kitchen_quality",
+            ("厨房", "厨师长", "出餐"),
+        ),
+        (
+            "BOM理论用量和实际用量不一致，先查什么？",
+            "cost_margin",
+            ("BOM", "理论用量", "实际用量"),
+        ),
+        (
+            "同商圈竞品都在引流，青花椒门口路过客怎么转进店？",
+            "traffic_conversion",
+            ("同商圈", "竞品", "引流"),
+        ),
+        (
+            "仓管+厨师长+前台今天分别盯什么，老板不用一直催？",
+            "operations_dispatch",
+            ("仓管", "厨师长", "前台"),
+        ),
+        (
+            "月盘点发现损耗高，厨房和采购今天怎么改？",
+            "kitchen_quality",
+            ("月盘点", "损耗", "厨房"),
+        ),
+    ]
+
+    for message, expected_scenario, expected_words in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_MATRIX_{expected_scenario}_{len(message)}",
+                message=message,
+                demoScenario="package",
+            )
+        )
+
+        data = response["data"]
+        answer = data["answer"]
+        assert data["scenario"] == expected_scenario, message
+        assert "一句话结论" in answer
+        assert "缺少数据" not in answer
+        assert "无法判断" not in answer
+        for word in expected_words:
+            assert word in answer, f"{message}: missing {word} in {answer}"
+
+
+def test_owner_action_chat_new_explicit_question_does_not_follow_previous_session() -> None:
+    first = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NEW_EXPLICIT_NO_FOLLOWUP",
+            session_id="owner-action-no-sticky-session",
+            message="客流画像显示路过人多但进店少，今天先改哪个入口？",
+        )
+    )
+    assert first["data"]["scenario"] == "traffic_conversion"
+
+    next_turn = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_NEW_EXPLICIT_NO_FOLLOWUP",
+            session_id=first["data"]["sessionId"],
+            demoScenario="traffic_conversion",
+            message="商场今天有活动，我们怎么备货和接客？",
+        )
+    )
+
+    assert next_turn["data"]["scenario"] == "external_event_response"
+    assert "一句话结论" in next_turn["data"]["answer"]
+    assert "这个追问我只拆执行细节" not in next_turn["data"]["answer"]
+    assert "商场" in next_turn["data"]["answer"]
+
+
 def test_owner_action_chat_returns_scenario_specific_charts() -> None:
     cases = [
         ("seating_mix", "二人桌不够，周末翻台怎么调？", "来的客人和桌型是不是匹配"),

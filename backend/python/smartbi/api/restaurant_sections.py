@@ -404,33 +404,64 @@ def _has_owner_action_topic(message: str) -> bool:
     )
 
 
+def _infer_owner_action_scenario_from_message(message: str) -> str:
+    text = message or ""
+    if "厨房慢" in message and "服务慢" in message:
+        return "staff_training"
+    if any(keyword in text for keyword in (
+        "厨师长、仓管、前台", "仓管厨师长前台", "仓管+厨师长+前台", "仓管、厨师长、前台",
+        "分别盯什么", "分别要做什么", "各岗位", "谁做什么", "派工", "分工",
+    )):
+        return "operations_dispatch"
+    if any(keyword in text for keyword in ("所有门店", "其他门店", "连锁", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "复制哪")):
+        return "store_compare"
+    if any(keyword in text for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
+        return "seating_mix"
+    if any(keyword in text for keyword in (
+        "商场今天有活动", "商场活动", "商圈活动", "周边活动", "天气", "下雨", "雨天",
+        "天气不好", "高温", "天气热", "节日", "外部活动", "亲子节", "会员日",
+    )):
+        return "external_event_response"
+    if any(keyword in text for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "采购价格", "盈利")):
+        return "cost_margin"
+    if "套餐" not in text and any(keyword in text for keyword in ("备菜", "备货", "仓管今天", "具体补什么", "补什么", "补货", "库存", "原料", "食材")):
+        return "inventory_reorder"
+    if any(keyword in text for keyword in (
+        "客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销",
+        "进店少", "到店少", "客流情况", "客流", "人流", "商场热起来", "接住",
+        "这波人", "门口", "路过", "下单", "入口", "平台", "页面", "首图",
+        "美团", "大众点评", "抖音", "团购", "竞品", "同商圈", "引流",
+    )):
+        return "traffic_conversion"
+    if "套餐" in text and any(keyword in text for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备", "外卖")):
+        return "package"
+    if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "拉营收", "拉高营收", "提高营收", "提高客单", "提升客单", "客单价")):
+        return "package"
+    if any(keyword in text for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢", "退菜", "重做", "口味", "太咸")) and not any(keyword in text for keyword in ("备菜", "备货", "补货", "库存")):
+        return "kitchen_quality"
+    if any(keyword in text for keyword in ("盘点", "月盘点", "损耗")) and any(keyword in text for keyword in ("厨房", "厨师长", "出品", "后厨")):
+        return "kitchen_quality"
+    if any(keyword in text for keyword in ("盘点", "月盘点", "损耗", "采购")):
+        return "cost_margin"
+    if any(keyword in text for keyword in ("备菜", "备货", "仓管今天", "具体补什么", "补什么", "补货", "库存", "原料", "食材")):
+        return "inventory_reorder"
+    if any(keyword in text for keyword in ("几段班", "员工工时", "工时", "午市", "晚市", "排班", "人效", "人手", "加一个人", "加在哪个环节", "加人")):
+        return "staffing_schedule"
+    for scenario, keywords in _OWNER_ACTION_KEYWORDS:
+        if any(keyword in text for keyword in keywords):
+            return scenario
+    return ""
+
+
 def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> str:
     scenarios = set(list_owner_action_demo_scenarios())
     requested = _OWNER_ACTION_SCENARIO_ALIASES.get(str(requested or "").strip(), requested)
     previous = _OWNER_ACTION_SCENARIO_ALIASES.get(str(previous or "").strip(), previous)
+    explicit = _infer_owner_action_scenario_from_message(message)
+    if explicit in scenarios:
+        return explicit
     if requested in scenarios:
         return requested
-    if "厨房慢" in message and "服务慢" in message:
-        return "staff_training"
-    if any(keyword in message for keyword in ("厨师长、仓管、前台", "仓管厨师长前台", "分别盯什么", "分别要做什么", "各岗位", "谁做什么")):
-        return "operations_dispatch"
-    if any(keyword in message for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
-        return "seating_mix"
-    if any(keyword in message for keyword in ("几段班", "员工工时", "工时", "午市", "晚市", "排班", "人效")):
-        return "staffing_schedule"
-    if any(keyword in message for keyword in ("商场今天有活动", "商场活动", "商圈活动", "周边活动", "天气", "下雨", "雨天", "天气不好", "高温", "天气热", "节日", "外部活动")):
-        return "external_event_response"
-    if "套餐" in message and any(keyword in message for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备")):
-        return "package"
-    if any(keyword in message for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢")) and not any(keyword in message for keyword in ("备菜", "备货", "补货", "库存")):
-        return "kitchen_quality"
-    if any(keyword in message for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "盘点", "月盘点", "损耗", "采购价格", "盈利")):
-        return "cost_margin"
-    if any(keyword in message for keyword in ("备菜", "备货", "仓管今天", "具体补什么", "补什么", "补货", "库存", "采购", "原料", "食材")):
-        return "inventory_reorder"
-    for scenario, keywords in _OWNER_ACTION_KEYWORDS:
-        if any(keyword in message for keyword in keywords):
-            return scenario
     if previous and _is_follow_up(message):
         return previous
     return previous or "package"
@@ -630,6 +661,7 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
             parts.append(f"路过的人主要是{segment}，他们最在意的是{need or '价格清楚、吃得快、招牌明确'}。")
         if weak_text:
             parts.append(f"{weak_text} 有人看但下单弱，说明页面、套餐说明或到店核销没有讲清楚。")
+        parts.append("同商圈竞品已经在抢这波路过客，今天要把门口引流话术和线上入口一起改，不要只等自然客流。")
         return "".join(parts)
 
     if scenario == "store_compare":
@@ -677,6 +709,36 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
         parts.append("所以今天先查采购价、BOM 用量、后厨损耗和差评菜品，不要只让前厅多卖。")
         return "".join(parts)
 
+    if scenario == "external_event_response":
+        external = params.get("external_signals") if isinstance(params.get("external_signals"), dict) else {}
+        weather = external.get("weather") if isinstance(external.get("weather"), dict) else {}
+        activities = external.get("activities") if isinstance(external.get("activities"), list) else []
+        activity = activities[0] if activities and isinstance(activities[0], dict) else {}
+        lift = _owner_metric(activity.get("expectedTrafficLiftPct"), 1)
+        weather_text = _plain_text(weather.get("text")) or "今天有天气变化，客流会更集中到商场室内和晚市"
+        activity_title = _plain_text(activity.get("title")) or "商场活动"
+        parts = [f"{weather_text}，同时商场有{activity_title}。"]
+        if lift:
+            parts.append(f"活动预计把客流抬高约 {lift}%，但这些人不会自动进店。")
+        parts.append("堂食要承接晚市集中客，外卖要承接雨天不想出门的人，备货要围绕招牌鱼、热汤小食和双人套餐，不要平均多备。")
+        return "".join(parts)
+
+    if scenario == "kitchen_quality":
+        review = params.get("review_summary") if isinstance(params.get("review_summary"), dict) else {}
+        themes = "、".join(
+            str(item.get("theme")) for item in (review.get("negativeThemes") or [])[:2]
+            if isinstance(item, dict) and item.get("theme")
+        )
+        dishes = "、".join(
+            str(item.get("name")) for item in (review.get("negativeDishMentions") or [])[:2]
+            if isinstance(item, dict) and item.get("name")
+        )
+        parts = ["厨房问题不能只靠前厅道歉，今天要让厨师长直接管出餐和出品。"]
+        if dishes or themes:
+            parts.append(f"评价里被点名的是 {dishes or '招牌菜'}，主要问题是 {themes or '出餐慢和口味不稳定'}。")
+        parts.append("如果月盘点也提示损耗高，就把活鱼切配、底料用量和退菜重做一起查，别只看采购单价。")
+        return "".join(parts)
+
     return fallback
 
 
@@ -718,7 +780,7 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
         ]
     if scenario == "staffing_schedule":
         return [
-            "今天把人手压到晚市 18:00-20:00：前厅多 1 人盯等位和核销，后厨多 1 人盯招牌鱼出餐。",
+            "今天加人只加在晚市 18:00-20:00：前厅多 1 人盯等位和核销，后厨多 1 人盯招牌鱼出餐。",
             "午市只保留稳定班，不要平均撒人；忙的时段没人，闲的时段人多，是最浪费的排班。",
             "店长开班前把分工讲清：谁迎宾、谁催菜、谁处理差评苗头，别等顾客催了才临时补位。",
         ]
@@ -730,9 +792,9 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
         ]
     if scenario == "kitchen_quality":
         return [
-            "今天先把被差评点名最多的招牌鱼做出餐抽查：咸淡、鱼片熟度、上菜时长三项必须记录。",
+            "今天先让厨师长把被差评点名最多的招牌鱼做出餐抽查：咸淡、鱼片熟度、上菜时长三项必须记录。",
             "晚高峰前减少复杂低销量菜的备料和推荐，厨房先保招牌鱼、冰豆花、双人套餐这几条主线。",
-            "前厅一旦发现上菜慢超过阈值，立刻提醒后厨和店长，不要等顾客写差评才处理。",
+            "如果月盘点发现损耗高，同步抽查切配称重和底料用量；前厅一旦发现上菜慢超过阈值，立刻提醒后厨和店长。",
         ]
     if scenario == "cost_margin":
         return [
@@ -762,9 +824,15 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
             margin_text = f"，毛利率约 {margin}%" if margin else ""
             return [
                 f"今天先把“{name}”做成双人小套餐：售价约 {price or '270元'}，食材成本约 {cost or '100元'}，一份大概能留下 {profit or '170元'} 毛利{margin_text}。",
-                "只在工作日午市/低峰和美团、大众点评入口测 7 天，别一上来全渠道铺开。",
-                "门口物料和团购页只写三句话：招牌是什么、两个人多少钱、适合多久吃完。服务员也按这三句话推荐。",
+                "只在工作日午市/低峰、外卖入口和美团/大众点评入口测 7 天，别一上来全渠道铺开。",
+                "门口物料、外卖页和团购页只写三句话：招牌是什么、两个人多少钱、适合多久吃完。服务员也按这三句话推荐。",
             ]
+    if scenario == "external_event_response":
+        return [
+            "堂食先接晚市：门口和等位牌写清“雨天热汤鱼、两人多少钱、预计多久吃完”，把商场活动来的客流接住。",
+            "外卖和团购页同步上同一套雨天套餐，不要只做满减；主推招牌鱼、小食和热饮，避免配送后口感掉太多的菜。",
+            "备货只多备招牌鱼、底料、热汤小食和高频双人套餐原料，临期豆腐和番茄优先消耗，别因为商场活动就全品类加库存。",
+        ]
     if first_action:
         return [_owner_remove_score_words(first_action)]
     return ["今天先选一个最明显的问题改，不要同时改太多项。"]
@@ -781,6 +849,8 @@ def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
         return "今天先别把这家店简单判成差店。它日均不弱，问题是工作日和客单价没吃满，要和同类门店拆开比。"
     if scenario == "cost_margin":
         return "今天先别直接涨价，也别砍掉主菜。先查采购价、BOM 和损耗，否则可能把顾客喜欢的菜也误伤。"
+    if scenario == "external_event_response":
+        return "今天先别因为商场活动或下雨就全店打折、全品类多备。先分堂食和外卖承接，再按高频菜少量加备。"
     text = _first_text(owner_page.get("doNotDo"))
     return text or "先别凭感觉大改菜单、价格和排班，等今天这一个动作看出效果再扩大。"
 
@@ -804,6 +874,8 @@ def _owner_watch_numbers(owner_page: dict[str, Any], scenario: str) -> str:
         return "今天看四个数：活鱼采购价、BOM 实际偏差、盘点损耗金额、差评里被点名的菜品。前三项收窄且差评没变多，毛利才是真的补回来了。"
     if scenario == "store_compare":
         return "今天看三个数：工作日午市收入、双人套餐占比、客单价。它们追上对标店，说明复制动作有效。"
+    if scenario == "external_event_response":
+        return "明天看四个数：商场活动时段进店人数、堂食晚市订单、外卖雨天订单、备货报损。订单涨而报损没涨，说明承接动作对。"
     return "今天看三个数：订单数、客单价、差评关键词。先看动作有没有让生意变好，再决定要不要扩大。"
 
 

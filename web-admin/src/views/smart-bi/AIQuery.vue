@@ -577,6 +577,15 @@ const pendingOwnerActionScenario = ref('');
 
 const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> = [
   {
+    scenario: 'operations_dispatch',
+    terms: [
+      '\u4ed3\u7ba1+\u53a8\u5e08\u957f+\u524d\u53f0', '\u4ed3\u7ba1\u53a8\u5e08\u957f\u524d\u53f0',
+      '\u4ed3\u7ba1\u3001\u53a8\u5e08\u957f\u3001\u524d\u53f0', '\u5206\u522b\u76ef\u4ec0\u4e48',
+      '\u5206\u522b\u8981\u505a\u4ec0\u4e48', '\u8c01\u505a\u4ec0\u4e48', '\u5404\u5c97\u4f4d',
+      '\u6d3e\u5de5', '\u5206\u5de5', '\u7ba1\u7406\u5c42\u51cf\u5c11\u5de5\u4f5c',
+    ],
+  },
+  {
     scenario: 'seating_mix',
     terms: [
       '\u684c\u578b', '\u684c\u5b50', '\u684c\u6570', '\u4e8c\u4eba\u684c', '\u56db\u4eba\u684c',
@@ -584,11 +593,44 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     ],
   },
   {
+    scenario: 'cost_margin',
+    terms: [
+      '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', 'bom', 'BOM',
+      '\u635f\u8017', '\u9a8c\u6536', '\u6da8\u4ef7', '\u62a5\u635f', '\u6708\u76d8\u70b9',
+      '\u76d8\u70b9', '\u7406\u8bba\u7528\u91cf', '\u5b9e\u9645\u7528\u91cf', '\u4e8f\u6bdb\u5229',
+    ],
+  },
+  {
+    scenario: 'external_event_response',
+    terms: [
+      '\u5546\u573a\u6d3b\u52a8', '\u5546\u5708\u6d3b\u52a8', '\u5468\u8fb9\u6d3b\u52a8',
+      '\u8282\u65e5', '\u5929\u6c14', '\u4e0b\u96e8', '\u96e8\u5929', '\u9ad8\u6e29',
+      '\u4eb2\u5b50\u8282', '\u4f1a\u5458\u65e5', '\u5916\u90e8\u6d3b\u52a8',
+    ],
+  },
+  {
+    scenario: 'traffic_conversion',
+    terms: [
+      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u4ea4\u901a', '\u5468\u8fb9',
+      '\u7ade\u54c1', '\u540c\u5546\u5708', '\u5f15\u6d41', '\u95e8\u53e3', '\u8def\u8fc7',
+      '\u8fdb\u5e97', '\u66dd\u5149', '\u6838\u9500', '\u627f\u63a5', '\u5e73\u53f0',
+      '\u9875\u9762', '\u9996\u56fe', '\u7f8e\u56e2', '\u5927\u4f17\u70b9\u8bc4',
+      '\u6296\u97f3', '\u56e2\u8d2d',
+    ],
+  },
+  {
+    scenario: 'kitchen_quality',
+    terms: [
+      '\u53a8\u623f', '\u540e\u53a8', '\u53a8\u5e08\u957f', '\u51fa\u9910', '\u4e0a\u83dc\u6162',
+      '\u9000\u83dc', '\u91cd\u505a', '\u53e3\u5473', '\u592a\u54b8', '\u51fa\u54c1',
+    ],
+  },
+  {
     scenario: 'staffing_schedule',
     terms: [
       '\u6392\u73ed', '\u4eba\u624b', '\u5458\u5de5', '\u670d\u52a1\u5458', '\u524d\u53f0',
-      '\u524d\u5385', '\u540e\u53a8', '\u53a8\u623f', '\u53a8\u5e08\u957f', '\u4ed3\u7ba1',
-      '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed', '\u52a0\u4eba', '\u591a\u52a0',
+      '\u524d\u5385', '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed', '\u52a0\u4eba',
+      '\u591a\u52a0', '\u5de5\u65f6', '\u4eba\u6548',
     ],
   },
   {
@@ -596,25 +638,7 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     terms: [
       '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
       '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
-      '\u5916\u5356', '\u5e73\u53f0', '\u56e2\u8d2d', '\u7f8e\u56e2', '\u6296\u97f3',
-    ],
-  },
-  {
-    scenario: 'external_event_response',
-    terms: [
-      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
-      '\u8282\u65e5', '\u5929\u6c14', '\u4ea4\u901a', '\u5468\u8fb9', '\u5916\u90e8',
-      '\u4eb2\u5b50', '\u7ade\u54c1', '\u540c\u5546\u5708', '\u5f15\u6d41', '\u95e8\u53e3',
-      '\u66dd\u5149', '\u6838\u9500', '\u627f\u63a5',
-    ],
-  },
-  {
-    scenario: 'cost_margin',
-    terms: [
-      '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', '\u5e93\u5b58',
-      'bom', 'BOM', '\u635f\u8017', '\u5907\u8d27', '\u9a8c\u6536', '\u6da8\u4ef7',
-      '\u62a5\u635f', '\u6708\u76d8\u70b9', '\u7406\u8bba\u7528\u91cf', '\u5b9e\u9645\u7528\u91cf',
-      '\u4e8f\u6bdb\u5229',
+      '\u5916\u5356', '\u4e0d\u6253\u6298', '\u4e0d\u60f3\u6253\u6298', '\u62c9\u8425\u6536',
     ],
   },
   {
@@ -1116,12 +1140,17 @@ async function tryJavaIntentChat(
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
   try {
+    const inferredOwnerActionScenario = inferOwnerActionScenario(query);
+    const pendingScenario = pendingOwnerActionScenario.value;
     const ownerActionQuery = shouldSendOwnerActionContext(query);
-    const ownerActionScenario = pendingOwnerActionScenario.value || inferOwnerActionScenario(query) || undefined;
+    const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || undefined;
+    const ownerActionSessionForRequest = (
+      pendingScenario || (!inferredOwnerActionScenario && isOwnerActionFollowupText(query))
+    ) ? (ownerActionSessionId.value || undefined) : undefined;
     const res = await executeIntent(factoryId, query, {
       sessionId: javaIntentSessionId.value,
       context: ownerActionQuery ? {
-        ownerActionSessionId: ownerActionSessionId.value || undefined,
+        ownerActionSessionId: ownerActionSessionForRequest,
         ownerActionScenario,
         storeName: '青花椒上海示范店',
         subSector: '中餐/川味酸菜鱼',
