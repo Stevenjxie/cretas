@@ -49,6 +49,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock WarehouseResolver warehouseResolver;
     @Mock ProductTypeRepository productTypeRepository;
+    @Mock com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository deliveryRecordRepository;
 
     @InjectMocks SalesDeliveryBatchAllocationServiceImpl service;
 
@@ -91,7 +92,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(warehouseResolver.resolveId(FID, "WH-LOG")).thenReturn(WH_LOG_ID);
 
         FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(wksBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -111,7 +112,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(warehouseResolver.resolveId(FID, "WH-WKS")).thenReturn(WH_WKS_ID);
 
         FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(wksBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -130,7 +131,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         // FG sits in WH-WKS (production landing zone) — under the old WH-LOG default this 409'd.
         FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(wksBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -150,7 +151,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
 
         FinishedGoodsBatch rdBatch = batch("b1", WH_RD_ID, new BigDecimal("20"));
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(rdBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(rdBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -161,6 +162,153 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         assertEquals(409, ex.getCode());
         assertTrue(ex.getMessage().contains("研发") || ex.getMessage().contains("中试"),
                 "error should explain the batch is in the R&D/trial warehouse");
+    }
+
+    // ─────────────── 🔴 预留隔离 (reserved lifecycle) ───────────────
+
+    private SalesDeliveryItemBatchAllocation allocRecord(String batchId, BigDecimal qty, String unit) {
+        SalesDeliveryItemBatchAllocation a = new SalesDeliveryItemBatchAllocation();
+        a.setFactoryId(FID);
+        a.setDeliveryItemId(ITEM_ID);
+        a.setFinishedGoodsBatchId(batchId);
+        a.setBatchNumber("BATCH-" + batchId);
+        a.setAllocatedQty(qty);
+        a.setUnit(unit);
+        return a;
+    }
+
+    // 分配 = 在批次上写预留 (reserved += 分配量), 之后其它单读到的可用即已扣本单占用。
+    @Test
+    void allocateBatches_incrementsReservedByAllocatedQty() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("10"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+
+        FinishedGoodsBatch b = batch("b1", WH_WKS_ID, new BigDecimal("20")); // reserved 0
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(b));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("10"));
+
+        service.allocateBatches(FID, ITEM_ID, List.of(dto));
+
+        assertEquals(0, b.getReservedQuantity().compareTo(new BigDecimal("10")),
+                "分配后批次预留应等于分配量");
+        verify(finishedGoodsBatchRepository).save(b);
+        verify(allocationRepository).saveAll(anyList());
+    }
+
+    // 🔴 核心并发隔离: 批次已被另一发货行预留 (reserved=60), 本行再分配 50 → 可用=40 → 409, 不能超分同一物理库存。
+    @Test
+    void allocateBatches_cannotOverAllocateReservedByOtherLine() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("50"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+
+        FinishedGoodsBatch b = batch("b1", WH_WKS_ID, new BigDecimal("100"));
+        b.setReservedQuantity(new BigDecimal("60")); // 另一行已占 60 → 可用仅 40
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(b));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("50"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("可用库存不足"));
+        // 未写入本行预留 (409 前不改), 另一行的 60 保持不变。
+        assertEquals(0, b.getReservedQuantity().compareTo(new BigDecimal("60")));
+    }
+
+    // 改分配 (re-allocate): 先释放本行旧预留再按新量预留 → 不叠加。旧 8 → 新 5, 批次预留最终=5 不是 13。
+    @Test
+    void allocateBatches_reAllocate_releasesOldReserveNoStacking() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("5"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+
+        FinishedGoodsBatch b = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        b.setReservedQuantity(new BigDecimal("8")); // 本行旧分配占用 8
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(b));
+        // 本行现有分配记录 (旧 8) → 释放依据
+        when(allocationRepository.findByFactoryIdAndDeliveryItemId(FID, ITEM_ID))
+                .thenReturn(List.of(allocRecord("b1", new BigDecimal("8"), "kg")));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("5"));
+
+        service.allocateBatches(FID, ITEM_ID, List.of(dto));
+
+        // 释放旧 8 (→0) 再预留新 5 (→5) —— 不叠加成 13。
+        assertEquals(0, b.getReservedQuantity().compareTo(new BigDecimal("5")),
+                "改分配应释放旧预留再按新量预留, 不叠加");
+    }
+
+    // 跨单位预留: 发货行=盒, 批次原生=kg, 每盒15g → 分配 60盒 预留应换算回 kg = 0.9kg。
+    @Test
+    void allocateBatches_reserveConvertedToBatchNativeUnit() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("60"));
+        item.setUnit("盒");
+        item.setProductTypeId(PRODUCT_ID);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveRdId(FID)).thenReturn(WH_RD_ID);
+        when(productTypeRepository.findById(PRODUCT_ID))
+                .thenReturn(Optional.of(productTypeWithGramsPerUnit(new BigDecimal("15"), "盒")));
+
+        FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1")); // 1kg, reserved 0
+        kgBatch.setUnit("kg");
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(kgBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("60")); // 60盒
+
+        service.allocateBatches(FID, ITEM_ID, List.of(dto));
+
+        // 60盒 × 15g = 900g = 0.9kg 预留 (原生单位)。
+        assertEquals(0, new BigDecimal("0.9").compareTo(kgBatch.getReservedQuantity()),
+                "预留应换算回批次原生单位 (kg)");
+    }
+
+    // 清空分配 = 释放预留 (release on cancel)。批次预留 10 → 清空后归 0, 并删记录。
+    @Test
+    void clearAllocations_releasesReservedAndDeletes() {
+        FinishedGoodsBatch b = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        b.setReservedQuantity(new BigDecimal("10"));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(b));
+        when(allocationRepository.findByFactoryIdAndDeliveryItemId(FID, ITEM_ID))
+                .thenReturn(List.of(allocRecord("b1", new BigDecimal("10"), "kg")));
+
+        service.clearAllocations(FID, ITEM_ID);
+
+        assertEquals(0, b.getReservedQuantity().compareTo(BigDecimal.ZERO), "清空分配应释放预留归零");
+        verify(allocationRepository).deleteByFactoryIdAndDeliveryItemId(FID, ITEM_ID);
+    }
+
+    // 防呆守卫: 已发货的发货单不能再改批次分配 (防重复释放预留 → available 虚高)。
+    @Test
+    void allocateBatches_rejectedWhenDeliveryAlreadyShipped() {
+        SalesDeliveryItem item = deliveryItem(null, new BigDecimal("10"));
+        item.setDeliveryRecordId("dlv-1");
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        com.cretas.aims.entity.inventory.SalesDeliveryRecord rec =
+                new com.cretas.aims.entity.inventory.SalesDeliveryRecord();
+        rec.setStatus(com.cretas.aims.entity.enums.SalesDeliveryStatus.SHIPPED);
+        when(deliveryRecordRepository.findById("dlv-1")).thenReturn(Optional.of(rec));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("10"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("不允许"));
+        // 已发货 → 提前 409, 绝不触碰批次库存。
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     // ─────────────── recommendFifo ───────────────
@@ -286,7 +434,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
         kgBatch.setUnit("kg");
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(kgBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -307,7 +455,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
         kgBatch.setUnit("kg");
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(kgBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");
@@ -332,7 +480,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         FinishedGoodsBatch kgBatch = batch("b1", WH_WKS_ID, new BigDecimal("1"));
         kgBatch.setUnit("kg");
-        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(kgBatch));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("b1", FID)).thenReturn(Optional.of(kgBatch));
 
         BatchAllocationDTO dto = new BatchAllocationDTO();
         dto.setFinishedGoodsBatchId("b1");

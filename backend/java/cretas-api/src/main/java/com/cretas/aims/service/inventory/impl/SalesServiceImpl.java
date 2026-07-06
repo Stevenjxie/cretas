@@ -3030,9 +3030,14 @@ public class SalesServiceImpl implements SalesService {
      * loud-fail, 绝不裸误扣。
      *
      * <p><b>容量</b>: 只扣该批<b>可用量</b> (available = produced − shipped − reserved, 与 FIFO Pass1
-     * 同口径, releaseReserved=0, 守 available≥0 不变式)。分配时 (allocateBatches) 已校验 可用≥分配,
+     * 同口径, 守 available≥0 不变式)。分配时 (allocateBatches) 已校验 可用≥分配,
      * 但发货时可能因并发/其它单发货导致可用下降 → 若某批可用已不足以覆盖其分配量 (超出亚单位换算漂移),
      * loud-fail 409 提示重新分配, <b>绝不静默少发或超发</b>。
+     *
+     * <p>🔴 <b>预留隔离</b> (fix/fg-allocation-reserved-isolation): 分配时已把分配量作为预留累加到
+     * {@code reserved_quantity} (防两单超分同一物理库存); 发货时释放同一原生量 (release on ship),
+     * available 精确回到基线, 不残留幻影预留。批次读取用 {@code findByIdAndFactoryIdForUpdate} 悲观锁,
+     * 与 allocateBatches 同锁路径, 串行化"分配预留"与"发货扣减释放"。
      */
     private void deductByAllocations(String factoryId, SalesDeliveryItem item,
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations) {
@@ -3046,15 +3051,15 @@ public class SalesServiceImpl implements SalesService {
 
         BigDecimal remaining = item.getDeliveredQuantity();
         for (com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation alloc : allocations) {
-            FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(alloc.getFinishedGoodsBatchId())
+            // 🔴 预留隔离 (fix/fg-allocation-reserved-isolation): 悲观写锁读取分配批次 —— 与分配预留
+            // (allocateBatches 同一 findByIdAndFactoryIdForUpdate) 同锁路径, 串行化"分配预留"与"发货扣减+释放预留"
+            // 的并发, 不造竞态。查询已按 factoryId 过滤, 跨工厂/已删除 → empty → loud-fail 409。
+            FinishedGoodsBatch batch = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(alloc.getFinishedGoodsBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(409, "分配的成品批次不存在或已删除: "
                             + alloc.getBatchNumber())
                             .withHint("请到「发货记录 → 分配批次」重新分配后再确认发货")
                             .withHintTarget("发货记录 Tab"));
-            if (!factoryId.equals(batch.getFactoryId())) {
-                throw new BusinessException(403, "分配的成品批次不属于当前工厂: " + alloc.getBatchNumber())
-                        .withHint("跨工厂数据被拒绝, 请重新分配批次").withHintTarget("finishedGoodsBatchId");
-            }
             String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : targetUnit;
             // 分配量换算到 targetUnit (通常 allocUnit==targetUnit → 恒等), 统一在发货单位记账。
             BigDecimal allocQtyInTarget = FgQuantityUnitConverter
@@ -3092,8 +3097,19 @@ public class SalesServiceImpl implements SalesService {
             if (shipNative == null || shipNative.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
-            // 扣可用部分 (未预留), releaseReserved=0 — 与 FIFO Pass1 同, 守 available≥0 不变式。
-            applyShipment(batch, shipNative, BigDecimal.ZERO);
+            // 🔴 预留隔离 (fix/fg-allocation-reserved-isolation): 发货 = 把分配时占用的<b>预留</b>转为已发。
+            // allocateBatches 分配时已 reserved += 本分配的原生量; 发货时释放同一原生量 (release on ship),
+            // 使 available = produced − shipped − reserved 在发货后精确回到基线 (预留归零), 不残留幻影预留
+            // ("有货发不出")。释放量按 allocatedQty 的原生换算 (与 allocate 累加口径一致) 而非 shipNative
+            // (亚单位漂移 clamp 后可能略小) —— 预留被本次发货完全兑现, 应整量释放; applyShipment 内 max(0)
+            // 兜底 (本次修复前已分配未发的历史行 reserved 可能为 0 → 释放 clamp 到 0, 不会转负)。
+            BigDecimal reserveReleaseNative = com.cretas.aims.service.inventory.FgQuantityUnitConverter
+                    .convert(alloc.getAllocatedQty(), allocUnit, batch.getUnit(), gramsPerUnit);
+            if (reserveReleaseNative == null) {
+                // allocQtyInTarget 换算已成功 → 到原生也应成功; 极端失败时回落 shipNative 释放, 不残留过量预留。
+                reserveReleaseNative = shipNative;
+            }
+            applyShipment(batch, shipNative, reserveReleaseNative);
             recordDeductedBatch(item, batch);
             remaining = remaining.subtract(shipInTarget);
         }
