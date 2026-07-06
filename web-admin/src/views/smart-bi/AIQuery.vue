@@ -661,6 +661,10 @@ const OWNER_ACTION_DECISION_TERMS = [
   '\u5148\u67e5', '\u5148\u770b', '\u4e0d\u8981\u591a\u5907', '\u522b\u4e8f', '\u914d\u5408',
   '\u8be5\u6539', '\u53ea\u80fd', '\u8fd8\u662f', '\u4e0d\u7528\u7b49', '\u8981\u8003\u8651',
 ];
+const PACKAGE_PRIORITY_TERMS = [
+  '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u53cc\u4eba\u9910',
+  '\u5355\u4eba\u9910', '\u52a0\u8d2d', '\u642d\u914d',
+];
 
 function includesAny(text: string, terms: string[]): boolean {
   return terms.some((term) => text.includes(term));
@@ -670,8 +674,7 @@ function inferOwnerActionScenario(query: string): string {
   const text = query.trim();
   if (!text) return '';
   if (!includesAny(text, OWNER_ACTION_DECISION_TERMS)) return '';
-  const packageTerms = OWNER_ACTION_SCENARIO_TERMS.find((entry) => entry.scenario === 'package')?.terms ?? [];
-  if (includesAny(text, packageTerms)) {
+  if (includesAny(text, PACKAGE_PRIORITY_TERMS)) {
     return 'package';
   }
   for (const entry of OWNER_ACTION_SCENARIO_TERMS) {

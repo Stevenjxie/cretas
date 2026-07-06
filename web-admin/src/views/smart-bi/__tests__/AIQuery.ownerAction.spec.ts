@@ -159,6 +159,30 @@ describe('AIQuery restaurant owner-action routing', () => {
     });
   });
 
+  it('keeps external event scenario for weather questions even when they mention takeout', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'owner-action-weather-session',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: 'weather answer',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'external_event_response',
+        sessionId: 'owner-action-weather-session',
+        answer: 'weather answer',
+      },
+    });
+
+    await ask('\u4eca\u5929\u4e0b\u96e8\uff0c\u5802\u98df\u548c\u5916\u5356\u5e94\u8be5\u5206\u522b\u600e\u4e48\u5b89\u6392\uff1f');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(1);
+    expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
+      context: {
+        ownerActionScenario: 'external_event_response',
+      },
+    });
+  });
+
   it('keeps owner-action context for manual package follow-ups that ask to recalculate or stop', async () => {
     executeIntentMock
       .mockResolvedValueOnce({
