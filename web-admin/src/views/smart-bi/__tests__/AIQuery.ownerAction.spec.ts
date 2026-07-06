@@ -75,6 +75,20 @@ async function ask(question: string) {
   await flushPromises();
 }
 
+async function askOnSameThread(questions: string[]) {
+  const wrapper = mount(AIQuery, { global: { stubs: globalStubs } });
+  await flushPromises();
+  const vm = wrapper.vm as unknown as {
+    inputQuery: string;
+    handleSendMessage: () => Promise<void>;
+  };
+  for (const question of questions) {
+    vm.inputQuery = question;
+    await vm.handleSendMessage();
+    await flushPromises();
+  }
+}
+
 describe('AIQuery restaurant owner-action routing', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -141,6 +155,64 @@ describe('AIQuery restaurant owner-action routing', () => {
     expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
       context: {
         ownerActionScenario: 'package',
+      },
+    });
+  });
+
+  it('keeps owner-action context for manual package follow-ups that ask to recalculate or stop', async () => {
+    executeIntentMock
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'owner-action-package-session',
+        intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+        message: 'package answer',
+        resultData: {
+          source: 'restaurant_owner_action',
+          scenario: 'package',
+          sessionId: 'owner-action-package-session',
+          answer: 'package answer',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'owner-action-package-session',
+        intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+        message: 'follow-up answer',
+        resultData: {
+          source: 'restaurant_owner_action',
+          scenario: 'package',
+          sessionId: 'owner-action-package-session',
+          answer: 'follow-up answer',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'owner-action-package-session',
+        intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+        message: 'stop answer',
+        resultData: {
+          source: 'restaurant_owner_action',
+          scenario: 'package',
+          sessionId: 'owner-action-package-session',
+          answer: 'stop answer',
+        },
+      });
+
+    await askOnSameThread([
+      '\u6839\u636e\u83dc\u54c1\u6bdb\u5229\u548c\u6210\u672c\uff0c\u5e2e\u6211\u7b97\u4e00\u4e2a\u9002\u5408\u4eca\u5929\u63a8\u7684\u5c0f\u5957\u9910',
+      '\u5982\u679c\u6362\u4e00\u4e2a\u5c0f\u98df\uff0c\u600e\u4e48\u91cd\u65b0\u7b97\uff1f',
+      '\u660e\u5929\u600e\u4e48\u5224\u65ad\u8fd9\u4e2a\u5957\u9910\u8981\u4e0d\u8981\u505c\uff1f',
+    ]);
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(3);
+    expect(executeIntentMock.mock.calls[1][2]).toMatchObject({
+      context: {
+        ownerActionSessionId: 'owner-action-package-session',
+      },
+    });
+    expect(executeIntentMock.mock.calls[2][2]).toMatchObject({
+      context: {
+        ownerActionSessionId: 'owner-action-package-session',
       },
     });
   });

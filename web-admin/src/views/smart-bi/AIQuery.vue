@@ -670,6 +670,10 @@ function inferOwnerActionScenario(query: string): string {
   const text = query.trim();
   if (!text) return '';
   if (!includesAny(text, OWNER_ACTION_DECISION_TERMS)) return '';
+  const packageTerms = OWNER_ACTION_SCENARIO_TERMS.find((entry) => entry.scenario === 'package')?.terms ?? [];
+  if (includesAny(text, packageTerms)) {
+    return 'package';
+  }
   for (const entry of OWNER_ACTION_SCENARIO_TERMS) {
     if (includesAny(text, entry.terms)) {
       return entry.scenario;
@@ -686,7 +690,7 @@ function shouldSendOwnerActionContext(query: string): boolean {
 }
 
 function isOwnerActionFollowupText(query: string): boolean {
-  return /继续|具体|详细|为什么|怎么做|怎么调|怎么排|怎么改|怎么讲|怎么备货|怎么验收|哪三个数|三个数|哪些数|先看哪|看什么|验证|落地|然后呢|执行细节|拆给我|哪些事情|先不要|不要做|别做|风险|避开|哪一个动作|放到哪些入口|复制哪家店/.test(query);
+  return /继续|具体|详细|为什么|怎么做|怎么调|怎么排|怎么改|怎么讲|怎么算|重新算|怎么备货|怎么验收|哪三个数|三个数|哪些数|先看哪|看什么|判断|验证|落地|然后呢|执行细节|拆给我|哪些事情|先不要|不要做|别做|要不要停|停不停|换一个|风险|避开|哪一个动作|放到哪些入口|复制哪家店/.test(query);
 }
 
 function ownerActionFollowups(items?: string[], scenario?: string): Array<{ label: string; question: string; ownerActionScenario?: string }> {
@@ -1145,7 +1149,7 @@ async function tryJavaIntentChat(
     const ownerActionQuery = shouldSendOwnerActionContext(query);
     const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || undefined;
     const ownerActionSessionForRequest = (
-      pendingScenario || (!inferredOwnerActionScenario && isOwnerActionFollowupText(query))
+      pendingScenario || isOwnerActionFollowupText(query)
     ) ? (ownerActionSessionId.value || undefined) : undefined;
     const res = await executeIntent(factoryId, query, {
       sessionId: javaIntentSessionId.value,
