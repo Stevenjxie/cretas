@@ -900,7 +900,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     .withSeverity("BLOCKING");
         }
         batch.setUsedQuantity(used.subtract(returnQty));
-        if (batch.getStatus() == MaterialBatchStatus.USED_UP && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) > 0) {
+        // 退料恢复后若批次曾被打满 USED_UP 或 DEPLETED (两者都是"耗尽终态", 见
+        // ReportReversalServiceImpl.restoreMaterialBatchConsumption / MaterialBatchServiceImpl.releaseBatchReservation
+        // 的同 pattern), 且退料后现存 > 0, 必须翻回 AVAILABLE —— 否则批次永久滞留耗尽状态,
+        // FEFO/FIFO 查询硬编码 status='AVAILABLE' 捞不到, 库存被冻结不可用 (2026-07 F006 事故: 10 批 67.40kg 冻结)。
+        if ((batch.getStatus() == MaterialBatchStatus.USED_UP || batch.getStatus() == MaterialBatchStatus.DEPLETED)
+                && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) > 0) {
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
         }
         materialBatchRepository.save(batch);
