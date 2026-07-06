@@ -46,13 +46,12 @@ echo "YES-PROD" | ./scripts/deploy/deploy-web-admin.sh --env prod   # web 必须
 - **Flyway `out-of-order` 默认 false** → 迁移号必须递增部署（低号后于高号会被跳过）。加迁移前 `git ls-tree -r --name-only origin/main | grep V20261027_` 查最高号。加枚举值必查 PG CHECK 放宽（踩过多次）。
 - 部署后核 jar marker（⚠️ strings 不输出中文=假阴性，用非中文 marker 或 Flyway applied 或 live API 验）。
 
-## 6. 待你（Steve）拍板 + 待部署（Opus 交接时未决）
-- **PR #1281 🔒🔒 成品预留台账**（fg_reservation_ledger，根治取消/发货预留孤儿 + 清 F001 测试幽灵 1500 + 保留 F006 合法 76）：已 gate 过、验证安全（发货算法不动、LIUSHANMEN 零影响、Flyway V46）。**未部署——等 Steve GO**。GO 后 #1281(V46)+#1282(V47) 一起按 Flyway 顺序部署。
-- **PR #1282 销售已发货金额历史 backfill**（actual_shipped_amount，#1267 镜像缺口，V47）：gate 过、ROLLBACK 验证。**Flyway 耦合 #1281**（V46 必须先于 V47），跟 #1281 一起部署或（若 #1281 defer）单独部署。
-- **RN 质检缺陷复选框语义**（食安）：勾"有瑕疵/异味/破损"不影响结果也不存储（custom_fields={}）；web-admin 质检是手动下拉无 checklist。决定：(a)只记录 (b)影响结果自动判不合格 (c)删除。Opus 建议 (a)或(c) 与 web 一致。**RN 改动需 OTA。**
+## 6. 待你拍板项 —— 已全部解决 (2026-07-06 Steve 拍板)
+- ✅ **PR #1281 🔒🔒 成品预留台账 + #1282 已发货金额 backfill**：Steve GO → 已部署 v20260706_231741 + **完全验证**（V46/V47 applied、台账建成 F006 76 归属、F001 幽灵 1500→0 释放、所有非软删已发货单 backfill、发货可用量零回归、健康 UP）。
+- ✅ **RN 质检缺陷复选框 = 选项 C 删除**（#1284，`QIFormScreen.tsx` 删 3 复选框，数字评分判定完全不动）→ merged + **OTA 已推**（ts=1783351984135，设备冷启生效）。
 
 ## 7. 已 live 部署（本 session，15 修）
-BUG1 结单族盘点双扣 / BUG2 付款→资金GL / BUG3 停产SFI盲区 / #1268 死退货 / #1271 菜单孤儿×35+模块化可见性 / #1272 现金流期初现金 / #1273 material_batch超扣DB CHECK+守卫 / #1274 退料漏判DEPLETED库存冻结+计划状态回写 / #1275 停产状态守卫 / #1276 批次分配绑定发货 / #1277 调拨超收封顶+清幽灵 / #1278 采购付款GL backfill / #1279 排程分页0/1-based / **#1283 生产进度打屏读真实计划状态(原查空production_reports恒显0%; Controller有重复旧逻辑一并修delegate)+质量统计todayInspections/failedBatches字段**。全真客户 LIUSHANMEN 零影响。
+BUG1 结单族盘点双扣 / BUG2 付款→资金GL / BUG3 停产SFI盲区 / #1268 死退货 / #1271 菜单孤儿×35+模块化可见性 / #1272 现金流期初现金 / #1273 material_batch超扣DB CHECK+守卫 / #1274 退料漏判DEPLETED库存冻结+计划状态回写 / #1275 停产状态守卫 / #1276 批次分配绑定发货 / #1277 调拨超收封顶+清幽灵 / #1278 采购付款GL backfill / #1279 排程分页0/1-based / **#1283 生产进度打屏读真实计划状态(原查空production_reports恒显0%; Controller有重复旧逻辑一并修delegate)+质量统计todayInspections/failedBatches字段** / 🔒🔒 **#1281 成品预留台账**(根治取消/发货预留孤儿+清F001幽灵1500) / **#1282 已发货金额历史backfill** / RN-OTA **#1284 删质检无效缺陷复选框**。全真客户 LIUSHANMEN 零影响。
 
 ## 8. backlog / 已知非阻塞
 - **经营驾驶舱 (/smart-bi/dashboard) 盲于真实 ERP 销售**：显示"--请传Excel"，但 F006 本月真有 56单¥304,074 sales_orders。SmartBI 只接 Excel 上传管线不读 live `sales_orders`。**SmartBI 域—别测别改**（另一 session 在改 AI/SmartBI），需 Steve/Opus 定 SmartBI 驾驶舱是否该接 live ERP。
