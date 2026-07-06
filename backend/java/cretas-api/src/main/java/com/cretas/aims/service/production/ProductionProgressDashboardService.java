@@ -35,6 +35,7 @@ public class ProductionProgressDashboardService {
             "WHERE p.factory_id = :factoryId " +
             "  AND (p.batch_date = :date OR CAST(p.created_at AS DATE) = :date) " +
             "  AND p.deleted_at IS NULL " +
+            "  AND p.status <> 'CANCELLED' " +
             "ORDER BY p.created_at DESC"
         ).setParameter("factoryId", factoryId)
          .setParameter("date", targetDate)
@@ -78,6 +79,7 @@ public class ProductionProgressDashboardService {
             String planNumber = (String) row[1];
             BigDecimal plannedQty = toBigDecimal(row[2]);
             BigDecimal actualQty = toBigDecimal(row[3]);
+            String rawStatus = row[4] != null ? row[4].toString() : "PENDING";
             String customerName = (String) row[5];
             String productName = (String) row[6];
 
@@ -88,12 +90,19 @@ public class ProductionProgressDashboardService {
                 reportedQty = actualQty;
             }
 
-            int progressPct = calcPct(reportedQty, plannedQty);
-            String planStatus = progressPct >= 100 ? "DONE"
-                    : progressPct > 0 ? "IN_PROGRESS" : "PENDING";
+            // B2-fix (2026-07-06): 计划级"已完成/进行中/未开始"必须以 production_plans.status
+            // (真实计划生命周期, 权威来源) 为准 —— 不能靠 production_reports 的产量比例反推。
+            // production_reports 当天可能 0 行(报工走别的表/流程), 之前全部误判"未开始 0%"。
+            // production_reports 仍保留用于展示"逐工序"明细产量(见下方 processes 分支),
+            // 只是不再拿它来决定顶层完成/进行中/未开始的桶。
+            String planBucket = mapStatusToBucket(rawStatus);
+            boolean isDone = "DONE".equals(planBucket);
+            int progressPct = isDone ? 100 : calcPct(reportedQty, plannedQty);
+            String planStatus = planBucket;
 
             List<Map<String, Object>> processList = new ArrayList<>();
             if (processes.isEmpty()) {
+                // 无逐工序报工数据 → 用计划真实状态占位, 不再靠 0/0 数量比例臆断"未开始"
                 processList.add(Map.of(
                     "processName", "总进度",
                     "plannedQty", plannedQty,
@@ -103,8 +112,10 @@ public class ProductionProgressDashboardService {
                 ));
             } else {
                 for (Map.Entry<String, BigDecimal> e : processes.entrySet()) {
-                    int pPct = calcPct(e.getValue(), plannedQty);
-                    String pStatus = pPct >= 100 ? "DONE" : pPct > 0 ? "IN_PROGRESS" : "PENDING";
+                    int pPct = isDone ? 100 : calcPct(e.getValue(), plannedQty);
+                    String pStatus = isDone ? "DONE"
+                            : pPct >= 100 ? "DONE"
+                            : pPct > 0 ? "IN_PROGRESS" : planBucket;
                     Map<String, Object> p = new LinkedHashMap<>();
                     p.put("processName", e.getKey());
                     p.put("plannedQty", plannedQty);
@@ -144,7 +155,12 @@ public class ProductionProgressDashboardService {
         summary.put("completedWorkOrders", completedWorkOrders);
         summary.put("inProgressWorkOrders", inProgressWorkOrders);
         summary.put("pendingWorkOrders", pendingWorkOrders);
-        summary.put("overallProgressPct", calcPct(totalReported, totalPlanned));
+        // B2-fix: 整体进度按"已完成工单数/总工单数"计算, 不再单纯按产量比例。
+        // 产量(actual_quantity/production_reports)在很多工厂经常缺失填报(见上),
+        // 纯数量比例会长期卡在 0%; 已完成工单数是从计划真实状态算出的可靠信号。
+        summary.put("overallProgressPct", totalWorkOrders > 0
+                ? (int) Math.round(completedWorkOrders * 100.0 / totalWorkOrders)
+                : 0);
         summary.put("totalPlannedQuantity", totalPlanned);
         summary.put("totalReportedQuantity", totalReported);
 
@@ -153,6 +169,21 @@ public class ProductionProgressDashboardService {
         data.put("summary", summary);
         data.put("plans", plans);
         return data;
+    }
+
+    /**
+     * B2-fix: production_plans.status (ProductionPlanStatus 枚举) → 看板 3 态桶。
+     * COMPLETED → DONE; IN_PROGRESS/PAUSED(曾开工, 暂停) → IN_PROGRESS;
+     * 其余 (PENDING/PLANNED/PREPARED/PENDING_APPROVAL) → PENDING(未开始)。
+     * CANCELLED 计划已在 SQL 层过滤掉, 不会流入此处。
+     */
+    private String mapStatusToBucket(String rawStatus) {
+        if (rawStatus == null) return "PENDING";
+        return switch (rawStatus) {
+            case "COMPLETED" -> "DONE";
+            case "IN_PROGRESS", "PAUSED" -> "IN_PROGRESS";
+            default -> "PENDING";
+        };
     }
 
     private BigDecimal toBigDecimal(Object val) {

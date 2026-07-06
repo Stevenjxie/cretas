@@ -1999,6 +1999,17 @@ public class ProcessingServiceImpl implements ProcessingService {
         dashboard.put("failedInspections", monthlyStats.getOrDefault("failedBatches", 0));
         dashboard.put("avgPassRate", monthlyStats.getOrDefault("averagePassRate", BigDecimal.ZERO));
 
+        // B3-fix (2026-07-06): web-admin 首页质量统计卡片 (DashboardAdmin.vue) 读取
+        // qualityStats.todayInspections / qualityStats.failedBatches, 但本方法此前从未
+        // 输出这两个字段名(只有月度的 totalInspections/failedInspections) → 前端恒 "-"。
+        // failedBatches: 与已建立的 failedInspections/passRate 同口径(本月), 复用同一份
+        // monthlyStats, 不新增查询, 也不改动既有字段。
+        // todayInspections: 卡片语义是"今日检验批次数", 单独按"今天"这一天查询
+        // (与 monthlyStatistics 的月度范围区分, 是其子集)。
+        Map<String, Object> todayStats = getQualityStatistics(factoryId, today, today);
+        dashboard.put("todayInspections", todayStats.getOrDefault("totalInspections", 0));
+        dashboard.put("failedBatches", monthlyStats.getOrDefault("failedBatches", 0));
+
         // 计算缺陷率 (defectRate = 100 - passRate)
         BigDecimal passRate = (BigDecimal) monthlyStats.getOrDefault("averagePassRate", BigDecimal.ZERO);
         BigDecimal defectRate = BigDecimal.valueOf(100).subtract(passRate);
