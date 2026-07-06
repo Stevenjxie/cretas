@@ -151,6 +151,11 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 "\u4eca\u5929\u684c\u578b\u548c\u6392\u73ed\u600e\u4e48\u8c03\uff0c\u4e8c\u4eba\u684c\u56db\u4eba\u684c\u600e\u4e48\u5b89\u6392\uff1f",
                 Collections.emptyMap()))
                 .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "F006",
+                "\u5982\u679c\u6211\u6ca1\u6709\u771f\u5b9ePOS\uff0c\u53ea\u770bdemo\u6570\u636e\u80fd\u6f14\u793a\u4ec0\u4e48\uff1f",
+                Collections.emptyMap()))
+                .isFalse();
 
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
@@ -190,6 +195,11 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
                 "月盘点发现损耗高，今天不用等月底先查哪几项？",
+                Collections.emptyMap()))
+                .isTrue();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u5982\u679c\u6211\u6ca1\u6709\u771f\u5b9ePOS\uff0c\u53ea\u770bdemo\u6570\u636e\u80fd\u6f14\u793a\u4ec0\u4e48\uff1f",
                 Collections.emptyMap()))
                 .isTrue();
     }

@@ -1744,7 +1744,9 @@ public class IntentExecutionOrchestrator {
         if (!isRestaurantOwnerActionFactory(factoryId, factoryDomain)) {
             return false;
         }
-        if (isPureRestaurantReviewRemedyQuestion(userInput.toLowerCase(Locale.ROOT))) {
+        String normalizedInput = userInput.toLowerCase(Locale.ROOT);
+        if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
+                || isPlainRestaurantReadQuestion(normalizedInput)) {
             return false;
         }
         if (hasOwnerActionContinuationContext(context)) {
@@ -1787,7 +1789,8 @@ public class IntentExecutionOrchestrator {
                 "\u4f4e\u4ef7\u503c\u83dc", "\u54ea\u4e9b\u83dc", "\u4e3b\u63a8",
                 "\u5355\u54c1", "\u52a0\u8d2d", "\u62a5\u635f", "\u6708\u76d8\u70b9", "\u7406\u8bba\u7528\u91cf",
                 "\u5b9e\u9645\u7528\u91cf", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
-                "\u4eb2\u5b50", "\u95e8\u53e3", "\u5f15\u6d41", "\u7ade\u54c1", "\u6253\u6298");
+                "\u4eb2\u5b50", "\u95e8\u53e3", "\u5f15\u6d41", "\u7ade\u54c1", "\u6253\u6298",
+                "demo", "\u6f14\u793a\u6570\u636e", "\u6a21\u62df\u6570\u636e", "mock\u6570\u636e", "pos", "\u771f\u5b9epos");
         boolean hasDecision = containsAny(input,
                 "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392", "\u600e\u4e48\u6539",
                 "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
@@ -1806,7 +1809,8 @@ public class IntentExecutionOrchestrator {
                 "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u62c9\u8d77\u6765",
                 "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u4e0d\u8981\u591a\u5907",
                 "\u522b\u4e8f", "\u914d\u5408", "\u8be5\u6539", "\u53ea\u80fd", "\u8fd8\u662f",
-                "\u4e0d\u7528\u7b49", "\u54ea\u51e0\u9879", "\u9002\u5408", "\u8981\u8003\u8651");
+                "\u4e0d\u7528\u7b49", "\u54ea\u51e0\u9879", "\u9002\u5408", "\u8981\u8003\u8651",
+                "\u80fd\u6f14\u793a", "\u6f14\u793a\u4ec0\u4e48", "\u80fd\u505a\u4ec0\u4e48", "\u80fd\u770b\u4ec0\u4e48");
         return hasTopic && hasDecision;
     }
 
@@ -1835,6 +1839,24 @@ public class IntentExecutionOrchestrator {
                 "\u600e\u4e48\u5904\u7406", "\u5982\u4f55\u6539\u5584", "\u89e3\u51b3",
                 "\u5efa\u8bae", "\u6539\u8fdb\u5efa\u8bae");
         return asksRemedy && !hasOpsSignal;
+    }
+
+    private boolean isPlainRestaurantReadQuestion(String input) {
+        boolean hasReadVerb = containsAny(input,
+                "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u67e5\u770b", "\u67e5");
+        boolean hasPlainReadObject = containsAny(input,
+                "\u8ba2\u5355", "\u8ba2\u5355\u660e\u7ec6", "\u8425\u6536", "\u8425\u4e1a\u989d",
+                "\u9500\u552e\u989d", "\u62a5\u8868");
+        boolean hasReviewSummary = containsAny(input,
+                "\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837", "\u8bc4\u4ef7\u600e\u4e48\u6837",
+                "\u8bc4\u8bba\u600e\u4e48\u6837", "\u53e3\u7891\u600e\u4e48\u6837");
+        boolean hasDecisionSignal = containsAny(input,
+                "\u600e\u4e48\u6539", "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392",
+                "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
+                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u57f9\u8bad", "\u5e94\u8be5",
+                "\u5efa\u8bae", "\u52a8\u4f5c", "\u5148\u6539", "\u5148\u505a",
+                "\u5148\u7ba1", "\u5148\u67e5\u54ea", "\u54ea\u4e09\u4e2a", "\u5f71\u54cd", "\u98ce\u9669");
+        return ((hasReadVerb && hasPlainReadObject) || hasReviewSummary) && !hasDecisionSignal;
     }
 
     boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
