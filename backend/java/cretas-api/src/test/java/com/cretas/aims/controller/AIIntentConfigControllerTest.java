@@ -148,6 +148,24 @@ class AIIntentConfigControllerTest {
                 .build();
         shortcut.invoke(controller, "DEMO_REST", salesAction);
         assertEquals(null, salesAction.getIntentCode());
+
+        IntentExecuteRequest roleAction = IntentExecuteRequest.builder()
+                .userInput("本周营业额下降，仓管厨师长前台分别要做什么？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", roleAction);
+        assertEquals(null, roleAction.getIntentCode());
+
+        IntentExecuteRequest reviewHighFrequency = IntentExecuteRequest.builder()
+                .userInput("大众点评评论里高频好评和高频差评分别是什么？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", reviewHighFrequency);
+        assertEquals("RESTAURANT_REVIEW_SUMMARY", reviewHighFrequency.getIntentCode());
+
+        IntentExecuteRequest regionalManager = IntentExecuteRequest.builder()
+                .userInput("这家店不是最差但客单价不高，区域经理今天看什么？")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", regionalManager);
+        assertEquals(null, regionalManager.getIntentCode());
     }
 
     @Test

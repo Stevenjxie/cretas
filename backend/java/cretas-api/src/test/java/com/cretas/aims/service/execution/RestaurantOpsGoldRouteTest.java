@@ -266,7 +266,10 @@ class RestaurantOpsGoldRouteTest {
                 "这家店和同商圈门店比，问题在客流还是执行？",
                 "连锁内部排名不高，今天先补哪个动作？",
                 "哪些菜值得主推，哪些低价值菜要排除？",
-                "主推单品怎么判断有没有拉动加购？"
+                "主推单品怎么判断有没有拉动加购？",
+                "本周营业额下降，仓管厨师长前台分别要做什么？",
+                "这家店不是最差但客单价不高，区域经理今天看什么？",
+                "那就按第2种，指定门店下滑继续分析"
         }) {
             Boolean shouldRoute = ReflectionTestUtils.invokeMethod(
                     orchestrator,

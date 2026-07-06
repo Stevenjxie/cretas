@@ -318,6 +318,12 @@ public class AIIntentConfigController {
                 "\u7edf\u8ba1",
                 "\u5206\u6790");
         boolean reviewAction = reportAction || containsAny(q,
+                "\u662f\u4ec0\u4e48",
+                "\u6709\u54ea\u4e9b",
+                "\u54ea\u4e9b",
+                "\u9ad8\u9891",
+                "\u597d\u8bc4",
+                "\u5206\u522b",
                 "\u5e94\u8be5\u600e\u4e48",
                 "\u600e\u4e48\u6539\u5584",
                 "\u5982\u4f55\u6539\u5584",
@@ -343,6 +349,8 @@ public class AIIntentConfigController {
         if (reviewMetric && !salesMetric && reviewAction) {
             if (reviewReplyProgress) {
                 request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
+            } else if (isRestaurantReviewSummaryQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
             } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
                 request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
             } else if (trendAction) {
@@ -375,7 +383,7 @@ public class AIIntentConfigController {
             return false;
         }
         boolean hasTopic = containsAny(q,
-                "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406",
+                "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406", "\u4ed3\u7ba1", "\u53a8\u5e08\u957f", "\u524d\u53f0",
                 "\u8425\u6536", "\u8425\u4e1a\u989d", "\u6536\u5165", "\u5ba2\u5355", "\u8ba2\u5355",
                 "\u684c\u578b", "\u684c\u5b50", "\u4e8c\u4eba\u684c", "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f",
                 "\u6392\u73ed", "\u5458\u5de5", "\u4eba\u624b", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
@@ -389,6 +397,7 @@ public class AIIntentConfigController {
                 "\u600e\u4e48", "\u5982\u4f55", "\u5e94\u8be5", "\u6700\u5e94\u8be5", "\u9002\u5408",
                 "\u52a8\u4f5c", "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u5148\u505a",
                 "\u5148\u6539", "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u5148\u8bad\u7ec3",
+                "\u505a\u4ec0\u4e48", "\u770b\u4ec0\u4e48", "\u5206\u522b",
                 "\u4e0d\u8981\u591a\u5907", "\u4e0d\u60f3\u6253\u6298", "\u62c9\u8d77\u6765", "\u522b\u4e8f",
                 "\u8be5\u6539", "\u914d\u5408", "\u53ea\u80fd", "\u8fd8\u662f", "\u4e0d\u7528\u7b49",
                 "\u63a8", "\u8c03", "\u6392", "\u6539", "\u63d0\u9ad8", "\u63d0\u5347", "\u4f18\u5316",
@@ -404,6 +413,19 @@ public class AIIntentConfigController {
             return false;
         }
         return hasTopic && hasDecision;
+    }
+
+    private boolean isRestaurantReviewSummaryQuestion(String q) {
+        boolean hasReviewSignal = containsAny(q,
+                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u8bc4\u5206", "\u53e3\u7891",
+                "\u5927\u4f17\u70b9\u8bc4", "\u597d\u8bc4", "\u5dee\u8bc4");
+        if (!hasReviewSignal) {
+            return false;
+        }
+        return containsAny(q,
+                "\u600e\u4e48\u6837", "\u60c5\u51b5", "\u6c47\u603b", "\u7edf\u8ba1",
+                "\u9ad8\u9891", "\u597d\u8bc4", "\u662f\u4ec0\u4e48", "\u6709\u54ea\u4e9b",
+                "\u54ea\u4e9b", "\u5206\u522b");
     }
 
     private boolean isPureRestaurantReviewRemedyQuestion(String q) {

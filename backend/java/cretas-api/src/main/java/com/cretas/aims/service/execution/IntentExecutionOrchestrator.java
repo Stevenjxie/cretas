@@ -66,6 +66,7 @@ public class IntentExecutionOrchestrator {
             "老板|店长|区域经理|今天.*动作|今天.*应该|今天.*最应该|今天.*怎么|今天.*要不要|今天.*适合|今天.*查|今天.*调|今天.*改|今天.*提高|"
                     + "具体动作|提高营收|提升营收|提高营业额|提高客单价|怎么提高|怎么提升|应该怎么|应该先|怎么处理|怎么培训|先改|先做|"
                     + "今天.*做|今天.*推|今天.*放|今天.*讲|今天.*带着推|今晚.*排班|要怎么备货|怎么调|怎么排班|哪个时间段|最需要加人|加前厅|加后厨|帮我算.*套餐|能不能复制|应该复制|复制哪家店|复制.*做法|哪家店.*做法|连锁内部|排名不高|"
+                    + "指定门店下滑|第[一二三四五六七八九0-9]+种.*继续分析|"
                     + "主推|值得主推|低价值|加购|拉动加购|首屏|短视频|最值得学习|"
                     + "怎么优化|怎么解决|优化.*营收|优化.*收入|解决方案|改进建议|怎么做生意|增加营收|增加营业额|提高收入|提升收入|先看哪|先不要|不要做|先训练|训练哪|"
                     + "哪三个动作|三个动作|先管|先查|先看|该改|拉起来|别亏|亏毛利|怎么别亏|怎么配合|不能多备|不要多备|"
@@ -1749,6 +1750,9 @@ public class IntentExecutionOrchestrator {
         if (hasOwnerActionContinuationContext(context)) {
             return true;
         }
+        if (RESTAURANT_OWNER_ACTION_DIRECT_PATTERN.matcher(userInput).find()) {
+            return true;
+        }
         if (matchesOwnerActionKeywordHeuristic(userInput)) {
             return true;
         }
@@ -1768,6 +1772,7 @@ public class IntentExecutionOrchestrator {
         }
         boolean hasTopic = containsAny(input,
                 "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406",
+                "\u4ed3\u7ba1", "\u53a8\u5e08\u957f", "\u524d\u53f0",
                 "\u684c\u578b", "\u684c\u5b50", "\u684c\u6570", "\u4e8c\u4eba\u684c", "\u4e24\u4eba\u684c",
                 "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f", "\u7b49\u4f4d",
                 "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
@@ -1790,7 +1795,7 @@ public class IntentExecutionOrchestrator {
                 "\u5982\u4f55\u4f18\u5316", "\u5e94\u8be5\u600e\u4e48", "\u8981\u4e0d\u8981",
                 "\u5148\u505a", "\u5148\u6539", "\u5148\u8bad\u7ec3", "\u5b89\u6392",
                 "\u5904\u7406", "\u89e3\u51b3", "\u5efa\u8bae", "\u76f4\u63a5\u5efa\u8bae",
-                "\u52a8\u4f5c", "\u505a\u4ec0\u4e48", "\u76ef\u4ec0\u4e48", "\u8c03\u6574",
+                "\u52a8\u4f5c", "\u505a\u4ec0\u4e48", "\u76ef\u4ec0\u4e48", "\u770b\u4ec0\u4e48", "\u5206\u522b", "\u8c03\u6574",
                 "\u63a8\u8350", "\u4e3b\u63a8", "\u5e2e\u6211\u7b97", "\u7b97\u4e00\u4e2a",
                 "\u5f71\u54cd", "\u4f1a\u5f71\u54cd", "\u6709\u4ec0\u4e48\u5f71\u54cd",
                 "\u6709\u4ec0\u4e48\u529e\u6cd5", "\u5e94\u8be5\u590d\u5236",
