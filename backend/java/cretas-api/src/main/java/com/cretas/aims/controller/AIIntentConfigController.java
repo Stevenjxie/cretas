@@ -246,7 +246,7 @@ public class AIIntentConfigController {
     // sensitivity_level=LOW + empty required_roles allow all authenticated users).
     @PostMapping("/execute")
     @Operation(summary = "执行AI意图", description = "识别用户输入的意图并执行对应操作")
-    @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
@@ -461,7 +461,7 @@ public class AIIntentConfigController {
     @PostMapping("/execute/multi")
     @Operation(summary = "执行多意图 (Multi-Label Classification)",
                description = "使用 Sigmoid-based 多标签分类识别并执行多个意图")
-    @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeMultiIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,
@@ -485,7 +485,7 @@ public class AIIntentConfigController {
     // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
     @PostMapping(value = "/execute/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式执行AI意图 (SSE)", description = "通过 Server-Sent Events 实时返回执行进度")
-    @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
     public SseEmitter executeIntentStream(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody IntentExecuteRequest request,

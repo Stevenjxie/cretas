@@ -69,7 +69,7 @@ public class GenericAIChatController {
     @PostMapping("/chat")
     @Operation(summary = "通用 AI Chat",
                description = "发送消息列表给 AI，获取回复。支持多轮对话和自定义参数。")
-    @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI对话请求过于频繁，请稍后再试")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI对话请求过于频繁，请稍后再试")
     public ApiResponse<GenericChatResponse> chat(
             @RequestBody GenericChatRequest request) {
 
@@ -166,7 +166,7 @@ public class GenericAIChatController {
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式 AI Chat (SSE)",
                description = "SSE 流式输出，逐 token 推送。事件: meta, token, done, error")
-    @RateLimit(count = 20, period = 60, limitType = LimitType.USER, message = "AI对话请求过于频繁，请稍后再试")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI对话请求过于频繁，请稍后再试")
     public SseEmitter chatStream(@RequestBody GenericChatRequest request) {
         SseEmitter emitter = new SseEmitter(120_000L);
 
