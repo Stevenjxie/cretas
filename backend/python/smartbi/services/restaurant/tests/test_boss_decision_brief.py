@@ -1179,6 +1179,50 @@ def test_owner_action_chat_platform_and_external_variants_keep_distinct_focus() 
     assert len(set(answers)) == len(answers)
 
 
+def test_owner_action_chat_seating_and_staffing_variants_keep_distinct_focus() -> None:
+    cases = [
+        (
+            "今天桌型和排班怎么调，二人桌四人桌怎么安排？",
+            "seating_mix",
+            ("二人桌", "四人桌", "可拼可拆"),
+        ),
+        (
+            "周末排队长但空桌也多，是桌型问题还是前台引导问题？",
+            "seating_mix",
+            ("排队", "空桌", "前台"),
+        ),
+        (
+            "今天只能多加一个人，是加前厅还是后厨？",
+            "staffing_schedule",
+            ("只能加一个人", "前厅", "后厨"),
+        ),
+        (
+            "厨房出餐慢和差评变多，今天先改哪三个动作？",
+            "kitchen_quality",
+            ("厨房", "出餐", "差评"),
+        ),
+    ]
+
+    answers = []
+    for message, expected_scenario, expected_words in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_SEATING_STAFFING_VARIANT_{len(message)}",
+                message=message,
+                demoScenario="package",
+            )
+        )
+
+        data = response["data"]
+        answer = data["answer"]
+        assert data["scenario"] == expected_scenario
+        answers.append(answer)
+        for word in expected_words:
+            assert word in answer, f"{message}: missing {word} in {answer}"
+
+    assert len(set(answers)) == len(answers)
+
+
 def test_owner_action_chat_new_explicit_question_does_not_follow_previous_session() -> None:
     first = owner_action_chat(
         OwnerActionChatRequest(

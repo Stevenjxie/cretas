@@ -338,5 +338,7 @@ class IntentKnowledgeBaseTest {
                 kb.matchPhrase("\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT").orElse("NONE"));
         assertEquals("RESTAURANT_REVIEW_COMPLAINT",
                 kb.matchPhrase("\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT").orElse("NONE"));
+        assertEquals("RESTAURANT_REVIEW_REPLY_RATE",
+                kb.matchPhrase("\u4f4e\u661f\u8bc4\u4ef7\u56de\u590d\u7387\u5dee\uff0c\u4eca\u5929\u8981\u5148\u8865\u54ea\u4e9b\u56de\u590d\uff1f", "RESTAURANT").orElse("NONE"));
     }
 }

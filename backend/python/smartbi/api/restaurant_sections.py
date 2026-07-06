@@ -413,6 +413,8 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         "分别盯什么", "分别要做什么", "各岗位", "谁做什么", "派工", "分工",
     )):
         return "operations_dispatch"
+    if any(keyword in text for keyword in ("只能多加一个人", "只能加一个人", "加前厅还是后厨", "前厅还是后厨")):
+        return "staffing_schedule"
     if any(keyword in text for keyword in ("所有门店", "其他门店", "连锁", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "复制哪")):
         return "store_compare"
     if any(keyword in text for keyword in ("桌型", "桌子", "二人桌", "两人桌", "四人桌", "翻台", "排队", "等位")):
@@ -884,6 +886,10 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
             return "采购价异常要和菜品毛利一起看。单价涨了不一定马上涨售价，先看这道菜是不是主推、能不能用高毛利小食带回来；如果主菜毛利已经被压穿，再谈调价或换供应商。"
 
     if scenario == "traffic_conversion":
+        if "商圈客流画像" in text or ("客流画像" in text and "影响" in text):
+            return "商圈画像不是只告诉你人多不多，而是告诉你今天来的是什么人、为什么会路过、哪一段时间能承接。今天先把画像拆成三件事：午晚市哪个时段人多、亲子/白领/家庭客谁更多、他们更在意价格还是出餐速度；然后再决定门口话术、套餐和备货。"
+        if "先改哪个入口" in text or ("路过" in text and "进店" in text):
+            return "客流画像已经说明路过多但进店少，所以今天先改门口和平台入口，不先改厨房。门口让顾客三秒看懂招牌和双人价格；平台首图同步同一套信息；进店后再看核销和点单承接。"
         if "美团" in text or "大众点评" in text:
             return "美团/大众点评的问题先看“有人看但为什么不核销”。今天先改首图、套餐说明和到店核销话术；不要先加投流，因为曝光已经有了，当前漏点更像页面没有把顾客说服进店。"
         if "抖音" in text or "团购" in text:
@@ -898,6 +904,12 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
             return "雨天不要只做堂食动作。堂食要接住商场里不想走远的人，外卖要推热汤、好配送、到家口感稳定的组合；备货只加这些相关原料，不要全菜单一起加。"
         if "亲子" in text or "商场" in text or "活动" in text:
             return "商场活动带来的是一波短时间客流，不等于每道菜都会多卖。今天要把门口套餐、儿童友好小食、晚市备货和前台接待串起来，别只看活动人数。"
+
+    if scenario == "seating_mix":
+        if "排队" in text or "空桌" in text or "前台引导" in text:
+            return "排队长但空桌多，通常不是单纯缺桌，而是前台没有把客人导到合适桌型。今天先让前台按人数分流：两人客优先拼拆位，三四人客再合桌；每 15 分钟看一次空桌和等位，不要让四人桌被两人客占死。"
+        if "二人桌" in text or "四人桌" in text or "桌型" in text:
+            return "桌型问题要直接改现场布局，不要只看翻台率。今天先把少量四人桌改成可拼可拆，二人桌不够时二人客能快坐，四人客来了能拼回去；这是比加人更快见效的动作。"
 
     if scenario == "staffing_schedule":
         if "只能多加一个人" in text:

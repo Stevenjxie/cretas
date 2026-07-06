@@ -6906,6 +6906,10 @@ public class IntentKnowledgeBase {
         restaurantPhraseMapping.put("客单价对比", "RESTAURANT_STORE_REVENUE_RANK");
         restaurantPhraseMapping.put("平台评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
         restaurantPhraseMapping.put("评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("低星评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("低星评价回复率差", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("低星评价回复率差今天要先补哪些回复", "RESTAURANT_REVIEW_REPLY_RATE");
+        restaurantPhraseMapping.put("低星评价今天要先补哪些回复", "RESTAURANT_REVIEW_REPLY_RATE");
         restaurantPhraseMapping.put("VIP客户分析", "RESTAURANT_REVIEW_VIP");
 
         // RESTAURANT_SLOW_SELLER_QUERY — 滞销菜品查询
