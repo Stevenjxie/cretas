@@ -63,7 +63,10 @@ async function loadPlans() {
   try {
     const response = await getSchedulingPlans(factoryId.value, {
       status: 'confirmed',
-      page: 1,
+      // page is 0-based per backend (mirrors scheduling/plans/list.vue's
+      // `page - 1`); literal `page: 1` was silently requesting page 2 and
+      // returning empty results whenever all confirmed plans fit on page 1.
+      page: 0,
       size: 50
     });
     if (response.success && response.data) {
