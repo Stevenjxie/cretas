@@ -1,5 +1,6 @@
 package com.cretas.aims.service.finance;
 
+import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.report.CashFlowDTO;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Voucher;
@@ -20,6 +21,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -192,5 +195,94 @@ class CashFlowServiceTest {
         CashFlowDTO dto = svc.generate(FACTORY, 2026, 1, 2026, 1);
 
         assertEquals(new BigDecimal("0.00"), dto.getOperatingNetCashFlow(), "VOID 凭证不计入 (既有行为, 回归测试)");
+    }
+
+    // -------------------------------------------------------------------------
+    // beginningCash / endingCash — 修复历史 bug (曾硬编码 0, 任何非起点区间低报期末余额)
+    // -------------------------------------------------------------------------
+
+    private SubjectAggregateRow aggregateRow(String code, String name, BigDecimal debit, BigDecimal credit) {
+        return new SubjectAggregateRow(code, name, debit, credit, 1L);
+    }
+
+    @Test
+    void generate_nonInceptionRange_beginningCashReflectsPriorCumulativeBalance() {
+        // 2026-06 区间: 期初现金余额 = 现金科目在 [EPOCH_START, 2026-05-31] 的累计
+        // debit-credit. 现金科目分散在 1001/1002/1012 三个 code, 且聚合结果里混入非现金科目
+        // (6001) 必须被过滤掉, 不能污染期初余额.
+        LocalDate priorCutoff = LocalDate.of(2026, 5, 31);
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(FACTORY, LocalDate.of(1970, 1, 1), priorCutoff))
+                .thenReturn(List.of(
+                        aggregateRow("1001", "库存现金", new BigDecimal("500.00"), new BigDecimal("100.00")),
+                        aggregateRow("1002", "银行存款", new BigDecimal("5000.00"), new BigDecimal("1000.00")),
+                        aggregateRow("1012", "其他货币资金", new BigDecimal("200.00"), new BigDecimal("0.00")),
+                        aggregateRow("6001", "主营业务收入", new BigDecimal("0.00"), new BigDecimal("999999.00"))));
+
+        // 本期 (2026-06) 一张 POSTED 凭证: 现金借 300 (银行存款) / 对手贷 300 (收入) — 净增 300
+        Voucher june = voucher(VoucherStatus.POSTED,
+                entry("1002", "银行存款", new BigDecimal("300.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("300.00")));
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(june));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(0L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 2026, 6, 2026, 6);
+
+        // beginningCash = (500-100) + (5000-1000) + (200-0) = 400 + 4000 + 200 = 4600 (6001 excluded)
+        assertEquals(new BigDecimal("4600.00"), dto.getBeginningCash(),
+                "期初现金余额须为现金科目 (1001/1002/1012) 累计余额, 非现金科目 (6001) 必须被过滤");
+        assertEquals(new BigDecimal("300.00"), dto.getNetIncreaseInCash());
+        // endingCash = beginningCash + netIncrease = 4600 + 300 = 4900 — 精确等于资产负债表口径
+        assertEquals(new BigDecimal("4900.00"), dto.getEndingCash(),
+                "期末现金余额 = 期初 + 本期净额, 必须等于资产负债表现金科目区间末余额");
+    }
+
+    @Test
+    void generate_startDateAtEpoch_beginningCashIsZeroWithoutQuerying() {
+        // 起始月正好是 EPOCH_START 所在月 (1970-01) — startDate.minusDays(1) 早于 EPOCH_START,
+        // 应直接返回 0, 不应发起聚合查询 (无意义的空区间查询).
+        Voucher jan1970 = voucher(VoucherStatus.POSTED,
+                entry("1002", "银行存款", new BigDecimal("100.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("100.00")));
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(jan1970));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(0L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 1970, 1, 1970, 1);
+
+        assertEquals(new BigDecimal("0.00"), dto.getBeginningCash());
+        assertEquals(new BigDecimal("100.00"), dto.getEndingCash());
+        verify(voucherEntryRepo, never()).aggregateBySubjectExcludingDraft(any(), any(), any());
+    }
+
+    @Test
+    void generate_sinceInceptionDefault_beginningCashStillZero() {
+        // 从数据起点开始查询 (无更早历史) — aggregateBySubjectExcludingDraft 返回空列表,
+        // beginningCash 应为 0 (既有 UI 默认"年初至当月"在 F006 上凑巧 = since-inception 的行为不变).
+        when(voucherEntryRepo.aggregateBySubjectExcludingDraft(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(Collections.emptyList());
+        Voucher v = voucher(VoucherStatus.POSTED,
+                entry("1002", "银行存款", new BigDecimal("1000.00"), null),
+                entry("6001", "主营业务收入", null, new BigDecimal("1000.00")));
+        when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(v));
+        when(accountRepo.findVisibleToFactory(FACTORY)).thenReturn(Collections.emptyList());
+        when(voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
+                eq(FACTORY), eq(VoucherStatus.DRAFT), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(0L);
+
+        CashFlowService svc = new CashFlowService(voucherRepo, voucherEntryRepo, accountRepo);
+        CashFlowDTO dto = svc.generate(FACTORY, 2026, 1, 2026, 1);
+
+        assertEquals(new BigDecimal("0.00"), dto.getBeginningCash());
+        assertEquals(new BigDecimal("1000.00"), dto.getEndingCash());
     }
 }
