@@ -83,10 +83,10 @@ class SalesOrderFulfillmentWarehouseTest {
     /** Invoke private deductFinishedGoodsInventory via reflection. */
     private void invokeDeduct(SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
         try {
-            m.invoke(salesService, FACTORY_A, item);
+            m.invoke(salesService, FACTORY_A, (String) null, item);
         } catch (java.lang.reflect.InvocationTargetException e) {
             // Unwrap so callers can catch BusinessException directly.
             if (e.getCause() instanceof RuntimeException) {
@@ -468,9 +468,9 @@ class SalesOrderFulfillmentWarehouseTest {
         item.setUnit("kg");
 
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
-        m.invoke(mixedUnitService, FACTORY_A, item);
+        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
 
         // 10kg 目标量换算回批次原生单位(盒): 10 × 1000 / 15 = 666.6666... → HALF_UP scale2 → 666.67盒
         assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
@@ -503,12 +503,12 @@ class SalesOrderFulfillmentWarehouseTest {
         item.setUnit("kg");
 
         Method m = SalesServiceImpl.class.getDeclaredMethod(
-                "deductFinishedGoodsInventory", String.class, SalesDeliveryItem.class);
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> {
                     try {
-                        m.invoke(mixedUnitService, FACTORY_A, item);
+                        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
                     } catch (java.lang.reflect.InvocationTargetException e) {
                         if (e.getCause() instanceof RuntimeException re) throw re;
                         throw new RuntimeException(e);

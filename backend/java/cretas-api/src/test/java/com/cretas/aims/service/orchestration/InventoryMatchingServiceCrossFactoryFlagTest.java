@@ -55,6 +55,9 @@ class InventoryMatchingServiceCrossFactoryFlagTest {
     @Mock
     private WarehouseResolver warehouseResolver;
 
+    @Mock
+    private com.cretas.aims.service.inventory.FgReservationLedgerService reservationLedgerService;
+
     @InjectMocks
     private InventoryMatchingService service;
 

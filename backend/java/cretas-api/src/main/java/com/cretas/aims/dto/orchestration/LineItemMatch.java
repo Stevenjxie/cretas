@@ -15,6 +15,9 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 public class LineItemMatch {
 
+    /** 销售订单行 ID (预留台账归属, 2026-07-06)。 */
+    private String salesOrderItemId;
+
     /** 产品类型ID */
     private String productTypeId;
 
