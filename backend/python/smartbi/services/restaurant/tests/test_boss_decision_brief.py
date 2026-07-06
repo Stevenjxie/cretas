@@ -1344,6 +1344,39 @@ def test_owner_action_chat_routes_cross_role_operations_dispatch() -> None:
     assert data["charts"]
 
 
+def test_owner_action_chat_direct_special_answers_for_scope_role_and_script() -> None:
+    cases = [
+        (
+            "如果数据不确定，应该先问我什么范围？",
+            ("具体哪家门店", "哪个时间段", "哪个平台或渠道", "选范围"),
+        ),
+        (
+            "如果店长说没问题，我怎么用数据反问？",
+            ("反问店长", "工作日午市收入", "感觉还行"),
+        ),
+        (
+            "这个建议要落到前台话术，怎么说？",
+            ("前台今天就用这三句话", "迎宾", "核销", "安抚"),
+        ),
+        (
+            "老板不要一直催，四个岗位今天各自盯什么？",
+            ("仓管", "厨师长", "前台", "店长"),
+        ),
+    ]
+
+    for message, expected_terms in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id="F_DIRECT_SPECIAL_DEMO",
+                message=message,
+            )
+        )
+
+        answer = response["data"]["answer"]
+        for term in expected_terms:
+            assert term in answer
+
+
 def test_owner_action_chat_routes_inventory_reorder_and_seeds_role_plan() -> None:
     response = owner_action_chat(
         OwnerActionChatRequest(

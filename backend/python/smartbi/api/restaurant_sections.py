@@ -1934,6 +1934,43 @@ def _owner_action_follow_up_answer(owner_page: dict[str, Any], scenario: str, me
     ])
 
 
+def _owner_direct_special_answer(owner_page: dict[str, Any], scenario: str, message: str) -> str:
+    text = (message or "").strip()
+    if not text:
+        return ""
+    if "不确定" in text and any(keyword in text for keyword in ("范围", "先问", "问我")):
+        return "\n\n".join([
+            "数据不确定时，不要硬给结论，先让老板选范围。",
+            "我会先问 4 个范围：1 具体哪家门店；2 哪个时间段；3 哪个平台或渠道；4 是要看营收、客单、毛利、客流，还是评价。",
+            "如果老板还没选，我先给可点选项：全店本周、指定门店、点评/美团核销、晚市时段。选完再给动作，避免把全店数据误当成某一家店的问题。",
+        ])
+    if "数据反问" in text or ("反问" in text and "店长" in text):
+        return "\n\n".join([
+            "可以这样反问店长，不用吵：",
+            "1. 如果没问题，为什么工作日午市收入、双人套餐占比、客单价这三个数没有一起变好？",
+            "2. 如果只是客流问题，为什么门口路过人不少，但进店和核销没有同步涨？",
+            "3. 如果厨房没问题，为什么差评关键词还集中在上菜慢、口味不稳或解释不清？",
+            "店长只要拿这三组数回答，不要用“感觉还行”回答。",
+        ])
+    if "前台话术" in text or ("话术" in text and any(keyword in text for keyword in ("怎么说", "怎么讲", "落到前台"))):
+        return "\n\n".join([
+            "前台今天就用这三句话，不要背长话术：",
+            "1. 迎宾：今天两个人吃招牌鱼最合适，双人套餐大概 270 元，45 分钟左右能吃完。",
+            "2. 核销：我先帮您确认券，确认完建议直接上招牌鱼，再加一份冰豆花，等位和出餐会更稳。",
+            "3. 安抚：现在预计还要等 8-10 分钟，我先帮您排招牌鱼，坐下后能更快上。",
+            "店长今晚只听前台有没有说到这三句，不要让每个人自由发挥。",
+        ])
+    if any(keyword in text for keyword in ("四个岗位", "各自盯什么", "各岗位", "岗位今天")):
+        return "\n\n".join([
+            "老板今天不要一直催，直接拆成四张清单：",
+            "1. 仓管：10:30 前看活鱼、青花椒底料、冰豆花原料，缺口先补，临期豆腐和番茄贴红标先消耗。",
+            "2. 厨师长：晚市只盯招牌鱼出餐时长、鱼片熟度、底料咸淡，复杂低销量菜不主动推。",
+            "3. 前台：只讲招牌、双人价格、预计用餐时间三句话；核销客先确认券，再推荐招牌加小食。",
+            "4. 店长：只盯等位、上菜、缺货三个异常；打烊后复盘收入、上菜时长、缺货次数。",
+        ])
+    return ""
+
+
 def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, is_follow_up: bool = False) -> str:
     headline = _plain_text(owner_page.get("headline"))
     diagnosis = _plain_text(owner_page.get("plainDiagnosis"))
@@ -1951,6 +1988,10 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     watch_numbers = _owner_watch_numbers(owner_page, scenario)
     watch_numbers = _owner_message_specific_watch_numbers(owner_page, scenario, message, watch_numbers)
     evidence_text = _owner_plain_evidence(owner_page, scenario)
+
+    direct_special = _owner_direct_special_answer(owner_page, scenario, message)
+    if direct_special:
+        return direct_special
 
     metric_follow_up = _owner_metric_follow_up_answer(owner_page, scenario, message)
     if metric_follow_up:
