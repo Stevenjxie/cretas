@@ -888,14 +888,14 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
     if scenario == "traffic_conversion":
         if "商圈客流画像" in text or ("客流画像" in text and "影响" in text):
             return "商圈画像不是只告诉你人多不多，而是告诉你今天来的是什么人、为什么会路过、哪一段时间能承接。今天先把画像拆成三件事：午晚市哪个时段人多、亲子/白领/家庭客谁更多、他们更在意价格还是出餐速度；然后再决定门口话术、套餐和备货。"
+        if "同商圈" in text or "竞品" in text:
+            return "同商圈竞品变多时，先别跟着打价格战。今天先把门口三句话和平台首屏统一：招牌是什么、两个人多少钱、多久能吃完；用清楚的引流理由把路过客拉进店。"
         if "先改哪个入口" in text or ("路过" in text and "进店" in text):
             return "客流画像已经说明路过多但进店少，所以今天先改门口和平台入口，不先改厨房。门口让顾客三秒看懂招牌和双人价格；平台首图同步同一套信息；进店后再看核销和点单承接。"
         if "美团" in text or "大众点评" in text:
             return "美团/大众点评的问题先看“有人看但为什么不核销”。今天先改首图、套餐说明和到店核销话术；不要先加投流，因为曝光已经有了，当前漏点更像页面没有把顾客说服进店。"
         if "抖音" in text or "团购" in text:
             return "抖音团购要特别盯毛利。短视频能带新客，但客单容易低；今天只上能解释招牌、能加购小食、核销后不亏毛利的团购，不要用低价券把晚高峰座位卖便宜。"
-        if "同商圈" in text or "竞品" in text:
-            return "同商圈竞品变多时，先别跟着打价格战。今天先把门口三句话和平台首屏统一：招牌是什么、两个人多少钱、多久能吃完；用清楚的引流理由把路过客拉进店。"
         if "客流画像" in text or "路过" in text or "进店" in text:
             return "客流画像要落到一个问题：路过的人为什么没进来。今天先看入口和门口承接，不是先看店内服务；等进店人数上来后，再判断服务、出餐和复购。"
 
@@ -929,6 +929,48 @@ def _owner_message_specific_guidance(owner_page: dict[str, Any], scenario: str, 
         return f"连锁对比不要只看总收入排名。今天要找可复制动作：这家店可以先对标 {copy_from or '日均表现更好的同城门店'} 的入口套餐和服务员推荐话术，明天只看工作日午市、双人套餐占比、客单价有没有缩小差距。"
 
     return ""
+
+
+def _owner_message_specific_reason(owner_page: dict[str, Any], scenario: str, message: str, fallback: str) -> str:
+    if scenario != "traffic_conversion":
+        return fallback
+    text = message or ""
+    params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
+    traffic = owner_page.get("trafficPersona") if isinstance(owner_page.get("trafficPersona"), dict) else {}
+    platform = owner_page.get("platformChannelSnapshot") if isinstance(owner_page.get("platformChannelSnapshot"), dict) else {}
+    passersby = _owner_metric(traffic.get("storefrontPassersby")) or "5600"
+    capture = _owner_rate_people(traffic.get("captureRate")) or "12"
+    peer_capture = _owner_rate_people(traffic.get("peerCaptureRate")) or "24"
+    segment = _plain_text(traffic.get("topSegment")) or "周边办公午餐客"
+    need = _plain_text(traffic.get("topNeed")) or "45 分钟内吃完、价格清楚"
+    weak_platforms = platform.get("weakConversionPlatforms") if isinstance(platform.get("weakConversionPlatforms"), list) else []
+    weak_text = "、".join(str(item) for item in weak_platforms[:2]) or "抖音团购"
+    if "商圈客流画像" in text or ("客流画像" in text and "影响" in text):
+        return (
+            f"画像先告诉老板今天该接谁：门口约 {passersby} 人经过，主力是{segment}，他们最在意{need}。"
+            f"所以不是先讨论菜品好不好，而是午市能不能让这类人快速看懂、快速进店、快速吃完。"
+        )
+    if "同商圈" in text or "竞品" in text:
+        return (
+            "同商圈竞品变多时，真正危险的是顾客在门口三秒内看不出为什么选你。"
+            "这时先做差异化引流，不先大改产品：把招牌、价格和用餐效率说清楚，避免被竞品低价牵着走。"
+        )
+    if "先改哪个入口" in text or ("路过" in text and "进店" in text):
+        return (
+            f"问题卡在门口漏斗：100 个路过的人里大概只有 {capture} 个进店，同层类似店能到 {peer_capture} 个。"
+            "这说明今天先改物理入口和第一眼信息，不先改菜单结构。"
+        )
+    if "美团" in text or "大众点评" in text:
+        return (
+            f"美团/大众点评已经有曝光，漏点在核销前：顾客看到页面后没有形成到店理由。"
+            f"{weak_text} 的下单弱也提示页面说明、券包门槛和到店话术没有接上。"
+        )
+    if "抖音" in text or "团购" in text:
+        return (
+            "抖音能带新客，但天然容易低客单。老板要看的不是播放量，而是券后客单、加购小食和扣完平台成本后的毛利。"
+            "如果晚高峰座位被低毛利券占掉，营收看着热闹，利润反而会薄。"
+        )
+    return fallback
 
 
 def _owner_message_specific_actions(
@@ -982,9 +1024,41 @@ def _owner_message_specific_actions(
             ]
         if "不想打折" in text or "不要打折" in text or "不打折" in text:
             return [
-                "今天不做满减和全店折扣，改成“招牌鱼+高毛利小食”的双人理由，让顾客觉得省心而不是便宜。",
+                "今天的动作不是满减和全店折扣，而是改成“招牌鱼+高毛利小食”的双人理由，让顾客觉得省心而不是便宜。",
                 "门口、点评、美团三处统一一句话：两个人吃什么、多少钱、多久吃完；不要每个平台讲不同卖点。",
                 "晚市结束只看客单价有没有抬、套餐毛利有没有守住；如果只靠低价带单，就立刻停。",
+            ]
+
+    if scenario == "traffic_conversion":
+        if "商圈客流画像" in text or ("客流画像" in text and "影响" in text):
+            return [
+                "先按画像分三段接客：午市办公客讲 45 分钟吃完，晚市家庭客讲双人/多人套餐，活动客讲到店核销简单。",
+                "前厅今天记录每段客人问得最多的一句话，晚上把门口台卡和平台首图一起改掉。",
+                "备货按画像走：午市保快出餐主菜，晚市保招牌鱼和小食，不按全菜单平均多备。",
+            ]
+        if "同商圈" in text or "竞品" in text:
+            return [
+                "今天先改引流理由，不先改产品线：门口写清“活鱼现做、两人价、快吃完”，和竞品低价酸菜鱼拉开差异。",
+                "店长拍一张竞品门口和团购页，对照自己的首图、价格和等位话术，只改顾客第一眼能看到的三处。",
+                "招牌鱼不降价，用小食或饮品做组合；避免被同商圈竞品拖进价格战。",
+            ]
+        if "先改哪个入口" in text or ("路过" in text and "进店" in text):
+            return [
+                "先改门口入口：海报只留招牌鱼、双人价格、预计用餐时间，其他信息先撤掉。",
+                "门迎站位提前到外摆线，看到两人客先报双人套餐和预计等位，不等顾客自己看完再问。",
+                "平台首图只同步门口同一句话，抖音团购先保留但不加低价券；今天不先动菜单和厨房，先把路过客推进店。",
+            ]
+        if "美团" in text or "大众点评" in text:
+            return [
+                "先改美团/点评首图：招牌鱼实图、双人价、到店可核销三件事放第一屏。",
+                "套餐页删掉复杂说明，只保留适合几人、含哪些菜、预计上菜时间；券包门槛不要让顾客算半天。",
+                "前台核销话术固定一句：先确认券，再推荐招牌加小食；今天看曝光到核销的转化，不加投流。",
+            ]
+        if "抖音" in text or "团购" in text:
+            return [
+                "抖音今天不上低价引流券，只上能带加购的小套餐：招牌鱼做入口，小食和饮品做毛利补充。",
+                "核销时前台必须二次推荐高毛利小食；如果顾客只用低价券不加购，这个券明天就降权。",
+                "晚高峰限制低毛利团购核销量，别让便宜券占掉正价客座位。",
             ]
 
     if scenario == "inventory_reorder":
@@ -1024,7 +1098,7 @@ def _owner_message_specific_actions(
     if scenario == "seating_mix":
         if "排队" in text or "空桌" in text or "前台引导" in text:
             return [
-                "前台每 15 分钟报一次：门口等位几组、空桌几张、空的是几人桌；先确认是不是有桌没人坐。",
+                "前厅每 15 分钟报一次：门口等位几组、空桌几张、空的是几人桌；先确认是不是有桌没人坐。",
                 "两人客优先引导到可拼可拆位，四人客再合桌；如果四人桌被两人客占死，店长当场调整。",
                 "今天先改引导规则，不先加员工；如果引导改了还排队，再判断是不是厨房出餐慢。",
             ]
@@ -1081,6 +1155,17 @@ def _owner_message_specific_watch_numbers(owner_page: dict[str, Any], scenario: 
             return "明天看这款套餐的售价接受度、食材成本、毛利额。毛利额能留下来，才说明这套计算有用。"
         if "不想打折" in text or "不要打折" in text or "不打折" in text:
             return "明天看客单价、套餐占比、折扣让利金额。客单涨且让利没涨，才说明不是靠打折拉起来。"
+    if scenario == "traffic_conversion":
+        if "商圈客流画像" in text or ("客流画像" in text and "影响" in text):
+            return "明天只看三个数：分时段进店人数、主力客群点单率、画像对应套餐销量。画像不是报告，能带来分时段动作才有用。"
+        if "同商圈" in text or "竞品" in text:
+            return "明天只看三个数：门口咨询数、竞品价格对比记录、本店招牌套餐销量。咨询和招牌销量涨，说明没有被同商圈竞品低价带偏。"
+        if "先改哪个入口" in text or ("路过" in text and "进店" in text):
+            return "明天只看三个数：门口路过人数、被门迎拦下咨询人数、实际进店人数。只要咨询和进店涨，说明入口先改对了。"
+        if "美团" in text or "大众点评" in text:
+            return "明天只看三个数：美团/点评曝光、套餐页点击、到店核销。曝光不变但核销涨，说明页面和前台话术有效。"
+        if "抖音" in text or "团购" in text:
+            return "明天只看三个数：抖音券核销量、券后客单价、加购小食毛利。核销涨但客单和毛利掉，就不能继续放量。"
     if scenario == "inventory_reorder":
         if any(keyword in text for keyword in ("不要多备", "别多备", "少备", "报损")):
             return "明天只看三个数：低销量菜剩货金额、临期原料报损、招牌菜缺货次数。报损降了但招牌不断货，才是少备成功。"
@@ -1817,6 +1902,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     plain_reason = _owner_plain_reason(owner_page, scenario, focus_reason or diagnosis)
     plain_actions = _owner_plain_actions(owner_page, scenario, first_action)
     specific_guidance = _owner_message_specific_guidance(owner_page, scenario, message)
+    plain_reason = _owner_message_specific_reason(owner_page, scenario, message, plain_reason)
     plain_actions = _owner_message_specific_actions(owner_page, scenario, message, plain_actions)
     do_not_do = _owner_do_not_do(owner_page, scenario)
     watch_numbers = _owner_watch_numbers(owner_page, scenario)
