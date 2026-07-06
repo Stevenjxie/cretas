@@ -1,5 +1,6 @@
 package com.cretas.aims.service.finance;
 
+import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.report.CashFlowDTO;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Account;
@@ -56,6 +57,12 @@ public class CashFlowService {
 
     /** 标准现金/银行存款/其他货币资金科目 code (per 中国 GAAP). */
     private static final List<String> CASH_CODES = List.of("1001", "1002", "1012");
+
+    /**
+     * 资产负债表口径共用累计起点 (1970-01-01 Unix epoch) — 与 {@link BalanceSheetService}
+     * (及 {@code VoucherExportServiceImpl}) 保持一致, 用于把现金科目累计余额算到"远古".
+     */
+    private static final LocalDate EPOCH_START = LocalDate.of(1970, 1, 1);
 
     public CashFlowDTO generate(String factoryId,
                                 Integer startYear, Integer startMonth,
@@ -198,8 +205,12 @@ public class CashFlowService {
         BigDecimal netIncrease = operatingNet.add(investingNet).add(financingNet)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // 期初/期末现金余额 — 简化: 不计算 (需 BalanceSheet 跨期, 留 TODO)
-        BigDecimal beginningCash = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        // 期初现金余额 = 现金科目 (CASH_CODES) 在 [EPOCH_START, startDate-1] 的累计余额
+        // (debit - credit), 复用 BalanceSheetService 同款聚合方法
+        // (voucherEntryRepo.aggregateBySubjectExcludingDraft) 保证与资产负债表现金科目余额口径
+        // 完全一致 (排 VOID/DRAFT, 保留 REVERSED — 与本方法上面的 voucher 过滤条件同一原则).
+        // 历史 bug: 曾硬编码 0, 导致任何不从数据起点开始的区间现金流量表期末余额低报.
+        BigDecimal beginningCash = computeCashBalance(factoryId, startDate.minusDays(1));
         BigDecimal endingCash = beginningCash.add(netIncrease).setScale(2, RoundingMode.HALF_UP);
 
         // F006 财务审计 Bug 6 follow-up (2026-07-04): 待过账 (DRAFT) 凭证数 — 现金流量表已切
@@ -384,5 +395,30 @@ public class CashFlowService {
 
     private BigDecimal nullsafe(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
+    }
+
+    /**
+     * 现金科目 ({@link #CASH_CODES}) 在 [{@link #EPOCH_START}, asOfDate] 的累计余额
+     * (debit - credit), 复用 {@code voucherEntryRepo.aggregateBySubjectExcludingDraft} — 与
+     * {@link BalanceSheetService#generate} 计算资产科目余额 (debit - credit) 完全同款聚合方法
+     * (排 VOID/DRAFT, 保留 REVERSED, 见其 javadoc), 确保期初现金余额跟资产负债表现金科目余额
+     * 口径一致, 也与本类现金流量表活动聚合的 voucher 过滤条件 (line ~99 排 VOID/DRAFT 保留
+     * REVERSED) 同一原则.
+     *
+     * @param asOfDate 累计截止日 (含); 若早于 EPOCH_START (理论上不会发生) 返回 0
+     */
+    private BigDecimal computeCashBalance(String factoryId, LocalDate asOfDate) {
+        if (asOfDate.isBefore(EPOCH_START)) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        List<SubjectAggregateRow> aggregates =
+                voucherEntryRepo.aggregateBySubjectExcludingDraft(factoryId, EPOCH_START, asOfDate);
+        BigDecimal balance = BigDecimal.ZERO;
+        for (SubjectAggregateRow row : aggregates) {
+            if (row.getSubjectCode() != null && CASH_CODES.contains(row.getSubjectCode())) {
+                balance = balance.add(nullsafe(row.getTotalDebit())).subtract(nullsafe(row.getTotalCredit()));
+            }
+        }
+        return balance.setScale(2, RoundingMode.HALF_UP);
     }
 }
