@@ -419,12 +419,12 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         return "seating_mix"
     if any(keyword in text for keyword in (
         "商场今天有活动", "商场活动", "商圈活动", "周边活动", "天气", "下雨", "雨天",
-        "天气不好", "高温", "天气热", "节日", "外部活动", "亲子节", "会员日",
+        "天气不好", "高温", "天气热", "节日", "外部活动", "亲子节", "亲子活动", "会员日",
     )):
         return "external_event_response"
-    if any(keyword in text for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "采购价格", "盈利")):
-        return "cost_margin"
-    if "套餐" not in text and any(keyword in text for keyword in ("备菜", "备货", "仓管今天", "具体补什么", "补什么", "补货", "库存", "原料", "食材")):
+    if "套餐" in text and any(keyword in text for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备", "外卖", "平台")):
+        return "package"
+    if "套餐" not in text and any(keyword in text for keyword in ("备菜", "备货", "仓管今天", "具体补什么", "补什么", "补货", "库存")):
         return "inventory_reorder"
     if any(keyword in text for keyword in (
         "客流画像", "进店转化", "门口客流", "路过客流", "转化率", "曝光", "核销",
@@ -433,8 +433,8 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         "美团", "大众点评", "抖音", "团购", "竞品", "同商圈", "引流",
     )):
         return "traffic_conversion"
-    if "套餐" in text and any(keyword in text for keyword in ("推", "客单", "毛利", "成本", "售价", "组合", "配", "提升", "提高", "食材", "少备", "多备", "外卖")):
-        return "package"
+    if any(keyword in text for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "采购价格", "盈利")):
+        return "cost_margin"
     if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "拉营收", "拉高营收", "提高营收", "提高客单", "提升客单", "客单价")):
         return "package"
     if any(keyword in text for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢", "退菜", "重做", "口味", "太咸")) and not any(keyword in text for keyword in ("备菜", "备货", "补货", "库存")):
@@ -653,6 +653,7 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
             parts.append(f"同一楼层类似店大概能做到 100 个里进 {peer_capture} 个，所以我们差的不是客流，是入口吸引力。")
         if mall_lift:
             parts.append(f"商场人流比上周多约 {mall_lift}%，但本店订单没有跟着涨。")
+            parts.append("如果商场活动继续带来人流，重点也不是再投广告，而是把活动客流承接到门口和平台入口。")
         elif visits:
             parts.append(f"估算真正进店的人大约 {visits} 人，门口还有不少可以争取的人。")
         if order_gap and order_gap != "0.0":
@@ -661,7 +662,7 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
             parts.append(f"路过的人主要是{segment}，他们最在意的是{need or '价格清楚、吃得快、招牌明确'}。")
         if weak_text:
             parts.append(f"{weak_text} 有人看但下单弱，说明页面、套餐说明或到店核销没有讲清楚。")
-        parts.append("同商圈竞品已经在抢这波路过客，今天要把门口引流话术和线上入口一起改，不要只等自然客流。")
+        parts.append("同商圈竞品已经在抢这波路过客，今天要把门口引流话术和线上入口承接一起改，不要只等自然客流。")
         return "".join(parts)
 
     if scenario == "store_compare":
@@ -698,7 +699,7 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
         if food_cost is not None:
             parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross or 51}%，比健康状态更紧。")
         if losses:
-            parts.append(f"盘点先指向 {losses} 这些损耗点。")
+            parts.append(f"月盘点先指向 {losses} 这些损耗点。")
         if variance:
             parts.append(f"BOM 和实际用量差异主要在 {variance}。")
         if negative_dishes or negative_themes:
@@ -798,9 +799,9 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
         ]
     if scenario == "cost_margin":
         return [
-            "今天先查三张表：活鱼采购价、招牌鱼 BOM 理论用量、昨日盘点损耗；先找毛利漏点。",
+            "今天先查三张表：活鱼采购价、招牌鱼 BOM 理论用量、昨日月盘点损耗；先找毛利漏点，不要多备到晚上报损。",
             "如果活鱼实际用量比 BOM 高，先称重抽查和切配标准，不要只靠涨价补利润。",
-            "高毛利小食可以带低销量菜，但必须算套餐售价、食材成本和毛利，毛利守不住就不推。",
+            "高毛利小食可以带低销量菜，但必须算套餐售价、食材成本和毛利；这是今天的主推动作，毛利守不住就不推。",
         ]
     if scenario == "store_compare":
         compare = pos.get("storeComparison") if isinstance(pos.get("storeComparison"), dict) else {}
@@ -823,7 +824,7 @@ def _owner_plain_actions(owner_page: dict[str, Any], scenario: str, first_action
             margin = _owner_metric(candidate.get("grossMarginPct"), 1)
             margin_text = f"，毛利率约 {margin}%" if margin else ""
             return [
-                f"今天先把“{name}”做成双人小套餐：售价约 {price or '270元'}，食材成本约 {cost or '100元'}，一份大概能留下 {profit or '170元'} 毛利{margin_text}。",
+                f"今天的主推动作是把“{name}”做成双人小套餐：售价约 {price or '270元'}，食材成本约 {cost or '100元'}，一份大概能留下 {profit or '170元'} 毛利{margin_text}。",
                 "只在工作日午市/低峰、外卖入口和美团/大众点评入口测 7 天，别一上来全渠道铺开。",
                 "门口物料、外卖页和团购页只写三句话：招牌是什么、两个人多少钱、适合多久吃完。服务员也按这三句话推荐。",
             ]
