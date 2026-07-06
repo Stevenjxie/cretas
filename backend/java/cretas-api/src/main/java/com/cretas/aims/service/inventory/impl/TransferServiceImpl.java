@@ -94,6 +94,33 @@ public class TransferServiceImpl implements TransferService {
     @Autowired(required = false)
     private MaterialConsumptionRepository materialConsumptionRepository;
 
+    /**
+     * 🔒 库存完整性修复 (2026-07-06): 调拨签收超收容忍率 (默认 2%)。
+     *
+     * <p><b>调拨 vs 采购超收语义完全不同</b> — 别照抄 {@link PurchaseServiceImpl#overReceiveRate}
+     * 的 30%：采购超收是供应商在下单量基础上主动多发货的业务惯例（客户 audio 确认，超限要求
+     * 采购另下订单兜底）；调拨是同企业内部仓库间搬运物理上的同一批货，调出方发运量就是物理
+     * 上限——目标仓不可能凭空收到比发运更多的实物。这里的小额上限纯粹是容忍两端过磅（装车/
+     * 卸车分别称重）的仪器误差，不是给"多收"业务合法性开口子，因此取一个很小的值 (2%)。
+     *
+     * <p><b>Bug 复现 (2026-07-06)</b>: {@code receiveTransfer} 对 {@code itemActualQuantities}
+     * 逐行填入 {@code receivedQuantity} 时无任何上限校验；{@code confirmTransfer} →
+     * {@code createTargetInventory} 直接按 {@code receivedQuantity} 建目标批次 —— 传入远大于
+     * 发运量的值（如发 5kg 收 500kg）会在目标仓凭空造出库存差额，源仓库存不受影响（扣减走的是
+     * {@code item.getQuantity()} 发运量，不是 receivedQuantity）。{@link TransferDiffServiceImpl}
+     * 同时只检测"少收"（received &lt; shipped）生成差异单，"多收"完全没有对应检测/拦截，静默通过。
+     *
+     * <p>本修复：签收时逐行校验 receivedQuantity ≤ shipped × (1 + tolerance)，超出直接 409
+     * 拒绝签收（fool-proof-design Rule 1: 预先显示边界，不事后报错），不建立任何超量状态。
+     * Ops 可调：application.properties 设 {@code cretas.transfer.receive-over-tolerance-rate=0.05}
+     * 等临时放宽，无需 rebuild。
+     *
+     * <p>内联默认值 (非仅 @Value 默认) 是有意为之：现有 4 个 {@code TransferReceiveActualQuantityTest}
+     * 单测走 7 参数构造器 (无 Spring 容器)，若无内联默认会是 null，校验时 NPE。
+     */
+    @org.springframework.beans.factory.annotation.Value("${cretas.transfer.receive-over-tolerance-rate:0.02}")
+    private BigDecimal transferReceiveOverToleranceRate = new BigDecimal("0.02");
+
     public TransferServiceImpl(InternalTransferRepository transferRepository,
                                InternalTransferItemRepository transferItemRepository,
                                MaterialBatchRepository materialBatchRepository,
@@ -400,6 +427,20 @@ public class TransferServiceImpl implements TransferService {
         // 只有调入方可以签收
         assertTargetFactory(factoryId, transfer, "签收");
         assertStatus(transfer, TransferStatus.SHIPPED, "签收");
+
+        // 🔒 库存完整性修复 (2026-07-06): 在任何 DB mutation 之前, 逐行校验实收量不超过
+        // 发运量的容忍上限 (见 transferReceiveOverToleranceRate 字段注释)。防止
+        // confirmTransfer 阶段按凭空放大的 receivedQuantity 建目标批次造出幽灵库存。
+        // 只校验 map 中显式传入的行 — 回退到 shipped qty 的行 actual==shipped, 恒不超限。
+        if (itemActualQuantities != null) {
+            for (InternalTransferItem item : transfer.getItems()) {
+                BigDecimal actual = item.getId() != null ? itemActualQuantities.get(item.getId()) : null;
+                if (actual != null) {
+                    validateReceivedNotExceedingShipped(item, actual);
+                }
+            }
+        }
+
         transfer.setStatus(TransferStatus.RECEIVED);
         transfer.setReceivedAt(LocalDateTime.now());
         // BUG-3 修复: 每个 item 写入 receivedQuantity = map.getOrDefault(id, shippedQty)。
@@ -487,6 +528,37 @@ public class TransferServiceImpl implements TransferService {
             throw new BusinessException(403, action + "操作只允许调入方执行 (当前: " + factoryId
                     + ", 调入方: " + transfer.getTargetFactoryId() + ")")
                     .withHint("请使用调入方账号登录");
+        }
+    }
+
+    /**
+     * 🔒 库存完整性修复 (2026-07-06): 调拨签收超收上限校验核心 (单行)。
+     *
+     * <p>超过 {@code shipped × (1 + transferReceiveOverToleranceRate)} 抛 409, 不做任何 DB 写。
+     * 调用方 (receiveTransfer 早返) 负责在任何 DB mutation 之前调用, 保证事务不被 doom
+     * (同 {@link PurchaseServiceImpl#checkOverReceiveCap} fail-fast 范式)。
+     *
+     * @param item   调拨行 (用于取品名/发运量/单位 — message 需要 fool-proof-design Rule 2 上下文)
+     * @param actual 本次实收量 (调用方保证非 null)
+     */
+    private void validateReceivedNotExceedingShipped(InternalTransferItem item, BigDecimal actual) {
+        BigDecimal shipped = item.getQuantity();
+        if (shipped == null) return; // 防御: 理论上 quantity 是 @Column(nullable=false)
+        BigDecimal tolerance = transferReceiveOverToleranceRate != null
+                ? transferReceiveOverToleranceRate : BigDecimal.ZERO;
+        BigDecimal maxAllowed = shipped.multiply(BigDecimal.ONE.add(tolerance));
+        if (actual.compareTo(maxAllowed) > 0) {
+            String name = item.getItemName() != null ? item.getItemName()
+                    : (item.getMaterialTypeId() != null ? item.getMaterialTypeId() : item.getProductTypeId());
+            String unit = item.getUnit() != null ? " " + item.getUnit() : "";
+            throw new BusinessException(409, String.format(
+                    "实收量超出发运量上限: 「%s」发运 %s%s, 本次实收 %s%s, 最大可收 %s%s (含 %s%% 称重误差容忍)",
+                    name,
+                    shipped.stripTrailingZeros().toPlainString(), unit,
+                    actual.stripTrailingZeros().toPlainString(), unit,
+                    maxAllowed.stripTrailingZeros().toPlainString(), unit,
+                    tolerance.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()))
+                    .withHint("调拨实收量不能明显超过发运量, 请核实实收数量或联系调出方核对发运记录");
         }
     }
 
