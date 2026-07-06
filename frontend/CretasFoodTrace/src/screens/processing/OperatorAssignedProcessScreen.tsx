@@ -11,6 +11,7 @@ import { useAuthStore } from '../../store/authStore';
 import { theme } from '../../theme';
 import type { ShortageAlertDetailParams } from './ShortageAlertDetailScreen';
 import { isTaskReportComplete } from '../../utils/operatorAssignedProcess';
+import { groupShortageRequests } from '../../utils/shortageRequestGrouping';
 
 type OperatorAssignedProcessStackParamList = {
   OperatorAssignedProcess: undefined;
@@ -218,20 +219,26 @@ export default function OperatorAssignedProcessScreen() {
     let cancelled = false;
     const fetchAll = async () => {
       const updates: Record<number, number> = {};
+      const factoryId = getFactoryId() ?? undefined;
+      const groups = groupShortageRequests(
+        entries.map((entry) => ({
+          batchId: entry.batchId,
+          productTypeId: entry.productTypeId,
+          plannedQuantity: entry.currentReportableTask?.plannedQuantity,
+        })),
+      );
       await Promise.all(
-        entries.map(async (entry) => {
-          const ptid = entry.productTypeId;
-          if (!ptid) return;
+        groups.map(async (group) => {
           try {
-            const qty =
-              (entry.currentReportableTask?.plannedQuantity) ?? 1;
             const { result } = await shortageAlertApiClient.fetchBomShortage(
-              ptid,
-              qty,
-              getFactoryId() ?? undefined,
+              group.productTypeId,
+              group.quantity,
+              factoryId,
             );
             if (!cancelled) {
-              updates[entry.batchId] = result.shortfallLeafCount;
+              for (const batchId of group.batchIds) {
+                updates[batchId] = result.shortfallLeafCount;
+              }
             }
           } catch {
             // 缺料查询失败时不影响主界面；badge 静默不显示
