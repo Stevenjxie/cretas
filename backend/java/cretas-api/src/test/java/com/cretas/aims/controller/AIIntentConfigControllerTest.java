@@ -112,6 +112,12 @@ class AIIntentConfigControllerTest {
                 .build();
         shortcut.invoke(controller, "DEMO_REST", sales);
         assertEquals("RESTAURANT_OPS_SALES_SUMMARY", sales.getIntentCode());
+
+        IntentExecuteRequest review = IntentExecuteRequest.builder()
+                .userInput("\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837")
+                .build();
+        shortcut.invoke(controller, "DEMO_REST", review);
+        assertEquals("RESTAURANT_REVIEW_SUMMARY", review.getIntentCode());
     }
 
     @Test

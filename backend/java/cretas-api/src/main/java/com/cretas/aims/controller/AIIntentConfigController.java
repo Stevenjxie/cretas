@@ -281,17 +281,23 @@ public class AIIntentConfigController {
             return;
         }
         String q = input.replaceAll("\\s+", "");
-        boolean reportMetric = containsAny(q,
+        boolean salesMetric = containsAny(q,
                 "\u8425\u6536",
                 "\u8425\u4e1a\u989d",
                 "\u9500\u552e\u989d",
                 "\u9500\u552e",
                 "\u5ba2\u5355\u4ef7",
-                "\u8ba2\u5355",
+                "\u8ba2\u5355");
+        boolean reviewMetric = containsAny(q,
                 "\u8bc4\u4ef7",
                 "\u8bc4\u8bba",
                 "\u8bc4\u5206",
+                "\u53e3\u7891",
+                "\u5dee\u8bc4",
+                "\u6295\u8bc9",
+                "\u987e\u5ba2\u6ee1\u610f",
                 "\u5927\u4f17\u70b9\u8bc4");
+        boolean reportMetric = salesMetric || reviewMetric;
         boolean reportAction = containsAny(q,
                 "\u67e5",
                 "\u67e5\u8be2",
@@ -314,6 +320,18 @@ public class AIIntentConfigController {
                 "\u589e\u957f",
                 "\u4e0b\u964d",
                 "\u6708\u5ea6\u53d8\u5316");
+        if (reviewMetric && !salesMetric && reportAction) {
+            if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
+                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
+            } else if (trendAction) {
+                request.setIntentCode("RESTAURANT_REVIEW_TREND");
+            } else {
+                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
+            }
+            log.info("[RestaurantDemoIntentShortcut] route review report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+            return;
+        }
         if (reportMetric && trendAction) {
             request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
             log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
