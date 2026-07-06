@@ -61,8 +61,31 @@ public class TransferDiffServiceImpl implements TransferDiffService {
             // null-safe: receivedQuantity 未填时视为与发货量一致（无差异）
             if (shipped == null || received == null) continue;
 
-            // 无差异 — 跳过
-            if (received.compareTo(shipped) >= 0) continue;
+            int cmp = received.compareTo(shipped);
+
+            // 恰好相等 — 无差异
+            if (cmp == 0) continue;
+
+            if (cmp > 0) {
+                // 🔒 库存完整性修复 (2026-07-06): 多收方向。receiveTransfer 已在签收入口对
+                // receivedQuantity 做 shipped × (1 + tolerance) 硬上限校验
+                // (见 TransferServiceImpl#validateReceivedNotExceedingShipped)，理论上不可能
+                // 出现明显超出容忍范围的多收到达这里；能到这里的只会是容忍范围内的称重误差
+                // (默认 ≤2%)，或历史上未经该守卫写入的数据。
+                //
+                // 不生成 TransferDiffRecord: 现有 TransferDiffDecision
+                // (FOUND_BACK=找回货物 / WRITE_OFF_LOSS=核销损耗 / TRANSFER_DAMAGE=转报损)
+                // 三个决策全部是"少收"语义，对"多收"场景没有一个说得通（多收不需要"找回"，也没有
+                // "损耗"或"报损"）。引入专门的多收决策类型属于独立 feature 设计范畴（新决策枚举 +
+                // 前端交互 + 业务口径确认），不在本次幽灵库存 hotfix 的 scope 内。这里保留防御性
+                // 日志，让多收方向至少可审计、不被静默吞掉，而不是勉强塞进不匹配的决策工作流。
+                log.warn("[TDIFF] 调拨 {} item={} 实收({}) 大于发运({}) — 差值 {}{}，"
+                                + "未生成差异单(现有决策枚举语义仅适用少收方向，见 TransferDiffDecision)",
+                        transfer.getTransferNumber(), item.getItemName(), received, shipped,
+                        received.subtract(shipped).stripTrailingZeros().toPlainString(),
+                        item.getUnit() != null ? " " + item.getUnit() : "");
+                continue;
+            }
 
             BigDecimal diffQty = shipped.subtract(received); // > 0
 
