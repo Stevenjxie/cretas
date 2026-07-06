@@ -61,14 +61,14 @@ export default function QIFormScreen() {
       id: 'appearance',
       name: t('form.checkItems.appearance'),
       maxScore: 20,
-      options: [t('form.checkOptions.normalColor'), t('form.checkOptions.completeShape'), t('form.checkOptions.hasDefects')],
+      options: [t('form.checkOptions.normalColor'), t('form.checkOptions.completeShape')],
       color: '#4CAF50',
     },
     {
       id: 'smell',
       name: t('form.checkItems.smell'),
       maxScore: 20,
-      options: [t('form.checkOptions.normal'), t('form.checkOptions.slightOdor'), t('form.checkOptions.obviousOdor')],
+      options: [t('form.checkOptions.normal'), t('form.checkOptions.slightOdor')],
       color: '#2196F3',
     },
     {
@@ -89,7 +89,7 @@ export default function QIFormScreen() {
       id: 'packaging',
       name: t('form.checkItems.packaging'),
       maxScore: 20,
-      options: [t('form.checkOptions.packagingComplete'), t('form.checkOptions.labelClear'), t('form.checkOptions.hasDamage')],
+      options: [t('form.checkOptions.packagingComplete'), t('form.checkOptions.labelClear')],
       color: '#F44336',
     },
   ];
