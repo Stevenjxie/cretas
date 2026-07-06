@@ -587,6 +587,13 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
     ],
   },
   {
+    scenario: 'external_event_response',
+    terms: [
+      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
+      '\u8282\u65e5', '\u5929\u6c14', '\u4ea4\u901a', '\u5468\u8fb9', '\u5916\u90e8',
+    ],
+  },
+  {
     scenario: 'cost_margin',
     terms: [
       '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', '\u5e93\u5b58',
@@ -600,13 +607,6 @@ const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> 
       '\u53e3\u7891', '\u6295\u8bc9', '\u590d\u8d2d', '\u4f53\u9a8c',
     ],
   },
-  {
-    scenario: 'external_event_response',
-    terms: [
-      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u5546\u573a', '\u6d3b\u52a8',
-      '\u8282\u65e5', '\u5929\u6c14', '\u4ea4\u901a', '\u5468\u8fb9', '\u5916\u90e8',
-    ],
-  },
 ];
 
 const OWNER_ACTION_DECISION_TERMS = [
@@ -615,6 +615,7 @@ const OWNER_ACTION_DECISION_TERMS = [
   '\u600e\u4e48\u6539', '\u600e\u4e48\u5b89\u6392', '\u5982\u4f55\u63d0\u9ad8',
   '\u5982\u4f55\u4f18\u5316', '\u52a8\u4f5c', '\u843d\u5730', '\u5148\u505a', '\u5148\u6539',
   '\u5e2e\u6211\u7b97', '\u63a8\u8350', '\u4e3b\u63a8', '\u8981\u4e0d\u8981',
+  '\u5f71\u54cd', '\u4f1a\u5f71\u54cd', '\u6709\u4ec0\u4e48\u5f71\u54cd',
 ];
 
 function includesAny(text: string, terms: string[]): boolean {

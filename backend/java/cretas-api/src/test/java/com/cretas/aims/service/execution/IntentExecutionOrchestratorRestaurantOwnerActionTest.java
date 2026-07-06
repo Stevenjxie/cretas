@@ -81,6 +81,9 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u6839\u636e\u83dc\u54c1\u6bdb\u5229\u548c\u6210\u672c\uff0c\u5e2e\u6211\u7b97\u4e00\u4e2a\u9002\u5408\u4eca\u5929\u63a8\u7684\u5c0f\u5957\u9910"))
                 .isTrue();
+        assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
+                "\u4eca\u5929\u5546\u5708\u5ba2\u6d41\u753b\u50cf\u5bf9\u95e8\u5e97\u7ecf\u8425\u6709\u4ec0\u4e48\u5f71\u54cd\uff1f"))
+                .isTrue();
 
         assertThat(orchestrator.matchesOwnerActionKeywordHeuristic(
                 "\u67e5\u4e00\u4e0b\u8ba2\u5355\u660e\u7ec6"))
@@ -136,6 +139,11 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 "\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584",
                 Collections.emptyMap()))
                 .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "\u4eca\u5929\u5546\u5708\u5ba2\u6d41\u753b\u50cf\u5bf9\u95e8\u5e97\u7ecf\u8425\u6709\u4ec0\u4e48\u5f71\u54cd\uff1f",
+                Collections.emptyMap()))
+                .isTrue();
     }
 
     @Test

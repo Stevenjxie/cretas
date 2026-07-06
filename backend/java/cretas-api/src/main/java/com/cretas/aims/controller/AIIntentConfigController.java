@@ -312,6 +312,15 @@ public class AIIntentConfigController {
                 "\u6c47\u603b",
                 "\u7edf\u8ba1",
                 "\u5206\u6790");
+        boolean reviewAction = reportAction || containsAny(q,
+                "\u5e94\u8be5\u600e\u4e48",
+                "\u600e\u4e48\u6539\u5584",
+                "\u5982\u4f55\u6539\u5584",
+                "\u6539\u5584",
+                "\u6539\u8fdb",
+                "\u5904\u7406",
+                "\u89e3\u51b3",
+                "\u5efa\u8bae");
         boolean trendAction = containsAny(q,
                 "\u540c\u6bd4",
                 "\u73af\u6bd4",
@@ -320,7 +329,7 @@ public class AIIntentConfigController {
                 "\u589e\u957f",
                 "\u4e0b\u964d",
                 "\u6708\u5ea6\u53d8\u5316");
-        if (reviewMetric && !salesMetric && reportAction) {
+        if (reviewMetric && !salesMetric && reviewAction) {
             if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
                 request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
             } else if (trendAction) {

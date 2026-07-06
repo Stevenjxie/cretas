@@ -1741,6 +1741,9 @@ public class IntentExecutionOrchestrator {
         if (!isRestaurantOwnerActionFactory(factoryId, factoryDomain)) {
             return false;
         }
+        if (isPureRestaurantReviewRemedyQuestion(userInput.toLowerCase(Locale.ROOT))) {
+            return false;
+        }
         if (hasOwnerActionContinuationContext(context)) {
             return true;
         }
@@ -1784,6 +1787,7 @@ public class IntentExecutionOrchestrator {
                 "\u5904\u7406", "\u89e3\u51b3", "\u5efa\u8bae", "\u76f4\u63a5\u5efa\u8bae",
                 "\u52a8\u4f5c", "\u505a\u4ec0\u4e48", "\u76ef\u4ec0\u4e48", "\u8c03\u6574",
                 "\u63a8\u8350", "\u4e3b\u63a8", "\u5e2e\u6211\u7b97", "\u7b97\u4e00\u4e2a",
+                "\u5f71\u54cd", "\u4f1a\u5f71\u54cd", "\u6709\u4ec0\u4e48\u5f71\u54cd",
                 "\u6709\u4ec0\u4e48\u529e\u6cd5", "\u5e94\u8be5\u590d\u5236",
                 "\u590d\u5236\u54ea\u5bb6\u5e97", "\u590d\u5236", "\u5b66\u4e60",
                 "\u95ee\u9898\u5728", "\u6267\u884c", "\u503c\u5f97\u4e3b\u63a8",
