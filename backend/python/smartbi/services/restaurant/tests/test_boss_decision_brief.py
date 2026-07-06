@@ -991,6 +991,23 @@ def test_owner_action_chat_explicit_keywords_override_previous_follow_up_topic()
     assert "主推单品" in next_turn["data"]["answer"]
 
 
+def test_owner_action_chat_corrects_decline_premise_when_demo_data_is_up() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_PREMISE_CONFLICT",
+            message="这个星期营收同比上周下滑，不想打折，今天怎么提高客单？",
+        )
+    )
+
+    answer = response["data"]["answer"]
+    assert response["data"]["scenario"] == "package"
+    assert "我先纠正一个前提" in answer
+    assert "并不是下滑" in answer
+    assert "指定门店下滑" in answer
+    assert "美团/点评核销下滑" in answer
+    assert "套餐" in answer
+
+
 def test_owner_action_chat_matrix_questions_route_to_plain_boss_decisions() -> None:
     cases = [
         (

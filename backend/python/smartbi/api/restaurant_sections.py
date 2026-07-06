@@ -539,6 +539,48 @@ def _owner_rate_people(rate: Any) -> str:
     return str(round(value * 100))
 
 
+def _owner_weekly_revenue_delta(owner_page: dict[str, Any]) -> float | None:
+    params = owner_page.get("demoParams") if isinstance(owner_page.get("demoParams"), dict) else {}
+    pos = params.get("pos_summary") if isinstance(params.get("pos_summary"), dict) else {}
+    weekly = pos.get("weeklyTrend") if isinstance(pos.get("weeklyTrend"), list) else []
+    if weekly:
+        last = weekly[-1] if isinstance(weekly[-1], dict) else {}
+        try:
+            return float(last.get("wowRevenuePct"))
+        except (TypeError, ValueError):
+            pass
+    ops = params.get("operations_metrics") if isinstance(params.get("operations_metrics"), dict) else {}
+    try:
+        return float(ops.get("revenueVsLastWeekPct"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _owner_premise_check(owner_page: dict[str, Any], message: str) -> str:
+    text = message or ""
+    says_decline = any(keyword in text for keyword in (
+        "下滑",
+        "下降",
+        "比上周低",
+        "同比上周低",
+        "环比上周低",
+        "营收低",
+        "营收掉",
+        "营收跌",
+        "变差",
+    ))
+    if not says_decline:
+        return ""
+    delta = _owner_weekly_revenue_delta(owner_page)
+    if delta is None or delta <= 0:
+        return ""
+    return (
+        f"我先纠正一个前提：demo 里的全店周环比并不是下滑，最近一周营收比上周高约 {round(delta, 1)}%。"
+        "如果你说的是某一家门店、某个平台，或者某一天/某个时段下滑，需要先把范围确认清楚。"
+        "下面我先按“全店实际数据”给今天动作；你也可以继续回复：1 全店实际数据，2 指定门店下滑，3 美团/点评核销下滑。"
+    )
+
+
 def _owner_role_action_plan(params: dict[str, Any], scenario: str) -> list[dict[str, Any]]:
     raw = params.get("role_action_plan") or params.get("roleActionPlan")
     if isinstance(raw, list):
@@ -1899,6 +1941,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
     problem = _plain_text(focus.get("primaryProblem") if isinstance(focus, dict) else None)
     focus_reason = _plain_text(focus.get("why") if isinstance(focus, dict) else None)
     first_action = _first_text(owner_page.get("doFirst"))
+    premise_check = _owner_premise_check(owner_page, message)
     plain_reason = _owner_plain_reason(owner_page, scenario, focus_reason or diagnosis)
     plain_actions = _owner_plain_actions(owner_page, scenario, first_action)
     specific_guidance = _owner_message_specific_guidance(owner_page, scenario, message)
@@ -1935,6 +1978,8 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
         f"一句话结论：{problem or headline or '今天先抓一个最影响营收的问题。'}",
         f"我按“{direction_label}”来判断，不是先让你打折或凭感觉改。",
     ]
+    if premise_check:
+        parts.insert(0, premise_check)
     if "厨房慢" in message and "服务慢" in message:
         parts.append(
             "先后顺序：先处理厨房慢，再处理服务慢。厨房慢会直接放大等位、催菜和差评；服务话术要同步补，但今天先让厨师长把招牌鱼出餐时长压住，前厅只负责提前告知时间和安抚。"
