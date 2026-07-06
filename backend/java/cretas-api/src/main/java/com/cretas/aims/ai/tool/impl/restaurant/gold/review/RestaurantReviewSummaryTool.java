@@ -31,7 +31,18 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
     protected Map<String, Object> queryGold(
             String factoryId, LocalDate start, LocalDate end, Map<String, Object> params)
             throws Exception {
-        return gold.fetchReviewSummary(factoryId);
+        Map<String, Object> summary = new LinkedHashMap<>(gold.fetchReviewSummary(factoryId));
+        try {
+            Map<String, Object> tags = gold.fetchReviewVipTags(factoryId, 5);
+            summary.put("vip_good_tags", tags.get("vip_good_tags"));
+            summary.put("vip_bad_tags", tags.get("vip_bad_tags"));
+            summary.put("normal_good_tags", tags.get("normal_good_tags"));
+            summary.put("normal_bad_tags", tags.get("normal_bad_tags"));
+        } catch (Exception e) {
+            log.warn("Fetch review high-frequency tags failed, keep summary only: factoryId={}, error={}",
+                    factoryId, e.getMessage());
+        }
+        return summary;
     }
 
     @Override
@@ -62,6 +73,18 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
         sb.append("\n· 好评(≥4.5星) ").append(high).append(" 条；差评(≤3星) ").append(low).append(" 条");
         sb.append("\n· VIP 顾客评价 ").append(vip).append(" 条");
 
+        List<Map<String, Object>> vipGood = listOfMaps(g.get("vip_good_tags"));
+        List<Map<String, Object>> vipBad = listOfMaps(g.get("vip_bad_tags"));
+        List<Map<String, Object>> normalGood = listOfMaps(g.get("normal_good_tags"));
+        List<Map<String, Object>> normalBad = listOfMaps(g.get("normal_bad_tags"));
+        if (!vipGood.isEmpty() || !normalGood.isEmpty() || !vipBad.isEmpty() || !normalBad.isEmpty()) {
+            sb.append("\n· 高频好评词：VIP ").append(joinTags(vipGood))
+                    .append("；非VIP ").append(joinTags(normalGood));
+            sb.append("\n· 高频差评词：VIP ").append(joinTags(vipBad))
+                    .append("；非VIP ").append(joinTags(normalBad));
+            sb.append("\n建议：好评词用于平台首图和门口卖点，差评词当天拆给店长/厨师长/前台整改，不要只看平均分。");
+        }
+
         List<Map<String, Object>> dims = listOfMaps(g.get("dimension_scores"));
         List<String> names = new ArrayList<>();
         List<Double> vals = new ArrayList<>();
@@ -81,6 +104,10 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
         result.put("VIP评价数", vip);
         result.put("门店数", stores);
         result.put("城市数", cities);
+        result.put("VIP好评标签", vipGood);
+        result.put("VIP差评标签", vipBad);
+        result.put("非VIP好评标签", normalGood);
+        result.put("非VIP差评标签", normalBad);
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
         if (!names.isEmpty()) {
@@ -101,6 +128,21 @@ public class RestaurantReviewSummaryTool extends AbstractReviewGoldTool {
                         "差评", "星级 <= 3 星的评价。"),
                 "横轴是各维度平均分(5分制)，柱越高该维度口碑越好；对比哪个维度是短板。");
         return result;
+    }
+
+    private static String joinTags(List<Map<String, Object>> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return "（暂无）";
+        }
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i < tags.size(); i++) {
+            if (i > 0) {
+                s.append("、");
+            }
+            Map<String, Object> tag = tags.get(i);
+            s.append(tag.get("tag")).append("(").append(intOf(tag.get("count"))).append(")");
+        }
+        return s.toString();
     }
 
     @Override

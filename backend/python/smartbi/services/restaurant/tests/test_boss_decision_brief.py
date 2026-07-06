@@ -1429,6 +1429,59 @@ def test_owner_action_chat_direct_special_answers_for_scope_role_and_script() ->
             assert term in answer
 
 
+def test_owner_action_chat_duplicate_risk_variants_get_direct_answers() -> None:
+    cases = [
+        (
+            "如果只允许改一个动作，今天改哪个？",
+            ("只改一个动作", "门口和平台第一句话", "明天看门口咨询数"),
+        ),
+        (
+            "明天怎么复盘这个动作有没有用？",
+            ("三张小表", "份数涨", "店长只需要回答"),
+        ),
+        (
+            "给我一句话结论，不要讲大段模型逻辑",
+            ("一句话：", "不要先全店打折", "明天只看三个数"),
+        ),
+        (
+            "今天哪些事情先不要做？",
+            ("别全店满减", "别继续加投流", "明天再决定"),
+        ),
+        (
+            "美团点评首图和门口海报要不要讲同一句话？",
+            ("同图同价同承诺", "美团/点评首图", "门口海报"),
+        ),
+        (
+            "大众点评有人收藏但不到店，老板先改什么？",
+            ("收藏后为什么今天就来", "到店可核销", "收藏到核销"),
+        ),
+        (
+            "商场活动只持续两个小时，后厨备货别浪费怎么做？",
+            ("两小时活动", "活动窗口备 80%", "低频复杂菜不加备"),
+        ),
+        (
+            "仓管厨师长前台的动作拆细一点，谁几点做什么？",
+            ("10:30 仓管", "15:30 厨师长", "17:30 店长"),
+        ),
+    ]
+
+    answers = []
+    for message, expected_terms in cases:
+        response = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=f"F_DUPLICATE_RISK_VARIANT_{len(message)}",
+                message=message,
+            )
+        )
+        answer = response["data"]["answer"]
+        answers.append(answer)
+        assert "一句话结论：工作日/低峰转化不足" not in answer
+        for term in expected_terms:
+            assert term in answer, f"{message}: missing {term} in {answer}"
+
+    assert len(set(answers)) == len(answers)
+
+
 def test_owner_action_chat_routes_inventory_reorder_and_seeds_role_plan() -> None:
     response = owner_action_chat(
         OwnerActionChatRequest(
