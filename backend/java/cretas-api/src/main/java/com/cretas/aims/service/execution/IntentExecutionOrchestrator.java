@@ -1758,6 +1758,9 @@ public class IntentExecutionOrchestrator {
             return false;
         }
         String input = userInput.toLowerCase(Locale.ROOT);
+        if (isPureRestaurantReviewRemedyQuestion(input)) {
+            return false;
+        }
         boolean hasTopic = containsAny(input,
                 "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406",
                 "\u684c\u578b", "\u684c\u5b50", "\u684c\u6570", "\u4e8c\u4eba\u684c", "\u4e24\u4eba\u684c",
@@ -1785,8 +1788,33 @@ public class IntentExecutionOrchestrator {
                 "\u590d\u5236\u54ea\u5bb6\u5e97", "\u590d\u5236", "\u5b66\u4e60",
                 "\u95ee\u9898\u5728", "\u6267\u884c", "\u503c\u5f97\u4e3b\u63a8",
                 "\u8981\u6392\u9664", "\u6392\u9664", "\u600e\u4e48\u5224\u65ad",
-                "\u62c9\u52a8");
+                "\u62c9\u52a8", "\u600e\u4e48\u57f9\u8bad", "\u57f9\u8bad");
         return hasTopic && hasDecision;
+    }
+
+    private boolean isPureRestaurantReviewRemedyQuestion(String input) {
+        boolean hasReviewSignal = containsAny(input,
+                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u6295\u8bc9",
+                "\u53e3\u7891", "\u4f4e\u661f", "\u5927\u4f17\u70b9\u8bc4");
+        if (!hasReviewSignal) {
+            return false;
+        }
+        boolean hasOpsSignal = containsAny(input,
+                "\u684c\u578b", "\u684c\u5b50", "\u684c\u6570", "\u4e8c\u4eba\u684c", "\u4e24\u4eba\u684c",
+                "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f", "\u7b49\u4f4d",
+                "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
+                "\u53a8\u623f", "\u51fa\u9910", "\u4e0a\u83dc", "\u670d\u52a1\u5458", "\u8bad\u7ec3", "\u57f9\u8bad",
+                "\u5907\u83dc", "\u5907\u8d27", "\u5e93\u5b58", "\u635f\u8017", "bom", "\u6bdb\u5229",
+                "\u6210\u672c", "\u7f8e\u56e2", "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
+                "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5957\u9910", "\u5c0f\u5957\u9910",
+                "\u83dc\u54c1", "\u8425\u6536", "\u6536\u5165", "\u5ba2\u5355",
+                "\u65e5\u5747", "\u5de5\u4f5c\u65e5", "\u540c\u5546\u5708", "\u8fde\u9501",
+                "\u95e8\u5e97", "\u6392\u540d", "\u4e3b\u63a8", "\u5355\u54c1", "\u52a0\u8d2d");
+        boolean asksRemedy = containsAny(input,
+                "\u600e\u4e48\u6539\u5584", "\u600e\u4e48\u6539", "\u5e94\u8be5\u600e\u4e48",
+                "\u600e\u4e48\u5904\u7406", "\u5982\u4f55\u6539\u5584", "\u89e3\u51b3",
+                "\u5efa\u8bae", "\u6539\u8fdb\u5efa\u8bae");
+        return asksRemedy && !hasOpsSignal;
     }
 
     boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
