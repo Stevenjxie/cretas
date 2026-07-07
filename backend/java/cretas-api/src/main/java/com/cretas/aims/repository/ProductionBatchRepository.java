@@ -47,6 +47,10 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
            "ORDER BY p.createdAt DESC")
     Page<ProductionBatch> findByFactoryId(@Param("factoryId") String factoryId, Pageable pageable);
 
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId " +
+           "ORDER BY p.createdAt DESC")
+    Page<ProductionBatch> findByFactoryIdIncludingClerkWip(@Param("factoryId") String factoryId, Pageable pageable);
+
     /**
      * 根据状态分页查找 (排除 CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径统一).
      * SP-D Fix 1b: 有状态过滤时同样不展示文员录入产生的中间 WIP 批次, 避免切换状态筛选时行为不一致.
@@ -54,6 +58,10 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.status = :status " +
            "AND p.batchType <> 'CLERK_WIP'")
     Page<ProductionBatch> findByFactoryIdAndStatus(@Param("factoryId") String factoryId,
+            @Param("status") ProductionBatchStatus status, Pageable pageable);
+
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.status = :status")
+    Page<ProductionBatch> findByFactoryIdAndStatusIncludingClerkWip(@Param("factoryId") String factoryId,
             @Param("status") ProductionBatchStatus status, Pageable pageable);
 
     /**
@@ -71,10 +79,23 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      */
     Page<ProductionBatch> findByFactoryIdAndSupervisorId(String factoryId, Long supervisorId, Pageable pageable);
 
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.supervisorId = :supervisorId")
+    Page<ProductionBatch> findByFactoryIdAndSupervisorIdIncludingClerkWip(
+            @Param("factoryId") String factoryId,
+            @Param("supervisorId") Long supervisorId,
+            Pageable pageable);
+
     /**
      * 根据工厂ID、主管ID和状态分页查找
      */
     Page<ProductionBatch> findByFactoryIdAndSupervisorIdAndStatus(String factoryId, Long supervisorId, ProductionBatchStatus status, Pageable pageable);
+
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.supervisorId = :supervisorId AND p.status = :status")
+    Page<ProductionBatch> findByFactoryIdAndSupervisorIdAndStatusIncludingClerkWip(
+            @Param("factoryId") String factoryId,
+            @Param("supervisorId") Long supervisorId,
+            @Param("status") ProductionBatchStatus status,
+            Pageable pageable);
 
     /**
      * 查询时间范围内的批次

@@ -69,6 +69,10 @@ public interface ProcessingService {
      */
     PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId, Boolean isTrial, PageRequest pageRequest);
 
+    PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
+                                             Boolean isTrial, Boolean includeClerkWip,
+                                             PageRequest pageRequest);
+
     /**
      * 班组批量报工
      */

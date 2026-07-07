@@ -382,6 +382,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
+        if (pageRequest != null) {
+            return getBatchPage(factoryId, status, null, false, pageRequest);
+        }
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
                 pageRequest.getSize(),
@@ -402,6 +405,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                 pageRequest.getSize(),
                 page.getTotalElements()
         );
+    }
+
+    @Override
+    public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
+                                                    Boolean isTrial, Boolean includeClerkWip,
+                                                    PageRequest pageRequest) {
+        if (isTrial == null) {
+            return getBatchPage(factoryId, status, supervisorId, Boolean.TRUE.equals(includeClerkWip), pageRequest);
+        }
+        return getBatches(factoryId, status, supervisorId, isTrial, pageRequest);
     }
 
     @Override
@@ -448,6 +461,43 @@ public class ProcessingServiceImpl implements ProcessingService {
             page = productionBatchRepository.findByFactoryIdAndSupervisorIdAndStatus(factoryId, supervisorId, statusEnum, pageable);
         } else {
             page = productionBatchRepository.findByFactoryIdAndSupervisorId(factoryId, supervisorId, pageable);
+        }
+        page.getContent().forEach(this::enrichBatchDisplayFields);
+        return PageResponse.of(
+                page.getContent(),
+                pageRequest.getPage(),
+                pageRequest.getSize(),
+                page.getTotalElements()
+        );
+    }
+
+    private PageResponse<ProductionBatch> getBatchPage(String factoryId, String status, Long supervisorId,
+                                                       boolean includeClerkWip, PageRequest pageRequest) {
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        );
+        Page<ProductionBatch> page;
+        if (status != null && !status.isEmpty()) {
+            ProductionBatchStatus statusEnum = ProductionBatchStatus.valueOf(status.toUpperCase());
+            if (supervisorId == null) {
+                page = includeClerkWip
+                        ? productionBatchRepository.findByFactoryIdAndStatusIncludingClerkWip(factoryId, statusEnum, pageable)
+                        : productionBatchRepository.findByFactoryIdAndStatus(factoryId, statusEnum, pageable);
+            } else {
+                page = includeClerkWip
+                        ? productionBatchRepository.findByFactoryIdAndSupervisorIdAndStatusIncludingClerkWip(factoryId, supervisorId, statusEnum, pageable)
+                        : productionBatchRepository.findByFactoryIdAndSupervisorIdAndStatus(factoryId, supervisorId, statusEnum, pageable);
+            }
+        } else if (supervisorId == null) {
+            page = includeClerkWip
+                    ? productionBatchRepository.findByFactoryIdIncludingClerkWip(factoryId, pageable)
+                    : productionBatchRepository.findByFactoryId(factoryId, pageable);
+        } else {
+            page = includeClerkWip
+                    ? productionBatchRepository.findByFactoryIdAndSupervisorIdIncludingClerkWip(factoryId, supervisorId, pageable)
+                    : productionBatchRepository.findByFactoryIdAndSupervisorId(factoryId, supervisorId, pageable);
         }
         page.getContent().forEach(this::enrichBatchDisplayFields);
         return PageResponse.of(
