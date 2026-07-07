@@ -271,9 +271,11 @@ const REJECT_REASONS = [
 ];
 
 function approvalContextHtml(row: TableRow): string {
-  const name = row.materialName || row.materialTypeName || row.batchNumber || '报废记录';
-  const batch = row.batchNumber ? `批次 ${row.batchNumber}` : '';
-  const qty = row.quantity != null ? `数量 ${row.quantity}` : '';
+  const name = getBatchDisplayName(row);
+  const batchNumber = getBatchNumber(row);
+  const quantity = getDisposalQuantity(row);
+  const batch = batchNumber !== '-' ? `批次 ${batchNumber}` : '';
+  const qty = quantity !== '-' ? `数量 ${quantity}` : '';
   const type = getTypeText(row.disposalType as string);
   const loss = row.estimatedLoss != null ? `预估损失 ¥${row.estimatedLoss}` : '';
   const parts = [batch, qty, `类型 ${type}`, loss].filter(Boolean);
@@ -361,9 +363,53 @@ function getTypeText(type: string) {
     EXPIRED: '过期',
     DAMAGED: '损坏',
     QUALITY_ISSUE: '质量问题',
+    SCRAP: '报废',
+    MATERIAL: '原料',
     OTHER: '其他'
   };
   return map[type?.toUpperCase()] || type;
+}
+
+function getRecordNumber(row: TableRow): string | number {
+  return row.recordNumber ?? row.recordNo ?? row.id ?? '-';
+}
+
+function getBatchNumber(row: TableRow): string {
+  return row.batchNumber
+    || row.materialBatch?.batchNumber
+    || row.finishedGoodsBatch?.batchNumber
+    || row.productionBatch?.batchNumber
+    || '-';
+}
+
+function getBatchDisplayName(row: TableRow): string {
+  return row.materialName
+    || row.materialTypeName
+    || row.materialBatch?.materialName
+    || row.materialBatch?.materialTypeName
+    || row.materialBatch?.materialType?.name
+    || row.finishedGoodsBatch?.productName
+    || row.finishedGoodsBatch?.productTypeName
+    || row.finishedGoodsBatch?.productType?.name
+    || getBatchNumber(row)
+    || '报废记录';
+}
+
+function getDisposalQuantity(row: TableRow): string | number {
+  return row.quantity ?? row.disposalQuantity ?? '-';
+}
+
+function getDisposalReason(row: TableRow): string {
+  return row.reason || row.disposalReason || '-';
+}
+
+function getApplicantName(row: TableRow): string {
+  return row.applicantName
+    || row.createdByName
+    || row.createdByUser?.fullName
+    || row.createdByUser?.name
+    || row.createdByUser?.username
+    || '-';
 }
 </script>
 
@@ -404,16 +450,36 @@ function getTypeText(type: string) {
       </div>
 
       <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column prop="recordNumber" label="记录编号" width="160" />
-        <el-table-column prop="batchNumber" label="批次号" width="160" />
+        <el-table-column label="记录编号" width="160">
+          <template #default="{ row }">
+            {{ getRecordNumber(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="批次号" width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ getBatchNumber(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="disposalType" label="废弃类型" width="120" align="center">
           <template #default="{ row }">
             {{ getTypeText(row.disposalType) }}
           </template>
         </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="100" align="right" />
-        <el-table-column prop="reason" label="废弃原因" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="applicantName" label="申请人" width="100" />
+        <el-table-column label="数量" width="100" align="right">
+          <template #default="{ row }">
+            {{ getDisposalQuantity(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="废弃原因" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ getDisposalReason(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="申请人" width="120">
+          <template #default="{ row }">
+            {{ getApplicantName(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">
@@ -463,12 +529,12 @@ function getTypeText(type: string) {
     <!-- 查看详情 -->
     <el-dialog v-model="viewDialogVisible" title="废弃处理详情" width="500px" destroy-on-close>
       <el-descriptions v-if="viewRecord" :column="1" border>
-        <el-descriptions-item label="记录编号">{{ viewRecord.recordNumber || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="批次号">{{ viewRecord.batchNumber || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="记录编号">{{ getRecordNumber(viewRecord) }}</el-descriptions-item>
+        <el-descriptions-item label="批次号">{{ getBatchNumber(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="废弃类型">{{ getTypeText(viewRecord.disposalType) }}</el-descriptions-item>
-        <el-descriptions-item label="数量">{{ viewRecord.quantity }}</el-descriptions-item>
-        <el-descriptions-item label="废弃原因">{{ viewRecord.reason || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="申请人">{{ viewRecord.applicantName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="数量">{{ getDisposalQuantity(viewRecord) }}</el-descriptions-item>
+        <el-descriptions-item label="废弃原因">{{ getDisposalReason(viewRecord) }}</el-descriptions-item>
+        <el-descriptions-item label="申请人">{{ getApplicantName(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="getStatusType(viewRecord.status)" size="small">{{ getStatusText(viewRecord.status) }}</el-tag>
         </el-descriptions-item>
@@ -558,8 +624,10 @@ function getTypeText(type: string) {
     <el-dialog v-model="rejectDialogVisible" title="拒绝报废申请" width="480px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item label="报废记录">
-          <span>{{ rejectRow?.materialName || rejectRow?.materialTypeName || rejectRow?.batchNumber || '-' }}
-            <span v-if="rejectRow?.batchNumber" style="color:#909399"> ({{ rejectRow?.batchNumber }})</span>
+          <span>{{ rejectRow ? getBatchDisplayName(rejectRow) : '-' }}
+            <span v-if="rejectRow && getBatchNumber(rejectRow) !== '-'" style="color:#909399">
+              ({{ getBatchNumber(rejectRow) }})
+            </span>
           </span>
         </el-form-item>
         <el-form-item label="拒绝原因" required>
