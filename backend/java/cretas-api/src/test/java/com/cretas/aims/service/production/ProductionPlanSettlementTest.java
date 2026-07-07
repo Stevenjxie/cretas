@@ -367,8 +367,10 @@ class ProductionPlanSettlementTest {
         plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
         wireR2(plan, feedRow("SFI-STOCK", "30", true, false));
 
-        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L));
 
+        assertTrue(ex.getMessage().contains("小结"), "safety-stock settlement must direct users to batch settlement");
         verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
         verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any());
     }
