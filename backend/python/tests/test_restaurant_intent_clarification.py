@@ -8,25 +8,31 @@ is parsed as the user's ANSWER to that question (original question +
 answer, deterministic T1/T2 first, then T3 with `history`) instead of being
 re-parsed as a brand-new, context-free query.
 
-Mirrors the mocking style of test_restaurant_intent.py (patch cosine_topk /
-common.llm_router.call_chain, local _FakeConn/_FakePool doubles).
+Pending storage is the shared smartbi Postgres table
+`restaurant_pending_clarifications` (migration V20260708_01) -- NOT process
+memory, because prod runs `uvicorn --workers 2` and an in-process store made
+continuation a coin flip whenever the follow-up landed on the other worker
+(2026-07-08 prod bug). The `_FakeDbPool` double below carries the pending
+rows itself (dispatching on SQL substrings, extending the _FakeConn pattern
+from test_restaurant_intent.py), so each test's pool IS its isolated store.
+
+Everything else is mocked in the style of test_restaurant_intent.py (patch
+cosine_topk / common.llm_router.call_chain).
 """
 from __future__ import annotations
 
 import json
-import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from smartbi.gold.restaurant_intent import (
-    _PENDING_CLARIFICATIONS,
     _build_t3_prompt,
     _cache_get,
     _cache_put,
     _pending_pop,
     _pending_put,
-    clear_pending_clarifications,
     clear_route_cache,
     clear_tenant_gate_cache,
     parse_restaurant_query,
@@ -36,31 +42,76 @@ from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range, match_
 
 @pytest.fixture(autouse=True)
 def _reset_state():
+    # Pending-clarification state needs no reset here: it lives in each
+    # test's own _FakeDbPool instance (worker-shared Postgres in prod), so
+    # test isolation is automatic. Only the per-process performance caches
+    # (route / tenant-gate) are module-global and must be cleared.
     clear_route_cache()
     clear_tenant_gate_cache()
-    clear_pending_clarifications()
     yield
     clear_route_cache()
     clear_tenant_gate_cache()
-    clear_pending_clarifications()
 
 
-class _FakeConn:
-    def __init__(self, fetchrow_result):
-        self._fetchrow_result = fetchrow_result
+class _FakeDbConn:
+    """asyncpg connection double that carries the pending-clarification
+    table semantics (UPSERT / DELETE..RETURNING / sweep) plus the tenant
+    gate's fetchrow. Dispatches on SQL substrings -- extends the _FakeConn
+    pattern from test_restaurant_intent.py / test_analysis_restaurant_ops.py."""
+
+    def __init__(self, pool: "_FakeDbPool"):
+        self._pool = pool
 
     async def fetchrow(self, sql, *args):
-        return self._fetchrow_result
+        if self._pool.raise_on_pending and "restaurant_pending_clarifications" in sql:
+            raise RuntimeError("simulated DB failure (pending store)")
+        if "agg_restaurant_daily_totals" in sql:
+            self._pool.tenant_gate_calls += 1
+            return {"?column?": 1} if self._pool.is_restaurant else None
+        if "DELETE FROM restaurant_pending_clarifications" in sql and "RETURNING" in sql:
+            factory_id, session_key = args
+            # dict with original_query / clarification_question / created_at, or None
+            return self._pool.pending.pop((factory_id, session_key), None)
+        raise AssertionError(f"unexpected fetchrow SQL in fake pool: {sql}")
+
+    async def execute(self, sql, *args):
+        if self._pool.raise_on_pending and "restaurant_pending_clarifications" in sql:
+            raise RuntimeError("simulated DB failure (pending store)")
+        if "INSERT INTO restaurant_pending_clarifications" in sql:
+            factory_id, session_key, original_query, clarification_question = args
+            # Mirrors ON CONFLICT ... DO UPDATE: same-key put overwrites.
+            self._pool.pending[(factory_id, session_key)] = {
+                "original_query": original_query,
+                "clarification_question": clarification_question,
+                "created_at": datetime.now(timezone.utc),
+            }
+            return "INSERT 0 1"
+        if "DELETE FROM restaurant_pending_clarifications" in sql and "created_at <" in sql:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            stale = [k for k, v in self._pool.pending.items() if v["created_at"] < cutoff]
+            for k in stale:
+                del self._pool.pending[k]
+            self._pool.sweep_calls += 1
+            return f"DELETE {len(stale)}"
+        if "DELETE FROM restaurant_pending_clarifications" in sql:
+            n = len(self._pool.pending)
+            self._pool.pending.clear()
+            return f"DELETE {n}"
+        raise AssertionError(f"unexpected execute SQL in fake pool: {sql}")
 
 
-class _FakePool:
-    def __init__(self, conn: _FakeConn):
-        self._conn = conn
+class _FakeDbPool:
+    def __init__(self, *, is_restaurant: bool = True):
+        self.pending: dict = {}
+        self.is_restaurant = is_restaurant
         self.acquire_calls = 0
+        self.tenant_gate_calls = 0
+        self.sweep_calls = 0
+        self.raise_on_pending = False  # simulate pending-store DB failure
 
     def acquire(self):
         self.acquire_calls += 1
-        conn = self._conn
+        conn = _FakeDbConn(self)
 
         class _Ctx:
             async def __aenter__(self):
@@ -72,8 +123,8 @@ class _FakePool:
         return _Ctx()
 
 
-def _restaurant_pool() -> _FakePool:
-    return _FakePool(_FakeConn({"?column?": 1}))
+def _restaurant_pool() -> _FakeDbPool:
+    return _FakeDbPool(is_restaurant=True)
 
 
 def _llm_result(payload: dict) -> dict:
@@ -107,6 +158,9 @@ async def test_continuation_resolves_via_t3_with_history_and_clears_pending():
     assert spec1 is not None
     assert spec1.clarification_needed is True
     assert spec1.is_clarification_continuation is False
+    # The pending entry landed in the SHARED store (the DB double), where a
+    # different worker process would see it too.
+    assert ("F_CLAR", "sess-1") in pool.pending
 
     answer = "最近两个月"
     concatenated = f"{original_query} {answer}"
@@ -144,8 +198,10 @@ async def test_continuation_resolves_via_t3_with_history_and_clears_pending():
     assert original_query in user_msg
     assert spec1.clarification_question in user_msg
 
-    # Pending is consumed -- a repeat lookup for the same key finds nothing.
-    assert _pending_pop("F_CLAR", "sess-1") is None
+    # Pending is consumed (single atomic DELETE..RETURNING) -- gone from the
+    # shared store, and a repeat pop finds nothing.
+    assert pool.pending == {}
+    assert await _pending_pop(pool, "F_CLAR", "sess-1") is None
 
 
 # ─── 2. Still ambiguous after continuation -> no re-registration ─────────
@@ -184,7 +240,8 @@ async def test_continuation_still_ambiguous_does_not_reregister_pending():
 
     # No new pending was registered for this (factory, session) -- a THIRD
     # message would be treated as fresh, not another continuation hop.
-    assert _pending_pop("F_LOOP", "sess-loop") is None
+    assert pool.pending == {}
+    assert await _pending_pop(pool, "F_LOOP", "sess-loop") is None
 
 
 # ─── 3. No session_key -> continuation never attempted ────────────────────
@@ -192,8 +249,8 @@ async def test_continuation_still_ambiguous_does_not_reregister_pending():
 @pytest.mark.asyncio
 async def test_no_session_key_never_attempts_continuation():
     pool = _restaurant_pool()
-    _pending_put(
-        "F_NOKEY", "sess-untouched",
+    await _pending_put(
+        pool, "F_NOKEY", "sess-untouched",
         original_query="情况怎么样", clarification_question="您想看哪方面？",
     )
 
@@ -205,7 +262,8 @@ async def test_no_session_key_never_attempts_continuation():
     assert spec.is_clarification_continuation is False
     # session_key wasn't passed at all -- the pending entry for a DIFFERENT
     # session under the same factory must be left completely untouched.
-    assert _pending_pop("F_NOKEY", "sess-untouched") is not None
+    assert ("F_NOKEY", "sess-untouched") in pool.pending
+    assert await _pending_pop(pool, "F_NOKEY", "sess-untouched") is not None
 
 
 @pytest.mark.asyncio
@@ -213,8 +271,8 @@ async def test_empty_string_session_key_never_attempts_continuation():
     """Spec section 1: session_key missing (None) OR empty behaves
     identically -- an empty string must not enable continuation either."""
     pool = _restaurant_pool()
-    _pending_put(
-        "F_EMPTYKEY", "sess-empty-check",
+    await _pending_put(
+        pool, "F_EMPTYKEY", "sess-empty-check",
         original_query="情况怎么样", clarification_question="您想看哪方面？",
     )
 
@@ -223,7 +281,7 @@ async def test_empty_string_session_key_never_attempts_continuation():
     )
     assert spec is not None
     assert spec.is_clarification_continuation is False
-    assert _pending_pop("F_EMPTYKEY", "sess-empty-check") is not None
+    assert await _pending_pop(pool, "F_EMPTYKEY", "sess-empty-check") is not None
 
 
 # ─── 4. TTL expiry -> continuation not attempted ──────────────────────────
@@ -232,13 +290,13 @@ async def test_empty_string_session_key_never_attempts_continuation():
 async def test_ttl_expired_pending_is_not_continued():
     pool = _restaurant_pool()
     factory_id, session_key = "F_TTL", "sess-ttl"
-    _pending_put(
-        factory_id, session_key,
+    await _pending_put(
+        pool, factory_id, session_key,
         original_query="情况怎么样", clarification_question="您想看哪方面？",
     )
-    # Backdate the entry past the 5-minute TTL.
-    key = (factory_id, session_key)
-    _PENDING_CLARIFICATIONS[key]["ts"] = time.time() - 400
+    # Backdate the row past the 5-minute TTL (row still in the table -- TTL
+    # is judged Python-side on the created_at returned by DELETE..RETURNING).
+    pool.pending[(factory_id, session_key)]["created_at"] -= timedelta(seconds=400)
 
     spec = await parse_restaurant_query(
         "哪家店最赚钱", pool, factory_id=factory_id, session_key=session_key,
@@ -247,8 +305,26 @@ async def test_ttl_expired_pending_is_not_continued():
     assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
     assert spec.is_clarification_continuation is False  # fresh path, not continuation
 
-    # The stale entry is gone after being read once (whether or not it was used).
-    assert _pending_pop(factory_id, session_key) is None
+    # The stale row was consumed by the pop even though it wasn't used.
+    assert (factory_id, session_key) not in pool.pending
+    assert await _pending_pop(pool, factory_id, session_key) is None
+
+
+@pytest.mark.asyncio
+async def test_pop_opportunistically_sweeps_hour_old_rows():
+    """The anti-bloat sweep rides along on pop: rows older than 1 hour that
+    nobody ever followed up on get deleted (failure-ignored side effect)."""
+    pool = _restaurant_pool()
+    await _pending_put(
+        pool, "F_SWEEP", "sess-abandoned",
+        original_query="情况怎么样", clarification_question="您想看哪方面？",
+    )
+    pool.pending[("F_SWEEP", "sess-abandoned")]["created_at"] -= timedelta(hours=2)
+
+    # Pop for an unrelated key -- returns None, but the sweep runs.
+    assert await _pending_pop(pool, "F_SWEEP", "sess-other") is None
+    assert pool.sweep_calls >= 1
+    assert ("F_SWEEP", "sess-abandoned") not in pool.pending
 
 
 # ─── 5. Different sessions never cross-contaminate ────────────────────────
@@ -257,8 +333,8 @@ async def test_ttl_expired_pending_is_not_continued():
 async def test_different_session_keys_do_not_cross_contaminate():
     pool = _restaurant_pool()
     factory_id = "F_MULTI"
-    _pending_put(
-        factory_id, "sess-A",
+    await _pending_put(
+        pool, factory_id, "sess-A",
         original_query="情况怎么样", clarification_question="您想看哪方面？",
     )
 
@@ -268,7 +344,7 @@ async def test_different_session_keys_do_not_cross_contaminate():
     assert spec is not None
     assert spec.is_clarification_continuation is False
     # sess-A's pending entry must be untouched by the sess-B call.
-    assert _pending_pop(factory_id, "sess-A") is not None
+    assert await _pending_pop(pool, factory_id, "sess-A") is not None
 
 
 # ─── 6. Continuation bypasses the routing-decision cache (read + write) ──
@@ -289,8 +365,8 @@ async def test_continuation_bypasses_route_cache_read_and_write():
         "clarification_needed": False, "clarification_question": None,
     })
 
-    _pending_put(
-        factory_id, "sess-cache",
+    await _pending_put(
+        pool, factory_id, "sess-cache",
         original_query=original_query, clarification_question="您想看哪方面？",
     )
 
@@ -330,12 +406,15 @@ async def test_concatenated_deterministic_fast_path_skips_llm_call_on_continuati
     concatenated = f"{original_query} {answer}"
     assert match_restaurant_ops(concatenated) == "RESTAURANT_OPS_STORE_MARGIN"
 
-    _pending_put(
-        factory_id, "sess-fast",
+    await _pending_put(
+        pool, factory_id, "sess-fast",
         original_query=original_query, clarification_question="您想看哪方面？",
     )
 
     with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(side_effect=AssertionError("T2 must not run -- T1 already resolved it")),
+    ), patch(
         "common.llm_router.call_chain",
         new=AsyncMock(side_effect=AssertionError("T3 must not run -- T1 already resolved it")),
     ):
@@ -348,8 +427,9 @@ async def test_concatenated_deterministic_fast_path_skips_llm_call_on_continuati
     assert spec.source_tier == "keyword"
     assert spec.confidence == 0.95
     assert spec.is_clarification_continuation is True
-    # T1 hit is ungated -- the tenant lookup must not even run.
-    assert pool.acquire_calls == 0
+    # T1 hit short-circuits BEFORE the tenant gate -- only the pending pop
+    # touched the DB, never the agg_restaurant_daily_totals lookup.
+    assert pool.tenant_gate_calls == 0
 
 
 # ─── 8. Deterministic slots see the FULL concatenated (two-turn) text ─────
@@ -369,8 +449,8 @@ async def test_continuation_deterministic_slots_use_concatenated_text():
     concatenated = f"{original_query} {answer}"
     assert match_restaurant_ops(concatenated) is None  # still no T1 hit (no margin word)
 
-    _pending_put(
-        factory_id, "sess-dim",
+    await _pending_put(
+        pool, factory_id, "sess-dim",
         original_query=original_query, clarification_question="您想看哪方面？",
     )
 
@@ -410,7 +490,7 @@ async def test_pending_registered_when_fresh_parse_clarifies_with_session_key():
         )
     assert spec.clarification_needed is True
 
-    pending = _pending_pop("F_REG", "sess-reg")
+    pending = await _pending_pop(pool, "F_REG", "sess-reg")
     assert pending is not None
     assert pending["original_query"] == query
     assert pending["clarification_question"] == spec.clarification_question
@@ -423,7 +503,8 @@ async def test_pending_not_registered_when_t1_resolves_with_session_key():
         "哪家店最赚钱", pool, factory_id="F_NOREG_T1", session_key="sess-noreg-t1",
     )
     assert spec.clarification_needed is False
-    assert _pending_pop("F_NOREG_T1", "sess-noreg-t1") is None
+    assert pool.pending == {}
+    assert await _pending_pop(pool, "F_NOREG_T1", "sess-noreg-t1") is None
 
 
 @pytest.mark.asyncio
@@ -444,7 +525,8 @@ async def test_pending_not_registered_when_t3_resolves_successfully_with_session
             "这两个月生意咋样，挣着钱没", pool, factory_id="F_NOREG_T3", session_key="sess-noreg-t3",
         )
     assert spec.clarification_needed is False
-    assert _pending_pop("F_NOREG_T3", "sess-noreg-t3") is None
+    assert pool.pending == {}
+    assert await _pending_pop(pool, "F_NOREG_T3", "sess-noreg-t3") is None
 
 
 # ─── 10. Cached-clarification replay also registers pending ──────────────
@@ -468,7 +550,7 @@ async def test_cached_clarification_replay_also_registers_pending():
     )
     assert spec.clarification_needed is True
 
-    pending = _pending_pop(factory_id, "sess-replay")
+    pending = await _pending_pop(pool, factory_id, "sess-replay")
     assert pending is not None
     assert pending["clarification_question"] == "问哪方面？"
 
@@ -489,3 +571,38 @@ def test_t3_prompt_includes_previous_turn_history_block():
 def test_t3_prompt_omits_history_block_when_none():
     prompt = _build_t3_prompt("情况怎么样", None, None)
     assert "上一轮对话" not in prompt
+
+
+# ─── 12. Fail-open: pending-store DB failure never breaks the parse ──────
+
+@pytest.mark.asyncio
+async def test_pending_store_db_failure_fails_open_on_pop_and_put():
+    """The 2026-07-08 fix moved pending storage to Postgres -- a DB blip on
+    that table must degrade to 'no continuation this time / nothing
+    registered' (module principle 6), NEVER raise into the caller's chain
+    and never block a fresh parse from resolving."""
+    pool = _restaurant_pool()
+    pool.raise_on_pending = True
+
+    # Pop path: T1-resolvable query with session_key -- pending pop raises,
+    # parse must still resolve the query as a fresh single-turn one.
+    spec = await parse_restaurant_query(
+        "哪家店最赚钱", pool, factory_id="F_FAILOPEN", session_key="sess-fail",
+    )
+    assert spec is not None
+    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
+    assert spec.is_clarification_continuation is False
+
+    # Put path: a fresh clarification with session_key -- registration
+    # raises, the clarification must still be returned to the user.
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk", new=AsyncMock(return_value=[]),
+    ), patch(
+        "common.llm_router.call_chain", new=AsyncMock(return_value=_llm_result(_CLARIFY_JSON)),
+    ):
+        spec2 = await parse_restaurant_query(
+            "情况怎么样", pool, factory_id="F_FAILOPEN", session_key="sess-fail",
+        )
+    assert spec2 is not None
+    assert spec2.clarification_needed is True
+    assert pool.pending == {}  # nothing got registered (put failed silently)
