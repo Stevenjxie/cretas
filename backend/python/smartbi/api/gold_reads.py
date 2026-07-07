@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -970,6 +970,11 @@ class TieredIntentAnswerRequest(BaseModel):
     factory_id: str
     query: str
     java_tool_name: Optional[str] = None
+    # 2026-07-08 clarification-loop v1 (additive, optional): the caller's
+    # chat session id, forwarded to `parse_restaurant_query` so a user's
+    # answer to a PREVIOUS clarification from this same session is parsed in
+    # context. None (every existing caller) preserves prior behavior exactly.
+    session_id: Optional[str] = None
 
 
 @router.post("/restaurant/tiered-answer")
@@ -1034,12 +1039,27 @@ async def post_restaurant_tiered_answer(
         if not pool:
             return {"delegate": False}
 
-        spec = await parse_restaurant_query(query, pool, factory_id=fid)
+        spec = await parse_restaurant_query(query, pool, factory_id=fid, session_key=body.session_id)
         if not should_delegate(spec, body.java_tool_name):
             return {"delegate": False}
 
+        # 2026-07-08 clarification-loop v1: `parse_restaurant_query` above
+        # already consumed (popped) any pending clarification for
+        # (fid, body.session_id) -- continuation is single-use (see
+        # restaurant_intent module docstring). Passing THIS SAME spec into
+        # tiered_answer as `precomputed_spec` stops it from calling
+        # parse_restaurant_query a second time, which would find the
+        # pending entry already gone and silently degrade to a fresh,
+        # context-free parse. When no session_id was supplied (every
+        # pre-existing caller), this branch is skipped entirely and the
+        # call below is byte-identical to before this feature existed.
+        extra_kwargs: Dict[str, Any] = {}
+        if body.session_id:
+            extra_kwargs["session_key"] = body.session_id
+            extra_kwargs["precomputed_spec"] = spec
         result = await tiered_answer(
             query, pool, fid, role, java_tool_name=body.java_tool_name,
+            **extra_kwargs,
         )
         if not result:
             # should_delegate said yes but resolution produced nothing

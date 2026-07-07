@@ -1,10 +1,15 @@
 """Tiered restaurant intent router: keyword (T1) -> vector (T2) -> LLM (T3).
 
 Design doc: docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md
+Clarification-loop v1 (2026-07-08): the ``history`` parameter reserved (but
+unused) in the design above is now wired up so a user's answer to a
+clarification question gets parsed IN CONTEXT of the original question,
+instead of being re-parsed as a brand-new, context-free query. See the
+"Clarification continuation (v1, 2026-07-08)" section further down.
 
 Architecture (spec section references below are to that doc):
 
-  parse_restaurant_query(query, pool, factory_id=..., history=...)
+  parse_restaurant_query(query, pool, factory_id=..., history=..., session_key=...)
       T1 keyword match_restaurant_ops()               (<1ms,  confidence=0.95)
       T2 vector cosine_topk(code_prefix=RESTAURANT_OPS_) (~30ms, confidence=similarity)
       T3 LLM structured QuerySpec parse (SLOT.MAPPER)  (thinking off, confidence=0.0-1.0)
@@ -29,6 +34,43 @@ Six architecture principles (spec section 1.3), enforced here:
   6. Fail-open: any exception at any tier is swallowed and logged; the
      function returns None so the caller's existing fallback chain runs
      (mirrors template_rag.hybrid_match's "never raises" contract).
+
+Clarification continuation (v1, 2026-07-08):
+
+  When `parse_restaurant_query` returns a clarification AND the caller passed
+  a non-empty `session_key`, the (factory_id, session_key) -> {original
+  question, clarification question} pair is registered in an in-process
+  LRU+TTL store (`_PENDING_CLARIFICATIONS`, ~5 minutes / 500 entries). The
+  NEXT call for that same (factory_id, session_key) is then treated as the
+  user's ANSWER to that clarification, not a fresh standalone query:
+
+    1. Deterministic fast path FIRST: T1 keyword, then T2 vector, both run
+       against the ORIGINAL question concatenated with the new answer (no LLM
+       token spent if that combination is already resolvable).
+    2. Only on a deterministic miss does this escalate to T3, this time with
+       `history=[{"role":"user","content":<original question>},
+       {"role":"assistant","content":<clarification question>}]` so the LLM
+       combines both turns (spec principle 2: the LLM only fills what the
+       deterministic layer could not).
+
+  This whole continuation path bypasses `_ROUTE_CACHE` (a routing decision
+  cached under a single utterance would not reflect the two-turn context,
+  and would poison a later STANDALONE ask of the same follow-up text -- see
+  principle 6 point 6 in the 2026-07-08 clarification-loop design brief).
+
+  Continuation is capped at ONE hop: the pending entry is consumed (removed)
+  the moment it is read, regardless of whether the continuation attempt
+  resolves or produces yet another clarification -- so a second, still-vague
+  answer surfaces a (final) clarification question but does NOT register a
+  new pending entry (no infinite clarification loops). The returned spec's
+  `is_clarification_continuation` flag distinguishes a continuation-produced
+  spec from a fresh single-turn one (for logging / tests).
+
+  A missing/empty `session_key`, or no pending entry for the given key (never
+  registered, already consumed, or past the TTL), simply skips all of the
+  above -- `parse_restaurant_query` behaves exactly as it did before this
+  feature existed (pure fail-open addition, zero behavior change for callers
+  that don't pass `session_key`).
 """
 from __future__ import annotations
 
@@ -70,6 +112,11 @@ class RestaurantQuerySpec:
     source_tier: str                              # "keyword" | "vector" | "llm"
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    # 2026-07-08 clarification-loop v1: True when this spec was produced by
+    # CONTINUING a previous clarification (see module docstring) rather than
+    # a fresh single-turn parse. Additive-only (default False preserves every
+    # existing construction of this dataclass).
+    is_clarification_continuation: bool = False
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
@@ -153,6 +200,7 @@ def _build_spec(
     time_phrase: str = "",
     llm_wants_margin: bool = False,
     llm_asks_profitability: bool = False,
+    is_continuation: bool = False,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
@@ -191,6 +239,7 @@ def _build_spec(
         source_tier=tier,
         clarification_needed=clarification_needed,
         clarification_question=clarification_question,
+        is_clarification_continuation=is_continuation,
     )
 
 
@@ -230,6 +279,78 @@ def clear_route_cache() -> None:
 
 def _normalize_query(query: str) -> str:
     return (query or "").strip()
+
+
+# ─── Pending-clarification store (2026-07-08 clarification-loop v1) ──────
+# Separate from `_ROUTE_CACHE` above -- this is NOT a routing-decision cache,
+# it is a short-lived "what did we just ask this session, and what was the
+# original question" memo so the NEXT message from that (factory_id,
+# session_key) can be interpreted as an ANSWER instead of a fresh query. See
+# module docstring "Clarification continuation" section for the full flow.
+# LRU (size-capped, same OrderedDict pattern as _ROUTE_CACHE) + lazy TTL
+# check on read (no background sweep thread needed -- an entry nobody reads
+# just ages out of the LRU eventually, or is judged stale the one time it IS
+# read).
+_PENDING_CLARIFICATIONS: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
+_PENDING_MAX = 500
+_PENDING_TTL_SECONDS = 5 * 60  # ~5 minutes, per clarification-loop v1 design
+
+
+def _pending_key(factory_id: str, session_key: str) -> Tuple[str, str]:
+    return (factory_id, session_key)
+
+
+def _pending_put(
+    factory_id: str, session_key: str, *,
+    original_query: str, clarification_question: Optional[str],
+) -> None:
+    key = _pending_key(factory_id, session_key)
+    _PENDING_CLARIFICATIONS[key] = {
+        "original_query": original_query,
+        "clarification_question": clarification_question,
+        "ts": time.time(),
+    }
+    _PENDING_CLARIFICATIONS.move_to_end(key)
+    while len(_PENDING_CLARIFICATIONS) > _PENDING_MAX:
+        _PENDING_CLARIFICATIONS.popitem(last=False)
+
+
+def _pending_pop(factory_id: str, session_key: str) -> Optional[Dict[str, Any]]:
+    """Read-and-remove: a pending entry is consumed the moment it is looked
+    at, whether or not the continuation attempt built from it actually
+    resolves -- this is what caps continuation at exactly one hop (module
+    docstring). Returns None (not just "not found") when the entry has aged
+    past `_PENDING_TTL_SECONDS`; either way it is gone from the store after
+    this call."""
+    key = _pending_key(factory_id, session_key)
+    entry = _PENDING_CLARIFICATIONS.pop(key, None)
+    if entry is None:
+        return None
+    if time.time() - entry["ts"] > _PENDING_TTL_SECONDS:
+        return None
+    return entry
+
+
+def clear_pending_clarifications() -> None:
+    """Test-only helper: reset the in-process pending-clarification store."""
+    _PENDING_CLARIFICATIONS.clear()
+
+
+def _maybe_register_pending(
+    query: str, spec: Optional[RestaurantQuerySpec], factory_id: str,
+    session_key: Optional[str],
+) -> None:
+    """Register a pending clarification for (factory_id, session_key) when
+    `spec` asked one AND the caller opted in with a session_key. No-op
+    (including for a falsy/empty session_key -- spec section 1 of the
+    2026-07-08 design: "session_key 缺失 → 完全不启用续接") on every other
+    path, so this is safe to call unconditionally after any fresh (non-
+    continuation) parse outcome."""
+    if session_key and spec is not None and spec.clarification_needed:
+        _pending_put(
+            factory_id, session_key,
+            original_query=query, clarification_question=spec.clarification_question,
+        )
 
 
 def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
@@ -361,6 +482,26 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
             f"\n提示: 向量检索认为最可能是 \"{hint_code}\" (相似度 {hint_sim:.2f})，"
             f"仅供参考，请结合问题原文自行判断。\n"
         )
+    # 2026-07-08 clarification-loop v1: when a continuation attempt (see
+    # module docstring) passes the ORIGINAL question + the clarification
+    # question we asked, render it as a two-turn block so the LLM combines
+    # both instead of parsing the (often incomplete on its own, e.g. just
+    # "最近两个月") current message in isolation. `history` is None for every
+    # ordinary (non-continuation) T3 call -- history_line stays "" and the
+    # rest of the prompt is byte-identical to before this feature existed.
+    history_line = ""
+    if history:
+        turns = []
+        for turn in history:
+            role = turn.get("role") if isinstance(turn, dict) else None
+            content = (turn.get("content") if isinstance(turn, dict) else None) or ""
+            label = "你(追问)" if role == "assistant" else "用户"
+            turns.append(f"{label}: {content}")
+        history_line = (
+            "\n上一轮对话 (用户当前这条消息是在回答你上一轮提出的澄清问题，"
+            "请结合上一轮的原始问题和这次的回答来判断完整意图，不要只看当前这一句):\n"
+            + "\n".join(turns) + "\n"
+        )
     few_shot = (
         '示例1: "这两个月生意咋样，挣着钱没" -> '
         '{"intent": "RESTAURANT_OPS_SALES_SUMMARY", "time_range": {"type": "relative", '
@@ -378,6 +519,7 @@ def _build_t3_prompt(query: str, hint: Optional[Tuple[str, float]], history: Opt
         "可选 intent 取值（必须从下面列表中选择一个，或者在无法判断时输出 null）：\n"
         f"{intent_lines}\n"
         f"{hint_line}\n"
+        f"{history_line}"
         "严格规则:\n"
         "1. 你绝对不能计算或输出具体日期！time_range 只能是结构化描述，例如: "
         '{"type": "relative", "unit": "month", "count": 2} (最近2个月), '
@@ -472,16 +614,30 @@ async def parse_restaurant_query(
     *,
     factory_id: str,
     history: Optional[Sequence[Dict[str, str]]] = None,
+    session_key: Optional[str] = None,
 ) -> Optional[RestaurantQuerySpec]:
     """Resolve `query` to a RestaurantQuerySpec via T1 -> T2 -> T3, or None.
 
     Fail-open at every tier: any exception is logged and swallowed, and the
     function degrades to the next tier (or to None), never raising into the
     caller's chat.py SSE stream.
+
+    `session_key` (2026-07-08 clarification-loop v1, additive/optional):
+    when truthy AND a pending clarification is on record for
+    (factory_id, session_key), this call is treated as the user's ANSWER to
+    that clarification (see module docstring "Clarification continuation")
+    instead of a fresh, context-free query. Falsy/omitted `session_key`, or
+    no pending entry, is byte-identical to this function's behavior before
+    the feature existed.
     """
     norm_query = _normalize_query(query)
     if not norm_query or not factory_id:
         return None
+
+    if session_key:
+        pending = _pending_pop(factory_id, session_key)
+        if pending is not None:
+            return await _parse_continuation(norm_query, pool, factory_id=factory_id, pending=pending)
 
     # ── T1: keyword (ungated, unchanged, <1ms) ──
     try:
@@ -502,7 +658,7 @@ async def parse_restaurant_query(
 
     cached = _cache_get(factory_id, norm_query)
     if cached is not None:
-        return _build_spec(
+        cached_spec = _build_spec(
             cached["code"] or None, norm_query,
             confidence=cached["confidence"], tier=cached["tier"],
             clarification_needed=cached["clarification_needed"],
@@ -511,6 +667,8 @@ async def parse_restaurant_query(
             llm_wants_margin=cached.get("llm_wants_margin", False),
             llm_asks_profitability=cached.get("llm_asks_profitability", False),
         )
+        _maybe_register_pending(norm_query, cached_spec, factory_id, session_key)
+        return cached_spec
 
     # ── T2: vector (code_prefix=RESTAURANT_OPS_, ~30ms, 0 LLM tokens) ──
     try:
@@ -577,9 +735,110 @@ async def parse_restaurant_query(
         "code": t3_code or "", "confidence": t3_confidence, "tier": "llm",
         "clarification_needed": True, "clarification_question": clarification_question,
     })
-    return _build_spec(
+    spec = _build_spec(
         t3_code, norm_query, confidence=t3_confidence, tier="llm",
         clarification_needed=True, clarification_question=clarification_question,
+    )
+    _maybe_register_pending(norm_query, spec, factory_id, session_key)
+    return spec
+
+
+# ─── Clarification continuation (2026-07-08 clarification-loop v1) ───────
+
+async def _parse_continuation(
+    query: str,
+    pool,
+    *,
+    factory_id: str,
+    pending: Dict[str, Any],
+) -> Optional[RestaurantQuerySpec]:
+    """Resolve a follow-up answer to a previously-asked clarification
+    question (module docstring "Clarification continuation"). `query` here
+    is already normalized (caller: `parse_restaurant_query`) and is the
+    user's ANSWER, not the original question.
+
+    Order of attempts (spec section 3 of the 2026-07-08 clarification-loop
+    design): deterministic T1 keyword, then T2 vector -- both against the
+    ORIGINAL question concatenated with this answer (so slot detectors see
+    the full two-turn context, e.g. a "哪家店" dimension mentioned only in
+    the original question) -- and only on a miss there, T3 LLM with
+    `history` carrying both turns.
+
+    Never touches `_ROUTE_CACHE` (a routing decision cached under a single
+    utterance would not reflect this two-turn context) and never registers
+    a NEW pending entry regardless of outcome (continuation is capped at one
+    hop -- the caller already popped/consumed the entry that got us here).
+    """
+    original_query = pending.get("original_query") or ""
+    clarification_question = pending.get("clarification_question")
+    concatenated = f"{original_query} {query}".strip()
+
+    # ── deterministic fast path: T1 then T2 on the concatenated text ──
+    try:
+        t1_code = match_restaurant_ops(concatenated)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] continuation T1 match raised (fail-open): {exc}")
+        t1_code = None
+    if t1_code:
+        return _build_spec(t1_code, concatenated, confidence=0.95, tier="keyword", is_continuation=True)
+
+    try:
+        if not await _is_restaurant_tenant(pool, factory_id):
+            return None
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] continuation tenant gate raised (fail-open): {exc}")
+        return None
+
+    try:
+        t2_code, _t2_sim, t2_hint = await _t2_vector_match(pool, concatenated)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] continuation T2 match raised (fail-open): {exc}")
+        t2_code, t2_hint = None, None
+    if t2_code:
+        return _build_spec(t2_code, concatenated, confidence=_t2_sim, tier="vector", is_continuation=True)
+
+    # ── T3 with the two-turn history the caller was asked to answer ──
+    history = [
+        {"role": "user", "content": original_query},
+        {"role": "assistant", "content": clarification_question or ""},
+    ]
+    parsed = await _t3_llm_parse(query, hint=t2_hint, history=history)
+    if parsed is None:
+        return None  # miss at every tier -> caller falls through, unchanged
+
+    t3_code = parsed.get("intent")
+    if t3_code not in _VALID_CODES:
+        t3_code = None
+    try:
+        t3_confidence = float(parsed.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        t3_confidence = 0.0
+    clarification_needed = bool(parsed.get("clarification_needed"))
+    next_clarification_question = parsed.get("clarification_question")
+    if not isinstance(next_clarification_question, str):
+        next_clarification_question = None
+
+    if t3_code and t3_confidence >= _T3_MIN_CONFIDENCE and not clarification_needed:
+        time_phrase = _parse_t3_time_range(parsed.get("time_range"))
+        llm_wants_margin = bool(parsed.get("wants_margin"))
+        llm_asks_profitability = bool(parsed.get("asks_profitability"))
+        return _build_spec(
+            t3_code, concatenated, confidence=t3_confidence, tier="llm",
+            time_phrase=time_phrase,
+            llm_wants_margin=llm_wants_margin,
+            llm_asks_profitability=llm_asks_profitability,
+            is_continuation=True,
+        )
+
+    # Still unresolved after combining both turns -- surface a (final)
+    # clarification question, but per the module docstring do NOT register a
+    # new pending entry: continuation is capped at exactly one hop.
+    if not next_clarification_question:
+        next_clarification_question = "还是没太明白，能换个说法说说想看哪方面的数据吗？"
+    return _build_spec(
+        t3_code, concatenated, confidence=t3_confidence, tier="llm",
+        clarification_needed=True, clarification_question=next_clarification_question,
+        is_continuation=True,
     )
 
 

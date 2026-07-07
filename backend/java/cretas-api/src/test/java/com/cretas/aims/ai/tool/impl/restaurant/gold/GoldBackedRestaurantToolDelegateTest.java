@@ -272,4 +272,93 @@ class GoldBackedRestaurantToolDelegateTest {
         // is irrelevant here -- but assert no accidental aliased call happened.
         verify(gold, never()).fetchDataRange(anyString());
     }
+
+    // =========================================================================
+    // 2026-07-08 clarification-loop v1: session id extraction from context
+    // (best-effort -- only ToolDispatchService.executeWithTool stashes the
+    // raw IntentExecuteRequest under context["request"]).
+    // =========================================================================
+
+    @Test
+    @DisplayName("context carries IntentExecuteRequest with sessionId -> 4-arg fetchTieredIntentAnswer overload used")
+    void contextWithSessionIdUsesFourArgOverload() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchTieredIntentAnswer(
+                eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold"), eq("sess-xyz")))
+                .thenReturn(Map.of(
+                        "delegate", true,
+                        "answer_text", "最近2个月营收共120万，是赚钱的。"
+                ));
+
+        RestaurantPeakMonthGoldTool tool = newTool(gold);
+        Map<String, Object> context = new HashMap<>();
+        context.put("request", com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                .sessionId("sess-xyz").build());
+
+        Map<String, Object> result = tool.doExecute(
+                FACTORY_ID, paramsWithInput("这两个月生意咋样，挣着钱没"), context);
+
+        assertThat(result).containsEntry("tieredDelegate", true);
+        verify(gold).fetchTieredIntentAnswer(
+                eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold"), eq("sess-xyz"));
+        // The 3-arg overload must NOT also be invoked for this call.
+        verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("context carries IntentExecuteRequest with null sessionId -> falls back to 3-arg overload")
+    void contextWithNullSessionIdFallsBackToThreeArgOverload() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold")))
+                .thenReturn(Map.of("delegate", false));
+
+        Map<String, Object> range = new HashMap<>();
+        range.put("min_date", "2025-01-01");
+        range.put("max_date", "2026-04-30");
+        when(gold.fetchDataRange(FACTORY_ID)).thenReturn(range);
+        Map<String, Object> dailyTrend = new HashMap<>();
+        dailyTrend.put("points", List.of(Map.of("date", "2026-04-01", "revenue", 5000.0)));
+        when(gold.fetchDailyTrend(eq(FACTORY_ID), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(dailyTrend);
+
+        RestaurantPeakMonthGoldTool tool = newTool(gold);
+        Map<String, Object> context = new HashMap<>();
+        context.put("request", com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                .sessionId(null).build());
+
+        tool.doExecute(FACTORY_ID, paramsWithInput("营收趋势"), context);
+
+        verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString(), anyString());
+        verify(gold).fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold"));
+    }
+
+    @Test
+    @DisplayName("context without a \"request\" key (e.g. DynamicToolSelectionService dispatch) -> 3-arg overload, unchanged")
+    void contextWithoutRequestKeyFallsBackToThreeArgOverload() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold")))
+                .thenReturn(Map.of("delegate", false));
+
+        Map<String, Object> range = new HashMap<>();
+        range.put("min_date", "2025-01-01");
+        range.put("max_date", "2026-04-30");
+        when(gold.fetchDataRange(FACTORY_ID)).thenReturn(range);
+        Map<String, Object> dailyTrend = new HashMap<>();
+        dailyTrend.put("points", List.of(Map.of("date", "2026-04-01", "revenue", 5000.0)));
+        when(gold.fetchDailyTrend(eq(FACTORY_ID), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(dailyTrend);
+
+        RestaurantPeakMonthGoldTool tool = newTool(gold);
+        // A context with OTHER keys but no "request" -- mirrors
+        // DynamicToolSelectionService / LlmIntentFallbackClientImpl's leaner
+        // context shape.
+        Map<String, Object> context = new HashMap<>();
+        context.put("factoryId", FACTORY_ID);
+        context.put("userId", 1L);
+
+        tool.doExecute(FACTORY_ID, paramsWithInput("营收趋势"), context);
+
+        verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString(), anyString());
+        verify(gold).fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold"));
+    }
 }
