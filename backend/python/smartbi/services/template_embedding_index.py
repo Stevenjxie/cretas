@@ -106,7 +106,8 @@ async def populate_all(pool) -> Dict[str, int]:
 
 
 async def populate_restaurant_ops(pool) -> Dict[str, int]:
-    """Embed restaurant_ops_router.SAMPLE_QUERIES and upsert into the index.
+    """Embed restaurant_ops_router.SAMPLE_QUERIES + the promotion flywheel
+    ledger, and upsert into the index.
 
     2026-07-07 restaurant intent tiered routing design section 3.3: these
     sample queries existed since Plan C ("used both for keyword matching AND
@@ -115,13 +116,23 @@ async def populate_restaurant_ops(pool) -> Dict[str, int]:
     carries the namespace prefix cosine_topk's code_prefix/exclude_prefix
     filters on -- no separate namespacing needed.
 
+    2026-07-07 flywheel promotion follow-up: `merge_samples` folds in
+    `smartbi/data/promoted_restaurant_intent_samples.json` (human-approved
+    via `scripts/restaurant-intent-promote.py --apply`) so a promoted query
+    gets embedded with the SAME embedding_model as everything else on every
+    boot -- including after a model upgrade, where re-embedding from a
+    DB-only index would silently strand promoted rows on the old model (see
+    restaurant_intent_promotion module docstring).
+
     Idempotent (ON CONFLICT DO UPDATE, same as populate_all) -- safe to call
     on every boot.
     """
     from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES
+    from smartbi.gold.restaurant_intent_promotion import merge_samples
 
+    code_to_samples = merge_samples(SAMPLE_QUERIES)
     summary = await _embed_and_upsert_samples(
-        pool, SAMPLE_QUERIES, log_prefix="restaurant-ops-emb",
+        pool, code_to_samples, log_prefix="restaurant-ops-emb",
     )
     total = sum(summary.values())
     logger.info(
