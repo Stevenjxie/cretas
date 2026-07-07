@@ -391,6 +391,12 @@ test.describe('G2 销售→采购→入库 @pr-gate', () => {
     await receivePage.goto(`/procurement/orders/${poId}`);
     await receivePage.waitForURL(/\/procurement\/orders\//, { timeout: 20_000 });
     await receivePage.waitForSelector('.el-card', { timeout: 15_000 });
+    const notificationCloseButtons = receivePage.locator('.el-notification__closeBtn');
+    const notificationCount = await notificationCloseButtons.count().catch(() => 0);
+    for (let i = notificationCount - 1; i >= 0; i -= 1) {
+      await notificationCloseButtons.nth(i).click({ force: true }).catch(() => {});
+    }
+    await receivePage.locator('.el-notification').first().waitFor({ state: 'hidden', timeout: 3_000 }).catch(() => {});
 
     // Click "创建收货单" / receive button (appears when FINANCE_APPROVED)
     const receiveBtn = receivePage.locator('button:has-text("收货"), button:has-text("创建收货单"), button:has-text("入库")').first();

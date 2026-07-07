@@ -19,6 +19,14 @@ CREATE INDEX idx_manufacturer_factory_active
     ON manufacturer_registry (factory_id, is_active)
     WHERE deleted_at IS NULL;
 
-ALTER TABLE purchase_receive_items
-    ADD COLUMN IF NOT EXISTS factory_number VARCHAR(100),
-    ADD COLUMN IF NOT EXISTS origin_place VARCHAR(200);
+DO $$
+BEGIN
+    IF to_regclass('public.purchase_receive_items') IS NULL THEN
+        RAISE NOTICE 'V20261024_16 skipped: purchase_receive_items not present before Hibernate DDL';
+        RETURN;
+    END IF;
+
+    ALTER TABLE purchase_receive_items
+        ADD COLUMN IF NOT EXISTS factory_number VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS origin_place VARCHAR(200);
+END $$;

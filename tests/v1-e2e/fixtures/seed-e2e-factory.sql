@@ -344,7 +344,7 @@ WHERE NOT EXISTS (
 INSERT INTO material_batches (
     id, factory_id, material_type_id, batch_number, warehouse_id,
     receipt_quantity, used_quantity, reserved_quantity, quantity_unit,
-    inbound_date, status, created_by, created_at, updated_at
+    inbound_date, status, created_by, created_at, updated_at, version
 )
 SELECT
     'e2e-mb-' || m.code || '-0000000000001',
@@ -355,7 +355,7 @@ SELECT
     1000.0000, 0.0000, 0.0000, m.unit,
     CURRENT_DATE, 'AVAILABLE',
     (SELECT id FROM users WHERE username = 'e2e_super_admin'),
-    NOW(), NOW()
+    NOW(), NOW(), 0
 FROM raw_material_types m
 WHERE m.factory_id = 'F_E2E_TEST' AND m.deleted_at IS NULL
 ON CONFLICT (id) DO NOTHING;

@@ -260,33 +260,11 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     await expect(sourceOrderOption).toBeVisible({ timeout: 10_000 });
     await sourceOrderOption.click();
 
-    // Select product line; product type is auto-filled and intentionally disabled.
-    const productLineSelect = planDialog.locator('.el-form-item:has-text("产品行") .el-select').first();
-    await productLineSelect.click();
-    await adminPage.waitForTimeout(500);
-    const productLineOption = adminPage.locator(
-      `.el-select-dropdown:visible .el-select-dropdown__item:has-text("${PRODUCT_NAME}")`
-    );
-    await expect(productLineOption).toBeVisible({ timeout: 8_000 });
-    const processLoadPromise = adminPage.waitForResponse(
-      (r) => r.url().includes('/product-work-processes') && r.request().method() === 'GET',
-      { timeout: 10_000 }
-    ).catch(() => null);
-    await productLineOption.click();
-    await processLoadPromise;
-    await adminPage.waitForTimeout(300);
-    await expect(planDialog.locator('.el-form-item.is-required:has-text("产品类型")')).toContainText(PRODUCT_NAME, {
+    // CUSTOMER_ORDER plans now use product-line multi-select and hide product type/quantity fields.
+    const productLineItem = planDialog.locator('.el-form-item:has-text("产品行")').first();
+    await expect(productLineItem).toContainText(PRODUCT_NAME, {
       timeout: 8_000,
     });
-
-    // Fill planned quantity
-    const planQtyInput = planDialog.locator(S.form.input('计划数量')).or(
-      planDialog.locator('.el-input-number input').first()
-    );
-    await planQtyInput.click();
-    await adminPage.keyboard.press('Control+A');
-    await planQtyInput.fill(String(PLAN_QTY));
-    await adminPage.keyboard.press('Tab');
 
     // Fill planned production date — label renamed 计划日期 → 计划生产日 (list.vue A5/E3).
     // el-date-picker input requires direct type (not fill) to trigger Vue reactivity.
@@ -321,8 +299,9 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
 
     const planBody = await planCreateResp.json();
     expect(planBody.success, `生产计划创建失败: ${JSON.stringify(planBody)}`).toBe(true);
-    planId = String(planBody.data?.id || '');
-    planNumber = String(planBody.data?.planNumber || '');
+    const createdPlan = Array.isArray(planBody.data) ? planBody.data[0] : planBody.data;
+    planId = String(createdPlan?.id || '');
+    planNumber = String(createdPlan?.planNumber || '');
     expect(planId, '生产计划 id 不能为空').toBeTruthy();
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -380,7 +359,21 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     const pickBody = await pickApiResp.json();
     expect(pickBody.success, `开始备料失败: ${JSON.stringify(pickBody)}`).toBe(true);
 
-    // Step 4b: Transfer (PICKING → TRANSFERRED)
+    // Step 4b: Confirm actual picked quantities before transfer.
+    const pickedItems = Array.isArray(pickBody.data?.items) ? pickBody.data.items : [];
+    expect(pickedItems.length, `领料单明细不能为空: ${JSON.stringify(pickBody)}`).toBeGreaterThan(0);
+    const confirmItems = pickedItems.map((item: { id?: string; pickedQty?: number | string | null; requiredQty?: number | string | null }) => ({
+      itemId: item.id,
+      pickedQty: item.pickedQty ?? item.requiredQty,
+    }));
+    const confirmPickApiResp = await adminCtx.request.put(
+      `http://localhost:10010/api/mobile/${FACTORY_ID}/material-requisitions/${fmrId}/confirm-picking`,
+      { data: { items: confirmItems }, headers: { 'Content-Type': 'application/json' } }
+    );
+    const confirmPickBody = await confirmPickApiResp.json();
+    expect(confirmPickBody.success, `确认领料失败: ${JSON.stringify(confirmPickBody)}`).toBe(true);
+
+    // Step 4c: Transfer (PICKING → TRANSFERRED)
     const transferApiResp = await adminCtx.request.put(
       `http://localhost:10010/api/mobile/${FACTORY_ID}/material-requisitions/${fmrId}/transfer`,
       { data: {}, headers: { 'Content-Type': 'application/json' } }
@@ -388,7 +381,7 @@ test.describe('G3 生产 6 步 @pr-gate', () => {
     const transferBody = await transferApiResp.json();
     expect(transferBody.success, `调拨失败: ${JSON.stringify(transferBody)}`).toBe(true);
 
-    // Step 4c: Receive (TRANSFERRED → ISSUED) — materials move 物流仓 → 鲜棉仓
+    // Step 4d: Receive (TRANSFERRED → ISSUED) — materials move 物流仓 → 鲜棉仓
     const receiveApiResp = await adminCtx.request.put(
       `http://localhost:10010/api/mobile/${FACTORY_ID}/material-requisitions/${fmrId}/receive`,
       { data: {}, headers: { 'Content-Type': 'application/json' } }
