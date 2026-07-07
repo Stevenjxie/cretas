@@ -72,8 +72,17 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
 async def _try_tiered_restaurant_intent(
     query: str, pool, factory_id: str, role: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 design:
-    docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md).
+    """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 Phase 1
+    design: docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md).
+
+    Thin wrapper (Phase 2, 2026-07-07:
+    docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+    section 4) -- the implementation now lives in
+    `smartbi.gold.restaurant_intent_service.tiered_answer`, shared with the
+    `POST /api/smartbi/gold/restaurant/tiered-answer` endpoint the Java
+    GoldBackedRestaurantTool delegate gate calls. Signature/behavior here are
+    byte-for-byte unchanged from before the extraction (the 3 existing
+    chat.py call sites and all pre-existing tests are unaffected).
 
     ONLY call this after the existing T1 keyword fast path
     (`match_restaurant_ops`) has already missed at this call site -- this
@@ -91,66 +100,9 @@ async def _try_tiered_restaurant_intent(
       {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
        "title": str, "code": str, "contract_pass": bool, "spec": spec}
     """
-    try:
-        from smartbi.gold.restaurant_intent import (
-            parse_restaurant_query, build_resolver_query, log_intent_capture,
-        )
-        from smartbi.gold import answer_contract as _contract
-        from smartbi.gold.restaurant_ops_router import resolve_by_code as _resolve_tiered
+    from smartbi.gold.restaurant_intent_service import tiered_answer
 
-        spec = await parse_restaurant_query(query, pool, factory_id=factory_id)
-        if spec is None:
-            return None
-        if spec.clarification_needed or not spec.intent:
-            return {
-                "kind": "clarification",
-                "answer_text": (
-                    spec.clarification_question
-                    or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
-                ),
-                "spec": spec,
-            }
-
-        resolver_query = build_resolver_query(query, spec)
-        tiered_answer = await _resolve_tiered(
-            spec.intent, pool, factory_id, role=role, query=resolver_query,
-        )
-        if not tiered_answer:
-            return None
-
-        contract = _contract.validate(
-            spec, tiered_answer.answer_text, tiered_answer.kpis, tiered_answer.meta,
-        )
-        answer_text = tiered_answer.answer_text
-        if not contract.passed:
-            # Spec section 4: missing element(s) get ONE supplemental-fetch
-            # opportunity in the resolver itself (resolve_sales_summary
-            # already does this for margin via wants_margin); if still
-            # missing after that, explicitly disclose rather than silently
-            # dropping it.
-            answer_text += (
-                f"\n\n⚠️ 提示：以上回答可能未完整覆盖{_contract.describe_missing(contract.missing)}，"
-                "如需更精确的结果，可以换个更具体的说法重新提问。"
-            )
-
-        result: Dict[str, Any] = {
-            "kind": "answer",
-            "answer_text": answer_text,
-            "charts": tiered_answer.charts,
-            "kpis": tiered_answer.kpis,
-            "title": tiered_answer.title,
-            "code": spec.intent,
-            "contract_pass": contract.passed,
-            "spec": spec,
-        }
-        asyncio.create_task(log_intent_capture(
-            pool, spec, factory_id=factory_id, query=query,
-            answer=answer_text, contract_pass=contract.passed, served=True,
-        ))
-        return result
-    except Exception as e:
-        logger.warning(f"[restaurant-intent] tiered fast path failed (fail-open): {e}")
-        return None
+    return await tiered_answer(query, pool, factory_id, role)
 
 
 def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:

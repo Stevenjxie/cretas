@@ -1325,4 +1325,128 @@ public class GoldFinanceClient {
             return parsed;
         }
     }
+
+    // =========================================================================
+    // Phase 2 Java-entry delegate gate (2026-07-07)
+    // POST /api/smartbi/gold/restaurant/tiered-answer
+    //
+    // Design: docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+    //
+    // Called from GoldBackedRestaurantTool.doExecute BEFORE its own
+    // resolveWindow -> queryGold -> format flow runs, to ask Python's tiered
+    // (T1/T2/T3) restaurant-intent router + Answer Contract whether THIS
+    // query needs that path instead (profitability/margin verdicts and
+    // relative-window ops summaries that the Java Gold Tool family cannot
+    // produce). X-User-Role forwarded so the Python-side RBAC money-strip
+    // sees the caller's price-view permission, same as every other fetch*
+    // method here.
+    // =========================================================================
+
+    /** Per-call timeout for {@link #fetchTieredIntentAnswer} — T3 LLM parse
+     * is capped at 5s Python-side; 10s leaves headroom for the vector/DB
+     * resolve + network round-trip without holding the Tool call open too
+     * long (design section 4: "timeout 10s（T3 LLM 最多 5s + resolve）"). */
+    private static final long TIERED_ANSWER_TIMEOUT_MS = 10_000L;
+
+    /**
+     * Ask Python's tiered restaurant-intent router whether {@code userInput}
+     * should be delegated to the Python path instead of this Tool's own Gold
+     * flow.
+     *
+     * <p><b>Deviates from every other {@code fetchX} method in this class:
+     * this method NEVER throws.</b> Per design section 4 ("任何非 200/异常返回
+     * null"), any transport failure, non-2xx response, or parse error is
+     * logged at WARN and swallowed, returning {@code null}. This keeps
+     * {@code GoldBackedRestaurantTool.doExecute}'s delegate gate a simple
+     * null-check — the gate itself still wraps the whole decision in a
+     * defensive try/catch (design section 4: "catch Exception 必须 log.warn
+     * 后 fall through，绝不向上抛"), belt-and-suspenders in case something
+     * other than this HTTP call throws.
+     *
+     * @param factoryId    tenant id — the RAW factoryId, deliberately NOT
+     *                     passed through {@code resolveGoldFactoryId}
+     *                     (DEMO_REST → RES_3101_009 aliasing). The Python
+     *                     restaurant-intent path handles DEMO_REST directly
+     *                     against its own seeded Gold data (V20260706_01
+     *                     migration), matching chat.py's existing
+     *                     factory_id_hdr usage at its 3 SSE call sites —
+     *                     aliasing here would look up the wrong tenant's
+     *                     restaurant-ops rows (design section 4).
+     * @param userInput    the user's free-form question; {@code null}/blank
+     *                     short-circuits to {@code null} without a network
+     *                     call (mirrors the Tool-side "userInput 空 → 跳过"
+     *                     rule so this method is always safe to call
+     *                     unconditionally)
+     * @param javaToolName the calling Tool's {@code getToolName()} —
+     *                     observability tag forwarded as {@code java_tool_name}
+     *                     in the request body; not currently branched on by
+     *                     the Python decision function (reserved for future
+     *                     per-tool exceptions)
+     * @return parsed response map: {@code {"delegate": false}} when Java
+     *         should keep its own flow; {@code {"delegate": true, "kind":
+     *         "clarification", "answer_text": ...}} for a clarifying
+     *         question; or {@code {"delegate": true, "answer_text": ...,
+     *         "charts": [...], "kpis": [...], "code": ..., "contract_pass":
+     *         ...}} for a full answer. {@code null} on any failure.
+     */
+    public Map<String, Object> fetchTieredIntentAnswer(
+            String factoryId,
+            String userInput,
+            String javaToolName
+    ) {
+        if (factoryId == null || factoryId.trim().isEmpty()) {
+            log.debug("fetchTieredIntentAnswer: missing factoryId, skipping");
+            return null;
+        }
+        if (userInput == null || userInput.trim().isEmpty()) {
+            return null;
+        }
+
+        long t0 = System.currentTimeMillis();
+        try {
+            java.util.Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("factory_id", factoryId);
+            bodyMap.put("query", userInput);
+            if (javaToolName != null && !javaToolName.isEmpty()) {
+                bodyMap.put("java_tool_name", javaToolName);
+            }
+            String json = objectMapper.writeValueAsString(bodyMap);
+
+            Request.Builder reqBuilder = new Request.Builder()
+                    .url(config.getUrl() + "/api/smartbi/gold/restaurant/tiered-answer")
+                    .post(RequestBody.create(json, JSON_MEDIA));
+            if (!internalSecret.isEmpty()) {
+                reqBuilder.addHeader("X-Internal-Secret", internalSecret);
+                reqBuilder.addHeader("X-Factory-Id", factoryId);
+                String userRole = currentUserRole();
+                if (userRole != null && !userRole.isEmpty()) {
+                    reqBuilder.addHeader("X-User-Role", userRole);
+                }
+            }
+            Request req = reqBuilder.build();
+
+            okhttp3.Call call = http.newCall(req);
+            call.timeout().timeout(TIERED_ANSWER_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            try (Response resp = call.execute()) {
+                long elapsed = System.currentTimeMillis() - t0;
+                if (!resp.isSuccessful()) {
+                    String body = resp.body() != null ? resp.body().string() : "";
+                    log.warn("Tiered intent answer HTTP {} in {}ms factory={} tool={}: {}",
+                            resp.code(), elapsed, factoryId, javaToolName, body);
+                    return null;
+                }
+                String body = resp.body() != null ? resp.body().string() : "{}";
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+                log.debug("Tiered intent answer factory={} tool={} delegate={} in {}ms",
+                        factoryId, javaToolName, parsed.get("delegate"), elapsed);
+                return parsed;
+            }
+        } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - t0;
+            log.warn("Tiered intent answer failed factory={} tool={} in {}ms: {}",
+                    factoryId, javaToolName, elapsed, e.getMessage());
+            return null;
+        }
+    }
 }
