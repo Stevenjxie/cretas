@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,6 +44,8 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
      * 下游道 semiFinished 投料的 getSemiUnitCost 移动均价传导, 无需在此单独读)。
      */
     List<ProcessSheetRow> findByFactoryIdAndBatchId(String factoryId, Long batchId);
+
+    List<ProcessSheetRow> findByFactoryIdAndBatchIdIn(String factoryId, Collection<Long> batchIds);
 
     /**
      * SP-F Task 1.8: 按 (factory, plan, clientRowId) 查行 —— delete 端点路径不含 processCode。

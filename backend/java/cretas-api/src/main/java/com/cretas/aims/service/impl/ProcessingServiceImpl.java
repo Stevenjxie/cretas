@@ -4,6 +4,7 @@ import com.cretas.aims.dto.batch.TeamBatchReportRequest;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.*;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
@@ -71,6 +72,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final QualityInspectionService qualityInspectionService;
     private final ProductionAlertRepository productionAlertRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
+    private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // Sprint 5 Track E (M-WAGE-INTEGRATION-1): 生产→工资 自动 trigger
@@ -381,6 +383,54 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
     }
 
+    private void enrichClerkWipSourceFields(String factoryId, List<ProductionBatch> batches) {
+        if (batches == null || batches.isEmpty()) {
+            return;
+        }
+        List<Long> clerkWipIds = batches.stream()
+                .filter(batch -> batch != null && "CLERK_WIP".equals(batch.getBatchType()))
+                .map(ProductionBatch::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        if (clerkWipIds.isEmpty()) {
+            return;
+        }
+
+        Map<Long, ProcessSheetRow> rowByBatchId = processSheetRowRepository
+                .findByFactoryIdAndBatchIdIn(factoryId, clerkWipIds)
+                .stream()
+                .filter(row -> row.getBatchId() != null)
+                .collect(Collectors.toMap(
+                        ProcessSheetRow::getBatchId,
+                        row -> row,
+                        (left, right) -> left.getId() <= right.getId() ? left : right
+                ));
+
+        Set<String> planIds = rowByBatchId.values().stream()
+                .map(ProcessSheetRow::getPlanId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<String, String> planNumberById = planIds.isEmpty()
+                ? Collections.emptyMap()
+                : productionPlanRepository.findAllById(planIds).stream()
+                        .filter(plan -> factoryId.equals(plan.getFactoryId()))
+                        .collect(Collectors.toMap(ProductionPlan::getId, ProductionPlan::getPlanNumber));
+
+        for (ProductionBatch batch : batches) {
+            if (batch == null || !"CLERK_WIP".equals(batch.getBatchType())) {
+                continue;
+            }
+            ProcessSheetRow row = rowByBatchId.get(batch.getId());
+            if (row == null) {
+                continue;
+            }
+            batch.setSourcePlanId(row.getPlanId());
+            batch.setSourcePlanNumber(planNumberById.get(row.getPlanId()));
+            batch.setSourceProcessOrder(row.getProcessOrder());
+            batch.setSourceProcessCode(row.getProcessCode());
+        }
+    }
+
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
         if (pageRequest != null) {
             return getBatchPage(factoryId, status, null, false, pageRequest);
@@ -500,6 +550,9 @@ public class ProcessingServiceImpl implements ProcessingService {
                     : productionBatchRepository.findByFactoryIdAndSupervisorId(factoryId, supervisorId, pageable);
         }
         page.getContent().forEach(this::enrichBatchDisplayFields);
+        if (includeClerkWip) {
+            enrichClerkWipSourceFields(factoryId, page.getContent());
+        }
         return PageResponse.of(
                 page.getContent(),
                 pageRequest.getPage(),
