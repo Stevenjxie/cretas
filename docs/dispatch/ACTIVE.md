@@ -5,6 +5,13 @@
 **防撞**: 派活前查 Scope 锁地图，重叠 → 串行 / 切 scope，绝不并发改同一文件。
 **规范**: 详见 `.claude/rules/organizer-protocol.md` + `.claude/rules/multi-model-dispatch.md`。
 
+> 🚦 **2026-07-07 Ship-gate 值守 (Opus organizer 接手 Codex 测试 campaign 出货闸)** — Codex 跑 headed 找/修/PR, Opus gate 终审 + 从 main 部署。3 项全 **SHIPPED**:
+> 1. **#1285** RN 报工 BOM shortage N+1 分组 (51 batch → 按 `productTypeId|qty` 去重 1 call, 结果 fan-out 回所有 batchId) — gate PASS(纯前端 util+screen, 无红线, rn-test 绿) → merged `a10b8aa4c` → **RN OTA prod** (rv 1.0.1 / ch production / ts 1783393856597, manifest 已验 serve 新 bundle)。
+> 2. **#1286** web-admin 报损列表字段映射修复 (列此前绑 flat `prop=batchNumber/quantity/applicantName` → 接口返嵌套 → 空; 改 accessor fallback `materialBatch/finishedGoodsBatch/createdByName`) — 之前 codex push 网络瞬断搁浅, **重试 push 成功** → gate PASS(display-only, `TableRow=Record<string,any>` 编译安全; vue-build red = main 既有 3 test 失败与本 diff 无关, **已在 clean main 复现证实**) → merged → **web-admin prod 部署** (139:8086, HTTP 200, 675 assets, git pre-check HEAD==origin/main)。
+> 3. **#1287** RN 操作员分配工序任务状态口径 (yield step `phase=COMPLETED` 即视为完成隐藏, 即使 `task.status` 滞后 IN_PROGRESS; 统一前置检查覆盖非哨兵工序) — Codex 已 commit+push(worktree `C:/Users/Steve/rn-task-status`, 未丢) → gate PASS(纯 RN 过滤, rn-test 绿, mergeable CLEAN) → merged → 同 OTA bundle(1.0.1/1783393856597)。
+> ⚠️ **遗留(非本批, 需修)**: main 上 3 个 vue 单测**预先 red** — `menuConfig.spec`(Liushanmen dept workflow entries) + `ChartInsightProvider.spec`×2(restaurant chart 本地化 store/dish 标签), 来自近期 restaurant-owner-ai/liushanmen 工作, 断言与实现不符 → **CI/CD Pipeline main 常红噪音**。快修候选(Sonnet/Codex): 判定是 test 该更新 vs 实现回归。
+> 隔离铁律遵守: 只前端(app-wide client perf/UI, 租户无关), **未碰 LIUSHANMEN 数据**; prod 从 clean main worktree(`.worktrees/main-restaurant-ai-merge`)部署; commit 锁 scope。
+
 > ⚙️ **Fleet 现状 (2026-06-07)**: **Codex/GPT 暂停**(GPT 10x 额度用尽) → **出 Claude 池只剩 Composer 2.5**。
 > 路由临时调整: 改文件/UI/样式/lint → Composer(唯一出池); **跑终端/headed E2E/构建/TDD/查日志 → 回 Claude 20x 桶**(Sonnet subagent 或 Steve 开的 low/med Sonnet chat),**别硬塞 Composer**(它弱在 CLI/E2E/构建);判断/红线/终审 → Opus 自留。GPT 恢复后撤销此行。
 
