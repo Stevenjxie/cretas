@@ -515,6 +515,17 @@ def _pick_owner_action_scenario(message: str, requested: str, previous: str) -> 
     requested = _OWNER_ACTION_SCENARIO_ALIASES.get(str(requested or "").strip(), requested)
     previous = _OWNER_ACTION_SCENARIO_ALIASES.get(str(previous or "").strip(), previous)
     explicit = _infer_owner_action_scenario_from_message(message)
+    if previous == "revenue_growth" and _is_follow_up(message) and any(keyword in (message or "") for keyword in (
+        "选一个营收杠杆",
+        "继续拆",
+        "先拆客流转化",
+        "门口海报",
+        "首图",
+        "明天看哪三个数",
+        "进店没涨",
+        "再拆客单",
+    )):
+        return previous
     if explicit in scenarios:
         return explicit
     if requested in scenarios:
@@ -1784,8 +1795,21 @@ def _owner_chart_guide(scenario: str) -> str:
     return "图表是给建议做证据用的：先看差距最大的柱子，再决定今天先改哪一个动作。"
 
 
-def _owner_chat_follow_ups(scenario: str) -> list[str]:
+def _owner_chat_follow_ups(scenario: str, message: str = "") -> list[str]:
     if scenario == "revenue_growth":
+        text = message or ""
+        if "门口海报" in text or "首图" in text:
+            return [
+                "明天看哪三个数",
+                "如果进店没涨怎么办",
+                "再拆客单和套餐怎么做",
+            ]
+        if "选一个营收杠杆" in text or "继续拆" in text or "先拆客流转化" in text:
+            return [
+                "门口海报和首图具体怎么改",
+                "明天看哪三个数",
+                "如果进店没涨怎么办",
+            ]
         return [
             "帮我选一个营收杠杆继续拆",
             "先拆客流转化怎么做",
@@ -2005,6 +2029,25 @@ def _owner_direct_special_answer(owner_page: dict[str, Any], scenario: str, mess
     if not text:
         return ""
     if scenario == "revenue_growth":
+        if "门口海报" in text or "首图" in text:
+            return "\n\n".join([
+                "门口海报和线上首图今天只改一件事：让顾客 3 秒内知道为什么现在进店。",
+                "门口海报写：两个人吃招牌青花椒鱼，价格清楚，45 分钟左右吃完。图片只放招牌鱼和双人价，不要放一堆菜名。",
+                "美团/大众点评首图用同一句话，同一个价格承诺；抖音团购页面也别只讲便宜，要写清到店可核销、适合两人、预计出餐时间。",
+                "前台迎宾同步讲同一句：您如果两个人用餐，今天点招牌鱼双人组合最稳，我先帮您确认券和预计上菜时间。",
+            ])
+        if "明天看哪三个数" in text:
+            return "\n\n".join([
+                "明天只看三个数：门口咨询人数、平台到店核销、实际进店下单数。",
+                "如果咨询涨、核销涨、下单也涨，说明入口话术有效；如果只有咨询涨但下单没涨，问题在前台承接或价格表达；如果三个都不动，首图和海报还没打中顾客。",
+                "先别用整店总收入判断这次动作，因为一天内收入会被天气、活动和大桌影响。先看入口漏斗有没有动。",
+            ])
+        if "进店没涨" in text:
+            return "\n\n".join([
+                "如果明天进店没涨，不要马上打折，先换入口表达。",
+                "第一步换图：首图从菜品堆叠改成招牌鱼实物 + 双人价格。第二步换话术：从“欢迎光临”改成“两个人吃招牌鱼大概多少钱、多久能吃完”。第三步查竞品：同楼层酸菜鱼或川菜有没有更清楚的门口价。",
+                "再观察一天。如果门口咨询仍不涨，再考虑商场活动联动或平台曝光；如果咨询涨但进店不涨，就训练前台承接，不是继续投流。",
+            ])
         if "选一个营收杠杆" in text or "继续拆" in text:
             return "\n\n".join([
                 "我建议今天先拆客流转化，不要先拆套餐。",
@@ -2433,7 +2476,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
         if role_plan:
             owner_page["roleActionPlan"] = role_plan
     answer = _owner_chat_answer(owner_page, scenario, body.message, is_follow_up=is_follow_up_turn)
-    follow_ups = _owner_chat_follow_ups(scenario)
+    follow_ups = _owner_chat_follow_ups(scenario, body.message)
     charts = _owner_evidence_charts(owner_page, scenario, params)
     chart_guide = _owner_chart_guide(scenario) if charts else ""
     data_readiness = _owner_action_data_readiness(scenario, params)
