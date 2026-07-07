@@ -254,6 +254,55 @@ _BASE_PARAMS: dict[str, Any] = {
 
 
 _SCENARIO_PATCHES: dict[str, dict[str, Any]] = {
+    "revenue_growth": {
+        "pos_summary": {
+            "weekdayWeekend": {"weekdayAvgDailyRevenue": 17200, "weekendAvgDailyRevenue": 19800, "gapPct": 15.1},
+            "dailyAnomaly": {"date": "2026-07-01", "revenueVsBaselinePct": -9.5, "ordersVsBaselinePct": -7.8},
+            "platformChannels": [
+                {
+                    "platform": "美团/大众点评",
+                    "orders": 2980,
+                    "revenue": 671500,
+                    "exposure": 208000,
+                    "storePageVisits": 24500,
+                    "couponRedemptions": 1280,
+                    "conversionRate": 0.122,
+                    "rating": 4.71,
+                    "mainProblem": "页面访问不少，但双人套餐和招牌鱼表达不够直接",
+                },
+                {
+                    "platform": "抖音团购",
+                    "orders": 610,
+                    "revenue": 121300,
+                    "exposure": 166000,
+                    "storePageVisits": 11800,
+                    "couponRedemptions": 360,
+                    "conversionRate": 0.052,
+                    "rating": 4.58,
+                    "mainProblem": "曝光高、核销低，短视频引流没有被套餐承接",
+                },
+            ],
+        },
+        "traffic_persona": {
+            "storefrontPassersby": 5600,
+            "estimatedStoreVisits": 690,
+            "captureRate": 0.123,
+            "trafficTrend": {
+                "mallVsLastWeekPct": 14.8,
+                "restaurantFloorVsLastWeekPct": 11.5,
+                "storefrontVsLastWeekPct": 10.2,
+                "storeOrdersVsTrafficPct": -18.4,
+            },
+            "customerProfiles": [
+                {"segment": "周边办公午餐客", "share": 0.44, "need": "45分钟内吃完、价格清楚"},
+                {"segment": "逛街随机客", "share": 0.24, "need": "门口能马上看懂招牌和双人价"},
+            ],
+            "mallBenchmarks": {
+                "sameFloorPeerCaptureRate": 0.24,
+                "categoryMedianCaptureRate": 0.21,
+            },
+        },
+    },
     "package": {},
     "operations_dispatch": {
         "pos_summary": {

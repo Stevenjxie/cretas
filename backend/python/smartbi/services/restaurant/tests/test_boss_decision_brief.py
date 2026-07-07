@@ -1544,3 +1544,37 @@ def test_owner_action_chat_routes_inventory_reorder_and_seeds_role_plan() -> Non
     warehouse = next(item for item in role_plan if item["role"] == "仓管")
     assert any("安全库存" in action for action in warehouse["todayActions"])
     assert any("临期" in action for action in warehouse["todayActions"])
+
+
+def test_owner_action_chat_broad_revenue_question_offers_decision_paths() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_BROAD_REVENUE_DEMO",
+            message="老板就想知道这周怎么提高营收，应该先做什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "revenue_growth"
+    assert "先选营收杠杆" in data["answer"]
+    assert "客流转化" in data["answer"]
+    assert "客单和套餐" in data["answer"]
+    assert "翻台和桌型" in data["answer"]
+    assert "排班和出餐" in data["answer"]
+    assert "成本毛利" in data["answer"]
+    assert "缺数据" not in data["answer"]
+    assert "无法判断" not in data["answer"]
+    assert "帮我选一个营收杠杆继续拆" in data["followUpSuggestions"]
+
+    follow_up = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_BROAD_REVENUE_DEMO",
+            session_id=data["sessionId"],
+            message="帮我选一个营收杠杆继续拆",
+        )
+    )
+    follow_up_data = follow_up["data"]
+    assert follow_up_data["scenario"] == "revenue_growth"
+    assert follow_up_data["answer"] != data["answer"]
+    assert "我建议今天先拆客流转化" in follow_up_data["answer"]
+    assert "如果明天进店没动" in follow_up_data["answer"]

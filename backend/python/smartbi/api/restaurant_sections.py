@@ -217,6 +217,7 @@ def _owner_action_data_readiness(scenario: str, params: dict[str, Any]) -> dict[
         "external_event",
     ]
     scenario_sources = {
+        "revenue_growth": ["pos_sales", "traffic_persona", "review_feedback", "bom_cost"],
         "operations_dispatch": ["pos_sales", "inventory", "review_feedback", "traffic_persona"],
         "inventory_reorder": ["inventory", "bom_cost", "pos_sales"],
         "traffic_conversion": ["traffic_persona", "pos_sales", "review_feedback"],
@@ -290,7 +291,8 @@ _OWNER_ACTION_SCENARIO_ALIASES = {
     "table": "seating_mix",
     "seating": "seating_mix",
     "traffic": "traffic_conversion",
-    "revenue": "package",
+    "revenue": "revenue_growth",
+    "growth": "revenue_growth",
     "kitchen": "kitchen_quality",
 }
 
@@ -371,6 +373,7 @@ def _is_follow_up(message: str) -> bool:
             "\u7136\u540e\u5462",
             "\u6267\u884c\u7ec6\u8282",
             "\u62c6\u7ed9\u6211",
+            "\u7ee7\u7eed\u62c6",
             "\u5177\u4f53\u6539",
             "\u5177\u4f53\u8c03",
             "\u5177\u4f53\u6392",
@@ -402,6 +405,54 @@ def _has_owner_action_topic(message: str) -> bool:
         for _, keywords in _OWNER_ACTION_KEYWORDS
         for keyword in keywords
     )
+
+
+def _is_broad_revenue_growth_question(message: str) -> bool:
+    text = message or ""
+    if not any(keyword in text for keyword in (
+        "提高营收",
+        "提升营收",
+        "增加营收",
+        "拉营收",
+        "拉高营收",
+        "营业额",
+        "收入怎么",
+        "生意怎么",
+        "怎么提高生意",
+    )):
+        return False
+    specific_keywords = (
+        "套餐",
+        "组合",
+        "小套餐",
+        "客单价",
+        "提高客单",
+        "提升客单",
+        "客流",
+        "进店",
+        "曝光",
+        "核销",
+        "翻台",
+        "桌型",
+        "排班",
+        "人手",
+        "厨房",
+        "出餐",
+        "成本",
+        "毛利",
+        "BOM",
+        "库存",
+        "补货",
+        "采购",
+        "服务",
+        "差评",
+        "商场活动",
+        "天气",
+        "仓管",
+        "厨师长",
+        "前台",
+    )
+    return not any(keyword in text for keyword in specific_keywords)
 
 
 def _infer_owner_action_scenario_from_message(message: str) -> str:
@@ -437,9 +488,11 @@ def _infer_owner_action_scenario_from_message(message: str) -> str:
         "美团", "大众点评", "抖音", "团购", "竞品", "同商圈", "引流",
     )):
         return "traffic_conversion"
+    if _is_broad_revenue_growth_question(text):
+        return "revenue_growth"
     if any(keyword in text for keyword in ("BOM", "理论用量", "实际用量", "成本", "毛利", "采购价格", "盈利")):
         return "cost_margin"
-    if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "满减", "拉营收", "拉高营收", "提高营收", "提高客单", "提升客单", "客单价")):
+    if any(keyword in text for keyword in ("不想打折", "不要打折", "不打折", "满减", "提高客单", "提升客单", "客单价")):
         return "package"
     if any(keyword in text for keyword in ("厨房", "后厨", "厨师长", "出餐", "上菜慢", "退菜", "重做", "口味", "太咸")) and not any(keyword in text for keyword in ("备菜", "备货", "补货", "库存")):
         return "kitchen_quality"
@@ -1234,6 +1287,8 @@ def _owner_message_specific_watch_numbers(owner_page: dict[str, Any], scenario: 
 
 
 def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
+    if scenario == "revenue_growth":
+        return "今天先别同时改菜单、投流、排班和备货。先选一个营收杠杆跑一天，否则明天看不出到底哪个动作有效。"
     if scenario == "operations_dispatch":
         return "今天先别让每个岗位都自己判断重点，也别临时全员加班。先按仓管、厨师长、前台、店长四张清单跑一晚。"
     if scenario == "inventory_reorder":
@@ -1251,6 +1306,8 @@ def _owner_do_not_do(owner_page: dict[str, Any], scenario: str) -> str:
 
 
 def _owner_watch_numbers(owner_page: dict[str, Any], scenario: str) -> str:
+    if scenario == "revenue_growth":
+        return "明天只看五个数：进店人数、客单价、翻台次数、上菜时长、食材成本率。哪一项最拖后腿，下一轮就只拆那一项。"
     if scenario == "operations_dispatch":
         return "明天只看三个数：晚市收入、平均上菜时长、缺货/售罄次数。收入涨、上菜变快、缺货变少，说明岗位分工有效。"
     if scenario == "inventory_reorder":
@@ -1698,6 +1755,8 @@ def _owner_evidence_charts(owner_page: dict[str, Any], scenario: str, params: di
 
 
 def _owner_chart_guide(scenario: str) -> str:
+    if scenario == "revenue_growth":
+        return "先看营收到底卡在哪条杠杆：客流、客单、翻台、出餐、毛利，不要同时改五件事。"
     if scenario == "operations_dispatch":
         return "先看岗位动作有没有拆清楚，再看库存缺口；老板今天只需要盯等位、上菜、缺货三个异常。"
     if scenario == "inventory_reorder":
@@ -1726,7 +1785,14 @@ def _owner_chart_guide(scenario: str) -> str:
 
 
 def _owner_chat_follow_ups(scenario: str) -> list[str]:
+    if scenario == "revenue_growth":
+        return [
+            "帮我选一个营收杠杆继续拆",
+            "先拆客流转化怎么做",
+            "先拆客单和套餐怎么做",
+        ]
     scenario_specific = {
+        "revenue_growth": "帮我选一个营收杠杆继续拆",
         "package": "把套餐执行细节拆给我",
         "operations_dispatch": "把仓管厨师长前台的动作拆细",
         "inventory_reorder": "库存补货今天具体先看哪几项",
@@ -1938,6 +2004,19 @@ def _owner_direct_special_answer(owner_page: dict[str, Any], scenario: str, mess
     text = (message or "").strip()
     if not text:
         return ""
+    if scenario == "revenue_growth":
+        if "选一个营收杠杆" in text or "继续拆" in text:
+            return "\n\n".join([
+                "我建议今天先拆客流转化，不要先拆套餐。",
+                "原因很简单：demo 里商场和门口人流不弱，问题更像是路过客、平台浏览客没有被一句话拉进店。先把门口海报、美团/大众点评首图、前台迎宾话术统一，再看进店和核销有没有动。",
+                "如果明天进店没动，再拆客单和套餐；如果进店涨但收入没涨，再拆套餐和毛利；如果进店涨但差评涨，再拆厨房和排班。",
+            ])
+        return "\n\n".join([
+            "先选营收杠杆，不要一上来就做套餐或打折。",
+            "我会按 5 条路判断：1 客流转化，看门口和平台有没有把人拉进店；2 客单和套餐，看双人客有没有被合理组合承接；3 翻台和桌型，看两人桌、四人桌有没有错配；4 排班和出餐，看高峰有没有卡在前厅或厨房；5 成本毛利，看收入涨了以后利润有没有被食材和损耗吃掉。",
+            "这家青花椒 demo 当前更像先看客流转化：商场人流和平台曝光有基础，但门口进店、点评/美团核销和抖音承接偏弱。老板今天先别让全店一起改，先选一个杠杆跑一天。",
+            "如果你不选，我默认先拆客流转化；如果你已经确定想拉客单，我再切到套餐毛利；如果你担心高峰忙不过来，我再切到排班和厨房。",
+        ])
     if "不确定" in text and any(keyword in text for keyword in ("范围", "先问", "问我")):
         return "\n\n".join([
             "数据不确定时，不要硬给结论，先让老板选范围。",
@@ -2217,6 +2296,7 @@ def _owner_chat_answer(owner_page: dict[str, Any], scenario: str, message: str, 
         return action_follow_up
 
     direction_label = {
+        "revenue_growth": "营收增长路径",
         "operations_dispatch": "岗位派工",
         "inventory_reorder": "库存补货",
         "traffic_conversion": "客流转化",

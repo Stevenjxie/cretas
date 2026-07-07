@@ -106,6 +106,7 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         )
 
         labels = {
+            "revenue_growth": "营收增长路径",
             "package": "套餐推荐",
             "seating_mix": "桌型调整",
             "staffing_schedule": "排班调整",
