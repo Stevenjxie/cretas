@@ -145,7 +145,8 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // unchanged original flow.
         String userInput = getString(params, "userInput");
         if (userInput != null && !userInput.isBlank()) {
-            Map<String, Object> delegated = tryDelegateToTieredIntent(factoryId, userInput);
+            Map<String, Object> delegated = tryDelegateToTieredIntent(
+                    factoryId, userInput, extractSessionId(context));
             if (delegated != null) {
                 return delegated;
             }
@@ -209,14 +210,25 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
      * @param factoryId raw tenant id (not gold-resolved)
      * @param userInput the user's free-form question (already checked
      *                  non-blank by the caller)
+     * @param sessionId caller's chat session id, or {@code null} when
+     *                  unavailable (see {@link #extractSessionId}) —
+     *                  forwarded so a multi-turn answer to a PREVIOUS
+     *                  clarification question is matched back to it
+     *                  (2026-07-08 clarification-loop v1). {@code null} is
+     *                  a no-op: the 3-arg {@link GoldFinanceClient#fetchTieredIntentAnswer}
+     *                  overload runs exactly as it did before this
+     *                  parameter existed.
      * @return a Tool result map when the Python side delegated (either a
      *         full answer or a clarification), or {@code null} when Java
      *         should proceed with its own {@code resolveWindow -> queryGold
      *         -> format} flow (no delegation, or any failure along the way)
      */
-    private Map<String, Object> tryDelegateToTieredIntent(String factoryId, String userInput) {
+    private Map<String, Object> tryDelegateToTieredIntent(
+            String factoryId, String userInput, String sessionId) {
         try {
-            Map<String, Object> response = gold.fetchTieredIntentAnswer(factoryId, userInput, getToolName());
+            Map<String, Object> response = (sessionId != null && !sessionId.isBlank())
+                    ? gold.fetchTieredIntentAnswer(factoryId, userInput, getToolName(), sessionId)
+                    : gold.fetchTieredIntentAnswer(factoryId, userInput, getToolName());
             if (response == null || !Boolean.TRUE.equals(response.get("delegate"))) {
                 return null;
             }
@@ -259,6 +271,40 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
                     getToolName(), factoryId, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Best-effort session id lookup for the tiered-intent delegate gate's
+     * clarification continuation (2026-07-08 design).
+     *
+     * <p>Only {@code ToolDispatchService.executeWithTool} — the main
+     * intent-execution path — stashes the raw {@code IntentExecuteRequest}
+     * under {@code context.get("request")} (see
+     * {@code ToolDispatchService.java} around line 323). Other Tool-dispatch
+     * paths that build a leaner context (e.g. {@code
+     * DynamicToolSelectionService}, {@code LlmIntentFallbackClientImpl}, the
+     * preview flow) do NOT carry it, so this returns {@code null} for those
+     * — a safe, purely additive best-effort lookup, NOT a contract that
+     * every call site guarantees a session id.
+     *
+     * <p>{@code null} is a complete no-op downstream: {@link
+     * GoldFinanceClient#fetchTieredIntentAnswer(String, String, String)}
+     * (the 3-arg overload) runs exactly as it did before this feature
+     * existed — continuation is simply never attempted for that call.
+     *
+     * @param context the Tool execution context passed into {@code doExecute}
+     * @return the session id, or {@code null} when not available through
+     *         this path
+     */
+    private static String extractSessionId(Map<String, Object> context) {
+        if (context == null) {
+            return null;
+        }
+        Object request = context.get("request");
+        if (request instanceof com.cretas.aims.dto.ai.IntentExecuteRequest req) {
+            return req.getSessionId();
+        }
+        return null;
     }
 
     private String resolveGoldFactoryId(String factoryId) {

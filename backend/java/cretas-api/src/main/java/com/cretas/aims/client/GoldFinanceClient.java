@@ -1394,6 +1394,34 @@ public class GoldFinanceClient {
             String userInput,
             String javaToolName
     ) {
+        return fetchTieredIntentAnswer(factoryId, userInput, javaToolName, null);
+    }
+
+    /**
+     * Overload of {@link #fetchTieredIntentAnswer(String, String, String)}
+     * that also forwards the caller's chat session id (2026-07-08
+     * clarification-loop v1), so a multi-turn answer to a PREVIOUS
+     * clarification question on the Python side can be matched back to the
+     * pending clarification it is answering instead of being parsed as a
+     * brand-new, context-free query.
+     *
+     * @param sessionId caller's chat session id, or {@code null}/blank when
+     *                  unavailable (e.g. this Tool was dispatched via a
+     *                  context-building path that doesn't carry the raw
+     *                  request — see {@code GoldBackedRestaurantTool}'s
+     *                  {@code extractSessionId} javadoc). Omitted from the
+     *                  request body entirely when null/blank — Python
+     *                  treats a missing {@code session_id} exactly like an
+     *                  absent one: continuation is simply never attempted
+     *                  for that call, zero behavior change from before this
+     *                  parameter existed.
+     */
+    public Map<String, Object> fetchTieredIntentAnswer(
+            String factoryId,
+            String userInput,
+            String javaToolName,
+            String sessionId
+    ) {
         if (factoryId == null || factoryId.trim().isEmpty()) {
             log.debug("fetchTieredIntentAnswer: missing factoryId, skipping");
             return null;
@@ -1409,6 +1437,9 @@ public class GoldFinanceClient {
             bodyMap.put("query", userInput);
             if (javaToolName != null && !javaToolName.isEmpty()) {
                 bodyMap.put("java_tool_name", javaToolName);
+            }
+            if (sessionId != null && !sessionId.isBlank()) {
+                bodyMap.put("session_id", sessionId);
             }
             String json = objectMapper.writeValueAsString(bodyMap);
 

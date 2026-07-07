@@ -71,6 +71,7 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
 
 async def _try_tiered_restaurant_intent(
     query: str, pool, factory_id: str, role: Optional[str],
+    *, session_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 Phase 1
     design: docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md).
@@ -95,6 +96,13 @@ async def _try_tiered_restaurant_intent(
     before this feature existed (zero regression risk for non-restaurant
     tenants or when anything below throws).
 
+    `session_key` (2026-07-08 clarification-loop v1, additive/optional):
+    forwarded to `tiered_answer` / `parse_restaurant_query` so a user's
+    answer to a clarification question from a PREVIOUS call at this same
+    call site is parsed in context instead of as a brand-new query. All 3
+    chat.py call sites pass `request.session_id` here; omitted (None) is
+    byte-identical to this function's behavior before the feature existed.
+
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}
       {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
@@ -102,7 +110,7 @@ async def _try_tiered_restaurant_intent(
     """
     from smartbi.gold.restaurant_intent_service import tiered_answer
 
-    return await tiered_answer(query, pool, factory_id, role)
+    return await tiered_answer(query, pool, factory_id, role, session_key=session_key)
 
 
 def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
@@ -1029,6 +1037,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         )
                         tiered = await _try_tiered_restaurant_intent(
                             query, pool, factory_id_hdr, role_hdr,
+                            session_key=request.session_id,
                         )
                         if tiered:
                             response = GeneralAnalysisResponse(
@@ -1703,6 +1712,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             ):
                                 tiered_trend = await _try_tiered_restaurant_intent(
                                     user_q, pool_trend, factory_id_hdr, _role_hdr,
+                                    session_key=request.session_id,
                                 )
                                 if tiered_trend and tiered_trend["kind"] == "answer":
                                     yield _sse_event(
@@ -1897,6 +1907,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             )
                             tiered_ops = await _try_tiered_restaurant_intent(
                                 user_q, pool, factory_id_hdr, _role_hdr,
+                                session_key=request.session_id,
                             )
                             if tiered_ops:
                                 title = tiered_ops.get("title") or "餐饮经营分析"

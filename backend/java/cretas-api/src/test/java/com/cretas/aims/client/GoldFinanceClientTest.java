@@ -158,4 +158,60 @@ class GoldFinanceClientTest {
         assertNull(req.getHeader("X-Internal-Secret"));
         assertNull(req.getHeader("X-Factory-Id"));
     }
+
+    // =========================================================================
+    // fetchTieredIntentAnswer — 2026-07-08 clarification-loop v1 session_id
+    // overload (4-arg). Mirrors the RecordedRequest body-inspection pattern
+    // used elsewhere in this file.
+    // =========================================================================
+
+    @Test
+    void fetchTieredIntentAnswer_4arg_withSessionId_includesSessionIdInBody() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
+
+        client.fetchTieredIntentAnswer("F001", "最近两个月", "restaurant_peak_month_gold", "sess-abc-123");
+
+        RecordedRequest req = server.takeRequest();
+        String body = req.getBody().readUtf8();
+        assertTrue(body.contains("\"session_id\":\"sess-abc-123\""), body);
+        assertTrue(body.contains("\"factory_id\":\"F001\""), body);
+        assertTrue(body.contains("\"query\":\"最近两个月\""), body);
+    }
+
+    @Test
+    void fetchTieredIntentAnswer_4arg_withNullSessionId_omitsSessionIdField() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
+
+        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold", null);
+
+        RecordedRequest req = server.takeRequest();
+        String body = req.getBody().readUtf8();
+        assertFalse(body.contains("session_id"), body);
+    }
+
+    @Test
+    void fetchTieredIntentAnswer_4arg_withBlankSessionId_omitsSessionIdField() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
+
+        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold", "   ");
+
+        RecordedRequest req = server.takeRequest();
+        String body = req.getBody().readUtf8();
+        assertFalse(body.contains("session_id"), body);
+    }
+
+    @Test
+    void fetchTieredIntentAnswer_3arg_overload_stillOmitsSessionIdField() throws Exception {
+        // The pre-existing 3-arg overload (used by every call site that has
+        // no session id available) must produce a byte-identical request
+        // body to before this feature existed -- no session_id key at all.
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
+
+        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold");
+
+        RecordedRequest req = server.takeRequest();
+        String body = req.getBody().readUtf8();
+        assertFalse(body.contains("session_id"), body);
+        assertTrue(body.contains("\"factory_id\":\"F001\""), body);
+    }
 }
