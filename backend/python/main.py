@@ -431,6 +431,41 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[startup] template embedding warmer failed: {e}")
 
+    # 2026-07-07 restaurant intent tiered routing design section 3.3:
+    # populate restaurant_ops_router.SAMPLE_QUERIES into the SAME embedding
+    # index (they've existed since Plan C but were never actually embedded --
+    # this is the T2 vector tier's data source). Mirrors the populate_all
+    # gating above: leader-only, background task, idempotent re-run.
+    try:
+        from smartbi.services.template_embedding_index import (
+            count_embeddings as _count_restaurant_emb,
+            populate_restaurant_ops,
+        )
+        from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES as _RESTAURANT_SAMPLES
+        from smartbi.config import get_pg_pool as _get_pool_restaurant_emb
+        _restaurant_emb_pool = await _get_pool_restaurant_emb()
+        if _restaurant_emb_pool is not None:
+            _restaurant_expected = sum(len(v) for v in _RESTAURANT_SAMPLES.values())
+            _restaurant_existing = await _count_restaurant_emb(
+                _restaurant_emb_pool, code_prefix="RESTAURANT_OPS_",
+            )
+            if _restaurant_existing == 0 or (
+                _restaurant_expected > 0 and _restaurant_existing < _restaurant_expected
+            ):
+                if _is_leader:
+                    logger.info(
+                        f"[startup] restaurant ops embedding index — "
+                        f"populating {_restaurant_expected} sample queries in background (leader)"
+                    )
+                    import asyncio as _asyncio_r
+                    _asyncio_r.create_task(populate_restaurant_ops(_restaurant_emb_pool))
+                else:
+                    logger.info(
+                        "[follower] restaurant ops embedding warmer skipped (leader will populate)"
+                    )
+    except Exception as e:
+        logger.warning(f"[startup] restaurant ops embedding warmer failed: {e}")
+
     # Agent layer narrative_cache TTL pruner — hourly background task.
     # Gated on SMARTBI_AGENT_LAYER_ENABLED so disabled tenants don't touch the table.
     _narrative_pruner_task = None

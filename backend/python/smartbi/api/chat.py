@@ -69,6 +69,90 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
         return None
 
 
+async def _try_tiered_restaurant_intent(
+    query: str, pool, factory_id: str, role: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """T2 (vector) / T3 (LLM) restaurant intent routing (2026-07-07 design:
+    docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md).
+
+    ONLY call this after the existing T1 keyword fast path
+    (`match_restaurant_ops`) has already missed at this call site -- this
+    function does not re-check keywords, it goes straight to
+    `parse_restaurant_query` (which itself re-tries T1 first, cheaply, before
+    T2/T3 -- so calling it unconditionally is safe, just slightly redundant).
+
+    Fail-open: returns None on any miss/exception/business-type-gate-closed,
+    so every call site's existing fallback chain is reached exactly as
+    before this feature existed (zero regression risk for non-restaurant
+    tenants or when anything below throws).
+
+    Return shape:
+      {"kind": "clarification", "answer_text": str, "spec": spec}
+      {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
+       "title": str, "code": str, "contract_pass": bool, "spec": spec}
+    """
+    try:
+        from smartbi.gold.restaurant_intent import (
+            parse_restaurant_query, build_resolver_query, log_intent_capture,
+        )
+        from smartbi.gold import answer_contract as _contract
+        from smartbi.gold.restaurant_ops_router import resolve_by_code as _resolve_tiered
+
+        spec = await parse_restaurant_query(query, pool, factory_id=factory_id)
+        if spec is None:
+            return None
+        if spec.clarification_needed or not spec.intent:
+            return {
+                "kind": "clarification",
+                "answer_text": (
+                    spec.clarification_question
+                    or "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
+                ),
+                "spec": spec,
+            }
+
+        resolver_query = build_resolver_query(query, spec)
+        tiered_answer = await _resolve_tiered(
+            spec.intent, pool, factory_id, role=role, query=resolver_query,
+        )
+        if not tiered_answer:
+            return None
+
+        contract = _contract.validate(
+            spec, tiered_answer.answer_text, tiered_answer.kpis, tiered_answer.meta,
+        )
+        answer_text = tiered_answer.answer_text
+        if not contract.passed:
+            # Spec section 4: missing element(s) get ONE supplemental-fetch
+            # opportunity in the resolver itself (resolve_sales_summary
+            # already does this for margin via wants_margin); if still
+            # missing after that, explicitly disclose rather than silently
+            # dropping it.
+            answer_text += (
+                f"\n\n⚠️ 提示：以上回答可能未完整覆盖 {'、'.join(contract.missing)}，"
+                "如需更精确的结果，可以换个更具体的说法重新提问。"
+            )
+
+        result: Dict[str, Any] = {
+            "kind": "answer",
+            "answer_text": answer_text,
+            "charts": tiered_answer.charts,
+            "kpis": tiered_answer.kpis,
+            "title": tiered_answer.title,
+            "code": spec.intent,
+            "contract_pass": contract.passed,
+            "spec": spec,
+        }
+        asyncio.create_task(log_intent_capture(
+            pool, spec, factory_id=factory_id, query=query,
+            answer=answer_text, contract_pass=contract.passed, served=True,
+        ))
+        return result
+    except Exception as e:
+        logger.warning(f"[restaurant-intent] tiered fast path failed (fail-open): {e}")
+        return None
+
+
 def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
     """Build a self-contained input_text for chat_qa corpus samples.
 
@@ -979,6 +1063,35 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             )
                             _chat_cache_set(cache_key, response.dict())
                             return response
+                else:
+                    # 2026-07-07 tiered intent (T2 vector / T3 LLM): only
+                    # reached when T1 keyword match_restaurant_ops missed
+                    # (ops_code was falsy). Business-type-gated inside the
+                    # helper; fail-open (returns None on any miss/error, so
+                    # the existing fallback chain below is unaffected).
+                    pool = await _get_pool()
+                    if pool:
+                        role_hdr = (
+                            getattr(http_request.state, 'role', None)
+                            if hasattr(http_request, 'state') else None
+                        )
+                        tiered = await _try_tiered_restaurant_intent(
+                            query, pool, factory_id_hdr, role_hdr,
+                        )
+                        if tiered:
+                            response = GeneralAnalysisResponse(
+                                success=True,
+                                answer=tiered["answer_text"],
+                                aiAnalysis=tiered["answer_text"],
+                                sessionId=request.session_id,
+                                thinkingEnabled=request.enable_thinking,
+                                insights=[],
+                                charts=tiered.get("charts") or [],
+                                processing_time_ms=int((time.time() - start_time) * 1000),
+                            )
+                            if tiered["kind"] == "answer":
+                                _chat_cache_set(cache_key, response.dict())
+                            return response
             except Exception as ops_err:
                 logger.warning(f"[general_analysis] restaurant ops fast path failed: {ops_err}")
 
@@ -1553,7 +1666,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         resolve_by_code as _resolve_ops_trend,
                     )
                     from smartbi.config import get_pg_pool as _get_pool_trend
-                    if _match_ops_trend(user_q) == "RESTAURANT_OPS_TREND_ANALYSIS":
+                    _t1_trend_code = _match_ops_trend(user_q)
+                    if _t1_trend_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
                             _role_hdr = (
@@ -1606,6 +1720,86 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     f"template=RESTAURANT_OPS_TREND_ANALYSIS, wall={wall_ms}ms"
                                 )
                                 return  # early exit — gold trend served the answer
+                    elif not _t1_trend_code:
+                        # 2026-07-07 tiered intent (T2 vector / T3 LLM), kept
+                        # SURGICAL to this pre-check's original scope: only
+                        # escalate here when the resolved intent is
+                        # specifically TREND_ANALYSIS (a paraphrase of
+                        # 同比/环比/趋势 the frozen T1 keyword table missed).
+                        # Any OTHER ops code detected by T2/T3 is deliberately
+                        # NOT served here -- it falls through to the
+                        # synthesis router below exactly as before, and gets
+                        # picked up by the general tiered block in the
+                        # gold-ops section further down. This preserves the
+                        # "minimal blast radius" guarantee of this pre-check.
+                        pool_trend = await _get_pool_trend()
+                        if pool_trend:
+                            _role_hdr = (
+                                getattr(http_request.state, 'role', None)
+                                if hasattr(http_request, 'state') else None
+                            )
+                            from smartbi.gold.restaurant_intent import (
+                                parse_restaurant_query as _peek_trend_spec,
+                            )
+                            _trend_spec = await _peek_trend_spec(
+                                user_q, pool_trend, factory_id=factory_id_hdr,
+                            )
+                            if (
+                                _trend_spec is not None
+                                and _trend_spec.intent == "RESTAURANT_OPS_TREND_ANALYSIS"
+                                and not _trend_spec.clarification_needed
+                            ):
+                                tiered_trend = await _try_tiered_restaurant_intent(
+                                    user_q, pool_trend, factory_id_hdr, _role_hdr,
+                                )
+                                if tiered_trend and tiered_trend["kind"] == "answer":
+                                    yield _sse_event(
+                                        "status",
+                                        f"命中餐饮运营模板:{tiered_trend.get('title') or '营收趋势分析'}",
+                                    )
+                                    chunk_size = 40
+                                    trend_text = tiered_trend["answer_text"]
+                                    for i in range(0, len(trend_text), chunk_size):
+                                        yield _sse_event("chunk", trend_text[i:i + chunk_size])
+                                    if tiered_trend.get("charts"):
+                                        yield _sse_event("charts", tiered_trend["charts"])
+                                    wall_ms = int((time.time() - start_time) * 1000)
+                                    yield _sse_event("done", {
+                                        "success": True,
+                                        "answer": trend_text,
+                                        "charts": tiered_trend.get("charts") or [],
+                                        "kpis": tiered_trend.get("kpis") or [],
+                                        "source": "restaurant_ops_gold",
+                                        "template_code": "RESTAURANT_OPS_TREND_ANALYSIS",
+                                        "processingTimeMs": wall_ms,
+                                        "log_id": None,
+                                    })
+                                    if request.session_id and _session_factory_id:
+                                        try:
+                                            from smartbi.services.chat_session_service import (
+                                                ChatSessionService as _CSS_TREND2,
+                                            )
+                                            from smartbi.api.materialized_analytics import (
+                                                _spawn_bg as _spawn_trend2,
+                                            )
+                                            _spawn_trend2(_CSS_TREND2(pool_trend).upsert(
+                                                session_id=request.session_id,
+                                                factory_id=_session_factory_id,
+                                                parent_query=user_q,
+                                                parent_answer_summary=trend_text,
+                                                parent_template_code="RESTAURANT_OPS_TREND_ANALYSIS",
+                                                parent_upload_id=None,
+                                                user_id=_session_user_id,
+                                            ))
+                                        except Exception as _e2:
+                                            logger.warning(
+                                                f"[chat-session] writeback (gold trend tiered) failed: {_e2}"
+                                            )
+                                    logger.info(
+                                        f"[stream] served via gold trend tiered (pre-synthesis): "
+                                        f"tier={_trend_spec.source_tier}, wall={wall_ms}ms"
+                                    )
+                                    return  # early exit — tiered gold trend served the answer
             except Exception as e:
                 logger.warning(f"[stream] gold trend pre-check failed, falling through: {e}")
 
@@ -1737,6 +1931,68 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     f"[stream] served via gold ops: template={ops_code}, wall={wall_ms}ms"
                                 )
                                 return  # early exit — Gold served the answer
+                    else:
+                        # 2026-07-07 tiered intent (T2 vector / T3 LLM): the
+                        # general catch-all for all 8 RESTAURANT_OPS_* codes
+                        # (and clarification), reached only when the frozen T1
+                        # keyword table missed here. Kept AFTER the synthesis
+                        # router above, same relative order T1 already had.
+                        pool = await _get_pool()
+                        if pool:
+                            _role_hdr = (
+                                getattr(http_request.state, 'role', None)
+                                if hasattr(http_request, 'state') else None
+                            )
+                            tiered_ops = await _try_tiered_restaurant_intent(
+                                user_q, pool, factory_id_hdr, _role_hdr,
+                            )
+                            if tiered_ops:
+                                title = tiered_ops.get("title") or "餐饮经营分析"
+                                yield _sse_event("status", f"命中餐饮运营模板:{title}")
+                                chunk_size = 40
+                                answer_text_ops = tiered_ops["answer_text"]
+                                for i in range(0, len(answer_text_ops), chunk_size):
+                                    yield _sse_event("chunk", answer_text_ops[i:i + chunk_size])
+                                if tiered_ops.get("charts"):
+                                    yield _sse_event("charts", tiered_ops["charts"])
+                                wall_ms = int((time.time() - start_time) * 1000)
+                                yield _sse_event("done", {
+                                    "success": True,
+                                    "answer": answer_text_ops,
+                                    "charts": tiered_ops.get("charts") or [],
+                                    "kpis": tiered_ops.get("kpis") or [],
+                                    "source": "restaurant_ops_gold",
+                                    "template_code": tiered_ops.get("code"),
+                                    "processingTimeMs": wall_ms,
+                                    "log_id": None,
+                                })
+                                if (
+                                    tiered_ops["kind"] == "answer"
+                                    and request.session_id and _session_factory_id
+                                ):
+                                    try:
+                                        from smartbi.services.chat_session_service import (
+                                            ChatSessionService as _CSS_OPS2,
+                                        )
+                                        from smartbi.api.materialized_analytics import (
+                                            _spawn_bg as _spawn_ops2,
+                                        )
+                                        _spawn_ops2(_CSS_OPS2(pool).upsert(
+                                            session_id=request.session_id,
+                                            factory_id=_session_factory_id,
+                                            parent_query=user_q,
+                                            parent_answer_summary=answer_text_ops,
+                                            parent_template_code=tiered_ops.get("code") or "RESTAURANT_OPS_CLARIFICATION",
+                                            parent_upload_id=None,
+                                            user_id=_session_user_id,
+                                        ))
+                                    except Exception as _e:
+                                        logger.warning(f"[chat-session] writeback (gold ops tiered) failed: {_e}")
+                                logger.info(
+                                    f"[stream] served via gold ops tiered: kind={tiered_ops['kind']}, "
+                                    f"code={tiered_ops.get('code')}, wall={wall_ms}ms"
+                                )
+                                return  # early exit — tiered Gold served the answer
             except Exception as e:
                 logger.warning(f"[stream] gold ops router failed, falling through: {e}")
 

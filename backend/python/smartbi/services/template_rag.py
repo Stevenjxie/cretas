@@ -73,7 +73,16 @@ async def hybrid_match(
     still expose the best vector candidate below threshold as a "possibly"
     hint to the LLM prompt.
     """
-    candidates = await cosine_topk(pool, query, k=3, min_similarity=MIN_USEFUL)
+    # 2026-07-07 restaurant intent tiered routing design section 3.3:
+    # exclude RESTAURANT_OPS_* from the FACTORY-side vector search so a
+    # factory query can never vector-match a restaurant-only template. The
+    # mirror (restaurant queries scoped to code_prefix='RESTAURANT_OPS_') is
+    # in smartbi.gold.restaurant_intent._t2_vector_match -- together they
+    # give bidirectional business-type isolation.
+    candidates = await cosine_topk(
+        pool, query, k=3, min_similarity=MIN_USEFUL,
+        exclude_prefix="RESTAURANT_OPS_",
+    )
     if not candidates:
         if keyword_code:
             return HybridMatch(

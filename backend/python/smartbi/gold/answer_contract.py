@@ -1,0 +1,157 @@
+"""Answer Contract: post-hoc checks that a served OpsAnswer actually covers
+what the RestaurantQuerySpec asked for (design section 4).
+
+Pure text/heuristic validation -- no LLM judge. Runs against T1 (keyword)
+answers too, which is deliberate: the "最近两个月" regression this whole
+project exists to prevent was a T1-reachable failure mode (a time window
+silently dropped back to full history), and this contract is a regression
+guard for exactly that class of bug regardless of which tier resolved the
+intent.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from smartbi.gold.restaurant_intent import RestaurantQuerySpec
+
+# Tokens that count as an explicit "yes we answered the profitability
+# question" verdict (either direction).
+_PROFIT_VERDICT_TOKENS = (
+    "赚钱", "亏损", "亏了", "赚了", "盈利", "打平", "持平",
+    "不赚", "不亏", "亏钱", "挣钱", "净赚",
+)
+
+# Tokens that count as an explicit, honest "we could not compute this"
+# disclosure -- satisfies the contract just as well as a real number would
+# (per spec section 4: "缺不了就明说" is itself compliant, not a failure).
+_EXPLICIT_GAP_TOKENS = (
+    "无法可靠计算", "无法计算", "缺少", "缺成本", "不完整", "暂时无法",
+    "不能查看", "暂无", "还没有可用",
+)
+
+_MARGIN_TOKENS = ("毛利", "毛利率", "利润")
+
+
+def _contains_any(text: str, tokens: tuple) -> bool:
+    return any(tok in text for tok in tokens)
+
+
+def _window_echoed(spec: RestaurantQuerySpec, answer_text: str) -> bool:
+    if spec.window_label and spec.window_label in answer_text:
+        return True
+    start, end = spec.date_range
+    if start is not None and end is not None:
+        start_text = start.isoformat() if hasattr(start, "isoformat") else str(start)
+        end_text = end.isoformat() if hasattr(end, "isoformat") else str(end)
+        return start_text in answer_text and end_text in answer_text
+    return False
+
+
+def _profitability_verdict_present(answer_text: str) -> bool:
+    return _contains_any(answer_text, _PROFIT_VERDICT_TOKENS)
+
+
+def _margin_value_present(answer_text: str) -> bool:
+    if not _contains_any(answer_text, _MARGIN_TOKENS):
+        return False
+    # Either a number/percent sign near the margin word, or an explicit,
+    # honest disclosure of why it's missing -- both count as "covered".
+    has_number = any(ch.isdigit() for ch in answer_text) or "%" in answer_text or "¥" in answer_text
+    return has_number or _contains_any(answer_text, _EXPLICIT_GAP_TOKENS)
+
+
+def _collect_named_entities(kpis: Optional[List[Dict[str, Any]]], meta: Optional[Dict[str, Any]]) -> List[str]:
+    """Best-effort scrape of concrete object names (store/dish names) baked
+    into kpis/meta by the resolver, so we can check whether the answer_text
+    actually mentions at least one of them."""
+    names: List[str] = []
+    for kpi in (kpis or []):
+        value = kpi.get("value")
+        if isinstance(value, str) and value not in ("—", "***", "暂无"):
+            names.append(value)
+    for meta_list_key in ("stores", "weak_stores", "low_margin_dishes"):
+        entries = (meta or {}).get(meta_list_key) or []
+        for entry in entries:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                names.append(entry["name"])
+            elif isinstance(entry, str):
+                names.append(entry)
+    return names
+
+
+def _dimension_object_named(dimension_label: str, answer_text: str, entities: List[str]) -> bool:
+    if not entities:
+        # No entity list available from this resolver's meta/kpis -- can't
+        # verify either way. Treat as satisfied rather than false-failing
+        # every resolver that doesn't populate a name list (heuristic, not
+        # a hard NLP guarantee -- see module docstring).
+        return True
+    return any(name in answer_text for name in entities if name)
+
+
+def required_elements(spec: RestaurantQuerySpec) -> List[str]:
+    """Which contract elements this spec demands the answer to cover."""
+    elements: List[str] = []
+    if spec.relative_window or spec.window_label != "全部历史":
+        elements.append("window_label")
+    if spec.asks_profitability:
+        elements.append("profitability_verdict")
+    if spec.wants_margin:
+        elements.append("margin_value")
+    if "store" in spec.dimensions:
+        elements.append("store_name")
+    if "dish" in spec.dimensions:
+        elements.append("dish_name")
+    return elements
+
+
+class ContractResult:
+    __slots__ = ("missing",)
+
+    def __init__(self, missing: List[str]):
+        self.missing = missing
+
+    @property
+    def passed(self) -> bool:
+        return not self.missing
+
+    def __repr__(self) -> str:  # pragma: no cover - debug convenience
+        return f"ContractResult(missing={self.missing!r})"
+
+
+def validate(
+    spec: RestaurantQuerySpec,
+    answer_text: str,
+    kpis: Optional[List[Dict[str, Any]]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> ContractResult:
+    """Check answer_text (+ kpis/meta) against everything `spec` demands.
+
+    Never raises -- callers use `.passed` / `.missing` as a quality signal
+    (logged for the flywheel) and, per spec section 4, get exactly one
+    supplemental-fetch opportunity before falling back to an explicit
+    disclaimer. A malformed/empty answer_text simply fails every required
+    element rather than raising.
+    """
+    text = answer_text or ""
+    required = required_elements(spec)
+    entities = _collect_named_entities(kpis, meta)
+
+    missing: List[str] = []
+    for element in required:
+        if element == "window_label":
+            if not _window_echoed(spec, text):
+                missing.append(element)
+        elif element == "profitability_verdict":
+            if not _profitability_verdict_present(text):
+                missing.append(element)
+        elif element == "margin_value":
+            if not _margin_value_present(text):
+                missing.append(element)
+        elif element == "store_name":
+            if not _dimension_object_named("store", text, entities):
+                missing.append(element)
+        elif element == "dish_name":
+            if not _dimension_object_named("dish", text, entities):
+                missing.append(element)
+    return ContractResult(missing=missing)
