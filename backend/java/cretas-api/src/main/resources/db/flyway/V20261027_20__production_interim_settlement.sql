@@ -19,5 +19,13 @@ CREATE INDEX IF NOT EXISTS idx_interim_plan
     ON production_interim_settlement(factory_id, production_plan_id)
     WHERE deleted_at IS NULL;
 
-ALTER TABLE material_consumptions
-    ADD COLUMN IF NOT EXISTS interim_settled_at TIMESTAMP NULL;
+DO $$
+BEGIN
+    IF to_regclass('public.material_consumptions') IS NULL THEN
+        RAISE NOTICE 'V20261027_20 skipped: material_consumptions not present before Hibernate DDL';
+        RETURN;
+    END IF;
+
+    ALTER TABLE material_consumptions
+        ADD COLUMN IF NOT EXISTS interim_settled_at TIMESTAMP NULL;
+END $$;

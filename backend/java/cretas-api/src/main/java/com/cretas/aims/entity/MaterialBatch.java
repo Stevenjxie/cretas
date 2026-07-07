@@ -72,8 +72,14 @@ public class MaterialBatch extends BaseEntity {
     private String warehouseId;
 
     @Version
-    @Column(name = "version")
-    private Long version;
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
+    // Hibernate version generation NPEs when legacy SQL-seeded rows load a null version.
+    // DB backfill/default covers persisted rows; this keeps already-loaded entities safe.
+    public Long getVersion() {
+        return version != null ? version : 0L;
+    }
 
     // ===================================================================
     // 核心字段 - 存储在数据库

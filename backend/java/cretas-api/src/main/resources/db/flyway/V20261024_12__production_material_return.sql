@@ -1,7 +1,17 @@
 -- Production material return for zero-inventory production close.
+-- Guard: factory_material_requisition_items is a Hibernate entity table.
+-- Fresh CI DB runs Flyway before Hibernate, so add the column only when the
+-- table already exists. validate-on-migrate=false keeps this safe on prod.
 
-ALTER TABLE factory_material_requisition_items
-    ADD COLUMN IF NOT EXISTS wastage_qty NUMERIC(15,3) DEFAULT 0;
+DO $$
+BEGIN
+    IF to_regclass('public.factory_material_requisition_items') IS NULL THEN
+        RAISE NOTICE 'V20261024_12 skipped: factory_material_requisition_items not yet created (fresh-DB Flyway-before-Hibernate)';
+    ELSE
+        ALTER TABLE factory_material_requisition_items
+            ADD COLUMN IF NOT EXISTS wastage_qty NUMERIC(15,3) DEFAULT 0;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS production_material_returns (
     id                  VARCHAR(64) PRIMARY KEY,
