@@ -308,8 +308,15 @@ export const usePermissionStore = defineStore('permission', () => {
       ]);
       dbPermissions.value = mergeLayers(l1Rows, l2Map, currentRole.value);
       if (currentFactoryId.value && currentUserId.value) {
-        const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value);
-        applyUserModuleAccess(l4Rows);
+        try {
+          const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value, { silent: true });
+          applyUserModuleAccess(l4Rows);
+        } catch {
+          // L4 user-specific overrides are managed from System/Canvas. Business roles
+          // can run on L1/L2 permissions without read access to that admin matrix.
+          userModuleAccess.value = {};
+          isUserModuleAccessLoaded.value = true;
+        }
       }
       isDbLoaded.value = true;
     } catch (e) {
