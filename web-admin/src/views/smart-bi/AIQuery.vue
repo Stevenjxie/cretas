@@ -573,6 +573,7 @@ function inferDomainFromFilename(name: string): string {
 // as a fallback for non-restaurant tenants and the autocomplete list.
 const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
 const ownerActionSessionId = ref('');
+const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
 
 const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> = [
@@ -1150,7 +1151,8 @@ async function tryJavaIntentChat(
     const inferredOwnerActionScenario = inferOwnerActionScenario(query);
     const pendingScenario = pendingOwnerActionScenario.value;
     const ownerActionQuery = shouldSendOwnerActionContext(query);
-    const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || undefined;
+    const followupScenario = isOwnerActionFollowupText(query) ? currentOwnerActionScenario.value : '';
+    const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || followupScenario || undefined;
     const ownerActionSessionForRequest = (
       pendingScenario || isOwnerActionFollowupText(query)
     ) ? (ownerActionSessionId.value || undefined) : undefined;
@@ -1192,6 +1194,7 @@ async function tryJavaIntentChat(
         || resultDataAny?.advisorSource === 'restaurant_owner_action_advisor';
       if (isOwnerActionResponse) {
         ownerActionSessionId.value = String(resultDataAny.sessionId || ownerActionSessionId.value || '');
+        currentOwnerActionScenario.value = String(resultDataAny.scenario || ownerActionScenario || currentOwnerActionScenario.value || '');
         msg.source = 'restaurant_owner_action';
         msg.templateCode = `owner_action_${resultDataAny.scenario || 'general'}`;
         msg.logId = resultDataAny.log_id ?? resultDataAny.logId ?? null;

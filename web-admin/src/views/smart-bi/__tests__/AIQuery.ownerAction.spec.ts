@@ -232,11 +232,13 @@ describe('AIQuery restaurant owner-action routing', () => {
     expect(executeIntentMock.mock.calls[1][2]).toMatchObject({
       context: {
         ownerActionSessionId: 'owner-action-package-session',
+        ownerActionScenario: 'package',
       },
     });
     expect(executeIntentMock.mock.calls[2][2]).toMatchObject({
       context: {
         ownerActionSessionId: 'owner-action-package-session',
+        ownerActionScenario: 'package',
       },
     });
   });

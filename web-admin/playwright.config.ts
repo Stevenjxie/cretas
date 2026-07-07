@@ -133,6 +133,21 @@ export default defineConfig({
       name: 'restaurant-chat',
       testMatch: 'restaurant-chat.spec.ts',
     },
+    // Restaurant owner AI demo E2E. Skipped by default; enable with:
+    //   RUN_RESTAURANT_OWNER_AI_DEMO_E2E=1 npx playwright test --project restaurant-owner-ai-demo
+    {
+      name: 'restaurant-owner-ai-demo',
+      testMatch: 'restaurant-owner-ai-demo.spec.ts',
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        headless: true,
+        viewport: { width: 1440, height: 960 },
+        locale: 'zh-CN',
+        screenshot: 'on',
+        video: 'retain-on-failure',
+      },
+    },
     // Step 14: 数据织网 C smoke E2E — real-window guards for Day 23-30
     // critical user journeys. Catches "vitest passes but production broken"
     // bugs (Day 26 snake/camel + P0-1 grossMargin 2058% + P0-2 KPI 全 0 +
