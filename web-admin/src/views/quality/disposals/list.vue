@@ -587,8 +587,10 @@ function getApplicantName(row: TableRow): string {
         <el-form-item label="数量" required>
           <el-input-number
             v-model="disposalForm.quantity"
-            :min="1"
+            :min="0.01"
             :max="selectedBatchMax ?? undefined"
+            :step="0.01"
+            :precision="2"
             style="width: 100%"
           />
           <div v-if="selectedBatchMax != null" style="font-size:12px;color:#909399;margin-top:4px">

@@ -4,6 +4,7 @@ import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
@@ -246,6 +247,7 @@ class DisposalRecordServiceCrossTenantTest {
         assertThat(batch.getUsedQuantity()).isEqualByComparingTo("100.00");
         assertThat(batch.getReceiptQuantity()).isEqualByComparingTo("100.00");
         assertThat(batch.getCurrentQuantity()).isEqualByComparingTo("0.00");
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.USED_UP);
         verify(materialBatchRepo).save(batch);
         verify(adjustmentRepo).save(argThat((MaterialBatchAdjustment a) ->
                 a.getQuantityBefore().compareTo(new BigDecimal("20.00")) == 0
