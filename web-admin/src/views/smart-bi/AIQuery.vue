@@ -579,6 +579,18 @@ const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURA
 const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
+const showRestaurantMoreQuestions = ref(false);
+const restaurantPrimaryQuestions = computed(() => RESTAURANT_QUICK_GROUPS[0]?.questions.slice(0, 4) ?? []);
+const restaurantMoreQuestionGroups = computed<RestaurantQuickGroup[]>(() => {
+  const [ownerGroup, ...restGroups] = RESTAURANT_QUICK_GROUPS;
+  const ownerOverflow = ownerGroup?.questions.slice(4) ?? [];
+  return [
+    ...(ownerOverflow.length ? [{ label: '更多老板决策', questions: ownerOverflow }] : []),
+    ...restGroups,
+  ];
+});
+const restaurantMoreQuestionCount = computed(() => restaurantMoreQuestionGroups.value
+  .reduce((total, group) => total + group.questions.length, 0));
 
 function shouldSendOwnerActionContext(query: string): boolean {
   if (!isRestaurantTenant.value) return false;
@@ -606,6 +618,11 @@ const quickQuestions = computed<string[]>(() => {
   const sname = (item as any)?.sheetName || '';
   const domain = inferDomainFromFilename(fname + ' ' + sname);
   return QUICK_QUESTIONS_BY_DOMAIN[domain] || QUICK_QUESTIONS_BY_DOMAIN.default;
+});
+const queryPlaceholder = computed(() => {
+  if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';
+  if (isRestaurantTenant.value) return '直接问老板问题，例如：这周营收怎么提高，今天先做哪几个动作';
+  return '输入您的问题（下拉有 40+ 模板秒回问题可选）';
 });
 
 // 自动补全候选 — 覆盖 35 个模板的高频 sample_queries(177 中精选)
@@ -2174,7 +2191,7 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
       <div class="header-right">
         <el-select
-          v-if="dataSources.length > 0"
+          v-if="dataSources.length > 0 && !isRestaurantTenant"
           v-model="selectedUploadId"
           placeholder="选择数据源"
           size="small"
@@ -2191,7 +2208,7 @@ function handleKeydown(event: KeyboardEvent) {
             </el-tooltip>
           </el-option>
         </el-select>
-        <el-tooltip content="SQL 直查：直接将问题转为 SQL 查询数据" placement="bottom">
+        <el-tooltip v-if="!isRestaurantTenant" content="SQL 直查：直接将问题转为 SQL 查询数据" placement="bottom">
           <el-switch
             v-model="nl2sqlMode"
             active-text="SQL 直查"
@@ -2211,7 +2228,7 @@ function handleKeydown(event: KeyboardEvent) {
     <div class="chat-container">
       <!-- 物化分析面板：仅在选择了数据源时展示，位于对话历史区上方 -->
       <MaterializedAnalysisPanel
-        v-if="selectedUploadId"
+        v-if="selectedUploadId && !isRestaurantTenant"
         :upload-id="selectedUploadId"
       />
 
@@ -2512,7 +2529,7 @@ function handleKeydown(event: KeyboardEvent) {
         </div>
 
         <!-- Template section - shown when only welcome message exists (no real conversation) -->
-        <div v-if="chatHistory.length <= 1" class="template-section">
+        <div v-if="chatHistory.length <= 1 && !isRestaurantTenant" class="template-section">
           <h3 class="template-title">
             <el-icon><Cpu /></el-icon> 选择分析模板
           </h3>
@@ -2559,11 +2576,34 @@ function handleKeydown(event: KeyboardEvent) {
 
       <!-- 快捷问题 (hide when conversation has started to save space) -->
       <!-- P1-B: RESTAURANT 租户展示分组目录; 其他租户展示扁平 chip 列表 (原有逻辑) -->
-      <div v-if="chatHistory.length <= 2 && isRestaurantTenant" class="quick-questions quick-questions--grouped">
-        <span class="label">老板问什么:</span>
-        <div class="questions-grouped">
+      <div v-if="chatHistory.length <= 2 && isRestaurantTenant" class="quick-questions quick-questions--restaurant">
+        <div class="restaurant-question-head">
+          <div>
+            <span class="label">老板今天先问这几个</span>
+            <p>先看能直接做决定的问题，其它分析入口收在下面。</p>
+          </div>
+          <el-button
+            size="small"
+            text
+            @click="showRestaurantMoreQuestions = !showRestaurantMoreQuestions"
+          >
+            {{ showRestaurantMoreQuestions ? '收起' : `更多 ${restaurantMoreQuestionCount} 个` }}
+          </el-button>
+        </div>
+        <div class="restaurant-primary-questions">
+          <el-button
+            v-for="(q, qi) in restaurantPrimaryQuestions"
+            :key="qi"
+            size="small"
+            round
+            @click="handleQuickQuestion(q)"
+          >
+            {{ q }}
+          </el-button>
+        </div>
+        <div v-if="showRestaurantMoreQuestions" class="questions-grouped">
           <div
-            v-for="group in RESTAURANT_QUICK_GROUPS"
+            v-for="group in restaurantMoreQuestionGroups"
             :key="group.label"
             class="questions-group"
           >
@@ -2602,7 +2642,7 @@ function handleKeydown(event: KeyboardEvent) {
           ref="inputRef"
           class="query-autocomplete"
           :fetch-suggestions="fetchAutocomplete"
-          :placeholder="nl2sqlMode ? '输入数据查询，例如：各产品的销售额汇总' : '输入您的问题（下拉有 40+ 模板秒回问题可选）'"
+          :placeholder="queryPlaceholder"
           :disabled="isTyping"
           :trigger-on-focus="true"
           popper-class="query-autocomplete-popper"
@@ -2631,7 +2671,7 @@ function handleKeydown(event: KeyboardEvent) {
 
       <!-- 措施③ "猜你想问" 推荐区: 输入框下方. 列出该工厂已物化的模板, 点 chip
            直接命中物化缓存 (0 token, ~230ms). 仅在有已物化模板时展示. -->
-      <div v-if="recommendChips.length > 0" class="recommend-area">
+      <div v-if="recommendChips.length > 0 && !isRestaurantTenant" class="recommend-area">
         <span class="recommend-label">
           <el-icon><MagicStick /></el-icon> 猜你想问:
         </span>
@@ -3004,6 +3044,58 @@ function handleKeydown(event: KeyboardEvent) {
     gap: 8px;
   }
 
+  &--restaurant {
+    padding: 14px 20px 12px;
+    background: #fbfcfd;
+
+    .restaurant-question-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+
+      .label {
+        display: block;
+        margin: 0 0 2px;
+        color: var(--el-text-color-primary, #303133);
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      p {
+        margin: 0;
+        color: var(--el-text-color-secondary, #909399);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .el-button {
+        flex-shrink: 0;
+      }
+    }
+
+    .restaurant-primary-questions {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+
+      .el-button {
+        width: 100%;
+        min-height: 34px;
+        margin-left: 0;
+        white-space: normal;
+        line-height: 1.35;
+      }
+    }
+
+    .questions-grouped {
+      padding-top: 10px;
+      border-top: 1px dashed var(--el-border-color-light, #e4e7ed);
+    }
+  }
+
   // P1-B: grouped layout for restaurant tenants
   &--grouped {
     padding-bottom: 16px;
@@ -3251,6 +3343,17 @@ function handleKeydown(event: KeyboardEvent) {
     .questions-list {
       max-height: 120px;
       overflow-y: auto;
+    }
+  }
+
+  .quick-questions--restaurant {
+    .restaurant-question-head {
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .restaurant-primary-questions {
+      grid-template-columns: 1fr;
     }
   }
 

@@ -22,10 +22,12 @@ from datetime import date
 import pytest
 
 from smartbi.gold.restaurant_ops_router import (
+    OpsAnswer,
     SAMPLE_QUERIES,
     _resolve_sales_date_range,
     match_restaurant_ops,
     resolve_by_code,
+    resolve_sales_summary,
 )
 
 
@@ -58,6 +60,7 @@ LEGITIMATE_TRIGGERS = [
     ("营业额走势", "RESTAURANT_OPS_TREND_ANALYSIS"),
     ("最近是增长还是下降", "RESTAURANT_OPS_TREND_ANALYSIS"),
     ("总营收和客单价表现怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("最近一个月的营收情况如何？毛利有多少", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("整体销售情况怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("门店销售对比，哪家最值得复制", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("查询本周营收", "RESTAURANT_OPS_SALES_SUMMARY"),
@@ -159,6 +162,7 @@ def test_revenue_amount_query_routes_to_sales_summary_not_trend():
         ("今天查订单", (date(2026, 7, 6), date(2026, 7, 6)), "今天"),
         ("查询本周营收", (date(2026, 7, 6), date(2026, 7, 6)), "本周"),
         ("本月营业额", (date(2026, 7, 1), date(2026, 7, 6)), "本月"),
+        ("最近一个月的营收情况如何？毛利有多少", (date(2026, 6, 7), date(2026, 7, 6)), "最近30天"),
         ("最近7天销售情况", (date(2026, 6, 30), date(2026, 7, 6)), "最近7天"),
         ("总营收和客单价表现怎么样", (None, None), "全部历史"),
     ],
@@ -168,6 +172,65 @@ def test_resolve_sales_date_range(query, expected_range, expected_label):
         expected_range,
         expected_label,
     )
+
+
+def test_sales_summary_recent_month_keeps_time_and_margin(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        captured["date_range"] = date_range
+        return {
+            "total_revenue": 10000.0,
+            "bill_count": 50,
+            "avg_bill_value": 200.0,
+            "day_count": 30,
+            "store_count": 2,
+            "top_stores": [
+                {"store_name": "示范门店01", "revenue": 7000.0, "bill_count": 30},
+            ],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": ["示范门店02"]}
+
+    async def _fake_latest_anchor(pool, factory_id):
+        return date(2025, 12, 31)
+
+    async def _fake_store_margin(pool, factory_id, days=30, top_n=5):
+        captured["margin_days"] = days
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title="门店毛利",
+            answer_text="ok",
+            charts=[],
+            kpis=[],
+            meta={"totalProfit": 1700.0, "avgRate": 0.42},
+        )
+
+    import smartbi.gold.queries as _q
+    import smartbi.gold.restaurant_ops_router as _r
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+    monkeypatch.setattr(_r, "_latest_sales_anchor", _fake_latest_anchor)
+    monkeypatch.setattr(_r, "resolve_store_margin", _fake_store_margin)
+
+    ans = asyncio.run(
+        resolve_sales_summary(
+            object(),
+            "RES_TEST",
+            role="restaurant_manager",
+            query="最近一个月的营收情况如何？毛利有多少",
+        )
+    )
+
+    assert captured["date_range"] == (date(2025, 12, 2), date(2025, 12, 31))
+    assert captured["margin_days"] == 30
+    assert "最近30天" in ans.answer_text
+    assert "毛利约" in ans.answer_text
+    assert "1,700" in ans.answer_text
+    assert any(kpi["title"] == "毛利" for kpi in ans.kpis)
+    assert any(kpi["title"] == "毛利率" for kpi in ans.kpis)
 
 
 # ──────────────────────────────────────────────────────────────────────────

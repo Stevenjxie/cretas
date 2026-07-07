@@ -247,6 +247,9 @@ def _resolve_sales_date_range(
         days = max(1, min(int(recent_match.group(1)), 365))
         return (anchor - timedelta(days=days - 1), anchor), f"最近{days}天"
 
+    if any(token in text for token in ("最近一个月", "近一个月", "最近1个月", "近1个月", "过去一个月", "近一月")):
+        return (anchor - timedelta(days=29), anchor), "最近30天"
+
     if any(token in text for token in ("今天", "今日")):
         return (anchor, anchor), "今天"
 
@@ -257,6 +260,30 @@ def _resolve_sales_date_range(
         return (anchor.replace(day=1), anchor), "本月"
 
     return (None, None), "全部历史"
+
+
+def _uses_relative_sales_window(query: Optional[str]) -> bool:
+    text = (query or "").strip()
+    return bool(
+        re.search(r"最近\s*\d{1,3}\s*天", text)
+        or any(token in text for token in (
+            "最近一个月", "近一个月", "最近1个月", "近1个月", "过去一个月", "近一月",
+            "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
+        ))
+    )
+
+
+async def _latest_sales_anchor(smartbi_pool, factory_id: str) -> Optional[date]:
+    try:
+        async with smartbi_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT MAX(date) AS max_date FROM agg_daily WHERE factory_id = $1",
+                factory_id,
+            )
+        return row["max_date"] if row and row["max_date"] else None
+    except Exception as exc:
+        logger.warning("[restaurant-ops] latest sales anchor lookup failed: %s", exc)
+        return None
 
 
 async def resolve_wastage_top(
@@ -1055,7 +1082,9 @@ async def resolve_sales_summary(
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
-    date_range, window_label = _resolve_sales_date_range(query)
+    anchor = await _latest_sales_anchor(smartbi_pool, factory_id) if _uses_relative_sales_window(query) else None
+    date_range, window_label = _resolve_sales_date_range(query, today=anchor)
+    wants_margin = any(token in (query or "") for token in ("毛利", "毛利润", "毛利率", "利润"))
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     stores_data = await store_comparison(smartbi_pool, factory_id, date_range)
     stores = stores_data.get("stores") or []
@@ -1100,9 +1129,34 @@ async def resolve_sales_summary(
         weak_line = f"低于中位水平的门店有 {len(weak_stores)} 家，先看{weak_stores[0]}。"
 
     avg_text = _money(float(avg_bill)) if avg_bill is not None else "暂无"
+    margin_line = ""
+    margin_meta: Dict[str, Any] = {}
+    if wants_margin:
+        if can_see_money:
+            margin_days = 30
+            if date_range[0] is not None and date_range[1] is not None:
+                margin_days = max(1, min((date_range[1] - date_range[0]).days + 1, 365))
+            margin_result = await resolve_store_margin(
+                smartbi_pool,
+                factory_id,
+                days=margin_days,
+                top_n=5,
+            )
+            margin_meta = margin_result.meta or {}
+            total_profit = margin_meta.get("totalProfit")
+            avg_rate = margin_meta.get("avgRate")
+            if total_profit is not None:
+                rate_text = f"，毛利率约 {float(avg_rate) * 100:.1f}%" if avg_rate is not None else ""
+                margin_line = f"毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
+            else:
+                margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或 POS 明细还不完整。"
+        else:
+            margin_line = "毛利属于成本/价格权限，当前角色不能查看金额；可以先看订单、客单价和门店差异。"
+
     answer = (
         f"{window_label}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
         f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
+        f"{margin_line}"
         f"{top_line}{weak_line}"
         "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
         "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
@@ -1131,6 +1185,18 @@ async def resolve_sales_summary(
          "rawValue": float(avg_bill) if can_see_money and avg_bill is not None else None},
         {"title": "门店数", "value": store_count, "rawValue": store_count},
     ]
+    if wants_margin and margin_meta.get("totalProfit") is not None:
+        kpis.append({
+            "title": "毛利",
+            "value": _money(float(margin_meta["totalProfit"])) if can_see_money else None,
+            "rawValue": float(margin_meta["totalProfit"]) if can_see_money else None,
+        })
+        if margin_meta.get("avgRate") is not None:
+            kpis.append({
+                "title": "毛利率",
+                "value": f"{float(margin_meta['avgRate']) * 100:.1f}%" if can_see_money else None,
+                "rawValue": float(margin_meta["avgRate"]) if can_see_money else None,
+            })
 
     return OpsAnswer(
         code="RESTAURANT_OPS_SALES_SUMMARY",
@@ -1147,6 +1213,7 @@ async def resolve_sales_summary(
             "weak_stores": weak_stores,
             "price_view": can_see_money,
             "store_comparison_count": len(stores),
+            "margin": margin_meta if wants_margin else None,
         },
     )
 
