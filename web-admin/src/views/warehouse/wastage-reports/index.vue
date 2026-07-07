@@ -68,6 +68,7 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const statusFilter = ref('');
+const UNSETTLED_BATCH_QUERY_SIZE = 50;
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -175,10 +176,15 @@ async function loadUnsettledConsumption() {
   try {
     const batchIds = batches.value.map((b) => String(b.id)).filter(Boolean);
     if (batchIds.length === 0) return;
-    const res = await get(`/${factoryId.value}/material-batches/unsettled-consumption`, {
-      params: { batchIds: batchIds.join(',') },
-    });
-    if (res.success && res.data) unsettledByBatch.value = res.data as Record<string, number>;
+    const merged: Record<string, number> = {};
+    for (let i = 0; i < batchIds.length; i += UNSETTLED_BATCH_QUERY_SIZE) {
+      const chunk = batchIds.slice(i, i + UNSETTLED_BATCH_QUERY_SIZE);
+      const res = await get(`/${factoryId.value}/material-batches/unsettled-consumption`, {
+        params: { batchIds: chunk.join(',') },
+      });
+      if (res.success && res.data) Object.assign(merged, res.data as Record<string, number>);
+    }
+    unsettledByBatch.value = merged;
   } catch { /* silent — 加载失败时货架实物提示不显示, 仍显示原 availableQuantity, 不阻断报损 */ }
 }
 
