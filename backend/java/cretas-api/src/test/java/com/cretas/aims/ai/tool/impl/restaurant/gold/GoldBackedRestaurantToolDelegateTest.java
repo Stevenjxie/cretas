@@ -243,4 +243,33 @@ class GoldBackedRestaurantToolDelegateTest {
         assertThat(result).containsEntry("峰值月份", "2026-04");
         verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString());
     }
+
+    @Test
+    @DisplayName("DEMO_REST → delegate gate receives the RAW factoryId, not the RES_3101_009 gold alias")
+    void demoRestUsesRawFactoryIdForDelegateGate() throws Exception {
+        // 2026-07-08 audit fix C-3: the single most deliberate decision in the
+        // Phase 2 gate is passing the RAW factoryId to Python (DEMO_REST has
+        // its own seeded restaurant-ops Gold data, V20260706_01; the
+        // resolveGoldFactoryId DEMO_REST→RES_3101_009 alias is for the OTHER
+        // GoldFinanceClient fetches only). This pins that behavior so a future
+        // refactor that moves the gate below resolveGoldFactoryId() fails here
+        // instead of silently breaking the public demo tenant.
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchTieredIntentAnswer(eq("DEMO_REST"), anyString(), eq("restaurant_peak_month_gold")))
+                .thenReturn(Map.of(
+                        "delegate", true,
+                        "answer_text", "最近2个月是赚钱的，毛利约 ¥100。建议：保持。"
+                ));
+
+        RestaurantPeakMonthGoldTool tool = newTool(gold);
+        Map<String, Object> result = tool.doExecute(
+                "DEMO_REST", paramsWithInput("这两个月挣着钱没"), Collections.emptyMap());
+
+        assertThat(result).containsEntry("tieredDelegate", true);
+        verify(gold).fetchTieredIntentAnswer(eq("DEMO_REST"), anyString(), eq("restaurant_peak_month_gold"));
+        verify(gold, never()).fetchTieredIntentAnswer(eq("RES_3101_009"), anyString(), anyString());
+        // The delegated path never reaches the Gold data fetches, so the alias
+        // is irrelevant here -- but assert no accidental aliased call happened.
+        verify(gold, never()).fetchDataRange(anyString());
+    }
 }

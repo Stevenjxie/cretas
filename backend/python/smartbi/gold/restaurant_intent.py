@@ -285,17 +285,21 @@ async def _is_restaurant_tenant(pool, factory_id: str) -> bool:
     cached = _RESTAURANT_TENANT_CACHE.get(factory_id)
     if cached is not None:
         return cached
-    is_restaurant = False
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT 1 FROM agg_restaurant_daily_totals WHERE factory_id = $1 LIMIT 1",
                 factory_id,
             )
-        is_restaurant = row is not None
     except Exception as exc:
-        logger.warning(f"[restaurant-intent] tenant gate lookup failed for {factory_id}: {exc}")
-        is_restaurant = False
+        # 2026-07-08 audit fix B-3: 查询异常 (DB 抖动) 只本次按 False 处理,
+        # 不写缓存 —— 否则一个瞬时错误会把合法餐饮租户永久锁出 T2/T3
+        # (进程不重启不恢复)。只有拿到明确的 DB 答案才缓存。
+        logger.warning(
+            f"[restaurant-intent] tenant gate lookup failed for {factory_id} (not cached): {exc}"
+        )
+        return False
+    is_restaurant = row is not None
     _RESTAURANT_TENANT_CACHE[factory_id] = is_restaurant
     return is_restaurant
 

@@ -42,6 +42,11 @@ from smartbi.gold.restaurant_ops_router import resolve_by_code as _resolve_tiere
 
 logger = logging.getLogger(__name__)
 
+# 2026-07-08 audit fix A-3: resolver 能力表定义在 answer_contract (更底层,
+# 本模块已 import 它, 反向会循环)。should_delegate 规则 3 与
+# answer_contract.required_elements 共用同一份表, 两处判断保持一致。
+_MARGIN_CAPABLE_INTENTS = _contract.MARGIN_CAPABLE_INTENTS
+
 
 async def tiered_answer(
     query: str,
@@ -153,9 +158,15 @@ def should_delegate(
       2. ``spec.clarification_needed`` -> True. Java's Gold Tool flow has no
          mechanism to ask a clarifying question; only the Python tiered path
          can.
-      3. ``spec.asks_profitability or spec.wants_margin`` -> True. The Java
-         Gold Tool family (revenue-trend / store-revenue-rank / etc.) never
-         produces a profit/margin verdict.
+      3. ``(spec.asks_profitability or spec.wants_margin) and spec.intent in
+         _MARGIN_CAPABLE_INTENTS`` -> True. The Java Gold Tool family never
+         produces a profit/margin verdict, so delegating buys the verdict —
+         but ONLY when the Python resolver for the parsed intent can actually
+         produce one (2026-07-08 audit fix A-3: delegating a WASTAGE_TOP-class
+         intent on a secondary profit mention hands the answer to a resolver
+         that ignores the profit ask entirely, and the Answer Contract then
+         appends a permanent, unfixable disclaimer — worse than Java's own
+         answer, so those stay in Java).
       4. ``spec.intent == "RESTAURANT_OPS_SALES_SUMMARY" and
          spec.relative_window`` -> True. "最近N天/周/月" ops-summary windows
          are only honored by the Python resolver (``_resolve_sales_date_range``
@@ -175,7 +186,10 @@ def should_delegate(
         return False
     if spec.clarification_needed:
         return True
-    if spec.asks_profitability or spec.wants_margin:
+    if (
+        (spec.asks_profitability or spec.wants_margin)
+        and spec.intent in _MARGIN_CAPABLE_INTENTS
+    ):
         return True
     if spec.intent == "RESTAURANT_OPS_SALES_SUMMARY" and spec.relative_window:
         return True

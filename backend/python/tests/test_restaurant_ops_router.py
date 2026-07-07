@@ -226,7 +226,11 @@ def test_sales_summary_keeps_time_margin_and_profitability(
     async def _fake_latest_anchor(pool, factory_id):
         return date(2025, 12, 31)
 
-    async def _fake_store_margin(pool, factory_id, days=30, top_n=5):
+    async def _fake_store_margin(pool, factory_id, days=30, top_n=5, *, role=None):
+        # role kwarg added 2026-07-08 (RBAC audit fix): sales_summary now
+        # forwards role so the real resolve_store_margin's PRICE_VIEW_ROLES
+        # gate stays consistent with the caller's can_see_money branch.
+        captured["margin_role"] = role
         captured["margin_days"] = days
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
@@ -490,3 +494,43 @@ def test_store_margin_does_not_match_service_quality():
             f"Query {q!r} unexpectedly matched STORE_MARGIN — "
             f"check for over-broad keywords in group-2."
         )
+
+
+# ─── 2026-07-08 audit fix: RBAC gate on margin resolvers (B-1) ─────────────
+# resolve_gross_margin / resolve_store_margin previously had NO role param;
+# resolve_by_code's signature filter silently dropped role, so ANY
+# authenticated role saw unmasked ¥ revenue/margin. The gate now mirrors
+# resolve_sales_summary's PRICE_VIEW_ROLES check and returns an honest
+# disclosure (no DB touched) for non-price-view roles.
+
+import smartbi.gold.restaurant_ops_router as _r  # noqa: E402  (module alias for the new RBAC tests)
+
+@pytest.mark.parametrize("denied_role", [None, "", "viewer", "waiter", "cashier"])
+def test_gross_margin_masked_for_non_price_view_role(denied_role):
+    result = asyncio.run(
+        _r.resolve_gross_margin(None, "F_TEST", role=denied_role)  # pool unused on masked path
+    )
+    assert result.meta.get("rbac_masked") is True
+    assert "¥" not in result.answer_text
+    assert "权限" in result.answer_text          # honest disclosure, not silence
+    assert result.kpis == [] and result.charts == []
+
+
+@pytest.mark.parametrize("denied_role", [None, "viewer"])
+def test_store_margin_masked_for_non_price_view_role(denied_role):
+    result = asyncio.run(
+        _r.resolve_store_margin(None, "F_TEST", role=denied_role)
+    )
+    assert result.meta.get("rbac_masked") is True
+    assert "¥" not in result.answer_text
+    assert result.kpis == [] and result.charts == []
+
+
+def test_price_view_role_passes_margin_gate():
+    """A PRICE_VIEW role must get PAST the gate (reaches the DB layer — here a
+    None pool, so the resolver blows up with AttributeError, which is exactly
+    the proof the early-return did NOT trigger)."""
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    price_role = next(iter(PRICE_VIEW_ROLES))
+    with pytest.raises(AttributeError):
+        asyncio.run(_r.resolve_gross_margin(None, "F_TEST", role=price_role))

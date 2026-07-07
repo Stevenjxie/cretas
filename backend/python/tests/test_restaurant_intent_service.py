@@ -70,16 +70,43 @@ def test_should_delegate_clarification_needed_true():
 
 
 def test_should_delegate_asks_profitability_true():
-    """Rule 3: asks_profitability -> True (Java Gold Tool family never
-    produces a profit verdict)."""
-    spec = _spec(asks_profitability=True, wants_margin=True)
+    """Rule 3: asks_profitability + margin-capable intent -> True (Java Gold
+    Tool family never produces a profit verdict; 2026-07-08 audit fix A-3
+    scoped the rule to intents whose Python resolver CAN produce one)."""
+    spec = _spec(
+        intent="RESTAURANT_OPS_SALES_SUMMARY",
+        asks_profitability=True, wants_margin=True,
+    )
     assert should_delegate(spec) is True
 
 
 def test_should_delegate_wants_margin_without_profitability_true():
-    """Rule 3 also fires on wants_margin alone (not just asks_profitability)."""
-    spec = _spec(wants_margin=True, asks_profitability=False)
+    """Rule 3 also fires on wants_margin alone (not just asks_profitability),
+    on a margin-capable intent."""
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        wants_margin=True, asks_profitability=False,
+    )
     assert should_delegate(spec) is True
+
+
+@pytest.mark.parametrize("incapable_intent", [
+    "RESTAURANT_OPS_WASTAGE_TOP",
+    "RESTAURANT_OPS_STOCK_SHORTAGE",
+    "RESTAURANT_OPS_RECIPE_COST",
+    "RESTAURANT_OPS_REQUISITION_TREND",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+])
+def test_should_delegate_margin_ask_on_incapable_intent_false(incapable_intent):
+    """2026-07-08 audit fix A-3: a profit/margin mention on an intent whose
+    resolver ignores it (fixed 30-day window, no role/query params) must NOT
+    delegate -- the Python answer would ignore the ask and the contract would
+    append a permanent disclaimer; Java's own answer is strictly better."""
+    spec = _spec(
+        intent=incapable_intent,
+        wants_margin=True, asks_profitability=True,
+    )
+    assert should_delegate(spec) is False
 
 
 def test_should_delegate_sales_summary_relative_window_true():
@@ -159,7 +186,7 @@ def test_should_delegate_java_tool_name_does_not_change_decision(java_tool_name)
     """java_tool_name is accepted for future per-tool exceptions (design
     section 3) but is NOT currently branched on -- same spec always yields
     the same decision regardless of which Java tool is asking."""
-    spec = _spec(asks_profitability=True)
+    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY", asks_profitability=True)
     assert should_delegate(spec, java_tool_name) is True
 
     spec2 = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
@@ -376,9 +403,27 @@ async def test_endpoint_clarification_shape(monkeypatch):
         AsyncMock(return_value=tiered_result),
     )
 
-    body = TieredIntentAnswerRequest(factory_id="QHJ01", query="情况怎么样")
+    # query 必须带确定性利润/时间窗信号 (2026-07-08 audit fix C-2 端点前置滤:
+    # 无信号问句直接 delegate:false 不烧 T2/T3) —— "赚钱情况怎么样" 带利润词
+    # 但仍模糊, 走 mock 的 clarification 路径。
+    body = TieredIntentAnswerRequest(factory_id="QHJ01", query="赚钱情况怎么样")
     result = await post_restaurant_tiered_answer(_fake_request(), body)
     assert result == {"delegate": True, "kind": "clarification", "answer_text": "您想看哪方面？"}
+
+
+@pytest.mark.asyncio
+async def test_endpoint_prefilter_skips_parse_for_signal_free_query(monkeypatch):
+    """2026-07-08 audit fix C-2: no profit token + no relative/named window
+    -> delegate:false BEFORE parse_restaurant_query runs (no T2 embedding, no
+    T3 LLM spent on a decision that cannot come out True)."""
+    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
+    parse_mock = AsyncMock(side_effect=AssertionError("parse must not run for signal-free query"))
+    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+
+    body = TieredIntentAnswerRequest(factory_id="QHJ01", query="哪个菜卖得好")
+    result = await post_restaurant_tiered_answer(_fake_request(), body)
+    assert result == {"delegate": False}
+    assert parse_mock.await_count == 0
 
 
 @pytest.mark.asyncio
