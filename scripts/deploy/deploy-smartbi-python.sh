@@ -80,7 +80,14 @@ echo "=========================================="
 # Pre-flight: git sync check (May 11 2026 stale-local-deploy bug fix)
 # Stale local working tree → deploy ships stale code → prod gets pre-PR fixes.
 # Per HARD rule feedback_organizer_must_git_pull_before_deploy.md.
-check_git_sync "$PROJECT_ROOT" "[0/5] Git sync pre-check..."
+#
+# Jul 7 2026 事故修复: --env 含 prod (prod/all) 时启用 strict 模式 — 非
+# origin/main HEAD 或脏工作树直接 ABORT (之前只 WARN).
+GIT_SYNC_STRICT=""
+if [[ "$DEPLOY_ENV" =~ ^(prod|all)$ ]]; then
+    GIT_SYNC_STRICT="1"
+fi
+check_git_sync "$PROJECT_ROOT" "[0/5] Git sync pre-check..." "$GIT_SYNC_STRICT"
 
 # 1. 检查本地文件
 log "INFO" "[1/5] 检查本地文件..."

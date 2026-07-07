@@ -130,16 +130,24 @@ wait_for_health_via_ssh() {
 
 # ==================== Git 同步检查 ====================
 
-# check_git_sync <project_root> [step_label]
+# check_git_sync <project_root> [step_label] [strict]
 # 部署前确认本地 HEAD 与 origin/main 一致 (防 stale-local-deploy, May 11 2026 bug fix;
 # per HARD rule feedback_organizer_must_git_pull_before_deploy.md):
 # - 在 main 分支且与 origin/main 不一致 → ERROR + exit 1 (除非 SKIP_GIT_CHECK=1)
 # - 非 main 分支 → WARN 提示确认部署源
 # - 工作树有未提交改动 → WARN (非致命)
+#
+# strict="1" (Jul 7 2026 事故修复: 非 main 分支 + 脏工作树从主目录部署 prod 覆盖了
+# origin/main 的代码): prod 部署默认严格模式 —
+# - HEAD != origin/main (commit 层面比较, 不看分支名 — detached HEAD 落在
+#   origin/main 上是合法的干净 worktree 部署形态) → ABORT (除非 SKIP_GIT_CHECK=1)
+# - 工作树有未提交改动 (含 staged) → ABORT (除非 ALLOW_DIRTY_DEPLOY=1)
+# strict 为空/非 "1" 时行为与之前完全一致 (test 环境等仍只 WARN).
 # 依赖调用方已 source 本库 (用 log). 注意: 函数内 cd 会改变调用方 cwd (与原内联行为一致).
 check_git_sync() {
     local project_root="$1"
     local step_label="${2:-Git sync pre-check...}"
+    local strict="${3:-}"
     cd "$project_root" || { log "ERROR" "check_git_sync: 无法 cd 到 $project_root"; exit 1; }
     log "INFO" "$step_label"
     git fetch origin main 2>/dev/null || log "WARN" "git fetch origin main failed (offline?), continue with caution"
@@ -150,7 +158,19 @@ check_git_sync() {
     current_branch=$(git branch --show-current 2>/dev/null || echo "unknown")
 
     if [ "$local_sha" != "$origin_sha" ] && [ "$local_sha" != "unknown" ] && [ "$origin_sha" != "unknown" ]; then
-        if [ "$current_branch" = "main" ]; then
+        if [ "$strict" = "1" ]; then
+            log "ERROR" "⛔ Strict git gate (prod deploy): HEAD != origin/main — ABORT"
+            log "ERROR" "  local HEAD : $local_sha (branch: $current_branch)"
+            log "ERROR" "  origin/main: $origin_sha"
+            log "ERROR" "  正确做法: 从干净 worktree 部署 —"
+            log "ERROR" "    git worktree add ../cretas-deploy-clean origin/main && cd ../cretas-deploy-clean"
+            log "ERROR" "  或本地 main 分支同步: git checkout main && git pull origin main"
+            log "ERROR" "  逃生门 (确认知道风险才用): SKIP_GIT_CHECK=1 重新运行部署脚本"
+            if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
+                exit 1
+            fi
+            log "WARN" "⚠️  SKIP_GIT_CHECK=1 set, continuing STRICT prod deploy with HEAD != origin/main"
+        elif [ "$current_branch" = "main" ]; then
             log "ERROR" "Local main HEAD != origin/main HEAD"
             log "ERROR" "  local : $local_sha"
             log "ERROR" "  origin: $origin_sha"
@@ -167,9 +187,21 @@ check_git_sync() {
         log "INFO" "  Git: local HEAD matches origin/main ✓"
     fi
 
-    # Dirty tree warning (non-fatal)
+    # Dirty tree check: strict=1 → ABORT, 否则 WARN (non-fatal, 与之前一致)
     if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        log "WARN" "Working tree has uncommitted changes — deploy will use local working tree state"
+        if [ "$strict" = "1" ]; then
+            log "ERROR" "⛔ Strict git gate (prod deploy): working tree has uncommitted changes — ABORT"
+            log "ERROR" "  查看改动: git -C $project_root status"
+            log "ERROR" "  正确做法: 从干净 worktree 部署 —"
+            log "ERROR" "    git worktree add ../cretas-deploy-clean origin/main && cd ../cretas-deploy-clean"
+            log "ERROR" "  逃生门 (确认知道风险才用): ALLOW_DIRTY_DEPLOY=1 重新运行部署脚本"
+            if [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
+                exit 1
+            fi
+            log "WARN" "⚠️  ALLOW_DIRTY_DEPLOY=1 set, continuing STRICT prod deploy with dirty working tree"
+        else
+            log "WARN" "Working tree has uncommitted changes — deploy will use local working tree state"
+        fi
     fi
 }
 
