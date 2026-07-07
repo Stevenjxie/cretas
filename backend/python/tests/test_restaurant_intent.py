@@ -540,3 +540,107 @@ def test_contract_all_satisfied_passes():
 def test_required_elements_empty_for_bare_query():
     spec = _spec()  # no time, no margin, no profitability, no dimensions
     assert contract.required_elements(spec) == []
+
+
+# ─── 7. 2026-07-07 live-verify follow-ups (paraphrase slot gaps + cache) ───
+# Live demo caught "这两个月生意咋样，挣着钱没" losing both its time window
+# and its profitability ask. These pin the three fixes:
+#   (a) "这N个月/这N周" relative form (bare "这个月"/"这周" stay named windows)
+#   (b) colloquial split profit forms ("挣着钱没" has no "挣钱" substring)
+#   (c) T3 slot supplements (time_phrase + llm profit booleans) survive the
+#       routing cache, and build_resolver_query splices a canonical profit
+#       phrase for LLM-only detections.
+
+def test_zhe_numeral_relative_window():
+    (start, end), label = _resolve_sales_date_range("这两个月生意咋样", today=date(2026, 7, 7))
+    assert label == "最近2个月"
+    assert (end - start).days == 59
+
+    (start3, end3), label3 = _resolve_sales_date_range("这3周表现", today=date(2026, 7, 7))
+    assert label3 == "最近3周"
+    assert (end3 - start3).days == 20
+
+
+def test_bare_zhege_yue_and_zhezhou_stay_named_windows():
+    _, label_month = _resolve_sales_date_range("这个月营收", today=date(2026, 7, 7))
+    assert label_month == "本月"
+    _, label_week = _resolve_sales_date_range("这周营收", today=date(2026, 7, 7))
+    assert label_week == "本周"
+
+
+def test_last_week_and_last_month_named_windows():
+    # 2026-07-07 is a Tuesday: 上周 = Mon 6/29 .. Sun 7/5.
+    (start, end), label = _resolve_sales_date_range("上周营收多少", today=date(2026, 7, 7))
+    assert label == "上周"
+    assert start == date(2026, 6, 29) and end == date(2026, 7, 5)
+
+    (m_start, m_end), m_label = _resolve_sales_date_range("上个月赚钱了吗", today=date(2026, 7, 7))
+    assert m_label == "上个月"
+    assert m_start == date(2026, 6, 1) and m_end == date(2026, 6, 30)
+
+    # 这周...比上周: 本周 stays the primary window.
+    _, mixed_label = _resolve_sales_date_range("这周营收比上周差在哪里", today=date(2026, 7, 7))
+    assert mixed_label == "本周"
+
+
+def test_colloquial_split_profit_forms_detected():
+    for q in ("这两个月生意咋样，挣着钱没", "赚着钱没", "有没有赚到钱", "最近挣到钱了吗"):
+        spec = _build_spec("RESTAURANT_OPS_SALES_SUMMARY", q, confidence=1.0, tier="test")
+        assert spec.asks_profitability is True, q
+        assert spec.wants_margin is True, q
+
+
+@pytest.mark.asyncio
+async def test_t3_slot_supplements_survive_route_cache():
+    """First call: T3 parses, supplements ride the spec. Second call: cache
+    hit (LLM must NOT run again) rebuilds the SAME window + profit slots."""
+    query = "生意有起色没，划算不划算"  # no deterministic time/profit token
+    llm_json = json.dumps({
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+        "time_range": {"type": "relative", "unit": "month", "count": 2},
+        "wants_margin": True, "asks_profitability": True,
+        "dimensions": [], "comparison": None, "confidence": 0.88,
+        "clarification_needed": False, "clarification_question": None,
+    })
+    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)) as mock_chain:
+        spec1 = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
+        spec2 = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
+
+    assert mock_chain.await_count == 1  # second call served from route cache
+    for spec in (spec1, spec2):
+        assert spec is not None
+        assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
+        assert spec.window_label == "最近2个月"      # time_phrase supplement kept
+        assert spec.asks_profitability is True       # llm profit slot kept
+        assert spec.wants_margin is True
+    assert spec1.window_label == spec2.window_label
+    assert spec1.date_range == spec2.date_range
+
+
+@pytest.mark.asyncio
+async def test_build_resolver_query_splices_profit_phrase_for_llm_only_detection():
+    query = "生意有起色没，划算不划算"
+    llm_json = json.dumps({
+        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
+        "time_range": None,
+        "wants_margin": True, "asks_profitability": True,
+        "dimensions": [], "comparison": None, "confidence": 0.85,
+        "clarification_needed": False, "clarification_question": None,
+    })
+    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
+    with patch(
+        "smartbi.services.template_embedding_index.cosine_topk",
+        new=AsyncMock(return_value=[]),
+    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)):
+        spec = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
+
+    assert spec is not None and spec.asks_profitability is True
+    resolver_query = build_resolver_query(query, spec)
+    # The resolver re-derives profit intent from raw text; the canonical
+    # phrase makes its own _profit_intent fire for this LLM-only detection.
+    assert "赚钱了吗" in resolver_query
+    assert query in resolver_query

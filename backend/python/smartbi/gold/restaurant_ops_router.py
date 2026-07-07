@@ -283,6 +283,13 @@ def _parse_small_count(raw: Optional[str], default: int = 1) -> int:
 
 def _relative_period_match(text: str) -> Optional[Tuple[int, str]]:
     match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十]{0,4})\s*个?\s*(天|日|周|星期|月)", text)
+    if match is None:
+        # "这两个月" / "这3周" style: 这 + explicit numeral + unit. The numeral
+        # is REQUIRED here ({1,4}, not {0,4}) so bare "这个月" / "这周" keep
+        # falling through to the named-window branches in
+        # _resolve_sales_date_range (本月 / 本周) instead of becoming a
+        # rolling window.
+        match = re.search(r"这\s*([0-9一二两三四五六七八九十]{1,4})\s*个?\s*(天|日|周|星期|月)", text)
     if not match:
         return None
     count = max(1, _parse_small_count(match.group(1), default=1))
@@ -294,6 +301,10 @@ def _profit_intent(query: Optional[str]) -> Tuple[bool, bool]:
     asks_profitability = any(token in text for token in (
         "赚钱吗", "赚钱了吗", "赚不赚", "赚了", "挣钱吗", "挣钱了吗", "盈利吗", "盈利了吗",
         "亏钱吗", "亏了吗", "亏不亏", "是否赚钱", "是否盈利",
+        # Colloquial split forms ("挣着钱没" does NOT contain the substring
+        # "挣钱", so the tokens above miss it — live-caught 2026-07-07):
+        "挣着钱", "赚着钱", "挣到钱", "赚到钱", "挣钱没", "赚钱没",
+        "有没有赚", "有没有挣", "有没有盈利",
     ))
     wants_margin = asks_profitability or any(token in text for token in (
         "毛利", "毛利润", "毛利率", "利润", "盈利", "赚钱", "挣钱", "净赚", "亏钱",
@@ -330,8 +341,18 @@ def _resolve_sales_date_range(
     if any(token in text for token in ("本周", "这周", "本星期", "这星期")):
         return (anchor - timedelta(days=anchor.weekday()), anchor), "本周"
 
+    # 上周/上个月 AFTER 本周/本月: "这周营收比上周差在哪里" keeps 本周 as the
+    # primary window (the comparison target is the resolver's business).
+    if any(token in text for token in ("上周", "上星期", "上个星期")):
+        this_monday = anchor - timedelta(days=anchor.weekday())
+        return (this_monday - timedelta(days=7), this_monday - timedelta(days=1)), "上周"
+
     if any(token in text for token in ("本月", "这个月")):
         return (anchor.replace(day=1), anchor), "本月"
+
+    if any(token in text for token in ("上个月", "上月")):
+        last_of_prev = anchor.replace(day=1) - timedelta(days=1)
+        return (last_of_prev.replace(day=1), last_of_prev), "上个月"
 
     return (None, None), "全部历史"
 
