@@ -25,6 +25,7 @@ from smartbi.gold.restaurant_ops_router import (
     OpsAnswer,
     SAMPLE_QUERIES,
     _resolve_sales_date_range,
+    _resolve_sales_query_spec,
     match_restaurant_ops,
     resolve_by_code,
     resolve_sales_summary,
@@ -61,6 +62,8 @@ LEGITIMATE_TRIGGERS = [
     ("最近是增长还是下降", "RESTAURANT_OPS_TREND_ANALYSIS"),
     ("总营收和客单价表现怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("最近一个月的营收情况如何？毛利有多少", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("最近两个月的营收情况如何，赚钱吗", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("近3个月盈利了吗", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("整体销售情况怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("门店销售对比，哪家最值得复制", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("查询本周营收", "RESTAURANT_OPS_SALES_SUMMARY"),
@@ -163,6 +166,9 @@ def test_revenue_amount_query_routes_to_sales_summary_not_trend():
         ("查询本周营收", (date(2026, 7, 6), date(2026, 7, 6)), "本周"),
         ("本月营业额", (date(2026, 7, 1), date(2026, 7, 6)), "本月"),
         ("最近一个月的营收情况如何？毛利有多少", (date(2026, 6, 7), date(2026, 7, 6)), "最近30天"),
+        ("最近两个月的营收情况如何，赚钱吗", (date(2026, 5, 8), date(2026, 7, 6)), "最近2个月"),
+        ("近3个月盈利了吗", (date(2026, 4, 8), date(2026, 7, 6)), "最近3个月"),
+        ("过去2周销售如何", (date(2026, 6, 23), date(2026, 7, 6)), "最近2周"),
         ("最近7天销售情况", (date(2026, 6, 30), date(2026, 7, 6)), "最近7天"),
         ("总营收和客单价表现怎么样", (None, None), "全部历史"),
     ],
@@ -174,7 +180,31 @@ def test_resolve_sales_date_range(query, expected_range, expected_label):
     )
 
 
-def test_sales_summary_recent_month_keeps_time_and_margin(monkeypatch):
+def test_sales_query_spec_extracts_time_margin_and_profitability():
+    spec = _resolve_sales_query_spec("最近两个月的营收情况如何，赚钱吗", today=date(2026, 7, 6))
+
+    assert spec.date_range == (date(2026, 5, 8), date(2026, 7, 6))
+    assert spec.window_label == "最近2个月"
+    assert spec.wants_margin is True
+    assert spec.asks_profitability is True
+    assert spec.relative_window is True
+
+
+@pytest.mark.parametrize(
+    "query,expected_range,expected_label,expected_margin_days,expects_verdict",
+    [
+        ("最近一个月的营收情况如何？毛利有多少", (date(2025, 12, 2), date(2025, 12, 31)), "最近30天", 30, False),
+        ("最近两个月的营收情况如何，赚钱吗", (date(2025, 11, 2), date(2025, 12, 31)), "最近2个月", 60, True),
+    ],
+)
+def test_sales_summary_keeps_time_margin_and_profitability(
+    monkeypatch,
+    query,
+    expected_range,
+    expected_label,
+    expected_margin_days,
+    expects_verdict,
+):
     captured: dict = {}
 
     async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
@@ -220,15 +250,17 @@ def test_sales_summary_recent_month_keeps_time_and_margin(monkeypatch):
             object(),
             "RES_TEST",
             role="restaurant_manager",
-            query="最近一个月的营收情况如何？毛利有多少",
+            query=query,
         )
     )
 
-    assert captured["date_range"] == (date(2025, 12, 2), date(2025, 12, 31))
-    assert captured["margin_days"] == 30
-    assert "最近30天" in ans.answer_text
+    assert captured["date_range"] == expected_range
+    assert captured["margin_days"] == expected_margin_days
+    assert expected_label in ans.answer_text
     assert "毛利约" in ans.answer_text
     assert "1,700" in ans.answer_text
+    if expects_verdict:
+        assert "是赚钱的" in ans.answer_text
     assert any(kpi["title"] == "毛利" for kpi in ans.kpis)
     assert any(kpi["title"] == "毛利率" for kpi in ans.kpis)
 

@@ -111,6 +111,11 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     ),
     (
         "RESTAURANT_OPS_SALES_SUMMARY",
+        [["赚钱", "挣钱", "盈利", "利润", "毛利", "净赚", "亏钱", "亏不亏", "赚不赚"],
+         ["最近", "近", "过去", "本周", "这周", "今天", "今日", "本月", "这个月", "情况", "怎么样", "多少", "了吗"]],
+    ),
+    (
+        "RESTAURANT_OPS_SALES_SUMMARY",
         [["营收", "营业额", "销售额", "销售情况", "客单价", "平均每单", "订单", "单量"],
          ["表现", "怎么样", "多少", "情况", "总", "整体"]],
     ),
@@ -223,6 +228,16 @@ class OpsAnswer:
     meta: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SalesQuerySpec:
+    """Stable query contract for owner-facing sales/profit questions."""
+    date_range: Tuple[Optional[date], Optional[date]]
+    window_label: str
+    wants_margin: bool
+    asks_profitability: bool
+    relative_window: bool
+
+
 def _date_text(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
@@ -231,6 +246,59 @@ def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> 
     if start_date and end_date:
         return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
     return f"最近 {requested_days} 天"
+
+
+_CN_SMALL_NUMBERS = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
+def _parse_small_count(raw: Optional[str], default: int = 1) -> int:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    if value.isdigit():
+        return int(value)
+    if value == "十":
+        return 10
+    if value.startswith("十") and len(value) == 2:
+        return 10 + _CN_SMALL_NUMBERS.get(value[1], 0)
+    if value.endswith("十") and len(value) == 2:
+        return _CN_SMALL_NUMBERS.get(value[0], default) * 10
+    if "十" in value and len(value) == 3:
+        left, right = value.split("十", 1)
+        return _CN_SMALL_NUMBERS.get(left, default) * 10 + _CN_SMALL_NUMBERS.get(right, 0)
+    return _CN_SMALL_NUMBERS.get(value, default)
+
+
+def _relative_period_match(text: str) -> Optional[Tuple[int, str]]:
+    match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十]{0,4})\s*个?\s*(天|日|周|星期|月)", text)
+    if not match:
+        return None
+    count = max(1, _parse_small_count(match.group(1), default=1))
+    return count, match.group(2)
+
+
+def _profit_intent(query: Optional[str]) -> Tuple[bool, bool]:
+    text = query or ""
+    asks_profitability = any(token in text for token in (
+        "赚钱吗", "赚钱了吗", "赚不赚", "赚了", "挣钱吗", "挣钱了吗", "盈利吗", "盈利了吗",
+        "亏钱吗", "亏了吗", "亏不亏", "是否赚钱", "是否盈利",
+    ))
+    wants_margin = asks_profitability or any(token in text for token in (
+        "毛利", "毛利润", "毛利率", "利润", "盈利", "赚钱", "挣钱", "净赚", "亏钱",
+    ))
+    return wants_margin, asks_profitability
 
 
 def _resolve_sales_date_range(
@@ -242,13 +310,19 @@ def _resolve_sales_date_range(
     text = (query or "").strip()
     anchor = today or date.today()
 
-    recent_match = re.search(r"最近\s*(\d{1,3})\s*天", text)
-    if recent_match:
-        days = max(1, min(int(recent_match.group(1)), 365))
-        return (anchor - timedelta(days=days - 1), anchor), f"最近{days}天"
-
-    if any(token in text for token in ("最近一个月", "近一个月", "最近1个月", "近1个月", "过去一个月", "近一月")):
-        return (anchor - timedelta(days=29), anchor), "最近30天"
+    relative_match = _relative_period_match(text)
+    if relative_match:
+        count, unit = relative_match
+        if unit in ("天", "日"):
+            days = max(1, min(count, 365))
+            return (anchor - timedelta(days=days - 1), anchor), f"最近{days}天"
+        if unit in ("周", "星期"):
+            days = max(1, min(count * 7, 365))
+            return (anchor - timedelta(days=days - 1), anchor), f"最近{count}周"
+        if unit == "月":
+            days = max(1, min(count * 30, 365))
+            label = "最近30天" if count == 1 else f"最近{count}个月"
+            return (anchor - timedelta(days=days - 1), anchor), label
 
     if any(token in text for token in ("今天", "今日")):
         return (anchor, anchor), "今天"
@@ -265,11 +339,22 @@ def _resolve_sales_date_range(
 def _uses_relative_sales_window(query: Optional[str]) -> bool:
     text = (query or "").strip()
     return bool(
-        re.search(r"最近\s*\d{1,3}\s*天", text)
+        _relative_period_match(text)
         or any(token in text for token in (
-            "最近一个月", "近一个月", "最近1个月", "近1个月", "过去一个月", "近一月",
             "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
         ))
+    )
+
+
+def _resolve_sales_query_spec(query: Optional[str], *, today: Optional[date] = None) -> SalesQuerySpec:
+    date_range, window_label = _resolve_sales_date_range(query, today=today)
+    wants_margin, asks_profitability = _profit_intent(query)
+    return SalesQuerySpec(
+        date_range=date_range,
+        window_label=window_label,
+        wants_margin=wants_margin,
+        asks_profitability=asks_profitability,
+        relative_window=_uses_relative_sales_window(query),
     )
 
 
@@ -1082,9 +1167,10 @@ async def resolve_sales_summary(
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
-    anchor = await _latest_sales_anchor(smartbi_pool, factory_id) if _uses_relative_sales_window(query) else None
-    date_range, window_label = _resolve_sales_date_range(query, today=anchor)
-    wants_margin = any(token in (query or "") for token in ("毛利", "毛利润", "毛利率", "利润"))
+    initial_spec = _resolve_sales_query_spec(query)
+    anchor = await _latest_sales_anchor(smartbi_pool, factory_id) if initial_spec.relative_window else None
+    spec = _resolve_sales_query_spec(query, today=anchor)
+    date_range, window_label = spec.date_range, spec.window_label
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     stores_data = await store_comparison(smartbi_pool, factory_id, date_range)
     stores = stores_data.get("stores") or []
@@ -1131,7 +1217,7 @@ async def resolve_sales_summary(
     avg_text = _money(float(avg_bill)) if avg_bill is not None else "暂无"
     margin_line = ""
     margin_meta: Dict[str, Any] = {}
-    if wants_margin:
+    if spec.wants_margin:
         if can_see_money:
             margin_days = 30
             if date_range[0] is not None and date_range[1] is not None:
@@ -1146,8 +1232,16 @@ async def resolve_sales_summary(
             total_profit = margin_meta.get("totalProfit")
             avg_rate = margin_meta.get("avgRate")
             if total_profit is not None:
+                verdict = ""
+                if spec.asks_profitability:
+                    if float(total_profit) > 0:
+                        verdict = "按已配置成本卡看，这段时间是赚钱的。"
+                    elif float(total_profit) < 0:
+                        verdict = "按已配置成本卡看，这段时间是亏损的。"
+                    else:
+                        verdict = "按已配置成本卡看，这段时间基本打平。"
                 rate_text = f"，毛利率约 {float(avg_rate) * 100:.1f}%" if avg_rate is not None else ""
-                margin_line = f"毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
+                margin_line = f"{verdict}毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
             else:
                 margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或 POS 明细还不完整。"
         else:
@@ -1185,7 +1279,7 @@ async def resolve_sales_summary(
          "rawValue": float(avg_bill) if can_see_money and avg_bill is not None else None},
         {"title": "门店数", "value": store_count, "rawValue": store_count},
     ]
-    if wants_margin and margin_meta.get("totalProfit") is not None:
+    if spec.wants_margin and margin_meta.get("totalProfit") is not None:
         kpis.append({
             "title": "毛利",
             "value": _money(float(margin_meta["totalProfit"])) if can_see_money else None,
@@ -1213,7 +1307,8 @@ async def resolve_sales_summary(
             "weak_stores": weak_stores,
             "price_view": can_see_money,
             "store_comparison_count": len(stores),
-            "margin": margin_meta if wants_margin else None,
+            "margin": margin_meta if spec.wants_margin else None,
+            "asks_profitability": spec.asks_profitability,
         },
     )
 
