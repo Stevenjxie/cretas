@@ -1399,6 +1399,21 @@ def test_owner_action_chat_routes_extended_boss_decision_questions() -> None:
         assert data["charts"], message
 
 
+def test_owner_action_chat_accepts_legacy_review_recovery_alias() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_REVIEW_RECOVERY_ALIAS",
+            demoScenario="review_recovery",
+            message="如果服务差评多，店长今天应该怎么培训员工？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "staff_training"
+    assert "开班前" in data["answer"]
+    assert "差评" in data["answer"]
+
+
 def test_owner_action_chat_routes_cross_role_operations_dispatch() -> None:
     response = owner_action_chat(
         OwnerActionChatRequest(

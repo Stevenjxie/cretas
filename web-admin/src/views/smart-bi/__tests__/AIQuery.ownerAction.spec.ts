@@ -249,6 +249,60 @@ describe('AIQuery restaurant owner-action routing', () => {
     });
   });
 
+  it('routes review recovery questions to the backend staff training scenario', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'owner-action-training-session',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: 'training answer',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'staff_training',
+        sessionId: 'owner-action-training-session',
+        answer: 'training answer',
+      },
+    });
+
+    await ask('如果服务差评多，店长今天应该怎么培训员工？');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(1);
+    expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
+      context: {
+        ownerActionScenario: 'staff_training',
+      },
+    });
+  });
+
+  it('routes inventory, store comparison, and single-item push questions to backend scenarios', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'owner-action-scenario-session',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: 'scenario answer',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'ok',
+        sessionId: 'owner-action-scenario-session',
+        answer: 'scenario answer',
+      },
+    });
+
+    await ask('库存预警和采购补货今天先看什么？');
+    await ask('哪家店最值得学习？它的做法能不能复制到青花椒？');
+    await ask('主推单品怎么判断有没有拉动加购？');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(3);
+    expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
+      context: { ownerActionScenario: 'inventory_reorder' },
+    });
+    expect(executeIntentMock.mock.calls[1][2]).toMatchObject({
+      context: { ownerActionScenario: 'store_compare' },
+    });
+    expect(executeIntentMock.mock.calls[2][2]).toMatchObject({
+      context: { ownerActionScenario: 'single_item_push' },
+    });
+  });
+
   it('keeps owner-action context for manual package follow-ups that ask to recalculate or stop', async () => {
     executeIntentMock
       .mockResolvedValueOnce({

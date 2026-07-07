@@ -286,6 +286,7 @@ _OWNER_ACTION_SCENARIO_ALIASES = {
     "schedule": "staffing_schedule",
     "weather": "external_event_response",
     "event": "external_event_response",
+    "review_recovery": "staff_training",
     "review": "staff_training",
     "training": "staff_training",
     "table": "seating_mix",
