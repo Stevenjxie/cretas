@@ -185,4 +185,33 @@ test.describe('restaurant owner AI demo', () => {
     });
     expect(normalizeText(result.answer)).toMatch(/下雨|天气|堂食|外卖|配送|雨/);
   });
+
+  test('keeps revenue-growth scenario for weekly revenue decline follow-ups', async ({ page }, testInfo) => {
+    await openDemo(page);
+
+    const first = await sendPrompt(page, '这周营收比上周差，老板应该先做什么？');
+    const second = await sendPrompt(page, '帮我选一个营收杠杆继续拆');
+    await attachScreenshot(page, testInfo, 'revenue-growth-follow-up-final');
+
+    expect(first.requestBody.context).toMatchObject({
+      ownerActionScenario: 'revenue_growth',
+    });
+    expect(first.response).toMatchObject({
+      ok: true,
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      source: 'restaurant_owner_action',
+    });
+    expect(first.response.sessionId).toBeTruthy();
+
+    expect(second.requestBody.context).toMatchObject({
+      ownerActionScenario: 'revenue_growth',
+      ownerActionSessionId: first.response.sessionId,
+    });
+    expect(second.response).toMatchObject({
+      ok: true,
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      source: 'restaurant_owner_action',
+    });
+    expect(normalizeText(second.answer)).toMatch(/营收|上周|客单|翻台|外卖|套餐|杠杆/);
+  });
 });
