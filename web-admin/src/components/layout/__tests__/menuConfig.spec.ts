@@ -42,15 +42,15 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]));
   });
 
-  it('keeps account and department management under HR, with workflow setup in system', () => {
+  it('keeps account and department management under HR and mirrors account setup in system', () => {
     expect(childPaths('/hr')).toEqual(expect.arrayContaining([
       '/system/users',
       '/system/roles',
       '/hr/departments',
     ]));
-    expect(childPaths('/system')).not.toContain('/system/users');
-    expect(childPaths('/system')).not.toContain('/system/roles');
     expect(childPaths('/system')).toEqual(expect.arrayContaining([
+      '/system/users',
+      '/system/roles',
       '/system/approval-chains',
       '/system/workflow-designer',
       '/canvas-editor',

@@ -127,6 +127,7 @@ function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null)
   };
   const applyLabels = (value?: string) => {
     if (!value) return value;
+    if (chart.meta?.domain === 'restaurant') return value;
     let localized = value;
     const labels = chart.config?.xAxis?.data ?? [];
     labels.slice(0, 6).forEach((label, index) => {
@@ -163,7 +164,7 @@ function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null)
       suggestion: '先把非菜品行排除，再看酒酿馒头、腐竹-砂锅煲这类真实菜品：能并入套餐的并入，只拖库存的限量或下架。',
     };
   }
-  if (/畅销|热销|菜品|销量|Top\s*\d*/i.test(title) && chart.meta?.domain === 'restaurant') {
+  if (/畅销|热销|菜品|销量|Top\s*\d*/i.test(title) && chart.meta?.domain === 'restaurant' && context.noun === '菜品') {
     return {
       ...raw,
       finding: 'Top 菜品可以作为主推池，但不等于每一道都适合外卖或套餐。',
