@@ -84,7 +84,33 @@ const form = ref({
   remark: '',
   items: [] as ManualTransferItem[],
 });
+function validateWarehouseTransferSource(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  if (form.value.transferType === 'WAREHOUSE_TO_WAREHOUSE' && !value) {
+    callback(new Error('仓库间调拨必须选择调出仓库'));
+    return;
+  }
+  callback();
+}
+
+function validateWarehouseTransferTarget(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  if (form.value.transferType !== 'WAREHOUSE_TO_WAREHOUSE') {
+    callback();
+    return;
+  }
+  if (!value) {
+    callback(new Error('仓库间调拨必须选择调入仓库'));
+    return;
+  }
+  if (form.value.sourceWarehouseId && value === form.value.sourceWarehouseId) {
+    callback(new Error('调入仓库不能和调出仓库相同'));
+    return;
+  }
+  callback();
+}
+
 const formRules = {
+  sourceWarehouseId: [{ validator: validateWarehouseTransferSource, trigger: 'change' }],
+  targetWarehouseId: [{ validator: validateWarehouseTransferTarget, trigger: 'change' }],
   transferType: [{ required: true, message: '请选择调拨类型', trigger: 'change' }],
   targetFactoryId: [{ required: true, message: '请选择调入方', trigger: 'change' }],
   transferDate: [{ required: true, message: '请选择调拨日期', trigger: 'change' }],

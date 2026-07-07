@@ -140,6 +140,8 @@ public class TransferServiceImpl implements TransferService {
     @Override
     @Transactional
     public InternalTransfer createTransfer(String factoryId, CreateTransferRequest request, Long userId) {
+        TransferType transferType = TransferType.valueOf(request.getTransferType());
+        validateCreateWarehouseRoute(factoryId, request, transferType);
         // Round 11 T4: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
             try {
@@ -169,7 +171,7 @@ public class TransferServiceImpl implements TransferService {
 
         InternalTransfer transfer = new InternalTransfer();
         transfer.setTransferNumber(transferNumber);
-        transfer.setTransferType(TransferType.valueOf(request.getTransferType()));
+        transfer.setTransferType(transferType);
         transfer.setSourceFactoryId(factoryId);
         transfer.setTargetFactoryId(request.getTargetFactoryId());
         transfer.setSourceWarehouseId(request.getSourceWarehouseId());
@@ -242,6 +244,38 @@ public class TransferServiceImpl implements TransferService {
 
         log.info("创建调拨单: sourceFactory={}, targetFactory={}, transferNumber={}", factoryId, request.getTargetFactoryId(), transferNumber);
         return transfer;
+    }
+
+    private void validateCreateWarehouseRoute(String factoryId, CreateTransferRequest request, TransferType transferType) {
+        if (transferType != TransferType.WAREHOUSE_TO_WAREHOUSE) {
+            return;
+        }
+        if (!factoryId.equals(request.getTargetFactoryId())) {
+            throw new BusinessException(400, "仓库间调拨必须在同一工厂内流转")
+                    .withHint("请选择当前工厂作为调入方，跨工厂调拨请使用总部/分部调拨类型");
+        }
+        String sourceWarehouseId = trimToNull(request.getSourceWarehouseId());
+        String targetWarehouseId = trimToNull(request.getTargetWarehouseId());
+        if (sourceWarehouseId == null) {
+            throw new BusinessException(400, "仓库间调拨必须选择调出仓库")
+                    .withHint("请先选择实际发货的源仓库");
+        }
+        if (targetWarehouseId == null) {
+            throw new BusinessException(400, "仓库间调拨必须选择调入仓库")
+                    .withHint("请先选择实际收货的目标仓库");
+        }
+        if (sourceWarehouseId.equals(targetWarehouseId)) {
+            throw new BusinessException(400, "调出仓库和调入仓库不能相同")
+                    .withHint("请选择两个不同仓库，避免生成无意义的内部搬库单");
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     @Override

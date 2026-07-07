@@ -48,8 +48,19 @@ class TransferServiceImplDedupTest {
 
     private CreateTransferRequest req() {
         CreateTransferRequest r = new CreateTransferRequest();
-        r.setTransferType("MATERIAL");
+        r.setTransferType("BRANCH_TO_BRANCH");
         r.setTargetFactoryId(TARGET_FACTORY);
+        r.setTransferDate(LocalDate.now());
+        r.setItems(List.of());
+        return r;
+    }
+
+    private CreateTransferRequest warehouseTransferReq(String sourceWarehouseId, String targetWarehouseId) {
+        CreateTransferRequest r = new CreateTransferRequest();
+        r.setTransferType("WAREHOUSE_TO_WAREHOUSE");
+        r.setTargetFactoryId(FACTORY_ID);
+        r.setSourceWarehouseId(sourceWarehouseId);
+        r.setTargetWarehouseId(targetWarehouseId);
         r.setTransferDate(LocalDate.now());
         r.setItems(List.of());
         return r;
@@ -75,6 +86,32 @@ class TransferServiceImplDedupTest {
         assertEquals(409, ex.getCode().intValue());
         assertTrue(ex.getMessage().contains("TR-20260618-0001"),
                 "409 message must cite existing transfer number, was: " + ex.getMessage());
+        verify(transferRepository, never()).save(any(InternalTransfer.class));
+    }
+
+    @Test
+    @DisplayName("create warehouse transfer requires explicit target warehouse")
+    void createWarehouseTransfer_rejectsMissingTargetWarehouse() {
+        TransferServiceImpl service = newService();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createTransfer(FACTORY_ID, warehouseTransferReq("WH-RAW", null), USER_ID));
+
+        assertEquals(400, ex.getCode().intValue());
+        assertTrue(ex.getMessage().contains("调入仓库"), "message should name target warehouse: " + ex.getMessage());
+        verify(transferRepository, never()).save(any(InternalTransfer.class));
+    }
+
+    @Test
+    @DisplayName("create warehouse transfer rejects same source and target warehouse")
+    void createWarehouseTransfer_rejectsSameSourceAndTargetWarehouse() {
+        TransferServiceImpl service = newService();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createTransfer(FACTORY_ID, warehouseTransferReq("WH-RAW", "WH-RAW"), USER_ID));
+
+        assertEquals(400, ex.getCode().intValue());
+        assertTrue(ex.getMessage().contains("不能相同"), "message should explain same-warehouse route: " + ex.getMessage());
         verify(transferRepository, never()).save(any(InternalTransfer.class));
     }
 }
