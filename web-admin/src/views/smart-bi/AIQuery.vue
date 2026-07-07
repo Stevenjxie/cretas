@@ -578,6 +578,16 @@ const pendingOwnerActionScenario = ref('');
 
 const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> = [
   {
+    scenario: 'revenue_growth',
+    terms: [
+      '\u8425\u6536\u6760\u6746', '\u63d0\u9ad8\u8425\u6536', '\u63d0\u5347\u8425\u6536',
+      '\u589e\u52a0\u8425\u6536', '\u8425\u6536\u6bd4', '\u8425\u6536\u5dee',
+      '\u8425\u6536\u4e0b\u6ed1', '\u8425\u6536\u4e0b\u964d', '\u8425\u6536\u6389',
+      '\u8425\u4e1a\u989d', '\u6536\u5165\u4e0b\u6ed1', '\u6536\u5165\u4e0b\u964d',
+      '\u672c\u5468\u53d8\u5dee', '\u8fd9\u5468\u53d8\u5dee', '\u751f\u610f\u53d8\u5dee',
+    ],
+  },
+  {
     scenario: 'operations_dispatch',
     terms: [
       '\u4ed3\u7ba1+\u53a8\u5e08\u957f+\u524d\u53f0', '\u4ed3\u7ba1\u53a8\u5e08\u957f\u524d\u53f0',
@@ -661,6 +671,7 @@ const OWNER_ACTION_DECISION_TERMS = [
   '\u54ea\u4e09\u4e2a', '\u4e09\u4e2a\u52a8\u4f5c', '\u62c9\u8d77\u6765', '\u5148\u7ba1',
   '\u5148\u67e5', '\u5148\u770b', '\u4e0d\u8981\u591a\u5907', '\u522b\u4e8f', '\u914d\u5408',
   '\u8be5\u6539', '\u53ea\u80fd', '\u8fd8\u662f', '\u4e0d\u7528\u7b49', '\u8981\u8003\u8651',
+  '\u7ee7\u7eed\u62c6', '\u62c6\u7ec6', '\u8425\u6536\u6760\u6746',
 ];
 const PACKAGE_PRIORITY_TERMS = [
   '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u53cc\u4eba\u9910',

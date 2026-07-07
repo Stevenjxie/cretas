@@ -159,6 +159,72 @@ describe('AIQuery restaurant owner-action routing', () => {
     });
   });
 
+  it('sends revenue growth scenario for broad weekly revenue decline questions', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      sessionId: 'owner-action-revenue-session',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: 'revenue answer',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'revenue_growth',
+        sessionId: 'owner-action-revenue-session',
+        answer: 'revenue answer',
+      },
+    });
+
+    await ask('这周营收比上周差，老板应该先做什么？');
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(1);
+    expect(executeIntentMock.mock.calls[0][2]).toMatchObject({
+      context: {
+        ownerActionScenario: 'revenue_growth',
+        period: 'this_week',
+      },
+    });
+  });
+
+  it('keeps revenue growth owner-action session for manual leverage follow-ups', async () => {
+    executeIntentMock
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'java-session-revenue',
+        intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+        message: 'revenue answer',
+        resultData: {
+          source: 'restaurant_owner_action',
+          scenario: 'revenue_growth',
+          sessionId: 'owner-action-revenue-session',
+          answer: 'revenue answer',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        sessionId: 'java-session-revenue-2',
+        intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+        message: 'follow-up answer',
+        resultData: {
+          source: 'restaurant_owner_action',
+          scenario: 'revenue_growth',
+          sessionId: 'owner-action-revenue-session',
+          answer: 'follow-up answer',
+        },
+      });
+
+    await askOnSameThread([
+      '这周营收比上周差，老板应该先做什么？',
+      '帮我选一个营收杠杆继续拆',
+    ]);
+
+    expect(executeIntentMock).toHaveBeenCalledTimes(2);
+    expect(executeIntentMock.mock.calls[1][2]).toMatchObject({
+      context: {
+        ownerActionSessionId: 'owner-action-revenue-session',
+        ownerActionScenario: 'revenue_growth',
+      },
+    });
+  });
+
   it('keeps external event scenario for weather questions even when they mention takeout', async () => {
     executeIntentMock.mockResolvedValue({
       status: 'SUCCESS',
