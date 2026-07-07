@@ -323,11 +323,13 @@ request.interceptors.response.use(
     if (status === 403) {
       const backendMsg = error.response?.data?.message || '您没有权限执行此操作';
       const rich = (error.response?.data as unknown as Record<string, string | null>) || {};
-      showRichError(backendMsg, {
-        actionHint: rich.actionHint,
-        severity: rich.severity || 'BLOCKING',
-        hintTarget: rich.hintTarget,
-      });
+      if (!originalRequest._silent) {
+        showRichError(backendMsg, {
+          actionHint: rich.actionHint,
+          severity: rich.severity || 'BLOCKING',
+          hintTarget: rich.hintTarget,
+        });
+      }
       return Promise.reject(new ApiError('权限不足', 'FORBIDDEN', 403));
     }
 

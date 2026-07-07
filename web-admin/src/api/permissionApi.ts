@@ -88,9 +88,11 @@ export async function updateFactoryOverride(
 export async function getUserModuleAccess(
   factoryId: string,
   userId: string | number,
+  options: { silent?: boolean } = {},
 ): Promise<UserModuleAccessView[]> {
   const res = await request.get<ApiResponse<UserModuleAccessView[]>>(
     `/${factoryId}/canvas/user-module-access/${encodeURIComponent(String(userId))}`,
+    options.silent ? ({ _silent: true } as never) : undefined,
   );
   return ((res as unknown as ApiResponse<UserModuleAccessView[]>).data) || [];
 }
