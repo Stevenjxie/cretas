@@ -61,6 +61,7 @@ export async function askRestaurantQuestion(
   const resultData = asRecord(response.resultData);
   const nestedData = asRecord(resultData.data);
   const scenario = resultData.scenario ?? nestedData.scenario;
+  const ownerActionSessionId = resultData.sessionId ?? resultData.session_id ?? nestedData.sessionId ?? nestedData.session_id;
   const sections = normalizeSections(resultData.sections ?? nestedData.sections);
   const followUpChips = [
     ...normalizeFollowups(resultData.suggestedFollowups),
@@ -73,7 +74,7 @@ export async function askRestaurantQuestion(
     success: response.status === 'SUCCESS',
     intentCode: response.intentCode ?? null,
     message: response.message || response.formattedText || '已完成分析',
-    sessionId: response.sessionId ?? null,
+    sessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : (response.sessionId ?? null),
     ownerActionScenario: typeof scenario === 'string' ? scenario : null,
     sections,
     followUpChips,
