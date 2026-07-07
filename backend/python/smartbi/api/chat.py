@@ -129,7 +129,7 @@ async def _try_tiered_restaurant_intent(
             # missing after that, explicitly disclose rather than silently
             # dropping it.
             answer_text += (
-                f"\n\n⚠️ 提示：以上回答可能未完整覆盖 {'、'.join(contract.missing)}，"
+                f"\n\n⚠️ 提示：以上回答可能未完整覆盖{_contract.describe_missing(contract.missing)}，"
                 "如需更精确的结果，可以换个更具体的说法重新提问。"
             )
 

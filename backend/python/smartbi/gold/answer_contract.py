@@ -1,18 +1,36 @@
 """Answer Contract: post-hoc checks that a served OpsAnswer actually covers
 what the RestaurantQuerySpec asked for (design section 4).
 
-Pure text/heuristic validation -- no LLM judge. Runs against T1 (keyword)
-answers too, which is deliberate: the "最近两个月" regression this whole
-project exists to prevent was a T1-reachable failure mode (a time window
-silently dropped back to full history), and this contract is a regression
-guard for exactly that class of bug regardless of which tier resolved the
-intent.
+Pure text/heuristic validation -- no LLM judge. Tier-agnostic by design
+(validate() accepts any spec+answer), but in v1 the chat.py call sites only
+run it on answers served through the tiered helper (T2 vector / T3 LLM):
+T1 keyword hits keep their legacy byte-identical serve path per the spec's
+zero-regression principle (section 1.3 rule 5 beats section 4 where they
+conflict). Extending enforcement to T1 answers is a deliberate follow-up
+once the contract has soaked on the new tiers.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from smartbi.gold.restaurant_intent import RestaurantQuerySpec
+
+# Boss-facing Chinese labels for contract element tokens. Anything that
+# builds user-visible text from ContractResult.missing MUST go through
+# describe_missing() -- the raw tokens are internal identifiers and must
+# never be shown to the user.
+_ELEMENT_LABELS_CN = {
+    "window_label": "您问的时间范围",
+    "profitability_verdict": "是否赚钱的判断",
+    "margin_value": "毛利数据",
+    "store_name": "具体门店",
+    "dish_name": "具体菜品",
+}
+
+
+def describe_missing(missing: List[str]) -> str:
+    """Render missing contract elements as boss-readable Chinese."""
+    return "、".join(_ELEMENT_LABELS_CN.get(m, m) for m in missing)
 
 # Tokens that count as an explicit "yes we answered the profitability
 # question" verdict (either direction).
