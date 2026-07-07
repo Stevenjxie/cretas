@@ -625,6 +625,16 @@ const queryPlaceholder = computed(() => {
   return '输入您的问题（下拉有 40+ 模板秒回问题可选）';
 });
 
+function buildWelcomeMessage(): string {
+  if (isRestaurantTenant.value) {
+    return '您好！我是餐饮经营 AI 助手。您可以直接问今天先做什么、这周怎么提升营收、毛利和成本哪里要盯、门店和菜品怎么调整；系统会自动调用已经整理好的餐饮数据，不需要手动选择数据源。';
+  }
+  const sourceHint = dataSourceLabel.value
+    ? `\n\n当前${dataSourceLabel.value}`
+    : '\n\n提示：暂无上传数据，建议先在"数据分析"页面上传 Excel 文件。';
+  return `您好！我是 SmartBI 智能助手，可以帮您分析销售、财务、库存等数据。您可以选择下方的分析模板快速开始，或直接输入问题。${sourceHint}`;
+}
+
 // 自动补全候选 — 覆盖 35 个模板的高频 sample_queries(177 中精选)
 // 命中这里的任何 query → Python RAG 秒回(sim=1.0 via template embedding)
 const autocompleteSuggestions = [
@@ -929,11 +939,10 @@ onMounted(async () => {
 
   // 添加欢迎消息
   if (chatHistory.value.length === 0) {
-    const sourceHint = dataSourceLabel.value ? `\n\n当前${dataSourceLabel.value}` : '\n\n提示：暂无上传数据，建议先在"数据分析"页面上传 Excel 文件。';
     chatHistory.value.push({
       id: 'welcome',
       role: 'assistant',
-      content: `您好！我是 SmartBI 智能助手，可以帮您分析销售、财务、库存等数据。您可以选择下方的分析模板快速开始，或直接输入问题。${sourceHint}`,
+      content: buildWelcomeMessage(),
       timestamp: new Date()
     });
   }
@@ -2146,7 +2155,7 @@ function handleClearHistory() {
   chatHistory.value = [{
     id: 'welcome',
     role: 'assistant',
-    content: '您好！我是 SmartBI 智能助手，可以帮您分析销售、财务、库存等数据。您可以选择下方的分析模板快速开始，或直接输入问题。',
+    content: buildWelcomeMessage(),
     timestamp: new Date()
   }];
 }
