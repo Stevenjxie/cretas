@@ -252,7 +252,9 @@ _CN_SMALL_NUMBERS = {
     "一": 1,
     "二": 2,
     "两": 2,
+    "俩": 2,   # 口语: "俩月" (2026-07-08 时间词汇加硬)
     "三": 3,
+    "仨": 3,   # 口语: "仨月"
     "四": 4,
     "五": 5,
     "六": 6,
@@ -282,14 +284,14 @@ def _parse_small_count(raw: Optional[str], default: int = 1) -> int:
 
 
 def _relative_period_match(text: str) -> Optional[Tuple[int, str]]:
-    match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十]{0,4})\s*个?\s*(天|日|周|星期|月)", text)
+    match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十俩仨]{0,4})\s*个?\s*(天|日|周|星期|月)", text)
     if match is None:
         # "这两个月" / "这3周" style: 这 + explicit numeral + unit. The numeral
         # is REQUIRED here ({1,4}, not {0,4}) so bare "这个月" / "这周" keep
         # falling through to the named-window branches in
         # _resolve_sales_date_range (本月 / 本周) instead of becoming a
         # rolling window.
-        match = re.search(r"这\s*([0-9一二两三四五六七八九十]{1,4})\s*个?\s*(天|日|周|星期|月)", text)
+        match = re.search(r"这\s*([0-9一二两三四五六七八九十俩仨]{1,4})\s*个?\s*(天|日|周|星期|月)", text)
     if not match:
         return None
     count = max(1, _parse_small_count(match.group(1), default=1))
@@ -335,14 +337,21 @@ def _resolve_sales_date_range(
             label = "最近30天" if count == 1 else f"最近{count}个月"
             return (anchor - timedelta(days=days - 1), anchor), label
 
-    if any(token in text for token in ("今天", "今日")):
-        return (anchor, anchor), "今天"
+    # 半年 = 滚动 ~183 天 (2026-07-08 时间词汇加硬)。上半年/下半年是日历半年
+    # 不是滚动窗口, 不在此猜测 —— 落到全部历史, 诚实回退好过错窗口。
+    if "半年" in text and "上半年" not in text and "下半年" not in text:
+        return (anchor - timedelta(days=182), anchor), "最近半年"
 
+    # 命名窗口优先级 (2026-07-08 audit fix A-1): 周/月窗口检查必须在 "今天"
+    # 之前 —— 老板问句常见形态是「<周/月窗口>怎么样，今天先做什么」，行动子句
+    # 里的 "今天" 不是数据窗口。实测被劫持的验收原句:
+    # "这周营收比上周差在哪里，今天先做哪几个动作" → 数据窗口应为 本周。
+    # 纯 "今天营业额" (无周/月 token) 仍落到最后的 今天 分支不受影响。
+    # 上周/上个月 AFTER 本周/本月: "这周营收比上周差在哪里" keeps 本周 as the
+    # primary window (the comparison target is the resolver's business).
     if any(token in text for token in ("本周", "这周", "本星期", "这星期")):
         return (anchor - timedelta(days=anchor.weekday()), anchor), "本周"
 
-    # 上周/上个月 AFTER 本周/本月: "这周营收比上周差在哪里" keeps 本周 as the
-    # primary window (the comparison target is the resolver's business).
     if any(token in text for token in ("上周", "上星期", "上个星期")):
         this_monday = anchor - timedelta(days=anchor.weekday())
         return (this_monday - timedelta(days=7), this_monday - timedelta(days=1)), "上周"
@@ -354,15 +363,24 @@ def _resolve_sales_date_range(
         last_of_prev = anchor.replace(day=1) - timedelta(days=1)
         return (last_of_prev.replace(day=1), last_of_prev), "上个月"
 
+    if any(token in text for token in ("今天", "今日")):
+        return (anchor, anchor), "今天"
+
     return (None, None), "全部历史"
 
 
 def _uses_relative_sales_window(query: Optional[str]) -> bool:
+    # 2026-07-08 audit fix A-2: "上周" 家族补入 —— _resolve_sales_date_range
+    # 支持上周窗口但这里漏了, 导致 spec.relative_window=False, Phase 2
+    # should_delegate 规则 4 不委托, Java 侧又不认识 "上周" → 纯 "上周营收多少"
+    # 落 Java 全历史窗口。"上个月/上月" 故意不加: Java parseMonthLabel 原生
+    # 支持上月, 留在 Java 是 by-design (Phase 2 spec §3)。
     text = (query or "").strip()
     return bool(
         _relative_period_match(text)
         or any(token in text for token in (
             "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
+            "上周", "上星期", "上个星期", "半年",
         ))
     )
 
@@ -713,6 +731,7 @@ async def resolve_requisition_trend(
 
 async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
+    *, role: Optional[str] = None,
 ) -> OpsAnswer:
     """Cross-module gross margin analysis: POS sold_price × recipe food_cost.
 
@@ -725,7 +744,26 @@ async def resolve_gross_margin(
 
     Plan C's signature feature — unlocks real gross margin analysis that
     was impossible before Silver/Gold restaurant ops layer.
+
+    RBAC (2026-07-08 audit fix): 毛利/成本/营收金额是价格权限数据 —— 与
+    resolve_sales_summary 相同的 PRICE_VIEW_ROLES 门。此前本函数没有 role
+    参数, resolve_by_code 的签名过滤把 role 静默丢弃, 任何角色都能拿到未
+    脱敏金额。非价格角色现在拿到诚实披露 + 非金额替代入口, 不出金额。
     """
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    if not (bool(role) and role in PRICE_VIEW_ROLES):
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title="菜品毛利分析",
+            answer_text=(
+                "菜品毛利、成本和营收金额属于成本/价格权限，当前角色不能查看金额。"
+                "可以先看销量视角：问「哪个菜卖得好」看菜品销量排行；"
+                "如需毛利数据请联系管理员开通价格查看权限。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={"rbac_masked": True},
+        )
     # Need cretas connection for product_types name↔id lookup
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
@@ -942,11 +980,29 @@ async def resolve_gross_margin(
 
 async def resolve_store_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
+    *, role: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
     for the chain-owner's core question "which store is most profitable".
+
+    RBAC (2026-07-08 audit fix): 同 resolve_gross_margin —— PRICE_VIEW_ROLES
+    门, 此前无 role 参数导致任何角色可见未脱敏门店营收/毛利金额。
     """
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+    if not (bool(role) and role in PRICE_VIEW_ROLES):
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title="门店毛利对比",
+            answer_text=(
+                "门店营收和毛利金额属于成本/价格权限，当前角色不能查看金额。"
+                "可以先看经营量视角：问「哪家店订单最多」看门店单量对比；"
+                "如需毛利数据请联系管理员开通价格查看权限。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={"rbac_masked": True},
+        )
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
         # Per-store per-dish aggregation — need this granularity to compute
@@ -1243,11 +1299,15 @@ async def resolve_sales_summary(
             margin_days = 30
             if date_range[0] is not None and date_range[1] is not None:
                 margin_days = max(1, min((date_range[1] - date_range[0]).days + 1, 365))
+            # role 必传 (2026-07-08 audit fix): resolve_store_margin 现在自带
+            # PRICE_VIEW_ROLES 门, 不传 role 会拿到脱敏空结果破坏本函数的毛利段;
+            # 此分支本就在 can_see_money=True 内, 透传保持行为一致。
             margin_result = await resolve_store_margin(
                 smartbi_pool,
                 factory_id,
                 days=margin_days,
                 top_n=5,
+                role=role,
             )
             margin_meta = margin_result.meta or {}
             total_profit = margin_meta.get("totalProfit")

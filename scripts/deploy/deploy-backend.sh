@@ -210,11 +210,20 @@ done
 # Jul 7 2026 事故修复: --env 含 prod (prod/all) 时启用 strict 模式 — 非
 # origin/main HEAD 或脏工作树直接 ABORT (之前只 WARN, 主目录脏树+非 main
 # 分支的部署把 prod 覆盖成了旧码). 必须放在 --env 解析之后才能拿到 DEPLOY_ENV.
-GIT_SYNC_STRICT=""
-if [[ "$DEPLOY_ENV" =~ ^(prod|all)$ ]]; then
-    GIT_SYNC_STRICT="1"
+#
+# Jul 8 2026 审计修复 C-1: --rollback 完全豁免本检查 —— rollback 是纯服务器端
+# 操作 (SSH 复制 .bak jar + 重启), 不读本地 git 也不构建; 事故回滚时操作者
+# 大概率正处在脏树/feature 分支, strict ABORT 会在最需要速度的时刻拦住回滚。
+# --dry-run 只构建不上传, 降级为非 strict (保留 WARN 提示部署源)。
+if [ "$MODE" = "rollback" ]; then
+    log "INFO" "[0/4] Git sync pre-check skipped (rollback 为纯服务器端操作, 不依赖本地源)"
+else
+    GIT_SYNC_STRICT=""
+    if [[ "$DEPLOY_ENV" =~ ^(prod|all)$ ]] && [ "$MODE" != "dry-run" ]; then
+        GIT_SYNC_STRICT="1"
+    fi
+    check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
 fi
-check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
 
 # ==================== 环境准备 ====================
 # Windows 环境设置 PATH

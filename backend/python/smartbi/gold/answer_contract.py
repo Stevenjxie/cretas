@@ -107,14 +107,40 @@ def _dimension_object_named(dimension_label: str, answer_text: str, entities: Li
     return any(name in answer_text for name in entities if name)
 
 
+# 2026-07-08 audit fix A-3: resolver 能力表 —— 契约只要求 resolver 真正能满足
+# 的元素。8 码里只有 SALES_SUMMARY 的 resolver 接受 query 并按解析出的时间窗
+# 取数/回显; 只有下面三个能产出毛利金额与盈亏判断。对其余 resolver 提这些
+# 要求 = 永远失败的契约 + 每答必挂的免责声明 (审计 A-3 实锤场景:
+# "最近7天损耗最多的食材" 的改述经 T2/T3 → WASTAGE_TOP, resolver 固定 30 天
+# 窗口且不收 query, 窗口回显必然缺失)。restaurant_intent_service.should_delegate
+# 复用 MARGIN_CAPABLE_INTENTS, 两处判断保持一致。
+WINDOW_CAPABLE_INTENTS = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+})
+MARGIN_CAPABLE_INTENTS = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+})
+
+
 def required_elements(spec: RestaurantQuerySpec) -> List[str]:
-    """Which contract elements this spec demands the answer to cover."""
+    """Which contract elements this spec demands the answer to cover.
+
+    Scoped by resolver capability (see WINDOW/MARGIN_CAPABLE_INTENTS above):
+    the contract is a regression guard for what the resolver CAN honor, not a
+    wish list — an element the resolver can never produce would turn into a
+    permanent disclaimer, which trains users to ignore disclaimers.
+    """
     elements: List[str] = []
-    if spec.relative_window or spec.window_label != "全部历史":
+    if (
+        spec.intent in WINDOW_CAPABLE_INTENTS
+        and (spec.relative_window or spec.window_label != "全部历史")
+    ):
         elements.append("window_label")
-    if spec.asks_profitability:
+    if spec.asks_profitability and spec.intent in MARGIN_CAPABLE_INTENTS:
         elements.append("profitability_verdict")
-    if spec.wants_margin:
+    if spec.wants_margin and spec.intent in MARGIN_CAPABLE_INTENTS:
         elements.append("margin_value")
     if "store" in spec.dimensions:
         elements.append("store_name")

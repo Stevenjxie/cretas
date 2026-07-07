@@ -999,12 +999,35 @@ async def post_restaurant_tiered_answer(
     """
     from smartbi.gold.restaurant_intent import parse_restaurant_query
     from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
+    from smartbi.gold.restaurant_ops_router import (
+        _profit_intent,
+        _uses_relative_sales_window,
+    )
 
     try:
         fid = _resolve_tiered_tenant(body.factory_id)
         role = _get_role(request)
         query = (body.query or "").strip()
         if not query:
+            return {"delegate": False}
+
+        # 2026-07-08 audit fix C-2 (延迟缓解): should_delegate 只可能经
+        # 规则 3 (利润信号 + 毛利可答 intent) 或规则 4 (SALES_SUMMARY +
+        # 相对时间窗) 成立, 两个信号的检测都是 <1ms 纯函数且对 T1/T2/T3
+        # 各层同源 (T3 只能在此之上追加, 不会无中生有出规则 2 之外的委托 —
+        # 规则 2 澄清仅在信号存在的模糊问句里才值得让 T3 判断)。两个信号
+        # 都不在 → 委托不可能成立, 直接返回, 不为注定 delegate:false 的判定
+        # 烧 T2 向量 + T3 LLM (最多 5s)。这是 Java 每个 Gold Tool 调用的
+        # 前置路径, 延迟直接进用户等待时间。
+        # 代价: 无信号模糊问题不再经 T3 产生澄清委托 (回到 Java 原样回答,
+        # 即 Phase 2 之前的行为), 可接受; 时间改述的覆盖损失由确定性时间
+        # 词汇加硬 (俩/仨/半年, 同批 commit) 收窄。
+        wants_margin_pre, asks_profit_pre = _profit_intent(query)
+        if (
+            not wants_margin_pre
+            and not asks_profit_pre
+            and not _uses_relative_sales_window(query)
+        ):
             return {"delegate": False}
 
         pool = await get_pg_pool()

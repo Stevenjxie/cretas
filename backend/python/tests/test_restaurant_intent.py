@@ -644,3 +644,95 @@ async def test_build_resolver_query_splices_profit_phrase_for_llm_only_detection
     # phrase makes its own _profit_intent fire for this LLM-only detection.
     assert "赚钱了吗" in resolver_query
     assert query in resolver_query
+
+
+# ─── 8. 2026-07-08 audit fixes (window ordering / vocab / contract scoping) ─
+
+def test_demo_acceptance_string_week_window_not_hijacked_by_today():
+    """Audit fix A-1: the LITERAL Phase-1 acceptance query — the trailing
+    action clause "今天先做哪几个动作" must not hijack the data window away
+    from 本周. (The earlier regression test used a truncated string and
+    missed this; 今天 branch now runs AFTER all week/month branches.)"""
+    (start, end), label = _resolve_sales_date_range(
+        "这周营收比上周差在哪里，今天先做哪几个动作", today=date(2026, 7, 7),
+    )
+    assert label == "本周"
+    assert start == date(2026, 7, 6) and end == date(2026, 7, 7)
+
+
+def test_pure_today_query_still_resolves_today():
+    _, label = _resolve_sales_date_range("今天先做哪几个动作", today=date(2026, 7, 7))
+    assert label == "今天"
+
+
+def test_colloquial_numerals_and_half_year_windows():
+    """时间词汇加硬: 俩/仨 numerals + rolling 半年 (calendar 上半年/下半年
+    deliberately falls through to 全部历史 — honest fallback, not a guess)."""
+    (s, e), label = _resolve_sales_date_range("这俩月生意咋样", today=date(2026, 7, 7))
+    assert label == "最近2个月" and (e - s).days == 59
+
+    _, label3 = _resolve_sales_date_range("最近仨月的营收", today=date(2026, 7, 7))
+    assert label3 == "最近3个月"
+
+    (hs, he), hlabel = _resolve_sales_date_range("近半年赚钱了吗", today=date(2026, 7, 7))
+    assert hlabel == "最近半年" and (he - hs).days == 182
+
+    _, uh_label = _resolve_sales_date_range("上半年营收多少", today=date(2026, 7, 7))
+    assert uh_label == "全部历史"
+
+
+def test_uses_relative_window_covers_last_week():
+    """Audit fix A-2: 上周 must set relative_window so Phase 2 rule 4
+    delegates (Java's resolveWindow does not understand 上周 at all)."""
+    from smartbi.gold.restaurant_ops_router import _uses_relative_sales_window
+    assert _uses_relative_sales_window("上周营收多少") is True
+    assert _uses_relative_sales_window("上星期卖了多少") is True
+
+
+def test_contract_scoping_by_resolver_capability():
+    """Audit fix A-3: the contract only demands what the resolver CAN honor.
+    WASTAGE_TOP's resolver ignores query/window/margin entirely — demanding
+    them would mean a permanent disclaimer on every such answer."""
+    wastage_spec = _spec_for_contract(
+        intent="RESTAURANT_OPS_WASTAGE_TOP",
+        window_label="最近7天", relative_window=True,
+        wants_margin=True, asks_profitability=True,
+    )
+    assert contract.required_elements(wastage_spec) == []
+
+    sales_spec = _spec_for_contract(
+        intent="RESTAURANT_OPS_SALES_SUMMARY",
+        window_label="最近7天", relative_window=True,
+        wants_margin=True, asks_profitability=True,
+    )
+    assert contract.required_elements(sales_spec) == [
+        "window_label", "profitability_verdict", "margin_value",
+    ]
+
+    dish_margin_spec = _spec_for_contract(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        window_label="最近7天", relative_window=True,
+        wants_margin=True, dimensions=("dish",),
+    )
+    # window not required (resolver fixed 30d window), margin IS required,
+    # dish naming still required.
+    assert contract.required_elements(dish_margin_spec) == ["margin_value", "dish_name"]
+
+
+def _spec_for_contract(**overrides):
+    defaults = dict(
+        intent="RESTAURANT_OPS_SALES_SUMMARY",
+        domain="restaurant",
+        date_range=(None, None),
+        window_label="全部历史",
+        relative_window=False,
+        metrics=(),
+        wants_margin=False,
+        asks_profitability=False,
+        dimensions=(),
+        comparison=None,
+        confidence=0.9,
+        source_tier="keyword",
+    )
+    defaults.update(overrides)
+    return RestaurantQuerySpec(**defaults)
