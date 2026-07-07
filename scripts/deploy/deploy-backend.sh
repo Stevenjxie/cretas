@@ -53,14 +53,6 @@ if command -v acquire_deploy_lock >/dev/null 2>&1 || declare -F acquire_deploy_l
     acquire_deploy_lock "cretas-backend-deploy" || exit 1
 fi
 
-# ==================== Git Sync Pre-check ====================
-# May 11 2026 stale-local-deploy bug fix: deploy builds jar via mvn package from
-# local source. If local is behind origin/main (e.g. organizer admin-merged via
-# gh CLI without `git pull`), deploy ships stale code. Health checks PASS (code
-# compiles) but functional behavior is OLD.
-# Per HARD rule feedback_organizer_must_git_pull_before_deploy.md.
-check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..."
-
 # ==================== 配置 ====================
 REPO="Stevenjxie/cretas"
 JAR_NAME="cretas-backend-system-1.0.0.jar"
@@ -207,6 +199,22 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ==================== Git Sync Pre-check ====================
+# May 11 2026 stale-local-deploy bug fix: deploy builds jar via mvn package from
+# local source. If local is behind origin/main (e.g. organizer admin-merged via
+# gh CLI without `git pull`), deploy ships stale code. Health checks PASS (code
+# compiles) but functional behavior is OLD.
+# Per HARD rule feedback_organizer_must_git_pull_before_deploy.md.
+#
+# Jul 7 2026 事故修复: --env 含 prod (prod/all) 时启用 strict 模式 — 非
+# origin/main HEAD 或脏工作树直接 ABORT (之前只 WARN, 主目录脏树+非 main
+# 分支的部署把 prod 覆盖成了旧码). 必须放在 --env 解析之后才能拿到 DEPLOY_ENV.
+GIT_SYNC_STRICT=""
+if [[ "$DEPLOY_ENV" =~ ^(prod|all)$ ]]; then
+    GIT_SYNC_STRICT="1"
+fi
+check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
 
 # ==================== 环境准备 ====================
 # Windows 环境设置 PATH

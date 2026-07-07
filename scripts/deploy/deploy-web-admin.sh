@@ -85,7 +85,14 @@ fi
 # ==================== Git Sync Pre-check ====================
 # 防 stale-local-deploy (May 11 2026 bug fix; per feedback_organizer_must_git_pull_before_deploy.md):
 # deploy 从本地工作树 build Vite dist, 本地落后 origin/main → ship stale code.
-check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..."
+#
+# Jul 7 2026 事故修复: --env 含 prod (prod/all) 时启用 strict 模式 — 非
+# origin/main HEAD 或脏工作树直接 ABORT (之前只 WARN).
+GIT_SYNC_STRICT=""
+if [[ "$ENV" =~ ^(prod|all)$ ]]; then
+    GIT_SYNC_STRICT="1"
+fi
+check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
 
 # 根据 --env 决定目标路径
 if [ "$ENV" = "prod" ]; then
