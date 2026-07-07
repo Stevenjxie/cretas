@@ -21,6 +21,11 @@ export function isTaskReportComplete(task: WorkProcessTask, yieldData?: BatchYie
   // 普通终态直接返回
   if (isTerminalWorkProcessStatus(task.status)) return true;
 
+  const step = yieldData?.steps?.find(
+    (s) => s.workProcessTaskId === task.id || s.processOrder === task.processOrder,
+  );
+  if (step?.phase === 'COMPLETED') return true;
+
   // 非哨兵工序不额外检查 yield
   if (
     task.workProcessId !== SENTINEL_MATERIAL_INPUT &&
@@ -29,23 +34,16 @@ export function isTaskReportComplete(task: WorkProcessTask, yieldData?: BatchYie
     return false;
   }
 
-  // 没有 yield 数据时保守返回 false (不误隐藏)
-  if (!yieldData?.steps) return false;
-
-  const step = yieldData.steps.find(
-    (s) => s.workProcessTaskId === task.id || s.processOrder === task.processOrder,
-  );
   if (!step) return false;
 
   if (task.workProcessId === SENTINEL_MATERIAL_INPUT) {
-    // 领料哨兵: 有实际投入量 或 phase 已进入生产/完成
+    // 领料哨兵: 有实际投入量 或 phase 已进入生产
     return (
       (step.totalInput ?? 0) > 0 ||
-      step.phase === 'IN_PRODUCTION' ||
-      step.phase === 'COMPLETED'
+      step.phase === 'IN_PRODUCTION'
     );
   }
 
-  // SENTINEL_FINAL_OUTPUT: 有实际产出量 或 phase 完成
-  return (step.totalOutput ?? 0) > 0 || step.phase === 'COMPLETED';
+  // SENTINEL_FINAL_OUTPUT: 有实际产出量
+  return (step.totalOutput ?? 0) > 0;
 }

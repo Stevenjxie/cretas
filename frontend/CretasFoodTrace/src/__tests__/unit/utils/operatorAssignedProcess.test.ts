@@ -125,9 +125,24 @@ describe('normal process (non-sentinel)', () => {
     status: 'IN_PROGRESS',
   };
 
-  it('keeps visible while IN_PROGRESS regardless of yield data', () => {
+  it('keeps visible while IN_PROGRESS when yield data has input but no completed phase', () => {
     expect(isTaskReportComplete(normalTask, makeYield({ totalInput: 10 }))).toBe(false);
     expect(isTaskReportComplete(normalTask, null)).toBe(false);
+  });
+
+  it('hides when yield step phase is COMPLETED even if task status is still IN_PROGRESS', () => {
+    expect(
+      isTaskReportComplete(
+        normalTask,
+        makeYield({
+          workProcessTaskId: normalTask.id,
+          processOrder: normalTask.processOrder,
+          totalInput: 109,
+          totalOutput: 59.95,
+          phase: 'COMPLETED',
+        }),
+      ),
+    ).toBe(true);
   });
 
   it('hides when status becomes COMPLETED', () => {
