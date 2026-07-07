@@ -39,10 +39,15 @@ Clarification continuation (v1, 2026-07-08):
 
   When `parse_restaurant_query` returns a clarification AND the caller passed
   a non-empty `session_key`, the (factory_id, session_key) -> {original
-  question, clarification question} pair is registered in an in-process
-  LRU+TTL store (`_PENDING_CLARIFICATIONS`, ~5 minutes / 500 entries). The
-  NEXT call for that same (factory_id, session_key) is then treated as the
-  user's ANSWER to that clarification, not a fresh standalone query:
+  question, clarification question} pair is registered in the shared smartbi
+  Postgres table `restaurant_pending_clarifications` (~5 minute TTL, judged
+  Python-side on pop; migration V20260708_01). Storage MUST be the shared DB,
+  not process memory: prod runs `uvicorn --workers 2`, and an in-process
+  store made continuation a coin flip whenever the follow-up landed on the
+  other worker (2026-07-08 prod bug -- see the "Pending-clarification store"
+  section comment below). The NEXT call for that same (factory_id,
+  session_key) is then treated as the user's ANSWER to that clarification,
+  not a fresh standalone query:
 
     1. Deterministic fast path FIRST: T1 keyword, then T2 vector, both run
        against the ORIGINAL question concatenated with the new answer (no LLM
@@ -76,9 +81,9 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from smartbi.gold.restaurant_ops_router import (
@@ -287,57 +292,123 @@ def _normalize_query(query: str) -> str:
 # original question" memo so the NEXT message from that (factory_id,
 # session_key) can be interpreted as an ANSWER instead of a fresh query. See
 # module docstring "Clarification continuation" section for the full flow.
-# LRU (size-capped, same OrderedDict pattern as _ROUTE_CACHE) + lazy TTL
-# check on read (no background sweep thread needed -- an entry nobody reads
-# just ages out of the LRU eventually, or is judged stale the one time it IS
-# read).
-_PENDING_CLARIFICATIONS: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
-_PENDING_MAX = 500
+#
+# STORAGE IS POSTGRES, NOT PROCESS MEMORY (2026-07-08 prod bug fix): prod
+# cretas-python runs `uvicorn --workers 2`, so the first version's
+# in-process OrderedDict registered the pending entry in worker A while the
+# user's follow-up answer landed on worker B -- continuation became a coin
+# flip (live-verified: a 3-message conversation re-clarified the answer as a
+# brand-new query). The `restaurant_pending_clarifications` table (migration
+# V20260708_01__restaurant_pending_clarifications.sql) lives in the same
+# smartbi Postgres the `pool` argument already points at (home of
+# agg_restaurant_daily_*), shared by every worker.
+#
+# Consume-once semantics come from a single atomic DELETE ... RETURNING; the
+# ~5-minute TTL is judged Python-side on the returned created_at (the row is
+# deleted either way, preserving the one-hop cap). No background sweeper: an
+# opportunistic bulk delete of rows older than 1 hour rides along on each
+# pop (failure ignored) so abandoned entries cannot bloat the table.
+#
+# The per-worker `_ROUTE_CACHE` / `_RESTAURANT_TENANT_CACHE` above stay
+# in-process ON PURPOSE: they are pure performance caches (each worker
+# re-warming them independently costs latency, never correctness), whereas
+# pending clarifications are conversation STATE.
+#
+# Fail-open (module principle 6): ANY DB error in put/pop logs a warning and
+# degrades to "nothing registered" / "no continuation this time" -- never
+# raises into the caller's chain.
 _PENDING_TTL_SECONDS = 5 * 60  # ~5 minutes, per clarification-loop v1 design
 
 
-def _pending_key(factory_id: str, session_key: str) -> Tuple[str, str]:
-    return (factory_id, session_key)
-
-
-def _pending_put(
-    factory_id: str, session_key: str, *,
+async def _pending_put(
+    pool, factory_id: str, session_key: str, *,
     original_query: str, clarification_question: Optional[str],
 ) -> None:
-    key = _pending_key(factory_id, session_key)
-    _PENDING_CLARIFICATIONS[key] = {
-        "original_query": original_query,
-        "clarification_question": clarification_question,
-        "ts": time.time(),
-    }
-    _PENDING_CLARIFICATIONS.move_to_end(key)
-    while len(_PENDING_CLARIFICATIONS) > _PENDING_MAX:
-        _PENDING_CLARIFICATIONS.popitem(last=False)
+    """UPSERT the pending clarification for (factory_id, session_key). A
+    newer clarification for the same session overwrites the older one
+    (ON CONFLICT), same as the previous in-process dict assignment did."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO restaurant_pending_clarifications
+                    (factory_id, session_key, original_query, clarification_question, created_at)
+                VALUES ($1, $2, $3, $4, now())
+                ON CONFLICT (factory_id, session_key) DO UPDATE
+                   SET original_query = EXCLUDED.original_query,
+                       clarification_question = EXCLUDED.clarification_question,
+                       created_at = now()
+                """,
+                factory_id, session_key, original_query, clarification_question,
+            )
+    except Exception as exc:
+        logger.warning(
+            f"[restaurant-intent] pending-clarification put failed (fail-open, not registered): {exc}"
+        )
 
 
-def _pending_pop(factory_id: str, session_key: str) -> Optional[Dict[str, Any]]:
+async def _pending_pop(pool, factory_id: str, session_key: str) -> Optional[Dict[str, Any]]:
     """Read-and-remove: a pending entry is consumed the moment it is looked
     at, whether or not the continuation attempt built from it actually
     resolves -- this is what caps continuation at exactly one hop (module
-    docstring). Returns None (not just "not found") when the entry has aged
-    past `_PENDING_TTL_SECONDS`; either way it is gone from the store after
-    this call."""
-    key = _pending_key(factory_id, session_key)
-    entry = _PENDING_CLARIFICATIONS.pop(key, None)
-    if entry is None:
+    docstring). The DELETE ... RETURNING is a single atomic statement, so
+    two workers racing on the same follow-up can never both continue.
+
+    Returns None (not just "not found") when the entry has aged past
+    `_PENDING_TTL_SECONDS`; either way it is gone from the store after this
+    call. Any DB error also returns None (fail-open: no continuation this
+    time)."""
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                DELETE FROM restaurant_pending_clarifications
+                 WHERE factory_id = $1 AND session_key = $2
+                 RETURNING original_query, clarification_question, created_at
+                """,
+                factory_id, session_key,
+            )
+            # Opportunistic anti-bloat sweep (failure ignored): entries the
+            # user never followed up on have no other deletion path.
+            try:
+                await conn.execute(
+                    "DELETE FROM restaurant_pending_clarifications"
+                    " WHERE created_at < now() - interval '1 hour'"
+                )
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.warning(
+            f"[restaurant-intent] pending-clarification pop failed (fail-open, no continuation): {exc}"
+        )
         return None
-    if time.time() - entry["ts"] > _PENDING_TTL_SECONDS:
+
+    if row is None:
         return None
-    return entry
+    created_at = row["created_at"]
+    if created_at is not None:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+        if age_seconds > _PENDING_TTL_SECONDS:
+            return None
+    return {
+        "original_query": row["original_query"],
+        "clarification_question": row["clarification_question"],
+    }
 
 
-def clear_pending_clarifications() -> None:
-    """Test-only helper: reset the in-process pending-clarification store."""
-    _PENDING_CLARIFICATIONS.clear()
+async def clear_pending_clarifications(pool) -> None:
+    """Test/ops helper: remove ALL pending-clarification rows. Fail-open."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM restaurant_pending_clarifications")
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent] pending-clarification clear failed: {exc}")
 
 
-def _maybe_register_pending(
-    query: str, spec: Optional[RestaurantQuerySpec], factory_id: str,
+async def _maybe_register_pending(
+    pool, query: str, spec: Optional[RestaurantQuerySpec], factory_id: str,
     session_key: Optional[str],
 ) -> None:
     """Register a pending clarification for (factory_id, session_key) when
@@ -347,8 +418,8 @@ def _maybe_register_pending(
     path, so this is safe to call unconditionally after any fresh (non-
     continuation) parse outcome."""
     if session_key and spec is not None and spec.clarification_needed:
-        _pending_put(
-            factory_id, session_key,
+        await _pending_put(
+            pool, factory_id, session_key,
             original_query=query, clarification_question=spec.clarification_question,
         )
 
@@ -635,7 +706,7 @@ async def parse_restaurant_query(
         return None
 
     if session_key:
-        pending = _pending_pop(factory_id, session_key)
+        pending = await _pending_pop(pool, factory_id, session_key)
         if pending is not None:
             return await _parse_continuation(norm_query, pool, factory_id=factory_id, pending=pending)
 
@@ -667,7 +738,7 @@ async def parse_restaurant_query(
             llm_wants_margin=cached.get("llm_wants_margin", False),
             llm_asks_profitability=cached.get("llm_asks_profitability", False),
         )
-        _maybe_register_pending(norm_query, cached_spec, factory_id, session_key)
+        await _maybe_register_pending(pool, norm_query, cached_spec, factory_id, session_key)
         return cached_spec
 
     # ── T2: vector (code_prefix=RESTAURANT_OPS_, ~30ms, 0 LLM tokens) ──
@@ -739,7 +810,7 @@ async def parse_restaurant_query(
         t3_code, norm_query, confidence=t3_confidence, tier="llm",
         clarification_needed=True, clarification_question=clarification_question,
     )
-    _maybe_register_pending(norm_query, spec, factory_id, session_key)
+    await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
     return spec
 
 
