@@ -150,17 +150,30 @@ def _build_spec(
     tier: str,
     clarification_needed: bool = False,
     clarification_question: Optional[str] = None,
+    time_phrase: str = "",
+    llm_wants_margin: bool = False,
+    llm_asks_profitability: bool = False,
 ) -> RestaurantQuerySpec:
     """Compose the final QuerySpec: deterministic slots ALWAYS recomputed
     fresh against `query` + today's date, regardless of which tier picked
     `code` or whether that tier's decision came from cache. This is what
     keeps a cached "最近两个月" routing decision from serving yesterday's
-    date window (principle 1 in the module docstring)."""
-    date_range, window_label = _resolve_sales_date_range(query)
-    wants_margin, asks_profitability = _profit_intent(query)
-    relative_window = _uses_relative_sales_window(query)
-    dimensions = _detect_dimensions(query)
-    comparison = _detect_comparison(query)
+    date window (principle 1 in the module docstring).
+
+    `time_phrase` / `llm_wants_margin` / `llm_asks_profitability` are the T3
+    slot SUPPLEMENTS (spec section 1.3 principle 2: the LLM fills only what
+    the deterministic layer could not parse). They are additive-only — the
+    deterministic detectors stay authoritative when they fire, and the
+    supplements ride the routing cache so a cache hit rebuilds the exact
+    same spec as the original T3 parse (dates still recomputed fresh)."""
+    effective_query = f"{query} {time_phrase}".strip() if time_phrase else query
+    date_range, window_label = _resolve_sales_date_range(effective_query)
+    wants_margin, asks_profitability = _profit_intent(effective_query)
+    asks_profitability = asks_profitability or llm_asks_profitability
+    wants_margin = wants_margin or llm_wants_margin or asks_profitability
+    relative_window = _uses_relative_sales_window(effective_query)
+    dimensions = _detect_dimensions(effective_query)
+    comparison = _detect_comparison(effective_query)
     metrics = _default_metrics_for_code(code, wants_margin) if code else ()
 
     return RestaurantQuerySpec(
@@ -181,14 +194,16 @@ def _build_spec(
     )
 
 
-# ─── Routing-decision cache (T1/T2/T3 code+confidence+tier only) ──────────
+# ─── Routing-decision cache ───────────────────────────────────────────────
 # NOT the full spec -- date_range/window_label are always recomputed fresh in
-# `_build_spec` above. Caching only the (code, confidence, tier, clarification)
-# tuple is safe across days; caching the resolved date window would NOT be
-# (see docstring principle 1). Simple size-capped OrderedDict (manual LRU) --
-# no external dependency, no TTL needed since the cached payload is
-# date-agnostic.
-_ROUTE_CACHE: "OrderedDict[Tuple[str, str], Tuple[str, float, str, bool, Optional[str]]]" = OrderedDict()
+# `_build_spec` above. The cached payload is the routing DECISION plus the T3
+# slot supplements (time_phrase / llm profit booleans): all date-agnostic
+# (time_phrase is a relative phrase like "最近2个月", never concrete dates),
+# so a cache hit rebuilds the exact same spec the original parse produced,
+# resolved against *today*. Caching the resolved date window would NOT be
+# safe (see docstring principle 1). Simple size-capped OrderedDict (manual
+# LRU) -- no external dependency, no TTL needed.
+_ROUTE_CACHE: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
 _ROUTE_CACHE_MAX = 500
 
 
@@ -235,12 +250,23 @@ def build_resolver_query(query: str, spec: RestaurantQuerySpec) -> str:
     text) and closes the gap for T3 paraphrases. Original wording is kept
     intact so profit/margin keyword detection (`_profit_intent`) still sees
     the user's actual words.
+
+    Same trick for the T3 profit-slot supplement: when the spec says the user
+    asked about profitability/margin but the raw text carries no token the
+    resolver's own `_profit_intent` would recognize (LLM-only detection),
+    splice a canonical phrase in so the resolver actually produces the
+    margin/verdict section instead of relying on the Answer Contract
+    disclaimer after the fact.
     """
-    if spec.window_label == "全部历史":
-        return query
-    if spec.window_label in query:
-        return query
-    return f"{query} {spec.window_label}".strip()
+    parts = [query]
+    if spec.window_label != "全部历史" and spec.window_label not in query:
+        parts.append(spec.window_label)
+    raw_wants_margin, raw_asks_profit = _profit_intent(query)
+    if spec.asks_profitability and not raw_asks_profit:
+        parts.append("赚钱了吗")
+    elif spec.wants_margin and not raw_wants_margin:
+        parts.append("毛利")
+    return " ".join(parts)
 
 
 # ─── Business-type gate (spec section 3.4) ────────────────────────────────
@@ -472,11 +498,14 @@ async def parse_restaurant_query(
 
     cached = _cache_get(factory_id, norm_query)
     if cached is not None:
-        code, confidence, tier, clarification_needed, clarification_question = cached
         return _build_spec(
-            code or None, norm_query, confidence=confidence, tier=tier,
-            clarification_needed=clarification_needed,
-            clarification_question=clarification_question,
+            cached["code"] or None, norm_query,
+            confidence=cached["confidence"], tier=cached["tier"],
+            clarification_needed=cached["clarification_needed"],
+            clarification_question=cached["clarification_question"],
+            time_phrase=cached.get("time_phrase", ""),
+            llm_wants_margin=cached.get("llm_wants_margin", False),
+            llm_asks_profitability=cached.get("llm_asks_profitability", False),
         )
 
     # ── T2: vector (code_prefix=RESTAURANT_OPS_, ~30ms, 0 LLM tokens) ──
@@ -486,7 +515,10 @@ async def parse_restaurant_query(
         logger.warning(f"[restaurant-intent] T2 vector match raised (fail-open): {exc}")
         t2_code, t2_sim, t2_hint = None, 0.0, None
     if t2_code:
-        _cache_put(factory_id, norm_query, (t2_code, t2_sim, "vector", False, None))
+        _cache_put(factory_id, norm_query, {
+            "code": t2_code, "confidence": t2_sim, "tier": "vector",
+            "clarification_needed": False, "clarification_question": None,
+        })
         return _build_spec(t2_code, norm_query, confidence=t2_sim, tier="vector")
 
     # ── T3: LLM structured parse (thinking off, temperature 0, 5s timeout) ──
@@ -507,25 +539,40 @@ async def parse_restaurant_query(
         clarification_question = None
 
     if t3_code and t3_confidence >= _T3_MIN_CONFIDENCE and not clarification_needed:
-        # Splice the LLM's structured (non-date) time_range hint back into
-        # plain Chinese so `_resolve_sales_date_range` (T1/T2's SAME
-        # deterministic parser) can compute the actual dates. If the LLM gave
-        # no usable hint, or the raw query already carries an explicit time
-        # phrase, `_build_spec` -> `_resolve_sales_date_range` still works off
-        # `norm_query` directly, so this is purely additive.
+        # T3 slot supplements (spec principle 2: LLM fills only what the
+        # deterministic layer could not parse; additive-only):
+        #   - time_phrase: the LLM's structured (non-date) time_range hint,
+        #     rendered back into plain Chinese so `_resolve_sales_date_range`
+        #     (T1/T2's SAME deterministic parser) computes the actual dates.
+        #   - llm_wants_margin / llm_asks_profitability: colloquial profit
+        #     phrasings the token detectors miss ("挣着钱没" etc.) — OR'd in,
+        #     never removing a deterministic detection.
+        # All three ride the cache so a repeat query rebuilds the same spec.
         time_phrase = _parse_t3_time_range(parsed.get("time_range"))
-        effective_query = f"{norm_query} {time_phrase}".strip() if time_phrase else norm_query
-        _cache_put(factory_id, norm_query, (t3_code, t3_confidence, "llm", False, None))
-        return _build_spec(t3_code, effective_query, confidence=t3_confidence, tier="llm")
+        llm_wants_margin = bool(parsed.get("wants_margin"))
+        llm_asks_profitability = bool(parsed.get("asks_profitability"))
+        _cache_put(factory_id, norm_query, {
+            "code": t3_code, "confidence": t3_confidence, "tier": "llm",
+            "clarification_needed": False, "clarification_question": None,
+            "time_phrase": time_phrase,
+            "llm_wants_margin": llm_wants_margin,
+            "llm_asks_profitability": llm_asks_profitability,
+        })
+        return _build_spec(
+            t3_code, norm_query, confidence=t3_confidence, tier="llm",
+            time_phrase=time_phrase,
+            llm_wants_margin=llm_wants_margin,
+            llm_asks_profitability=llm_asks_profitability,
+        )
 
     # Low confidence or explicit clarification request -> surface a
     # clarification instead of querying data with a guess.
     if not clarification_question:
         clarification_question = "能再具体说说想看哪方面的数据吗？比如营收、毛利、损耗还是库存盘点。"
-    _cache_put(
-        factory_id, norm_query,
-        (t3_code or "", t3_confidence, "llm", True, clarification_question),
-    )
+    _cache_put(factory_id, norm_query, {
+        "code": t3_code or "", "confidence": t3_confidence, "tier": "llm",
+        "clarification_needed": True, "clarification_question": clarification_question,
+    })
     return _build_spec(
         t3_code, norm_query, confidence=t3_confidence, tier="llm",
         clarification_needed=True, clarification_question=clarification_question,
