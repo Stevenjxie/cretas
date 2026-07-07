@@ -134,6 +134,23 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
             String factoryId,
             Map<String, Object> params,
             Map<String, Object> context) throws Exception {
+        // 0. Phase 2 delegate gate (2026-07-07 design:
+        // docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md).
+        // Ask Python's tiered (T1/T2/T3) restaurant-intent router + Answer
+        // Contract whether THIS query needs that path (profitability/margin
+        // verdicts, relative-window ops summaries) instead of this Tool's own
+        // resolveWindow -> queryGold -> format flow below. Uses the RAW
+        // factoryId (not resolveGoldFactoryId'd — see tryDelegateToTieredIntent
+        // javadoc). Any miss/exception here falls straight through to the
+        // unchanged original flow.
+        String userInput = getString(params, "userInput");
+        if (userInput != null && !userInput.isBlank()) {
+            Map<String, Object> delegated = tryDelegateToTieredIntent(factoryId, userInput);
+            if (delegated != null) {
+                return delegated;
+            }
+        }
+
         String goldFactoryId = resolveGoldFactoryId(factoryId);
 
         // 1. Resolve the analysis window
@@ -165,6 +182,83 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // 4. Format and return. The restaurant demo is used by operators who need
         // next actions, not just rankings, so keep every Gold answer actionable.
         return ensureActionableMessage(format(g));
+    }
+
+    /**
+     * Phase 2 delegate gate (2026-07-07 design section 2/4): ask
+     * {@link GoldFinanceClient#fetchTieredIntentAnswer} whether {@code
+     * userInput} should be answered by Python's tiered restaurant-intent
+     * router (T1/T2/T3 + Answer Contract) instead of this Tool's own Gold
+     * flow, and if so, map the Python response into a Tool result.
+     *
+     * <p>Uses the <b>raw</b> {@code factoryId} — deliberately NOT passed
+     * through {@link #resolveGoldFactoryId} (the DEMO_REST → RES_3101_009
+     * alias). The Python restaurant-intent path already handles DEMO_REST
+     * directly against its own seeded Gold data (V20260706_01 migration),
+     * matching chat.py's existing {@code factory_id_hdr} usage at its 3 SSE
+     * call sites — aliasing here would look up the wrong tenant's
+     * restaurant-ops rows.
+     *
+     * <p>Never throws: {@link GoldFinanceClient#fetchTieredIntentAnswer}
+     * itself never throws (returns {@code null} on any HTTP failure), but
+     * this method still wraps the whole decision in a defensive try/catch
+     * per design section 4 ("catch Exception 必须 log.warn 后 fall
+     * through，绝不向上抛") in case a caller bug throws something unrelated
+     * to the HTTP call (e.g. malformed response map access).
+     *
+     * @param factoryId raw tenant id (not gold-resolved)
+     * @param userInput the user's free-form question (already checked
+     *                  non-blank by the caller)
+     * @return a Tool result map when the Python side delegated (either a
+     *         full answer or a clarification), or {@code null} when Java
+     *         should proceed with its own {@code resolveWindow -> queryGold
+     *         -> format} flow (no delegation, or any failure along the way)
+     */
+    private Map<String, Object> tryDelegateToTieredIntent(String factoryId, String userInput) {
+        try {
+            Map<String, Object> response = gold.fetchTieredIntentAnswer(factoryId, userInput, getToolName());
+            if (response == null || !Boolean.TRUE.equals(response.get("delegate"))) {
+                return null;
+            }
+            Object answerObj = response.get("answer_text");
+            String answerText = answerObj != null ? answerObj.toString() : null;
+            if (answerText == null || answerText.isBlank()) {
+                log.warn("[{}] tiered-intent delegate response missing answer_text, falling through factory={}",
+                        getToolName(), factoryId);
+                return null;
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("dataAvailable", true);
+            result.put("message", answerText);
+            result.put("tieredDelegate", true);
+
+            boolean isClarification = "clarification".equals(response.get("kind"));
+            if (isClarification) {
+                // A clarifying question is not an "actionable report" moment —
+                // ensureActionableMessage's owner-action framing (forced
+                // "建议：..." advice text, decisionBridge, suggestedFollowups)
+                // would bolt unrelated tool-specific advice onto a question
+                // that is itself asking the user for more detail. Return the
+                // clarification message as-is (fool-proof-design.md: context
+                // must make sense to the reader).
+                return result;
+            }
+
+            result.put("charts", response.getOrDefault("charts", Collections.emptyList()));
+            result.put("kpis", response.getOrDefault("kpis", Collections.emptyList()));
+            if (response.get("code") != null) {
+                result.put("code", response.get("code"));
+            }
+            if (response.get("contract_pass") != null) {
+                result.put("contractPass", response.get("contract_pass"));
+            }
+            return ensureActionableMessage(result);
+        } catch (Exception e) {
+            log.warn("[{}] tiered-intent delegate gate failed factory={}: {}",
+                    getToolName(), factoryId, e.getMessage());
+            return null;
+        }
     }
 
     private String resolveGoldFactoryId(String factoryId) {

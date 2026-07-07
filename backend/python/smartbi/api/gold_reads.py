@@ -20,6 +20,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from smartbi.config import get_pg_pool
 from smartbi.gold import (
@@ -146,6 +147,32 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
             detail=f"factory_id query param {fid!r} doesn't match JWT tenant {tenant!r}",
         )
     return DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
+
+
+def _resolve_tiered_tenant(factory_id: Optional[str]) -> str:
+    """Like ``_resolve_tenant`` (belt-and-suspenders JWT/internal-tenant
+    match) but WITHOUT the ``DEMO_GOLD_TENANT_ALIASES`` DEMO_REST ->
+    RES_3101_009 remap.
+
+    The restaurant tiered-intent path (``parse_restaurant_query`` /
+    ``resolve_by_code`` / the Answer Contract) already handles ``DEMO_REST``
+    directly against its own seeded restaurant-ops Gold data (V20260706_01
+    migration) -- matching chat.py's existing ``factory_id_hdr`` usage at its
+    3 SSE call sites, which never aliases either. Aliasing here would look up
+    the WRONG tenant's restaurant-ops rows (Phase 2 design section 4: "传原始
+    factoryId（DEMO_REST 在 Python smartbi 有自己的 gold seed，与 chat.py 路径
+    一致；不做 RES_3101_009 映射）").
+    """
+    tenant = get_factory_id()
+    if not tenant:
+        raise HTTPException(status_code=401, detail="tenant context not set")
+    fid = factory_id or tenant
+    if fid != tenant:
+        raise HTTPException(
+            status_code=403,
+            detail=f"factory_id {fid!r} doesn't match tenant {tenant!r}",
+        )
+    return fid
 
 
 def _parse_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
@@ -923,3 +950,95 @@ async def get_store_kpi_dashboard(
     except Exception as e:
         logger.exception("store-kpi-dashboard failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+# =============================================================================
+# Phase 2 Java-entry delegate gate (2026-07-07)
+# POST /api/smartbi/gold/restaurant/tiered-answer
+#
+# Called by GoldFinanceClient.fetchTieredIntentAnswer from
+# GoldBackedRestaurantTool.doExecute BEFORE Java's own resolveWindow ->
+# queryGold -> format flow runs. Decides via should_delegate() whether this
+# query needs the Python tiered (T1/T2/T3) intent router + Answer Contract
+# instead of Java's simpler Gold Tool flow, and if so, resolves + returns the
+# full answer. See:
+# docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+# =============================================================================
+
+
+class TieredIntentAnswerRequest(BaseModel):
+    factory_id: str
+    query: str
+    java_tool_name: Optional[str] = None
+
+
+@router.post("/restaurant/tiered-answer")
+async def post_restaurant_tiered_answer(
+    request: Request,
+    body: TieredIntentAnswerRequest,
+) -> dict:
+    """Phase 2 delegate-gate endpoint.
+
+    Never raises a 5xx for a business-logic miss -- mirrors the "never
+    raises" fail-open philosophy of ``parse_restaurant_query`` /
+    ``tiered_answer``: ANY internal exception (including tenant-mismatch —
+    deliberately, since Java calling with a stale/mismatched X-Factory-Id is
+    a caller bug that should fall through, not break the user's answer) is
+    caught and the endpoint returns ``{"delegate": False}`` so the Java
+    caller's ``catch Exception -> fall through to original flow`` gate is
+    exercised exactly as designed (design doc section 4: "catch Exception
+    必须 log.warn 后 fall through，绝不向上抛" on the Java side; mirrored here
+    so a Python-side failure never surfaces as anything other than
+    delegate:false).
+
+    Response shape:
+      {"delegate": False}
+      {"delegate": True, "kind": "clarification", "answer_text": str}
+      {"delegate": True, "answer_text": str, "charts": [...], "kpis": [...],
+       "code": str, "contract_pass": bool}
+    """
+    from smartbi.gold.restaurant_intent import parse_restaurant_query
+    from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
+
+    try:
+        fid = _resolve_tiered_tenant(body.factory_id)
+        role = _get_role(request)
+        query = (body.query or "").strip()
+        if not query:
+            return {"delegate": False}
+
+        pool = await get_pg_pool()
+        if not pool:
+            return {"delegate": False}
+
+        spec = await parse_restaurant_query(query, pool, factory_id=fid)
+        if not should_delegate(spec, body.java_tool_name):
+            return {"delegate": False}
+
+        result = await tiered_answer(
+            query, pool, fid, role, java_tool_name=body.java_tool_name,
+        )
+        if not result:
+            # should_delegate said yes but resolution produced nothing
+            # (resolver miss / contract path failed) -- fall through to
+            # Java's own flow rather than serve an empty/broken answer.
+            return {"delegate": False}
+
+        if result["kind"] == "clarification":
+            return {
+                "delegate": True,
+                "kind": "clarification",
+                "answer_text": result["answer_text"],
+            }
+
+        return {
+            "delegate": True,
+            "answer_text": result["answer_text"],
+            "charts": result.get("charts") or [],
+            "kpis": result.get("kpis") or [],
+            "code": result.get("code"),
+            "contract_pass": result.get("contract_pass"),
+        }
+    except Exception as e:
+        logger.warning(f"[gold-reads] restaurant tiered-answer delegate gate failed (fail-open): {e}")
+        return {"delegate": False}

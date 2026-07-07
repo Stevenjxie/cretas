@@ -591,6 +591,7 @@ async def log_intent_capture(
     contract_pass: Optional[bool],
     served: bool,
     total_wall_ms: int = 0,
+    source: Optional[str] = None,
 ) -> Optional[int]:
     """Fire-and-forget capture of a parse+serve outcome, reusing the existing
     llm_fallback_logger table (no new schema). tier/confidence/contract_pass
@@ -598,6 +599,13 @@ async def log_intent_capture(
     script reads to find T3 (LLM-tier) queries worth promoting into
     SAMPLE_QUERIES / the vector index (per spec section 5, promotion stays
     manual --apply in this v1).
+
+    `source` (Phase 2, 2026-07-07 design section 3): an optional free-form
+    tag distinguishing WHERE the capture came from -- e.g.
+    "java_entry_delegate" when this parse+serve was triggered by the Java
+    GoldBackedRestaurantTool delegate gate rather than a direct chat.py SSE
+    call. Additive-only: omitted (None) preserves the exact agg_meta shape
+    every existing caller/test already relies on.
     """
     try:
         from smartbi.services.llm_fallback_logger import log_template_hit
@@ -609,6 +617,8 @@ async def log_intent_capture(
             "window_label": spec.window_label,
             "clarification_needed": spec.clarification_needed,
         }
+        if source:
+            agg_meta["source"] = source
         return await log_template_hit(
             pool, query, factory_id, None,
             spec.intent or "RESTAURANT_OPS_CLARIFICATION",
