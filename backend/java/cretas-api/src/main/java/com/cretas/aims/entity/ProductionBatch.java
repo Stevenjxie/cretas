@@ -455,4 +455,16 @@ public class ProductionBatch extends BaseEntity {
      */
     @Transient
     private String batchSourceType;
+
+    @Transient
+    private String sourcePlanId;
+
+    @Transient
+    private String sourcePlanNumber;
+
+    @Transient
+    private Integer sourceProcessOrder;
+
+    @Transient
+    private String sourceProcessCode;
 }

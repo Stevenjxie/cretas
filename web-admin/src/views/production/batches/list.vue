@@ -23,6 +23,15 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
+type BatchTableRow = TableRow & {
+  isSyntheticPlanGroup?: boolean;
+  children?: BatchTableRow[];
+  sourcePlanId?: string | null;
+  sourcePlanNumber?: string | null;
+  sourceProcessOrder?: number | null;
+  sourceProcessCode?: string | null;
+};
+
 function rowActionsFor(row: TableRow) {
   // #751: 删除 dropdown 中的 'view-detail' (页面已有独立"查看" button, 避免重复 button 跳同页)
   // fool-proof-design Rule 5: 'edit'/'lock' 没有真实后端能力 (无批次编辑表单/接口,
@@ -104,12 +113,81 @@ async function handleAiFill(params: Record<string, unknown>) {
 }
 
 const loading = ref(false);
-const tableData = ref<TableRow[]>([]);
+const tableData = ref<BatchTableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchForm = ref({
   batchNumber: '',
   status: ''
 });
+
+function sumQuantity(rows: BatchTableRow[], key: string) {
+  let total = 0;
+  let hasValue = false;
+  for (const row of rows) {
+    const value = Number(row[key]);
+    if (Number.isFinite(value)) {
+      total += value;
+      hasValue = true;
+    }
+  }
+  return hasValue ? Number(total.toFixed(3)) : null;
+}
+
+const displayTableData = computed<BatchTableRow[]>(() => {
+  const result: BatchTableRow[] = [];
+  const groups = new Map<string, BatchTableRow>();
+
+  for (const row of tableData.value) {
+    const sourcePlanKey = row.batchType === 'CLERK_WIP'
+      ? String(row.sourcePlanId || row.sourcePlanNumber || '')
+      : '';
+
+    if (!sourcePlanKey) {
+      result.push(row);
+      continue;
+    }
+
+    let group = groups.get(sourcePlanKey);
+    if (!group) {
+      group = {
+        id: `source-plan-${sourcePlanKey}`,
+        batchNumber: row.sourcePlanNumber || row.sourcePlanId || '未归属生产计划',
+        productTypeName: row.productTypeName || row.productName || '',
+        status: 'SOURCE_PLAN_GROUP',
+        isSyntheticPlanGroup: true,
+        sourcePlanId: row.sourcePlanId,
+        sourcePlanNumber: row.sourcePlanNumber,
+        children: []
+      };
+      groups.set(sourcePlanKey, group);
+      result.push(group);
+    }
+
+    group.children?.push(row);
+  }
+
+  for (const group of groups.values()) {
+    const children = group.children || [];
+    children.sort((a, b) => {
+      const orderA = Number(a.sourceProcessOrder ?? Number.MAX_SAFE_INTEGER);
+      const orderB = Number(b.sourceProcessOrder ?? Number.MAX_SAFE_INTEGER);
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a.batchNumber || '').localeCompare(String(b.batchNumber || ''));
+    });
+    group.plannedQuantity = sumQuantity(children, 'plannedQuantity');
+    group.actualQuantity = sumQuantity(children, 'actualQuantity');
+  }
+
+  return result;
+});
+
+function openSourcePlan(row: BatchTableRow) {
+  if (row.sourcePlanId) {
+    router.push({ path: '/production/plans', query: { openProcessEntryPlan: String(row.sourcePlanId) } });
+    return;
+  }
+  router.push('/production/plans');
+}
 
 // 创建批次
 const createDialogVisible = ref(false);
@@ -332,24 +410,63 @@ function getStatusText(status: string) {
       </div>
 
       <!-- 数据表格 -->
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column prop="batchNumber" label="批次号" width="160" />
+      <el-table
+        :data="displayTableData"
+        v-loading="loading"
+        row-key="id"
+        :tree-props="{ children: 'children' }"
+        default-expand-all
+        empty-text="暂无数据"
+        stripe
+        border
+        style="width: 100%"
+      >
+        <el-table-column prop="batchNumber" label="计划/批次号" width="260">
+          <template #default="{ row }">
+            <div v-if="row.isSyntheticPlanGroup" class="plan-group-cell">
+              <span class="plan-group-title">生产计划 {{ row.sourcePlanNumber || row.sourcePlanId || '-' }}</span>
+              <el-tag size="small" type="success">已小结归组</el-tag>
+            </div>
+            <span v-else>{{ row.batchNumber || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="产品类型" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</template>
+          <template #default="{ row }">
+            <span v-if="row.isSyntheticPlanGroup">{{ row.children?.length || 0 }} 条已小结批次</span>
+            <span v-else>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
+          </template>
         </el-table-column>
         <el-table-column prop="plannedQuantity" label="计划数量" width="100" align="right" />
         <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
+        <el-table-column label="来源工序" width="130" align="center">
+          <template #default="{ row }">
+            <span v-if="row.isSyntheticPlanGroup">生产计划</span>
+            <span v-else-if="row.batchType === 'CLERK_WIP' && row.sourceProcessOrder">
+              {{ `第${row.sourceProcessOrder}道` }}{{ row.sourceProcessCode ? ` / ${row.sourceProcessCode}` : '' }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
+            <el-tag v-if="row.isSyntheticPlanGroup" type="info" size="small">
+              计划归组
+            </el-tag>
+            <el-tag v-else :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="supervisorName" label="负责人" width="100" />
+        <el-table-column prop="supervisorName" label="负责人" width="100">
+          <template #default="{ row }">{{ row.isSyntheticPlanGroup ? '-' : (row.supervisorName || '-') }}</template>
+        </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
         <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
+            <template v-if="row.isSyntheticPlanGroup">
+              <el-button type="primary" link size="small" @click="openSourcePlan(row)">查看计划</el-button>
+            </template>
+            <template v-else>
             <!-- #751: 查看 vs 编辑 区分 — 详情页消费 ?mode=edit 决定 read-only / editable.
                  fool-proof-design Rule 5: 批次没有独立编辑表单, 之前点了才发现是死路
                  (click-then-toast) — 灰显 + title 说明原因, 而不是让用户点一次才知道。 -->
@@ -368,6 +485,7 @@ function getStatusText(status: string) {
               @action-click="(id: string) => handleRowActionClick(id, row)"
               @ai-trigger="() => openAiForRow(row)"
             />
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -501,6 +619,21 @@ function getStatusText(status: string) {
 
 .el-table {
   flex: 1;
+}
+
+.plan-group-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-group-title {
+  font-weight: 600;
+  color: var(--text-color-primary, #303133);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pagination-wrapper {
