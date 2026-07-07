@@ -49,6 +49,10 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
+import {
+  inferOwnerActionScenario,
+  isOwnerActionFollowupText,
+} from './restaurantOwnerActionRegistry';
 
 // Render markdown content safely
 function renderMarkdown(text: string): string {
@@ -576,161 +580,11 @@ const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
 
-const OWNER_ACTION_SCENARIO_TERMS: Array<{ scenario: string; terms: string[] }> = [
-  {
-    scenario: 'store_compare',
-    terms: [
-      '所有门店', '其他门店', '连锁店', '连锁', '区域经理', '品牌共性',
-      '单店问题', '门店里', '哪家店', '最值得学习', '复制到',
-    ],
-  },
-  {
-    scenario: 'revenue_growth',
-    terms: [
-      '\u8425\u6536\u6760\u6746', '\u63d0\u9ad8\u8425\u6536', '\u63d0\u5347\u8425\u6536',
-      '\u589e\u52a0\u8425\u6536', '\u8425\u6536\u6bd4', '\u8425\u6536\u5dee',
-      '\u8425\u6536\u4e0b\u6ed1', '\u8425\u6536\u4e0b\u964d', '\u8425\u6536\u6389',
-      '\u8425\u4e1a\u989d', '\u6536\u5165\u4e0b\u6ed1', '\u6536\u5165\u4e0b\u964d',
-      '\u672c\u5468\u53d8\u5dee', '\u8fd9\u5468\u53d8\u5dee', '\u751f\u610f\u53d8\u5dee',
-    ],
-  },
-  {
-    scenario: 'operations_dispatch',
-    terms: [
-      '\u4ed3\u7ba1+\u53a8\u5e08\u957f+\u524d\u53f0', '\u4ed3\u7ba1\u53a8\u5e08\u957f\u524d\u53f0',
-      '\u4ed3\u7ba1\u3001\u53a8\u5e08\u957f\u3001\u524d\u53f0', '\u5206\u522b\u76ef\u4ec0\u4e48',
-      '\u5206\u522b\u8981\u505a\u4ec0\u4e48', '\u8c01\u505a\u4ec0\u4e48', '\u5404\u5c97\u4f4d',
-      '\u6d3e\u5de5', '\u5206\u5de5', '\u7ba1\u7406\u5c42\u51cf\u5c11\u5de5\u4f5c',
-    ],
-  },
-  {
-    scenario: 'seating_mix',
-    terms: [
-      '\u684c\u578b', '\u684c\u5b50', '\u684c\u6570', '\u4e8c\u4eba\u684c', '\u56db\u4eba\u684c',
-      '\u62fc\u684c', '\u7ffb\u53f0', '\u5ea7\u4f4d', '\u6392\u961f', '\u7b49\u4f4d',
-    ],
-  },
-  {
-    scenario: 'inventory_reorder',
-    terms: [
-      '库存预警', '补货', '采购补货', '安全库存', '临期', '缺货',
-      '备货缺口', '库存风险', '备货', '备菜', '仓管今天', '具体补什么',
-      '原料', '食材', '报损',
-    ],
-  },
-  {
-    scenario: 'cost_margin',
-    terms: [
-      '\u6210\u672c', '\u6bdb\u5229', '\u5229\u6da6', '\u91c7\u8d2d', 'bom', 'BOM',
-      '\u635f\u8017', '\u9a8c\u6536', '\u6da8\u4ef7', '\u62a5\u635f', '\u6708\u76d8\u70b9',
-      '\u76d8\u70b9', '\u7406\u8bba\u7528\u91cf', '\u5b9e\u9645\u7528\u91cf', '\u4e8f\u6bdb\u5229',
-    ],
-  },
-  {
-    scenario: 'external_event_response',
-    terms: [
-      '\u5546\u573a\u6d3b\u52a8', '\u5546\u5708\u6d3b\u52a8', '\u5468\u8fb9\u6d3b\u52a8',
-      '\u8282\u65e5', '\u5929\u6c14', '\u4e0b\u96e8', '\u96e8\u5929', '\u9ad8\u6e29',
-      '\u4eb2\u5b50\u8282', '\u4f1a\u5458\u65e5', '\u5916\u90e8\u6d3b\u52a8',
-    ],
-  },
-  {
-    scenario: 'traffic_conversion',
-    terms: [
-      '\u5ba2\u6d41', '\u753b\u50cf', '\u5546\u5708', '\u4ea4\u901a', '\u5468\u8fb9',
-      '\u7ade\u54c1', '\u540c\u5546\u5708', '\u5f15\u6d41', '\u95e8\u53e3', '\u8def\u8fc7',
-      '\u8fdb\u5e97', '\u66dd\u5149', '\u6838\u9500', '\u627f\u63a5', '\u5e73\u53f0',
-      '\u9875\u9762', '\u9996\u56fe', '\u7f8e\u56e2', '\u5927\u4f17\u70b9\u8bc4',
-      '\u6296\u97f3', '\u56e2\u8d2d',
-    ],
-  },
-  {
-    scenario: 'staff_training',
-    terms: [
-      '培训', '训练', '服务员', '服务态度', '服务差评', '服务慢',
-      '话术', '催菜', '意识', '店长', '开班前', '评论', '顾客',
-      '复购', '最在意', '评价', '差评', '小红书', '口碑', '投诉', '体验',
-    ],
-  },
-  {
-    scenario: 'kitchen_quality',
-    terms: [
-      '\u53a8\u623f', '\u540e\u53a8', '\u53a8\u5e08\u957f', '\u51fa\u9910', '\u4e0a\u83dc\u6162',
-      '\u9000\u83dc', '\u91cd\u505a', '\u53e3\u5473', '\u592a\u54b8', '\u51fa\u54c1',
-    ],
-  },
-  {
-    scenario: 'staffing_schedule',
-    terms: [
-      '\u6392\u73ed', '\u4eba\u624b', '\u5458\u5de5', '\u670d\u52a1\u5458', '\u524d\u53f0',
-      '\u524d\u5385', '\u73ed\u6b21', '\u8c03\u5ea6', '\u52a0\u73ed', '\u52a0\u4eba',
-      '\u591a\u52a0', '\u5de5\u65f6', '\u4eba\u6548',
-    ],
-  },
-  {
-    scenario: 'single_item_push',
-    terms: [
-      '主推单品', '主推', '单品', '招牌', '爆品', '引流菜',
-      '低价值', '拉动加购', '首屏', '短视频',
-    ],
-  },
-  {
-    scenario: 'package',
-    terms: [
-      '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u63a8\u83dc',
-      '\u5ba2\u5355', '\u52a0\u8d2d', '\u642d\u914d', '\u5355\u4eba\u9910', '\u53cc\u4eba\u9910',
-      '\u5916\u5356', '\u4e0d\u6253\u6298', '\u4e0d\u60f3\u6253\u6298', '\u62c9\u8425\u6536',
-    ],
-  },
-];
-
-const OWNER_ACTION_DECISION_TERMS = [
-  '\u51b3\u7b56', '\u5efa\u8bae', '\u76f4\u63a5\u5efa\u8bae', '\u600e\u4e48\u63d0\u9ad8',
-  '\u600e\u4e48\u4f18\u5316', '\u600e\u4e48\u505a', '\u600e\u4e48\u8c03', '\u600e\u4e48\u6392',
-  '\u600e\u4e48\u6539', '\u600e\u4e48\u5b89\u6392', '怎么培训', '怎么训练', '怎么判断',
-  '\u5982\u4f55\u63d0\u9ad8',
-  '\u5982\u4f55\u4f18\u5316', '\u52a8\u4f5c', '\u843d\u5730', '\u5148\u505a', '\u5148\u6539',
-  '\u5e2e\u6211\u7b97', '\u63a8\u8350', '\u4e3b\u63a8', '\u8981\u4e0d\u8981',
-  '\u5f71\u54cd', '\u4f1a\u5f71\u54cd', '\u6709\u4ec0\u4e48\u5f71\u54cd',
-  '\u54ea\u4e09\u4e2a', '\u4e09\u4e2a\u52a8\u4f5c', '\u62c9\u8d77\u6765', '\u5148\u7ba1',
-  '\u5148\u67e5', '\u5148\u770b', '\u4e0d\u8981\u591a\u5907', '\u522b\u4e8f', '\u914d\u5408',
-  '\u8be5\u6539', '\u53ea\u80fd', '\u8fd8\u662f', '能不能', '该不该', '是否',
-  '\u4e0d\u7528\u7b49', '\u8981\u8003\u8651',
-  '\u7ee7\u7eed\u62c6', '\u62c6\u7ec6', '\u8425\u6536\u6760\u6746',
-];
-const PACKAGE_PRIORITY_TERMS = [
-  '\u5957\u9910', '\u5c0f\u5957\u9910', '\u83dc\u54c1\u7ec4\u5408', '\u53cc\u4eba\u9910',
-  '\u5355\u4eba\u9910',
-];
-
-function includesAny(text: string, terms: string[]): boolean {
-  return terms.some((term) => text.includes(term));
-}
-
-function inferOwnerActionScenario(query: string): string {
-  const text = query.trim();
-  if (!text) return '';
-  if (!includesAny(text, OWNER_ACTION_DECISION_TERMS)) return '';
-  if (includesAny(text, PACKAGE_PRIORITY_TERMS)) {
-    return 'package';
-  }
-  for (const entry of OWNER_ACTION_SCENARIO_TERMS) {
-    if (includesAny(text, entry.terms)) {
-      return entry.scenario;
-    }
-  }
-  return includesAny(text, OWNER_ACTION_DECISION_TERMS) ? 'cost_margin' : '';
-}
-
 function shouldSendOwnerActionContext(query: string): boolean {
   if (!isRestaurantTenant.value) return false;
   const text = query.trim();
   if (inferOwnerActionScenario(text)) return true;
   return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
-}
-
-function isOwnerActionFollowupText(query: string): boolean {
-  return /继续|具体|详细|为什么|怎么做|怎么调|怎么排|怎么改|怎么讲|怎么算|重新算|怎么备货|怎么验收|哪三个数|三个数|哪些数|先看哪|看什么|判断|验证|落地|然后呢|执行细节|拆给我|哪些事情|先不要|不要做|别做|要不要停|停不停|换一个|风险|避开|哪一个动作|放到哪些入口|复制哪家店/.test(query);
 }
 
 function ownerActionFollowups(items?: string[], scenario?: string): Array<{ label: string; question: string; ownerActionScenario?: string }> {
