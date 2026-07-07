@@ -584,7 +584,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
         batch.setStorageLocation("库存生产小结入库");
         batch.setProductionPlanId(plan.getId());
-        batch.setWarehouseId(warehouseResolver.resolveWorkshopId(plan.getFactoryId()));
+        batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(plan.getFactoryId()));
         // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 若该生产计划下任一生产批次质检已判 FAILED, 小结产出的
         // 成品批次不得直接可售 —— 隔离为 DEFECTIVE。覆盖"先质检失败, 后小结产出"的时序 (与
         // QualityInspectionServiceImpl.quarantineFinishedGoodsForFailedBatch 覆盖的反向时序互补)。

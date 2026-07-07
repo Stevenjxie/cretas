@@ -67,6 +67,11 @@ public class WarehouseResolver {
                 .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_WKS));
     }
 
+    /** Finished-goods warehouse (WH-FG) id for saleable finished-goods receipts. */
+    public String resolveFinishedGoodsId(String factoryId) {
+        return resolveId(factoryId, WarehouseCodes.WH_FG);
+    }
+
     /**
      * 研发/中试库 (WH-RD) id — 试制批次 (is_trial=true) 产出专属仓库。
      * SP10 §RD-1, V20261023_01 seed。有配置覆盖则优先用配置。

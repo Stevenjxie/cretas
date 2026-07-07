@@ -542,7 +542,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
             batch.setId("fg-1");
@@ -571,7 +571,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         // 权威生产成本 900, 入库 90 → unitCost = 900/90 = 10.0000 (与 SAFETY_STOCK 小结同基准)。
         when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
                 .thenReturn(OrderCostBreakdownDTO.builder()
@@ -588,6 +588,7 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
 
         FinishedGoodsBatch saved = captor.getValue();
+        assertEquals("WH-FG-ID", saved.getWarehouseId());
         assertEquals(0, new BigDecimal("10.0000").compareTo(saved.getUnitCost()),
                 "结单族成品应携带传导成本 10.0000, 而非 null");
     }
@@ -603,7 +604,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         // 权威成本 0 (全部投入未定价 / 无批次) → 诚实 null, 期末 COGS 结转 honest-null 排除。
         when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
                 .thenReturn(OrderCostBreakdownDTO.builder()
@@ -633,7 +634,7 @@ class ProductionPlanSettlementTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY_ID)).thenReturn("WH-WKS-ID");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
             FinishedGoodsBatch batch = inv.getArgument(0);
             batch.setId("fg-1");

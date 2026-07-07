@@ -150,7 +150,7 @@ class FgCostPropagationTest {
         when(consumptionRepository.save(any(MaterialConsumption.class))).thenAnswer(inv -> inv.getArgument(0));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productTypeRepository.findByIdAndFactoryId(any(), eq(FACTORY))).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn("WH-WKS");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY)).thenReturn("WH-FG");
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(eq(FACTORY), any()))
                 .thenReturn(Optional.empty());
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
@@ -198,6 +198,7 @@ class FgCostPropagationTest {
         // 入库量 = productWeight 10 (不是 outputQuantity 50)
         assertThat(fg.getProducedQuantity()).isEqualByComparingTo("10");
         assertThat(fg.getUnit()).isEqualTo("kg");
+        assertThat(fg.getWarehouseId()).isEqualTo("WH-FG");
         // FG.unitCost = (原料300 + 调料120 + 人工80 + feed 40×5=200) / 10 = 700/10 = 70.0000
         assertThat(fg.getUnitCost()).isNotNull();
         assertThat(fg.getUnitCost()).isEqualByComparingTo("70");

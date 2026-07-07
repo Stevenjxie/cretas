@@ -47,9 +47,11 @@ class WarehouseResolverTest {
     private static final String FACTORY_ID = "F001";
     private static final String WH_LOG_ID = "wh-log-uuid-001";
     private static final String WH_WKS_ID = "wh-wks-uuid-001";
+    private static final String WH_FG_ID = "wh-fg-uuid-001";
 
     private FactoryWarehouse whLog;
     private FactoryWarehouse whWks;
+    private FactoryWarehouse whFg;
 
     @BeforeEach
     void setUp() {
@@ -68,6 +70,14 @@ class WarehouseResolverTest {
         whWks.setName("鲜棉仓");
         whWks.setType(WarehouseType.WORKSHOP);
         whWks.setIsActive(true);
+
+        whFg = new FactoryWarehouse();
+        whFg.setId(WH_FG_ID);
+        whFg.setFactoryId(FACTORY_ID);
+        whFg.setCode(WarehouseCodes.WH_FG);
+        whFg.setName("finished goods");
+        whFg.setType(WarehouseType.FINISHED);
+        whFg.setIsActive(true);
     }
 
     @Test
@@ -91,6 +101,17 @@ class WarehouseResolverTest {
         String id = warehouseResolver.resolveWorkshopId(FACTORY_ID);
 
         assertEquals(WH_WKS_ID, id);
+    }
+
+    @Test
+    @DisplayName("resolveFinishedGoodsId returns WH-FG factory_warehouses.id")
+    void resolveFinishedGoodsId_returnsCorrectId() {
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, WarehouseCodes.WH_FG))
+                .thenReturn(Optional.of(whFg));
+
+        String id = warehouseResolver.resolveFinishedGoodsId(FACTORY_ID);
+
+        assertEquals(WH_FG_ID, id);
     }
 
     @Test
@@ -133,6 +154,7 @@ class WarehouseResolverTest {
         // 与 V20260411_03 / V20260424_08 seed 必须一致
         assertEquals("WH-LOG", WarehouseCodes.WH_LOG);
         assertEquals("WH-WKS", WarehouseCodes.WH_WKS);
+        assertEquals("WH-FG", WarehouseCodes.WH_FG);
     }
 
     // ==================== V20261027_30 可配置默认仓 ====================
