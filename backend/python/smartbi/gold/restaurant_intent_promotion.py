@@ -1,0 +1,254 @@
+"""Restaurant intent flywheel promotion: capture -> two-level objective gate ->
+human review (--apply) -> repo-committed ledger -> re-embedded vector index.
+
+Design docs:
+  docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md (section 5, flywheel)
+  docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+
+Philosophy mirror: smartbi/services/learning_promotion.py -- capture (already
+in restaurant_intent.log_intent_capture / list_promotion_candidates) -> an
+OBJECTIVE gate (never LLM-judged, never silent) -> a human runs
+`scripts/restaurant-intent-promote.py --apply <reviewed.json>` -> the ledger
+file below is written -> a human commits + deploys -> `populate_restaurant_ops`
+re-embeds the merged sample set on next boot.
+
+Why a repo-file ledger and not just a DB UPSERT (the key constraint driving
+this module's shape):
+  1. Python deployment is `rsync` of the code tree (server-operations.md /
+     python-services-architecture.md) -- anything a live server process
+     writes to disk is clobbered by the next deploy. A promotion decision
+     that only lives in a DB row would survive deploys but the *code* that
+     reads SAMPLE_QUERIES would still not know about it unless the vector
+     index itself is DB-only source of truth, which conflicts with #2:
+  2. When the embedding model changes, `populate_restaurant_ops` re-embeds
+     from its Python-side sample dict. If a promoted query is not in that
+     dict, a model upgrade silently drops it from the re-embedded set while
+     leaving a stale-model row behind in `smart_bi_template_embeddings` --
+     `count_embeddings` gates on `embedding_model = _MODEL`, so that stale
+     row would be invisible to the current model's coverage count too,
+     making the gap silent.
+  So: apply_promotions() writes a JSON ledger *in the repo* (like
+  learning_promotion's TRUNK_FILE), and `merge_samples()` is the single
+  source of truth `populate_restaurant_ops` embeds from -- ledger entries are
+  first-class members of the sample set, not a parallel DB-only index.
+
+Never silently graduates: `apply_promotions` is only ever invoked by a human
+running the CLI's `--apply` flag with a file the human already reviewed.
+Nothing in this module, `aggregate_candidates` included, writes on its own.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from collections import Counter
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_DATA = Path(__file__).parent.parent / "data"
+LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
+
+# Two-level objective gate thresholds (spec section 5). Row-level filter (a)
+# is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
+# in aggregate_candidates). Group-level recommendation (b) additionally
+# requires either repeat occurrence or high single-shot confidence, and never
+# recommends a group where different rows resolved to different codes
+# (`conflict`) -- those still surface for human review, just unmarked.
+_RECOMMEND_MIN_COUNT = 2
+_RECOMMEND_MIN_CONFIDENCE = 0.85
+
+
+# ─── Ledger I/O ────────────────────────────────────────────────────────────
+
+def load_promoted_samples() -> Dict[str, List[str]]:
+    """Read the repo-committed ledger. Tolerates a missing/empty/corrupt file
+    (fail-open, mirrors learning_promotion._load): callers treat {} as "no
+    promotions yet", never as an error."""
+    try:
+        if LEDGER_FILE.exists():
+            with open(LEDGER_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    str(code): [str(q) for q in queries if isinstance(q, str) and q.strip()]
+                    for code, queries in data.items()
+                    if isinstance(queries, list)
+                }
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load ledger failed (ignored): {exc}")
+    return {}
+
+
+def merge_samples(base: Optional[Dict[str, List[str]]] = None) -> Dict[str, List[str]]:
+    """`base` (default `restaurant_ops_router.SAMPLE_QUERIES`) + the promoted
+    ledger, deduped per code. This is the single source of truth
+    `populate_restaurant_ops` embeds from and the source `aggregate_candidates`
+    checks "already known" against -- so a promoted query is never re-offered
+    as a candidate and never silently missing from the re-embedded index after
+    an embedding-model upgrade (see module docstring point 2).
+
+    Base entries keep their original order; ledger-only entries are appended
+    sorted (stable diffs, no dependency on ledger file's on-disk order)."""
+    if base is None:
+        from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES
+        base = SAMPLE_QUERIES
+    ledger = load_promoted_samples()
+    merged: Dict[str, List[str]] = {}
+    for code in sorted(set(base) | set(ledger)):
+        base_list = list(base.get(code, []))
+        extra = sorted(q for q in ledger.get(code, []) if q not in base_list)
+        merged[code] = base_list + extra
+    return merged
+
+
+def _known_query_set(merged: Dict[str, List[str]]) -> frozenset:
+    return frozenset(q for queries in merged.values() for q in queries)
+
+
+# ─── Candidate aggregation (objective gate, read-only) ────────────────────
+
+async def aggregate_candidates(
+    pool,
+    *,
+    min_confidence: float = 0.75,
+    min_count: int = 1,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """Aggregate `smart_bi_llm_fallback_log` rows into promotion candidates.
+
+    Row-level gate (a) -- only rows that are ALL of: tier='llm' (T3 parsed
+    it, meaning T1/T2 could not), contract_pass=true (Answer Contract did not
+    flag missing elements), served=true (the answer actually reached the
+    user) -- ever enter the aggregate. This is the same objective bar
+    `list_promotion_candidates` in restaurant_intent.py checks per-row; this
+    function groups those rows by normalized query text across repeats.
+
+    Group-level recommendation (b) -- a group is `recommended` only when
+    it is NOT `conflict` (all rows agree on the same RESTAURANT_OPS_* code)
+    AND (occurred >= 2 times OR max confidence >= 0.85). Conflicting or
+    below-threshold groups are still returned (a human may still want to look
+    at them) but `recommended=False` -- the CLI prints them distinctly and
+    `apply_promotions` does not gate on this flag (a human decides what goes
+    into the JSON they pass to --apply); this flag is a review aid, not an
+    enforcement mechanism.
+
+    `min_confidence`/`min_count` are a loose pre-filter (HAVING, OR'd) so a
+    caller with a large log table can narrow the read before the Python-side
+    recommendation computation; defaults are permissive (virtually every
+    row-level-qualifying group is returned) since exclusion of low-value
+    groups is `recommended=False`, not omission.
+
+    Fail-open: returns [] on any DB error (mirrors
+    list_promotion_candidates / the rest of this module's philosophy)."""
+    sql = """
+        SELECT trim(query)                                              AS norm_query,
+               array_agg(template_code)                                  AS codes,
+               COUNT(*)                                                  AS occurrence_count,
+               MAX(COALESCE((agg_meta->>'confidence')::float, 0))        AS max_confidence,
+               MAX(created_at)                                           AS last_seen
+          FROM smart_bi_llm_fallback_log
+         WHERE source = 'template'
+           AND template_code LIKE 'RESTAURANT_OPS_%%'
+           AND (agg_meta->>'tier') = 'llm'
+           AND (agg_meta->>'served') = 'true'
+           AND (agg_meta->>'contract_pass') = 'true'
+         GROUP BY trim(query)
+        HAVING MAX(COALESCE((agg_meta->>'confidence')::float, 0)) >= $1
+            OR COUNT(*) >= $2
+         ORDER BY MAX(created_at) DESC
+         LIMIT $3
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, min_confidence, min_count, limit)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] aggregate_candidates query failed (fail-open): {exc}")
+        return []
+
+    known = _known_query_set(merge_samples())
+
+    candidates: List[Dict[str, Any]] = []
+    for r in rows:
+        norm_query = (r["norm_query"] or "").strip()
+        if not norm_query or norm_query in known:
+            continue  # already promoted / already a shipped sample -- not a new candidate
+        raw_codes = [c for c in (r["codes"] or []) if c]
+        # restaurant_intent._VALID_CODES imported lazily to avoid import-time
+        # coupling for callers that only need merge_samples/load_promoted_samples.
+        from smartbi.gold.restaurant_intent import _VALID_CODES
+        valid_codes = [c for c in raw_codes if c in _VALID_CODES]
+        if not valid_codes:
+            continue
+        counts = Counter(valid_codes)
+        top_code, _top_n = counts.most_common(1)[0]
+        conflict = len(counts) > 1
+        occurrence_count = int(r["occurrence_count"] or 0)
+        max_confidence = round(float(r["max_confidence"] or 0.0), 3)
+        recommended = (
+            not conflict
+            and (occurrence_count >= _RECOMMEND_MIN_COUNT or max_confidence >= _RECOMMEND_MIN_CONFIDENCE)
+        )
+        candidates.append({
+            "query": norm_query,
+            "code": top_code,
+            "codes": sorted(counts.keys()),
+            "occurrence_count": occurrence_count,
+            "max_confidence": max_confidence,
+            "conflict": conflict,
+            "recommended": recommended,
+            "last_seen": r["last_seen"],
+        })
+    return candidates
+
+
+# ─── Human-reviewed apply (the ONLY write path) ───────────────────────────
+
+def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Write human-reviewed `[{"query": ..., "code": ...}, ...]` entries into
+    the ledger file. This is the ONLY function in this module that writes,
+    and it is only ever called by a human via the CLI's `--apply <file>` --
+    never automatically, never from `aggregate_candidates` or any request
+    path (spec section 5: "绝不静默自动毕业").
+
+    Invalid entries (empty query, code not one of the 8 known
+    RESTAURANT_OPS_* codes) and entries already present in the ledger are
+    skipped with a reason, not silently dropped -- the caller (CLI) reports
+    both `added` and `skipped` so a human can see exactly what happened.
+
+    Returns a dict with `added`, `skipped`, `ledger_path`, `ledger_size` for
+    the CLI to print as a diff summary. Does not write the file at all when
+    nothing was added (no gratuitous touch of a file a human will `git diff`
+    afterwards)."""
+    from smartbi.gold.restaurant_intent import _VALID_CODES
+
+    ledger = load_promoted_samples()
+    added: List[Dict[str, str]] = []
+    skipped: List[Dict[str, str]] = []
+    for e in entries or []:
+        query = str((e or {}).get("query") or "").strip()
+        code = str((e or {}).get("code") or "").strip()
+        if not query or code not in _VALID_CODES:
+            skipped.append({"query": query, "code": code, "reason": "invalid_code_or_empty_query"})
+            continue
+        bucket = ledger.setdefault(code, [])
+        if query in bucket:
+            skipped.append({"query": query, "code": code, "reason": "already_in_ledger"})
+            continue
+        bucket.append(query)
+        added.append({"query": query, "code": code})
+
+    if added:
+        ordered = {code: sorted(set(qs)) for code, qs in ledger.items() if qs}
+        LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LEDGER_FILE.write_text(
+            json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    return {
+        "added": added,
+        "skipped": skipped,
+        "ledger_path": str(LEDGER_FILE),
+        "ledger_size": sum(len(v) for v in ledger.values()),
+    }

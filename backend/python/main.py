@@ -442,10 +442,15 @@ async def lifespan(app: FastAPI):
             populate_restaurant_ops,
         )
         from smartbi.gold.restaurant_ops_router import SAMPLE_QUERIES as _RESTAURANT_SAMPLES
+        from smartbi.gold.restaurant_intent_promotion import merge_samples as _merge_restaurant_samples
         from smartbi.config import get_pg_pool as _get_pool_restaurant_emb
         _restaurant_emb_pool = await _get_pool_restaurant_emb()
         if _restaurant_emb_pool is not None:
-            _restaurant_expected = sum(len(v) for v in _RESTAURANT_SAMPLES.values())
+            # Expected count must include the promotion ledger too (merge_samples),
+            # or a fresh promotion would never trip the "existing < expected"
+            # re-populate check below -- the newly-promoted queries would sit
+            # un-embedded until some UNRELATED sample count changed.
+            _restaurant_expected = sum(len(v) for v in _merge_restaurant_samples(_RESTAURANT_SAMPLES).values())
             _restaurant_existing = await _count_restaurant_emb(
                 _restaurant_emb_pool, code_prefix="RESTAURANT_OPS_",
             )
