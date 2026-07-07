@@ -135,7 +135,7 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const response = await get(`/${factoryId.value}/processing/batches`, {
+    const response = await get(`/${factoryId.value}/processing/batches-with-clerk-wip`, {
       params: {
         page: pagination.value.page,
         size: pagination.value.size,

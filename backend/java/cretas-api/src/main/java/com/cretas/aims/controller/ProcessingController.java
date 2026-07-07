@@ -177,6 +177,25 @@ public class ProcessingController {
     /**
      * 获取批次列表
      */
+    @GetMapping("/batches-with-clerk-wip")
+    @Operation(summary = "获取含小结批次的批次列表", description = "分页获取生产批次列表，包含小结生成的 CLERK_WIP 批次")
+    public ApiResponse<PageResponse<ProductionBatch>> getBatchesWithClerkWip(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long supervisorId,
+            @RequestParam(required = false) Boolean isTrial,
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size) {
+        log.info("Get production batches with clerk WIP: factoryId={}, status={}, supervisorId={}, isTrial={}",
+                factoryId, status, supervisorId, isTrial);
+        PageRequest pageRequest = new PageRequest();
+        pageRequest.setPage(page);
+        pageRequest.setSize(size);
+        PageResponse<ProductionBatch> result = processingService.getBatches(
+                factoryId, status, supervisorId, isTrial, true, pageRequest);
+        return ApiResponse.success(result);
+    }
+
     @GetMapping("/batches")
     @Operation(summary = "获取批次列表", description = "分页获取生产批次列表")
     public ApiResponse<PageResponse<ProductionBatch>> getBatches(
