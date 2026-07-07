@@ -40,6 +40,7 @@ export interface ChatQueryRequest {
   subSector?: string;
   uploadId?: string;
   sessionId?: string;
+  ownerActionSessionId?: string;
   ownerActionScenario?: string;
 }
 
@@ -51,6 +52,8 @@ export interface ChatQueryResponse {
   skillName?: string;
   message?: string;
   sessionId?: string | null;
+  javaSessionId?: string | null;
+  ownerActionSessionId?: string | null;
   ownerActionScenario?: string | null;
   sections?: SectionPayload[];
   followUpChips?: string[];

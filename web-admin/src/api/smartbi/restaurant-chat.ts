@@ -53,7 +53,7 @@ export async function askRestaurantQuestion(
     context: {
       subSector: request.subSector,
       uploadId: request.uploadId,
-      ownerActionSessionId: request.sessionId,
+      ownerActionSessionId: request.ownerActionSessionId,
       ownerActionScenario: request.ownerActionScenario,
     },
   });
@@ -75,6 +75,8 @@ export async function askRestaurantQuestion(
     intentCode: response.intentCode ?? null,
     message: response.message || response.formattedText || '已完成分析',
     sessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : (response.sessionId ?? null),
+    javaSessionId: response.sessionId ?? null,
+    ownerActionSessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : null,
     ownerActionScenario: typeof scenario === 'string' ? scenario : null,
     sections,
     followUpChips,

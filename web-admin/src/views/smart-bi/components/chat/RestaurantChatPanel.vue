@@ -19,7 +19,8 @@ const turns = ref<ChatTurn[]>([]);
 const isTyping = ref(false);
 const inputText = ref('');
 const chatContainer = ref<HTMLElement | null>(null);
-const sessionId = ref<string | null>(null);
+const javaIntentSessionId = ref<string | null>(null);
+const ownerActionSessionId = ref<string | null>(null);
 const ownerActionScenario = ref<string | null>(null);
 
 /**
@@ -56,10 +57,12 @@ async function sendMessage(text?: string) {
       userId: getUserId(),
       subSector: props.subSector,
       uploadId: props.uploadId,
-      sessionId: sessionId.value ?? undefined,
+      sessionId: javaIntentSessionId.value ?? undefined,
+      ownerActionSessionId: ownerActionSessionId.value ?? undefined,
       ownerActionScenario: ownerActionScenario.value ?? undefined,
     });
-    sessionId.value = response.sessionId ?? sessionId.value;
+    javaIntentSessionId.value = response.javaSessionId ?? javaIntentSessionId.value;
+    ownerActionSessionId.value = response.ownerActionSessionId ?? ownerActionSessionId.value;
     ownerActionScenario.value = response.ownerActionScenario ?? ownerActionScenario.value;
 
     const aiTurn: ChatTurn = {
@@ -98,7 +101,8 @@ async function scrollToBottom() {
 }
 
 async function clearConversation() {
-  sessionId.value = null;
+  javaIntentSessionId.value = null;
+  ownerActionSessionId.value = null;
   ownerActionScenario.value = null;
   turns.value = [];
   ElMessage.success('对话已清空');
