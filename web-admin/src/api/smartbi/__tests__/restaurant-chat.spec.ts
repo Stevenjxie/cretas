@@ -39,6 +39,33 @@ describe('restaurant chat adapter', () => {
     expect(response.followUpChips).toEqual(['\u660e\u5929\u600e\u4e48\u5224\u65ad\u8fd9\u4e2a\u5957\u9910\u8981\u4e0d\u8981\u505c\uff1f']);
   });
 
+  it('does not expose owner-action top-level session as a Java session', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'SUCCESS',
+      intentCode: 'RESTAURANT_OWNER_ACTION_CHAT',
+      message: '\u5df2\u7ee7\u7eed\u5957\u9910\u5206\u6790\u3002',
+      sessionId: 'owner-action-session-from-top-level',
+      resultData: {
+        source: 'restaurant_owner_action',
+        scenario: 'package',
+        sessionId: 'owner-action-session-from-result-data',
+      },
+    });
+
+    const response = await askRestaurantQuestion({
+      query: '\u7ee7\u7eed\u5206\u6790\u8fd9\u4e2a\u5957\u9910',
+      factoryId: 'DEMO_REST',
+      userId: 'owner',
+      sessionId: 'java-intent-session-existing',
+      ownerActionSessionId: 'owner-action-session-existing',
+      ownerActionScenario: 'package',
+    });
+
+    expect(response.javaSessionId).toBeNull();
+    expect(response.ownerActionSessionId).toBe('owner-action-session-from-result-data');
+    expect(response.sessionId).toBe('owner-action-session-from-result-data');
+  });
+
   it('sends Java session separately from owner-action session on follow-up turns', async () => {
     executeIntentMock.mockResolvedValue({
       status: 'SUCCESS',

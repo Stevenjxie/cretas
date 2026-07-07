@@ -61,7 +61,15 @@ export async function askRestaurantQuestion(
   const resultData = asRecord(response.resultData);
   const nestedData = asRecord(resultData.data);
   const scenario = resultData.scenario ?? nestedData.scenario;
-  const ownerActionSessionId = resultData.sessionId ?? resultData.session_id ?? nestedData.sessionId ?? nestedData.session_id;
+  const isOwnerActionResponse = resultData.source === 'restaurant_owner_action'
+    || resultData.advisorSource === 'restaurant_owner_action_advisor'
+    || response.intentCode === 'RESTAURANT_OWNER_ACTION_CHAT';
+  const ownerActionSessionId = resultData.sessionId
+    ?? resultData.session_id
+    ?? nestedData.sessionId
+    ?? nestedData.session_id
+    ?? (isOwnerActionResponse ? response.sessionId : null);
+  const javaSessionId = isOwnerActionResponse ? null : (response.sessionId ?? null);
   const sections = normalizeSections(resultData.sections ?? nestedData.sections);
   const followUpChips = [
     ...normalizeFollowups(resultData.suggestedFollowups),
@@ -74,8 +82,8 @@ export async function askRestaurantQuestion(
     success: response.status === 'SUCCESS',
     intentCode: response.intentCode ?? null,
     message: response.message || response.formattedText || '已完成分析',
-    sessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : (response.sessionId ?? null),
-    javaSessionId: response.sessionId ?? null,
+    sessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : javaSessionId,
+    javaSessionId,
     ownerActionSessionId: typeof ownerActionSessionId === 'string' ? ownerActionSessionId : null,
     ownerActionScenario: typeof scenario === 'string' ? scenario : null,
     sections,
