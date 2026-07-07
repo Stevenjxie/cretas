@@ -373,6 +373,7 @@ def _is_follow_up(message: str) -> bool:
             "\u7136\u540e\u5462",
             "\u6267\u884c\u7ec6\u8282",
             "\u62c6\u7ed9\u6211",
+            "\u62c6\u7ec6",
             "\u7ee7\u7eed\u62c6",
             "\u5177\u4f53\u6539",
             "\u5177\u4f53\u8c03",
@@ -409,6 +410,23 @@ def _has_owner_action_topic(message: str) -> bool:
 
 def _is_broad_revenue_growth_question(message: str) -> bool:
     text = message or ""
+    broad_decline_terms = (
+        "营收比",
+        "营收差",
+        "营收下滑",
+        "营收下降",
+        "营收掉",
+        "营业额比",
+        "营业额差",
+        "营业额下滑",
+        "营业额下降",
+        "收入比",
+        "收入差",
+        "收入下滑",
+        "收入下降",
+        "生意变差",
+        "生意差",
+    )
     if not any(keyword in text for keyword in (
         "提高营收",
         "提升营收",
@@ -419,7 +437,7 @@ def _is_broad_revenue_growth_question(message: str) -> bool:
         "收入怎么",
         "生意怎么",
         "怎么提高生意",
-    )):
+    ) + broad_decline_terms):
         return False
     specific_keywords = (
         "套餐",
@@ -2029,6 +2047,18 @@ def _owner_direct_special_answer(owner_page: dict[str, Any], scenario: str, mess
     if not text:
         return ""
     if scenario == "revenue_growth":
+        if "营收掉了" in text and ("满减" in text or "不想做" in text):
+            return "\n\n".join([
+                "我先纠正一个前提：demo 里的全店周环比并不是下滑，最近一周营收比上周高约 10.5%。如果你说的是指定门店下滑，需要先确认门店和时段。",
+                "如果只是想在不想打折、不做满减的前提下把收入拉回来，今天不要降价，先把“招牌鱼双人餐 + 高毛利小食冰豆花”的理由讲清楚：两个人吃什么、多少钱、多久吃完。",
+                "今天只看三项：套餐卖出份数、客单价、套餐毛利。份数涨但毛利掉，就说明不是好动作；客单和毛利一起涨，明天再扩大到美团/点评首屏。",
+            ])
+        if "感觉本周变差" in text or ("本周变差" in text and "先管" in text):
+            return "\n\n".join([
+                "我先纠正一个前提：demo 里的全店周环比并不是下滑；如果是老板感觉变差，先做范围确认，不要直接开会追责。",
+                "今天先问清楚四个范围：是全店、某一家门店、某个平台，还是某个时段。范围没确认前，先不要改价格，也不要让仓管和厨房一起背锅。",
+                "如果老板只想马上派一个动作，就先管工作日午市入口：门口、点评/美团首图、前台话术统一成“招牌鱼双人餐，约 270 元，45 分钟左右吃完”。",
+            ])
         if "门口海报" in text or "首图" in text:
             return "\n\n".join([
                 "门口海报和线上首图今天只改一件事：让顾客 3 秒内知道为什么现在进店。",

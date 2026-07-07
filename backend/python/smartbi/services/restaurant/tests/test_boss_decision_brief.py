@@ -842,6 +842,38 @@ def test_owner_action_chat_follow_up_chips_return_distinct_next_step_answers() -
     assert "一句话结论" not in risk_data["answer"]
 
 
+def test_owner_action_chat_common_follow_up_chips_do_not_repeat_first_answer() -> None:
+    cases = [
+        ("F_PACKAGE_FOLLOWUP_UX", "要不要推小套餐，推什么组合？", "package", "把套餐执行细节拆给我"),
+        ("F_KITCHEN_FOLLOWUP_UX", "厨房出餐慢应该怎么处理？", "kitchen_quality", "厨房抽查怎么做"),
+        ("F_OPS_FOLLOWUP_UX", "前台员工今天应该重点提醒什么？", "operations_dispatch", "把仓管厨师长前台的动作拆细"),
+    ]
+
+    for factory_id, message, expected_scenario, expected_follow_up in cases:
+        first = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                message=message,
+            )
+        )["data"]
+
+        assert first["scenario"] == expected_scenario
+        assert first["followUpSuggestions"][0] == expected_follow_up
+
+        follow_up = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                session_id=first["sessionId"],
+                message=first["followUpSuggestions"][0],
+            )
+        )["data"]
+
+        assert follow_up["scenario"] == expected_scenario
+        assert follow_up["answer"] != first["answer"]
+        assert "这个追问我只拆执行细节，不重复前面的结论" in follow_up["answer"]
+        assert "一句话结论" not in follow_up["answer"]
+
+
 def test_owner_action_follow_up_uses_explicit_session_and_scenario_when_memory_misses() -> None:
     _OWNER_ACTION_CHAT_SESSIONS.pop(
         _owner_action_session_key("F_TRAFFIC_CROSS_WORKER", "owner-action-missing-worker"),
@@ -1593,3 +1625,18 @@ def test_owner_action_chat_broad_revenue_question_offers_decision_paths() -> Non
     assert next_follow_up_data["answer"] != follow_up_data["answer"]
     assert "门口海报" in next_follow_up_data["answer"]
     assert "美团/大众点评首图" in next_follow_up_data["answer"]
+
+
+def test_owner_action_chat_routes_weekly_revenue_decline_to_revenue_growth() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_WEEKLY_REVENUE_DECLINE",
+            message="这周营收比上周差，老板应该先做什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "revenue_growth"
+    assert "先选营收杠杆" in data["answer"]
+    assert "套餐" in data["answer"]
+    assert "缺数据" not in data["answer"]
