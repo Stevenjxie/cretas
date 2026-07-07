@@ -477,6 +477,13 @@ def _is_broad_revenue_growth_question(message: str) -> bool:
 
 def _infer_owner_action_scenario_from_message(message: str) -> str:
     text = message or ""
+    if any(keyword in text for keyword in (
+        "营收杠杆",
+        "先拆客流转化",
+        "门口海报和首图",
+        "如果进店没涨",
+    )):
+        return "revenue_growth"
     if "厨房慢" in message and "服务慢" in message:
         return "staff_training"
     if any(keyword in text for keyword in (
@@ -2464,6 +2471,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     is_follow_up_turn = _is_follow_up(body.message) and (
         (bool(previous.get("scenario")) and scenario == previous.get("scenario"))
         or (bool(provided_session_id) and requested_scenario in scenarios and scenario == requested_scenario)
+        or (bool(provided_session_id) and not previous and scenario in scenarios)
     )
 
     try:

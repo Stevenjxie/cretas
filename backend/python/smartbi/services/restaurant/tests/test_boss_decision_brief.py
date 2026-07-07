@@ -896,6 +896,52 @@ def test_owner_action_follow_up_uses_explicit_session_and_scenario_when_memory_m
     assert "一句话结论" not in data["answer"]
 
 
+def test_owner_action_follow_up_chips_survive_missing_worker_memory() -> None:
+    cases = [
+        (
+            "F_CROSS_WORKER_REVENUE",
+            "老板就想知道这周怎么提高营收，应该先做什么？",
+            "revenue_growth",
+            "我建议今天先拆客流转化",
+        ),
+        (
+            "F_CROSS_WORKER_OPS",
+            "前台员工今天应该重点提醒什么？",
+            "operations_dispatch",
+            "这个追问我只拆执行细节",
+        ),
+        (
+            "F_CROSS_WORKER_KITCHEN",
+            "厨房出餐慢应该怎么处理？",
+            "kitchen_quality",
+            "这个追问我只拆执行细节",
+        ),
+    ]
+
+    for factory_id, message, expected_scenario, expected_answer in cases:
+        first = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                message=message,
+            )
+        )["data"]
+        session_id = first["sessionId"]
+        _OWNER_ACTION_CHAT_SESSIONS.pop(_owner_action_session_key(factory_id, session_id), None)
+
+        follow_up = owner_action_chat(
+            OwnerActionChatRequest(
+                factory_id=factory_id,
+                session_id=session_id,
+                message=first["followUpSuggestions"][0],
+            )
+        )["data"]
+
+        assert follow_up["scenario"] == expected_scenario
+        assert expected_answer in follow_up["answer"]
+        assert follow_up["answer"] != first["answer"]
+        assert "一句话结论" not in follow_up["answer"]
+
+
 def test_owner_action_package_question_with_two_person_context_prefers_package() -> None:
     response = owner_action_chat(
         OwnerActionChatRequest(
