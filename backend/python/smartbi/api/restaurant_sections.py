@@ -426,6 +426,8 @@ def _is_broad_revenue_growth_question(message: str) -> bool:
         "收入下降",
         "生意变差",
         "生意差",
+        "本周变差",
+        "这周变差",
     )
     if not any(keyword in text for keyword in (
         "提高营收",

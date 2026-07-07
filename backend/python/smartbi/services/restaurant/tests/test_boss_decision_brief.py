@@ -1640,3 +1640,18 @@ def test_owner_action_chat_routes_weekly_revenue_decline_to_revenue_growth() -> 
     assert "先选营收杠杆" in data["answer"]
     assert "套餐" in data["answer"]
     assert "缺数据" not in data["answer"]
+
+
+def test_owner_action_chat_routes_felt_decline_to_revenue_growth_with_scope_check() -> None:
+    response = owner_action_chat(
+        OwnerActionChatRequest(
+            factory_id="F_FELT_REVENUE_DECLINE",
+            message="如果我感觉本周变差了，今天先管什么？",
+        )
+    )
+
+    data = response["data"]
+    assert data["scenario"] == "revenue_growth"
+    assert "我先纠正一个前提" in data["answer"]
+    assert "范围确认" in data["answer"]
+    assert "先不要改价格" in data["answer"]
