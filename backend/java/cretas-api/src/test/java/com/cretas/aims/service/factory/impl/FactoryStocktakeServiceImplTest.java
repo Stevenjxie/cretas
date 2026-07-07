@@ -269,6 +269,29 @@ class FactoryStocktakeServiceImplTest {
         assertThat(item.getDifferenceQty().compareTo(new BigDecimal("20.0000"))).isEqualTo(0);
     }
 
+    @Test
+    @DisplayName("T4b: 实盘数量超过2位小数 → 拒绝，避免 apply 静默四舍五入库存")
+    void updateItems_quantityScaleExceeded_rejected() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("BATCH-001");
+        item.setSystemQty(new BigDecimal("100.0000"));
+
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.INITIATED);
+        stocktake.setItems(List.of(item));
+        item.setStocktake(stocktake);
+
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+
+        StocktakeItemUpdateDTO update = new StocktakeItemUpdateDTO();
+        update.setItemId(item.getId());
+        update.setActualQty(new BigDecimal("100.123"));
+
+        assertThatThrownBy(() -> service.updateItems(stocktake.getId(), FACTORY_ID, List.of(update), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("最多保留2位小数");
+    }
+
     // -------------------------------------------------------
     // 5. apply 幂等: 已 APPLIED → 409
     // -------------------------------------------------------
