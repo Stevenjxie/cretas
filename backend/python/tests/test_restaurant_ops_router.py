@@ -534,3 +534,50 @@ def test_price_view_role_passes_margin_gate():
     price_role = next(iter(PRICE_VIEW_ROLES))
     with pytest.raises(AttributeError):
         asyncio.run(_r.resolve_gross_margin(None, "F_TEST", role=price_role))
+
+
+# --------------------------------------------------------------------------
+# _compute_margin_dragger — 拖毛利归因 (impact = share × rate-gap, not just rate)
+# --------------------------------------------------------------------------
+from smartbi.gold.restaurant_ops_router import _compute_margin_dragger  # noqa: E402
+
+
+def _dish(name, revenue, margin_rate):
+    return {"name": name, "revenue": float(revenue), "margin_rate": float(margin_rate)}
+
+
+class TestMarginDragger:
+    def test_biggest_dragger_is_impact_not_lowest_rate(self):
+        # 香辣牛蛙 has the WORST rate but tiny revenue → barely drags. 招牌菜 has a
+        # mild rate gap but huge revenue → drags the blend more. The dragger must
+        # be the high-impact dish, not the lowest-rate one.
+        with_cost = [
+            _dish("香辣牛蛙", 5_000, 0.30),     # worst rate, tiny revenue
+            _dish("招牌菜", 900_000, 0.70),      # mild gap, huge revenue
+            _dish("凉菜", 90_000, 0.80),
+        ]
+        total = sum(d["revenue"] for d in with_cost)
+        avg = 0.72
+        d = _compute_margin_dragger(with_cost, avg, total)
+        assert d is not None
+        assert d["name"] == "招牌菜"          # impact, not lowest-rate 香辣牛蛙
+        assert d["margin_rate"] == 0.70
+
+    def test_loss_making_cause(self):
+        with_cost = [
+            _dish("赔本菜", 200_000, -0.10),
+            _dish("正常菜", 300_000, 0.60),
+        ]
+        total = sum(d["revenue"] for d in with_cost)
+        d = _compute_margin_dragger(with_cost, 0.30, total)
+        assert d["name"] == "赔本菜"
+        assert "亏本" in d["cause"]
+
+    def test_needs_two_costed_dishes(self):
+        assert _compute_margin_dragger([_dish("A", 5000, 0.5)], 0.5, 5000) is None
+        assert _compute_margin_dragger([], 0.5, 0) is None
+
+    def test_low_revenue_dishes_excluded(self):
+        # Both below min_revenue → nothing to compare.
+        assert _compute_margin_dragger(
+            [_dish("A", 100, 0.1), _dish("B", 200, 0.2)], 0.5, 300) is None
