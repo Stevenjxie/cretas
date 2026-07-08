@@ -66,6 +66,17 @@ class TestNumericReconcile:
         assert "实际 4.50" in out
         assert meta["reconciled"] is True
 
+    def test_vip_correct_not_falsely_corrected_to_overall(self):
+        # F3 substring collision: 平均星级(4.79) ⊂ VIP平均星级(4.50). When the VIP
+        # number is CORRECT (within tol of 4.50), the bare overall 平均星级 must
+        # NOT re-match INSIDE "VIP平均星级" and falsely "correct" it to 4.79.
+        rec = FactReconciler()
+        ans = "VIP平均星级4.504，低于非VIP平均星级4.83。"
+        out, meta = rec.reconcile(ans, _fb())
+        assert "4.79" not in out          # no false overall-rating correction
+        assert "实际" not in out           # both numbers within tol → no annotation
+        assert meta["reconciled"] is False
+
     def test_no_matching_fact_noop(self):
         rec = FactReconciler()
         # "翻台率" is not a fact name → must not annotate (宁漏不错).
