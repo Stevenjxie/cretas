@@ -1792,7 +1792,24 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         if pool_syn:
                             window = await _resolve_window(pool_syn, factory_id_hdr, None, None, question=user_q)
                             engine = ComprehensiveSynthesisEngine(pool_syn)
-                            syn = await engine.synthesize(factory_id_hdr, user_q, window)
+                            # P2 multi-turn memory (2026-07-09): pass the
+                            # already-looked-up (Phase 0, top of this handler)
+                            # bounded turns_history so a follow-up like "展开
+                            # 第三点"/"那家店呢"/"它呢" can resolve WHAT it
+                            # refers to. 🔒 numbers still come solely from this
+                            # turn's FactBook inside synthesize() — history is
+                            # never a number source (see synthesis_engine.py
+                            # docstrings). chat_session_parent is None when no
+                            # session_id/no hit → conversation_history=None →
+                            # behavior byte-identical to before this change.
+                            _syn_history = (
+                                chat_session_parent.get("turns_history")
+                                if chat_session_parent else None
+                            )
+                            syn = await engine.synthesize(
+                                factory_id_hdr, user_q, window,
+                                conversation_history=_syn_history,
+                            )
                             yield _sse_event("status", "综合分析：评价+经营多维")
                             answer_syn = syn.answer or ""
                             chunk_size = 40
@@ -1811,6 +1828,28 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 "processingTimeMs": wall_ms,
                                 "log_id": None,
                             })
+                            # v2/v3 conversation memory writeback: so a NEXT
+                            # follow-up (chained after this synthesis turn)
+                            # also has this turn in its turns_history. Mirrors
+                            # the writeback pattern used by the gold ops /
+                            # gold trend routes above.
+                            if request.session_id and _session_factory_id:
+                                try:
+                                    from smartbi.services.chat_session_service import (
+                                        ChatSessionService as _CSS_SYN,
+                                    )
+                                    from smartbi.api.materialized_analytics import _spawn_bg as _spawn_syn
+                                    _spawn_syn(_CSS_SYN(pool_syn).upsert(
+                                        session_id=request.session_id,
+                                        factory_id=_session_factory_id,
+                                        parent_query=user_q,
+                                        parent_answer_summary=answer_syn,
+                                        parent_template_code="COMPREHENSIVE_SYNTHESIS",
+                                        parent_upload_id=None,
+                                        user_id=_session_user_id,
+                                    ))
+                                except Exception as _e:
+                                    logger.warning(f"[chat-session] writeback (synthesis) failed: {_e}")
                             logger.info(
                                 f"[stream] served via synthesis engine: source={syn.source}, "
                                 f"wall={wall_ms}ms"

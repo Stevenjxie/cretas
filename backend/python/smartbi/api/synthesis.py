@@ -53,6 +53,15 @@ class SynthesisRequest(BaseModel):
     start_date: Optional[str] = Field(None, description="YYYY-MM-DD; 不传按 Gold 数据范围")
     end_date: Optional[str] = Field(None, description="YYYY-MM-DD; 不传按 Gold 数据范围")
     factory_id: Optional[str] = Field(None, description="belt-and-suspenders; 默认 JWT 租户")
+    # P2 multi-turn memory (2026-07-09): OPTIONAL v2 conv-memory session_id
+    # (same mechanism as chat.py's stream handler — see
+    # smartbi.services.chat_session_service.ChatSessionService). When present,
+    # the last few turns are passed to synthesize() purely to resolve
+    # indirect follow-up references ("展开第三点"/"那家店呢"/"它呢"); numbers
+    # still come solely from this call's own FactBook. Omitted (None, the
+    # default) → no history lookup → behavior identical to before this field
+    # existed (backward compat).
+    session_id: Optional[str] = Field(None, description="v2 conv memory session_id (optional)")
 
     @property
     def effective_question(self) -> str:
@@ -118,6 +127,29 @@ async def _resolve_window(
     return end - timedelta(days=365), end
 
 
+async def _lookup_conversation_history(pool, session_id: Optional[str], factory_id: str):
+    """Optional read-side of P2 multi-turn memory for the HTTP endpoints below.
+
+    Returns the bounded turns_history (list of {q, a_summary, ts} dicts, see
+    ChatSessionService.upsert) if session_id is present and the session hits;
+    None otherwise (no session_id, miss, or lookup error). Never raises —
+    mirrors the other non-fatal chat_session_service call sites (chat.py).
+    Only a READ — this endpoint has no write-back; the FE conversational flow
+    (chat.py's stream handler) already looks up + writes back for its own
+    session_id, and body.session_id here is for direct/Java callers that want
+    the same reference-resolution benefit without owning their own writeback.
+    """
+    if not session_id:
+        return None
+    try:
+        from smartbi.services.chat_session_service import ChatSessionService
+        parent = await ChatSessionService(pool).lookup(session_id, factory_id)
+        return parent.get("turns_history") if parent else None
+    except Exception as e:
+        logger.warning(f"[synthesis] conversation_history lookup failed (non-fatal): {e}")
+        return None
+
+
 def _factory_id(request: Request, override: Optional[str]) -> str:
     fid = getattr(request.state, "factory_id", None)
     if not fid:
@@ -142,7 +174,8 @@ async def comprehensive(request: Request, body: SynthesisRequest):
         raise HTTPException(status_code=503, detail="database not available")
     window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
     engine = ComprehensiveSynthesisEngine(pool)
-    resp = await engine.synthesize(fid, q, window)
+    conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+    resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
     return resp.to_dict()
 
 
@@ -177,7 +210,8 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
             window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
             yield _sse("status", "正在汇总评价与经营多维数据…")
             engine = ComprehensiveSynthesisEngine(pool)
-            resp = await engine.synthesize(fid, q, window)
+            conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+            resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
             # Stream the (already redaction-restored) answer in fixed slices.
             answer = resp.answer or ""
             chunk_size = 40
