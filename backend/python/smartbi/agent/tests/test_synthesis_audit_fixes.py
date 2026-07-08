@@ -17,6 +17,21 @@ def test_history_numbers_redacted_entities_survive():
     assert "乙店" in block                 # entity survives for 指代 resolution
 
 
+def test_history_keeps_entity_ids_and_ordinals():
+    # A store id / ordinal is an entity identifier, NOT a data figure — it must
+    # survive redaction so a follow-up "它…/第3点…" resolves (live role-play:
+    # "示范门店01" was wrongly stripped to "示范门店" and stopped resolving).
+    block = _build_history_block([
+        {"q": "哪家店拖后腿",
+         "a_summary": "示范门店01最拖后腿，营收15,018,722元，客单价228.80，第3点是建议"},
+    ])
+    assert "示范门店01" in block          # entity id survives
+    assert "第3" in block                  # ordinal survives
+    # figures still stripped (grounding intact)
+    assert "15,018,722" not in block
+    assert "228.80" not in block
+
+
 def test_history_non_string_fields_do_not_crash():
     # non-string q/a_summary must not raise (str() coerce) — a direct/Java caller
     # could pass a non-string; comprehensive() has no try around synthesize.

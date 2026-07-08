@@ -267,20 +267,34 @@ def compute_weather_attribution(
     }
 
 
-_HISTORY_NUMBER_RE = re.compile(r"\d[\d,\.]*\s*(?:万|亿|千|%|％|元|块|折)?")
+_HISTORY_NUMBER_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(万|亿|千|%|％|元|块|折)?")
 
 
 def _redact_numbers(text: str) -> str:
-    """Strip Arabic numbers from injected history text (audit P2 #1).
+    """Strip *figure-shaped* numbers from injected history text (audit P2 #1).
 
     指代 resolution (它/那家店/第三点) needs entity/topic words, NOT figures —
     every number in the answer must come solely from the CURRENT FactBook. Left
     un-redacted, the LLM could lift a history number that is ABSENT from the
     current FactBook, which FactReconciler cannot catch (it flags contradiction,
-    not absence). Redacting converts the "FactBook is the sole number source"
-    invariant from a soft prompt-label into a structural guarantee.
+    not absence).
+
+    But a store id ("示范门店01") or ordinal ("第3点") is an ENTITY IDENTIFIER,
+    not a data figure — redacting it breaks the very reference resolution this
+    feature exists for (live role-play: "示范门店01" → stripped to "示范门店" →
+    the follow-up "它…" no longer resolves). So we redact a number ONLY when it
+    is figure-shaped: has a decimal, a thousands-comma, a unit (万/亿/千/¥/%/元/
+    块/折), or is a bare integer ≥ 4 digits. Small bare integers (店01 / 第3 /
+    16家) survive. Every real financial figure still gets stripped → grounding
+    intact.
     """
-    return _HISTORY_NUMBER_RE.sub("[数值]", text or "")
+    def _repl(m: "re.Match") -> str:
+        core, unit = m.group(1), m.group(2)
+        digits = core.replace(",", "")
+        if unit or "." in core or "," in core or len(digits) >= 4:
+            return "[数值]"
+        return m.group(0)  # keep small bare integer (entity id / ordinal)
+    return _HISTORY_NUMBER_RE.sub(_repl, text or "")
 
 
 def _build_history_block(
