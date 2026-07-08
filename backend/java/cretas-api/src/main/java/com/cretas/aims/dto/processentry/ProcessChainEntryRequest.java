@@ -71,6 +71,12 @@ public class ProcessChainEntryRequest {
         private List<LaborSegment> laborSegments;
         /** SP-G G3a: 包装明细 [{name,cost}] (膜/气体/标签/其他); 随 YIELD 报工写入 ProductionReport。 */
         private List<java.util.Map<String, Object>> packagingDetail;
+        /**
+         * G2: 本工序自定义字段值 (config-driven, WorkProcess.customFieldSchema 约束), mirror
+         * ProcessSheetRowRequest.customFields. 随 YIELD 报工命名空间并入 ProductionReport.customFields
+         * (见 ClerkProcessEntryServiceImpl#processEntryCustomFields), 不覆盖既有内部记账 key。
+         */
+        private java.util.Map<String, Object> customFields;
     }
 
     @Data

@@ -13,10 +13,12 @@ import {
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
   updateProductWorkProcess,
+  updateWorkProcess,
   getProductWorkProcessRecommendation,
   type WorkProcessItem,
   type ProductWorkProcessItem,
-  type RecommendedWorkProcess
+  type RecommendedWorkProcess,
+  type ProcessSheetCustomFieldDef
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
@@ -965,6 +967,68 @@ async function saveCostConfig() {
     costSaving.value = false;
   }
 }
+
+// ───── G2 工序自定义字段 (config-driven 逐工序电子表格自定义列, 如 波美度/添加剂量/备注) ─────
+// 注意: 编辑的是 WorkProcess.customFieldSchema (共享工序目录字段, 见 WorkProcess.java), 不是
+// 本页其它开关那样的 ProductWorkProcess 链接行字段 —— 因此不走 pendingOps/草稿-保存 流程,
+// 而是直接调 updateWorkProcess(workProcessId, ...) 立即持久化 (与 handleSave 的批量提交解耦)。
+// 影响范围: 改动会作用于该 workProcessId 在**所有**产品上的自定义字段列 (工序是跨产品共享的目录项)。
+const customFieldDialogVisible = ref(false);
+const customFieldSaving = ref(false);
+const customFieldEditWorkProcessId = ref('');
+const customFieldEditName = ref('');
+const customFieldForm = ref<ProcessSheetCustomFieldDef[]>([]);
+
+function openCustomFieldConfig(item: any) {
+  customFieldEditWorkProcessId.value = item.workProcessId || '';
+  customFieldEditName.value = item.processName || item.workProcessId;
+  customFieldForm.value = Array.isArray(item.customFieldSchema)
+    ? item.customFieldSchema.map((f: any) => ({
+        key: f.key ?? '',
+        label: f.label ?? '',
+        type: (f.type === 'text' || f.type === 'date') ? f.type : 'number',
+        enabled: f.enabled !== false,
+      }))
+    : [];
+  customFieldDialogVisible.value = true;
+}
+function addCustomFieldRow() {
+  customFieldForm.value.push({ key: '', label: '', type: 'number', enabled: true });
+}
+function removeCustomFieldRow(i: number) {
+  customFieldForm.value.splice(i, 1);
+}
+
+async function saveCustomFieldConfig() {
+  if (!customFieldEditWorkProcessId.value) return;
+  // 防呆: key/label 必填 + key 唯一 才允许保存 —— 否则存进 schema 会产生前端无法渲染
+  // (缺 label) 或后端校验白名单里出现两个同 key (歧义) 的坏配置。
+  const rows = customFieldForm.value;
+  if (rows.some((r) => !r.key.trim() || !r.label.trim())) {
+    ElMessage.error('每个自定义字段必须填写 key 和显示名称');
+    return;
+  }
+  const keys = rows.map((r) => r.key.trim());
+  if (new Set(keys).size !== keys.length) {
+    ElMessage.error('自定义字段 key 不能重复');
+    return;
+  }
+  customFieldSaving.value = true;
+  try {
+    await updateWorkProcess(factoryId.value, customFieldEditWorkProcessId.value, {
+      customFieldSchema: rows.map((r) => ({
+        key: r.key.trim(), label: r.label.trim(), type: r.type, enabled: r.enabled,
+      })),
+    });
+    ElMessage.success('自定义字段已保存（逐工序录入将显示新增列）');
+    customFieldDialogVisible.value = false;
+    await loadLinkedProcesses(); // 重新拉取 join 后的 customFieldSchema
+  } catch (e) {
+    handleCatchError(e, '保存自定义字段失败');
+  } finally {
+    customFieldSaving.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1151,6 +1215,7 @@ async function saveCostConfig() {
                       <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
+                  <!-- 5988 成品源: 开启后报工来源可额外选择同产品族成品库存 -->
                   <span class="step-injection" v-if="canWrite">
                     <el-switch
                       :model-value="item.allowFinishedGoodsSource === true"
@@ -1171,6 +1236,12 @@ async function saveCostConfig() {
                     <el-tag v-if="item.allowMultipleUpstreamSources === true" size="small" type="success">混批</el-tag>
                     <el-tag v-if="item.allowFinishedGoodsSource === true" size="small" type="warning">成品源</el-tag>
                   </template>
+                  <!-- G2 自定义字段: 已配置且至少 1 个启用项时显示提示 (Rule 1: 预先显示边界); 与读写模式无关, 始终展示汇总 -->
+                  <el-tag
+                    v-if="Array.isArray(item.customFieldSchema) && item.customFieldSchema.some((f: any) => f.enabled !== false)"
+                    size="small" type="success">
+                    自定义字段×{{ item.customFieldSchema.filter((f: any) => f.enabled !== false).length }}
+                  </el-tag>
                 </div>
 
                 <!-- C3 / T121 — 多人负责多选下拉 (filterable, multiple) -->
@@ -1205,6 +1276,7 @@ async function saveCostConfig() {
 
               <div class="step-actions" v-if="canWrite">
                 <el-button text size="small" v-if="!item.isPending" @click="openCostConfig(item)" title="成本配置 (报工自动继承)">成本</el-button>
+                <el-button text size="small" v-if="!item.isPending" @click="openCustomFieldConfig(item)" title="自定义字段 (波美度/添加剂量/备注等, 逐工序电子表格自动显示)">字段</el-button>
                 <el-button text size="small" :disabled="index === 0" @click="handleMoveUp(index)" title="上移">
                   <el-icon><Rank /></el-icon>
                 </el-button>
@@ -1305,6 +1377,28 @@ async function saveCostConfig() {
       <template #footer>
         <el-button @click="costDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="costSaving" @click="saveCostConfig">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- G2 工序自定义字段 dialog (config-driven 逐工序电子表格自定义列) -->
+    <el-dialog v-model="customFieldDialogVisible" :title="`自定义字段 — ${customFieldEditName}`" width="620px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
+        title="为该工序增加自定义录入列 (如波美度/添加剂量/备注)。逐工序电子表格录入时会显示对应输入框; 停用后列隐藏, 已录历史值不丢失。工序为跨产品共享目录, 改动对所有使用该工序的产品生效。" />
+      <div v-for="(row, i) in customFieldForm" :key="i" style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
+        <el-input v-model="row.key" placeholder="字段 key (英文, 如 baume)" style="width:170px" />
+        <el-input v-model="row.label" placeholder="显示名称 (如 波美度)" style="width:150px" />
+        <el-select v-model="row.type" style="width:100px">
+          <el-option label="数字" value="number" />
+          <el-option label="文本" value="text" />
+          <el-option label="日期" value="date" />
+        </el-select>
+        <el-switch v-model="row.enabled" inline-prompt active-text="启用" inactive-text="停用" />
+        <el-button text type="danger" @click="removeCustomFieldRow(i)">删</el-button>
+      </div>
+      <el-button text type="primary" @click="addCustomFieldRow">+ 添加字段</el-button>
+      <template #footer>
+        <el-button @click="customFieldDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="customFieldSaving" @click="saveCustomFieldConfig">保存</el-button>
       </template>
     </el-dialog>
 

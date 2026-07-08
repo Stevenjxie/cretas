@@ -86,6 +86,15 @@ public class ProcessSheetRowRequest {
     /** 成品重(kg) — 气调/末道录入, 用于按重量算真实出成率 (frontend fields['productWeight']) */
     private java.math.BigDecimal productWeight;
 
+    /**
+     * G2: 本工序自定义字段值 (如 {"baume":12.5,"remark":"..."}), key 集合受
+     * {@link com.cretas.aims.entity.WorkProcess#getCustomFieldSchema()} 约束 —— 未配置 schema
+     * (customFieldSchema=null) 的工序不接受任何 key (保存时校验层 400 拒绝, 见
+     * ProcessSheetServiceImpl#validateCustomFields)。随 row_payload 持久化, 跨保存往返;
+     * 物化时并入 ProductionReport.customFields (见 ClerkProcessEntryServiceImpl#processEntryCustomFields)。
+     */
+    private Map<String, Object> customFields;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {

@@ -306,8 +306,20 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
         if (steps.isEmpty()) {
             return BatchYieldDTO.builder().steps(steps).complete(false).build();
         }
-        StepYieldDTO first = steps.get(0);
-        StepYieldDTO last = steps.get(steps.size() - 1);
+        // F1 (2026-07-08): 纯辅助报工组 (只承载副产/留样/包装/自定义字段, 无 input/output 信号 →
+        // totalInput=totalOutput=0) 不是 yield step, 绝不能被选为首/末道或参与 complete 判定。否则
+        // recordChain 多步链里某道只填自定义字段(备注/波美度)且无产出 → 自成 0/0 组 → 若为末道 →
+        // cumulative=0% + complete=false 静默跳过完工入库。同时修既有"仅副产末道"同类潜伏 bug。
+        // 全量 steps 仍返回 (成本/工时/展示需要), 仅 yield 序列 (首/末/complete) 排除纯 aux 组。
+        List<StepYieldDTO> yieldSteps = steps.stream()
+                .filter(s -> (s.getTotalInput() != null && s.getTotalInput().compareTo(BigDecimal.ZERO) > 0)
+                        || (s.getTotalOutput() != null && s.getTotalOutput().compareTo(BigDecimal.ZERO) > 0))
+                .toList();
+        if (yieldSteps.isEmpty()) {
+            return BatchYieldDTO.builder().steps(steps).complete(false).build();
+        }
+        StepYieldDTO first = yieldSteps.get(0);
+        StepYieldDTO last = yieldSteps.get(yieldSteps.size() - 1);
         BigDecimal firstInput = first.getTotalInput();
         BigDecimal lastOutput = last.getTotalOutput();
 
@@ -326,7 +338,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             }
             cumulative = lastOutputInFirstUnit.divide(firstInput, YIELD_SCALE, RoundingMode.HALF_UP);
         }
-        boolean complete = steps.stream().allMatch(s ->
+        boolean complete = yieldSteps.stream().allMatch(s ->
                 s.getTotalInput() != null && s.getTotalInput().compareTo(BigDecimal.ZERO) > 0
                         && s.getTotalOutput() != null && s.getTotalOutput().compareTo(BigDecimal.ZERO) > 0);
 

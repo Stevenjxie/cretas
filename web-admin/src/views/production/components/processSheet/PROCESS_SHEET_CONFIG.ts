@@ -206,6 +206,31 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
   ],
 };
 
+/**
+ * G1 混批去硬编码 — 通用兜底列定义.
+ *
+ * 用于 PROCESS_SHEET_CONFIG 里查不到对应 processCode 的场景 (真正自定义命名的新工序,
+ * 未映射到任何现有 archetype). 结构镜像 熟制(shuzhi): 单个 input/output 数字字段 +
+ * 出成率/剩余量/总工时 自动列, 上游批次由 ProcessDataTable 的 isSingleSource/isMultiSource
+ * 通用渲染块负责 (不依赖这里的 'upstreamBatch' 项, 该 key 已被排除渲染, 仅作文档占位).
+ *
+ * 当前 ProcessSheet.vue 的工序链解析 (resolveProcesses) 总是把未匹配关键词的工序位置性
+ * 兜底映射到 'chaoshui'/'xiuyou' (已在 PROCESS_SHEET_CONFIG 里有列定义), 所以这个通用兜底
+ * 在现有调用链下不会被触发 —— 它是防御性的面向未来扩展点: 若日后 processCode 直接透传
+ * 真实工序标识 (不再折叠进 6 个 archetype), 任何未登记的新工序仍能渲染出可用的录入列,
+ * 不会因为 PROCESS_SHEET_CONFIG[processCode] 查不到而变成空表格。
+ */
+export const GENERIC_FALLBACK_COLS: ColDef[] = [
+  { key: 'upstreamBatch', type: 'dropdown',                       label: '上游批次' },
+  { key: 'batch',         type: 'readonly',                        label: '本道批次' },
+  { key: 'date',          type: 'daterange',                       label: '日期' },
+  { key: 'input',         type: 'number',                          label: '投入(kg)' },
+  { key: 'output',        type: 'number',                          label: '产出(kg)' },
+  { key: 'yieldRate',     type: 'auto',     autoCalc: 'yield',      label: '出成率(%)' },
+  { key: 'remain',        type: 'auto',     autoCalc: 'remaining',  label: '剩余(kg)' },
+  { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours', label: '总工时(h)' },
+];
+
 // =========================================================================
 // clientRowId 生成工具
 // =========================================================================

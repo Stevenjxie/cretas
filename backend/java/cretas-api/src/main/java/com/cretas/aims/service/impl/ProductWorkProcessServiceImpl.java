@@ -257,11 +257,11 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                     .estimatedMinutesOverride(src.getEstimatedMinutesOverride())
                     // 防呆: 不复制人员指派 (各产品班组不同) — responsibleWorkerId/assignees 留空, 由用户另配
                     .responsibleWorkerId(null)
-                        .reportingRequired(src.getReportingRequired())
-                        .allowSemiFinishedInjection(src.getAllowSemiFinishedInjection())
-                        .allowMultipleUpstreamSources(src.getAllowMultipleUpstreamSources())
-                        .allowFinishedGoodsSource(src.getAllowFinishedGoodsSource())
-                        .defaultCostCategory(src.getDefaultCostCategory())
+                    .reportingRequired(src.getReportingRequired())
+                    .allowSemiFinishedInjection(src.getAllowSemiFinishedInjection())
+                    .allowMultipleUpstreamSources(src.getAllowMultipleUpstreamSources())
+                    .allowFinishedGoodsSource(src.getAllowFinishedGoodsSource())
+                    .defaultCostCategory(src.getDefaultCostCategory())
                     .packagingTemplate(src.getPackagingTemplate())
                     .auxAllocMethod(src.getAuxAllocMethod())
                     .standardYieldRate(src.getStandardYieldRate())
@@ -308,7 +308,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
             builder.processName(wp.getProcessName())
                     .processCategory(wp.getProcessCategory())
                     .defaultUnit(wp.getUnit())
-                    .defaultEstimatedMinutes(wp.getEstimatedMinutes());
+                    .defaultEstimatedMinutes(wp.getEstimatedMinutes())
+                    .customFieldSchema(wp.getCustomFieldSchema());
         }
 
         return builder.build();

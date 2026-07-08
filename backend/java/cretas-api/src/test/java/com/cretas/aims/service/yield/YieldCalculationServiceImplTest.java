@@ -105,6 +105,51 @@ class YieldCalculationServiceImplTest {
         assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.5469");
     }
 
+    /** F1 aux 报工: 纯自定义字段 (无 input/output 信号) 的 YIELD 报工, 自成一组 (processOrder=order). */
+    private ProductionReport rptCustomFieldsOnlyAux(int order, String processName,
+                                                    Map<String, Object> clerkCustomFields) {
+        String key = order + "|" + processName + "|";
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(null).processOrder(order)
+                .inputQuantity(null).outputQuantity(null)   // 纯 aux: 无产出/投入信号
+                .customFields(Map.of(
+                        "processEntryStepKey", key,
+                        "processEntryProcessName", processName,
+                        "clerkCustomFields", clerkCustomFields))
+                .build();
+    }
+
+    /**
+     * F1 (2026-07-08 fable 查血): 多步链末道后挂一条「仅自定义字段」的 YIELD 辅助报工 (无 input/output)
+     * → 纯-aux 组绝不能污染 首/末/complete 判定。
+     *
+     * <p>修复前: 纯-aux 组 (order=3, output=null) 排在最后 → 被选为 last → lastOutput=null →
+     * cumulative=null + complete=false → 静默跳过完工入库 (口径 bug)。
+     * 修复后: yieldSteps 过滤掉纯-aux 组 → last=step2 (output 64) → cumulative=64/100=0.64, complete=true。
+     * 全量 steps (含 aux 组) 仍返回, 供成本/展示。
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("F1: 纯自定义字段末道 aux 组不污染首/末/complete (cumulative=0.64, complete=true)")
+    void f1_customFieldsOnlyAuxTail_doesNotPoisonFirstLastComplete() {
+        List<ProductionReport> reports = List.of(
+                rptNullTaskStep(1, "xiuyou", "RAW_MATERIAL", "100", "80", null, null),
+                rptNullTaskStep(2, "shuzhi", "SEASONING", "80", "64", null, null),   // 真末道
+                rptCustomFieldsOnlyAux(3, "beizhu", Map.of("baume", new BigDecimal("12.5"))));
+
+        BatchYieldDTO dto = svc.calculateBatchYield(reports, null);
+
+        // 首/末从 yieldSteps (排除纯-aux) 取 → 首投 100, 末产 64
+        assertThat(dto.getFirstStepInput()).isEqualByComparingTo("100");
+        assertThat(dto.getLastStepOutput()).isEqualByComparingTo("64");
+        // 累计出成率 = 64/100 = 0.64 (非 0, 非 null)
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.6400");
+        // complete 仅看 yieldSteps (两道均有 input+output>0) → true, 不被纯-aux 组的 0/0 拖成 false
+        assertThat(dto.getComplete()).isTrue();
+        // 全量 steps 仍返回 3 组 (aux 组供成本/展示, 只是不参与 yield 序列)
+        assertThat(dto.getSteps()).hasSize(3);
+    }
+
     @Test
     void cumulativeYield_matchesGoldStandard_0_3828() {
         // 猪舌简化链 (首投 998kg -> 末产 382.08kg, 累计 0.3828)

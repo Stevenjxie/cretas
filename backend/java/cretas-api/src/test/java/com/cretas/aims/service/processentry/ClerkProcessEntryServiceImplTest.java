@@ -1182,6 +1182,60 @@ class ClerkProcessEntryServiceImplTest {
     }
 
     /**
+     * G2 — 用户自定义字段 (波美度/添加剂量/备注等, WorkProcess.customFieldSchema 配置驱动)
+     * → 写 YIELD 报工, 命名空间并入 ProductionReport.customFields (clerkCustomFields 子 key),
+     * <b>不覆盖</b>既有内部记账 key (processEntryStepKey / processEntryProcessName /
+     * processEntryProcessCategory) —— 后者被 YieldCalculationServiceImpl 依赖用于分组去重。
+     */
+    @Test
+    @DisplayName("G2: customFields → 写 YIELD 报工 (命名空间并入 clerkCustomFields, 不覆盖内部记账 key)")
+    void g2_customFields_yieldReportWrittenWithoutClobberingInternalKeys() {
+        stubNoIdempotency("G2-CF-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        com.cretas.aims.entity.MaterialBatch raw = rawMb("RAW-G2CF", FACTORY, new BigDecimal("5"));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-G2CF", FACTORY)).thenReturn(Optional.of(raw));
+
+        StepEntry step = rawStep(1, "100", "80", List.of(rawInput("RAW-G2CF", "100")));
+        java.util.Map<String, Object> customFields = new java.util.LinkedHashMap<>();
+        customFields.put("baume", new java.math.BigDecimal("12.5"));
+        customFields.put("remark", "试产批次");
+        step.setCustomFields(customFields);
+
+        BatchEntry batch = finishedBatch("FIN-G2CF", "PT-X", List.of(step));
+        service.recordChain(FACTORY, PLAN_ID, req("G2-CF-KEY", List.of(batch)), OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeastOnce()).save(cap.capture());
+
+        com.cretas.aims.entity.ProductionReport auxRpt = cap.getAllValues().stream()
+                .filter(r -> "YIELD".equals(r.getReportType()) && r.getCustomFields() != null
+                        && r.getCustomFields().containsKey("clerkCustomFields"))
+                .findFirst()
+                .orElse(null);
+
+        assertThat(auxRpt).as("应写出一条含 clerkCustomFields 的 YIELD ProductionReport").isNotNull();
+
+        // 内部记账 key 未被覆盖 (YieldCalculationServiceImpl 依赖 processEntryStepKey 分组去重)
+        assertThat(auxRpt.getCustomFields()).containsKey("processEntryStepKey");
+
+        // 用户自定义字段原样落在 clerkCustomFields 子 map, 与内部记账 key 命名空间隔离
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> landedCustomFields =
+                (java.util.Map<String, Object>) auxRpt.getCustomFields().get("clerkCustomFields");
+        assertThat(landedCustomFields)
+                .containsEntry("baume", new java.math.BigDecimal("12.5"))
+                .containsEntry("remark", "试产批次");
+    }
+
+    /**
      * T17 — 🔒 honest-null: 混批含未计价源 (源 unitPrice==null) → 批次 ROLL-UP totalCost/unitCost 诚实置 null。
      *
      * <p>与纯 SFI 投料路径 (ProcessSheetServiceImpl:151「成本诚实 null」) 一致 —— 未知成本不假造 0。
