@@ -146,21 +146,24 @@ PACKAGE_RECOMMENDATION:
 
 STAFFING_SCHEDULE:
   java_intent: null
-  python_ops: null
+  python_ops: RESTAURANT_OPS_STAFFING_ADVICE
   materialized: []
   owner_action: staffing_schedule
   notes: >
-    排班/人效优化建议。三表均缺 — 与 STAFF_RANKING(下条)不同: 后者是"谁开单多"
-    的历史排行(有模板), 本概念是"该怎么排班"的前瞻建议, 目前纯 LLM 兜底无数据管线。
+    排班/人效优化建议。2026-07-08 补 python_ops 码 RESTAURANT_OPS_STAFFING_ADVICE
+    (V20260708_04/05 mock 时段人力数据) — 与 STAFF_RANKING(下条)不同: 后者是
+    "谁开单多"的历史排行, 本概念是"该怎么排班"的前瞻建议(按时段人效比诊断加/减人)。
 
 INVENTORY_WARNING:
   java_intent: null
-  python_ops: null
+  python_ops: RESTAURANT_OPS_INVENTORY_WARNING
   materialized: []
   owner_action: inventory_reorder
   notes: >
-    库存预警/安全库存阈值提醒(前瞻)。与 STOCK_SHORTAGE(回顾盘点差异)故意区分为
-    两个概念 — 三表均缺是真实缺口, 目前该场景完全靠前端 terms 匹配 + LLM 兜底。
+    库存预警/安全库存阈值提醒(前瞻)。2026-07-08 补 python_ops 码
+    RESTAURANT_OPS_INVENTORY_WARNING(复用 fact_inventory_snapshot/dim_ingredient_threshold
+    + V20260708_03 mock seed, stock<reorder=HIGH / <safe=MEDIUM)。与 STOCK_SHORTAGE
+    (回顾盘点差异)故意区分为两个概念。
 
 STAFF_RANKING:
   java_intent: RESTAURANT_STAFF_RANKING  # intent_name='员工开单排行'
