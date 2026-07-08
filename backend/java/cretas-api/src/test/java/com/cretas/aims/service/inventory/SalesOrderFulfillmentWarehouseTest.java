@@ -348,6 +348,85 @@ class SalesOrderFulfillmentWarehouseTest {
         verify(salesOrderRepository, times(1)).save(order);
     }
 
+    @Test
+    @DisplayName("shipment weights cost across two allocated FG batches and preserves gross margin math")
+    void updateOrderDeliveryStatus_weightsCostAcrossAllocatedBatches() throws Exception {
+        salesService = new SalesServiceImpl(
+                salesOrderRepository,
+                salesOrderItemRepository,
+                null,
+                finishedGoodsBatchRepository,
+                null,
+                productTypeRepository,
+                null,
+                null);
+        ReflectionTestUtils.setField(salesService, "batchAllocationService", batchAllocationService);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-MIX-001");
+        order.setFactoryId(FACTORY_A);
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+
+        SalesOrderItem orderItem = new SalesOrderItem();
+        orderItem.setSalesOrderId(order.getId());
+        orderItem.setProductTypeId(PRODUCT_TYPE);
+        orderItem.setQuantity(new BigDecimal("50"));
+        orderItem.setDeliveredQuantity(BigDecimal.ZERO);
+        orderItem.setUnit("\u76d2");
+        orderItem.setUnitPrice(new BigDecimal("40.0000"));
+
+        SalesDeliveryItem deliveryItem = new SalesDeliveryItem();
+        deliveryItem.setId(167L);
+        deliveryItem.setProductTypeId(PRODUCT_TYPE);
+        deliveryItem.setDeliveredQuantity(new BigDecimal("50"));
+        deliveryItem.setUnit("\u76d2");
+
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setFactoryId(FACTORY_A);
+        record.setSalesOrderId(order.getId());
+        record.setItems(List.of(deliveryItem));
+
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE);
+        productType.setGramsPerUnit(new BigDecimal("200"));
+
+        FinishedGoodsBatch batchA = buildAvailableBatch("FG-MIX-A", WH_LOG_ID, new BigDecimal("30"));
+        batchA.setId("FG-MIX-A-ID");
+        batchA.setUnit("\u76d2");
+        batchA.setUnitCost(new BigDecimal("20.0000"));
+
+        FinishedGoodsBatch batchB = buildAvailableBatch("FG-MIX-B", WH_LOG_ID, new BigDecimal("20"));
+        batchB.setId("FG-MIX-B-ID");
+        batchB.setUnit("\u76d2");
+        batchB.setUnitCost(new BigDecimal("26.0000"));
+
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
+        when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))
+                .thenReturn(List.of(
+                        buildAllocation(batchA.getId(), new BigDecimal("30"), "\u76d2"),
+                        buildAllocation(batchB.getId(), new BigDecimal("20"), "\u76d2")));
+        when(finishedGoodsBatchRepository.findById(batchA.getId())).thenReturn(Optional.of(batchA));
+        when(finishedGoodsBatchRepository.findById(batchB.getId())).thenReturn(Optional.of(batchB));
+
+        invokeUpdateOrderDeliveryStatus(record);
+
+        assertEquals(0, orderItem.getDeliveredQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, orderItem.getCostUnitPrice().compareTo(new BigDecimal("22.4000")));
+        assertEquals(0, orderItem.getCostTotal().compareTo(new BigDecimal("1120.00")));
+        assertEquals(0, orderItem.getLineAmount().compareTo(new BigDecimal("2000.00")));
+        BigDecimal grossProfit = orderItem.getLineAmount().subtract(orderItem.getCostTotal());
+        BigDecimal grossMargin = grossProfit.divide(orderItem.getLineAmount(), 4, java.math.RoundingMode.HALF_UP);
+        assertEquals(0, grossProfit.compareTo(new BigDecimal("880.00")));
+        assertEquals(0, grossMargin.compareTo(new BigDecimal("0.4400")));
+        assertEquals(SalesOrderStatus.COMPLETED, order.getStatus());
+        assertEquals("DELIVERED", order.getTransportPlanStatus());
+        assertEquals(0, order.getActualShippedAmount().compareTo(new BigDecimal("2000.00")));
+        verify(salesOrderItemRepository, times(1)).saveAll(List.of(orderItem));
+        verify(salesOrderRepository, times(1)).save(order);
+    }
+
     // ============================================================
     // T4-D5 #572: per-row sourceWarehouseCode honored (PR #547/#564 chain)
     // ============================================================

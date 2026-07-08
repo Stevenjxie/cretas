@@ -1053,12 +1053,12 @@ class ClerkProcessEntryServiceImplTest {
     }
 
     /**
-     * T11 — Fix 3: blend step with upstreamSources but no seasoning config → warning emitted.
-     * SP-D Fix 3: A step with upstreamSources but processCategory != SEASONING and potCount == null
-     * should emit a warning about unconfigured seasoning, NOT silently drop cost.
+     * T11 — blend step named like seasoning but without a seasoning recipe → warning emitted.
+     * Process names such as 熟制 are now treated as seasoning steps even when processCategory
+     * and potCount are blank; the expected guard is the missing-recipe warning.
      */
     @Test
-    @DisplayName("T11: 混锅工序无 processCategory=SEASONING → warnings 含调料配置提示 (SP-D Fix 3)")
+    @DisplayName("T11: 熟制混锅无调料配方 → warnings 含调料配方提示")
     void t11_nonSeasoningBlendStep_emitsWarning() {
         stubNoIdempotency("T11-KEY");
         stubPlan();
@@ -1082,7 +1082,7 @@ class ClerkProcessEntryServiceImplTest {
                 rawStep(1, "30", "30", List.of(rawInput("RAW-T11B", "30")))
         ));
 
-        // Finished batch: blend step with upstreamSources, but NO processCategory=SEASONING and NO potCount
+        // Finished batch: 熟制 name makes the step seasoning even without processCategory/potCount.
         StepEntry blendNoSeasoning = new StepEntry();
         blendNoSeasoning.setProcessOrder(1);
         blendNoSeasoning.setProcessName("熟制");
@@ -1092,16 +1092,16 @@ class ClerkProcessEntryServiceImplTest {
                 upstreamSource("WIP-T11A", "50"),
                 upstreamSource("WIP-T11B", "30")
         ));
-        // processCategory is null and potCount is null → isSeasoningStep = false
+        // processCategory is null and potCount is null, but processName 熟制 triggers seasoning recognition.
         BatchEntry fin = finishedBatch("FIN-T11", "PT-FINAL", List.of(blendNoSeasoning));
 
         ProcessChainEntryResult result = service.recordChain(
                 FACTORY, PLAN_ID, req("T11-KEY", List.of(wipA, wipB, fin)), OPERATOR_ID);
 
-        // Warning must mention the step name and the missing configuration
+        // Warning must point to the missing seasoning recipe; "未识别为调味步骤" would be stale.
         assertThat(result.getWarnings())
-                .as("should contain seasoning configuration warning for 熟制 step")
-                .anyMatch(w -> w.contains("熟制") && w.contains("调料成本未计入"));
+                .as("should contain missing seasoning recipe warning for 熟制 step")
+                .anyMatch(w -> w.contains("PT-FINAL") && w.contains("未设置调料配方"));
     }
 
     /**

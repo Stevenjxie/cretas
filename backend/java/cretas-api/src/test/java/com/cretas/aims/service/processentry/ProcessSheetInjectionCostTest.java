@@ -114,6 +114,10 @@ class ProcessSheetInjectionCostTest {
     }
 
     private ProcessSheetRowRequest pureSfiReq(String processName, String output, String feed) {
+        return pureSfiReq(processName, output, upstream("SFI-A", feed));
+    }
+
+    private ProcessSheetRowRequest pureSfiReq(String processName, String output, UpstreamRef... upstreams) {
         ProcessSheetRowRequest r = new ProcessSheetRowRequest();
         r.setClientRowId("row-inj-cost");
         r.setProcessCode(processName);
@@ -121,15 +125,22 @@ class ProcessSheetInjectionCostTest {
         r.setProcessOrder(2);
         r.setProductTypeId(PRODUCT_TYPE);
         r.setFinished(false);
-        r.setInputQuantity(new BigDecimal(feed));
+        BigDecimal input = java.util.Arrays.stream(upstreams)
+                .map(UpstreamRef::getFeedQuantityKg)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        r.setInputQuantity(input);
         r.setOutputQuantity(new BigDecimal(output));
         r.setUnit("kg");
+        r.setUpstreamSources(List.of(upstreams));
+        return r;
+    }
+
+    private UpstreamRef upstream(String batchNumber, String feed) {
         UpstreamRef u = new UpstreamRef();
-        u.setSourceBatchNumber("SFI-A");
+        u.setSourceBatchNumber(batchNumber);
         u.setFeedQuantityKg(new BigDecimal(feed));
         u.setSemiFinished(true);
-        r.setUpstreamSources(List.of(u));
-        return r;
+        return u;
     }
 
     /** 捕获保存时 postClerkOutput 收到的 inUnitCost (第 6 参, index 5)。 */
@@ -151,6 +162,22 @@ class ProcessSheetInjectionCostTest {
 
         // (人工 100 + 50×10) / 40 = 15.0000
         assertThat(capturePostedUnitCost()).isNotNull().isEqualByComparingTo("15");
+    }
+
+    @Test
+    @DisplayName("成本传导(混批): 两个上游 SFI 30kg@15 + 20kg@12 + 人工110 → 产出40kg unitCost=20")
+    void saveBlendedSfiInputsPostsWeightedOutputCost() {
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("15"));
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-B")).thenReturn(new BigDecimal("12"));
+        when(clerkService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("110"));
+
+        service.saveRow(FACTORY, PLAN_ID, pureSfiReq("切片",
+                "40",
+                upstream("SFI-A", "30"),
+                upstream("SFI-B", "20")), 7L);
+
+        // (30×15 + 20×12 + 人工110) / 40 = 20.0000
+        assertThat(capturePostedUnitCost()).isNotNull().isEqualByComparingTo("20");
     }
 
     @Test
