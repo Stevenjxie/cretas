@@ -138,6 +138,8 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
     "RESTAURANT_OPS_STORE_MARGIN": "门店级别的毛利/毛利率对比",
     "RESTAURANT_OPS_SALES_SUMMARY": "总体经营概览：营收、订单、客单价、是否盈利",
     "RESTAURANT_OPS_TREND_ANALYSIS": "营收的同比/环比/月度趋势分析",
+    "RESTAURANT_OPS_INVENTORY_WARNING": "食材库存水位预警：低于补货点/安全库存的食材，提示补货（区别于盘点差异/盘亏的历史账实差）",
+    "RESTAURANT_OPS_STAFFING_ADVICE": "按时段(午市/晚市/下午茶/夜宵)的人效比诊断，建议哪个时段加人/减人",
 }
 
 _VALID_CODES = frozenset(_INTENT_DESCRIPTIONS)
@@ -184,6 +186,8 @@ _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
     "RESTAURANT_OPS_STORE_MARGIN": ("gross_profit", "gross_margin"),
     "RESTAURANT_OPS_SALES_SUMMARY": ("revenue", "orders", "avg_ticket"),
     "RESTAURANT_OPS_TREND_ANALYSIS": ("revenue",),
+    "RESTAURANT_OPS_INVENTORY_WARNING": ("stock_qty", "shortage_count"),
+    "RESTAURANT_OPS_STAFFING_ADVICE": ("staff_efficiency",),
 }
 
 
