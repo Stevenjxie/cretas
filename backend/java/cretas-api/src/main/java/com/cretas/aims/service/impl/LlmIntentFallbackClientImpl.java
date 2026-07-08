@@ -646,7 +646,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
      * v12.1 Phase 2 增强:
      * 1. 使用 Chain-of-Thought 4 步分析框架
      * 2. 使用 MMR 算法选择多样化的 Few-Shot 示例
-     * 3. 强调必须做出决策，避免返回 UNKNOWN
+     * 3. 覆盖范围优先：先判断是否在系统能力范围内，超范围诚实返回 UNKNOWN(≤0.3)，不硬套
      * 4. v11.4 RAG: 动态注入相似历史案例作为 Few-Shot 示例
      *
      * @param availableIntents 可用意图列表
@@ -1121,9 +1121,14 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         }
 
         sb.append("## 重要规则\n\n");
-        sb.append("1. **必须做出决策**：从上述意图中选择最接近的\n");
-        sb.append("2. **语义优先**：即使没有完全匹配的关键词，也要根据语义选择\n");
-        sb.append("3. **置信度校准**：如果有合理的匹配，置信度应该在 0.7 以上\n\n");
+        sb.append("1. **先判断是否在覆盖范围内**：如果用户问题确实不属于上述任何意图的能力范围"
+                + "(超出本系统当前功能，例如闲聊/常识问答/本系统不支持的操作)，必须返回 "
+                + "intent_code=UNKNOWN 且 confidence≤0.3。绝不要为了\"给个答案\"而硬套一个最接近但"
+                + "并不真正匹配的意图——硬套=自信答错。只有当问题确实匹配某意图时才选它。\n");
+        sb.append("2. **语义优先**：只要问题确实落在某意图能力范围内，即使没有完全匹配的关键词，"
+                + "也要根据语义选择(此规则不适用于超范围问题——见规则1)\n");
+        sb.append("3. **置信度必须诚实**：真正匹配时置信度可在 0.7 以上；勉强/硬套的匹配置信度不得"
+                + "虚高，宁可低置信度或 UNKNOWN。置信度要反映真实匹配程度。\n\n");
 
         sb.append("## 输出格式\n\n");
         sb.append("```json\n");
@@ -1347,6 +1352,19 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                         .filter(c -> intentCode.equalsIgnoreCase(c.getIntentCode()))
                         .findFirst()
                         .orElse(null);
+            }
+
+            // Phase 0.1 (audit follow-up): honest out-of-coverage UNKNOWN → clean
+            // no-match decline. Do NOT fall through into fuzzy-match / auto-create
+            // tool-calling (line ~1388), which makes a 2nd LLM call and could invoke
+            // a business read tool — re-escalating an honest "I can't do that" into
+            // a wrong answer. Matches the classify prompt (out-of-scope → UNKNOWN,
+            // confidence≤0.3). confidence here is the raw LLM value (calibration
+            // skips UNKNOWN), so it reflects the model's own out-of-scope signal.
+            if ("UNKNOWN".equalsIgnoreCase(intentCode) && confidence <= 0.3) {
+                log.info("[Phase0] out-of-coverage UNKNOWN (conf={}) → graceful no-match decline: '{}'",
+                        confidence, truncate(userInput, 50));
+                return IntentMatchResult.empty(userInput);
             }
 
             if (matchedConfig == null) {

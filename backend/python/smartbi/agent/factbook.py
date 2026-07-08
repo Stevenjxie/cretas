@@ -359,6 +359,13 @@ class FactBook:
             n = s.get("store_name")
             if isinstance(n, str) and n.strip():
                 names.append(n.strip())
+        # Anomaly (low-traffic, excluded) stores are still printed in the render
+        # note ("注：{names} 客流极低…"), so register them too — otherwise the
+        # reconciler's fabricated-name check false-flags a real store the LLM
+        # merely echoed when explaining the exclusion.
+        for n in (att.get("anomalies") or []):
+            if isinstance(n, str) and n.strip():
+                names.append(n.strip())
         # dedup preserve order
         seen = set()
         out = []
