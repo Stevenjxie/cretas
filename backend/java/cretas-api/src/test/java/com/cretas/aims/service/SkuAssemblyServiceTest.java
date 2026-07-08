@@ -27,6 +27,8 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,6 +48,7 @@ class SkuAssemblyServiceTest {
     private static final String FACTORY_ID = "F-SKU-CLONE";
     private static final String TEMPLATE_ID = "PT-TEMPLATE-CLONE";
     private static final Long USER_ID = 1L;
+    private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     @Autowired private SkuAssemblyService skuAssemblyService;
     @Autowired private ProductTypeRepository productTypeRepository;
@@ -86,6 +89,8 @@ class SkuAssemblyServiceTest {
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, sku.getId())
                 .orElseThrow();
         assertNotEquals("BOM-TEMPLATE-CURRENT", copiedRecipe.getId());
+        assertNotEquals(templateRecipeCode(), copiedRecipe.getRecipeCode());
+        assertTrue(copiedRecipe.getRecipeCode().matches("BOM-\\d{8}-\\d{3}"));
         assertEquals("Template Product", copiedRecipe.getProductName());
         assertEquals(BomRecipe.Status.ACTIVE, copiedRecipe.getStatus());
         assertEquals(Boolean.TRUE, copiedRecipe.getIsCurrent());
@@ -173,7 +178,7 @@ class SkuAssemblyServiceTest {
         BomRecipe recipe = new BomRecipe();
         recipe.setId("BOM-TEMPLATE-CURRENT");
         recipe.setFactoryId(FACTORY_ID);
-        recipe.setRecipeCode("BOM-CLONE-001");
+        recipe.setRecipeCode(templateRecipeCode());
         recipe.setProductTypeId(TEMPLATE_ID);
         recipe.setProductName("Template Product");
         recipe.setVersion(7);
@@ -266,5 +271,9 @@ class SkuAssemblyServiceTest {
         process.setAllowMultipleUpstreamSources(allowMultipleUpstreamSources);
         process.setIsActive(true);
         return process;
+    }
+
+    private String templateRecipeCode() {
+        return "BOM-" + LocalDate.now().format(CODE_DATE_FMT) + "-001";
     }
 }

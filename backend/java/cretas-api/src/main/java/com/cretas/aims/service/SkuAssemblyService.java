@@ -10,7 +10,6 @@ import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
-import java.time.LocalDateTime;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -25,6 +24,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,6 +44,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class SkuAssemblyService {
+
+    private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final ProductTypeRepository productTypeRepository;
     private final CustomerRepository customerRepository;
@@ -293,7 +297,7 @@ public class SkuAssemblyService {
         BomRecipe copy = new BomRecipe();
         copy.setId(UUID.randomUUID().toString());
         copy.setFactoryId(factoryId);
-        copy.setRecipeCode(source.getRecipeCode());
+        copy.setRecipeCode(generateRecipeCode(factoryId));
         copy.setProductTypeId(skuId);
         copy.setProductName(source.getProductName());
         copy.setVersion(source.getVersion());
@@ -360,5 +364,16 @@ public class SkuAssemblyService {
             seasoningCopy.setRemark(sourceSeasoning.getRemark());
             bomSeasoningItemRepository.save(seasoningCopy);
         }
+    }
+
+    private String generateRecipeCode(String factoryId) {
+        String today = LocalDate.now().format(CODE_DATE_FMT);
+        String prefix = "BOM-" + today + "-";
+        long sequence = bomRecipeRepository.countByRecipeCodePrefix(factoryId, prefix + "%") + 1;
+        String recipeCode;
+        do {
+            recipeCode = String.format("%s%03d", prefix, sequence++);
+        } while (bomRecipeRepository.existsByFactoryIdAndRecipeCode(factoryId, recipeCode));
+        return recipeCode;
     }
 }
