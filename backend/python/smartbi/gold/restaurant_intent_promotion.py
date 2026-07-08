@@ -106,6 +106,47 @@ def _known_query_set(merged: Dict[str, List[str]]) -> frozenset:
     return frozenset(q for queries in merged.values() for q in queries)
 
 
+# ─── Question-family classification (evidence-based backlog) ──────────────
+# Tags each LLM-tail question by intent FAMILY so the dimension backlog is
+# demand-driven, not supply-driven (2026-07-08 strategy amendment, Fable review):
+# we build a NEW attribution/write dimension only when the flywheel shows owners
+# actually asking that family. Pure keyword heuristic, no LLM.
+_ATTRIBUTION_CUES = (
+    "为什么", "为啥", "怎么回事", "拖后腿", "垫底", "拉低", "拖累", "差在哪",
+    "是客流还是", "是量还是", "是率还是", "归因", "原因", "哪个环节",
+)
+_WRITE_CUES = (
+    "建个", "建一个", "新建", "创建", "帮我建", "录入", "开单", "下单", "开一张",
+    "申请", "提交", "新增", "登记", "报个", "补录",
+)
+
+
+def classify_question_family(text: Optional[str]) -> str:
+    """Return the intent family of a question: attribution | write | query.
+
+    - attribution: "为什么亏 / 哪家店拖后腿 / 是客流还是客单价" — needs a
+      deterministic decomposition producer (numeric attribution can NOT be
+      LLM-generalized; see synthesis_engine docstring).
+    - write: "帮我建个领料单 / 录入盘点" — needs a write Tool + preview/confirm.
+    - query: everything else (lookup / ranking / trend) — deterministic resolver.
+    """
+    t = (text or "").lower()
+    if any(c in t for c in _ATTRIBUTION_CUES):
+        return "attribution"
+    if any(c in t for c in _WRITE_CUES):
+        return "write"
+    return "query"
+
+
+def family_breakdown(candidates: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Count promotion candidates per family — the evidence for whether the next
+    backlog slot should be an attribution dimension, a write op, or neither."""
+    out: Dict[str, int] = {"attribution": 0, "write": 0, "query": 0}
+    for c in candidates:
+        out[c.get("family") or classify_question_family(c.get("query"))] += 1
+    return out
+
+
 # ─── Candidate aggregation (objective gate, read-only) ────────────────────
 
 async def aggregate_candidates(
@@ -197,6 +238,7 @@ async def aggregate_candidates(
             "max_confidence": max_confidence,
             "conflict": conflict,
             "recommended": recommended,
+            "family": classify_question_family(norm_query),
             "last_seen": r["last_seen"],
         })
     return candidates
