@@ -1790,7 +1790,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         from smartbi.config import get_pg_pool as _get_pool_syn
                         pool_syn = await _get_pool_syn()
                         if pool_syn:
-                            window = await _resolve_window(pool_syn, factory_id_hdr, None, None)
+                            window = await _resolve_window(pool_syn, factory_id_hdr, None, None, question=user_q)
                             engine = ComprehensiveSynthesisEngine(pool_syn)
                             syn = await engine.synthesize(factory_id_hdr, user_q, window)
                             yield _sse_event("status", "综合分析：评价+经营多维")
