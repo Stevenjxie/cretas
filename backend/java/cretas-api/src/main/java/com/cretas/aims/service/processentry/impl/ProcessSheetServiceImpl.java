@@ -1723,6 +1723,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setProcessCategory(seasoning ? "SEASONING" : "NORMAL");
         st.setInputQuantity(req.getInputQuantity());
         st.setOutputQuantity(req.getOutputQuantity());
+        st.setProductWeight(req.getProductWeight());
         st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
         st.setPotCount(req.getPotCount());
         st.setPotRawKgs(req.getPotRawKgs());
@@ -1805,7 +1806,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     /** yieldRate = output/input × 100 (scale 4, HALF_UP); input≤0 → null。 */
     private BigDecimal yieldRate(ProcessSheetRowRequest req) {
-        BigDecimal output = req.getOutputQuantity();
+        BigDecimal output = req.getProductWeight() != null && req.getProductWeight().signum() > 0
+                ? req.getProductWeight()
+                : req.getOutputQuantity();
         if (output == null || req.getInputQuantity() == null || req.getInputQuantity().signum() <= 0) {
             return null;
         }

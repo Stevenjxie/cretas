@@ -45,6 +45,8 @@ public class ProcessChainEntryRequest {
         private String processCategory;
         private BigDecimal inputQuantity;
         private BigDecimal outputQuantity;
+        /** Finished-goods net product weight in kg; used for yield when outputQuantity is a count unit. */
+        private BigDecimal productWeight;
         private String unit;                 // 默认 "kg"
         // 人工(起止+人数 → 工时)
         private String laborStartTime;       // "HH:mm"

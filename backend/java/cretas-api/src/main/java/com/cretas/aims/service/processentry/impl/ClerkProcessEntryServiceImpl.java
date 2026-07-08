@@ -276,6 +276,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         // 3. 调料 + 人工 + 产出量 —— 逐工序计算 (上游消耗已由 edges 替代).
         BigDecimal lastOutputQty = BigDecimal.ZERO;
+        BigDecimal lastYieldOutputQty = BigDecimal.ZERO;
         for (StepEntry st : steps) {
             // 3a. 调料成本 (熟制道，使用 RecipeCostCalculator)
             // 写 ProductionReport 行 (costCategory=SEASONING)，让 OrderCostBreakdownService
@@ -330,6 +331,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 追踪产出量 (取最后一道有产出的 step)
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
                 lastOutputQty = st.getOutputQuantity();
+                lastYieldOutputQty = yieldOutputQuantity(st);
             }
         }
 
@@ -346,7 +348,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
                     lastOutputQty, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
         }
-        applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty, anyUncosted);
+        applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost,
+                firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
 
         return new MaterializedBatch(batch.getId(), batch.getBatchNumber(),
                 wipMbId, anyUncosted ? null : batchTotalCost, consumptionsWritten);
@@ -368,6 +371,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         BigDecimal batchTotalCost = BigDecimal.ZERO;
         int consumptionsWritten = 0;
         BigDecimal firstInputQty = firstPositiveInput(steps);
+        BigDecimal lastYieldOutputQty = BigDecimal.ZERO;
         // 🔒 honest-null: 镜像 materializeBatch — 任一消耗源 unitPrice==null → ROLL-UP 成本诚实 null。
         boolean anyUncosted = false;
 
@@ -432,6 +436,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
                 lastOutputQty = st.getOutputQuantity();
+                lastYieldOutputQty = yieldOutputQuantity(st);
             }
         }
 
@@ -459,7 +464,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (lastOutputQty.signum() > 0) {
             pb.setQuantity(lastOutputQty);
         }
-        applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost, firstInputQty, lastOutputQty, anyUncosted);
+        applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost,
+                firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
         batchRepo.save(pb);
 
         return new MaterializedBatch(existingBatchId, pb.getBatchNumber(),
@@ -568,12 +574,23 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 .orElse(BigDecimal.ZERO);
     }
 
+    private BigDecimal yieldOutputQuantity(StepEntry step) {
+        if (step == null) {
+            return BigDecimal.ZERO;
+        }
+        if (step.getProductWeight() != null && step.getProductWeight().signum() > 0) {
+            return step.getProductWeight();
+        }
+        return nz(step.getOutputQuantity());
+    }
+
     private void applyBatchCostSummary(ProductionBatch batch,
                                        BigDecimal materialCost,
                                        BigDecimal laborCost,
                                        BigDecimal totalCost,
                                        BigDecimal inputQty,
                                        BigDecimal outputQty,
+                                       BigDecimal yieldOutputQty,
                                        boolean anyUncosted) {
         BigDecimal material = nz(materialCost);
         BigDecimal labor = nz(laborCost);
@@ -594,8 +611,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 batch.setUnitCost(null);
             }
         }
-        if (inputQty != null && inputQty.signum() > 0 && outputQty != null) {
-            batch.setYieldRate(outputQty.multiply(new BigDecimal("100"))
+        if (inputQty != null && inputQty.signum() > 0 && yieldOutputQty != null) {
+            batch.setYieldRate(yieldOutputQty.multiply(new BigDecimal("100"))
                     .divide(inputQty, 2, RoundingMode.HALF_UP));
         } else {
             batch.setYieldRate(null);
