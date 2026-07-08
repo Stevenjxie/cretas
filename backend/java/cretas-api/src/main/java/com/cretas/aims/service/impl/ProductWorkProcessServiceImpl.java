@@ -79,6 +79,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 // 半成品注入工序 (张权 R4): null → 默认 false (普通工序); 显式 true → 逐道录入可选 SFI/FG。
                 .allowSemiFinishedInjection(
                         dto.getAllowSemiFinishedInjection() == null ? Boolean.FALSE : dto.getAllowSemiFinishedInjection())
+                // 多上游混批: null → 默认 false (单批); 显式 true → 报工可添加多个来源批。
+                .allowMultipleUpstreamSources(
+                        dto.getAllowMultipleUpstreamSources() == null ? Boolean.FALSE : dto.getAllowMultipleUpstreamSources())
                 // 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别)
                 .defaultCostCategory(dto.getDefaultCostCategory())
                 .packagingTemplate(dto.getPackagingTemplate())
@@ -155,6 +158,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (dto.getReportingRequired() != null) entity.setReportingRequired(dto.getReportingRequired());
         // 半成品注入工序 partial update: null → no-change; 非 null → set (true/false 均可显式设)。
         if (dto.getAllowSemiFinishedInjection() != null) entity.setAllowSemiFinishedInjection(dto.getAllowSemiFinishedInjection());
+        // 多上游混批 partial update: null → no-change; 非 null → set (true/false 均可显式设)。
+        if (dto.getAllowMultipleUpstreamSources() != null) entity.setAllowMultipleUpstreamSources(dto.getAllowMultipleUpstreamSources());
         // 工序成本配置 partial update: null → no-change; 非 null → set
         if (dto.getDefaultCostCategory() != null) entity.setDefaultCostCategory(dto.getDefaultCostCategory());
         if (dto.getPackagingTemplate() != null) entity.setPackagingTemplate(dto.getPackagingTemplate());
@@ -249,6 +254,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                     .responsibleWorkerId(null)
                     .reportingRequired(src.getReportingRequired())
                     .allowSemiFinishedInjection(src.getAllowSemiFinishedInjection())
+                    .allowMultipleUpstreamSources(src.getAllowMultipleUpstreamSources())
                     .defaultCostCategory(src.getDefaultCostCategory())
                     .packagingTemplate(src.getPackagingTemplate())
                     .auxAllocMethod(src.getAuxAllocMethod())
@@ -282,6 +288,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
                 .isActive(entity.getIsActive())
                 .reportingRequired(entity.getReportingRequired())
                 .allowSemiFinishedInjection(entity.getAllowSemiFinishedInjection())
+                .allowMultipleUpstreamSources(entity.getAllowMultipleUpstreamSources())
                 .defaultCostCategory(entity.getDefaultCostCategory())
                 .packagingTemplate(entity.getPackagingTemplate())
                 .auxAllocMethod(entity.getAuxAllocMethod())

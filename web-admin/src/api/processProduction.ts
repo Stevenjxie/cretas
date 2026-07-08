@@ -229,6 +229,8 @@ export interface ProductWorkProcessItem {
    * false/undefined (默认) = 普通工序 (仅现有 archetype 兜底会显 picker)。
    */
   allowSemiFinishedInjection?: boolean;
+  /** 是否允许本道工序从多个上游批次混批投料。 */
+  allowMultipleUpstreamSources?: boolean;
   /** 工序默认成本类别 (报工自动继承; 防呆: 操作员不手填)。RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER */
   defaultCostCategory?: string | null;
   /** 工序默认包装明细模板 [{name,cost}] (膜/气体/标签/其他); 报工自动继承。 */

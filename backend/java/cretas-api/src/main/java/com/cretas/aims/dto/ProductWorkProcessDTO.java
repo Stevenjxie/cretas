@@ -74,6 +74,16 @@ public class ProductWorkProcessDTO {
     private Boolean allowSemiFinishedInjection;
 
     /**
+     * 是否允许本道工序从多个上游批次混批投料。
+     * <ul>
+     *   <li>null (omitted) — create 取默认 false; update 不修改现有值 (no-change 语义)</li>
+     *   <li>true — 报工 UI 可添加多个上游来源批</li>
+     *   <li>false — 单一上游批次</li>
+     * </ul>
+     */
+    private Boolean allowMultipleUpstreamSources;
+
+    /**
      * 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别/明细)。
      * partial update 语义: null → 不修改现有值。
      */

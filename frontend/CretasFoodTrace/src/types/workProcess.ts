@@ -93,6 +93,8 @@ export interface ProductWorkProcess {
    * true (默认) = 逐道报; false = 该工序免报 (spawn 跳过, 不生成报工任务, 配置保留供溯源)。
    */
   reportingRequired?: boolean;
+  /** 是否允许本道工序从多个上游批次混批投料。 */
+  allowMultipleUpstreamSources?: boolean;
   /** 后端 join 提供的只读字段 */
   processName?: string;
   processCategory?: string;
@@ -112,6 +114,8 @@ export interface CreateProductWorkProcessRequest {
   estimatedMinutesOverride?: number;
   /** Wave2: 是否需报工 (省略 → 后端默认 true 逐道报; false → 免报)。 */
   reportingRequired?: boolean;
+  /** 是否允许本道工序从多个上游批次混批投料。 */
+  allowMultipleUpstreamSources?: boolean;
 }
 
 /**

@@ -76,6 +76,15 @@ public class ProductWorkProcess {
     @Builder.Default
     private Boolean allowSemiFinishedInjection = false;
 
+    /**
+     * 是否允许本道工序从多个上游批次混批投料。
+     *
+     * <p>DEFAULT false = 单一上游批次; true = 报工 UI 可添加多个上游来源批。
+     */
+    @Column(name = "allow_multiple_upstream_sources", nullable = false)
+    @Builder.Default
+    private Boolean allowMultipleUpstreamSources = false;
+
     // ── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ──────────────
     /** 该工序默认成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; 报工未传 costCategory 时继承 (CALC-003) */
     @Column(name = "default_cost_category", length = 20)

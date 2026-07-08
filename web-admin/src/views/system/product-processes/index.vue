@@ -116,7 +116,9 @@ interface PendingResponsible { type: 'responsible'; serverId: number; assigneeWo
 interface PendingReporting { type: 'reporting'; serverId: number; reportingRequired: boolean; productTypeId: string; workProcessId: string }
 /** 张权 R4: 半成品注入工序切换 pending op (server item only; draft-only items send flag on POST) */
 interface PendingInjection { type: 'injection'; serverId: number; allowSemiFinishedInjection: boolean; productTypeId: string; workProcessId: string }
-type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting | PendingInjection;
+/** 多上游混批切换 pending op (server item only; draft-only items send flag on POST) */
+interface PendingMultiSource { type: 'multiSource'; serverId: number; allowMultipleUpstreamSources: boolean; productTypeId: string; workProcessId: string }
+type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting | PendingInjection | PendingMultiSource;
 const pendingOps = ref<PendingOp[]>([]);
 const recommendationNotice = ref('');
 
@@ -173,6 +175,7 @@ async function handleSave() {
     const toResponsible = pendingOps.value.filter((o): o is PendingResponsible => o.type === 'responsible');
     const toReporting = pendingOps.value.filter((o): o is PendingReporting => o.type === 'reporting');
     const toInjection = pendingOps.value.filter((o): o is PendingInjection => o.type === 'injection');
+    const toMultiSource = pendingOps.value.filter((o): o is PendingMultiSource => o.type === 'multiSource');
     const needsSort = pendingOps.value.some(o =>
       o.type === 'sort' || o.type === 'add' || o.type === 'remove'
     );
@@ -191,12 +194,15 @@ async function handleSave() {
       const reportingRequired = draftItem?.reportingRequired;
       // 张权 R4: 草稿态工序若标了半成品注入, 随 create 一起发 (省略 → 后端默认 false 普通工序)
       const allowSemiFinishedInjection = draftItem?.allowSemiFinishedInjection;
+      // 多上游混批: 草稿态工序若开启混批, 随 create 一起发 (省略 → 后端默认 false 单批)
+      const allowMultipleUpstreamSources = draftItem?.allowMultipleUpstreamSources;
       await createProductWorkProcess(factoryId.value, {
         productTypeId: selectedProductId.value,
         workProcessId: op.wp.id,
         processOrder: 999, // corrected by sort step below
         ...(reportingRequired === false ? { reportingRequired: false } : {}),
         ...(allowSemiFinishedInjection === true ? { allowSemiFinishedInjection: true } : {}),
+        ...(allowMultipleUpstreamSources === true ? { allowMultipleUpstreamSources: true } : {}),
         ...(assigneeWorkerIds && assigneeWorkerIds.length > 0
           ? { assigneeWorkerIds }
           : responsibleWorkerId != null ? { responsibleWorkerId } : {}),
@@ -242,6 +248,17 @@ async function handleSave() {
         productTypeId: freshItem.productTypeId,
         workProcessId: freshItem.workProcessId,
         allowSemiFinishedInjection: op.allowSemiFinishedInjection,
+      });
+    }
+
+    // 4d. 多上游混批变更 (server items): partial update allowMultipleUpstreamSources
+    for (const op of toMultiSource) {
+      const freshItem = freshByWpId.get(op.workProcessId);
+      if (!freshItem) continue;
+      await updateProductWorkProcess(factoryId.value, freshItem.id, {
+        productTypeId: freshItem.productTypeId,
+        workProcessId: freshItem.workProcessId,
+        allowMultipleUpstreamSources: op.allowMultipleUpstreamSources,
       });
     }
 
@@ -745,6 +762,32 @@ function handleInjectionChange(item: DraftItem, value: boolean) {
   }
 }
 
+/**
+ * 多上游混批: 切换某道工序是否可在报工时添加多个上游来源批。
+ * @param item - 被编辑的 DraftItem
+ * @param value - true=允许混批; false=单批
+ */
+function handleMultipleUpstreamSourcesChange(item: DraftItem, value: boolean) {
+  const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
+  if (idx !== -1) {
+    draftLinked.value[idx] = { ...draftLinked.value[idx], allowMultipleUpstreamSources: value };
+  }
+  if (!item.isPending) {
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'multiSource' && o.serverId === item.id)
+    );
+    markDirty({
+      type: 'multiSource',
+      serverId: item.id,
+      allowMultipleUpstreamSources: value,
+      productTypeId: item.productTypeId,
+      workProcessId: item.workProcessId,
+    });
+  } else {
+    if (!dirty.value) dirty.value = true;
+  }
+}
+
 // ─────────────────────────────────────────────
 // Move up/down (fallback buttons, C1)
 // ─────────────────────────────────────────────
@@ -1055,6 +1098,25 @@ async function saveCostConfig() {
                     </el-tooltip>
                   </span>
                   <el-tag v-else-if="item.allowSemiFinishedInjection === true" size="small" type="success">半成品注入</el-tag>
+                  <!-- 多上游混批: 开启后本道报工可添加多个上游来源批, 关闭后只允许单一上游批次 -->
+                  <span class="step-injection" v-if="canWrite">
+                    <el-switch
+                      :model-value="item.allowMultipleUpstreamSources === true"
+                      size="small"
+                      inline-prompt
+                      active-text="混批"
+                      inactive-text="单批"
+                      @change="(val: boolean) => handleMultipleUpstreamSourcesChange(item, val)"
+                    />
+                    <el-tooltip placement="top">
+                      <template #content>
+                        开启后, 此工序报工时可选择多个上游批次并分别填写投料量。<br />
+                        关闭后, 此工序只走单一上游批次, 适合不需要混批追溯的简单工序。
+                      </template>
+                      <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                  <el-tag v-else-if="item.allowMultipleUpstreamSources === true" size="small" type="success">混批</el-tag>
                 </div>
 
                 <!-- C3 / T121 — 多人负责多选下拉 (filterable, multiple) -->

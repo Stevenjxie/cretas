@@ -308,6 +308,30 @@ class ProductWorkProcessServiceImplTest {
                     "显式 true → 持久化 true (半成品注入工序)");
             assertEquals(Boolean.TRUE, result.getAllowSemiFinishedInjection());
         }
+
+        @Test
+        @DisplayName("UT-PWP-01i: create() allowMultipleUpstreamSources=true → 混批工序持久化 true + toDTO 回填")
+        void testCreateAllowMultipleUpstreamSourcesTrue() {
+            ProductWorkProcessDTO dto = ProductWorkProcessDTO.builder()
+                    .productTypeId(PRODUCT_TYPE_ID)
+                    .workProcessId(WORK_PROCESS_ID)
+                    .processOrder(3)
+                    .allowMultipleUpstreamSources(true)
+                    .build();
+
+            when(repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                    FACTORY_ID, PRODUCT_TYPE_ID, WORK_PROCESS_ID)).thenReturn(false);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WORK_PROCESS_ID))
+                    .thenReturn(Optional.of(buildDefaultWorkProcess()));
+            when(repository.save(any(ProductWorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ProductWorkProcessDTO result = service.create(FACTORY_ID, dto);
+
+            verify(repository).save(entityCaptor.capture());
+            assertEquals(Boolean.TRUE, entityCaptor.getValue().getAllowMultipleUpstreamSources(),
+                    "显式 true → 持久化 true (允许多上游混批)");
+            assertEquals(Boolean.TRUE, result.getAllowMultipleUpstreamSources());
+        }
     }
 
     @Nested

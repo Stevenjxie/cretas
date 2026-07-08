@@ -37,6 +37,8 @@ const props = withDefaults(defineProps<{
   /** 张权 R4: 本工序是否被配置为「半成品注入工序」(ProductWorkProcess.allowSemiFinishedInjection)。
    * true → 逐道录入显示半成品(SFI)/成品(FG) 投料选择器 (config-driven gating, 见 showSfi)。 */
   allowSemiFinishedInjection?: boolean;
+  /** 是否允许本道工序从多个上游批次混批投料。false 时仍可单选一个上游批次。 */
+  allowMultipleUpstreamSources?: boolean;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
    * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
   upstreamProcessLabel?: string;
@@ -50,6 +52,7 @@ const props = withDefaults(defineProps<{
   viewMode?: 'grid' | 'card';
 }>(), {
   allowSemiFinishedInjection: false,
+  allowMultipleUpstreamSources: false,
   upstreamItems: () => [],
   ownInventoryItems: () => [],
   initialRows: () => [],
@@ -117,6 +120,11 @@ const isSingleUpstream = computed(() =>
 );
 const isQuSheTou = computed(() => props.processCode === 'qushetou');
 const isQidiao = computed(() => props.processCode === 'qidiao');
+const supportsUpstreamSources = computed(() =>
+  isSingleUpstream.value || isQuSheTou.value || isShuZhi.value || isQidiao.value,
+);
+const isMultiSource = computed(() => props.allowMultipleUpstreamSources === true && supportsUpstreamSources.value);
+const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiSource.value);
 
 // Bug 1 修复: 来源批次选择器的 label 必须反映真实工序链, 不能按 archetype processCode 硬编码
 // (硬编码在 role-mode / 关键词回退下必错 —— 同一 archetype 可能对应不同真实工序名)。
@@ -124,6 +132,8 @@ const isQidiao = computed(() => props.processCode === 'qidiao');
 const ownProcessName = computed(() => props.processLabel || props.processCode);
 /** 上游(前置)工序真实显示名; 链起步道(无上游)兜底通用「上游」。 */
 const upstreamProcessName = computed(() => props.upstreamProcessLabel || '上游');
+const sourceTitle = computed(() => `${upstreamProcessName.value}${isMultiSource.value ? '来源(混批)' : '批次'}`);
+const sourcePickerPlaceholder = computed(() => `选${upstreamProcessName.value}批次/半成品`);
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -322,14 +332,26 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.fields['scrap'] = inp != null && out != null ? inp - out : null;
   }
   if (isShuZhi.value) {
-    row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
+    if (isMultiSource.value) {
+      row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
+    } else {
+      row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+      row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+      row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+    }
     row.fields['input'] = p.inputQuantity ?? null;
     row.fields['output'] = p.outputQuantity ?? null;
     row.potCount = p.potCount ?? 1;
     row.potRawKgs = (p.potRawKgs ?? []).map((v) => v);
   }
   if (isQidiao.value) {
-    row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
+    if (isMultiSource.value) {
+      row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
+    } else {
+      row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+      row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+      row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+    }
     row.fields['usedWeight'] = p.inputQuantity ?? null;
     // outputQuantity = actualProd (盒数); restored from payload into auto-calc fields
     const payloadFields = p as unknown as Record<string, unknown>;
@@ -470,6 +492,14 @@ function calcReverseInput(row: SheetRow): number | null {
   return scrap + output;
 }
 
+function singleSourceUsage(row: SheetRow): number {
+  if (isSingleUpstream.value) return (row.fields['before'] as number) ?? 0;
+  if (isQuSheTou.value) return calcReverseInput(row) ?? 0;
+  if (isShuZhi.value) return (row.fields['input'] as number) ?? 0;
+  if (isQidiao.value) return (row.fields['usedWeight'] as number) ?? 0;
+  return 0;
+}
+
 function calcYield(row: SheetRow): number | null {
   let input: number | null = null;
   let output: number | null = null;
@@ -477,6 +507,11 @@ function calcYield(row: SheetRow): number | null {
   if (isXiuYou.value) {
     input = row.rawBatchQty;
     output = (row.fields['output'] as number) ?? null;
+  } else if (isMultiSource.value) {
+    input = row.upstreamSources.reduce((sum, src) => sum + (src.feedQuantityKg || 0), 0);
+    output = isQidiao.value
+      ? ((row.fields['productWeight'] as number) ?? null)
+      : ((row.fields['output'] as number) ?? null);
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: before/after 字段
     input = (row.fields['before'] as number) ?? null;
@@ -510,8 +545,8 @@ function calcRemaining(row: SheetRow): number | null {
     const inv = props.ownInventoryItems.find((b) => b.batchNumber === row.batchNumber);
     if (inv != null) return inv.remaining;
   }
-  // Fallback for single-upstream / qushetou unsaved rows: derive from upstream usage.
-  if (isSingleUpstream.value || isQuSheTou.value) {
+  // Fallback for single-source upstream unsaved rows: derive from selected source.
+  if (isSingleSource.value) {
     if (row.upstreamFinishedGoods) {
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
       return fg ? fgAvailable(fg) : null;
@@ -572,9 +607,8 @@ function calcLaborPerBox(row: SheetRow): number | null {
 }
 
 function upstreamWarning(row: SheetRow): string | null {
-  if (isSingleUpstream.value) {
-    // 焯水 + 滚揉: 用量 = before
-    const usage = (row.fields['before'] as number) ?? 0;
+  if (isSingleSource.value) {
+    const usage = singleSourceUsage(row);
     if (row.upstreamFinishedGoods) {
       // ①c FG 投料 max 守卫: 计数单位(盒装)成品经每盒克重折算 kg 可投量; kg 源按原 kg 比较。
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
@@ -595,28 +629,7 @@ function upstreamWarning(row: SheetRow): string | null {
     if (!inv) return null;
     if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
   }
-  if (isQuSheTou.value) {
-    // 去舌苔: 用量 = 投入量 = scrap + output
-    const usage = calcReverseInput(row) ?? 0;
-    if (row.upstreamFinishedGoods) {
-      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
-      if (!fg) return null;
-      if (isCountUnit(fg.unit)) return countUnitFeedWarning(fg.unit, fg.gramsPerUnit, fgAvailable(fg), usage, '该成品来源');
-      if (usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
-      return null;
-    }
-    if (row.upstreamSemiFinished) {
-      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
-      if (!sfi) return null;
-      if (isCountUnit(sfi.unit)) return countUnitFeedWarning(sfi.unit, sfi.gramsPerUnit, sfiAvailable(sfi), usage, '该半成品来源');
-      if (usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
-      return null;
-    }
-    const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
-    if (!inv) return null;
-    if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
-  }
-  if (isShuZhi.value || isQidiao.value) {
+  if (isMultiSource.value) {
     const warnings: string[] = [];
     for (const src of row.upstreamSources) {
       const usage = src.feedQuantityKg;
@@ -666,30 +679,42 @@ function saveDisabledReason(row: SheetRow): string | null {
     if (!row.rawBatchId) return '请选择原料批次';
     if (row.rawBatchQty == null) return '请填写出库重量';
     if ((row.fields['output'] as number) == null) return '请填写产出数量';
-  } else if (isSingleUpstream.value) {
-    // 焯水 + 滚揉: before/after 校验 — label 用真实工序名 (Bug 1 修复, 不再按 archetype 硬编码)
-    const processLabel = ownProcessName.value;
-    const upstreamLabel = `${upstreamProcessName.value}批次`;
-    if (!row.upstreamBatch) return `请选择${upstreamLabel}`;
-    if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
-    if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
-  } else if (isQuSheTou.value) {
-    if (!row.upstreamBatch) return `请选择${upstreamProcessName.value}批次`;
-    if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
-    if ((row.fields['output'] as number) == null) return '请填写产出重量';
-  } else if (isShuZhi.value) {
+  } else if (isMultiSource.value) {
     if (row.upstreamSources.length === 0) return '请添加上游来源批';
     if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
-    if ((row.fields['output'] as number) == null) return '请填写产出数量';
-    if (row.potCount > 1) {
-      const filled = row.potRawKgs.filter((v) => v != null && v > 0);
-      if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
+    if (isSingleUpstream.value) {
+      const processLabel = ownProcessName.value;
+      if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
+      if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
+    } else if (isQuSheTou.value) {
+      if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
+      if ((row.fields['output'] as number) == null) return '请填写产出重量';
+    } else if (isShuZhi.value) {
+      if ((row.fields['output'] as number) == null) return '请填写产出数量';
+      if (row.potCount > 1) {
+        const filled = row.potRawKgs.filter((v) => v != null && v > 0);
+        if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
+      }
+    } else if (isQidiao.value) {
+      if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
+      if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
     }
-  } else if (isQidiao.value) {
-    if (row.upstreamSources.length === 0) return `请添加${upstreamProcessName.value}来源批`;
-    if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
-    if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
-    if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
+  } else if (isSingleSource.value) {
+    if (!row.upstreamBatch) return `请选择${upstreamProcessName.value}批次`;
+    if (isSingleUpstream.value) {
+      const processLabel = ownProcessName.value;
+      if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
+      if ((row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
+    } else if (isQuSheTou.value) {
+      if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
+      if ((row.fields['output'] as number) == null) return '请填写产出重量';
+    } else if (isShuZhi.value) {
+      if ((row.fields['input'] as number) == null) return '请填写投入重量';
+      if ((row.fields['output'] as number) == null) return '请填写产出数量';
+    } else if (isQidiao.value) {
+      if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
+      if (calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
+    }
   }
   // 🔒 防呆 Rule 1 — 超投/单位不匹配 must-fix 不是 advisory: upstreamWarning() 命中时同样 disable 保存,
   // 不能只在提示区显示警告文字却仍放行保存(2026-07-02 GATE-HANDBACK 阻断项②)。
@@ -743,6 +768,47 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
       base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
     }
+  } else if (isMultiSource.value) {
+    const totalFeed = row.upstreamSources.reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
+    base.upstreamSources = row.upstreamSources;
+    if (isSingleUpstream.value) {
+      const before = (row.fields['before'] as number) ?? totalFeed;
+      base.inputQuantity = before;
+      base.outputQuantity = (row.fields['after'] as number) ?? 0;
+      base.unit = 'kg';
+      const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+      if (bpQty > 0) {
+        const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+        base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+      }
+    } else if (isQuSheTou.value) {
+      const output = (row.fields['output'] as number) ?? 0;
+      const scrap = (row.fields['scrap'] as number) ?? 0;
+      const inputQty = scrap + output;
+      base.inputQuantity = inputQty || totalFeed;
+      base.outputQuantity = output;
+      base.unit = 'kg';
+    } else if (isShuZhi.value) {
+      base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
+      base.outputQuantity = (row.fields['output'] as number) ?? 0;
+      base.unit = 'kg';
+    } else if (isQidiao.value) {
+      const actualProd = calcSumBoxes(row);
+      base.inputQuantity = (row.fields['usedWeight'] as number) ?? totalFeed;
+      base.outputQuantity = actualProd;
+      base.unit = '盒';
+      const trimmings = (row.fields['trimmings'] as number) ?? 0;
+      if (trimmings > 0) {
+        base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
+      }
+      const sample = (row.fields['sample'] as number) ?? 0;
+      if (sample > 0) {
+        base.sampleRetainQuantity = Math.round(sample);
+      }
+      for (const key of ['storage', 'sample', 'remainBox', 'claim', 'productWeight', 'trimmings', 'usedWeight', 'boxWeight', 'workerPrice'] as const) {
+        base[key] = row.fields[key] ?? null;
+      }
+    }
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
     // semiFinished: 单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
@@ -769,15 +835,26 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.outputQuantity = output;
     base.unit = 'kg';
   } else if (isShuZhi.value) {
-    base.upstreamSources = row.upstreamSources;
-    const totalFeed = row.upstreamSources.reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
-    base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
+    const inputQty = (row.fields['input'] as number) ?? 0;
+    base.upstreamSources = [{
+      sourceBatchNumber: row.upstreamBatch,
+      feedQuantityKg: inputQty,
+      semiFinished: row.upstreamSemiFinished,
+      finishedGoods: row.upstreamFinishedGoods,
+    }];
+    base.inputQuantity = inputQty;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
     base.unit = 'kg';
   } else if (isQidiao.value) {
     // ⭐ outputQuantity = 盒数 (actualProd), NOT kg
     const actualProd = calcSumBoxes(row);
-    base.upstreamSources = row.upstreamSources;
+    const inputQty = (row.fields['usedWeight'] as number) ?? 0;
+    base.upstreamSources = [{
+      sourceBatchNumber: row.upstreamBatch,
+      feedQuantityKg: inputQty,
+      semiFinished: row.upstreamSemiFinished,
+      finishedGoods: row.upstreamFinishedGoods,
+    }];
     base.inputQuantity = (row.fields['usedWeight'] as number) ?? undefined;
     base.outputQuantity = actualProd;            // ⭐⭐ 盒数!
     base.unit = '盒';
@@ -930,9 +1007,6 @@ const fgOptions = ref<FinishedGoodsStockItem[]>([]);
 const fgLoading = ref(false);
 let fgLoadSeq = 0;
 
-/** 是否多来源混锅工序 (熟制 / 气调) — 多源混锅提供 SFI 投料选项。 */
-const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
-
 /**
  * 是否提供「半成品库存(SFI)」投料选项。
  *
@@ -943,7 +1017,7 @@ const isMultiSource = computed(() => isShuZhi.value || isQidiao.value);
  * 保证历史产品工序零回归 —— 即使未配置 flag 也不丢失现有能力。
  */
 const showSfi = computed(() =>
-  props.allowSemiFinishedInjection || isMultiSource.value || isSingleUpstream.value || isQuSheTou.value,
+  props.allowSemiFinishedInjection || supportsUpstreamSources.value,
 );
 /** ①c 是否提供「成品库存(FG)」投料选项 (与 SFI 同工序集: 混锅 + 单上游道)。 */
 const showFg = computed(() => showSfi.value);
@@ -1372,14 +1446,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </div>
           </template>
 
-          <!-- 焯水 + 滚揉: single upstream dropdown (结构相同) — 含半成品库存(SFI)选项 -->
-          <template v-else-if="isSingleUpstream">
+          <!-- 单来源上游: 含半成品库存(SFI)/成品库存(FG)选项 -->
+          <template v-else-if="isSingleSource && !isQuSheTou">
             <div class="sp-card-field">
-              <label class="sp-card-label">{{ upstreamProcessName }}批次</label>
+              <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-select
                 :model-value="singleUpstreamSelectKey(row)"
                 @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                :placeholder="`选${upstreamProcessName}批次/半成品`"
+                :placeholder="sourcePickerPlaceholder"
                 filterable clearable
                 :filter-method="onBatchSelectFilter"
                 @visible-change="onBatchSelectVisibleChange"
@@ -1411,13 +1485,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           </template>
 
           <!-- 去舌苔: single upstream dropdown — 含半成品库存(SFI)选项 -->
-          <template v-else-if="isQuSheTou">
+          <template v-else-if="isSingleSource && isQuSheTou">
             <div class="sp-card-field">
-              <label class="sp-card-label">{{ upstreamProcessName }}批次</label>
+              <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-select
                 :model-value="singleUpstreamSelectKey(row)"
                 @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                :placeholder="`选${upstreamProcessName}批次/半成品`"
+                :placeholder="sourcePickerPlaceholder"
                 filterable clearable
                 :filter-method="onBatchSelectFilter"
                 @visible-change="onBatchSelectVisibleChange"
@@ -1448,10 +1522,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </div>
           </template>
 
-          <!-- 熟制 / 气调: multi-source expander -->
-          <template v-else-if="isShuZhi || isQidiao">
+          <!-- 多来源混批: configured by ProductWorkProcess.allowMultipleUpstreamSources -->
+          <template v-else-if="isMultiSource">
             <div class="sp-card-field sp-card-field-full">
-              <label class="sp-card-label">{{ upstreamProcessName }}来源(混锅)</label>
+              <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
                 <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
                 {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
@@ -1460,7 +1534,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <!-- Mix expanded inline -->
             <div v-if="row.mixExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
               <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                <span style="font-size:12px;font-weight:600;color:#303133">{{ upstreamProcessName }}来源批 (混锅)</span>
+                <span style="font-size:12px;font-weight:600;color:#303133">{{ sourceTitle }}</span>
                 <el-button size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
               </div>
               <div v-for="(src, si) in row.upstreamSources" :key="si"
@@ -1468,7 +1542,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-select
                   :model-value="srcSelectKey(src)"
                   @change="(v: string) => onUpstreamSelect(src, v)"
-                  :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                  :placeholder="sourcePickerPlaceholder" filterable clearable
                   :filter-method="onBatchSelectFilter"
                   @visible-change="onBatchSelectVisibleChange"
                   :loading="sfiLoading"
@@ -1652,24 +1726,19 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <th class="sp-th sp-th-num">出库重量(kg)</th>
             </template>
 
-            <!-- 焯水 + 滚揉: upstream single-select -->
-            <template v-else-if="isSingleUpstream">
-              <th class="sp-th">{{ upstreamProcessName }}批次</th>
+            <!-- 单来源上游 -->
+            <template v-else-if="isSingleSource && !isQuSheTou">
+              <th class="sp-th">{{ sourceTitle }}</th>
             </template>
 
-            <!-- 去舌苔: upstream single-select -->
-            <template v-else-if="isQuSheTou">
-              <th class="sp-th">{{ upstreamProcessName }}批次</th>
+            <!-- 去舌苔单来源上游 -->
+            <template v-else-if="isSingleSource && isQuSheTou">
+              <th class="sp-th">{{ sourceTitle }}</th>
             </template>
 
-            <!-- 熟制: multi-source (rendered as expander cell) -->
-            <template v-else-if="isShuZhi">
-              <th class="sp-th">{{ upstreamProcessName }}来源(混锅)</th>
-            </template>
-
-            <!-- 气调: multi-source (rendered as expander cell) -->
-            <template v-else-if="isQidiao">
-              <th class="sp-th">{{ upstreamProcessName }}来源(混锅)</th>
+            <!-- 多来源混批 (rendered as expander cell) -->
+            <template v-else-if="isMultiSource">
+              <th class="sp-th">{{ sourceTitle }}</th>
             </template>
 
             <!-- Generic cols from config (skip special-cased keys) -->
@@ -1803,13 +1872,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </td>
               </template>
 
-              <!-- ---- 焯水 + 滚揉: single upstream dropdown (结构相同) — 含半成品库存(SFI) ---- -->
-              <template v-else-if="isSingleUpstream">
+              <!-- ---- 单来源上游 dropdown — 含半成品库存(SFI)/成品库存(FG) ---- -->
+              <template v-else-if="isSingleSource && !isQuSheTou">
                 <td class="sp-td">
                   <el-select
                     :model-value="singleUpstreamSelectKey(row)"
                     @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                    :placeholder="`选${upstreamProcessName}批次/半成品`"
+                    :placeholder="sourcePickerPlaceholder"
                     filterable clearable
                     :filter-method="onBatchSelectFilter"
                     @visible-change="onBatchSelectVisibleChange"
@@ -1842,12 +1911,12 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </template>
 
               <!-- ---- 去舌苔: single upstream dropdown — 含半成品库存(SFI) ---- -->
-              <template v-else-if="isQuSheTou">
+              <template v-else-if="isSingleSource && isQuSheTou">
                 <td class="sp-td">
                   <el-select
                     :model-value="singleUpstreamSelectKey(row)"
                     @change="(v: string) => onSingleUpstreamSelect(row, v)"
-                    :placeholder="`选${upstreamProcessName}批次/半成品`"
+                    :placeholder="sourcePickerPlaceholder"
                     filterable clearable
                     :filter-method="onBatchSelectFilter"
                     @visible-change="onBatchSelectVisibleChange"
@@ -1879,8 +1948,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </td>
               </template>
 
-              <!-- ---- 熟制 / 气调: multi-source expander cell ---- -->
-              <template v-else-if="isShuZhi || isQidiao">
+              <!-- ---- 多来源混批 expander cell ---- -->
+              <template v-else-if="isMultiSource">
                 <td class="sp-td">
                   <el-button
                     link size="small"
@@ -2030,12 +2099,12 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <!-- ============================================================
                  熟制: 混锅来源 + 锅数 expander row
                  ============================================================ -->
-            <tr v-if="isShuZhi && row.mixExpanded" :key="row.clientRowId + '-mix'"
+            <tr v-if="isMultiSource && !isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
                 :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
                   <div class="sp-expand-title">
-                    {{ upstreamProcessName }}来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
+                      {{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}
                     <el-button size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
                       + 来源批
                     </el-button>
@@ -2047,7 +2116,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-select
                       :model-value="srcSelectKey(src)"
                       @change="(v: string) => onUpstreamSelect(src, v)"
-                      :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                        :placeholder="sourcePickerPlaceholder" filterable clearable
                       :filter-method="onBatchSelectFilter"
                       @visible-change="onBatchSelectVisibleChange"
                       :loading="sfiLoading"
@@ -2113,12 +2182,12 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <!-- ============================================================
                  气调: 混锅来源 expander row (SP-G G3b)
                  ============================================================ -->
-            <tr v-if="isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
+            <tr v-if="isMultiSource && isQidiao && row.mixExpanded" :key="row.clientRowId + '-mix'"
                 :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
               <td :colspan="999" class="sp-td-expand">
                 <div class="sp-expand-section">
                   <div class="sp-expand-title">
-                    {{ upstreamProcessName }}来源批 (混锅) — {{ row.batchNumber || '(未保存行)' }}
+                      {{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}
                     <el-button size="small" :icon="Plus" style="margin-left:8px" @click="addUpstreamSource(row)">
                       + 来源批
                     </el-button>
@@ -2130,7 +2199,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-select
                       :model-value="srcSelectKey(src)"
                       @change="(v: string) => onUpstreamSelect(src, v)"
-                      :placeholder="`选${upstreamProcessName}批次`" filterable clearable
+                        :placeholder="sourcePickerPlaceholder" filterable clearable
                       :filter-method="onBatchSelectFilter"
                       @visible-change="onBatchSelectVisibleChange"
                       :loading="sfiLoading"
