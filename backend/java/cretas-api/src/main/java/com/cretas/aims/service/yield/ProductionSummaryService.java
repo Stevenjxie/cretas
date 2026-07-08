@@ -108,9 +108,9 @@ public class ProductionSummaryService {
         java.util.List<ProductionSummaryDTO.BatchLine> lines = items.stream()
                 .map(i -> ProductionSummaryDTO.BatchLine.builder()
                         .batchNumber(i.getBatchNumber()).processOrder(i.getProcessOrder())
-                        .processName(i.getProcessName()).produced(i.getProduced())
-                        .remaining(i.getRemaining()).status(i.getStatus())
-                        .cumulativeYieldRate(i.getCumulativeYieldRate()).build())
+                        .processName(i.getProcessName()).produced(summaryProduced(i))
+                        .remaining(summaryRemaining(i)).status(i.getStatus())
+                        .cumulativeYieldRate(summaryCumulativeYield(i, yieldDenominator)).build())
                 .toList();
 
         return ProductionSummaryDTO.builder()
@@ -131,4 +131,30 @@ public class ProductionSummaryService {
     }
 
     private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    private static boolean hasFinishedWeight(ProcessSheetInventoryItem item) {
+        return item != null
+                && "COMPLETED".equals(item.getStatus())
+                && item.getProductWeight() != null
+                && item.getProductWeight().signum() > 0;
+    }
+
+    private static BigDecimal summaryProduced(ProcessSheetInventoryItem item) {
+        return hasFinishedWeight(item) ? item.getProductWeight() : item.getProduced();
+    }
+
+    private static BigDecimal summaryRemaining(ProcessSheetInventoryItem item) {
+        return hasFinishedWeight(item) ? item.getProductWeight() : item.getRemaining();
+    }
+
+    private static BigDecimal summaryCumulativeYield(ProcessSheetInventoryItem item, BigDecimal yieldDenominator) {
+        if (!hasFinishedWeight(item)) {
+            return item == null ? null : item.getCumulativeYieldRate();
+        }
+        if (yieldDenominator == null || yieldDenominator.signum() <= 0) {
+            return null;
+        }
+        return item.getProductWeight().multiply(new BigDecimal("100"))
+                .divide(yieldDenominator, 4, java.math.RoundingMode.HALF_UP);
+    }
 }

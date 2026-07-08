@@ -125,6 +125,26 @@ class ProductionSummaryServiceTest {
     }
 
     @org.junit.jupiter.api.Test
+    void finishedBatchLine_usesProductWeightForSummaryInsteadOfBoxQuantity() {
+        when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
+                item(1, "ACTIVE", new java.math.BigDecimal("23.0"), new java.math.BigDecimal("21.0"),
+                        java.math.BigDecimal.ZERO, null),
+                item(2, "COMPLETED", null, new java.math.BigDecimal("120.0"), new java.math.BigDecimal("120.0"),
+                        new java.math.BigDecimal("521.7391"), new java.math.BigDecimal("10.8"))
+        ));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "P1"))
+                .thenReturn(java.util.List.of(clkB(new java.math.BigDecimal("120.0"))));
+
+        ProductionSummaryDTO dto = service.computeSummary("F006", "P1", false);
+
+        ProductionSummaryDTO.BatchLine finished = dto.getBatches().get(1);
+        assertThat(finished.getProduced()).isEqualByComparingTo("10.8");
+        assertThat(finished.getRemaining()).isEqualByComparingTo("10.8");
+        assertThat(finished.getCumulativeYieldRate()).isEqualByComparingTo("46.9565");
+        assertThat(dto.getRealYieldRate()).isEqualByComparingTo("46.96");
+    }
+
+    @org.junit.jupiter.api.Test
     void realYield_nullWhenProductWeightNotRecorded_andYieldNoteSet() {
         // COMPLETED 行无 productWeight → realYieldRate null, yieldNote 有提示
         when(processSheetService.getInventoryYieldCard("F006", "P1")).thenReturn(java.util.List.of(
