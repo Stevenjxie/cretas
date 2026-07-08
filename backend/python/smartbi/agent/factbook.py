@@ -223,14 +223,13 @@ class FactBook:
         sunny = buckets.get("晴天")
         rainy = buckets.get("雨天")
         lines.append("## 天气×营收（internal_seed_weather，相关≠因果）")
-        if sunny and rainy:
-            pct = weather.get("rain_vs_sunny_pct")
-            direction = "低" if pct is not None and pct < 0 else "高"
-            pct_text = abs(float(pct)) if pct is not None else None
+        pct = weather.get("rain_vs_sunny_pct")
+        if sunny and rainy and pct is not None:  # audit P3 F3: skip "%" line when pct is None
+            direction = "低" if pct < 0 else "高"
             lines.append(
                 f"- 雨天({int(rainy.get('n_days') or 0)}天)日均¥{_money(rainy.get('avg_rev'))} "
                 f"比晴天({int(sunny.get('n_days') or 0)}天)¥{_money(sunny.get('avg_rev'))} "
-                f"{direction}{pct_text}%"
+                f"{direction}{abs(float(pct))}%"
             )
         for b in weather.get("buckets") or []:
             sample = "；小样本" if b.get("small_sample") else ""
@@ -384,10 +383,22 @@ class FactBook:
         weather = self.weather or {}
         if weather and not weather.get("no_data"):
             buckets = {b.get("cond"): b for b in (weather.get("buckets") or [])}
-            for label, bucket_name in (("雨天日均营收", "雨天"), ("晴天日均营收", "晴天")):
-                v = _num((buckets.get(bucket_name) or {}).get("avg_rev"))
+            # audit P3 F2: ground every per-bucket number the renderer emits
+            # (avg_rev / 客单价 / 日均订单 for 晴/雨/暴雨) so FactReconciler can
+            # check them — previously only 雨天/晴天日均营收 were indexed and the
+            # LLM could misquote 暴雨日均 / 客单价 with no backstop.
+            for label, bucket_name in (("雨天日均营收", "雨天"), ("晴天日均营收", "晴天"),
+                                       ("暴雨日均营收", "暴雨")):
+                b = buckets.get(bucket_name) or {}
+                v = _num(b.get("avg_rev"))
                 if v is not None:
                     idx[label] = v
+                tk = _num(b.get("avg_ticket"))
+                if tk is not None:
+                    idx[f"{bucket_name}客单价"] = tk
+                bl = _num(b.get("avg_bills"))
+                if bl is not None:
+                    idx[f"{bucket_name}日均订单"] = bl
             v = _num(weather.get("rain_vs_sunny_pct"))
             if v is not None:
                 idx["天气影响率"] = v

@@ -70,6 +70,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date
@@ -266,6 +267,22 @@ def compute_weather_attribution(
     }
 
 
+_HISTORY_NUMBER_RE = re.compile(r"\d[\d,\.]*\s*(?:万|亿|千|%|％|元|块|折)?")
+
+
+def _redact_numbers(text: str) -> str:
+    """Strip Arabic numbers from injected history text (audit P2 #1).
+
+    指代 resolution (它/那家店/第三点) needs entity/topic words, NOT figures —
+    every number in the answer must come solely from the CURRENT FactBook. Left
+    un-redacted, the LLM could lift a history number that is ABSENT from the
+    current FactBook, which FactReconciler cannot catch (it flags contradiction,
+    not absence). Redacting converts the "FactBook is the sole number source"
+    invariant from a soft prompt-label into a structural guarantee.
+    """
+    return _HISTORY_NUMBER_RE.sub("[数值]", text or "")
+
+
 def _build_history_block(
     conversation_history: Optional[List[Dict[str, Any]]],
 ) -> str:
@@ -312,8 +329,8 @@ def _build_history_block(
     if not turns:
         return ""
     rendered = [
-        f"第{i}轮提问：{(t.get('q') or '').strip()}\n"
-        f"第{i}轮回答摘要：{(t.get('a_summary') or '').strip()}"
+        f"第{i}轮提问：{_redact_numbers(str(t.get('q') or '')).strip()}\n"
+        f"第{i}轮回答摘要：{_redact_numbers(str(t.get('a_summary') or '')).strip()}"
         for i, t in enumerate(turns, start=1)
     ]
     # Budget-cap by dropping OLDEST turns first — the most recent turn matters
@@ -601,9 +618,11 @@ class ComprehensiveSynthesisEngine:
             "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
+        # "哪天" dropped (audit P3 F1): "哪天营收最高" is a pure ranking question,
+        # not a weather question — it over-triggered the weather dimension.
         _wants_weather = any(k in ql for k in (
             "天气", "下雨", "雨天", "暴雨", "刮风", "下雪", "高温",
-            "为什么这几天", "为啥这段", "哪天",
+            "为什么这几天", "为啥这段",
         ))
         _has_revenue_context = any(k in ql for k in (
             "营收", "营业额", "经营", "财务", "客单价", "收入", "业绩",
