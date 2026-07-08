@@ -1,19 +1,38 @@
 -- Demo restaurant inventory-warning seed (RESTAURANT_OPS_INVENTORY_WARNING,
 -- 2026-07-08 restaurant intent tiered-routing follow-up: 库存预警 + 排班建议).
 --
--- DEMO_REST's dim_ingredient / dim_store are BOTH EMPTY (verified against
--- prod), so this seed is self-contained -- it inserts its own
--- dim_ingredient rows + thresholds + one snapshot day, rather than
--- depending on any pre-existing ETL data. No new tables here: reuses
--- fact_inventory_snapshot + dim_ingredient_threshold + dim_ingredient,
--- all already GRANTed to smartbi_user (V20260428_03__b_silver_grants.sql).
+-- Reuses fact_inventory_snapshot + dim_ingredient_threshold + dim_ingredient
+-- (no new tables), all already GRANTed to smartbi_user
+-- (V20260428_03__b_silver_grants.sql).
 --
--- Fixed ingredient_id space (90001-90012) avoids colliding with any future
--- ETL-populated ingredient_id sequence values for DEMO_REST. `id` columns
--- on the threshold/snapshot rows are also explicit (mirroring the
--- ingredient_id space) so ON CONFLICT (id) DO NOTHING is a real idempotency
--- guard even though store_id is NULL on every row (a NULL-inclusive natural
--- unique constraint would not reliably detect a re-run as a conflict).
+-- ⚠️ Collision-robust rewrite (2026-07-08): DEMO_REST's dim_ingredient is NOT
+-- empty in prod -- it already holds ~53 ETL rows, at least one of which
+-- (鸭血) shares a normalized_name with this seed. dim_ingredient carries
+-- UNIQUE (factory_id, normalized_name), and BOTH fact_inventory_snapshot and
+-- dim_ingredient_threshold have a FK on ingredient_id -> dim_ingredient. A
+-- naive `ON CONFLICT (ingredient_id) DO NOTHING` on dim_ingredient would skip
+-- the colliding row (its 9000x id never created) and then the threshold /
+-- snapshot rows referencing that 9000x ingredient_id would abort on the FK.
+--
+-- Fix:
+--   1. dim_ingredient uses no-target `ON CONFLICT DO NOTHING` -- skips on the
+--      PK dup OR the (factory_id, normalized_name) / (factory_id, source_pk)
+--      unique, so a name that already exists is left untouched.
+--   2. threshold + snapshot resolve ingredient_id BY normalized_name (JOIN
+--      dim_ingredient) instead of the hardcoded 9000x space, so a demo
+--      ingredient that already exists (e.g. 鸭血) attaches to its REAL
+--      ingredient_id. This is future-proof against any further ETL-populated
+--      name overlap, and satisfies both the FK and the resolver's INNER JOIN
+--      (fact_inventory_snapshot s JOIN dim_ingredient i ON i.ingredient_id =
+--      s.ingredient_id). The 11 non-colliding names are inserted by step 1
+--      above and are visible to the JOIN within the same migration txn.
+--
+-- Fixed ingredient_id space (90001-90012) for the newly-inserted rows avoids
+-- colliding with any future ETL-populated ingredient_id sequence values for
+-- DEMO_REST. The threshold / snapshot `id` PKs (also 9000x) make
+-- `ON CONFLICT (id) DO NOTHING` a real idempotency guard even though store_id
+-- is NULL on every row (a NULL-inclusive natural unique constraint would not
+-- reliably detect a re-run as a conflict).
 --
 -- snapshot_date is a FIXED date (2026-07-07), not CURRENT_DATE -- the
 -- resolver reads MAX(snapshot_date) per factory, so a fixed date keeps the
@@ -41,38 +60,46 @@ VALUES
     (90010, 'DEMO_REST', 'DEMO_INV_010', '香菜',       '香菜',       '蔬菜',   'INV-010', 'kg', 9.00,  TRUE, NOW(), NOW()),
     (90011, 'DEMO_REST', 'DEMO_INV_011', '花椒油',     '花椒油',     '调料',   'INV-011', 'L',  28.00, TRUE, NOW(), NOW()),
     (90012, 'DEMO_REST', 'DEMO_INV_012', '干辣椒',     '干辣椒',     '调料',   'INV-012', 'kg', 22.00, TRUE, NOW(), NOW())
-ON CONFLICT (ingredient_id) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 INSERT INTO dim_ingredient_threshold
     (id, factory_id, ingredient_id, store_id, safe_stock_qty, reorder_point, max_stock_qty, unit, set_by, created_at, updated_at)
-VALUES
-    (90001, 'DEMO_REST', 90001, NULL, 50, 20, 100, '斤', 'demo-seed', NOW(), NOW()),
-    (90002, 'DEMO_REST', 90002, NULL, 30, 10, 80,  'kg', 'demo-seed', NOW(), NOW()),
-    (90003, 'DEMO_REST', 90003, NULL, 40, 15, 90,  'kg', 'demo-seed', NOW(), NOW()),
-    (90004, 'DEMO_REST', 90004, NULL, 25, 10, 60,  'kg', 'demo-seed', NOW(), NOW()),
-    (90005, 'DEMO_REST', 90005, NULL, 35, 15, 70,  'kg', 'demo-seed', NOW(), NOW()),
-    (90006, 'DEMO_REST', 90006, NULL, 30, 12, 60,  'kg', 'demo-seed', NOW(), NOW()),
-    (90007, 'DEMO_REST', 90007, NULL, 50, 20, 100, 'kg', 'demo-seed', NOW(), NOW()),
-    (90008, 'DEMO_REST', 90008, NULL, 40, 15, 90,  'kg', 'demo-seed', NOW(), NOW()),
-    (90009, 'DEMO_REST', 90009, NULL, 15, 5,  40,  'kg', 'demo-seed', NOW(), NOW()),
-    (90010, 'DEMO_REST', 90010, NULL, 10, 3,  30,  'kg', 'demo-seed', NOW(), NOW()),
-    (90011, 'DEMO_REST', 90011, NULL, 20, 8,  50,  'L',  'demo-seed', NOW(), NOW()),
-    (90012, 'DEMO_REST', 90012, NULL, 25, 10, 60,  'kg', 'demo-seed', NOW(), NOW())
+SELECT v.id, 'DEMO_REST', di.ingredient_id, NULL, v.safe, v.reorder, v.maxq, v.unit, 'demo-seed', NOW(), NOW()
+FROM (VALUES
+    (90001, '活鱼',       50, 20, 100, '斤'),
+    (90002, '青花椒底料', 30, 10, 80,  'kg'),
+    (90003, '黄豆芽',     40, 15, 90,  'kg'),
+    (90004, '嫩豆花',     25, 10, 60,  'kg'),
+    (90005, '毛肚',       35, 15, 70,  'kg'),
+    (90006, '鸭血',       30, 12, 60,  'kg'),
+    (90007, '宽粉',       50, 20, 100, 'kg'),
+    (90008, '藕片',       40, 15, 90,  'kg'),
+    (90009, '木耳',       15, 5,  40,  'kg'),
+    (90010, '香菜',       10, 3,  30,  'kg'),
+    (90011, '花椒油',     20, 8,  50,  'L'),
+    (90012, '干辣椒',     25, 10, 60,  'kg')
+) AS v(id, nname, safe, reorder, maxq, unit)
+JOIN dim_ingredient di
+  ON di.factory_id = 'DEMO_REST' AND di.normalized_name = v.nname
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO fact_inventory_snapshot
     (id, factory_id, upload_id, ingredient_id, store_id, snapshot_date, stock_qty, unit, safe_stock_qty, reorder_point, created_at)
-VALUES
-    (90001, 'DEMO_REST', NULL, 90001, NULL, '2026-07-07', 8,  '斤', 50, 20, NOW()),
-    (90002, 'DEMO_REST', NULL, 90002, NULL, '2026-07-07', 45, 'kg', 30, 10, NOW()),
-    (90003, 'DEMO_REST', NULL, 90003, NULL, '2026-07-07', 5,  'kg', 40, 15, NOW()),
-    (90004, 'DEMO_REST', NULL, 90004, NULL, '2026-07-07', 3,  'kg', 25, 10, NOW()),
-    (90005, 'DEMO_REST', NULL, 90005, NULL, '2026-07-07', 20, 'kg', 35, 15, NOW()),
-    (90006, 'DEMO_REST', NULL, 90006, NULL, '2026-07-07', 18, 'kg', 30, 12, NOW()),
-    (90007, 'DEMO_REST', NULL, 90007, NULL, '2026-07-07', 30, 'kg', 50, 20, NOW()),
-    (90008, 'DEMO_REST', NULL, 90008, NULL, '2026-07-07', 25, 'kg', 40, 15, NOW()),
-    (90009, 'DEMO_REST', NULL, 90009, NULL, '2026-07-07', 20, 'kg', 15, 5,  NOW()),
-    (90010, 'DEMO_REST', NULL, 90010, NULL, '2026-07-07', 15, 'kg', 10, 3,  NOW()),
-    (90011, 'DEMO_REST', NULL, 90011, NULL, '2026-07-07', 25, 'L',  20, 8,  NOW()),
-    (90012, 'DEMO_REST', NULL, 90012, NULL, '2026-07-07', 40, 'kg', 25, 10, NOW())
+SELECT v.id, 'DEMO_REST', NULL, di.ingredient_id, NULL, DATE '2026-07-07', v.stock, v.unit, v.safe, v.reorder, NOW()
+FROM (VALUES
+    (90001, '活鱼',       8,  '斤', 50, 20),
+    (90002, '青花椒底料', 45, 'kg', 30, 10),
+    (90003, '黄豆芽',     5,  'kg', 40, 15),
+    (90004, '嫩豆花',     3,  'kg', 25, 10),
+    (90005, '毛肚',       20, 'kg', 35, 15),
+    (90006, '鸭血',       18, 'kg', 30, 12),
+    (90007, '宽粉',       30, 'kg', 50, 20),
+    (90008, '藕片',       25, 'kg', 40, 15),
+    (90009, '木耳',       20, 'kg', 15, 5),
+    (90010, '香菜',       15, 'kg', 10, 3),
+    (90011, '花椒油',     25, 'L',  20, 8),
+    (90012, '干辣椒',     40, 'kg', 25, 10)
+) AS v(id, nname, stock, unit, safe, reorder)
+JOIN dim_ingredient di
+  ON di.factory_id = 'DEMO_REST' AND di.normalized_name = v.nname
 ON CONFLICT (id) DO NOTHING;
