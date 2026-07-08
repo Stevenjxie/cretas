@@ -149,6 +149,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         List<String> warnings = new ArrayList<>();
 
+        assertFinishedGoodsSourceAllowed(factoryId, req);
+
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
 
@@ -249,6 +251,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // SP-G P3: 捕获变更前 payload (在任何 updateRowInPlace 之前), 供 UPDATE diff 审计。
         ProcessSheetRowRequest beforeReq = tryDeserialize(existing.getRowPayload());
+
+        assertFinishedGoodsSourceAllowed(factoryId, req);
 
         // 与 create 同的 factory-scoped 上游/原料边解析 (🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
@@ -1559,6 +1563,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private boolean hasFinishedGoodsUpstream(ProcessSheetRowRequest req) {
         return req.getUpstreamSources() != null
                 && req.getUpstreamSources().stream().anyMatch(ProcessSheetRowRequest.UpstreamRef::isFinishedGoods);
+    }
+
+    private void assertFinishedGoodsSourceAllowed(String factoryId, ProcessSheetRowRequest req) {
+        if (!hasFinishedGoodsUpstream(req)) {
+            return;
+        }
+        boolean allowed = productWorkProcessRepo
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(factoryId, req.getProductTypeId(), req.getProcessOrder())
+                .map(ProductWorkProcess::getAllowFinishedGoodsSource)
+                .orElse(Boolean.FALSE);
+        if (!allowed) {
+            throw new BusinessException(409, "该工序未开启成品作来源, 不能选择成品库存批次投料")
+                    .withCode("FINISHED_GOODS_SOURCE_NOT_ALLOWED")
+                    .withHint("请先到产品-工序配置开启“成品源”, 再录入成品库存来源批")
+                    .withHintTarget(req.getProcessCode());
+        }
     }
 
     /**

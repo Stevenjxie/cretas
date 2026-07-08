@@ -52,6 +52,7 @@ type ProcEntry = {
   label: string;
   allowInjection: boolean;
   allowMultipleUpstreamSources: boolean;
+  allowFinishedGoodsSource: boolean;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -85,9 +86,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true, allowFinishedGoodsSource: false },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -163,6 +164,7 @@ async function resolveProcesses() {
           label: it.processName,
           allowInjection: it.allowSemiFinishedInjection === true,
           allowMultipleUpstreamSources: it.allowMultipleUpstreamSources === true,
+          allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -355,6 +357,7 @@ defineExpose({ hasUnsavedRows });
             :process-label="proc.label"
             :allow-semi-finished-injection="proc.allowInjection"
             :allow-multiple-upstream-sources="proc.allowMultipleUpstreamSources"
+            :allow-finished-goods-source="proc.allowFinishedGoodsSource"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
