@@ -2590,6 +2590,7 @@ function handleAiFill(params: TableRow) {
             <li><strong>核对结单</strong>：PC 文员逐单核对实际产量、原料/半成品领用和工时；缺料信息会在列表和弹窗里作为参考值显示。</li>
             <li><strong>APP 报工 / 转批次</strong>：需要 APP 逐道报工时使用，系统会自动建批次 + 工序任务；原料不足只提示缺口，不阻断转批次。</li>
             <li><strong>PC 结单</strong>：不需要逐道报工的计划，也必须由文员在「核对结单」里录入实际产量、实际领用和人效后，才算完成。</li>
+            <li><strong>补录时效</strong>：今天/昨天可补，前天为极限，大前天及更早禁止补录；超出窗口请走审批或联系管理员处理。</li>
           </ul>
           <strong>下一步</strong>：现场用 APP 逐工序上报；文员用「核对结单」把实际数量、领用和工时闭环。
           <span style="color: var(--text-color-secondary, #909399);">
@@ -3441,6 +3442,25 @@ function handleAiFill(params: TableRow) {
             同一生产计划可以同时产成品和半成品；提交结单会按实际领用扣减原料/半成品，成品需仓库确认实收后才入库。
           </div>
         </el-form-item>
+        <el-alert
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+        >
+          <template #title>
+            <div class="settlement-loss-guide">
+              <strong>生产报损/损耗留证：</strong>
+              现场发生损耗时，不要直接改领用数量抵消。请到
+              <el-link
+                type="primary"
+                underline="hover"
+                @click="router.push({ path: '/warehouse/wastage-reports', query: { reason: 'PRODUCTION_WASTE', source: 'production-settlement' } })"
+              >报损登记</el-link>
+              报损原因选择“生产损耗”，拍照或附件留证；审批后再按缺料结果补调拨。
+            </div>
+          </template>
+        </el-alert>
 
         <el-divider content-position="left">实际领用核对</el-divider>
         <el-alert
@@ -3522,6 +3542,9 @@ function handleAiFill(params: TableRow) {
           <span>半成品实际领用</span>
           <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">增加半成品行</el-button>
         </div>
+        <div class="settlement-help">
+          选择半成品后会持续显示当前可用量；本行最多领用当前可用数量，超出可用量会被拦截。
+        </div>
         <div v-if="wipList.length === 0 && !wipListLoading" class="settlement-empty">
           暂无可用半成品库存；如果本计划无需半成品领用，可以不新增半成品行。
         </div>
@@ -3557,6 +3580,22 @@ function handleAiFill(params: TableRow) {
             class="consumption-note"
           />
           <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
+          <div
+            v-if="selectedWipForSettlement(line.semiFinishedInventoryId)"
+            class="settlement-wip-boundary"
+          >
+            当前可用
+            <strong>
+              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
+              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.unit || '' }}
+            </strong>
+            ，本行最多领用
+            <strong>
+              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
+              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.unit || '' }}
+            </strong>
+            ；超出可用量会被拦截。
+          </div>
         </div>
 
         <el-divider content-position="left">
@@ -4429,6 +4468,12 @@ function handleAiFill(params: TableRow) {
   line-height: 1.5;
 }
 
+.settlement-loss-guide {
+  color: var(--text-color-regular, #606266);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .settlement-line-header {
   display: flex;
   align-items: center;
@@ -4456,6 +4501,19 @@ function handleAiFill(params: TableRow) {
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.settlement-wip-boundary {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+  color: var(--text-color-secondary, #909399);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settlement-wip-boundary strong {
+  color: var(--text-color-primary, #303133);
+  font-weight: 600;
 }
 
 .consumption-select,
