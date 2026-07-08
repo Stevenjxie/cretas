@@ -47,6 +47,23 @@ backfills any deviating number and flags fabricated names.
 
 This template uses float() (per python-java-port: not byte-strict). Money rendered
 via orchestrator._fmt_money.
+
+⛔ Numeric attribution stays deterministic — the LLM never computes it (2026-07-08
+strategy amendment, Fable review)
+-----------------------------------------------------------------------------
+"LLMCompiler 泛化" here means orchestration + narration (plan → parallel fetch →
+grounded rephrasing), NOT the decomposition math. Any "哪个X拖后腿，差多少 / 是
+因子A还是因子B" answer's numbers MUST come from a deterministic producer (e.g.
+factbook.compute_store_attribution), never from the LLM reasoning over raw facts.
+Reason: FactReconciler is 宁漏不错 — it reconciles only the ~20 exact-named facts
+in FactBook.to_facts_index (exact substring + immediately-following number), and
+_reconcile_one_fact deliberately SKIPS any sentence containing 店/馆/门店, which
+attribution prose almost always does. So an LLM-computed attribution number is
+invisible to the guard and can be plausibly-scaled but arithmetically wrong.
+The LLM layer is legitimate only for the QUALITATIVE cross-dim tail ("为什么差评
+变多") where no exact identity exists and the answer is narrative. When adding an
+attribution dimension: write a deterministic fact-producer, do NOT ask the LLM to
+compute.
 """
 from __future__ import annotations
 

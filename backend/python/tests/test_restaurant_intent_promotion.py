@@ -366,3 +366,34 @@ async def test_populate_restaurant_ops_merges_ledger(tmp_path, monkeypatch):
     assert "老问法" in merged
     assert "新问法" in merged
     assert summary["RESTAURANT_OPS_SALES_SUMMARY"] == 2
+
+
+# ─── question-family classification (2026-07-08 evidence-based backlog) ─────
+from smartbi.gold.restaurant_intent_promotion import (  # noqa: E402
+    classify_question_family,
+    family_breakdown,
+)
+
+
+class TestQuestionFamily:
+    def test_attribution_cues(self):
+        for q in ["哪家店拖后腿，是客流还是客单价", "为什么这个月毛利低了",
+                  "哪个菜拖累了整体毛利", "差评变多的原因"]:
+            assert classify_question_family(q) == "attribution", q
+
+    def test_write_cues(self):
+        for q in ["帮我建个领料单", "录入今天的盘点", "新建一张调拨单"]:
+            assert classify_question_family(q) == "write", q
+
+    def test_query_default(self):
+        for q in ["这个月营收多少", "哪家店订单最多", "本周销量排行", ""]:
+            assert classify_question_family(q) == "query", q
+
+    def test_family_breakdown_counts(self):
+        cands = [
+            {"query": "哪家店拖后腿"}, {"query": "为什么亏钱"},
+            {"query": "帮我建个领料单"}, {"query": "本月营收多少"},
+            {"family": "query", "query": "x"},  # pre-tagged honored
+        ]
+        b = family_breakdown(cands)
+        assert b == {"attribution": 2, "write": 1, "query": 2}
