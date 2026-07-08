@@ -74,6 +74,7 @@ from smartbi.agent.factbook import (
     NOTE_LOW_STAR_SMALL_SAMPLE,
     NOTE_REVIEW_ABSENT_NEXTACTION,
     NOTE_VIP_SIGNAL,
+    compute_store_attribution,
     factbook_to_dataframe,
 )
 from smartbi.agent.narrative_cache import (
@@ -92,6 +93,7 @@ from smartbi.gold import (
     channel_breakdown,
     discount_breakdown,
     finance_summary,
+    store_comparison,
     review_dish_issues,
     review_good_tags,
     review_platform,
@@ -277,13 +279,22 @@ class ComprehensiveSynthesisEngine:
         1-sentence LLM classifier at THIS site only.
         """
         ql = (q or "").lower()
-        plan = {"review": False, "finance": False, "sales": False, "cross": []}
+        plan = {"review": False, "finance": False, "sales": False,
+                "attribution": False, "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
         if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
             plan["sales"] = True
+        # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
+        # a store reference AND either a lag cue or a traffic/ticket cue, so a
+        # generic "门店营收" question stays on the plain finance path.
+        _wants_store = any(k in ql for k in ("门店", "分店", "店铺", "哪家", "哪个店", "各店", "分店"))
+        _wants_lag = any(k in ql for k in ("拖后腿", "垫底", "最差", "掉队", "落后", "差在哪", "拉胯", "最弱"))
+        _wants_traffic_ticket = any(k in ql for k in ("客流", "客单价", "人均", "单量", "来客", "进店"))
+        if _wants_store and (_wants_lag or _wants_traffic_ticket):
+            plan["attribution"] = True
         # Cross relations.
         if "vip" in ql and any(k in ql for k in ("菜品", "门店", "评价", "口味")):
             plan["cross"].append("vip_x_rating")
@@ -294,7 +305,9 @@ class ComprehensiveSynthesisEngine:
                 any(k in ql for k in ("评分", "评价", "口碑")):
             plan["cross"].append("platform_x_rating")
         # Fallback: holistic question with no explicit dimension → open all.
-        if not (plan["review"] or plan["finance"] or plan["sales"]):
+        # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
+        # does NOT trip the open-all fallback.
+        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["attribution"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -342,6 +355,12 @@ class ComprehensiveSynthesisEngine:
         if plan.get("finance"):
             tasks["finance"] = _safe(
                 finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
+            )
+        if plan.get("attribution"):
+            # store_comparison returns ALL stores (no top-N) — needed for the
+            # chain benchmark + laggard, which finance_summary's top-5 can't give.
+            tasks["attribution"] = _safe(
+                store_comparison(self._pool, factory_id, date_range), "attribution",
             )
         if plan.get("sales"):
             tasks["top_products"] = _safe(
@@ -397,6 +416,21 @@ class ComprehensiveSynthesisEngine:
                 fb.finance = fin
             else:
                 plan["finance"] = False
+
+        # ---- assemble attribution (客流×客单价 拖后腿拆解) ----
+        if plan.get("attribution"):
+            comp = results.get("attribution") or {}
+            att = compute_store_attribution(comp.get("stores") or [])
+            if att and not att.get("no_data"):
+                fb.attribution = att
+                notes.append(
+                    "门店拖后腿归因为确定性拆解：营收=客流×客单价，"
+                    "ΔR 拆成客流效应+客单价效应；主因取较大负向效应。"
+                )
+            else:
+                # Not enough stores to compare → drop this dimension (no dead-end;
+                # finance/other dims, if planned, still answer).
+                plan["attribution"] = False
 
         # ---- assemble sales ----
         if plan.get("sales"):

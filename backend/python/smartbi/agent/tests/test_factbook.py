@@ -180,3 +180,77 @@ class TestDataframe:
     def test_dataframe_empty_factbook(self):
         df = factbook_to_dataframe(FactBook())
         assert df.empty
+
+
+# --------------------------------------------------------------------------
+# compute_store_attribution — 客流×客单价 拖后腿拆解 (2026-07-08)
+# --------------------------------------------------------------------------
+from smartbi.agent.factbook import compute_store_attribution  # noqa: E402
+
+
+def _stores(*triples):
+    """triples: (name, revenue, orderCount) — avgTicket derived."""
+    return [
+        {"name": n, "revenue": float(r), "orderCount": int(b),
+         "avgTicket": (r / b if b else 0.0)}
+        for (n, r, b) in triples
+    ]
+
+
+class TestStoreAttribution:
+    def test_laggard_is_below_benchmark_and_cause_is_ticket(self):
+        # B: normal traffic, low ticket → laggard, cause 客单价.
+        att = compute_store_attribution(_stores(
+            ("A", 1_000_000, 8000),   # ticket 125
+            ("B", 600_000, 6000),     # ticket 100  ← low ticket
+            ("C", 1_400_000, 7000),   # ticket 200
+        ))
+        assert att["laggard"]["store_name"] == "B"
+        assert att["laggard"]["delta_revenue"] < 0      # genuinely below peers
+        assert att["primary_cause"] == "客单价"
+        # decomposition sign: ticket effect is the dominant negative
+        assert att["laggard"]["ticket_effect"] < att["laggard"]["traffic_effect"]
+
+    def test_cause_is_traffic_when_traffic_drives_the_gap(self):
+        # B: normal ticket, low traffic → cause 客流.
+        att = compute_store_attribution(_stores(
+            ("A", 1_000_000, 8000),   # ticket 125
+            ("B", 500_000, 4000),     # ticket 125, but half the traffic
+            ("C", 1_100_000, 8800),   # ticket 125
+        ))
+        assert att["laggard"]["store_name"] == "B"
+        assert att["primary_cause"] == "客流"
+
+    def test_low_traffic_anomaly_excluded_and_benchmark_consistent(self):
+        # Z has near-zero traffic → excluded from the peer comparison, reported
+        # separately. Without exclusion the benchmark would be dragged down and
+        # the laggard could show a POSITIVE delta (the bug this guards).
+        att = compute_store_attribution(_stores(
+            ("A", 1_000_000, 8000),
+            ("B", 900_000, 7000),
+            ("C", 1_100_000, 7500),
+            ("Z", 5_000, 30),         # anomaly
+        ))
+        assert "Z" in att["anomalies"]
+        assert all(s["store_name"] != "Z" for s in att["stores"])
+        assert att["n_stores"] == 3
+        assert att["laggard"]["delta_revenue"] < 0
+
+    def test_needs_two_comparable_stores(self):
+        assert compute_store_attribution([]).get("no_data")
+        assert compute_store_attribution(_stores(("A", 100, 1))).get("no_data")
+
+    def test_render_and_index_and_names(self):
+        att = compute_store_attribution(_stores(
+            ("甲店", 1_000_000, 8000),
+            ("乙店", 600_000, 6000),
+            ("丙店", 1_400_000, 7000),
+        ))
+        fb = FactBook(period="2025", attribution=att)
+        text = fb.to_prompt_text()
+        assert "门店拖后腿归因" in text
+        assert "乙店" in text and "客流效应" in text and "客单价效应" in text
+        idx = fb.to_facts_index()
+        for k in ("门店平均客流", "全链客单价", "客流效应", "客单价效应", "拖后腿门店营收"):
+            assert k in idx
+        assert "乙店" in fb.known_store_names()  # reconciler + redactor see it
