@@ -95,6 +95,8 @@ export interface ProductWorkProcess {
   reportingRequired?: boolean;
   /** 是否允许本道工序从多个上游批次混批投料。 */
   allowMultipleUpstreamSources?: boolean;
+  /** 是否允许本道工序选择成品库存批次作为投料来源。 */
+  allowFinishedGoodsSource?: boolean;
   /** 后端 join 提供的只读字段 */
   processName?: string;
   processCategory?: string;
@@ -116,6 +118,8 @@ export interface CreateProductWorkProcessRequest {
   reportingRequired?: boolean;
   /** 是否允许本道工序从多个上游批次混批投料。 */
   allowMultipleUpstreamSources?: boolean;
+  /** 是否允许本道工序选择成品库存批次作为投料来源。 */
+  allowFinishedGoodsSource?: boolean;
 }
 
 /**

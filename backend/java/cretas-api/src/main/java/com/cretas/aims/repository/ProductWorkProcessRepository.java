@@ -13,6 +13,9 @@ public interface ProductWorkProcessRepository extends JpaRepository<ProductWorkP
     List<ProductWorkProcess> findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
             String factoryId, String productTypeId);
 
+    Optional<ProductWorkProcess> findByFactoryIdAndProductTypeIdAndProcessOrder(
+            String factoryId, String productTypeId, Integer processOrder);
+
     Optional<ProductWorkProcess> findByFactoryIdAndId(String factoryId, Long id);
 
     boolean existsByFactoryIdAndProductTypeIdAndWorkProcessId(

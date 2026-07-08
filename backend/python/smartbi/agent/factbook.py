@@ -194,6 +194,13 @@ class FactBook:
         day_count = fin.get("day_count") or 0
         lines.append(f"- 营业日 {int(day_count):,} 天，门店 {int(store_count):,} 家")
         lines.append(f"- 总营业额（应收口径）¥{_money(revenue)}；订单数 {int(bills):,}")
+        if fin.get("net_profit") is not None:
+            lines.append(
+                f"- 总成本 ¥{_money(fin.get('total_cost'))}"
+                f"（食材¥{_money(fin.get('material_cost'))}/人工¥{_money(fin.get('labor_cost'))}"
+                f"/其他¥{_money(fin.get('overhead_cost'))}）；"
+                f"净利润 ¥{_money(fin.get('net_profit'))}，净利率 {fin.get('net_margin_pct')}%"
+            )
         if avg_bill is not None:
             lines.append(f"- 客单价 ¥{_money(avg_bill)}")
         stores = fin.get("top_stores") or []
@@ -314,7 +321,9 @@ class FactBook:
 
         fin = self.finance or {}
         for label, key in (("总营业额", "total_revenue"), ("订单数", "bill_count"),
-                           ("客单价", "avg_bill_value"), ("门店数", "store_count")):
+                           ("客单价", "avg_bill_value"), ("门店数", "store_count"),
+                           ("总成本", "total_cost"), ("净利润", "net_profit"),
+                           ("净利率", "net_margin_pct"), ("食材成本", "material_cost")):
             v = _num(fin.get(key))
             if v is not None:
                 idx[label] = v

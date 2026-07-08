@@ -120,7 +120,8 @@ interface PendingReporting { type: 'reporting'; serverId: number; reportingRequi
 interface PendingInjection { type: 'injection'; serverId: number; allowSemiFinishedInjection: boolean; productTypeId: string; workProcessId: string }
 /** 多上游混批切换 pending op (server item only; draft-only items send flag on POST) */
 interface PendingMultiSource { type: 'multiSource'; serverId: number; allowMultipleUpstreamSources: boolean; productTypeId: string; workProcessId: string }
-type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting | PendingInjection | PendingMultiSource;
+interface PendingFinishedGoodsSource { type: 'finishedGoodsSource'; serverId: number; allowFinishedGoodsSource: boolean; productTypeId: string; workProcessId: string }
+type PendingOp = PendingAdd | PendingRemove | PendingSort | PendingResponsible | PendingReporting | PendingInjection | PendingMultiSource | PendingFinishedGoodsSource;
 const pendingOps = ref<PendingOp[]>([]);
 const recommendationNotice = ref('');
 
@@ -178,6 +179,7 @@ async function handleSave() {
     const toReporting = pendingOps.value.filter((o): o is PendingReporting => o.type === 'reporting');
     const toInjection = pendingOps.value.filter((o): o is PendingInjection => o.type === 'injection');
     const toMultiSource = pendingOps.value.filter((o): o is PendingMultiSource => o.type === 'multiSource');
+    const toFinishedGoodsSource = pendingOps.value.filter((o): o is PendingFinishedGoodsSource => o.type === 'finishedGoodsSource');
     const needsSort = pendingOps.value.some(o =>
       o.type === 'sort' || o.type === 'add' || o.type === 'remove'
     );
@@ -198,6 +200,7 @@ async function handleSave() {
       const allowSemiFinishedInjection = draftItem?.allowSemiFinishedInjection;
       // 多上游混批: 草稿态工序若开启混批, 随 create 一起发 (省略 → 后端默认 false 单批)
       const allowMultipleUpstreamSources = draftItem?.allowMultipleUpstreamSources;
+      const allowFinishedGoodsSource = draftItem?.allowFinishedGoodsSource;
       await createProductWorkProcess(factoryId.value, {
         productTypeId: selectedProductId.value,
         workProcessId: op.wp.id,
@@ -205,6 +208,7 @@ async function handleSave() {
         ...(reportingRequired === false ? { reportingRequired: false } : {}),
         ...(allowSemiFinishedInjection === true ? { allowSemiFinishedInjection: true } : {}),
         ...(allowMultipleUpstreamSources === true ? { allowMultipleUpstreamSources: true } : {}),
+        ...(allowFinishedGoodsSource === true ? { allowFinishedGoodsSource: true } : {}),
         ...(assigneeWorkerIds && assigneeWorkerIds.length > 0
           ? { assigneeWorkerIds }
           : responsibleWorkerId != null ? { responsibleWorkerId } : {}),
@@ -261,6 +265,16 @@ async function handleSave() {
         productTypeId: freshItem.productTypeId,
         workProcessId: freshItem.workProcessId,
         allowMultipleUpstreamSources: op.allowMultipleUpstreamSources,
+      });
+    }
+
+    for (const op of toFinishedGoodsSource) {
+      const freshItem = freshByWpId.get(op.workProcessId);
+      if (!freshItem) continue;
+      await updateProductWorkProcess(factoryId.value, freshItem.id, {
+        productTypeId: freshItem.productTypeId,
+        workProcessId: freshItem.workProcessId,
+        allowFinishedGoodsSource: op.allowFinishedGoodsSource,
       });
     }
 
@@ -794,6 +808,27 @@ function handleMultipleUpstreamSourcesChange(item: DraftItem, value: boolean) {
 // Move up/down (fallback buttons, C1)
 // ─────────────────────────────────────────────
 
+function handleFinishedGoodsSourceChange(item: DraftItem, value: boolean) {
+  const idx = draftLinked.value.findIndex(d => d.draftKey === item.draftKey);
+  if (idx !== -1) {
+    draftLinked.value[idx] = { ...draftLinked.value[idx], allowFinishedGoodsSource: value };
+  }
+  if (!item.isPending) {
+    pendingOps.value = pendingOps.value.filter(
+      o => !(o.type === 'finishedGoodsSource' && o.serverId === item.id)
+    );
+    markDirty({
+      type: 'finishedGoodsSource',
+      serverId: item.id,
+      allowFinishedGoodsSource: value,
+      productTypeId: item.productTypeId,
+      workProcessId: item.workProcessId,
+    });
+  } else {
+    if (!dirty.value) dirty.value = true;
+  }
+}
+
 function handleMoveUp(index: number) {
   if (index <= 0) return;
   const items = [...draftLinked.value];
@@ -1180,8 +1215,28 @@ async function saveCustomFieldConfig() {
                       <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
-                  <el-tag v-else-if="item.allowMultipleUpstreamSources === true" size="small" type="success">混批</el-tag>
-                  <!-- G2 自定义字段: 已配置且至少 1 个启用项时显示提示 (Rule 1: 预先显示边界) -->
+                  <!-- 5988 成品源: 开启后报工来源可额外选择同产品族成品库存 -->
+                  <span class="step-injection" v-if="canWrite">
+                    <el-switch
+                      :model-value="item.allowFinishedGoodsSource === true"
+                      size="small"
+                      inline-prompt
+                      active-text="成品源"
+                      inactive-text="禁成品"
+                      @change="(val: boolean) => handleFinishedGoodsSourceChange(item, val)"
+                    />
+                    <el-tooltip
+                      content="开启后，报工来源批次可额外选择同产品族成品库存；默认关闭，避免把成品仓库存混入普通生产来源。"
+                      placement="top"
+                    >
+                      <el-icon class="reporting-hint"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                  <template v-else>
+                    <el-tag v-if="item.allowMultipleUpstreamSources === true" size="small" type="success">混批</el-tag>
+                    <el-tag v-if="item.allowFinishedGoodsSource === true" size="small" type="warning">成品源</el-tag>
+                  </template>
+                  <!-- G2 自定义字段: 已配置且至少 1 个启用项时显示提示 (Rule 1: 预先显示边界); 与读写模式无关, 始终展示汇总 -->
                   <el-tag
                     v-if="Array.isArray(item.customFieldSchema) && item.customFieldSchema.some((f: any) => f.enabled !== false)"
                     size="small" type="success">

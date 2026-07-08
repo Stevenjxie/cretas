@@ -236,6 +236,29 @@ _SCALE_WORDS: List[Tuple[str, float]] = [
 _DISH_NAME_MISLABELS = ["招牌菜", "招牌菜品", "明星菜", "这道菜", "该菜品", "畅销菜名"]
 
 _ANNOT_TEMPLATE = "（数据核对：实际 {true}）"
+
+
+def _pos_inside_longer(text: str, pos: int, name_len: int, longer_names) -> bool:
+    """True if text[pos:pos+name_len] falls entirely within an occurrence of a
+    longer, more-specific fact name.
+
+    F3 fix: fact names collide as substrings — 平均星级 ⊂ VIP平均星级, and
+    VIP平均星级 ⊂ 非VIP平均星级. Without this guard the broader fact's value
+    re-matches the number sitting inside the more-specific name and "corrects"
+    it falsely (VIP 4.50 → overall 4.79; 非VIP 4.83 → VIP 4.50). The number after
+    such an occurrence belongs to the longer fact, so the shorter fact must skip it.
+    """
+    end = pos + name_len
+    for longer in longer_names:
+        start = 0
+        while True:
+            lpos = text.find(longer, start)
+            if lpos < 0:
+                break
+            if lpos <= pos and end <= lpos + len(longer):
+                return True
+            start = lpos + 1
+    return False
 _ANNOT_FABRICATED = "[未在数据中找到该名称]"
 _ANNOT_DISH_LABEL = "（提示：上述为口味/品质标签，非菜名）"
 
@@ -336,7 +359,12 @@ class FactReconciler:
         #    Longest fact name first so "VIP平均星级" matches before "平均星级".
         for name in sorted(facts.keys(), key=len, reverse=True):
             true_v = facts[name]
-            out, hit, dev = self._reconcile_one_fact(out, name, true_v, tol)
+            # Longer fact keys that contain this name as a substring (e.g.
+            # "VIP平均星级" ⊃ "平均星级"). A number inside such a longer name is the
+            # more-specific fact's claim; reconciling it here is a false correction.
+            longer_names = [n for n in facts if n != name and name in n]
+            out, hit, dev = self._reconcile_one_fact(
+                out, name, true_v, tol, longer_names=longer_names)
             if hit and dev is not None:
                 violations.append(
                     f"{name}: LLM 偏离真值 (实际 {self._fmt(true_v)}, 偏差 {dev * 100:.0f}%)"
@@ -384,7 +412,8 @@ class FactReconciler:
     # ---------------- internals ----------------
 
     def _reconcile_one_fact(
-        self, text: str, name: str, true_v: float, tol: float
+        self, text: str, name: str, true_v: float, tol: float,
+        *, longer_names: Iterable[str] = (),
     ) -> Tuple[str, bool, Optional[float]]:
         """If ``name`` appears in text followed (within window) by a number that
         deviates from ``true_v`` by > tol, annotate it. Returns
@@ -407,6 +436,12 @@ class FactReconciler:
             pos = result.find(name, search_from)
             if pos < 0:
                 break
+            # F3: skip an occurrence sitting INSIDE a longer, more-specific fact
+            # name (平均星级 within VIP平均星级; VIP平均星级 within 非VIP平均星级) —
+            # that number is the longer fact's claim, not this one's.
+            if _pos_inside_longer(result, pos, len(name), longer_names):
+                search_from = pos + len(name)
+                continue
             after = result[pos + len(name): pos + len(name) + _FACT_NUMBER_WINDOW]
             # 宁漏不错: only treat a number as this metric's claim if it
             # IMMEDIATELY follows the name (connective chars only). Numbers with

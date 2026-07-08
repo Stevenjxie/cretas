@@ -385,7 +385,20 @@ class TestQuestionFamily:
         for q in ["帮我建个领料单", "录入今天的盘点", "新建一张调拨单"]:
             assert classify_question_family(q) == "write", q
 
+    def test_attribution_colloquial_cues(self):
+        # F2 (2026-07-08 role-play): plain-speech attribution must be labeled
+        # attribution so the synthesis demand report doesn't under-count it.
+        for q in ["十六家店里头哪家最不行，是没人来还是客人花的钱少",
+                  "有的店生意就是做不起来", "谁最差"]:
+            assert classify_question_family(q) == "attribution", q
+
+    def test_chabuduo_neutral_stays_query(self):
+        # 哪家差 dropped (⊂ 哪家差不多, neutral) → must stay query (audit B#3).
+        assert classify_question_family("这两家店哪家差不多能达标") == "query"
+
     def test_query_default(self):
+        # Neutral/positive queries (incl. superlatives like 最多) stay query —
+        # the new colloquial attribution cues are underperformance-specific.
         for q in ["这个月营收多少", "哪家店订单最多", "本周销量排行", ""]:
             assert classify_question_family(q) == "query", q
 

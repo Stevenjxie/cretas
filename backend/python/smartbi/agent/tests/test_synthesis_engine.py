@@ -172,6 +172,33 @@ class TestPlanDimensions:
         assert plan["attribution"] is True
         assert not plan["review"] and not plan["finance"] and not plan["sales"]
 
+    def test_attribution_detected_for_colloquial_phrasing(self):
+        # F2 (2026-07-08 role-play): plain-speech attribution must trigger the
+        # 客流×客单价 decomposition, not fall through to a review answer.
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        for q in ["十六家店里头哪家最不行，是没人来还是客人花的钱少",
+                  "有的店生意就是做不起来",
+                  "哪家店没人来"]:
+            assert eng.plan_dimensions(q)["attribution"] is True, q
+
+    def test_colloquial_neutral_store_query_not_attribution(self):
+        # A neutral store ranking (positive superlative) must NOT trip attribution.
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        assert eng.plan_dimensions("哪家店订单最多")["attribution"] is False
+
+    def test_shengyi_chabuduo_not_attribution(self):
+        # 生意差 ⊂ 生意差不多 (neutral "roughly the same") — polarity inversion must
+        # NOT trip the store decomposition (audit B#1).
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        for q in ["各店生意差不多", "哪家店生意差不多"]:
+            assert eng.plan_dimensions(q)["attribution"] is False, q
+
+    def test_bare_renshao_dropped_no_overreach(self):
+        # bare 人少 dropped → a supplier/staffing question must not trip attribution
+        # (audit B#2).
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        assert eng.plan_dimensions("哪家供应商送货人少")["attribution"] is False
+
 
 # --------------------------------------------------------------------------
 # _build_factbook
@@ -449,6 +476,149 @@ class TestSynthesisCapture:
         # + flagged, so the demand report still sees the question.
         assert captured[0]["quality"] == 2
         assert captured[0]["metadata"]["empty_factbook"] is True
+
+
+
+# --------------------------------------------------------------------------
+# P2 multi-turn memory (2026-07-09): bounded conversation-history window for
+# resolving indirect follow-up references ("展开第三点"/"那家店呢"/"它呢").
+# 🔒 GROUNDING: history must never be a number source — FactBook stays the
+# sole source of every number, and FactReconciler still reconciles against the
+# CURRENT FactBook only. See synthesis_engine.py module docstring + Rule.
+# --------------------------------------------------------------------------
+class TestConversationHistoryPromptInjection:
+    def test_history_passed_prompt_contains_labeled_block(self, monkeypatch):
+        # (a) history passed → prompt contains the labeled history block.
+        _install_data_fakes(monkeypatch)
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        fb = asyncio.run(eng._build_factbook(
+            "RES_3101_009", dr,
+            {"review": True, "finance": True, "sales": False, "cross": []},
+            period="2025",
+        ))
+        history = [
+            {"q": "上个月营收多少", "a_summary": "上月营收 200 万，环比增长 5%。"},
+            {"q": "哪家店最差", "a_summary": "乙店客单价最低，是拖后腿的主因。"},
+        ]
+        prompt = eng._build_prompt("那家店呢", fb, "", conversation_history=history)
+        assert se.HISTORY_BLOCK_HEADER in prompt
+        assert "上个月营收多少" in prompt
+        assert "乙店客单价最低" in prompt
+        # history block must appear BEFORE the user question / FactBook so the
+        # LLM resolves the referent first, then anchors numbers to FactBook.
+        assert prompt.index(se.HISTORY_BLOCK_HEADER) < prompt.index("用户问：那家店呢")
+
+    def test_no_history_prompt_byte_identical_backcompat(self, monkeypatch):
+        # (b) no session/history → prompt unchanged (backcompat).
+        _install_data_fakes(monkeypatch)
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        fb = asyncio.run(eng._build_factbook(
+            "RES_3101_009", dr,
+            {"review": True, "finance": True, "sales": False, "cross": []},
+            period="2025",
+        ))
+        prompt_default_arg = eng._build_prompt("综合分析评价和经营", fb, "")
+        prompt_explicit_none = eng._build_prompt(
+            "综合分析评价和经营", fb, "", conversation_history=None,
+        )
+        prompt_empty_list = eng._build_prompt(
+            "综合分析评价和经营", fb, "", conversation_history=[],
+        )
+        assert prompt_default_arg == prompt_explicit_none == prompt_empty_list
+        assert se.HISTORY_BLOCK_HEADER not in prompt_default_arg
+
+    def test_history_block_carries_factbook_authority_label(self):
+        # (d) history block carries the "数字以 FactBook 为准" label.
+        history = [{"q": "上月营收", "a_summary": "200 万"}]
+        block = se._build_history_block(history)
+        assert se.HISTORY_BLOCK_HEADER in block
+        assert "FactBook 为准" in block
+        assert "绝不能" in block and "数字来源" in block
+
+    def test_history_block_bounded_window_not_linear_growth(self):
+        # Bounded window: only the last HISTORY_MAX_TURNS turns are rendered,
+        # regardless of how many turns are passed in — this must NOT regress
+        # into unbounded "linear-growth general chat" history.
+        # Fixed-width zero-padded ids (00-19) so no id is a substring of
+        # another (e.g. "问题1" would otherwise wrongly match inside "问题16").
+        many_turns = [
+            {"q": f"问题{i:02d}", "a_summary": f"回答{i:02d}"} for i in range(20)
+        ]
+        block = se._build_history_block(many_turns)
+        rendered_count = sum(1 for i in range(20) if f"问题{i:02d}" in block)
+        assert rendered_count == se.HISTORY_MAX_TURNS
+        # the MOST RECENT turns are kept (not the oldest).
+        assert "问题19" in block
+        assert "问题00" not in block
+
+    def test_history_block_handles_json_string_and_malformed_input(self):
+        # Defense in depth: asyncpg may hand back turns_history as a raw JSON
+        # string depending on codec registration (mirrors
+        # build_context_block's own normalization).
+        import json as _json
+        history_list = [{"q": "问题A", "a_summary": "回答A"}]
+        as_json_str = _json.dumps(history_list, ensure_ascii=False)
+        assert "问题A" in se._build_history_block(as_json_str)
+        assert se._build_history_block(None) == ""
+        assert se._build_history_block([]) == ""
+        assert se._build_history_block("not json{{{") == ""
+        assert se._build_history_block([{"no_q_or_a": True}]) == ""
+
+    def test_synthesize_with_history_still_reconciles_against_current_factbook(self, monkeypatch):
+        # (c) FactReconciler still in the flow (unchanged) — even when
+        # conversation_history is supplied, a wrong number in the LLM's answer
+        # must still be backfilled from the CURRENT turn's FactBook, not from
+        # anything in the history.
+        _install_data_fakes(monkeypatch)
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            # sanity: the history block reached the LLM payload.
+            user_msg = payload["messages"][-1]["content"]
+            assert se.HISTORY_BLOCK_HEADER in user_msg
+            return {
+                "choices": [{"message": {"content": "平均星级 4.2，门店营收不错。"}}],
+                "usage": {"total_tokens": 111},
+            }
+
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        history = [{"q": "上月怎么样", "a_summary": "上月营收平稳，评分 4.79。"}]
+        resp = asyncio.run(eng.synthesize(
+            "RES_3101_009", "那这个月呢", dr, conversation_history=history,
+        ))
+        assert resp.source == "llm"
+        # grounding unchanged: wrong 4.2 backfilled with the CURRENT FactBook's
+        # actual 4.79 — history's own numbers ("上月营收平稳") never leak in.
+        assert "实际 4.79" in resp.answer
+        assert resp.fact_check["reconciled"] is True
+        # history-bearing turns skip the narrative cache (read+write) — see
+        # synthesize() docstring: cache key doesn't capture which parent turn
+        # produced the answer, so caching/reusing it across sessions would be
+        # an ungrounded reuse of a resolved reference.
+        assert not eng._cache.put_calls
+
+    def test_synthesize_without_history_cache_write_unaffected(self, monkeypatch):
+        # Backward compat: conversation_history=None still writes to cache
+        # exactly as before this change.
+        _install_data_fakes(monkeypatch)
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {"choices": [{"message": {"content": "综合表现良好。"}}],
+                    "usage": {"total_tokens": 90}}
+
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析评价和经营", dr))
+        assert resp.source == "llm"
+        assert eng._cache.put_calls  # unchanged: no-history path still caches
 
 
 if __name__ == "__main__":

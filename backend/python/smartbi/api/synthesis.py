@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
+from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,15 @@ class SynthesisRequest(BaseModel):
     start_date: Optional[str] = Field(None, description="YYYY-MM-DD; 不传按 Gold 数据范围")
     end_date: Optional[str] = Field(None, description="YYYY-MM-DD; 不传按 Gold 数据范围")
     factory_id: Optional[str] = Field(None, description="belt-and-suspenders; 默认 JWT 租户")
+    # P2 multi-turn memory (2026-07-09): OPTIONAL v2 conv-memory session_id
+    # (same mechanism as chat.py's stream handler — see
+    # smartbi.services.chat_session_service.ChatSessionService). When present,
+    # the last few turns are passed to synthesize() purely to resolve
+    # indirect follow-up references ("展开第三点"/"那家店呢"/"它呢"); numbers
+    # still come solely from this call's own FactBook. Omitted (None, the
+    # default) → no history lookup → behavior identical to before this field
+    # existed (backward compat).
+    session_id: Optional[str] = Field(None, description="v2 conv memory session_id (optional)")
 
     @property
     def effective_question(self) -> str:
@@ -66,9 +76,16 @@ def _parse_date(s: str, field: str) -> date:
 
 
 async def _resolve_window(
-    pool, factory_id: str, start_date: Optional[str], end_date: Optional[str]
+    pool, factory_id: str, start_date: Optional[str], end_date: Optional[str],
+    *, question: Optional[str] = None,
 ) -> Tuple[date, date]:
-    """Pinned range if both given; else factory Gold data span; else trailing 12mo."""
+    """Resolve the analysis window.
+
+    Priority: pinned range (both dates) > relative-time phrase in the question
+    ("这两个月" / "上个月" / "最近30天", anchored to the data's max date, not today —
+    demo/historical data lives in the past) > full factory Gold data span >
+    trailing 12mo. No phrase → full data span (unchanged legacy behaviour).
+    """
     if start_date and end_date:
         s = _parse_date(start_date, "start_date")
         e = _parse_date(end_date, "end_date")
@@ -79,11 +96,58 @@ async def _resolve_window(
         dr = await data_range(pool, factory_id)
         mn, mx = dr.get("min_date"), dr.get("max_date")
         if mn and mx:
-            return date.fromisoformat(mn), date.fromisoformat(mx)
+            data_min, data_max = date.fromisoformat(mn), date.fromisoformat(mx)
+            # F1: honor an owner's relative-time phrase if present. Anchor to
+            # data_max (reuse the ops router's battle-tested parser incl. 俩月/仨月),
+            # then clamp to the available span. Phrase absent → (None,None) → full span.
+            if question:
+                try:
+                    (rs, re_), _lbl = _resolve_sales_date_range(question, today=data_max)
+                    # A bare "今天"/"今日" (single-day) is almost always an action
+                    # clause ("综合看看经营，今天先做哪几家店"), NOT a request to
+                    # analyze one day — the parser is tuned for sales prompts where
+                    # 1 day is valid. Ignore it for multi-dim synthesis (audit A#2).
+                    if rs and re_ and _lbl not in ("今天",):
+                        s = max(rs, data_min)
+                        e = min(re_, data_max)
+                        if s <= e:
+                            return s, e
+                        # Parsed window has NO overlap with available data (owner
+                        # asked "上个月" but no data there). Return the honest empty
+                        # window — never silently substitute full history and label
+                        # all-time numbers as if answering the phrase (audit A#1,
+                        # 禁止降级/no-fake-data). Empty factbook → honest "no data".
+                        return rs, re_
+                except Exception as _rex:  # parser must never break window resolution
+                    logger.warning("[synthesis] relative-window parse failed: %s", _rex)
+            return data_min, data_max
     except Exception as e:
         logger.warning("[synthesis] data_range failed for %s: %s", factory_id, e)
     end = date.today()
     return end - timedelta(days=365), end
+
+
+async def _lookup_conversation_history(pool, session_id: Optional[str], factory_id: str):
+    """Optional read-side of P2 multi-turn memory for the HTTP endpoints below.
+
+    Returns the bounded turns_history (list of {q, a_summary, ts} dicts, see
+    ChatSessionService.upsert) if session_id is present and the session hits;
+    None otherwise (no session_id, miss, or lookup error). Never raises —
+    mirrors the other non-fatal chat_session_service call sites (chat.py).
+    Only a READ — this endpoint has no write-back; the FE conversational flow
+    (chat.py's stream handler) already looks up + writes back for its own
+    session_id, and body.session_id here is for direct/Java callers that want
+    the same reference-resolution benefit without owning their own writeback.
+    """
+    if not session_id:
+        return None
+    try:
+        from smartbi.services.chat_session_service import ChatSessionService
+        parent = await ChatSessionService(pool).lookup(session_id, factory_id)
+        return parent.get("turns_history") if parent else None
+    except Exception as e:
+        logger.warning(f"[synthesis] conversation_history lookup failed (non-fatal): {e}")
+        return None
 
 
 def _factory_id(request: Request, override: Optional[str]) -> str:
@@ -108,9 +172,10 @@ async def comprehensive(request: Request, body: SynthesisRequest):
     pool = await get_pg_pool()
     if pool is None:
         raise HTTPException(status_code=503, detail="database not available")
-    window = await _resolve_window(pool, fid, body.start_date, body.end_date)
+    window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
     engine = ComprehensiveSynthesisEngine(pool)
-    resp = await engine.synthesize(fid, q, window)
+    conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+    resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
     return resp.to_dict()
 
 
@@ -142,10 +207,11 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
             if pool is None:
                 yield _sse("error", "数据库暂时不可用，请稍后重试")
                 return
-            window = await _resolve_window(pool, fid, body.start_date, body.end_date)
+            window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
             yield _sse("status", "正在汇总评价与经营多维数据…")
             engine = ComprehensiveSynthesisEngine(pool)
-            resp = await engine.synthesize(fid, q, window)
+            conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+            resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
             # Stream the (already redaction-restored) answer in fixed slices.
             answer = resp.answer or ""
             chunk_size = 40

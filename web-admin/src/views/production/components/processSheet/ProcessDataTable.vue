@@ -54,6 +54,8 @@ const props = withDefaults(defineProps<{
    * 值收集进保存请求的 customFields map。
    */
   customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
+  /** 是否允许本道工序选择成品库存批次作为投料来源。 */
+  allowFinishedGoodsSource?: boolean;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
    * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
   upstreamProcessLabel?: string;
@@ -69,6 +71,7 @@ const props = withDefaults(defineProps<{
   allowSemiFinishedInjection: false,
   allowMultipleUpstreamSources: false,
   customFieldSchema: () => [],
+  allowFinishedGoodsSource: false,
   upstreamItems: () => [],
   ownInventoryItems: () => [],
   initialRows: () => [],
@@ -1100,8 +1103,8 @@ let fgLoadSeq = 0;
 const showSfi = computed(() =>
   props.allowSemiFinishedInjection || supportsUpstreamSources.value,
 );
-/** ①c 是否提供「成品库存(FG)」投料选项 (与 SFI 同工序集: 混锅 + 单上游道)。 */
-const showFg = computed(() => showSfi.value);
+/** ①c 是否提供「成品库存(FG)」投料选项；必须按产品工序显式开启。 */
+const showFg = computed(() => showSfi.value && props.allowFinishedGoodsSource === true);
 
 // 下拉选项用「类型::批次号」复合值, 让来源类型由选中的 OPTION 显式携带, 而非按字符串值反查
 // (规避 in-plan WIP 批号与 SFI/FG 批号偶然相同时的误判)。
@@ -1351,7 +1354,7 @@ function onPotCountChange(row: SheetRow, val: number) {
 }
 
 watch(
-  () => [props.factoryId, props.processCode, props.productTypeId] as const,
+  () => [props.factoryId, props.processCode, props.productTypeId, props.allowSemiFinishedInjection, props.allowFinishedGoodsSource] as const,
   () => {
     rawBatchOptions.value = [];
     consumableWarehouseIds.value = [];

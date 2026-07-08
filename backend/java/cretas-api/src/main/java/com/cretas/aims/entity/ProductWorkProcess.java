@@ -85,6 +85,16 @@ public class ProductWorkProcess {
     @Builder.Default
     private Boolean allowMultipleUpstreamSources = false;
 
+    /**
+     * Whether this product-process row may use finished-goods stock as a feed source.
+     *
+     * <p>DEFAULT false = do not expose or accept FG stock feed for normal production rows.
+     * true = process-entry source picker may include same-product-family finished-goods batches.
+     */
+    @Column(name = "allow_finished_goods_source", nullable = false)
+    @Builder.Default
+    private Boolean allowFinishedGoodsSource = false;
+
     // ── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ──────────────
     /** 该工序默认成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; 报工未传 costCategory 时继承 (CALC-003) */
     @Column(name = "default_cost_category", length = 20)

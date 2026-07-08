@@ -84,6 +84,12 @@ public class ProductWorkProcessDTO {
     private Boolean allowMultipleUpstreamSources;
 
     /**
+     * Whether this row may use finished-goods stock as feed source.
+     * null = create default false / update no-change.
+     */
+    private Boolean allowFinishedGoodsSource;
+
+    /**
      * 工序成本配置 (报工自动继承, 防呆: 操作员不手填会计类别/明细)。
      * partial update 语义: null → 不修改现有值。
      */
