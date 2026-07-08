@@ -1,3 +1,17 @@
+// A1 (2026-07-08, docs/superpowers/specs/2026-07-08-business-concept-registry-direction.md
+// §3): the backend (backend/python/smartbi/api/restaurant_sections.py
+// _infer_owner_action_scenario_from_message) now loads its scenario->terms
+// keyword tuple from backend/python/smartbi/data/owner_action_scenarios.json,
+// which was seeded from a conservative union of these terms and the
+// backend's own (previously independently-maintained) keyword tuple. That
+// JSON is the authoritative cross-language source for scenario terms going
+// forward. This file's runtime (inferOwnerActionScenario) was intentionally
+// LEFT UNCHANGED in A1 to avoid touching the frontend build/deploy chain in
+// the same change as the backend swap; a Python-side test
+// (test_owner_action_scenarios.py::test_frontend_terms_are_subset_of_shared_json)
+// asserts these terms stay a subset of the shared JSON so this file cannot
+// silently drift ahead of it again. If you add a term here, add it to
+// owner_action_scenarios.json too (or that test will fail in CI).
 export const RESTAURANT_OWNER_ACTION_SCENARIOS = [
   'cost_margin',
   'external_event_response',

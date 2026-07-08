@@ -13,6 +13,7 @@ section names. The list includes ``cost_rigidity`` (which the batch
 calls.
 """
 
+import json
 import logging
 import re
 import tempfile
@@ -264,7 +265,10 @@ def _owner_action_data_readiness(scenario: str, params: dict[str, Any]) -> dict[
     }
 
 
-_OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+# Fail-open fallback: exact pre-A1 hardcoded tuple, kept verbatim. Used only
+# if backend/python/smartbi/data/owner_action_scenarios.json is missing or
+# malformed at import time (see _load_owner_action_keywords below).
+_OWNER_ACTION_KEYWORDS_FALLBACK: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("store_compare", ("所有门店", "其他门店", "区域经理", "品牌共性", "单店问题", "门店里", "哪家店", "最值得学习", "复制到")),
     ("operations_dispatch", ("仓管", "前台", "门迎", "分别", "派工", "调度", "今日作战", "管理层", "减少工作", "谁做什么", "各岗位", "分工")),
     ("inventory_reorder", ("库存预警", "补货", "采购补货", "安全库存", "临期", "缺货", "备货缺口", "库存风险", "先看什么", "备货", "备菜", "仓管今天", "具体补什么", "原料", "食材")),
@@ -278,6 +282,52 @@ _OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cost_margin", ("成本", "毛利", "BOM", "盘点", "月盘点", "损耗", "损耗高", "采购", "采购价格", "原料", "食材", "盈利", "备货", "少备", "备太多", "不能多备", "继续备", "不适合继续备", "不应该继续重点推", "继续重点推")),
     ("single_item_push", ("主推", "单品", "招牌", "爆品", "引流菜", "低价值", "加购", "拉动加购", "首屏", "短视频")),
 )
+
+_OWNER_ACTION_SCENARIOS_JSON = (
+    FsPath(__file__).resolve().parents[1] / "data" / "owner_action_scenarios.json"
+)
+
+
+def _load_owner_action_keywords() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Load the scenario->terms keyword tuple from the shared JSON data file.
+
+    A1 (spec docs/superpowers/specs/2026-07-08-business-concept-registry-direction.md
+    §3): this JSON is shared with web-admin's restaurantOwnerActionRegistry.ts
+    as the single source of truth for scenario terms, replacing two
+    independently-maintained copies. Only scenarios with
+    ``backendKeywordGate: true`` are loaded here -- e.g. ``revenue_growth``
+    is intentionally excluded (handled via separate compound-phrase logic
+    elsewhere in this module; see the JSON's ``_meta.revenueGrowth`` note).
+
+    Fail-open: any error (missing file, malformed JSON, empty result) falls
+    back to the pre-A1 hardcoded tuple so a bad deploy of the data file
+    cannot break owner-action routing.
+    """
+    try:
+        raw = json.loads(_OWNER_ACTION_SCENARIOS_JSON.read_text(encoding="utf-8"))
+        entries = []
+        for item in raw.get("scenarios", []):
+            if not item.get("backendKeywordGate", False):
+                continue
+            scenario = item["scenario"]
+            terms = tuple(item["terms"])
+            if not terms:
+                continue
+            entries.append((scenario, terms))
+        if not entries:
+            raise ValueError("owner_action_scenarios.json produced zero backend-gated scenarios")
+        return tuple(entries)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        logger.warning(
+            "[owner-action-keywords] failed to load %s (%s) -- falling back to hardcoded tuple",
+            _OWNER_ACTION_SCENARIOS_JSON,
+            exc,
+        )
+        return _OWNER_ACTION_KEYWORDS_FALLBACK
+
+
+# Loaded once at module import time (per spec §3 A1: "模块级加载一次").
+_OWNER_ACTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = _load_owner_action_keywords()
 
 _OWNER_ACTION_SCENARIO_ALIASES = {
     "inventory": "inventory_reorder",
