@@ -60,3 +60,21 @@ def test_relative_window_clamped_to_data_min(monkeypatch):
     s, e = _run(start_date=None, end_date=None, question="这两个月赚钱没")
     assert s == datetime.date(2026, 6, 20)  # clamped, not 60 days back
     assert e == datetime.date(2026, 6, 30)
+
+
+def test_bare_today_not_collapsed_for_synthesis(monkeypatch):
+    # "今天" in an action clause must NOT collapse a multi-dim synthesis to 1 day
+    # (audit A#2) — falls back to the full data span.
+    _mock_data_range(monkeypatch, "2025-01-01", "2026-06-30")
+    s, e = _run(start_date=None, end_date=None,
+                question="综合看看经营，今天先做哪几家店")
+    assert (s, e) == (datetime.date(2025, 1, 1), datetime.date(2026, 6, 30))
+
+
+def test_out_of_range_phrase_returns_honest_empty_not_full_span(monkeypatch):
+    # Data only in July; "上个月" (June) has no data → return the June window
+    # (honestly empty), NOT silently the full July span (audit A#1).
+    _mock_data_range(monkeypatch, "2026-07-01", "2026-07-06")
+    s, e = _run(start_date=None, end_date=None, question="上个月赚钱没")
+    assert (s, e) == (datetime.date(2026, 6, 1), datetime.date(2026, 6, 30))
+    assert (s, e) != (datetime.date(2026, 7, 1), datetime.date(2026, 7, 6))  # not full span

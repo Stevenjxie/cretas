@@ -119,7 +119,7 @@ _ATTRIBUTION_CUES = (
     # attribution too. All are underperformance/comparison cues, so they do NOT
     # match neutral query examples ("哪家店订单最多" / "本周销量排行").
     "最不行", "做不起来", "做不起", "是没人来还是", "是人少还是", "是客人少还是",
-    "谁最差", "哪家最差", "哪家差", "生意差在哪",
+    "谁最差", "哪家最差", "生意差在哪",  # "哪家差" dropped — ⊂ 哪家差不多 (audit B#3)
 )
 _WRITE_CUES = (
     "建个", "建一个", "新建", "创建", "帮我建", "录入", "开单", "下单", "开一张",
