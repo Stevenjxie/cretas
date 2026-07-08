@@ -225,6 +225,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * "该工序未开启自定义字段校验" —— 此时不拒绝任何 key (宽松兜底, 因为 schema=null 是本功能
      * 的默认/未配置状态, 拒绝会误伤未升级使用本功能的既有工序)。若请求根本没带 customFields,
      * 直接跳过 (最常见路径, 提前 return 避免不必要查询)。
+     *
+     * <p><b>F2(a)</b>: 判据是「key 是否在 schema 声明里」(无论 enabled 真假), 见
+     * {@link ProcessCustomFieldValidation#checkKeys}。字段被 admin 禁用后仍在 schema 里 →
+     * 该行历史存的禁用键再次提交不会被误挡, 只挡真正未知 key。
      */
     private void validateCustomFields(String factoryId, ProcessSheetRowRequest req) {
         Map<String, Object> customFields = req.getCustomFields();
@@ -236,32 +240,54 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // 不因为定位信息缺失而拒绝写入 (这类缺失应由别处校验拦截, 不是本方法职责)。
             return;
         }
+        WorkProcess wp = resolveWorkProcess(factoryId, req.getProductTypeId(), req.getProcessOrder());
+        if (wp == null) {
+            return; // 找不到对应工序配置 —— 无 schema 可校验, 放行
+        }
+        // F2(a) + F3: 共享判据 —— key 不在 schema (无论 enabled) → 诚实 400。
+        ProcessCustomFieldValidation.checkKeys(wp.getCustomFieldSchema(), customFields.keySet(), wp.getProcessName());
+    }
+
+    /**
+     * F2(b): 把 {@code prior} (上次已存 row_payload 反序列化) 里已存、本次 {@code req} 未提交的自定义键
+     * merge 回 {@code req.customFields} —— 新提交同名键覆盖旧值, 旧有其它键保留。
+     *
+     * <p>动机: 字段被 admin 禁用后, 前端 buildRequest 只收 enabled 键 → 禁用键不再随请求提交;
+     * 而 re-save 落库是 {@code serializePayload(req)} 整体覆盖 row_payload + 物化重写
+     * ProductionReport.customFields —— 若不 merge, 该行历史录入的禁用键值 (如已录波美度=12.5) 会被
+     * 静默销毁 (F2 真 bug)。merge 后, 未提交的旧键随 req 一并落库 + 物化 (row_payload 与
+     * ProductionReport.customFields.clerkCustomFields 同源 req, 一致保留)。
+     *
+     * <p>取舍: 由此"未提交即保留"意味着 enabled 字段无法通过"提交空值/省略"来清空 (前端 buildRequest
+     * 本就不发空值)。数据保全 (不静默丢失客户已录数据) 优先级高于"按省略清空", 与 F2 brief 一致。
+     */
+    private void mergeCustomFieldsFromPrior(ProcessSheetRowRequest req, ProcessSheetRowRequest prior) {
+        Map<String, Object> priorFields = prior == null ? null : prior.getCustomFields();
+        if (priorFields == null || priorFields.isEmpty()) {
+            return; // 无既存自定义键 —— 无需 merge
+        }
+        Map<String, Object> merged = new LinkedHashMap<>(priorFields);
+        if (req.getCustomFields() != null) {
+            merged.putAll(req.getCustomFields()); // 新提交覆盖同名键
+        }
+        req.setCustomFields(merged);
+    }
+
+    /**
+     * 解析 (factory, productTypeId, processOrder) → 该道对应的 {@link WorkProcess} (供 schema 读取)。
+     * 找不到工序配置 / 未链接 workProcessId → null (caller 视为"无 schema", 放行)。
+     */
+    private WorkProcess resolveWorkProcess(String factoryId, String productTypeId, Integer processOrder) {
         List<ProductWorkProcess> pwps = productWorkProcessRepo
-                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, req.getProductTypeId());
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
         ProductWorkProcess pwp = pwps.stream()
-                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
                 .findFirst()
                 .orElse(null);
         if (pwp == null || pwp.getWorkProcessId() == null) {
-            return; // 找不到对应工序配置 —— 无 schema 可校验, 放行
+            return null;
         }
-        WorkProcess wp = processRepo.findById(pwp.getWorkProcessId()).orElse(null);
-        if (wp == null || wp.getCustomFieldSchema() == null) {
-            return; // 该工序未开启自定义字段 schema —— 不限制 (默认/未配置状态)
-        }
-        Set<String> allowedKeys = wp.getCustomFieldSchema().stream()
-                .filter(f -> Boolean.TRUE.equals(f.get("enabled")))
-                .map(f -> String.valueOf(f.get("key")))
-                .collect(Collectors.toSet());
-        for (String key : customFields.keySet()) {
-            if (!allowedKeys.contains(key)) {
-                throw new BusinessException(400,
-                        String.format("工序「%s」未配置自定义字段「%s」，请先在工序设置中添加该字段",
-                                wp.getProcessName(), key))
-                        .withCode("PROCESS_SHEET_CUSTOM_FIELD_UNKNOWN")
-                        .withHintTarget(key);
-            }
-        }
+        return processRepo.findById(pwp.getWorkProcessId()).orElse(null);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -305,6 +331,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // SP-G P3: 捕获变更前 payload (在任何 updateRowInPlace 之前), 供 UPDATE diff 审计。
         ProcessSheetRowRequest beforeReq = tryDeserialize(existing.getRowPayload());
+
+        // F2(b): 自定义字段 merge (不整体覆盖) —— 字段被 admin 禁用后前端 buildRequest 不再发它,
+        //   若整体覆盖 row_payload 会静默销毁该行已存的禁用键值。把 beforeReq 里已存、本次 req 未提交的
+        //   自定义键 merge 回 req.customFields (新提交覆盖同名键), 再落库 + 物化 —— row_payload 与
+        //   ProductionReport.customFields.clerkCustomFields 同源 (都从 merge 后的 req 派生), 一并保留。
+        mergeCustomFieldsFromPrior(req, beforeReq);
 
         // 与 create 同的 factory-scoped 上游/原料边解析 (🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);

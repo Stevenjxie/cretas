@@ -167,6 +167,63 @@ class ProcessSheetCustomFieldValidationTest {
     }
 
     @Test
+    @DisplayName("F2(a): 已禁用但仍在 schema 的 key → 不被误挡 (判据是「在 schema」非「enabled」, 不丢历史)")
+    void disabledButInSchemaKey_notRejected() {
+        // baume 被 admin 禁用 (enabled=false) 但仍在 schema 里
+        WorkProcess wp = WorkProcess.builder()
+                .id(WORK_PROCESS_ID).factoryId(FACTORY).processName("熟制")
+                .customFieldSchema(List.of(
+                        Map.of("key", "baume", "label", "波美度", "type", "number", "enabled", false)))
+                .build();
+        when(processRepo.findById(WORK_PROCESS_ID)).thenReturn(Optional.of(wp));
+
+        ProcessSheetRowRequest req = draftReq("row-cf-disabled", Map.of("baume", new BigDecimal("12.5")));
+        // F2(a): 禁用键仍在 schema → 不抛 400, 正常放行落库 (旧值不因禁用被误挡)
+        service.saveRow(FACTORY, PLAN_ID, req, 7L);
+        verify(rowRepo).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("F2(b): 禁用字段后再保存同行 (未发该键) → row_payload merge 保留已存禁用键值 (不静默销毁)")
+    void resave_preservesPriorDisabledCustomField() throws Exception {
+        // 1. 既存行 (DRAFT) 的 row_payload 含 customFields={baume:12.5} (禁用前已录)
+        ProcessSheetRowRequest priorReq = draftReq("row-merge", Map.of("baume", new BigDecimal("12.5")));
+        com.cretas.aims.entity.processentry.ProcessSheetRow existing =
+                new com.cretas.aims.entity.processentry.ProcessSheetRow();
+        existing.setFactoryId(FACTORY);
+        existing.setPlanId(PLAN_ID);
+        existing.setProcessCode("shuzhi");
+        existing.setProcessOrder(1);
+        existing.setClientRowId("row-merge");
+        existing.setBatchId(null);
+        existing.setRowStatus("DRAFT");
+        existing.setRowPayload(new ObjectMapper().writeValueAsString(priorReq));
+        when(rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(FACTORY, PLAN_ID, "shuzhi", "row-merge"))
+                .thenReturn(Optional.of(existing));
+        when(rowRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // baume 已被禁用 (schema 里仍在, enabled=false)
+        WorkProcess wp = WorkProcess.builder()
+                .id(WORK_PROCESS_ID).factoryId(FACTORY).processName("熟制")
+                .customFieldSchema(List.of(
+                        Map.of("key", "baume", "label", "波美度", "type", "number", "enabled", false)))
+                .build();
+        when(processRepo.findById(WORK_PROCESS_ID)).thenReturn(Optional.of(wp));
+
+        // 2. 再保存同行, 只改了别的格子 → 前端 buildRequest 不再发已禁用的 baume (customFields 为空)
+        ProcessSheetRowRequest resaveReq = draftReq("row-merge", null);
+        service.saveRow(FACTORY, PLAN_ID, resaveReq, 7L);
+
+        // 3. 断言 re-save 落库的 row_payload 仍含 baume=12.5 (merge 不整体覆盖, 不因禁用丢历史)
+        ArgumentCaptor<com.cretas.aims.entity.processentry.ProcessSheetRow> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.processentry.ProcessSheetRow.class);
+        verify(rowRepo).save(cap.capture());
+        assertThat(cap.getValue().getRowPayload())
+                .as("re-save 后 row_payload 仍含禁用键 baume=12.5 (F2 merge)")
+                .contains("baume").contains("12.5");
+    }
+
+    @Test
     @DisplayName("(c) 未开启自定义字段 schema (customFieldSchema=null) 的工序 → 不限制任何 key (放行, 向后兼容)")
     void noSchemaConfigured_allowsAnyKey() {
         // 覆盖 setUp 的 stub: 该工序未配置 schema

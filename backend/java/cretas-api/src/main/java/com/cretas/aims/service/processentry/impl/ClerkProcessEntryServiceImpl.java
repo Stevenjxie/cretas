@@ -13,8 +13,10 @@ import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
+import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ReportMode;
@@ -30,6 +32,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.recipe.ProductRecipeRepository;
@@ -101,6 +105,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private final ProductionPlanRepository planRepository;
     /** headed-audit 修复 (2026-07-03): 批次创建时解析产品名称. null-tolerant (测试 @InjectMocks 未注入时 skip). */
     private final ProductTypeRepository productTypeRepository;
+    /**
+     * F3: 逐工序自定义字段 schema 校验 —— chain 路径 (recordChain) 复用与 sheet 路径同一诚实-400 契约。
+     * null-tolerant (测试 @InjectMocks 未注入时 skip 校验; 校验只在 step.customFields 非空时触发, 极少查库)。
+     */
+    private final ProductWorkProcessRepository productWorkProcessRepository;
+    private final WorkProcessRepository workProcessRepository;
 
     // ─────────────────────────────────────────────────────────────
     // Public API
@@ -134,6 +144,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 2. 拓扑排序: WIP 批次(finished=false)先于成品批次(finished=true)
         List<BatchEntry> ordered = new ArrayList<>(req.getBatches());
         ordered.sort(Comparator.comparing(BatchEntry::isFinished)); // false(0) < true(1)
+
+        // 2.5 F3: 自定义字段 schema 校验 (fail-fast, 在任何物化写入之前) —— chain 路径此前无校验,
+        //   任意 key 静默落库违背诚实-400 契约。逐批逐道校验 step.customFields (仅非空时查库)。
+        for (BatchEntry be : ordered) {
+            if (be.getSteps() == null) continue;
+            for (StepEntry st : be.getSteps()) {
+                validateStepCustomFields(factoryId, be.getProductTypeId(), st);
+            }
+        }
 
         Map<String, Long> batchIdsByKey = new LinkedHashMap<>();
         Map<String, String> batchNumbersByKey = new LinkedHashMap<>();
@@ -798,6 +817,41 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             report.setPackagingDetail(st.getPackagingDetail());
         }
         reportRepo.save(report);
+    }
+
+    /**
+     * F3: 校验 chain 路径单个 step 的自定义字段 key 白名单 (与 sheet 路径同一诚实-400 契约)。
+     *
+     * <p>只在 {@code st.getCustomFields()} 非空时查库解析 (factory, productTypeId, processOrder) →
+     * WorkProcess.customFieldSchema, 再调共享 {@link ProcessCustomFieldValidation#checkKeys}。
+     * null-tolerant: repos 未注入 (测试 @InjectMocks) / 缺定位信息 / 找不到工序配置 → skip (放行),
+     * 与 sheet 路径 {@code ProcessSheetServiceImpl.validateCustomFields} 的兜底语义一致。
+     */
+    private void validateStepCustomFields(String factoryId, String productTypeId, StepEntry st) {
+        Map<String, Object> cf = st.getCustomFields();
+        if (cf == null || cf.isEmpty()) {
+            return; // 无自定义字段 —— 最常见路径, 提前返回避免查库
+        }
+        if (productWorkProcessRepository == null || workProcessRepository == null) {
+            return; // 测试 @InjectMocks 未注入这两个 repo —— 放行 (与其它 null-tolerant 依赖一致)
+        }
+        if (productTypeId == null || st.getProcessOrder() == null) {
+            return; // 无法定位该道 WorkProcess —— 防御性放行
+        }
+        List<ProductWorkProcess> pwps = productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
+        ProductWorkProcess pwp = pwps.stream()
+                .filter(p -> st.getProcessOrder().equals(p.getProcessOrder()))
+                .findFirst()
+                .orElse(null);
+        if (pwp == null || pwp.getWorkProcessId() == null) {
+            return; // 找不到对应工序配置 —— 无 schema 可校验, 放行
+        }
+        WorkProcess wp = workProcessRepository.findById(pwp.getWorkProcessId()).orElse(null);
+        if (wp == null) {
+            return;
+        }
+        ProcessCustomFieldValidation.checkKeys(wp.getCustomFieldSchema(), cf.keySet(), wp.getProcessName());
     }
 
     /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */
