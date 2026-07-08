@@ -3174,6 +3174,17 @@ public class SalesServiceImpl implements SalesService {
         for (SalesDeliveryItem deliveryItem : record.getItems()) {
             for (SalesOrderItem orderItem : orderItems) {
                 if (orderItem.getProductTypeId().equals(deliveryItem.getProductTypeId())) {
+                    BigDecimal previousDelivered = orderItem.getDeliveredQuantity() != null
+                            ? orderItem.getDeliveredQuantity() : BigDecimal.ZERO;
+                    BigDecimal deliveryCostUnitPrice = computeDeliveryCostUnitPrice(record.getFactoryId(), deliveryItem);
+                    if (deliveryCostUnitPrice != null && deliveryItem.getDeliveredQuantity() != null
+                            && deliveryItem.getDeliveredQuantity().signum() > 0) {
+                        orderItem.setCostUnitPrice(blendCostUnitPrice(
+                                orderItem.getCostUnitPrice(),
+                                previousDelivered,
+                                deliveryCostUnitPrice,
+                                deliveryItem.getDeliveredQuantity()));
+                    }
                     BigDecimal newDelivered = orderItem.getDeliveredQuantity().add(deliveryItem.getDeliveredQuantity());
                     orderItem.setDeliveredQuantity(newDelivered);
                 }
@@ -3222,6 +3233,88 @@ public class SalesServiceImpl implements SalesService {
             order.setTransportPlanStatus("IN_TRANSIT");
         }
         salesOrderRepository.save(order);
+    }
+
+    /**
+     * Cost of one delivery-line unit, derived from the actual finished-goods batches shipped.
+     *
+     * <p>Finished-goods batches may be stored in kg while the sales line is in boxes/pcs. Batch
+     * unitCost is in the batch native unit, so one delivery unit is converted into the native unit
+     * before multiplying. Allocation rows are in the delivery item unit and are used as weights for
+     * multi-batch shipments.
+     */
+    private BigDecimal computeDeliveryCostUnitPrice(String factoryId, SalesDeliveryItem item) {
+        if (item == null || item.getDeliveredQuantity() == null || item.getDeliveredQuantity().signum() <= 0) {
+            return null;
+        }
+        BigDecimal gramsPerUnit = productTypeRepository != null
+                ? productTypeRepository.findById(item.getProductTypeId()).map(ProductType::getGramsPerUnit).orElse(null)
+                : null;
+
+        if (batchAllocationService != null && item.getId() != null) {
+            List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations =
+                    batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()));
+            if (allocations != null && !allocations.isEmpty()) {
+                BigDecimal totalQty = BigDecimal.ZERO;
+                BigDecimal totalCost = BigDecimal.ZERO;
+                for (com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation alloc : allocations) {
+                    FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(alloc.getFinishedGoodsBatchId())
+                            .orElse(null);
+                    if (batch == null || batch.getUnitCost() == null || alloc.getAllocatedQty() == null) {
+                        continue;
+                    }
+                    String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : item.getUnit();
+                    BigDecimal allocQtyInItemUnit = FgQuantityUnitConverter
+                            .convert(alloc.getAllocatedQty(), allocUnit, item.getUnit(), gramsPerUnit);
+                    BigDecimal costPerItemUnit = convertBatchUnitCost(batch, item.getUnit(), gramsPerUnit);
+                    if (allocQtyInItemUnit == null || costPerItemUnit == null
+                            || allocQtyInItemUnit.signum() <= 0) {
+                        continue;
+                    }
+                    totalQty = totalQty.add(allocQtyInItemUnit);
+                    totalCost = totalCost.add(allocQtyInItemUnit.multiply(costPerItemUnit));
+                }
+                if (totalQty.signum() > 0) {
+                    return totalCost.divide(totalQty, 4, java.math.RoundingMode.HALF_UP);
+                }
+            }
+        }
+
+        if (item.getFinishedGoodsBatchId() == null) {
+            return null;
+        }
+        return finishedGoodsBatchRepository.findById(item.getFinishedGoodsBatchId())
+                .map(batch -> convertBatchUnitCost(batch, item.getUnit(), gramsPerUnit))
+                .orElse(null);
+    }
+
+    private BigDecimal convertBatchUnitCost(FinishedGoodsBatch batch, String targetUnit, BigDecimal gramsPerUnit) {
+        if (batch == null || batch.getUnitCost() == null || targetUnit == null) {
+            return null;
+        }
+        BigDecimal nativeQtyPerTargetUnit = FgQuantityUnitConverter
+                .convert(BigDecimal.ONE, targetUnit, batch.getUnit(), gramsPerUnit);
+        if (nativeQtyPerTargetUnit == null || nativeQtyPerTargetUnit.signum() <= 0) {
+            return null;
+        }
+        return batch.getUnitCost().multiply(nativeQtyPerTargetUnit)
+                .setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal blendCostUnitPrice(BigDecimal existingCostUnitPrice, BigDecimal previousDelivered,
+                                          BigDecimal deliveryCostUnitPrice, BigDecimal deliveryQuantity) {
+        BigDecimal prevQty = previousDelivered != null ? previousDelivered : BigDecimal.ZERO;
+        BigDecimal newQty = deliveryQuantity != null ? deliveryQuantity : BigDecimal.ZERO;
+        if (prevQty.signum() <= 0 || existingCostUnitPrice == null) {
+            return deliveryCostUnitPrice;
+        }
+        BigDecimal totalQty = prevQty.add(newQty);
+        if (totalQty.signum() <= 0) {
+            return deliveryCostUnitPrice;
+        }
+        return existingCostUnitPrice.multiply(prevQty)
+                .add(deliveryCostUnitPrice.multiply(newQty))
+                .divide(totalQty, 4, java.math.RoundingMode.HALF_UP);
     }
 
     // ==================== T3: 业务员双字段过渡 ====================

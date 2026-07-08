@@ -1,12 +1,22 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +31,7 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -51,6 +62,18 @@ class SalesOrderFulfillmentWarehouseTest {
 
     @Mock
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @Mock
+    private SalesOrderRepository salesOrderRepository;
+
+    @Mock
+    private SalesOrderItemRepository salesOrderItemRepository;
+
+    @Mock
+    private ProductTypeRepository productTypeRepository;
+
+    @Mock
+    private SalesDeliveryBatchAllocationService batchAllocationService;
 
     @Mock
     private WarehouseResolver warehouseResolver;
@@ -114,6 +137,30 @@ class SalesOrderFulfillmentWarehouseTest {
         b.setShippedQuantity(BigDecimal.ZERO);
         b.setReservedQuantity(BigDecimal.ZERO);
         return b;
+    }
+
+    private void invokeUpdateOrderDeliveryStatus(SalesDeliveryRecord record) throws Exception {
+        Method m = SalesServiceImpl.class.getDeclaredMethod("updateOrderDeliveryStatus", SalesDeliveryRecord.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(salesService, record);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException) {
+                throw (RuntimeException) e.getCause();
+            }
+            throw e;
+        }
+    }
+
+    private SalesDeliveryItemBatchAllocation buildAllocation(String batchId, BigDecimal qty, String unit) {
+        SalesDeliveryItemBatchAllocation allocation = new SalesDeliveryItemBatchAllocation();
+        allocation.setFactoryId(FACTORY_A);
+        allocation.setDeliveryItemId("167");
+        allocation.setFinishedGoodsBatchId(batchId);
+        allocation.setBatchNumber("FG-BATCH-001");
+        allocation.setAllocatedQty(qty);
+        allocation.setUnit(unit);
+        return allocation;
     }
 
     // ============================================================
@@ -234,6 +281,71 @@ class SalesOrderFulfillmentWarehouseTest {
     void warehouseCodeConstantIsStable() {
         // Defensive: 若未来重命名 WH-LOG → 这个 test 立即 fail, 提醒 grep 所有 site
         assertEquals("WH-LOG", WarehouseCodes.WH_LOG);
+    }
+
+    @Test
+    @DisplayName("shipment updates sales order item cost from allocated FG batch unit cost")
+    void updateOrderDeliveryStatus_backfillsCostUnitPriceFromAllocatedBatch() throws Exception {
+        salesService = new SalesServiceImpl(
+                salesOrderRepository,
+                salesOrderItemRepository,
+                null,
+                finishedGoodsBatchRepository,
+                null,
+                productTypeRepository,
+                null,
+                null);
+        ReflectionTestUtils.setField(salesService, "batchAllocationService", batchAllocationService);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-001");
+        order.setFactoryId(FACTORY_A);
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+
+        SalesOrderItem orderItem = new SalesOrderItem();
+        orderItem.setSalesOrderId(order.getId());
+        orderItem.setProductTypeId(PRODUCT_TYPE);
+        orderItem.setQuantity(new BigDecimal("10"));
+        orderItem.setDeliveredQuantity(BigDecimal.ZERO);
+        orderItem.setUnit("\u76d2");
+        orderItem.setUnitPrice(new BigDecimal("8.0000"));
+
+        SalesDeliveryItem deliveryItem = new SalesDeliveryItem();
+        deliveryItem.setId(167L);
+        deliveryItem.setProductTypeId(PRODUCT_TYPE);
+        deliveryItem.setDeliveredQuantity(new BigDecimal("10"));
+        deliveryItem.setUnit("\u76d2");
+
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setFactoryId(FACTORY_A);
+        record.setSalesOrderId(order.getId());
+        record.setItems(List.of(deliveryItem));
+
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE);
+        productType.setGramsPerUnit(new BigDecimal("200"));
+
+        FinishedGoodsBatch batch = buildAvailableBatch("FG-BATCH-001", WH_LOG_ID, new BigDecimal("10.8"));
+        batch.setId("FG-BATCH-ID");
+        batch.setUnit("kg");
+        batch.setUnitCost(new BigDecimal("4.1667"));
+
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
+        when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))
+                .thenReturn(List.of(buildAllocation(batch.getId(), new BigDecimal("10"), "\u76d2")));
+        when(finishedGoodsBatchRepository.findById(batch.getId())).thenReturn(Optional.of(batch));
+
+        invokeUpdateOrderDeliveryStatus(record);
+
+        assertEquals(0, orderItem.getDeliveredQuantity().compareTo(new BigDecimal("10")));
+        assertEquals(0, orderItem.getCostUnitPrice().compareTo(new BigDecimal("0.8333")));
+        assertEquals(SalesOrderStatus.COMPLETED, order.getStatus());
+        assertEquals("DELIVERED", order.getTransportPlanStatus());
+        assertEquals(0, order.getActualShippedAmount().compareTo(new BigDecimal("80.00")));
+        verify(salesOrderItemRepository, times(1)).saveAll(List.of(orderItem));
+        verify(salesOrderRepository, times(1)).save(order);
     }
 
     // ============================================================
