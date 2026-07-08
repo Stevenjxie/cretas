@@ -77,6 +77,18 @@ class TestNumericReconcile:
         assert "实际" not in out           # both numbers within tol → no annotation
         assert meta["reconciled"] is False
 
+    def test_wrong_overall_still_caught_when_vip_present(self):
+        # Over-suppression guard (F3 audit): the span-guard must skip ONLY the
+        # inside-longer-name occurrences — a STANDALONE wrong overall 平均星级 in
+        # the SAME answer where VIP/非VIP names co-occur must STILL be corrected.
+        rec = FactReconciler()
+        ans = "平均星级4.2，其中VIP平均星级4.50，非VIP平均星级4.83。"
+        out, meta = rec.reconcile(ans, _fb())
+        assert "实际 4.79" in out          # standalone wrong overall STILL annotated
+        assert meta["reconciled"] is True
+        assert "实际 4.50" not in out      # correct VIP not falsely touched
+        assert "实际 4.83" not in out      # correct 非VIP not falsely touched
+
     def test_no_matching_fact_noop(self):
         rec = FactReconciler()
         # "翻台率" is not a fact name → must not annotate (宁漏不错).
