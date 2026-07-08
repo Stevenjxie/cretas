@@ -1,0 +1,177 @@
+# 统一业务概念注册表 — 餐饮域 (A0)
+#
+# 目的: 登记同一个业务概念在四套互不知晓的词汇表里的对应码, 让"这个概念还活着吗/
+# 该路由到哪" 从人工 grep 变成一张可 diff、可 CI 校验的表。
+#
+# 来源 spec: docs/superpowers/specs/2026-07-08-business-concept-registry-direction.md
+#            (§3 推荐路径 A0 — 半天登记 ~15 个高频概念 + pytest 校验器)
+#
+# 字段说明:
+#   java_intent  : ai_intent_configs.intent_code (Flyway seed, backend/java/.../db/flyway/*.sql)
+#                  仅格式校验 (UPPER_SNAKE_CASE), 不做存在性校验 —
+#                  grep Flyway SQL 从 Python 测试里做既脆又贵, 跨语言收益低 (spec §3 A0 备注)。
+#   python_ops   : smartbi.gold.restaurant_ops_router.SAMPLE_QUERIES 的 key (RESTAURANT_OPS_* 前缀)。
+#                  null = 该概念目前没有 Python ops 直读实现。
+#                  CI 校验器同时反向检查: SAMPLE_QUERIES 里的每个码都必须在本文件出现
+#                  (这是 A0 真正的价值 — 防止新码上线漏登记, 重演 2026-07-07 Stage-8
+#                  LLM 直选 Java 码丢窗口/盈亏的路由抢跑事故)。
+#   materialized : 物化模板 code 列表 (backend/python/smartbi/services/materialized_analytics/
+#                  templates/*.py 的 @register 类 code 属性)。[] = 无对应模板。
+#   owner_action : web-admin restaurantOwnerActionRegistry.ts 的 13 个 scenario 之一。
+#                  null = 该概念不直接对应一个老板行动场景 (纯分析类概念)。
+#   notes        : 人工判断依据 / 已知歧义 / 缺口说明。
+
+REVENUE_TREND:
+  java_intent: RESTAURANT_REVENUE_TREND
+  python_ops: RESTAURANT_OPS_TREND_ANALYSIS
+  materialized: [monthly_trend, period_comparison_trend]
+  owner_action: revenue_growth
+  notes: >
+    spec §2 方案 A 原始示例概念。Java 执行前经 Phase2 委托 gate;
+    窗口/盈亏槽位归 Python (2026-07-07 事故根因: 两者语义同物互不知晓)。
+
+OPS_OVERVIEW:
+  java_intent: RESTAURANT_OPS_SALES_SUMMARY  # V20260630_01 直接把 Python 码字符串当 Java intent_code 登记(耦合无登记, spec §1 已实证代价)
+  python_ops: RESTAURANT_OPS_SALES_SUMMARY
+  materialized: [business_overview_summary]
+  owner_action: null
+  notes: >
+    总体经营概览(营收/客单/订单数/门店差距, 见 restaurant_ops_router.py
+    SAMPLE_QUERIES["RESTAURANT_OPS_SALES_SUMMARY"])。java_intent 与 python_ops
+    字符串相同 — 这正是 spec §1 描述的"补丁级映射"实例, 不是本文件新造的巧合。
+    owner_action 留空: 该概念覆盖面太宽, 具体动作场景视 query 细节落在
+    revenue_growth/cost_margin 等多个 scenario, 不是单一映射。
+
+STORE_MARGIN:
+  java_intent: RESTAURANT_OPS_STORE_MARGIN  # 同上, V20260630_01 字符串复用
+  python_ops: RESTAURANT_OPS_STORE_MARGIN
+  materialized: [store_performance]
+  owner_action: store_compare
+  notes: 门店毛利差异分析。
+
+DISH_MARGIN:
+  java_intent: RESTAURANT_DISH_MARGIN  # backend/.../V20260821_03__indicator_seed_initial.sql (ind-f006-rdm)
+  python_ops: RESTAURANT_OPS_GROSS_MARGIN
+  materialized: []
+  owner_action: cost_margin
+  notes: >
+    菜品毛利。materialized=[] 是真实缺口 — 模板目录里没有 margin/毛利 专属模板
+    (dish_sales_top_n/dish_slow_movers/dish_category_breakdown 等都不是毛利口径)。
+
+DISH_COST:
+  java_intent: RESTAURANT_DISH_COST_QUERY  # V20260522_52__fix_restaurant_dish_cost_intent_tool_binding.sql
+  python_ops: RESTAURANT_OPS_RECIPE_COST
+  materialized: []
+  owner_action: cost_margin
+  notes: 食材/菜品成本卡查询 (BOM 用量成本), 与 DISH_MARGIN 相邻但不同口径(成本 vs 毛利率)。
+
+WASTAGE:
+  java_intent: RESTAURANT_WASTAGE_RATE  # V20260821_03__indicator_seed_initial.sql (ind-f006-rwr)
+  python_ops: RESTAURANT_OPS_WASTAGE_TOP
+  materialized: []
+  owner_action: cost_margin
+  notes: >
+    损耗排行(按食材/类型)。owner_action 判断依据: 前端 OWNER_ACTION_SCENARIO_TERMS
+    的 cost_margin 组含"损耗"; inventory_reorder 组只含"报损"(报损单据动作)不含
+    "损耗"(损耗率分析) — 故归 cost_margin, 供人审。
+
+STOCK_SHORTAGE:
+  java_intent: RESTAURANT_OPS_STOCK_SHORTAGE  # V20260630_01 字符串复用
+  python_ops: RESTAURANT_OPS_STOCK_SHORTAGE
+  materialized: []
+  owner_action: inventory_reorder
+  notes: 盘点缺口/库存差异热点。
+
+REQUISITION_TREND:
+  java_intent: RESTAURANT_OPS_REQUISITION_TREND  # V20260630_01 字符串复用
+  python_ops: RESTAURANT_OPS_REQUISITION_TREND
+  materialized: [purchase_inventory_inflow]
+  owner_action: inventory_reorder
+  notes: >
+    领料成本趋势 + top5 食材。materialized 用 purchase_inventory_inflow(进销存)
+    近似对应, 不是 1:1 同源模板, 供人审。
+
+STORE_COMPARE:
+  java_intent: RESTAURANT_STORE_REVENUE_RANK  # 门店营收排行 (grep 确认 intent_name='门店营收排行')
+  python_ops: null
+  materialized: [store_performance]
+  owner_action: store_compare
+  notes: >
+    门店营收/综合排行对比。python_ops=null 是真实缺口 —
+    RESTAURANT_OPS_* 8 码里最接近的是 STORE_MARGIN(毛利口径), 没有纯排行码。
+
+REVIEW_SUMMARY:
+  java_intent: RESTAURANT_REVIEW_SUMMARY  # intent_name='客户评价总览'
+  python_ops: null
+  materialized: [reviews_sentiment_summary]
+  owner_action: staff_training
+  notes: >
+    评价口碑总览。python_ops=null(无 RESTAURANT_OPS_* 对应码, 评价域完全在
+    Java 侧 RESTAURANT_REVIEW_* 12+ 码, 见 V20260903_01/V20260904_01, 未逐一登记 —
+    留作 A2 按需补)。owner_action 依据: 前端 staff_training terms 含
+    评价/差评/口碑/投诉/体验。
+
+MEMBER_RFM:
+  java_intent: RESTAURANT_VIP_GUEST_QUERY  # 重点客户查询; 姊妹码 RESTAURANT_AT_RISK_GUEST_QUERY(流失预警)未单独登记
+  python_ops: null
+  materialized: [member_consumption, member_deep_analytics]
+  owner_action: null
+  notes: >
+    会员 RFM/重点客户与流失预警。python_ops=null 是真实缺口(会员域完全在
+    Java+模板层, RESTAURANT_OPS_* 无会员码)。owner_action 留空: 无清晰单一
+    scenario 对应(会员运营散落在 traffic_conversion/revenue_growth 等多处)。
+
+TRAFFIC_CONVERSION:
+  java_intent: null
+  python_ops: null
+  materialized: []
+  owner_action: traffic_conversion
+  notes: >
+    ⚠️ 三表全缺的真实空洞: 客流/进店转化在 Java RESTAURANT_* 94 码、
+    Python RESTAURANT_OPS_* 8 码、40 个物化模板里都没有直接对应码 —
+    只在前端 owner-action terms 里存在(见 restaurantOwnerActionRegistry.ts
+    traffic_conversion 组: 客流/画像/商圈/转化/曝光/核销等)。这正是 A0
+    "缺失登记本身就有价值"的例子 — 说明这个老板高频提问的场景背后目前
+    没有真实数据管线, 只有关键词匹配后走 LLM 兜底。
+
+PACKAGE_RECOMMENDATION:
+  java_intent: null
+  python_ops: null
+  materialized: [combo_usage_rate]
+  owner_action: package
+  notes: >
+    套餐/组合推荐。java_intent 与 python_ops 均缺(套餐推荐目前没有专属
+    RESTAURANT_* 或 RESTAURANT_OPS_* 码) — materialized 用 combo_usage_rate
+    (套餐使用率)近似覆盖, 不完全同义(使用率 vs 推荐), 供人审。
+
+STAFFING_SCHEDULE:
+  java_intent: null
+  python_ops: null
+  materialized: []
+  owner_action: staffing_schedule
+  notes: >
+    排班/人效优化建议。三表均缺 — 与 STAFF_RANKING(下条)不同: 后者是"谁开单多"
+    的历史排行(有模板), 本概念是"该怎么排班"的前瞻建议, 目前纯 LLM 兜底无数据管线。
+
+INVENTORY_WARNING:
+  java_intent: null
+  python_ops: null
+  materialized: []
+  owner_action: inventory_reorder
+  notes: >
+    库存预警/安全库存阈值提醒(前瞻)。与 STOCK_SHORTAGE(回顾盘点差异)故意区分为
+    两个概念 — 三表均缺是真实缺口, 目前该场景完全靠前端 terms 匹配 + LLM 兜底。
+
+STAFF_RANKING:
+  java_intent: RESTAURANT_STAFF_RANKING  # intent_name='员工开单排行'
+  python_ops: null
+  materialized: [staff_performance]
+  owner_action: staffing_schedule
+  notes: 员工开单/效能历史排行(非前瞻排班建议, 见 STAFFING_SCHEDULE 区分)。
+
+BESTSELLER_ANALYSIS:
+  java_intent: RESTAURANT_BESTSELLER_QUERY
+  python_ops: null
+  materialized: [dish_sales_top_n]
+  owner_action: single_item_push
+  notes: 热销单品分析, 供主推单品决策参考。

@@ -1,0 +1,166 @@
+{
+  "_meta": {
+    "purpose": "Shared owner-action scenario -> keyword-terms data, unifying the two independent implementations that previously drifted (spec §1 drift #5): web-admin restaurantOwnerActionRegistry.ts (frontend inference) and backend restaurant_sections.py _OWNER_ACTION_KEYWORDS (backend topic-gate + fallback inference).",
+    "spec": "docs/superpowers/specs/2026-07-08-business-concept-registry-direction.md (§3 A1)",
+    "merge_policy": "Per-scenario term set = union(frontend_terms, backend_terms), EXCEPT where a term maps to a DIFFERENT scenario across the two sources AND adding it to the frontend's scenario would come earlier than the backend's current scenario in the backend's iteration order (see excludedConflicts below) -- those are excluded from the union to guarantee zero behavior regression in the backend fallback loop (first-match-wins over scenarios in tuple order).",
+    "revenueGrowth": "revenue_growth exists only in the frontend registry. Backend handles it via separate compound-phrase logic (_infer_owner_action_scenario_from_message top-of-function literal phrases + _is_broad_revenue_growth_question), not via this flat keyword-tuple mechanism. Registered here (backendKeywordGate=false) for completeness / future convergence, but NOT loaded into the backend's runtime _OWNER_ACTION_KEYWORDS tuple -- adding it there would newly open the topic gate for terms that previously didn't engage the owner-action feature at all, which is a materially bigger change than simple term-widening and out of A1's zero-regression scope.",
+    "excludedConflicts": [
+      {
+        "term": "服务员",
+        "frontendWants": "staffing_schedule",
+        "backendCurrentWinner": "staff_training",
+        "reason": "staff_training appears LATER than staffing_schedule in the backend's iteration order. Backend already resolves a message containing only '服务员' to staff_training today. Adding it to staffing_schedule (earlier in order) would silently steal that match. Excluded from staffing_schedule's term list to preserve current behavior; still present under staff_training (already there in both sources)."
+      },
+      {
+        "term": "加购",
+        "frontendWants": "package",
+        "backendCurrentWinner": "single_item_push",
+        "reason": "single_item_push appears LATER than package in the backend's iteration order. Backend already resolves a message containing only '加购' to single_item_push today. Adding it to package (earlier in order) would silently steal that match. Excluded from package's term list; still present under single_item_push (already there in both sources)."
+      }
+    ],
+    "otherKnownAmbiguities": [
+      {
+        "term": "前台",
+        "frontend": "staffing_schedule",
+        "backend": "operations_dispatch",
+        "note": "operations_dispatch is earlier in backend order and already contains this term, so it already wins today; adding to staffing_schedule too is safe (dead weight for that specific term, doesn't change any outcome, but documented for human review since it is a genuine semantic ambiguity between the two systems)."
+      },
+      {
+        "term": "外卖",
+        "frontend": "package",
+        "backend": "external_event_response",
+        "note": "external_event_response is earlier and already contains this term, so it already wins today; safe to also list under package."
+      },
+      {
+        "term": "调度",
+        "frontend": "staffing_schedule",
+        "backend": "operations_dispatch",
+        "note": "operations_dispatch is earlier and already contains this term, so it already wins today; safe to also list under staffing_schedule."
+      },
+      {
+        "term": "报损",
+        "frontend": "ambiguous within frontend itself (present under BOTH inventory_reorder and cost_margin in restaurantOwnerActionRegistry.ts)",
+        "backend": "was absent from both scenarios pre-merge (dead keyword, no match)",
+        "note": "Added to inventory_reorder only (earlier in backend order than cost_margin), mirroring how the frontend's own array-order resolution would already prefer inventory_reorder. Pure coverage gain -- backend previously had zero match for this term."
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "scenario": "store_compare",
+      "terms": [
+        "其他门店", "区域经理", "单店问题", "品牌共性", "哪家店", "复制到",
+        "所有门店", "最值得学习", "连锁", "连锁店", "门店里"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "operations_dispatch",
+      "terms": [
+        "今日作战", "仓管", "仓管+厨师长+前台", "仓管、厨师长、前台", "仓管厨师长前台",
+        "减少工作", "分别", "分别盯什么", "分别要做什么", "分工", "前台", "各岗位",
+        "派工", "管理层", "管理层减少工作", "谁做什么", "调度", "门迎"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "inventory_reorder",
+      "terms": [
+        "临期", "仓管今天", "先看什么", "具体补什么", "原料", "备菜", "备货",
+        "备货缺口", "安全库存", "库存预警", "库存风险", "报损", "缺货", "补货",
+        "采购补货", "食材"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "seating_mix",
+      "terms": [
+        "两人客", "两人桌", "二人桌", "四人客", "四人桌", "座位", "拼桌", "排队",
+        "桌型", "桌子", "桌数", "等位", "翻台", "翻台率"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "staffing_schedule",
+      "terms": [
+        "人手", "人效", "几段班", "前厅", "前台", "加一个人", "加人", "加在哪",
+        "加班", "午市", "后厨", "员工", "员工工时", "员工时间", "哪个环节", "多加",
+        "岗位", "工时", "忙不过来", "排班", "晚市", "班次", "调度"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "external_event_response",
+      "terms": [
+        "下雨", "亲子节", "会员日", "周边活动", "商圈活动", "商场活动", "堂食",
+        "外卖", "外部", "外部活动", "天气", "天气不好", "寒潮", "活动", "节日",
+        "降温", "雨天", "高温"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "traffic_conversion",
+      "terms": [
+        "下单", "交通", "人流", "入口", "到店少", "同商圈", "周边", "商圈", "商场",
+        "团购", "大众点评", "客流", "客流情况", "客流画像", "平台", "引流", "承接",
+        "抖音", "接住", "曝光", "核销", "热起来", "画像", "竞品", "美团", "路过",
+        "路过客流", "转化率", "这波人", "进店", "进店少", "进店转化", "门口",
+        "门口客流", "页面", "首图"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "staff_training",
+      "terms": [
+        "体验", "催菜", "口碑", "培训", "复购", "小红书", "差评", "店长", "开班前",
+        "意识", "投诉", "最在意", "服务员", "服务差评", "服务态度", "服务慢", "训练",
+        "评价", "评论", "话术", "顾客"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "kitchen_quality",
+      "terms": [
+        "上菜慢", "保证出餐", "出品", "出餐", "出餐速度", "厨师长", "厨房", "口味",
+        "后厨", "复杂菜", "太咸", "稳定", "退菜", "重做", "难吃"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "package",
+      "terms": [
+        "不想打折", "不打折", "低峰", "别只看销量", "单人餐", "双人餐", "外卖",
+        "套餐", "客单", "小套餐", "小菜", "工作日", "拉营收", "推菜", "提高客单价",
+        "搭配", "组合", "菜品组合", "配什么", "饮品"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "cost_margin",
+      "terms": [
+        "BOM", "bom", "不应该继续重点推", "不能多备", "不适合继续备", "亏毛利",
+        "利润", "原料", "备太多", "备货", "实际用量", "少备", "成本", "报损",
+        "损耗", "损耗高", "月盘点", "毛利", "涨价", "理论用量", "盈利", "盘点",
+        "继续备", "继续重点推", "采购", "采购价格", "食材", "验收"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "single_item_push",
+      "terms": [
+        "主推", "主推单品", "低价值", "加购", "单品", "引流菜", "拉动加购", "招牌",
+        "爆品", "短视频", "首屏"
+      ],
+      "backendKeywordGate": true
+    },
+    {
+      "scenario": "revenue_growth",
+      "terms": [
+        "增加营收", "提升营收", "提高营收", "收入下滑", "收入下降", "本周变差",
+        "生意变差", "营业额", "营收下滑", "营收下降", "营收差", "营收掉",
+        "营收杠杆", "营收比", "这周变差"
+      ],
+      "backendKeywordGate": false
+    }
+  ]
+}
