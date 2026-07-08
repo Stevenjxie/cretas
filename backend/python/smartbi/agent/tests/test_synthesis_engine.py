@@ -387,6 +387,69 @@ class TestSynthesisCapture:
         assert resp.source == "degraded"
         assert captured == []  # budget-exhausted degraded path must not capture
 
+    def test_llm_failure_not_captured(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        captured = []
+
+        async def boom(slot, payload, chain=None, timeout=30.0):
+            raise RuntimeError("all providers exhausted")
+
+        monkeypatch.setattr(se, "call_chain", boom)
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析评价和经营", dr))
+        assert resp.source == "degraded"
+        assert captured == []  # LLM-failure degraded path must not capture (guards refactors)
+
+    def test_factory_tenant_labeled_factory(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        captured = []
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {"choices": [{"message": {"content": "门店表现平稳。"}}],
+                    "usage": {"total_tokens": 200}}
+
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        # A Cretas factory tenant (F#####) reaching synthesis must be labeled
+        # "factory", not the restaurant default — no corpus-bucket pollution.
+        resp = asyncio.run(eng.synthesize("F001", "综合分析经营", dr))
+        assert resp.source == "llm"
+        assert captured[0]["business_type"] == "factory"
+
+    def test_empty_factbook_low_quality_and_flagged(self, monkeypatch):
+        captured = []
+
+        async def empty(*a, **k):
+            return None
+
+        for name in ("review_summary", "review_vip", "review_platform",
+                     "review_time_period", "review_good_tags", "review_dish_issues",
+                     "review_store_ranking", "finance_summary", "store_comparison",
+                     "top_products", "channel_breakdown", "discount_breakdown"):
+            monkeypatch.setattr(se, name, empty)
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {"choices": [{"message": {"content": "暂无数据可分析。"}}],
+                    "usage": {"total_tokens": 50}}
+
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析经营", dr))
+        assert resp.source == "llm"
+        # empty factbook → captured but quality=2 (excluded from training export)
+        # + flagged, so the demand report still sees the question.
+        assert captured[0]["quality"] == 2
+        assert captured[0]["metadata"]["empty_factbook"] is True
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])

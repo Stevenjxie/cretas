@@ -41,3 +41,17 @@ def test_family_breakdown_reused_over_candidates():
     assert bd["attribution"] == 1
     assert bd["write"] == 1
     assert bd["query"] == 0
+
+
+def test_stray_family_clamped_no_keyerror():
+    # A row with a family value outside the known set (legacy / future 4th family)
+    # must be clamped to "query" so family_breakdown() doesn't KeyError-crash the
+    # whole report.
+    rows = [
+        {"query": "某个问题", "family": "sentiment", "occurrence_count": 1,
+         "business_type": "restaurant", "last_seen": None},
+    ]
+    cands = mod._build_candidates(rows)
+    assert cands[0]["family"] == "query"
+    bd = mod.family_breakdown(cands)  # must not raise
+    assert bd["query"] == 1
