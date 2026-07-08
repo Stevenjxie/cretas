@@ -89,6 +89,12 @@ export interface ProcessSheetRowRequest {
   sampleRetainQuantity?: number;
   /** SP-G G3a: 包装明细 (来自产品-工序配置, 气调不在此录) */
   packagingDetail?: Array<Record<string, unknown>>;
+  /**
+   * G2: 本工序自定义字段值 (如 {baume: 12.5, remark: "..."})。key 集合受该工序
+   * WorkProcess.customFieldSchema 约束 —— 未配置 schema 的工序传任何 key 都会被后端 400 拒绝
+   * (见 ProcessSheetServiceImpl#validateCustomFields)。
+   */
+  customFields?: Record<string, unknown>;
 }
 
 /**

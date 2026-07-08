@@ -17,7 +17,8 @@ import {
   type FinishedGoodsStockItem,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
-import { PROCESS_SHEET_CONFIG, genClientRowId } from './PROCESS_SHEET_CONFIG';
+import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
+import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
 import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 import { isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
@@ -39,6 +40,20 @@ const props = withDefaults(defineProps<{
   allowSemiFinishedInjection?: boolean;
   /** 是否允许本道工序从多个上游批次混批投料。false 时仍可单选一个上游批次。 */
   allowMultipleUpstreamSources?: boolean;
+  /**
+   * G1 混批去硬编码: 本工序是否为链内第一道 (无上游, 如原料领料入口)。
+   * false/undefined → 走 `!isFirstProcess` 主判据 (config-driven, 由父组件按 processOrder ===
+   * 链内最小 processOrder 算出); undefined (父组件未传) 时只靠下方 archetype 兜底判断
+   * (与既有 5-archetype 硬编码等价, 保证零回归)。true → 明确首道, 不显上游来源选择器
+   * (除非命中 archetype 兜底, 如 xiuyou 从不在 archetype 集合内所以不受影响)。
+   */
+  isFirstProcess?: boolean;
+  /**
+   * G2 自定义字段: 本工序 WorkProcess.customFieldSchema (只含 enabled=true 项由父组件预筛选,
+   * 也可整份原样传入 — 本组件自行按 enabled 过滤)。渲染为额外的通用录入列 (追加到 cols 之后),
+   * 值收集进保存请求的 customFields map。
+   */
+  customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
    * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
   upstreamProcessLabel?: string;
@@ -53,6 +68,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   allowSemiFinishedInjection: false,
   allowMultipleUpstreamSources: false,
+  customFieldSchema: () => [],
   upstreamItems: () => [],
   ownInventoryItems: () => [],
   initialRows: () => [],
@@ -111,7 +127,20 @@ interface SheetRow {
 // -------------------------------------------------------------------------
 // Column config
 // -------------------------------------------------------------------------
-const cols = computed(() => PROCESS_SHEET_CONFIG[props.processCode] || []);
+/** G2 自定义字段: 只取 enabled=true 项 (防呆: 曾配置后又关闭的字段不再显示, 但历史值仍随
+ *  row_payload/customFields 保留, 不因隐藏而丢失 —— 重新开启后仍能看到)。 */
+const enabledCustomFields = computed(() =>
+  (props.customFieldSchema || []).filter((f) => f.enabled),
+);
+/** G2 自定义字段列描述符 (追加到 archetype/generic 列之后), key 与 label/type 直接来自 schema。 */
+const customFieldCols = computed<ColDef[]>(() =>
+  enabledCustomFields.value.map((f) => ({ key: f.key, label: f.label, type: f.type })),
+);
+/** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
+const cols = computed(() => [
+  ...(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS),
+  ...customFieldCols.value,
+]);
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
 const isXiuYou = computed(() => props.processCode === 'xiuyou');
 /** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
@@ -120,11 +149,33 @@ const isSingleUpstream = computed(() =>
 );
 const isQuSheTou = computed(() => props.processCode === 'qushetou');
 const isQidiao = computed(() => props.processCode === 'qidiao');
+/** 已登记列定义的 archetype processCode 集合 (与 PROCESS_SHEET_CONFIG 的 key 一致)。 */
+const KNOWN_ARCHETYPES = new Set(['xiuyou', 'chaoshui', 'gunrou', 'qushetou', 'shuzhi', 'qidiao']);
+/**
+ * G1 混批去硬编码: 本工序是否显示上游来源选择器 (单选/混选)。
+ *
+ * 主判据 (config-driven): `!props.isFirstProcess` —— 父组件按产品工序链动态算出"是否为链内
+ * 第一道", 任何非首道工序(不论真实工序名/processCode)均可用。
+ * 兜底 (archetype, 向后兼容零回归): 现有 5 个已登记 archetype 即使 isFirstProcess 未传
+ * (父组件旧版本 / 单测直接挂载不传该 prop) 也保持可用, 与本次改动前完全一致。
+ */
 const supportsUpstreamSources = computed(() =>
-  isSingleUpstream.value || isQuSheTou.value || isShuZhi.value || isQidiao.value,
+  props.isFirstProcess === false
+  || isSingleUpstream.value || isQuSheTou.value || isShuZhi.value || isQidiao.value,
 );
 const isMultiSource = computed(() => props.allowMultipleUpstreamSources === true && supportsUpstreamSources.value);
 const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiSource.value);
+/**
+ * G1 混批去硬编码: processCode 不属于任何已登记 archetype 且本工序确实显示上游来源选择器
+ * (supportsUpstreamSources) —— 真正自定义命名、未映射的新非首道工序。这类工序沿用 熟制
+ * (shuzhi) 的单 input/output 字段形状 (见 GENERIC_FALLBACK_COLS + 下方
+ * calcYield/buildRequest/hydrateRow/saveDisabledReason 里 `isGenericUpstream` 分支),
+ * 但不含 熟制 专属的锅数(potCount)录入。绑定 supportsUpstreamSources 而非直接判 isFirstProcess,
+ * 避免"支持来源选择器"和"用哪种字段形状"两个判据在边界 case 下不一致。
+ */
+const isGenericUpstream = computed(() =>
+  !KNOWN_ARCHETYPES.has(props.processCode) && supportsUpstreamSources.value,
+);
 
 // Bug 1 修复: 来源批次选择器的 label 必须反映真实工序链, 不能按 archetype processCode 硬编码
 // (硬编码在 role-mode / 关键词回退下必错 —— 同一 archetype 可能对应不同真实工序名)。
@@ -260,7 +311,7 @@ function blankRow(): SheetRow {
   // Default daterange fields to [today, today] for each daterange col in this process.
   const today = todayStr();
   const daterangeDefaults: Record<string, [string, string]> = {};
-  for (const col of PROCESS_SHEET_CONFIG[props.processCode] ?? []) {
+  for (const col of cols.value) {
     if (col.type === 'daterange') {
       daterangeDefaults[col.key] = [today, today];
     }
@@ -331,7 +382,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     const out = p.outputQuantity ?? null;
     row.fields['scrap'] = inp != null && out != null ? inp - out : null;
   }
-  if (isShuZhi.value) {
+  if (isShuZhi.value || isGenericUpstream.value) {
     if (isMultiSource.value) {
       row.upstreamSources = (p.upstreamSources ?? []).map((s) => ({ ...s }));
     } else {
@@ -341,6 +392,8 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     }
     row.fields['input'] = p.inputQuantity ?? null;
     row.fields['output'] = p.outputQuantity ?? null;
+    // 锅数(potCount)是 熟制 专属 UI (isShuZhi 才渲染 v-if), generic 也镜像 hydrate 无害
+    // (值存在但不渲染, isMultiSource 混锅面板对 generic 同样可用不含锅数录入)。
     row.potCount = p.potCount ?? 1;
     row.potRawKgs = (p.potRawKgs ?? []).map((v) => v);
   }
@@ -384,6 +437,18 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
         row.fields[col.key] = [stored, stored];
       } else {
         row.fields[col.key] = [today, today];
+      }
+    }
+  }
+
+  // G2 自定义字段: 从 payload.customFields 回填 (mirror isQidiao 的 payloadFields 回填模式)。
+  // 只回填当前 enabled 的字段 key —— 若某字段后来被工序设置里关闭 (enabled=false), 值仍在
+  // 后端 row_payload.customFields 里但本组件不再渲染对应列, 也就不回填 (重新启用后再次可见)。
+  const savedCustomFields = p.customFields as Record<string, unknown> | undefined;
+  if (savedCustomFields) {
+    for (const def of enabledCustomFields.value) {
+      if (def.key in savedCustomFields) {
+        row.fields[def.key] = savedCustomFields[def.key] as string | number | null;
       }
     }
   }
@@ -495,7 +560,7 @@ function calcReverseInput(row: SheetRow): number | null {
 function singleSourceUsage(row: SheetRow): number {
   if (isSingleUpstream.value) return (row.fields['before'] as number) ?? 0;
   if (isQuSheTou.value) return calcReverseInput(row) ?? 0;
-  if (isShuZhi.value) return (row.fields['input'] as number) ?? 0;
+  if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? 0;
   if (isQidiao.value) return (row.fields['usedWeight'] as number) ?? 0;
   return 0;
 }
@@ -520,7 +585,7 @@ function calcYield(row: SheetRow): number | null {
     // 去舌苔: 分母是反推投入量 (scrap + output), 分子是 output
     input = calcReverseInput(row);
     output = (row.fields['output'] as number) ?? null;
-  } else if (isShuZhi.value) {
+  } else if (isShuZhi.value || isGenericUpstream.value) {
     input = (row.fields['input'] as number) ?? null;
     output = (row.fields['output'] as number) ?? null;
   }
@@ -689,9 +754,9 @@ function saveDisabledReason(row: SheetRow): string | null {
     } else if (isQuSheTou.value) {
       if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
       if ((row.fields['output'] as number) == null) return '请填写产出重量';
-    } else if (isShuZhi.value) {
+    } else if (isShuZhi.value || isGenericUpstream.value) {
       if ((row.fields['output'] as number) == null) return '请填写产出数量';
-      if (row.potCount > 1) {
+      if (isShuZhi.value && row.potCount > 1) {
         const filled = row.potRawKgs.filter((v) => v != null && v > 0);
         if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
       }
@@ -708,7 +773,7 @@ function saveDisabledReason(row: SheetRow): string | null {
     } else if (isQuSheTou.value) {
       if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
       if ((row.fields['output'] as number) == null) return '请填写产出重量';
-    } else if (isShuZhi.value) {
+    } else if (isShuZhi.value || isGenericUpstream.value) {
       if ((row.fields['input'] as number) == null) return '请填写投入重量';
       if ((row.fields['output'] as number) == null) return '请填写产出数量';
     } else if (isQidiao.value) {
@@ -788,7 +853,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       base.inputQuantity = inputQty || totalFeed;
       base.outputQuantity = output;
       base.unit = 'kg';
-    } else if (isShuZhi.value) {
+    } else if (isShuZhi.value || isGenericUpstream.value) {
       base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
       base.outputQuantity = (row.fields['output'] as number) ?? 0;
       base.unit = 'kg';
@@ -834,7 +899,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.inputQuantity = inputQty;
     base.outputQuantity = output;
     base.unit = 'kg';
-  } else if (isShuZhi.value) {
+  } else if (isShuZhi.value || isGenericUpstream.value) {
     const inputQty = (row.fields['input'] as number) ?? 0;
     base.upstreamSources = [{
       sourceBatchNumber: row.upstreamBatch,
@@ -871,6 +936,22 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     // Persist numeric fields into payload JSON (backend stores row_payload)
     for (const key of ['storage', 'sample', 'remainBox', 'claim', 'productWeight', 'trimmings', 'usedWeight', 'boxWeight', 'workerPrice'] as const) {
       base[key] = row.fields[key] ?? null;
+    }
+  }
+
+  // G2 自定义字段: 收集非空值进 customFields map (后端按 WorkProcess.customFieldSchema 白名单校验,
+  // 未配置 schema 的工序传任何 key 都会被拒 — 前端只在 enabledCustomFields 非空时才会有值可收集,
+  // 天然不会给未开启自定义字段的工序发多余 key)。
+  if (enabledCustomFields.value.length > 0) {
+    const customFields: Record<string, unknown> = {};
+    for (const def of enabledCustomFields.value) {
+      const v = row.fields[def.key];
+      if (v !== null && v !== undefined && v !== '') {
+        customFields[def.key] = v;
+      }
+    }
+    if (Object.keys(customFields).length > 0) {
+      base.customFields = customFields;
     }
   }
   return base;

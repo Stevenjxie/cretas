@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { getInventory, getRows, type ProcessSheetInventoryItem, type ProcessSheetRowView } from '@/api/processSheet';
-import { getProductWorkProcesses } from '@/api/processProduction';
+import { getProductWorkProcesses, type ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
@@ -52,6 +52,11 @@ type ProcEntry = {
   label: string;
   allowInjection: boolean;
   allowMultipleUpstreamSources: boolean;
+  /** G1 混批去硬编码: 本工序是否为链内第一道 (排序后 index 0) —— config-driven 主判据,
+   *  透传给 ProcessDataTable 的 isFirstProcess prop (archetype 硬编码仍作兜底, 见组件内注释)。 */
+  isFirstProcess: boolean;
+  /** G2 自定义字段: 本工序 WorkProcess.customFieldSchema (join 只读字段), 透传给 ProcessDataTable。 */
+  customFieldSchema: ProcessSheetCustomFieldDef[] | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -85,9 +90,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -157,12 +162,17 @@ async function resolveProcesses() {
           }
         }
         // 张权 R4: 该工序是否被配置为「半成品注入工序」→ 透传给 ProcessDataTable 作 config-driven picker gating。
+        // G1: idx===0 (排序后链内第一道) → isFirstProcess=true, 作 supportsUpstreamSources 的
+        // config-driven 主判据 (archetype 硬编码仍作兜底, 见 ProcessDataTable 内注释)。
+        // G2: customFieldSchema 直接透传 (join 只读字段, 未开启则 null)。
         return {
           code,
           order: it.processOrder,
           label: it.processName,
           allowInjection: it.allowSemiFinishedInjection === true,
           allowMultipleUpstreamSources: it.allowMultipleUpstreamSources === true,
+          isFirstProcess: idx === 0,
+          customFieldSchema: it.customFieldSchema ?? null,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -355,6 +365,8 @@ defineExpose({ hasUnsavedRows });
             :process-label="proc.label"
             :allow-semi-finished-injection="proc.allowInjection"
             :allow-multiple-upstream-sources="proc.allowMultipleUpstreamSources"
+            :is-first-process="proc.isFirstProcess"
+            :custom-field-schema="proc.customFieldSchema"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"

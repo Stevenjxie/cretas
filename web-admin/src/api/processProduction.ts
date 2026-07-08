@@ -191,8 +191,21 @@ export interface WorkProcessItem {
   needsInput: boolean;               // 该工序是否需录投入量 (默认 true)
   outputUnit: string | null;         // 产出单位 (kg→盒/份; 空则沿用 unit)
   standardHourlyRate: number | null; // 标准时薪 (元/小时; null=未配置, 绝不默认 0)
+  /**
+   * G2: 自定义字段 schema (config-driven 逐工序电子表格自定义列)。
+   * 格式: [{key,label,type,enabled}, ...]。null = 本工序未开启自定义字段。
+   */
+  customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** G2: 工序自定义字段定义 (mirror WorkProcess.customFieldSchema 元素 shape). */
+export interface ProcessSheetCustomFieldDef {
+  key: string;
+  label: string;
+  type: 'number' | 'text' | 'date';
+  enabled: boolean;
 }
 
 export interface ProductWorkProcessItem {
@@ -243,6 +256,12 @@ export interface ProductWorkProcessItem {
   auxUnitPrice?: number | null;
   /** 段2(B) 元/kg 乘哪侧 kg: INPUT(投入侧)|OUTPUT(产出侧); 保水工序 output>input 必须显式。 */
   auxBasis?: string | null;
+  /**
+   * G2: 自定义字段 schema (只读, 来自 join WorkProcess.customFieldSchema)。
+   * null = 本工序未开启自定义字段。写入走 updateWorkProcess(factoryId, workProcessId, {customFieldSchema})
+   * (WorkProcess 是共享工序目录, 不是本 ProductWorkProcess 链接行的字段)。
+   */
+  customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
 }
 
 export interface RecommendedWorkProcess {
