@@ -80,6 +80,7 @@ class FactBook:
     # decomposition. Populated when the plan flags `attribution` (store-lag /
     # traffic-vs-ticket question). See ``compute_store_attribution``.
     attribution: Optional[Dict[str, Any]] = None
+    weather: Optional[Dict[str, Any]] = None
     cross_hints: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     # Echoed window for the prompt header (set by the engine).
@@ -103,6 +104,7 @@ class FactBook:
 
         self._render_review(lines)
         self._render_finance(lines)
+        self._render_weather(lines)
         self._render_attribution(lines)
         self._render_sales(lines)
         self._render_cross(lines)
@@ -211,6 +213,41 @@ class FactBook:
                 rev = s.get("revenue")
                 bc = s.get("bill_count") or 0
                 lines.append(f"  {i}. {name}：¥{_money(rev)}（{int(bc):,} 单）")
+        lines.append("")
+
+    def _render_weather(self, lines: List[str]) -> None:
+        weather = self.weather
+        if not weather or weather.get("no_data"):
+            return
+        buckets = {b.get("cond"): b for b in (weather.get("buckets") or [])}
+        sunny = buckets.get("晴天")
+        rainy = buckets.get("雨天")
+        lines.append("## 天气×营收（internal_seed_weather，相关≠因果）")
+        if sunny and rainy:
+            pct = weather.get("rain_vs_sunny_pct")
+            direction = "低" if pct is not None and pct < 0 else "高"
+            pct_text = abs(float(pct)) if pct is not None else None
+            lines.append(
+                f"- 雨天({int(rainy.get('n_days') or 0)}天)日均¥{_money(rainy.get('avg_rev'))} "
+                f"比晴天({int(sunny.get('n_days') or 0)}天)¥{_money(sunny.get('avg_rev'))} "
+                f"{direction}{pct_text}%"
+            )
+        for b in weather.get("buckets") or []:
+            sample = "；小样本" if b.get("small_sample") else ""
+            lines.append(
+                f"- {b.get('cond')}：{int(b.get('n_days') or 0)}天，日均营收¥{_money(b.get('avg_rev'))}，"
+                f"日均订单{_money(b.get('avg_bills'))}，客单价¥{_money(b.get('avg_ticket'))}{sample}"
+            )
+        extreme = weather.get("extreme_days") or []
+        if extreme:
+            seg = "；".join(
+                f"{d.get('date')} 降水{d.get('rain_mm')}mm 营收¥{_money(d.get('revenue'))}"
+                for d in extreme[:5]
+            )
+            lines.append(f"- 暴雨日：{seg}")
+        caveat = weather.get("caveat")
+        if caveat:
+            lines.append(f"- {caveat}")
         lines.append("")
 
     def _render_attribution(self, lines: List[str]) -> None:
@@ -343,6 +380,17 @@ class FactBook:
                 v = _num(val)
                 if v is not None:
                     idx[label] = v
+
+        weather = self.weather or {}
+        if weather and not weather.get("no_data"):
+            buckets = {b.get("cond"): b for b in (weather.get("buckets") or [])}
+            for label, bucket_name in (("雨天日均营收", "雨天"), ("晴天日均营收", "晴天")):
+                v = _num((buckets.get(bucket_name) or {}).get("avg_rev"))
+                if v is not None:
+                    idx[label] = v
+            v = _num(weather.get("rain_vs_sunny_pct"))
+            if v is not None:
+                idx["天气影响率"] = v
         return idx
 
     # -----------------------------------------------------------------
