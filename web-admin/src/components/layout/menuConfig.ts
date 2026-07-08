@@ -1,18 +1,6 @@
 import type { ModuleName } from '@/store/modules/permission';
 
-// ⚠️ 单一事实源 (single source of truth): 侧边栏菜单只读这个文件 (AppSidebar.vue
-// `filteredMenu` 直接消费 `menuConfig` / `financeManagerMenu`), 不读 router meta。
-//
-// 🔴 router/index.ts 里的 `meta.showInMenu` 是死代码 — 从未被任何组件读取。
-// 新增页面时把 `showInMenu: true` 写进 router meta **不会**让它出现在侧边栏, 必须在
-// 本文件手动登记一个 MenuItem 条目, 否则页面建好也部署了但用户永远点不到 (dead-end)。
-// 新增页面 checklist:
-//   1. router/index.ts 注册路由 (跟以前一样)
-//   2. 本文件 (menuConfig.ts) 里对应模块的 children 数组里加一个 MenuItem
-//   3. 需要限权限的话带上 roles (镜像 router meta.roles) 和/或 hideForFactoryTypes
-//
-// 想临时隐藏/显示某功能 (不删代码, 不改 router) → 加/改该项的 `visible` 字段即可,
-// 不需要注释整段 children 或去 router 改 showInMenu (那个字段没用)。
+// 菜单配置
 export interface MenuItem {
   path: string;
   title: string;
@@ -22,14 +10,9 @@ export interface MenuItem {
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
-  /**
-   * 显式可见性开关 (模块化管理入口)。默认 true (省略即可见)。
-   * 设为 false 立即从侧边栏隐藏该项 (及其 children, 如果是父组), 不影响路由本身
-   * (深链仍可访问, 只是没有菜单入口) —— 用于"功能上线但还不想暴露给所有租户"
-   * 或者"临时下线某功能入口"场景, 不用注释/删代码。
-   */
-  visible?: boolean;
 }
+
+const PLATFORM_ADMIN_ONLY = ['platform_admin'];
 
 // 财务主管专用菜单 - 简化版
 // WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
@@ -47,12 +30,7 @@ export const financeManagerMenu: MenuItem[] = [
   // Smoke v2 Bug #2: 财务审核采购单 — finance_manager 是该列表的主审核人
   { path: '/procurement/finance-review', title: '财务待审采购单', icon: 'ShoppingCart', module: 'finance' },
   // Sprint4-H F-AR-1: 财务审核销售单 — finance_manager 复核成本/利润/BOM 标准
-  { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' },
-  // 🔴 fool-proof-design Rule 5 fix (2026-07-05): financeManagerMenu 是完全独立的精简数组
-  // (AppSidebar.vue: roleCode==='finance_manager' 时 *只* 用这个, 不 fallback 到 rawMenuConfig
-  // 的 /procurement/payment-requests 项) — finance_manager 是付款申请的审批人 (isFinanceManager
-  // role check), 之前在此数组里 0 入口, 只能靠深链, 找不到"去哪审批供应商付款"。
-  { path: '/procurement/payment-requests', title: '采购付款申请', icon: 'Money', module: 'finance' }
+  { path: '/sales/finance-review', title: '财务待审销售单', icon: 'Goods', module: 'finance' }
 ];
 
 const rawMenuConfig: MenuItem[] = [
@@ -63,15 +41,13 @@ const rawMenuConfig: MenuItem[] = [
     icon: 'Odometer',
     module: 'dashboard',
     children: [
-      { path: '/workdesk/sales-owner', title: '销售老板工作台', icon: '', module: 'sales' },
+      { path: '/workdesk/sales-owner', title: '销售老板工作台', icon: '', module: 'sales', groupLabel: '经营管理' },
       { path: '/workdesk/finance-manager', title: '财务主管工作台', icon: '', module: 'finance' },
       { path: '/workdesk/quality-manager', title: '质量主管工作台', icon: '', module: 'quality' },
-      { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse' },
-      { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
-      // IA fix: 与 quality-manager (食品安全召回) 同名"质量主管工作台"造成侧边栏两项无法区分
-      // (per 菜单审计) — 按实际职能改名区分: quality-chief = 批次放行决策 (release_decision Tool)
-      { path: '/workdesk/quality-chief', title: '质检组长工作台', icon: '', module: 'quality' },
       { path: '/workdesk/production-manager', title: '生产经理工作台', icon: '', module: 'production' },
+      { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse', groupLabel: '一线执行' },
+      { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
+      { path: '/workdesk/quality-chief', title: '质检主管工作台', icon: '', module: 'quality' },
     ],
   },
   {
@@ -81,15 +57,18 @@ const rawMenuConfig: MenuItem[] = [
     path: '/production', title: '生产管理', icon: 'Operation', module: 'production',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
+      { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
-      { path: '/production/plans', title: '生产计划', icon: '', module: 'production' },
-      // 菜单孤儿 audit fix (2026-07-06): 未完成计划队列 (router: ProductionPendingQueue,
-      // 文员视角按交期升序展示 PENDING+IN_PROGRESS 计划) 早已注册, 从未进侧边栏。
       { path: '/production/pending-queue', title: '未完成计划队列', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
+      { path: '/production/delivery-warnings', title: '交货预警', icon: '', module: 'production' },
+      { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
+      { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
+      { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
+      { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
       // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
       // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
-      { path: '/system/products', title: '成品 / SKU (本厂生产)', icon: '', module: 'production' },
+      { path: '/system/products', title: '成品 / SKU', icon: '', module: 'production', groupLabel: '生产配置' },
       { path: '/system/work-processes', title: '工序管理', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',
@@ -98,22 +77,21 @@ const rawMenuConfig: MenuItem[] = [
       // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
       // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
       { path: '/production/bom', title: 'BOM/配方维护', icon: '', module: 'production' },
-      // 菜单孤儿 audit fix: BOM 版本管理/工程变更通知/多级BOM展开 (router 早注册, 从未进侧边栏)
-      { path: '/production/bom/tree', title: '多级BOM展开', icon: '', module: 'production' },
       { path: '/production/bom/versions', title: 'BOM版本管理', icon: '', module: 'production' },
-      { path: '/production/bom/ecns', title: 'ECN工程变更', icon: '', module: 'production' },
-      { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
-      // 菜单孤儿 audit fix: 报工撤回审批列表 (router: ProductionReversals)
-      { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
+      { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
+      { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
+      { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
+        groupLabel: '生产分析', hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/production-analytics/production', title: '生产数据分析', icon: '', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/production/bom-achievement', title: 'BOM达成率分析', icon: '', module: 'production' },
       { path: '/production/process-io', title: '工序投入产出对比', icon: '', module: 'production' },
-      { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
-      { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
-      { path: '/rd/samples', title: '研发样品', icon: '', module: 'production' },
-      // 菜单孤儿 audit fix: 已转样品库 (router: RdConverted, 研发样品转正后的库)
-      { path: '/rd/converted', title: '已转样品库', icon: '', module: 'production' },
       // SP9: 人效双口径对比 (报价 quotedLaborCost vs 实际 actualLaborCost)
-      { path: '/production/labor-efficiency', title: '人效双口径对比', icon: '', module: 'production' }
+      { path: '/production/labor-efficiency', title: '人效双口径对比', icon: '', module: 'production' },
+      { path: '/production-analytics/yield-cost', title: '成品出厂核算', icon: '', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
+        hideForFactoryTypes: ['RESTAURANT'] },
     ]
   },
   {
@@ -122,33 +100,18 @@ const rawMenuConfig: MenuItem[] = [
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/warehouse/material-types', title: '原料类型字典 (新建原料)', icon: '', module: 'warehouse' },
-      { path: '/warehouse/material-segments', title: '物料分段字典', icon: '', module: 'warehouse' },
-      { path: '/warehouse/materials', title: '原料入库登记 (具体批次)', icon: '', module: 'warehouse' },
-      // 菜单孤儿 audit fix (2026-07-06): 在制品 WIP (router: WarehouseWipBatches) 早注册,
-      // 从未进侧边栏, 放在原料入库登记附近 (同属批次/库存明细类)。
-      { path: '/warehouse/wip-batches', title: '在制品 (WIP)', icon: '', module: 'warehouse' },
-      // 菜单孤儿 audit fix: 半成品重量库存 (router: WarehouseSemiFinished, 只读快照)
-      { path: '/warehouse/semi-finished', title: '半成品重量库存', icon: '', module: 'warehouse' },
+      { path: '/warehouse/materials', title: '原料入库登记', icon: '', module: 'warehouse', groupLabel: '仓储作业' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
-      { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },
-      // SP7 六扇门 ERP-lite — 盘点任务(批量导入/期初建账/审批应用), 与上面"盘点管理"是不同页面,
-      // 之前只在 router 里注册没进侧边栏, 用户无法自助发现 (fool-proof-design Rule 5: dead-end 改导航)
-      { path: '/warehouse/stocktakes', title: '批量盘点/建账', icon: '', module: 'warehouse' },
-      // IA fix (菜单审计): 半成品盘点路由早已注册 (router index.ts) 但从未加入侧边栏 —
-      // 只能靠深链访问, 违反 fool-proof-design Rule 5 (dead-end 改导航)。放在盘点管理旁边。
-      { path: '/warehouse/semi-finished-stocktakes', title: '半成品盘点', icon: '', module: 'warehouse' },
-      { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse' },
-      // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
-      { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
+      { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
       { path: '/warehouse/wastage-reports', title: '报损管理', icon: '', module: 'warehouse' },
-      // 菜单孤儿 audit fix: 盐化仓管理 (router: WarehouseSaltedDeductions, F006 对客户代加工独立扣量)
-      { path: '/warehouse/salted-deductions', title: '盐化仓管理', icon: '', module: 'warehouse' },
-      { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse' },
-      { path: '/transfer/list', title: '调拨单', icon: '', module: 'warehouse' },
-      // 菜单孤儿 audit fix: 中转挂账对账 (router: WarehouseTransitLedger, 六扇门 N10 仓库主管/财务用)
-      { path: '/warehouse/transit-ledger', title: '中转挂账对账', icon: '', module: 'warehouse' }
+      { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse', groupLabel: '库存盘点' },
+      // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
+      { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
+      { path: '/warehouse/inventory', title: '盘点管理', icon: '', module: 'warehouse' },
+      { path: '/warehouse/material-types', title: '原料类型字典', icon: '', module: 'warehouse', groupLabel: '仓储配置' },
+      { path: '/warehouse/material-segments', title: '物料分段字典', icon: '', module: 'warehouse' },
+      { path: '/warehouse/material-price-trend', title: '物料均价趋势', icon: '', module: 'warehouse', groupLabel: '仓储分析' },
     ]
   },
   {
@@ -156,13 +119,13 @@ const rawMenuConfig: MenuItem[] = [
     path: '/quality', title: '质量管理', icon: 'Checked', module: 'quality',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality' },
-      { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
-      { path: '/quality/standards', title: '质检标准', icon: '', module: 'quality' },
+      { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality', groupLabel: '质量检验' },
       // Sprint4-H Q-PROCESS-1: 工序质检不良闭环
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
-      { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' }
+      { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' },
+      { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality', groupLabel: '处置闭环' },
+      { path: '/quality/standards', title: '质检标准', icon: '', module: 'quality', groupLabel: '质量配置' }
     ]
   },
   {
@@ -171,72 +134,37 @@ const rawMenuConfig: MenuItem[] = [
     path: '/procurement', title: '采购管理', icon: 'ShoppingCart', module: 'procurement',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement' },
+      { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement', groupLabel: '采购执行' },
       { path: '/procurement/receives', title: '采购入库', icon: '', module: 'procurement' },
-      { path: '/procurement/finance-review', title: '财务待审采购单', icon: '', module: 'finance' },
-      // F006 采购 audit fix (Bug 1, fool-proof-design Rule 5): /procurement/returns route
-      // existed (router/index.ts PurchaseReturns) but was never surfaced in sidebar — only
-      // reachable via a PO row's "更多→退货" dropdown or direct URL. Mirrors the /sales/returns
-      // entry added for the same gap on the sales side (see T-RTA fix comment below).
-      { path: '/procurement/returns', title: '采购退货', icon: '', module: 'procurement' },
-      // 菜单孤儿 audit fix (2026-07-06): 请购单 3 页 (router: PurchaseRequisitions /
-      // PendingApprovalRequisitions / MyPurchaseRequisitions) 早已注册, 但此前只挂在
-      // 「餐饮运营」组的 /procurement/requisitions/my 一项下 (且该组顶级 hideForFactoryTypes:
-      // ['FACTORY']) —— FACTORY 类型租户 (如 F006) 完全无法从菜单到达请购单功能, 只能靠深链。
-      // 现补进采购管理组 (该组对 FACTORY 可见, 对 RESTAURANT 隐藏, 与餐饮组互不冲突)。
-      { path: '/procurement/requisitions', title: '全部请购单', icon: '', module: 'procurement' },
-      { path: '/procurement/requisitions/my', title: '我的请购', icon: '', module: 'procurement' },
-      // roles 镜像 router/index.ts PendingApprovalRequisitions meta.roles
-      { path: '/procurement/requisitions/pending-approval', title: '待审批请购', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin'] },
-      // 菜单孤儿 audit fix: 核价单 (询价→核价→采购 pipeline, router: InquiryQuoteList)
-      { path: '/procurement/inquiry-quotes', title: '核价单', icon: '', module: 'procurement' },
-      // roles 镜像 router/index.ts PurchaseApprovalRules meta.roles
-      { path: '/procurement/approval-rules', title: '采购审批规则', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'permission_admin', 'procurement_manager', 'finance_manager'] },
-      // 菜单孤儿 audit fix: 入库异常处理 (router: PurchaseExceptions)
-      { path: '/procurement/exceptions', title: '入库异常', icon: '', module: 'procurement' },
-      // roles 镜像 router/index.ts PurchaseInvoices meta.roles
-      { path: '/procurement/invoices', title: '采购发票', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
-      // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 路由 (router/index.ts) 早已注册
-      // /procurement/payment-requests (采购付款申请 PENDING→FINANCE_REVIEW→APPROVED→PAID
-      // 状态机, 后端 markPaidPurchase 三写原子已生效, prod 已有 AP_PAYMENT 数据), 但从未加入
-      // 侧边栏 — 财务/出纳/采购员只能靠深链访问, 应付账款台账/采购单详情也无入口跳转过来,
-      // 用户找不到"怎么给供应商付款"。roles 镜像 router/index.ts PaymentRequests meta.
-      { path: '/procurement/payment-requests', title: '付款申请', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
-      { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement' },
+      { path: '/procurement/finance-review', title: '财务待审采购单', icon: '', module: 'finance', groupLabel: '采购审批' },
+      { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement', groupLabel: '供应商与价格' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]
   },
   {
     path: '/sales', title: '销售管理', icon: 'Goods', module: 'sales',
     children: [
-      { path: '/sales/orders', title: '销售订单', icon: '', module: 'sales' },
+      { path: '/sales/orders', title: '销售订单', icon: '', module: 'sales', groupLabel: '销售业务' },
       // 2026-06-17: 「成品库存」从销售菜单移除 (Steve: 不需要留在销售)。
       // 成品/库存归仓储管理口径; 路由 /sales/finished-goods 保留 (深链可达), 仅撤销售侧入口。
       // Apr 24 UX: /sales/shipments 等 manufacturing-only 概念对餐饮隐藏 (无批次/发货)。
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
-      // IA fix (菜单审计): #1236 已把页面/router title 改成「手工出货登记」(与仓储管理→出货管理
-      // 的扣库存流程区分), 但侧边栏标签当时漏改, 仍显示旧名「出货记录」造成菜单与页面标题不一致。
-      // 现同步为「手工出货登记(不扣库存)」, 双出货入口标签在菜单层面即可区分。
-      { path: '/sales/shipments', title: '手工出货登记(不扣库存)', icon: '', module: 'sales',
+      { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by
       // PR #549 but NEVER surfaced in sidebar — customer service / finance roles
       // had no menu entry, only "申请退货" button on individual sales order detail.
       // Now discoverable for 历史退货 review + status-tracking workflows.
       { path: '/sales/returns', title: '销售退货', icon: '', module: 'sales' },
-      { path: '/sales/vehicles', title: '车辆字典', icon: '', module: 'sales',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      // #739/#746: 销售方向付款申请 (退款/返利/销售费用) — roles 镜像 router/index.ts SalesPaymentRequests
+      { path: '/sales/payment-requests', title: '销售付款申请', icon: '', module: 'sales',
+        roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier'] },
       // Sprint4-H F-AR-1: 销售单财务审核 (镜像 /procurement/finance-review).
       // module:'finance' 让 finance_manager 在 /sales 组下也可见. 销售员可看但
       // 后端 @RequirePermission("finance:read_write") 限制操作权.
-      { path: '/sales/finance-review', title: '财务待审销售单', icon: '', module: 'finance' },
-      // #739/#746: 销售方向付款申请 (退款/返利/销售费用) — roles 镜像 router/index.ts SalesPaymentRequests
-      { path: '/sales/payment-requests', title: '销售付款申请', icon: '', module: 'sales',
-        roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier'] }
+      { path: '/sales/finance-review', title: '财务待审销售单', icon: '', module: 'finance', groupLabel: '销售审批' },
+      { path: '/sales/vehicles', title: '车辆字典', icon: '', module: 'sales', groupLabel: '销售配置',
+        hideForFactoryTypes: ['RESTAURANT'] }
     ]
   },
   {
@@ -259,8 +187,8 @@ const rawMenuConfig: MenuItem[] = [
     path: '/equipment', title: '设备管理', icon: 'Monitor', module: 'equipment',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/equipment/list', title: '设备列表', icon: '', module: 'equipment' },
-      { path: '/equipment/maintenance', title: '维护记录', icon: '', module: 'equipment' },
+      { path: '/equipment/list', title: '设备列表', icon: '', module: 'equipment', groupLabel: '设备台账' },
+      { path: '/equipment/maintenance', title: '维护记录', icon: '', module: 'equipment', groupLabel: '维护监控' },
       { path: '/equipment/alerts', title: '告警管理', icon: '', module: 'equipment' }
     ]
   },
@@ -270,95 +198,61 @@ const rawMenuConfig: MenuItem[] = [
     path: '/finance', title: '财务管理', icon: 'Money', module: 'finance',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      { path: '/sales/finance-review', title: '待审销售单', icon: '', module: 'finance' },
+      { path: '/sales/finance-review', title: '待审销售单', icon: '', module: 'finance', groupLabel: '审核队列' },
       { path: '/procurement/finance-review', title: '待审采购单', icon: '', module: 'finance' },
-      { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance' },
+      { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance' },
+      { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance', groupLabel: '财务核算' },
       { path: '/finance/three-statements', title: '财务报表', icon: '', module: 'finance' },
       { path: '/finance/reports', title: '财务分析(Excel)', icon: '', module: 'finance' },
       { path: '/finance/ar-ap', title: '应收应付', icon: '', module: 'finance' },
       { path: '/finance/invoices', title: '开票管理', icon: '', module: 'finance' },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
-      // 菜单孤儿 audit fix (2026-07-06): 凭证列表/期间结账/进销存台账/凭证模板/凭证导出
-      // (router: FinanceVoucherList / FinanceAccountingPeriod / FinanceInventoryLedger /
-      // FinanceVoucherTemplate / FinanceVoucherExport) 早已注册, 从未进侧边栏。
-      { path: '/finance/voucher-list', title: '凭证列表', icon: '', module: 'finance' },
-      { path: '/finance/accounting-period', title: '期间结账', icon: '', module: 'finance' },
-      { path: '/finance/inventory-ledger', title: '进销存台账', icon: '', module: 'finance' },
-      { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance' },
-      { path: '/finance/voucher-export', title: '凭证导出', icon: '', module: 'finance' },
-      // 🔴 fool-proof-design Rule 5 fix (2026-07-05): 镜像加一份到财务管理组 (与
-      // procurement/finance-review / sales/finance-review 的镜像模式一致) — 出纳/财务主管
-      // 习惯从"财务管理"找付款相关操作, 采购管理组下的入口对他们不够直觉。
-      { path: '/procurement/payment-requests', title: '采购付款申请', icon: '', module: 'finance',
-        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier'] },
-      { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance' },
-      { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance' },
-      { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance' }
+      { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
+      { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' }
     ]
   },
   // UX P2-5 merged into 生产管理: /rd 原独立顶级组 (1 项), 研发样品并入生产
   {
     path: '/system', title: '系统管理', icon: 'Setting', module: 'system',
     children: [
-      // IA fix (菜单审计): 账号管理/角色权限此前只挂在「人事管理」下 —
-      // 超管建厂时习惯去「系统管理」找"开账号", 找不到就以为功能缺失。
-      // 镜像加一份到系统管理 (同 path, 与 procurement/sales 的 finance-review 镜像模式一致),
-      // 人事管理下的原入口保留 (HR 场景仍成立)。module 保持 'system' 与 router meta 一致, RBAC 门控不变。
-      { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
-      { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
-      { path: '/system/logs', title: '操作日志', icon: '', module: 'system' },
-      { path: '/system/settings', title: '系统设置', icon: '', module: 'system' },
-      { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system' },
-      { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system' },
-      { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system' },
-      { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system' },
+      { path: '/system/logs', title: '操作日志', icon: '', module: 'system', groupLabel: '系统运维' },
+      { path: '/system/settings', title: '系统设置', icon: '', module: 'system', groupLabel: '工厂配置' },
       { path: '/system/approval-chains', title: '审批链配置', icon: '', module: 'system' },
-      { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system' },
       { path: '/system/workflow-designer', title: '工作流设计器', icon: '', module: 'system' },
       { path: '/system/features', title: '功能模块配置', icon: '', module: 'system' },
       // Apr 18 2026 bug #48: Canvas 编辑器 router 限制 roles, sidebar 跟上不让 dispatcher/
       // 其他 system:read 角色看到菜单 (否则点进去 /403 体验差)
       { path: '/canvas-editor', title: 'Canvas 配置编辑器', icon: '', module: 'system', roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
-      { path: '/system/pos', title: 'POS集成', icon: '', module: 'system' },
-      { path: '/system/smartbi-config', title: 'SmartBI配置', icon: '', module: 'system' },
       { path: '/system/badge-generator', title: '员工工牌生成', icon: '', module: 'system',
         hideForFactoryTypes: ['RESTAURANT'] },
-      // UX P2-5: 行为校准 (1 项) 合并入系统管理下, 不单做顶级组
-      { path: '/calibration/list', title: '行为校准', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
-      { path: '/system/data-quality-queue', title: '数据质量队列', icon: '', module: 'system',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
       // T123: 计量单位字典 — 客户要求"留个给我自己修改"的单位配置模块
       // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
       { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
-    ]
-  },
-  // 菜单孤儿 audit fix (2026-07-06): 工作流 4 页 (router 顶级组 /workflow, module: 'system')
-  // 早已注册 (my-created/my-participated/admin-running/rules), 从未进侧边栏 —
-  // 与 /system/workflow-designer (设计流程模板) 是不同功能: 这 4 页是"运行中工作流实例"的
-  // 个人/管理视角 (谁创建的/谁参与的/管理员看全部在跑的/流转规则设置), 独立顶级组更好发现,
-  // 不塞进已经很长的「系统管理」。roles 镜像 router meta (均无角色限制, 只受 module:'system'
-  // 权限门控 — 任何有 system 读权限的用户都能看自己创建/参与的工作流)。
-  {
-    path: '/workflow', title: '工作流', icon: 'Connection', module: 'system',
-    children: [
-      { path: '/workflow/my-created', title: '我创建的工作流', icon: '', module: 'system' },
-      { path: '/workflow/my-participated', title: '我参与的工作流', icon: '', module: 'system' },
-      { path: '/workflow/admin-running', title: '工作流处理', icon: '', module: 'system' },
-      { path: '/workflow/rules', title: '流转规则设置', icon: '', module: 'system' }
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
+      { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
+      { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/pos', title: 'POS集成', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/smartbi-config', title: 'SmartBI配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      // UX P2-5: 行为校准 (1 项) 合并入系统管理下, 不单做顶级组
+      { path: '/calibration/list', title: '行为校准', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY,
+        hideForFactoryTypes: ['RESTAURANT'] },
+      // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
+      { path: '/system/data-quality-queue', title: '数据质量队列', icon: '', module: 'system',
+        roles: PLATFORM_ADMIN_ONLY }
     ]
   },
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling' },
+      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '调度执行' },
       { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling' },
       { path: '/scheduling/realtime', title: '实时监控', icon: '', module: 'scheduling' },
-      { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling' },
+      { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling', groupLabel: '资源与预警' },
       { path: '/scheduling/alerts', title: '告警管理', icon: '', module: 'scheduling' },
-      { path: '/scheduling/settings', title: '排产设置', icon: '', module: 'scheduling' }
+      { path: '/scheduling/settings', title: '排产设置', icon: '', module: 'scheduling', groupLabel: '调度配置' }
     ]
   },
   {
@@ -426,20 +320,6 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
       { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/analytics/production-report', title: '车间实时生产报表', icon: 'Operation', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/production', title: '生产数据分析', icon: 'Histogram', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/efficiency', title: '人效分析', icon: 'User', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/cost', title: '成本分析', icon: 'Coin', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/yield-cost', title: '成品出厂核算', icon: 'Coin', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/cost-summary', title: '成本汇总', icon: 'Tickets', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/production-analytics/three-price-comparison', title: '三价对比看板', icon: 'Money', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
       // -- 数据管理 --
       { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
       { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
@@ -469,7 +349,6 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/quality': 80,
   '/smart-bi': 90,
   '/system': 100,
-  '/workflow': 105,
   '/scheduling': 110,
   '/hr': 120,
   '/equipment': 130,

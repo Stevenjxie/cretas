@@ -7,6 +7,8 @@ import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import { buildHubRedirect } from './analysisHubRedirect';
 
+const platformAdminOnlyRoles = ['platform_admin'];
+
 const financeReviewRoles = [
   'factory_super_admin',
   'platform_admin',
@@ -157,19 +159,17 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'procurement'
         }
       },
-      // Sprint 8 P4c — 质检组长工作台 (QualityChiefWorkdesk)
+      // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
       // 5 Tool: quality_check_summary + haccp_status_query + additive_compliance_check_quality
       // + customer_quality_standard + release_decision (WRITE + Preview 灵魂 Tool)
       // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?" — 1 页面综合判断 vs HJ 4 菜单
-      // IA fix (菜单审计): 与 quality-manager (食品安全召回) 原来同名"质量主管工作台",
-      // 侧边栏出现两个一模一样的项无法区分 — 按实际职能(批次放行决策)改名。
       {
         path: 'workdesk/quality-chief',
         name: 'QualityChiefWorkdesk',
         component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
         meta: {
           requiresAuth: true,
-          title: '质检组长工作台',
+          title: '质量主管工作台',
           icon: 'Aim',
           module: 'quality'
         }
@@ -352,9 +352,6 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/materials/list.vue'),
             meta: { requiresAuth: true, title: '原材料批次', module: 'warehouse' }
           },
-          // 期初建账已并入盘点 (Steve 架构决策 2026-07): 期初/盘盈/盘亏都是"库存调整+过凭证",
-          // 统一在「批量盘点/建账」(/warehouse/stocktakes) 勾选「期初建账」一个入口完成——
-          // 既有批次校正 + 新物料从 0 建账 + 同一张 借1403/贷4001 期初凭证。原独立「期初建账」页已移除。
           // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
           {
             path: 'inventory-total',
@@ -493,12 +490,6 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'QualityInspections',
             component: () => import('@/views/quality/inspections/list.vue'),
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
-          },
-          {
-            path: 'disposition',
-            name: 'QualityDisposition',
-            component: () => import('@/views/quality/disposition/list.vue'),
-            meta: { requiresAuth: true, title: '不良品处置', module: 'quality' }
           },
           {
             path: 'disposals',
@@ -788,8 +779,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'shipments',
             name: 'SalesShipments',
             component: () => import('@/views/sales/shipments/list.vue'),
-            // 手工出货登记 (ShipmentRecord, 不扣库存) — 与「销售订单→发货单→仓库确认」(扣库存) 区分.
-            meta: { requiresAuth: true, title: '手工出货登记', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
+            meta: { requiresAuth: true, title: '出货记录', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
           },
           {
             path: 'vehicles',
@@ -1029,15 +1019,6 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'HRWagePolicy',
             component: () => import('@/views/hr/wage-policy/index.vue'),
             meta: { requiresAuth: true, title: '工资策略', module: 'hr' }
-          },
-          {
-            // 2026-07-02: 工时单价配置迁移 — 原只在 系统设置(module:'system') 成本设置 tab,
-            // 逐工序报工缺配置死胡同提示无法自助解决 (缺 system 模块的工厂看不到入口)。
-            // 挪到 人事管理(module:'hr') 下, 复用同一后端端点 /config/cost-settings。
-            path: 'config/labor-rate',
-            name: 'HRLaborRateConfig',
-            component: () => import('@/views/hr/config/labor-rate.vue'),
-            meta: { requiresAuth: true, title: '人工成本设置', module: 'hr' }
           }
         ]
       },
@@ -1257,7 +1238,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'encoding-rules',
             name: 'SystemEncodingRules',
             component: () => import('@/views/system/encoding-rules/list.vue'),
-            meta: { requiresAuth: true, title: '编码规则字典', module: 'system' }
+            meta: { requiresAuth: true, title: '编码规则字典', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'approval-chains',
@@ -1269,7 +1250,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'ai-quota',
             name: 'SystemAIQuota',
             component: () => import('@/views/system/ai-quota/list.vue'),
-            meta: { requiresAuth: true, title: 'AI 配额规则', module: 'system' }
+            meta: { requiresAuth: true, title: 'AI 配额规则', module: 'system', roles: platformAdminOnlyRoles }
           },
           // Sprint 8 P0.2 HIDE — index.vue 是 el-empty 占位, 内容未实现.
           // 后端 API (permissionApi.ts) 已 ship, 仅缺前端实现.
@@ -1290,19 +1271,19 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'ai-intents',
             name: 'SystemAIIntents',
             component: () => import('@/views/system/ai-intents/index.vue'),
-            meta: { requiresAuth: true, title: 'AI意图配置', module: 'system' }
+            meta: { requiresAuth: true, title: 'AI意图配置', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'skill-tools',
             name: 'SystemSkillTools',
             component: () => import('@/views/system/skill-tools/index.vue'),
-            meta: { requiresAuth: true, title: 'Skill/Tool 治理', module: 'system' }
+            meta: { requiresAuth: true, title: 'Skill/Tool 治理', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'llm-usage',
             name: 'SystemLLMUsage',
             component: () => import('@/views/system/llm-usage/index.vue'),
-            meta: { requiresAuth: true, title: 'LLM 用量监控', module: 'system' }
+            meta: { requiresAuth: true, title: 'LLM 用量监控', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             // Sprint 4 Chat K C-LOG-AUDIT-1 (2026-05-16): 系统操作日志独立 menu.
@@ -1378,7 +1359,7 @@ const businessRoutes: RouteRecordRaw[] = [
               title: '数据质量队列',
               module: 'system',
               hidden: false,
-              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+              roles: platformAdminOnlyRoles,
             },
           },
           {
@@ -1391,7 +1372,7 @@ const businessRoutes: RouteRecordRaw[] = [
               title: '数据质量队列详情',
               module: 'system',
               hidden: true,
-              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+              roles: platformAdminOnlyRoles,
             },
           },
           {
@@ -1410,7 +1391,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'pos',
             name: 'SystemPos',
             component: () => import('@/views/system/pos/list.vue'),
-            meta: { requiresAuth: true, title: 'POS集成', module: 'system' }
+            meta: { requiresAuth: true, title: 'POS集成', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'work-processes',
@@ -1434,19 +1415,19 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'smartbi-config',
             name: 'SmartBIConfig',
             component: () => import('@/views/smartbi-config/SmartBIConfigView.vue'),
-            meta: { requiresAuth: true, title: 'SmartBI配置', module: 'system' }
+            meta: { requiresAuth: true, title: 'SmartBI配置', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'smartbi-config/data-sources',
             name: 'SmartBIDataSources',
             component: () => import('@/views/smartbi-config/DataSourceConfigView.vue'),
-            meta: { requiresAuth: true, title: '数据源配置', module: 'system' }
+            meta: { requiresAuth: true, title: '数据源配置', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'smartbi-config/chart-templates',
             name: 'SmartBIChartTemplates',
             component: () => import('@/views/smartbi-config/ChartTemplateView.vue'),
-            meta: { requiresAuth: true, title: '图表模板', module: 'system' }
+            meta: { requiresAuth: true, title: '图表模板', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: 'badge-generator',
@@ -1568,19 +1549,19 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'calibration',
         name: 'Calibration',
         redirect: '/calibration/list',
-        meta: { requiresAuth: true, title: '行为校准', icon: 'Aim', module: 'system' },
+        meta: { requiresAuth: true, title: '行为校准', icon: 'Aim', module: 'system', roles: platformAdminOnlyRoles },
         children: [
           {
             path: 'list',
             name: 'CalibrationList',
             component: () => import('@/views/calibration/CalibrationListView.vue'),
-            meta: { requiresAuth: true, title: '校准列表', module: 'system' }
+            meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: platformAdminOnlyRoles }
           },
           {
             path: ':id',
             name: 'CalibrationDetail',
             component: () => import('@/views/calibration/CalibrationDetailView.vue'),
-            meta: { requiresAuth: true, title: '校准详情', module: 'system', hidden: true }
+            meta: { requiresAuth: true, title: '校准详情', module: 'system', hidden: true, roles: platformAdminOnlyRoles }
           }
         ]
       },
