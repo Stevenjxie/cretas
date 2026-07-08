@@ -142,6 +142,13 @@ logger = logging.getLogger(__name__)
 
 
 SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
+THIN_RESTATE_MAX_TOKENS = 400
+
+RESULT_SOURCE_THIN_RESTATE = "thin_restate"
+RESULT_SOURCE_TEMPLATE = "template"
+
+_THIN_NUMBER_RE = re.compile(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
+_THIN_RESTATE_TOL = Decimal("0.5")
 
 
 # ============================================================================
@@ -182,6 +189,52 @@ def _round1(value: Optional[Decimal]) -> Optional[float]:
     if value is None:
         return None
     return float(value.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def _is_pure_attribution_plan(plan: Dict[str, Any]) -> bool:
+    return bool(plan.get("attribution")) and not any(
+        bool(plan.get(k)) for k in ("review", "finance", "sales", "weather")
+    )
+
+
+def _collect_numeric_values(obj: Any, out: Optional[List[Decimal]] = None) -> List[Decimal]:
+    if out is None:
+        out = []
+    if isinstance(obj, bool) or obj is None:
+        return out
+    if isinstance(obj, (int, float, Decimal)):
+        try:
+            out.append(Decimal(str(obj)))
+        except Exception:
+            return out
+        return out
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect_numeric_values(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_numeric_values(v, out)
+    return out
+
+
+def _thin_restate_numbers_allowed(text: str, attribution: Dict[str, Any]) -> bool:
+    """Reverse-whitelist Arabic numbers in thin restate text.
+
+    Every Arabic number the LLM emits must be present in compute_store_attribution
+    output within a 0.5 tolerance. Unknown numbers force deterministic template
+    fallback; this helper does not attempt to "fix" the LLM text.
+    """
+    allowed = _collect_numeric_values(attribution)
+    if not allowed:
+        return False
+    for match in _THIN_NUMBER_RE.finditer(text or ""):
+        try:
+            claimed = Decimal(match.group(0).replace(",", ""))
+        except Exception:
+            return False
+        if not any(abs(claimed - val) <= _THIN_RESTATE_TOL for val in allowed):
+            return False
+    return True
 
 
 def compute_weather_attribution(
@@ -486,6 +539,27 @@ class ComprehensiveSynthesisEngine:
             factory_id, date_range, plan, period=f"{start_iso} 至 {end_iso}",
         )
 
+        if _is_pure_attribution_plan(plan) and factbook.attribution:
+            answer, tokens, response_source = await self._thin_restate_attribution(
+                question, factbook, factory_id,
+            )
+            answer, fc_meta = self._reconciler.reconcile(answer, factbook)
+            charts = self.collect_charts(factbook, plan)
+            post_budget = await self._budget.consume(factory_id, tokens)
+            if not conversation_history:
+                await self._cache.put(
+                    factory_id, q_hash, answer,
+                    chart_config={"charts": charts} if charts else None,
+                    tokens=tokens, ttl_hours=cache_ttl_hours,
+                )
+            return SynthesisResponse(
+                answer=answer, source=response_source, tokens=tokens,
+                tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                insight_summary="", fact_check=fc_meta,
+            )
+
         # 5. Structured multi-dim insights (deterministic correlations).
         insight_summary = self._analyze(factbook, period=f"{start_iso} 至 {end_iso}")
 
@@ -618,6 +692,14 @@ class ComprehensiveSynthesisEngine:
             "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
+            # A pure "traffic or ticket" lag question contains 客单价, which is
+            # also a finance cue. Keep it pure attribution unless the user also
+            # asks for broader revenue/finance/operations context (so the thin-
+            # restate pure-attribution fast path can trigger — P4).
+            if plan["finance"] and not any(k in ql for k in (
+                "营收", "营业额", "经营", "财务", "收入", "业绩",
+            )):
+                plan["finance"] = False
         # "哪天" dropped (audit P3 F1): "哪天营收最高" is a pure ranking question,
         # not a weather question — it over-triggered the weather dimension.
         _wants_weather = any(k in ql for k in (
@@ -913,6 +995,98 @@ class ComprehensiveSynthesisEngine:
             "严格遵守诚实标注规则。"
         )
         return "\n".join(lines)
+
+    async def _thin_restate_attribution(
+        self, question: str, factbook: FactBook, factory_id: Optional[str]
+    ) -> Tuple[str, int, str]:
+        """Thin restate for pure store attribution.
+
+        The deterministic attribution dict is the only numeric source. The LLM
+        may only restate those numbers in plain language; every Arabic number in
+        its text is reverse-whitelisted before the text can be returned.
+        """
+        attribution = factbook.attribution or {}
+        fallback = self._render_attribution_template(attribution)
+        try:
+            prompt = self._build_thin_restate_prompt(question, attribution)
+            with redaction_scope():
+                register_values_for_egress(factbook.collect_sensitive_names())
+                answer, tokens = await self._call_thin_restate_llm(prompt, factory_id)
+                answer = restore_in_scope(answer)
+            if _thin_restate_numbers_allowed(answer, attribution):
+                return answer, tokens, RESULT_SOURCE_THIN_RESTATE
+            logger.warning("[synthesis] thin restate rejected by numeric whitelist")
+            return fallback, tokens, RESULT_SOURCE_TEMPLATE
+        except Exception as e:
+            logger.warning("[synthesis] thin restate failed; using template: %s", e)
+            return fallback, 0, RESULT_SOURCE_TEMPLATE
+
+    def _build_thin_restate_prompt(self, question: str, attribution: Dict[str, Any]) -> str:
+        lg = attribution.get("laggard") or {}
+        facts = {
+            "laggard_store": lg.get("store_name"),
+            "laggard_revenue": lg.get("revenue"),
+            "delta_revenue": lg.get("delta_revenue"),
+            "traffic_effect": lg.get("traffic_effect"),
+            "ticket_effect": lg.get("ticket_effect"),
+            "bills": lg.get("bills"),
+            "avg_ticket": lg.get("avg_ticket"),
+            "bench_bills": attribution.get("bench_bills"),
+            "chain_avg_ticket": attribution.get("chain_avg_ticket"),
+            "bench_revenue": attribution.get("bench_revenue"),
+            "primary_cause": attribution.get("primary_cause"),
+        }
+        return (
+            "用户问：{question}\n\n"
+            "你是餐饮经营问答的薄复述层，只能把下面 attribution 数字用老板听得懂的话复述。\n"
+            "禁止计算、禁止新增任何阿拉伯数字、禁止百分比、禁止估算。"
+            "如果要写数字，只能逐字使用下面字段里的数字。\n"
+            "attribution={facts}\n\n"
+            "用一小段中文回答：先说哪家店拖后腿，再说主要是客流还是客单价，以及两个效应。"
+        ).format(question=question, facts=json.dumps(facts, ensure_ascii=False, sort_keys=True))
+
+    async def _call_thin_restate_llm(
+        self, user_prompt: str, factory_id: Optional[str] = None
+    ) -> Tuple[str, int]:
+        """Call the shared INSIGHTS slot for a short restatement only."""
+        payload = {
+            "messages": [
+                {"role": "system", "content": (
+                    "你只做餐饮经营归因的薄复述，不做计算。"
+                    "所有阿拉伯数字必须原样来自用户给定 attribution。"
+                    "不要输出 attribution 之外的阿拉伯数字。"
+                )},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": THIN_RESTATE_MAX_TOKENS,
+        }
+        with llm_caller_context("synthesis_engine.thin_restate", factory_id):
+            body = await call_chain(SLOT.INSIGHTS, payload, timeout=20.0)
+        text = (
+            body.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        ).strip()
+        usage = body.get("usage") or {}
+        tokens = int(usage.get("total_tokens") or 0)
+        if not text:
+            raise ValueError("LLM returned empty thin restate")
+        return text, tokens
+
+    @staticmethod
+    def _render_attribution_template(attribution: Dict[str, Any]) -> str:
+        lg = attribution.get("laggard") or {}
+        store = lg.get("store_name") or "该门店"
+        primary = attribution.get("primary_cause") or "未判定"
+        return (
+            f"{store}拖后腿：营收 {lg.get('revenue')}，"
+            f"与门店平均差额 {lg.get('delta_revenue')}。"
+            f"拆开看，客流效应 {lg.get('traffic_effect')}，"
+            f"客单价效应 {lg.get('ticket_effect')}，"
+            f"主因是{primary}。"
+        )
 
     async def _call_llm(
         self, user_prompt: str, factory_id: Optional[str] = None
