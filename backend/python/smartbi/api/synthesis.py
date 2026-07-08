@@ -94,11 +94,21 @@ async def _resolve_window(
             if question:
                 try:
                     (rs, re_), _lbl = _resolve_sales_date_range(question, today=data_max)
-                    if rs and re_:
+                    # A bare "今天"/"今日" (single-day) is almost always an action
+                    # clause ("综合看看经营，今天先做哪几家店"), NOT a request to
+                    # analyze one day — the parser is tuned for sales prompts where
+                    # 1 day is valid. Ignore it for multi-dim synthesis (audit A#2).
+                    if rs and re_ and _lbl not in ("今天",):
                         s = max(rs, data_min)
                         e = min(re_, data_max)
                         if s <= e:
                             return s, e
+                        # Parsed window has NO overlap with available data (owner
+                        # asked "上个月" but no data there). Return the honest empty
+                        # window — never silently substitute full history and label
+                        # all-time numbers as if answering the phrase (audit A#1,
+                        # 禁止降级/no-fake-data). Empty factbook → honest "no data".
+                        return rs, re_
                 except Exception as _rex:  # parser must never break window resolution
                     logger.warning("[synthesis] relative-window parse failed: %s", _rex)
             return data_min, data_max

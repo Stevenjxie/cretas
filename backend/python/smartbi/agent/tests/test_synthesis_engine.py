@@ -186,6 +186,19 @@ class TestPlanDimensions:
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         assert eng.plan_dimensions("哪家店订单最多")["attribution"] is False
 
+    def test_shengyi_chabuduo_not_attribution(self):
+        # 生意差 ⊂ 生意差不多 (neutral "roughly the same") — polarity inversion must
+        # NOT trip the store decomposition (audit B#1).
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        for q in ["各店生意差不多", "哪家店生意差不多"]:
+            assert eng.plan_dimensions(q)["attribution"] is False, q
+
+    def test_bare_renshao_dropped_no_overreach(self):
+        # bare 人少 dropped → a supplier/staffing question must not trip attribution
+        # (audit B#2).
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        assert eng.plan_dimensions("哪家供应商送货人少")["attribution"] is False
+
 
 # --------------------------------------------------------------------------
 # _build_factbook

@@ -392,6 +392,10 @@ class TestQuestionFamily:
                   "有的店生意就是做不起来", "谁最差"]:
             assert classify_question_family(q) == "attribution", q
 
+    def test_chabuduo_neutral_stays_query(self):
+        # 哪家差 dropped (⊂ 哪家差不多, neutral) → must stay query (audit B#3).
+        assert classify_question_family("这两家店哪家差不多能达标") == "query"
+
     def test_query_default(self):
         # Neutral/positive queries (incl. superlatives like 最多) stay query —
         # the new colloquial attribution cues are underperformance-specific.

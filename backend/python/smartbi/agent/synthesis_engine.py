@@ -362,12 +362,16 @@ class ComprehensiveSynthesisEngine:
         _wants_store = any(k in ql for k in (
             "门店", "分店", "店铺", "哪家", "哪个店", "各店",
             "有的店", "有些店", "有几家", "几家店", "某家", "某些店"))
+        # "生意差在哪" not bare "生意差" — 生意差 ⊂ 生意差不多 (neutral "roughly the
+        # same"), a polarity inversion that wrongly tripped attribution (audit B#1).
         _wants_lag = any(k in ql for k in (
             "拖后腿", "垫底", "最差", "掉队", "落后", "差在哪", "拉胯", "最弱",
-            "最不行", "做不起来", "做不起", "生意差", "生意不好", "起不来"))
+            "最不行", "做不起来", "做不起", "生意差在哪", "生意不好", "起不来"))
+        # bare "人少" dropped — ambiguous (人手少/送货人少); keep the unambiguous
+        # 客人少/来客少/没人来 (audit B#2).
         _wants_traffic_ticket = any(k in ql for k in (
             "客流", "客单价", "人均", "单量", "来客", "进店",
-            "没人来", "没客人", "人少", "客人少", "来的人少", "来客少",
+            "没人来", "没客人", "客人少", "来的人少", "来客少",
             "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
