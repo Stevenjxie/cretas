@@ -66,4 +66,6 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
            "AND br.recipeCode LIKE :prefix")
     long countByRecipeCodePrefix(@Param("factoryId") String factoryId,
                                   @Param("prefix") String prefix);
+
+    boolean existsByFactoryIdAndRecipeCode(String factoryId, String recipeCode);
 }
