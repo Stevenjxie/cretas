@@ -1007,6 +1007,7 @@ async def post_restaurant_tiered_answer(
     from smartbi.gold.restaurant_ops_router import (
         _profit_intent,
         _uses_relative_sales_window,
+        match_restaurant_ops,
     )
 
     try:
@@ -1027,11 +1028,19 @@ async def post_restaurant_tiered_answer(
         # 代价: 无信号模糊问题不再经 T3 产生澄清委托 (回到 Java 原样回答,
         # 即 Phase 2 之前的行为), 可接受; 时间改述的覆盖损失由确定性时间
         # 词汇加硬 (俩/仨/半年, 同批 commit) 收窄。
+        #
+        # 2026-07-08 follow-up (库存预警/排班建议新增): T1 关键词
+        # (match_restaurant_ops) 命中的查询 —— 例如"哪些食材快没了"/"库存够
+        # 不够" —— 既无利润词也无相对时间窗, 会被上面这条判断误挡, 永远走不
+        # 到 T2/T3, should_delegate 也就永远没有机会被调用。T1 命中是 <1ms
+        # 确定性判断 (跟 wants_margin_pre/asks_profit_pre 同一档成本), 不该
+        # 被这条"为省 T2/T3 延迟"的前置滤挡住 —— 加一个 T1 命中即放行的分支。
         wants_margin_pre, asks_profit_pre = _profit_intent(query)
         if (
             not wants_margin_pre
             and not asks_profit_pre
             and not _uses_relative_sales_window(query)
+            and match_restaurant_ops(query) is None
         ):
             return {"delegate": False}
 

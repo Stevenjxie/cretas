@@ -125,6 +125,25 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
          ["销售", "营收", "营业额", "业绩", "订单", "单量"],
          ["对比", "比较", "排名", "最好", "最值得复制", "复制", "标杆", "表现"]],
     ),
+    # Inventory warning (2026-07-08): 食材库存水位预警——低于补货点/安全库存
+    # 的食材，提示补货。placed at the END of the list (safest position — any
+    # earlier pattern that legitimately matches a query keeps winning first,
+    # e.g. "食材成本最高的菜" still routes to RECIPE_COST because that pattern
+    # is checked before this one and matches on its own more specific phrase).
+    # Distinct from STOCK_SHORTAGE (历史盘点账实差), which requires "库存差异"
+    # not just "库存".
+    (
+        "RESTAURANT_OPS_INVENTORY_WARNING",
+        [["库存", "食材", "原料", "补货", "进货"],
+         ["预警", "够不够", "够吗", "快没了", "要补", "该进", "不足", "缺货", "备货"]],
+    ),
+    # Staffing advice (2026-07-08): 按时段(午市/晚市/下午茶/夜宵)的人效比诊断，
+    # 建议哪个时段加人/减人。Also placed at the END for the same reason.
+    (
+        "RESTAURANT_OPS_STAFFING_ADVICE",
+        [["排班", "人手", "人力", "员工", "服务员", "几点", "时段", "午市", "晚市", "下午茶", "夜宵"],
+         ["加人", "减人", "够不够", "够吗", "忙不忙", "安排", "调配", "人效", "几个人", "排班", "建议", "人太多", "人少"]],
+    ),
 ]
 
 
@@ -198,6 +217,22 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "总营收和客单价表现怎么样",
         "整体销售情况怎么样",
         "订单数和平均每单表现如何",
+    ],
+    "RESTAURANT_OPS_INVENTORY_WARNING": [
+        "哪些食材快没了",
+        "库存够不够",
+        "需要补货的食材",
+        "该进货了吗",
+        "食材库存预警",
+        "哪些原料库存不足",
+    ],
+    "RESTAURANT_OPS_STAFFING_ADVICE": [
+        "今晚怎么排班",
+        "哪个时段要加人",
+        "人手够不够",
+        "午市要不要加人",
+        "排班建议",
+        "哪个时段人太多",
     ],
 }
 
@@ -1563,6 +1598,262 @@ async def resolve_trend_analysis(
     )
 
 
+async def resolve_inventory_warning(
+    smartbi_pool, factory_id: str, *, top_n: int = 15,
+) -> OpsAnswer:
+    """Stock-level warning: which ingredients are below their reorder point
+    or safe-stock threshold, from the latest snapshot day on record.
+
+    Reads stock_qty from ``fact_inventory_snapshot`` (latest snapshot_date
+    for the factory) and thresholds from ``dim_ingredient_threshold`` (the
+    LIVE/current threshold config — falls back to the snapshot row's own
+    denormalized safe_stock_qty/reorder_point when no threshold row exists
+    for that ingredient, since the snapshot writer always populates those
+    two columns even before a threshold row is ever configured).
+
+    No monetary output — this is a quantity/threshold read, not a cost/price
+    read, so it carries no PRICE_VIEW_ROLES gate (unlike resolve_gross_margin
+    / resolve_store_margin / resolve_sales_summary).
+    """
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        anchor = await conn.fetchrow(
+            "SELECT MAX(snapshot_date) AS max_date FROM fact_inventory_snapshot WHERE factory_id = $1",
+            factory_id,
+        )
+        max_date = anchor["max_date"] if anchor else None
+        if max_date is None:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_INVENTORY_WARNING",
+                title="库存预警",
+                answer_text=(
+                    "还没有接入库存快照数据，无法判断哪些食材需要补货。"
+                    "请先在库存管理里上传/维护库存快照（含安全库存和补货点），本分析即可运行。"
+                ),
+                charts=[], kpis=[],
+                meta={"no_data": True},
+            )
+        rows = await conn.fetch(
+            """
+            SELECT s.ingredient_id, i.name, i.category, i.unit,
+                   s.stock_qty::float AS stock_qty,
+                   COALESCE(t.safe_stock_qty, s.safe_stock_qty)::float AS safe_stock_qty,
+                   COALESCE(t.reorder_point, s.reorder_point)::float AS reorder_point
+              FROM fact_inventory_snapshot s
+              JOIN dim_ingredient i
+                ON i.ingredient_id = s.ingredient_id AND i.factory_id = s.factory_id
+              LEFT JOIN dim_ingredient_threshold t
+                ON t.factory_id = s.factory_id AND t.ingredient_id = s.ingredient_id
+               AND t.store_id IS NOT DISTINCT FROM s.store_id
+             WHERE s.factory_id = $1 AND s.snapshot_date = $2
+             ORDER BY i.name
+            """,
+            factory_id, max_date,
+        )
+
+    high: List[Dict[str, Any]] = []
+    medium: List[Dict[str, Any]] = []
+    ok: List[Dict[str, Any]] = []
+    for r in rows:
+        stock = r["stock_qty"] if r["stock_qty"] is not None else 0.0
+        reorder = r["reorder_point"]
+        safe = r["safe_stock_qty"]
+        entry = {
+            "name": r["name"], "category": r["category"], "unit": r["unit"] or "",
+            "stock": stock, "reorder": reorder, "safe": safe,
+        }
+        if reorder is not None and stock < reorder:
+            high.append(entry)
+        elif safe is not None and stock < safe:
+            medium.append(entry)
+        else:
+            ok.append(entry)
+
+    high.sort(key=lambda e: (e["stock"] - e["reorder"]))
+    medium.sort(key=lambda e: (e["stock"] - e["safe"]))
+
+    high_text = "\n".join([
+        f"  {i+1}. {e['name']} ({e['category'] or '—'}): 剩 {e['stock']:.1f} {e['unit']}，"
+        f"低于补货点 {e['reorder']:.1f} {e['unit']}，需立即补货"
+        for i, e in enumerate(high[:top_n])
+    ]) or "  (无)"
+    medium_text = "、".join([
+        f"{e['name']} 剩 {e['stock']:.1f} {e['unit']}" for e in medium[:top_n]
+    ]) or "无"
+
+    answer = (
+        f"库存预警（{_date_text(max_date)}）:\n"
+        f"- 需要立即补货 {len(high)} 项, 关注 {len(medium)} 项, 正常 {len(ok)} 项\n\n"
+        f"需立即补货:\n{high_text}\n\n"
+        f"接近安全库存需关注: {medium_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 需立即补货的食材今天下单，优先安排高频用量的食材避免断货影响出品。\n"
+        f"  2. 接近安全库存的食材纳入未来三天的进货计划，避免临时缺货。\n"
+        f"  3. 定期核对补货点和安全库存设置是否符合实际用量，避免虚高或虚低导致误判。"
+    )
+
+    charts = [{
+        "chartType": "bar",
+        "title": "库存预警分布",
+        "xAxis": {"data": ["需补货", "关注", "正常"]},
+        "series": [{
+            "name": "食材数量", "type": "bar",
+            "data": [len(high), len(medium), len(ok)],
+        }],
+    }] if rows else []
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_INVENTORY_WARNING",
+        title="库存预警",
+        answer_text=answer,
+        charts=charts,
+        kpis=[
+            {"title": "需补货", "value": len(high), "rawValue": len(high)},
+            {"title": "关注", "value": len(medium), "rawValue": len(medium)},
+            {"title": "正常", "value": len(ok), "rawValue": len(ok)},
+        ],
+        meta={
+            "snapshot_date": _date_text(max_date),
+            "high_count": len(high), "medium_count": len(medium), "ok_count": len(ok),
+            "high_ingredients": [e["name"] for e in high],
+        },
+    )
+
+
+# Fixed daypart display order (independent of DB row order) so the answer
+# text and kpis are deterministic regardless of how fact_staffing_daypart
+# rows happen to sort.
+_DAYPART_ORDER = ["午市", "下午茶", "晚市", "夜宵"]
+_WEEKDAY_TYPE_LABEL = {"weekday": "工作日", "weekend": "周末"}
+
+
+def _daypart_sort_key(daypart: str) -> int:
+    try:
+        return _DAYPART_ORDER.index(daypart)
+    except ValueError:
+        return len(_DAYPART_ORDER)
+
+
+async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
+    """Per-daypart staffing/labor-efficiency advice: which daypart is
+    over-staffed (few orders per staff member, could reassign) vs
+    under-staffed (many orders per staff member, should add headcount).
+
+    No monetary output — this is an orders-per-staff ratio read, not a
+    cost/price read, so it carries no PRICE_VIEW_ROLES gate.
+    """
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        rows = await conn.fetch(
+            """
+            SELECT daypart, weekday_type,
+                   avg_orders::float AS avg_orders,
+                   staff_on_duty,
+                   target_orders_per_staff::float AS target
+              FROM fact_staffing_daypart
+             WHERE factory_id = $1
+            """,
+            factory_id,
+        )
+
+    if not rows:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STAFFING_ADVICE",
+            title="排班建议",
+            answer_text=(
+                "还没有配置各时段的人效数据（历史日均订单/在岗人数/目标人效），无法给出排班建议。"
+                "请先在人效配置里维护各时段（午市/晚市/下午茶/夜宵）的目标值，本分析即可运行。"
+            ),
+            charts=[], kpis=[],
+            meta={"no_data": True},
+        )
+
+    entries: List[Dict[str, Any]] = []
+    for r in rows:
+        avg_orders = r["avg_orders"] if r["avg_orders"] is not None else 0.0
+        staff = r["staff_on_duty"]
+        target = r["target"]
+        actual_per_staff = (avg_orders / staff) if staff else None
+        advice = "人力未配置，无法计算人效"
+        delta = 0
+        if actual_per_staff is not None and target is not None and target > 0:
+            if actual_per_staff > target * 1.15:
+                suggested = max(staff + 1, round(avg_orders / target))
+                delta = suggested - staff
+                advice = f"人效偏高，建议加 {delta} 人"
+            elif actual_per_staff < target * 0.7:
+                suggested = max(1, round(avg_orders / target))
+                delta = suggested - staff
+                advice = f"人效偏低，可减 {abs(delta)} 人" if delta < 0 else "人效偏低，可精简排班"
+            else:
+                advice = "人效均衡，维持现状"
+        entries.append({
+            "daypart": r["daypart"], "weekday_type": r["weekday_type"],
+            "avg_orders": avg_orders, "staff": staff, "target": target,
+            "actual_per_staff": actual_per_staff, "advice": advice, "delta": delta,
+        })
+    entries.sort(key=lambda e: (e["weekday_type"] != "weekday", _daypart_sort_key(e["daypart"])))
+
+    lines = []
+    for wd_type in ("weekday", "weekend"):
+        group = [e for e in entries if e["weekday_type"] == wd_type]
+        if not group:
+            continue
+        label = _WEEKDAY_TYPE_LABEL.get(wd_type, wd_type)
+        lines.append(f"{label}:")
+        for e in group:
+            ratio_text = f"{e['actual_per_staff']:.1f}/人" if e["actual_per_staff"] is not None else "—"
+            lines.append(
+                f"  - {e['daypart']}: 日均 {e['avg_orders']:.0f} 单, {e['staff']} 人在岗, "
+                f"人效 {ratio_text} ({e['advice']})"
+            )
+    detail_text = "\n".join(lines)
+
+    understaffed = [e for e in entries if e["delta"] > 0]
+    overstaffed = [e for e in entries if e["delta"] < 0]
+    most_understaffed = max(understaffed, key=lambda e: e["delta"], default=None)
+    most_overstaffed = min(overstaffed, key=lambda e: e["delta"], default=None)
+
+    answer = (
+        f"排班建议（按时段人效诊断）:\n{detail_text}\n\n"
+        f"建议动作:\n"
+        f"  1. 对人效偏高的时段优先加人，避免出餐延迟和服务质量下降。\n"
+        f"  2. 对人效偏低的时段可精简排班或调配到高峰时段，避免人力浪费。\n"
+        f"  3. 每周复盘一次日均订单数，及时调整目标人效基准。"
+    )
+
+    charts = [{
+        "chartType": "bar",
+        "title": "各时段人效对比",
+        "xAxis": {"data": [f"{e['weekday_type']}-{e['daypart']}" for e in entries]},
+        "series": [{
+            "name": "人效(单/人)", "type": "bar",
+            "data": [e["actual_per_staff"] for e in entries],
+        }],
+    }]
+
+    return OpsAnswer(
+        code="RESTAURANT_OPS_STAFFING_ADVICE",
+        title="排班建议",
+        answer_text=answer,
+        charts=charts,
+        kpis=[
+            {"title": "最缺人时段",
+             "value": f"{most_understaffed['weekday_type']}-{most_understaffed['daypart']}" if most_understaffed else "—",
+             "rawValue": 0},
+            {"title": "最冗余时段",
+             "value": f"{most_overstaffed['weekday_type']}-{most_overstaffed['daypart']}" if most_overstaffed else "—",
+             "rawValue": 0},
+            {"title": "总时段数", "value": len(entries), "rawValue": len(entries)},
+        ],
+        meta={
+            "daypart_count": len(entries),
+            "understaffed": [f"{e['weekday_type']}-{e['daypart']}" for e in understaffed],
+            "overstaffed": [f"{e['weekday_type']}-{e['daypart']}" for e in overstaffed],
+        },
+    )
+
+
 _RESOLVERS = {
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
@@ -1572,6 +1863,8 @@ _RESOLVERS = {
     "RESTAURANT_OPS_STORE_MARGIN": resolve_store_margin,
     "RESTAURANT_OPS_SALES_SUMMARY": resolve_sales_summary,
     "RESTAURANT_OPS_TREND_ANALYSIS": resolve_trend_analysis,
+    "RESTAURANT_OPS_INVENTORY_WARNING": resolve_inventory_warning,
+    "RESTAURANT_OPS_STAFFING_ADVICE": resolve_staffing_advice,
 }
 
 
