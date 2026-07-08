@@ -319,5 +319,74 @@ class TestSynthesize:
         assert resp.factbook_text
 
 
+# --------------------------------------------------------------------------
+# G1: distillation capture — synthesis path becomes observable/learnable
+# --------------------------------------------------------------------------
+class TestSynthesisCapture:
+    @staticmethod
+    def _fake_persist(sink):
+        async def fake_persist(pool, source=None, task_type=None, input_text=None,
+                               teacher_output=None, **kw):
+            sink.append({
+                "source": source, "task_type": task_type,
+                "input_text": input_text, "teacher_output": teacher_output, **kw,
+            })
+        return fake_persist
+
+    def test_llm_path_captured_to_corpus(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        captured = []
+
+        async def fake_call_chain(slot, payload, chain=None, timeout=30.0):
+            return {"choices": [{"message": {"content": "门店表现平稳。"}}],
+                    "usage": {"total_tokens": 200}}
+
+        monkeypatch.setattr(se, "call_chain", fake_call_chain)
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "哪家店拖后腿", dr))
+        assert resp.source == "llm"
+        assert len(captured) == 1
+        c = captured[0]
+        assert c["source"] == "synthesis"
+        assert c["task_type"] == "synthesis"
+        assert c["factory_id"] == "RES_3101_009"
+        assert c["business_type"] == "restaurant"
+        # answer captured verbatim (grounded output)
+        assert c["teacher_output"] == resp.answer
+        # input_text embeds the question + data context (teaches FROM data)
+        assert "哪家店拖后腿" in c["input_text"]
+        assert "数据上下文" in c["input_text"]
+        # metadata carries the demand signal: raw query + family classification
+        assert c["metadata"]["query"] == "哪家店拖后腿"
+        assert c["metadata"]["question_family"] == "attribution"
+        assert "grounding" in c["metadata"]
+
+    def test_cache_hit_not_captured(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        captured = []
+        cache = FakeCache(hit={"answer": "缓存答案", "chart_config": None})
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch, cache=cache)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
+        assert resp.source == "cache"
+        assert captured == []  # cache re-serve must not re-capture
+
+    def test_degraded_not_captured(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        captured = []
+        monkeypatch.setattr(se, "persist_distillation_sample", self._fake_persist(captured))
+        eng = _engine(monkeypatch, budget=FakeBudget(blocked=True))
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "综合分析", dr))
+        assert resp.source == "degraded"
+        assert captured == []  # budget-exhausted degraded path must not capture
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
