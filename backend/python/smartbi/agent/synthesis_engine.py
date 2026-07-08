@@ -290,23 +290,36 @@ class ComprehensiveSynthesisEngine:
         # belt-and-suspenders and never touches the user-facing response.
         try:
             grounded_clean = not (fc_meta or {}).get("violations")
+            # business_type: comprehensive synthesis is restaurant-domain by
+            # construction (pulls review_*/finance/store_comparison restaurant
+            # Gold), so default restaurant — UNLESS the tenant is clearly a Cretas
+            # factory (F#####), which we label honestly. A factory tenant reaching
+            # this path gets a near-empty factbook (captured at low quality below,
+            # so it never pollutes the restaurant training bucket).
+            fid_up = (factory_id or "").upper()
+            biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
+            # Empty factbook → degenerate "no data" narrative. Keep it visible to
+            # the demand report (a question asked with no data is still demand),
+            # but tag quality=2 so the training export (quality>=4) excludes it.
+            has_data = any([factbook.review, factbook.finance, factbook.sales,
+                            factbook.attribution])
+            quality = 2 if not has_data else (4 if grounded_clean else 3)
+            q_capped = (question or "")[:500]  # bound text/jsonb columns
             await persist_distillation_sample(
                 self._pool,
                 source="synthesis",
                 task_type="synthesis",
-                input_text=f"{question}\n\n【数据上下文】\n{factbook.to_prompt_text()[:1200]}",
+                input_text=f"{q_capped}\n\n【数据上下文】\n{factbook.to_prompt_text()[:1200]}",
                 teacher_output=answer,
-                # Live comprehensive_synthesis route is restaurant-domain (review +
-                # finance + sales dims are restaurant Gold). Labeled restaurant to
-                # keep the corpus bucket accurate for census/export.
-                business_type="restaurant",
+                business_type=biz_type,
                 factory_id=factory_id,
                 system_prompt="comprehensive synthesis",
-                quality=4 if grounded_clean else 3,
+                quality=quality,
                 metadata={
-                    "query": question,
-                    "question_family": classify_question_family(question),
+                    "query": q_capped,
+                    "question_family": classify_question_family(q_capped),
                     "plan": plan,
+                    "empty_factbook": not has_data,
                     "grounding": {"clean": grounded_clean, **(fc_meta or {})},
                 },
             )
