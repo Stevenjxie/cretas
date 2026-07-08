@@ -738,6 +738,44 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[startup] llm-cache pruner init failed: {e}")
 
+    # 2026-07-08: post-restart warmup. The heaviest read resolvers (STORE_MARGIN,
+    # GROSS_MARGIN) scan raw fact_pos_item and cold-start at ~12s on the FIRST call
+    # after a restart (cold PG shared_buffers); once warm they return ~0.5s. Fire a
+    # one-shot warmup for the showcase tenants so the first real user doesn't eat
+    # the cold-start. Leader-only: PG shared_buffers are server-side, so one warm
+    # benefits every worker. Fail-open, non-blocking (never delays boot/health).
+    _warmup_task = None
+    try:
+        import asyncio as _asyncio
+        from smartbi.config import get_pg_pool as _get_pg_pool_warm
+
+        async def _warmup_heavy_resolvers_once():
+            await _asyncio.sleep(30)  # let pool + service settle first
+            try:
+                from smartbi.gold.restaurant_ops_router import resolve_by_code
+                from smartbi.tenant_ctx import set_factory_id
+                pool = await _get_pg_pool_warm()
+                if pool is None:
+                    return
+                warmed = 0
+                for fid in ("DEMO_REST", "DEMO_FACTORY"):
+                    set_factory_id(fid)
+                    for code in ("RESTAURANT_OPS_STORE_MARGIN", "RESTAURANT_OPS_GROSS_MARGIN"):
+                        try:
+                            await resolve_by_code(code, pool, fid, role="restaurant_owner", query="预热")
+                            warmed += 1
+                        except Exception as we:
+                            logger.debug(f"[warmup] {fid}/{code} skipped: {we}")
+                logger.info(f"[warmup] heavy POS resolvers pre-warmed ({warmed}) — cold-start eliminated")
+            except Exception as ex:
+                logger.warning(f"[warmup] heavy resolver warmup failed (fail-open): {ex}")
+
+        if _is_leader:
+            _warmup_task = _asyncio.create_task(_warmup_heavy_resolvers_once())
+            logger.info("[leader] heavy-resolver warmup armed")
+    except Exception as e:
+        logger.warning(f"[startup] warmup init failed: {e}")
+
     # Phase 2B-α (Apr 29 2026): AI intent matching orchestrator + snapshot.
     # Wires app.state.ai_orchestrator (3 matchers) so /api/ai/intent/match resolves
     # at runtime. Snapshot loaded if pg_pool available; absent pool degrades to
