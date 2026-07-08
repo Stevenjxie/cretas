@@ -543,17 +543,18 @@ class TestConversationHistoryPromptInjection:
         # Bounded window: only the last HISTORY_MAX_TURNS turns are rendered,
         # regardless of how many turns are passed in — this must NOT regress
         # into unbounded "linear-growth general chat" history.
-        # Fixed-width zero-padded ids (00-19) so no id is a substring of
-        # another (e.g. "问题1" would otherwise wrongly match inside "问题16").
+        # Non-numeric single-letter markers (话题A..话题T) — numbers are now
+        # redacted from history (audit P2 #1), so numeric ids like "问题16" would
+        # all collapse to "问题[数值]"; letters survive and stay distinct.
         many_turns = [
-            {"q": f"问题{i:02d}", "a_summary": f"回答{i:02d}"} for i in range(20)
+            {"q": f"话题{chr(65 + i)}", "a_summary": f"答复{chr(65 + i)}"} for i in range(20)
         ]
         block = se._build_history_block(many_turns)
-        rendered_count = sum(1 for i in range(20) if f"问题{i:02d}" in block)
+        rendered_count = sum(1 for i in range(20) if f"话题{chr(65 + i)}" in block)
         assert rendered_count == se.HISTORY_MAX_TURNS
         # the MOST RECENT turns are kept (not the oldest).
-        assert "问题19" in block
-        assert "问题00" not in block
+        assert "话题T" in block   # i=19
+        assert "话题A" not in block  # i=0
 
     def test_history_block_handles_json_string_and_malformed_input(self):
         # Defense in depth: asyncpg may hand back turns_history as a raw JSON
