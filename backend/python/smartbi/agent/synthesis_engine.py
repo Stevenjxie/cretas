@@ -120,6 +120,8 @@ from smartbi.gold import (
     review_vip,
     top_products,
 )
+from smartbi.gold.restaurant_intent_promotion import classify_question_family
+from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
     InsightDimension,
     InsightDimensionAnalyzer,
@@ -276,6 +278,40 @@ class ComprehensiveSynthesisEngine:
             chart_config={"charts": charts} if charts else None,
             tokens=tokens, ttl_hours=cache_ttl_hours,
         )
+
+        # 10. Distillation capture (G1) — make the synthesis answer observable to
+        # the learning flywheel (family_breakdown demand signal) and the training
+        # corpus. Only the freshly-generated LLM path reaches here (cache hit /
+        # degraded returned above), so there is no double-capture. Tenant isolation
+        # + anonymization happen at EXPORT (mirrors the other 5 capture points):
+        # the raw row stores factory_id + the grounded answer; consent-gated,
+        # value-bucketed, entity-pseudonymized export is what crosses tenants.
+        # persist_distillation_sample never raises; the try/except is
+        # belt-and-suspenders and never touches the user-facing response.
+        try:
+            grounded_clean = not (fc_meta or {}).get("violations")
+            await persist_distillation_sample(
+                self._pool,
+                source="synthesis",
+                task_type="synthesis",
+                input_text=f"{question}\n\n【数据上下文】\n{factbook.to_prompt_text()[:1200]}",
+                teacher_output=answer,
+                # Live comprehensive_synthesis route is restaurant-domain (review +
+                # finance + sales dims are restaurant Gold). Labeled restaurant to
+                # keep the corpus bucket accurate for census/export.
+                business_type="restaurant",
+                factory_id=factory_id,
+                system_prompt="comprehensive synthesis",
+                quality=4 if grounded_clean else 3,
+                metadata={
+                    "query": question,
+                    "question_family": classify_question_family(question),
+                    "plan": plan,
+                    "grounding": {"clean": grounded_clean, **(fc_meta or {})},
+                },
+            )
+        except Exception as _cap_exc:  # never affect the user-facing response
+            logger.debug("[synthesis] distillation capture skipped: %s", _cap_exc)
 
         return SynthesisResponse(
             answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
