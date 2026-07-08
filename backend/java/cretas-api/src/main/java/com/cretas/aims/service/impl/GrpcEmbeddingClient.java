@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +35,7 @@ import java.util.stream.Collectors;
 public class GrpcEmbeddingClient implements EmbeddingClient {
 
     private static final int DEFAULT_DIMENSION = 768;
+    private static final int RPC_DEADLINE_SECONDS = 3;
 
     @GrpcClient("embedding-service")
     private EmbeddingServiceGrpc.EmbeddingServiceBlockingStub embeddingStub;
@@ -62,13 +64,17 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
     private void checkServiceAndGetInfo() {
         try {
             // Health check
-            HealthCheckResponse healthResponse = embeddingStub.healthCheck(
+            HealthCheckResponse healthResponse = embeddingStub
+                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .healthCheck(
                     HealthCheckRequest.newBuilder().build());
             available = healthResponse.getAvailable();
 
             if (available) {
                 // Get model info
-                ModelInfoResponse infoResponse = embeddingStub.getModelInfo(
+                ModelInfoResponse infoResponse = embeddingStub
+                        .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                        .getModelInfo(
                         ModelInfoRequest.newBuilder().build());
                 modelName = infoResponse.getModelName();
                 dimension = infoResponse.getDimension();
@@ -90,7 +96,9 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
                     .setText(text)
                     .build();
 
-            EncodeResponse response = embeddingStub.encode(request);
+            EncodeResponse response = embeddingStub
+                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .encode(request);
 
             if (!response.getSuccess()) {
                 log.error("Embedding encode failed: {}", response.getErrorMessage());
@@ -129,7 +137,9 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
                     .addAllTexts(texts)
                     .build();
 
-            EncodeBatchResponse response = embeddingStub.encodeBatch(request);
+            EncodeBatchResponse response = embeddingStub
+                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .encodeBatch(request);
 
             if (!response.getSuccess()) {
                 log.error("Batch embedding encode failed: {}", response.getErrorMessage());
@@ -169,7 +179,9 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
                     .setText2(text2)
                     .build();
 
-            SimilarityResponse response = embeddingStub.computeSimilarity(request);
+            SimilarityResponse response = embeddingStub
+                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .computeSimilarity(request);
 
             if (!response.getSuccess()) {
                 log.error("Compute similarity failed: {}", response.getErrorMessage());
@@ -201,7 +213,9 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
                     .setTopK(topK)
                     .build();
 
-            FindSimilarResponse response = embeddingStub.findSimilar(request);
+            FindSimilarResponse response = embeddingStub
+                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .findSimilar(request);
 
             if (!response.getSuccess()) {
                 log.error("Find similar failed: {}", response.getErrorMessage());
