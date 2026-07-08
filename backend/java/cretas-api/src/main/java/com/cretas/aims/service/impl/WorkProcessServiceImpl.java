@@ -81,6 +81,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .semiFinishedOutputCode(blankToNull(dto.getSemiFinishedOutputCode()))
                 .standardHourlyRate(dto.getStandardHourlyRate())
                 .expectedByproducts(dto.getExpectedByproducts())
+                .customFieldSchema(dto.getCustomFieldSchema())
                 .build();
 
         WorkProcess saved = workProcessRepository.save(entity);
@@ -142,6 +143,8 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getStandardHourlyRate() != null) entity.setStandardHourlyRate(dto.getStandardHourlyRate());
         // expectedByproducts: null means "don't change"; explicit empty list means "clear"
         if (dto.getExpectedByproducts() != null) entity.setExpectedByproducts(dto.getExpectedByproducts());
+        // customFieldSchema (G2): null means "don't change"; explicit empty list means "clear"
+        if (dto.getCustomFieldSchema() != null) entity.setCustomFieldSchema(dto.getCustomFieldSchema());
 
         WorkProcess saved = workProcessRepository.save(entity);
         return toDTO(saved);
@@ -241,6 +244,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .semiFinishedOutputCode(entity.getSemiFinishedOutputCode())
                 .standardHourlyRate(entity.getStandardHourlyRate())
                 .expectedByproducts(entity.getExpectedByproducts())
+                .customFieldSchema(entity.getCustomFieldSchema())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

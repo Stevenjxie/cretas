@@ -138,6 +138,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(403, "无权访问该计划");
         }
 
+        // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
+        //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
+        validateCustomFields(factoryId, req);
+
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
                 .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
@@ -206,6 +210,58 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(),
                 unitPrice(mat.getRowTotalCost(), req.getOutputQuantity()), false, true, warnings);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // G2: 自定义字段 key 白名单校验
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * G2 KEYSTONE (save-validate): 校验 {@code req.getCustomFields()} 的每个 key 都在该工序
+     * {@link WorkProcess#getCustomFieldSchema()} 的已启用 (enabled=true) key 集合内。
+     *
+     * <p>禁止降级 (api-response-handling.md): 未知 key → 明确 400 + 指出具体 key + 工序名,
+     * 不静默丢弃、不静默忽略。schema 本身缺失 (null / 无法解析该道对应的 WorkProcess) 视为
+     * "该工序未开启自定义字段校验" —— 此时不拒绝任何 key (宽松兜底, 因为 schema=null 是本功能
+     * 的默认/未配置状态, 拒绝会误伤未升级使用本功能的既有工序)。若请求根本没带 customFields,
+     * 直接跳过 (最常见路径, 提前 return 避免不必要查询)。
+     */
+    private void validateCustomFields(String factoryId, ProcessSheetRowRequest req) {
+        Map<String, Object> customFields = req.getCustomFields();
+        if (customFields == null || customFields.isEmpty()) {
+            return;
+        }
+        if (req.getProductTypeId() == null || req.getProcessOrder() == null) {
+            // 无法定位该道对应的 WorkProcess (缺 productTypeId/processOrder) —— 防御性放行,
+            // 不因为定位信息缺失而拒绝写入 (这类缺失应由别处校验拦截, 不是本方法职责)。
+            return;
+        }
+        List<ProductWorkProcess> pwps = productWorkProcessRepo
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, req.getProductTypeId());
+        ProductWorkProcess pwp = pwps.stream()
+                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .findFirst()
+                .orElse(null);
+        if (pwp == null || pwp.getWorkProcessId() == null) {
+            return; // 找不到对应工序配置 —— 无 schema 可校验, 放行
+        }
+        WorkProcess wp = processRepo.findById(pwp.getWorkProcessId()).orElse(null);
+        if (wp == null || wp.getCustomFieldSchema() == null) {
+            return; // 该工序未开启自定义字段 schema —— 不限制 (默认/未配置状态)
+        }
+        Set<String> allowedKeys = wp.getCustomFieldSchema().stream()
+                .filter(f -> Boolean.TRUE.equals(f.get("enabled")))
+                .map(f -> String.valueOf(f.get("key")))
+                .collect(Collectors.toSet());
+        for (String key : customFields.keySet()) {
+            if (!allowedKeys.contains(key)) {
+                throw new BusinessException(400,
+                        String.format("工序「%s」未配置自定义字段「%s」，请先在工序设置中添加该字段",
+                                wp.getProcessName(), key))
+                        .withCode("PROCESS_SHEET_CUSTOM_FIELD_UNKNOWN")
+                        .withHintTarget(key);
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1747,6 +1803,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setByproducts(req.getByproducts());
         st.setSampleRetainQuantity(req.getSampleRetainQuantity());
         st.setPackagingDetail(req.getPackagingDetail());
+        // G2: 透传自定义字段值 → materializeBatch 写 YIELD 报工 (命名空间并入 ProductionReport.customFields)
+        st.setCustomFields(req.getCustomFields());
         return st;
     }
 

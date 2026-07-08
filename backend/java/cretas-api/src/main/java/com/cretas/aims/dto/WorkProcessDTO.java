@@ -91,6 +91,13 @@ public class WorkProcessDTO {
      */
     private List<Map<String, Object>> expectedByproducts;
 
+    /**
+     * G2 自定义字段 schema (config-driven 逐工序电子表格自定义列)。
+     * 格式: [{"key":"baume","label":"波美度","type":"number","enabled":true}, ...]
+     * null = 本工序未开启自定义字段。
+     */
+    private List<Map<String, Object>> customFieldSchema;
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 

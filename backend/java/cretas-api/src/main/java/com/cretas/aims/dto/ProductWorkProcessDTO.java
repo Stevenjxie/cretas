@@ -99,6 +99,13 @@ public class ProductWorkProcessDTO {
     private String processCategory;
     private String defaultUnit;
     private Integer defaultEstimatedMinutes;
+    /**
+     * G2 自定义字段 schema (只读, 来自 join WorkProcess.customFieldSchema)。
+     * 格式: [{"key":"baume","label":"波美度","type":"number","enabled":true}, ...]。
+     * null = 本工序未开启自定义字段。前端逐工序录入据此渲染额外列 + Config UI 据此编辑 (写回走
+     * work-processes/{workProcessId} 端点, 非本 DTO — 本字段仅只读展示)。
+     */
+    private java.util.List<java.util.Map<String, Object>> customFieldSchema;
 
     /**
      * T135: Read-only display name for the responsible worker (primary assignee).

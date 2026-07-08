@@ -759,7 +759,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private boolean hasAuxFields(StepEntry st) {
         return (st.getByproducts() != null && !st.getByproducts().isEmpty())
                 || st.getSampleRetainQuantity() != null
-                || (st.getPackagingDetail() != null && !st.getPackagingDetail().isEmpty());
+                || (st.getPackagingDetail() != null && !st.getPackagingDetail().isEmpty())
+                // G2: 自定义字段值非空也需写 YIELD 辅助报工 (否则 hasAuxFields=false → writeYieldAuxReport
+                // 不被调用 → customFields 静默丢失, 即使该行没有副产/留样/包装明细)。
+                || (st.getCustomFields() != null && !st.getCustomFields().isEmpty());
     }
 
     /**
@@ -806,6 +809,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
         if (st.getProcessCategory() != null && !st.getProcessCategory().isBlank()) {
             fields.put("processEntryProcessCategory", st.getProcessCategory());
+        }
+        // G2 KEYSTONE (materialize-land): 用户自定义字段值 (波美度/添加剂量/备注等, WorkProcess
+        // .customFieldSchema 配置驱动) 落 ProductionReport.customFields。命名空间隔离
+        // ("clerkCustomFields" 子 key) —— 不能与上面的内部记账 key 拍平合并: processEntryStepKey
+        // 被 YieldCalculationServiceImpl 读取用于按 (order|name|category) 去重分组, 直接
+        // fields.putAll(st.getCustomFields()) 会有把用户字段名撞上未来新增内部 key 的风险,
+        // 也让"哪些是内部记账 / 哪些是用户填的"混在一起不可辨识。
+        if (st.getCustomFields() != null && !st.getCustomFields().isEmpty()) {
+            fields.put("clerkCustomFields", st.getCustomFields());
         }
         return fields;
     }

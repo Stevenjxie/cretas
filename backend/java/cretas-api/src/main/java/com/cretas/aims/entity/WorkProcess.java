@@ -91,4 +91,13 @@ public class WorkProcess extends BaseEntity {
      */
     @Column(name = "semi_finished_output_code", length = 50)
     private String semiFinishedOutputCode;
+
+    /**
+     * G2 自定义字段 schema (config-driven 逐工序电子表格自定义列, 如 波美度/添加剂量/备注)。
+     * 格式: [{"key":"baume","label":"波美度","type":"number","enabled":true}, ...]。
+     * null = 本工序未开启自定义字段 (逐工序录入不接受任何自定义 key, 保存时校验层拒绝)。
+     */
+    @Type(JsonType.class)
+    @Column(name = "custom_field_schema", columnDefinition = "jsonb")
+    private List<Map<String, Object>> customFieldSchema;
 }

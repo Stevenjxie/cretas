@@ -301,7 +301,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
             builder.processName(wp.getProcessName())
                     .processCategory(wp.getProcessCategory())
                     .defaultUnit(wp.getUnit())
-                    .defaultEstimatedMinutes(wp.getEstimatedMinutes());
+                    .defaultEstimatedMinutes(wp.getEstimatedMinutes())
+                    .customFieldSchema(wp.getCustomFieldSchema());
         }
 
         return builder.build();
