@@ -172,6 +172,20 @@ class TestPlanDimensions:
         assert plan["attribution"] is True
         assert not plan["review"] and not plan["finance"] and not plan["sales"]
 
+    def test_attribution_detected_for_colloquial_phrasing(self):
+        # F2 (2026-07-08 role-play): plain-speech attribution must trigger the
+        # 客流×客单价 decomposition, not fall through to a review answer.
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        for q in ["十六家店里头哪家最不行，是没人来还是客人花的钱少",
+                  "有的店生意就是做不起来",
+                  "哪家店没人来"]:
+            assert eng.plan_dimensions(q)["attribution"] is True, q
+
+    def test_colloquial_neutral_store_query_not_attribution(self):
+        # A neutral store ranking (positive superlative) must NOT trip attribution.
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        assert eng.plan_dimensions("哪家店订单最多")["attribution"] is False
+
 
 # --------------------------------------------------------------------------
 # _build_factbook
