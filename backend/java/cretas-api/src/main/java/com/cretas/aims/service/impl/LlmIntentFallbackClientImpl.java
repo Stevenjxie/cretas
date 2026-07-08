@@ -814,10 +814,16 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         }
 
         sb.append("\n## 重要规则\n\n");
-        sb.append("1. **必须做出决策**：尽量从已有意图中选择最接近的，只有在用户输入完全无法理解时才返回 UNKNOWN\n");
+        sb.append("1. **先判断是否在覆盖范围内**：如果用户问题确实不属于以上任何意图的能力范围"
+                + "(超出本系统当前功能，例如闲聊/常识问答/本系统不支持的操作)，"
+                + "必须返回 intent_code=UNKNOWN 且 confidence≤0.3，并在 reasoning 说明为何超出范围。"
+                + "绝不要为了\"给个答案\"而硬套一个最接近但并不真正匹配的意图——硬套=自信答错，"
+                + "比诚实说\"暂不支持\"更糟。只有当问题确实匹配某意图时才选它。\n");
         sb.append("2. **理解同义词**：参考上面的口语化示例，用户可能使用不同的表达方式描述相同的意图\n");
-        sb.append("3. **优先语义匹配**：即使没有完全匹配的关键词，也要根据语义选择最相关的意图\n");
-        sb.append("4. **置信度校准**：如果有合理的匹配，置信度应该在 0.6 以上\n");
+        sb.append("3. **优先语义匹配**：只要问题确实落在某意图能力范围内，即使没有完全匹配的关键词，"
+                + "也要根据语义选择最相关的意图(此规则不适用于超范围问题——见规则1)\n");
+        sb.append("4. **置信度必须诚实**：真正匹配时置信度可在 0.6 以上；勉强/硬套的匹配置信度不得虚高，"
+                + "宁可低置信度或 UNKNOWN。置信度要反映真实匹配程度，不是\"尽量给高\"。\n");
         sb.append("5. **区分查询和更新**：\"设备状态\"是查询(QUERY)，\"更新设备状态\"才是更新(UPDATE)\n");
         sb.append("6. **销售类意图优先级**：销售情况/数据→REPORT_DASHBOARD_OVERVIEW，销售排名→REPORT_KPI，不要用REPORT_FINANCE\n");
         sb.append("7. **生产类意图优先级**：产量/今天生产→PRODUCTION_STATUS_QUERY，不要用PROCESSING_BATCH_TIMELINE\n");
@@ -828,7 +834,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         sb.append("请以 JSON 格式返回，reasoning 字段**必须**包含 4 步思考链分析：\n");
         sb.append("```json\n");
         sb.append("{\n");
-        sb.append("  \"intent_code\": \"匹配的意图代码，尽量避免返回 UNKNOWN\",\n");
+        sb.append("  \"intent_code\": \"真正匹配的意图代码；若问题确实超出覆盖范围则填 UNKNOWN(勿硬套)\",\n");
         sb.append("  \"confidence\": 0.0-1.0 之间的置信度,\n");
         sb.append("  \"reasoning\": \"Step1-实体识别:... Step2-意图分析:... Step3-领域确定:... Step4-最终决策:...\",\n");
         sb.append("  \"entities\": {\n");
@@ -1010,7 +1016,9 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         }
 
         sb.append("\n## 重要规则\n\n");
-        sb.append("1. **必须选择一个类别**：根据语义选择最相关的类别，避免返回 UNKNOWN\n");
+        sb.append("1. **选相关类别；都不属于则 UNKNOWN**：根据语义选择最相关的类别；"
+                + "如果用户问题不属于以上任何类别(超出本系统功能)，返回 category=UNKNOWN 且 confidence≤0.3，"
+                + "不要硬选一个并不相关的类别。\n");
         sb.append("2. **理解口语表达**：用户可能使用口语化的方式描述需求\n");
         sb.append("3. **关注核心意图**：忽略修饰词，关注用户真正想做什么\n\n");
 
