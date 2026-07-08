@@ -5,6 +5,8 @@
 import type { RouteRecordRaw } from 'vue-router';
 import { buildHubRedirect, buildPathRedirect } from '../analysisHubRedirect';
 
+const platformAdminOnlyRoles = ['platform_admin'];
+
 const smartBIRoutes: RouteRecordRaw[] = [
   // SmartBI 主模块
   {
@@ -78,7 +80,7 @@ const smartBIRoutes: RouteRecordRaw[] = [
         path: 'calibration',
         name: 'SmartBICalibration',
         component: () => import('@/views/calibration/CalibrationListView.vue'),
-        meta: { requiresAuth: true, title: '行为校准监控', icon: 'Aim', module: 'analytics' },
+        meta: { requiresAuth: true, title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: platformAdminOnlyRoles },
       },
       // WS4: 财务看板已合并入经营分析 hub (redirect 保书签 → ?tab=finance, 保留 ?section=)。
       {

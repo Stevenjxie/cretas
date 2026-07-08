@@ -5,6 +5,29 @@ function findGroup(path: string): MenuItem | undefined {
   return menuConfig.find((m) => m.path === path);
 }
 
+function collectPaths(items: MenuItem[] = []): string[] {
+  return items.flatMap((item) => [
+    item.path,
+    ...collectPaths(item.children),
+  ]);
+}
+
+function descendantPaths(groupPath: string): string[] {
+  return collectPaths(findGroup(groupPath)?.children);
+}
+
+function findDescendant(groupPath: string, path: string): MenuItem | undefined {
+  const visit = (items: MenuItem[] = []): MenuItem | undefined => {
+    for (const item of items) {
+      if (item.path === path) return item;
+      const found = visit(item.children);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(findGroup(groupPath)?.children);
+}
+
 describe('menuConfig — baseline structure (pre-merge)', () => {
   it('exports a non-empty menuConfig array', () => {
     expect(Array.isArray(menuConfig)).toBe(true);
@@ -33,6 +56,10 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     return findGroup(groupPath)?.children?.map((c) => c.title) ?? [];
   }
 
+  function childGroupLabels(groupPath: string): string[] {
+    return findGroup(groupPath)?.children?.filter((c) => c.groupLabel).map((c) => c.groupLabel!) ?? [];
+  }
+
   it('keeps finance review queues discoverable under business modules and finance', () => {
     expect(childPaths('/procurement')).toContain('/procurement/finance-review');
     expect(childPaths('/sales')).toContain('/sales/finance-review');
@@ -42,19 +69,32 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]));
   });
 
-  it('keeps account and department management under HR and mirrors account setup in system', () => {
+  it('keeps account and department management under HR, with workflow setup in system', () => {
     expect(childPaths('/hr')).toEqual(expect.arrayContaining([
       '/system/users',
       '/system/roles',
       '/hr/departments',
     ]));
+    expect(childPaths('/system')).not.toContain('/system/users');
+    expect(childPaths('/system')).not.toContain('/system/roles');
     expect(childPaths('/system')).toEqual(expect.arrayContaining([
-      '/system/users',
-      '/system/roles',
       '/system/approval-chains',
       '/system/workflow-designer',
       '/canvas-editor',
     ]));
+  });
+
+  it('groups workdesks by management and execution roles without duplicate quality titles', () => {
+    expect(childGroupLabels('/workdesk')).toEqual(['经营管理', '一线执行']);
+    expect(childTitles('/workdesk')).toEqual([
+      '销售老板工作台',
+      '财务主管工作台',
+      '质量主管工作台',
+      '生产经理工作台',
+      '仓管员工作台',
+      '采购员工作台',
+      '质检主管工作台',
+    ]);
   });
 
   it('uses clear HR menu groups to avoid account/profile/onboarding duplication', () => {
@@ -76,7 +116,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
   it('keeps production master data under production instead of system', () => {
-    expect(childPaths('/production')).toEqual(expect.arrayContaining([
+    expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
       '/system/products',
       '/system/work-processes',
       '/system/product-processes',
@@ -84,6 +124,140 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/system')).not.toContain('/system/products');
     expect(childPaths('/system')).not.toContain('/system/work-processes');
     expect(childPaths('/system')).not.toContain('/system/product-processes');
+  });
+
+  it('groups production with inline section labels instead of nested lanes', () => {
+    const production = findGroup('/production')!;
+    expect(production.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel)).toEqual([
+      '生产过程',
+      '生产配置',
+      '生产分析',
+    ]);
+    expect(production.children!.map((c) => c.path)).not.toContain('/production/process');
+    expect(production.children!.map((c) => c.path)).not.toContain('/production/config');
+    expect(production.children!.map((c) => c.path)).not.toContain('/production/analysis');
+  });
+
+  it('keeps plans, batches, and reporting approval together in production process', () => {
+    expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
+      '/production/plans',
+      '/production/batches',
+      '/production/approval',
+      '/production/reversals',
+    ]));
+  });
+
+  it('moves production analytics out of SmartBI sidebar duplication', () => {
+    expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
+      '/analytics/production-report',
+      '/production-analytics/production',
+      '/production-analytics/yield-cost',
+      '/production-analytics/cost-summary',
+    ]));
+    const smartBiPaths = descendantPaths('/smart-bi');
+    for (const path of [
+      '/analytics/production-report',
+      '/production-analytics/production',
+      '/production-analytics/yield-cost',
+      '/production-analytics/cost-summary',
+    ]) {
+      expect(smartBiPaths).not.toContain(path);
+    }
+  });
+
+  it('groups warehouse with inline section labels instead of nested lanes', () => {
+    const warehouse = findGroup('/warehouse')!;
+    expect(warehouse.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel)).toEqual([
+      '仓储作业',
+      '库存盘点',
+      '仓储配置',
+      '仓储分析',
+    ]);
+    expect(warehouse.children!.map((c) => c.path)).not.toContain('/warehouse/operations');
+    expect(warehouse.children!.map((c) => c.path)).not.toContain('/warehouse/inventory-work');
+    expect(warehouse.children!.map((c) => c.path)).not.toContain('/warehouse/config');
+    expect(warehouse.children!.map((c) => c.path)).not.toContain('/warehouse/analysis');
+  });
+
+  it('keeps warehouse operations together under the first inline section', () => {
+    expect(findGroup('/warehouse')!.children!.slice(0, 4).map((c) => c.path)).toEqual([
+      '/warehouse/materials',
+      '/warehouse/shipments',
+      '/transfer/list',
+      '/warehouse/wastage-reports',
+    ]);
+  });
+
+  it('keeps stock query, count, config, and price analysis discoverable under warehouse', () => {
+    expect(descendantPaths('/warehouse')).toEqual(expect.arrayContaining([
+      '/inventory/by-warehouse',
+      '/warehouse/inventory-total',
+      '/warehouse/inventory',
+      '/warehouse/material-types',
+      '/warehouse/material-segments',
+      '/warehouse/material-price-trend',
+    ]));
+  });
+
+  it('groups procurement into execution, approval, and supplier-price sections', () => {
+    expect(childGroupLabels('/procurement')).toEqual([
+      '采购执行',
+      '采购审批',
+      '供应商与价格',
+    ]);
+    expect(childPaths('/procurement')).toEqual([
+      '/procurement/orders',
+      '/procurement/receives',
+      '/procurement/finance-review',
+      '/procurement/suppliers',
+      '/procurement/price-lists',
+    ]);
+  });
+
+  it('groups sales into business, approval, and configuration sections', () => {
+    expect(childGroupLabels('/sales')).toEqual([
+      '销售业务',
+      '销售审批',
+      '销售配置',
+    ]);
+    expect(childPaths('/sales')).toEqual([
+      '/sales/orders',
+      '/sales/customers',
+      '/sales/shipments',
+      '/sales/returns',
+      '/sales/payment-requests',
+      '/sales/finance-review',
+      '/sales/vehicles',
+    ]);
+  });
+
+  it('groups finance into review, accounting, analysis, and configuration sections', () => {
+    expect(childGroupLabels('/finance')).toEqual([
+      '审核队列',
+      '财务核算',
+      '财务分析',
+      '财务配置',
+    ]);
+    expect(childPaths('/finance')).toEqual([
+      '/sales/finance-review',
+      '/procurement/finance-review',
+      '/finance/adjustments',
+      '/finance/costs',
+      '/finance/three-statements',
+      '/finance/reports',
+      '/finance/ar-ap',
+      '/finance/invoices',
+      '/finance/payments',
+      '/finance/sku-margin',
+      '/finance/gross-margin-redline',
+    ]);
+  });
+
+  it('groups quality, equipment, scheduling, and system modules with inline labels', () => {
+    expect(childGroupLabels('/quality')).toEqual(['质量检验', '处置闭环', '质量配置']);
+    expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
+    expect(childGroupLabels('/scheduling')).toEqual(['调度执行', '资源与预警', '调度配置']);
+    expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);
   });
 });
 
@@ -136,15 +310,21 @@ describe('menuConfig — merged 数据与分析 group (WS4 经营分析合并)',
     expect(g.children!.map((c) => c.path)).not.toContain('/analytics/ai-reports');
   });
 
-  it('迁入的工厂侧专题项仍保留 (异常预警/进销存/车间/生产/人效)', () => {
+  it('经营分析仍保留跨域项，生产专题统一迁入生产分析', () => {
     const g = menuConfig.find((m) => m.path === '/smart-bi')!;
     const paths = g.children!.map((c) => c.path);
     for (const p of [
       '/analytics/alert-dashboard', '/analytics/supply-chain',
-      '/analytics/production-report',
-      '/production-analytics/production', '/production-analytics/efficiency',
     ]) {
       expect(paths, `missing migrated child ${p}`).toContain(p);
+    }
+    for (const p of [
+      '/analytics/production-report',
+      '/production-analytics/production',
+      '/production-analytics/yield-cost',
+      '/production-analytics/cost-summary',
+    ]) {
+      expect(paths, `${p} should live under /production/analysis, not /smart-bi`).not.toContain(p);
     }
   });
 
@@ -176,12 +356,18 @@ describe('menuConfig — 业态门控方向 (WS4)', () => {
   const child = (p: string) => group().children!.find((c) => c.path === p)!;
 
   it.each([
-    '/analytics/production-report',
     '/analytics/supply-chain',
-    '/production-analytics/production',
-    '/production-analytics/efficiency',
   ])('制造专属项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
     expect(child(p).hideForFactoryTypes).toContain('RESTAURANT');
+  });
+
+  it.each([
+    '/analytics/production-report',
+    '/production-analytics/production',
+    '/production-analytics/yield-cost',
+    '/production-analytics/cost-summary',
+  ])('生产分析项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
+    expect(findDescendant('/production', p)!.hideForFactoryTypes).toContain('RESTAURANT');
   });
 
   it('经营分析 hub 不门控 (双业态自适应 — 财务/销售/趋势/KPI 各 tab 内部自适应)', () => {
@@ -255,5 +441,26 @@ describe('menuConfig — 餐饮运营组 3 层重组 (Task 1)', () => {
   it('admin 段 (ETL状态) 保留 roles 门控', () => {
     const etl = group().children!.find((c) => c.path === '/restaurant/admin/etl-status')!;
     expect(etl.roles).toContain('factory_super_admin');
+  });
+});
+
+
+describe('menuConfig - platform-only governance entries', () => {
+  const systemPaths = () => findGroup('/system')?.children ?? [];
+
+  it.each([
+    '/system/ai-intents',
+    '/system/skill-tools',
+    '/system/llm-usage',
+    '/system/encoding-rules',
+    '/system/ai-quota',
+    '/system/pos',
+    '/system/smartbi-config',
+    '/calibration/list',
+    '/system/data-quality-queue',
+  ])('keeps %s out of factory-level account permissions', (path) => {
+    const item = systemPaths().find((child) => child.path === path);
+    expect(item, `missing ${path}`).toBeDefined();
+    expect(item!.roles).toEqual(['platform_admin']);
   });
 });

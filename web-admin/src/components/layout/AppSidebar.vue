@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
@@ -9,15 +9,29 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork, Connection
+  Histogram, KnifeFork
 } from '@element-plus/icons-vue';
 import { menuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import SidebarMenuNode from './SidebarMenuNode.vue';
+import {
+  createPointerHistory,
+  MENU_AIM_DEFAULTS,
+  shouldHoldSubmenuForPointerPath,
+  useMenuAimTimeouts,
+} from './menuAim';
 
 const router = useRouter();
 const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+
+type MenuController = {
+  open: (index: string) => void;
+  close: (index: string) => void;
+};
+
+const menuRef = ref<MenuController | null>(null);
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
@@ -119,12 +133,107 @@ const disabledSidebarModules = computed(() => {
   return set;
 });
 
+const isCollapsedSidebar = computed(() => appStore.sidebarCollapsed && !appStore.isMobile);
+const { showTimeout: submenuShowTimeout, hideTimeout: submenuHideTimeout } = useMenuAimTimeouts(
+  isCollapsedSidebar,
+  computed(() => appStore.isMobile),
+);
+
+const pointerHistory = createPointerHistory();
+const hoverOpenTimers = new Map<string, number>();
+const hoverCloseTimers = new Map<string, number>();
+
+function clearMenuTimer(timers: Map<string, number>, path: string) {
+  const timer = timers.get(path);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    timers.delete(path);
+  }
+}
+
+function clearAllMenuTimers() {
+  for (const timer of hoverOpenTimers.values()) window.clearTimeout(timer);
+  for (const timer of hoverCloseTimers.values()) window.clearTimeout(timer);
+  hoverOpenTimers.clear();
+  hoverCloseTimers.clear();
+}
+
+function trackPointer(event: PointerEvent) {
+  pointerHistory.push({ x: event.clientX, y: event.clientY });
+}
+
+onMounted(() => {
+  window.addEventListener('pointermove', trackPointer, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointermove', trackPointer);
+  clearAllMenuTimers();
+  pointerHistory.clear();
+});
+
+function visibleMenuPopperRects(): DOMRect[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('.app-sidebar-menu-popper'))
+    .filter((el) => {
+      const style = window.getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    })
+    .map((el) => el.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function shouldHoldMenuForAim(event: MouseEvent): boolean {
+  const previous = pointerHistory.previous();
+  const current = { x: event.clientX, y: event.clientY };
+  return visibleMenuPopperRects().some((rect) =>
+    shouldHoldSubmenuForPointerPath(previous, current, rect, MENU_AIM_DEFAULTS.safeTrianglePadding),
+  );
+}
+
+function shouldOpenSubmenuOnHover(level: number): boolean {
+  if (appStore.isMobile) return false;
+  return isCollapsedSidebar.value || level <= 1;
+}
+
+function handleSubmenuEnter(item: MenuItem, _event: MouseEvent, level: number) {
+  if (appStore.isMobile || !item.children?.length) return;
+  if (!shouldOpenSubmenuOnHover(level)) return;
+
+  clearMenuTimer(hoverCloseTimers, item.path);
+  clearMenuTimer(hoverOpenTimers, item.path);
+
+  const timer = window.setTimeout(() => {
+    menuRef.value?.open(item.path);
+    hoverOpenTimers.delete(item.path);
+  }, submenuShowTimeout.value);
+  hoverOpenTimers.set(item.path, timer);
+}
+
+function handleSubmenuLeave(item: MenuItem, event: MouseEvent, level: number) {
+  if (appStore.isMobile || !item.children?.length) return;
+  if (!shouldOpenSubmenuOnHover(level)) return;
+
+  clearMenuTimer(hoverOpenTimers, item.path);
+  clearMenuTimer(hoverCloseTimers, item.path);
+
+  const holdForPointerPath = shouldHoldMenuForAim(event);
+  const delay = holdForPointerPath
+    ? MENU_AIM_DEFAULTS.collapsedHideTimeout
+    : submenuHideTimeout.value;
+
+  const timer = window.setTimeout(() => {
+    menuRef.value?.close(item.path);
+    hoverCloseTimers.delete(item.path);
+  }, delay);
+  hoverCloseTimers.set(item.path, timer);
+}
+
 // 图标映射
 const iconMap: Record<string, any> = {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork, Connection
+  Histogram, KnifeFork
 };
 
 // 菜单配置已抽到 ./menuConfig.ts (可单测) — MenuItem / menuConfig / financeManagerMenu 由顶部 import 引入
@@ -147,13 +256,6 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
-
-  // 模块化可见性开关 (menuConfig.ts `visible` 字段) — 显式 false 立即隐藏,
-  // 不影响路由/深链, 用于临时下线某功能入口而不用注释代码。
-  // 注意: router meta 的 `showInMenu` 是死代码, 不在这里读取 — 唯一事实源是 menuConfig.ts。
-  if (item.visible === false) {
-    return false;
-  }
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {
@@ -181,20 +283,25 @@ function canSeeMenuItem(item: MenuItem): boolean {
 
 // 过滤有权限的菜单
 const filteredMenu = computed(() => {
-  // 财务主管使用简化菜单
   if (roleCode.value === 'finance_manager') {
     return financeManagerMenu;
   }
 
+  const filterMenuItem = (item: MenuItem): MenuItem | null => {
+    if (!canSeeMenuItem(item)) return null;
+    if (!item.children?.length) return item;
+
+    const filteredChildren = item.children
+      .map(child => filterMenuItem(child))
+      .filter((child): child is MenuItem => child !== null);
+
+    if (filteredChildren.length === 0) return null;
+    return { ...item, children: filteredChildren };
+  };
+
   return menuConfig
-    .filter(item => canSeeMenuItem(item))
-    .map(item => {
-      if (!item.children) return item;
-      // 过滤子菜单中有角色限制的项
-      const filteredChildren = item.children.filter(child => canSeeMenuItem(child));
-      return { ...item, children: filteredChildren };
-    })
-    .filter(item => !item.children || item.children.length > 0);  // 移除没有可见子菜单的父菜单
+    .map(item => filterMenuItem(item))
+    .filter((item): item is MenuItem => item !== null);
 });
 
 // Apr 24 2026 Plan C: restaurant-specific sidebar title overrides for
@@ -215,18 +322,25 @@ function titleForItem(item: MenuItem): string {
 // 当前激活的菜单
 const activeMenu = computed(() => route.path);
 
-// 默认展开的菜单
+function findOpenParents(path: string, items: MenuItem[], parents: string[] = []): string[] | null {
+  for (const item of items) {
+    if (!item.children?.length) continue;
+    const nextParents = [...parents, item.path];
+    if (item.children.some(child => path === child.path || path.startsWith(child.path + '/'))) {
+      return nextParents;
+    }
+    const nestedParents = findOpenParents(path, item.children, nextParents);
+    if (nestedParents) return nestedParents;
+  }
+  return null;
+}
+
 const defaultOpeneds = computed(() => {
-  const path = route.path;
-  const parent = menuConfig.find(item =>
-    item.children?.some(child => path.startsWith(child.path))
-  );
-  return parent ? [parent.path] : [];
+  return findOpenParents(route.path, filteredMenu.value) ?? [];
 });
 
 function handleSelect(path: string) {
   router.push(path);
-  // 移动端点击菜单项后自动关闭抽屉
   if (appStore.isMobile) {
     appStore.closeMobileMenu();
   }
@@ -260,38 +374,31 @@ function handleSelect(path: string) {
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
       <el-menu
+        ref="menuRef"
         :default-active="activeMenu"
         :default-openeds="defaultOpeneds"
-        :collapse="appStore.sidebarCollapsed && !appStore.isMobile"
+        :collapse="isCollapsedSidebar"
+        :show-timeout="submenuShowTimeout"
+        :hide-timeout="submenuHideTimeout"
         unique-opened
         background-color="transparent"
         text-color="#ffffffa6"
         active-text-color="#ffffff"
         @select="handleSelect"
       >
-        <template v-for="item in filteredMenu" :key="item.path">
-          <!-- 有子菜单 -->
-          <el-sub-menu v-if="item.children?.length" :index="item.path">
-            <template #title>
-              <el-icon><component :is="iconMap[item.icon]" /></el-icon>
-              <span>{{ titleForItem(item) }}</span>
-            </template>
-            <template v-for="child in item.children" :key="child.path">
-              <div v-if="child.groupLabel && !appStore.sidebarCollapsed" class="menu-group-label">
-                {{ child.groupLabel }}
-              </div>
-              <el-menu-item :index="child.path">
-                {{ titleForItem(child) }}
-              </el-menu-item>
-            </template>
-          </el-sub-menu>
-
-          <!-- 无子菜单 -->
-          <el-menu-item v-else :index="item.path">
-            <el-icon><component :is="iconMap[item.icon]" /></el-icon>
-            <template #title>{{ titleForItem(item) }}</template>
-          </el-menu-item>
-        </template>
+        <SidebarMenuNode
+          v-for="item in filteredMenu"
+          :key="item.path"
+          :item="item"
+          :collapsed="isCollapsedSidebar"
+          :icon-map="iconMap"
+          :title-for-item="titleForItem"
+          :show-timeout="submenuShowTimeout"
+          :hide-timeout="submenuHideTimeout"
+          :level="1"
+          @submenu-enter="handleSubmenuEnter"
+          @submenu-leave="handleSubmenuLeave"
+        />
       </el-menu>
     </el-scrollbar>
   </aside>
@@ -383,10 +490,12 @@ function handleSelect(path: string) {
   .el-sub-menu__title {
     margin: 2px 0;
     border-radius: 8px;
+    cursor: pointer;
     transition: all 0.2s ease;
 
     &:hover {
       background-color: rgba(255, 255, 255, 0.06) !important;
+      color: #fff !important;
     }
   }
 
@@ -414,25 +523,6 @@ function handleSelect(path: string) {
   }
 }
 
-.menu-group-label {
-  padding: 8px 12px 4px 36px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  user-select: none;
-
-  &:not(:first-child) {
-    margin-top: 4px;
-    border-top: 1px solid rgba(255, 255, 255, 0.04);
-    padding-top: 10px;
-  }
-}
-
-// 移动端遮罩
 .sidebar-overlay {
   display: none;
 }
@@ -456,4 +546,22 @@ function handleSelect(path: string) {
     z-index: 1000;
   }
 }
+
+:global(.app-sidebar-menu-popper) {
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 8px !important;
+  background: #102033 !important;
+  box-shadow: 0 16px 40px rgba(3, 10, 20, 0.35) !important;
+}
+
+:global(.app-sidebar-menu-popper::before) {
+  content: '';
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: -24px;
+  width: 32px;
+  pointer-events: auto;
+}
+
 </style>
