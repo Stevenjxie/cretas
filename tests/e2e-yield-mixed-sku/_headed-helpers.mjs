@@ -276,6 +276,8 @@ async function copyProductProcesses(apiCall, template, productTypeId) {
       assigneeWorkerIds: source.assigneeWorkerIds ?? null,
       isActive: source.isActive !== false,
       reportingRequired: source.reportingRequired !== false,
+      allowSemiFinishedInjection: Boolean(source.allowSemiFinishedInjection),
+      allowMultipleUpstreamSources: Boolean(source.allowMultipleUpstreamSources),
       defaultCostCategory: source.defaultCostCategory ?? null,
       packagingTemplate: source.packagingTemplate ?? null,
       auxAllocMethod: source.auxAllocMethod ?? null,

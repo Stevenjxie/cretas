@@ -1769,9 +1769,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         try {
             rowRepo.saveAndFlush(row);
         } catch (DataIntegrityViolationException e) {
-            // UK (factory,plan,processCode,clientRowId) 冲突 — 并发双 POST。
-            // 完整幂等读已有行测在 Task 1.7; 这里映射 409 + 整事务回滚 loser 的物化图。
-            throw new BusinessException(409, "该行已存在 (并发提交)");
+            String detail = Optional.ofNullable(e.getMostSpecificCause())
+                    .map(Throwable::getMessage)
+                    .orElse(e.getMessage());
+            if (detail != null && detail.contains("uk_sheet_row")) {
+                // UK (factory,plan,processCode,clientRowId) 冲突 — 并发双 POST。
+                // 完整幂等读已有行测在 Task 1.7; 这里映射 409 + 整事务回滚 loser 的物化图。
+                throw new BusinessException(409, "该行已存在 (并发提交)")
+                        .withCode("PROCESS_SHEET_ROW_DUPLICATE");
+            }
+            log.warn("process sheet row flush failed: factory={}, plan={}, process={}, clientRowId={}, detail={}",
+                    factoryId, planId, req.getProcessCode(), req.getClientRowId(), detail, e);
+            throw new BusinessException(409, "工序行保存失败，请检查上游批次、成本和库存数据")
+                    .withCode("PROCESS_SHEET_ROW_INTEGRITY")
+                    .withHint(detail)
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(req.getProcessCode());
         }
     }
 
