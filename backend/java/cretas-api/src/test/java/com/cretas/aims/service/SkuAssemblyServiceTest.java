@@ -1,6 +1,7 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.User;
@@ -47,6 +48,7 @@ class SkuAssemblyServiceTest {
 
     private static final String FACTORY_ID = "F-SKU-CLONE";
     private static final String TEMPLATE_ID = "PT-TEMPLATE-CLONE";
+    private static final String CUSTOMER_ID = "CUS-SKU-CLONE";
     private static final Long USER_ID = 1L;
     private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -65,9 +67,14 @@ class SkuAssemblyServiceTest {
         seedTemplateWithProcessChainAndBom();
 
         ProductType sku = skuAssemblyService.assemblesku(
-                FACTORY_ID, TEMPLATE_ID, null, "v1", null, USER_ID);
+                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID);
         entityManager.flush();
         entityManager.clear();
+
+        ProductType savedSku = productTypeRepository.findById(sku.getId()).orElseThrow();
+        assertEquals("Template Product (Clone Customer)", savedSku.getName());
+        assertEquals(new BigDecimal("250.00"), savedSku.getGramsPerUnit());
+        assertEquals(new BigDecimal("120.000"), savedSku.getSinglePotCapacity());
 
         List<ProductWorkProcess> copiedProcesses =
                 productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
@@ -84,6 +91,8 @@ class SkuAssemblyServiceTest {
         assertNotEquals(templateProcessIds(), copiedProcesses.stream()
                 .map(ProductWorkProcess::getId)
                 .toList());
+        assertTrue(copiedProcesses.stream()
+                .allMatch(process -> process.getResponsibleWorkerId() == null));
 
         BomRecipe copiedRecipe = bomRecipeRepository
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, sku.getId())
@@ -91,7 +100,7 @@ class SkuAssemblyServiceTest {
         assertNotEquals("BOM-TEMPLATE-CURRENT", copiedRecipe.getId());
         assertNotEquals(templateRecipeCode(), copiedRecipe.getRecipeCode());
         assertTrue(copiedRecipe.getRecipeCode().matches("BOM-\\d{8}-\\d{3}"));
-        assertEquals("Template Product", copiedRecipe.getProductName());
+        assertEquals(savedSku.getName(), copiedRecipe.getProductName());
         assertEquals(BomRecipe.Status.ACTIVE, copiedRecipe.getStatus());
         assertEquals(Boolean.TRUE, copiedRecipe.getIsCurrent());
         assertEquals(new BigDecimal("0.2000"), copiedRecipe.getInjectionRate());
@@ -114,11 +123,12 @@ class SkuAssemblyServiceTest {
                 bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
                         FACTORY_ID, sku.getId());
         assertEquals(1, copiedLegacyItems.size());
+        assertEquals(savedSku.getName(), copiedLegacyItems.get(0).getProductName());
         assertEquals("MAT-LEGACY-1", copiedLegacyItems.get(0).getMaterialTypeId());
         assertEquals(Boolean.TRUE, copiedLegacyItems.get(0).getPerPortion());
 
         assertThrows(BusinessException.class, () -> skuAssemblyService.assemblesku(
-                FACTORY_ID, TEMPLATE_ID, null, "v1", null, USER_ID));
+                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID));
         assertEquals(3, productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, sku.getId())
                 .size());
@@ -152,6 +162,17 @@ class SkuAssemblyServiceTest {
         entityManager.persist(user);
         entityManager.flush();
 
+        Customer customer = new Customer();
+        customer.setId(CUSTOMER_ID);
+        customer.setFactoryId(FACTORY_ID);
+        customer.setCode("CUS-CLONE");
+        customer.setCustomerCode("CUS-CLONE");
+        customer.setName("Clone Customer");
+        customer.setIsActive(true);
+        customer.setCreatedBy(user.getId());
+        customer.setVersion(0L);
+        entityManager.persist(customer);
+
         ProductType template = new ProductType();
         template.setId(TEMPLATE_ID);
         template.setFactoryId(FACTORY_ID);
@@ -160,6 +181,8 @@ class SkuAssemblyServiceTest {
         template.setCategory("finished");
         template.setUnit("kg");
         template.setUnitPrice(new BigDecimal("12.34"));
+        template.setGramsPerUnit(new BigDecimal("250.00"));
+        template.setSinglePotCapacity(new BigDecimal("120.000"));
         template.setIsActive(true);
         template.setCreatedBy(user.getId());
         productTypeRepository.saveAndFlush(template);

@@ -108,6 +108,8 @@ public class SkuAssemblyService {
         sku.setUnitPrice(template.getUnitPrice());
         sku.setProductionTimeMinutes(template.getProductionTimeMinutes());
         sku.setShelfLifeDays(template.getShelfLifeDays());
+        sku.setGramsPerUnit(template.getGramsPerUnit());
+        sku.setSinglePotCapacity(template.getSinglePotCapacity());
         sku.setProductCategory(template.getProductCategory());
         sku.setSpecification(template.getSpecification());
         sku.setPackageSpec(template.getPackageSpec());
@@ -127,7 +129,7 @@ public class SkuAssemblyService {
         // 5. 复制配方 (MaterialProductConversion)
         copyRecipe(factoryId, templateId, sku.getId(), recipeModifications);
         copyWorkProcessChain(factoryId, templateId, sku.getId());
-        copyBom(factoryId, templateId, sku.getId());
+        copyBom(factoryId, templateId, sku.getId(), sku.getName());
 
         return sku;
     }
@@ -233,7 +235,7 @@ public class SkuAssemblyService {
             copy.setProcessOrder(source.getProcessOrder());
             copy.setUnitOverride(source.getUnitOverride());
             copy.setEstimatedMinutesOverride(source.getEstimatedMinutesOverride());
-            copy.setResponsibleWorkerId(source.getResponsibleWorkerId());
+            copy.setResponsibleWorkerId(null);
             copy.setIsActive(source.getIsActive());
             copy.setReportingRequired(source.getReportingRequired());
             copy.setAllowSemiFinishedInjection(source.getAllowSemiFinishedInjection());
@@ -251,7 +253,7 @@ public class SkuAssemblyService {
                 templateId, skuId, templateProcesses.size());
     }
 
-    private void copyBom(String factoryId, String templateId, String skuId) {
+    private void copyBom(String factoryId, String templateId, String skuId, String skuProductName) {
         if (bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, skuId).isPresent()) {
             throw new BusinessException(409, "SKU当前BOM已存在，禁止重复复制: " + skuId)
                     .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入BOM")
@@ -264,7 +266,7 @@ public class SkuAssemblyService {
         }
 
         bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, templateId)
-                .ifPresent(source -> copyCurrentBomRecipe(factoryId, source, skuId));
+                .ifPresent(source -> copyCurrentBomRecipe(factoryId, source, skuId, skuProductName));
 
         List<BomItem> legacyItems =
                 bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
@@ -273,7 +275,7 @@ public class SkuAssemblyService {
             BomItem copy = new BomItem();
             copy.setFactoryId(factoryId);
             copy.setProductTypeId(skuId);
-            copy.setProductName(source.getProductName());
+            copy.setProductName(skuProductName);
             copy.setMaterialTypeId(source.getMaterialTypeId());
             copy.setMaterialName(source.getMaterialName());
             copy.setStandardQuantity(source.getStandardQuantity());
@@ -293,13 +295,13 @@ public class SkuAssemblyService {
         log.info("BOM复制完成: template={} -> sku={}, legacyItems={}", templateId, skuId, legacyItems.size());
     }
 
-    private void copyCurrentBomRecipe(String factoryId, BomRecipe source, String skuId) {
+    private void copyCurrentBomRecipe(String factoryId, BomRecipe source, String skuId, String skuProductName) {
         BomRecipe copy = new BomRecipe();
         copy.setId(UUID.randomUUID().toString());
         copy.setFactoryId(factoryId);
         copy.setRecipeCode(generateRecipeCode(factoryId));
         copy.setProductTypeId(skuId);
-        copy.setProductName(source.getProductName());
+        copy.setProductName(skuProductName);
         copy.setVersion(source.getVersion());
         copy.setIsCurrent(true);
         copy.setOverallYieldRate(source.getOverallYieldRate());
