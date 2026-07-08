@@ -356,9 +356,19 @@ class ComprehensiveSynthesisEngine:
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
-        _wants_store = any(k in ql for k in ("门店", "分店", "店铺", "哪家", "哪个店", "各店", "分店"))
-        _wants_lag = any(k in ql for k in ("拖后腿", "垫底", "最差", "掉队", "落后", "差在哪", "拉胯", "最弱"))
-        _wants_traffic_ticket = any(k in ql for k in ("客流", "客单价", "人均", "单量", "来客", "进店"))
+        # Colloquial owner phrasings added 2026-07-08 (role-play: "十六家店里头哪家
+        # 最不行，是没人来还是客人花的钱少" previously fell through to a review answer
+        # because none of 拖后腿/客流/客单价 matched the plain-speech wording).
+        _wants_store = any(k in ql for k in (
+            "门店", "分店", "店铺", "哪家", "哪个店", "各店",
+            "有的店", "有些店", "有几家", "几家店", "某家", "某些店"))
+        _wants_lag = any(k in ql for k in (
+            "拖后腿", "垫底", "最差", "掉队", "落后", "差在哪", "拉胯", "最弱",
+            "最不行", "做不起来", "做不起", "生意差", "生意不好", "起不来"))
+        _wants_traffic_ticket = any(k in ql for k in (
+            "客流", "客单价", "人均", "单量", "来客", "进店",
+            "没人来", "没客人", "人少", "客人少", "来的人少", "来客少",
+            "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
         # Cross relations.

@@ -114,6 +114,12 @@ def _known_query_set(merged: Dict[str, List[str]]) -> frozenset:
 _ATTRIBUTION_CUES = (
     "为什么", "为啥", "怎么回事", "拖后腿", "垫底", "拉低", "拖累", "差在哪",
     "是客流还是", "是量还是", "是率还是", "归因", "原因", "哪个环节",
+    # Colloquial owner phrasings (2026-07-08 role-play) — keep aligned with
+    # synthesis_engine.plan_dimensions so the demand report labels these
+    # attribution too. All are underperformance/comparison cues, so they do NOT
+    # match neutral query examples ("哪家店订单最多" / "本周销量排行").
+    "最不行", "做不起来", "做不起", "是没人来还是", "是人少还是", "是客人少还是",
+    "谁最差", "哪家最差", "哪家差", "生意差在哪",
 )
 _WRITE_CUES = (
     "建个", "建一个", "新建", "创建", "帮我建", "录入", "开单", "下单", "开一张",
