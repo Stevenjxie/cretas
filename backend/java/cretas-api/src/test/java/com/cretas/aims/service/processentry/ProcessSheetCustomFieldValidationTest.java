@@ -224,6 +224,46 @@ class ProcessSheetCustomFieldValidationTest {
     }
 
     @Test
+    @DisplayName("B: 启用字段发 {key:null} → merge putAll 覆盖成 null → 真清掉 (不再是旧值 12.5)")
+    void resave_enabledFieldSentNull_clearsPriorValue() throws Exception {
+        // 1. 既存行 (DRAFT) 的 row_payload 含 customFields={baume:12.5}
+        ProcessSheetRowRequest priorReq = draftReq("row-clear", Map.of("baume", new BigDecimal("12.5")));
+        com.cretas.aims.entity.processentry.ProcessSheetRow existing =
+                new com.cretas.aims.entity.processentry.ProcessSheetRow();
+        existing.setFactoryId(FACTORY);
+        existing.setPlanId(PLAN_ID);
+        existing.setProcessCode("shuzhi");
+        existing.setProcessOrder(1);
+        existing.setClientRowId("row-clear");
+        existing.setBatchId(null);
+        existing.setRowStatus("DRAFT");
+        existing.setRowPayload(new ObjectMapper().writeValueAsString(priorReq));
+        when(rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(FACTORY, PLAN_ID, "shuzhi", "row-clear"))
+                .thenReturn(Optional.of(existing));
+        when(rowRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // baume 仍启用 (schema 里 enabled=true) —— setUp 的 stub 即可
+
+        // 2. 再保存: 用户清空 baume 单元格 → 前端 B 改动: 启用字段仍带 key, 值发 null
+        java.util.Map<String, Object> clearedFields = new java.util.HashMap<>();
+        clearedFields.put("baume", null);
+        ProcessSheetRowRequest resaveReq = draftReq("row-clear", clearedFields);
+        service.saveRow(FACTORY, PLAN_ID, resaveReq, 7L);
+
+        // 3. 断言 row_payload 的 baume 已清 (不再含旧值 12.5) —— merge putAll(null) 覆盖生效
+        ArgumentCaptor<com.cretas.aims.entity.processentry.ProcessSheetRow> cap =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.processentry.ProcessSheetRow.class);
+        verify(rowRepo).save(cap.capture());
+        String payloadJson = cap.getValue().getRowPayload();
+        assertThat(payloadJson)
+                .as("清空启用字段后 row_payload 不再含旧值 12.5 (B: {key:null} 覆盖清空)")
+                .doesNotContain("12.5");
+        // 反序列化确认 baume 键存在但值为 null (显式清空, 非静默丢键)
+        ProcessSheetRowRequest reparsed = new ObjectMapper().readValue(payloadJson, ProcessSheetRowRequest.class);
+        assertThat(reparsed.getCustomFields()).as("customFields 非空").isNotNull();
+        assertThat(reparsed.getCustomFields().get("baume")).as("baume 已清为 null").isNull();
+    }
+
+    @Test
     @DisplayName("(c) 未开启自定义字段 schema (customFieldSchema=null) 的工序 → 不限制任何 key (放行, 向后兼容)")
     void noSchemaConfigured_allowsAnyKey() {
         // 覆盖 setUp 的 stub: 该工序未配置 schema

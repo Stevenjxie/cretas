@@ -942,20 +942,24 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }
   }
 
-  // G2 自定义字段: 收集非空值进 customFields map (后端按 WorkProcess.customFieldSchema 白名单校验,
-  // 未配置 schema 的工序传任何 key 都会被拒 — 前端只在 enabledCustomFields 非空时才会有值可收集,
-  // 天然不会给未开启自定义字段的工序发多余 key)。
+  // G2 自定义字段: 收集**启用**字段进 customFields map。后端按 WorkProcess.customFieldSchema
+  // 白名单校验 key (在 schema 即放行, 不校验 value); 前端只对 enabledCustomFields 发 key,
+  // 天然不会给未开启自定义字段的工序发多余 key。
+  //
+  // B (2026-07-09 让"清空"真生效): 启用字段**即使单元格为空也带上该 key (值发 null)**, 不再省略。
+  //   与后端 mergeCustomFieldsFromPrior 的语义配合:
+  //   - 启用字段清空 → 发 {key: null} → putAll 覆盖旧值成 null → 真清掉 ✅
+  //   - 启用但未改的字段 → hydrateRow 已载入旧值, 原样回发 → 保留 ✅
+  //   - 禁用字段 → 不在 enabledCustomFields, 仍缺席 → 后端保留旧值 (F2 不变) ✅
+  //   若之前省略空值, 后端会把"缺席 key"当"保留旧值", 导致启用字段清不掉 (F2(b) 的 wart)。
   if (enabledCustomFields.value.length > 0) {
     const customFields: Record<string, unknown> = {};
     for (const def of enabledCustomFields.value) {
       const v = row.fields[def.key];
-      if (v !== null && v !== undefined && v !== '') {
-        customFields[def.key] = v;
-      }
+      // 空单元格显式发 null (可清空); 非空发原值。绝不省略启用字段的 key。
+      customFields[def.key] = (v === undefined || v === '') ? null : v;
     }
-    if (Object.keys(customFields).length > 0) {
-      base.customFields = customFields;
-    }
+    base.customFields = customFields;
   }
   return base;
 }
