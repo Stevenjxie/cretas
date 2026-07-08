@@ -892,6 +892,60 @@ async def finance_summary(
     return result
 
 
+async def weather_daily(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """Daily internal-seed weather observations for restaurant synthesis."""
+    start, end = date_range
+    _validate_range(start, end)
+
+    params: list = [factory_id]
+    conds = [
+        "factory_id = $1",
+        "source_code = 'internal_seed_weather'",
+        "benchmark_domain = 'restaurant'",
+        "metric_code IN ('rain_mm', 'temp_c')",
+    ]
+    if start is not None:
+        params.append(start)
+        conds.append(f"period_start >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"period_start <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+              period_start AS date,
+              MAX(metric_value) FILTER (WHERE metric_code = 'rain_mm')::numeric(18,4) AS rain_mm,
+              MAX(metric_value) FILTER (WHERE metric_code = 'temp_c')::numeric(18,4) AS temp_c
+            FROM external_benchmark_observation
+            WHERE {where}
+            GROUP BY period_start
+            ORDER BY period_start
+            """,
+            *params,
+        )
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "days": [
+            {
+                "date": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
+                "rain_mm": float(r["rain_mm"]) if r["rain_mm"] is not None else None,
+                "temp_c": float(r["temp_c"]) if r["temp_c"] is not None else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 async def menu_quadrant(
     pool: asyncpg.Pool,
     factory_id: str,

@@ -73,6 +73,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
@@ -109,6 +110,7 @@ from smartbi.agent.orchestrator import (
 )
 from smartbi.gold import (
     channel_breakdown,
+    daily_trend,
     discount_breakdown,
     finance_summary,
     store_comparison,
@@ -121,6 +123,7 @@ from smartbi.gold import (
     review_vip,
     top_products,
 )
+from smartbi.gold.queries import weather_daily
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
@@ -162,6 +165,105 @@ SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
 HISTORY_MAX_TURNS = 4
 HISTORY_CHAR_BUDGET = 1200  # ~800 LLM tokens for Chinese-heavy text (~1.5 chars/token)
 HISTORY_BLOCK_HEADER = "对话历史（仅供理解追问指代，数字一律以下方 FactBook 为准）"
+
+
+def _as_date_key(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _as_decimal(value: Any) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _round1(value: Optional[Decimal]) -> Optional[float]:
+    if value is None:
+        return None
+    return float(value.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def compute_weather_attribution(
+    daily_rows: List[Dict[str, Any]],
+    weather_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compare daily revenue by deterministic rain buckets.
+
+    This is a descriptive correlation slice only. It does not claim causality.
+    """
+    weather_by_date = {
+        _as_date_key(r.get("date")): r
+        for r in weather_rows
+        if r.get("date") is not None and r.get("rain_mm") is not None
+    }
+    bucket_order = ["晴天", "雨天", "暴雨"]
+    buckets = {
+        name: {"cond": name, "n_days": 0, "_rev": Decimal("0"), "_bills": Decimal("0")}
+        for name in bucket_order
+    }
+    extreme_days: List[Dict[str, Any]] = []
+
+    for row in daily_rows:
+        d = _as_date_key(row.get("date"))
+        weather = weather_by_date.get(d)
+        if not weather:
+            continue
+        rain = _as_decimal(weather.get("rain_mm"))
+        if rain == 0:
+            cond = "晴天"
+        elif rain < Decimal("30"):
+            cond = "雨天"
+        else:
+            cond = "暴雨"
+        revenue = _as_decimal(row.get("revenue", row.get("total_revenue")))
+        bills = _as_decimal(row.get("bill_count", row.get("bills")))
+        b = buckets[cond]
+        b["n_days"] += 1
+        b["_rev"] += revenue
+        b["_bills"] += bills
+        if cond == "暴雨":
+            extreme_days.append({
+                "date": d,
+                "rain_mm": float(rain),
+                "revenue": float(revenue),
+            })
+
+    rendered = []
+    for name in bucket_order:
+        b = buckets[name]
+        n = int(b["n_days"])
+        if n == 0:
+            continue
+        avg_rev = b["_rev"] / Decimal(n)
+        avg_bills = b["_bills"] / Decimal(n)
+        avg_ticket = b["_rev"] / b["_bills"] if b["_bills"] != 0 else None
+        rendered.append({
+            "cond": name,
+            "n_days": n,
+            "avg_rev": _round1(avg_rev),
+            "avg_bills": _round1(avg_bills),
+            "avg_ticket": _round1(avg_ticket),
+            "small_sample": n < 3,
+        })
+
+    by_cond = {b["cond"]: b for b in rendered}
+    sunny = by_cond.get("晴天")
+    rainy = by_cond.get("雨天")
+    delta = pct = None
+    if sunny and rainy and sunny.get("avg_rev") not in (None, 0):
+        delta_dec = _as_decimal(rainy["avg_rev"]) - _as_decimal(sunny["avg_rev"])
+        delta = _round1(delta_dec)
+        pct = _round1((delta_dec / _as_decimal(sunny["avg_rev"])) * Decimal("100"))
+
+    if not rendered:
+        return {"no_data": True, "buckets": [], "extreme_days": []}
+    return {
+        "buckets": rendered,
+        "rain_vs_sunny_delta": delta,
+        "rain_vs_sunny_pct": pct,
+        "extreme_days": extreme_days,
+        "caveat": "天气对比为相关关系，不等于因果；小样本档需谨慎解读。",
+    }
 
 
 def _build_history_block(
@@ -470,7 +572,7 @@ class ComprehensiveSynthesisEngine:
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
-                "attribution": False, "cross": []}
+                "attribution": False, "weather": False, "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
         if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
@@ -499,6 +601,16 @@ class ComprehensiveSynthesisEngine:
             "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
+        _wants_weather = any(k in ql for k in (
+            "天气", "下雨", "雨天", "暴雨", "刮风", "下雪", "高温",
+            "为什么这几天", "为啥这段", "哪天",
+        ))
+        _has_revenue_context = any(k in ql for k in (
+            "营收", "营业额", "经营", "财务", "客单价", "收入", "业绩",
+            "利润", "生意", "订单", "客流", "赚钱",
+        ))
+        if _wants_weather and _has_revenue_context:
+            plan["weather"] = True
         # Cross relations.
         if "vip" in ql and any(k in ql for k in ("菜品", "门店", "评价", "口味")):
             plan["cross"].append("vip_x_rating")
@@ -511,7 +623,7 @@ class ComprehensiveSynthesisEngine:
         # Fallback: holistic question with no explicit dimension → open all.
         # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
         # does NOT trip the open-all fallback.
-        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["attribution"]):
+        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["attribution"] or plan["weather"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -575,6 +687,13 @@ class ComprehensiveSynthesisEngine:
             )
             tasks["discounts"] = _safe(
                 discount_breakdown(self._pool, factory_id, date_range), "discounts",
+            )
+        if plan.get("weather"):
+            tasks["weather_sales"] = _safe(
+                daily_trend(self._pool, factory_id, date_range), "weather_sales",
+            )
+            tasks["weather_daily"] = _safe(
+                weather_daily(self._pool, factory_id, date_range), "weather_daily",
             )
 
         results: Dict[str, Any] = {}
@@ -651,6 +770,16 @@ class ComprehensiveSynthesisEngine:
                 plan["sales"] = False
 
         # ---- cross hints (descriptive relationships, 相关≠因果) ----
+        if plan.get("weather"):
+            daily_points = (results.get("weather_sales") or {}).get("points") or []
+            weather_days = (results.get("weather_daily") or {}).get("days") or []
+            wattr = compute_weather_attribution(daily_points, weather_days)
+            if wattr and not wattr.get("no_data"):
+                fb.weather = wattr
+                notes.append("天气归因仅为晴/雨/暴雨分档的营收相关对比，相关关系不等于因果。")
+            else:
+                plan["weather"] = False
+
         fb.cross_hints = self._build_cross_hints(fb, plan, results)
         fb.notes = notes
         return fb
@@ -761,7 +890,7 @@ class ComprehensiveSynthesisEngine:
         lines.append("")
         lines.append(
             "请综合以上多维数据回答用户问题：先给 1-2 句核心结论，再分维度("
-            "评价/经营/交叉关系)简述，最后给 2-3 条 4 要素齐全的可执行建议。"
+            "评价/经营/天气/交叉关系)简述，最后给 2-3 条 4 要素齐全的可执行建议。"
             "严格遵守诚实标注规则。"
         )
         return "\n".join(lines)
