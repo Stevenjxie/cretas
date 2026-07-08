@@ -283,6 +283,42 @@ def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> 
     return f"最近 {requested_days} 天"
 
 
+def _compute_margin_dragger(
+    with_cost: List[Dict[str, Any]], avg_margin: float, total_rev_with_cost: float,
+    *, min_revenue: float = 1000.0,
+) -> Optional[Dict[str, Any]]:
+    """Which dish drags the BLENDED gross margin most (拖毛利归因, deterministic).
+
+    A dish's drag on the blended margin is the exact identity
+    ``营收占比 × (毛利率 − 平均毛利率)``; summed over costed dishes it is 0, so the
+    most-negative term is the single biggest dragger. Crucially this is NOT the
+    lowest-rate dish — a tiny-revenue low-margin dish barely moves the blend,
+    while a high-volume mildly-below-average dish drags it more. Returns the
+    dragger + a cause label, or None when fewer than 2 costed dishes qualify.
+    """
+    cands = [e for e in (with_cost or []) if float(e.get("revenue") or 0.0) >= min_revenue]
+    if len(cands) < 2 or total_rev_with_cost <= 0:
+        return None
+    best = None
+    for e in cands:
+        share = float(e["revenue"]) / total_rev_with_cost
+        drag = share * (float(e["margin_rate"]) - avg_margin)
+        if best is None or drag < best["drag"]:
+            best = {"name": e.get("name"), "margin_rate": float(e["margin_rate"]),
+                    "share": share, "drag": drag}
+    rate = best["margin_rate"]
+    if rate < 0:
+        cause = "该菜亏本（成本高于售价），优先复核售价/份量/进价"
+    elif rate < avg_margin * 0.6:
+        cause = "毛利率过低，主要靠提价或降成本"
+    elif best["share"] > 0.15:
+        cause = "销量占比大、毛利率偏低，规模摊薄了整体毛利"
+    else:
+        cause = "毛利率偏低，可小幅提价或标准化份量"
+    best["cause"] = cause
+    return best
+
+
 _CN_SMALL_NUMBERS = {
     "一": 1,
     "二": 2,
@@ -942,6 +978,18 @@ async def resolve_gross_margin(
         key=lambda x: x["margin_rate"],
     )[:3]
 
+    # 拖毛利归因（确定性）: which single dish drags the BLENDED margin most, and
+    # whether it's a rate problem or a volume-amplified one — answers "哪个菜拖
+    # 毛利，是率低还是量大" directly instead of only listing bottom-rate dishes.
+    dragger = _compute_margin_dragger(with_cost, avg_margin, total_rev_with_cost)
+    dragger_text = (
+        f"\n\n最拖整体毛利的菜品（拖累 = 营收占比 × 毛利率差）:\n"
+        f"  - {dragger['name']}: 毛利率 {dragger['margin_rate'] * 100:.1f}% "
+        f"(低于平均 {avg_margin * 100:.1f}%), 占营收 {dragger['share'] * 100:.1f}%"
+        f" → 主因：{dragger['cause']}"
+        if dragger else ""
+    )
+
     top_text = "\n".join([
         f"  {i+1}. {e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['food_cost_unit'] * e['qty']:.2f} / "
         f"毛利 ¥{e['gross_profit']:.2f} ({e['margin_rate'] * 100:.1f}%)"
@@ -983,7 +1031,7 @@ async def resolve_gross_margin(
         f"菜品毛利分析（{window_label}）\n"
         f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_margin * 100:.1f}%\n"
         f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据；缺成本菜品不纳入毛利率均值，避免虚高。\n\n"
-        f"Top {len(top_slice)} 毛利菜品（按绝对毛利）:\n{top_text}\n\n"
+        f"Top {len(top_slice)} 毛利菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
         f"需要关注的低毛利菜品:\n{low_margin_text}\n\n"
         f"建议动作:\n"
         f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
