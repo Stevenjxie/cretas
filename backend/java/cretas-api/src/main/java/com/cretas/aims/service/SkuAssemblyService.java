@@ -3,12 +3,22 @@ package com.cretas.aims.service;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import java.time.LocalDateTime;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +46,11 @@ public class SkuAssemblyService {
     private final ProductTypeRepository productTypeRepository;
     private final CustomerRepository customerRepository;
     private final ConversionRepository conversionRepository;
+    private final ProductWorkProcessRepository productWorkProcessRepository;
+    private final BomRecipeRepository bomRecipeRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
+    private final BomSeasoningItemRepository bomSeasoningItemRepository;
+    private final BomItemRepository bomItemRepository;
 
     /**
      * 拼积木创建 SKU
@@ -107,6 +122,8 @@ public class SkuAssemblyService {
 
         // 5. 复制配方 (MaterialProductConversion)
         copyRecipe(factoryId, templateId, sku.getId(), recipeModifications);
+        copyWorkProcessChain(factoryId, templateId, sku.getId());
+        copyBom(factoryId, templateId, sku.getId());
 
         return sku;
     }
@@ -191,5 +208,157 @@ public class SkuAssemblyService {
         }
 
         log.info("配方复制完成: template={} → sku={}, recipes={}", templateId, skuId, templateRecipes.size());
+    }
+    private void copyWorkProcessChain(String factoryId, String templateId, String skuId) {
+        List<ProductWorkProcess> existingTargetProcesses =
+                productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, skuId);
+        if (!existingTargetProcesses.isEmpty()) {
+            throw new BusinessException(409, "SKU工序链已存在，禁止重复复制: " + skuId)
+                    .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入工序链")
+                    .withHintTarget("productTypeId");
+        }
+
+        List<ProductWorkProcess> templateProcesses =
+                productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, templateId);
+
+        for (ProductWorkProcess source : templateProcesses) {
+            ProductWorkProcess copy = new ProductWorkProcess();
+            copy.setFactoryId(factoryId);
+            copy.setProductTypeId(skuId);
+            copy.setWorkProcessId(source.getWorkProcessId());
+            copy.setProcessOrder(source.getProcessOrder());
+            copy.setUnitOverride(source.getUnitOverride());
+            copy.setEstimatedMinutesOverride(source.getEstimatedMinutesOverride());
+            copy.setResponsibleWorkerId(source.getResponsibleWorkerId());
+            copy.setIsActive(source.getIsActive());
+            copy.setReportingRequired(source.getReportingRequired());
+            copy.setAllowSemiFinishedInjection(source.getAllowSemiFinishedInjection());
+            copy.setAllowMultipleUpstreamSources(source.getAllowMultipleUpstreamSources());
+            copy.setDefaultCostCategory(source.getDefaultCostCategory());
+            copy.setPackagingTemplate(source.getPackagingTemplate());
+            copy.setAuxAllocMethod(source.getAuxAllocMethod());
+            copy.setStandardYieldRate(source.getStandardYieldRate());
+            copy.setAuxUnitPrice(source.getAuxUnitPrice());
+            copy.setAuxBasis(source.getAuxBasis());
+            productWorkProcessRepository.save(copy);
+        }
+
+        log.info("工序链复制完成: template={} -> sku={}, processes={}",
+                templateId, skuId, templateProcesses.size());
+    }
+
+    private void copyBom(String factoryId, String templateId, String skuId) {
+        if (bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, skuId).isPresent()) {
+            throw new BusinessException(409, "SKU当前BOM已存在，禁止重复复制: " + skuId)
+                    .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入BOM")
+                    .withHintTarget("productTypeId");
+        }
+        if (bomItemRepository.countByFactoryIdAndProductTypeId(factoryId, skuId) > 0) {
+            throw new BusinessException(409, "SKU旧版BOM明细已存在，禁止重复复制: " + skuId)
+                    .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入旧版BOM明细")
+                    .withHintTarget("productTypeId");
+        }
+
+        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, templateId)
+                .ifPresent(source -> copyCurrentBomRecipe(factoryId, source, skuId));
+
+        List<BomItem> legacyItems =
+                bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+                        factoryId, templateId);
+        for (BomItem source : legacyItems) {
+            BomItem copy = new BomItem();
+            copy.setFactoryId(factoryId);
+            copy.setProductTypeId(skuId);
+            copy.setProductName(source.getProductName());
+            copy.setMaterialTypeId(source.getMaterialTypeId());
+            copy.setMaterialName(source.getMaterialName());
+            copy.setStandardQuantity(source.getStandardQuantity());
+            copy.setYieldRate(source.getYieldRate());
+            copy.setUnit(source.getUnit());
+            copy.setUnitPrice(source.getUnitPrice());
+            copy.setTaxRate(source.getTaxRate());
+            copy.setMaterialCategory(source.getMaterialCategory());
+            copy.setSortOrder(source.getSortOrder());
+            copy.setRemark(source.getRemark());
+            copy.setPerPortion(source.getPerPortion());
+            copy.setSemiFinishedRefCode(source.getSemiFinishedRefCode());
+            copy.setSubProductTypeId(source.getSubProductTypeId());
+            bomItemRepository.save(copy);
+        }
+
+        log.info("BOM复制完成: template={} -> sku={}, legacyItems={}", templateId, skuId, legacyItems.size());
+    }
+
+    private void copyCurrentBomRecipe(String factoryId, BomRecipe source, String skuId) {
+        BomRecipe copy = new BomRecipe();
+        copy.setId(UUID.randomUUID().toString());
+        copy.setFactoryId(factoryId);
+        copy.setRecipeCode(source.getRecipeCode());
+        copy.setProductTypeId(skuId);
+        copy.setProductName(source.getProductName());
+        copy.setVersion(source.getVersion());
+        copy.setIsCurrent(true);
+        copy.setOverallYieldRate(source.getOverallYieldRate());
+        copy.setOutputQuantityPerUnit(source.getOutputQuantityPerUnit());
+        copy.setOutputUnit(source.getOutputUnit());
+        copy.setTotalMaterialCost(source.getTotalMaterialCost());
+        copy.setTotalLaborCost(source.getTotalLaborCost());
+        copy.setTotalOverheadCost(source.getTotalOverheadCost());
+        copy.setTotalCost(source.getTotalCost());
+        copy.setStandardSalePrice(source.getStandardSalePrice());
+        copy.setStatus(source.getStatus());
+        copy.setActivatedAt(source.getActivatedAt());
+        copy.setActivatedBy(source.getActivatedBy());
+        copy.setSourceType(source.getSourceType());
+        copy.setSourceSampleId(source.getSourceSampleId());
+        copy.setNotes(source.getNotes());
+        copy.setCookingPotBaseKg(source.getCookingPotBaseKg());
+        copy.setSubsequentPotRatio(source.getSubsequentPotRatio());
+        copy.setInjectionRate(source.getInjectionRate());
+        bomRecipeRepository.save(copy);
+
+        List<BomRecipeItem> sourceItems = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(source.getId());
+        for (BomRecipeItem sourceItem : sourceItems) {
+            BomRecipeItem itemCopy = new BomRecipeItem();
+            itemCopy.setRecipeId(copy.getId());
+            itemCopy.setFactoryId(factoryId);
+            itemCopy.setMaterialTypeId(sourceItem.getMaterialTypeId());
+            itemCopy.setMaterialName(sourceItem.getMaterialName());
+            itemCopy.setStandardQuantity(sourceItem.getStandardQuantity());
+            itemCopy.setYieldRate(sourceItem.getYieldRate());
+            itemCopy.setActualQuantity(sourceItem.getActualQuantity());
+            itemCopy.setUnit(sourceItem.getUnit());
+            itemCopy.setUnitPrice(sourceItem.getUnitPrice());
+            itemCopy.setTaxRate(sourceItem.getTaxRate());
+            itemCopy.setItemCost(sourceItem.getItemCost());
+            itemCopy.setMaterialCategory(sourceItem.getMaterialCategory());
+            itemCopy.setSortOrder(sourceItem.getSortOrder());
+            itemCopy.setIsOptional(sourceItem.getIsOptional());
+            itemCopy.setSubstituteGroup(sourceItem.getSubstituteGroup());
+            itemCopy.setRemark(sourceItem.getRemark());
+            itemCopy.setPerPortion(sourceItem.getPerPortion());
+            itemCopy.setSemiFinishedRefCode(sourceItem.getSemiFinishedRefCode());
+            itemCopy.setSubProductTypeId(sourceItem.getSubProductTypeId());
+            itemCopy.setPrimaryCode(sourceItem.getPrimaryCode());
+            itemCopy.setPrimaryCodeRef(sourceItem.getPrimaryCodeRef());
+            bomRecipeItemRepository.save(itemCopy);
+        }
+
+        List<BomSeasoningItem> sourceSeasoningItems =
+                bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(source.getId());
+        for (BomSeasoningItem sourceSeasoning : sourceSeasoningItems) {
+            BomSeasoningItem seasoningCopy = new BomSeasoningItem();
+            seasoningCopy.setRecipeId(copy.getId());
+            seasoningCopy.setFactoryId(factoryId);
+            seasoningCopy.setSection(sourceSeasoning.getSection());
+            seasoningCopy.setSeq(sourceSeasoning.getSeq());
+            seasoningCopy.setName(sourceSeasoning.getName());
+            seasoningCopy.setDosagePerKgG(sourceSeasoning.getDosagePerKgG());
+            seasoningCopy.setPriceSource1(sourceSeasoning.getPriceSource1());
+            seasoningCopy.setPriceSource2(sourceSeasoning.getPriceSource2());
+            seasoningCopy.setCountInSeasoning(sourceSeasoning.getCountInSeasoning());
+            seasoningCopy.setRemark(sourceSeasoning.getRemark());
+            bomSeasoningItemRepository.save(seasoningCopy);
+        }
     }
 }
