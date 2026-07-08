@@ -17,6 +17,7 @@ Protected paths:
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -135,9 +136,28 @@ class JWTAuthMiddleware:
         # auth_method=internal when called by Java with the header. Some
         # handlers (e.g. ai/api.py:154) require auth_method=="internal" and
         # used to fail with 401 because the secret check was skipped first.
+        # 2026-07-08 security fix (fail-closed): NO hardcoded fallback secret.
+        # The old `os.environ.get(...) or "cretas-internal-2026"` meant that if
+        # INTERNAL_API_SECRET was ever unset on the Python process, the public
+        # fallback (this repo is public on GitHub) became live — any external
+        # caller reaching Python via the gateway could send that known constant
+        # + arbitrary X-Factory-Id / X-User-Role and get cross-tenant,
+        # RBAC-bypassing access (the internal branch below skips
+        # require_factory_match entirely, see line ~326). Now: env unset/blank →
+        # expected_secret is falsy → this whole internal branch is unreachable
+        # and the request falls through to the JWT / public-prefix checks.
+        # hmac.compare_digest = constant-time compare (mirrors the OTA
+        # admin-token gate). prod + test .env.prod both set INTERNAL_API_SECRET
+        # (verified 2026-07-08), so fail-closed breaks no live Java→Python call;
+        # a missing secret is a misconfiguration that MUST fail closed, never
+        # silently accept a public constant.
         internal_secret = headers.get("x-internal-secret", "")
-        expected_secret = os.environ.get("INTERNAL_API_SECRET") or "cretas-internal-2026"
-        if expected_secret and internal_secret == expected_secret:
+        expected_secret = os.environ.get("INTERNAL_API_SECRET") or ""
+        if (
+            expected_secret
+            and internal_secret
+            and hmac.compare_digest(internal_secret, expected_secret)
+        ):
             if "state" not in scope:
                 scope["state"] = {}
             internal_factory = headers.get("x-factory-id") or None
