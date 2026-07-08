@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
+from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,16 @@ def _parse_date(s: str, field: str) -> date:
 
 
 async def _resolve_window(
-    pool, factory_id: str, start_date: Optional[str], end_date: Optional[str]
+    pool, factory_id: str, start_date: Optional[str], end_date: Optional[str],
+    *, question: Optional[str] = None,
 ) -> Tuple[date, date]:
-    """Pinned range if both given; else factory Gold data span; else trailing 12mo."""
+    """Resolve the analysis window.
+
+    Priority: pinned range (both dates) > relative-time phrase in the question
+    ("这两个月" / "上个月" / "最近30天", anchored to the data's max date, not today —
+    demo/historical data lives in the past) > full factory Gold data span >
+    trailing 12mo. No phrase → full data span (unchanged legacy behaviour).
+    """
     if start_date and end_date:
         s = _parse_date(start_date, "start_date")
         e = _parse_date(end_date, "end_date")
@@ -79,7 +87,21 @@ async def _resolve_window(
         dr = await data_range(pool, factory_id)
         mn, mx = dr.get("min_date"), dr.get("max_date")
         if mn and mx:
-            return date.fromisoformat(mn), date.fromisoformat(mx)
+            data_min, data_max = date.fromisoformat(mn), date.fromisoformat(mx)
+            # F1: honor an owner's relative-time phrase if present. Anchor to
+            # data_max (reuse the ops router's battle-tested parser incl. 俩月/仨月),
+            # then clamp to the available span. Phrase absent → (None,None) → full span.
+            if question:
+                try:
+                    (rs, re_), _lbl = _resolve_sales_date_range(question, today=data_max)
+                    if rs and re_:
+                        s = max(rs, data_min)
+                        e = min(re_, data_max)
+                        if s <= e:
+                            return s, e
+                except Exception as _rex:  # parser must never break window resolution
+                    logger.warning("[synthesis] relative-window parse failed: %s", _rex)
+            return data_min, data_max
     except Exception as e:
         logger.warning("[synthesis] data_range failed for %s: %s", factory_id, e)
     end = date.today()
@@ -108,7 +130,7 @@ async def comprehensive(request: Request, body: SynthesisRequest):
     pool = await get_pg_pool()
     if pool is None:
         raise HTTPException(status_code=503, detail="database not available")
-    window = await _resolve_window(pool, fid, body.start_date, body.end_date)
+    window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
     engine = ComprehensiveSynthesisEngine(pool)
     resp = await engine.synthesize(fid, q, window)
     return resp.to_dict()
@@ -142,7 +164,7 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
             if pool is None:
                 yield _sse("error", "数据库暂时不可用，请稍后重试")
                 return
-            window = await _resolve_window(pool, fid, body.start_date, body.end_date)
+            window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
             yield _sse("status", "正在汇总评价与经营多维数据…")
             engine = ComprehensiveSynthesisEngine(pool)
             resp = await engine.synthesize(fid, q, window)
