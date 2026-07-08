@@ -108,6 +108,13 @@ def _install_data_fakes(monkeypatch, *, review_empty=False):
     async def fake_discounts(pool, fid, dr, *, top_n=10):
         return {"discounts": [{"discount_name": "满减券", "amount": 800000.0}]}
 
+    async def fake_store_comparison(pool, fid, dr):
+        return {"stores": [
+            {"name": "甲店", "revenue": 1000000.0, "orderCount": 8000, "avgTicket": 125.0},
+            {"name": "乙店", "revenue": 600000.0, "orderCount": 6000, "avgTicket": 100.0},
+            {"name": "丙店", "revenue": 1400000.0, "orderCount": 7000, "avgTicket": 200.0},
+        ], "medianRevenue": 1000000.0, "weakStores": ["乙店"]}
+
     monkeypatch.setattr(se, "review_summary", fake_review_summary)
     monkeypatch.setattr(se, "review_vip", fake_review_vip)
     monkeypatch.setattr(se, "review_platform", fake_review_platform)
@@ -116,6 +123,7 @@ def _install_data_fakes(monkeypatch, *, review_empty=False):
     monkeypatch.setattr(se, "review_dish_issues", fake_review_issues)
     monkeypatch.setattr(se, "review_store_ranking", fake_review_worst)
     monkeypatch.setattr(se, "finance_summary", fake_finance)
+    monkeypatch.setattr(se, "store_comparison", fake_store_comparison)
     monkeypatch.setattr(se, "top_products", fake_top_products)
     monkeypatch.setattr(se, "channel_breakdown", fake_channels)
     monkeypatch.setattr(se, "discount_breakdown", fake_discounts)
@@ -146,6 +154,24 @@ class TestPlanDimensions:
         plan = eng.plan_dimensions("整体诊断")
         assert plan["review"] and plan["finance"] and plan["sales"]
 
+    def test_attribution_detected_for_lag_question(self):
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        plan = eng.plan_dimensions("哪家店拖后腿，是客流还是客单价")
+        assert plan["attribution"] is True
+
+    def test_attribution_not_for_generic_finance(self):
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        plan = eng.plan_dimensions("总营收多少")
+        assert plan["attribution"] is False
+
+    def test_pure_attribution_does_not_trip_open_all(self):
+        # "客流" is NOT a finance keyword → only attribution fires; the open-all
+        # fallback must NOT then force review/finance/sales on.
+        eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
+        plan = eng.plan_dimensions("哪家店客流拖后腿")
+        assert plan["attribution"] is True
+        assert not plan["review"] and not plan["finance"] and not plan["sales"]
+
 
 # --------------------------------------------------------------------------
 # _build_factbook
@@ -166,6 +192,20 @@ class TestBuildFactbook:
         # honest notes
         assert se.NOTE_DISH_TAG_NOT_NAME in fb.notes
         assert se.NOTE_VIP_SIGNAL in fb.notes  # VIP 4.50 < 非VIP 4.83
+
+    def test_attribution_dimension_populates_from_store_comparison(self, monkeypatch):
+        _install_data_fakes(monkeypatch)
+        eng = _engine(monkeypatch)
+        import datetime
+        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
+        plan = {"review": False, "finance": False, "sales": False,
+                "attribution": True, "cross": []}
+        fb = asyncio.run(eng._build_factbook("F", dr, plan, period="2025"))
+        assert fb.attribution is not None
+        assert fb.attribution["laggard"]["store_name"] == "乙店"  # lowest ticket
+        assert fb.attribution["primary_cause"] == "客单价"
+        assert "门店拖后腿归因" in fb.to_prompt_text()
+        assert "客流效应" in fb.to_facts_index()
 
     def test_review_empty_degrades_with_nextaction(self, monkeypatch):
         _install_data_fakes(monkeypatch, review_empty=True)

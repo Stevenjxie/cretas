@@ -76,6 +76,10 @@ class FactBook:
     review: Optional[Dict[str, Any]] = None
     finance: Optional[Dict[str, Any]] = None
     sales: Optional[Dict[str, Any]] = None
+    # Per-store 客流(bills)×客单价(avg_ticket) 拖后腿归因 — laggard + effect
+    # decomposition. Populated when the plan flags `attribution` (store-lag /
+    # traffic-vs-ticket question). See ``compute_store_attribution``.
+    attribution: Optional[Dict[str, Any]] = None
     cross_hints: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     # Echoed window for the prompt header (set by the engine).
@@ -99,6 +103,7 @@ class FactBook:
 
         self._render_review(lines)
         self._render_finance(lines)
+        self._render_attribution(lines)
         self._render_sales(lines)
         self._render_cross(lines)
 
@@ -201,6 +206,37 @@ class FactBook:
                 lines.append(f"  {i}. {name}：¥{_money(rev)}（{int(bc):,} 单）")
         lines.append("")
 
+    def _render_attribution(self, lines: List[str]) -> None:
+        att = self.attribution
+        if not att or att.get("no_data"):
+            return
+        lg = att.get("laggard") or {}
+        lines.append("## 门店拖后腿归因（营收=客流×客单价，按店拆解）")
+        lines.append(
+            f"- 全链基准：门店平均客流 {int(att.get('bench_bills') or 0):,} 单，"
+            f"全链客单价 ¥{_money(att.get('chain_avg_ticket'))}，"
+            f"门店平均营收 ¥{_money(att.get('bench_revenue'))}"
+        )
+        lines.append(
+            f"- 拖后腿门店：{lg.get('store_name')}，营收 ¥{_money(lg.get('revenue'))}"
+            f"（较门店平均少 ¥{_money(abs(lg.get('delta_revenue') or 0))}）"
+        )
+        lines.append(
+            f"- 客流效应 ¥{_money(lg.get('traffic_effect'))}"
+            f"（该店 {int(lg.get('bills') or 0):,} 单 vs 平均 {int(att.get('bench_bills') or 0):,} 单）"
+        )
+        lines.append(
+            f"- 客单价效应 ¥{_money(lg.get('ticket_effect'))}"
+            f"（该店客单价 ¥{_money(lg.get('avg_ticket'))} vs 全链 ¥{_money(att.get('chain_avg_ticket'))}）"
+        )
+        lines.append(f"- 主因判定（确定性）：{att.get('primary_cause')}")
+        anomalies = att.get("anomalies") or []
+        if anomalies:
+            lines.append(
+                f"- 注：{('、'.join(anomalies))} 客流极低（可能新店/歇业），未计入门店对比。"
+            )
+        lines.append("")
+
     def _render_sales(self, lines: List[str]) -> None:
         sales = self.sales
         if not sales:
@@ -282,6 +318,22 @@ class FactBook:
             v = _num(fin.get(key))
             if v is not None:
                 idx[label] = v
+
+        att = self.attribution or {}
+        if att and not att.get("no_data"):
+            lg = att.get("laggard") or {}
+            for label, val in (
+                ("门店平均客流", att.get("bench_bills")),
+                ("全链客单价", att.get("chain_avg_ticket")),
+                ("门店平均营收", att.get("bench_revenue")),
+                ("拖后腿门店营收", lg.get("revenue")),
+                ("拖后腿门店客单价", lg.get("avg_ticket")),
+                ("客流效应", lg.get("traffic_effect")),
+                ("客单价效应", lg.get("ticket_effect")),
+            ):
+                v = _num(val)
+                if v is not None:
+                    idx[label] = v
         return idx
 
     # -----------------------------------------------------------------
@@ -298,6 +350,13 @@ class FactBook:
         rv = self.review or {}
         for s in ((rv.get("worst_stores") or {}).get("stores") or []):
             n = s.get("store")
+            if isinstance(n, str) and n.strip():
+                names.append(n.strip())
+        # Attribution stores (laggard + full per-store list) — so the reconciler's
+        # fabricated-name check and the egress redactor both know these names.
+        att = self.attribution or {}
+        for s in (att.get("stores") or []):
+            n = s.get("store_name")
             if isinstance(n, str) and n.strip():
                 names.append(n.strip())
         # dedup preserve order
@@ -362,3 +421,95 @@ def factbook_to_dataframe(fb: FactBook) -> "pd.DataFrame":
     if not row:
         return pd.DataFrame()
     return pd.DataFrame([row])
+
+
+def compute_store_attribution(
+    store_rows: List[Dict[str, Any]], *, traffic_floor_frac: float = 0.10
+) -> Optional[Dict[str, Any]]:
+    """Deterministic 客流×客单价 拖后腿 attribution over ALL stores.
+
+    ``store_rows`` = ``gold.store_comparison`` output items, each with
+    ``{name, revenue, orderCount, avgTicket, ...}``. Decomposes each store's
+    revenue gap vs the chain per-store benchmark into a traffic (客流) effect
+    and an average-ticket (客单价) effect — an exact identity, no LLM:
+
+        营收 = 客流 × 客单价
+        基准 B̄ = 总客流 / 门店数 ,  Ā = 总营收 / 总客流 ,  R̄ = B̄·Ā
+        ΔR_i        = 营收_i − R̄
+        客流效应_i   = (客流_i − B̄) × Ā
+        客单价效应_i = B̄ × (客单价_i − Ā)      （交互项并入差额，不单列）
+
+    Laggard = most-negative ΔR among stores above a traffic floor (a
+    shuttered/near-zero store must not masquerade as "拖后腿"). Returns None
+    when there are fewer than 2 stores with bills (nothing to compare).
+    """
+    rows = [
+        s for s in (store_rows or [])
+        if _num(s.get("orderCount")) and int(s.get("orderCount") or 0) > 0
+        and _num(s.get("revenue")) is not None
+    ]
+    if len(rows) < 2:
+        return {"no_data": True}
+
+    # Anomaly floor: stores whose traffic is a tiny fraction of the median are
+    # likely new / shuttered / partially-loaded and would distort a peer
+    # benchmark. They are reported separately, NOT compared.
+    median_bills = sorted(int(s["orderCount"]) for s in rows)[len(rows) // 2]
+    floor = median_bills * traffic_floor_frac
+    anomaly_rows = [s for s in rows if int(s["orderCount"]) < floor]
+    eligible_rows = [s for s in rows if int(s["orderCount"]) >= floor]
+    # Need ≥2 comparable peers; if the floor left too few, compare everyone.
+    if len(eligible_rows) < 2:
+        eligible_rows, anomaly_rows = rows, []
+
+    # Benchmark is computed over the SAME eligible set the laggard is chosen
+    # from — otherwise excluded low-traffic stores drag the mean down and every
+    # eligible store looks above-average (a false "no laggard" / positive ΔR).
+    total_bills = sum(int(s["orderCount"]) for s in eligible_rows)
+    total_rev = sum(float(s["revenue"]) for s in eligible_rows)
+    n = len(eligible_rows)
+    if total_bills <= 0:
+        return {"no_data": True}
+
+    bench_bills = total_bills / n          # B̄  门店平均客流
+    chain_ticket = total_rev / total_bills  # Ā  全链客单价
+    bench_rev = bench_bills * chain_ticket  # R̄  门店平均营收
+
+    stores: List[Dict[str, Any]] = []
+    for s in eligible_rows:
+        b = int(s["orderCount"])
+        rev = float(s["revenue"])
+        ticket = rev / b if b else 0.0
+        stores.append({
+            "store_name": s.get("name"),
+            "bills": b,
+            "revenue": round(rev, 0),
+            "avg_ticket": round(ticket, 1),
+            "delta_revenue": round(rev - bench_rev, 0),
+            "traffic_effect": round((b - bench_bills) * chain_ticket, 0),
+            "ticket_effect": round(bench_bills * (ticket - chain_ticket), 0),
+            "below_traffic_floor": False,
+        })
+
+    laggard = min(stores, key=lambda s: s["delta_revenue"])
+    tr, tk = laggard["traffic_effect"], laggard["ticket_effect"]
+    if tr < 0 and tr <= tk:
+        primary = "客流"
+    elif tk < 0 and tk < tr:
+        primary = "客单价"
+    else:
+        primary = "客流" if tr <= tk else "客单价"
+
+    return {
+        "no_data": False,
+        "n_stores": n,
+        "total_bills": total_bills,
+        "total_revenue": round(total_rev, 0),
+        "bench_bills": round(bench_bills, 0),
+        "chain_avg_ticket": round(chain_ticket, 1),
+        "bench_revenue": round(bench_rev, 0),
+        "laggard": laggard,
+        "primary_cause": primary,
+        "anomalies": [s.get("name") for s in anomaly_rows if s.get("name")],
+        "stores": stores,
+    }
