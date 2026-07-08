@@ -373,8 +373,7 @@ class TestSynthesisCapture:
         eng = _engine(monkeypatch)
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
-        query = "overall diagnosis"
-        resp = asyncio.run(eng.synthesize("RES_3101_009", query, dr))
+        resp = asyncio.run(eng.synthesize("RES_3101_009", "哪家店拖后腿", dr))
         assert resp.source == "llm"
         assert len(captured) == 1
         c = captured[0]
@@ -385,11 +384,11 @@ class TestSynthesisCapture:
         # answer captured verbatim (grounded output)
         assert c["teacher_output"] == resp.answer
         # input_text embeds the question + data context (teaches FROM data)
-        assert query in c["input_text"]
+        assert "哪家店拖后腿" in c["input_text"]
         assert "数据上下文" in c["input_text"]
         # metadata carries the demand signal: raw query + family classification
-        assert c["metadata"]["query"] == query
-        assert c["metadata"]["question_family"] == se.classify_question_family(query)
+        assert c["metadata"]["query"] == "哪家店拖后腿"
+        assert c["metadata"]["question_family"] == "attribution"
         assert "grounding" in c["metadata"]
 
     def test_cache_hit_not_captured(self, monkeypatch):
