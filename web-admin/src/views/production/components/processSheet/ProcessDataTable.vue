@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading } from '@element-plus/icons-vue';
+import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading, QuestionFilled } from '@element-plus/icons-vue';
 import {
   saveRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
   getFinishedGoodsInventory,
@@ -139,6 +139,11 @@ const enabledCustomFields = computed(() =>
 const customFieldCols = computed<ColDef[]>(() =>
   enabledCustomFields.value.map((f) => ({ key: f.key, label: f.label, type: f.type })),
 );
+/** A: 自定义字段列 key 集合 (O(1) 判定, 供列头 `?` info 提示区分自定义列 vs archetype/generic 列)。 */
+const customFieldKeySet = computed(() => new Set(customFieldCols.value.map((c) => c.key)));
+function isCustomFieldCol(key: string): boolean {
+  return customFieldKeySet.value.has(key);
+}
 /** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
 const cols = computed(() => [
   ...(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS),
@@ -1699,7 +1704,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               v-if="!['rawBatch','outWeight','upstreamBatch','batch'].includes(col.key)"
               class="sp-card-field"
               :class="{ 'sp-card-field-auto': col.type === 'auto' || col.type === 'readonly' }">
-              <label class="sp-card-label">{{ col.label }}</label>
+              <label class="sp-card-label">
+                {{ col.label }}
+                <!-- A: 自定义字段列头轻提示 (由管理员在工序配置里定义) -->
+                <el-tooltip v-if="isCustomFieldCol(col.key)" content="自定义字段（由管理员在「工序配置」里定义）" placement="top">
+                  <el-icon class="sp-th-custom-hint"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </label>
 
               <el-input-number
                 v-if="col.type === 'number'"
@@ -1839,6 +1850,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     'sp-th-daterange': col.type === 'daterange',
                   }">
                 {{ col.label }}
+                <!-- A: 自定义字段列头轻提示 (由管理员在工序配置里定义) -->
+                <el-tooltip v-if="isCustomFieldCol(col.key)" content="自定义字段（由管理员在「工序配置」里定义）" placement="top">
+                  <el-icon class="sp-th-custom-hint"><QuestionFilled /></el-icon>
+                </el-tooltip>
               </th>
             </template>
 
@@ -2642,6 +2657,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   color: #909399;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* A: 自定义字段列头 `?` info 图标 (轻提示, 不抢占空间) */
+.sp-th-custom-hint {
+  font-size: 12px;
+  color: #c0c4cc;
+  cursor: help;
+  vertical-align: -1px;
+  margin-left: 2px;
 }
 
 /* Inline expand sections within card (labor / mix) */
