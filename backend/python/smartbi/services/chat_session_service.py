@@ -226,7 +226,9 @@ class ChatSessionService:
                         updated_at            = NOW(),
                         expires_at            = NOW() + INTERVAL '1 hour',
                         -- v3: append new turn (truncation in next UPDATE).
-                        turns_history = COALESCE(smart_bi_chat_session.turns_history, '[]'::jsonb) || EXCLUDED.turns_history  # noqa: E501
+                        turns_history =
+                            COALESCE(smart_bi_chat_session.turns_history, '[]'::jsonb)
+                            || EXCLUDED.turns_history
                     """,
                     session_id, factory_id, user_id,
                     parent_query, summary,
