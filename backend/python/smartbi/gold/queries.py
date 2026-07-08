@@ -779,15 +779,15 @@ async def finance_summary(
     # `date` vs `a.date`) but the SAME $N param order, so we build the
     # param list once and two parallel WHERE fragments.
     params: list = [factory_id]
-    totals_conds = ["factory_id = $1"]
+    totals_conds = ["a.factory_id = $1"]
     stores_conds = ["a.factory_id = $1"]
     if start is not None:
         params.append(start)
-        totals_conds.append(f"date >= ${len(params)}")
+        totals_conds.append(f"a.date >= ${len(params)}")
         stores_conds.append(f"a.date >= ${len(params)}")
     if end is not None:
         params.append(end)
-        totals_conds.append(f"date <= ${len(params)}")
+        totals_conds.append(f"a.date <= ${len(params)}")
         stores_conds.append(f"a.date <= ${len(params)}")
     totals_where = " AND ".join(totals_conds)
     stores_where = " AND ".join(stores_conds)
@@ -801,11 +801,15 @@ async def finance_summary(
         totals = await conn.fetchrow(
             f"""
             SELECT
-              COALESCE(SUM(net_amount), 0)::numeric(18,2)  AS total_revenue,
-              COALESCE(SUM(bill_count), 0)                 AS bill_count,
-              COUNT(DISTINCT store_id)                     AS store_count,
-              COUNT(DISTINCT date)                         AS day_count
-            FROM agg_daily
+              COALESCE(SUM(a.net_amount), 0)::numeric(18,2)  AS total_revenue,
+              COALESCE(SUM(a.bill_count), 0)                 AS bill_count,
+              COUNT(DISTINCT a.store_id)                     AS store_count,
+              COUNT(DISTINCT a.date)                         AS day_count,
+              SUM(c.material_cost)::numeric(18,2)            AS material_cost,
+              SUM(c.labor_cost)::numeric(18,2)               AS labor_cost,
+              SUM(c.overhead_cost)::numeric(18,2)            AS overhead_cost
+            FROM agg_daily a
+            LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)
             WHERE {totals_where}
             """,
             *params[:-1],
@@ -834,7 +838,7 @@ async def finance_summary(
         if bill_count > 0 else None
     )
 
-    return {
+    result = {
         "factory_id": factory_id,
         "start_date": start.isoformat() if start is not None else None,
         "end_date": end.isoformat() if end is not None else None,
@@ -853,6 +857,39 @@ async def finance_summary(
             for r in top_stores
         ],
     }
+
+    cost_values = {}
+    for key in ("material_cost", "labor_cost", "overhead_cost"):
+        try:
+            cost_values[key] = totals[key]
+        except KeyError:
+            cost_values[key] = None
+
+    if any(v is not None for v in cost_values.values()):
+        material_cost = Decimal(cost_values["material_cost"] or 0)
+        labor_cost = Decimal(cost_values["labor_cost"] or 0)
+        overhead_cost = Decimal(cost_values["overhead_cost"] or 0)
+        total_cost = material_cost + labor_cost + overhead_cost
+        net_profit = total_revenue - total_cost
+        gross_profit = total_revenue - material_cost
+        net_margin_pct: Optional[Decimal] = (
+            ((net_profit / total_revenue) * Decimal("100")).quantize(
+                Decimal("0.1"),
+                rounding=ROUND_HALF_UP,
+            )
+            if total_revenue != 0 else None
+        )
+        result.update({
+            "material_cost": float(material_cost),
+            "labor_cost": float(labor_cost),
+            "overhead_cost": float(overhead_cost),
+            "total_cost": float(total_cost),
+            "net_profit": float(net_profit),
+            "gross_profit": float(gross_profit),
+            "net_margin_pct": float(net_margin_pct) if net_margin_pct is not None else None,
+        })
+
+    return result
 
 
 async def menu_quadrant(
