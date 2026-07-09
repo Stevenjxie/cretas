@@ -24,6 +24,7 @@ from smartbi.database.models import (
     RestaurantReviewSource,
     RestaurantReview,
 )
+from smartbi.canonical.provenance._admin_auth import require_factory_scope
 from services.food_industry_detector import detect_restaurant_chain
 from services.restaurant_analyzer import RestaurantAnalyzer
 
@@ -989,6 +990,13 @@ def _get_factory_id(request: Request) -> str:
     return factory_id
 
 
+def _resolve_factory_id(request: Request, client_factory_id: Optional[str]) -> str:
+    fid = (client_factory_id or "").strip() or _get_factory_id(request)
+    if fid:
+        require_factory_scope(request, fid)
+    return fid
+
+
 # ── SKU 表单 (Layer 2) ─────────────────────────────────────────
 
 
@@ -998,7 +1006,7 @@ def list_sku_forms(request: Request, factory_id: Optional[str] = None):
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1050,7 +1058,7 @@ async def upload_sku_forms(request: Request):
     except Exception:
         return {"success": False, "message": "Invalid JSON body"}
 
-    fid = body.get("factory_id") or _get_factory_id(request)
+    fid = _resolve_factory_id(request, body.get("factory_id"))
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1119,7 +1127,7 @@ def delete_sku_form(
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1146,7 +1154,7 @@ def list_monthly_purchases(request: Request, factory_id: Optional[str] = None):
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1208,7 +1216,7 @@ async def upload_monthly_purchases(request: Request):
     except Exception:
         return {"success": False, "message": "Invalid JSON body"}
 
-    fid = body.get("factory_id") or _get_factory_id(request)
+    fid = _resolve_factory_id(request, body.get("factory_id"))
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1270,7 +1278,7 @@ def delete_monthly_purchase(
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1315,7 +1323,7 @@ async def register_review_source(request: Request):
     except Exception:
         return {"success": False, "message": "Invalid JSON body"}
 
-    fid = body.get("factory_id") or _get_factory_id(request)
+    fid = _resolve_factory_id(request, body.get("factory_id"))
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1368,7 +1376,7 @@ def list_review_sources(request: Request, factory_id: Optional[str] = None):
     if not is_postgres_enabled():
         return {"success": False, "data": []}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1439,7 +1447,7 @@ async def upload_reviews(request: Request):
     except Exception:
         return {"success": False, "message": "Invalid JSON body"}
 
-    fid = body.get("factory_id") or _get_factory_id(request)
+    fid = _resolve_factory_id(request, body.get("factory_id"))
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1591,7 +1599,7 @@ def list_reviews(
     if not is_postgres_enabled():
         return {"success": False, "data": []}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 
@@ -1635,7 +1643,7 @@ def review_stats(request: Request, factory_id: Optional[str] = None):
     if not is_postgres_enabled():
         return {"success": False, "data": {}}
 
-    fid = factory_id or _get_factory_id(request)
+    fid = _resolve_factory_id(request, factory_id)
     if not fid:
         return {"success": False, "message": "factory_id required"}
 

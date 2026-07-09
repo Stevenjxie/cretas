@@ -76,6 +76,7 @@ class FactBook:
     review: Optional[Dict[str, Any]] = None
     finance: Optional[Dict[str, Any]] = None
     sales: Optional[Dict[str, Any]] = None
+    dish_margin: Optional[Dict[str, Any]] = None
     # Per-store 客流(bills)×客单价(avg_ticket) 拖后腿归因 — laggard + effect
     # decomposition. Populated when the plan flags `attribution` (store-lag /
     # traffic-vs-ticket question). See ``compute_store_attribution``.
@@ -106,6 +107,7 @@ class FactBook:
         self._render_finance(lines)
         self._render_weather(lines)
         self._render_attribution(lines)
+        self._render_dish_margin(lines)
         self._render_sales(lines)
         self._render_cross(lines)
 
@@ -311,6 +313,40 @@ class FactBook:
             lines.append(f"- 折扣结构：{seg}")
         lines.append("")
 
+    def _render_dish_margin(self, lines: List[str]) -> None:
+        dm = self.dish_margin
+        if not dm:
+            return
+        top_items = dm.get("top_margin") or []
+        low_items = dm.get("low_margin") or []
+        if not (top_items or low_items):
+            return
+        lines.append("## 单品毛利（restaurant_sku_forms：售价 - 单份成本）")
+        if top_items:
+            lines.append("- 高毛利菜品：")
+            for i, item in enumerate(top_items[:5], 1):
+                lines.append(
+                    f"  {i}. {item.get('dish_name')}：售价 ¥{_money(item.get('selling_price'))}，"
+                    f"单份成本 ¥{_money(item.get('unit_cost'))}，毛利 ¥{_money(item.get('gross_profit'))}，"
+                    f"毛利率 {item.get('gross_margin_pct')}%"
+                )
+            ingredients = top_items[0].get("ingredients") or []
+            if ingredients:
+                seg = " / ".join(
+                    f"{ing.get('name')} ¥{_money(ing.get('cost'))}"
+                    for ing in ingredients[:6]
+                )
+                lines.append(f"- {top_items[0].get('dish_name')} 成本构成：{seg}")
+        if low_items:
+            lines.append("- 低毛利率菜品：")
+            for i, item in enumerate(low_items[:5], 1):
+                lines.append(
+                    f"  {i}. {item.get('dish_name')}：售价 ¥{_money(item.get('selling_price'))}，"
+                    f"单份成本 ¥{_money(item.get('unit_cost'))}，毛利 ¥{_money(item.get('gross_profit'))}，"
+                    f"毛利率 {item.get('gross_margin_pct')}%"
+                )
+        lines.append("")
+
     def _render_cross(self, lines: List[str]) -> None:
         if not self.cross_hints:
             return
@@ -363,6 +399,20 @@ class FactBook:
             v = _num(fin.get(key))
             if v is not None:
                 idx[label] = v
+
+        dm = self.dish_margin or {}
+        top_items = dm.get("top_margin") or []
+        if top_items:
+            top = top_items[0]
+            for label, key in (
+                ("单品最高售价", "selling_price"),
+                ("单品最高成本", "unit_cost"),
+                ("单品最高毛利", "gross_profit"),
+                ("单品最高毛利率", "gross_margin_pct"),
+            ):
+                v = _num(top.get(key))
+                if v is not None:
+                    idx[label] = v
 
         att = self.attribution or {}
         if att and not att.get("no_data"):
@@ -472,8 +522,15 @@ class FactBook:
             n = p.get("product_name") or p.get("name")
             if isinstance(n, str) and n.strip():
                 prods.append(n.strip())
+        dm = self.dish_margin or {}
+        for bucket in ("top_margin", "low_margin"):
+            for p in (dm.get(bucket) or []):
+                n = p.get("dish_name")
+                if isinstance(n, str) and n.strip():
+                    prods.append(n.strip())
         if prods:
-            out["菜品"] = prods
+            seen = set()
+            out["菜品"] = [p for p in prods if not (p in seen or seen.add(p))]
         return out
 
 

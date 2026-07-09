@@ -112,6 +112,7 @@ from smartbi.agent.orchestrator import (
 from smartbi.gold import (
     channel_breakdown,
     daily_trend,
+    dish_margin,
     discount_breakdown,
     finance_summary,
     store_comparison,
@@ -722,12 +723,20 @@ class ComprehensiveSynthesisEngine:
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
-                "attribution": False, "weather": False, "cross": []}
+                "dish_margin": False, "attribution": False, "weather": False,
+                "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
         if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
+            plan["sales"] = True
+        _wants_dish_margin = any(k in ql for k in (
+            "毛利", "成本构成", "单份成本", "哪道菜", "菜品成本", "单品成本",
+            "dish margin", "gross margin",
+        )) and any(k in ql for k in ("菜", "菜品", "单品", "sku", "商品"))
+        if _wants_dish_margin:
+            plan["dish_margin"] = True
             plan["sales"] = True
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
@@ -795,7 +804,7 @@ class ComprehensiveSynthesisEngine:
         # Fallback: holistic question with no explicit dimension → open all.
         # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
         # does NOT trip the open-all fallback.
-        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["attribution"] or plan["weather"]):
+        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["dish_margin"] or plan["attribution"] or plan["weather"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -814,7 +823,7 @@ class ComprehensiveSynthesisEngine:
             fid_up = (factory_id or "").upper()
             biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
             has_data = any([factbook.review, factbook.finance, factbook.sales,
-                            factbook.attribution])
+                            factbook.dish_margin, factbook.attribution])
             quality = 2 if not has_data else (4 if grounded_clean else 3)
             q_capped = (question or "")[:500]
             await persist_distillation_sample(
@@ -935,6 +944,10 @@ class ComprehensiveSynthesisEngine:
             tasks["finance"] = _safe(
                 finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
             )
+        if plan.get("dish_margin"):
+            tasks["dish_margin"] = _safe(
+                dish_margin(self._pool, factory_id, top_n=10), "dish_margin",
+            )
         if plan.get("attribution"):
             # store_comparison returns ALL stores (no top-N) — needed for the
             # chain benchmark + laggard, which finance_summary's top-5 can't give.
@@ -1002,6 +1015,14 @@ class ComprehensiveSynthesisEngine:
                 fb.finance = fin
             else:
                 plan["finance"] = False
+
+        # ---- assemble dish margin ----
+        if plan.get("dish_margin"):
+            dm = results.get("dish_margin")
+            if dm and dm.get("dish_count"):
+                fb.dish_margin = dm
+            else:
+                plan["dish_margin"] = False
 
         # ---- assemble attribution (客流×客单价 拖后腿拆解) ----
         if plan.get("attribution"):

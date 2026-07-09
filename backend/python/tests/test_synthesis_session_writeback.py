@@ -122,6 +122,22 @@ async def test_comprehensive_writeback_error_does_not_break_response(synthesis_m
 
 
 @pytest.mark.asyncio
+async def test_writeback_skips_degraded_source(synthesis_mocks):
+    calls, _service = synthesis_mocks
+
+    await syn._write_conversation_turn(
+        object(),
+        "sid-degraded",
+        "DEMO_REST",
+        "question",
+        "placeholder answer",
+        source="degraded",
+    )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_comprehensive_stream_writes_back_after_done_event(synthesis_mocks):
     calls, _service = synthesis_mocks
     body = syn.SynthesisRequest(question="哪家分店最拖后腿", session_id="sid-stream")

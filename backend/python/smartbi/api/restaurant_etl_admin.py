@@ -39,7 +39,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from smartbi.canonical.provenance._admin_auth import require_admin
+from smartbi.canonical.provenance._admin_auth import require_admin, require_factory_scope
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +355,7 @@ async def trigger_etl(request: Request, body: TriggerRequest):
     require_admin(request, action_name="餐饮 ETL 触发")
 
     factory_id = body.factoryId.strip()
+    require_factory_scope(request, factory_id)
     if not factory_id:
         raise HTTPException(status_code=400, detail="factoryId 不能为空")
 
@@ -401,6 +402,7 @@ async def status_etl(
     require_admin(request, action_name="餐饮 ETL 状态查询")
 
     factory_id = factoryId.strip()
+    require_factory_scope(request, factory_id)
     if not factory_id:
         raise HTTPException(status_code=400, detail="factoryId 不能为空")
 
@@ -511,6 +513,7 @@ async def trigger_finance_etl(request: Request, body: FinanceEtlTriggerRequest):
     require_admin(request, action_name="餐饮 Finance ETL 触发")
 
     factory_id = body.factoryId.strip()
+    require_factory_scope(request, factory_id)
     if not factory_id:
         raise HTTPException(status_code=400, detail="factoryId 不能为空")
 
@@ -781,6 +784,9 @@ async def trigger_finance_etl_bulk(
             )
     else:
         factory_ids = list(RESTAURANT_FACTORY_BACKFILL_LIST)
+
+    for fid in factory_ids:
+        require_factory_scope(request, fid, field_name="factoryIds")
 
     job_id = str(uuid.uuid4())
 

@@ -73,3 +73,23 @@ def require_admin(request: Request, *, action_name: str) -> str:
         )
 
     return factory_id or ""
+
+
+def require_factory_scope(
+    request: Request,
+    client_factory_id: str | None,
+    *,
+    field_name: str = "factoryId",
+) -> None:
+    """Reject client-supplied factory IDs outside the caller's JWT tenant."""
+    if not client_factory_id:
+        return
+    if getattr(request.state, "auth_method", None) == "internal":
+        return
+    role = getattr(request.state, "role", None)
+    jwt_factory_id = getattr(request.state, "factory_id", None)
+    if role != "platform_admin" and jwt_factory_id and client_factory_id != jwt_factory_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"非 platform_admin 仅可访问自己工厂 (当前工厂 {jwt_factory_id!r}, {field_name}={client_factory_id!r})",
+        )

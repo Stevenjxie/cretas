@@ -92,3 +92,23 @@ async def test_trigger_returns_job_id_for_valid_admin():
     body = resp.json()
     assert "jobId" in body
     assert body.get("status") in ("queued", "running")
+
+
+@pytest.mark.asyncio
+async def test_trigger_rejects_cross_factory_for_non_platform_admin():
+    """factory_super_admin must not trigger ETL for another tenant."""
+    from unittest.mock import AsyncMock, patch
+
+    app = _make_test_app(role="factory_super_admin", factory_id="F001")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with patch(
+        "smartbi.api.restaurant_etl_admin._enqueue_job",
+        new=AsyncMock(return_value=None),
+    ):
+        resp = client.post(
+            "/api/smartbi/restaurant/etl/trigger",
+            json={"factoryId": "F002"},
+        )
+
+    assert resp.status_code == 403

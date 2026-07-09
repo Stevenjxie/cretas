@@ -1,7 +1,8 @@
 ﻿<template>
   <section class="chart-card" aria-label="经营分析图表">
     <h3 v-if="chart.title" class="chart-title">{{ chart.title }}</h3>
-    <div class="chart-scroll">
+    <p v-if="chartError" class="chart-error">图表暂不可用</p>
+    <div v-else class="chart-scroll">
       <div ref="chartRef" class="chart-canvas" />
     </div>
   </section>
@@ -17,14 +18,21 @@ const props = defineProps<{
 }>()
 
 const chartRef = ref<HTMLDivElement | null>(null)
+const chartError = ref(false)
 let instance: ECharts | null = null
 
 function renderChart(): void {
   if (!chartRef.value) return
-  if (!instance) {
-    instance = init(chartRef.value, 'default')
+  chartError.value = false
+  try {
+    if (!instance) {
+      instance = init(chartRef.value, 'default')
+    }
+    instance.setOption(props.chart.option as EChartsOption, true)
+  } catch (error) {
+    console.warn('[ChartBlock] failed to render chart', error)
+    chartError.value = true
   }
-  instance.setOption(props.chart.option as EChartsOption, true)
 }
 
 function resizeChart(): void {
