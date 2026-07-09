@@ -406,6 +406,124 @@ class SynthesisResponse:
         }
 
 
+# ---------------------------------------------------------------------------
+# P4 v2: thin-restate for pure store-attribution (cheap natural narration of the
+# deterministic 客流×客单价 decomposition, grounded by a numeric-CLOSURE
+# whitelist). Falls through to FULL synthesis on any doubt — never a robotic
+# template. (v1 failed because the LLM naturally states DERIVED numbers — the
+# bills/ticket deltas and %s — which the raw whitelist rejected; the closure +
+# normalization + relative tolerance fix that.)
+# ---------------------------------------------------------------------------
+RESULT_SOURCE_THIN_RESTATE = "thin_restate"
+THIN_RESTATE_MAX_TOKENS = 500
+_THIN_UNIT = (("亿", 100000000), ("万", 10000), ("千", 1000))
+_THIN_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*[亿万千]?")
+_THIN_REL_TOL = Decimal("0.02")   # ±2% accommodates 万-rounding
+_THIN_ABS_TOL = Decimal("0.5")
+
+
+def _thin_dec(x: Any) -> Optional[Decimal]:
+    if x is None or isinstance(x, bool):
+        return None
+    try:
+        return Decimal(str(x))
+    except Exception:
+        return None
+
+
+def _collect_numeric_values(obj: Any, out: Optional[List[Decimal]] = None) -> List[Decimal]:
+    if out is None:
+        out = []
+    if isinstance(obj, bool) or obj is None:
+        return out
+    if isinstance(obj, (int, float, Decimal)):
+        d = _thin_dec(obj)
+        if d is not None:
+            out.append(d)
+        return out
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect_numeric_values(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_numeric_values(v, out)
+    return out
+
+
+def _thin_restate_closure(attribution: Dict[str, Any]) -> List[Decimal]:
+    """Allowed values = every raw attribution number (+ its abs) PLUS the derived
+    quantities the LLM naturally states: pairwise gaps (bills/ticket/revenue) and
+    their percentages. Mirrors chart_insight's arithmetic-closure grounding."""
+    raw = _collect_numeric_values(attribution)
+    allowed: List[Decimal] = list(raw) + [abs(v) for v in raw]
+    lg = attribution.get("laggard") or {}
+    at, ct = _thin_dec(lg.get("avg_ticket")), _thin_dec(attribution.get("chain_avg_ticket"))
+    bills, bb = _thin_dec(lg.get("bills")), _thin_dec(attribution.get("bench_bills"))
+    rev, br = _thin_dec(lg.get("revenue")), _thin_dec(attribution.get("bench_revenue"))
+    for a, b in ((at, ct), (bills, bb), (rev, br)):
+        if a is not None and b is not None:
+            allowed.append(abs(a - b))
+            if b != 0:
+                allowed.append(abs((a - b) / b * Decimal("100")))
+    return [v for v in allowed if v is not None]
+
+
+def _thin_normalize(tok: str) -> Decimal:
+    s = tok.strip()
+    mult = Decimal(1)
+    for unit, m in _THIN_UNIT:
+        if unit in s:
+            mult = Decimal(m)
+            s = s.replace(unit, "")
+            break
+    s = s.replace(",", "").strip()
+    return Decimal(s) * mult
+
+
+def _thin_store_names(attribution: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    lg = attribution.get("laggard") or {}
+    if lg.get("store_name"):
+        names.append(str(lg["store_name"]))
+    for s in (attribution.get("stores") or []):
+        n = s.get("store_name")
+        if n:
+            names.append(str(n))
+    return sorted(set(names), key=len, reverse=True)  # longest first
+
+
+def _thin_restate_ok(text: str, attribution: Dict[str, Any]) -> bool:
+    """Reverse-whitelist: every number in the restatement must match a closure
+    value within max(0.5, 2%). Unknown → reject (caller falls to full synthesis).
+
+    Entity-aware: strip known store names FIRST so a numbered store id
+    ("示范门店01" → "01") is not mistaken for a fabricated data figure (memory:
+    the attribution spike hit exactly this false positive)."""
+    allowed = _thin_restate_closure(attribution)
+    if not allowed:
+        return False
+    clean = text or ""
+    for name in _thin_store_names(attribution):
+        if name:
+            clean = clean.replace(name, "　")  # ideographic space, keeps offsets sane
+    for m in _THIN_NUM_RE.finditer(clean):
+        try:
+            claimed = _thin_normalize(m.group(0))
+        except Exception:
+            return False
+        if not any(abs(claimed - v) <= max(_THIN_ABS_TOL, abs(v) * _THIN_REL_TOL)
+                   for v in allowed):
+            return False
+    return True
+
+
+def _is_thin_restate_eligible(plan: Dict[str, Any]) -> bool:
+    """Attribution focus (客单价 also sets finance, so allow finance) but NOT a
+    multi-dimension question — those keep the full synthesis."""
+    return bool(plan.get("attribution")) and not (
+        plan.get("review") or plan.get("sales") or plan.get("weather"))
+
+
 class ComprehensiveSynthesisEngine:
     def __init__(
         self,
@@ -503,6 +621,37 @@ class ComprehensiveSynthesisEngine:
         # 5. Structured multi-dim insights (deterministic correlations).
         insight_summary = self._analyze(factbook, period=f"{start_iso} 至 {end_iso}")
 
+        # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
+        # deterministic 客流×客单价 decomposition. Grounded by a numeric-closure
+        # whitelist; on ANY doubt (reject / LLM fail) fall through to the full
+        # synthesis below — never a robotic template.
+        if (_is_thin_restate_eligible(plan) and factbook.attribution
+                and not factbook.attribution.get("no_data")):
+            thin_answer = thin_tokens = None
+            with redaction_scope():
+                register_values_for_egress(factbook.collect_sensitive_names())
+                thin = await self._try_thin_restate(question, factbook.attribution, factory_id)
+                if thin is not None:
+                    thin_answer = restore_in_scope(thin[0])
+                    thin_tokens = thin[1]
+            if thin_answer is not None:
+                thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
+                charts = self.collect_charts(factbook, plan)
+                post_budget = await self._budget.consume(factory_id, thin_tokens)
+                await self._capture_distillation(
+                    question, factbook, thin_answer, fc_meta, plan, factory_id)
+                if not conversation_history:
+                    await self._cache.put(
+                        factory_id, q_hash, thin_answer,
+                        chart_config={"charts": charts} if charts else None,
+                        tokens=thin_tokens, ttl_hours=cache_ttl_hours)
+                return SynthesisResponse(
+                    answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
+                    tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
+                    elapsed_ms=int((time.monotonic() - t0) * 1000),
+                    charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                    insight_summary=insight_summary, fact_check=fc_meta)
+
         # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
         prompt = self._build_prompt(question, factbook, insight_summary, conversation_history)
         try:
@@ -545,43 +694,7 @@ class ComprehensiveSynthesisEngine:
         # value-bucketed, entity-pseudonymized export is what crosses tenants.
         # persist_distillation_sample never raises; the try/except is
         # belt-and-suspenders and never touches the user-facing response.
-        try:
-            grounded_clean = not (fc_meta or {}).get("violations")
-            # business_type: comprehensive synthesis is restaurant-domain by
-            # construction (pulls review_*/finance/store_comparison restaurant
-            # Gold), so default restaurant — UNLESS the tenant is clearly a Cretas
-            # factory (F#####), which we label honestly. A factory tenant reaching
-            # this path gets a near-empty factbook (captured at low quality below,
-            # so it never pollutes the restaurant training bucket).
-            fid_up = (factory_id or "").upper()
-            biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
-            # Empty factbook → degenerate "no data" narrative. Keep it visible to
-            # the demand report (a question asked with no data is still demand),
-            # but tag quality=2 so the training export (quality>=4) excludes it.
-            has_data = any([factbook.review, factbook.finance, factbook.sales,
-                            factbook.attribution])
-            quality = 2 if not has_data else (4 if grounded_clean else 3)
-            q_capped = (question or "")[:500]  # bound text/jsonb columns
-            await persist_distillation_sample(
-                self._pool,
-                source="synthesis",
-                task_type="synthesis",
-                input_text=f"{q_capped}\n\n【数据上下文】\n{factbook.to_prompt_text()[:1200]}",
-                teacher_output=answer,
-                business_type=biz_type,
-                factory_id=factory_id,
-                system_prompt="comprehensive synthesis",
-                quality=quality,
-                metadata={
-                    "query": q_capped,
-                    "question_family": classify_question_family(q_capped),
-                    "plan": plan,
-                    "empty_factbook": not has_data,
-                    "grounding": {"clean": grounded_clean, **(fc_meta or {})},
-                },
-            )
-        except Exception as _cap_exc:  # never affect the user-facing response
-            logger.debug("[synthesis] distillation capture skipped: %s", _cap_exc)
+        await self._capture_distillation(question, factbook, answer, fc_meta, plan, factory_id)
 
         return SynthesisResponse(
             answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
@@ -680,6 +793,97 @@ class ComprehensiveSynthesisEngine:
         if not (plan["review"] or plan["finance"] or plan["sales"] or plan["attribution"] or plan["weather"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
+
+    # =====================================================================
+    # =====================================================================
+    # G1 distillation capture — shared by the full-synthesis and thin-restate
+    # paths so pure-attribution answers are captured too.
+    # =====================================================================
+    async def _capture_distillation(self, question, factbook, answer, fc_meta, plan, factory_id):
+        """Fire-and-forget: make the synthesis answer observable to the learning
+        flywheel (family_breakdown) + training corpus. Tenant isolation +
+        anonymization happen at EXPORT (mirrors the other 5 capture points).
+        Never affects the user-facing response."""
+        try:
+            grounded_clean = not (fc_meta or {}).get("violations")
+            fid_up = (factory_id or "").upper()
+            biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
+            has_data = any([factbook.review, factbook.finance, factbook.sales,
+                            factbook.attribution])
+            quality = 2 if not has_data else (4 if grounded_clean else 3)
+            q_capped = (question or "")[:500]
+            await persist_distillation_sample(
+                self._pool, source="synthesis", task_type="synthesis",
+                input_text=f"{q_capped}\n\n【数据上下文】\n{factbook.to_prompt_text()[:1200]}",
+                teacher_output=answer, business_type=biz_type, factory_id=factory_id,
+                system_prompt="comprehensive synthesis", quality=quality,
+                metadata={
+                    "query": q_capped,
+                    "question_family": classify_question_family(q_capped),
+                    "plan": plan,
+                    "empty_factbook": not has_data,
+                    "grounding": {"clean": grounded_clean, **(fc_meta or {})},
+                },
+            )
+        except Exception as _cap_exc:  # never affect the user-facing response
+            logger.debug("[synthesis] distillation capture skipped: %s", _cap_exc)
+
+    # =====================================================================
+    # P4 v2: thin restate (cheap natural narration of the attribution decomposition)
+    # =====================================================================
+    def _build_thin_restate_prompt(self, question: str, attribution: Dict[str, Any]) -> str:
+        lg = attribution.get("laggard") or {}
+        facts = {
+            "拖后腿门店": lg.get("store_name"),
+            "该店营收": lg.get("revenue"),
+            "比平均少的营收": lg.get("delta_revenue"),
+            "客流效应": lg.get("traffic_effect"),
+            "客单价效应": lg.get("ticket_effect"),
+            "该店订单数": lg.get("bills"),
+            "该店客单价": lg.get("avg_ticket"),
+            "全链平均订单数": attribution.get("bench_bills"),
+            "全链平均客单价": attribution.get("chain_avg_ticket"),
+            "全链平均营收": attribution.get("bench_revenue"),
+            "主因": attribution.get("primary_cause"),
+        }
+        return (
+            f"用户问：{question}\n\n"
+            "你是餐饮问答的薄复述层。用店老板听得懂的大白话，把下面 attribution 数据"
+            "复述成 2-3 句话 + 一句可落地建议。\n"
+            "**铁律：只能用下面给出的数字，或用它们直接算出的差值/百分比（如两个客单价"
+            "相减、两个订单数相减）；绝不能编造、估算任何新数字。**\n"
+            f"数据：{json.dumps(facts, ensure_ascii=False)}\n\n"
+            "先说哪家店拖后腿、主要差在客流还是客单价，再给一句建议。"
+        )
+
+    async def _call_thin_restate_llm(self, prompt: str, factory_id: str):
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": THIN_RESTATE_MAX_TOKENS,
+        }
+        with llm_caller_context("synthesis_engine.thin_restate", factory_id=factory_id):
+            resp = await call_chain(SLOT.INSIGHTS, payload, timeout=30.0)
+        if not resp:
+            return None, 0
+        choices = resp.get("choices") or []
+        content = (choices[0].get("message", {}).get("content", "") if choices else "") or ""
+        tokens = int((resp.get("usage") or {}).get("total_tokens") or 0)
+        return content.strip(), tokens
+
+    async def _try_thin_restate(self, question: str, attribution: Dict[str, Any],
+                                factory_id: str):
+        """(answer, tokens) if the restatement passes the numeric-closure whitelist;
+        else None → caller falls through to FULL synthesis (never a robotic template)."""
+        try:
+            prompt = self._build_thin_restate_prompt(question, attribution)
+            answer, tokens = await self._call_thin_restate_llm(prompt, factory_id)
+            if answer and _thin_restate_ok(answer, attribution):
+                return answer, tokens
+            logger.info("[synthesis] thin restate rejected by whitelist → full synthesis")
+        except Exception as e:
+            logger.warning("[synthesis] thin restate errored → full synthesis: %s", e)
+        return None
 
     # =====================================================================
     # Step 2: build FactBook (parallel deterministic pulls)

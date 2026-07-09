@@ -374,7 +374,9 @@ class TestSynthesisCapture:
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
         resp = asyncio.run(eng.synthesize("RES_3101_009", "哪家店拖后腿", dr))
-        assert resp.source == "llm"
+        # P4: pure-attribution routes to the thin-restate path — which must ALSO
+        # capture to the corpus (shared _capture_distillation helper).
+        assert resp.source == "thin_restate"
         assert len(captured) == 1
         c = captured[0]
         assert c["source"] == "synthesis"
