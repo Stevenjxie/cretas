@@ -267,7 +267,13 @@ export const usePermissionStore = defineStore('permission', () => {
   const lastLoadTs = ref<number>(0);
   const LOAD_DEBOUNCE_MS = 30_000;  // Avoid redundant fetches within 30s
 
-  function setRole(role: string, factoryId?: string, factoryType?: string, userId?: string | number) {
+  function setRole(
+    role: string,
+    factoryId?: string,
+    factoryType?: string,
+    userId?: string | number,
+    options?: { skipDbLoad?: boolean },
+  ) {
     const roleChanged = currentRole.value !== (role || 'unactivated')
       || currentFactoryId.value !== (factoryId || '')
       || currentUserId.value !== (userId == null ? '' : String(userId));
@@ -285,7 +291,7 @@ export const usePermissionStore = defineStore('permission', () => {
       lastLoadTs.value = 0;
     }
     // Fire-and-forget async load (non-blocking)
-    if (role && role !== 'unactivated' && factoryId) {
+    if (!options?.skipDbLoad && role && role !== 'unactivated' && factoryId) {
       void loadFromDb();
     }
   }

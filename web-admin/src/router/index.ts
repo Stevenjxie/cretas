@@ -1604,6 +1604,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '实时监控', module: 'scheduling' }
           },
           {
+            path: 'logistics-demo',
+            name: 'LogisticsSchedulingDemo',
+            component: () => import('@/views/scheduling/logistics-demo/index.vue'),
+            meta: { requiresAuth: true, title: '物流排班看板', module: 'scheduling', mockDemo: true }
+          },
+          {
             path: 'workers',
             name: 'SchedulingWorkers',
             component: () => import('@/views/scheduling/workers/assignment.vue'),
