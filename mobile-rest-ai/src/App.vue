@@ -31,7 +31,7 @@
         </div>
       </header>
 
-      <section class="suggestions" aria-label="推荐提问">
+      <section v-if="messages.length === 0 && !isAsking" class="suggestions" aria-label="推荐提问">
         <button
           v-for="item in suggestedQuestions"
           :key="item.text"
