@@ -25,6 +25,7 @@ used by the gold finance pulls' own RBAC path if needed.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -247,6 +248,9 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
             chunk_size = 40
             for i in range(0, len(answer), chunk_size):
                 yield _sse("chunk", answer[i:i + chunk_size])
+                # Pace the slices so the (already-computed, reconciled) answer
+                # visibly types out on the client instead of arriving in one blob.
+                await asyncio.sleep(0.04)
             if resp.charts:
                 yield _sse("charts", resp.charts)
             yield _sse("done", {
