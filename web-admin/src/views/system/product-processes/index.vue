@@ -977,11 +977,22 @@ const customFieldDialogVisible = ref(false);
 const customFieldSaving = ref(false);
 const customFieldEditWorkProcessId = ref('');
 const customFieldEditName = ref('');
+// WorkProcess 更新 DTO 上 processName @NotBlank (必填), 保存自定义字段的 PUT /work-processes/{id}
+// 必须带上该工序已有的 processName, 否则后端 400 "工序名称不能为空" —— 自定义字段根本存不上。
+// processCategory/unit 仅 @Size (可空), 但一并回传已有值 (partial update no-op 覆盖), 与后端
+// update() 语义对齐, 也防将来新增必填字段再次踩坑。均取自 item 的 join 只读字段 (server 行必有)。
+const customFieldEditProcessName = ref('');
+const customFieldEditProcessCategory = ref<string | undefined>(undefined);
+const customFieldEditUnit = ref<string | undefined>(undefined);
 const customFieldForm = ref<ProcessSheetCustomFieldDef[]>([]);
 
 function openCustomFieldConfig(item: any) {
   customFieldEditWorkProcessId.value = item.workProcessId || '';
   customFieldEditName.value = item.processName || item.workProcessId;
+  // 捕获该工序已有的必填/身份字段 (随 PUT 一并回传, 满足 WorkProcessDTO @NotBlank processName)
+  customFieldEditProcessName.value = item.processName || '';
+  customFieldEditProcessCategory.value = item.processCategory ?? undefined;
+  customFieldEditUnit.value = item.defaultUnit ?? undefined;
   customFieldForm.value = Array.isArray(item.customFieldSchema)
     ? item.customFieldSchema.map((f: any) => ({
         key: f.key ?? '',
@@ -1013,13 +1024,26 @@ async function saveCustomFieldConfig() {
     ElMessage.error('自定义字段 key 不能重复');
     return;
   }
+  // WorkProcess 更新 DTO processName @NotBlank — 必须回传已有工序名, 否则后端 400。
+  // 防呆: 拿不到已有工序名 (理论上不会, server 行都有 join processName) 时明确报错而非发坏请求。
+  const existingProcessName = customFieldEditProcessName.value.trim();
+  if (!existingProcessName) {
+    ElMessage.error('无法获取该工序名称，请刷新页面后重试');
+    return;
+  }
   customFieldSaving.value = true;
   try {
-    await updateWorkProcess(factoryId.value, customFieldEditWorkProcessId.value, {
+    // 随 customFieldSchema 一并回传该工序已有的 processName (必填) + processCategory/unit (可空,
+    // partial update 语义下等于 no-op 覆盖), 满足 WorkProcessDTO @Valid 校验, 不改动其它字段。
+    const payload: Partial<WorkProcessItem> & { customFieldSchema: ProcessSheetCustomFieldDef[] } = {
+      processName: existingProcessName,
       customFieldSchema: rows.map((r) => ({
         key: r.key.trim(), label: r.label.trim(), type: r.type, enabled: r.enabled,
       })),
-    });
+    };
+    if (customFieldEditProcessCategory.value != null) payload.processCategory = customFieldEditProcessCategory.value;
+    if (customFieldEditUnit.value != null) payload.unit = customFieldEditUnit.value;
+    await updateWorkProcess(factoryId.value, customFieldEditWorkProcessId.value, payload);
     ElMessage.success('自定义字段已保存（逐工序录入将显示新增列）');
     customFieldDialogVisible.value = false;
     await loadLinkedProcesses(); // 重新拉取 join 后的 customFieldSchema
