@@ -95,6 +95,7 @@ const stores = ref<StoreOrder[]>([
   { id: 'S-010', name: '苏州高新区金鹰商业广场店', address: '高新区金鹰商业广场', area: '高新', boxes: 21, pieces: 161, weightKg: 640, volumeCbm: 2.2, x: 35, y: 67, window: '10:00-13:00' },
   { id: 'S-011', name: 'No.4108苏州吴中浦街店', address: '吴中区浦街', area: '吴中', boxes: 13, pieces: 86, weightKg: 360, volumeCbm: 1.2, x: 32, y: 84, window: '15:00-19:00' },
   { id: 'S-012', name: 'No.4219江苏苏州同里古镇店', address: '吴江区同里古镇', area: '吴江', boxes: 26, pieces: 190, weightKg: 810, volumeCbm: 2.8, x: 66, y: 83, window: '16:00-20:00' },
+  { id: 'S-013', name: 'No.4477苏州吴中越溪街道店', address: '吴中区越溪街道', area: '吴中', boxes: 22, pieces: 168, weightKg: 700, volumeCbm: 2.0, x: 44, y: 74, window: '16:30-20:00' },
 ]);
 
 const vehicles = ref<Vehicle[]>([
@@ -124,11 +125,15 @@ const totalVolume = computed(() => stores.value.reduce((sum, store) => sum + sto
 const totalWeight = computed(() => stores.value.reduce((sum, store) => sum + store.weightKg, 0));
 const totalDistance = computed(() => routes.value.reduce((sum, route) => sum + route.distanceKm, 0));
 const neededVehicles = computed(() => routes.value.length);
-const activeRouteVolume = computed(() => routeStores.value.reduce((sum, store) => sum + store.volumeCbm, 0));
-const activeRouteWeight = computed(() => routeStores.value.reduce((sum, store) => sum + store.weightKg, 0));
-const activeLoadRate = computed(() => Math.round((activeRouteVolume.value / activeVehicle.value.capacityCbm) * 100));
-const activeWeightRate = computed(() => Math.round((activeRouteWeight.value / activeVehicle.value.maxWeightKg) * 100));
-const activePolyline = computed(() => routeStores.value.map((store) => `${store.x},${store.y}`).join(' '));
+const activeRouteLoad = computed(() => routeLoad(activeRoute.value));
+const activeFittedStores = computed(() => activeRouteLoad.value.fitted.map(storeById).filter(Boolean) as StoreOrder[]);
+const activeOverflowStores = computed(() => activeRouteLoad.value.overflow.map(storeById).filter(Boolean) as StoreOrder[]);
+const activeFittedVolume = computed(() => activeRouteLoad.value.fittedVolume);
+const activeOverflowVolume = computed(() => activeOverflowStores.value.reduce((sum, store) => sum + store.volumeCbm, 0));
+const activeFittedWeight = computed(() => activeFittedStores.value.reduce((sum, store) => sum + store.weightKg, 0));
+const activeLoadRate = computed(() => Math.round((activeFittedVolume.value / activeVehicle.value.capacityCbm) * 100));
+const activeWeightRate = computed(() => Math.round((activeFittedWeight.value / activeVehicle.value.maxWeightKg) * 100));
+const activePolyline = computed(() => activeFittedStores.value.map((store) => `${store.x},${store.y}`).join(' '));
 
 const exportRows = computed(() => routes.value.map((route) => {
   const vehicle = vehicleById(route.vehicleId);
@@ -184,20 +189,43 @@ function routeNameFor(vehicle: Vehicle, storeIds: string[]): string {
   return `${vehicleAreaFallback(vehicle)}线`;
 }
 
+// 按车辆容量顺序装车：装满 capacityCbm 就不再装，剩余门店自动顺延下一车次。
+// 直接对应客户原话「超过10个方，它自动默认一下一辆车不给你装了」。
+function routeLoad(route: RoutePlan): { cap: number; fittedVolume: number; fitted: string[]; overflow: string[] } {
+  const vehicle = vehicleById(route.vehicleId);
+  const cap = vehicle.capacityCbm;
+  const fitted: string[] = [];
+  const overflow: string[] = [];
+  let cum = 0;
+  let full = false;
+  for (const id of route.storeIds) {
+    const store = storeById(id);
+    if (!store) continue;
+    if (!full && cum + store.volumeCbm <= cap) {
+      fitted.push(id);
+      cum += store.volumeCbm;
+    } else {
+      full = true;
+      overflow.push(id);
+    }
+  }
+  return { cap, fittedVolume: cum, fitted, overflow };
+}
+
 function assessRoute(route: RoutePlan): Pick<RoutePlan, 'status' | 'note'> {
   const vehicle = vehicleById(route.vehicleId);
   const assignedStores = route.storeIds.map(storeById).filter(Boolean) as StoreOrder[];
   if (!assignedStores.length) {
     return { status: 'draft', note: '今日暂无该区域订单' };
   }
+  const load = routeLoad(route);
+  if (load.overflow.length) {
+    return { status: 'risk', note: `超 ${load.cap} 方上限，${load.overflow.length} 家自动分下一车次` };
+  }
   if (vehicle.source === '外包') {
     return { status: 'risk', note: '外协车源，建议调度员确认派车' };
   }
-  const volume = assignedStores.reduce((sum, store) => sum + store.volumeCbm, 0);
-  const loadRate = Math.round((volume / vehicle.capacityCbm) * 100);
-  if (loadRate > targetLoad.value) {
-    return { status: 'risk', note: `货量高于目标 ${loadRate}%，建议复核或拆分` };
-  }
+  const loadRate = Math.round((load.fittedVolume / vehicle.capacityCbm) * 100);
   if (loadRate < targetLoad.value - 15) {
     return { status: 'draft', note: '装载率偏低，可合并后续订单' };
   }
@@ -360,6 +388,12 @@ function statusType(status: RouteStatus) {
         </div>
         <h1>导入门店订单，地图成点，快速形成车辆线路框架</h1>
         <p>电脑端网页 Demo；首期不依赖 GPS 实时轨迹，先用订单地址、货量体积、车辆容量和路线距离跑通排线框架。</p>
+        <div class="diff-strip">
+          <span class="diff-chip">导入即出图</span>
+          <span class="diff-chip">超载自动分车</span>
+          <span class="diff-chip">拖一下就调顺序</span>
+          <span class="diff-tag">调度员零培训上手 · 不像传统 TMS 那样要录一堆字段</span>
+        </div>
       </div>
       <div class="hero-actions">
         <el-button :icon="Download" @click="downloadImportTemplate">模板样例</el-button>
@@ -502,7 +536,7 @@ function statusType(status: RouteStatus) {
         </div>
 
         <div class="route-kpi-grid">
-          <div><span>装载率</span><strong>{{ activeLoadRate }}%</strong></div>
+          <div><span>装载率</span><strong>{{ activeLoadRate }}%<em v-if="activeOverflowStores.length" class="over-flag"> · 超 {{ activeOverflowVolume.toFixed(1) }} 方顺延</em></strong></div>
           <div><span>重量利用</span><strong>{{ activeWeightRate }}%</strong></div>
           <div><span>线路里程</span><strong>{{ activeRoute.distanceKm }} km</strong></div>
           <div><span>司机班次</span><strong>{{ activeVehicle.shift }}</strong></div>
@@ -511,7 +545,7 @@ function statusType(status: RouteStatus) {
         </div>
 
         <div class="sequence-list">
-          <div v-for="(store, index) in routeStores" :key="store.id" class="sequence-row">
+          <div v-for="(store, index) in activeFittedStores" :key="store.id" class="sequence-row">
             <span class="sequence-index">{{ index + 1 }}</span>
             <div>
               <strong>{{ store.name }}</strong>
@@ -519,9 +553,23 @@ function statusType(status: RouteStatus) {
             </div>
             <div class="sequence-actions">
               <el-button :icon="ArrowUp" circle size="small" :disabled="index === 0" @click="moveStore(store.id, -1)" />
-              <el-button :icon="ArrowDown" circle size="small" :disabled="index === routeStores.length - 1" @click="moveStore(store.id, 1)" />
+              <el-button :icon="ArrowDown" circle size="small" :disabled="index === activeFittedStores.length - 1" @click="moveStore(store.id, 1)" />
             </div>
           </div>
+
+          <template v-if="activeOverflowStores.length">
+            <div class="overflow-divider">
+              <el-icon><Warning /></el-icon>
+              <span>超 {{ activeVehicle.capacityCbm }} 方上限（本车已装 {{ activeFittedVolume.toFixed(1) }} 方），以下 {{ activeOverflowStores.length }} 家自动分下一车次</span>
+            </div>
+            <div v-for="store in activeOverflowStores" :key="store.id" class="sequence-row overflow">
+              <span class="sequence-index overflow">↓</span>
+              <div>
+                <strong>{{ store.name }}</strong>
+                <span>{{ store.volumeCbm }} 方 · {{ store.weightKg }} kg · 顺延下一车次</span>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -1060,6 +1108,65 @@ h1 {
     font-size: 13px;
     line-height: 1.6;
   }
+}
+
+.diff-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.diff-chip {
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: #e8f1ff;
+  color: #1b65a8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.diff-tag {
+  color: #27623c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.over-flag {
+  color: #b23c17;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.overflow-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 10px 12px;
+  border: 1px dashed #dd5a32;
+  border-radius: 8px;
+  background: #fdf1ec;
+  color: #b23c17;
+  font-size: 12px;
+  font-weight: 700;
+
+  .el-icon {
+    color: #dd5a32;
+    font-size: 15px;
+  }
+}
+
+.sequence-row.overflow {
+  border-style: dashed;
+  border-color: #f0c3b2;
+  background: #fdf6f3;
+}
+
+.sequence-index.overflow {
+  background: #dd5a32;
 }
 
 @media (max-width: 1280px) {
