@@ -4,6 +4,7 @@ import com.cretas.aims.entity.DisposalRecord;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -235,6 +236,9 @@ public class DisposalRecordService implements IDisposalRecordService {
 
             batch.setUsedQuantity(usedAfter.setScale(2, RoundingMode.HALF_UP));
             batch.setLastUsedAt(LocalDateTime.now());
+            if (availableAfter.compareTo(BigDecimal.ZERO) <= 0) {
+                batch.setStatus(MaterialBatchStatus.USED_UP);
+            }
             materialBatchRepository.save(batch);
 
             return valuate(disposalQty, batch.getUnitPrice(), record.getEstimatedLoss());
