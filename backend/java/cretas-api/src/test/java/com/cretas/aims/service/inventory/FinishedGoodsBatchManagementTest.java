@@ -9,6 +9,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,6 +50,7 @@ class FinishedGoodsBatchManagementTest {
     @Mock FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
     @Mock ProductTypeRepository productTypeRepository;
     @Mock ApplicationEventPublisher applicationEventPublisher;
+    @Mock WarehouseResolver warehouseResolver;
 
     SalesServiceImpl salesService;
 
@@ -71,6 +73,7 @@ class FinishedGoodsBatchManagementTest {
         // inject optional repo via reflection
         ReflectionTestUtils.setField(salesService, "finishedGoodsAdjustmentLogRepository",
                 finishedGoodsAdjustmentLogRepository);
+        ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
     }
 
     // ========== helpers ==========
@@ -89,6 +92,24 @@ class FinishedGoodsBatchManagementTest {
         b.setUnit("盒");
         b.setWarehouseId("WH-WKS");
         return b;
+    }
+
+    // ========== create tests ==========
+
+    @Test
+    @DisplayName("opening finished goods defaults to WH-FG")
+    void createOpening_defaultsWarehouseToFinishedGoods() {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setProductTypeId("PT-1");
+        batch.setProducedQuantity(new BigDecimal("12"));
+        batch.setUnit("kg");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(finishedGoodsBatchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        FinishedGoodsBatch result = salesService.createOpeningFinishedGoodsBatch(FACTORY_ID, batch, OPERATOR_ID);
+
+        assertThat(result.getWarehouseId()).isEqualTo("WH-FG-ID");
+        verify(warehouseResolver).resolveFinishedGoodsId(FACTORY_ID);
     }
 
     // ========== edit tests ==========

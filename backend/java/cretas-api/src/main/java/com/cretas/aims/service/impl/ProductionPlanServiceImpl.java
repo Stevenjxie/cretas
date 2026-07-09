@@ -3040,7 +3040,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
         batch.setStorageLocation("仓库确认入库");
         batch.setProductionPlanId(plan.getId());
-        batch.setWarehouseId(warehouseResolver.resolveWorkshopId(settlement.getFactoryId()));
+        batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(settlement.getFactoryId()));
         batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());

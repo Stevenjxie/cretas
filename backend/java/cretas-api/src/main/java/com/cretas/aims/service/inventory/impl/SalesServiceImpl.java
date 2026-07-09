@@ -2610,10 +2610,10 @@ public class SalesServiceImpl implements SalesService {
         if (batch.getBatchNumber() == null) {
             batch.setBatchNumber(generateFinishedGoodsBatchNumber(factoryId));
         }
-        // D1: 成品默认 WH-WKS (per PR #310 spec §3.3) — 直接创建路径 (manual / rework) 也用 WH-WKS.
+        // Finished-goods creation defaults to WH-FG.
         // 若 caller 显式设置 warehouseId, 不覆盖.
         if (batch.getWarehouseId() == null) {
-            batch.setWarehouseId(warehouseResolver.resolveWorkshopId(factoryId));
+            batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(factoryId));
         }
         batch = finishedGoodsBatchRepository.save(batch);
 

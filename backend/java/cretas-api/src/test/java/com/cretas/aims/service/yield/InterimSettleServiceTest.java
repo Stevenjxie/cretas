@@ -143,7 +143,7 @@ class InterimSettleServiceTest {
         when(consumptionRepository.save(any(MaterialConsumption.class))).thenAnswer(inv -> inv.getArgument(0));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productTypeRepository.findByIdAndFactoryId(any(), eq(FACTORY))).thenReturn(Optional.empty());
-        when(warehouseResolver.resolveWorkshopId(FACTORY)).thenReturn("WH-WKS");
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY)).thenReturn("WH-FG");
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(eq(FACTORY), any()))
                 .thenReturn(Optional.empty());
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
@@ -278,6 +278,7 @@ class InterimSettleServiceTest {
         FinishedGoodsBatch fg = fgCap.getValue();
         assertThat(fg.getProducedQuantity()).isEqualByComparingTo("9");
         assertThat(fg.getUnit()).isEqualTo("kg");
+        assertThat(fg.getWarehouseId()).isEqualTo("WH-FG");
         assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S2-PT1"); // 含 productType8 (PT1)
         // 小结2 无新 SFI IN (道4 是成品), postClerkOutput 仍累计 1 次 (来自小结1)
         verify(wipInventoryService, times(1)).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
