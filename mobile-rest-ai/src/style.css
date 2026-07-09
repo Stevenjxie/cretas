@@ -279,7 +279,7 @@ svg {
   padding: 8px 12px;
   color: #202020;
   background: #f1f1f1;
-  border-radius: 12px;
+  border-radius: 12px 12px 4px 12px;
 }
 
 .user-bubble p {
@@ -397,6 +397,42 @@ svg {
 .markdown-body strong {
   color: #111;
   font-weight: 780;
+}
+
+.markdown-body a {
+  color: #3b82f6;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body a:visited {
+  color: #2563eb;
+}
+
+.markdown-body code {
+  padding: 2px 5px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.92em;
+  background: #f3f4f6;
+  border-radius: 6px;
+}
+
+.markdown-body pre {
+  max-width: 100%;
+  margin: 12px 0 16px;
+  padding: 12px;
+  overflow-x: auto;
+  background: #f3f4f6;
+  border-radius: 6px;
+}
+
+.markdown-body pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
 }
 
 .markdown-body table {
@@ -617,29 +653,55 @@ svg {
 .composer {
   position: sticky;
   bottom: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px;
-  gap: 8px;
-  align-items: end;
+  display: flex;
+  justify-content: center;
   flex: 0 0 auto;
   margin-top: auto;
-  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-  background: rgba(246, 246, 246, 0.94);
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(248, 248, 248, 0.94);
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(18px);
 }
 
-.attach-button {
-  position: absolute;
-  bottom: calc(8px + env(safe-area-inset-bottom));
-  left: 17px;
+.composer-box {
   display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 44px;
+  gap: 4px;
+  align-items: end;
+  width: 100%;
+  max-width: 600px;
+  min-height: 44px;
+  padding: 0 0 0 8px;
+  background: #fff;
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  transition:
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.composer:focus-within .composer-box {
+  border-color: rgba(183, 43, 46, 0.7);
+  box-shadow: 0 0 0 3px rgba(183, 43, 46, 0.12);
+}
+
+.composer-box:has(textarea:disabled) {
+  background: #f5f5f5;
+  border-color: #e5e5ea;
+  box-shadow: none;
+}
+
+.attach-button {
+  display: grid;
+  align-self: end;
   place-items: center;
-  width: 34px;
+  width: 36px;
   height: 44px;
   min-height: 44px;
   color: #8d8d8d;
   background: transparent;
+  transition: transform 150ms ease-out;
 }
 
 .attach-button svg {
@@ -650,30 +712,30 @@ svg {
 
 .composer textarea {
   width: 100%;
+  height: 44px;
   min-height: 44px;
   max-height: 120px;
-  padding: 11px 10px 11px 42px;
+  padding: 10px 0;
   font-size: 16px;
   line-height: 1.5;
   resize: none;
-  color: #202020;
-  background: #fff;
-  border: 1px solid #dedbd8;
-  border-radius: 8px;
+  color: #0d0d0d;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   outline: none;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.05);
+  box-shadow: none;
+  overflow-y: auto;
 }
 
 .composer textarea::placeholder {
-  color: #9c9c9c;
+  color: rgb(180 180 184 / 70%);
 }
 
-.composer textarea:focus {
-  border-color: rgba(183, 43, 46, 0.42);
-  box-shadow: 0 0 0 3px rgba(183, 43, 46, 0.09);
+.composer textarea:focus::placeholder {
+  color: rgb(213 213 215 / 40%);
 }
 
-.send-button,
 .primary-button {
   color: #fff;
   background: linear-gradient(135deg, #b72b2e 0%, #c84649 100%);
@@ -682,20 +744,54 @@ svg {
 }
 
 .send-button {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  justify-content: center;
-  width: 72px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: end;
+  width: 44px;
+  height: 44px;
   min-height: 44px;
-  font-size: 16px;
-  font-weight: 680;
+  color: #fff;
+  background: transparent;
+  border-radius: 50%;
+  transition:
+    color 150ms ease-out,
+    opacity 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+.send-button::before {
+  position: absolute;
+  inset: 6px;
+  content: "";
+  background: #b72b2e;
+  border-radius: 50%;
+  transition: background-color 150ms ease-out;
+}
+
+.send-button:not(:disabled):active::before {
+  background: #9f2428;
+}
+
+.attach-button:not(:disabled):active,
+.send-button:not(:disabled):active {
+  transform: scale(0.95);
+}
+
+.send-button:disabled::before {
+  background: #f0f0f0;
 }
 
 .send-button svg {
-  width: 20px;
-  height: 20px;
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
   stroke-width: 2.1;
+}
+
+.send-button:disabled svg {
+  color: #b4b4b8;
 }
 
 .auth-error {

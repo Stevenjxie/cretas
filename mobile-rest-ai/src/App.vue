@@ -155,28 +155,34 @@
       <p v-if="threadError" class="thread-error">{{ threadError }}</p>
 
       <form class="composer" @submit.prevent="sendCurrentInput">
-        <button class="attach-button" type="button" aria-label="附件">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m21 11.5-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.8 9.8a2 2 0 0 1-2.8-2.8l8.8-8.8" />
-          </svg>
-        </button>
-        <label class="sr-only" for="question-input">输入经营问题</label>
-        <textarea
-          id="question-input"
-          v-model="draft"
-          maxlength="500"
-          rows="1"
-          placeholder="请输入你的问题，例如：哪道菜毛利最高？"
-          :disabled="!isReady || isAsking"
-          @keydown.enter.exact.prevent="sendCurrentInput"
-        />
-        <button class="send-button" type="submit" :disabled="!canSend" aria-label="发送">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M22 2 11 13" />
-            <path d="m22 2-7 20-4-9-9-4Z" />
-          </svg>
-          <span>发送</span>
-        </button>
+        <div class="composer-box">
+          <button class="attach-button" type="button" aria-label="附件">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m21 11.5-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.8 9.8a2 2 0 0 1-2.8-2.8l8.8-8.8" />
+            </svg>
+          </button>
+          <label class="sr-only" for="question-input">输入经营问题</label>
+          <textarea
+            id="question-input"
+            ref="composerInputRef"
+            v-model="draft"
+            maxlength="500"
+            rows="1"
+            placeholder="请输入你的问题，例如：哪道菜毛利最高？"
+            :disabled="!isReady || isAsking"
+            @input="resizeComposerInput"
+            @compositionstart="isComposing = true"
+            @compositionend="handleCompositionEnd"
+            @keydown="handleComposerKeydown"
+          />
+          <button class="send-button" type="submit" :disabled="!canSend" aria-label="发送">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M22 2 11 13" />
+              <path d="m22 2-7 20-4-9-9-4Z" />
+            </svg>
+            <span class="sr-only">发送</span>
+          </button>
+        </div>
       </form>
 
     </template>
@@ -207,9 +213,11 @@ const draft = ref('')
 const messages = ref<ChatMessage[]>([])
 const isAsking = ref(false)
 const isSlowLoading = ref(false)
+const isComposing = ref(false)
 const threadError = ref('')
 const showDebug = ref(false)
 const feedRef = ref<HTMLElement | null>(null)
+const composerInputRef = ref<HTMLTextAreaElement | null>(null)
 const sessionId = ref(createSessionId())
 let slowLoadingTimer: number | undefined
 
@@ -239,10 +247,15 @@ function renderMarkdown(markdown: string): string {
   return DOMPurify.sanitize(html)
 }
 
-async function scrollToBottom(): Promise<void> {
+function isFeedNearBottom(feed: HTMLElement): boolean {
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120
+}
+
+async function scrollToBottom(force = false): Promise<void> {
   await nextTick()
   const feed = feedRef.value
   if (!feed) return
+  if (!force && !isFeedNearBottom(feed)) return
   feed.scrollTo({
     top: feed.scrollHeight,
     behavior: 'smooth',
@@ -279,6 +292,32 @@ function startNewConversation(): void {
   draft.value = ''
   threadError.value = ''
   isSlowLoading.value = false
+  void nextTick(resizeComposerInput)
+}
+
+function resizeComposerInput(): void {
+  const input = composerInputRef.value
+  if (!input) return
+  input.style.height = 'auto'
+  input.style.height = `${Math.min(input.scrollHeight, 120)}px`
+}
+
+function handleCompositionEnd(): void {
+  isComposing.value = false
+  resizeComposerInput()
+}
+
+function shouldSendOnEnter(event: KeyboardEvent): boolean {
+  if (isComposing.value || event.isComposing) return false
+  if (event.key !== 'Enter' || event.shiftKey) return false
+  if (event.metaKey || event.ctrlKey) return true
+  return window.matchMedia('(pointer: coarse)').matches
+}
+
+function handleComposerKeydown(event: KeyboardEvent): void {
+  if (!shouldSendOnEnter(event)) return
+  event.preventDefault()
+  sendCurrentInput()
 }
 
 async function sendQuestion(question: string): Promise<void> {
@@ -288,13 +327,14 @@ async function sendQuestion(question: string): Promise<void> {
   threadError.value = ''
   messages.value.push(createMessage('user', normalized))
   draft.value = ''
+  void nextTick(resizeComposerInput)
   isAsking.value = true
   isSlowLoading.value = false
   clearSlowLoadingTimer()
   slowLoadingTimer = window.setTimeout(() => {
     if (isAsking.value) isSlowLoading.value = true
   }, 3000)
-  await scrollToBottom()
+  await scrollToBottom(true)
 
   try {
     const response = await askSynthesis(normalized, sessionId.value)
