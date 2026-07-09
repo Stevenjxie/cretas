@@ -227,6 +227,20 @@ const FACTORY_TYPE_MODULE_FILTER: Record<string, Partial<ModulePermissions>> = {
     equipment: '-',
     scheduling: '-',
   },
+  LOGISTICS: {
+    production: '-',
+    warehouse: '-',
+    quality: '-',
+    procurement: '-',
+    sales: '-',
+    hr: '-',
+    equipment: '-',
+    finance: '-',
+    system: '-',
+    analytics: '-',
+    restaurant: '-',
+    rd: '-',
+  },
   // HEADQUARTERS / CENTRAL_KITCHEN / BRANCH: 不做限制，保留角色原始权限
 };
 

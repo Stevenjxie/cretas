@@ -1577,55 +1577,61 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'overview',
             name: 'SchedulingOverview',
             component: () => import('@/views/scheduling/index.vue'),
-            meta: { requiresAuth: true, title: '调度中心', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '调度中心', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'plans',
             name: 'SchedulingPlans',
             component: () => import('@/views/scheduling/plans/list.vue'),
-            meta: { requiresAuth: true, title: '调度计划', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '调度计划', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'plans/create',
             name: 'SchedulingPlanCreate',
             component: () => import('@/views/scheduling/plans/create.vue'),
-            meta: { requiresAuth: true, title: '创建计划', module: 'scheduling', hidden: true }
+            meta: { requiresAuth: true, title: '创建计划', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'plans/:id',
             name: 'SchedulingPlanDetail',
             component: () => import('@/views/scheduling/plans/detail.vue'),
-            meta: { requiresAuth: true, title: '计划详情', module: 'scheduling', hidden: true }
+            meta: { requiresAuth: true, title: '计划详情', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'realtime',
             name: 'SchedulingRealtime',
             component: () => import('@/views/scheduling/realtime/index.vue'),
-            meta: { requiresAuth: true, title: '实时监控', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '实时监控', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'logistics-demo',
             name: 'LogisticsSchedulingDemo',
             component: () => import('@/views/scheduling/logistics-demo/index.vue'),
-            meta: { requiresAuth: true, title: '物流排班看板', module: 'scheduling', mockDemo: true }
+            meta: {
+              requiresAuth: true,
+              title: '物流排班看板',
+              module: 'scheduling',
+              mockDemo: true,
+              hideForFactoryTypes: ['FACTORY', 'RESTAURANT'],
+            }
           },
           {
             path: 'workers',
             name: 'SchedulingWorkers',
             component: () => import('@/views/scheduling/workers/assignment.vue'),
-            meta: { requiresAuth: true, title: '人员分配', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '人员分配', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'alerts',
             name: 'SchedulingAlerts',
             component: () => import('@/views/scheduling/alerts/index.vue'),
-            meta: { requiresAuth: true, title: '告警管理', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '告警管理', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'settings',
             name: 'SchedulingSettings',
             component: () => import('@/views/scheduling/settings/index.vue'),
-            meta: { requiresAuth: true, title: '排产设置', module: 'scheduling' }
+            meta: { requiresAuth: true, title: '排产设置', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           }
         ]
       },

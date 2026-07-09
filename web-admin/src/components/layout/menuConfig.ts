@@ -247,13 +247,20 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/logistics-demo', title: '物流排班看板', icon: '', module: 'scheduling', groupLabel: '一加物流演示' },
-      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度' },
-      { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling' },
-      { path: '/scheduling/realtime', title: '实时监控', icon: '', module: 'scheduling' },
-      { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling', groupLabel: '资源与预警' },
-      { path: '/scheduling/alerts', title: '告警管理', icon: '', module: 'scheduling' },
-      { path: '/scheduling/settings', title: '排产设置', icon: '', module: 'scheduling', groupLabel: '调度配置' }
+      { path: '/scheduling/logistics-demo', title: '智能排班看板', icon: '', module: 'scheduling', groupLabel: '物流公司演示',
+        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度',
+        hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling',
+        hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/realtime', title: '实时监控', icon: '', module: 'scheduling',
+        hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling', groupLabel: '资源与预警',
+        hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/alerts', title: '告警管理', icon: '', module: 'scheduling',
+        hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/settings', title: '排产设置', icon: '', module: 'scheduling', groupLabel: '调度配置',
+        hideForFactoryTypes: ['LOGISTICS'] }
     ]
   },
   {
