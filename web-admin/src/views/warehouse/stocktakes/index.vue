@@ -1124,7 +1124,7 @@ onMounted(async () => {
                 <el-table-column label="数量" width="150">
                   <template #header><span style="color: #f56c6c">*</span> 数量</template>
                   <template #default="{ row }">
-                    <el-input-number v-model="row.quantity" :min="0" :precision="3" size="small" style="width: 130px" placeholder="期初数量" />
+                    <el-input-number v-model="row.quantity" :min="0" :precision="2" size="small" style="width: 130px" placeholder="期初数量" />
                   </template>
                 </el-table-column>
                 <el-table-column label="单位" width="90">
@@ -1335,7 +1335,7 @@ onMounted(async () => {
             <el-input-number
               v-model="row.actualQty"
               :min="0"
-              :precision="3"
+              :precision="2"
               size="small"
               style="width: 110px"
               placeholder="实盘数量"

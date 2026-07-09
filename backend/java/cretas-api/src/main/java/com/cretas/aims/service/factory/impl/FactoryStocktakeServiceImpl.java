@@ -239,6 +239,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     .orElseThrow(() -> new BusinessException(404,
                             "盘点明细行不存在: " + update.getItemId()));
 
+            validateInventoryScale(update.getActualQty(), "实盘数量");
             item.setActualQty(update.getActualQty().setScale(4, RoundingMode.HALF_UP));
             if (update.getPhotoUrls() != null) {
                 item.setPhotoUrls(update.getPhotoUrls());
@@ -262,6 +263,18 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             }
         }
         stocktakeRepo.save(stocktake);
+    }
+
+    private static void validateInventoryScale(BigDecimal value, String fieldName) {
+        if (value == null) {
+            return;
+        }
+        if (value.stripTrailingZeros().scale() > 2) {
+            throw new BusinessException(400,
+                    fieldName + "最多保留2位小数，请按库存数量精度重新填写: " + value.toPlainString())
+                    .withCode("STOCKTAKE_QTY_SCALE_EXCEEDED")
+                    .withHint("库存批次数量当前按2位小数保存；请在预览/提交前改成两位以内，避免系统静默四舍五入");
+        }
     }
 
     @Override

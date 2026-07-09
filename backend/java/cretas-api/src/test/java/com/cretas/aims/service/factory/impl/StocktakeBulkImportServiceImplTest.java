@@ -322,6 +322,38 @@ class StocktakeBulkImportServiceImplTest {
     }
 
     @Test
+    @DisplayName("OPENING 预览：期初数量超过2位小数 → 诚实报错，不让 apply 静默四舍五入")
+    void preview_opening_quantityScaleExceeded_errors() {
+        stubWarehouseAndBatches();
+        stubMaterialTypeDictionary();
+
+        List<StocktakeImportRowDTO> rows = List.of(
+                openingRow("鸭掌", "", new BigDecimal("0.123"), new BigDecimal("12.00")));
+
+        StocktakeBulkImportPreviewDTO dto = service.preview(
+                FACTORY_ID, WAREHOUSE_ID, FactoryStocktake.ImportMode.OPENING, toExcel(rows));
+
+        assertThat(dto.getMatchedCount()).isZero();
+        assertThat(dto.getErrorCount()).isEqualTo(1);
+        assertThat(dto.getErrors().get(0).getReason()).contains("最多保留2位小数");
+    }
+
+    @Test
+    @DisplayName("NORMAL 预览：实盘数量超过2位小数 → 诚实报错，不让库存数量静默变短")
+    void preview_normal_quantityScaleExceeded_errors() {
+        stubWarehouseAndBatches();
+
+        List<StocktakeImportRowDTO> rows = List.of(row("猪蹄", "B001", new BigDecimal("120.123")));
+
+        StocktakeBulkImportPreviewDTO dto = service.preview(
+                FACTORY_ID, WAREHOUSE_ID, FactoryStocktake.ImportMode.NORMAL, toExcel(rows));
+
+        assertThat(dto.getMatchedCount()).isZero();
+        assertThat(dto.getErrorCount()).isEqualTo(1);
+        assertThat(dto.getErrors().get(0).getReason()).contains("最多保留2位小数");
+    }
+
+    @Test
     @DisplayName("NORMAL 预览：未知批次仍报错 (不受 OPENING 改动影响)")
     void preview_normal_unknownBatch_stillErrors() {
         stubWarehouseAndBatches();

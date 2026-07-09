@@ -267,6 +267,11 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                     dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName, "实盘数量不能为负数"));
                     continue;
                 }
+                if (hasMoreThanTwoDecimals(actual)) {
+                    dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                            "实盘数量最多保留2位小数，请改为两位以内后再导入（当前: " + actual.toPlainString() + "）"));
+                    continue;
+                }
                 MatchedLine line = new MatchedLine();
                 line.setMaterialBatchId(batch.getId());
                 line.setBatchNumber(batchNo);
@@ -332,6 +337,16 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             if (actual.compareTo(BigDecimal.ZERO) <= 0) {
                 dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
                         "期初新建物料的数量必须大于 0"));
+                continue;
+            }
+            if (hasMoreThanTwoDecimals(actual)) {
+                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                        "期初数量最多保留2位小数，请改为两位以内后再导入（当前: " + actual.toPlainString() + "）"));
+                continue;
+            }
+            if (hasMoreThanTwoDecimals(row.getUnitPrice())) {
+                dto.getErrors().add(new RowError(rowNum, batchNo, rowMaterialName,
+                        "期初单价最多保留2位小数，请改为两位以内后再导入（当前: " + row.getUnitPrice().toPlainString() + "）"));
                 continue;
             }
 
@@ -440,5 +455,9 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
 
     private static BigDecimal scale4(BigDecimal v) {
         return v != null ? v.setScale(4, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+    }
+
+    private static boolean hasMoreThanTwoDecimals(BigDecimal value) {
+        return value != null && value.stripTrailingZeros().scale() > 2;
     }
 }
