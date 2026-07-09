@@ -47,9 +47,6 @@
 
       <section ref="feedRef" class="message-feed" aria-live="polite">
         <div v-if="messages.length === 0 && !isAsking" class="empty-state">
-          <div class="assistant-avatar" aria-hidden="true">
-            <DinoIcon />
-          </div>
           <div>
             <h2>问一句经营问题，马上看真实合成分析。</h2>
             <p>比如利润率、分店拖累、天气影响、VIP 满意度或最近差评。</p>
@@ -66,21 +63,9 @@
             <div class="user-bubble">
               <p>{{ message.content }}</p>
             </div>
-            <div class="user-avatar" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <circle cx="12" cy="8" r="4" />
-                <path d="M4.5 21a7.5 7.5 0 0 1 15 0" />
-              </svg>
-            </div>
           </template>
 
           <template v-else>
-            <div class="assistant-rail">
-              <div class="assistant-avatar" aria-hidden="true">
-                <DinoIcon />
-              </div>
-              <time>{{ formatTime(message.createdAt) }}</time>
-            </div>
             <div class="assistant-card">
               <div class="analysis-status">
                 <span class="status-check">
@@ -133,6 +118,9 @@
                   </svg>
                   没帮助
                 </button>
+                <button class="source-toggle" type="button" @click="showDebug = !showDebug">
+                  {{ showDebug ? '隐藏 source' : 'source' }}
+                </button>
               </div>
 
               <details v-if="showDebug" class="debug-line" open>
@@ -146,12 +134,6 @@
         </article>
 
         <article v-if="isAsking" class="message-row assistant">
-          <div class="assistant-rail">
-            <div class="assistant-avatar" aria-hidden="true">
-              <DinoIcon />
-            </div>
-            <time>{{ formatTime(Date.now()) }}</time>
-          </div>
           <div class="assistant-card loading-card">
             <div class="analysis-status">
               <span class="spinner" aria-hidden="true" />
@@ -191,9 +173,6 @@
         </button>
       </form>
 
-      <button class="debug-toggle" type="button" @click="showDebug = !showDebug">
-        {{ showDebug ? '隐藏 source' : '显示 source' }}
-      </button>
     </template>
   </main>
 </template>
@@ -242,14 +221,6 @@ function createMessage(role: ChatMessage['role'], content: string): ChatMessage 
     content,
     createdAt: Date.now(),
   }
-}
-
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(timestamp))
 }
 
 function renderMarkdown(markdown: string): string {
@@ -326,19 +297,6 @@ function sendCurrentInput(): void {
   if (!canSend.value) return
   void sendQuestion(draft.value)
 }
-
-const DinoIcon = defineComponent({
-  setup() {
-    return () => h('svg', { viewBox: '0 0 48 48', 'aria-hidden': 'true' }, [
-      h('path', {
-        d: 'M8 30c2.8-12 11-20 24-20 5.6 0 8.9 2.4 9.9 6.2.8 3.1-.7 6-3.8 7.5l-4.4 2.1 6.2 4.3c-2 6.2-7.6 9.9-15.4 9.9-7.2 0-13.3-3.8-16.5-10Z',
-      }),
-      h('path', { d: 'M19.2 19.8c4.3-3.1 9.4-4.4 14.2-3.5' }),
-      h('circle', { cx: '32.5', cy: '17.2', r: '1.8' }),
-      h('path', { d: 'M29 24.2c3.2 1.4 6.6 1.2 10.2-.5' }),
-    ])
-  },
-})
 
 const QuestionIcon = defineComponent({
   props: {

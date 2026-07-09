@@ -2,11 +2,12 @@
   color: #181818;
   background: #ffffff;
   font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 16px;
   line-height: 1.5;
   font-synthesis: none;
+  font-kerning: normal;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -26,9 +27,7 @@ body,
 
 body {
   min-width: 320px;
-  background:
-    radial-gradient(circle at 18% 18%, rgba(183, 41, 45, 0.045), transparent 28%),
-    linear-gradient(180deg, #ffffff 0%, #f8f8f8 100%);
+  background: #fff;
 }
 
 button,
@@ -73,7 +72,7 @@ svg {
 
 .app-header {
   flex: 0 0 auto;
-  padding: max(14px, env(safe-area-inset-top)) 22px 10px;
+  padding: max(8px, env(safe-area-inset-top)) 20px 8px;
   background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid rgba(0, 0, 0, 0.075);
   backdrop-filter: blur(18px);
@@ -83,9 +82,9 @@ svg {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 24px;
+  height: 18px;
   color: #090909;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 750;
   line-height: 1;
 }
@@ -142,15 +141,15 @@ svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 18px;
+  margin-top: 10px;
 }
 
 .app-header h1,
 .brand-line {
   margin: 0;
   color: #111;
-  font-size: 20px;
-  font-weight: 760;
+  font-size: 16px;
+  font-weight: 680;
   line-height: 1.18;
   text-align: center;
   white-space: nowrap;
@@ -161,8 +160,8 @@ svg {
 .ghost-icon {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   color: #111;
   background: transparent;
   border-radius: 999px;
@@ -178,17 +177,17 @@ svg {
 }
 
 .history-button svg {
-  width: 27px;
-  height: 27px;
+  width: 24px;
+  height: 24px;
   stroke-width: 2.1;
 }
 
 .suggestions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 12px;
+  gap: 8px 10px;
   flex: 0 0 auto;
-  padding: 20px 16px 18px;
+  padding: 12px 24px 10px;
   background: #fff;
 }
 
@@ -197,8 +196,8 @@ svg {
   align-items: center;
   justify-content: flex-start;
   min-width: 0;
-  min-height: 66px;
-  padding: 0 9px;
+  min-height: 44px;
+  padding: 0 10px;
   color: #151515;
   background: rgba(255, 255, 255, 0.93);
   border: 1px solid #e9e5e2;
@@ -212,9 +211,9 @@ svg {
 
 .suggestion-card svg {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  margin-right: 7px;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
   color: #bd2d2f;
   stroke-width: 1.9;
 }
@@ -225,9 +224,9 @@ svg {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  font-size: 15px;
-  font-weight: 570;
-  line-height: 1.24;
+  font-size: 12.5px;
+  font-weight: 560;
+  line-height: 1.22;
   text-align: left;
   text-overflow: clip;
   white-space: normal;
@@ -236,20 +235,15 @@ svg {
 .message-feed {
   flex: 1;
   min-height: 0;
-  padding: 8px 20px 22px;
+  padding: 10px 28px 20px;
   overflow-x: hidden;
   overflow-y: auto;
   scroll-behavior: smooth;
-  background:
-    linear-gradient(90deg, transparent 0, rgba(0, 0, 0, 0.018) 50%, transparent 100%),
-    #fff;
+  background: #fff;
 }
 
 .empty-state {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+  max-width: 31rem;
   margin-top: 24px;
   color: #5f5f5f;
 }
@@ -276,125 +270,59 @@ svg {
 
 .message-row.user {
   justify-content: flex-end;
-  gap: 10px;
   align-items: center;
 }
 
 .user-bubble {
   position: relative;
   max-width: min(78%, 320px);
-  padding: 13px 18px;
-  color: #fff;
-  background: linear-gradient(135deg, #b72b2e 0%, #c94547 100%);
-  border-radius: 10px;
-  box-shadow: 0 14px 34px rgba(178, 35, 39, 0.2);
-}
-
-.user-bubble::after {
-  position: absolute;
-  right: -7px;
-  bottom: 0;
-  width: 14px;
-  height: 14px;
-  content: "";
-  background: #c94547;
-  clip-path: polygon(0 0, 100% 100%, 0 100%);
+  padding: 10px 16px;
+  color: #202020;
+  background: #f1f1f1;
+  border-radius: 18px;
 }
 
 .user-bubble p {
   margin: 0;
-  font-size: 16px;
-  font-weight: 560;
-  line-height: 1.48;
-}
-
-.user-avatar {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  color: #9b9b9b;
-  background: #f1f1f1;
-  border-radius: 50%;
-}
-
-.user-avatar svg {
-  width: 27px;
-  height: 27px;
-  fill: currentColor;
-  stroke: none;
+  font-size: 16.5px;
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .message-row.assistant {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-
-.assistant-rail {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.assistant-rail time {
-  color: #b6b6b6;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.assistant-avatar {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  color: #fff;
-  background: linear-gradient(145deg, #b9272d, #d3484a);
-  border-radius: 50%;
-  box-shadow: 0 10px 24px rgba(183, 39, 45, 0.16);
-}
-
-.assistant-avatar svg {
-  width: 36px;
-  height: 36px;
-  fill: currentColor;
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 1.35;
+  display: block;
+  margin: 26px 0;
 }
 
 .assistant-card {
   width: 100%;
   min-width: 0;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid #e7e3df;
-  border-radius: 10px;
-  box-shadow:
-    0 20px 42px rgba(0, 0, 0, 0.055),
-    0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .analysis-status {
   display: flex;
   align-items: center;
-  min-height: 48px;
-  padding: 0 16px;
-  color: #2b2b2b;
-  font-size: 15px;
-  font-weight: 650;
-  background: rgba(255, 255, 255, 0.92);
-  border-bottom: 1px solid #ece8e5;
+  min-height: 28px;
+  padding: 0;
+  margin-bottom: 14px;
+  color: #767676;
+  font-size: 14px;
+  font-weight: 400;
+  background: transparent;
+  border-bottom: 0;
 }
 
 .status-check {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   margin-right: 8px;
   color: #2ba05d;
   border: 1.5px solid currentColor;
@@ -408,10 +336,10 @@ svg {
 }
 
 .collapse-button {
-  display: grid;
+  display: none;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   margin-left: auto;
   color: #999;
   background: transparent;
@@ -424,11 +352,12 @@ svg {
 
 .markdown-body {
   max-width: 100%;
-  padding: 18px 18px 4px;
+  padding: 0;
   overflow-x: hidden;
-  color: #202020;
-  font-size: 16px;
-  line-height: 1.72;
+  color: #171717;
+  font-size: 16.5px;
+  font-weight: 400;
+  line-height: 1.68;
 }
 
 .markdown-body > :first-child {
@@ -442,10 +371,10 @@ svg {
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3 {
-  margin: 18px 0 10px;
+  margin: 22px 0 10px;
   color: #151515;
   font-size: 17px;
-  font-weight: 780;
+  font-weight: 680;
   line-height: 1.4;
 }
 
@@ -453,16 +382,16 @@ svg {
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote {
-  margin: 0 0 12px;
+  margin: 0 0 18px;
 }
 
 .markdown-body ul,
 .markdown-body ol {
-  padding-left: 20px;
+  padding-left: 22px;
 }
 
 .markdown-body li {
-  margin: 4px 0;
+  margin: 7px 0;
 }
 
 .markdown-body strong {
@@ -474,7 +403,7 @@ svg {
   display: block;
   width: 100%;
   max-width: 100%;
-  margin: 10px 0 18px;
+  margin: 12px 0 22px;
   overflow-x: auto;
   border-collapse: separate;
   border-spacing: 0;
@@ -485,8 +414,10 @@ svg {
 
 .markdown-body th,
 .markdown-body td {
-  min-width: 88px;
-  padding: 10px 12px;
+  min-width: 72px;
+  padding: 7px 9px;
+  font-size: 14px;
+  line-height: 1.45;
   text-align: center;
   border-right: 1px solid #e6e2de;
   border-bottom: 1px solid #e6e2de;
@@ -501,7 +432,7 @@ svg {
   display: flex;
   gap: 14px;
   max-width: 100%;
-  padding: 4px 18px 14px;
+  padding: 4px 0 12px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
@@ -531,8 +462,8 @@ svg {
 .chart-title {
   margin: 0 0 10px;
   color: #232323;
-  font-size: 15px;
-  font-weight: 760;
+  font-size: 14px;
+  font-weight: 680;
 }
 
 .chart-scroll {
@@ -545,17 +476,17 @@ svg {
 
 .chart-canvas {
   width: 100%;
-  min-width: 310px;
-  height: 286px;
+  min-width: 286px;
+  height: 238px;
 }
 
 .answer-footer {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 4px 18px 16px;
+  padding: 2px 0 12px;
   color: #a0a0a0;
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -582,8 +513,15 @@ svg {
   stroke-width: 1.8;
 }
 
+.answer-footer .source-toggle {
+  min-height: 28px;
+  margin-left: auto;
+  color: #9c9c9c;
+  font-size: 11px;
+}
+
 .debug-line {
-  margin: 0 18px 16px;
+  margin: 0 0 16px;
   color: #69776b;
   font-size: 12px;
 }
@@ -611,7 +549,7 @@ svg {
 .skeleton-line {
   width: 64%;
   height: 12px;
-  margin: 14px 18px 0;
+  margin: 14px 0 0;
   border-radius: 999px;
   background: linear-gradient(90deg, #eeeeee, #fafafa, #eeeeee);
   background-size: 220% 100%;
@@ -619,12 +557,12 @@ svg {
 }
 
 .skeleton-line.wide {
-  width: calc(100% - 36px);
+  width: 100%;
 }
 
 .skeleton-chart {
   height: 168px;
-  margin: 18px;
+  margin: 18px 0 0;
   border: 1px solid #ece8e5;
   border-radius: 10px;
   background:
@@ -649,12 +587,12 @@ svg {
   position: sticky;
   bottom: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 78px;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 8px;
   align-items: end;
   flex: 0 0 auto;
   margin-top: auto;
-  padding: 12px 10px calc(12px + env(safe-area-inset-bottom));
+  padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
   background: rgba(246, 246, 246, 0.94);
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(18px);
@@ -662,13 +600,13 @@ svg {
 
 .attach-button {
   position: absolute;
-  bottom: calc(12px + env(safe-area-inset-bottom));
+  bottom: calc(9px + env(safe-area-inset-bottom));
   left: 17px;
   display: grid;
   place-items: center;
   width: 34px;
-  height: 52px;
-  min-height: 52px;
+  height: 46px;
+  min-height: 46px;
   color: #8d8d8d;
   background: transparent;
 }
@@ -681,9 +619,11 @@ svg {
 
 .composer textarea {
   width: 100%;
-  min-height: 52px;
+  min-height: 46px;
   max-height: 120px;
-  padding: 15px 12px 15px 46px;
+  padding: 12px 10px 12px 42px;
+  font-size: 15px;
+  line-height: 1.45;
   resize: none;
   color: #202020;
   background: #fff;
@@ -715,30 +655,16 @@ svg {
   gap: 6px;
   align-items: center;
   justify-content: center;
-  width: 78px;
-  min-height: 52px;
-  font-size: 16px;
-  font-weight: 720;
+  width: 72px;
+  min-height: 46px;
+  font-size: 14px;
+  font-weight: 680;
 }
 
 .send-button svg {
   width: 20px;
   height: 20px;
   stroke-width: 2.1;
-}
-
-.debug-toggle {
-  position: fixed;
-  right: max(10px, calc((100vw - 430px) / 2 + 10px));
-  bottom: calc(82px + env(safe-area-inset-bottom));
-  z-index: 4;
-  min-height: 32px;
-  padding: 0 8px;
-  color: #8d3a34;
-  font-size: 11px;
-  background: rgba(255, 246, 244, 0.92);
-  border: 1px solid rgba(183, 43, 46, 0.18);
-  border-radius: 999px;
 }
 
 .auth-error {
@@ -795,25 +721,21 @@ svg {
 @media (max-width: 380px) {
   .app-header h1,
   .brand-line {
-    font-size: 20px;
+    font-size: 15px;
   }
 
   .suggestions {
-    padding-right: 20px;
-    padding-left: 20px;
+    padding-right: 18px;
+    padding-left: 18px;
   }
 
   .suggestion-card {
-    padding: 0 12px;
+    padding: 0 9px;
   }
 
   .message-feed {
-    padding-right: 14px;
-    padding-left: 14px;
-  }
-
-  .message-row.assistant {
-    grid-template-columns: 54px minmax(0, 1fr);
+    padding-right: 24px;
+    padding-left: 24px;
   }
 }
 
