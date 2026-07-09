@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="chart-card" aria-label="经营分析图表">
     <h3 v-if="chart.title" class="chart-title">{{ chart.title }}</h3>
     <div class="chart-scroll">
