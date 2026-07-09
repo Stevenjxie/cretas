@@ -303,6 +303,36 @@ svg {
   line-height: 1.6;
 }
 
+.streaming-body {
+  max-width: 100%;
+  color: #171717;
+  font-size: 15px;
+  line-height: 1.76;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: #111;
+  animation: stream-cursor-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes stream-cursor-blink {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
 .markdown-body > :first-child {
   margin-top: 0;
 }
