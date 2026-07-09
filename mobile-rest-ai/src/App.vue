@@ -135,13 +135,19 @@
 
         <article v-if="isAsking" class="message-row assistant">
           <div class="assistant-card loading-card">
-            <div class="analysis-status">
-              <span class="spinner" aria-hidden="true" />
-              <span>正在分析…</span>
+            <div class="loading-status" aria-live="polite">
+              <span>{{ isSlowLoading ? '正在生成中' : '正在分析' }}</span>
+              <span class="typing-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
             </div>
-            <div class="skeleton-line wide" />
-            <div class="skeleton-line" />
-            <div class="skeleton-chart" />
+            <div class="skeleton-bubble" aria-hidden="true">
+              <div class="skeleton-line wide" />
+              <div class="skeleton-line medium" />
+              <div class="skeleton-line short" />
+            </div>
           </div>
         </article>
       </section>
@@ -200,10 +206,12 @@ const authError = ref('')
 const draft = ref('')
 const messages = ref<ChatMessage[]>([])
 const isAsking = ref(false)
+const isSlowLoading = ref(false)
 const threadError = ref('')
 const showDebug = ref(false)
 const feedRef = ref<HTMLElement | null>(null)
 const sessionId = ref(createSessionId())
+let slowLoadingTimer: number | undefined
 
 const isReady = computed(() => authStatus.value === 'ready')
 const canSend = computed(() => {
@@ -258,11 +266,19 @@ function retryLogin(): void {
   void login()
 }
 
+function clearSlowLoadingTimer(): void {
+  if (slowLoadingTimer === undefined) return
+  window.clearTimeout(slowLoadingTimer)
+  slowLoadingTimer = undefined
+}
+
 function startNewConversation(): void {
+  clearSlowLoadingTimer()
   sessionId.value = createSessionId()
   messages.value = []
   draft.value = ''
   threadError.value = ''
+  isSlowLoading.value = false
 }
 
 async function sendQuestion(question: string): Promise<void> {
@@ -273,6 +289,11 @@ async function sendQuestion(question: string): Promise<void> {
   messages.value.push(createMessage('user', normalized))
   draft.value = ''
   isAsking.value = true
+  isSlowLoading.value = false
+  clearSlowLoadingTimer()
+  slowLoadingTimer = window.setTimeout(() => {
+    if (isAsking.value) isSlowLoading.value = true
+  }, 3000)
   await scrollToBottom()
 
   try {
@@ -288,7 +309,9 @@ async function sendQuestion(question: string): Promise<void> {
     threadError.value = message
     messages.value.push(createMessage('assistant', `**请求失败**\n\n${message}`))
   } finally {
+    clearSlowLoadingTimer()
     isAsking.value = false
+    isSlowLoading.value = false
     await scrollToBottom()
   }
 }
