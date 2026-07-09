@@ -39,6 +39,23 @@ def test_fabricated_number_rejected():
     assert _thin_restate_ok("示范门店01客单价只有150元", _ATTR) is False
 
 
+def test_closure_excludes_other_stores_numbers():
+    # Audit A#1: the closure must be scoped to laggard+bench only. A different
+    # store's real number (which the LLM never saw) must NOT pass as the laggard's.
+    attr = dict(_ATTR, stores=[
+        {"store_name": "门店03", "avg_ticket": 195.00, "revenue": 15183500.0,
+         "bills": 70000, "delta_revenue": 91778.0, "traffic_effect": 100.0,
+         "ticket_effect": 200.0}])
+    assert _thin_restate_ok("示范门店01客单价只有195元", attr) is False  # other store's ticket
+    assert _thin_restate_ok("示范门店01客单价228.80元", attr) is True     # laggard's own
+
+
+def test_tolerance_tightened_rejects_2pct_off():
+    # Audit A#3: 15,318,722 is ~2% above laggard revenue 15,018,722 — must reject
+    # at the tightened 0.5% tolerance (would have passed at the old ±2%).
+    assert _thin_restate_ok("示范门店01营收15,318,722元", _ATTR) is False
+
+
 def test_eligibility_pure_or_finance_attribution_only():
     assert _is_thin_restate_eligible({"attribution": True, "finance": True}) is True
     assert _is_thin_restate_eligible({"attribution": True}) is True
