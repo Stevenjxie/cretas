@@ -247,7 +247,8 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '调度执行' },
+      { path: '/scheduling/logistics-demo', title: '物流排班看板', icon: '', module: 'scheduling', groupLabel: '一加物流演示' },
+      { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度' },
       { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling' },
       { path: '/scheduling/realtime', title: '实时监控', icon: '', module: 'scheduling' },
       { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling', groupLabel: '资源与预警' },
