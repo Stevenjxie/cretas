@@ -493,7 +493,7 @@ class ComprehensiveSynthesisEngine:
             )
 
         # 3. Dimension plan (rules-first, no LLM).
-        plan = self.plan_dimensions(question)
+        plan = self.plan_dimensions(question, has_history=bool(conversation_history))
 
         # 4. Build FactBook (parallel deterministic pulls per plan).
         factbook = await self._build_factbook(
@@ -594,12 +594,17 @@ class ComprehensiveSynthesisEngine:
     # =====================================================================
     # Step 1: dimension planning (rules-first, no LLM per feedback_rules_first)
     # =====================================================================
-    def plan_dimensions(self, q: str) -> Dict[str, Any]:
-        """Decide {review, finance, sales, cross[]} from the question.
+    def plan_dimensions(self, q: str, *, has_history: bool = False) -> Dict[str, Any]:
+        """Decide {review, finance, sales, attribution, weather, cross[]} from the question.
 
         Rule coverage is sufficient for synthesis questions (limited dimension
         vocabulary). No LLM here — if future queries escape the rules, add a
         1-sentence LLM classifier at THIS site only.
+
+        has_history: True when this is a follow-up turn with prior conversation.
+        Enables the attribution-continuation branch (link ③) so a store-less
+        follow-up like "它主要是差在客流还是客单价" re-triggers the store
+        decomposition for the prior laggard.
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
@@ -632,6 +637,22 @@ class ComprehensiveSynthesisEngine:
             "花的钱少", "花钱少", "花得少", "消费低", "消费少"))
         if _wants_store and (_wants_lag or _wants_traffic_ticket):
             plan["attribution"] = True
+        # Link ③ (2026-07-09 role-play): a store-LESS follow-up that continues an
+        # attribution topic. "它主要是差在客流还是客单价" has traffic/ticket cues but
+        # no store word → _wants_store=False → attribution wouldn't fire, so the
+        # follow-up couldn't retrieve the referent store's decomposition (the LLM
+        # resolved "它=示范门店01" from history but the FactBook lacked its data).
+        # When there IS history, treat a pronoun (它/那家/该店/这家) + lag/traffic
+        # cue, OR explicit "是客流还是客单价 / 差在哪" attribution phrasing, as an
+        # attribution continuation (referent = the prior laggard). Gated on
+        # has_history so a fresh single-turn "客单价多少" never trips it (F2 lesson).
+        if not plan["attribution"] and has_history:
+            _pronoun = any(p in ql for p in ("它", "那家", "这家", "该店"))
+            _attrib_phrasing = any(p in ql for p in (
+                "是客流还是", "是客单价还是", "客流还是客单价", "客单价还是客流",
+                "是量还是", "是率还是", "差在哪", "问题在哪"))
+            if (_pronoun and (_wants_lag or _wants_traffic_ticket)) or _attrib_phrasing:
+                plan["attribution"] = True
         # "哪天" dropped (audit P3 F1): "哪天营收最高" is a pure ranking question,
         # not a weather question — it over-triggered the weather dimension.
         _wants_weather = any(k in ql for k in (

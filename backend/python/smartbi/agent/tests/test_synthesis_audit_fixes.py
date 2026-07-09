@@ -40,6 +40,25 @@ def test_history_non_string_fields_do_not_crash():
 
 
 # ── P3 F1: "哪天" no longer over-triggers the weather dimension ─────────────
+def test_multiturn_attribution_followup_triggers_with_history():
+    # Link ③: a store-less attribution follow-up re-triggers the store
+    # decomposition ONLY when there is conversation history.
+    eng = ComprehensiveSynthesisEngine(pool=object())
+    q = "它主要是差在客流还是客单价"
+    assert eng.plan_dimensions(q, has_history=True)["attribution"] is True
+    # same question with NO history → does NOT trip (fresh single-turn)
+    assert eng.plan_dimensions(q, has_history=False)["attribution"] is False
+
+
+def test_multiturn_followup_no_overtrigger():
+    # With history present, non-attribution follow-ups must NOT trip attribution.
+    eng = ComprehensiveSynthesisEngine(pool=object())
+    for q in ["整体客单价多少",          # general finance, no pronoun/phrasing
+              "它怎么样",                 # pronoun but no lag/traffic cue
+              "那家店评价好不好"]:        # review follow-up, not attribution
+        assert eng.plan_dimensions(q, has_history=True)["attribution"] is False, q
+
+
 def test_naerdian_ranking_does_not_trip_weather():
     eng = ComprehensiveSynthesisEngine(pool=object())
     assert eng.plan_dimensions("哪天营收最高")["weather"] is False
