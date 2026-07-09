@@ -266,6 +266,7 @@ svg {
   display: flex;
   width: 100%;
   margin: 8px 0;
+  -webkit-touch-callout: default;
 }
 
 .message-row.user {
@@ -650,6 +651,48 @@ svg {
   border-radius: 8px;
 }
 
+.message-action-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 88px;
+  overflow: hidden;
+  color: #fff;
+  background: rgb(0 0 0 / 80%);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(14px);
+}
+
+.message-action-menu button {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  color: inherit;
+  font-size: 14px;
+  background: transparent;
+}
+
+.message-action-menu button:active {
+  background: rgb(255 255 255 / 12%);
+}
+
+.toast {
+  position: fixed;
+  right: 50%;
+  bottom: calc(82px + env(safe-area-inset-bottom));
+  z-index: 21;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 9px 14px;
+  margin: 0;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  background: rgb(0 0 0 / 78%);
+  border-radius: 999px;
+  transform: translateX(50%);
+  animation: toastIn 150ms ease-out;
+}
+
 .composer {
   position: sticky;
   bottom: 0;
@@ -861,6 +904,18 @@ svg {
   40% {
     opacity: 0.9;
     transform: translateY(-2px);
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(50%, 8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(50%, 0);
   }
 }
 

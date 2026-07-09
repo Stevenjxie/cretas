@@ -1,5 +1,5 @@
 <template>
-  <main class="app-shell">
+  <main class="app-shell" @click="handleShellClick">
     <section v-if="authStatus === 'error'" class="auth-error">
       <div class="brand-line">白垩纪AI示范餐厅 · 经营助手</div>
       <h1>演示登录暂时不可用</h1>
@@ -58,6 +58,11 @@
           :key="message.id"
           class="message-row"
           :class="message.role"
+          @contextmenu.prevent="openMessageMenu($event, message)"
+          @pointercancel="clearMessagePressTimer"
+          @pointerdown="startMessagePress($event, message)"
+          @pointerleave="clearMessagePressTimer"
+          @pointerup="clearMessagePressTimer"
         >
           <template v-if="message.role === 'user'">
             <div class="user-bubble">
@@ -87,6 +92,7 @@
 
               <div
                 class="markdown-body"
+                @click="handleMarkdownClick"
                 v-html="renderMarkdown(message.content)"
               />
 
@@ -185,6 +191,16 @@
         </div>
       </form>
 
+      <div
+        v-if="messageMenu"
+        class="message-action-menu"
+        :style="{ left: `${messageMenu.x}px`, top: `${messageMenu.y}px` }"
+        @click.stop
+      >
+        <button type="button" @click="copyMessageFromMenu">复制</button>
+      </div>
+
+      <p v-if="toastMessage" class="toast" role="status">{{ toastMessage }}</p>
     </template>
   </main>
 </template>
@@ -192,12 +208,18 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { computed, defineComponent, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { askSynthesis, clearToken, demoLogin } from './api'
 import ChartBlock from './components/ChartBlock.vue'
 import type { ChatMessage } from './types'
 
 type AuthStatus = 'loading' | 'ready' | 'error'
+type MessageActionMenu = {
+  id: string
+  content: string
+  x: number
+  y: number
+}
 
 const suggestedQuestions = [
   { text: '这两个月赚钱没，利润率多少', icon: 'trend' },
@@ -220,6 +242,11 @@ const feedRef = ref<HTMLElement | null>(null)
 const composerInputRef = ref<HTMLTextAreaElement | null>(null)
 const sessionId = ref(createSessionId())
 let slowLoadingTimer: number | undefined
+const messageMenu = ref<MessageActionMenu | null>(null)
+const toastMessage = ref('')
+const suppressNextShellClick = ref(false)
+let messagePressTimer: number | undefined
+let toastTimer: number | undefined
 
 const isReady = computed(() => authStatus.value === 'ready')
 const canSend = computed(() => {
@@ -285,13 +312,95 @@ function clearSlowLoadingTimer(): void {
   slowLoadingTimer = undefined
 }
 
+function clearMessagePressTimer(): void {
+  if (messagePressTimer === undefined) return
+  window.clearTimeout(messagePressTimer)
+  messagePressTimer = undefined
+}
+
+function clearToastTimer(): void {
+  if (toastTimer === undefined) return
+  window.clearTimeout(toastTimer)
+  toastTimer = undefined
+}
+
+function showToast(message: string): void {
+  clearToastTimer()
+  toastMessage.value = message
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = ''
+    toastTimer = undefined
+  }, 3000)
+}
+
+function isMessageActionTarget(target: EventTarget | null): boolean {
+  return target instanceof Element
+    && !target.closest('a, button, textarea, input, pre, code')
+}
+
+function openMessageMenu(event: MouseEvent | PointerEvent, message: ChatMessage): void {
+  if (!isMessageActionTarget(event.target)) return
+  clearMessagePressTimer()
+  suppressNextShellClick.value = true
+  messageMenu.value = {
+    id: message.id,
+    content: message.content,
+    x: Math.min(event.clientX, window.innerWidth - 92),
+    y: Math.max(56, event.clientY - 48),
+  }
+  if ('vibrate' in navigator) navigator.vibrate(8)
+}
+
+function handleShellClick(): void {
+  if (suppressNextShellClick.value) {
+    suppressNextShellClick.value = false
+    return
+  }
+  messageMenu.value = null
+}
+
+function startMessagePress(event: PointerEvent, message: ChatMessage): void {
+  if (!isMessageActionTarget(event.target)) return
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  clearMessagePressTimer()
+  messagePressTimer = window.setTimeout(() => {
+    openMessageMenu(event, message)
+  }, 450)
+}
+
+async function copyText(text: string, successMessage: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    showToast(successMessage)
+  } catch {
+    showToast('复制失败')
+  }
+}
+
+function copyMessageFromMenu(): void {
+  const activeMenu = messageMenu.value
+  if (!activeMenu) return
+  messageMenu.value = null
+  void copyText(activeMenu.content, '已复制')
+}
+
+function handleMarkdownClick(event: MouseEvent): void {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const codeBlock = target.closest('pre')
+  if (!codeBlock?.textContent) return
+  void copyText(codeBlock.textContent, '代码已复制')
+}
+
 function startNewConversation(): void {
   clearSlowLoadingTimer()
+  clearMessagePressTimer()
   sessionId.value = createSessionId()
   messages.value = []
   draft.value = ''
   threadError.value = ''
   isSlowLoading.value = false
+  messageMenu.value = null
   void nextTick(resizeComposerInput)
 }
 
@@ -389,5 +498,11 @@ watch(
 
 onMounted(() => {
   void login()
+})
+
+onUnmounted(() => {
+  clearSlowLoadingTimer()
+  clearMessagePressTimer()
+  clearToastTimer()
 })
 </script>
