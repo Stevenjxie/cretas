@@ -104,6 +104,14 @@ export function setupRouterGuards(router: Router) {
       return;
     }
 
+    // mockDemo 路由 = 公开演示页：已登录即放行，跳过模块/工厂类型/角色权限门。
+    // 演示页为纯前端 mock、无真实数据；scheduling 模块对演示租户默认 '-'，
+    // 否则 canAccess('scheduling') 会把演示看板误判成无权限 → /403。
+    if (to.meta.mockDemo) {
+      next();
+      return;
+    }
+
     // 检查角色路由白名单
     const roleWhitelist = ROLE_PATH_WHITELIST[authStore.currentRole];
     if (roleWhitelist) {
