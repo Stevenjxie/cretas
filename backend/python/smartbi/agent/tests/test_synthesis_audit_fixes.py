@@ -17,6 +17,15 @@ def test_history_numbers_redacted_entities_survive():
     assert "乙店" in block                 # entity survives for 指代 resolution
 
 
+def test_history_redacts_bare_3digit_figure():
+    # Audit B: a bare 3-digit currency without a unit ("客单价238") was surviving
+    # (threshold ≥4) and could be echoed. ≥3 redacts it; ≤2-digit ids survive.
+    block = _build_history_block([{"q": "客单价", "a_summary": "本店客单价238，环比降了12"}])
+    assert "238" not in block                       # 3-digit figure redacted
+    b2 = _build_history_block([{"q": "哪家", "a_summary": "示范门店01第3点，共16家店"}])
+    assert "示范门店01" in b2 and "第3" in b2 and "16" in b2  # ≤2-digit ids survive
+
+
 def test_history_keeps_entity_ids_and_ordinals():
     # A store id / ordinal is an entity identifier, NOT a data figure — it must
     # survive redaction so a follow-up "它…/第3点…" resolves (live role-play:
@@ -55,7 +64,10 @@ def test_multiturn_followup_no_overtrigger():
     eng = ComprehensiveSynthesisEngine(pool=object())
     for q in ["整体客单价多少",          # general finance, no pronoun/phrasing
               "它怎么样",                 # pronoun but no lag/traffic cue
-              "那家店评价好不好"]:        # review follow-up, not attribution
+              "那家店评价好不好",         # review follow-up, not attribution
+              "差在哪",                   # audit B-Crit: bare, ambiguous → no trigger
+              "问题在哪",                 # ditto
+              "评价差在哪"]:              # review topic, must stay review-only
         assert eng.plan_dimensions(q, has_history=True)["attribution"] is False, q
 
 

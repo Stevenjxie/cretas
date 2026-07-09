@@ -284,16 +284,22 @@ def _redact_numbers(text: str) -> str:
     feature exists for (live role-play: "示范门店01" → stripped to "示范门店" →
     the follow-up "它…" no longer resolves). So we redact a number ONLY when it
     is figure-shaped: has a decimal, a thousands-comma, a unit (万/亿/千/¥/%/元/
-    块/折), or is a bare integer ≥ 4 digits. Small bare integers (店01 / 第3 /
-    16家) survive. Every real financial figure still gets stripped → grounding
-    intact.
+    块/折), or is a bare integer ≥ 3 digits. Only ≤2-digit bare integers (店01 /
+    第3 / 16家 — entity ids/ordinals) survive. Every real financial figure still
+    gets stripped → grounding intact.
+
+    Audit B: the threshold was ≥4; a bare 3-digit currency in unit-less compact
+    phrasing (e.g. "客单价238") then survived and could be echoed into a new
+    answer. ≥3 closes that; store ids/ordinals are ≤2 digits in practice.
+    (Residual: a bare ≤2-digit figure like "降了12" still survives — the price of
+    preserving 2-digit entity ids; callers should format currency with units.)
     """
     def _repl(m: "re.Match") -> str:
         core, unit = m.group(1), m.group(2)
         digits = core.replace(",", "")
-        if unit or "." in core or "," in core or len(digits) >= 4:
+        if unit or "." in core or "," in core or len(digits) >= 3:
             return "[数值]"
-        return m.group(0)  # keep small bare integer (entity id / ordinal)
+        return m.group(0)  # keep ≤2-digit bare integer (entity id / ordinal)
     return _HISTORY_NUMBER_RE.sub(_repl, text or "")
 
 
@@ -418,7 +424,8 @@ RESULT_SOURCE_THIN_RESTATE = "thin_restate"
 THIN_RESTATE_MAX_TOKENS = 500
 _THIN_UNIT = (("亿", 100000000), ("万", 10000), ("千", 1000))
 _THIN_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*[亿万千]?")
-_THIN_REL_TOL = Decimal("0.02")   # ±2% accommodates 万-rounding
+_THIN_REL_TOL = Decimal("0.005")  # ±0.5% covers 万-rounding (~0.15%); tighter than
+                                   # v1's 2% which left ~300K slack on a 15M figure (audit A#3)
 _THIN_ABS_TOL = Decimal("0.5")
 
 
@@ -431,41 +438,33 @@ def _thin_dec(x: Any) -> Optional[Decimal]:
         return None
 
 
-def _collect_numeric_values(obj: Any, out: Optional[List[Decimal]] = None) -> List[Decimal]:
-    if out is None:
-        out = []
-    if isinstance(obj, bool) or obj is None:
-        return out
-    if isinstance(obj, (int, float, Decimal)):
-        d = _thin_dec(obj)
-        if d is not None:
-            out.append(d)
-        return out
-    if isinstance(obj, dict):
-        for v in obj.values():
-            _collect_numeric_values(v, out)
-    elif isinstance(obj, (list, tuple)):
-        for v in obj:
-            _collect_numeric_values(v, out)
-    return out
-
-
 def _thin_restate_closure(attribution: Dict[str, Any]) -> List[Decimal]:
-    """Allowed values = every raw attribution number (+ its abs) PLUS the derived
-    quantities the LLM naturally states: pairwise gaps (bills/ticket/revenue) and
-    their percentages. Mirrors chart_insight's arithmetic-closure grounding."""
-    raw = _collect_numeric_values(attribution)
-    allowed: List[Decimal] = list(raw) + [abs(v) for v in raw]
+    """Allowed values = ONLY the laggard + bench numbers actually shown to the
+    LLM in ``_build_thin_restate_prompt`` (+ their abs) PLUS the derived pairwise
+    gaps/percentages the LLM naturally states. Mirrors chart_insight's
+    arithmetic-closure grounding.
+
+    ⛔ Audit A#1: MUST NOT recurse the whole ``attribution`` dict — it carries
+    ``attribution["stores"]`` (every store's raw numbers, which the LLM never
+    saw). Whitelisting those lets a non-laggard store's figure pass AS IF it were
+    the laggard's (e.g. another store's 客单价195 accepted for the laggard). Build
+    the allow-set from exactly the prompt's ``facts`` fields, nothing else."""
     lg = attribution.get("laggard") or {}
     at, ct = _thin_dec(lg.get("avg_ticket")), _thin_dec(attribution.get("chain_avg_ticket"))
     bills, bb = _thin_dec(lg.get("bills")), _thin_dec(attribution.get("bench_bills"))
     rev, br = _thin_dec(lg.get("revenue")), _thin_dec(attribution.get("bench_revenue"))
+    prompt_vals = [
+        rev, _thin_dec(lg.get("delta_revenue")), _thin_dec(lg.get("traffic_effect")),
+        _thin_dec(lg.get("ticket_effect")), bills, at, bb, ct, br,
+    ]
+    raw = [v for v in prompt_vals if v is not None]
+    allowed: List[Decimal] = list(raw) + [abs(v) for v in raw]
     for a, b in ((at, ct), (bills, bb), (rev, br)):
         if a is not None and b is not None:
             allowed.append(abs(a - b))
             if b != 0:
                 allowed.append(abs((a - b) / b * Decimal("100")))
-    return [v for v in allowed if v is not None]
+    return allowed
 
 
 def _thin_normalize(tok: str) -> Decimal:
@@ -481,15 +480,17 @@ def _thin_normalize(tok: str) -> Decimal:
 
 
 def _thin_store_names(attribution: Dict[str, Any]) -> List[str]:
-    names: List[str] = []
+    """Only the LAGGARD store name (the one the thin answer is about) — audit A#2.
+    Stripping every store's name (the old behavior) was both over-broad (paired
+    with the A#1 closure bug) and a corruption risk. Skip a bare-numeric name
+    (e.g. a store literally named "01"): a `str.replace("01","　")` over the whole
+    answer would mangle unrelated figures like "1501万" → the number check then
+    fails closed (→ full synthesis), safe but lossy; better not to strip it."""
     lg = attribution.get("laggard") or {}
-    if lg.get("store_name"):
-        names.append(str(lg["store_name"]))
-    for s in (attribution.get("stores") or []):
-        n = s.get("store_name")
-        if n:
-            names.append(str(n))
-    return sorted(set(names), key=len, reverse=True)  # longest first
+    n = lg.get("store_name")
+    if n and not str(n).isdigit():
+        return [str(n)]
+    return []
 
 
 def _thin_restate_ok(text: str, attribution: Dict[str, Any]) -> bool:
@@ -761,10 +762,14 @@ class ComprehensiveSynthesisEngine:
         # has_history so a fresh single-turn "客单价多少" never trips it (F2 lesson).
         if not plan["attribution"] and has_history:
             _pronoun = any(p in ql for p in ("它", "那家", "这家", "该店"))
-            _attrib_phrasing = any(p in ql for p in (
-                "是客流还是", "是客单价还是", "客流还是客单价", "客单价还是客流",
-                "是量还是", "是率还是", "差在哪", "问题在哪"))
-            if (_pronoun and (_wants_lag or _wants_traffic_ticket)) or _attrib_phrasing:
+            # Only UNAMBIGUOUS traffic-vs-ticket phrasing fires on its own. Audit
+            # B-Critical: bare "差在哪"/"问题在哪"/"是量还是"/"是率还是" are too
+            # broad — a review/finance follow-up ("差评差在哪") would wrongly pull
+            # ONLY the attribution dimension and answer about a store's 客流/客单价
+            # instead. So those must co-occur with a pronoun + lag/traffic cue.
+            _explicit_attrib = any(p in ql for p in (
+                "是客流还是", "是客单价还是", "客流还是客单价", "客单价还是客流"))
+            if (_pronoun and (_wants_lag or _wants_traffic_ticket)) or _explicit_attrib:
                 plan["attribution"] = True
         # "哪天" dropped (audit P3 F1): "哪天营收最高" is a pure ranking question,
         # not a weather question — it over-triggered the weather dimension.
