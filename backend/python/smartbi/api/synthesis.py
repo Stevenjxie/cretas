@@ -150,6 +150,22 @@ async def _lookup_conversation_history(pool, session_id: Optional[str], factory_
         return None
 
 
+async def _write_conversation_turn(pool, session_id: Optional[str], factory_id: str, query: str, answer: str):
+    if not session_id:
+        return
+    try:
+        from smartbi.services.chat_session_service import ChatSessionService
+        await ChatSessionService(pool).upsert(
+            session_id=session_id,
+            factory_id=factory_id,
+            parent_query=(query or "")[:500],
+            parent_answer_summary=answer or "",
+            parent_template_code="COMPREHENSIVE_SYNTHESIS",
+        )
+    except Exception as e:
+        logger.warning("[synthesis] session writeback skipped: %s", e)
+
+
 def _factory_id(request: Request, override: Optional[str]) -> str:
     fid = getattr(request.state, "factory_id", None)
     if not fid:
@@ -176,6 +192,13 @@ async def comprehensive(request: Request, body: SynthesisRequest):
     engine = ComprehensiveSynthesisEngine(pool)
     conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
     resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
+    await _write_conversation_turn(
+        pool,
+        body.session_id,
+        fid,
+        (body.question or body.message or ""),
+        resp.answer or "",
+    )
     return resp.to_dict()
 
 
@@ -229,6 +252,13 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 "fact_check": resp.fact_check,
                 "processingTimeMs": int((time.time() - t0) * 1000),
             })
+            await _write_conversation_turn(
+                pool,
+                body.session_id,
+                fid,
+                (body.question or body.message or ""),
+                answer,
+            )
         except Exception as e:
             logger.exception("[synthesis] stream failed: %s", e)
             yield _sse("error", "综合分析处理失败，请稍后重试")
