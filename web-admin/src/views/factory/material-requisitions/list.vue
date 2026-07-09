@@ -343,6 +343,24 @@ function buildItemsSummaryHtml(items: RequisitionItem[], qtyField: 'pickedQty' |
   return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${rows}</div>`;
 }
 
+function hasPickedQuantity(items: RequisitionItem[]): boolean {
+  return items.some((item) => toNumber(item.pickedQty) > 0);
+}
+
+function prepareConfirmDialog(data: Requisition) {
+  confirmTarget.value = data;
+  confirmRows.value = (data.items || []).map((item) => {
+    const picked = toNumber(item.pickedQty);
+    return {
+      ...item,
+      // Prefill: reuse a saved picked quantity; otherwise default to required quantity for quick operator confirmation.
+      pickedInput: picked > 0 ? picked : toNumber(item.requiredQty),
+    };
+  });
+  confirmDialogVisible.value = true;
+  void resolvePlanNames([data.productionPlanId]);
+}
+
 // 调拨: 备料仓 → 生产仓, 富确认带品名+数量+仓库路由 (对齐「确认领料」上下文标准, 不是裸单号弹窗)。
 async function handleTransfer(row: Requisition) {
   if (submitting.value) return;
@@ -350,6 +368,11 @@ async function handleTransfer(row: Requisition) {
     const data = await fetchDetail(row);
     if (!data) return;
     const items = data.items || [];
+    if (!hasPickedQuantity(items)) {
+      ElMessage.warning('请先确认领料数量，再调拨到生产仓');
+      prepareConfirmDialog(data);
+      return;
+    }
     const from = warehouseName(data.sourceWarehouseId);
     const to = warehouseName(data.targetWarehouseId);
     await ElMessageBox.confirm(
@@ -407,17 +430,7 @@ async function openConfirmDialog(row: Requisition) {
   try {
     const data = await fetchDetail(row);
     if (!data) return;
-    confirmTarget.value = data;
-    confirmRows.value = (data.items || []).map((item) => {
-      const picked = toNumber(item.pickedQty);
-      return {
-        ...item,
-        // 预填: 已录过用已录值, 否则默认 = 需求量 (仓管默认按需领, 只需核对)
-        pickedInput: picked > 0 ? picked : toNumber(item.requiredQty),
-      };
-    });
-    confirmDialogVisible.value = true;
-    void resolvePlanNames([data.productionPlanId]);
+    prepareConfirmDialog(data);
   } catch (e) {
     handleCatchError(e, '加载领料明细失败');
   }
