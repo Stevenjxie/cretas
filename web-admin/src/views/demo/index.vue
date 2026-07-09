@@ -16,13 +16,18 @@
       <div v-else class="demo-choices">
         <button class="demo-choice demo-choice--factory" @click="enter('factory')">
           <div class="demo-choice-icon">🏭</div>
-          <div class="demo-choice-name">工厂演示</div>
+          <div class="demo-choice-name">生产工厂演示</div>
           <div class="demo-choice-desc">食品加工厂 · 生产 / 采购 / 进销存 / 经营驾驶舱 / AI 分析</div>
         </button>
         <button class="demo-choice demo-choice--rest" @click="enter('rest')">
           <div class="demo-choice-icon">🍽️</div>
-          <div class="demo-choice-name">餐饮演示</div>
+          <div class="demo-choice-name">餐饮工厂演示</div>
           <div class="demo-choice-desc">连锁餐饮 · 营收 / 损耗 / 配方 / 经营驾驶舱 / AI 问答</div>
+        </button>
+        <button class="demo-choice demo-choice--logistics" @click="enter('logistics', '/scheduling/logistics-demo')">
+          <div class="demo-choice-icon">🚚</div>
+          <div class="demo-choice-name">物流公司演示</div>
+          <div class="demo-choice-desc">一加物流 · 车辆 / 司机 / 门店订单 / 智能排班看板</div>
         </button>
       </div>
 
@@ -52,7 +57,11 @@ function currentDemoQuery(): Record<string, unknown> {
 
 async function enter(tenant: DemoTenant, redirectTo = '/dashboard') {
   error.value = '';
-  loadingLabel.value = tenant === 'factory' ? '工厂演示' : '餐饮演示';
+  loadingLabel.value = tenant === 'factory'
+    ? '生产工厂演示'
+    : tenant === 'logistics'
+      ? '物流公司演示'
+      : '餐饮工厂演示';
   loading.value = true;
   try {
     // 清掉任何已有登录态, 保证以演示账号进入 (避免上一个访客的缓存身份)
@@ -76,7 +85,7 @@ onMounted(() => {
   const query = currentDemoQuery();
   const tenant = resolveDemoTenant(query);
   if (tenant) {
-    void enter(tenant, resolveDemoRedirect(query));
+    void enter(tenant, resolveDemoRedirect(query, tenant));
   }
 });
 </script>
@@ -121,6 +130,10 @@ onMounted(() => {
   transform: translateY(-6px);
   background: rgba(255, 255, 255, 0.18);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+.demo-choice--logistics {
+  background: rgba(8, 126, 164, 0.22);
+  border-color: rgba(125, 211, 252, 0.32);
 }
 .demo-choice-icon { font-size: 52px; line-height: 1; }
 .demo-choice-name { margin-top: 16px; font-size: 22px; font-weight: 600; }

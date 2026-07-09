@@ -18,6 +18,7 @@ import { isPlatformUser, isFactoryUser, ROLE_METADATA } from '@/types/auth';
 
 // localStorage keys (only for non-sensitive user info)
 const USER_KEY = 'cretas_user';
+type DemoTenant = 'rest' | 'factory' | 'logistics';
 
 const FACTORY_BRAND_SUBTITLE = '白垩纪AI';
 const DEFAULT_BRAND_TITLE = '白垩纪AI Agent';
@@ -33,10 +34,11 @@ function getFactoryBrandOverride(id?: string) {
   return id ? FACTORY_BRAND_OVERRIDES[id] : undefined;
 }
 
-function resolveBusinessDomain(factoryType?: string, explicitDomain?: string): 'FACTORY' | 'RESTAURANT' {
+function resolveBusinessDomain(factoryType?: string, explicitDomain?: string): 'FACTORY' | 'RESTAURANT' | 'LOGISTICS' {
   const domain = explicitDomain?.toUpperCase();
-  if (domain === 'RESTAURANT' || domain === 'FACTORY') return domain;
+  if (domain === 'RESTAURANT' || domain === 'FACTORY' || domain === 'LOGISTICS') return domain;
   const type = factoryType?.toUpperCase();
+  if (type === 'LOGISTICS') return 'LOGISTICS';
   return type === 'RESTAURANT' || type === 'BRANCH' ? 'RESTAURANT' : 'FACTORY';
 }
 
@@ -128,6 +130,14 @@ export const useAuthStore = defineStore('auth', () => {
         department: 'restaurant',
       };
     }
+    if (businessDomain.value === 'LOGISTICS' && role === 'dispatcher') {
+      return {
+        ...metadata,
+        displayName: '物流调度员',
+        description: '负责车辆、司机、门店订单和智能排班',
+        department: 'logistics',
+      };
+    }
     return metadata;
   });
 
@@ -197,10 +207,38 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(userData);
   }
 
-  // 演示账号免密登录 (路演扫码). tenant = 'rest' | 'factory'
-  async function demoLogin(tenant: 'rest' | 'factory'): Promise<boolean> {
+  function applyLogisticsDemoUser() {
+    localStorage.setItem('cretas_access_token', 'demo-logistics-local-token');
+    const now = new Date().toISOString();
+    const userData: User = {
+      id: 9001,
+      username: 'dispatcher_demo_logistics',
+      email: '',
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+      userType: 'factory',
+      factoryUser: {
+        role: 'dispatcher',
+        factoryId: 'DEMO_LOGISTICS',
+        factoryName: '一加物流调度中心',
+        factoryLogoUrl: '',
+        factoryType: 'LOGISTICS',
+        businessDomain: 'LOGISTICS',
+        permissions: [],
+      },
+    } as User;
+    setUser(userData);
+  }
+
+  // 演示账号免密登录 (路演扫码). tenant = 'rest' | 'factory' | 'logistics'
+  async function demoLogin(tenant: DemoTenant): Promise<boolean> {
     loading.value = true;
     try {
+      if (tenant === 'logistics') {
+        applyLogisticsDemoUser();
+        return true;
+      }
       const { demoLogin: demoApi } = await import('@/api/auth');
       const response = await demoApi(tenant);
       if (response.success && response.data) {

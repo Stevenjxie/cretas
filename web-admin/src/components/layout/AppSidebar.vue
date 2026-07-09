@@ -53,6 +53,7 @@ const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
   // 财务模块已补数据 (ar_ap_transactions 204 / invoice 97 / payment 97 → 财务概览/应收应付/
   // 开票/收款 有数据) → 不再整组藏 finance, 只藏空的 reports/adjustments 子页 (见 PATHS)。
   FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
+  LOGISTICS: ['production', 'warehouse', 'quality', 'procurement', 'sales', 'hr', 'equipment', 'finance', 'system', 'restaurant', 'analytics'],
 };
 // 路径前缀级隐藏 (按业态). 2026-06-14 DB ground-truth (每表 count) + headed 逐页核实:
 //   工厂 (DEMO_FACTORY2, F006): 报工链是亮点 — 生产批次(104)/计划(133)/报工审批·工序投入产出·
@@ -86,6 +87,14 @@ const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
     '/smart-bi/analysis-hub',             // 经营分析hub: 与经营驾驶舱功能重复 (旗舰已覆盖, 冗余); 财务tab 另需完整 Excel 上传数据源选择交互
     '/smart-bi/calibration',              // 行为校准监控: roles=['platform_admin'], demo 账号本就被角色门控隐藏 (非数据问题)
   ],
+  LOGISTICS: [
+    '/scheduling/overview',
+    '/scheduling/plans',
+    '/scheduling/realtime',
+    '/scheduling/workers',
+    '/scheduling/alerts',
+    '/scheduling/settings',
+  ],
 };
 function isDemoTenant(factoryId: string | undefined): boolean {
   return /^DEMO_/.test(factoryId || '');
@@ -101,7 +110,7 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 let disabledFetchToken = 0;
 async function fetchDisabledModules(factoryId: string) {
   const token = ++disabledFetchToken;
-  if (!factoryId) {
+  if (!factoryId || isDemoTenant(factoryId)) {
     disabledModuleCodes.value = [];
     return;
   }
@@ -312,9 +321,17 @@ const RESTAURANT_TITLE_OVERRIDES: Record<string, string> = {
   '/system/products': '菜品信息管理',
 };
 
+const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
+  '/scheduling': '物流调度',
+  '/scheduling/logistics-demo': '智能排班看板',
+};
+
 function titleForItem(item: MenuItem): string {
   if (authStore.factoryType === 'RESTAURANT' && RESTAURANT_TITLE_OVERRIDES[item.path]) {
     return RESTAURANT_TITLE_OVERRIDES[item.path];
+  }
+  if (authStore.factoryType === 'LOGISTICS' && LOGISTICS_TITLE_OVERRIDES[item.path]) {
+    return LOGISTICS_TITLE_OVERRIDES[item.path];
   }
   return item.title;
 }
