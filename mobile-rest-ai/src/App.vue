@@ -69,7 +69,7 @@
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
                 </span>
-                <span>已完成分析</span>
+                <span>{{ message.status || (message.isStreaming ? '正在分析…' : '已完成分析') }}</span>
                 <button
                   class="collapse-button"
                   type="button"
@@ -82,6 +82,14 @@
               </div>
 
               <div
+                v-if="message.isStreaming"
+                class="streaming-body"
+                aria-live="polite"
+              >
+                <span>{{ message.content }}</span><span class="stream-cursor" aria-hidden="true" />
+              </div>
+              <div
+                v-else
                 class="markdown-body"
                 @click="handleMarkdownClick"
                 v-html="renderMarkdown(message.content)"
@@ -130,7 +138,7 @@
           </template>
         </article>
 
-        <article v-if="isAsking" class="message-row assistant">
+        <article v-if="isAsking && !hasStreamingAssistant" class="message-row assistant">
           <div class="assistant-card loading-card">
             <div class="loading-status" aria-live="polite">
               <span>{{ isSlowLoading ? '正在生成中' : '正在分析' }}</span>
@@ -200,9 +208,9 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RequestTimeoutError, askSynthesis, clearToken, demoLogin } from './api'
+import { RequestTimeoutError, askSynthesis, askSynthesisStream, clearToken, demoLogin } from './api'
 import ChartBlock from './components/ChartBlock.vue'
-import type { ChatMessage } from './types'
+import type { ChartPayload, ChatMessage, SynthesisResponse } from './types'
 
 type AuthStatus = 'loading' | 'ready' | 'error'
 type MessageActionMenu = {
@@ -242,6 +250,9 @@ let messagePressTimer: number | undefined
 let toastTimer: number | undefined
 
 const isReady = computed(() => authStatus.value === 'ready')
+const hasStreamingAssistant = computed(() => {
+  return messages.value.some((message) => message.role === 'assistant' && message.isStreaming)
+})
 const canSend = computed(() => {
   return isReady.value && !isAsking.value && draft.value.trim().length > 0
 })
@@ -437,6 +448,10 @@ async function sendQuestion(question: string): Promise<void> {
 
   threadError.value = ''
   messages.value.push(createMessage('user', normalized))
+  const assistantMessage = createMessage('assistant', '')
+  assistantMessage.isStreaming = true
+  assistantMessage.status = '正在连接…'
+  messages.value.push(assistantMessage)
   draft.value = ''
   void nextTick(resizeComposerInput)
   isAsking.value = true
@@ -447,22 +462,80 @@ async function sendQuestion(question: string): Promise<void> {
   }, 3000)
   await scrollToBottom(true)
 
+  let sawStreamPayload = false
+  let streamErrorMessage = ''
+  const stillCurrent = () => myGen === genCounter && currentAbort === controller
+  const finishAssistant = (payload: SynthesisResponse): void => {
+    if (!stillCurrent()) return
+    assistantMessage.content = payload.answer
+    assistantMessage.charts = payload.charts
+    assistantMessage.source = payload.source
+    assistantMessage.tokens = payload.tokens
+    assistantMessage.isStreaming = false
+    assistantMessage.status = '已完成分析'
+  }
+
   try {
-    const response = await askSynthesis(normalized, sessionId.value, controller.signal)
-    if (myGen !== genCounter) return
-    messages.value.push({
-      ...createMessage('assistant', response.answer),
-      charts: response.charts,
-      source: response.source,
-      tokens: response.tokens,
-    })
+    await askSynthesisStream(normalized, sessionId.value, {
+      onStatus(text) {
+        if (!stillCurrent()) return
+        sawStreamPayload = true
+        assistantMessage.status = text || '正在分析…'
+      },
+      onChunk(text) {
+        if (!stillCurrent()) return
+        sawStreamPayload = true
+        assistantMessage.content += text
+        assistantMessage.status = '正在生成中'
+        void scrollToBottom()
+      },
+      onCharts(charts: ChartPayload[]) {
+        if (!stillCurrent()) return
+        sawStreamPayload = true
+        assistantMessage.charts = charts
+      },
+      onDone(payload) {
+        sawStreamPayload = true
+        finishAssistant(payload)
+      },
+      onError(message) {
+        streamErrorMessage = message
+        if (!stillCurrent() || !sawStreamPayload) return
+        threadError.value = message
+        assistantMessage.content = `**请求失败**\n\n${message}`
+        assistantMessage.isStreaming = false
+        assistantMessage.status = '分析失败'
+      },
+    }, controller.signal)
   } catch (error) {
     if (myGen !== genCounter || controller.signal.aborted) return
+    if (!(error instanceof RequestTimeoutError) && !sawStreamPayload) {
+      try {
+        assistantMessage.status = '正在切换普通分析…'
+        assistantMessage.content = ''
+        assistantMessage.isStreaming = true
+        const response = await askSynthesis(normalized, sessionId.value, controller.signal)
+        finishAssistant(response)
+        return
+      } catch (fallbackError) {
+        if (myGen !== genCounter || controller.signal.aborted) return
+        const message = fallbackError instanceof RequestTimeoutError
+          ? '分析超时，请重试'
+          : fallbackError instanceof Error ? fallbackError.message : streamErrorMessage || '网络失败，请稍后重试。'
+        threadError.value = message
+        assistantMessage.content = `**请求失败**\n\n${message}`
+        assistantMessage.isStreaming = false
+        assistantMessage.status = '分析失败'
+        return
+      }
+    }
     const message = error instanceof RequestTimeoutError
       ? '分析超时，请重试'
-      : error instanceof Error ? error.message : '网络失败，请稍后重试。'
+      : error instanceof Error ? error.message : streamErrorMessage || '网络失败，请稍后重试。'
     threadError.value = message
-    messages.value.push(createMessage('assistant', `**请求失败**\n\n${message}`))
+    assistantMessage.content = `**请求失败**\n\n${message}`
+    assistantMessage.isStreaming = false
+    assistantMessage.status = '分析失败'
   } finally {
     if (currentAbort === controller) {
       currentAbort = null

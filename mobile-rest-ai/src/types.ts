@@ -17,6 +17,8 @@ export interface SynthesisResponse {
   tokens?: number
   plan?: unknown
   fact_check?: unknown
+  success?: boolean
+  processingTimeMs?: number
 }
 
 export type MessageRole = 'user' | 'assistant'
@@ -28,5 +30,7 @@ export interface ChatMessage {
   charts?: ChartPayload[]
   source?: string
   tokens?: number
+  status?: string
+  isStreaming?: boolean
   createdAt: number
 }
