@@ -42,9 +42,11 @@ function mountShuZhiTable() {
     props: {
       factoryId: 'F006',
       planId: 'PLAN-1',
-      processCode: 'shuzhi', // 熟制 (multi-source 混锅) → showSfi=showFg=true
+      processCode: 'shuzhi', // 熟制 (multi-source 混锅)
       processOrder: 2,
       processLabel: '熟制',
+      allowSemiFinishedInjection: true,
+      allowFinishedGoodsSource: true,
       productTypeId: 'PT-1',
       upstreamItems: [],
       ownInventoryItems: [],
