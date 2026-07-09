@@ -256,7 +256,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('groups quality, equipment, scheduling, and system modules with inline labels', () => {
     expect(childGroupLabels('/quality')).toEqual(['质量检验', '处置闭环', '质量配置']);
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
-    expect(childGroupLabels('/scheduling')).toEqual(['调度执行', '资源与预警', '调度配置']);
+    expect(childGroupLabels('/scheduling')).toEqual(['一加物流演示', '工厂智能调度', '资源与预警', '调度配置']);
     expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);
   });
 });
