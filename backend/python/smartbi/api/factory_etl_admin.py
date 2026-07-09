@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from smartbi.canonical.provenance._admin_auth import require_admin
+from smartbi.canonical.provenance._admin_auth import require_admin, require_factory_scope
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,7 @@ async def trigger_factory_etl(request: Request, body: FactoryEtlTriggerRequest):
     require_admin(request, action_name="工厂生产 ETL 触发")
 
     factory_id = body.factoryId.strip()
+    require_factory_scope(request, factory_id)
     if not factory_id:
         raise HTTPException(status_code=400, detail="factoryId 不能为空")
 
@@ -211,6 +212,7 @@ async def status_factory_etl(
     require_admin(request, action_name="工厂生产 ETL 状态查询")
 
     factory_id = factoryId.strip()
+    require_factory_scope(request, factory_id)
     if not factory_id:
         raise HTTPException(status_code=400, detail="factoryId 不能为空")
 

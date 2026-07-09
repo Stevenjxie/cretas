@@ -29,6 +29,7 @@ wrap these in response_model schemas as we lock shapes down.
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Tuple
@@ -890,6 +891,105 @@ async def finance_summary(
         })
 
     return result
+
+
+def _as_decimal(value: Any) -> Optional[Decimal]:
+    if value is None:
+        return None
+    return Decimal(str(value))
+
+
+def _normalize_ingredients(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        entry = {"name": name.strip()}
+        for key in ("cost", "weight_g", "unit_price_per_kg"):
+            if item.get(key) is not None:
+                entry[key] = float(Decimal(str(item[key])))
+        out.append(entry)
+    return out
+
+
+async def dish_margin(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """Dish-level selling price, unit cost, gross profit and margin rate.
+
+    Source is restaurant_sku_forms: Layer-2 SKU BOM form with per-dish
+    total_cogs_amount, selling_price and ingredients JSON. The function returns
+    deterministic numbers for synthesis; the LLM never derives these figures.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT sku_name,
+                   category,
+                   total_cogs_amount::numeric(18,2) AS unit_cost,
+                   selling_price::numeric(18,2) AS selling_price,
+                   monthly_sales_quantity,
+                   ingredients
+              FROM restaurant_sku_forms
+             WHERE factory_id = $1
+               AND selling_price IS NOT NULL
+               AND selling_price > 0
+               AND total_cogs_amount IS NOT NULL
+             ORDER BY (selling_price - total_cogs_amount) DESC, sku_name
+             LIMIT $2
+            """,
+            factory_id,
+            max(int(top_n) * 4, int(top_n), 20),
+        )
+
+    items = []
+    for r in rows:
+        selling_price = _as_decimal(r["selling_price"])
+        unit_cost = _as_decimal(r["unit_cost"])
+        if selling_price is None or unit_cost is None or selling_price <= 0:
+            continue
+        gross_profit = selling_price - unit_cost
+        gross_margin_pct = ((gross_profit / selling_price) * Decimal("100")).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+        items.append({
+            "dish_name": r["sku_name"],
+            "category": r["category"],
+            "selling_price": float(selling_price),
+            "unit_cost": float(unit_cost),
+            "gross_profit": float(gross_profit),
+            "gross_margin_pct": float(gross_margin_pct),
+            "monthly_sales_quantity": (
+                float(Decimal(str(r["monthly_sales_quantity"])))
+                if r["monthly_sales_quantity"] is not None else None
+            ),
+            "ingredients": _normalize_ingredients(r["ingredients"]),
+        })
+
+    top = sorted(items, key=lambda item: item["gross_profit"], reverse=True)[:int(top_n)]
+    low = sorted(items, key=lambda item: item["gross_margin_pct"])[:int(top_n)]
+    return {
+        "factory_id": factory_id,
+        "dish_count": len(items),
+        "top_margin": top,
+        "low_margin": low,
+    }
 
 
 async def weather_daily(

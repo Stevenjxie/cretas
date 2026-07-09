@@ -4,6 +4,42 @@ const TOKEN_STORAGE_KEY = 'cretas_rest_ai_token'
 
 let memoryToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || ''
 
+export class RequestTimeoutError extends Error {
+  constructor() {
+    super('分析超时，请重试')
+    this.name = 'RequestTimeoutError'
+  }
+}
+
+function signalWithTimeout(userSignal: AbortSignal | undefined, ms: number): {
+  signal: AbortSignal
+  cleanup: () => void
+  didTimeout: () => boolean
+} {
+  const controller = new AbortController()
+  let timedOut = false
+  const abortFromUser = () => controller.abort(userSignal?.reason)
+  const timer = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, ms)
+
+  if (userSignal?.aborted) {
+    abortFromUser()
+  } else {
+    userSignal?.addEventListener('abort', abortFromUser, { once: true })
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      window.clearTimeout(timer)
+      userSignal?.removeEventListener('abort', abortFromUser)
+    },
+    didTimeout: () => timedOut,
+  }
+}
+
 function readErrorMessage(payload: unknown, fallback: string): string {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>
@@ -119,24 +155,37 @@ export async function demoLogin(): Promise<DemoLoginResponse> {
 export async function askSynthesis(
   question: string,
   sessionId: string,
+  userSignal?: AbortSignal,
 ): Promise<SynthesisResponse> {
   const token = getToken()
   if (!token) {
     throw new Error('登录已失效，请重试。')
   }
 
-  const response = await fetch('/api/smartbi/synthesis/comprehensive', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      question,
-      session_id: sessionId,
-    }),
-  })
+  const requestSignal = signalWithTimeout(userSignal, 20_000)
+  let response: Response
+  try {
+    response = await fetch('/api/smartbi/synthesis/comprehensive', {
+      method: 'POST',
+      credentials: 'include',
+      signal: requestSignal.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        question,
+        session_id: sessionId,
+      }),
+    })
+  } catch (error) {
+    if (requestSignal.didTimeout()) {
+      throw new RequestTimeoutError()
+    }
+    throw error
+  } finally {
+    requestSignal.cleanup()
+  }
   const payload = await parseJson(response)
 
   if (!response.ok) {

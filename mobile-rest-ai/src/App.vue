@@ -9,15 +9,6 @@
 
     <template v-else>
       <header class="app-header">
-        <div class="status-bar" aria-hidden="true">
-          <span>9:41</span>
-          <span class="phone-status">
-            <span class="signal-bars"><i /><i /><i /></span>
-            <span class="wifi-dot" />
-            <span class="battery" />
-          </span>
-        </div>
-
         <div class="title-bar">
           <button class="ghost-icon left-spacer" type="button" aria-hidden="true" tabindex="-1" />
           <h1>白垩纪AI示范餐厅 · 经营助手</h1>
@@ -209,7 +200,7 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { askSynthesis, clearToken, demoLogin } from './api'
+import { RequestTimeoutError, askSynthesis, clearToken, demoLogin } from './api'
 import ChartBlock from './components/ChartBlock.vue'
 import type { ChatMessage } from './types'
 
@@ -242,6 +233,8 @@ const feedRef = ref<HTMLElement | null>(null)
 const composerInputRef = ref<HTMLTextAreaElement | null>(null)
 const sessionId = ref(createSessionId())
 let slowLoadingTimer: number | undefined
+let currentAbort: AbortController | null = null
+let genCounter = 0
 const messageMenu = ref<MessageActionMenu | null>(null)
 const toastMessage = ref('')
 const suppressNextShellClick = ref(false)
@@ -393,12 +386,16 @@ function handleMarkdownClick(event: MouseEvent): void {
 }
 
 function startNewConversation(): void {
+  genCounter += 1
+  currentAbort?.abort()
+  currentAbort = null
   clearSlowLoadingTimer()
   clearMessagePressTimer()
   sessionId.value = createSessionId()
   messages.value = []
   draft.value = ''
   threadError.value = ''
+  isAsking.value = false
   isSlowLoading.value = false
   messageMenu.value = null
   void nextTick(resizeComposerInput)
@@ -433,6 +430,11 @@ async function sendQuestion(question: string): Promise<void> {
   const normalized = question.trim().slice(0, 500)
   if (!normalized || !isReady.value || isAsking.value) return
 
+  const myGen = ++genCounter
+  const controller = new AbortController()
+  currentAbort?.abort()
+  currentAbort = controller
+
   threadError.value = ''
   messages.value.push(createMessage('user', normalized))
   draft.value = ''
@@ -446,7 +448,8 @@ async function sendQuestion(question: string): Promise<void> {
   await scrollToBottom(true)
 
   try {
-    const response = await askSynthesis(normalized, sessionId.value)
+    const response = await askSynthesis(normalized, sessionId.value, controller.signal)
+    if (myGen !== genCounter) return
     messages.value.push({
       ...createMessage('assistant', response.answer),
       charts: response.charts,
@@ -454,14 +457,22 @@ async function sendQuestion(question: string): Promise<void> {
       tokens: response.tokens,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : '网络失败，请稍后重试。'
+    if (myGen !== genCounter || controller.signal.aborted) return
+    const message = error instanceof RequestTimeoutError
+      ? '分析超时，请重试'
+      : error instanceof Error ? error.message : '网络失败，请稍后重试。'
     threadError.value = message
     messages.value.push(createMessage('assistant', `**请求失败**\n\n${message}`))
   } finally {
-    clearSlowLoadingTimer()
-    isAsking.value = false
-    isSlowLoading.value = false
-    await scrollToBottom()
+    if (currentAbort === controller) {
+      currentAbort = null
+    }
+    if (myGen === genCounter) {
+      clearSlowLoadingTimer()
+      isAsking.value = false
+      isSlowLoading.value = false
+      await scrollToBottom()
+    }
   }
 }
 
@@ -501,6 +512,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  genCounter += 1
+  currentAbort?.abort()
+  currentAbort = null
   clearSlowLoadingTimer()
   clearMessagePressTimer()
   clearToastTimer()

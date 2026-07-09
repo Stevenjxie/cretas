@@ -150,8 +150,14 @@ async def _lookup_conversation_history(pool, session_id: Optional[str], factory_
         return None
 
 
-async def _write_conversation_turn(pool, session_id: Optional[str], factory_id: str, query: str, answer: str):
+async def _write_conversation_turn(pool, session_id: Optional[str], factory_id: str,
+                                   query: str, answer: str, source: Optional[str] = None):
     if not session_id:
+        return
+    # Don't record a degraded (budget-exhausted / LLM-unavailable) turn - its
+    # placeholder answer would occupy a slot in the bounded last-3-turn window and
+    # evict a real answered turn, silently breaking the next pronoun follow-up.
+    if source == "degraded":  # RESULT_SOURCE_DEGRADED
         return
     try:
         from smartbi.services.chat_session_service import ChatSessionService
@@ -198,6 +204,7 @@ async def comprehensive(request: Request, body: SynthesisRequest):
         fid,
         (body.question or body.message or ""),
         resp.answer or "",
+        resp.source,
     )
     return resp.to_dict()
 
@@ -258,6 +265,7 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 fid,
                 (body.question or body.message or ""),
                 answer,
+                resp.source,
             )
         except Exception as e:
             logger.exception("[synthesis] stream failed: %s", e)

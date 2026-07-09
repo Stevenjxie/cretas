@@ -81,6 +81,29 @@ PUBLIC_PREFIXES = (
     "/api/ota/",
 )
 
+# Demo tenants (mirror Java `cretas.demo.factory-ids`). The public /mobile-ai/rest/
+# page hands one of these JWTs (role factory_super_admin) to ANY anonymous visitor.
+# That token is otherwise valid against the whole Python service, where some
+# endpoints trust a client-supplied factory_id (cross-tenant IDOR) and Java's
+# DemoReadOnlyInterceptor has no effect. Contain the blast radius at this single
+# chokepoint: (a) reject any request whose query carries a factory_id != the
+# token's own; (b) read-only except an explicit read-analysis allowlist.
+DEMO_FACTORY_IDS = frozenset({"DEMO_REST", "DEMO_FACTORY2"})
+DEMO_WRITE_ALLOW_PREFIXES = (
+    "/api/smartbi/synthesis/",   # the mobile Q&A page (POST, factory from token)
+    "/api/chat/",                # general-analysis / drill-down (read-analysis POSTs)
+    "/api/smartbi/analysis",     # analysis POSTs
+    "/api/smartbi/cross-sheet",
+    "/api/smartbi/yoy",
+    "/api/smartbi/benchmark",
+    "/api/statistical/",
+    "/api/analysis/",
+    "/api/forecast/",
+    "/api/insight/",
+    "/api/smartbi/chart/",
+    "/api/classifier/",
+)
+
 
 class JWTAuthMiddleware:
     """
@@ -231,6 +254,40 @@ class JWTAuthMiddleware:
         scope["state"]["username"] = claims.get("sub")
         scope["state"]["role"] = claims.get("role")
         scope["state"]["auth_method"] = "jwt"
+
+        # ---- Demo-tenant containment (defense-in-depth chokepoint) ----------
+        # See DEMO_FACTORY_IDS note. Only JWT-authenticated demo tokens reach
+        # here (internal-secret Java calls returned earlier and are trusted).
+        if factory_id in DEMO_FACTORY_IDS:
+            # (a) no cross-tenant: a factory_id/factoryId in the query differing
+            #     from the token's own factory -> 403.
+            try:
+                from urllib.parse import parse_qs
+                _qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+                _foreign = any(
+                    v and v != factory_id
+                    for k in ("factory_id", "factoryId")
+                    for v in _qs.get(k, [])
+                )
+            except Exception:
+                _foreign = False
+            if _foreign:
+                await self._send_json_response(send, 403, {
+                    "success": False, "code": "DEMO_TENANT_SCOPE",
+                    "message": "演示账号只能访问本演示租户的数据",
+                })
+                return
+            # (b) read-only except the read-analysis allowlist (blocks the
+            #     ETL-trigger / sku-form / monthly-purchase write IDORs).
+            _method = scope.get("method", "GET")
+            if _method not in ("GET", "HEAD", "OPTIONS") and not any(
+                path.startswith(p) for p in DEMO_WRITE_ALLOW_PREFIXES
+            ):
+                await self._send_json_response(send, 403, {
+                    "success": False, "code": "DEMO_READ_ONLY",
+                    "message": "演示账号为只读，无法执行该写操作",
+                })
+                return
 
         # Propagate factory_id to contextvars:
         #  (1) llm_metrics _llm_factory — LLM usage rows tagged with factory

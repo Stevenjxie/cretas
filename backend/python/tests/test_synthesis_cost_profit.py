@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from smartbi.agent.factbook import FactBook
-from smartbi.gold.queries import finance_summary
+from smartbi.gold.queries import dish_margin, finance_summary
 
 
 class _Acquire:
@@ -44,6 +44,38 @@ class _Conn:
         return []
 
 
+class _DishConn:
+    async def fetch(self, sql: str, *params):
+        assert "restaurant_sku_forms" in sql
+        assert params[0] == "DEMO_REST"
+        return [
+            {
+                "sku_name": "招牌青花椒鱼",
+                "category": "招牌主菜",
+                "unit_cost": Decimal("28.50"),
+                "selling_price": Decimal("88.00"),
+                "monthly_sales_quantity": Decimal("320"),
+                "ingredients": [
+                    {"name": "黑鱼片", "cost": 18.0},
+                    {"name": "青花椒", "cost": 4.5},
+                ],
+            },
+            {
+                "sku_name": "手工虾滑",
+                "category": "小吃",
+                "unit_cost": Decimal("16.00"),
+                "selling_price": Decimal("38.00"),
+                "monthly_sales_quantity": Decimal("500"),
+                "ingredients": [{"name": "虾仁", "cost": 12.0}],
+            },
+        ]
+
+
+class _DishPool:
+    def acquire(self) -> _Acquire:
+        return _Acquire(_DishConn())
+
+
 def _migrations_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "smartbi" / "database" / "migrations"
 
@@ -67,6 +99,16 @@ def test_cost_migrations_keep_locked_rls_grant_and_seed_formula():
     assert "ROUND(a.net_amount * (0.22 + (a.store_id % 9) * 0.01), 2)" in seed_sql
     assert "ROUND(a.net_amount * (0.14 + (a.store_id % 7) * 0.01), 2)" in seed_sql
     assert "ON CONFLICT (factory_id, date, store_id) DO NOTHING;" in seed_sql
+
+
+def test_demo_rest_dish_bom_cost_migration_is_demo_only_and_idempotent():
+    sql = (_migrations_dir() / "V20260709_03__demo_rest_dish_bom_cost.sql").read_text(encoding="utf-8")
+
+    assert "SELECT set_config('app.factory_id', 'DEMO_REST', false)" in sql
+    assert "INSERT INTO restaurant_sku_forms" in sql
+    assert "factory_id = 'DEMO_REST'" in sql
+    assert "WHERE NOT EXISTS" in sql
+    assert "restaurant_sku_forms" in sql
 
 
 @pytest.mark.asyncio
@@ -118,6 +160,20 @@ async def test_finance_summary_keeps_profit_keys_absent_without_cost():
         assert key not in out
 
 
+@pytest.mark.asyncio
+async def test_dish_margin_computes_unit_margin_and_rate():
+    out = await dish_margin(_DishPool(), "DEMO_REST", top_n=5)
+
+    assert out["dish_count"] == 2
+    top = out["top_margin"][0]
+    assert top["dish_name"] == "招牌青花椒鱼"
+    assert top["selling_price"] == 88.0
+    assert top["unit_cost"] == 28.5
+    assert top["gross_profit"] == 59.5
+    assert top["gross_margin_pct"] == 67.61
+    assert top["ingredients"][0]["name"] == "黑鱼片"
+
+
 def test_factbook_renders_profit_and_indexes_profit_facts():
     fb = FactBook(finance={
         "start_date": "2026-07-01",
@@ -147,3 +203,26 @@ def test_factbook_renders_profit_and_indexes_profit_facts():
     assert idx["净利润"] == 270.0
     assert idx["净利率"] == 27.0
     assert idx["食材成本"] == 330.0
+
+
+def test_factbook_renders_dish_margin_and_indexes_top_dish_facts():
+    fb = FactBook(dish_margin={
+        "top_margin": [{
+            "dish_name": "招牌青花椒鱼",
+            "selling_price": 88.0,
+            "unit_cost": 28.5,
+            "gross_profit": 59.5,
+            "gross_margin_pct": 67.61,
+            "ingredients": [{"name": "黑鱼片", "cost": 18.0}],
+        }],
+        "low_margin": [],
+    })
+
+    text = fb.to_prompt_text()
+    idx = fb.to_facts_index()
+
+    assert "单品毛利" in text
+    assert "招牌青花椒鱼" in text
+    assert "黑鱼片" in text
+    assert idx["单品最高毛利"] == 59.5
+    assert idx["单品最高毛利率"] == 67.61
