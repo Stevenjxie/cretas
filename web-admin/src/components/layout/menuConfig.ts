@@ -247,7 +247,13 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/logistics-demo', title: '智能排班看板', icon: '', module: 'scheduling', groupLabel: '物流公司演示',
+      { path: '/scheduling/logistics/workbench', title: '排线工作台', icon: '', module: 'scheduling', groupLabel: '日常调度',
+        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+      { path: '/scheduling/logistics/records', title: '调度记录', icon: '', module: 'scheduling',
+        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+      { path: '/scheduling/logistics/orders', title: '门店与订单', icon: '', module: 'scheduling', groupLabel: '基础资料',
+        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+      { path: '/scheduling/logistics/resources', title: '车辆与司机', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
       { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度',
         hideForFactoryTypes: ['LOGISTICS'] },

@@ -323,7 +323,10 @@ const RESTAURANT_TITLE_OVERRIDES: Record<string, string> = {
 
 const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
   '/scheduling': '物流调度',
-  '/scheduling/logistics-demo': '智能排班看板',
+  '/scheduling/logistics/workbench': '排线工作台',
+  '/scheduling/logistics/records': '调度记录',
+  '/scheduling/logistics/orders': '门店与订单',
+  '/scheduling/logistics/resources': '车辆与司机',
 };
 
 function titleForItem(item: MenuItem): string {

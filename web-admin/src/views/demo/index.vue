@@ -24,7 +24,7 @@
           <div class="demo-choice-name">餐饮工厂演示</div>
           <div class="demo-choice-desc">连锁餐饮 · 营收 / 损耗 / 配方 / 经营驾驶舱 / AI 问答</div>
         </button>
-        <button class="demo-choice demo-choice--logistics" @click="enter('logistics', '/scheduling/logistics-demo')">
+        <button class="demo-choice demo-choice--logistics" @click="enter('logistics', '/scheduling/logistics/workbench')">
           <div class="demo-choice-icon">🚚</div>
           <div class="demo-choice-name">物流公司演示</div>
           <div class="demo-choice-desc">一加物流 · 车辆 / 司机 / 门店订单 / 智能排班看板</div>

@@ -26,4 +26,8 @@ describe('demoRoute', () => {
     expect(resolveDemoRedirect({ redirect: 'https://example.com' })).toBe('/dashboard');
     expect(resolveDemoRedirect({ redirect: '//example.com' })).toBe('/dashboard');
   });
+
+  it('opens the logistics workbench by default', () => {
+    expect(resolveDemoRedirect({}, 'logistics')).toBe('/scheduling/logistics/workbench');
+  });
 });

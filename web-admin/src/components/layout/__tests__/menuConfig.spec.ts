@@ -256,14 +256,24 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('groups quality, equipment, scheduling, and system modules with inline labels', () => {
     expect(childGroupLabels('/quality')).toEqual(['质量检验', '处置闭环', '质量配置']);
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
-    expect(childGroupLabels('/scheduling')).toEqual(['物流公司演示', '工厂智能调度', '资源与预警', '调度配置']);
+    expect(childGroupLabels('/scheduling')).toEqual(['日常调度', '基础资料', '工厂智能调度', '资源与预警', '调度配置']);
     expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);
   });
 
-  it('keeps logistics scheduling demo out of production-factory scheduling menus', () => {
-    const logisticsDemo = findDescendant('/scheduling', '/scheduling/logistics-demo')!;
-    expect(logisticsDemo.title).toBe('智能排班看板');
-    expect(logisticsDemo.hideForFactoryTypes).toEqual(['FACTORY', 'RESTAURANT']);
+  it('exposes four logistics modules only to LOGISTICS tenants', () => {
+    const paths = [
+      '/scheduling/logistics/workbench',
+      '/scheduling/logistics/records',
+      '/scheduling/logistics/orders',
+      '/scheduling/logistics/resources',
+    ];
+    expect(paths.map((path) => findDescendant('/scheduling', path)?.title)).toEqual([
+      '排线工作台', '调度记录', '门店与订单', '车辆与司机',
+    ]);
+    for (const path of paths) {
+      expect(findDescendant('/scheduling', path)?.hideForFactoryTypes).toEqual(['FACTORY', 'RESTAURANT']);
+    }
+    expect(findDescendant('/scheduling', '/scheduling/logistics-demo')).toBeUndefined();
 
     for (const path of [
       '/scheduling/overview',

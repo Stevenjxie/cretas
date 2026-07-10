@@ -1604,16 +1604,33 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '实时监控', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
+            path: 'logistics/workbench',
+            name: 'LogisticsSchedulingWorkbench',
+            component: () => import('@/views/scheduling/logistics/workbench/index.vue'),
+            meta: { requiresAuth: true, title: '排线工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/records',
+            name: 'LogisticsSchedulingRecords',
+            component: () => import('@/views/scheduling/logistics/records/index.vue'),
+            meta: { requiresAuth: true, title: '调度记录', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/orders',
+            name: 'LogisticsSchedulingOrders',
+            component: () => import('@/views/scheduling/logistics/orders/index.vue'),
+            meta: { requiresAuth: true, title: '门店与订单', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/resources',
+            name: 'LogisticsSchedulingResources',
+            component: () => import('@/views/scheduling/logistics/resources/index.vue'),
+            meta: { requiresAuth: true, title: '车辆与司机', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
             path: 'logistics-demo',
-            name: 'LogisticsSchedulingDemo',
-            component: () => import('@/views/scheduling/logistics-demo/index.vue'),
-            meta: {
-              requiresAuth: true,
-              title: '物流排班看板',
-              module: 'scheduling',
-              mockDemo: true,
-              hideForFactoryTypes: ['FACTORY', 'RESTAURANT'],
-            }
+            redirect: '/scheduling/logistics/workbench',
+            meta: { hidden: true, mockDemo: true },
           },
           {
             path: 'workers',
