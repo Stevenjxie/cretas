@@ -29,6 +29,7 @@
  *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
  */
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
@@ -42,6 +43,7 @@ import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
@@ -95,6 +97,10 @@ const storageTypeOptions = ref<DictItem[]>([]);
 const unitOptions = ref<UnitItem[]>([]);
 
 onMounted(async () => {
+  const keyword = route.query.keyword;
+  if (typeof keyword === 'string' && keyword.trim()) {
+    searchKeyword.value = keyword.trim();
+  }
   await loadDictionaries();
   await loadData();
 });

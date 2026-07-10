@@ -672,6 +672,33 @@ const warehouseSelectOptions = computed(() => {
   }));
 });
 
+const productCategoryLabels: Record<string, string> = {
+  FINISHED_PRODUCT: '成品',
+  RAW_MATERIAL: '原料',
+  PACKAGING: '包材',
+  SEASONING: '调味料',
+  CUSTOMER_MATERIAL: '客供料',
+  CONTRACT_MANUFACTURING: '代工',
+};
+
+function textPart(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function productCategoryLabel(product: TableRow): string {
+  const code = textPart(product.productCategory) || textPart(product.category);
+  return productCategoryLabels[code] || code;
+}
+
+function productOptionLabel(product: TableRow): string {
+  return [
+    textPart(product.code),
+    textPart(product.name) || textPart(product.productName),
+    textPart(product.specification) || textPart(product.packageSpec),
+    productCategoryLabel(product),
+  ].filter(Boolean).join(' / ');
+}
+
 // T130 Feature C — 来源仓库 = OPERATOR memory. 记住该操作员上次选的仓库, 新行预填.
 // Key 按 user.id 隔离 (不同操作员各自记忆), anon 兜底.
 const warehouseMemoryKey = computed(
@@ -2429,7 +2456,7 @@ function handleMergePurchase() {
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
           <el-select v-model="item.productTypeId" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
-            <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
+            <el-option v-for="p in products" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
           </el-select>
           <!-- T130 Feature D — 规格只读: 取产品字典 specification/packageSpec, 抄码品由 onProductSelect 识别. -->
           <el-input :model-value="specDisplay(item)" placeholder="规格" style="width: 120px" disabled />
