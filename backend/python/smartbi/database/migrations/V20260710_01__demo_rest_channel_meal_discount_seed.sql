@@ -23,10 +23,25 @@
 --   combined_ratio(order_type, meal_period) = order_ratio * meal_ratio (9 combos)
 --   customer_count ≈ bill_count(split) * 1.5 (assumed party size)
 --
--- 折扣 seed derives from the SAME agg_daily monthly revenue/bill totals:
---   discount_total = monthly_revenue * 6%           (DISCOUNT_PCT_OF_REVENUE)
---   split shares    : 满减 40% / 会员折扣 35% / 团购券 25%
---   discount bill participation = monthly_bills * 20% * share (per type)
+-- 折扣 seed reconciles with the discount agg_daily ALREADY carries
+-- (gross_amount − net_amount = discount_amount): agg_discount.amount per
+-- (month, type) = SUM(that month's agg_daily.discount_amount) × type-share.
+-- This way the折扣 dimension's grounded total (queries.discount_summary reads
+-- agg_daily.discount_amount over the exact window) and the per-type
+-- composition (agg_discount proportions) never contradict each other, and
+-- neither contradicts store_comparison's per-store 折扣率 (also agg_daily).
+--   type shares : 满减 40% / 会员折扣 35% / 团购券 25%  (of the月度 discount)
+--   discount bill participation = monthly_bills * 20% * share (heuristic only —
+--     agg_daily doesn't split bills by discount type; bill_count is
+--     informational, discount_summary derives composition by AMOUNT not bills)
+--
+-- ⚠️ POINT-IN-TIME COUPLING (mirrors the P1 cost seed V20260709_02): both
+-- Step A (order_type_meal splits) and Step C (agg_discount) are DERIVED from
+-- the CURRENT agg_daily rows. If DEMO_REST agg_daily is later re-materialized
+-- with NEW dates (the sales seed V20260706_01 uses CURRENT_DATE-relative
+-- days), re-run this seed so the channel/meal splits and agg_discount cover
+-- those new dates — otherwise Σ(channel) < finance total and折扣构成 is stale
+-- for the new window. Idempotent ON CONFLICT makes re-running safe.
 
 SELECT set_config('app.factory_id', 'DEMO_REST', false);
 
@@ -77,8 +92,8 @@ ON CONFLICT (factory_id, name) DO NOTHING;
 -- ── Step C: agg_discount monthly rollup derived from agg_daily monthly totals ──
 WITH monthly AS (
     SELECT date_trunc('month', date)::date AS month,
-           SUM(net_amount)  AS revenue,
-           SUM(bill_count)  AS bills
+           SUM(discount_amount) AS discount,   -- reconciles with agg_daily
+           SUM(bill_count)      AS bills
       FROM agg_daily
      WHERE factory_id = 'DEMO_REST'
      GROUP BY date_trunc('month', date)
@@ -101,7 +116,7 @@ SELECT
     'DEMO_REST',
     d.discount_id,
     m.month,
-    ROUND(m.revenue * 0.06 * s.share, 2)      AS amount,
+    ROUND(m.discount * s.share, 2)            AS amount,
     ROUND(m.bills * 0.20 * s.share)::int      AS bill_count,
     1,
     NOW()

@@ -828,8 +828,12 @@ class ComprehensiveSynthesisEngine:
             plan["cross"].append("platform_x_rating")
         # Fallback: holistic question with no explicit dimension → open all.
         # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
-        # does NOT trip the open-all fallback.
-        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["dish_margin"] or plan["attribution"] or plan["weather"]):
+        # does NOT trip the open-all fallback. channel/meal_period/discount are
+        # explicit dimensions too — a pure "满减花了多少" / "外卖单多不多" must
+        # NOT trip open-all (token bloat, I3).
+        if not (plan["review"] or plan["finance"] or plan["sales"]
+                or plan["dish_margin"] or plan["attribution"] or plan["weather"]
+                or plan["channel"] or plan["meal_period"] or plan["discount"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -1110,7 +1114,10 @@ class ComprehensiveSynthesisEngine:
         # ---- assemble discount (折扣总额/占营收比/构成, descriptive only) ----
         if plan.get("discount"):
             dsc = results.get("discount_dim")
-            if dsc and dsc.get("discounts"):
+            # Keep the dimension when there's a grounded total (from agg_daily)
+            # OR a per-type composition — the total alone is still valuable even
+            # if agg_discount has no composition rows for this window.
+            if dsc and ((dsc.get("total_discount_amount") or 0) > 0 or dsc.get("discounts")):
                 fb.discount = dsc
             else:
                 plan["discount"] = False
