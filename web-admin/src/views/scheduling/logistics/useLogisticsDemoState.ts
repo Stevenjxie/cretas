@@ -2,7 +2,7 @@ import { computed, ref } from 'vue';
 import { MOCK_STORES, MOCK_VEHICLES } from './mockData';
 import { ROAD_SEGMENTS } from './roadSegments';
 import { assembleTripGeometry, buildExportRows, generateSchedule, reorderTrip } from './routeEngine';
-import type { RouteTrip, ScheduleResult, Vehicle } from './types';
+import type { RouteTrip, ScheduleResult, StoreOrder, Vehicle } from './types';
 
 export type LogisticsStep = 'import' | 'map' | 'confirm' | 'export';
 
@@ -15,8 +15,23 @@ function emptyScheduleResult(): ScheduleResult {
   };
 }
 
-const stores = ref([...MOCK_STORES]);
-const vehicles = ref([...MOCK_VEHICLES]);
+function cloneStores(): StoreOrder[] {
+  return MOCK_STORES.map((store) => ({
+    ...store,
+    mapAnchor: { ...store.mapAnchor },
+  }));
+}
+
+function cloneVehicles(): Vehicle[] {
+  return MOCK_VEHICLES.map((vehicle) => ({
+    ...vehicle,
+    areaCodes: [...vehicle.areaCodes],
+    backupDrivers: [...vehicle.backupDrivers],
+  }));
+}
+
+const stores = ref(cloneStores());
+const vehicles = ref(cloneVehicles());
 const targetLoadPct = ref(88);
 const activeStep = ref<LogisticsStep>('import');
 const imported = ref(false);
@@ -176,14 +191,26 @@ function confirmTrip(): boolean {
 }
 
 function confirmSchedule(): boolean {
+  const isResolved = scheduleResult.value.trips.length > 0
+    && scheduleResult.value.unassignedStoreIds.length === 0
+    && scheduleResult.value.trips.every((trip) => trip.status === 'confirmed');
+  if (!isResolved) {
+    activeStep.value = 'confirm';
+    return false;
+  }
+  activeStep.value = 'export';
+  return true;
+}
+
+function previewExport(): boolean {
   if (!scheduleResult.value.trips.length) return false;
   activeStep.value = 'export';
   return true;
 }
 
 function reset(): void {
-  stores.value = [...MOCK_STORES];
-  vehicles.value = [...MOCK_VEHICLES];
+  stores.value = cloneStores();
+  vehicles.value = cloneVehicles();
   targetLoadPct.value = 88;
   activeStep.value = 'import';
   imported.value = false;
@@ -213,6 +240,7 @@ const state = {
   assignDriver,
   confirmTrip,
   confirmSchedule,
+  previewExport,
   reset,
 };
 

@@ -1,10 +1,24 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { MOCK_STORES, MOCK_VEHICLES } from '../mockData';
 import { resetLogisticsDemoState, useLogisticsDemoState } from '../useLogisticsDemoState';
 
 function prepareRoutes() {
   const state = useLogisticsDemoState();
   state.importOrders();
   state.generateRoutes();
+  return state;
+}
+
+function prepareConfirmedRoutes() {
+  const state = useLogisticsDemoState();
+  state.stores.value = state.stores.value.filter((store) => !['S-011', 'S-013'].includes(store.id));
+  state.importOrders();
+  state.generateRoutes();
+  for (const trip of [...state.scheduleResult.value.trips]) {
+    state.selectTrip(trip.id);
+    expect(state.confirmTrip()).toBe(true);
+  }
+  expect(state.scheduleResult.value.trips.every((trip) => trip.status === 'confirmed')).toBe(true);
   return state;
 }
 
@@ -89,7 +103,7 @@ describe('useLogisticsDemoState', () => {
     expect(state.activeTrip.value).toMatchObject({ driverId: null, status: 'needs_vehicle' });
   });
 
-  it('selects stores, confirms a viable trip, and resets the singleton', () => {
+  it('selects stores and refuses formal confirmation while the schedule is unresolved', () => {
     const state = prepareRoutes();
     const trip = state.scheduleResult.value.trips.find((item) => item.status === 'draft')!;
 
@@ -99,10 +113,79 @@ describe('useLogisticsDemoState', () => {
     expect(state.confirmTrip()).toBe(true);
     expect(state.activeTrip.value).toMatchObject({ status: 'confirmed' });
 
-    state.confirmSchedule();
+    expect(state.confirmSchedule()).toBe(false);
+    expect(state.activeStep.value).toBe('confirm');
+    expect(state.scheduleResult.value.trips.some((item) => item.status === 'needs_vehicle')).toBe(true);
+  });
+
+  it('previews unresolved export rows without changing pending trip statuses', () => {
+    const state = prepareRoutes();
+    const statuses = state.scheduleResult.value.trips.map((trip) => trip.status);
+
+    expect(state.previewExport()).toBe(true);
+
     expect(state.activeStep.value).toBe('export');
-    state.reset();
-    expect(state.imported.value).toBe(false);
-    expect(state.scheduleResult.value.trips).toEqual([]);
+    expect(state.scheduleResult.value.trips.map((trip) => trip.status)).toEqual(statuses);
+    expect(state.scheduleResult.value.trips.some((trip) => trip.status === 'needs_vehicle')).toBe(true);
+  });
+
+  it.each([
+    ['needs_vehicle', (state: ReturnType<typeof useLogisticsDemoState>) => {
+      state.scheduleResult.value.trips[0].status = 'needs_vehicle';
+    }],
+    ['needs_route_data', (state: ReturnType<typeof useLogisticsDemoState>) => {
+      state.scheduleResult.value.trips[0].status = 'needs_route_data';
+    }],
+    ['draft', (state: ReturnType<typeof useLogisticsDemoState>) => {
+      state.scheduleResult.value.trips[0].status = 'draft';
+    }],
+    ['unassigned stores', (state: ReturnType<typeof useLogisticsDemoState>) => {
+      state.scheduleResult.value.unassignedStoreIds = ['S-PENDING'];
+    }],
+  ])('blocks formal confirmation for %s', (_condition, arrange) => {
+    const state = prepareConfirmedRoutes();
+    arrange(state);
+
+    expect(state.confirmSchedule()).toBe(false);
+    expect(state.activeStep.value).toBe('confirm');
+  });
+
+  it('formally confirms only a resolved schedule whose trips are all confirmed', () => {
+    const state = prepareConfirmedRoutes();
+
+    expect(state.confirmSchedule()).toBe(true);
+    expect(state.activeStep.value).toBe('export');
+    expect(state.scheduleResult.value.trips.every((trip) => trip.status === 'confirmed')).toBe(true);
+  });
+
+  it('restores deeply cloned store and vehicle fixtures on reset', () => {
+    const state = useLogisticsDemoState();
+    const original = {
+      storeName: MOCK_STORES[0].name,
+      mapAnchorX: MOCK_STORES[0].mapAnchor.x,
+      vehiclePlate: MOCK_VEHICLES[0].plate,
+      areaCodes: [...MOCK_VEHICLES[0].areaCodes],
+      backupDrivers: [...MOCK_VEHICLES[0].backupDrivers],
+    };
+
+    state.stores.value[0].name = 'mutated store';
+    state.stores.value[0].mapAnchor.x = -1;
+    state.vehicles.value[0].plate = 'mutated plate';
+    state.vehicles.value[0].areaCodes.push('mutated area');
+    state.vehicles.value[0].backupDrivers[0] = 'mutated driver';
+
+    expect(MOCK_STORES[0].name).toBe(original.storeName);
+    expect(MOCK_STORES[0].mapAnchor.x).toBe(original.mapAnchorX);
+    expect(MOCK_VEHICLES[0].plate).toBe(original.vehiclePlate);
+    expect(MOCK_VEHICLES[0].areaCodes).toEqual(original.areaCodes);
+    expect(MOCK_VEHICLES[0].backupDrivers).toEqual(original.backupDrivers);
+
+    resetLogisticsDemoState();
+
+    expect(state.stores.value[0].name).toBe(original.storeName);
+    expect(state.stores.value[0].mapAnchor.x).toBe(original.mapAnchorX);
+    expect(state.vehicles.value[0].plate).toBe(original.vehiclePlate);
+    expect(state.vehicles.value[0].areaCodes).toEqual(original.areaCodes);
+    expect(state.vehicles.value[0].backupDrivers).toEqual(original.backupDrivers);
   });
 });
