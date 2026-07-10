@@ -11,20 +11,20 @@
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
         </div>
         <div class="toolbar-actions">
-          <el-button :disabled="!canWrite || !productTypeId" @click="addStandaloneRaw">+ 原料 Cell</el-button>
-          <el-button :disabled="!canWrite || history.length === 0" @click="undo">撤销</el-button>
-          <el-button :disabled="!canWrite || future.length === 0" @click="redo">重做</el-button>
-          <el-button :disabled="!productTypeId || flowNodes.length === 0" @click="handleAutoLayout">自动布局</el-button>
+          <el-button :disabled="!canEdit" @click="addStandaloneRaw">+ 原料 Cell</el-button>
+          <el-button :disabled="!canEdit || history.length === 0" @click="undo">撤销</el-button>
+          <el-button :disabled="!canEdit || future.length === 0" @click="redo">重做</el-button>
+          <el-button :disabled="!canEdit || flowNodes.length === 0" @click="handleAutoLayout">自动布局</el-button>
           <el-button :disabled="!productTypeId || flowNodes.length === 0" @click="fitCanvas">适应画布</el-button>
           <el-button
             type="primary"
-            :disabled="!canWrite || !productTypeId || !dirty"
+            :disabled="!canEdit || !dirty"
             :loading="saving"
             @click="saveDraft"
           >保存草稿</el-button>
           <el-button
             type="success"
-            :disabled="!canWrite || !productTypeId || flowNodes.length === 0"
+            :disabled="!canEdit || flowNodes.length === 0"
             :loading="publishing"
             @click="publishWorkflow"
           >发布版本</el-button>
@@ -44,8 +44,8 @@
           :pan-on-drag="true"
           :zoom-on-scroll="true"
           :zoom-on-pinch="true"
-          :nodes-draggable="canWrite"
-          :nodes-connectable="canWrite"
+          :nodes-draggable="canEdit"
+          :nodes-connectable="canEdit"
           :snap-to-grid="true"
           :snap-grid="[16, 16]"
           :default-viewport="definition?.viewport || { x: 0, y: 0, zoom: 1 }"
@@ -64,7 +64,7 @@
               :kind="slotProps.data.kind"
               :data="slotProps.data"
               :selected="slotProps.selected"
-              :can-write="canWrite"
+              :can-write="canEdit"
               :raw-material-options="rawMaterialOptions"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
@@ -75,7 +75,7 @@
             <WorkflowProcessNode
               :data="slotProps.data"
               :selected="slotProps.selected"
-              :can-write="canWrite"
+              :can-write="canEdit"
               :sku-options="outputSkuOptions"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
@@ -87,7 +87,7 @@
 
         <div v-if="productTypeId && flowNodes.length === 0 && !loading" class="empty-canvas-action">
           <el-empty description="该产品还没有工序图">
-            <el-button v-if="canWrite" type="primary" @click="addStandaloneRaw">添加第一个原料 Cell</el-button>
+            <el-button v-if="canEdit" type="primary" @click="addStandaloneRaw">添加第一个原料 Cell</el-button>
           </el-empty>
         </div>
       </div>
@@ -109,7 +109,7 @@
           :endpoint="`/${factoryId}/config/v2/ai/chat`"
           module-code="product_process_workflow_config"
           :title="`AI 助手${selectedNodeId ? ' · 当前 Cell' : ''}`"
-          :disabled="!productTypeId || !canWrite"
+          :disabled="!canEdit"
           :context="selectedNodeContext"
           :quick-prompts="aiQuickPrompts"
           @apply-draft="applyWorkflowAIDraft"
@@ -239,6 +239,11 @@ interface RawMaterialOption {
   unit?: string;
 }
 
+interface WorkflowIdentity {
+  factoryId: string;
+  productTypeId: string;
+}
+
 const props = defineProps<{
   factoryId: string;
   productTypeId: string;
@@ -248,6 +253,7 @@ const props = defineProps<{
 
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
+const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
 const flowNodes = ref<Node[]>([]);
 const flowEdges = ref<Edge[]>([]);
 const loading = ref(false);
@@ -274,8 +280,17 @@ const skuBindingTarget = ref<{ processId: string; portId: string } | null>(null)
 const skuForm = ref({ name: '', unit: 'kg', specification: '' });
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
 let lastGraphIdSeed = 0;
+let loadGeneration = 0;
+let saveGeneration = 0;
+let publishGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
+const canEdit = computed(() => (
+  props.canWrite
+  && !loading.value
+  && loadedDefinitionIdentity.value?.factoryId === props.factoryId
+  && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
+));
 const aiStorageKey = computed(() => `product-process-workflow:ai-collapsed:${props.factoryId}`);
 const aiCollapsed = ref(false);
 const aiQuickPrompts = [
@@ -310,11 +325,8 @@ onMounted(async () => {
   await Promise.all([loadCatalogs(), loadDefinition()]);
 });
 
-watch(() => props.productTypeId, async (next, previous) => {
-  if (next === previous) return;
-  selectedNodeId.value = '';
-  history.value = [];
-  future.value = [];
+watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
+  if (next[0] === previous[0] && next[1] === previous[1]) return;
   await loadDefinition();
 });
 
@@ -346,42 +358,109 @@ async function loadCatalogs(): Promise<void> {
 }
 
 async function loadDefinition(): Promise<void> {
-  if (!props.factoryId || !props.productTypeId) {
-    definition.value = null;
-    flowNodes.value = [];
-    flowEdges.value = [];
-    dirty.value = false;
+  const generation = ++loadGeneration;
+  const identity = {
+    factoryId: props.factoryId,
+    productTypeId: props.productTypeId,
+  };
+  const productName = props.productName;
+  invalidateLoadedDefinition();
+  if (!identity.factoryId || !identity.productTypeId) {
     return;
   }
   loading.value = true;
   try {
-    const response = await getProductProcessWorkflow(props.factoryId, props.productTypeId);
+    const response = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
+    if (!isCurrentLoad(generation, identity)) return;
     let nextDefinition = response.success ? response.data : null;
     if (!nextDefinition) {
-      const legacyResponse = await getProductWorkProcesses(props.factoryId, props.productTypeId);
+      const legacyResponse = await getProductWorkProcesses(identity.factoryId, identity.productTypeId);
+      if (!isCurrentLoad(generation, identity)) return;
       const legacyProcesses = legacyResponse.success && Array.isArray(legacyResponse.data)
         ? legacyResponse.data
         : [];
       nextDefinition = createWorkflowFromLegacy({
-        productTypeId: props.productTypeId,
-        productName: props.productName || props.productTypeId,
+        productTypeId: identity.productTypeId,
+        productName: productName || identity.productTypeId,
         processes: legacyProcesses,
       });
     }
+    if (!definitionMatchesIdentity(nextDefinition, identity)) {
+      throw new Error('Workflow definition identity does not match the requested product');
+    }
     hydrate(nextDefinition);
+    loadedDefinitionIdentity.value = identity;
     dirty.value = !nextDefinition.id;
     await nextTick();
+    if (!isCurrentLoad(generation, identity)) return;
     if (nextDefinition.id) {
       await setViewport(nextDefinition.viewport);
     } else if (flowNodes.value.length > 0) {
       await fitCanvas();
     }
   } catch (error) {
+    if (!isCurrentLoad(generation, identity)) return;
+    invalidateLoadedDefinition(false);
     console.error('[ProductProcessWorkflow] definition loading failed', error);
     ElMessage.error('Workflow 图定义加载失败');
   } finally {
-    loading.value = false;
+    if (isCurrentLoad(generation, identity)) {
+      loading.value = false;
+    }
   }
+}
+
+function invalidateLoadedDefinition(invalidatePersistence = true): void {
+  loading.value = false;
+  loadedDefinitionIdentity.value = null;
+  definition.value = null;
+  flowNodes.value = [];
+  flowEdges.value = [];
+  dirty.value = false;
+  selectedNodeId.value = '';
+  history.value = [];
+  future.value = [];
+  dragStartSnapshot.value = null;
+  processDialogVisible.value = false;
+  skuDialogVisible.value = false;
+  skuBindingTarget.value = null;
+  if (invalidatePersistence) {
+    saveGeneration += 1;
+    publishGeneration += 1;
+    saving.value = false;
+    publishing.value = false;
+  }
+}
+
+function isCurrentLoad(generation: number, identity: WorkflowIdentity): boolean {
+  return generation === loadGeneration
+    && identity.factoryId === props.factoryId
+    && identity.productTypeId === props.productTypeId;
+}
+
+function definitionMatchesIdentity(
+  candidate: ProductProcessWorkflowDefinition,
+  identity: WorkflowIdentity,
+): boolean {
+  return (!candidate.factoryId || candidate.factoryId === identity.factoryId)
+    && (!candidate.productTypeId || candidate.productTypeId === identity.productTypeId);
+}
+
+function currentLoadedIdentity(): WorkflowIdentity | null {
+  const identity = loadedDefinitionIdentity.value;
+  if (!identity
+    || identity.factoryId !== props.factoryId
+    || identity.productTypeId !== props.productTypeId) {
+    return null;
+  }
+  return { ...identity };
+}
+
+function isLoadedIdentityCurrent(identity: WorkflowIdentity): boolean {
+  return loadedDefinitionIdentity.value?.factoryId === identity.factoryId
+    && loadedDefinitionIdentity.value?.productTypeId === identity.productTypeId
+    && props.factoryId === identity.factoryId
+    && props.productTypeId === identity.productTypeId;
 }
 
 function hydrate(nextDefinition: ProductProcessWorkflowDefinition): void {
@@ -448,6 +527,7 @@ function remember(snapshot = currentDefinition()): void {
 }
 
 function mutate(action: () => void): void {
+  if (!canEdit.value) return;
   remember();
   action();
   refreshPortMaterialMetadata();
@@ -455,6 +535,7 @@ function mutate(action: () => void): void {
 }
 
 function undo(): void {
+  if (!canEdit.value) return;
   const previous = history.value.pop();
   if (!previous) return;
   future.value.push(currentDefinition());
@@ -463,6 +544,7 @@ function undo(): void {
 }
 
 function redo(): void {
+  if (!canEdit.value) return;
   const next = future.value.pop();
   if (!next) return;
   history.value.push(currentDefinition());
@@ -475,10 +557,12 @@ function onNodeClick({ node }: { node: Node }): void {
 }
 
 function onNodeDragStart(): void {
+  if (!canEdit.value) return;
   dragStartSnapshot.value = currentDefinition();
 }
 
 function onNodeDragStop({ node }: { node: Node }): void {
+  if (!canEdit.value) return;
   if (dragStartSnapshot.value) remember(dragStartSnapshot.value);
   dragStartSnapshot.value = null;
   const target = flowNodes.value.find((candidate) => candidate.id === node.id);
@@ -487,13 +571,13 @@ function onNodeDragStop({ node }: { node: Node }): void {
 }
 
 function onViewportChangeEnd(viewport: ViewportTransform): void {
-  if (!definition.value || loading.value) return;
+  if (!definition.value || !canEdit.value) return;
   definition.value.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
   dirty.value = true;
 }
 
 function onConnect(connection: Connection): void {
-  if (!props.canWrite || !connection.source || !connection.target) return;
+  if (!canEdit.value || !connection.source || !connection.target) return;
   mutate(() => {
     flowEdges.value.push({
       id: `edge:${connection.source}:${connection.sourceHandle || 'output'}:${connection.target}:${connection.targetHandle || 'input'}:${nextGraphIdSeed()}`,
@@ -526,6 +610,7 @@ function addStandaloneRaw(): void {
 }
 
 function openAddProcess(materialNodeId: string): void {
+  if (!canEdit.value) return;
   processSourceMaterialId.value = materialNodeId;
   selectedWorkProcessId.value = '';
   processDialogVisible.value = true;
@@ -654,6 +739,7 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
 }
 
 function selectOutputSku(processId: string, portId: string, skuId: string): void {
+  if (!canEdit.value) return;
   if (skuId === '__CREATE__') {
     const process = flowNodes.value.find((node) => node.id === processId);
     const data = process?.data as ProcessNodeData | undefined;
@@ -705,6 +791,7 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
 }
 
 async function confirmCreateSku(): Promise<void> {
+  if (!canEdit.value) return;
   const name = skuForm.value.name.trim();
   const unit = skuForm.value.unit;
   if (!name || !unit || !skuBindingTarget.value) {
@@ -783,6 +870,7 @@ function nextGraphIdSeed(): number {
 }
 
 async function handleAutoLayout(): Promise<void> {
+  if (!canEdit.value) return;
   remember();
   const laidOut = autoLayoutWorkflow(currentDefinition());
   hydrate(laidOut);
@@ -797,24 +885,28 @@ async function fitCanvas(): Promise<void> {
 }
 
 async function saveDraft(): Promise<boolean> {
-  if (!props.factoryId || !props.productTypeId || !props.canWrite) return false;
+  const identity = currentLoadedIdentity();
+  if (!identity || !canEdit.value) return false;
   const nextDefinition = currentDefinition();
   const errors = validateWorkflow(nextDefinition, 'draft');
   if (errors.length > 0) {
     ElMessage.error(errors[0].message);
     return false;
   }
+  const generation = ++saveGeneration;
   saving.value = true;
   try {
     const response = await saveProductProcessWorkflowDraft(
-      props.factoryId,
-      props.productTypeId,
+      identity.factoryId,
+      identity.productTypeId,
       nextDefinition,
     );
+    if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
     if (!response.success || !response.data) {
       ElMessage.error(response.message || 'Workflow 草稿保存失败');
       return false;
     }
+    if (!definitionMatchesIdentity(response.data, identity)) return false;
     hydrate(response.data);
     dirty.value = false;
     history.value = [];
@@ -822,15 +914,22 @@ async function saveDraft(): Promise<boolean> {
     ElMessage.success('Workflow 草稿已独立保存');
     return true;
   } catch (error) {
+    if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
     console.error('[ProductProcessWorkflow] save failed', error);
     return false;
   } finally {
-    saving.value = false;
+    if (generation === saveGeneration) {
+      saving.value = false;
+    }
   }
 }
 
 async function publishWorkflow(): Promise<void> {
+  let identity = currentLoadedIdentity();
+  if (!identity || !canEdit.value) return;
   if (dirty.value && !(await saveDraft())) return;
+  identity = currentLoadedIdentity();
+  if (!identity || !canEdit.value) return;
   if (!definition.value?.lockVersion && definition.value?.lockVersion !== 0) {
     ElMessage.warning('请先保存草稿');
     return;
@@ -851,28 +950,37 @@ async function publishWorkflow(): Promise<void> {
   } catch {
     return;
   }
+  if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+  const generation = ++publishGeneration;
   publishing.value = true;
   try {
     const response = await publishProductProcessWorkflow(
-      props.factoryId,
-      props.productTypeId,
+      identity.factoryId,
+      identity.productTypeId,
       definition.value.lockVersion,
     );
+    if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (!response.success || !response.data) {
       ElMessage.error(response.message || 'Workflow 发布失败');
       return;
     }
+    if (!definitionMatchesIdentity(response.data, identity)) return;
     hydrate(response.data);
     dirty.value = false;
     ElMessage.success('Workflow 版本已发布');
   } catch (error) {
+    if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     console.error('[ProductProcessWorkflow] publish failed', error);
   } finally {
-    publishing.value = false;
+    if (generation === publishGeneration) {
+      publishing.value = false;
+    }
   }
 }
 
 async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity || !canEdit.value) return;
   if (!Array.isArray(payload.patches)) {
     ElMessage.warning('AI 没有返回合法的 Workflow 补丁');
     return;
@@ -895,6 +1003,7 @@ async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<v
   } catch {
     return;
   }
+  if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
   remember();
   hydrate(proposed.definition);
   dirty.value = true;
