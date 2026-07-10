@@ -137,7 +137,7 @@
       <el-alert
         type="info"
         :closable="false"
-        title="确认后会自动生成工序 Cell 和下一个半成品 Cell；如该工序产出成品，可在工序 Cell 的产出类型中切换。"
+        title="确认后会根据工序主数据的默认产出类型，自动生成工序 Cell、产出 Cell 和两条连接。"
       />
       <template #footer>
         <el-button @click="processDialogVisible = false">取消</el-button>
@@ -203,6 +203,7 @@ import {
 } from './workflowApi';
 import {
   autoLayoutWorkflow,
+  createProcessBranch,
   createWorkflowFromLegacy,
   snapPosition,
   toPlainWorkflowValue,
@@ -530,63 +531,39 @@ function confirmAddProcess(): void {
   const workProcess = workProcessOptions.value.find((item) => item.id === selectedWorkProcessId.value);
   if (!source || !workProcess) return;
   mutate(() => {
-    const timestamp = Date.now();
-    const processId = `process:${workProcess.id}:${timestamp}`;
-    const outputId = `material:semi:${timestamp}`;
-    const inputUnit = String(source.data?.baseUnit || workProcess.unit || 'kg');
-    const outputUnit = workProcess.outputUnit || workProcess.unit || inputUnit;
-    const processData: ProcessNodeData & { kind: 'PROCESS' } = {
-      kind: 'PROCESS',
-      workProcessId: workProcess.id,
-      processName: workProcess.processName,
-      inputUnit,
-      outputUnit,
-      ports: [
-        {
-          id: `input:${timestamp}`,
-          direction: 'INPUT',
-          materialNodeId: source.id,
-          unit: inputUnit,
-          ordinal: 0,
-        },
-        {
-          id: `output:${timestamp}`,
-          direction: 'OUTPUT',
-          materialNodeId: outputId,
-          materialKind: 'SEMI_FINISHED',
-          unit: outputUnit,
-          ordinal: 0,
-        },
-      ],
-      conversionRule: { mode: 'ACTUAL_WEIGHT' },
-      reportingRequired: true,
-      allowMultipleUpstreamSources: false,
-      allowFinishedGoodsSource: false,
-    };
+    const branch = createProcessBranch({
+      source: serializeFlowNode(source),
+      workProcess,
+      productTypeId: props.productTypeId,
+      productName: props.productName || props.productTypeId,
+      timestamp: Date.now(),
+    });
     flowNodes.value.push(
       {
-        id: processId,
+        id: branch.processNode.id,
         type: 'process',
-        position: snapPosition({ x: source.position.x + 240, y: source.position.y }),
-        data: processData,
+        position: branch.processNode.position,
+        data: {
+          ...toPlainWorkflowValue(branch.processNode.data),
+          kind: branch.processNode.kind,
+        },
       },
       {
-        id: outputId,
+        id: branch.outputNode.id,
         type: 'material',
-        position: snapPosition({ x: source.position.x + 720, y: source.position.y }),
+        position: branch.outputNode.position,
         data: {
-          kind: 'SEMI_FINISHED',
-          name: `${workProcess.processName}后半成品`,
-          skuId: '',
-          skuCode: '待选择或现场创建 SKU',
-          bound: false,
-          baseUnit: outputUnit,
+          ...toPlainWorkflowValue(branch.outputNode.data),
+          kind: branch.outputNode.kind,
         },
       },
     );
     flowEdges.value.push(
-      flowEdge(source.id, 'output', processId, `input:${timestamp}`),
-      flowEdge(processId, `output:${timestamp}`, outputId, 'input'),
+      ...branch.edges.map((edge) => ({
+        ...edge,
+        markerEnd: MarkerType.ArrowClosed,
+        style: { stroke: '#1b65a8', strokeWidth: 2 },
+      })),
     );
   });
   processDialogVisible.value = false;

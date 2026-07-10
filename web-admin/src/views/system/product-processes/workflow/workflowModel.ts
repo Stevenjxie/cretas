@@ -1,6 +1,7 @@
 import type {
   LegacyProductWorkProcess,
   MaterialNodeData,
+  ProcessBranchInput,
   ProcessNodeData,
   ProductProcessNodeKind,
   ProductProcessWorkflowDefinition,
@@ -29,6 +30,88 @@ export function snapPosition(position: WorkflowPosition): WorkflowPosition {
   return {
     x: Math.round(position.x / GRID_SIZE) * GRID_SIZE,
     y: Math.round(position.y / GRID_SIZE) * GRID_SIZE,
+  };
+}
+
+export function createProcessBranch(input: ProcessBranchInput): {
+  processNode: ProductProcessWorkflowNode;
+  outputNode: ProductProcessWorkflowNode;
+  edges: [ProductProcessWorkflowEdge, ProductProcessWorkflowEdge];
+} {
+  const { source, workProcess, timestamp } = input;
+  const outputKind = workProcess.defaultOutputMaterialKind;
+  const processId = `process:${workProcess.id}:${timestamp}`;
+  const outputId = `material:${outputKind === 'FINISHED_GOOD' ? 'finished' : 'semi'}:${timestamp}`;
+  const inputPortId = `input:${timestamp}`;
+  const outputPortId = `output:${timestamp}`;
+  const inputUnit = String(source.data.baseUnit || workProcess.unit || 'kg');
+  const outputUnit = workProcess.outputUnit || workProcess.unit || inputUnit;
+
+  const processNode: ProductProcessWorkflowNode = {
+    id: processId,
+    kind: 'PROCESS',
+    position: snapPosition({ x: source.position.x + 240, y: source.position.y }),
+    data: {
+      workProcessId: workProcess.id,
+      processName: workProcess.processName,
+      inputUnit,
+      outputUnit,
+      ports: [
+        {
+          id: inputPortId,
+          direction: 'INPUT',
+          materialNodeId: source.id,
+          unit: inputUnit,
+          ordinal: 0,
+        },
+        {
+          id: outputPortId,
+          direction: 'OUTPUT',
+          materialNodeId: outputId,
+          materialKind: outputKind,
+          unit: outputUnit,
+          ordinal: 0,
+        },
+      ],
+      conversionRule: { mode: 'ACTUAL_WEIGHT' },
+      reportingRequired: true,
+      allowMultipleUpstreamSources: false,
+      allowFinishedGoodsSource: false,
+    } satisfies ProcessNodeData,
+  };
+  const isFinished = outputKind === 'FINISHED_GOOD';
+  const outputNode: ProductProcessWorkflowNode = {
+    id: outputId,
+    kind: outputKind,
+    position: snapPosition({ x: source.position.x + 720, y: source.position.y }),
+    data: {
+      name: isFinished ? input.productName : `${workProcess.processName}后半成品`,
+      skuId: isFinished ? input.productTypeId : '',
+      skuCode: isFinished ? input.productTypeId : '待选择或现场创建 SKU',
+      bound: isFinished,
+      baseUnit: outputUnit,
+    } satisfies MaterialNodeData,
+  };
+
+  return {
+    processNode,
+    outputNode,
+    edges: [
+      {
+        id: `edge:${source.id}:${processId}`,
+        source: source.id,
+        sourceHandle: 'output',
+        target: processId,
+        targetHandle: inputPortId,
+      },
+      {
+        id: `edge:${processId}:${outputId}`,
+        source: processId,
+        sourceHandle: outputPortId,
+        target: outputId,
+        targetHandle: 'input',
+      },
+    ],
   };
 }
 

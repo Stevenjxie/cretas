@@ -3,6 +3,7 @@ import { reactive } from 'vue';
 import {
   applyWorkflowPatches,
   autoLayoutWorkflow,
+  createProcessBranch,
   createWorkflowFromLegacy,
   snapPosition,
   toPlainWorkflowValue,
@@ -10,6 +11,7 @@ import {
 } from '../workflowModel';
 import type {
   ProductProcessWorkflowDefinition,
+  ProductProcessWorkflowNode,
   WorkflowPatch,
 } from '../types';
 
@@ -49,6 +51,91 @@ describe('product process workflow model', () => {
     expect(definition.edges).toHaveLength(6);
     expect(definition.nodes[1].data).toMatchObject({ inputUnit: '只', outputUnit: '只' });
     expect(definition.nodes[5].data).toMatchObject({ inputUnit: '盒', outputUnit: '盒' });
+  });
+
+  it('creates a green semi-finished output branch for a normal process', () => {
+    const branch = createProcessBranch({
+      source: materialNode('raw', 'RAW_MATERIAL', { x: 16, y: 32 }, 'kg'),
+      workProcess: processOption({ defaultOutputMaterialKind: 'SEMI_FINISHED' }),
+      productTypeId: 'PT-PIG',
+      productName: '五香去骨猪蹄',
+      timestamp: 100,
+    });
+
+    expect(branch.processNode).toMatchObject({
+      id: 'process:WP-CUT:100',
+      kind: 'PROCESS',
+      position: { x: 256, y: 32 },
+      data: {
+        inputUnit: 'kg',
+        outputUnit: '盒',
+        ports: [
+          { id: 'input:100', materialNodeId: 'raw', unit: 'kg' },
+          {
+            id: 'output:100',
+            materialNodeId: 'material:semi:100',
+            materialKind: 'SEMI_FINISHED',
+            unit: '盒',
+          },
+        ],
+      },
+    });
+    expect(branch.outputNode).toMatchObject({
+      id: 'material:semi:100',
+      kind: 'SEMI_FINISHED',
+      position: { x: 736, y: 32 },
+      data: {
+        name: '切配后半成品',
+        skuId: '',
+        bound: false,
+        baseUnit: '盒',
+      },
+    });
+    expect(branch.edges).toEqual([
+      {
+        id: 'edge:raw:process:WP-CUT:100',
+        source: 'raw',
+        sourceHandle: 'output',
+        target: 'process:WP-CUT:100',
+        targetHandle: 'input:100',
+      },
+      {
+        id: 'edge:process:WP-CUT:100:material:semi:100',
+        source: 'process:WP-CUT:100',
+        sourceHandle: 'output:100',
+        target: 'material:semi:100',
+        targetHandle: 'input',
+      },
+    ]);
+  });
+
+  it('creates a terminal purple finished-good branch for an output process', () => {
+    const branch = createProcessBranch({
+      source: materialNode('semi', 'SEMI_FINISHED', { x: 32, y: 48 }, 'kg'),
+      workProcess: processOption({ defaultOutputMaterialKind: 'FINISHED_GOOD' }),
+      productTypeId: 'PT-PIG-400',
+      productName: '五香去骨猪蹄 400g',
+      timestamp: 101,
+    });
+
+    expect(branch.outputNode).toMatchObject({
+      id: 'material:finished:101',
+      kind: 'FINISHED_GOOD',
+      data: {
+        name: '五香去骨猪蹄 400g',
+        skuId: 'PT-PIG-400',
+        skuCode: 'PT-PIG-400',
+        bound: true,
+      },
+    });
+    expect(branch.processNode.data.ports).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        direction: 'OUTPUT',
+        materialNodeId: 'material:finished:101',
+        materialKind: 'FINISHED_GOOD',
+      }),
+    ]));
+    expect(branch.edges).toHaveLength(2);
   });
 
   it('lays out branches and joins by topological depth', () => {
@@ -105,6 +192,39 @@ describe('product process workflow model', () => {
     expect(errors.some((error) => error.code === 'CYCLE')).toBe(true);
   });
 });
+
+function materialNode(
+  id: string,
+  kind: 'RAW_MATERIAL' | 'SEMI_FINISHED',
+  position: { x: number; y: number },
+  baseUnit: string,
+): ProductProcessWorkflowNode {
+  return {
+    id,
+    kind,
+    position,
+    data: { name: id, skuId: `${id}-sku`, baseUnit },
+  };
+}
+
+function processOption(
+  overrides: Partial<{
+    id: string;
+    processName: string;
+    unit: string;
+    outputUnit: string | null;
+    defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD';
+  }> = {},
+) {
+  return {
+    id: 'WP-CUT',
+    processName: '切配',
+    unit: 'kg',
+    outputUnit: '盒',
+    defaultOutputMaterialKind: 'SEMI_FINISHED' as const,
+    ...overrides,
+  };
+}
 
 function branchedDefinition(): ProductProcessWorkflowDefinition {
   return {

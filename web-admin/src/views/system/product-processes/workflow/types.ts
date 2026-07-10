@@ -67,6 +67,20 @@ export interface ProductProcessWorkflowEdge {
   targetHandle: string;
 }
 
+export interface ProcessBranchInput {
+  source: ProductProcessWorkflowNode;
+  workProcess: {
+    id: string;
+    processName: string;
+    unit: string;
+    outputUnit?: string | null;
+    defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD';
+  };
+  productTypeId: string;
+  productName: string;
+  timestamp: number;
+}
+
 export interface ProductProcessWorkflowDefinition {
   id?: number;
   factoryId?: string;
