@@ -3,7 +3,7 @@ cache fallback layer).
 
 These are pure Python-mock tests (no live Postgres/pgvector needed) — they
 exercise the grounding guards that matter regardless of the actual cosine
-math: same-window + same-plan hard filters, and the 0.90 similarity floor.
+math: same-window + same-plan hard filters, and the 0.80 similarity floor.
 The fake connection mimics the SQL WHERE clause (factory_id, window_key,
 plan_key, expires_at, question_embedding IS NOT NULL) so a test asserting
 "returns None when window differs" is actually exercising the same
@@ -130,15 +130,15 @@ async def test_get_semantic_hits_when_similarity_at_or_above_threshold():
 
 
 async def test_get_semantic_exact_threshold_boundary_hits():
-    """sim == 0.90 exactly must still hit (>= not >)."""
-    rows = [_row(sim=0.90)]
+    """sim == 0.80 exactly must still hit (>= not >)."""
+    rows = [_row(sim=0.80)]
     svc = NarrativeCacheService(_FakePool(rows))
     hit = await svc.get_semantic(_FACTORY, _dummy_emb(), _WINDOW, _PLAN)
     assert hit is not None
 
 
 async def test_get_semantic_misses_below_threshold():
-    rows = [_row(sim=0.89)]
+    rows = [_row(sim=0.79)]
     svc = NarrativeCacheService(_FakePool(rows))
     hit = await svc.get_semantic(_FACTORY, _dummy_emb(), _WINDOW, _PLAN)
     assert hit is None
