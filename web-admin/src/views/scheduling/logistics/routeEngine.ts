@@ -76,10 +76,16 @@ function createTrip(
 }
 
 function matchingVehicle(vehicle: Vehicle, stores: StoreOrder[]): boolean {
-  return stores.every((store) => vehicle.areaCodes.includes(store.area));
+  const totalVolumeCbm = stores.reduce((total, store) => total + store.volumeCbm, 0);
+  return totalVolumeCbm <= vehicle.capacityCbm
+    && stores.every((store) => vehicle.areaCodes.includes(store.area));
 }
 
 export function generateSchedule({ stores, vehicles, roadSegments, targetLoadPct }: GenerateScheduleInput): ScheduleResult {
+  if (!Number.isFinite(targetLoadPct) || targetLoadPct <= 0 || targetLoadPct > 100) {
+    throw new RangeError('targetLoadPct must be greater than 0 and at most 100');
+  }
+
   const groups = new Map<string, StoreOrder[]>();
   const unassignedStoreIds: string[] = [];
 
@@ -95,20 +101,27 @@ export function generateSchedule({ stores, vehicles, roadSegments, targetLoadPct
   }
 
   const trips: RouteTrip[] = [];
-  const usedVehicleIds = new Set<string>();
+  const usedVehicleIds = new Set(groups.keys());
   for (const [groupVehicleId, groupedStores] of groups) {
     const primaryVehicle = vehicles.find((vehicle) => vehicle.id === groupVehicleId) ?? null;
     if (!primaryVehicle) continue;
     const targetCap = primaryVehicle.capacityCbm * targetLoadPct / 100;
     let current: StoreOrder[] = [];
+    let currentVolumeCbm = 0;
     const packed: StoreOrder[][] = [];
     for (const store of groupedStores) {
-      const currentVolume = current.reduce((total, item) => total + item.volumeCbm, 0);
-      if (current.length && currentVolume + store.volumeCbm > targetCap) {
+      const nextVolumeCbm = currentVolumeCbm + store.volumeCbm;
+      if (current.length && nextVolumeCbm > primaryVehicle.capacityCbm) {
         packed.push(current);
         current = [];
+        currentVolumeCbm = 0;
+      } else if (current.length && nextVolumeCbm > targetCap) {
+        packed.push(current);
+        current = [];
+        currentVolumeCbm = 0;
       }
       current.push(store);
+      currentVolumeCbm += store.volumeCbm;
     }
     if (current.length) packed.push(current);
 

@@ -83,6 +83,55 @@ describe('deterministic grouping and trip operations', () => {
     expect(result.unassignedStoreIds).toEqual(['B']);
   });
 
+  it('does not assign an overflow trip to a matching vehicle with insufficient capacity', () => {
+    const overflowStores = [
+      { ...stores[0], volumeCbm: 6 },
+      { ...stores[1], volumeCbm: 4 },
+    ];
+    const mixedCapacityVehicles = [
+      { ...vehicles[0], id: 'V1', capacityCbm: 10 },
+      { ...vehicles[0], id: 'V2', capacityCbm: 3 },
+    ];
+
+    const result = generateSchedule({ stores: overflowStores, vehicles: mixedCapacityVehicles, roadSegments: segments, targetLoadPct: 60 });
+
+    expect(result.trips.map((trip) => trip.vehicleId)).toEqual(['V1', null]);
+    expect(result.trips[1].totalVolumeCbm).toBe(4);
+  });
+
+  it('reserves every non-empty group primary before assigning overflow vehicles', () => {
+    const groupedStores = [
+      { ...stores[0], id: 'A1', area: 'AREA-A', volumeCbm: 6 },
+      { ...stores[1], id: 'A2', area: 'AREA-A', volumeCbm: 6 },
+      { ...stores[2], id: 'B1', area: 'AREA-B', volumeCbm: 2 },
+    ];
+    const groupedVehicles = [
+      { ...vehicles[0], id: 'V1', areaCodes: ['AREA-A'] },
+      { ...vehicles[0], id: 'V2', areaCodes: ['AREA-A', 'AREA-B'] },
+    ];
+
+    const result = generateSchedule({ stores: groupedStores, vehicles: groupedVehicles, roadSegments: {}, targetLoadPct: 60 });
+
+    expect(result.trips.map((trip) => trip.vehicleId)).toEqual(['V1', null, 'V2']);
+    expect(result.trips.filter((trip) => trip.vehicleId === 'V2')).toHaveLength(1);
+  });
+
+  it.each([0, -1, 101, Number.NaN])('rejects invalid target load percentage %s', (targetLoadPct) => {
+    expect(() => generateSchedule({ stores, vehicles, roadSegments: segments, targetLoadPct })).toThrow(RangeError);
+  });
+
+  it('never packs a valid target load beyond the primary vehicle hard cap', () => {
+    const hardCapStores = [
+      { ...stores[0], volumeCbm: 6 },
+      { ...stores[1], volumeCbm: 5 },
+    ];
+
+    const result = generateSchedule({ stores: hardCapStores, vehicles, roadSegments: segments, targetLoadPct: 100 });
+
+    expect(result.trips.map((trip) => trip.storeIds)).toEqual([['A'], ['B']]);
+    expect(result.trips.every((trip) => trip.totalVolumeCbm <= vehicles[0].capacityCbm)).toBe(true);
+  });
+
   it('reorders a trip and recalculates its route geometry', () => {
     const original = generateSchedule({ stores, vehicles, roadSegments: segments, targetLoadPct: 100 }).trips[0];
     const reordered = reorderTrip({ trip: original, storeIds: ['B', 'A'], roadSegments: segments });
