@@ -61,7 +61,14 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_TTL_HOURS = 24
-SEMANTIC_MIN_SIMILARITY = 0.90
+# Calibrated 2026-07-10 against gte-base-zh: genuine paraphrases score 0.78-0.86
+# ("这两个月净利多少" vs "这两个月净赚多少利润率" = 0.863), while different-intent
+# questions sit at 0.48-0.55 — a wide gap. 0.90 (initial guess) missed every
+# paraphrase → cache never semantically hit. 0.80 catches paraphrases and stays
+# far above the different-intent band. The window_key + plan_key HARD filters do
+# the real safety work (cross-dimension / cross-window never served regardless of
+# similarity); this threshold only screens within a same-plan+window candidate set.
+SEMANTIC_MIN_SIMILARITY = 0.80
 
 
 def _emb_literal(emb: List[float]) -> str:
