@@ -8,9 +8,9 @@
 
 ## 结论
 
-阶段一编辑器已经在配置端提供半成品 / 成品类型选择，但阶段二初稿没有明确区分“管理员配置时选择”和“操作员报工时只读”，因此容易被理解为系统完全不选择类型。阶段二初稿还引入了新的任务就绪状态和全面的端口报工合同，超过了“Workflow 不改变当前三阶段报工逻辑”的边界。AI 当前安全地被页面入口强制为 preview，但仍调用旧的线性产品工序草稿工具，并非真正的 Workflow 图助手。
+阶段一编辑器目前总先生成半成品 Cell，并提供半成品 / 成品类型下拉，但最终规则是不让文员或报工人员选择类型：类型应由所选工序的主数据自动决定。现有工序主数据只有 `semiFinishedOutputCode`，缺少明确的默认产出类型字段，因此当前实现无法可靠完成自动判定。阶段二初稿还引入了新的任务就绪状态和全面的端口报工合同，超过了“Workflow 不改变当前三阶段报工逻辑”的边界。AI 当前安全地被页面入口强制为 preview，但仍调用旧的线性产品工序草稿工具，并非真正的 Workflow 图助手。
 
-本次已同步修订运行时规格：保留现有 `INPUT → SEGMENT → OUTPUT`、审批、超收、续报与库存过账入口；Workflow 只提供配置上下文，当前字段表达不了多端口时才增加可选字段；AI 改为只生成 Workflow 图补丁的专用预览工具。
+本次已同步修订设计与运行时规格：新图自动带原料 Cell；选择工序时自动生成工序与产出 Cell；工序主数据决定默认产出类型；保留现有 `INPUT → SEGMENT → OUTPUT`、审批、超收、续报与库存过账入口；Workflow 只提供配置上下文，当前字段表达不了多端口时才增加可选字段；AI 改为只生成 Workflow 图补丁的专用预览工具。
 
 ## 高风险 / 未完成
 
@@ -28,20 +28,26 @@
 
 状态：设计已修正，代码尚未实现。
 
-### P1：产出类型边界表达不完整
+### P0：当前 Cell 类型仍依赖文员手工切换
 
-- Workflow 工序 Cell 已有 `半成品 / 成品` 下拉选择。
-- 绑定已有 SKU 时，前端会按 `productCategory` 自动推导类型；但之后仍可手动切换类型，当前代码没有清空不兼容 SKU，也没有证据表明发布校验会验证 SKU 分类一致性。
+- 新 Workflow 已能自动创建一个原料 Cell，但当前选择工序后固定先生成 `SEMI_FINISHED` 产出 Cell。
+- Workflow 工序 Cell仍提供 `半成品 / 成品` 下拉，要求文员人工纠正类型，与最终交互规则冲突。
+- 工序主数据目前只有“本工序产出半成品”开关和 `semiFinishedOutputCode`，没有 `defaultOutputMaterialKind`；关闭半成品开关不能区分“普通中间工序”与“最终成品出品工序”。
+- 绑定已有 SKU 时前端虽会按 `productCategory` 推导类型，但仍可手动切换，发布校验也没有验证工序默认类型、SKU 分类和 Cell 类型一致性。
 - 当前 RN 报工不让用户选择类型，而是根据 `output-options` 和半成品数量推导 `FINISHED/BOTH`。这个方向符合防呆，但数据来源仍是 `WorkProcess.semiFinishedOutputCode`，尚未读取 Workflow 端口。
 
 证据：
 
 - `web-admin/src/views/system/product-processes/workflow/WorkflowProcessNode.vue:54-95`
+- `web-admin/src/views/system/product-processes/workflow/ProductProcessWorkflowEditor.vue:528-590`
 - `web-admin/src/views/system/product-processes/workflow/ProductProcessWorkflowEditor.vue:692-734`
+- `web-admin/src/views/system/work-processes/index.vue:55-60`
+- `web-admin/src/views/system/work-processes/index.vue:464-475`
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/entity/WorkProcess.java:87-93`
 - `frontend/CretasFoodTrace/src/screens/processing/YieldStepReportScreen.tsx:1290-1327`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java:1306-1329`
 
-状态：partial。下一步在绑定、切换和发布校验三处保证类型与 SKU 分类一致。
+状态：missing。下一步新增工序默认产出类型，从 Workflow 移除类型下拉，并在选择工序时自动生成正确类型的产出 Cell。
 
 ### P1：现有报工字段只能覆盖部分图结构
 
@@ -77,7 +83,9 @@
 
 | 用户诉求 | 真实代码证据 | 测试深度 | 状态 | 下一步 Hook |
 |---|---|---|---|---|
-| 配置端选择半成品 / 成品类型 | `WorkflowProcessNode.vue:86-95` | 组件实现，未见分类一致性测试 | partial | SKU 筛选、切换清空、发布校验 |
+| 新图自动含原料 Cell | `workflowModel.ts:35-57` | 有模型测试 | done | 新图直接显示，不要求文员新增 |
+| 选择工序自动生成工序 + 产出 Cell | `ProductProcessWorkflowEditor.vue:528-590` | 当前固定生成半成品 | partial | 继承工序默认产出类型 |
+| 文员不选择半成品 / 成品类型 | `WorkflowProcessNode.vue:86-95` 当前仍有下拉 | 无自动类型测试 | missing | 新增主数据字段并删除下拉 |
 | 报工端不重复选择类型 | `YieldStepReportScreen.tsx:1290-1320` | 现有单/双产出路径有后端测试 | done（旧模型） | Workflow 端口接入 output-options |
 | Workflow 不改变三阶段报工 | `YieldReportServiceImpl.java:167-247` | 现有 Yield 单测 | done（现状） | 新字段走兼容适配，不建新状态机 |
 | 缺少字段时与报工步骤协同 | `YieldReportRequest.java:14-83` | 多 WIP / 多计划产出未覆盖 | missing | `workflowPortId/sourceWipRefs/configuredOutputs` |
@@ -86,12 +94,14 @@
 
 ## 需要补的实现 Hook
 
-1. Web Admin：产出类型与 SKU 分类双向约束，并增加发布校验测试。
-2. Workflow AI：新增只返回 `WorkflowPatch[]` 的专用模块和工具；移除编辑器对 `applyLegacyAIDraft` 的依赖。
-3. Backend：批次快照和任务节点绑定只提供配置上下文，不新增报工状态。
-4. 报工 DTO：先做现有字段映射测试，再只为多 WIP、多同类产出增加可选字段。
-5. RN：保留三阶段页面和提交函数，仅根据 Workflow 配置渲染必要的附加数量行。
-6. E2E：F006 分别验证旧任务零回归、Workflow 单入单出映射、多入和多出扩展字段。
+1. 工序主数据：新增 `defaultOutputMaterialKind`，默认 `SEMI_FINISHED`；工序管理页明确配置成品出品工序。
+2. Web Admin Workflow：选择工序时自动生成对应类型产出 Cell，删除类型下拉，成品 Cell 自动绑定当前产品 SKU。
+3. 发布校验：工序默认类型、端口类型、物料 Cell 类型与 SKU 分类必须一致。
+4. Workflow AI：新增只返回 `WorkflowPatch[]` 的专用模块和工具；移除编辑器对 `applyLegacyAIDraft` 的依赖。
+5. Backend：批次快照和任务节点绑定只提供配置上下文，不新增报工状态。
+6. 报工 DTO：先做现有字段映射测试，再只为多 WIP、多同类产出增加可选字段。
+7. RN：保留三阶段页面和提交函数，仅根据 Workflow 配置渲染必要的附加数量行。
+8. E2E：F006 分别验证旧任务零回归、Workflow 单入单出映射、多入和多出扩展字段。
 
 ## E2E 深度判定
 

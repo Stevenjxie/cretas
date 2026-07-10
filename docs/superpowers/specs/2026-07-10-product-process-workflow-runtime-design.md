@@ -17,17 +17,20 @@
 
 本阶段不恢复 Preview，不重做现有报工流程，不允许 AI 访问或操作报工、任务、库存、审批和激活，也不自动把图定义覆盖回旧的 `product_work_processes`。
 
-### 1.1 半成品 / 成品类型在哪里选择
+### 1.1 半成品 / 成品类型如何产生
 
-类型必须选择，但选择发生在 **Workflow 配置端**，不发生在 **现场报工端**：
+类型是系统配置值，但文员和报工人员都不手工选择：
 
-- 管理员在工序 Cell 的每个产出端口选择 `半成品` 或 `成品`，同时绑定对应 SKU；
-- 选择已有 SKU 时，系统按 SKU 的产品分类自动带入类型；管理员切换类型时只显示该类型可选 SKU；
-- 已绑定 SKU 与所选类型不一致时必须清空绑定或阻止发布，不能只改变 Cell 颜色；
+- 工序主数据新增 `defaultOutputMaterialKind`，默认 `SEMI_FINISHED`；
+- 明确配置为 `FINISHED_GOOD` 的出品工序，在 Workflow 被选中时自动生成成品 Cell；
+- 其他工序默认自动生成半成品 Cell；
+- 新 Workflow 自动带一个原料 Cell，文员从原料 Cell 右侧添加工序；每次选择工序都一次性生成“工序 Cell + 产出物料 Cell”；
+- 半成品 Cell 允许绑定/现场创建半成品 SKU；成品 Cell 自动绑定当前产品 SKU；
+- 额外产出 Cell 的类型按其绑定 SKU 分类自动确定，不出现独立类型下拉；
 - 现场报工只显示 Workflow 已确定的产出名称、SKU、类型和单位，操作员填写实际数量；
 - 未启用 Workflow 的旧任务继续保持当前报工页面与 `outputKind` 兼容行为。
 
-不在报工现场再次选择类型，是因为同一产出不能在不同班次被临时记成不同库存类别；库存去向属于产品工艺配置，不属于操作员的实报数据。
+当前 `WorkProcess.semiFinishedOutputCode` 只能说明“可产生某个半成品编码”，不能可靠表达一个工序默认生成半成品还是成品 Cell，因此不能继续把它当作唯一判断条件。
 
 ## 2. 已确认的上线策略
 
@@ -203,7 +206,7 @@ Workflow 先适配现有 `YieldReportRequest` 和 `ProductionReport`：
 |---|---|---|---|
 | F1 | 操作员不知道多投入任务还缺哪个来源 | HIGH | fool-proof Rule 1、Rule 5 |
 | F2 | 同 SKU 多批投入容易选错批次或超用库存 | HIGH | fool-proof Rule 1、Rule 2 |
-| F3 | 配置端未校验 SKU 分类，或报工端再次选择类型，会导致入错库存类别 | HIGH | fool-proof Rule 3 |
+| F3 | 工序主数据缺少明确产出类型，或任一页面让人再次选择类型，会导致 Cell 和过账路径不一致 | HIGH | fool-proof Rule 3 |
 | F4 | 多单位数字密集，容易把 kg、只、盒混填 | HIGH | 内联 UX 规则、Rule 2 |
 | F5 | 网络抖动或重复点击产生重复扣减/入库 | HIGH | fool-proof Rule 4 |
 | F6 | 提交失败后表单清空，现场无法复原 | HIGH | 内联错误恢复规则 |
@@ -213,7 +216,7 @@ Workflow 先适配现有 `YieldReportRequest` 和 `ProductionReport`：
 
 - F1 → INPUT 阶段直接列“待黄油鸡前处理 120 kg、待腌制液 18 kg”，缺任一项时禁用现有 INPUT 提交按钮。
 - F2 → 批次卡固定显示品名、批次号、当前可用量；单一来源自动选，多来源分配合计实时校验。
-- F3 → 管理员在 Workflow 选择并校验类型；现场报工只读类型并填数量。
+- F3 → 工序主数据确定默认类型，Workflow 自动生成对应 Cell；文员和报工人员都只读类型。
 - F4 → 单位紧贴每个数字且不可编辑；不同单位绝不跨行合计成一个数字。
 - F5 → 客户端提交 `idempotencyKey`，后端按任务、阶段、键唯一防重；按钮提交后立即进入 loading。
 - F6 → 失败保留全部本地输入；错误文案说明“发生了什么 + 怎么解决”，提供重试。
@@ -245,7 +248,7 @@ Workflow 先适配现有 `YieldReportRequest` 和 `ProductionReport`：
 ## 10. 校验、幂等与错误恢复
 
 - 继续执行当前 INPUT/OUTPUT 数量、库存、超收、续报和三阶段字段隔离校验。
-- Workflow 额外校验只检查端口归属、必填计划产出、配置单位与 SKU 类型一致性。
+- Workflow 额外校验只检查端口归属、必填计划产出、工序主数据默认类型、配置单位与 SKU 分类一致性。
 - 客户端提交的端口必须属于当前任务快照，单位必须与端口一致。
 - 同一输出 SKU 的两个不同端口仍保留两行，不按 SKU 偷偷合并。
 - 换算规则用于提示与边界校验；超出工序配置阈值时按现有软告警或主管规则处理，不篡改实报量。
@@ -258,7 +261,7 @@ Workflow 先适配现有 `YieldReportRequest` 和 `ProductionReport`：
 AI 助手只存在于产品工序 Workflow 编辑器，只接收当前产品的图定义和当前选中 Cell，用于：
 
 - 帮助增加、删除、连接和整理 Workflow Cell；
-- 检查 SKU 承接、半成品/成品类型、单位和数量关系；
+- 检查 SKU 承接、工序主数据与自动产出 Cell 类型、单位和数量关系；
 - 生成结构化 Workflow 图补丁和配置说明。
 
 实现时使用专用 `product_process_workflow_config` 模块与 `canvas_product_process_workflow_config` 预览工具，替换当前线性 `product_work_process_config` 草稿适配。该工具只返回允许的图补丁，不提供 `apply=true` 执行路径。
@@ -282,7 +285,7 @@ AI 不读取运行批次、报工、人员工时、库存余额或审批数据�
 ### RN 测试
 
 - 现有三阶段页面、按钮和状态转换保持不变。
-- Workflow 任务显示配置端已确定的名称、SKU、类型和单位；报工端不出现类型下拉。
+- Workflow 任务显示由工序主数据自动确定的名称、SKU、类型和单位；配置端与报工端都不出现类型下拉。
 - 来源不足、库存不足、重复提交、网络失败均保留输入并提供下一步。
 - 老任务仍显示当前单投入/兼容双产出页面。
 
