@@ -104,6 +104,8 @@ public class ProductWorkProcessDTO {
     private String processName;
     private String processCategory;
     private String defaultUnit;
+    /** Read-only output unit from WorkProcess; null means same as defaultUnit. */
+    private String defaultOutputUnit;
     private Integer defaultEstimatedMinutes;
     /**
      * G2 自定义字段 schema (只读, 来自 join WorkProcess.customFieldSchema)。

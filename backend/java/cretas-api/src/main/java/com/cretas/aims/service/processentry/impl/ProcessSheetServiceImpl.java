@@ -1431,6 +1431,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
+                assertSourceUnit(rawMb, requestInputUnit(req), "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
             }
@@ -1484,11 +1485,35 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                assertSourceUnit(srcMb, requestInputUnit(req), "上游批次");
                 edges.add(new ResolvedEdge(srcMb, nz(ur.getFeedQuantityKg()), "SEMI_FINISHED"));
             }
         }
 
         return edges;
+    }
+
+    /**
+     * 逐工序表格的 RAW / 同计划 WIP 扣减没有通用跨单位换算表；若来源和本道投入单位不同，
+     * 继续以数量相乘会把“只/袋”当 kg，直接污染库存与成本。因此这里明确阻断。
+     * SFI/FG 来源沿用各自既有的严格换算/校验路径，不走这个 MaterialBatch 分支。
+     */
+    private void assertSourceUnit(MaterialBatch source, String expectedUnit, String sourceLabel) {
+        String actualUnit = source == null ? null : source.getQuantityUnit();
+        if (actualUnit == null || actualUnit.isBlank() || expectedUnit == null || expectedUnit.isBlank()
+                || actualUnit.trim().equalsIgnoreCase(expectedUnit.trim())) {
+            return;
+        }
+        throw new BusinessException(409, sourceLabel + "单位为“" + actualUnit + "”，不能按本道投入单位“"
+                + expectedUnit + "”扣减")
+                .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
+                .withHint("请将工序投入单位设为来源批次单位，或先完成明确的单位换算")
+                .withSeverity("BLOCKING")
+                .withHintTarget("inputUnit");
+    }
+
+    private static String requestInputUnit(ProcessSheetRowRequest req) {
+        return firstNonBlank(req.getInputUnit(), req.getUnit(), "kg");
     }
 
     private void ensureRawMaterialWarehouse(String factoryId, String planId, MaterialBatch rawMb) {
@@ -1835,7 +1860,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setInputQuantity(req.getInputQuantity());
         st.setOutputQuantity(req.getOutputQuantity());
         st.setProductWeight(req.getProductWeight());
-        st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
+        String outputUnit = firstNonBlank(req.getOutputUnit(), req.getUnit(), "kg");
+        st.setInputUnit(firstNonBlank(req.getInputUnit(), req.getUnit(), outputUnit));
+        st.setOutputUnit(outputUnit);
+        st.setUnit(outputUnit);
         st.setPotCount(req.getPotCount());
         st.setPotRawKgs(req.getPotRawKgs());
         // 多时段工时 (materializeBatch 优先用此求和)
@@ -1965,6 +1993,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         r.setMaterialized(materialized);
         r.setWarnings(warnings);
         return r;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private static BigDecimal nz(BigDecimal v) {

@@ -59,6 +59,9 @@ type ProcEntry = {
   customFieldSchema: ProcessSheetCustomFieldDef[] | null;
   /** 5988: 本工序是否允许成品库存作投料来源 (透传给 ProcessDataTable 的 allowFinishedGoodsSource prop)。 */
   allowFinishedGoodsSource: boolean;
+  /** 本工序配置的投入/产出单位。产出单位为空时由表格沿用投入单位。 */
+  inputUnit: string;
+  outputUnit?: string | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -92,9 +95,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -176,6 +179,8 @@ async function resolveProcesses() {
           isFirstProcess: idx === 0,
           customFieldSchema: it.customFieldSchema ?? null,
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
+          inputUnit: it.unitOverride?.trim() || it.defaultUnit?.trim() || 'kg',
+          outputUnit: it.defaultOutputUnit?.trim() || null,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -371,6 +376,8 @@ defineExpose({ hasUnsavedRows });
             :is-first-process="proc.isFirstProcess"
             :custom-field-schema="proc.customFieldSchema"
             :allow-finished-goods-source="proc.allowFinishedGoodsSource"
+            :input-unit="proc.inputUnit"
+            :output-unit="proc.outputUnit"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"

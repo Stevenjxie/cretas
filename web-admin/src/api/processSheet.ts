@@ -69,7 +69,10 @@ export interface ProcessSheetRowRequest {
   inputQuantity?: number;
   /** 产出数量; >0 才物化 WIP 批 */
   outputQuantity: number;
-  unit?: string;   // 默认 "kg"
+  /** 兼容旧接口：等同 outputUnit。 */
+  unit?: string;
+  inputUnit?: string;
+  outputUnit?: string;
   /** 多工时时段, 后端 Σ 得总工时 */
   laborSegments?: LaborSegment[];
   /** 原料领料 (修油首道): 消耗原料 MaterialBatch */

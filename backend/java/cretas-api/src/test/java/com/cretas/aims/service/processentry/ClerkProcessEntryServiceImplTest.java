@@ -244,6 +244,51 @@ class ClerkProcessEntryServiceImplTest {
         return r;
     }
 
+    @Test
+    @DisplayName("单位贯通: 只→袋应写入报工、生产批和在制批次")
+    void processUnits_flowFromStepToReportAndWip() {
+        stubNoIdempotency("UNIT-FLOW-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch raw = rawMb("RAW-COUNT", FACTORY, new BigDecimal("12.50"));
+        raw.setQuantityUnit("只");
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-COUNT", FACTORY)).thenReturn(Optional.of(raw));
+
+        StepEntry step = rawStep(1, "200", "400", List.of(rawInput("RAW-COUNT", "200")));
+        step.setInputUnit("只");
+        step.setOutputUnit("袋");
+        step.setUnit("袋");
+        step.setLaborStartTime("08:00");
+        step.setLaborEndTime("09:00");
+        step.setWorkerCount(1);
+
+        service.recordChain(FACTORY, PLAN_ID,
+                req("UNIT-FLOW-KEY", List.of(wipBatch("COUNT-TO-BAG", "PT-CHICKEN", List.of(step)))),
+                OPERATOR_ID);
+
+        ArgumentCaptor<com.cretas.aims.entity.ProductionReport> reportCaptor =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.ProductionReport.class);
+        verify(reportRepo, atLeastOnce()).save(reportCaptor.capture());
+        assertThat(reportCaptor.getAllValues()).anySatisfy(report -> {
+            assertThat(report.getInputUnit()).isEqualTo("只");
+            assertThat(report.getOutputUnit()).isEqualTo("袋");
+        });
+
+        ArgumentCaptor<ProductionBatch> batchCaptor = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo, atLeastOnce()).save(batchCaptor.capture());
+        assertThat(batchCaptor.getAllValues()).anySatisfy(batch -> assertThat(batch.getUnit()).isEqualTo("袋"));
+
+        ArgumentCaptor<MaterialBatch> wipCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo, atLeastOnce()).save(wipCaptor.capture());
+        assertThat(wipCaptor.getAllValues()).anySatisfy(wip -> assertThat(wip.getQuantityUnit()).isEqualTo("袋"));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Tests
     // ─────────────────────────────────────────────────────────────

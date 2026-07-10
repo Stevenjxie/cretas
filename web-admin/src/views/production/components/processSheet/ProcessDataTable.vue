@@ -22,6 +22,7 @@ import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDe
 import WorkHoursTable from './WorkHoursTable.vue';
 import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 import { isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
+import { resolveProcessSheetUnits, withProcessSheetUnits } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // Props & emits
@@ -54,6 +55,10 @@ const props = withDefaults(defineProps<{
    * 值收集进保存请求的 customFields map。
    */
   customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
+  /** 本工序配置的投入单位（优先产品-工序单位覆盖）。 */
+  inputUnit?: string;
+  /** 本工序配置的产出单位；未配置时沿用投入单位。 */
+  outputUnit?: string | null;
   /** 是否允许本道工序选择成品库存批次作为投料来源。 */
   allowFinishedGoodsSource?: boolean;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
@@ -145,8 +150,14 @@ function isCustomFieldCol(key: string): boolean {
   return customFieldKeySet.value.has(key);
 }
 /** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
+const processUnits = computed(() => resolveProcessSheetUnits({
+  defaultUnit: props.inputUnit,
+  defaultOutputUnit: props.outputUnit,
+  // 老气调配置未填 outputUnit 时，保持既有 kg → 盒口径；显式配置优先。
+  fallbackOutputUnit: props.processCode === 'qidiao' ? '盒' : undefined,
+}));
 const cols = computed(() => [
-  ...(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS),
+  ...withProcessSheetUnits(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS, processUnits.value),
   ...customFieldCols.value,
 ]);
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
@@ -808,6 +819,9 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     batchNumber: row.batchNumber ?? undefined,
     finished: props.processCode === 'qidiao', // ⭐ 气调成品批
     outputQuantity: 0,
+    inputUnit: processUnits.value.inputUnit,
+    outputUnit: processUnits.value.outputUnit,
+    unit: processUnits.value.outputUnit,
     seasoningStep: props.processCode === 'shuzhi',
     laborSegments: row.laborSegments.length ? row.laborSegments : undefined,
     potCount: row.potCount > 1 ? row.potCount : undefined,
@@ -834,7 +848,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
     base.inputQuantity = row.rawBatchQty ?? undefined;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
-    base.unit = 'kg';
     // SP-G G3c: 副产 (修油 — 肥油等)
     const bpQty = (row.fields['byproductQty'] as number) ?? 0;
     if (bpQty > 0) {
@@ -848,7 +861,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       const before = (row.fields['before'] as number) ?? totalFeed;
       base.inputQuantity = before;
       base.outputQuantity = (row.fields['after'] as number) ?? 0;
-      base.unit = 'kg';
       const bpQty = (row.fields['byproductQty'] as number) ?? 0;
       if (bpQty > 0) {
         const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
@@ -860,16 +872,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       const inputQty = scrap + output;
       base.inputQuantity = inputQty || totalFeed;
       base.outputQuantity = output;
-      base.unit = 'kg';
     } else if (isShuZhi.value || isGenericUpstream.value) {
       base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
       base.outputQuantity = (row.fields['output'] as number) ?? 0;
-      base.unit = 'kg';
     } else if (isQidiao.value) {
       const actualProd = calcSumBoxes(row);
       base.inputQuantity = (row.fields['usedWeight'] as number) ?? totalFeed;
       base.outputQuantity = actualProd;
-      base.unit = '盒';
       const trimmings = (row.fields['trimmings'] as number) ?? 0;
       if (trimmings > 0) {
         base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
@@ -889,7 +898,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
-    base.unit = 'kg';
     // SP-G G3c: 副产 (焯水/滚揉 — 肥油等)
     const bpQty = (row.fields['byproductQty'] as number) ?? 0;
     if (bpQty > 0) {
@@ -906,7 +914,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = inputQty;
     base.outputQuantity = output;
-    base.unit = 'kg';
   } else if (isShuZhi.value || isGenericUpstream.value) {
     const inputQty = (row.fields['input'] as number) ?? 0;
     base.upstreamSources = [{
@@ -917,7 +924,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }];
     base.inputQuantity = inputQty;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
-    base.unit = 'kg';
   } else if (isQidiao.value) {
     // ⭐ outputQuantity = 盒数 (actualProd), NOT kg
     const actualProd = calcSumBoxes(row);
@@ -930,7 +936,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }];
     base.inputQuantity = (row.fields['usedWeight'] as number) ?? undefined;
     base.outputQuantity = actualProd;            // ⭐⭐ 盒数!
-    base.unit = '盒';
     // 副产品: 料头
     const trimmings = (row.fields['trimmings'] as number) ?? 0;
     if (trimmings > 0) {
