@@ -6,6 +6,7 @@ import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
+import { formatPlannedInput } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -34,6 +35,7 @@ const props = defineProps<{
   productTypeId: string;
   productName?: string;
   plannedQuantity?: number;
+  plannedUnit?: string | null;
 }>();
 const emit = defineEmits<{
   (e: 'submitted'): void;
@@ -324,7 +326,12 @@ defineExpose({ hasUnsavedRows });
         <div style="font-size:15px;font-weight:600;color:#303133">
           逐工序电子表格
           <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
-          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">计划 {{ plannedQuantity }} kg</span>
+          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
+            {{ formatPlannedInput(plannedQuantity, plannedUnit) }}
+            <el-tooltip content="计划数量按首道工序投入单位；最终成品单位看末道工序产出单位" placement="top">
+              <span style="margin-left:3px;cursor:help">?</span>
+            </el-tooltip>
+          </span>
         </div>
         <div style="font-size:12px;color:#909399;margin-top:4px">
           每行独立保存 · 保存后自动生成批次号 · 可随时追加

@@ -51,6 +51,8 @@ public class ProductionPlanDTO {
     @Schema(description = "计划数量")
     private BigDecimal plannedQuantity;
 
+    private String plannedUnit;
+
     @Schema(description = "实际数量")
     private BigDecimal actualQuantity;
 

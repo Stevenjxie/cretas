@@ -46,6 +46,8 @@ public class CreateProductionPlanRequest {
     @Schema(description = "计划数量 (SAFETY_STOCK 存货生产时可为空; 其他来源类型必填且 > 0)")
     private BigDecimal plannedQuantity;
 
+    private String plannedUnit;
+
     @Schema(description = "计划日期", required = true)
     @NotNull(message = "计划日期不能为空")
     @FutureOrPresent(message = "计划日期不能是过去", groups = OnCreate.class)

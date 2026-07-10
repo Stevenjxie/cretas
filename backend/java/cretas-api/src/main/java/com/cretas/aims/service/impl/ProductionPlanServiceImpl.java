@@ -308,6 +308,41 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
+    /**
+     * Resolves the unit attached to ProductionPlan.plannedQuantity.
+     * The first process input unit is authoritative; product unit and kg are fallbacks.
+     */
+    static String resolvePlannedUnit(String firstProcessInputUnit, String productUnit, String requestedUnit) {
+        String requested = firstNonBlank(requestedUnit);
+        if (requested != null) return requested;
+        String first = firstNonBlank(firstProcessInputUnit);
+        if (first != null) return first;
+        String product = firstNonBlank(productUnit);
+        return product != null ? product : "kg";
+    }
+
+    private String resolvePlannedUnitForPlan(String factoryId, String productTypeId, String requestedUnit) {
+        String firstProcessInputUnit = null;
+        if (productWorkProcessService != null && productTypeId != null) {
+            try {
+                firstProcessInputUnit = productWorkProcessService.listByProduct(factoryId, productTypeId)
+                        .stream()
+                        .sorted(Comparator.comparing(
+                                com.cretas.aims.dto.ProductWorkProcessDTO::getProcessOrder,
+                                Comparator.nullsLast(Integer::compareTo)))
+                        .findFirst()
+                        .map(p -> firstNonBlank(p.getUnitOverride(), p.getDefaultUnit()))
+                        .orElse(null);
+            } catch (RuntimeException ex) {
+                log.warn("解析计划投入单位时读取产品工序失败, factoryId={}, productTypeId={}, err={}",
+                        factoryId, productTypeId, ex.getMessage());
+            }
+        }
+        String productUnit = productTypeId == null ? null
+                : productTypeRepository.findById(productTypeId).map(ProductType::getUnit).orElse(null);
+        return resolvePlannedUnit(firstProcessInputUnit, productUnit, requestedUnit);
+    }
+
     @Override
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public boolean getSkipProcessReportingDefault(String factoryId) {
@@ -866,6 +901,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
+        request.setPlannedUnit(resolvePlannedUnitForPlan(factoryId, request.getProductTypeId(), request.getPlannedUnit()));
+
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
 
@@ -1167,6 +1204,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // P0-12: 校验销售订单来源 + 回填客户名
         validateAndEnrichSalesOrderSource(factoryId, request);
 
+        request.setPlannedUnit(resolvePlannedUnitForPlan(
+                factoryId,
+                request.getProductTypeId() != null ? request.getProductTypeId() : plan.getProductTypeId(),
+                request.getPlannedUnit() != null ? request.getPlannedUnit() : plan.getPlannedUnit()));
+
         // 更新计划信息
         productionPlanMapper.updateEntity(plan, request);
         plan = productionPlanRepository.save(plan);
@@ -1232,6 +1274,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 复制业务字段
         newPlan.setProductTypeId(source.getProductTypeId());
         newPlan.setPlannedQuantity(source.getPlannedQuantity());
+        newPlan.setPlannedUnit(source.getPlannedUnit() != null ? source.getPlannedUnit() : "kg");
         newPlan.setPlannedDate(source.getPlannedDate());
         newPlan.setExpectedCompletionDate(source.getExpectedCompletionDate());
         newPlan.setPlanType(source.getPlanType());

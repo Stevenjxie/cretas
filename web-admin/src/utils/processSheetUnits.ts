@@ -28,6 +28,12 @@ export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits 
   return { inputUnit, outputUnit };
 }
 
+export function formatPlannedInput(quantity: number | null | undefined, unit: string | null | undefined): string {
+  if (quantity == null || quantity === 0) return '计划投料 —';
+  const normalizedUnit = nonBlank(unit) ?? 'kg';
+  return `计划投料 ${quantity} ${normalizedUnit}`;
+}
+
 export function withProcessSheetUnits<T extends LabelColumn>(
   cols: readonly T[],
   units: ProcessSheetUnits,
