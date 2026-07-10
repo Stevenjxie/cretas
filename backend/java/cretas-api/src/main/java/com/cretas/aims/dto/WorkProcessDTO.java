@@ -1,5 +1,6 @@
 package com.cretas.aims.dto;
 
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
@@ -59,6 +60,8 @@ public class WorkProcessDTO {
     /** 产出单位 (kg→盒/份; 为空沿用 unit). */
     @Size(max = 20, message = "产出单位不能超过20个字符")
     private String outputUnit;
+
+    private WorkProcessOutputMaterialKind defaultOutputMaterialKind;
 
     /**
      * 本工序产出的半成品编码。配置后, 报工产出阶段会出现"产半成品"选项,

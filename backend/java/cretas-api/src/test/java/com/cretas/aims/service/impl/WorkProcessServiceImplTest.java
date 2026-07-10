@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.WorkProcessDTO;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -213,6 +214,36 @@ class WorkProcessServiceImplTest {
             verify(workProcessRepository).save(workProcessCaptor.capture());
             assertTrue(workProcessCaptor.getValue().getNeedsInput(), "needsInput 缺省应为 true");
         }
+
+        @Test
+        @DisplayName("create() 未指定默认产出物料类型时默认为半成品")
+        void createDefaultsOutputMaterialKindToSemiFinished() {
+            WorkProcessDTO request = buildDefaultCreateDTO();
+            request.setDefaultOutputMaterialKind(null);
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO result = service.create(FACTORY_ID, request);
+
+            assertEquals(WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                    result.getDefaultOutputMaterialKind());
+        }
+
+        @Test
+        @DisplayName("create() 保留显式指定的成品产出物料类型")
+        void createKeepsExplicitFinishedGoodOutputKind() {
+            WorkProcessDTO request = buildDefaultCreateDTO();
+            request.setDefaultOutputMaterialKind(WorkProcessOutputMaterialKind.FINISHED_GOOD);
+            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
+                    .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO result = service.create(FACTORY_ID, request);
+
+            assertEquals(WorkProcessOutputMaterialKind.FINISHED_GOOD,
+                    result.getDefaultOutputMaterialKind());
+        }
     }
 
     // ==================== 查询活跃工序测试 ====================
@@ -395,6 +426,44 @@ class WorkProcessServiceImplTest {
             assertEquals(0, new BigDecimal("1.3500").compareTo(result.getStandardYieldMax()));
             assertFalse(result.getNeedsInput());
             assertEquals("份", result.getOutputUnit());
+        }
+
+        @Test
+        @DisplayName("update() 未指定默认产出物料类型时保留原值")
+        void updateNullOutputMaterialKindKeepsStoredValue() {
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setDefaultOutputMaterialKind(WorkProcessOutputMaterialKind.FINISHED_GOOD);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO request = WorkProcessDTO.builder()
+                    .defaultOutputMaterialKind(null)
+                    .build();
+
+            WorkProcessDTO result = service.update(FACTORY_ID, WP_ID, request);
+
+            assertEquals(WorkProcessOutputMaterialKind.FINISHED_GOOD,
+                    result.getDefaultOutputMaterialKind());
+        }
+
+        @Test
+        @DisplayName("update() 应用显式指定的默认产出物料类型")
+        void updateAppliesExplicitOutputMaterialKind() {
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setDefaultOutputMaterialKind(WorkProcessOutputMaterialKind.SEMI_FINISHED);
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO request = WorkProcessDTO.builder()
+                    .defaultOutputMaterialKind(WorkProcessOutputMaterialKind.FINISHED_GOOD)
+                    .build();
+
+            WorkProcessDTO result = service.update(FACTORY_ID, WP_ID, request);
+
+            assertEquals(WorkProcessOutputMaterialKind.FINISHED_GOOD,
+                    result.getDefaultOutputMaterialKind());
         }
     }
 
