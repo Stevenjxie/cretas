@@ -14,6 +14,7 @@ import {
   optimizeWorkers,
   workerCheckIn,
   workerCheckOut,
+  isDemoSchedulingFactory,
   SchedulingPlan,
   LineSchedule,
   WorkerAssignment
@@ -71,6 +72,10 @@ async function loadPlans() {
     });
     if (response.success && response.data) {
       plans.value = response.data.content || [];
+      if (!selectedPlanId.value && plans.value.length > 0) {
+        selectedPlanId.value = plans.value[0].id;
+        await handlePlanChange();
+      }
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载计划失败');
     }
@@ -82,6 +87,17 @@ async function loadPlans() {
 
 async function loadWorkers() {
   if (!factoryId.value) return;
+
+  if (isDemoSchedulingFactory(factoryId.value)) {
+    availableWorkers.value = [
+      { id: 3101, name: '赵明', position: '卤制主操' },
+      { id: 3102, name: '李蓉', position: '包装线长' },
+      { id: 3103, name: '王磊', position: '包装操作' },
+      { id: 3104, name: '周敏', position: '质检员' },
+      { id: 4101, name: '顺达人力 / 陈师傅', position: '临时包装' },
+    ];
+    return;
+  }
 
   try {
     // 加载可用工人列表
