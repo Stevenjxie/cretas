@@ -67,12 +67,23 @@ class ProductProcessWorkflowValidatorTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
     }
 
+    @Test
+    void draftRejectsCollidingProcessAndPortIdentifiers() {
+        ProductProcessWorkflowDTO definition = collidingPortKeyDefinition();
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> validator.validateForDraft(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
+    }
+
     private ProductProcessWorkflowDTO validMultiInputDefinition() {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(new ArrayList<>(List.of(
                 material("raw-a", "RAW_MATERIAL"),
                 material("raw-b", "RAW_MATERIAL"),
-                process(List.of(
+                process("process", List.of(
                         port("in-a", "INPUT", "raw-a", "RAW_MATERIAL", 0),
                         port("in-b", "INPUT", "raw-b", "RAW_MATERIAL", 1),
                         port("out", "OUTPUT", "semi", "SEMI_FINISHED", 0))),
@@ -84,6 +95,28 @@ class ProductProcessWorkflowValidatorTest {
         return definition;
     }
 
+    private ProductProcessWorkflowDTO collidingPortKeyDefinition() {
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        definition.setNodes(new ArrayList<>(List.of(
+                material("raw-1", "RAW_MATERIAL"),
+                material("raw-2", "RAW_MATERIAL"),
+                process("p", List.of(
+                        port("x::y", "INPUT", "raw-1", "RAW_MATERIAL", 0),
+                        port("out-p", "OUTPUT", "semi-1", "SEMI_FINISHED", 0))),
+                material("semi-1", "SEMI_FINISHED"),
+                process("p::x", List.of(
+                        port("y", "INPUT", "raw-2", "RAW_MATERIAL", 0),
+                        port("other", "INPUT", "raw-1", "RAW_MATERIAL", 1),
+                        port("out-px", "OUTPUT", "semi-2", "SEMI_FINISHED", 0))),
+                material("semi-2", "SEMI_FINISHED"))));
+        definition.setEdges(new ArrayList<>(List.of(
+                edge("p-output", "p", "out-p", "semi-1", "input"),
+                edge("px-input", "raw-2", "output", "p::x", "y"),
+                edge("px-other-input", "raw-1", "output", "p::x", "other"),
+                edge("px-output", "p::x", "out-px", "semi-2", "input"))));
+        return definition;
+    }
+
     private ProductProcessWorkflowDTO.Node material(String id, String kind) {
         return new ProductProcessWorkflowDTO.Node(
                 id,
@@ -92,12 +125,14 @@ class ProductProcessWorkflowValidatorTest {
                 new LinkedHashMap<>(Map.of("name", id)));
     }
 
-    private ProductProcessWorkflowDTO.Node process(List<Map<String, Object>> ports) {
+    private ProductProcessWorkflowDTO.Node process(
+            String id,
+            List<Map<String, Object>> ports) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("processName", "mix");
         data.put("ports", new ArrayList<>(ports));
         return new ProductProcessWorkflowDTO.Node(
-                "process", "PROCESS", new ProductProcessWorkflowDTO.Position(0D, 0D), data);
+                id, "PROCESS", new ProductProcessWorkflowDTO.Position(0D, 0D), data);
     }
 
     private Map<String, Object> port(

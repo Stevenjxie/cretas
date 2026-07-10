@@ -143,6 +143,30 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
+    @DisplayName("草稿保存拒绝 processId/portId 分隔符碰撞造成的缺边")
+    void saveDraftRejectsCollidingProcessAndPortIdentifiers() {
+        lenient().when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        lenient().when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.empty());
+        lenient().when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            saved.setId(92L);
+            saved.setLockVersion(0L);
+            return saved;
+        });
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, collidingPortKeyDefinition()));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("保存缺失或跨工厂 owner product 时稳定拒绝且不落库")
     void saveDraftRejectsInvalidOwningProductBeforePersistence() {
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
@@ -245,6 +269,26 @@ class ProductProcessWorkflowServiceImplTest {
             assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode(), graphCase.name());
             assertEquals(ProductProcessWorkflow.Status.DRAFT, draft.getStatus(), graphCase.name());
         }
+        verify(repository, never()).saveAndFlush(any());
+        verify(catalogValidator, never()).validateForPublish(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("发布拒绝 processId/portId 分隔符碰撞且不改变草稿状态")
+    void publishRejectsCollidingProcessAndPortIdentifiersWithoutMutation() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(collidingPortKeyDefinition(), 3L);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        lenient().when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.publish(FACTORY_ID, PRODUCT_ID, 3L));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
+        assertEquals(ProductProcessWorkflow.Status.DRAFT, draft.getStatus());
         verify(repository, never()).saveAndFlush(any());
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
     }
@@ -354,6 +398,29 @@ class ProductProcessWorkflowServiceImplTest {
                 material("finished-direct", "FINISHED_GOOD", "Finished Cell", PRODUCT_ID))));
         dto.setEdges(new ArrayList<>(List.of(
                 edge("direct", "raw-direct", "out", "finished-direct", "in"))));
+        dto.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
+        return dto;
+    }
+
+    private ProductProcessWorkflowDTO collidingPortKeyDefinition() {
+        ProductProcessWorkflowDTO dto = new ProductProcessWorkflowDTO();
+        dto.setNodes(new ArrayList<>(List.of(
+                material("raw-1", "RAW_MATERIAL", "Raw 1", "RM-1"),
+                material("raw-2", "RAW_MATERIAL", "Raw 2", "RM-2"),
+                process("p", "Process p", List.of(
+                        port("x::y", "INPUT", "raw-1", "RAW_MATERIAL", 0),
+                        port("out-p", "OUTPUT", "finished-1", "FINISHED_GOOD", 0))),
+                material("finished-1", "FINISHED_GOOD", "Finished 1", "FG-1"),
+                process("p::x", "Process px", List.of(
+                        port("y", "INPUT", "raw-2", "RAW_MATERIAL", 0),
+                        port("other", "INPUT", "raw-1", "RAW_MATERIAL", 1),
+                        port("out-px", "OUTPUT", "finished-2", "FINISHED_GOOD", 0))),
+                material("finished-2", "FINISHED_GOOD", "Finished 2", "FG-2"))));
+        dto.setEdges(new ArrayList<>(List.of(
+                edge("p-output", "p", "out-p", "finished-1", "input"),
+                edge("px-input", "raw-2", "output", "p::x", "y"),
+                edge("px-other-input", "raw-1", "output", "p::x", "other"),
+                edge("px-output", "p::x", "out-px", "finished-2", "input"))));
         dto.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
         return dto;
     }

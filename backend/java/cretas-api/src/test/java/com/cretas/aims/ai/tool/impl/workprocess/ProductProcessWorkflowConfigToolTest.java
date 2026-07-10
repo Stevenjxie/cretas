@@ -132,6 +132,16 @@ class ProductProcessWorkflowConfigToolTest {
     }
 
     @Test
+    void publicPreviewRejectsCollidingProcessAndPortIdentifiers() throws Exception {
+        Map<String, Object> envelope = preview(
+                collidingPortKeyDefinition(),
+                List.of(setField("p", "reportingRequired", false)));
+
+        assertFalse((Boolean) envelope.get("success"));
+        assertEquals("WORKFLOW_PATCH_REJECTED", envelope.get("errorCode"));
+    }
+
+    @Test
     void executeIsAlwaysRejectedWithSemanticErrorCode() throws Exception {
         ToolCall call = ToolCall.of(
                 "execute-1",
@@ -146,8 +156,14 @@ class ProductProcessWorkflowConfigToolTest {
     }
 
     private Map<String, Object> preview(List<Map<String, Object>> patches) throws Exception {
+        return preview(definition(), patches);
+    }
+
+    private Map<String, Object> preview(
+            Map<String, Object> definition,
+            List<Map<String, Object>> patches) throws Exception {
         String arguments = objectMapper.writeValueAsString(Map.of(
-                "definition", definition(),
+                "definition", definition,
                 "patches", patches));
         return objectMapper.readValue(
                 tool.preview(
@@ -204,6 +220,31 @@ class ProductProcessWorkflowConfigToolTest {
                 "edges", List.of(
                         edge("edge:raw:process", "raw", "output", "process:1", "input:1"),
                         edge("edge:process:semi", "process:1", "output:1", "semi", "input")),
+                "viewport", Map.of("x", 0, "y", 0, "zoom", 1));
+    }
+
+    private Map<String, Object> collidingPortKeyDefinition() {
+        return Map.of(
+                "schemaVersion", 1,
+                "status", "DRAFT",
+                "version", 1,
+                "nodes", List.of(
+                        materialNode("raw-1", "RAW_MATERIAL"),
+                        materialNode("raw-2", "RAW_MATERIAL"),
+                        processNode("p", List.of(
+                                port("x::y", "INPUT", "raw-1", "kg", 0),
+                                port("out-p", "OUTPUT", "semi-1", "kg", 0))),
+                        materialNode("semi-1", "SEMI_FINISHED"),
+                        processNode("p::x", List.of(
+                                port("y", "INPUT", "raw-2", "kg", 0),
+                                port("other", "INPUT", "raw-1", "kg", 1),
+                                port("out-px", "OUTPUT", "semi-2", "kg", 0))),
+                        materialNode("semi-2", "SEMI_FINISHED")),
+                "edges", List.of(
+                        edge("p-output", "p", "out-p", "semi-1", "input"),
+                        edge("px-input", "raw-2", "output", "p::x", "y"),
+                        edge("px-other-input", "raw-1", "output", "p::x", "other"),
+                        edge("px-output", "p::x", "out-px", "semi-2", "input")),
                 "viewport", Map.of("x", 0, "y", 0, "zoom", 1));
     }
 

@@ -187,7 +187,7 @@ public class ProductProcessWorkflowValidator {
             portsByProcess.put(node.getId(), portsById);
         }
 
-        Map<String, Integer> matchedEdgeCount = new HashMap<>();
+        Map<PortKey, Integer> matchedEdgeCount = new HashMap<>();
         for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
             ProductProcessWorkflowDTO.Node source = nodesById.get(edge.getSource());
             ProductProcessWorkflowDTO.Node target = nodesById.get(edge.getTarget());
@@ -222,14 +222,14 @@ public class ProductProcessWorkflowValidator {
                 }
             }
 
-            String bindingKey = processId + "::" + portId;
+            PortKey bindingKey = new PortKey(processId, portId);
             if (matchedEdgeCount.merge(bindingKey, 1, Integer::sum) != 1) {
                 invalid("一个工序端口只能对应一条连线: " + portId);
             }
         }
 
         portsByProcess.forEach((processId, ports) -> ports.forEach((portId, binding) -> {
-            if (matchedEdgeCount.getOrDefault(processId + "::" + portId, 0) != 1) {
+            if (matchedEdgeCount.getOrDefault(new PortKey(processId, portId), 0) != 1) {
                 invalid("工序端口必须且只能连接一次: " + portId);
             }
         }));
@@ -322,5 +322,10 @@ public class ProductProcessWorkflowValidator {
     private record PortBinding(
             String direction,
             String materialNodeId) {
+    }
+
+    private record PortKey(
+            String processId,
+            String portId) {
     }
 }

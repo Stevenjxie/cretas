@@ -96,3 +96,55 @@ Catalog production code was not changed or relaxed. The valid two-process chain 
 
 - Message: `fix: enforce workflow graph ownership invariants`
 - Commit: the commit containing this report; exact hash is recorded in the parent handoff.
+
+## Reviewer follow-up: collision-free process/port keys
+
+### Finding
+
+The first implementation counted matched edges with `processId + "::" + portId`. Because `::` is legal in both IDs, distinct bindings `p/x::y` and `p::x/y` both serialized to `p::x::y`. One real edge for `p::x/y` could therefore hide the missing edge for `p/x::y`.
+
+### TDD RED
+
+The regression graph contains:
+
+- `p/x::y` bound to `raw-1` with no matching edge;
+- `p::x/y` bound to `raw-2` with a matching edge;
+- separate valid output ports/edges for both processes;
+- an additional valid `raw-1 -> p::x/other` edge so publish completeness cannot reject an unrelated disconnected material first.
+
+Command:
+
+```powershell
+mvn "-Dtest=ProductProcessWorkflowValidatorTest,ProductProcessWorkflowServiceImplTest,ProductProcessWorkflowConfigToolTest" test
+```
+
+Result before the production fix: 27 tests run; 4 failures; 0 errors; BUILD FAILURE. The shared validator, `saveDraft`, `publish`, and AI public preview all accepted the collision graph.
+
+### Fix
+
+- Replaced `Map<String, Integer>` with `Map<PortKey, Integer>`.
+- Added `record PortKey(String processId, String portId)` and used it for both edge-count insertion and declared-port lookup.
+- Did not reserve or reject `::`; all existing nonblank IDs remain legal and are compared structurally.
+
+### GREEN
+
+Final focused command:
+
+```powershell
+mvn "-Dtest=ProductProcessWorkflowValidatorTest,ProductProcessWorkflowCatalogValidatorTest,ProductProcessWorkflowServiceImplTest,ProductProcessWorkflowConfigToolTest,CanvasAIWorkflowConfigTest" test
+```
+
+Result: 70 tests run; 0 failures; 0 errors; 0 skipped; BUILD SUCCESS.
+
+- `ProductProcessWorkflowValidatorTest`: 5 passed.
+- `ProductProcessWorkflowCatalogValidatorTest`: 36 passed.
+- `ProductProcessWorkflowServiceImplTest`: 14 passed.
+- `ProductProcessWorkflowConfigToolTest`: 8 passed.
+- `CanvasAIWorkflowConfigTest`: 7 passed.
+
+Fresh `mvn -DskipTests compile`: BUILD SUCCESS; 3,695 main sources compiled.
+
+### Follow-up commit
+
+- Message: `fix: use collision-free workflow port keys`
+- Commit: the new commit containing this follow-up; exact hash is recorded in the parent handoff. The original `b85283bf5` commit was not amended.
