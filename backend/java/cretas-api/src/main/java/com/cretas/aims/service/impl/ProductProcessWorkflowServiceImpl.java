@@ -8,6 +8,7 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
+import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ProductProcessWorkflowRepository repository;
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
+    private final ProductProcessWorkflowCatalogValidator catalogValidator;
 
     @Override
     @Transactional(readOnly = true)
@@ -79,6 +81,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         assertCurrentVersion(lockVersion, draft);
         ProductProcessWorkflowDTO definition = toDTO(draft);
         validator.validateForPublish(definition);
+        catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         return toDTO(repository.saveAndFlush(draft));
     }

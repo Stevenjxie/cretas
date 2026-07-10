@@ -5,6 +5,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -38,6 +40,9 @@ class ProductProcessWorkflowServiceImplTest {
     @Mock
     private ProductProcessWorkflowRepository repository;
 
+    @Mock
+    private ProductProcessWorkflowCatalogValidator catalogValidator;
+
     private ProductProcessWorkflowValidator validator;
     private ProductProcessWorkflowServiceImpl service;
 
@@ -45,7 +50,7 @@ class ProductProcessWorkflowServiceImplTest {
     void setUp() {
         ObjectMapper objectMapper = new ObjectMapper();
         validator = new ProductProcessWorkflowValidator();
-        service = new ProductProcessWorkflowServiceImpl(repository, objectMapper, validator);
+        service = new ProductProcessWorkflowServiceImpl(repository, objectMapper, validator, catalogValidator);
     }
 
     @Test
@@ -97,6 +102,7 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(7, saved.getEdges().size());
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
+        verify(catalogValidator, never()).validateForPublish(any(), any(), any());
     }
 
     @Test
@@ -164,6 +170,7 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), published.getStatus());
         assertEquals(1, published.getVersion());
         assertEquals(4L, published.getLockVersion());
+        verify(catalogValidator).validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());
         verify(repository).saveAndFlush(draft);
     }
 
