@@ -48,6 +48,24 @@ def test_dish_margin_note_is_honest_degradation():
     assert "加权毛利率" in NOTE_DISH_MARGIN_ABSENT
 
 
+def test_plan_dimensions_no_dish_margin_keyerror():
+    """Regression: removing the 'dish_margin' plan key must not leave a subscript
+    reference in the open-all fallback (a supplier-only question 500'd with KeyError)."""
+    from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
+    eng = ComprehensiveSynthesisEngine.__new__(ComprehensiveSynthesisEngine)
+    # supplier-only (finance False) — previously reached plan["dish_margin"] → KeyError
+    plan = eng.plan_dimensions("哪个供应商偷偷涨价有没有回扣", has_history=False)
+    assert plan["supplier_anomaly"] is True
+    # explicit dim → fallback must NOT open review/finance/sales
+    assert plan["review"] is False and plan["finance"] is False and plan["sales"] is False
+    # bare vague question DOES trip the open-all fallback
+    plan2 = eng.plan_dimensions("帮我看看", has_history=False)
+    assert plan2["review"] and plan2["finance"] and plan2["sales"]
+    # dish-margin ask redirects to finance (+ period_comparison via 利润/生意? no — just finance)
+    plan3 = eng.plan_dimensions("哪道菜毛利最高", has_history=False)
+    assert plan3["dish_margin_asked"] is True and plan3["finance"] is True
+
+
 def test_period_comparison_render_and_degradation():
     pc = {
         "revenue": {"current": 1000000.0, "available": True, "yoy_pct": None, "mom_pct": -3.2,
