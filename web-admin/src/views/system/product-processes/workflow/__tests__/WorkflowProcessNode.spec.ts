@@ -82,6 +82,8 @@ describe('WorkflowProcessNode output gestures', () => {
     await wrapper.get('.process-node').trigger('mouseenter');
 
     expect(wrapper.find('[data-testid="add-output-edge"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="add-output-edge"]').trigger('click');
+    expect(wrapper.emitted('addOutput')).toHaveLength(1);
   });
 
   it('does not expose a manual output material kind selector', () => {
@@ -99,17 +101,30 @@ describe('WorkflowProcessNode output gestures', () => {
     expect(wrapper.emitted('addOutput')).toBeUndefined();
   });
 
-  it('keeps the edge action outside the single source handle hit area', () => {
+  it('keeps the edge action separated from the source handle without a hover gap', () => {
     const wrapper = mountNode();
+    const processNode = wrapper.get('.process-node');
     const sourceHandle = wrapper.get('[data-handle-type="source"]');
     const edgeAction = wrapper.get('[data-testid="add-output-edge"]');
 
     expect(sourceHandle.attributes('data-position')).toBe('right');
-    expect((sourceHandle.element as HTMLElement).style.top).toBe('50%');
-
+    const sourceTopPercent = Number.parseFloat((sourceHandle.element as HTMLElement).style.top);
+    const nodeMinHeight = Number.parseFloat((processNode.element as HTMLElement).style.minHeight);
+    const edgeTop = Number.parseFloat((edgeAction.element as HTMLElement).style.top);
     const edgeRight = Number.parseFloat((edgeAction.element as HTMLElement).style.right);
-    const edgeCenterFromNodeRight = -edgeRight - 14;
-    const minimumCenterDistance = (28 + 10) / 2;
-    expect(edgeCenterFromNodeRight).toBeGreaterThan(minimumCenterDistance);
+    expect({ sourceTopPercent, nodeMinHeight, edgeTop, edgeRight }).toEqual({
+      sourceTopPercent: 50,
+      nodeMinHeight: 96,
+      edgeTop: 12,
+      edgeRight: -14,
+    });
+
+    const sourceCenterY = nodeMinHeight * sourceTopPercent / 100;
+    const sourceTop = sourceCenterY - 10 / 2;
+    const edgeBottom = edgeTop + 28;
+    expect(edgeBottom).toBeLessThanOrEqual(sourceTop);
+
+    const edgeLeftFromNodeRight = -edgeRight - 28;
+    expect(edgeLeftFromNodeRight).toBeLessThanOrEqual(0);
   });
 });

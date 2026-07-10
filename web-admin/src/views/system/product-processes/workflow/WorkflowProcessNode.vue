@@ -2,6 +2,7 @@
   <div
     class="process-node"
     :class="{ selected }"
+    :style="processNodeStyle"
     @mouseenter="hovered = true"
     @mouseleave="hovered = false"
   >
@@ -172,7 +173,8 @@ const emit = defineEmits<{
 }>();
 
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
-const edgeOutputStyle = { right: '-44px' } as const;
+const processNodeStyle = { minHeight: '96px' } as const;
+const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
@@ -212,7 +214,6 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .create-option { color: #409eff; font-weight: 600; }
 .edge-output-add {
   position: absolute;
-  top: 50%;
   z-index: 2;
   display: grid;
   place-items: center;
@@ -228,7 +229,6 @@ function handleStyle(index: number, count: number): Record<string, string> {
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
-  transform: translateY(-50%);
 }
 .edge-output-add:hover { background: #eaf4ff; }
 :deep(.vue-flow__handle) { width: 10px; height: 10px; border: 2px solid #fff; background: #1b65a8; }
