@@ -683,6 +683,249 @@ async def order_type_mix(
     }
 
 
+# ── Restaurant-analytics dimensions: 渠道(点餐方式) / 时段 / 折扣 ──────────
+#
+# Follows the dish_margin() pattern (queries.py): deterministic aggregation,
+# Decimal + ROUND_HALF_UP (python-java-port.md Rule 10/12), plain dicts. The
+# LLM never derives these numbers, only narrates them (synthesis_engine plan
+# gates + factbook renders).
+#
+# NAMING NOTE: this "渠道" dimension is service-mode (堂食/外卖/自提), sourced
+# from agg_daily_order_type_meal.order_type — NOT the same concept as the
+# existing ``channel_breakdown()`` above, which is PAYMENT channel (微信/美团)
+# sourced from agg_channel/dim_payment_channel and already wired into the
+# "sales" synthesis dimension. To avoid shadowing that existing function this
+# one is named ``order_type_breakdown`` (mirrors ``order_type_mix`` above,
+# which powers the dashboard chart but lacks 客单价 and meal_period support).
+
+
+async def order_type_breakdown(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """渠道(点餐方式) breakdown — 堂食/外卖/自提 revenue/order/ticket split.
+
+    Source: agg_daily_order_type_meal.order_type. Deterministic; the LLM
+    never derives 客单价/占比 — both are computed here.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1", "order_type IS NOT NULL"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT order_type,
+                   COALESCE(SUM(actual_receive), 0)::numeric(18,2) AS revenue,
+                   COALESCE(SUM(bill_count), 0)                    AS bill_count
+              FROM agg_daily_order_type_meal
+             WHERE {where}
+             GROUP BY order_type
+             ORDER BY SUM(actual_receive) DESC
+            """,
+            *params,
+        )
+    total_revenue = sum((Decimal(str(r["revenue"])) for r in rows), Decimal("0"))
+    items = []
+    for r in rows:
+        revenue = Decimal(str(r["revenue"]))
+        bills = int(r["bill_count"] or 0)
+        avg_ticket = (
+            (revenue / bills).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if bills > 0 else None
+        )
+        share_pct = (
+            (revenue / total_revenue * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if total_revenue > 0 else Decimal("0")
+        )
+        items.append({
+            "order_type": _clean_display_name(r["order_type"]),
+            "revenue": float(revenue),
+            "bill_count": bills,
+            "avg_ticket": float(avg_ticket) if avg_ticket is not None else None,
+            "revenue_pct": float(share_pct),
+        })
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "total_revenue": float(total_revenue),
+        "order_types": items,
+    }
+
+
+async def meal_period_breakdown(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """时段 breakdown — 午市/晚市/夜宵 revenue/order/ticket split.
+
+    Source: agg_daily_order_type_meal.meal_period (same table as
+    order_type_breakdown, grouped on the OTHER dimension). Deterministic.
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1", "meal_period IS NOT NULL"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT meal_period,
+                   COALESCE(SUM(actual_receive), 0)::numeric(18,2) AS revenue,
+                   COALESCE(SUM(bill_count), 0)                    AS bill_count
+              FROM agg_daily_order_type_meal
+             WHERE {where}
+             GROUP BY meal_period
+             ORDER BY SUM(actual_receive) DESC
+            """,
+            *params,
+        )
+    total_revenue = sum((Decimal(str(r["revenue"])) for r in rows), Decimal("0"))
+    items = []
+    for r in rows:
+        revenue = Decimal(str(r["revenue"]))
+        bills = int(r["bill_count"] or 0)
+        avg_ticket = (
+            (revenue / bills).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if bills > 0 else None
+        )
+        share_pct = (
+            (revenue / total_revenue * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if total_revenue > 0 else Decimal("0")
+        )
+        items.append({
+            "meal_period": _clean_display_name(r["meal_period"]),
+            "revenue": float(revenue),
+            "bill_count": bills,
+            "avg_ticket": float(avg_ticket) if avg_ticket is not None else None,
+            "revenue_pct": float(share_pct),
+        })
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "total_revenue": float(total_revenue),
+        "meal_periods": items,
+    }
+
+
+async def discount_summary(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """折扣 dimension — 折扣总额 / 占营收比 / 按类型构成 (DESCRIPTIVE only).
+
+    Source: agg_discount (monthly grain) JOIN dim_discount for names, plus
+    agg_daily for the revenue denominator. This is intentionally descriptive
+    — it reports how much was discounted and its share of revenue, and NEVER
+    claims discounts "brought in" incremental revenue (no causal claim can be
+    grounded from these tables; that would require a control-group comparison
+    this schema doesn't carry).
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    start_m = start.replace(day=1) if start is not None else None
+    end_m = end.replace(day=1) if end is not None else None
+    conds = ["a.factory_id = $1"]
+    params: list = [factory_id]
+    if start_m is not None:
+        params.append(start_m)
+        conds.append(f"a.month >= ${len(params)}")
+    if end_m is not None:
+        params.append(end_m)
+        conds.append(f"a.month <= ${len(params)}")
+    where = " AND ".join(conds)
+    params.append(int(top_n))
+    limit_ph = f"${len(params)}"
+
+    rev_conds = ["factory_id = $1"]
+    rev_params: list = [factory_id]
+    if start is not None:
+        rev_params.append(start)
+        rev_conds.append(f"date >= ${len(rev_params)}")
+    if end is not None:
+        rev_params.append(end)
+        rev_conds.append(f"date <= ${len(rev_params)}")
+    rev_where = " AND ".join(rev_conds)
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT d.discount_id,
+                   d.name,
+                   SUM(a.amount)::numeric(18,2) AS amount,
+                   SUM(a.bill_count)            AS bill_count
+              FROM agg_discount a
+              JOIN dim_discount d ON d.discount_id = a.discount_id
+             WHERE {where}
+             GROUP BY d.discount_id, d.name
+             ORDER BY SUM(a.amount) DESC
+             LIMIT {limit_ph}
+            """,
+            *params,
+        )
+        rev_row = await conn.fetchrow(
+            f"""
+            SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2) AS revenue
+              FROM agg_daily
+             WHERE {rev_where}
+            """,
+            *rev_params,
+        )
+
+    total_discount = sum((Decimal(str(r["amount"])) for r in rows), Decimal("0"))
+    total_revenue = (
+        Decimal(str(rev_row["revenue"]))
+        if rev_row and rev_row["revenue"] is not None else Decimal("0")
+    )
+    revenue_share_pct = (
+        (total_discount / total_revenue * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        if total_revenue > 0 else None
+    )
+    items = []
+    for r in rows:
+        amt = Decimal(str(r["amount"]))
+        share = (
+            (amt / total_discount * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if total_discount > 0 else Decimal("0")
+        )
+        items.append({
+            "discount_id": int(r["discount_id"]),
+            "discount_name": _clean_display_name(r["name"]),
+            "amount": float(amt),
+            "bill_count": int(r["bill_count"] or 0),
+            "share_pct": float(share),
+        })
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "total_discount_amount": float(total_discount),
+        "total_revenue": float(total_revenue),
+        "revenue_share_pct": float(revenue_share_pct) if revenue_share_pct is not None else None,
+        "discounts": items,
+    }
+
+
 async def staff_ranking(
     pool: asyncpg.Pool,
     factory_id: str,

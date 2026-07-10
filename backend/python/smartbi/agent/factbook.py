@@ -10,6 +10,11 @@ Composition (filled by ``synthesis_engine._build_factbook`` per the dimension pl
                   review_store_ranking (差评门店) etc.
   - ``finance`` : gold finance_summary (total_revenue / bills / avg_bill / top_stores)
   - ``sales``   : gold top_products / channel_breakdown / discount_breakdown
+  - ``channel``     : gold order_type_breakdown (渠道/点餐方式 堂食/外卖/自提 —
+                  NOT the payment-channel breakdown embedded in ``sales``)
+  - ``meal_period`` : gold meal_period_breakdown (时段 午市/晚市/夜宵)
+  - ``discount``    : gold discount_summary (折扣总额/占营收比/构成, DESCRIPTIVE
+                  only — never a causal "折扣带来了多少营收" claim)
   - ``cross_hints`` : pre-computed cross-relations (VIP×星级, 时段×营收 ...) — these
                   are DESCRIPTIVE relationships only (相关 ≠ 因果).
   - ``notes``   : honest labels (小样本 / 标签语义 / 空数据 next-action).
@@ -82,6 +87,11 @@ class FactBook:
     # traffic-vs-ticket question). See ``compute_store_attribution``.
     attribution: Optional[Dict[str, Any]] = None
     weather: Optional[Dict[str, Any]] = None
+    # 渠道(点餐方式 堂食/外卖/自提) / 时段(午市/晚市/夜宵) / 折扣 dimensions —
+    # gold.order_type_breakdown / gold.meal_period_breakdown / gold.discount_summary.
+    channel: Optional[Dict[str, Any]] = None
+    meal_period: Optional[Dict[str, Any]] = None
+    discount: Optional[Dict[str, Any]] = None
     cross_hints: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     # Echoed window for the prompt header (set by the engine).
@@ -109,6 +119,9 @@ class FactBook:
         self._render_attribution(lines)
         self._render_dish_margin(lines)
         self._render_sales(lines)
+        self._render_channel(lines)
+        self._render_meal_period(lines)
+        self._render_discount(lines)
         self._render_cross(lines)
 
         if self.notes:
@@ -347,6 +360,58 @@ class FactBook:
                 )
         lines.append("")
 
+    def _render_channel(self, lines: List[str]) -> None:
+        ch = self.channel
+        if not ch:
+            return
+        items = ch.get("order_types") or []
+        if not items:
+            return
+        lines.append("## 渠道（点餐方式：堂食/外卖/自提，按营业额）")
+        for it in items:
+            avg_ticket = it.get("avg_ticket")
+            ticket_seg = f"，客单价 ¥{_money(avg_ticket)}" if avg_ticket is not None else ""
+            lines.append(
+                f"- {it.get('order_type')}：营收 ¥{_money(it.get('revenue'))}"
+                f"（订单 {int(it.get('bill_count') or 0):,} 单，占比 {it.get('revenue_pct')}%）{ticket_seg}"
+            )
+        lines.append("")
+
+    def _render_meal_period(self, lines: List[str]) -> None:
+        mp = self.meal_period
+        if not mp:
+            return
+        items = mp.get("meal_periods") or []
+        if not items:
+            return
+        lines.append("## 时段（午市/晚市/夜宵，按营业额）")
+        for it in items:
+            avg_ticket = it.get("avg_ticket")
+            ticket_seg = f"，客单价 ¥{_money(avg_ticket)}" if avg_ticket is not None else ""
+            lines.append(
+                f"- {it.get('meal_period')}：营收 ¥{_money(it.get('revenue'))}"
+                f"（订单 {int(it.get('bill_count') or 0):,} 单，占比 {it.get('revenue_pct')}%）{ticket_seg}"
+            )
+        lines.append("")
+
+    def _render_discount(self, lines: List[str]) -> None:
+        dsc = self.discount
+        if not dsc:
+            return
+        items = dsc.get("discounts") or []
+        if not items:
+            return
+        share = dsc.get("revenue_share_pct")
+        share_seg = f"，占营收比 {share}%" if share is not None else ""
+        lines.append("## 折扣（总额/构成，描述性数据，非因果——不代表折扣带来了这些营收）")
+        lines.append(f"- 折扣总额 ¥{_money(dsc.get('total_discount_amount'))}{share_seg}")
+        seg = "；".join(
+            f"{d.get('discount_name')} ¥{_money(d.get('amount'))}（{d.get('share_pct')}%）"
+            for d in items[:6]
+        )
+        lines.append(f"- 构成：{seg}")
+        lines.append("")
+
     def _render_cross(self, lines: List[str]) -> None:
         if not self.cross_hints:
             return
@@ -452,6 +517,47 @@ class FactBook:
             v = _num(weather.get("rain_vs_sunny_pct"))
             if v is not None:
                 idx["天气影响率"] = v
+
+        ch = self.channel or {}
+        for it in (ch.get("order_types") or []):
+            name = it.get("order_type")
+            if not name:
+                continue
+            for suffix, key in (("营收", "revenue"), ("客单价", "avg_ticket"),
+                                 ("占比", "revenue_pct"), ("订单数", "bill_count")):
+                v = _num(it.get(key))
+                if v is not None:
+                    idx[f"{name}{suffix}"] = v
+
+        mp = self.meal_period or {}
+        for it in (mp.get("meal_periods") or []):
+            name = it.get("meal_period")
+            if not name:
+                continue
+            for suffix, key in (("营收", "revenue"), ("客单价", "avg_ticket"),
+                                 ("占比", "revenue_pct"), ("订单数", "bill_count")):
+                v = _num(it.get(key))
+                if v is not None:
+                    idx[f"{name}{suffix}"] = v
+
+        dsc = self.discount or {}
+        if dsc:
+            v = _num(dsc.get("total_discount_amount"))
+            if v is not None:
+                idx["折扣总额"] = v
+            v = _num(dsc.get("revenue_share_pct"))
+            if v is not None:
+                idx["折扣占营收比"] = v
+            for d in (dsc.get("discounts") or []):
+                name = d.get("discount_name")
+                if not name:
+                    continue
+                v = _num(d.get("amount"))
+                if v is not None:
+                    idx[f"{name}折扣额"] = v
+                v = _num(d.get("share_pct"))
+                if v is not None:
+                    idx[f"{name}折扣占比"] = v
         return idx
 
     # -----------------------------------------------------------------
