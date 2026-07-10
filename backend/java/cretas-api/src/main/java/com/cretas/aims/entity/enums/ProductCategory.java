@@ -51,6 +51,7 @@ public final class ProductCategory {
     public static boolean isSellable(String category) {
         return FINISHED_PRODUCT.equals(category) || DISH.equals(category)
                 || COMBO.equals(category) || SEMI_FINISHED.equals(category)
-                || CONTRACT_MANUFACTURING.equals(category);
+                || CONTRACT_MANUFACTURING.equals(category)
+                || CUSTOMER_MATERIAL.equals(category);
     }
 }

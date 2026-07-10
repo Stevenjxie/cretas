@@ -32,6 +32,7 @@ import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
@@ -136,6 +137,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             "请从采购入库、退货入库或盘点单发起；历史数据或批量迁移请走 LEGACY_IMPORT 并申请 inventory:legacy_import 授权";
     private static final String LEGACY_IMPORT_SOURCE_DOC_TYPE = "LEGACY_IMPORT";
     private static final String LEGACY_IMPORT_PERMISSION = "inventory:legacy_import";
+    public static final String CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE = "CUSTOMER_MATERIAL_RECEIPT";
     /**
      * 期初建账 (opening inventory onboarding) 来源单据类型。建账时凭空建立起始库存,
      * <b>不产生应付账款</b> (与采购入库 PURCHASE_RECEIVE 相反) —— 期初存货的对方科目是
@@ -158,6 +160,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
     @Autowired(required = false)
     private FactoryMaterialRequisitionRepository factoryMaterialRequisitionRepository;
+    @Autowired(required = false)
+    private SalesOrderRepository salesOrderRepository;
     @Autowired(required = false)
     private PermissionService permissionService;
     @Autowired(required = false)
@@ -433,6 +437,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 // SalesReturn entity 暂未建, 仅记录引用, 不强校验存在性
                 log.info("P0-17: 销售退货入库 sourceDocId={} (SalesReturn 单据校验暂 skip)", id);
                 break;
+            case CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE:
+                if (id == null || id.isBlank()) {
+                    throw new BusinessException(400, "入库必须关联有效的发起单 (CUSTOMER_MATERIAL_RECEIPT sourceDocId 为空)")
+                            .withHint("请选择关联的销售订单").withHintTarget("sourceDocId");
+                }
+                if (salesOrderRepository == null || salesOrderRepository.findById(id)
+                        .filter(order -> Objects.equals(factoryId, order.getFactoryId()))
+                        .isEmpty()) {
+                    throw new BusinessException(404, "入库必须关联有效的发起单: 销售订单 " + id + " 不存在")
+                            .withHint("请确认销售订单属于当前工厂, 或重新选择销售订单");
+                }
+                break;
             case "INVENTORY_GAIN":
                 // B9 (客户原话 4850s): 仓库盘点产生的盘盈入库, 不需 sourceDocId, 但 notes 必填说明盘点单号/原因
                 if (request.getNotes() == null || request.getNotes().isBlank()) {
@@ -464,7 +480,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 break;
             default:
                 throw new BusinessException(400, "不支持的 sourceDocType: " + type)
-                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/INVENTORY_GAIN/FREE_GIFT/LEGACY_IMPORT/OPENING)");
+                        .withHint("请使用支持的入库类型 (MANUAL_ADJUST/PURCHASE_RECEIVE/MATERIAL_REQUISITION_RETURN/SALES_RETURN/CUSTOMER_MATERIAL_RECEIPT/INVENTORY_GAIN/FREE_GIFT/LEGACY_IMPORT/OPENING)");
         }
     }
 

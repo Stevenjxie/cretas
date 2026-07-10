@@ -16,7 +16,17 @@ export interface OrderItemRow {
   specification?: string;
   [k: string]: unknown;
 }
-interface ProductOption { id: string; name: string; unit?: string; [k: string]: unknown; }
+interface ProductOption {
+  id: string;
+  name: string;
+  unit?: string;
+  code?: string;
+  specification?: string;
+  packageSpec?: string;
+  productCategory?: string;
+  category?: string;
+  [k: string]: unknown;
+}
 
 const props = defineProps<{ items: OrderItemRow[]; products: ProductOption[] }>();
 const emit = defineEmits<{
@@ -48,6 +58,35 @@ function patch(idx: number, key: keyof OrderItemRow, val: unknown) {
 }
 
 const hasProducts = computed(() => props.products.length > 0);
+
+const categoryLabels: Record<string, string> = {
+  FINISHED_PRODUCT: '成品',
+  RAW_MATERIAL: '原料',
+  PACKAGING: '包材',
+  SEASONING: '调味料',
+  CUSTOMER_MATERIAL: '客供料',
+  CONTRACT_MANUFACTURING: '代工',
+};
+
+function textPart(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function productCategoryLabel(product: ProductOption): string {
+  const code = textPart(product.productCategory) || textPart(product.category);
+  return categoryLabels[code] || code;
+}
+
+function productOptionLabel(product: ProductOption): string {
+  return [
+    textPart(product.code),
+    textPart(product.name),
+    textPart(product.specification) || textPart(product.packageSpec),
+    productCategoryLabel(product),
+  ].filter(Boolean).join(' / ');
+}
+
+defineExpose({ productOptionLabel });
 </script>
 
 <template>
@@ -56,9 +95,11 @@ const hasProducts = computed(() => props.products.length > 0);
     <el-table v-else :data="rows" border size="small">
       <el-table-column label="产品" min-width="160">
         <template #default="{ row, $index }">
-          <el-select v-if="row" :model-value="row.productTypeId" placeholder="选择产品" filterable
+          <el-select v-if="row" :model-value="row.productTypeId" placeholder="选择产品"
+            filterable
+            clearable
             @update:model-value="(v: string) => onProductChange($index, v)">
-            <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
+            <el-option v-for="p in products" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
           </el-select>
         </template>
       </el-table-column>

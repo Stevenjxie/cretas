@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.InboundType;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.MaterialBatchMapper;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
@@ -15,6 +16,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.factory.WarehouseResolver;
@@ -65,6 +67,7 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
     @Mock private FactoryMaterialRequisitionRepository factoryMaterialRequisitionRepository;
+    @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private PermissionService permissionService;
     @Mock private UserRepository userRepository;
 
@@ -85,6 +88,7 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "purchaseReceiveRecordRepository", purchaseReceiveRecordRepository);
         ReflectionTestUtils.setField(service, "factoryMaterialRequisitionRepository", factoryMaterialRequisitionRepository);
+        injectSalesOrderRepositoryIfPresent();
         ReflectionTestUtils.setField(service, "permissionService", permissionService);
         ReflectionTestUtils.setField(service, "userRepository", userRepository);
 
@@ -118,6 +122,51 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
         user.setFactoryId(FACTORY);
         user.setRoleCode("warehouse_manager");
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+    }
+
+    @Test
+    @DisplayName("CUSTOMER_MATERIAL_RECEIPT linked to same-factory sales order -> allowed")
+    void createBatch_customerMaterialReceiptWithSalesOrder_allowed() {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-1");
+        order.setFactoryId(FACTORY);
+        when(salesOrderRepository.findById("SO-1")).thenReturn(Optional.of(order));
+        CreateMaterialBatchRequest request = baseRequest();
+        request.setSourceDocType("CUSTOMER_MATERIAL_RECEIPT");
+        request.setSourceDocId("SO-1");
+        request.setSupplierId("CUSTOMER");
+        request.setNotes("customer supplied material for SO-1");
+
+        assertThatCode(() -> service.createMaterialBatch(FACTORY, request, USER_ID))
+                .doesNotThrowAnyException();
+
+        ArgumentCaptor<MaterialBatch> captor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository).save(captor.capture());
+        assertThat(captor.getValue().getSourceDocType()).isEqualTo("CUSTOMER_MATERIAL_RECEIPT");
+        assertThat(captor.getValue().getSourceDocId()).isEqualTo("SO-1");
+    }
+
+    @Test
+    @DisplayName("CUSTOMER_MATERIAL_RECEIPT linked to another factory sales order -> rejected")
+    void createBatch_customerMaterialReceiptOtherFactory_rejected() {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-OTHER");
+        order.setFactoryId("F999");
+        when(salesOrderRepository.findById("SO-OTHER")).thenReturn(Optional.of(order));
+        CreateMaterialBatchRequest request = baseRequest();
+        request.setSourceDocType("CUSTOMER_MATERIAL_RECEIPT");
+        request.setSourceDocId("SO-OTHER");
+        request.setSupplierId("CUSTOMER");
+        request.setNotes("customer supplied material for SO-OTHER");
+
+        assertThatThrownBy(() -> service.createMaterialBatch(FACTORY, request, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(404);
+                    assertThat(be.getMessage()).contains("SO-OTHER");
+                });
+        verify(materialBatchRepository, never()).save(any());
     }
 
     @Test
@@ -208,5 +257,13 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
         request.setTotalWeight(BigDecimal.valueOf(100));
         request.setTotalValue(BigDecimal.valueOf(1000));
         return request;
+    }
+
+    private void injectSalesOrderRepositoryIfPresent() {
+        try {
+            ReflectionTestUtils.setField(service, "salesOrderRepository", salesOrderRepository);
+        } catch (IllegalArgumentException ignored) {
+            // RED phase: production code does not know this dependency yet.
+        }
     }
 }

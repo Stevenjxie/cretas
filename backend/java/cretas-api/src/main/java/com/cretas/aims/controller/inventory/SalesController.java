@@ -10,6 +10,8 @@ import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
+import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.sales.AdjustPriceRequest;
 import com.cretas.aims.dto.sales.AdjustPriceResponse;
 import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
@@ -27,6 +29,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.utils.TokenUtils;
@@ -46,6 +49,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -74,9 +78,12 @@ public class SalesController {
     private final EstimatePriceCheckService estimatePriceCheckService;
     // 改价留痕 + 审批
     private final SalesPriceAdjustmentService priceAdjustmentService;
+    private final MaterialBatchService materialBatchService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
+    private static final String CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE = "CUSTOMER_MATERIAL_RECEIPT";
+    private static final String CUSTOMER_SUPPLIER_ID = "CUSTOMER";
 
     // ==================== 销售订单 ====================
 
@@ -103,6 +110,20 @@ public class SalesController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesOrder> result = salesService.getSalesOrders(factoryId, keyword, page, size);
         return ApiResponse.success("查询成功", result);
+    }
+
+    @PostMapping("/orders/{orderId}/customer-material-receipts")
+    @Operation(summary = "销售订单客供料入库")
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    public ApiResponse<MaterialBatchDTO> createCustomerMaterialReceipt(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody CustomerMaterialReceiptRequest request) {
+        Long userId = extractUserId(authorization);
+        CreateMaterialBatchRequest batchRequest = toCustomerMaterialBatchRequest(request, orderId);
+        MaterialBatchDTO batch = materialBatchService.createMaterialBatch(factoryId, batchRequest, userId);
+        return ApiResponse.success("客供料入库成功", batch);
     }
 
     @PostMapping("/finished-goods/opening")
@@ -829,6 +850,38 @@ public class SalesController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    public static CreateMaterialBatchRequest toCustomerMaterialBatchRequest(
+            CustomerMaterialReceiptRequest request,
+            String orderId) {
+        CreateMaterialBatchRequest mapped = new CreateMaterialBatchRequest();
+        mapped.setMaterialTypeId(request.materialTypeId());
+        mapped.setSupplierId(CUSTOMER_SUPPLIER_ID);
+        mapped.setReceiptDate(request.receiptDate());
+        mapped.setReceiptQuantity(request.receiptQuantity());
+        mapped.setQuantityUnit(request.quantityUnit());
+        mapped.setTotalWeight(request.totalWeight());
+        mapped.setTotalValue(request.totalValue());
+        mapped.setWarehouseId(request.warehouseId());
+        mapped.setNotes(request.notes());
+        mapped.setSourceDocType(CUSTOMER_MATERIAL_RECEIPT_SOURCE_DOC_TYPE);
+        mapped.setSourceDocId(orderId);
+        return mapped;
+    }
+
+    public record CustomerMaterialReceiptRequest(
+            @NotBlank String materialTypeId,
+            @NotNull LocalDate receiptDate,
+            @NotNull @Positive BigDecimal receiptQuantity,
+            @NotBlank String quantityUnit,
+            @NotNull @Positive BigDecimal totalWeight,
+            @NotNull @DecimalMin("0.00") BigDecimal totalValue,
+            String warehouseId,
+            String notes,
+            String supplierId,
+            String sourceDocType,
+            String sourceDocId) {
     }
 
     public record OpeningFinishedGoodsRequest(

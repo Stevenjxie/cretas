@@ -389,7 +389,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
             // 库存量 (称重批次单位, e.g. kg)
-            BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
+            BigDecimal available = materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(
                     factoryId, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
@@ -469,7 +469,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             BigDecimal perUnitRequired = calculateRuntimeRequiredQuantity(item, effectiveProductYieldRate);
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
-            BigDecimal available = materialBatchRepository.sumAvailableQuantityByMaterialType(
+            BigDecimal available = materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(
                     factoryId, item.getMaterialTypeId());
             if (available == null) {
                 available = BigDecimal.ZERO;
@@ -627,7 +627,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         try {
             java.util.List<String> units = materialBatchRepository
-                    .findStockUnitsByMaterialType(factoryId, materialTypeId);
+                    .findRawStockUnitsByMaterialType(factoryId, materialTypeId);
             if (units != null && !units.isEmpty()) {
                 if (units.size() > 1) {
                     log.warn("物料 {} 可用批次单位混用 {}, 取最常见 {}",

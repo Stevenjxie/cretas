@@ -7,11 +7,14 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,6 +64,9 @@ class ProcessSheetRowsTest {
     @Autowired
     private UserRepository userRepo;
 
+    @Autowired
+    private FactoryWarehouseRepository warehouseRepo;
+
     private static final String FACTORY_ID   = "ROWS-FACTORY";
     private static final String PRODUCT_TYPE = "ROWS-PTYPE-001";
     private static final String RAW_MAT_TYPE = "ROWS-MATTYPE-PORK";
@@ -82,6 +88,15 @@ class ProcessSheetRowsTest {
         user.setIsActive(true);
         user = userRepo.saveAndFlush(user);
         operatorId = user.getId();
+
+        FactoryWarehouse rawWarehouse = new FactoryWarehouse();
+        rawWarehouse.setId("WH-ROWS-001");
+        rawWarehouse.setFactoryId(FACTORY_ID);
+        rawWarehouse.setCode("WH-LOG");
+        rawWarehouse.setName("测试原料仓");
+        rawWarehouse.setType(WarehouseType.RAW);
+        rawWarehouse.setIsActive(true);
+        warehouseRepo.saveAndFlush(rawWarehouse);
 
         // Plan
         planId = "ROWS-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
@@ -215,6 +230,15 @@ class ProcessSheetRowsTest {
         // 另一个工厂 + 对应 plan
         String otherFactory = "ROWS-OTHER-FACTORY";
         String otherPlanId  = "ROWS-OTHER-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
+
+        FactoryWarehouse otherRawWarehouse = new FactoryWarehouse();
+        otherRawWarehouse.setId("WH-OTHER-001");
+        otherRawWarehouse.setFactoryId(otherFactory);
+        otherRawWarehouse.setCode("WH-LOG");
+        otherRawWarehouse.setName("其他工厂测试原料仓");
+        otherRawWarehouse.setType(WarehouseType.RAW);
+        otherRawWarehouse.setIsActive(true);
+        warehouseRepo.saveAndFlush(otherRawWarehouse);
 
         ProductionPlan otherPlan = new ProductionPlan();
         otherPlan.setId(otherPlanId);

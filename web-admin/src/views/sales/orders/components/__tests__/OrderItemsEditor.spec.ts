@@ -38,4 +38,31 @@ describe('OrderItemsEditor', () => {
     });
     expect(wrapper.find('.np').exists()).toBe(true);
   });
+  it('supports searching product options by code and category label', () => {
+    const wrapper = mount(OrderItemsEditor, {
+      props: {
+        items: [{ productTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: 13 }],
+        products: [
+          { id: 'P1', code: 'YL0001', name: 'Raw beef', unit: 'kg', productCategory: 'RAW_MATERIAL' },
+          { id: 'P2', code: 'KH0001', name: 'Customer supplied pork', unit: 'kg', productCategory: 'CUSTOMER_MATERIAL' },
+        ],
+      },
+      global: { stubs },
+    });
+
+    const vm = wrapper.vm as unknown as {
+      productOptionLabel: (product: Record<string, unknown>) => string;
+    };
+    const rawLabel = vm.productOptionLabel({ code: 'YL0001', name: 'Raw beef', productCategory: 'RAW_MATERIAL' });
+    const customerMaterialLabel = vm.productOptionLabel({
+      code: 'KH0001',
+      name: 'Customer supplied pork',
+      productCategory: 'CUSTOMER_MATERIAL',
+    });
+
+    expect(rawLabel).toContain('YL0001');
+    expect(rawLabel).toContain('原料');
+    expect(customerMaterialLabel).toContain('KH0001');
+    expect(customerMaterialLabel).toContain('客供料');
+  });
 });

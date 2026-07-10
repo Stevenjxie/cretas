@@ -363,6 +363,21 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("materialTypeId") String materialTypeId);
 
     /**
+     * 生产计划原料校验专用: 只看真实原料库存, 排除由生产批次生成的车间/WIP 批次。
+     *
+     * <p>同一 materialType 下若混入 PRODUCTION_BATCH 批次, 会把 WIP 产出当成原料库存,
+     * 进一步污染库存单位判定 (例如主仓 只, 生产仓 kg)。生产计划展开 BOM 时只应参考原料可领用库存。
+     */
+    @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+    BigDecimal sumAvailableRawStockQuantityByMaterialType(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId);
+
+    /**
      * T144: 读取指定原料类型的可用批次实际库存单位 (MaterialBatch.quantityUnit, e.g. "kg")。
      *
      * <p><b>背景:</b> 原料是<b>称重入库</b> — 权威库存量是 kg (称重值), {@code RawMaterialType.unit}
@@ -380,6 +395,20 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "GROUP BY m.quantityUnit " +
            "ORDER BY COUNT(m) DESC")
     List<String> findStockUnitsByMaterialType(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId);
+
+    /**
+     * 生产计划原料校验专用: 读取真实原料库存单位, 排除 PRODUCTION_BATCH 生成的 WIP/生产仓批次。
+     */
+    @Query("SELECT m.quantityUnit FROM MaterialBatch m " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.quantityUnit " +
+           "ORDER BY COUNT(m) DESC")
+    List<String> findRawStockUnitsByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
 

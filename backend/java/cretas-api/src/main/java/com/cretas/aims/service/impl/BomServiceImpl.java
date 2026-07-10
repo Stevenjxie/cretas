@@ -91,11 +91,74 @@ public class BomServiceImpl implements BomService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    /** Write-time unit guard shared by BOM / stock write paths. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.DynamicFieldService dynamicFieldService;
+
+    private void validateBomItemUnitCompatibility(BomItem bomItem) {
+        if (bomItem == null || materialUomConverter == null) return;
+        String materialTypeId = trimToNull(bomItem.getMaterialTypeId());
+        String bomUnit = trimToNull(bomItem.getUnit());
+        if (materialTypeId == null || bomUnit == null) return;
+
+        boolean compatible;
+        try {
+            compatible = materialUomConverter.isWriteUnitCompatible(materialTypeId, bomUnit);
+        } catch (Exception e) {
+            log.warn("[BOM-UOM] unit compatibility check skipped material={} unit={}: {}",
+                    materialTypeId, bomUnit, e.getMessage());
+            return;
+        }
+        if (compatible) return;
+
+        com.cretas.aims.entity.RawMaterialType material = loadRawMaterialTypeSafely(materialTypeId);
+        String masterUnit = trimToNull(material != null ? material.getUnit() : null);
+        String materialName = firstNonBlank(
+                bomItem.getMaterialName(),
+                material != null ? material.getName() : null,
+                materialTypeId);
+        String message = String.format(
+                "BOM 单位无法换算：原料「%s」主单位为「%s」，当前 BOM 单位为「%s」。请先核对单位配置，或把 BOM 单位改成同一计量口径。",
+                materialName,
+                masterUnit != null ? masterUnit : "未配置",
+                bomUnit);
+        throw new com.cretas.aims.exception.BusinessException(409, message)
+                .withCode("MATERIAL_UOM_UNCONFIGURED")
+                .withHint("请到仓储 → 原料类型中核对该物料单位；如果不同 SKU 有不同包装/计数口径，请在 SKU/BOM 写入前配置好对应单位或包装换算。")
+                .withSeverity("warning")
+                .withHintTarget("去核对单位配置");
+    }
+
+    private com.cretas.aims.entity.RawMaterialType loadRawMaterialTypeSafely(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) return null;
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+        } catch (Exception e) {
+            log.debug("[BOM-UOM] load material type failed {}: {}", materialTypeId, e.getMessage());
+            return null;
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed != null) return trimmed;
+        }
+        return null;
+    }
 
     private void runBomValidation(String factoryId, String operation, BomItem bomItem) {
         if (validationRuleEvaluator == null) return;
@@ -149,6 +212,8 @@ public class BomServiceImpl implements BomService {
                             + (bomItem.getStandardQuantity() == null ? "null" : bomItem.getStandardQuantity())
                             + ")");
         }
+
+        validateBomItemUnitCompatibility(bomItem);
 
         // Canvas V2: DB-driven validation (runs before defaults so rules like "#yieldRate > 0" can catch invalid user input)
         String operation = (bomItem.getId() == null) ? "CREATE" : "UPDATE";
@@ -317,6 +382,7 @@ public class BomServiceImpl implements BomService {
                         .sortOrder(idx - 1)
                         .build();
                 item.setFactoryId(factoryId);
+                validateBomItemUnitCompatibility(item);
                 toInsert.add(item);
                 results.add(new com.cretas.aims.dto.bom.BomBatchImportResult.RowResult(idx, true, null, mtId, matName));
             } catch (Exception e) {
