@@ -516,6 +516,33 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(vm.dirty).toBe(true);
   });
 
+  it('copies live edits made after the conflicted mutation started', async () => {
+    const recoveryChoice = deferred<'confirm'>();
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
+    const writeText = installClipboardMock();
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 64, y: 96, zoom: 0.75 });
+
+    const savePromise = vm.saveDraft();
+    await flushPromises();
+    vm.flowNodes[0].data.name = 'Edited after the request started';
+    recoveryChoice.reject('cancel');
+    await savePromise;
+
+    const copied = JSON.parse(String(writeText.mock.calls[0][0])) as ProductProcessWorkflowDefinition;
+    expect(copied.nodes[0].data.name).toBe('Edited after the request started');
+    expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(vm.flowNodes[0].data.name).toBe('Edited after the request started');
+    expect(vm.dirty).toBe(true);
+  });
+
   it('keeps the local draft when the conflict recovery dialog is closed', async () => {
     apiMocks.getProductProcessWorkflow.mockResolvedValue({
       success: true,
@@ -557,6 +584,27 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(vm.dirty).toBe(true);
   });
 
+  it('does not open workflow recovery for an unrelated rich 409', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'UNRELATED_RICH_CONFLICT',
+      actionHint: 'Resolve the unrelated business rule',
+    });
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 32, y: 16, zoom: 1 });
+
+    await vm.saveDraft();
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled();
+    expect(vm.dirty).toBe(true);
+  });
+
   it('does not reload a conflicted product after the user has switched products', async () => {
     const recoveryChoice = deferred<'confirm'>();
     apiMocks.getProductProcessWorkflow.mockImplementation(
@@ -583,6 +631,33 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     await flushPromises();
 
     expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
+  });
+
+  it('does not copy a newly selected product from an old conflict dialog', async () => {
+    const recoveryChoice = deferred<'confirm'>();
+    apiMocks.getProductProcessWorkflow.mockImplementation(
+      (_factoryId: string, productTypeId: string) => Promise.resolve({
+        success: true,
+        data: definitionFor(productTypeId),
+      }),
+    );
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
+    const writeText = installClipboardMock();
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 48, y: 48, zoom: 0.8 });
+    const savePromise = vm.saveDraft();
+    await flushPromises();
+
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
+    await flushPromises();
+    recoveryChoice.reject('cancel');
+    await savePromise;
+
+    expect(writeText).not.toHaveBeenCalled();
     expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
   });
 

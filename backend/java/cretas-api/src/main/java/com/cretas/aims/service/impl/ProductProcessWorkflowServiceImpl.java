@@ -111,7 +111,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         if (requestVersion == null || !requestVersion.equals(entity.getLockVersion())) {
             throw new BusinessException(409, "该 Workflow 已被其他人更新")
                     .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
-                    .withHint("请重新加载最新版本；如需保留当前内容，可复制后另存为新草稿")
+                    .withHint("请重新加载最新版本；如需保留当前内容，可复制当前草稿 JSON")
                     .withSeverity("warning");
         }
     }

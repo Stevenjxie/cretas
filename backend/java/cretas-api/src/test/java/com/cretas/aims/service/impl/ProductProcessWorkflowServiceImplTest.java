@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -199,6 +200,8 @@ class ProductProcessWorkflowServiceImplTest {
 
         assertEquals(409, error.getCode());
         assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", error.getErrorCode());
+        assertTrue(error.getActionHint().contains("复制当前草稿 JSON"));
+        assertFalse(error.getActionHint().contains("另存为新草稿"));
         verify(repository, never()).saveAndFlush(any());
     }
 

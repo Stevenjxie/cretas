@@ -979,7 +979,7 @@ async function saveDraft(): Promise<boolean> {
   } catch (error) {
     if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
     if (isWorkflowConflict(error)) {
-      await recoverWorkflowConflict(identity, nextDefinition);
+      await recoverWorkflowConflict(identity);
       return false;
     }
     console.error('[ProductProcessWorkflow] save failed', error);
@@ -1019,7 +1019,6 @@ async function publishWorkflow(): Promise<void> {
   }
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
   const generation = ++publishGeneration;
-  const recoverySnapshot = currentDefinition();
   publishing.value = true;
   try {
     const response = await publishProductProcessWorkflow(
@@ -1039,7 +1038,7 @@ async function publishWorkflow(): Promise<void> {
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (isWorkflowConflict(error)) {
-      await recoverWorkflowConflict(identity, recoverySnapshot);
+      await recoverWorkflowConflict(identity);
       return;
     }
     console.error('[ProductProcessWorkflow] publish failed', error);
@@ -1053,15 +1052,28 @@ async function publishWorkflow(): Promise<void> {
 function isWorkflowConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as {
+    actionHint?: unknown;
+    code?: unknown;
+    errorCode?: unknown;
     status?: unknown;
-    response?: { status?: unknown };
+    response?: {
+      data?: { actionHint?: unknown; code?: unknown; errorCode?: unknown };
+      status?: unknown;
+    };
   };
-  return Number(candidate.status ?? candidate.response?.status) === 409;
+  if (Number(candidate.status ?? candidate.response?.status) !== 409) return false;
+  const responseData = candidate.response?.data;
+  const errorCode = candidate.errorCode
+    ?? candidate.code
+    ?? responseData?.errorCode
+    ?? responseData?.code;
+  if (errorCode === 'PRODUCT_PROCESS_WORKFLOW_CONFLICT') return true;
+  const actionHint = candidate.actionHint ?? responseData?.actionHint;
+  return !actionHint && (errorCode == null || String(errorCode) === '409');
 }
 
 async function recoverWorkflowConflict(
   identity: WorkflowIdentity,
-  localSnapshot: ProductProcessWorkflowDefinition,
 ): Promise<void> {
   try {
     await ElMessageBox.confirm(
@@ -1079,8 +1091,9 @@ async function recoverWorkflowConflict(
     await reloadLatestDefinition(identity);
   } catch (action) {
     if (action !== 'cancel') return;
+    if (!isLoadedIdentityCurrent(identity)) return;
     try {
-      await navigator.clipboard.writeText(JSON.stringify(localSnapshot, null, 2));
+      await navigator.clipboard.writeText(JSON.stringify(currentDefinition(), null, 2));
       ElMessage.success('当前 Workflow 草稿 JSON 已复制');
     } catch (error) {
       console.error('[ProductProcessWorkflow] copy conflict draft failed', error);

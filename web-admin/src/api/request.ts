@@ -227,15 +227,15 @@ request.interceptors.response.use(
         // state-machine fetch → new factory with no SM got a toast
         // "状态机配置不存在" on every page mount).
         const cfg = response.config as { _silent?: boolean };
+        const rich = (data as Record<string, string | null>);
         if (!cfg._silent) {
-          const rich = (data as Record<string, string | null>);
           showRichError(data.message || '操作失败', {
             actionHint: rich.actionHint,
             severity: rich.severity,
             hintTarget: rich.hintTarget,
           });
         }
-        return Promise.reject(new ApiError(data.message, data.code));
+        return Promise.reject(new ApiError(data.message, rich.errorCode || data.code));
       }
       return data;
     }
@@ -248,7 +248,11 @@ request.interceptors.response.use(
     };
   },
   async (error: AxiosError<ApiResponse>) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _silent?: boolean };
+    const originalRequest = error.config as InternalAxiosRequestConfig & {
+      _retry?: boolean;
+      _silent?: boolean;
+      _handledErrorCodes?: string[];
+    };
     const status = error.response?.status;
 
     // Apr 20 Bug BR-01 fix: 用户点浏览器回退/路由切换时, 进行中的 axios 请求会被 abort,
@@ -507,8 +511,11 @@ request.interceptors.response.use(
     // lock only (no actionHint).
     const rich = (error.response?.data as unknown as Record<string, string | null>) || {};
     const isVanillaOptimisticLock = status === 409 && !rich.actionHint && !rich.hintTarget;
+    const isCallerHandledConflict = status === 409
+      && typeof rich.errorCode === 'string'
+      && originalRequest._handledErrorCodes?.includes(rich.errorCode) === true;
     // Allow callers to suppress error toast via _silent config flag
-    if (!originalRequest._silent && !isVanillaOptimisticLock) {
+    if (!originalRequest._silent && !isVanillaOptimisticLock && !isCallerHandledConflict) {
       showRichError(message, {
         actionHint: rich.actionHint,
         severity: rich.severity,
@@ -518,7 +525,7 @@ request.interceptors.response.use(
 
     return Promise.reject(new ApiError(
       message,
-      error.response?.data?.code,
+      rich.errorCode || error.response?.data?.code,
       status,
       rich.actionHint || null,
     ));

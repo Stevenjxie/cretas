@@ -1,6 +1,10 @@
 import { get, post, put } from '@/api/request';
 import type { ProductProcessWorkflowDefinition } from './types';
 
+const workflowConflictConfig = {
+  _handledErrorCodes: ['PRODUCT_PROCESS_WORKFLOW_CONFLICT'],
+};
+
 export function getProductProcessWorkflow(factoryId: string, productTypeId: string) {
   return get<ProductProcessWorkflowDefinition | null>(
     `/${factoryId}/product-process-workflows/${productTypeId}`,
@@ -15,6 +19,7 @@ export function saveProductProcessWorkflowDraft(
   return put<ProductProcessWorkflowDefinition>(
     `/${factoryId}/product-process-workflows/${productTypeId}/draft`,
     definition,
+    workflowConflictConfig,
   );
 }
 
@@ -26,5 +31,6 @@ export function publishProductProcessWorkflow(
   return post<ProductProcessWorkflowDefinition>(
     `/${factoryId}/product-process-workflows/${productTypeId}/publish`,
     { lockVersion },
+    workflowConflictConfig,
   );
 }
