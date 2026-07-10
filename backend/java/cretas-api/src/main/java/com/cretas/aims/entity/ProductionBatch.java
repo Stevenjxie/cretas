@@ -202,7 +202,7 @@ public class ProductionBatch extends BaseEntity {
      /**
       * 良品率
       */
-    @Column(name = "yield_rate", precision = 5, scale = 2)
+    @Column(name = "yield_rate", precision = 12, scale = 2)
     private BigDecimal yieldRate;
      /**
       * 效率（实际产量/计划产量）
