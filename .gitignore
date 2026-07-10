@@ -234,6 +234,9 @@ frontend/CretasFoodTrace/android/app/src/main/assets/
 # Claude Code runtime locks
 .claude/scheduled_tasks.lock
 
+# Superpowers visual brainstorming sessions (local mockups, state, and access tokens)
+.superpowers/
+
 # Transient debug/batch artifacts (ad-hoc shell output)
 /p1_batch*.txt
 /p1_all.txt
