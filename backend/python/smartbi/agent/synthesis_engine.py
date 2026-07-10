@@ -782,7 +782,7 @@ class ComprehensiveSynthesisEngine:
                 "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
-        if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
+        if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩", "毛利", "利润")):
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
             plan["sales"] = True
@@ -831,6 +831,7 @@ class ComprehensiveSynthesisEngine:
                 "同比", "环比", "趋势", "增长", "涨了", "降了", "比上月", "比上周",
                 "比去年", "去年同期")):
             plan["period_comparison"] = True
+            plan["finance"] = True  # F2: pc 的绝对值(营收/加权毛利率)必须由 finance 维度 grounded
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -1143,7 +1144,7 @@ class ComprehensiveSynthesisEngine:
         # ---- assemble 同比环比 (营收+加权毛利率) ----
         if plan.get("period_comparison"):
             pc = results.get("period_comparison")
-            if pc and (pc.get("revenue") or {}).get("current") is not None:
+            if pc and (pc.get("revenue") or {}).get("available"):
                 fb.period_comparison = pc
             else:
                 plan["period_comparison"] = False

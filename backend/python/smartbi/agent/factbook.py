@@ -37,6 +37,7 @@ byte-strict; dict-eq is sufficient — no Java parity contract).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 try:  # pandas only needed for factbook_to_dataframe; keep import soft for unit tests.
@@ -79,6 +80,18 @@ def _num(v: Any) -> Optional[float]:
     try:
         return float(v)
     except (TypeError, ValueError):
+        return None
+
+
+def _pct1(v: Any) -> Optional[float]:
+    """Round to 1 decimal HALF_UP — parity with gold.period_comparison's quantize
+    (F4: Python round() is banker's, so 加权毛利率 would render/index two different
+    values at a .x5 boundary → false reconciler deviation)."""
+    if v is None:
+        return None
+    try:
+        return float(Decimal(str(float(v))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, ArithmeticError):
         return None
 
 
@@ -236,7 +249,7 @@ class FactBook:
             if gp is not None and rev_f:
                 lines.append(
                     f"- 加权毛利率（营收−食材成本，聚合口径，非单品毛利）"
-                    f"{round(gp / rev_f * 100, 1)}%（加权毛利 ¥{_money(gp)}）"
+                    f"{_pct1(gp / rev_f * 100)}%（加权毛利 ¥{_money(gp)}）"
                 )
         if avg_bill is not None:
             lines.append(f"- 客单价 ¥{_money(avg_bill)}")
@@ -385,6 +398,8 @@ class FactBook:
         if not pc:
             return
         rev = pc.get("revenue") or {}
+        if not rev.get("available"):  # F1: no current data → no fabricated ¥0 render
+            return
         gm = pc.get("gross_margin_pct") or {}
 
         def _seg(avail, pct, unit):
@@ -393,24 +408,23 @@ class FactBook:
             sign = "+" if pct >= 0 else ""
             return f"{sign}{pct}{unit}"
 
-        lines.append("## 同比环比（gold agg_daily）")
+        # F2: render ONLY the deltas (grounded via facts_index 营收同比/环比增长率 等);
+        # 绝对值(营收/加权毛利率)由 finance 维度呈现 (pc 触发时 finance 必开) — 避免
+        # 未 grounded 的绝对数字重复出现。
+        lines.append("## 同比环比（gold agg_daily；绝对值见「经营」）")
         yoy = _seg(rev.get("yoy_available"), rev.get("yoy_pct"), "%")
         mom = _seg(rev.get("mom_available"), rev.get("mom_pct"), "%")
-        parts = [
+        lines.append("- 营收增速：" + "，".join([
             f"同比 {yoy}" if yoy else "同比 去年同期无数据",
             f"环比 {mom}" if mom else "环比 无上一周期数据",
-        ]
-        lines.append(f"- 营收 ¥{_money(rev.get('current'))}：{('，'.join(parts))}")
+        ]))
         if gm.get("current") is not None:
             gy = _seg(gm.get("yoy_available"), gm.get("yoy_pct"), "个百分点")
             gm_ = _seg(gm.get("mom_available"), gm.get("mom_pct"), "个百分点")
-            gparts = [
+            lines.append("- 加权毛利率变化：" + "，".join([
                 f"同比 {gy}" if gy else "同比 去年同期无数据",
                 f"环比 {gm_}" if gm_ else "环比 无上一周期数据",
-            ]
-            lines.append(
-                f"- 加权毛利率（聚合口径，非单品）{gm.get('current')}%：{('，'.join(gparts))}"
-            )
+            ]))
         lines.append("")
 
     def _render_supplier_anomaly(self, lines: List[str]) -> None:
@@ -578,7 +592,9 @@ class FactBook:
         if gp is not None:
             idx["加权毛利"] = gp
         if gp is not None and rev_f:
-            idx["加权毛利率"] = round(gp / rev_f * 100, 1)
+            _gm = _pct1(gp / rev_f * 100)
+            if _gm is not None:
+                idx["加权毛利率"] = _gm
 
         # 同比环比 (营收增长率% + 加权毛利率百分点差) — grounded so the reconciler
         # backstops the growth numbers the LLM restates.
@@ -598,9 +614,12 @@ class FactBook:
         sa = self.supplier_anomaly or {}
         for a in (sa.get("anomalies") or []):
             nm = a.get("ingredientName") or a.get("normalizedName")
+            sup = a.get("supplierName") or a.get("supplierId") or ""
             v = _num(a.get("deltaPct"))
             if nm and v is not None:
-                idx[f"{nm}采购价涨幅"] = v
+                # F3 collision-safe: detect groups by (food, supplier); ingredient-only
+                # key would let two suppliers' deltas overwrite (last-wins) + mis-correct.
+                idx[f"{nm}（{sup}）采购价涨幅"] = v
 
         att = self.attribution or {}
         if att and not att.get("no_data"):

@@ -1226,6 +1226,7 @@ async def period_comparison(pool, factory_id, start, end):
             """
             SELECT COALESCE(SUM(a.net_amount), 0)::numeric(18,2) AS revenue,
                    SUM(c.material_cost)::numeric(18,2)           AS material_cost,
+                   COUNT(c.material_cost)                         AS cost_n,
                    COUNT(*)                                       AS n_rows
               FROM agg_daily a
               LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)
@@ -1235,9 +1236,11 @@ async def period_comparison(pool, factory_id, start, end):
         )
         rev = Decimal(row["revenue"] or 0)
         n = int(row["n_rows"] or 0)
+        cost_n = int(row["cost_n"] or 0)
         mat = row["material_cost"]
         gm = None
-        if n > 0 and mat is not None and rev != 0:
+        # F5: 仅当成本覆盖满窗 (cost_n == n) 才算毛利率 — 全窗营收÷部分窗成本会虚高。
+        if n > 0 and mat is not None and rev != 0 and cost_n == n:
             gm = (((rev - Decimal(mat)) / rev) * Decimal("100")).quantize(
                 Decimal("0.1"), rounding=ROUND_HALF_UP)
         return {"n": n, "revenue": rev, "gross_margin_pct": gm}
@@ -1253,14 +1256,17 @@ async def period_comparison(pool, factory_id, start, end):
             Decimal("0.1"), rounding=ROUND_HALF_UP))
 
     cur = agg["current"]
-    rev_mom = agg["mom"]["n"] > 0
-    rev_yoy = agg["yoy"]["n"] > 0
+    cur_available = cur["n"] > 0
+    rev_mom = cur_available and agg["mom"]["n"] > 0
+    rev_yoy = cur_available and agg["yoy"]["n"] > 0
     cur_gm = cur["gross_margin_pct"]
     gm_mom = cur_gm is not None and agg["mom"]["gross_margin_pct"] is not None
     gm_yoy = cur_gm is not None and agg["yoy"]["gross_margin_pct"] is not None
     return {
         "revenue": {
-            "current": float(cur["revenue"]),
+            # F1: current 窗无数据 → available False + current None (禁伪造 ¥0)
+            "current": float(cur["revenue"]) if cur_available else None,
+            "available": cur_available,
             "mom_pct": _growth(cur["revenue"], agg["mom"]["revenue"]) if rev_mom else None,
             "yoy_pct": _growth(cur["revenue"], agg["yoy"]["revenue"]) if rev_yoy else None,
             "mom_available": rev_mom,

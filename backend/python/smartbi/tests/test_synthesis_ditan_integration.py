@@ -50,7 +50,7 @@ def test_dish_margin_note_is_honest_degradation():
 
 def test_period_comparison_render_and_degradation():
     pc = {
-        "revenue": {"current": 1000000.0, "yoy_pct": None, "mom_pct": -3.2,
+        "revenue": {"current": 1000000.0, "available": True, "yoy_pct": None, "mom_pct": -3.2,
                     "yoy_available": False, "mom_available": True},
         "gross_margin_pct": {"current": 30.0, "yoy_pct": None, "mom_pct": 1.5,
                              "yoy_available": False, "mom_available": True},
@@ -78,7 +78,7 @@ def test_supplier_anomaly_render_and_grounding():
     assert "威慑非处罚" in text
     assert "青菜" in text and "老王蔬菜" in text
     idx = fb.to_facts_index()
-    assert idx["青菜采购价涨幅"] == 25.0
+    assert idx["青菜（老王蔬菜）采购价涨幅"] == 25.0   # F3 collision-safe key (含供应商)
     # empty anomalies → section omitted (honest; engine attaches NOTE separately)
     assert "供应商价格异常" not in FactBook(
         period="x", supplier_anomaly={"anomalies": []}).to_prompt_text()
@@ -94,7 +94,7 @@ class _FakeConn:
         return None
 
     async def fetchrow(self, sql, factory_id, s, e):
-        return self._wd.get((s, e), {"revenue": 0, "material_cost": None, "n_rows": 0})
+        return self._wd.get((s, e), {"revenue": 0, "material_cost": None, "cost_n": 0, "n_rows": 0})
 
 
 class _FakePool:
@@ -122,10 +122,10 @@ async def test_period_comparison_yoy_mom_math():
     mom_end = start - datetime.timedelta(days=1)
     mom_start = mom_end - span
     wd = {
-        (start, end): {"revenue": 1000, "material_cost": 300, "n_rows": 30},        # gm 70%
-        (mom_start, mom_end): {"revenue": 800, "material_cost": 280, "n_rows": 30},  # gm 65%
+        (start, end): {"revenue": 1000, "material_cost": 300, "cost_n": 30, "n_rows": 30},        # gm 70%
+        (mom_start, mom_end): {"revenue": 800, "material_cost": 280, "cost_n": 30, "n_rows": 30},  # gm 65%
         (datetime.date(2025, 6, 1), datetime.date(2025, 6, 30)):
-            {"revenue": 500, "material_cost": None, "n_rows": 30},                   # no cost
+            {"revenue": 500, "material_cost": None, "cost_n": 0, "n_rows": 30},                    # no cost
     }
     out = await period_comparison(_FakePool(_FakeConn(wd)), "DEMO_REST", start, end)
     assert out["revenue"]["mom_pct"] == 25.0      # (1000-800)/800*100
@@ -140,12 +140,28 @@ async def test_period_comparison_yoy_mom_math():
 async def test_period_comparison_empty_comparison_degrades():
     start = datetime.date(2026, 6, 1)
     end = datetime.date(2026, 6, 30)
-    wd = {(start, end): {"revenue": 1000, "material_cost": 300, "n_rows": 30}}
+    wd = {(start, end): {"revenue": 1000, "material_cost": 300, "cost_n": 30, "n_rows": 30}}
     out = await period_comparison(_FakePool(_FakeConn(wd)), "DEMO_REST", start, end)
+    assert out["revenue"]["available"] is True
     assert out["revenue"]["mom_available"] is False
     assert out["revenue"]["yoy_available"] is False
     assert out["revenue"]["mom_pct"] is None      # no fabricated 0
     assert out["revenue"]["current"] == 1000.0
+
+
+@pytest.mark.asyncio
+async def test_period_comparison_empty_current_no_fabricated_zero():
+    # F1: current window has NO rows → available False, current None (禁伪造 ¥0)
+    start = datetime.date(2026, 6, 1)
+    end = datetime.date(2026, 6, 30)
+    out = await period_comparison(_FakePool(_FakeConn({})), "DEMO_REST", start, end)
+    assert out["revenue"]["available"] is False
+    assert out["revenue"]["current"] is None
+    # and the render must emit nothing (no ¥0.00)
+    fb = FactBook(period="x", period_comparison=out)
+    text = fb.to_prompt_text()
+    assert "同比环比" not in text
+    assert "¥0.00" not in text
 
 
 @pytest.mark.asyncio
