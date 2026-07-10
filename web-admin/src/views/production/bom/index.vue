@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
@@ -21,6 +20,7 @@ import { isAxiosError } from 'axios';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete, Download, Refresh, MagicStick, InfoFilled } from '@element-plus/icons-vue';
+import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
@@ -31,6 +31,7 @@ import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const router = useRouter();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
@@ -252,12 +253,144 @@ const semiFinishedTypes = ref<TableRow[]>([]);
 const estimateLoading = ref(false);
 const estimateResult = ref<YieldEstimateResponse | null>(null);
 
+const COUNTING_UNIT_ALIASES = new Set(['个', '只', '件', 'pcs', 'pc', 'pce', 'piece', 'pieces']);
+const WEIGHT_UNIT_ALIASES = new Set(['g', '克', 'kg', '千克', '公斤', '斤']);
+const VOLUME_UNIT_ALIASES = new Set(['ml', 'mL', '毫升', 'l', 'L', '升']);
+
+function normalizeUnitValue(unit: unknown): string {
+  return String(unit || '').trim();
+}
+
+function isCountingUnit(unit: unknown): boolean {
+  return COUNTING_UNIT_ALIASES.has(normalizeUnitValue(unit));
+}
+
+function isWeightUnit(unit: unknown): boolean {
+  return WEIGHT_UNIT_ALIASES.has(normalizeUnitValue(unit));
+}
+
+function isVolumeUnit(unit: unknown): boolean {
+  return VOLUME_UNIT_ALIASES.has(normalizeUnitValue(unit));
+}
+
+function selectedMaterialRecord(): Record<string, unknown> | undefined {
+  return materialTypes.value.find((m: Record<string, unknown>) => m.id === bomForm.value.materialTypeId);
+}
+
+function selectedMaterialUnit(): string {
+  const material = selectedMaterialRecord();
+  return normalizeUnitValue(material?.unit);
+}
+
+function recipeUnitForMaterial(material: Record<string, unknown>, category: string): string {
+  const materialUnit = normalizeUnitValue(material.unit);
+  if (category === 'PACKAGING') return materialUnit || 'pcs';
+  if (isCountingUnit(materialUnit)) return materialUnit;
+  return 'g';
+}
+
+function bomUnitLabel(unit?: unknown): string {
+  const u = normalizeUnitValue(unit);
+  if (u === 'g') return '克 (g)';
+  if (u === 'kg') return '千克 (kg)';
+  if (u === 'mL') return '毫升 (mL)';
+  if (u === 'L') return '升 (L)';
+  if (u === 'pcs') return '件 (pcs)';
+  return u || '单位';
+}
+
+const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
+const bomUnitIsWeight = computed(() => isWeightUnit(bomForm.value.unit));
+const bomUnitIsVolume = computed(() => isVolumeUnit(bomForm.value.unit));
+const bomUnitIsCounting = computed(() => isCountingUnit(bomForm.value.unit));
+
+function bomQuantityHelpText(): string {
+  if (bomUnitIsCounting.value) {
+    return `成品用量 = 每份成品需要该物料多少${bomForm.value.unit || '个'}。例：半只鸡填 0.5 只，400 袋自动核算 200 只`;
+  }
+  if (bomUnitIsVolume.value) {
+    return `成品用量 = 每份成品需要该物料多少${bomForm.value.unit || 'mL'}`;
+  }
+  return '成品含量 = 每份成品中该物料的克数（来自产品标准克重）';
+}
+
+function actualQuantityHelpText(): string {
+  if (bomUnitIsCounting.value) {
+    return '= 成品用量；计数型原料不按出成率折算重量';
+  }
+  if (bomUnitIsVolume.value) {
+    return '= 成品用量 ÷ (出成率/100)';
+  }
+  return '= 成品含量 ÷ (出成率/100) | 示例: 200g 成品 × 58% 出成率 → 自动算原料 344.83g';
+}
+
+function knownUnitFamily(unit: unknown): 'weight' | 'volume' | 'count' | null {
+  if (isWeightUnit(unit)) return 'weight';
+  if (isVolumeUnit(unit)) return 'volume';
+  if (isCountingUnit(unit)) return 'count';
+  return null;
+}
+
+function unitsAreLocallyCompatible(bomUnit: unknown, materialUnit: unknown): boolean {
+  const normalizedBomUnit = normalizeUnitValue(bomUnit);
+  const normalizedMaterialUnit = normalizeUnitValue(materialUnit);
+  if (!normalizedBomUnit || !normalizedMaterialUnit) return true;
+  if (normalizedBomUnit === normalizedMaterialUnit) return true;
+  const bomFamily = knownUnitFamily(normalizedBomUnit);
+  const materialFamily = knownUnitFamily(normalizedMaterialUnit);
+  if (!bomFamily || !materialFamily) return true;
+  return bomFamily === materialFamily;
+}
+
+function bomUnitCompatibilityWarning(): string {
+  const material = selectedMaterialRecord();
+  const materialUnit = normalizeUnitValue(material?.unit);
+  const bomUnit = normalizeUnitValue(bomForm.value.unit);
+  if (!material || unitsAreLocallyCompatible(bomUnit, materialUnit)) return '';
+  const materialName = normalizeUnitValue(material.name) || bomForm.value.materialName || '当前原料';
+  return `原料「${materialName}」主单位是 ${materialUnit}，当前 BOM 单位是 ${bomUnit}，两者不是同一计量维度。请先核对单位配置，或把 BOM 单位改成同一口径。`;
+}
+
+function goMaterialUnitConfigFromBom() {
+  const material = selectedMaterialRecord();
+  const keyword = normalizeUnitValue(material?.name) || bomForm.value.materialName || normalizeUnitValue(material?.id);
+  router.push({
+    path: '/warehouse/material-types',
+    query: {
+      _returnTo: route.fullPath,
+      ...(keyword ? { keyword } : {}),
+    },
+  });
+}
+
+async function confirmBomUnitCompatibility(): Promise<boolean> {
+  const warning = bomUnitCompatibilityWarning();
+  if (!warning) return true;
+  try {
+    await ElMessageBox.confirm(
+      warning,
+      'BOM 单位需要核对',
+      {
+        confirmButtonText: '去核对单位配置',
+        cancelButtonText: '继续编辑',
+        distinguishCancelAndClose: true,
+        type: 'warning',
+      },
+    );
+    goMaterialUnitConfigFromBom();
+  } catch {
+    // stay in dialog
+  }
+  return false;
+}
+
 // D2 (2026-05-10 客户会议): 实时计算实际原料用量 = 成品含量 / (出成率/100)
 // 镜像后端 BomItem.getActualQuantity()
 // GAP F7: 出成率为 null (待评估) 时返回 null, 不用 100% 兜底 (防止 sq/1.0=sq 误导为真实 100%)
 const computedActualQuantity = computed<number | null>(() => {
-  if (bomForm.value.yieldRate == null) return null;
   const sq = Number(bomForm.value.standardQuantity) || 0;
+  if (bomUnitIsCounting.value) return Number(sq.toFixed(4));
+  if (bomForm.value.yieldRate == null) return null;
   const yr = Number(bomForm.value.yieldRate) / 100;
   if (yr <= 0 || sq <= 0) return 0;
   return Number((sq / yr).toFixed(4));
@@ -803,23 +936,25 @@ async function loadMaterialTypes() {
   }
 }
 
-// Phase A fix: onMaterialLink 不再覆盖 RAW 物料的 BOM 单位.
-// BOM 配方层 RAW 成品含量永远是克 (g), 单位固定显示 "克 (g)" 后缀.
-// 仅 PACKAGING 物料允许使用 material.unit (pcs/件 等).
+// 默认仍保持重量原料用 g；若原料主单位是计数单位 (只/个/件/pcs)，BOM 也用计数单位。
+// 这类原料不能被强行解释成克，否则结单时会出现 g ↔ 只 的不可换算预警。
 // Ref: D3 comment L68 + F006_OPERATIONS_GUIDE §0.4
 function onMaterialLink(materialTypeId: string) {
   if (!materialTypeId) return;
   const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === materialTypeId);
   if (material) {
     if (material.name) bomForm.value.materialName = String(material.name);
-    // Phase A: RAW / AUXILIARY → 固定 g, 不覆盖; 仅 PACKAGING 跟随物料单位
-    if (bomForm.value.materialCategory === 'PACKAGING') {
-      if (material.unit) bomForm.value.unit = String(material.unit);
-    } else {
-      // RAW / AUXILIARY 配方层始终用 g
-      bomForm.value.unit = 'g';
-    }
+    bomForm.value.unit = recipeUnitForMaterial(material, bomForm.value.materialCategory);
   }
+}
+
+function onBomCategoryChange(category: string) {
+  const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === bomForm.value.materialTypeId);
+  if (material) {
+    bomForm.value.unit = recipeUnitForMaterial(material, category);
+    return;
+  }
+  bomForm.value.unit = category === 'PACKAGING' ? 'pcs' : 'g';
 }
 
 // ========== BOM Items ==========
@@ -913,9 +1048,10 @@ async function submitBomForm() {
     return;
   }
   if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
-    ElMessage.warning('成品含量必须大于 0');
+    ElMessage.warning('成品用量必须大于 0');
     return;
   }
+  if (!(await confirmBomUnitCompatibility())) return;
   bomDialogLoading.value = true;
   try {
     let response;
@@ -1949,9 +2085,9 @@ async function handleAdjustConfirm() {
               <span v-else class="text-secondary">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="standardQuantity" label="成品含量(g)" width="100" align="right">
+          <el-table-column prop="standardQuantity" label="成品用量" width="120" align="right">
             <template #default="{ row }">
-              {{ (row.standardQuantity || 0).toFixed(4) }}
+              {{ (row.standardQuantity || 0).toFixed(4) }} {{ row.unit || '' }}
             </template>
           </el-table-column>
           <!-- Phase A: yieldRate null → 显示待评估 badge -->
@@ -1977,11 +2113,12 @@ async function handleAdjustConfirm() {
               {{ row.conversionRate ? row.conversionRate.toFixed(4) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="原料投量/份" width="100" align="right">
+          <el-table-column label="原料投量/份" width="120" align="right">
             <template #default="{ row }">
               {{ row.conversionRate
                 ? ((row.standardQuantity || 0) / row.conversionRate).toFixed(4)
                 : ((row.standardQuantity || 0) / ((row.yieldRate != null ? row.yieldRate : 100) / 100)).toFixed(4) }}
+              {{ row.unit || '' }}
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="单位" width="60" align="center" />
@@ -2189,7 +2326,7 @@ async function handleAdjustConfirm() {
           <el-input v-model="bomForm.materialName" placeholder="请输入物料名称" />
         </el-form-item>
         <el-form-item label="物料类别" required>
-          <el-select v-model="bomForm.materialCategory" style="width: 100%">
+          <el-select v-model="bomForm.materialCategory" style="width: 100%" @change="onBomCategoryChange">
             <el-option label="原料" value="RAW" />
             <el-option label="辅料" value="AUXILIARY" />
             <el-option label="包材" value="PACKAGING" />
@@ -2213,8 +2350,7 @@ async function handleAdjustConfirm() {
           </el-select>
           <div class="form-tip">已按当前「物料类别」筛选，切换类别后可选项会跟着变</div>
         </el-form-item>
-        <!-- Phase A: 成品含量 RAW/AUXILIARY 固定显示「克 (g)」后缀 -->
-        <el-form-item label="成品含量" required>
+        <el-form-item label="成品用量" required>
           <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
             <el-input-number
               v-model="bomForm.standardQuantity"
@@ -2223,19 +2359,15 @@ async function handleAdjustConfirm() {
               :step="0.01"
               style="flex: 1;"
             />
-            <span
-              v-if="bomForm.materialCategory !== 'PACKAGING'"
-              class="unit-suffix"
-            >克 (g)</span>
-            <span v-else class="unit-suffix">{{ bomForm.unit }}</span>
+            <span class="unit-suffix">{{ bomFormUnitLabel }}</span>
           </div>
           <div class="form-tip">
-            成品含量 = 每份成品中该物料的克数（来自产品标准克重）
+            {{ bomQuantityHelpText() }}
           </div>
         </el-form-item>
         <!-- Phase B: 评估按钮 (RAW 类别时显示) -->
         <el-form-item
-          v-if="bomForm.materialCategory === 'RAW'"
+          v-if="bomForm.materialCategory === 'RAW' && bomUnitIsWeight"
           label="出成率评估"
         >
           <div style="width: 100%;">
@@ -2322,30 +2454,40 @@ async function handleAdjustConfirm() {
             </template>
             <template v-else>
               {{ computedActualQuantity.toFixed(4) }}
-              <span v-if="bomForm.materialCategory !== 'PACKAGING'"> 克 (g)</span>
-              <span v-else> {{ bomForm.unit }}</span>
+              <span> {{ bomForm.unit }}</span>
             </template>
           </div>
           <div class="form-tip">
-            = 成品含量 ÷ (出成率/100) | 示例: 200g 成品 × 58% 出成率 → 自动算原料 344.83g
+            {{ actualQuantityHelpText() }}
           </div>
         </el-form-item>
-        <!-- Phase A: 计量单位 (RAW/AUXILIARY 锁定 g, PACKAGING 可选) -->
         <el-form-item label="计量单位">
-          <template v-if="bomForm.materialCategory !== 'PACKAGING'">
-            <el-input value="克 (g)" disabled style="width: 100%;" />
-            <div class="form-tip">D3: BOM 配方层 RAW/辅料 固定用 g，系统调拨时自动按 1:1000 换算为 kg</div>
-          </template>
-          <template v-else>
-            <el-select v-model="bomForm.unit" placeholder="选择单位" style="width: 100%">
-              <el-option label="克 (g)" value="g" />
-              <el-option label="千克 (kg)" value="kg" />
-              <el-option label="毫升 (mL)" value="mL" />
-              <el-option label="升 (L)" value="L" />
-              <el-option label="件 (pcs)" value="pcs" />
-            </el-select>
-            <div class="form-tip">包材单位按实际填写</div>
-          </template>
+          <el-select v-model="bomForm.unit" placeholder="选择单位" style="width: 100%">
+            <el-option label="克 (g)" value="g" />
+            <el-option label="千克 (kg)" value="kg" />
+            <el-option label="毫升 (mL)" value="mL" />
+            <el-option label="升 (L)" value="L" />
+            <el-option label="只" value="只" />
+            <el-option label="个" value="个" />
+            <el-option label="件 (pcs)" value="pcs" />
+            <el-option
+              v-if="selectedMaterialUnit() && !['g','kg','mL','L','只','个','pcs'].includes(selectedMaterialUnit())"
+              :label="selectedMaterialUnit()"
+              :value="selectedMaterialUnit()"
+            />
+          </el-select>
+          <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
+            <span>{{ bomUnitCompatibilityWarning() }}</span>
+            <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
+              去核对单位配置
+            </el-button>
+          </div>
+          <div v-else-if="bomUnitIsCounting" class="form-tip">
+            计数型原料按成品件数核算；例如 0.5 只/袋，400 袋会核算 200 只。
+          </div>
+          <div v-else class="form-tip">
+            重量型原料建议使用 g，系统调拨/库存校验会自动按 g ↔ kg 换算。
+          </div>
         </el-form-item>
         <!-- #759: 包材每产品单位用量 (PACKAGING 专属, 配置后 BOM 标准用量可自动推算) -->
         <el-form-item

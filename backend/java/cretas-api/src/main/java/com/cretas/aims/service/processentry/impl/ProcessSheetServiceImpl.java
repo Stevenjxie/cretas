@@ -331,6 +331,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         List<String> warnings = new ArrayList<>();
 
+        assertFinishedGoodsSourceAllowed(factoryId, req);
+
         // SP-G P3: 捕获变更前 payload (在任何 updateRowInPlace 之前), 供 UPDATE diff 审计。
         ProcessSheetRowRequest beforeReq = tryDeserialize(existing.getRowPayload());
 

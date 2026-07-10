@@ -2305,6 +2305,27 @@ function getPlanAdvisorySummary(row: TableRow) {
   return advisory.message;
 }
 
+function advisoryNeedsUnitConfig(advisory: ProductionPlanMaterialAdvisory | null | undefined): boolean {
+  if (!advisory?.hasWarning) return false;
+  const haystack = [
+    advisory.message,
+    ...(advisory.warnings || []).map((item) => item.message),
+  ].join('\n');
+  return /单位.*无法换算|无法换算.*单位|核对单位配置/.test(haystack);
+}
+
+function goMaterialUnitConfig(advisory: ProductionPlanMaterialAdvisory | null | undefined) {
+  const firstUnitWarning = (advisory?.warnings || []).find((item) => /单位|换算/.test(item.message))
+    || advisory?.warnings?.[0];
+  router.push({
+    path: '/warehouse/material-types',
+    query: {
+      _returnTo: route.fullPath,
+      ...(firstUnitWarning?.materialName ? { keyword: firstUnitWarning.materialName } : {}),
+    },
+  });
+}
+
 // T138 方案A: 开工/开始/生成调拨单 的可操作 gate.
 // 后端 startProduction / createBatchFromPlan 严格只接受 PENDING (PLANNED → 409),
 // 所以这三个动作只在 PENDING 时展示, 避免对 PLANNED 计划点了直接报错.
@@ -3315,14 +3336,23 @@ function handleAiFill(params: TableRow) {
       :before-close="handleCompleteDialogBeforeClose"
     >
       <el-form label-width="118px" class="settlement-form">
-        <el-alert
-          v-if="completeAdvisory?.hasWarning"
-          :title="completeAdvisory.message"
-          type="warning"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 12px"
-        />
+        <div v-if="completeAdvisory?.hasWarning" class="settlement-advisory-alert">
+          <el-alert
+            :title="completeAdvisory.message"
+            type="warning"
+            show-icon
+            :closable="false"
+          />
+          <el-button
+            v-if="advisoryNeedsUnitConfig(completeAdvisory)"
+            type="warning"
+            plain
+            size="small"
+            @click="goMaterialUnitConfig(completeAdvisory)"
+          >
+            去核对单位配置
+          </el-button>
+        </div>
         <!-- Phase 2A: 报工自动预填审计 -->
         <el-alert
           v-if="settlementPrefillLoading"
@@ -3463,14 +3493,23 @@ function handleAiFill(params: TableRow) {
         </el-alert>
 
         <el-divider content-position="left">实际领用核对</el-divider>
-        <el-alert
-          v-if="completeAdvisory?.hasWarning"
-          :title="completeAdvisory.message"
-          type="error"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 12px"
-        />
+        <div v-if="completeAdvisory?.hasWarning" class="settlement-advisory-alert">
+          <el-alert
+            :title="completeAdvisory.message"
+            type="error"
+            show-icon
+            :closable="false"
+          />
+          <el-button
+            v-if="advisoryNeedsUnitConfig(completeAdvisory)"
+            type="danger"
+            plain
+            size="small"
+            @click="goMaterialUnitConfig(completeAdvisory)"
+          >
+            去核对单位配置
+          </el-button>
+        </div>
         <el-alert
           v-else-if="completeAdvisory"
           :title="completeAdvisory.message"
@@ -4472,6 +4511,21 @@ function handleAiFill(params: TableRow) {
   color: var(--text-color-regular, #606266);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.settlement-advisory-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+
+  .el-alert {
+    flex: 1;
+  }
+
+  .el-button {
+    flex: 0 0 auto;
+  }
 }
 
 .settlement-line-header {
