@@ -142,6 +142,11 @@ logger = logging.getLogger(__name__)
 
 SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
 
+# 2026-07-10: semantic cache fallback source tag — distinct from
+# RESULT_SOURCE_CACHE (exact-hash) so hit-rate is measurable per path. FE
+# renders both identically (just an "answer" + optional "charts").
+RESULT_SOURCE_SEMANTIC_CACHE = "semantic_cache"
+
 
 # ============================================================================
 # P2 multi-turn memory (2026-07-09) — bounded conversation-history window
@@ -165,6 +170,21 @@ SYNTHESIS_MAX_TOKENS = 2000  # multi-dim; reasoning models spend tokens on CoT
 HISTORY_MAX_TURNS = 4
 HISTORY_CHAR_BUDGET = 1200  # ~800 LLM tokens for Chinese-heavy text (~1.5 chars/token)
 HISTORY_BLOCK_HEADER = "对话历史（仅供理解追问指代，数字一律以下方 FactBook 为准）"
+
+
+async def _get_embedding(text: str) -> Optional[List[float]]:
+    """Lazy-imported local embedding call (2026-07-10, semantic cache
+    fallback) — mirrors llm_fallback_logger.get_embedding /
+    template_embedding_index._get_embedding: keeps food_kb optional at
+    import time, and never raises (returns None on any failure so the
+    caller falls straight through to the exact-hash-miss path / full
+    synthesis, exactly like an embedding-service outage never existed)."""
+    try:
+        from food_kb.services.embedding import get_embedding as _real
+        return await _real(text)
+    except Exception as e:
+        logger.warning(f"[synthesis] embedding call failed for {text[:40]!r}: {e}")
+        return None
 
 
 def _as_date_key(value: Any) -> str:
@@ -613,6 +633,37 @@ class ComprehensiveSynthesisEngine:
         # 3. Dimension plan (rules-first, no LLM).
         plan = self.plan_dimensions(question, has_history=bool(conversation_history))
 
+        # 3b. Semantic cache fallback (2026-07-10) — computed right after plan
+        # (before factbook assembly mutates plan's dims to False on empty
+        # pulls, e.g. plan["review"] = False at line ~1045) so plan_key
+        # reflects what was actually PLANNED/asked, not what ended up having
+        # data. window_key/plan_key are HARD equality filters in
+        # get_semantic's SQL (see narrative_cache.py docstring) — a
+        # high-similarity match from a different date window or a different
+        # triggered-dimension set is NEVER served.
+        #
+        # Only tried on an exact-hash MISS (we already returned above on a
+        # hit) and only when there's no conversation_history — same
+        # rationale as the exact-hash skip: a history-bearing follow-up's
+        # cache key doesn't capture which parent turn it resolves against,
+        # so neither reading nor writing the shared cache is safe for it.
+        window_key = f"{start_iso}|{end_iso}"
+        plan_key = ",".join(sorted(k for k, v in plan.items() if v is True))
+        q_emb: Optional[List[float]] = None
+        if not conversation_history:
+            q_emb = await _get_embedding(question)
+            if q_emb is not None:
+                sem = await self._cache.get_semantic(factory_id, q_emb, window_key, plan_key)
+                if sem is not None:
+                    sem_charts = (sem.get("chart_config") or {}).get("charts") or [] \
+                        if isinstance(sem.get("chart_config"), dict) else []
+                    return SynthesisResponse(
+                        answer=sem["answer"], source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
+                        tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
+                        elapsed_ms=int((time.monotonic() - t0) * 1000),
+                        charts=sem_charts, plan=plan,
+                    )
+
         # 4. Build FactBook (parallel deterministic pulls per plan).
         factbook = await self._build_factbook(
             factory_id, date_range, plan, period=f"{start_iso} 至 {end_iso}",
@@ -644,7 +695,8 @@ class ComprehensiveSynthesisEngine:
                     await self._cache.put(
                         factory_id, q_hash, thin_answer,
                         chart_config={"charts": charts} if charts else None,
-                        tokens=thin_tokens, ttl_hours=cache_ttl_hours)
+                        tokens=thin_tokens, ttl_hours=cache_ttl_hours,
+                        question_embedding=q_emb, window_key=window_key, plan_key=plan_key)
                 return SynthesisResponse(
                     answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
                     tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
@@ -683,6 +735,7 @@ class ComprehensiveSynthesisEngine:
                 factory_id, q_hash, answer,
                 chart_config={"charts": charts} if charts else None,
                 tokens=tokens, ttl_hours=cache_ttl_hours,
+                question_embedding=q_emb, window_key=window_key, plan_key=plan_key,
             )
 
         # 10. Distillation capture (G1) — make the synthesis answer observable to
