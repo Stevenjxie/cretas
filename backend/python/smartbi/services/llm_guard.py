@@ -460,6 +460,17 @@ class FactReconciler:
                 dev = 0.0 if claimed == 0 else 1.0
             else:
                 dev = abs(claimed - true_v) / abs(true_v)
+            # Magnitude gate (宁漏不错): a genuine mis-statement of this metric stays
+            # in the same ballpark; a number ORDERS OF MAGNITUDE off is a DIFFERENT
+            # quantity — a derived ratio ("总营业额是折扣金额合计的 1719%"), a
+            # percentage, a count — that merely shares the metric's label inside a
+            # comparative sentence. Rewriting it to the metric value is a category
+            # error (张冠李戴), so skip. Real digit/rounding errors stay < 100×.
+            if (true_v != 0 and claimed != 0
+                    and max(abs(claimed), abs(true_v))
+                    / min(abs(claimed), abs(true_v)) > 100):
+                search_from = pos + len(name)
+                continue
             if dev > tol:
                 # 宁漏不错: only annotate when the number is a CLAIM about the
                 # GLOBAL metric. Skip when the same sentence (before the metric)
