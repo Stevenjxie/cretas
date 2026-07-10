@@ -1,0 +1,143 @@
+import { mount } from '@vue/test-utils';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { MOCK_STORES, MOCK_VEHICLES } from '../../mockData';
+import { ROAD_SEGMENTS } from '../../roadSegments';
+import { generateSchedule } from '../../routeEngine';
+import type { RouteTrip } from '../../types';
+import LogisticsMap from '../LogisticsMap.vue';
+import RouteCards from '../RouteCards.vue';
+import StoreDetailDrawer from '../StoreDetailDrawer.vue';
+
+const schedule = generateSchedule({
+  stores: MOCK_STORES,
+  vehicles: MOCK_VEHICLES,
+  roadSegments: ROAD_SEGMENTS,
+  targetLoadPct: 88,
+});
+
+const mapProps = () => ({
+  stores: MOCK_STORES,
+  trips: schedule.trips,
+  selectedTripId: schedule.trips[0].id,
+  selectedStoreId: null,
+});
+
+describe('LogisticsMap', () => {
+  beforeEach(() => {
+    expect(schedule.trips).toHaveLength(5);
+  });
+
+  it('renders every trip geometry in the exact shared map coordinate system', () => {
+    const wrapper = mount(LogisticsMap, { props: mapProps() });
+    const svg = wrapper.get('[data-testid="map-image"]');
+    const routePaths = wrapper.findAll('[data-testid="route-path"]');
+
+    expect(svg.attributes('viewBox')).toBe('0 0 1917 1165');
+    expect(svg.attributes('preserveAspectRatio')).toBe('xMidYMid meet');
+    expect(wrapper.get('[data-testid="base-map"]').attributes('src')).toContain('suzhou-logistics-map.png');
+    expect(routePaths).toHaveLength(schedule.trips.length);
+    routePaths.forEach((path, index) => {
+      expect(path.attributes('points')).toBe(
+        schedule.trips[index].geometry.map(({ x, y }) => `${x},${y}`).join(' '),
+      );
+    });
+  });
+
+  it('shows all 13 store anchors and numbers only the selected trip in order', () => {
+    const wrapper = mount(LogisticsMap, { props: mapProps() });
+    const numbers = wrapper.findAll('[data-testid="selected-stop-number"]');
+
+    expect(wrapper.findAll('[data-testid="store-anchor"]')).toHaveLength(13);
+    expect(numbers).toHaveLength(schedule.trips[0].storeIds.length);
+    expect(numbers.map((node) => node.text())).toEqual(['1', '2', '3']);
+    expect(numbers.map((node) => node.attributes('data-store-id'))).toEqual(schedule.trips[0].storeIds);
+  });
+
+  it('emits exact trip and store selection events', async () => {
+    const wrapper = mount(LogisticsMap, { props: mapProps() });
+    const secondTrip = schedule.trips[1];
+    const store = MOCK_STORES[4];
+
+    await wrapper.get(`[data-testid="route-path"][data-trip-id="${secondTrip.id}"]`).trigger('click');
+    await wrapper.get(`[data-testid="store-anchor"][data-store-id="${store.id}"]`).trigger('click');
+
+    expect(wrapper.emitted('select-trip')).toEqual([[secondTrip.id]]);
+    expect(wrapper.emitted('select-store')).toEqual([[store.id]]);
+  });
+
+  it('renders no route geometry when a trip has no geometry', () => {
+    const missingGeometryTrip: RouteTrip = {
+      ...schedule.trips[0],
+      id: 'missing-geometry-trip',
+      geometry: [],
+      status: 'needs_route_data',
+    };
+    const wrapper = mount(LogisticsMap, {
+      props: {
+        ...mapProps(),
+        trips: [missingGeometryTrip],
+        selectedTripId: missingGeometryTrip.id,
+      },
+    });
+
+    expect(wrapper.findAll('[data-testid="route-path"]')).toHaveLength(0);
+    expect(wrapper.findAll('.route-casing')).toHaveLength(0);
+  });
+});
+
+describe('RouteCards', () => {
+  it('renders ordered store chains, vehicle fallback, distance, and load', () => {
+    const wrapper = mount(RouteCards, { props: mapProps() });
+    const cards = wrapper.findAll('[data-testid="route-card"]');
+    const pendingCard = cards.find((card) => card.attributes('data-trip-id') === schedule.trips[3].id);
+
+    expect(cards).toHaveLength(schedule.trips.length);
+    expect(cards[0].findAll('[data-testid="route-store"]').map((store) => store.text())).toEqual([
+      '配送门店 01', '配送门店 03', '配送门店 04',
+    ]);
+    expect(cards[0].findAll('.chain-arrow')).toHaveLength(2);
+    expect(cards[0].text()).toContain(schedule.trips[0].vehiclePlate);
+    expect(cards[0].text()).toContain(`${schedule.trips[0].totalDistanceKm.toFixed(1)} km`);
+    expect(cards[0].text()).toContain(`${Math.round(schedule.trips[0].loadRate * 100)}%`);
+    expect(pendingCard?.text()).toContain('待匹配车辆');
+  });
+
+  it('emits exact card and store selection events', async () => {
+    const wrapper = mount(RouteCards, { props: mapProps() });
+    const trip = schedule.trips[2];
+    const storeId = trip.storeIds[1];
+
+    await wrapper.get(`[data-testid="route-card"][data-trip-id="${trip.id}"]`).trigger('click');
+    await wrapper.get(`[data-testid="route-store"][data-store-id="${storeId}"]`).trigger('click');
+
+    expect(wrapper.emitted('select-trip')).toEqual([[trip.id]]);
+    expect(wrapper.emitted('select-store')).toEqual([[storeId]]);
+  });
+});
+
+describe('StoreDetailDrawer', () => {
+  it('shows the selected store pieces, boxes, weight, volume, address, and window', () => {
+    const store = MOCK_STORES[6];
+    const wrapper = mount(StoreDetailDrawer, {
+      props: { stores: MOCK_STORES, selectedStoreId: store.id },
+    });
+
+    expect(wrapper.get('[data-testid="store-detail-drawer"]').text()).toContain(store.name);
+    expect(wrapper.get('[data-testid="store-pieces"]').text()).toContain(String(store.pieces));
+    expect(wrapper.get('[data-testid="store-boxes"]').text()).toContain(String(store.boxes));
+    expect(wrapper.get('[data-testid="store-weight"]').text()).toContain(`${store.weightKg} kg`);
+    expect(wrapper.get('[data-testid="store-volume"]').text()).toContain(`${store.volumeCbm} m³`);
+    expect(wrapper.get('[data-testid="store-address"]').text()).toContain(store.address);
+    expect(wrapper.get('[data-testid="store-window"]').text()).toContain(store.window);
+  });
+
+  it('clears the selected store through the exact select-store event', async () => {
+    const wrapper = mount(StoreDetailDrawer, {
+      props: { stores: MOCK_STORES, selectedStoreId: MOCK_STORES[0].id },
+    });
+
+    await wrapper.get('[data-testid="close-store-drawer"]').trigger('click');
+
+    expect(wrapper.emitted('select-store')).toEqual([[null]]);
+  });
+});
