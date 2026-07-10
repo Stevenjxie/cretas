@@ -22,9 +22,29 @@ const mapProps = () => ({
   selectedStoreId: null,
 });
 
+function activateNativeButton(element: Element, key: 'Enter' | ' '): void {
+  const button = element as HTMLButtonElement;
+  const keydown = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  const shouldRunDefault = button.dispatchEvent(keydown);
+  button.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+  if (shouldRunDefault) button.click();
+}
+
 describe('LogisticsMap', () => {
   beforeEach(() => {
     expect(schedule.trips).toHaveLength(5);
+  });
+
+  it('keeps the image decorative and exposes the interactive SVG as a labelled group', () => {
+    const wrapper = mount(LogisticsMap, { props: mapProps() });
+    const image = wrapper.get('[data-testid="base-map"]');
+    const svg = wrapper.get('[data-testid="map-image"]');
+
+    expect(image.attributes('alt')).toBe('');
+    expect(image.attributes('aria-hidden')).toBe('true');
+    expect(svg.attributes('role')).toBe('group');
+    expect(svg.attributes('role')).not.toBe('img');
+    expect(svg.attributes('aria-label')).toBe('配送路线与门店');
   });
 
   it('renders every trip geometry in the exact shared map coordinate system', () => {
@@ -51,6 +71,20 @@ describe('LogisticsMap', () => {
     expect(numbers).toHaveLength(schedule.trips[0].storeIds.length);
     expect(numbers.map((node) => node.text())).toEqual(['1', '2', '3']);
     expect(numbers.map((node) => node.attributes('data-store-id'))).toEqual(schedule.trips[0].storeIds);
+  });
+
+  it('keeps selected sequence badges visual-only and out of the interaction tree', async () => {
+    const wrapper = mount(LogisticsMap, { props: mapProps() });
+    const numbers = wrapper.findAll('[data-testid="selected-stop-number"]');
+
+    for (const number of numbers) {
+      expect(number.attributes('aria-hidden')).toBe('true');
+      expect(number.attributes('tabindex')).toBeUndefined();
+      expect(number.attributes('role')).toBeUndefined();
+    }
+
+    await numbers[0].trigger('click');
+    expect(wrapper.emitted('select-store')).toBeUndefined();
   });
 
   it('emits exact trip and store selection events', async () => {
@@ -113,6 +147,31 @@ describe('RouteCards', () => {
     expect(wrapper.emitted('select-trip')).toEqual([[trip.id]]);
     expect(wrapper.emitted('select-store')).toEqual([[storeId]]);
   });
+
+  it('selects a trip from the dedicated native route button by keyboard', () => {
+    const wrapper = mount(RouteCards, { props: mapProps() });
+    const trip = schedule.trips[1];
+    const routeButton = wrapper.get(`[data-testid="route-select"][data-trip-id="${trip.id}"]`);
+
+    expect(routeButton.element.tagName).toBe('BUTTON');
+    activateNativeButton(routeButton.element, 'Enter');
+    activateNativeButton(routeButton.element, ' ');
+
+    expect(wrapper.emitted('select-trip')).toEqual([[trip.id], [trip.id]]);
+  });
+
+  it('emits only store selection when a store chip is activated with Enter or Space', () => {
+    const wrapper = mount(RouteCards, { props: mapProps() });
+    const storeId = schedule.trips[0].storeIds[1];
+    const storeButton = wrapper.get(`[data-testid="route-store"][data-store-id="${storeId}"]`);
+
+    expect(storeButton.element.tagName).toBe('BUTTON');
+    activateNativeButton(storeButton.element, 'Enter');
+    activateNativeButton(storeButton.element, ' ');
+
+    expect(wrapper.emitted('select-store')).toEqual([[storeId], [storeId]]);
+    expect(wrapper.emitted('select-trip')).toBeUndefined();
+  });
 });
 
 describe('StoreDetailDrawer', () => {
@@ -139,5 +198,16 @@ describe('StoreDetailDrawer', () => {
     await wrapper.get('[data-testid="close-store-drawer"]').trigger('click');
 
     expect(wrapper.emitted('select-store')).toEqual([[null]]);
+  });
+
+  it('closes through the scrim as well as the close button', async () => {
+    const wrapper = mount(StoreDetailDrawer, {
+      props: { stores: MOCK_STORES, selectedStoreId: MOCK_STORES[0].id },
+    });
+
+    await wrapper.get('[data-testid="drawer-scrim"]').trigger('click');
+    await wrapper.get('[data-testid="close-store-drawer"]').trigger('click');
+
+    expect(wrapper.emitted('select-store')).toEqual([[null], [null]]);
   });
 });

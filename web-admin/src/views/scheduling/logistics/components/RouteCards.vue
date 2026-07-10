@@ -44,18 +44,21 @@ function selectTrip(tripId: string): void {
       data-testid="route-card"
       :data-trip-id="trip.id"
       :class="['route-card', { selected: trip.id === selectedTripId }]"
-      role="button"
-      tabindex="0"
-      :aria-label="`选择线路 ${index + 1}`"
       @click="selectTrip(trip.id)"
-      @keydown.enter.prevent="selectTrip(trip.id)"
-      @keydown.space.prevent="selectTrip(trip.id)"
     >
       <header class="card-header">
-        <div>
-          <p class="route-eyebrow">线路 {{ String(index + 1).padStart(2, '0') }}</p>
-          <h3>第 {{ trip.tripNo }} 趟配送</h3>
-        </div>
+        <button
+          type="button"
+          data-testid="route-select"
+          :data-trip-id="trip.id"
+          class="route-select-button"
+          :aria-pressed="trip.id === selectedTripId"
+          :aria-label="`选择线路 ${index + 1}，第 ${trip.tripNo} 趟配送`"
+          @click.stop="selectTrip(trip.id)"
+        >
+          <span class="route-eyebrow">线路 {{ String(index + 1).padStart(2, '0') }}</span>
+          <span class="route-title">第 {{ trip.tripNo }} 趟配送</span>
+        </button>
         <span :class="['route-status', `status-${trip.status}`]">
           {{ statusLabels[trip.status] }}
         </span>
@@ -115,7 +118,7 @@ function selectTrip(tripId: string): void {
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 
   &:hover,
-  &:focus-visible {
+  &:focus-within {
     border-color: rgba(27, 101, 168, 0.48);
     box-shadow: 0 6px 18px rgba(27, 101, 168, 0.12);
     outline: none;
@@ -140,20 +143,37 @@ function selectTrip(tripId: string): void {
   gap: 12px;
   margin-bottom: 14px;
 
-  h3 {
-    margin: 2px 0 0;
-    color: #101828;
-    font-size: 16px;
-    line-height: 1.4;
+}
+
+.route-select-button {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid #1b65a8;
+    outline-offset: 4px;
   }
 }
 
 .route-eyebrow {
-  margin: 0;
   color: #344054;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.05em;
+}
+
+.route-title {
+  margin-top: 2px;
+  color: #101828;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .route-status {

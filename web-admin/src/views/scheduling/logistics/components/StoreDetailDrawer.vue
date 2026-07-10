@@ -22,7 +22,13 @@ function close(): void {
 
 <template>
   <div v-if="selectedStore" class="drawer-layer">
-    <button class="drawer-scrim" type="button" aria-label="关闭门店详情" @click="close" />
+    <button
+      data-testid="drawer-scrim"
+      class="drawer-scrim"
+      type="button"
+      aria-label="关闭门店详情"
+      @click="close"
+    />
     <aside
       data-testid="store-detail-drawer"
       class="store-drawer"

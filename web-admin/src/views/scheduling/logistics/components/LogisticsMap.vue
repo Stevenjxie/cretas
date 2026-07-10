@@ -50,15 +50,16 @@ function compactStoreName(name: string): string {
       data-testid="base-map"
       class="base-map"
       :src="mapImage"
-      alt="苏州配送地图"
+      alt=""
+      aria-hidden="true"
     >
     <svg
       data-testid="map-image"
       class="map-overlay"
       viewBox="0 0 1917 1165"
       preserveAspectRatio="xMidYMid meet"
-      role="img"
-      aria-label="苏州多线路配送地图"
+      role="group"
+      aria-label="配送路线与门店"
     >
       <g class="route-layer">
         <template v-for="(trip, index) in trips" :key="trip.id">
@@ -122,12 +123,7 @@ function compactStoreName(name: string): string {
           :data-store-id="store.id"
           class="sequence-badge"
           :transform="`translate(${store.mapAnchor.x} ${store.mapAnchor.y})`"
-          role="button"
-          tabindex="0"
-          :aria-label="`第 ${index + 1} 站，${store.name}`"
-          @click.stop="emit('select-store', store.id)"
-          @keydown.enter.prevent="emit('select-store', store.id)"
-          @keydown.space.prevent="emit('select-store', store.id)"
+          aria-hidden="true"
         >
           <circle r="18" />
           <text y="1">{{ index + 1 }}</text>
@@ -253,7 +249,7 @@ function compactStoreName(name: string): string {
 }
 
 .sequence-badge {
-  cursor: pointer;
+  pointer-events: none;
 
   circle {
     fill: #1b65a8;
@@ -271,10 +267,6 @@ function compactStoreName(name: string): string {
     pointer-events: none;
   }
 
-  &:focus-visible circle,
-  &:hover circle {
-    fill: #124d82;
-  }
 }
 
 @media (max-width: 1440px) {
