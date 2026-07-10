@@ -61,7 +61,7 @@ type ProcEntry = {
   allowFinishedGoodsSource: boolean;
   /** 本工序配置的投入/产出单位。产出单位为空时由表格沿用投入单位。 */
   inputUnit: string;
-  outputUnit?: string | null;
+  outputUnit: string | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */

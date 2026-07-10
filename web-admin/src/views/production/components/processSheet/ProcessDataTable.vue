@@ -160,6 +160,9 @@ const cols = computed(() => [
   ...withProcessSheetUnits(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS, processUnits.value),
   ...customFieldCols.value,
 ]);
+const firstProcessInputLabel = computed(() =>
+  cols.value.find((col) => col.key === 'outWeight')?.label || `出库数量(${processUnits.value.inputUnit})`,
+);
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
 const isXiuYou = computed(() => props.processCode === 'xiuyou');
 /** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
@@ -1535,7 +1538,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </span>
             </div>
             <div class="sp-card-field">
-              <label class="sp-card-label">出库重量(kg)</label>
+              <label class="sp-card-label">{{ firstProcessInputLabel }}</label>
               <el-input-number
                 v-model="row.rawBatchQty"
                 :min="0" :precision="2"
@@ -1827,7 +1830,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <!-- 修油: raw batch + out-weight cols appear before generic cols -->
             <template v-if="isXiuYou">
               <th class="sp-th">原料批次</th>
-              <th class="sp-th sp-th-num">出库重量(kg)</th>
+              <th class="sp-th sp-th-num">{{ firstProcessInputLabel }}</th>
             </template>
 
             <!-- 单来源上游 -->
