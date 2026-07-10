@@ -11,6 +11,7 @@ import { useLogisticsDemoState } from '../useLogisticsDemoState';
 
 const state = useLogisticsDemoState();
 const assignmentIssue = ref('');
+const exportConfirmed = ref(false);
 
 const hasExceptions = computed(() => {
   const trips = state.scheduleResult.value.trips;
@@ -31,6 +32,12 @@ function handleTargetLoad(value: number): void {
 function startRoutePlanning(): void {
   state.importOrders();
   state.generateRoutes();
+  exportConfirmed.value = false;
+}
+
+function confirmExport(): void {
+  exportConfirmed.value = true;
+  state.activeStep.value = 'export';
 }
 
 function assignVehicle(vehicleId: string | null): void {
@@ -59,6 +66,7 @@ function back(): void {
   const steps = ['import', 'map', 'confirm', 'export'] as const;
   const index = steps.indexOf(state.activeStep.value);
   if (index > 0) state.activeStep.value = steps[index - 1];
+  if (state.activeStep.value !== 'export') exportConfirmed.value = false;
 }
 
 function next(): void {
@@ -85,7 +93,7 @@ function next(): void {
     </section>
 
     <ManualConfirmStep v-else-if="state.activeStep.value === 'confirm'" :trip="state.activeTrip.value" :stores="state.stores.value" :vehicles="state.vehicles.value" @move-store="state.moveStore" @assign-vehicle="assignVehicle" @assign-driver="assignDriver" @confirm-trip="state.confirmTrip" />
-    <ExportConfirmStep v-else :rows="state.exportRows.value" @confirm="state.confirmSchedule" />
+    <ExportConfirmStep v-else :rows="state.exportRows.value" :confirmed="exportConfirmed" @confirm="confirmExport" />
 
     <footer class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看导出预览' : '下一步' }}</button></footer>
   </main>

@@ -10,6 +10,30 @@ const importValidation = ref('可选择 CSV 文件进行本地字段校验。');
 
 const requiredHeaders = ['门店编号', '门店名称', '配送地址', '时间窗'];
 
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let value = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === ',' && !quoted) {
+      values.push(value.trim());
+      value = '';
+    } else {
+      value += character;
+    }
+  }
+  values.push(value.trim());
+  return values;
+}
+
 async function validateCsv(event: Event): Promise<void> {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
@@ -18,7 +42,7 @@ async function validateCsv(event: Event): Promise<void> {
     return;
   }
   const lines = (await file.text()).replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
-  const headers = lines[0]?.split(',').map((header) => header.trim()) ?? [];
+  const headers = lines[0] ? parseCsvLine(lines[0]) : [];
   const missing = requiredHeaders.filter((header) => !headers.includes(header));
   if (missing.length) {
     importValidation.value = `缺少必填列：${missing.join('、')}`;
@@ -26,11 +50,11 @@ async function validateCsv(event: Event): Promise<void> {
   }
   const rowCount = Math.max(lines.length - 1, 0);
   const missingValue = lines.slice(1).findIndex((line) => {
-    const values = line.split(',').map((value) => value.trim());
+    const values = parseCsvLine(line);
     return requiredHeaders.some((header) => !values[headers.indexOf(header)]);
   });
   if (missingValue >= 0) {
-    const values = lines[missingValue + 1].split(',').map((value) => value.trim());
+    const values = parseCsvLine(lines[missingValue + 1]);
     const missingHeader = requiredHeaders.find((header) => !values[headers.indexOf(header)]);
     importValidation.value = `第 ${missingValue + 2} 行缺少${missingHeader}`;
     return;

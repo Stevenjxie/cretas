@@ -40,6 +40,20 @@ describe('logistics workbench steps', () => {
     expect(wrapper.get('[data-testid="pending-export-row"]').text()).toContain('待匹配车辆');
   });
 
+  it('confirms the export preview without resolving the pending vehicle trip', async () => {
+    const state = useLogisticsDemoState();
+    state.generateRoutes();
+    state.activeStep.value = 'export';
+    const wrapper = mount(Workbench, { global: { stubs: { ElButton: false } } });
+
+    wrapper.findComponent(ExportConfirmStep).vm.$emit('confirm');
+    await wrapper.vm.$nextTick();
+
+    expect(state.activeStep.value).toBe('export');
+    expect(wrapper.get('[data-testid="export-confirmed"]').text()).toContain('已确认导出');
+    expect(wrapper.get('[data-testid="pending-export-row"]').text()).toContain('待匹配车辆');
+  });
+
   it('validates selected CSV headers without claiming it was persisted', async () => {
     const wrapper = mount(OrderImportStep, { props: { stores: MOCK_STORES, imported: false } });
     const file = new File(['门店编号,门店名称\nS-001,测试门店'], 'orders.csv', { type: 'text/csv' });
@@ -65,6 +79,18 @@ describe('logistics workbench steps', () => {
     expect(wrapper.get('[data-testid="import-validation"]').text()).toContain('第 2 行缺少配送地址');
   });
 
+  it('does not shift required fields when a quoted address contains a comma', async () => {
+    const wrapper = mount(OrderImportStep, { props: { stores: MOCK_STORES, imported: false } });
+    const file = new File([''], 'orders.csv', { type: 'text/csv' });
+    Object.assign(file, { text: async () => '门店编号,门店名称,配送地址,时间窗\nS-001,测试门店,"苏州市,工业园区",' });
+    const input = wrapper.get('[data-testid="csv-input"]');
+    Object.defineProperty(input.element, 'files', { value: [file] });
+
+    await input.trigger('change');
+
+    expect(wrapper.get('[data-testid="import-validation"]').text()).toContain('第 2 行缺少时间窗');
+  });
+
   it('shows a conditional conflict message when a resource assignment is rejected', async () => {
     const state = useLogisticsDemoState();
     state.generateRoutes();
@@ -82,7 +108,7 @@ describe('logistics workbench steps', () => {
 
   it('includes prepared volume and distance in the final preview', () => {
     const wrapper = mount(ExportConfirmStep, {
-      props: { rows: [{ tripId: 'T-1', vehicle: '待匹配车辆', driver: '', storeIds: [], storeOrder: 'S-001', volume: '1.80', loadRate: '18%', distance: '12.50 km' }] },
+      props: { confirmed: false, rows: [{ tripId: 'T-1', vehicle: '待匹配车辆', driver: '', storeIds: [], storeOrder: 'S-001', volume: '1.80', loadRate: '18%', distance: '12.50 km' }] },
     });
 
     expect(wrapper.html()).toContain('volume');
