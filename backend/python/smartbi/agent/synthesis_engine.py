@@ -901,8 +901,9 @@ class ComprehensiveSynthesisEngine:
         # explicit dimensions too — a pure "满减花了多少" / "外卖单多不多" must
         # NOT trip open-all (token bloat, I3).
         if not (plan["review"] or plan["finance"] or plan["sales"]
-                or plan["dish_margin"] or plan["attribution"] or plan["weather"]
-                or plan["channel"] or plan["meal_period"] or plan["discount"]):
+                or plan["attribution"] or plan["weather"]
+                or plan["channel"] or plan["meal_period"] or plan["discount"]
+                or plan["supplier_anomaly"] or plan["period_comparison"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -921,8 +922,9 @@ class ComprehensiveSynthesisEngine:
             fid_up = (factory_id or "").upper()
             biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
             has_data = any([factbook.review, factbook.finance, factbook.sales,
-                            factbook.dish_margin, factbook.attribution,
-                            factbook.channel, factbook.meal_period, factbook.discount])
+                            factbook.period_comparison, factbook.supplier_anomaly,
+                            factbook.attribution, factbook.channel,
+                            factbook.meal_period, factbook.discount])
             quality = 2 if not has_data else (4 if grounded_clean else 3)
             q_capped = (question or "")[:500]
             await persist_distillation_sample(
