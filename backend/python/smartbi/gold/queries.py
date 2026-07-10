@@ -1187,6 +1187,95 @@ async def finance_summary(
     return result
 
 
+async def period_comparison(pool, factory_id, start, end):
+    """同比(去年同期)/环比(前一等长周期) for 营收 + 加权毛利率, over agg_daily(+agg_daily_cost).
+
+    加权毛利 = 营收 - 食材成本 (镜像 finance_summary.gross_profit); 加权毛利率 = 该值/营收*100。
+    餐饮口径: 这是聚合的加权毛利率, 非单品毛利 (中餐单品用量难固定, 单品不可靠)。
+
+    诚实降级 (禁降级处理): 对比期无营业数据 → available=False, pct=None
+    (绝不返回伪造的 0/100%)。毛利率对比额外要求两侧成本非空 (agg_daily_cost 真租户可能 NULL)。
+
+    营收同比/环比 = 增长率 (%); 毛利率同比/环比 = 百分点差 (个百分点, 从30%到34%=+4)。
+
+    返回:
+      {"revenue": {"current", "yoy_pct", "mom_pct", "yoy_available", "mom_available"},
+       "gross_margin_pct": {同上键, "current" 可能 None}}
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(f"period_comparison: factory_id required (got {factory_id!r})")
+    if start is None or end is None:
+        raise ValueError(f"period_comparison: start/end required (got {start}, {end})")
+    from datetime import timedelta
+
+    def _shift_year(d, years):
+        try:
+            return d.replace(year=d.year - years)
+        except ValueError:  # Feb 29 → 365天近似回退
+            return d - timedelta(days=365 * years)
+
+    span = end - start
+    windows = {
+        "current": (start, end),
+        "mom": (start - timedelta(days=1) - span, start - timedelta(days=1)),
+        "yoy": (_shift_year(start, 1), _shift_year(end, 1)),
+    }
+
+    async def _agg(conn, s, e):
+        row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(a.net_amount), 0)::numeric(18,2) AS revenue,
+                   SUM(c.material_cost)::numeric(18,2)           AS material_cost,
+                   COUNT(*)                                       AS n_rows
+              FROM agg_daily a
+              LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)
+             WHERE a.factory_id = $1 AND a.date BETWEEN $2 AND $3
+            """,
+            factory_id, s, e,
+        )
+        rev = Decimal(row["revenue"] or 0)
+        n = int(row["n_rows"] or 0)
+        mat = row["material_cost"]
+        gm = None
+        if n > 0 and mat is not None and rev != 0:
+            gm = (((rev - Decimal(mat)) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return {"n": n, "revenue": rev, "gross_margin_pct": gm}
+
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        agg = {k: await _agg(conn, s, e) for k, (s, e) in windows.items()}
+
+    def _growth(cur, base):
+        if base is None or base == 0:
+            return None
+        return float((((cur - base) / abs(base)) * Decimal("100")).quantize(
+            Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+    cur = agg["current"]
+    rev_mom = agg["mom"]["n"] > 0
+    rev_yoy = agg["yoy"]["n"] > 0
+    cur_gm = cur["gross_margin_pct"]
+    gm_mom = cur_gm is not None and agg["mom"]["gross_margin_pct"] is not None
+    gm_yoy = cur_gm is not None and agg["yoy"]["gross_margin_pct"] is not None
+    return {
+        "revenue": {
+            "current": float(cur["revenue"]),
+            "mom_pct": _growth(cur["revenue"], agg["mom"]["revenue"]) if rev_mom else None,
+            "yoy_pct": _growth(cur["revenue"], agg["yoy"]["revenue"]) if rev_yoy else None,
+            "mom_available": rev_mom,
+            "yoy_available": rev_yoy,
+        },
+        "gross_margin_pct": {
+            "current": float(cur_gm) if cur_gm is not None else None,
+            "mom_pct": round(float(cur_gm) - float(agg["mom"]["gross_margin_pct"]), 1) if gm_mom else None,
+            "yoy_pct": round(float(cur_gm) - float(agg["yoy"]["gross_margin_pct"]), 1) if gm_yoy else None,
+            "mom_available": gm_mom,
+            "yoy_available": gm_yoy,
+        },
+    }
+
+
 def _as_decimal(value: Any) -> Optional[Decimal]:
     if value is None:
         return None

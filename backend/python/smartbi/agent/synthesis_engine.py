@@ -90,9 +90,11 @@ from smartbi.agent.budget_tracker import AgentBudgetTracker
 from smartbi.agent.factbook import (
     FactBook,
     NOTE_COMPLAINT_DISPUTE,
+    NOTE_DISH_MARGIN_ABSENT,
     NOTE_DISH_TAG_NOT_NAME,
     NOTE_LOW_STAR_SMALL_SAMPLE,
     NOTE_REVIEW_ABSENT_NEXTACTION,
+    NOTE_SUPPLIER_ANOMALY_ABSENT,
     NOTE_VIP_SIGNAL,
     compute_store_attribution,
     factbook_to_dataframe,
@@ -113,7 +115,6 @@ from smartbi.gold import (
     channel_breakdown,
     daily_trend,
     discount_summary,
-    dish_margin,
     discount_breakdown,
     finance_summary,
     meal_period_breakdown,
@@ -128,7 +129,8 @@ from smartbi.gold import (
     review_vip,
     top_products,
 )
-from smartbi.gold.queries import weather_daily
+from smartbi.gold.price_anomaly import detect_price_anomalies
+from smartbi.gold.queries import period_comparison, weather_daily
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
@@ -774,8 +776,9 @@ class ComprehensiveSynthesisEngine:
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
-                "dish_margin": False, "attribution": False, "weather": False,
+                "dish_margin_asked": False, "attribution": False, "weather": False,
                 "channel": False, "meal_period": False, "discount": False,
+                "period_comparison": False, "supplier_anomaly": False,
                 "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
@@ -783,12 +786,19 @@ class ComprehensiveSynthesisEngine:
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
             plan["sales"] = True
+        # 2026-07-10 (P1.1): 中餐单品毛利本身不可靠 (各菜用量难固定核算) — the
+        # dish-level dimension is REMOVED (see NOTE_DISH_MARGIN_ABSENT). A
+        # 毛利/单品成本 question is redirected to the finance dimension's
+        # 加权毛利率/总毛利率 (real cost, real since PR#1315); we still remember
+        # the trigger fired (`dish_margin_asked`) so _build_factbook can attach
+        # the honest degradation note instead of silently dropping the ask.
         _wants_dish_margin = any(k in ql for k in (
             "毛利", "成本构成", "单份成本", "哪道菜", "菜品成本", "单品成本",
             "dish margin", "gross margin",
         )) and any(k in ql for k in ("菜", "菜品", "单品", "sku", "商品"))
         if _wants_dish_margin:
-            plan["dish_margin"] = True
+            plan["dish_margin_asked"] = True
+            plan["finance"] = True
             plan["sales"] = True
         # 渠道(点餐方式 堂食/外卖/自提) — NOT the payment-channel breakdown
         # already embedded in "sales" (微信/美团); this is service-mode split.
@@ -811,6 +821,16 @@ class ComprehensiveSynthesisEngine:
         _wants_discount = any(k in ql for k in ("折扣", "优惠", "满减", "打折"))
         if _wants_discount:
             plan["discount"] = True
+        # 供应商价格异常 (反回扣: 采购端偷涨价威慑, 零理论依赖 — spec P2.1)
+        if any(k in ql for k in (
+                "供应商", "进货", "采购", "进价", "涨价", "回扣", "偷偷", "猫腻", "吃差价")):
+            plan["supplier_anomaly"] = True
+        # 同比环比 (趋势): 经营/营收类问题或显式趋势词 → 带同比环比 (spec P1.3)
+        if any(k in ql for k in (
+                "营收", "营业额", "经营", "财务", "收入", "业绩", "生意", "赚钱", "利润",
+                "同比", "环比", "趋势", "增长", "涨了", "降了", "比上月", "比上周",
+                "比去年", "去年同期")):
+            plan["period_comparison"] = True
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -1022,9 +1042,18 @@ class ComprehensiveSynthesisEngine:
             tasks["finance"] = _safe(
                 finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
             )
-        if plan.get("dish_margin"):
-            tasks["dish_margin"] = _safe(
-                dish_margin(self._pool, factory_id, top_n=10), "dish_margin",
+        if plan.get("period_comparison"):
+            _pc_s, _pc_e = (
+                (date_range[0], date_range[1])
+                if isinstance(date_range, (tuple, list))
+                else (getattr(date_range, "start", None), getattr(date_range, "end", None))
+            )
+            tasks["period_comparison"] = _safe(
+                period_comparison(self._pool, factory_id, _pc_s, _pc_e), "period_comparison",
+            )
+        if plan.get("supplier_anomaly"):
+            tasks["supplier_anomaly"] = _safe(
+                detect_price_anomalies(self._pool, factory_id), "supplier_anomaly",
             )
         if plan.get("attribution"):
             # store_comparison returns ALL stores (no top-N) — needed for the
@@ -1106,13 +1135,28 @@ class ComprehensiveSynthesisEngine:
             else:
                 plan["finance"] = False
 
-        # ---- assemble dish margin ----
-        if plan.get("dish_margin"):
-            dm = results.get("dish_margin")
-            if dm and dm.get("dish_count"):
-                fb.dish_margin = dm
+        # ---- P1.1: 中餐单品毛利已停用; 用户问单品毛利 → 诚实降级 NOTE
+        # (plan_dimensions 已把该问法重定向到 finance 维度的 加权毛利率)
+        if plan.get("dish_margin_asked"):
+            notes.append(NOTE_DISH_MARGIN_ABSENT)
+
+        # ---- assemble 同比环比 (营收+加权毛利率) ----
+        if plan.get("period_comparison"):
+            pc = results.get("period_comparison")
+            if pc and (pc.get("revenue") or {}).get("current") is not None:
+                fb.period_comparison = pc
             else:
-                plan["dish_margin"] = False
+                plan["period_comparison"] = False
+
+        # ---- assemble 供应商价格异常 (威慑非处罚) ----
+        if plan.get("supplier_anomaly"):
+            anomalies = results.get("supplier_anomaly")
+            if anomalies:  # non-empty list of anomalies
+                fb.supplier_anomaly = {"anomalies": anomalies}
+            else:
+                # 诚实降级: 无采购价格数据 / 无异常 → NOTE, 不编造
+                plan["supplier_anomaly"] = False
+                notes.append(NOTE_SUPPLIER_ANOMALY_ABSENT)
 
         # ---- assemble attribution (客流×客单价 拖后腿拆解) ----
         if plan.get("attribution"):
