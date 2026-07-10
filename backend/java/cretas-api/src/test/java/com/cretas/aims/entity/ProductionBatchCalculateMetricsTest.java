@@ -1,9 +1,11 @@
 package com.cretas.aims.entity;
 
+import jakarta.persistence.Column;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -90,5 +92,24 @@ class ProductionBatchCalculateMetricsTest {
         assertEquals(0, new BigDecimal("90.18").compareTo(b.getEfficiency()));
         assertNotNull(b.getUnitCost(), "plannedUnit=null 时按原逻辑计算 unitCost");
         assertEquals(0, new BigDecimal("7.0175").compareTo(b.getUnitCost()));
+    }
+
+    @Test
+    @DisplayName("P0-2: 跨单位换算导致的高出成率应能持久化")
+    void crossUnitYield_rateColumnSupportsLargePercentage() throws NoSuchFieldException {
+        ProductionBatch b = baseBatch();
+        b.setActualQuantity(new BigDecimal("0.13"));
+        b.setGoodQuantity(new BigDecimal("20"));
+        b.setPlannedUnit("kg");
+        b.setUnit("盒");
+
+        b.calculateMetrics();
+
+        assertEquals(0, new BigDecimal("15384.62").compareTo(b.getYieldRate()),
+                "kg→盒 的出成率可能超过 999.99, Java 计算不能被截断");
+        Field yieldRate = ProductionBatch.class.getDeclaredField("yieldRate");
+        Column column = yieldRate.getAnnotation(Column.class);
+        assertEquals(12, column.precision(), "数据库列精度必须容纳跨单位出成率");
+        assertEquals(2, column.scale());
     }
 }

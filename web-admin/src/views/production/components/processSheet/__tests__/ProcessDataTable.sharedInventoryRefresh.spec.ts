@@ -173,4 +173,33 @@ describe('ProcessDataTable.refreshSharedInventories — 修油(xiuyou) also refr
 
     expect(getAvailableRawBatches).toHaveBeenCalledTimes(1);
   });
+
+  it('renders configured count units in the special first-process grid headers', async () => {
+    const wrapper = mount(ProcessDataTable, {
+      props: {
+        factoryId: 'F006',
+        planId: 'PLAN-COUNT-UNIT',
+        processCode: 'xiuyou',
+        processOrder: 1,
+        processLabel: '前处理',
+        productTypeId: 'PT-COUNT-UNIT',
+        inputUnit: '只',
+        outputUnit: '袋',
+        upstreamItems: [],
+        ownInventoryItems: [],
+        initialRows: [],
+        viewMode: 'grid',
+      },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { teleport: true, transition: false },
+      },
+    });
+    await flushPromises();
+
+    const headers = wrapper.findAll('th').map((th) => th.text());
+    expect(headers).toContain('出库数量(只)');
+    expect(headers).toContain('产出数量(袋)');
+    expect(headers).not.toContain('出库重量(kg)');
+  });
 });
