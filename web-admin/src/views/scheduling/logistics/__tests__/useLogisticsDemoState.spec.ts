@@ -100,7 +100,7 @@ describe('useLogisticsDemoState', () => {
     expect(state.exportRows.value.map((row) => row.storeIds)).toEqual(state.scheduleResult.value.trips.map((trip) => trip.storeIds));
   });
 
-  it('rejects an out-of-area or undersized vehicle before changing a pending trip', () => {
+  it('rejects an out-of-area, undersized, or underweight vehicle before changing a pending trip', () => {
     const state = prepareRoutes();
     const pending = state.scheduleResult.value.trips.find((trip) => trip.status === 'needs_vehicle')!;
     const outsourcedTrip = state.scheduleResult.value.trips.find((trip) => trip.vehicleId === 'V-04')!;
@@ -119,6 +119,12 @@ describe('useLogisticsDemoState', () => {
 
     state.selectTrip(pending.id);
     expect(state.getVehicleAssignmentIssue('V-02')).toContain('容量不足');
+    expect(state.assignVehicle('V-02')).toBe(false);
+    expect(state.activeTrip.value).toMatchObject({ vehicleId: null, status: 'needs_vehicle' });
+
+    state.vehicles.value.find((vehicle) => vehicle.id === 'V-02')!.capacityCbm = 10;
+    state.vehicles.value.find((vehicle) => vehicle.id === 'V-02')!.maxWeightKg = 1;
+    expect(state.getVehicleAssignmentIssue('V-02')).toContain('载重不足');
     expect(state.assignVehicle('V-02')).toBe(false);
     expect(state.activeTrip.value).toMatchObject({ vehicleId: null, status: 'needs_vehicle' });
   });
