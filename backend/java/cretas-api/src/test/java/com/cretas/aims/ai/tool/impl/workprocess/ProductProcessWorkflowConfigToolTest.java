@@ -120,6 +120,16 @@ class ProductProcessWorkflowConfigToolTest {
     }
 
     @Test
+    void overflowExponentPortOrdinalsAreRejectedThroughPublicPreview() throws Exception {
+        for (String ordinalJson : List.of("1e309", "-1e309")) {
+            Map<String, Object> envelope = previewRawOrdinal(ordinalJson);
+
+            assertFalse((Boolean) envelope.get("success"), "overflow should be rejected: " + ordinalJson);
+            assertEquals("WORKFLOW_PATCH_REJECTED", envelope.get("errorCode"));
+        }
+    }
+
+    @Test
     void executeIsAlwaysRejectedWithSemanticErrorCode() throws Exception {
         ToolCall call = ToolCall.of(
                 "execute-1",
@@ -140,6 +150,42 @@ class ProductProcessWorkflowConfigToolTest {
         return objectMapper.readValue(
                 tool.preview(
                         ToolCall.of("preview", tool.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+    }
+
+    private Map<String, Object> previewRawOrdinal(String ordinalJson) throws Exception {
+        String arguments = """
+                {
+                  "definition": %s,
+                  "patches": [{
+                    "op": "SET_NODE_FIELD",
+                    "nodeId": "process:1",
+                    "path": "ports",
+                    "value": [
+                      {
+                        "id": "input:1",
+                        "direction": "INPUT",
+                        "materialNodeId": "raw",
+                        "materialKind": "RAW_MATERIAL",
+                        "unit": "kg",
+                        "ordinal": %s
+                      },
+                      {
+                        "id": "output:1",
+                        "direction": "OUTPUT",
+                        "materialNodeId": "semi",
+                        "materialKind": "SEMI_FINISHED",
+                        "unit": "kg",
+                        "ordinal": 0
+                      }
+                    ]
+                  }]
+                }
+                """.formatted(objectMapper.writeValueAsString(definition()), ordinalJson);
+        return objectMapper.readValue(
+                tool.preview(
+                        ToolCall.of("preview-overflow", tool.getToolName(), arguments),
                         Map.of("factoryId", "F006")),
                 new TypeReference<>() {});
     }

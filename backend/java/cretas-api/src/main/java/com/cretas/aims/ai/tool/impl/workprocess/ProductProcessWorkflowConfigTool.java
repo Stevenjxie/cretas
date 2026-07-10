@@ -229,6 +229,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             String unit = readNonBlankString(port.get("unit"));
             if (id == null || !("INPUT".equals(direction) || "OUTPUT".equals(direction))
                     || unit == null || !(port.get("ordinal") instanceof Number ordinal)
+                    || !isFiniteNumber(ordinal)
                     || ordinal.doubleValue() < 0 || ordinal.doubleValue() != Math.rint(ordinal.doubleValue())
                     || !isOptionalString(port, "materialNodeId")
                     || !isOptionalString(port, "materialName")
