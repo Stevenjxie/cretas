@@ -94,6 +94,32 @@ class ProductProcessWorkflowConfigToolTest {
     }
 
     @Test
+    void nullableMaterialMetadataAndProcessBoundariesAreAccepted() throws Exception {
+        for (Object standardTime : List.of(0, 120.5)) {
+            Map<String, Object> material = mutableNode(materialNode("raw", "RAW_MATERIAL"));
+            Map<String, Object> materialData = readMap(material.get("data"));
+            materialData.put("skuCode", null);
+            materialData.put("specification", null);
+
+            Map<String, Object> process = mutableNode(processNode("process:1", processPorts()));
+            Map<String, Object> processData = readMap(process.get("data"));
+            processData.put("processCategory", null);
+            processData.put("standardTime", standardTime);
+
+            Map<String, Object> envelope = preview(List.of(
+                    Map.of("op", "UPSERT_NODE", "node", material),
+                    Map.of("op", "UPSERT_NODE", "node", process)));
+
+            assertTrue((Boolean) envelope.get("success"), "boundary should be accepted: " + standardTime);
+        }
+
+        Map<String, Object> process = mutableNode(processNode("process:1", processPorts()));
+        readMap(process.get("data")).put("standardTime", null);
+        Map<String, Object> envelope = preview(List.of(Map.of("op", "UPSERT_NODE", "node", process)));
+        assertTrue((Boolean) envelope.get("success"), "null standardTime should be accepted");
+    }
+
+    @Test
     void executeIsAlwaysRejectedWithSemanticErrorCode() throws Exception {
         ToolCall call = ToolCall.of(
                 "execute-1",
@@ -186,6 +212,12 @@ class ProductProcessWorkflowConfigToolTest {
 
     private Map<String, Object> setField(String nodeId, String path, Object value) {
         return Map.of("op", "SET_NODE_FIELD", "nodeId", nodeId, "path", path, "value", value);
+    }
+
+    private Map<String, Object> mutableNode(Map<String, Object> node) {
+        Map<String, Object> copy = new LinkedHashMap<>(node);
+        copy.put("data", new LinkedHashMap<>(readMap(node.get("data"))));
+        return copy;
     }
 
     @SuppressWarnings("unchecked")

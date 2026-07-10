@@ -19,8 +19,9 @@ export interface WorkflowViewport extends WorkflowPosition {
 export interface MaterialNodeData extends Record<string, unknown> {
   name: string;
   skuId: string;
-  skuCode?: string;
-  specification?: string;
+  skuCode?: string | null;
+  specification?: string | null;
+  baseUnit?: string;
   bound?: boolean;
 }
 
@@ -43,9 +44,11 @@ export interface ProcessNodeData extends Record<string, unknown> {
   ports: ProcessPort[];
   conversionRule: {
     mode: ConversionMode;
-    expression?: string;
+    expression?: string | null;
   };
   reportingRequired: boolean;
+  processCategory?: string | null;
+  standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
 }

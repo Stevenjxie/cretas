@@ -191,8 +191,8 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         if (!hasAllowedKeys(data, MATERIAL_DATA_KEYS)
                 || readNonBlankString(data.get("name")) == null
                 || !(data.get("skuId") instanceof String)
-                || !isOptionalString(data, "skuCode")
-                || !isOptionalString(data, "specification")
+                || !isOptionalNullableString(data, "skuCode")
+                || !isOptionalNullableString(data, "specification")
                 || !isOptionalString(data, "baseUnit")
                 || !isOptionalBoolean(data, "bound")) return null;
         return copyKnownValues(data, MATERIAL_DATA_KEYS);
@@ -289,7 +289,8 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
 
     private boolean isAllowedFieldValue(String path, Object value) {
         return switch (path) {
-            case "name", "skuId" -> value instanceof String;
+            case "name" -> readNonBlankString(value) != null;
+            case "skuId" -> value instanceof String;
             case "skuCode", "specification", "conversionRule.expression" ->
                     value == null || value instanceof String;
             case "reportingRequired" -> value instanceof Boolean;

@@ -461,8 +461,8 @@ function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNo
   return hasAllowedKeys(value, materialDataKeys)
     && isNonBlankString(value.name)
     && typeof value.skuId === 'string'
-    && optionalString(value.skuCode)
-    && optionalString(value.specification)
+    && optionalNullableString(value.skuCode)
+    && optionalNullableString(value.specification)
     && optionalString(value.baseUnit)
     && optionalBoolean(value.bound);
 }
@@ -477,6 +477,8 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && value.ports.every(isProcessPort)
     && isConversionRule(value.conversionRule)
     && typeof value.reportingRequired === 'boolean'
+    && optionalNullableString(value.processCategory)
+    && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource);
 }
@@ -487,7 +489,8 @@ function isProcessPort(value: unknown): boolean {
     || !isNonBlankString(value.id)
     || (value.direction !== 'INPUT' && value.direction !== 'OUTPUT')
     || !isNonBlankString(value.unit)
-    || !Number.isInteger(value.ordinal)) {
+    || !Number.isInteger(value.ordinal)
+    || (value.ordinal as number) < 0) {
     return false;
   }
   return optionalString(value.materialNodeId)
@@ -502,11 +505,13 @@ function isConversionRule(value: unknown): boolean {
     && hasAllowedKeys(value, new Set(['mode', 'expression']))
     && typeof value.mode === 'string'
     && conversionModes.has(value.mode)
-    && optionalString(value.expression);
+    && optionalNullableString(value.expression);
 }
 
 function isAllowedFieldValue(path: string, value: unknown): boolean {
-  if (['name', 'skuId', 'skuCode', 'specification', 'conversionRule.expression'].includes(path)) {
+  if (path === 'name') return isNonBlankString(value);
+  if (path === 'skuId') return typeof value === 'string';
+  if (['skuCode', 'specification', 'conversionRule.expression'].includes(path)) {
     return value === null || typeof value === 'string';
   }
   if (path === 'reportingRequired') return typeof value === 'boolean';
@@ -534,6 +539,14 @@ function isNonBlankString(value: unknown): value is string {
 
 function optionalString(value: unknown): boolean {
   return value === undefined || typeof value === 'string';
+}
+
+function optionalNullableString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function optionalNullableFiniteNumber(value: unknown): boolean {
+  return value === undefined || value === null || isFiniteNumber(value);
 }
 
 function optionalBoolean(value: unknown): boolean {

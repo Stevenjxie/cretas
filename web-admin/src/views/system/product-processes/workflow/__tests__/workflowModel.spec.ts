@@ -297,6 +297,98 @@ describe('product process workflow model', () => {
     expect(result.definition.edges.some((edge) => edge.id === 'edge:process:semi2')).toBe(true);
   });
 
+  it('rejects invalid material field values and port ordinals atomically', () => {
+    const definition = simpleWorkflowDefinition();
+    const process = definition.nodes.find((node) => node.id === 'process:1');
+    if (!process) throw new Error('process fixture is missing');
+    const basePorts = structuredClone((process.data as ProcessNodeData).ports);
+    const attacks: unknown[][] = [
+      [{ op: 'SET_NODE_FIELD', nodeId: 'raw', path: 'name', value: null }],
+      [{ op: 'SET_NODE_FIELD', nodeId: 'raw', path: 'skuId', value: null }],
+      ...[-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY].map((ordinal) => {
+        const ports = structuredClone(basePorts);
+        ports[0].ordinal = ordinal;
+        return [{ op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: ports }];
+      }),
+    ];
+
+    attacks.forEach((patches) => expectWorkflowPatchRejected(definition, patches));
+  });
+
+  it('rejects invalid process optional values and other optional field types', () => {
+    const definition = simpleWorkflowDefinition();
+    const process = definition.nodes.find((node) => node.id === 'process:1');
+    const raw = definition.nodes.find((node) => node.id === 'raw');
+    if (!process || !raw) throw new Error('workflow fixtures are missing');
+    const invalidStandardTimes = [{ execute: true }, '120', Number.NaN, Number.NEGATIVE_INFINITY];
+    const processDataAttacks = [
+      ...invalidStandardTimes.map((standardTime) => ({ standardTime })),
+      { processCategory: { execute: true } },
+      { allowMultipleUpstreamSources: { execute: true } },
+      { allowFinishedGoodsSource: { execute: true } },
+      { conversionRule: { mode: 'ACTUAL_WEIGHT', expression: { execute: true } } },
+    ];
+    const materialDataAttacks = [
+      { skuCode: { execute: true } },
+      { specification: { execute: true } },
+      { baseUnit: { execute: true } },
+      { bound: { execute: true } },
+    ];
+
+    processDataAttacks.forEach((dataPatch) => expectWorkflowPatchRejected(definition, [{
+      op: 'UPSERT_NODE',
+      node: { ...process, data: { ...process.data, ...dataPatch } },
+    }]));
+    materialDataAttacks.forEach((dataPatch) => expectWorkflowPatchRejected(definition, [{
+      op: 'UPSERT_NODE',
+      node: { ...raw, data: { ...raw.data, ...dataPatch } },
+    }]));
+
+    const portOptionalFields = ['materialNodeId', 'materialName', 'skuId', 'materialKind'] as const;
+    portOptionalFields.forEach((field) => {
+      const ports = structuredClone((process.data as ProcessNodeData).ports);
+      Object.assign(ports[0], { [field]: { execute: true } });
+      expectWorkflowPatchRejected(definition, [{
+        op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: ports,
+      }]);
+    });
+  });
+
+  it('accepts aligned nullable and finite boundary values', () => {
+    const definition = simpleWorkflowDefinition();
+    const process = definition.nodes.find((node) => node.id === 'process:1');
+    const raw = definition.nodes.find((node) => node.id === 'raw');
+    if (!process || !raw) throw new Error('workflow fixtures are missing');
+
+    for (const standardTime of [null, 0, 120.5]) {
+      const result = applyWorkflowPatches(definition, [{
+        op: 'UPSERT_NODE',
+        node: { ...process, data: { ...process.data, processCategory: null, standardTime } },
+      }]);
+      expect(result.errors).toEqual([]);
+      expect(result.summary).toHaveLength(1);
+    }
+
+    const nullableMaterial = applyWorkflowPatches(definition, [{
+      op: 'UPSERT_NODE',
+      node: { ...raw, data: { ...raw.data, skuCode: null, specification: null } },
+    }]);
+    expect(nullableMaterial.errors).toEqual([]);
+    expect(nullableMaterial.summary).toHaveLength(1);
+
+    const nullableExpression = applyWorkflowPatches(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'conversionRule.expression', value: null,
+    }]);
+    expect(nullableExpression.errors).toEqual([]);
+    expect(nullableExpression.summary).toHaveLength(1);
+
+    const ordinalZero = applyWorkflowPatches(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports',
+      value: structuredClone((process.data as ProcessNodeData).ports),
+    }]);
+    expect(ordinalZero.errors).toEqual([]);
+  });
+
   it('detects an unbound SKU and a cycle before publish', () => {
     const definition = branchedDefinition();
     const finished = definition.nodes.find((node) => node.id === 'finished');
@@ -311,6 +403,17 @@ describe('product process workflow model', () => {
     expect(errors.some((error) => error.code === 'CYCLE')).toBe(true);
   });
 });
+
+function expectWorkflowPatchRejected(
+  definition: ProductProcessWorkflowDefinition,
+  patches: unknown,
+): void {
+  const before = structuredClone(definition);
+  const result = applyWorkflowPatches(definition, patches);
+  expect(result.definition).toEqual(before);
+  expect(result.summary).toEqual([]);
+  expect(result.errors.length).toBeGreaterThan(0);
+}
 
 function materialNode(
   id: string,
