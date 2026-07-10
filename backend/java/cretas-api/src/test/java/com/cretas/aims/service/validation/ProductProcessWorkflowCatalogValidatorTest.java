@@ -384,6 +384,120 @@ class ProductProcessWorkflowCatalogValidatorTest {
                 workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
     }
 
+    @Test
+    void rejectsConnectedFinishedCellWithoutProcessProducer() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-CUT", "SEMI_FINISHED", "SFI-1");
+        addMaterial(definition, "material:unproduced-finished", "FINISHED_GOOD", "SKU-FOREIGN");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:material-direct", "material:output", "output",
+                "material:unproduced-finished", "input"));
+        stubProcessAndProducts("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "material:unproduced-finished");
+    }
+
+    @Test
+    void rejectsTwoProcessesSharingOneOutputMaterialCell() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-CUT", "SEMI_FINISHED", "SFI-1");
+        definition.getNodes().add(processNode(
+                "process:second", "WP-MIX", "in-second", "out-second",
+                "material:output", "SEMI_FINISHED"));
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:second-producer", "process:second", "out-second", "material:output", "input"));
+        when(workProcessRepository.findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of("WP-CUT", "WP-MIX"))).thenReturn(List.of(
+                workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED),
+                workProcess("WP-MIX", WorkProcessOutputMaterialKind.SEMI_FINISHED)));
+        lenient().when(productTypeRepository.findByIdIn(List.of("SFI-1")))
+                .thenReturn(List.of(product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Output Cell");
+    }
+
+    @Test
+    void rejectsProducedMaterialWithAdditionalIncomingMaterialEdge() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-CUT", "SEMI_FINISHED", "SFI-1");
+        addMaterial(definition, "material:raw-extra", "RAW_MATERIAL", "RM-EXTRA");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:extra-incoming", "material:raw-extra", "output", "material:output", "input-extra"));
+        stubProcessAndProducts("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Output Cell");
+    }
+
+    @Test
+    void rejectsProducerEdgeUsingNonInputMaterialTargetHandle() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-CUT", "SEMI_FINISHED", "SFI-1");
+        definition.getEdges().getFirst().setTargetHandle("side-input");
+        stubProcessAndProducts("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Output Cell");
+    }
+
+    @Test
+    void acceptsValidRawToProcessToSemiToProcessToFinishedChain() {
+        ProductProcessWorkflowDTO definition = validTwoProcessChain();
+        when(workProcessRepository.findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of("WP-CUT", "WP-PACK"))).thenReturn(List.of(
+                workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED),
+                workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-CHAIN", "FG-CHAIN"))).thenReturn(List.of(
+                product("SFI-CHAIN", FACTORY_ID, ProductCategory.SEMI_FINISHED),
+                product("FG-CHAIN", FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+
+        new ProductProcessWorkflowValidator().validateForPublish(definition);
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        verify(productTypeRepository).findByIdIn(List.of("SFI-CHAIN", "FG-CHAIN"));
+    }
+
+    @Test
+    void acceptsSemiFinishedMaterialFeedingMultipleDownstreamProcesses() {
+        ProductProcessWorkflowDTO definition = validTwoProcessChain();
+        definition.getNodes().add(processNode(
+                "process:quality", "WP-QUALITY", "in-quality", "out-quality",
+                "material:finished-quality", "FINISHED_GOOD"));
+        addMaterial(definition, "material:finished-quality", "FINISHED_GOOD", "FG-QUALITY");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:semi-quality", "material:semi-chain", "output",
+                "process:quality", "in-quality"));
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:quality-finished", "process:quality", "out-quality",
+                "material:finished-quality", "input"));
+        when(workProcessRepository.findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of("WP-CUT", "WP-PACK", "WP-QUALITY"))).thenReturn(List.of(
+                workProcess("WP-CUT", WorkProcessOutputMaterialKind.SEMI_FINISHED),
+                workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD),
+                workProcess("WP-QUALITY", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-CHAIN", "FG-CHAIN", "FG-QUALITY")))
+                .thenReturn(List.of(
+                        product("SFI-CHAIN", FACTORY_ID, ProductCategory.SEMI_FINISHED),
+                        product("FG-CHAIN", FACTORY_ID, ProductCategory.FINISHED_PRODUCT),
+                        product("FG-QUALITY", FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+
+        new ProductProcessWorkflowValidator().validateForPublish(definition);
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+    }
+
     private ProductProcessWorkflowDTO workflowWithPrimaryOutput(
             String workProcessId,
             String materialKind,
@@ -424,6 +538,56 @@ class ProductProcessWorkflowCatalogValidatorTest {
         definition.setEdges(new ArrayList<>(List.of(new ProductProcessWorkflowDTO.Edge(
                 "edge:direct", "material:raw", "output", "material:finished", "input"))));
         return definition;
+    }
+
+    private ProductProcessWorkflowDTO validTwoProcessChain() {
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        definition.setNodes(new ArrayList<>(List.of(
+                materialNode("material:raw-chain", "RAW_MATERIAL", "Raw Chain", "RM-CHAIN"),
+                processNode("process:cut", "WP-CUT", "in-cut", "out-cut",
+                        "material:semi-chain", "SEMI_FINISHED"),
+                materialNode("material:semi-chain", "SEMI_FINISHED", "Semi Chain", "SFI-CHAIN"),
+                processNode("process:pack", "WP-PACK", "in-pack", "out-pack",
+                        "material:finished-chain", "FINISHED_GOOD"),
+                materialNode("material:finished-chain", "FINISHED_GOOD", "Finished Chain", "FG-CHAIN"))));
+        definition.setEdges(new ArrayList<>(List.of(
+                new ProductProcessWorkflowDTO.Edge(
+                        "edge:raw-cut", "material:raw-chain", "output", "process:cut", "in-cut"),
+                new ProductProcessWorkflowDTO.Edge(
+                        "edge:cut-semi", "process:cut", "out-cut", "material:semi-chain", "input"),
+                new ProductProcessWorkflowDTO.Edge(
+                        "edge:semi-pack", "material:semi-chain", "output", "process:pack", "in-pack"),
+                new ProductProcessWorkflowDTO.Edge(
+                        "edge:pack-finished", "process:pack", "out-pack", "material:finished-chain", "input"))));
+        definition.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
+        return definition;
+    }
+
+    private ProductProcessWorkflowDTO.Node processNode(
+            String nodeId,
+            String workProcessId,
+            String inputPortId,
+            String outputPortId,
+            String outputMaterialNodeId,
+            String outputMaterialKind) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("workProcessId", workProcessId);
+        data.put("processName", nodeId);
+        data.put("ports", new ArrayList<>(List.of(
+                new LinkedHashMap<>(Map.of(
+                        "id", inputPortId,
+                        "direction", "INPUT",
+                        "unit", "kg",
+                        "ordinal", 0)),
+                new LinkedHashMap<>(Map.of(
+                        "id", outputPortId,
+                        "direction", "OUTPUT",
+                        "materialNodeId", outputMaterialNodeId,
+                        "materialKind", outputMaterialKind,
+                        "unit", "kg",
+                        "ordinal", 0)))));
+        return new ProductProcessWorkflowDTO.Node(
+                nodeId, "PROCESS", new ProductProcessWorkflowDTO.Position(0D, 0D), data);
     }
 
     @SuppressWarnings("unchecked")

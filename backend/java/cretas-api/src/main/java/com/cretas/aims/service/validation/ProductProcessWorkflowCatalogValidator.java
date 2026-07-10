@@ -73,7 +73,7 @@ public class ProductProcessWorkflowCatalogValidator {
         Map<String, WorkProcess> workProcessesById = indexWorkProcesses(
                 factoryId, workProcessIds, processNodes, workProcessRows);
 
-        List<OutputBinding> outputBindings = new ArrayList<>();
+        Map<String, OutputBinding> outputBindingsByMaterialId = new LinkedHashMap<>();
         for (ProductProcessWorkflowDTO.Node processNode : processNodes) {
             String workProcessId = asString(data(processNode).get("workProcessId"));
             WorkProcess workProcess = workProcessesById.get(workProcessId);
@@ -116,32 +116,76 @@ public class ProductProcessWorkflowCatalogValidator {
                 }
                 ProductProcessWorkflowDTO.Node materialNode = resolveOutputMaterial(
                         processNode, outputPort, nodesById);
+                if (!"input".equals(edge.getTargetHandle())) {
+                    mismatch(materialNode,
+                            "工序产出连线必须连接物料 Cell 的 input 端口",
+                            "请删除该连线并重新连接到物料 Cell 的 input 端口");
+                }
                 if (!materialNode.getKind().equals(outputPort.materialKind())) {
                     mismatch(materialNode,
                             "产出端口类型 " + outputPort.materialKind()
                                     + " 与物料 Cell 类型 " + materialNode.getKind() + " 不一致",
                             "请在工序 Cell 中重新绑定该产出物料");
                 }
-                outputBindings.add(new OutputBinding(materialNode));
+                OutputBinding binding = new OutputBinding(processNode, materialNode, outputPort, edge);
+                if (outputBindingsByMaterialId.putIfAbsent(materialNode.getId(), binding) != null) {
+                    mismatch(materialNode,
+                            "同一个产出物料 Cell 被多个工序产出端口共享",
+                            "请为每个工序产出创建独立物料 Cell");
+                }
             }
 
-            OutputBinding primaryOutput = outputPorts.stream()
+            ProductProcessWorkflowDTO.Node primaryOutput = outputPorts.stream()
                     .min(Comparator.comparingInt(Port::ordinal))
-                    .map(port -> new OutputBinding(resolveOutputMaterial(processNode, port, nodesById)))
+                    .map(port -> resolveOutputMaterial(processNode, port, nodesById))
                     .orElseThrow(() -> catalogMismatch(processNode,
                             "没有可校验的产出端口", "请为该工序至少配置一个产出 Cell"));
             String expectedKind = workProcess.getDefaultOutputMaterialKind() == null
                     ? null
                     : workProcess.getDefaultOutputMaterialKind().name();
-            if (!primaryOutput.materialNode().getKind().equals(expectedKind)) {
-                mismatch(primaryOutput.materialNode(),
-                        "主产出类型 " + primaryOutput.materialNode().getKind()
+            if (!primaryOutput.getKind().equals(expectedKind)) {
+                mismatch(primaryOutput,
+                        "主产出类型 " + primaryOutput.getKind()
                                 + " 与工序目录默认产出类型 " + expectedKind + " 不一致",
                         "请重新选择工序或调整该主产出 Cell");
             }
         }
 
+        validateMaterialProducers(definition, outputBindingsByMaterialId);
+        List<OutputBinding> outputBindings = new ArrayList<>(outputBindingsByMaterialId.values());
         validateOutputSkus(factoryId, productTypeId, outputBindings);
+    }
+
+    private void validateMaterialProducers(
+            ProductProcessWorkflowDTO definition,
+            Map<String, OutputBinding> outputBindingsByMaterialId) {
+        for (ProductProcessWorkflowDTO.Node materialNode : definition.getNodes()) {
+            if (!"SEMI_FINISHED".equals(materialNode.getKind())
+                    && !"FINISHED_GOOD".equals(materialNode.getKind())) {
+                continue;
+            }
+            OutputBinding binding = outputBindingsByMaterialId.get(materialNode.getId());
+            if (binding == null) {
+                mismatch(materialNode,
+                        "产出物料 Cell 未绑定任何工序产出端口",
+                        "请从真实工序的产出端口连接并绑定该 Cell");
+            }
+            List<ProductProcessWorkflowDTO.Edge> incomingEdges = definition.getEdges().stream()
+                    .filter(edge -> materialNode.getId().equals(edge.getTarget()))
+                    .toList();
+            if (incomingEdges.size() != 1) {
+                mismatch(materialNode,
+                        "产出物料 Cell 必须且只能有一条工序生产连线，当前 incoming 数: "
+                                + incomingEdges.size(),
+                        "请只保留绑定工序产出端口到该 Cell 的唯一连线");
+            }
+            ProductProcessWorkflowDTO.Edge incomingEdge = incomingEdges.getFirst();
+            if (incomingEdge != binding.producerEdge()) {
+                mismatch(materialNode,
+                        "产出物料 Cell 的 incoming 连线与绑定工序产出端口不一致",
+                        "请删除额外连线并从绑定工序产出端口重新连接");
+            }
+        }
     }
 
     private void validateOutputSkus(
@@ -378,5 +422,9 @@ public class ProductProcessWorkflowCatalogValidator {
 
     private record Port(String id, String materialNodeId, String materialKind, int ordinal) {}
 
-    private record OutputBinding(ProductProcessWorkflowDTO.Node materialNode) {}
+    private record OutputBinding(
+            ProductProcessWorkflowDTO.Node processNode,
+            ProductProcessWorkflowDTO.Node materialNode,
+            Port port,
+            ProductProcessWorkflowDTO.Edge producerEdge) {}
 }
