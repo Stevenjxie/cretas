@@ -76,7 +76,7 @@
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canWrite"
-              :sku-options="skuOptions"
+              :sku-options="outputSkuOptions"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
@@ -195,6 +195,7 @@ import {
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
+import { classifyOutputSkuCategory } from './outputSkuClassification';
 import {
   getProductProcessWorkflow,
   publishProductProcessWorkflow,
@@ -260,6 +261,9 @@ const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialOption[]>([]);
+const outputSkuOptions = computed(() => skuOptions.value.filter(
+  (option) => classifyOutputSkuCategory(option.productCategory) !== null,
+));
 
 const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
@@ -269,6 +273,7 @@ const creatingSku = ref(false);
 const skuBindingTarget = ref<{ processId: string; portId: string } | null>(null);
 const skuForm = ref({ name: '', unit: 'kg', specification: '' });
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
+let lastGraphIdSeed = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 const aiStorageKey = computed(() => `product-process-workflow:ai-collapsed:${props.factoryId}`);
@@ -490,7 +495,7 @@ function onConnect(connection: Connection): void {
   if (!props.canWrite || !connection.source || !connection.target) return;
   mutate(() => {
     flowEdges.value.push({
-      id: `edge:${connection.source}:${connection.sourceHandle || 'output'}:${connection.target}:${connection.targetHandle || 'input'}:${Date.now()}`,
+      id: `edge:${connection.source}:${connection.sourceHandle || 'output'}:${connection.target}:${connection.targetHandle || 'input'}:${nextGraphIdSeed()}`,
       source: connection.source,
       target: connection.target,
       sourceHandle: connection.sourceHandle || 'output',
@@ -505,7 +510,7 @@ function addStandaloneRaw(): void {
   mutate(() => {
     const count = flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL').length;
     flowNodes.value.push({
-      id: `material:raw:${Date.now()}`,
+      id: `material:raw:${nextGraphIdSeed()}`,
       type: 'material',
       position: { x: 32, y: 32 + count * 160 },
       data: {
@@ -535,7 +540,7 @@ function confirmAddProcess(): void {
       workProcess,
       productTypeId: props.productTypeId,
       productName: props.productName || props.productTypeId,
-      timestamp: Date.now(),
+      timestamp: nextGraphIdSeed(),
     });
     flowNodes.value.push(
       {
@@ -574,7 +579,7 @@ function addInputToProcess(processId: string): void {
   mutate(() => {
     const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
     const inputCount = data.ports.filter((port) => port.direction === 'INPUT').length;
-    const timestamp = Date.now();
+    const timestamp = nextGraphIdSeed();
     const materialId = `material:input:${timestamp}`;
     const portId = `input:${timestamp}`;
     flowNodes.value.push({
@@ -600,7 +605,7 @@ function addOutputToProcess(processId: string): void {
   mutate(() => {
     const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
     const outputCount = data.ports.filter((port) => port.direction === 'OUTPUT').length;
-    const timestamp = Date.now();
+    const timestamp = nextGraphIdSeed();
     const materialId = `material:output:${timestamp}`;
     const portId = `output:${timestamp}`;
     flowNodes.value.push({
@@ -665,16 +670,19 @@ function selectOutputSku(processId: string, portId: string, skuId: string): void
   if (option) bindOutputSku(processId, portId, option);
 }
 
-function bindOutputSku(processId: string, portId: string, option: SkuOption): void {
+function bindOutputSku(processId: string, portId: string, option: SkuOption): boolean {
+  const kind = classifyOutputSkuCategory(option.productCategory);
+  if (!kind) {
+    ElMessage.error('所选 SKU 分类不能作为工序产出');
+    return false;
+  }
   const process = flowNodes.value.find((node) => node.id === processId);
-  if (!process) return;
+  if (!process) return false;
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  const port = data.ports.find((candidate) => candidate.id === portId);
+  const material = flowNodes.value.find((node) => node.id === port?.materialNodeId);
+  if (!port || !material) return false;
   mutate(() => {
-    const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
-    const port = data.ports.find((candidate) => candidate.id === portId);
-    const material = flowNodes.value.find((node) => node.id === port?.materialNodeId);
-    if (!port || !material) return;
-    const kind: Exclude<ProductProcessNodeKind, 'RAW_MATERIAL' | 'PROCESS'> =
-      option.productCategory === 'FINISHED_PRODUCT' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
     Object.assign(port, {
       skuId: option.id,
       materialName: option.name,
@@ -692,6 +700,7 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): vo
       bound: true,
     };
   });
+  return true;
 }
 
 async function confirmCreateSku(): Promise<void> {
@@ -704,8 +713,9 @@ async function confirmCreateSku(): Promise<void> {
   const duplicate = skuOptions.value.find((item) => item.name.trim() === name);
   if (duplicate) {
     ElMessage.info(`发现同名 SKU，已复用 ${duplicate.code || duplicate.id}`);
-    bindOutputSku(skuBindingTarget.value.processId, skuBindingTarget.value.portId, duplicate);
-    skuDialogVisible.value = false;
+    if (bindOutputSku(skuBindingTarget.value.processId, skuBindingTarget.value.portId, duplicate)) {
+      skuDialogVisible.value = false;
+    }
     return;
   }
   creatingSku.value = true;
@@ -764,6 +774,11 @@ function flowEdge(source: string, sourceHandle: string, target: string, targetHa
     markerEnd: MarkerType.ArrowClosed,
     style: { stroke: '#1b65a8', strokeWidth: 2 },
   };
+}
+
+function nextGraphIdSeed(): number {
+  lastGraphIdSeed = Math.max(Date.now(), lastGraphIdSeed + 1);
+  return lastGraphIdSeed;
 }
 
 async function handleAutoLayout(): Promise<void> {

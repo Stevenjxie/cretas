@@ -28,6 +28,7 @@
       class="edge-output-add nodrag"
       data-testid="add-output-edge"
       aria-label="添加一个产出 Cell"
+      :style="edgeOutputStyle"
       @click.stop="emit('addOutput')"
     >+</button>
 
@@ -171,6 +172,7 @@ const emit = defineEmits<{
 }>();
 
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
+const edgeOutputStyle = { right: '-44px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
@@ -211,7 +213,6 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .edge-output-add {
   position: absolute;
   top: 50%;
-  right: -14px;
   z-index: 2;
   display: grid;
   place-items: center;

@@ -1,6 +1,7 @@
 import ElementPlus from 'element-plus';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import { defineComponent, h } from 'vue';
 import WorkflowProcessNode from '../WorkflowProcessNode.vue';
 import type { ProcessNodeData } from '../types';
 
@@ -24,6 +25,27 @@ const processData: ProcessNodeData = {
   reportingRequired: true,
 };
 
+const PositionedHandleStub = defineComponent({
+  name: 'Handle',
+  inheritAttrs: false,
+  props: {
+    id: { type: String, required: true },
+    type: { type: String, required: true },
+    position: { type: String, required: true },
+    style: { type: Object, required: true },
+  },
+  setup(props) {
+    return () => h('button', {
+      type: 'button',
+      'data-testid': 'workflow-handle',
+      'data-handle-id': props.id,
+      'data-handle-type': props.type,
+      'data-position': props.position,
+      style: [props.style, { width: '10px', height: '10px' }],
+    });
+  },
+});
+
 function mountNode(selected = true) {
   return mount(WorkflowProcessNode, {
     props: {
@@ -34,7 +56,7 @@ function mountNode(selected = true) {
     },
     global: {
       plugins: [ElementPlus],
-      stubs: { Handle: true },
+      stubs: { Handle: PositionedHandleStub },
     },
   });
 }
@@ -72,8 +94,22 @@ describe('WorkflowProcessNode output gestures', () => {
   it('does not emit addOutput when a workflow handle is clicked', async () => {
     const wrapper = mountNode();
 
-    await wrapper.get('handle-stub').trigger('click');
+    await wrapper.get('[data-testid="workflow-handle"]').trigger('click');
 
     expect(wrapper.emitted('addOutput')).toBeUndefined();
+  });
+
+  it('keeps the edge action outside the single source handle hit area', () => {
+    const wrapper = mountNode();
+    const sourceHandle = wrapper.get('[data-handle-type="source"]');
+    const edgeAction = wrapper.get('[data-testid="add-output-edge"]');
+
+    expect(sourceHandle.attributes('data-position')).toBe('right');
+    expect((sourceHandle.element as HTMLElement).style.top).toBe('50%');
+
+    const edgeRight = Number.parseFloat((edgeAction.element as HTMLElement).style.right);
+    const edgeCenterFromNodeRight = -edgeRight - 14;
+    const minimumCenterDistance = (28 + 10) / 2;
+    expect(edgeCenterFromNodeRight).toBeGreaterThan(minimumCenterDistance);
   });
 });
