@@ -5,6 +5,7 @@ import { ROAD_SEGMENTS } from '../../roadSegments';
 import { generateSchedule } from '../../routeEngine';
 import type { RouteTrip } from '../../types';
 import LogisticsMap from '../LogisticsMap.vue';
+import logisticsMapSource from '../LogisticsMap.vue?raw';
 import RouteCards from '../RouteCards.vue';
 import StoreDetailDrawer from '../StoreDetailDrawer.vue';
 
@@ -71,6 +72,10 @@ describe('LogisticsMap', () => {
     expect(numbers).toHaveLength(schedule.trips[0].storeIds.length);
     expect(numbers.map((node) => node.text())).toEqual(['1', '2', '3']);
     expect(numbers.map((node) => node.attributes('data-store-id'))).toEqual(schedule.trips[0].storeIds);
+  });
+
+  it('uses the approved high-contrast text color for map labels', () => {
+    expect(logisticsMapSource).toMatch(/\.depot-label,\s*\.store-label\s*\{\s*fill: #101828;/);
   });
 
   it('keeps selected sequence badges visual-only and out of the interaction tree', async () => {

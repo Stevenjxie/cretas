@@ -242,7 +242,7 @@ function compactStoreName(name: string): string {
 
 .depot-label,
 .store-label {
-  fill: #1a2332;
+  fill: #101828;
   font-size: 22px;
   font-weight: 700;
   pointer-events: none;
