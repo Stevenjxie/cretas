@@ -20,6 +20,6 @@ export function resolveDemoRedirect(query: Record<string, unknown>, tenant?: Dem
   if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) {
     return redirect;
   }
-  if (tenant === 'logistics') return '/scheduling/logistics-demo';
+  if (tenant === 'logistics') return '/scheduling/logistics/workbench';
   return '/dashboard';
 }
