@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class ProductProcessWorkflowCatalogValidatorTest {
@@ -198,6 +199,191 @@ class ProductProcessWorkflowCatalogValidatorTest {
         assertCatalogMismatch(error, "Output Cell");
     }
 
+    @Test
+    void rejectsWorkflowWithoutAnyProcessCell() {
+        ProductProcessWorkflowDTO definition = workflowWithoutProcess();
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Finished Cell");
+    }
+
+    @Test
+    void rejectsDuplicateOutputPortIds() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        duplicatePort(definition, "out-1", "material:output", "SEMI_FINISHED", 1);
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsTwoOutputPortsSharingOneMaterialCell() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        addOutput(definition, "out-2", "material:output", "SEMI_FINISHED", "SFI-1", 1, false);
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsTwoOutputPortsBackedByOnlyOneEdge() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        duplicatePort(definition, "out-1", "material:output", "SEMI_FINISHED", 1);
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsOneOutputPortBackedByTwoEdges() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:duplicate", "process:packing", "out-1", "material:output", "input-2"));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsUndeclaredGhostSourceHandle() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        addMaterial(definition, "material:ghost", "SEMI_FINISHED", "SFI-GHOST");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:ghost", "process:packing", "ghost", "material:ghost", "input"));
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsExtraProcessOutgoingEdge() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        addMaterial(definition, "material:extra", "FINISHED_GOOD", "SKU-EXTRA");
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:extra", "process:packing", "not-a-port", "material:extra", "input"));
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsDuplicateOutputOrdinals() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        addOutput(definition, "out-2", "material:second", "SEMI_FINISHED", "SFI-2", 0, true);
+        stubProcessAndProducts("WP-PACK", WorkProcessOutputMaterialKind.SEMI_FINISHED,
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED),
+                product("SFI-2", FACTORY_ID, ProductCategory.SEMI_FINISHED));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void usesUniqueSmallestOrdinalAsPrimaryRegardlessOfPortListOrder() {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "SEMI_FINISHED", "SFI-1");
+        outputPort(definition).put("ordinal", 9);
+        addOutput(definition, "out-2", "material:finished", "FINISHED_GOOD", "SKU-FG", 2, true);
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-1", "SKU-FG"))).thenReturn(List.of(
+                product("SFI-1", FACTORY_ID, ProductCategory.SEMI_FINISHED),
+                product("SKU-FG", FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+    }
+
+    @Test
+    void rejectsWorkProcessReturnedForDifferentFactory() {
+        WorkProcess foreign = workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD);
+        foreign.setFactoryId("F002");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(foreign));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsDuplicateWorkProcessRowsWithStableBusinessError() {
+        WorkProcess first = workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD);
+        WorkProcess duplicate = workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD);
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(first, duplicate));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
+
+        assertCatalogMismatch(error, "Packing Cell");
+    }
+
+    @Test
+    void rejectsDuplicateRequestedProductRowsWithStableBusinessError() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType product = product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT);
+        ProductType duplicate = product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT);
+        when(productTypeRepository.findByIdIn(List.of(PRODUCT_ID)))
+                .thenReturn(List.of(product, duplicate));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
+
+        assertCatalogMismatch(error, "Output Cell");
+    }
+
+    @Test
+    void ignoresUnrequestedProductRowsButStillValidatesRequestedSku() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of(PRODUCT_ID))).thenReturn(List.of(
+                product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT),
+                product("UNREQUESTED", "F002", ProductCategory.SEMI_FINISHED)));
+
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
+    }
+
     private ProductProcessWorkflowDTO workflowWithPrimaryOutput(
             String workProcessId,
             String materialKind,
@@ -228,6 +414,79 @@ class ProductProcessWorkflowCatalogValidatorTest {
         definition.setEdges(new ArrayList<>(List.of(new ProductProcessWorkflowDTO.Edge(
                 "edge:output", "process:packing", "out-1", "material:output", "input"))));
         return definition;
+    }
+
+    private ProductProcessWorkflowDTO workflowWithoutProcess() {
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        definition.setNodes(new ArrayList<>(List.of(
+                materialNode("material:raw", "RAW_MATERIAL", "Raw Cell", "RM-1"),
+                materialNode("material:finished", "FINISHED_GOOD", "Finished Cell", PRODUCT_ID))));
+        definition.setEdges(new ArrayList<>(List.of(new ProductProcessWorkflowDTO.Edge(
+                "edge:direct", "material:raw", "output", "material:finished", "input"))));
+        return definition;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void duplicatePort(
+            ProductProcessWorkflowDTO definition,
+            String portId,
+            String materialNodeId,
+            String materialKind,
+            int ordinal) {
+        ((List<Map<String, Object>>) definition.getNodes().getFirst().getData().get("ports"))
+                .add(new LinkedHashMap<>(Map.of(
+                        "id", portId,
+                        "direction", "OUTPUT",
+                        "materialNodeId", materialNodeId,
+                        "materialKind", materialKind,
+                        "unit", "kg",
+                        "ordinal", ordinal)));
+    }
+
+    private void addOutput(
+            ProductProcessWorkflowDTO definition,
+            String portId,
+            String materialNodeId,
+            String materialKind,
+            String skuId,
+            int ordinal,
+            boolean addMaterial) {
+        duplicatePort(definition, portId, materialNodeId, materialKind, ordinal);
+        if (addMaterial) {
+            addMaterial(definition, materialNodeId, materialKind, skuId);
+        }
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:" + portId, "process:packing", portId, materialNodeId, "input"));
+    }
+
+    private void addMaterial(
+            ProductProcessWorkflowDTO definition,
+            String id,
+            String kind,
+            String skuId) {
+        definition.getNodes().add(materialNode(id, kind, id, skuId));
+    }
+
+    private ProductProcessWorkflowDTO.Node materialNode(
+            String id,
+            String kind,
+            String name,
+            String skuId) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", name);
+        data.put("skuId", skuId);
+        return new ProductProcessWorkflowDTO.Node(
+                id, kind, new ProductProcessWorkflowDTO.Position(0D, 0D), data);
+    }
+
+    private void stubProcessAndProducts(
+            String workProcessId,
+            WorkProcessOutputMaterialKind kind,
+            ProductType... products) {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of(workProcessId)))
+                .thenReturn(List.of(workProcess(workProcessId, kind)));
+        List<String> productIds = java.util.Arrays.stream(products).map(ProductType::getId).toList();
+        lenient().when(productTypeRepository.findByIdIn(productIds)).thenReturn(List.of(products));
     }
 
     @SuppressWarnings("unchecked")

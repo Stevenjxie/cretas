@@ -5,6 +5,8 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -174,6 +178,50 @@ class ProductProcessWorkflowServiceImplTest {
         verify(repository).saveAndFlush(draft);
     }
 
+    @Test
+    @DisplayName("目录校验失败时草稿状态不变且不保存")
+    void publishCatalogFailureDoesNotMutateOrSaveDraft() throws Exception {
+        ProductProcessWorkflowDTO definition = validDefinition();
+        ProductProcessWorkflow draft = persistedDraft(definition, 3L);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        BusinessException mismatch = new BusinessException(400, "Cell mismatch")
+                .withCode("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH");
+        doThrow(mismatch).when(catalogValidator)
+                .validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publish(FACTORY_ID, PRODUCT_ID, 3L));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH", error.getErrorCode());
+        assertEquals(ProductProcessWorkflow.Status.DRAFT, draft.getStatus());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("没有工序的原料直连成品图不能通过真实发布校验")
+    void publishRejectsRawToFinishedWorkflowWithoutProcess() throws Exception {
+        ProductProcessWorkflowDTO definition = rawToFinishedDefinition();
+        ProductProcessWorkflow draft = persistedDraft(definition, 3L);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        WorkProcessRepository workProcessRepository = mock(WorkProcessRepository.class);
+        ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
+        ProductProcessWorkflowCatalogValidator realCatalogValidator =
+                new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
+        ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
+                repository, new ObjectMapper(), validator, realCatalogValidator);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> realService.publish(FACTORY_ID, PRODUCT_ID, 3L));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH", error.getErrorCode());
+        assertEquals(ProductProcessWorkflow.Status.DRAFT, draft.getStatus());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
     private ProductProcessWorkflowDTO validDefinition() {
         List<ProductProcessWorkflowDTO.Node> nodes = List.of(
                 material("raw-a", "RAW_MATERIAL", "猪蹄 A 批", "RM-PIG-A"),
@@ -199,6 +247,30 @@ class ProductProcessWorkflowServiceImplTest {
         dto.setEdges(edges);
         dto.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
         return dto;
+    }
+
+    private ProductProcessWorkflowDTO rawToFinishedDefinition() {
+        ProductProcessWorkflowDTO dto = new ProductProcessWorkflowDTO();
+        dto.setSchemaVersion(1);
+        dto.setNodes(new ArrayList<>(List.of(
+                material("raw-direct", "RAW_MATERIAL", "Raw Cell", "RM-1"),
+                material("finished-direct", "FINISHED_GOOD", "Finished Cell", PRODUCT_ID))));
+        dto.setEdges(new ArrayList<>(List.of(
+                edge("direct", "raw-direct", "out", "finished-direct", "in"))));
+        dto.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
+        return dto;
+    }
+
+    private ProductProcessWorkflow persistedDraft(
+            ProductProcessWorkflowDTO definition,
+            Long lockVersion) throws Exception {
+        ProductProcessWorkflow draft = entityFrom(definition);
+        ObjectMapper mapper = new ObjectMapper();
+        draft.setNodesJson(mapper.writeValueAsString(definition.getNodes()));
+        draft.setEdgesJson(mapper.writeValueAsString(definition.getEdges()));
+        draft.setViewportJson(mapper.writeValueAsString(definition.getViewport()));
+        draft.setLockVersion(lockVersion);
+        return draft;
     }
 
     private ProductProcessWorkflowDTO.Node material(String id, String kind, String name, String skuId) {
