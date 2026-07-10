@@ -129,6 +129,38 @@ function vehicleById(vehicleId: string): Vehicle | undefined {
   return vehicles.value.find((vehicle) => vehicle.id === vehicleId);
 }
 
+function tripWeightKg(trip: RouteTrip): number {
+  return trip.storeIds.reduce((total, storeId) => total + (stores.value.find((store) => store.id === storeId)?.weightKg ?? 0), 0);
+}
+
+function getVehicleAssignmentIssue(vehicleId: string | null): string | null {
+  const trip = activeTrip.value;
+  if (!trip || vehicleId === null) return null;
+  const vehicle = vehicleById(vehicleId);
+  if (!vehicle) return '未找到所选车辆。';
+  if (vehicleIsInUse(vehicle.id, trip.id)) return `车辆已被其他车次使用：${vehicle.plate}。`;
+  if (vehicle.driverId !== null && driverIsInUse(vehicle.driverId, trip.id)) return `司机已被其他车次使用：${vehicle.driverName}。`;
+  const uncoveredAreas = [...new Set(trip.storeIds
+    .map((storeId) => stores.value.find((store) => store.id === storeId)?.area)
+    .filter((area): area is string => Boolean(area))
+    .filter((area) => !vehicle.areaCodes.includes(area)))];
+  if (uncoveredAreas.length) return `车辆服务区域不覆盖：${uncoveredAreas.join('、')}。`;
+  if (vehicle.capacityCbm < trip.totalVolumeCbm) return `车辆容量不足：需 ${trip.totalVolumeCbm.toFixed(1)} m³，车辆仅 ${vehicle.capacityCbm.toFixed(1)} m³。`;
+  const weightKg = tripWeightKg(trip);
+  if (vehicle.maxWeightKg < weightKg) return `车辆载重不足：需 ${weightKg} kg，车辆仅 ${vehicle.maxWeightKg} kg。`;
+  return null;
+}
+
+function getDriverAssignmentIssue(driverId: string | null): string | null {
+  const trip = activeTrip.value;
+  if (!trip || driverId === null) return null;
+  if (!trip.vehicleId) return '请先匹配车辆，再选择该车的司机。';
+  const vehicle = vehicleById(trip.vehicleId);
+  if (!vehicle || vehicle.driverId !== driverId) return '司机必须属于当前车辆。';
+  if (driverIsInUse(driverId, trip.id)) return `司机已被其他车次使用：${vehicle.driverName}。`;
+  return null;
+}
+
 function assignVehicle(vehicleId: string | null): boolean {
   const trip = activeTrip.value;
   if (!trip) return false;
@@ -145,10 +177,9 @@ function assignVehicle(vehicleId: string | null): boolean {
     return true;
   }
 
+  const issue = getVehicleAssignmentIssue(vehicleId);
   const vehicle = vehicleById(vehicleId);
-  if (!vehicle || vehicleIsInUse(vehicle.id, trip.id) || (vehicle.driverId !== null && driverIsInUse(vehicle.driverId, trip.id))) {
-    return false;
-  }
+  if (issue || !vehicle) return false;
 
   const nextTrip: RouteTrip = {
     ...trip,
@@ -172,8 +203,9 @@ function assignDriver(driverId: string | null): boolean {
     return true;
   }
 
+  const issue = getDriverAssignmentIssue(driverId);
   const vehicle = vehicles.value.find((candidate) => candidate.driverId === driverId);
-  if (!vehicle || driverIsInUse(driverId, trip.id)) return false;
+  if (issue || !vehicle) return false;
 
   const nextTrip = { ...trip, driverId, driverName: vehicle.driverName };
   replaceTrip({ ...nextTrip, status: statusFor(nextTrip) });
@@ -234,6 +266,8 @@ const state = {
   selectTrip,
   selectStore,
   moveStore,
+  getVehicleAssignmentIssue,
+  getDriverAssignmentIssue,
   assignVehicle,
   assignDriver,
   confirmTrip,

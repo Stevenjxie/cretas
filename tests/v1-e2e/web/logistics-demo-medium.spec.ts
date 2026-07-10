@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function enterLogisticsWorkbench(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/demo?tenant=logistics&redirect=/scheduling/logistics/workbench');
@@ -34,12 +35,17 @@ test.describe('物流排线工作台 @medium', () => {
 
     await page.getByTestId('finish-schedule').click();
     await expect(page.getByTestId('export-step')).toBeVisible();
-    await page.getByRole('button', { name: '确认排程' }).click();
-    await expect(page.getByTestId('export-confirmed')).toBeVisible();
+    await page.getByTestId('confirm-export-preview').click();
+    await expect(page.getByTestId('export-preview-confirmed')).toBeVisible();
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '下载 CSV' }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe('配送排程.csv');
+    const csvPath = await download.path();
+    expect(csvPath).not.toBeNull();
+    const csv = await readFile(csvPath!, 'utf8');
+    expect(csv).toContain('S-003, S-001, S-004');
+    expect(csv).toContain('待匹配车辆');
     await page.screenshot({ path: testInfo.outputPath('04-export-confirmed.png'), fullPage: true });
 
     expect(browserErrors).toEqual([]);

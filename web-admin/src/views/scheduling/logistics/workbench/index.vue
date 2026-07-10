@@ -12,6 +12,10 @@ import { useLogisticsDemoState } from '../useLogisticsDemoState';
 const state = useLogisticsDemoState();
 const assignmentIssue = ref('');
 const exportConfirmed = ref(false);
+const exportPreviewConfirmed = ref(false);
+const canConfirmSchedule = computed(() => state.scheduleResult.value.trips.length > 0
+  && state.scheduleResult.value.unassignedStoreIds.length === 0
+  && state.scheduleResult.value.trips.every((trip) => trip.status === 'confirmed'));
 
 const hasExceptions = computed(() => {
   const trips = state.scheduleResult.value.trips;
@@ -32,30 +36,39 @@ function handleTargetLoad(value: number): void {
 function importSampleOrders(): void {
   state.importOrders();
   exportConfirmed.value = false;
+  exportPreviewConfirmed.value = false;
 }
 
-function confirmExport(): void {
-  exportConfirmed.value = true;
+function confirmSchedule(): void {
+  if (state.confirmSchedule()) exportConfirmed.value = true;
+}
+
+function confirmExportPreview(): void {
+  exportPreviewConfirmed.value = true;
   state.activeStep.value = 'export';
 }
 
 function assignVehicle(vehicleId: string | null): void {
-  const trip = state.activeTrip.value;
-  const vehicle = state.vehicles.value.find((candidate) => candidate.id === vehicleId);
-  const conflict = vehicle && trip && state.scheduleResult.value.trips.some((candidate) => candidate.id !== trip.id && (candidate.vehicleId === vehicle.id || candidate.driverId === vehicle.driverId));
-  if (!state.assignVehicle(vehicleId) && conflict) {
-    assignmentIssue.value = `车辆或司机已被其他车次使用：${vehicle.plate}。`;
+  const issue = state.getVehicleAssignmentIssue(vehicleId);
+  if (issue) {
+    assignmentIssue.value = issue;
     return;
   }
-  assignmentIssue.value = '';
+  if (state.assignVehicle(vehicleId)) assignmentIssue.value = '';
 }
 
 function assignDriver(driverId: string | null): void {
-  const trip = state.activeTrip.value;
-  const driver = state.vehicles.value.find((candidate) => candidate.driverId === driverId);
-  const conflict = driver && trip && state.scheduleResult.value.trips.some((candidate) => candidate.id !== trip.id && candidate.driverId === driver.driverId);
-  if (!state.assignDriver(driverId) && conflict) {
-    assignmentIssue.value = `司机已被其他车次使用：${driver.driverName}。`;
+  const issue = state.getDriverAssignmentIssue(driverId);
+  if (issue) {
+    assignmentIssue.value = issue;
+    return;
+  }
+  if (state.assignDriver(driverId)) assignmentIssue.value = '';
+}
+
+function handleMoveStore(storeId: string, direction: -1 | 1): void {
+  if (!state.moveStore(storeId, direction)) {
+    assignmentIssue.value = '当前门店顺序缺少可用道路数据，未调整配送顺序。';
     return;
   }
   assignmentIssue.value = '';
@@ -65,7 +78,10 @@ function back(): void {
   const steps = ['import', 'map', 'confirm', 'export'] as const;
   const index = steps.indexOf(state.activeStep.value);
   if (index > 0) state.activeStep.value = steps[index - 1];
-  if (state.activeStep.value !== 'export') exportConfirmed.value = false;
+  if (state.activeStep.value !== 'export') {
+    exportConfirmed.value = false;
+    exportPreviewConfirmed.value = false;
+  }
 }
 
 function next(): void {
@@ -91,8 +107,8 @@ function next(): void {
       <button data-testid="generate-routes" class="generate-button" type="button" @click="state.generateRoutes">重新生成路线</button>
     </section>
 
-    <ManualConfirmStep v-else-if="state.activeStep.value === 'confirm'" :trip="state.activeTrip.value" :stores="state.stores.value" :vehicles="state.vehicles.value" @move-store="state.moveStore" @assign-vehicle="assignVehicle" @assign-driver="assignDriver" @confirm-trip="state.confirmTrip" />
-    <ExportConfirmStep v-else :rows="state.exportRows.value" :confirmed="exportConfirmed" @confirm="confirmExport" />
+    <ManualConfirmStep v-else-if="state.activeStep.value === 'confirm'" :trip="state.activeTrip.value" :stores="state.stores.value" :vehicles="state.vehicles.value" @move-store="handleMoveStore" @assign-vehicle="assignVehicle" @assign-driver="assignDriver" @confirm-trip="state.confirmTrip" />
+    <ExportConfirmStep v-else :rows="state.exportRows.value" :confirmed="exportConfirmed" :preview-confirmed="exportPreviewConfirmed" :can-confirm-schedule="canConfirmSchedule" @confirm-schedule="confirmSchedule" @confirm-preview="confirmExportPreview" />
 
     <footer class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看导出预览' : '下一步' }}</button></footer>
   </main>

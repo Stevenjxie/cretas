@@ -12,7 +12,7 @@ const emit = defineEmits<{
 
 const orderedStores = computed(() => props.trip?.storeIds.map((id) => props.stores.find((store) => store.id === id)).filter(Boolean) as StoreOrder[] ?? []);
 const selectedVehicle = computed(() => props.vehicles.find((vehicle) => vehicle.id === props.trip?.vehicleId) ?? null);
-const driverOptions = computed(() => props.vehicles.filter((vehicle) => vehicle.driverId));
+const driverOptions = computed(() => props.vehicles.filter((vehicle) => vehicle.id === props.trip?.vehicleId && vehicle.driverId));
 </script>
 
 <template>

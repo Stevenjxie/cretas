@@ -100,26 +100,43 @@ describe('useLogisticsDemoState', () => {
     expect(state.exportRows.value.map((row) => row.storeIds)).toEqual(state.scheduleResult.value.trips.map((trip) => trip.storeIds));
   });
 
-  it('manually assigns only free mock resources and keeps conflicts visibly pending', () => {
+  it('rejects an out-of-area or undersized vehicle before changing a pending trip', () => {
     const state = prepareRoutes();
-    const primary = state.scheduleResult.value.trips.find((trip) => trip.vehicleId === 'V-01')!;
     const pending = state.scheduleResult.value.trips.find((trip) => trip.status === 'needs_vehicle')!;
+    const outsourcedTrip = state.scheduleResult.value.trips.find((trip) => trip.vehicleId === 'V-04')!;
 
+    state.selectTrip(outsourcedTrip.id);
+    expect(state.assignVehicle(null)).toBe(true);
     state.selectTrip(pending.id);
-    expect(state.assignVehicle('V-01')).toBe(false);
+    expect(state.getVehicleAssignmentIssue('V-04')).toContain('服务区域');
+    expect(state.assignVehicle('V-04')).toBe(false);
     expect(state.activeTrip.value).toMatchObject({ vehicleId: null, status: 'needs_vehicle' });
 
-    state.selectTrip(primary.id);
+    const matchingPrimary = state.scheduleResult.value.trips.find((trip) => trip.vehicleId === 'V-02')!;
+    state.selectTrip(matchingPrimary.id);
     expect(state.assignVehicle(null)).toBe(true);
-    expect(state.activeTrip.value).toMatchObject({ vehicleId: null, driverId: null, status: 'needs_vehicle' });
+    state.vehicles.value.find((vehicle) => vehicle.id === 'V-02')!.capacityCbm = 1;
 
     state.selectTrip(pending.id);
-    expect(state.assignVehicle('V-01')).toBe(true);
-    expect(state.activeTrip.value).toMatchObject({ vehicleId: 'V-01', driverId: 'D-001', status: 'draft' });
+    expect(state.getVehicleAssignmentIssue('V-02')).toContain('容量不足');
+    expect(state.assignVehicle('V-02')).toBe(false);
+    expect(state.activeTrip.value).toMatchObject({ vehicleId: null, status: 'needs_vehicle' });
+  });
 
-    state.selectTrip(primary.id);
+  it('allows only the selected vehicle driver and rejects another vehicle driver', () => {
+    const state = prepareRoutes();
+    const pending = state.scheduleResult.value.trips.find((trip) => trip.status === 'needs_vehicle')!;
+    const matchingPrimary = state.scheduleResult.value.trips.find((trip) => trip.vehicleId === 'V-02')!;
+
+    state.selectTrip(matchingPrimary.id);
+    expect(state.assignVehicle(null)).toBe(true);
+    state.selectTrip(pending.id);
+    expect(state.assignVehicle('V-02')).toBe(true);
+    expect(state.activeTrip.value).toMatchObject({ vehicleId: 'V-02', driverId: 'D-002', status: 'draft' });
+
+    expect(state.getDriverAssignmentIssue('D-001')).toContain('当前车辆');
     expect(state.assignDriver('D-001')).toBe(false);
-    expect(state.activeTrip.value).toMatchObject({ driverId: null, status: 'needs_vehicle' });
+    expect(state.activeTrip.value).toMatchObject({ vehicleId: 'V-02', driverId: 'D-002', status: 'draft' });
   });
 
   it('selects stores and refuses formal confirmation while the schedule is unresolved', () => {

@@ -88,18 +88,36 @@ describe('logistics workbench steps', () => {
     expect(wrapper.get('[data-testid="pending-export-row"]').text()).toContain('待匹配车辆');
   });
 
-  it('confirms the export preview without resolving the pending vehicle trip', async () => {
+  it('confirms only an export preview while a vehicle trip remains pending', async () => {
     const state = useLogisticsDemoState();
     state.generateRoutes();
     state.activeStep.value = 'export';
     const wrapper = mount(Workbench, { global: { stubs: { ElButton: false } } });
 
-    wrapper.findComponent(ExportConfirmStep).vm.$emit('confirm');
+    wrapper.findComponent(ExportConfirmStep).vm.$emit('confirm-preview');
     await wrapper.vm.$nextTick();
 
     expect(state.activeStep.value).toBe('export');
-    expect(wrapper.get('[data-testid="export-confirmed"]').text()).toContain('已确认导出');
+    expect(wrapper.get('[data-testid="export-preview-confirmed"]').text()).toContain('已确认导出预览');
     expect(wrapper.get('[data-testid="pending-export-row"]').text()).toContain('待匹配车辆');
+  });
+
+  it('formally confirms a fully resolved schedule from the export step', async () => {
+    const state = useLogisticsDemoState();
+    state.stores.value = state.stores.value.filter((store) => !['S-011', 'S-013'].includes(store.id));
+    state.importOrders();
+    state.generateRoutes();
+    for (const trip of [...state.scheduleResult.value.trips]) {
+      state.selectTrip(trip.id);
+      expect(state.confirmTrip()).toBe(true);
+    }
+    state.activeStep.value = 'export';
+    const wrapper = mount(Workbench, { global: { stubs: { ElButton: false } } });
+
+    wrapper.findComponent(ExportConfirmStep).vm.$emit('confirm-schedule');
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('[data-testid="export-confirmed"]').text()).toContain('正式确认');
   });
 
   it('validates selected CSV headers without claiming it was persisted', async () => {
@@ -156,7 +174,7 @@ describe('logistics workbench steps', () => {
 
   it('includes prepared volume and distance in the final preview', () => {
     const wrapper = mount(ExportConfirmStep, {
-      props: { confirmed: false, rows: [{ tripId: 'T-1', vehicle: '待匹配车辆', driver: '', storeIds: [], storeOrder: 'S-001', volume: '1.80', loadRate: '18%', distance: '12.50 km' }] },
+      props: { confirmed: false, previewConfirmed: false, canConfirmSchedule: false, rows: [{ tripId: 'T-1', vehicle: '待匹配车辆', driver: '', storeIds: [], storeOrder: 'S-001', volume: '1.80', loadRate: '18%', distance: '12.50 km' }] },
     });
 
     expect(wrapper.html()).toContain('volume');
