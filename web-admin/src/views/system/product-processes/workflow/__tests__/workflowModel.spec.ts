@@ -178,6 +178,55 @@ describe('product process workflow model', () => {
     });
   });
 
+  it('applies only strictly shaped workflow patches to a local DRAFT', () => {
+    const definition = branchedDefinition();
+    definition.status = 'PUBLISHED';
+    const untrustedPatches: unknown[] = [
+      {
+        op: 'SET_NODE_FIELD',
+        nodeId: 'split',
+        path: 'conversionRule.mode',
+        value: 'SUM_OUTPUTS',
+      },
+      {
+        op: 'SET_NODE_FIELD',
+        nodeId: 'split',
+        path: 'productTypeId',
+        value: 'ATTACKER-PRODUCT',
+      },
+      {
+        op: 'SET_NODE_FIELD',
+        nodeId: 'split',
+        path: '__proto__.polluted',
+        value: true,
+      },
+      {
+        op: 'UPSERT_NODE',
+        node: {
+          id: 'report:1',
+          kind: 'REPORT',
+          position: { x: 16, y: 16 },
+          data: { name: 'Unauthorized', skuId: 'BAD' },
+        },
+      },
+      {
+        op: 'UPSERT_EDGE',
+        edge: { id: 'bad-edge', source: 'raw', target: 'split' },
+      },
+      { op: 'ACTIVATE_WORKFLOW', workflowId: 9 },
+    ];
+
+    const result = applyWorkflowPatches(definition, untrustedPatches);
+
+    expect((result.definition.nodes[1].data as ProcessNodeData).conversionRule.mode)
+      .toBe('SUM_OUTPUTS');
+    expect(result.definition.nodes.some((node) => node.id === 'report:1')).toBe(false);
+    expect(result.definition.edges.some((edge) => edge.id === 'bad-edge')).toBe(false);
+    expect(result.definition.nodes[1].data).not.toHaveProperty('productTypeId');
+    expect(result.definition.status).toBe('DRAFT');
+    expect(result.summary).toHaveLength(1);
+  });
+
   it('detects an unbound SKU and a cycle before publish', () => {
     const definition = branchedDefinition();
     const finished = definition.nodes.find((node) => node.id === 'finished');

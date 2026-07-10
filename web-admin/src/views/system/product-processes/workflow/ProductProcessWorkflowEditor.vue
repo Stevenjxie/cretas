@@ -107,12 +107,12 @@
           :factory-id="factoryId"
           :product-type-id="productTypeId"
           :endpoint="`/${factoryId}/config/v2/ai/chat`"
-          module-code="product_work_process_config"
+          module-code="product_process_workflow_config"
           :title="`AI 助手${selectedNodeId ? ' · 当前 Cell' : ''}`"
           :disabled="!productTypeId || !canWrite"
           :context="selectedNodeContext"
           :quick-prompts="aiQuickPrompts"
-          @apply-draft="applyLegacyAIDraft"
+          @apply-draft="applyWorkflowAIDraft"
         />
       </div>
     </aside>
@@ -189,7 +189,6 @@ import { get, post } from '@/api/request';
 import {
   getActiveWorkProcesses,
   getProductWorkProcesses,
-  type ProductWorkProcessItem,
   type WorkProcessItem,
 } from '@/api/processProduction';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
@@ -202,6 +201,7 @@ import {
   saveProductProcessWorkflowDraft,
 } from './workflowApi';
 import {
+  applyWorkflowPatches,
   autoLayoutWorkflow,
   createProcessBranch,
   createWorkflowFromLegacy,
@@ -292,6 +292,7 @@ const selectedNodeLabel = computed(() => {
 });
 const selectedNodeContext = computed<Record<string, unknown>>(() => ({
   productTypeId: props.productTypeId,
+  definition: definition.value ? currentDefinition() : null,
   selectedNodeId: selectedNodeId.value || null,
   selectedNode: selectedNode.value ? serializeFlowNode(selectedNode.value) : null,
   graphSummary: {
@@ -871,41 +872,27 @@ async function publishWorkflow(): Promise<void> {
   }
 }
 
-async function applyLegacyAIDraft(payload: Record<string, unknown>): Promise<void> {
-  const draft = Array.isArray(payload.draft) ? payload.draft as Array<Record<string, unknown>> : [];
-  if (draft.length === 0) {
-    ElMessage.warning('AI 草稿没有可应用的工序');
+async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<void> {
+  if (!Array.isArray(payload.patches)) {
+    ElMessage.warning('AI 没有返回合法的 Workflow 补丁');
     return;
   }
-  const processes = draft.map((step, index): ProductWorkProcessItem => ({
-    id: Number(step.productWorkProcessId || index + 1),
-    productTypeId: props.productTypeId,
-    workProcessId: String(step.workProcessId || `ai-${index}`),
-    processOrder: Number(step.processOrder || index + 1),
-    unitOverride: step.unit ? String(step.unit) : null,
-    estimatedMinutesOverride: null,
-    processName: String(step.processName || `工序 ${index + 1}`),
-    processCategory: String(step.processCategory || ''),
-    defaultUnit: String(step.unit || 'kg'),
-    defaultEstimatedMinutes: null,
-    reportingRequired: true,
-  }));
-  const proposed = createWorkflowFromLegacy({
-    productTypeId: props.productTypeId,
-    productName: props.productName,
-    processes,
-  });
+  const proposed = applyWorkflowPatches(currentDefinition(), payload.patches);
+  if (proposed.summary.length === 0) {
+    ElMessage.warning('AI 补丁均未通过安全校验，未修改本地草稿');
+    return;
+  }
   try {
     await ElMessageBox.confirm(
-      `AI 建议会生成 ${proposed.nodes.length} 个 Cell、${proposed.edges.length} 条连接，并替换当前画布草稿。是否应用？`,
-      '应用 AI 草稿',
+      proposed.summary.map((item) => `• ${item}`).join('\n'),
+      '审核 Workflow AI 补丁',
       { type: 'warning', confirmButtonText: '应用到草稿' },
     );
   } catch {
     return;
   }
   remember();
-  hydrate({ ...proposed, id: definition.value?.id, lockVersion: definition.value?.lockVersion });
+  hydrate(proposed.definition);
   dirty.value = true;
   await fitCanvas();
 }

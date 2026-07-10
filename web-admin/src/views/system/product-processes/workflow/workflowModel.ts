@@ -261,12 +261,15 @@ export function autoLayoutWorkflow(
 
 export function applyWorkflowPatches(
   definition: ProductProcessWorkflowDefinition,
-  patches: WorkflowPatch[],
+  patches: unknown,
 ): { definition: ProductProcessWorkflowDefinition; summary: string[] } {
   const result = cloneDefinition(definition);
   const summary: string[] = [];
+  const safePatches = Array.isArray(patches)
+    ? patches.map(sanitizeWorkflowPatch).filter((patch): patch is WorkflowPatch => patch !== null)
+    : [];
 
-  patches.forEach((patch) => {
+  safePatches.forEach((patch) => {
     if (patch.op === 'UPSERT_NODE') {
       const index = result.nodes.findIndex((node) => node.id === patch.node.id);
       const action = index >= 0 ? '更新' : '新增';
@@ -301,7 +304,191 @@ export function applyWorkflowPatches(
     setNestedValue(node.data, patch.path, patch.value);
     summary.push(`更新${kindLabel(node.kind)} ${nodeName(node)}`);
   });
+  if (safePatches.length > 0) result.status = 'DRAFT';
   return { definition: result, summary };
+}
+
+const workflowPatchOperations = new Set([
+  'UPSERT_NODE', 'REMOVE_NODE', 'UPSERT_EDGE', 'REMOVE_EDGE', 'SET_NODE_FIELD',
+]);
+const workflowNodeKinds = new Set<ProductProcessNodeKind>([
+  'RAW_MATERIAL', 'PROCESS', 'SEMI_FINISHED', 'FINISHED_GOOD',
+]);
+const materialNodeKinds = new Set(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED_GOOD']);
+const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 'FORMULA']);
+const materialDataKeys = new Set(['name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound']);
+const processDataKeys = new Set([
+  'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
+  'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
+  'allowFinishedGoodsSource',
+]);
+const portKeys = new Set([
+  'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit', 'ordinal',
+]);
+const fieldPaths = new Set([
+  'name', 'skuId', 'skuCode', 'specification', 'ports', 'conversionRule',
+  'conversionRule.mode', 'conversionRule.expression', 'reportingRequired',
+]);
+
+function sanitizeWorkflowPatch(raw: unknown): WorkflowPatch | null {
+  if (!isRecord(raw) || typeof raw.op !== 'string' || !workflowPatchOperations.has(raw.op)) {
+    return null;
+  }
+  if (raw.op === 'UPSERT_NODE') {
+    return hasExactKeys(raw, ['op', 'node']) && isWorkflowNode(raw.node)
+      ? { op: 'UPSERT_NODE', node: toPlainWorkflowValue(raw.node) }
+      : null;
+  }
+  if (raw.op === 'REMOVE_NODE') {
+    return hasExactKeys(raw, ['op', 'nodeId']) && isNonBlankString(raw.nodeId)
+      ? { op: 'REMOVE_NODE', nodeId: raw.nodeId }
+      : null;
+  }
+  if (raw.op === 'UPSERT_EDGE') {
+    return hasExactKeys(raw, ['op', 'edge']) && isWorkflowEdge(raw.edge)
+      ? { op: 'UPSERT_EDGE', edge: toPlainWorkflowValue(raw.edge) }
+      : null;
+  }
+  if (raw.op === 'REMOVE_EDGE') {
+    return hasExactKeys(raw, ['op', 'edgeId']) && isNonBlankString(raw.edgeId)
+      ? { op: 'REMOVE_EDGE', edgeId: raw.edgeId }
+      : null;
+  }
+  if (!hasExactKeys(raw, ['op', 'nodeId', 'path', 'value'])
+    || !isNonBlankString(raw.nodeId)
+    || !isNonBlankString(raw.path)
+    || !fieldPaths.has(raw.path)
+    || !isAllowedFieldValue(raw.path, raw.value)) {
+    return null;
+  }
+  return {
+    op: 'SET_NODE_FIELD',
+    nodeId: raw.nodeId,
+    path: raw.path,
+    value: toPlainWorkflowValue(raw.value),
+  };
+}
+
+function isWorkflowNode(value: unknown): value is ProductProcessWorkflowNode {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['id', 'kind', 'position', 'data'])
+    || !isNonBlankString(value.id)
+    || !isProductProcessNodeKind(value.kind)
+    || !isWorkflowPosition(value.position)
+    || !isRecord(value.data)) {
+    return false;
+  }
+  return value.kind === 'PROCESS'
+    ? isProcessNodeData(value.data)
+    : isMaterialNodeData(value.data);
+}
+
+function isWorkflowEdge(value: unknown): value is ProductProcessWorkflowEdge {
+  return isRecord(value)
+    && hasExactKeys(value, ['id', 'source', 'sourceHandle', 'target', 'targetHandle'])
+    && isNonBlankString(value.id)
+    && isNonBlankString(value.source)
+    && isNonBlankString(value.sourceHandle)
+    && isNonBlankString(value.target)
+    && isNonBlankString(value.targetHandle);
+}
+
+function isWorkflowPosition(value: unknown): value is WorkflowPosition {
+  return isRecord(value)
+    && hasExactKeys(value, ['x', 'y'])
+    && isFiniteNumber(value.x)
+    && isFiniteNumber(value.y);
+}
+
+function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNodeData {
+  return hasAllowedKeys(value, materialDataKeys)
+    && isNonBlankString(value.name)
+    && typeof value.skuId === 'string'
+    && optionalString(value.skuCode)
+    && optionalString(value.specification)
+    && optionalString(value.baseUnit)
+    && optionalBoolean(value.bound);
+}
+
+function isProcessNodeData(value: Record<string, unknown>): value is ProcessNodeData {
+  return hasAllowedKeys(value, processDataKeys)
+    && isNonBlankString(value.workProcessId)
+    && isNonBlankString(value.processName)
+    && isNonBlankString(value.inputUnit)
+    && isNonBlankString(value.outputUnit)
+    && Array.isArray(value.ports)
+    && value.ports.every(isProcessPort)
+    && isConversionRule(value.conversionRule)
+    && typeof value.reportingRequired === 'boolean'
+    && optionalBoolean(value.allowMultipleUpstreamSources)
+    && optionalBoolean(value.allowFinishedGoodsSource);
+}
+
+function isProcessPort(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasAllowedKeys(value, portKeys)
+    || !isNonBlankString(value.id)
+    || (value.direction !== 'INPUT' && value.direction !== 'OUTPUT')
+    || !isNonBlankString(value.unit)
+    || !Number.isInteger(value.ordinal)) {
+    return false;
+  }
+  return optionalString(value.materialNodeId)
+    && optionalString(value.materialName)
+    && optionalString(value.skuId)
+    && (value.materialKind === undefined
+      || (typeof value.materialKind === 'string' && materialNodeKinds.has(value.materialKind)));
+}
+
+function isConversionRule(value: unknown): boolean {
+  return isRecord(value)
+    && hasAllowedKeys(value, new Set(['mode', 'expression']))
+    && typeof value.mode === 'string'
+    && conversionModes.has(value.mode)
+    && optionalString(value.expression);
+}
+
+function isAllowedFieldValue(path: string, value: unknown): boolean {
+  if (['name', 'skuId', 'skuCode', 'specification', 'conversionRule.expression'].includes(path)) {
+    return value === null || typeof value === 'string';
+  }
+  if (path === 'reportingRequired') return typeof value === 'boolean';
+  if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
+  if (path === 'conversionRule') return isConversionRule(value);
+  if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => key in value);
+}
+
+function hasAllowedKeys(value: Record<string, unknown>, keys: Set<string>): boolean {
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function optionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean';
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isProductProcessNodeKind(value: unknown): value is ProductProcessNodeKind {
+  return typeof value === 'string' && workflowNodeKinds.has(value as ProductProcessNodeKind);
 }
 
 export function validateWorkflow(

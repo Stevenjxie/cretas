@@ -37,6 +37,21 @@ public class CanvasAIController {
     private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
     private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
 
+    private static final String PRODUCT_PROCESS_WORKFLOW_MODULE = "product_process_workflow_config";
+    private static final String PRODUCT_PROCESS_WORKFLOW_TOOL = "canvas_product_process_workflow_config";
+    private static final String PRODUCT_PROCESS_WORKFLOW_REPLY = "已生成可审核的 Workflow 本地补丁";
+    private static final String PRODUCT_PROCESS_WORKFLOW_SYSTEM_PROMPT = """
+            You are a preview-only product-process Workflow configuration assistant.
+            Return only a JSON WorkflowPatch[] array. Never call tools, APIs, save, publish,
+            activate, create products, create reports, create tasks, or change inventory.
+            Allowed operations: UPSERT_NODE, REMOVE_NODE, UPSERT_EDGE, REMOVE_EDGE, SET_NODE_FIELD.
+            SET_NODE_FIELD roots: name, skuId, skuCode, specification, ports, conversionRule,
+            reportingRequired. Do not return any other operation or field path.
+
+            Current definition: %s
+            Selected node id: %s
+            """;
+
     // D3: narrow route for work-process catalog (create/update work-process master data)
     private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
     private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
@@ -121,6 +136,9 @@ public class CanvasAIController {
         Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
 
         try {
+            if (PRODUCT_PROCESS_WORKFLOW_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleProductProcessWorkflowConfigChat(request, toolContext));
+            }
             if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
                 return ApiResponse.success(handleProductWorkProcessConfigChat(request, toolContext));
             }
@@ -152,6 +170,86 @@ public class CanvasAIController {
         }
 
         return ApiResponse.success(response);
+    }
+
+    /**
+     * Workflow-only route. It always returns before generic autopilot/plan/action handling and
+     * can only call the dedicated tool's public preview entry point.
+     */
+    private AIResponse handleProductProcessWorkflowConfigChat(
+            AIRequest request, Map<String, Object> toolContext) throws Exception {
+        ToolExecutor executor = toolRegistry.getExecutor(PRODUCT_PROCESS_WORKFLOW_TOOL)
+                .orElseThrow(() -> new BusinessException("工具不存在: " + PRODUCT_PROCESS_WORKFLOW_TOOL));
+
+        Map<String, Object> requestParams = request.getParams() != null
+                ? request.getParams()
+                : Map.of();
+        Map<String, Object> nestedContext = readStringObjectMap(requestParams.get("context"));
+        Object definition = requestParams.containsKey("definition")
+                ? requestParams.get("definition")
+                : nestedContext.get("definition");
+        Object selectedNodeId = requestParams.containsKey("selectedNodeId")
+                ? requestParams.get("selectedNodeId")
+                : nestedContext.get("selectedNodeId");
+
+        String prompt = PRODUCT_PROCESS_WORKFLOW_SYSTEM_PROMPT.formatted(
+                objectMapper.writeValueAsString(definition),
+                Objects.toString(selectedNodeId, "null"));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+        List<Map<String, Object>> generatedPatches = objectMapper.readValue(
+                extractJson(llmResponse), new TypeReference<List<Map<String, Object>>>() {});
+
+        Map<String, Object> toolArguments = new LinkedHashMap<>();
+        toolArguments.put("message", request.getMessage());
+        toolArguments.put("definition", definition);
+        toolArguments.put("selectedNodeId", selectedNodeId);
+        toolArguments.put("patches", generatedPatches);
+        ToolCall toolCall = ToolCall.of(
+                "workflow-preview-" + System.currentTimeMillis(),
+                PRODUCT_PROCESS_WORKFLOW_TOOL,
+                objectMapper.writeValueAsString(toolArguments));
+
+        String rawPreview = executor.preview(toolCall, toolContext);
+        Map<String, Object> previewEnvelope = objectMapper.readValue(
+                rawPreview, new TypeReference<Map<String, Object>>() {});
+        if (!Boolean.TRUE.equals(previewEnvelope.get("success"))) {
+            AIResponse errorResponse = new AIResponse();
+            errorResponse.setApplied(false);
+            errorResponse.setReply(Objects.toString(
+                    previewEnvelope.get("error"), "Workflow patch 校验失败"));
+            errorResponse.setDiffs(List.of());
+            return errorResponse;
+        }
+
+        Map<String, Object> validatedPreview = readStringObjectMap(previewEnvelope.get("data"));
+        Object patches = validatedPreview.get("patches") instanceof List<?>
+                ? validatedPreview.get("patches")
+                : List.of();
+        Map<String, Object> diffParams = new LinkedHashMap<>();
+        diffParams.put("patches", patches);
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(PRODUCT_PROCESS_WORKFLOW_REPLY);
+        response.setDiffs(List.of(Map.of(
+                "type", "PRODUCT_PROCESS_WORKFLOW_PATCH",
+                "tool", PRODUCT_PROCESS_WORKFLOW_TOOL,
+                "params", diffParams,
+                "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
+        return response;
+    }
+
+    private Map<String, Object> readStringObjectMap(Object value) {
+        if (!(value instanceof Map<?, ?> source)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, entryValue) -> {
+            if (key instanceof String stringKey) {
+                result.put(stringKey, entryValue);
+            }
+        });
+        return result;
     }
 
     /**
