@@ -56,7 +56,7 @@
                   class="apply-draft-btn"
                   size="small"
                   type="primary"
-                  @click="emitDraft(diff.params)"
+                  @click="emitDraft(diff.params, msg.sourceIdentity)"
                 >
                   应用 {{ getDraftSteps(diff.params).length }} 道工序到草稿
                 </el-button>
@@ -69,7 +69,7 @@
                   <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
                   <span>{{ diff.description }}</span>
                 </div>
-                <el-button size="small" type="primary" link @click="emitDraft(diff.params)">
+                <el-button size="small" type="primary" link @click="emitDraft(diff.params, msg.sourceIdentity)">
                   应用到草稿
                 </el-button>
               </div>
@@ -108,9 +108,15 @@ interface ChatDiff {
   description: string;
 }
 
+interface SourceIdentity {
+  factoryId: string;
+  productTypeId: string;
+}
+
 interface ChatMessage {
   role: ChatRole;
   content: string;
+  sourceIdentity?: SourceIdentity;
   diffPreview?: ChatDiff[];
 }
 
@@ -138,7 +144,7 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-  applyDraft: [draft: Record<string, unknown>];
+  applyDraft: [draft: Record<string, unknown>, sourceIdentity: SourceIdentity];
 }>();
 
 const modeLabel = computed(() => 'Plan');
@@ -151,13 +157,14 @@ const placeholder = computed(() => (
 const input = ref('');
 const loading = ref(false);
 const messagesRef = ref<HTMLElement>();
-const messages = ref<ChatMessage[]>([
-  { role: 'system', content: '选择产品后，描述工序顺序和责任小组长，AI 会生成草稿供你保存。' },
-]);
+const messages = ref<ChatMessage[]>(initialMessages());
+let requestGeneration = 0;
 
-// Reset input on product change or mount
-watch(() => props.productTypeId, () => {
+watch(() => `${props.factoryId}:${props.productTypeId}`, () => {
+  requestGeneration += 1;
   input.value = '';
+  loading.value = false;
+  messages.value = initialMessages();
 }, { immediate: true });
 
 async function send(): Promise<void> {
@@ -166,38 +173,62 @@ async function send(): Promise<void> {
     return;
   }
 
+  const sourceIdentity = {
+    factoryId: props.factoryId,
+    productTypeId: props.productTypeId,
+  };
+  const endpoint = props.endpoint;
+  const moduleCode = props.moduleCode;
+  const context = props.context;
+  const generation = ++requestGeneration;
   input.value = '';
-  messages.value.push({ role: 'user', content: text });
+  messages.value.push({ role: 'user', content: text, sourceIdentity });
   loading.value = true;
   try {
-    const res = await request.post<AIChatResponse>(props.endpoint, {
+    const res = await request.post<AIChatResponse>(endpoint, {
       message: text,
       mode: 'plan',
-      moduleCode: props.moduleCode,
+      moduleCode,
       params: {
-        productTypeId: props.productTypeId,
-        context: props.context,
+        productTypeId: sourceIdentity.productTypeId,
+        context,
       },
     });
+    if (!isCurrentRequest(generation, sourceIdentity)) return;
     const data = res.data ?? {};
     // D1 B-1: when diffs are empty (tool failure surfaced as error reply), show guidance text
     const hasDiffs = Array.isArray(data.diffs) && data.diffs.length > 0;
     messages.value.push({
       role: 'assistant',
       content: data.reply || (hasDiffs ? '已生成草稿，请审核后应用。' : '无法生成草稿，请检查工序描述'),
+      sourceIdentity,
       diffPreview: data.diffs || [],
     });
   } catch (e) {
+    if (!isCurrentRequest(generation, sourceIdentity)) return;
     console.error('[WorkProcessAIChatPanel] send failed:', e);
     messages.value.push({
       role: 'assistant',
       content: 'AI 服务暂不可用，请稍后重试。',
+      sourceIdentity,
     });
   } finally {
+    if (!isCurrentRequest(generation, sourceIdentity)) return;
     loading.value = false;
     await nextTick();
+    if (!isCurrentRequest(generation, sourceIdentity)) return;
     scrollMessagesToBottom();
   }
+}
+
+function initialMessages(): ChatMessage[] {
+  return [{ role: 'system', content: '选择产品后，描述工序顺序和责任小组长，AI 会生成草稿供你保存。' }];
+}
+
+function isCurrentRequest(generation: number, identity: SourceIdentity): boolean {
+  return generation === requestGeneration
+    && identity.factoryId === props.factoryId
+    && identity.productTypeId === props.productTypeId;
 }
 
 async function runQuickPrompt(prompt: string): Promise<void> {
@@ -210,8 +241,14 @@ function scrollMessagesToBottom(): void {
   messageContainer?.scrollTo({ top: messageContainer.scrollHeight, behavior: 'smooth' });
 }
 
-function emitDraft(draft: Record<string, unknown>): void {
-  emit('applyDraft', draft);
+function emitDraft(draft: Record<string, unknown>, sourceIdentity?: SourceIdentity): void {
+  if (!sourceIdentity || !isCurrentSource(sourceIdentity)) return;
+  emit('applyDraft', draft, sourceIdentity);
+}
+
+function isCurrentSource(identity: SourceIdentity): boolean {
+  return identity.factoryId === props.factoryId
+    && identity.productTypeId === props.productTypeId;
 }
 
 interface DraftStep {

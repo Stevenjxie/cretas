@@ -104,6 +104,7 @@
         </div>
         <WorkProcessAIChatPanel
           v-if="factoryId"
+          :key="`${factoryId}:${productTypeId}`"
           :factory-id="factoryId"
           :product-type-id="productTypeId"
           :endpoint="`/${factoryId}/config/v2/ai/chat`"
@@ -244,6 +245,11 @@ interface WorkflowIdentity {
   productTypeId: string;
 }
 
+interface SkuBindingTarget {
+  processId: string;
+  portId: string;
+}
+
 const props = defineProps<{
   factoryId: string;
   productTypeId: string;
@@ -257,6 +263,8 @@ const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
 const flowNodes = ref<Node[]>([]);
 const flowEdges = ref<Edge[]>([]);
 const loading = ref(false);
+const catalogLoading = ref(false);
+const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
 const publishing = ref(false);
 const dirty = ref(false);
@@ -276,10 +284,12 @@ const processSourceMaterialId = ref('');
 const selectedWorkProcessId = ref('');
 const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
-const skuBindingTarget = ref<{ processId: string; portId: string } | null>(null);
+const skuBindingTarget = ref<SkuBindingTarget | null>(null);
 const skuForm = ref({ name: '', unit: 'kg', specification: '' });
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
 let lastGraphIdSeed = 0;
+let catalogGeneration = 0;
+let createSkuGeneration = 0;
 let loadGeneration = 0;
 let saveGeneration = 0;
 let publishGeneration = 0;
@@ -288,6 +298,8 @@ const productTypeId = computed(() => props.productTypeId);
 const canEdit = computed(() => (
   props.canWrite
   && !loading.value
+  && !catalogLoading.value
+  && loadedCatalogFactoryId.value === props.factoryId
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
 ));
@@ -327,6 +339,10 @@ onMounted(async () => {
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
+  if (next[0] !== previous[0]) {
+    await Promise.all([loadCatalogs(), loadDefinition()]);
+    return;
+  }
   await loadDefinition();
 });
 
@@ -335,26 +351,52 @@ watch(aiStorageKey, () => {
 });
 
 async function loadCatalogs(): Promise<void> {
-  if (!props.factoryId) return;
+  const generation = ++catalogGeneration;
+  const factoryId = props.factoryId;
+  invalidateCatalogs();
+  if (!factoryId) return;
+  catalogLoading.value = true;
   try {
     const [processResponse, productResponse, rawResponse] = await Promise.all([
-      getActiveWorkProcesses(props.factoryId),
-      get<{ content: SkuOption[] }>(`/${props.factoryId}/product-types`, { params: { page: 1, size: 1000 } }),
-      get<RawMaterialOption[]>(`/${props.factoryId}/raw-material-types/active`),
+      getActiveWorkProcesses(factoryId),
+      get<{ content: SkuOption[] }>(`/${factoryId}/product-types`, { params: { page: 1, size: 1000 } }),
+      get<RawMaterialOption[]>(`/${factoryId}/raw-material-types/active`),
     ]);
-    workProcessOptions.value = processResponse.success && Array.isArray(processResponse.data)
-      ? processResponse.data
-      : [];
-    skuOptions.value = productResponse.success && Array.isArray(productResponse.data?.content)
-      ? productResponse.data.content
-      : [];
-    rawMaterialOptions.value = rawResponse.success && Array.isArray(rawResponse.data)
-      ? rawResponse.data
-      : [];
+    if (!isCurrentCatalogLoad(generation, factoryId)) return;
+    if (!processResponse.success
+      || !Array.isArray(processResponse.data)
+      || !productResponse.success
+      || !Array.isArray(productResponse.data?.content)
+      || !rawResponse.success
+      || !Array.isArray(rawResponse.data)) {
+      throw new Error('Workflow catalog response is incomplete');
+    }
+    workProcessOptions.value = processResponse.data;
+    skuOptions.value = productResponse.data.content;
+    rawMaterialOptions.value = rawResponse.data;
+    loadedCatalogFactoryId.value = factoryId;
   } catch (error) {
+    if (!isCurrentCatalogLoad(generation, factoryId)) return;
+    invalidateCatalogs();
     console.error('[ProductProcessWorkflow] catalog loading failed', error);
     ElMessage.error('Workflow 所需的工序或 SKU 字典加载失败');
+  } finally {
+    if (isCurrentCatalogLoad(generation, factoryId)) {
+      catalogLoading.value = false;
+    }
   }
+}
+
+function invalidateCatalogs(): void {
+  catalogLoading.value = false;
+  loadedCatalogFactoryId.value = null;
+  workProcessOptions.value = [];
+  skuOptions.value = [];
+  rawMaterialOptions.value = [];
+}
+
+function isCurrentCatalogLoad(generation: number, factoryId: string): boolean {
+  return generation === catalogGeneration && factoryId === props.factoryId;
 }
 
 async function loadDefinition(): Promise<void> {
@@ -425,8 +467,10 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   skuDialogVisible.value = false;
   skuBindingTarget.value = null;
   if (invalidatePersistence) {
+    createSkuGeneration += 1;
     saveGeneration += 1;
     publishGeneration += 1;
+    creatingSku.value = false;
     saving.value = false;
     publishing.value = false;
   }
@@ -791,45 +835,64 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
 }
 
 async function confirmCreateSku(): Promise<void> {
-  if (!canEdit.value) return;
+  const identity = currentLoadedIdentity();
+  const bindingTarget = skuBindingTarget.value ? { ...skuBindingTarget.value } : null;
+  if (!identity || !bindingTarget || !canEdit.value) return;
   const name = skuForm.value.name.trim();
   const unit = skuForm.value.unit;
-  if (!name || !unit || !skuBindingTarget.value) {
+  const specification = skuForm.value.specification.trim() || null;
+  if (!name || !unit) {
     ElMessage.warning('请填写半成品名称和单位');
     return;
   }
   const duplicate = skuOptions.value.find((item) => item.name.trim() === name);
   if (duplicate) {
     ElMessage.info(`发现同名 SKU，已复用 ${duplicate.code || duplicate.id}`);
-    if (bindOutputSku(skuBindingTarget.value.processId, skuBindingTarget.value.portId, duplicate)) {
+    if (bindOutputSku(bindingTarget.processId, bindingTarget.portId, duplicate)) {
       skuDialogVisible.value = false;
     }
     return;
   }
+  const generation = ++createSkuGeneration;
   creatingSku.value = true;
   try {
-    const response = await post<SkuOption>(`/${props.factoryId}/product-types`, {
+    const response = await post<SkuOption>(`/${identity.factoryId}/product-types`, {
       name,
       unit,
-      specification: skuForm.value.specification.trim() || null,
+      specification,
       productCategory: 'SEMI_FINISHED',
       isActive: true,
       notes: '在产品工序 Workflow 中现场创建',
     });
+    if (!isCreateSkuOperationCurrent(generation, identity, bindingTarget)) return;
     if (!response.success || !response.data) {
       ElMessage.error(response.message || '半成品 SKU 创建失败');
       return;
     }
     skuOptions.value.unshift(response.data);
-    bindOutputSku(skuBindingTarget.value.processId, skuBindingTarget.value.portId, response.data);
+    bindOutputSku(bindingTarget.processId, bindingTarget.portId, response.data);
     skuDialogVisible.value = false;
     ElMessage.success('半成品 SKU 已创建并绑定');
   } catch (error) {
+    if (!isCreateSkuOperationCurrent(generation, identity, bindingTarget)) return;
     console.error('[ProductProcessWorkflow] create sku failed', error);
     ElMessage.error('半成品 SKU 创建失败');
   } finally {
-    creatingSku.value = false;
+    if (generation === createSkuGeneration) {
+      creatingSku.value = false;
+    }
   }
+}
+
+function isCreateSkuOperationCurrent(
+  generation: number,
+  identity: WorkflowIdentity,
+  bindingTarget: SkuBindingTarget,
+): boolean {
+  return generation === createSkuGeneration
+    && isLoadedIdentityCurrent(identity)
+    && skuBindingTarget.value?.processId === bindingTarget.processId
+    && skuBindingTarget.value?.portId === bindingTarget.portId;
 }
 
 function refreshPortMaterialMetadata(): void {
@@ -978,9 +1041,15 @@ async function publishWorkflow(): Promise<void> {
   }
 }
 
-async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<void> {
+async function applyWorkflowAIDraft(
+  payload: Record<string, unknown>,
+  sourceIdentity?: WorkflowIdentity,
+): Promise<void> {
   const identity = currentLoadedIdentity();
-  if (!identity || !canEdit.value) return;
+  if (!identity
+    || !sourceIdentity
+    || !identitiesMatch(identity, sourceIdentity)
+    || !canEdit.value) return;
   if (!Array.isArray(payload.patches)) {
     ElMessage.warning('AI 没有返回合法的 Workflow 补丁');
     return;
@@ -1008,6 +1077,10 @@ async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<v
   hydrate(proposed.definition);
   dirty.value = true;
   await fitCanvas();
+}
+
+function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boolean {
+  return left.factoryId === right.factoryId && left.productTypeId === right.productTypeId;
 }
 
 function toggleAI(): void {
