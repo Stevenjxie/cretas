@@ -78,9 +78,7 @@ function generateRoutes(): void {
   selectedTripId.value = scheduleResult.value.trips.some((trip) => trip.id === selectedTripId.value)
     ? selectedTripId.value
     : scheduleResult.value.trips[0]?.id ?? null;
-  selectedStoreId.value = stores.value.some((store) => store.id === selectedStoreId.value)
-    ? selectedStoreId.value
-    : scheduleResult.value.trips[0]?.storeIds[0] ?? null;
+  selectedStoreId.value = null;
   activeStep.value = 'map';
 }
 
@@ -95,7 +93,7 @@ function setTargetLoad(value: number): void {
 function selectTrip(tripId: string | null): void {
   selectedTripId.value = scheduleResult.value.trips.some((trip) => trip.id === tripId) ? tripId : null;
   const trip = activeTrip.value;
-  if (trip && !trip.storeIds.includes(selectedStoreId.value ?? '')) selectedStoreId.value = trip.storeIds[0] ?? null;
+  if (trip && selectedStoreId.value && !trip.storeIds.includes(selectedStoreId.value)) selectedStoreId.value = null;
 }
 
 function selectStore(storeId: string | null): void {

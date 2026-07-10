@@ -38,6 +38,25 @@ describe('useLogisticsDemoState', () => {
     expect(state.scheduleResult.value.additionalVehicleCount).toBeGreaterThanOrEqual(1);
   });
 
+  it('selects the first route without opening a store drawer after generation', () => {
+    const state = useLogisticsDemoState();
+    state.importOrders();
+    state.generateRoutes();
+
+    expect(state.selectedTripId.value).toBe(state.scheduleResult.value.trips[0]?.id);
+    expect(state.selectedStoreId.value).toBeNull();
+  });
+
+  it('changes route selection without opening a store drawer', () => {
+    const state = useLogisticsDemoState();
+    state.importOrders();
+    state.generateRoutes();
+
+    state.selectTrip(state.scheduleResult.value.trips[1]?.id ?? null);
+
+    expect(state.selectedStoreId.value).toBeNull();
+  });
+
   it('reorders one supported trip and updates export order and distance', () => {
     const state = prepareRoutes();
     const trip = state.scheduleResult.value.trips.find((item) => item.storeIds.join(',') === 'S-001,S-003,S-004')!;

@@ -56,14 +56,17 @@ describe('logistics workbench steps', () => {
     expect(page.html()).toContain('备班司机');
   });
 
-  it('shows one task stage at a time', async () => {
+  it('shows import validation before the user advances to route planning', async () => {
     const wrapper = mount(Workbench, { global: { stubs: { ElButton: false } } });
 
     expect(wrapper.find('[data-testid="import-step"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="map-step"]').exists()).toBe(false);
 
     await wrapper.get('[data-testid="import-orders"]').trigger('click');
-    await wrapper.get('[data-testid="generate-routes"]').trigger('click');
+    expect(wrapper.find('[data-testid="import-step"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('13 家门店的订单字段与配送地址已通过校验。');
+
+    await wrapper.get('[data-testid="finish-schedule"]').trigger('click');
 
     expect(wrapper.find('[data-testid="map-step"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="export-step"]').exists()).toBe(false);

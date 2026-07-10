@@ -29,9 +29,8 @@ function handleTargetLoad(value: number): void {
   state.setTargetLoad(value);
 }
 
-function startRoutePlanning(): void {
+function importSampleOrders(): void {
   state.importOrders();
-  state.generateRoutes();
   exportConfirmed.value = false;
 }
 
@@ -82,7 +81,7 @@ function next(): void {
     <LogisticsStepBar :active-step="state.activeStep.value" />
     <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="assignmentIssue || undefined" type="warning" :closable="false" show-icon />
 
-    <OrderImportStep v-if="state.activeStep.value === 'import'" :stores="state.stores.value" :imported="state.imported.value" @import-sample="startRoutePlanning" />
+    <OrderImportStep v-if="state.activeStep.value === 'import'" :stores="state.stores.value" :imported="state.imported.value" @import-sample="importSampleOrders" />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
       <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div><label>目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label></header>
