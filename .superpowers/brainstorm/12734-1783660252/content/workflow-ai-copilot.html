@@ -1,0 +1,122 @@
+<style>
+  .app-shell{background:#f4f6f9;border:1px solid #dfe7f1;border-radius:14px;overflow:hidden;box-shadow:0 8px 28px rgba(27,101,168,.10)}
+  .app-top{height:64px;background:#fff;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid #edf2f7;gap:14px}
+  .back{width:32px;height:32px;border-radius:8px;border:1px solid #dfe7f1;display:flex;align-items:center;justify-content:center;color:#1b65a8;font-weight:700}
+  .titleblock h3{margin:0;color:#1a2332;font-size:17px}.titleblock p{margin:3px 0 0;color:#7a8599;font-size:11px}
+  .version{padding:5px 9px;border-radius:999px;background:#fff7e6;color:#b36b00;font-size:11px;font-weight:700}
+  .top-actions{margin-left:auto;display:flex;gap:8px}.btn{border:1px solid #dce6f1;background:#fff;color:#1a2332;padding:8px 12px;border-radius:7px;font-size:11px;font-weight:600}.btn.primary{background:#1b65a8;color:#fff;border-color:#1b65a8}.btn.ai{background:#eef6ff;border-color:#b8d8f5;color:#1b65a8}
+  .ai-command{background:linear-gradient(135deg,#eef6ff,#f8fbff);border:1px solid #c8def3;border-radius:9px;padding:10px;margin-bottom:9px}
+  .ai-command-head{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:#1b65a8;font-size:10px;font-weight:700}.ai-mark{width:24px;height:24px;border-radius:7px;background:#1b65a8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800}.ai-input{min-height:54px;background:#fff;border:1px solid #dce6f1;border-radius:7px;padding:8px 9px;color:#7a8599;font-size:9px;line-height:1.5}.ai-command-foot{display:flex;justify-content:flex-end;margin-top:7px}.ai-send{padding:8px 11px;background:#1b65a8;color:#fff;border-radius:7px;font-size:9px;font-weight:700}
+  .quick{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 10px}.chip{border:1px solid #dce6f1;background:#fff;border-radius:999px;padding:4px 7px;color:#5b6678;font-size:8px}
+  .workarea{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px;padding:12px 16px 16px}
+  .canvas{background:#fff;border:1px solid #edf2f7;border-radius:10px;min-height:585px;position:relative;overflow:auto}
+  .canvas-head{height:42px;border-bottom:1px solid #edf2f7;display:flex;align-items:center;padding:0 12px;color:#7a8599;font-size:10px}.legend{margin-left:auto;display:flex;gap:12px}.lg{display:flex;align-items:center;gap:4px}.sq{width:8px;height:8px;border-radius:2px;background:#409eff}.sq.green{background:#67c23a}.sq.orange{background:#e6a23c}
+  .lanes{position:absolute;inset:43px 0 0;min-width:1120px;display:grid;grid-template-columns:110px 1fr 150px;background-image:radial-gradient(#dce6f1 1px,transparent 1px);background-size:16px 16px}
+  .lane{border-right:1px dashed #d7e1ec;padding:10px}.lane:last-child{border-right:0}.lane-title{text-transform:uppercase;letter-spacing:.08em;color:#9aa6b6;font-size:9px;font-weight:800;margin-bottom:12px}
+  .pnode{background:#fff;border:1px solid #dbe5f0;border-left:4px solid #409eff;border-radius:9px;padding:9px;box-shadow:0 3px 10px rgba(27,101,168,.07);position:relative;margin-bottom:10px}.pnode.selected{border-color:#1b65a8;box-shadow:0 0 0 3px rgba(27,101,168,.10)}.pnode.item{border-left-color:#67c23a}.pnode.warn{border-left-color:#e6a23c}.pnode h4{margin:0 0 5px;font-size:11px;color:#1a2332}.pnode p{margin:2px 0;font-size:9px;color:#7a8599;line-height:1.4}.tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}.tag{padding:3px 5px;border-radius:4px;background:#f0f5fa;color:#516070;font-size:8px}.tag.blue{background:#eaf3ff;color:#1b65a8}.tag.green{background:#eff9ea;color:#478d2c}.tag.orange{background:#fff5e6;color:#a86600}
+  .flowcol{padding:10px 12px;display:grid;grid-template-columns:190px 24px 190px 24px 190px 24px 190px;justify-content:center;align-items:start}.flowcol .lane-title{grid-column:1/-1}.process-node{min-height:300px;padding:10px}.arrow{height:310px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#91a4b8;font-size:16px}.material-pill{margin-top:6px;max-width:82px;padding:4px 6px;border-radius:999px;background:#eff9ea;color:#478d2c;font-size:7px;text-align:center;white-space:nowrap}.branchline{display:grid;gap:8px}.smallnote{background:#f8fafc;border:1px dashed #cdd8e5;border-radius:7px;padding:7px;font-size:8px;color:#7a8599;text-align:center}
+  .node-head{display:flex;align-items:center;gap:7px;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #edf2f7}.node-no{width:22px;height:22px;border-radius:6px;background:#eaf3ff;color:#1b65a8;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800}.node-head h4{margin:0;flex:1}.node-status{font-size:7px;color:#478d2c;background:#eff9ea;border-radius:4px;padding:3px 4px}.field{margin-bottom:8px}.field-label{display:flex;justify-content:space-between;color:#697688;font-size:8px;margin-bottom:4px}.required{color:#e05a47}.fake-select{height:27px;border:1px solid #dce6f1;background:#fff;border-radius:6px;padding:0 7px;display:flex;align-items:center;justify-content:space-between;color:#1a2332;font-size:8px}.fake-select:after{content:'⌄';color:#93a1b2;font-size:10px}.segmented{display:grid;grid-template-columns:1fr 1fr;border:1px solid #dce6f1;border-radius:6px;overflow:hidden}.seg{padding:6px 3px;text-align:center;background:#fff;color:#7a8599;font-size:7px}.seg.active{background:#eaf3ff;color:#1b65a8;font-weight:700}.row2{display:grid;grid-template-columns:1fr 1fr;gap:5px}.conversion{display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center}.conversion .fake-select{min-width:0}.conversion-mark{font-size:8px;color:#7a8599}.check-list{border:1px solid #dce6f1;border-radius:6px;overflow:hidden}.check-row{display:flex;align-items:center;gap:5px;padding:5px 6px;border-bottom:1px solid #edf2f7;font-size:7px;color:#435064}.check-row:last-child{border-bottom:0}.check{width:11px;height:11px;border-radius:3px;border:1px solid #b8c7d8;display:flex;align-items:center;justify-content:center;color:#fff;font-size:7px}.check.on{background:#1b65a8;border-color:#1b65a8}.field-note{margin-top:4px;color:#95a0af;font-size:7px;line-height:1.35}
+  .side{background:#fff;border:1px solid #edf2f7;border-radius:10px;overflow:hidden;min-height:585px}.tabs{display:grid;grid-template-columns:repeat(2,1fr);border-bottom:1px solid #edf2f7}.tab{padding:12px 6px;text-align:center;font-size:10px;color:#7a8599}.tab.active{color:#1b65a8;font-weight:700;border-bottom:2px solid #1b65a8;background:#f8fbff}
+  .side-body{padding:12px}.assistant-card{border:1px solid #cfe2f5;background:#f8fbff;border-radius:9px;padding:10px;margin-bottom:10px}.assistant-card h4{margin:0 0 6px;color:#1b65a8;font-size:11px}.assistant-card p{margin:0;color:#5f6c7d;font-size:9px;line-height:1.55}.statusline{display:flex;align-items:center;gap:6px;margin-top:8px;color:#478d2c;font-size:9px}.pulse{width:7px;height:7px;border-radius:50%;background:#67c23a}
+  .simple-result{border:1px solid #dfe8f2;border-radius:9px;overflow:hidden;margin-top:10px}.simple-head{padding:9px 10px;background:#f8fbff;display:flex;align-items:center;justify-content:space-between;font-size:10px;font-weight:700;color:#1a2332}.simple-head span{color:#a86600;font-size:8px;background:#fff5e6;padding:3px 5px;border-radius:4px}.simple-item{padding:9px 10px;border-top:1px solid #edf2f7;display:flex;gap:8px;align-items:flex-start}.simple-icon{width:18px;height:18px;flex:0 0 18px;border-radius:50%;background:#eaf3ff;color:#1b65a8;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800}.simple-item strong{display:block;color:#1a2332;font-size:9px;margin-bottom:2px}.simple-item p{margin:0;color:#7a8599;font-size:8px;line-height:1.4}.simple-actions{display:flex;gap:7px;margin-top:10px}.simple-actions .apply{flex:1}.simple-actions .discard{padding-left:12px;padding-right:12px}
+  .diff-title{font-size:10px;font-weight:700;color:#1a2332;margin:12px 0 7px}.diff{border:1px solid #edf2f7;border-radius:8px;overflow:hidden}.diffrow{display:grid;grid-template-columns:20px 1fr auto;gap:6px;padding:8px;border-bottom:1px solid #edf2f7;font-size:9px;align-items:start}.diffrow:last-child{border-bottom:0}.plus{width:17px;height:17px;border-radius:4px;background:#eaf7e5;color:#478d2c;display:flex;align-items:center;justify-content:center;font-weight:800}.change{width:17px;height:17px;border-radius:4px;background:#fff4df;color:#a86600;display:flex;align-items:center;justify-content:center;font-weight:800}.diffrow strong{display:block;color:#1a2332;margin-bottom:2px}.diffrow span{color:#7a8599}.risk{font-size:8px;color:#478d2c;background:#eff9ea;border-radius:4px;padding:3px 5px}.risk.warn{color:#a86600;background:#fff5e6}
+  .ai-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.apply{background:#1b65a8;color:#fff;border-radius:7px;padding:9px;text-align:center;font-size:10px;font-weight:700}.discard{background:#fff;border:1px solid #dce6f1;color:#5b6678;border-radius:7px;padding:9px;text-align:center;font-size:10px;font-weight:700}
+  .simulation{margin-top:12px;border-top:1px solid #edf2f7;padding-top:10px}.simulation h4{margin:0 0 8px;font-size:10px}.sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.metric{background:#f4f6f9;border-radius:7px;padding:7px}.metric label{display:block;color:#7a8599;font-size:8px}.metric b{display:block;color:#1a2332;font-size:12px;margin-top:3px}.sim-warning{margin-top:7px;background:#fff6e8;border:1px solid #f6d6a5;border-radius:7px;padding:7px;color:#9a6308;font-size:8px;line-height:1.5}
+  .choice-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.choice{border:2px solid #e3eaf2;border-radius:10px;padding:12px;background:#fff;cursor:pointer}.choice:hover,.choice.selected{border-color:#1b65a8;background:#f7fbff}.choice strong{display:block;color:#1a2332;font-size:12px;margin-bottom:4px}.choice span{color:#7a8599;font-size:10px}
+  @media(max-width:1050px){.workarea{grid-template-columns:1fr}.side{min-height:auto}.choice-row{grid-template-columns:1fr}}
+</style>
+
+<h2>C 方案深化：Workflow 画布 + AI 流程副驾驶</h2>
+<p class="subtitle">每个工序 Cell 内直接完成投入、产出、批次、单位和规则选择；AI 只负责生成和检查草稿。</p>
+
+<div class="app-shell">
+  <div class="app-top">
+    <div class="back">‹</div>
+    <div class="titleblock"><h3>干式熟成鸡 · 产品工序 Workflow</h3><p>生产路径 v3 · 未发布草稿 · 最近保存 10:42</p></div>
+    <span class="version">草稿版本</span>
+    <div class="top-actions"><button class="btn">保存草稿</button><button class="btn">模拟预览</button><button class="btn primary">发布版本</button></div>
+  </div>
+
+  <div class="workarea">
+    <div class="canvas">
+      <div class="canvas-head">固定从左到右 · Cell 内直接配置 · 连线代表物料流 · 可横向滚动<div class="legend"><span class="lg"><i class="sq green"></i>物料</span><span class="lg"><i class="sq"></i>工序</span><span class="lg"><i class="sq orange"></i>需检查</span></div></div>
+      <div class="lanes">
+        <div class="lane">
+          <div class="lane-title">投入物料</div>
+          <div class="pnode item"><h4>黄油鸡</h4><p>原料 · 只 / kg</p><div class="tags"><span class="tag green">批次必选</span></div></div>
+          <div class="smallnote">计划投入<br><b>200只</b></div>
+        </div>
+        <div class="flowcol">
+          <div class="lane-title">加工 Workflow</div>
+          <div class="pnode process-node">
+            <div class="node-head"><span class="node-no">1</span><h4>前处理</h4><span class="node-status">已配置</span></div>
+            <div class="field"><div class="field-label"><span>投入物料</span><b class="required">必选</b></div><div class="fake-select">黄油鸡</div></div>
+            <div class="field"><div class="field-label"><span>投入方式</span></div><div class="segmented"><span class="seg active">单批投入</span><span class="seg">多批混合</span></div></div>
+            <div class="field"><div class="field-label"><span>产出物料</span><b class="required">必选</b></div><div class="fake-select">前处理半成品</div></div>
+            <div class="field"><div class="field-label"><span>产出方式</span></div><div class="fake-select">固定单产出</div></div>
+            <div class="field"><div class="field-label"><span>单位关系</span></div><div class="conversion"><div class="fake-select">kg</div><span class="conversion-mark">→</span><div class="fake-select">kg</div></div></div>
+          </div>
+          <div class="arrow">→<span class="material-pill">前处理品</span></div>
+          <div class="pnode warn process-node">
+            <div class="node-head"><span class="node-no">2</span><h4>分切</h4><span class="node-status">需换算</span></div>
+            <div class="field"><div class="field-label"><span>投入物料</span><b class="required">必选</b></div><div class="fake-select">前处理半成品</div></div>
+            <div class="field"><div class="field-label"><span>投入方式</span></div><div class="segmented"><span class="seg active">继承上批</span><span class="seg">重新选批</span></div></div>
+            <div class="field"><div class="field-label"><span>产出物料</span><b class="required">必选</b></div><div class="fake-select">半鸡半成品</div></div>
+            <div class="field"><div class="field-label"><span>产出方式</span></div><div class="fake-select">固定单产出</div></div>
+            <div class="field"><div class="field-label"><span>数量换算</span></div><div class="conversion"><div class="fake-select">1 只</div><span class="conversion-mark">=</span><div class="fake-select">2 半只</div></div></div>
+          </div>
+          <div class="arrow">→<span class="material-pill">半鸡</span></div>
+          <div class="pnode process-node">
+            <div class="node-head"><span class="node-no">3</span><h4>熟制筛选</h4><span class="node-status">已配置</span></div>
+            <div class="field"><div class="field-label"><span>投入物料</span><b class="required">必选</b></div><div class="fake-select">半鸡半成品</div></div>
+            <div class="field"><div class="field-label"><span>投入方式</span></div><div class="segmented"><span class="seg active">单批投入</span><span class="seg">多批混合</span></div></div>
+            <div class="field"><div class="field-label"><span>产出物料</span><b class="required">必选</b></div><div class="fake-select">熟制半鸡</div></div>
+            <div class="field"><div class="field-label"><span>损耗登记</span></div><div class="segmented"><span class="seg active">必须登记</span><span class="seg">不要求</span></div></div>
+            <div class="field"><div class="field-label"><span>标准出成率</span></div><div class="fake-select">99.5%</div></div>
+          </div>
+          <div class="arrow">→<span class="material-pill">熟制品</span></div>
+          <div class="pnode selected process-node">
+            <div class="node-head"><span class="node-no">4</span><h4>称重装箱</h4><span class="node-status">多产出</span></div>
+            <div class="field"><div class="field-label"><span>投入物料</span><b class="required">必选</b></div><div class="fake-select">熟制半鸡</div></div>
+            <div class="field"><div class="field-label"><span>投入方式</span></div><div class="segmented"><span class="seg">单批投入</span><span class="seg active">多批混合</span></div></div>
+            <div class="field"><div class="field-label"><span>产出方式</span></div><div class="fake-select">同时多产出</div></div>
+            <div class="field"><div class="field-label"><span>允许产出</span><b class="required">至少1项</b></div><div class="check-list"><div class="check-row"><i class="check on">✓</i>350g 成品</div><div class="check-row"><i class="check on">✓</i>400g 成品</div><div class="check-row"><i class="check on">✓</i>500g 成品</div></div></div>
+            <div class="field"><div class="field-label"><span>成本分摊</span></div><div class="fake-select">按实际净重</div></div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="lane-title">成品产出</div>
+          <div class="branchline">
+            <div class="pnode item"><h4>干式熟成鸡 350g</h4><p>成品 SKU · 盒</p><div class="tags"><span class="tag green">计划 200盒</span></div></div>
+            <div class="pnode item"><h4>干式熟成鸡 400g</h4><p>成品 SKU · 盒</p><div class="tags"><span class="tag green">计划 198盒</span></div></div>
+            <div class="pnode item"><h4>干式熟成鸡 500g</h4><p>成品 SKU · 盒</p><div class="tags"><span class="tag">允许 · 未计划</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="tabs"><div class="tab active">AI 助手</div><div class="tab">模拟预览</div></div>
+      <div class="side-body">
+        <div class="ai-command">
+          <div class="ai-command-head"><div class="ai-mark">AI</div><span>告诉 AI 你想怎样调整流程</span></div>
+          <div class="ai-input">例如：最后一步允许同时产出 350g、400g 和 500g 成品，并按重量分摊成本。</div>
+          <div class="ai-command-foot"><div class="ai-send">生成修改草稿</div></div>
+        </div>
+        <div class="quick"><span class="chip">生成流程</span><span class="chip">检查问题</span><span class="chip">优化当前节点</span></div>
+        <div class="simple-result">
+          <div class="simple-head">AI 检查结果 <span>2项待确认</span></div>
+          <div class="simple-item"><i class="simple-icon">1</i><div><strong>混批设置可以合并</strong><p>把独立开关放入“称重装箱”的投入方式。</p></div></div>
+          <div class="simple-item"><i class="simple-icon">2</i><div><strong>补充 500g 成品</strong><p>设为允许产出，本次计划默认不报工。</p></div></div>
+        </div>
+        <div class="simple-actions"><div class="discard">忽略</div><div class="apply">应用这 2 项</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="choice-row">
+  <div class="choice" data-choice="inline-cell-config-approved" onclick="toggleSelect(this)"><strong>Cell 内配置正确</strong><span>每个工序独立完成所需选择</span></div>
+  <div class="choice" data-choice="inline-cell-fields-adjust" onclick="toggleSelect(this)"><strong>还要调整字段</strong><span>继续增删 Cell 内的配置项目</span></div>
+  <div class="choice" data-choice="inline-cell-layout-adjust" onclick="toggleSelect(this)"><strong>布局还要调整</strong><span>改变字段顺序、宽度或展开方式</span></div>
+</div>

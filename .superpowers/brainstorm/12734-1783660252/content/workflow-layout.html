@@ -1,0 +1,102 @@
+<style>
+  .layout-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:22px}
+  .layout-card{border:2px solid #e7edf5;border-radius:14px;background:#fff;overflow:hidden;cursor:pointer;transition:.2s;box-shadow:0 2px 12px rgba(27,101,168,.06)}
+  .layout-card:hover{transform:translateY(-2px);border-color:#409eff;box-shadow:0 8px 24px rgba(27,101,168,.14)}
+  .layout-card.selected{border-color:#1b65a8;box-shadow:0 0 0 3px rgba(27,101,168,.12)}
+  .layout-head{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 16px 10px}
+  .layout-head h3{margin:0 0 4px;font-size:17px;color:#1a2332}
+  .layout-head p{margin:0;color:#7a8599;font-size:12px;line-height:1.5}
+  .badge{padding:4px 9px;border-radius:999px;background:#eaf3ff;color:#1b65a8;font-size:11px;font-weight:700;white-space:nowrap}
+  .mini{height:300px;background:#f4f6f9;border-top:1px solid #edf2f7;padding:12px;position:relative;overflow:hidden}
+  .toolbar{height:28px;border-radius:7px;background:#fff;border:1px solid #e7edf5;display:flex;align-items:center;gap:6px;padding:0 8px;margin-bottom:10px;font-size:9px;color:#7a8599}
+  .dot{width:6px;height:6px;border-radius:50%;background:#409eff}.toolbar .right{margin-left:auto;color:#1b65a8;font-weight:700}
+  .node{background:#fff;border:1px solid #dce6f1;border-left:4px solid #409eff;border-radius:8px;padding:7px 8px;font-size:9px;color:#1a2332;box-shadow:0 2px 6px rgba(27,101,168,.06)}
+  .node strong{display:block;font-size:10px;margin-bottom:3px}.node span{color:#7a8599}.node.out{border-left-color:#67c23a}.node.warn{border-left-color:#e6a23c}
+  .arrow{color:#a7b4c4;font-size:14px;text-align:center;line-height:1}
+  .canvas-flow{display:grid;grid-template-columns:1fr 16px 1fr 16px 1fr;align-items:center;gap:2px;margin-top:24px}
+  .branch{display:grid;gap:7px}
+  .vertical{display:grid;grid-template-columns:34px 1fr;gap:0 8px;margin:2px 8px}
+  .vstep{display:flex;flex-direction:column;align-items:center}.vnum{width:24px;height:24px;border-radius:50%;background:#1b65a8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}.vline{width:2px;flex:1;background:#dce6f1;min-height:14px}
+  .vcard{margin-bottom:8px}.vcard .node{padding:8px 10px}
+  .hybrid{display:grid;grid-template-columns:1.55fr .8fr;gap:8px;height:245px}
+  .hybrid-canvas{background:#f8fafc;border:1px dashed #cdd9e7;border-radius:8px;padding:8px}
+  .hybrid-drawer{background:#fff;border:1px solid #dce6f1;border-radius:8px;padding:8px}
+  .drawer-title{font-size:10px;font-weight:700;margin-bottom:7px}.field{font-size:8px;color:#7a8599;margin:6px 0}.select{border:1px solid #dce6f1;border-radius:5px;padding:5px;color:#1a2332;background:#fff}.outrow{display:flex;justify-content:space-between;border-radius:5px;background:#f4f6f9;padding:4px 5px;margin-top:4px;font-size:8px}.preview-btn{margin-top:9px;background:#1b65a8;color:#fff;border-radius:5px;padding:6px;text-align:center;font-size:9px;font-weight:700}
+  .hybrid-line{display:flex;align-items:center;gap:4px;margin-top:14px}.hybrid-line .node{width:68px;padding:6px}.hybrid-line .arrow{font-size:11px}.outputs{display:grid;gap:4px}
+  .foot{padding:13px 16px 16px}.foot h4{margin:0 0 5px;font-size:13px;color:#1a2332}.foot p{margin:0;font-size:12px;color:#7a8599;line-height:1.55}
+  @media(max-width:1000px){.layout-grid{grid-template-columns:1fr}.mini{height:280px}}
+</style>
+
+<h2>产品工序配置：哪种 Workflow 布局最清晰？</h2>
+<p class="subtitle">以“黄油鸡 → 前处理 → 分切 → 熟制 → 350g / 400g 成品”为真实内容。点击选择你更偏好的布局。</p>
+
+<div class="layout-grid">
+  <div class="layout-card" data-choice="pure-canvas" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <div><h3>A. 自由流程画布</h3><p>拖拽节点与连线，表达能力最强</p></div>
+    </div>
+    <div class="mini">
+      <div class="toolbar"><span class="dot"></span> 干式熟成鸡 <span class="right">校验 · 模拟</span></div>
+      <div class="canvas-flow">
+        <div class="node"><strong>黄油鸡</strong><span>只 / kg</span></div><div class="arrow">→</div>
+        <div class="node"><strong>前处理</strong><span>出成 92%</span></div><div class="arrow">→</div>
+        <div class="node warn"><strong>分切</strong><span>1 → 2 半只</span></div>
+      </div>
+      <div class="canvas-flow" style="margin-top:14px;grid-template-columns:1fr 16px 1fr 16px 1fr">
+        <div class="node"><strong>半鸡半成品</strong><span>半只 / kg</span></div><div class="arrow">→</div>
+        <div class="node"><strong>熟制装箱</strong><span>同时多产出</span></div><div class="arrow">→</div>
+        <div class="branch"><div class="node out"><strong>350g</strong><span>盒</span></div><div class="node out"><strong>400g</strong><span>盒</span></div></div>
+      </div>
+    </div>
+    <div class="foot"><h4>适合复杂流程专家</h4><p>分支、合并最直观，但自由拖拽容易摆乱，配置学习成本最高。</p></div>
+  </div>
+
+  <div class="layout-card" data-choice="vertical-stepper" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <div><h3>B. 纵向步骤卡片</h3><p>按顺序逐步配置，最容易上手</p></div>
+    </div>
+    <div class="mini">
+      <div class="toolbar"><span class="dot"></span> 干式熟成鸡 <span class="right">保存草稿</span></div>
+      <div class="vertical">
+        <div class="vstep"><div class="vnum">1</div><div class="vline"></div></div><div class="vcard"><div class="node"><strong>前处理</strong><span>投入：黄油鸡　产出：前处理半成品　kg→kg</span></div></div>
+        <div class="vstep"><div class="vnum">2</div><div class="vline"></div></div><div class="vcard"><div class="node"><strong>分切</strong><span>投入：前处理半成品　产出：半鸡　只→半只</span></div></div>
+        <div class="vstep"><div class="vnum">3</div><div class="vline"></div></div><div class="vcard"><div class="node"><strong>熟制</strong><span>投入：半鸡　产出：待包装半成品　kg→kg</span></div></div>
+        <div class="vstep"><div class="vnum">4</div></div><div class="vcard"><div class="node out"><strong>称重装箱 · 多产出</strong><span>350g / 400g / 500g</span></div></div>
+      </div>
+    </div>
+    <div class="foot"><h4>适合简单线性流程</h4><p>阅读和编辑很稳，但猪蹄分叉、三拼合并等复杂拓扑不够直观。</p></div>
+  </div>
+
+  <div class="layout-card" data-choice="guided-hybrid" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <div><h3>C. 引导式画布 + 配置抽屉</h3><p>固定方向的流程图，点击节点在右侧配置</p></div><span class="badge">推荐</span>
+    </div>
+    <div class="mini">
+      <div class="toolbar"><span class="dot"></span> 干式熟成鸡 · v3 草稿 <span class="right">校验流程　模拟预览　发布</span></div>
+      <div class="hybrid">
+        <div class="hybrid-canvas">
+          <div class="hybrid-line">
+            <div class="node"><strong>黄油鸡</strong><span>200只</span></div><div class="arrow">→</div>
+            <div class="node"><strong>前处理</strong><span>kg→kg</span></div><div class="arrow">→</div>
+            <div class="node warn"><strong>分切</strong><span>只→半只</span></div>
+          </div>
+          <div class="hybrid-line" style="margin-top:26px">
+            <div class="node"><strong>半鸡</strong><span>半成品</span></div><div class="arrow">→</div>
+            <div class="node" style="border-color:#1b65a8;background:#eef6ff"><strong>称重装箱</strong><span>多产出</span></div><div class="arrow">→</div>
+            <div class="outputs"><div class="node out"><strong>350g</strong><span>盒</span></div><div class="node out"><strong>400g</strong><span>盒</span></div></div>
+          </div>
+        </div>
+        <div class="hybrid-drawer">
+          <div class="drawer-title">称重装箱</div>
+          <div class="field">产出模式<div class="select">同时多产出</div></div>
+          <div class="field">允许产出</div>
+          <div class="outrow"><span>350g 成品</span><b>盒</b></div>
+          <div class="outrow"><span>400g 成品</span><b>盒</b></div>
+          <div class="outrow"><span>500g 成品</span><b>盒</b></div>
+          <div class="preview-btn">用 398 件模拟运行</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><h4>推荐：能力与易用性的平衡</h4><p>画布固定从左到右，不会摆乱；分支/合并清晰；复杂字段收进右侧抽屉，并可直接模拟投入产出。</p></div>
+  </div>
+</div>
