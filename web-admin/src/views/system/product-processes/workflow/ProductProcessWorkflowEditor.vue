@@ -878,6 +878,10 @@ async function applyWorkflowAIDraft(payload: Record<string, unknown>): Promise<v
     return;
   }
   const proposed = applyWorkflowPatches(currentDefinition(), payload.patches);
+  if (proposed.errors.length > 0) {
+    ElMessage.warning(proposed.errors[0]);
+    return;
+  }
   if (proposed.summary.length === 0) {
     ElMessage.warning('AI 补丁均未通过安全校验，未修改本地草稿');
     return;

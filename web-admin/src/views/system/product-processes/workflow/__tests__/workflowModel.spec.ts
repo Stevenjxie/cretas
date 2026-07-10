@@ -151,52 +151,45 @@ describe('product process workflow model', () => {
     expect(positions.finished.x).toBe(752);
   });
 
-  it('applies AI patches immutably and reports a concise summary', () => {
-    const definition = branchedDefinition();
+  it('applies a valid workflow patch immutably and reports a concise summary', () => {
+    const definition = simpleWorkflowDefinition();
     const patches: WorkflowPatch[] = [
-      { op: 'SET_NODE_FIELD', nodeId: 'split', path: 'conversionRule.mode', value: 'SUM_OUTPUTS' },
-      {
-        op: 'UPSERT_NODE',
-        node: {
-          id: 'loss',
-          kind: 'SEMI_FINISHED',
-          position: { x: 510, y: 400 },
-          data: { name: '不合格品损耗', skuId: 'SFI-LOSS', skuCode: 'SFI-LOSS' },
-        },
-      },
+      { op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'conversionRule.mode', value: 'SUM_OUTPUTS' },
     ];
 
     const result = applyWorkflowPatches(definition, patches);
 
     expect(result.definition).not.toBe(definition);
-    expect(result.summary).toEqual(['更新工序 拆包 / 分切', '新增半成品 不合格品损耗']);
-    expect(result.definition.nodes.find((node) => node.id === 'split')?.data).toMatchObject({
+    expect(result.summary).toHaveLength(1);
+    expect(result.errors).toEqual([]);
+    expect(result.definition.nodes.find((node) => node.id === 'process:1')?.data).toMatchObject({
       conversionRule: { mode: 'SUM_OUTPUTS' },
     });
-    expect(definition.nodes.find((node) => node.id === 'split')?.data).not.toMatchObject({
+    expect(definition.nodes.find((node) => node.id === 'process:1')?.data).not.toMatchObject({
       conversionRule: { mode: 'SUM_OUTPUTS' },
     });
   });
 
   it('applies only strictly shaped workflow patches to a local DRAFT', () => {
-    const definition = branchedDefinition();
+    const definition = simpleWorkflowDefinition();
     definition.status = 'PUBLISHED';
+    const before = structuredClone(definition);
     const untrustedPatches: unknown[] = [
       {
         op: 'SET_NODE_FIELD',
-        nodeId: 'split',
+        nodeId: 'process:1',
         path: 'conversionRule.mode',
         value: 'SUM_OUTPUTS',
       },
       {
         op: 'SET_NODE_FIELD',
-        nodeId: 'split',
+        nodeId: 'process:1',
         path: 'productTypeId',
         value: 'ATTACKER-PRODUCT',
       },
       {
         op: 'SET_NODE_FIELD',
-        nodeId: 'split',
+        nodeId: 'process:1',
         path: '__proto__.polluted',
         value: true,
       },
@@ -218,13 +211,90 @@ describe('product process workflow model', () => {
 
     const result = applyWorkflowPatches(definition, untrustedPatches);
 
-    expect((result.definition.nodes[1].data as ProcessNodeData).conversionRule.mode)
-      .toBe('SUM_OUTPUTS');
+    expect(result.definition).toEqual(before);
     expect(result.definition.nodes.some((node) => node.id === 'report:1')).toBe(false);
     expect(result.definition.edges.some((edge) => edge.id === 'bad-edge')).toBe(false);
     expect(result.definition.nodes[1].data).not.toHaveProperty('productTypeId');
-    expect(result.definition.status).toBe('DRAFT');
-    expect(result.summary).toHaveLength(1);
+    expect(result.definition.status).toBe('PUBLISHED');
+    expect(result.summary).toEqual([]);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects graph attacks and node-kind field crossover atomically', () => {
+    const definition = simpleWorkflowDefinition();
+    const attacks: unknown[][] = [
+      [{
+        op: 'UPSERT_EDGE',
+        edge: {
+          id: 'edge:ghost', source: 'ghost', sourceHandle: 'output',
+          target: 'process:1', targetHandle: 'input:1',
+        },
+      }],
+      [{
+        op: 'UPSERT_EDGE',
+        edge: {
+          id: 'edge:self', source: 'process:1', sourceHandle: 'output:1',
+          target: 'process:1', targetHandle: 'input:1',
+        },
+      }],
+      [{
+        op: 'UPSERT_EDGE',
+        edge: {
+          id: 'edge:handle', source: 'raw', sourceHandle: 'wrong',
+          target: 'process:1', targetHandle: 'input:1',
+        },
+      }],
+      [{ op: 'SET_NODE_FIELD', nodeId: 'raw', path: 'ports', value: [] }],
+      [{ op: 'SET_NODE_FIELD', nodeId: 'missing', path: 'name', value: 'ghost' }],
+      [{
+        op: 'UPSERT_NODE',
+        node: {
+          ...definition.nodes[0],
+          kind: 'PROCESS',
+          data: definition.nodes[1].data,
+        },
+      }],
+    ];
+
+    attacks.forEach((patches) => {
+      const result = applyWorkflowPatches(definition, patches);
+      expect(result.definition).toEqual(definition);
+      expect(result.summary).toEqual([]);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('accepts dependent node then ports then edge patches as one atomic batch', () => {
+    const definition = simpleWorkflowDefinition();
+    const process = definition.nodes.find((node) => node.id === 'process:1');
+    const ports = structuredClone((process?.data as ProcessNodeData).ports);
+    ports.push({
+      id: 'output:2', direction: 'OUTPUT', materialNodeId: 'semi:2',
+      materialKind: 'SEMI_FINISHED', unit: 'kg', ordinal: 1,
+    });
+
+    const result = applyWorkflowPatches(definition, [
+      {
+        op: 'UPSERT_NODE',
+        node: {
+          id: 'semi:2', kind: 'SEMI_FINISHED', position: { x: 736, y: 192 },
+          data: { name: 'Second output', skuId: 'SFI-2', baseUnit: 'kg' },
+        },
+      },
+      { op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: ports },
+      {
+        op: 'UPSERT_EDGE',
+        edge: {
+          id: 'edge:process:semi2', source: 'process:1', sourceHandle: 'output:2',
+          target: 'semi:2', targetHandle: 'input',
+        },
+      },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.summary).toHaveLength(3);
+    expect(result.definition.nodes.some((node) => node.id === 'semi:2')).toBe(true);
+    expect(result.definition.edges.some((edge) => edge.id === 'edge:process:semi2')).toBe(true);
   });
 
   it('detects an unbound SKU and a cycle before publish', () => {
@@ -272,6 +342,53 @@ function processOption(
     outputUnit: '盒',
     defaultOutputMaterialKind: 'SEMI_FINISHED' as const,
     ...overrides,
+  };
+}
+
+function simpleWorkflowDefinition(): ProductProcessWorkflowDefinition {
+  return {
+    schemaVersion: 1,
+    status: 'DRAFT',
+    version: 1,
+    nodes: [
+      {
+        id: 'raw', kind: 'RAW_MATERIAL', position: { x: 16, y: 32 },
+        data: { name: 'Raw', skuId: 'RM-1', baseUnit: 'kg' },
+      },
+      {
+        id: 'process:1', kind: 'PROCESS', position: { x: 256, y: 32 },
+        data: {
+          workProcessId: 'WP-1', processName: 'Cut', inputUnit: 'kg', outputUnit: 'kg',
+          ports: [
+            {
+              id: 'input:1', direction: 'INPUT', materialNodeId: 'raw',
+              materialKind: 'RAW_MATERIAL', unit: 'kg', ordinal: 0,
+            },
+            {
+              id: 'output:1', direction: 'OUTPUT', materialNodeId: 'semi',
+              materialKind: 'SEMI_FINISHED', unit: 'kg', ordinal: 0,
+            },
+          ],
+          conversionRule: { mode: 'ACTUAL_WEIGHT' },
+          reportingRequired: true,
+        },
+      },
+      {
+        id: 'semi', kind: 'SEMI_FINISHED', position: { x: 496, y: 32 },
+        data: { name: 'Semi', skuId: 'SFI-1', baseUnit: 'kg' },
+      },
+    ],
+    edges: [
+      {
+        id: 'edge:raw:process', source: 'raw', sourceHandle: 'output',
+        target: 'process:1', targetHandle: 'input:1',
+      },
+      {
+        id: 'edge:process:semi', source: 'process:1', sourceHandle: 'output:1',
+        target: 'semi', targetHandle: 'input',
+      },
+    ],
+    viewport: { x: 0, y: 0, zoom: 1 },
   };
 }
 

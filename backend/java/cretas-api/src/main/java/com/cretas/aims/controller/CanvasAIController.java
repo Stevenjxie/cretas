@@ -47,6 +47,8 @@ public class CanvasAIController {
             Allowed operations: UPSERT_NODE, REMOVE_NODE, UPSERT_EDGE, REMOVE_EDGE, SET_NODE_FIELD.
             SET_NODE_FIELD roots: name, skuId, skuCode, specification, ports, conversionRule,
             reportingRequired. Do not return any other operation or field path.
+            The patch array is atomic. Order dependent patches as UPSERT_NODE first,
+            SET_NODE_FIELD second, and UPSERT_EDGE last. Any invalid member rejects the whole array.
 
             Current definition: %s
             Selected node id: %s
@@ -196,8 +198,16 @@ public class CanvasAIController {
                 objectMapper.writeValueAsString(definition),
                 Objects.toString(selectedNodeId, "null"));
         String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
-        List<Map<String, Object>> generatedPatches = objectMapper.readValue(
-                extractJson(llmResponse), new TypeReference<List<Map<String, Object>>>() {});
+        List<Map<String, Object>> generatedPatches;
+        try {
+            generatedPatches = objectMapper.readValue(
+                    extractJson(llmResponse), new TypeReference<List<Map<String, Object>>>() {});
+        } catch (Exception parseError) {
+            return workflowPatchFailureResponse();
+        }
+        if (generatedPatches.isEmpty()) {
+            return workflowPatchFailureResponse();
+        }
 
         Map<String, Object> toolArguments = new LinkedHashMap<>();
         toolArguments.put("message", request.getMessage());
@@ -236,6 +246,14 @@ public class CanvasAIController {
                 "tool", PRODUCT_PROCESS_WORKFLOW_TOOL,
                 "params", diffParams,
                 "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
+        return response;
+    }
+
+    private AIResponse workflowPatchFailureResponse() {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply("AI 未返回可审核的 Workflow 补丁，请调整描述后重试");
         return response;
     }
 
@@ -370,6 +388,11 @@ public class CanvasAIController {
         for (Map<String, Object> diff : diffs) {
             String toolName = (String) diff.get("tool");
             if (toolName == null) continue;
+
+            if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)) {
+                errors.add(toolName + ": WORKFLOW_AI_PREVIEW_ONLY");
+                continue;
+            }
 
             try {
                 validateCanvasTool(toolName);

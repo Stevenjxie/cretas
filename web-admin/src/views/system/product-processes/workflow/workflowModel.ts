@@ -262,16 +262,31 @@ export function autoLayoutWorkflow(
 export function applyWorkflowPatches(
   definition: ProductProcessWorkflowDefinition,
   patches: unknown,
-): { definition: ProductProcessWorkflowDefinition; summary: string[] } {
+): { definition: ProductProcessWorkflowDefinition; summary: string[]; errors: string[] } {
+  const original = cloneDefinition(definition);
+  if (!Array.isArray(patches) || patches.length === 0) {
+    return { definition: original, summary: [], errors: ['Workflow patch batch is empty'] };
+  }
+  const parsedPatches = patches.map(sanitizeWorkflowPatch);
+  if (parsedPatches.some((patch) => patch === null)) {
+    return { definition: original, summary: [], errors: ['Workflow patch batch contains an invalid member'] };
+  }
+  const safePatches = parsedPatches.filter((patch): patch is WorkflowPatch => patch !== null);
+  const orderedPatches = [...safePatches].sort(
+    (left, right) => patchPhase(left.op) - patchPhase(right.op),
+  );
   const result = cloneDefinition(definition);
   const summary: string[] = [];
-  const safePatches = Array.isArray(patches)
-    ? patches.map(sanitizeWorkflowPatch).filter((patch): patch is WorkflowPatch => patch !== null)
-    : [];
+  let applicationError = '';
 
-  safePatches.forEach((patch) => {
+  orderedPatches.forEach((patch) => {
+    if (applicationError) return;
     if (patch.op === 'UPSERT_NODE') {
       const index = result.nodes.findIndex((node) => node.id === patch.node.id);
+      if (index >= 0 && result.nodes[index].kind !== patch.node.kind) {
+        applicationError = `Workflow patch cannot change node kind: ${patch.node.id}`;
+        return;
+      }
       const action = index >= 0 ? '更新' : '新增';
       if (index >= 0) result.nodes.splice(index, 1, toPlainWorkflowValue(patch.node));
       else result.nodes.push(toPlainWorkflowValue(patch.node));
@@ -280,6 +295,10 @@ export function applyWorkflowPatches(
     }
     if (patch.op === 'REMOVE_NODE') {
       const existing = result.nodes.find((node) => node.id === patch.nodeId);
+      if (!existing) {
+        applicationError = `Workflow patch references a missing node: ${patch.nodeId}`;
+        return;
+      }
       result.nodes = result.nodes.filter((node) => node.id !== patch.nodeId);
       result.edges = result.edges.filter(
         (edge) => edge.source !== patch.nodeId && edge.target !== patch.nodeId,
@@ -295,17 +314,55 @@ export function applyWorkflowPatches(
       return;
     }
     if (patch.op === 'REMOVE_EDGE') {
+      if (!result.edges.some((edge) => edge.id === patch.edgeId)) {
+        applicationError = `Workflow patch references a missing edge: ${patch.edgeId}`;
+        return;
+      }
       result.edges = result.edges.filter((edge) => edge.id !== patch.edgeId);
       summary.push('删除一条连接');
       return;
     }
     const node = result.nodes.find((candidate) => candidate.id === patch.nodeId);
-    if (!node) return;
+    if (!node) {
+      applicationError = `Workflow patch references a missing node: ${patch.nodeId}`;
+      return;
+    }
+    if (!isPathCompatibleWithNodeKind(node.kind, patch.path)) {
+      applicationError = `Workflow patch field is incompatible with node kind: ${patch.path}`;
+      return;
+    }
     setNestedValue(node.data, patch.path, patch.value);
     summary.push(`更新${kindLabel(node.kind)} ${nodeName(node)}`);
   });
-  if (safePatches.length > 0) result.status = 'DRAFT';
-  return { definition: result, summary };
+  if (applicationError) {
+    return { definition: original, summary: [], errors: [applicationError] };
+  }
+
+  result.status = 'DRAFT';
+  const errors = [
+    ...validateWorkflow(result, 'draft').map((error) => error.message),
+    ...validateWorkflowPatchGraph(result),
+  ];
+  if (errors.length > 0) {
+    return { definition: original, summary: [], errors: [...new Set(errors)] };
+  }
+  return { definition: result, summary, errors: [] };
+}
+
+function patchPhase(operation: WorkflowPatch['op']): number {
+  if (operation === 'UPSERT_NODE' || operation === 'REMOVE_NODE') return 0;
+  if (operation === 'SET_NODE_FIELD') return 1;
+  return 2;
+}
+
+function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string): boolean {
+  if (kind === 'PROCESS') {
+    return path === 'ports'
+      || path === 'conversionRule'
+      || path.startsWith('conversionRule.')
+      || path === 'reportingRequired';
+  }
+  return ['name', 'skuId', 'skuCode', 'specification'].includes(path);
 }
 
 const workflowPatchOperations = new Set([
@@ -489,6 +546,86 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isProductProcessNodeKind(value: unknown): value is ProductProcessNodeKind {
   return typeof value === 'string' && workflowNodeKinds.has(value as ProductProcessNodeKind);
+}
+
+function validateWorkflowPatchGraph(definition: ProductProcessWorkflowDefinition): string[] {
+  const errors: string[] = [];
+  const nodes = new Map<string, ProductProcessWorkflowNode>();
+  definition.nodes.forEach((node) => {
+    if (nodes.has(node.id)) errors.push(`Duplicate workflow node: ${node.id}`);
+    nodes.set(node.id, node);
+  });
+  const edgeIds = new Set<string>();
+  const portsByProcess = new Map<string, Map<string, Record<string, unknown>>>();
+
+  definition.nodes.forEach((node) => {
+    if (node.kind !== 'PROCESS') return;
+    const data = node.data as ProcessNodeData;
+    if (!Array.isArray(data.ports)) {
+      errors.push(`Process ports are invalid: ${node.id}`);
+      return;
+    }
+    const ports = new Map<string, Record<string, unknown>>();
+    data.ports.forEach((rawPort) => {
+      const port = rawPort as unknown;
+      if (!isRecord(port) || !isProcessPort(port)) {
+        errors.push(`Process port is invalid: ${node.id}`);
+        return;
+      }
+      const portId = String(port.id);
+      if (ports.has(portId)) errors.push(`Duplicate process port: ${node.id}/${portId}`);
+      const materialNodeId = String(port.materialNodeId || '');
+      const material = nodes.get(materialNodeId);
+      if (!material || material.kind === 'PROCESS') {
+        errors.push(`Process port references a missing material node: ${node.id}/${portId}`);
+      } else if (port.materialKind !== undefined && port.materialKind !== material.kind) {
+        errors.push(`Process port material kind mismatch: ${node.id}/${portId}`);
+      }
+      ports.set(portId, port);
+    });
+    portsByProcess.set(node.id, ports);
+  });
+
+  const matchedPorts = new Set<string>();
+  definition.edges.forEach((edge) => {
+    if (edgeIds.has(edge.id)) errors.push(`Duplicate workflow edge: ${edge.id}`);
+    edgeIds.add(edge.id);
+    const source = nodes.get(edge.source);
+    const target = nodes.get(edge.target);
+    if (!source || !target) return;
+    if (source.id === target.id) {
+      errors.push(`Workflow edge cannot be a self-loop: ${edge.id}`);
+      return;
+    }
+    if (source.kind === 'PROCESS' && target.kind !== 'PROCESS') {
+      const port = portsByProcess.get(source.id)?.get(edge.sourceHandle);
+      if (!port || port.direction !== 'OUTPUT'
+        || port.materialNodeId !== target.id || edge.targetHandle !== 'input') {
+        errors.push(`Workflow output edge does not match its process port: ${edge.id}`);
+        return;
+      }
+      matchedPorts.add(`${source.id}::${edge.sourceHandle}`);
+      return;
+    }
+    if (source.kind !== 'PROCESS' && target.kind === 'PROCESS') {
+      const port = portsByProcess.get(target.id)?.get(edge.targetHandle);
+      if (!port || port.direction !== 'INPUT'
+        || port.materialNodeId !== source.id || edge.sourceHandle !== 'output') {
+        errors.push(`Workflow input edge does not match its process port: ${edge.id}`);
+        return;
+      }
+      matchedPorts.add(`${target.id}::${edge.targetHandle}`);
+      return;
+    }
+    errors.push(`Workflow edge must connect material and process nodes: ${edge.id}`);
+  });
+
+  portsByProcess.forEach((ports, processId) => ports.forEach((port, portId) => {
+    if (port.materialNodeId && !matchedPorts.has(`${processId}::${portId}`)) {
+      errors.push(`Process port has no matching workflow edge: ${processId}/${portId}`);
+    }
+  }));
+  return errors;
 }
 
 export function validateWorkflow(

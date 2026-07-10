@@ -2,11 +2,14 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,97 +24,73 @@ class ProductProcessWorkflowConfigToolTest {
 
     @BeforeEach
     void setUp() {
-        tool = new ProductProcessWorkflowConfigTool(objectMapper);
+        tool = new ProductProcessWorkflowConfigTool(
+                objectMapper, new ProductProcessWorkflowValidator());
     }
 
     @Test
-    void previewKeepsOnlyWhitelistedWorkflowPatchOperationsAndPaths() throws Exception {
-        String arguments = objectMapper.writeValueAsString(Map.of(
-                "patches", List.of(
-                        Map.of(
-                                "op", "SET_NODE_FIELD",
-                                "nodeId", "process:1",
-                                "path", "conversionRule.mode",
-                                "value", "ACTUAL_WEIGHT"),
-                        Map.of(
-                                "op", "SET_NODE_FIELD",
-                                "nodeId", "process:1",
-                                "path", "__proto__.polluted",
-                                "value", true),
-                        Map.of(
-                                "op", "ACTIVATE_WORKFLOW",
-                                "workflowId", 9))));
-        ToolCall call = ToolCall.of("preview-1", tool.getToolName(), arguments);
+    void mixedValidAndUnauthorizedPatchRejectsWholeBatch() throws Exception {
+        Map<String, Object> envelope = preview(List.of(
+                setField("process:1", "conversionRule.mode", "SUM_OUTPUTS"),
+                Map.of("op", "ACTIVATE_WORKFLOW", "workflowId", 9)));
+
+        assertFalse((Boolean) envelope.get("success"));
+        assertEquals("WORKFLOW_PATCH_REJECTED", envelope.get("errorCode"));
+        assertFalse(envelope.containsKey("data"));
+    }
+
+    @Test
+    void definitionIsRequiredForPreview() throws Exception {
+        ToolCall call = ToolCall.of(
+                "missing-definition",
+                tool.getToolName(),
+                objectMapper.writeValueAsString(Map.of("patches", List.of())));
 
         Map<String, Object> envelope = objectMapper.readValue(
                 tool.preview(call, Map.of("factoryId", "F006")), new TypeReference<>() {});
-        Map<String, Object> data = readMap(envelope.get("data"));
-        List<Map<String, Object>> patches = readListOfMaps(data.get("patches"));
 
-        assertTrue((Boolean) envelope.get("success"));
-        assertEquals(1, patches.size());
-        assertEquals("conversionRule.mode", patches.get(0).get("path"));
-        assertEquals(false, data.get("applied"));
+        assertFalse((Boolean) envelope.get("success"));
+        assertEquals("WORKFLOW_DEFINITION_REQUIRED", envelope.get("errorCode"));
     }
 
     @Test
-    void previewRejectsMalformedNodeAndEdgeShapes() throws Exception {
-        Map<String, Object> validNode = Map.of(
-                "id", "process:1",
-                "kind", "PROCESS",
-                "position", Map.of("x", 16, "y", 32),
-                "data", Map.of(
-                        "workProcessId", "WP-1",
-                        "processName", "Cut",
-                        "inputUnit", "kg",
-                        "outputUnit", "kg",
-                        "ports", List.of(),
-                        "conversionRule", Map.of("mode", "ACTUAL_WEIGHT"),
-                        "reportingRequired", true));
-        Map<String, Object> validEdge = Map.of(
-                "id", "edge:1",
-                "source", "material:1",
-                "sourceHandle", "output",
-                "target", "process:1",
-                "targetHandle", "input:1");
-        Map<String, Object> malformedProcessNode = Map.of(
-                "id", "process:bad-port",
-                "kind", "PROCESS",
-                "position", Map.of("x", 16, "y", 32),
-                "data", Map.of(
-                        "workProcessId", "WP-1",
-                        "processName", "Cut",
-                        "inputUnit", "kg",
-                        "outputUnit", "kg",
-                        "ports", List.of(Map.of(
-                                "id", "input:1",
-                                "direction", "INPUT",
-                                "materialNodeId", Map.of("execute", true),
-                                "unit", "kg",
-                                "ordinal", 0)),
-                        "conversionRule", Map.of("mode", "ACTUAL_WEIGHT"),
-                        "reportingRequired", true));
-        String arguments = objectMapper.writeValueAsString(Map.of(
-                "patches", List.of(
-                        Map.of("op", "UPSERT_NODE", "node", validNode),
-                        Map.of("op", "UPSERT_NODE", "node", malformedProcessNode),
-                        Map.of("op", "UPSERT_NODE", "node", Map.of(
-                                "id", "bad", "kind", "REPORT", "position", Map.of("x", 0, "y", 0),
-                                "data", Map.of("name", "bad", "skuId", "bad"))),
-                        Map.of("op", "UPSERT_EDGE", "edge", validEdge),
-                        Map.of("op", "UPSERT_EDGE", "edge", Map.of(
-                                "id", "bad-edge", "source", "a", "target", "b")),
-                        Map.of("op", "REMOVE_NODE", "nodeId", "process:1", "execute", true))));
+    void finalGraphValidationRejectsDanglingCycleInvalidHandleAndKindCrossover() throws Exception {
+        List<List<Map<String, Object>>> attacks = List.of(
+                List.of(Map.of("op", "UPSERT_EDGE", "edge", edge(
+                        "edge:ghost", "missing", "output", "process:1", "input:1"))),
+                List.of(Map.of("op", "UPSERT_EDGE", "edge", edge(
+                        "edge:self", "process:1", "output:1", "process:1", "input:1"))),
+                List.of(Map.of("op", "UPSERT_EDGE", "edge", edge(
+                        "edge:bad-handle", "raw", "missing-output", "process:1", "input:1"))),
+                List.of(setField("raw", "ports", List.of(port(
+                        "bad", "INPUT", "raw", "kg", 0)))),
+                List.of(setField("missing", "name", "ghost")),
+                List.of(Map.of("op", "UPSERT_NODE", "node", processNode(
+                        "raw", List.of(port("input:new", "INPUT", "raw", "kg", 0))))));
 
-        Map<String, Object> envelope = objectMapper.readValue(
-                tool.preview(
-                        ToolCall.of("preview-shapes", tool.getToolName(), arguments),
-                        Map.of("factoryId", "F006")),
-                new TypeReference<>() {});
-        List<Map<String, Object>> patches = readListOfMaps(readMap(envelope.get("data")).get("patches"));
+        for (List<Map<String, Object>> attack : attacks) {
+            Map<String, Object> envelope = preview(attack);
+            assertFalse((Boolean) envelope.get("success"), "attack should be rejected: " + attack);
+            assertEquals("WORKFLOW_PATCH_REJECTED", envelope.get("errorCode"));
+        }
+    }
 
-        assertEquals(List.of("UPSERT_NODE", "UPSERT_EDGE"),
-                patches.stream().map(patch -> String.valueOf(patch.get("op"))).toList());
+    @Test
+    void dependentNodePortAndEdgePatchesAreAcceptedInDeclaredOrder() throws Exception {
+        List<Map<String, Object>> ports = new ArrayList<>(processPorts());
+        ports.add(port("output:2", "OUTPUT", "semi:2", "kg", 1));
+        List<Map<String, Object>> patches = List.of(
+                Map.of("op", "UPSERT_NODE", "node", materialNode("semi:2", "SEMI_FINISHED")),
+                setField("process:1", "ports", ports),
+                Map.of("op", "UPSERT_EDGE", "edge", edge(
+                        "edge:process:semi2", "process:1", "output:2", "semi:2", "input")));
+
+        Map<String, Object> envelope = preview(patches);
+
+        assertTrue((Boolean) envelope.get("success"));
+        Map<String, Object> data = readMap(envelope.get("data"));
+        assertEquals(false, data.get("applied"));
+        assertEquals(3, ((List<?>) data.get("patches")).size());
     }
 
     @Test
@@ -128,13 +107,89 @@ class ProductProcessWorkflowConfigToolTest {
         assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> readMap(Object value) {
-        return (Map<String, Object>) value;
+    private Map<String, Object> preview(List<Map<String, Object>> patches) throws Exception {
+        String arguments = objectMapper.writeValueAsString(Map.of(
+                "definition", definition(),
+                "patches", patches));
+        return objectMapper.readValue(
+                tool.preview(
+                        ToolCall.of("preview", tool.getToolName(), arguments),
+                        Map.of("factoryId", "F006")),
+                new TypeReference<>() {});
+    }
+
+    private Map<String, Object> definition() {
+        return Map.of(
+                "schemaVersion", 1,
+                "status", "DRAFT",
+                "version", 1,
+                "nodes", List.of(
+                        materialNode("raw", "RAW_MATERIAL"),
+                        processNode("process:1", processPorts()),
+                        materialNode("semi", "SEMI_FINISHED")),
+                "edges", List.of(
+                        edge("edge:raw:process", "raw", "output", "process:1", "input:1"),
+                        edge("edge:process:semi", "process:1", "output:1", "semi", "input")),
+                "viewport", Map.of("x", 0, "y", 0, "zoom", 1));
+    }
+
+    private Map<String, Object> materialNode(String id, String kind) {
+        return Map.of(
+                "id", id,
+                "kind", kind,
+                "position", Map.of("x", 16, "y", 32),
+                "data", Map.of("name", id, "skuId", id + "-sku", "baseUnit", "kg"));
+    }
+
+    private Map<String, Object> processNode(String id, List<Map<String, Object>> ports) {
+        return Map.of(
+                "id", id,
+                "kind", "PROCESS",
+                "position", Map.of("x", 256, "y", 32),
+                "data", Map.of(
+                        "workProcessId", "WP-1",
+                        "processName", "Cut",
+                        "inputUnit", "kg",
+                        "outputUnit", "kg",
+                        "ports", ports,
+                        "conversionRule", Map.of("mode", "ACTUAL_WEIGHT"),
+                        "reportingRequired", true));
+    }
+
+    private List<Map<String, Object>> processPorts() {
+        return List.of(
+                port("input:1", "INPUT", "raw", "kg", 0),
+                port("output:1", "OUTPUT", "semi", "kg", 0));
+    }
+
+    private Map<String, Object> port(
+            String id, String direction, String materialNodeId, String unit, int ordinal) {
+        Map<String, Object> port = new LinkedHashMap<>();
+        port.put("id", id);
+        port.put("direction", direction);
+        port.put("materialNodeId", materialNodeId);
+        port.put("materialKind", direction.equals("INPUT") ? "RAW_MATERIAL" : "SEMI_FINISHED");
+        port.put("unit", unit);
+        port.put("ordinal", ordinal);
+        return port;
+    }
+
+    private Map<String, Object> edge(
+            String id, String source, String sourceHandle, String target, String targetHandle) {
+        return Map.of(
+                "id", id,
+                "source", source,
+                "sourceHandle", sourceHandle,
+                "target", target,
+                "targetHandle", targetHandle);
+    }
+
+    private Map<String, Object> setField(String nodeId, String path, Object value) {
+        return Map.of("op", "SET_NODE_FIELD", "nodeId", nodeId, "path", path, "value", value);
     }
 
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> readListOfMaps(Object value) {
-        return (List<Map<String, Object>>) value;
+    private Map<String, Object> readMap(Object value) {
+        return (Map<String, Object>) value;
     }
 }

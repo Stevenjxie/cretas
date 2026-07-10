@@ -2,13 +2,19 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractTool;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -39,9 +45,13 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "materialKind", "unit", "ordinal");
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
+    private final ProductProcessWorkflowValidator workflowValidator;
 
-    public ProductProcessWorkflowConfigTool(ObjectMapper objectMapper) {
+    public ProductProcessWorkflowConfigTool(
+            ObjectMapper objectMapper,
+            ProductProcessWorkflowValidator workflowValidator) {
         this.objectMapper = objectMapper;
+        this.workflowValidator = workflowValidator;
     }
 
     @Override
@@ -63,7 +73,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                         "definition", Map.of("type", "object"),
                         "selectedNodeId", Map.of("type", List.of("string", "null")),
                         "patches", Map.of("type", "array", "items", Map.of("type", "object"))),
-                "required", List.of("patches"));
+                "required", List.of("definition", "patches"));
     }
 
     @Override
@@ -85,13 +95,24 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     public String preview(ToolCall toolCall, Map<String, Object> context) {
         try {
             Map<String, Object> arguments = parseArguments(toolCall);
+            if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
+                return buildSemanticError(
+                        "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
+            }
+            List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
+            ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
+                    definition, ProductProcessWorkflowDTO.class);
+            applyCandidateBatch(candidate, patches);
+            workflowValidator.validateForDraft(candidate);
+            validateGraphSemantics(candidate);
+
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "PREVIEW");
             data.put("applied", false);
-            data.put("patches", sanitizePatches(arguments.get("patches")));
+            data.put("patches", patches);
             return buildSuccessResult(data);
-        } catch (IllegalArgumentException error) {
-            return buildErrorResult("Workflow patch format is invalid");
+        } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+            return buildSemanticError("WORKFLOW_PATCH_REJECTED", "Workflow patch batch rejected");
         }
     }
 
@@ -110,15 +131,17 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     }
 
     private List<Map<String, Object>> sanitizePatches(Object rawPatches) {
-        if (!(rawPatches instanceof List<?> patches)) {
-            return List.of();
+        if (!(rawPatches instanceof List<?> patches) || patches.isEmpty()) {
+            throw new PatchRejectedException();
         }
         List<Map<String, Object>> accepted = new ArrayList<>();
         for (Object rawPatch : patches) {
-            if (rawPatch instanceof Map<?, ?> patch) {
-                Map<String, Object> sanitized = sanitizePatch(patch);
-                if (sanitized != null) accepted.add(sanitized);
+            if (!(rawPatch instanceof Map<?, ?> patch)) {
+                throw new PatchRejectedException();
             }
+            Map<String, Object> sanitized = sanitizePatch(patch);
+            if (sanitized == null) throw new PatchRejectedException();
+            accepted.add(sanitized);
         }
         return List.copyOf(accepted);
     }
@@ -313,6 +336,199 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
 
     private boolean isOptionalFiniteNumber(Map<?, ?> value, String key) {
         return !value.containsKey(key) || value.get(key) == null || isFiniteNumber(value.get(key));
+    }
+
+    private void applyCandidateBatch(
+            ProductProcessWorkflowDTO candidate,
+            List<Map<String, Object>> patches) {
+        patches.stream()
+                .filter(patch -> Set.of("UPSERT_NODE", "REMOVE_NODE").contains(patch.get("op")))
+                .forEach(patch -> applyNodePatch(candidate, patch));
+        patches.stream()
+                .filter(patch -> "SET_NODE_FIELD".equals(patch.get("op")))
+                .forEach(patch -> applyFieldPatch(candidate, patch));
+        patches.stream()
+                .filter(patch -> Set.of("UPSERT_EDGE", "REMOVE_EDGE").contains(patch.get("op")))
+                .forEach(patch -> applyEdgePatch(candidate, patch));
+    }
+
+    private void applyNodePatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        if ("REMOVE_NODE".equals(patch.get("op"))) {
+            String nodeId = String.valueOf(patch.get("nodeId"));
+            boolean removed = candidate.getNodes().removeIf(node -> nodeId.equals(node.getId()));
+            if (!removed) throw new PatchRejectedException();
+            candidate.getEdges().removeIf(edge ->
+                    nodeId.equals(edge.getSource()) || nodeId.equals(edge.getTarget()));
+            return;
+        }
+        ProductProcessWorkflowDTO.Node next = objectMapper.convertValue(
+                patch.get("node"), ProductProcessWorkflowDTO.Node.class);
+        ProductProcessWorkflowDTO.Node existing = findNode(candidate, next.getId());
+        if (existing != null && !Objects.equals(existing.getKind(), next.getKind())) {
+            throw new PatchRejectedException();
+        }
+        if (existing == null) candidate.getNodes().add(next);
+        else candidate.getNodes().set(candidate.getNodes().indexOf(existing), next);
+    }
+
+    private void applyFieldPatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        ProductProcessWorkflowDTO.Node target = findNode(candidate, String.valueOf(patch.get("nodeId")));
+        if (target == null) throw new PatchRejectedException();
+        String path = String.valueOf(patch.get("path"));
+        if (!isPathCompatibleWithNodeKind(target.getKind(), path)) {
+            throw new PatchRejectedException();
+        }
+        Map<String, Object> data = target.getData();
+        if (data == null) {
+            data = new LinkedHashMap<>();
+            target.setData(data);
+        }
+        Object value = patch.get("value");
+        if (path.startsWith("conversionRule.")) {
+            Object existingRule = data.get("conversionRule");
+            Map<String, Object> rule = existingRule instanceof Map<?, ?> source
+                    ? copyStringObjectMap(source)
+                    : new LinkedHashMap<>();
+            rule.put(path.substring("conversionRule.".length()), value);
+            data.put("conversionRule", rule);
+        } else {
+            data.put(path, value);
+        }
+    }
+
+    private void applyEdgePatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        if ("REMOVE_EDGE".equals(patch.get("op"))) {
+            String edgeId = String.valueOf(patch.get("edgeId"));
+            if (!candidate.getEdges().removeIf(edge -> edgeId.equals(edge.getId()))) {
+                throw new PatchRejectedException();
+            }
+            return;
+        }
+        ProductProcessWorkflowDTO.Edge next = objectMapper.convertValue(
+                patch.get("edge"), ProductProcessWorkflowDTO.Edge.class);
+        ProductProcessWorkflowDTO.Edge existing = candidate.getEdges().stream()
+                .filter(edge -> next.getId().equals(edge.getId()))
+                .findFirst()
+                .orElse(null);
+        if (existing == null) candidate.getEdges().add(next);
+        else candidate.getEdges().set(candidate.getEdges().indexOf(existing), next);
+    }
+
+    private boolean isPathCompatibleWithNodeKind(String kind, String path) {
+        if ("PROCESS".equals(kind)) {
+            return path.equals("ports")
+                    || path.equals("conversionRule")
+                    || path.startsWith("conversionRule.")
+                    || path.equals("reportingRequired");
+        }
+        return MATERIAL_NODE_KINDS.contains(kind)
+                && Set.of("name", "skuId", "skuCode", "specification").contains(path);
+    }
+
+    private void validateGraphSemantics(ProductProcessWorkflowDTO definition) {
+        Map<String, ProductProcessWorkflowDTO.Node> nodes = new HashMap<>();
+        definition.getNodes().forEach(node -> nodes.put(node.getId(), node));
+        Map<String, Map<String, Map<?, ?>>> portsByProcess = new HashMap<>();
+
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (!"PROCESS".equals(node.getKind())) continue;
+            Object rawPorts = node.getData() == null ? null : node.getData().get("ports");
+            if (!(rawPorts instanceof List<?> ports)) throw new PatchRejectedException();
+            Map<String, Map<?, ?>> portById = new HashMap<>();
+            for (Object rawPort : ports) {
+                if (!(rawPort instanceof Map<?, ?> port)) throw new PatchRejectedException();
+                String portId = readNonBlankString(port.get("id"));
+                String direction = readNonBlankString(port.get("direction"));
+                String materialNodeId = readNonBlankString(port.get("materialNodeId"));
+                ProductProcessWorkflowDTO.Node material = nodes.get(materialNodeId);
+                if (portId == null || !("INPUT".equals(direction) || "OUTPUT".equals(direction))
+                        || material == null || "PROCESS".equals(material.getKind())
+                        || portById.put(portId, port) != null) {
+                    throw new PatchRejectedException();
+                }
+                Object materialKind = port.get("materialKind");
+                if (materialKind != null && !material.getKind().equals(materialKind)) {
+                    throw new PatchRejectedException();
+                }
+            }
+            portsByProcess.put(node.getId(), portById);
+        }
+
+        Set<String> matchedPorts = new HashSet<>();
+        for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
+            ProductProcessWorkflowDTO.Node source = nodes.get(edge.getSource());
+            ProductProcessWorkflowDTO.Node target = nodes.get(edge.getTarget());
+            if (source == null || target == null || source.getId().equals(target.getId())) {
+                throw new PatchRejectedException();
+            }
+            if ("PROCESS".equals(source.getKind()) && !"PROCESS".equals(target.getKind())) {
+                Map<?, ?> port = portsByProcess.getOrDefault(source.getId(), Map.of())
+                        .get(edge.getSourceHandle());
+                if (port == null || !"OUTPUT".equals(port.get("direction"))
+                        || !target.getId().equals(port.get("materialNodeId"))
+                        || !"input".equals(edge.getTargetHandle())) {
+                    throw new PatchRejectedException();
+                }
+                matchedPorts.add(source.getId() + "::" + edge.getSourceHandle());
+            } else if (!"PROCESS".equals(source.getKind()) && "PROCESS".equals(target.getKind())) {
+                Map<?, ?> port = portsByProcess.getOrDefault(target.getId(), Map.of())
+                        .get(edge.getTargetHandle());
+                if (port == null || !"INPUT".equals(port.get("direction"))
+                        || !source.getId().equals(port.get("materialNodeId"))
+                        || !"output".equals(edge.getSourceHandle())) {
+                    throw new PatchRejectedException();
+                }
+                matchedPorts.add(target.getId() + "::" + edge.getTargetHandle());
+            } else {
+                throw new PatchRejectedException();
+            }
+        }
+
+        portsByProcess.forEach((processId, ports) -> ports.forEach((portId, port) -> {
+            if (port.get("materialNodeId") != null
+                    && !matchedPorts.contains(processId + "::" + portId)) {
+                throw new PatchRejectedException();
+            }
+        }));
+    }
+
+    private ProductProcessWorkflowDTO.Node findNode(
+            ProductProcessWorkflowDTO definition,
+            String nodeId) {
+        return definition.getNodes().stream()
+                .filter(node -> nodeId.equals(node.getId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private Map<String, Object> copyStringObjectMap(Map<?, ?> source) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, value) -> {
+            if (key instanceof String stringKey) result.put(stringKey, value);
+        });
+        return result;
+    }
+
+    private String buildSemanticError(String errorCode, String message) {
+        try {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("success", false);
+            error.put("errorCode", errorCode);
+            error.put("error", message);
+            return objectMapper.writeValueAsString(error);
+        } catch (Exception serializationError) {
+            return "{\"success\":false,\"errorCode\":\"WORKFLOW_PATCH_REJECTED\","
+                    + "\"error\":\"Workflow patch batch rejected\"}";
+        }
+    }
+
+    private static final class PatchRejectedException extends RuntimeException {
     }
 
     private Map<String, Object> linkedMap(Object... keyValues) {
