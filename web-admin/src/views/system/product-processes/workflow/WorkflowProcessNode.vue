@@ -1,5 +1,10 @@
 <template>
-  <div class="process-node" :class="{ selected }">
+  <div
+    class="process-node"
+    :class="{ selected }"
+    @mouseenter="hovered = true"
+    @mouseleave="hovered = false"
+  >
     <Handle
       v-for="(port, index) in inputPorts"
       :key="port.id"
@@ -16,6 +21,15 @@
       :position="Position.Right"
       :style="handleStyle(index, outputPorts.length)"
     />
+
+    <button
+      v-if="canWrite && (selected || hovered)"
+      type="button"
+      class="edge-output-add nodrag"
+      data-testid="add-output-edge"
+      aria-label="添加一个产出 Cell"
+      @click.stop="emit('addOutput')"
+    >+</button>
 
     <div class="process-heading">
       <span class="step-mark">序</span>
@@ -54,7 +68,15 @@
     <section class="port-section output-section">
       <div class="section-title">
         <span>产出物料</span>
-        <el-button v-if="canWrite" text size="small" type="primary" class="nodrag" @click="emit('addOutput')">+ 产出</el-button>
+        <el-button
+          v-if="canWrite"
+          text
+          size="small"
+          type="primary"
+          class="nodrag"
+          data-testid="add-output-inline"
+          @click.stop="emit('addOutput')"
+        >+ 产出</el-button>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
         <el-select
@@ -82,16 +104,6 @@
           @change="(unit: string) => updatePort(port.id, { unit })"
         >
           <el-option v-for="unit in unitOptions" :key="unit" :label="unit" :value="unit" />
-        </el-select>
-        <el-select
-          class="nodrag nowheel kind-select"
-          :model-value="port.materialKind || 'SEMI_FINISHED'"
-          :disabled="!canWrite"
-          size="small"
-          @change="(kind: 'SEMI_FINISHED' | 'FINISHED_GOOD') => emit('changeOutputKind', port.id, kind)"
-        >
-          <el-option label="半成品" value="SEMI_FINISHED" />
-          <el-option label="成品" value="FINISHED_GOOD" />
         </el-select>
       </div>
     </section>
@@ -140,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import type { ConversionMode, ProcessNodeData, ProcessPort } from './types';
 
@@ -156,10 +168,10 @@ const emit = defineEmits<{
   addInput: [];
   addOutput: [];
   selectOutputSku: [portId: string, skuId: string];
-  changeOutputKind: [portId: string, kind: 'SEMI_FINISHED' | 'FINISHED_GOOD'];
 }>();
 
 const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
+const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 
@@ -178,6 +190,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 
 <style scoped>
 .process-node {
+  position: relative;
   width: 390px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;
   border-radius: 10px; background: #fff; box-shadow: 0 2px 12px rgba(27, 101, 168, 0.09);
 }
@@ -190,10 +203,32 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .port-section, .conversion-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
-.output-row { grid-template-columns: minmax(0, 1fr) 70px 84px; }
+.output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .conversion-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px; }
 .conversion-example { margin-top: 6px; color: #8a95a8; font-size: 11px; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .create-option { color: #409eff; font-weight: 600; }
+.edge-output-add {
+  position: absolute;
+  top: 50%;
+  right: -14px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid #1b65a8;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(27, 101, 168, 0.2);
+  color: #1b65a8;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+.edge-output-add:hover { background: #eaf4ff; }
 :deep(.vue-flow__handle) { width: 10px; height: 10px; border: 2px solid #fff; background: #1b65a8; }
 </style>

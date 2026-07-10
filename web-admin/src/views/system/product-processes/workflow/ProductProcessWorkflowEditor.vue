@@ -81,7 +81,6 @@
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
               @select-output-sku="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
-              @change-output-kind="(portId, kind) => changeOutputKind(slotProps.id, portId, kind)"
             />
           </template>
         </VueFlow>
@@ -692,22 +691,6 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): vo
       baseUnit: option.unit || port.unit,
       bound: true,
     };
-  });
-}
-
-function changeOutputKind(
-  processId: string,
-  portId: string,
-  kind: 'SEMI_FINISHED' | 'FINISHED_GOOD',
-): void {
-  const process = flowNodes.value.find((node) => node.id === processId);
-  if (!process) return;
-  mutate(() => {
-    const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
-    const port = data.ports.find((candidate) => candidate.id === portId);
-    const material = flowNodes.value.find((node) => node.id === port?.materialNodeId);
-    if (port) port.materialKind = kind;
-    if (material) material.data = { ...material.data, kind };
   });
 }
 
