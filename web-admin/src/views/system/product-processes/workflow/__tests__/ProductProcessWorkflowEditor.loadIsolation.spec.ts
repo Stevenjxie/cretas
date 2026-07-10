@@ -52,7 +52,10 @@ vi.mock('@vue-flow/controls', () => ({
 interface EditorVm {
   canEdit: boolean;
   creatingSku: boolean;
+  dirty: boolean;
   flowNodes: Array<{ id: string; data: Record<string, unknown> }>;
+  history: ProductProcessWorkflowDefinition[];
+  future: ProductProcessWorkflowDefinition[];
   loading: boolean;
   rawMaterialOptions: Array<{ id: string }>;
   skuOptions: Array<{ id: string }>;
@@ -64,6 +67,8 @@ interface EditorVm {
   ) => Promise<void>;
   publishWorkflow: () => Promise<void>;
   saveDraft: () => Promise<boolean>;
+  currentDefinition: () => ProductProcessWorkflowDefinition;
+  onViewportChangeEnd: (viewport: { x: number; y: number; zoom: number }) => void;
   confirmCreateSku: () => Promise<void>;
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
   skuDialogVisible: boolean;
@@ -442,6 +447,206 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     editorVm(wrapper).addStandaloneRaw();
     expect(editorVm(wrapper).flowNodes).toHaveLength(2);
   });
+
+  it('keeps the local draft intact until an explicit conflict reload hydrates the latest version', async () => {
+    const recoveryChoice = deferred<'confirm'>();
+    const latest = {
+      ...definitionFor('PT-A', 'node:latest'),
+      lockVersion: 2,
+    };
+    apiMocks.getProductProcessWorkflow
+      .mockResolvedValueOnce({ success: true, data: definitionFor('PT-A') })
+      .mockResolvedValueOnce({ success: true, data: latest });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+      message: 'Workflow was updated by another user',
+    });
+    vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 120, y: 40, zoom: 0.8 });
+    vm.history.push(jsonClone(vm.currentDefinition()));
+    const nodesBeforeConflict = jsonClone(vm.flowNodes);
+    const historyBeforeConflict = jsonClone(vm.history);
+    const futureBeforeConflict = jsonClone(vm.future);
+
+    const savePromise = vm.saveDraft();
+    await flushPromises();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(vm.flowNodes).toEqual(nodesBeforeConflict);
+    expect(vm.history).toEqual(historyBeforeConflict);
+    expect(vm.future).toEqual(futureBeforeConflict);
+    expect(vm.dirty).toBe(true);
+    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(1);
+
+    recoveryChoice.resolve('confirm');
+    await savePromise;
+    await flushPromises();
+
+    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:latest']);
+    expect(vm.dirty).toBe(false);
+  });
+
+  it('copies the exact local draft for a generic Axios 409 without retrying the mutation', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      response: { status: 409, data: { message: 'Optimistic lock conflict' } },
+    });
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel');
+    const writeText = installClipboardMock();
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 64, y: 96, zoom: 0.75 });
+
+    await vm.saveDraft();
+
+    const submitted = apiMocks.saveProductProcessWorkflowDraft.mock.calls[0][2];
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(submitted, null, 2));
+    expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-A']);
+    expect(vm.dirty).toBe(true);
+  });
+
+  it('keeps the local draft when the conflict recovery dialog is closed', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue('close');
+    const writeText = installClipboardMock();
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 16, y: 32, zoom: 0.9 });
+    const localSnapshot = vm.currentDefinition();
+
+    await vm.saveDraft();
+
+    expect(vm.currentDefinition()).toEqual(localSnapshot);
+    expect(vm.dirty).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the existing non-409 failure path without opening conflict recovery', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 500 });
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 32, y: 16, zoom: 1 });
+    const localSnapshot = vm.currentDefinition();
+
+    await vm.saveDraft();
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled();
+    expect(vm.currentDefinition()).toEqual(localSnapshot);
+    expect(vm.dirty).toBe(true);
+  });
+
+  it('does not reload a conflicted product after the user has switched products', async () => {
+    const recoveryChoice = deferred<'confirm'>();
+    apiMocks.getProductProcessWorkflow.mockImplementation(
+      (_factoryId: string, productTypeId: string) => Promise.resolve({
+        success: true,
+        data: definitionFor(productTypeId),
+      }),
+    );
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 48, y: 48, zoom: 0.8 });
+    const savePromise = vm.saveDraft();
+    await flushPromises();
+
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
+    await flushPromises();
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
+
+    recoveryChoice.resolve('confirm');
+    await savePromise;
+    await flushPromises();
+
+    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
+  });
+
+  it('ignores a conflicted reload response that arrives after switching products', async () => {
+    const staleReload = deferred<ApiResponse>();
+    let aLoads = 0;
+    apiMocks.getProductProcessWorkflow.mockImplementation(
+      (_factoryId: string, productTypeId: string) => {
+        if (productTypeId === 'PT-A') {
+          aLoads += 1;
+          return aLoads === 1
+            ? Promise.resolve({ success: true, data: definitionFor('PT-A') })
+            : staleReload.promise;
+        }
+        return Promise.resolve({ success: true, data: definitionFor('PT-B') });
+      },
+    );
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm');
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 48, y: 48, zoom: 0.8 });
+
+    const savePromise = vm.saveDraft();
+    await flushPromises();
+    expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
+
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
+    await flushPromises();
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
+
+    staleReload.resolve({ success: true, data: definitionFor('PT-A', 'node:stale-reload') });
+    await savePromise;
+    await flushPromises();
+
+    expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:PT-B']);
+  });
+
+  it('offers the same safe copy recovery when publish conflicts', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: publishableDefinition('PT-A'),
+    });
+    apiMocks.publishProductProcessWorkflow.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
+    vi.mocked(ElMessageBox.confirm)
+      .mockResolvedValueOnce('confirm')
+      .mockRejectedValueOnce('cancel');
+    const writeText = installClipboardMock();
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    const localSnapshot = vm.currentDefinition();
+
+    await vm.publishWorkflow();
+
+    expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(localSnapshot, null, 2));
+    expect(vm.currentDefinition()).toEqual(localSnapshot);
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+  });
 });
 
 function mountEditor(): VueWrapper {
@@ -523,6 +728,63 @@ function definitionWithOutput(factoryId: string, productTypeId: string): Product
     }],
     viewport: { x: 0, y: 0, zoom: 1 },
   };
+}
+
+function publishableDefinition(productTypeId: string): ProductProcessWorkflowDefinition {
+  return {
+    id: 1,
+    factoryId: 'F006',
+    productTypeId,
+    schemaVersion: 1,
+    status: 'DRAFT',
+    version: 1,
+    lockVersion: 0,
+    nodes: [{
+      id: 'raw',
+      kind: 'RAW_MATERIAL',
+      position: { x: 16, y: 32 },
+      data: { name: 'Raw', skuId: 'SKU-RAW', baseUnit: 'kg', bound: true },
+    }, {
+      id: 'process',
+      kind: 'PROCESS',
+      position: { x: 320, y: 32 },
+      data: {
+        workProcessId: 'WP-1',
+        processName: 'Pack',
+        inputUnit: 'kg',
+        outputUnit: 'kg',
+        ports: [{
+          id: 'in', direction: 'INPUT', materialNodeId: 'raw', materialKind: 'RAW_MATERIAL', unit: 'kg', ordinal: 0,
+        }, {
+          id: 'out', direction: 'OUTPUT', materialNodeId: 'finished', materialKind: 'FINISHED_GOOD', unit: 'kg', ordinal: 0,
+        }],
+        conversionRule: { mode: 'ACTUAL_WEIGHT' },
+        reportingRequired: true,
+      },
+    }, {
+      id: 'finished',
+      kind: 'FINISHED_GOOD',
+      position: { x: 736, y: 32 },
+      data: { name: 'Finished', skuId: productTypeId, baseUnit: 'kg', bound: true },
+    }],
+    edges: [{ id: 'raw-process', source: 'raw', sourceHandle: 'output', target: 'process', targetHandle: 'in' }, {
+      id: 'process-finished', source: 'process', sourceHandle: 'out', target: 'finished', targetHandle: 'input',
+    }],
+    viewport: { x: 0, y: 0, zoom: 1 },
+  };
+}
+
+function installClipboardMock(): ReturnType<typeof vi.fn> {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  return writeText;
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 interface TestSku {

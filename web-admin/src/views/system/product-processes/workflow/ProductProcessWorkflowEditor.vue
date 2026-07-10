@@ -978,6 +978,10 @@ async function saveDraft(): Promise<boolean> {
     return true;
   } catch (error) {
     if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
+    if (isWorkflowConflict(error)) {
+      await recoverWorkflowConflict(identity, nextDefinition);
+      return false;
+    }
     console.error('[ProductProcessWorkflow] save failed', error);
     return false;
   } finally {
@@ -1015,6 +1019,7 @@ async function publishWorkflow(): Promise<void> {
   }
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
   const generation = ++publishGeneration;
+  const recoverySnapshot = currentDefinition();
   publishing.value = true;
   try {
     const response = await publishProductProcessWorkflow(
@@ -1033,10 +1038,85 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.success('Workflow 版本已发布');
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (isWorkflowConflict(error)) {
+      await recoverWorkflowConflict(identity, recoverySnapshot);
+      return;
+    }
     console.error('[ProductProcessWorkflow] publish failed', error);
   } finally {
     if (generation === publishGeneration) {
       publishing.value = false;
+    }
+  }
+}
+
+function isWorkflowConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    status?: unknown;
+    response?: { status?: unknown };
+  };
+  return Number(candidate.status ?? candidate.response?.status) === 409;
+}
+
+async function recoverWorkflowConflict(
+  identity: WorkflowIdentity,
+  localSnapshot: ProductProcessWorkflowDefinition,
+): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '该 Workflow 已被其他人更新。重新加载会读取服务器最新版本；也可以先复制当前本地草稿 JSON 留存。',
+      'Workflow 版本冲突',
+      {
+        type: 'warning',
+        confirmButtonText: '重新加载最新版本',
+        cancelButtonText: '复制当前草稿 JSON',
+        distinguishCancelAndClose: true,
+        closeOnClickModal: false,
+      },
+    );
+    if (!isLoadedIdentityCurrent(identity)) return;
+    await reloadLatestDefinition(identity);
+  } catch (action) {
+    if (action !== 'cancel') return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(localSnapshot, null, 2));
+      ElMessage.success('当前 Workflow 草稿 JSON 已复制');
+    } catch (error) {
+      console.error('[ProductProcessWorkflow] copy conflict draft failed', error);
+      ElMessage.error('复制草稿 JSON 失败，请保持当前页面并稍后重试');
+    }
+  }
+}
+
+async function reloadLatestDefinition(identity: WorkflowIdentity): Promise<void> {
+  const generation = ++loadGeneration;
+  loading.value = true;
+  try {
+    const response = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
+    if (!isCurrentLoad(generation, identity)) return;
+    if (!response.success || !response.data) {
+      throw new Error(response.message || 'Latest workflow definition is unavailable');
+    }
+    if (!definitionMatchesIdentity(response.data, identity)) {
+      throw new Error('Latest workflow definition identity does not match the requested product');
+    }
+    hydrate(response.data);
+    loadedDefinitionIdentity.value = identity;
+    dirty.value = false;
+    history.value = [];
+    future.value = [];
+    await nextTick();
+    if (!isCurrentLoad(generation, identity)) return;
+    await setViewport(response.data.viewport);
+    ElMessage.success('已重新加载服务器最新 Workflow 版本');
+  } catch (error) {
+    if (!isCurrentLoad(generation, identity)) return;
+    console.error('[ProductProcessWorkflow] conflict reload failed', error);
+    ElMessage.error('最新 Workflow 版本加载失败，本地草稿仍保留');
+  } finally {
+    if (isCurrentLoad(generation, identity)) {
+      loading.value = false;
     }
   }
 }
