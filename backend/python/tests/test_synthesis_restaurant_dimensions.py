@@ -362,10 +362,38 @@ def test_factbook_renders_discount_and_indexes_facts():
     assert "折扣" in text
     assert "满减" in text
     assert "非因果" in text  # honest label: descriptive, not causal
-    assert idx["折扣总额"] == 600.0
+    # Defect 1: total labeled/indexed as 折扣金额合计 (NOT 折扣总额) so the
+    # per-type share prose "占折扣总额 X%" can't be false-corrected by the
+    # millions-valued total.
+    assert "折扣金额合计" in text
+    assert "折扣总额" not in text          # the colliding phrase is gone
+    assert "（占比 40.0%）" in text        # composition share phrased 占比
+    assert idx["折扣金额合计"] == 600.0
+    assert "折扣总额" not in idx           # no colliding fact key
     assert idx["折扣占营收比"] == 6.0
     assert idx["满减折扣额"] == 240.0
-    assert idx["满减折扣占比"] == 40.0
+    assert idx["满减占比"] == 40.0         # per-type share is its own fact
+
+
+def test_discount_render_does_not_juxtapose_total_label_with_share():
+    # Defect 1 regression: the total-fact label must never sit immediately
+    # before a per-type share number in the rendered text — that juxtaposition
+    # is what let FactReconciler inject the total into a 28.9% share.
+    fb = FactBook(discount={
+        "total_discount_amount": 7072785.88,
+        "total_revenue": 121600000.0,
+        "revenue_share_pct": 5.8,
+        "discounts": [
+            {"discount_id": 1, "discount_name": "美团套餐券", "amount": 2043570.03,
+             "bill_count": 3000, "share_pct": 28.9},
+        ],
+    })
+    idx = fb.to_facts_index()
+    # The only million-valued fact key must be 折扣金额合计; "折扣总额" (the phrase
+    # the LLM prepends to a share %) is not a key, so it can't hijack 28.9.
+    assert "折扣总额" not in idx
+    assert idx["折扣金额合计"] == 7072785.88
+    assert idx["美团套餐券占比"] == 28.9
 
 
 def test_factbook_estimated_channel_money_not_indexed_as_hard_fact():
@@ -446,3 +474,35 @@ def test_channel_meal_discount_seed_migration_is_demo_only_and_idempotent():
     assert "0.06" not in sql  # the old invented flat-6%-of-revenue is gone
     # I4: point-in-time coupling documented.
     assert "POINT-IN-TIME COUPLING" in sql
+
+
+def test_order_type_meal_net_basis_corrective_migration():
+    # Defect 2: 渠道/时段 revenue basis must be 应收(net) so Σ(channel revenue)
+    # reconciles with the finance 应收 total (agg_daily.net_amount).
+    sql = (_migrations_dir() / "V20260710_02__demo_rest_order_type_meal_net_basis.sql").read_text(
+        encoding="utf-8",
+    )
+    assert "SELECT set_config('app.factory_id', 'DEMO_REST', false)" in sql
+    assert "UPDATE agg_daily_order_type_meal" in sql
+    # actual_receive is recomputed from net_amount × combined ratio (not actual_receive).
+    assert "actual_receive = ROUND(ad.net_amount * ot.ratio * mp.ratio, 2)" in sql
+    assert "m.factory_id  = 'DEMO_REST'" in sql
+    # Same ratios as Step A → combined ratios sum to 1.0 → Σ actual_receive == net.
+    assert "0.55::numeric" in sql and "0.35::numeric" in sql and "0.10::numeric" in sql
+    assert "0.40::numeric" in sql and "0.50::numeric" in sql and "0.10::numeric" in sql
+    assert "POINT-IN-TIME COUPLING" in sql
+
+
+def test_order_type_meal_ratios_reconcile_to_net_total():
+    # The mathematical guarantee behind Defect 2's fix: the order_type ratios
+    # sum to 1.0 and the meal_period ratios sum to 1.0, so summing net×(ot×mp)
+    # over all 9 combinations returns exactly net (Σ channel revenue == net).
+    order_type_ratios = [0.55, 0.35, 0.10]
+    meal_period_ratios = [0.40, 0.50, 0.10]
+    assert round(sum(order_type_ratios), 10) == 1.0
+    assert round(sum(meal_period_ratios), 10) == 1.0
+    net = 100000.0
+    combined = sum(
+        net * ot * mp for ot in order_type_ratios for mp in meal_period_ratios
+    )
+    assert round(combined, 2) == round(net, 2)
