@@ -135,12 +135,7 @@ from smartbi.services.insight_dimensions import (
     InsightDimension,
     InsightDimensionAnalyzer,
 )
-from smartbi.services.llm_guard import (
-    ACTION_REC_GUARD_CLAUSE,
-    FactReconciler,
-    LABELING_GUARD_CLAUSE,
-    NUMERIC_GUARD_CLAUSE,
-)
+from smartbi.services.llm_guard import FactReconciler
 
 logger = logging.getLogger(__name__)
 
@@ -1258,13 +1253,17 @@ class ComprehensiveSynthesisEngine:
         factory_id → _llm_factory ContextVar (via llm_caller_context) so the egress
         audit + usage rows attribute the call to the tenant.
         """
-        system = (
-            SYSTEM_PROMPT
-            + NUMERIC_GUARD_CLAUSE
-            + LABELING_GUARD_CLAUSE
-            + ACTION_REC_GUARD_CLAUSE
-            + HONEST_LABEL_CLAUSE
-        )
+        # Cost dedup (2026-07-10): the 3 guard clauses (NUMERIC/LABELING/ACTION_REC)
+        # near-duplicated SYSTEM_PROMPT — rule 1/4 (numbers-from-data), rule 6 (口径
+        # labeling) and rule 2/3 (4-element recommendations) are all already stated
+        # there — inflating the fixed prefix ~40% on EVERY call. LABELING_GUARD also
+        # CONTRADICTED SYSTEM_PROMPT rule 6 (it mandated [毛]/[净] brackets that rule
+        # 6 forbids). Numeric grounding is enforced post-hoc by FactReconciler (+
+        # the overshoot guard + magnitude gate) regardless of prompt emphasis, so
+        # dropping the clauses is safe. Verified A/B live (recs stay 4-element, 口径
+        # labels + honesty labels preserved, tokens down ~30-40%). Keep only
+        # HONEST_LABEL (the one clause with no SYSTEM_PROMPT equivalent).
+        system = SYSTEM_PROMPT + HONEST_LABEL_CLAUSE
         payload = {
             "messages": [
                 {"role": "system", "content": system},
