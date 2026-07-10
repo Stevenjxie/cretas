@@ -35,18 +35,45 @@ class FakeBudget:
 
 
 class FakeCache:
-    def __init__(self, hit=None):
+    def __init__(self, hit=None, semantic_hit=None):
         self._hit = hit
+        self._semantic_hit = semantic_hit
         self.put_calls = []
+        self.get_semantic_calls = []
 
     async def get(self, factory_id, q_hash):
         return self._hit
 
-    async def put(self, factory_id, q_hash, answer, chart_config, tokens, ttl_hours=24):
-        self.put_calls.append({"answer": answer, "chart_config": chart_config, "tokens": tokens})
+    async def put(self, factory_id, q_hash, answer, chart_config, tokens, ttl_hours=24,
+                   *, question_embedding=None, window_key=None, plan_key=None):
+        # 2026-07-10 semantic cache fallback: put() gained 3 optional kwargs
+        # (question_embedding/window_key/plan_key) — accepted here (and
+        # recorded) so pre-existing tests asserting on answer/chart_config/
+        # tokens are unaffected; new semantic-path tests can assert on these.
+        self.put_calls.append({
+            "answer": answer, "chart_config": chart_config, "tokens": tokens,
+            "question_embedding": question_embedding, "window_key": window_key,
+            "plan_key": plan_key,
+        })
+
+    async def get_semantic(self, factory_id, question_embedding, window_key, plan_key,
+                            *, min_similarity=0.90):
+        self.get_semantic_calls.append({
+            "factory_id": factory_id, "window_key": window_key, "plan_key": plan_key,
+        })
+        return self._semantic_hit
 
 
 def _engine(monkeypatch, *, budget=None, cache=None):
+    # 2026-07-10 semantic cache fallback: synthesize() now calls module-level
+    # _get_embedding(question) on every non-history call. Default it to a
+    # no-op (returns None, like an embedding-service outage) so pre-existing
+    # tests keep their old behavior (no real gRPC dial, no semantic lookup)
+    # unless a test explicitly monkeypatches se._get_embedding itself.
+    async def _no_embedding(text):
+        return None
+    monkeypatch.setattr(se, "_get_embedding", _no_embedding)
+
     eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=budget or FakeBudget(),
                                        cache=cache or FakeCache())
     return eng

@@ -1,4 +1,5 @@
-"""SHA256-keyed narrative cache for LLM insight responses.
+"""SHA256-keyed narrative cache for LLM insight responses, plus a semantic
+fallback layer (2026-07-10) for natural paraphrases.
 
 Table: narrative_cache (PK: factory_id, question_hash).
 
@@ -22,6 +23,29 @@ Cleanup:
 - `prune_expired()` deletes rows where expires_at < now(). Caller is
   responsible for scheduling (not baked in here — defer to a
   background task/cron layer).
+
+Semantic fallback (2026-07-10, `get_semantic`)
+-----------------------------------------------
+The exact-hash path above misses a natural paraphrase — "外送跟到店哪个强"
+vs "外卖堂食哪个赚钱" hash to completely different SHA256 keys even though
+they'd produce the same FactBook + answer. `get_semantic` adds a pgvector
+cosine-similarity lookup on TOP of (never instead of) the exact-hash path:
+synthesis_engine.py still tries the exact hash first (cheapest, zero
+false-positive risk) and only falls to `get_semantic` on a miss.
+
+⛔ Grounding guards (do NOT weaken — see migration
+V20260710_03__narrative_cache_semantic.sql for the schema rationale):
+  - similarity threshold 0.90 (stricter than template_rag's 0.85 routing
+    hint — this serves a FULL answer, not just a routing signal)
+  - `window_key` (the resolved date range) and `plan_key` (the sorted set of
+    triggered plan_dimensions()) are HARD SQL WHERE filters, not just part
+    of the similarity score. A high-similarity match across a different
+    window or a different dimension set is NEVER served — e.g. "堂食赚钱吗"
+    (finance+channel) must never serve for "堂食忙吗" (channel only), and
+    "这两月" must never serve for "上周" even with near-identical wording.
+  - The served answer was already grounded/reconciled by FactReconciler
+    when it was first written (post-`reconcile()`, pre-`put()`), so numbers
+    stay safe to replay within the same window+plan.
 """
 from __future__ import annotations
 
@@ -29,7 +53,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
@@ -37,6 +61,13 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_TTL_HOURS = 24
+SEMANTIC_MIN_SIMILARITY = 0.90
+
+
+def _emb_literal(emb: List[float]) -> str:
+    """pgvector literal format `[0.1,0.2,...]` — mirrors
+    template_embedding_index._emb_literal (same convention project-wide)."""
+    return f"[{','.join(str(x) for x in emb)}]"
 
 
 def compute_question_hash(
@@ -119,11 +150,22 @@ class NarrativeCacheService:
         chart_config: Optional[Dict[str, Any]],
         tokens: int,
         ttl_hours: int = DEFAULT_TTL_HOURS,
+        *,
+        question_embedding: Optional[List[float]] = None,
+        window_key: Optional[str] = None,
+        plan_key: Optional[str] = None,
     ) -> None:
-        """Upsert a cache entry. Existing row for the same key is replaced."""
+        """Upsert a cache entry. Existing row for the same key is replaced.
+
+        `question_embedding`/`window_key`/`plan_key` (2026-07-10, semantic
+        fallback) are optional — omitting them (the default) writes a
+        NULL-embedding row, byte-identical to pre-semantic-cache behavior
+        (exact-hash-only, invisible to get_semantic's partial-index scan).
+        """
         expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
         # asyncpg maps None → NULL, dict → jsonb via explicit cast.
         chart_json = json.dumps(chart_config) if chart_config is not None else None
+        emb_literal = _emb_literal(question_embedding) if question_embedding is not None else None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -134,18 +176,85 @@ class NarrativeCacheService:
                     """
                     INSERT INTO narrative_cache
                         (factory_id, question_hash, answer, chart_config,
-                         tokens, expires_at)
-                    VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                         tokens, expires_at, question_embedding, window_key,
+                         plan_key)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::vector, $8, $9)
                     ON CONFLICT (factory_id, question_hash) DO UPDATE
-                        SET answer       = EXCLUDED.answer,
-                            chart_config = EXCLUDED.chart_config,
-                            tokens       = EXCLUDED.tokens,
-                            expires_at   = EXCLUDED.expires_at,
-                            created_at   = NOW()
+                        SET answer             = EXCLUDED.answer,
+                            chart_config       = EXCLUDED.chart_config,
+                            tokens             = EXCLUDED.tokens,
+                            expires_at         = EXCLUDED.expires_at,
+                            created_at         = NOW(),
+                            question_embedding = EXCLUDED.question_embedding,
+                            window_key         = EXCLUDED.window_key,
+                            plan_key           = EXCLUDED.plan_key
                     """,
                     factory_id, question_hash, answer, chart_json,
-                    int(tokens), expires_at,
+                    int(tokens), expires_at, emb_literal, window_key, plan_key,
                 )
+
+    async def get_semantic(
+        self,
+        factory_id: str,
+        question_embedding: List[float],
+        window_key: str,
+        plan_key: str,
+        *,
+        min_similarity: float = SEMANTIC_MIN_SIMILARITY,
+    ) -> Optional[Dict[str, Any]]:
+        """Cosine-similarity fallback for a natural paraphrase that missed
+        the exact-hash lookup. Caller (synthesis_engine) tries `get()` first
+        and only calls this on a miss.
+
+        ⛔ window_key + plan_key are HARD equality filters in the SQL WHERE
+        clause, not folded into the similarity score — a paraphrase about a
+        DIFFERENT date window or a DIFFERENT set of triggered plan
+        dimensions is never served, no matter how similar the wording (see
+        module docstring + V20260710_03 migration for why). Returns None
+        (never raises) on any DB error, no embedding-model rows, or a
+        best-match similarity below `min_similarity` — callers fall through
+        to full synthesis exactly like a cache miss.
+        """
+        emb_literal = _emb_literal(question_embedding)
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.factory_id', $1, true)",
+                        factory_id,
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        SELECT answer, chart_config, tokens,
+                               1 - (question_embedding <=> $2::vector) AS sim
+                          FROM narrative_cache
+                         WHERE factory_id         = $1
+                           AND window_key         = $3
+                           AND plan_key           = $4
+                           AND expires_at         > NOW()
+                           AND question_embedding IS NOT NULL
+                         ORDER BY question_embedding <=> $2::vector ASC
+                         LIMIT 1
+                        """,
+                        factory_id, emb_literal, window_key, plan_key,
+                    )
+        except Exception as e:
+            logger.warning("[narrative-cache] get_semantic failed: %s", e)
+            return None
+        if row is None:
+            return None
+        sim = float(row["sim"])
+        if sim < min_similarity:
+            return None
+        chart = row["chart_config"]
+        if isinstance(chart, str):
+            chart = json.loads(chart)
+        return {
+            "answer": row["answer"],
+            "chart_config": chart,
+            "tokens": int(row["tokens"]),
+            "similarity": sim,
+        }
 
     async def invalidate_on_upload(self, factory_id: str) -> int:
         """Delete all cache rows for this factory. Returns row count.
