@@ -420,11 +420,21 @@ class FactBook:
             return
         share = dsc.get("revenue_share_pct")
         share_seg = f"，占营收比 {share}%" if share is not None else ""
-        lines.append("## 折扣（总额/构成，描述性数据，非因果——不代表折扣带来了这些营收）")
-        lines.append(f"- 折扣总额 ¥{_money(total)}{share_seg}")
+        lines.append("## 折扣（金额合计/构成，描述性数据，非因果——不代表折扣带来了这些营收）")
+        # Fact label is "折扣金额合计" (NOT "折扣总额"): the composition shares
+        # below are naturally phrased by the LLM as "占折扣总额 X%", and if the
+        # grounded total were indexed under the substring "折扣总额" the
+        # FactReconciler would match that prose and inject the millions-valued
+        # total right after the SHARE percentage (garbled mid-number output). A
+        # disambiguated label keeps the total reconcilable without colliding with
+        # the per-type share phrasing.
+        lines.append(f"- 折扣金额合计 ¥{_money(total)}{share_seg}")
         if items:
+            # "（占比 X%）" — per-type composition share; each is its own grounded
+            # fact ("{name}占比") so the reconciler recognizes the % rather than
+            # hijacking it with the total.
             seg = "；".join(
-                f"{d.get('discount_name')} ¥{_money(d.get('amount'))}（{d.get('share_pct')}%）"
+                f"{d.get('discount_name')} ¥{_money(d.get('amount'))}（占比 {d.get('share_pct')}%）"
                 for d in items[:6]
             )
             lines.append(f"- 构成：{seg}")
@@ -565,9 +575,12 @@ class FactBook:
 
         dsc = self.discount or {}
         if dsc:
+            # Key "折扣金额合计" (NOT "折扣总额") — see _render_discount: the
+            # per-type shares are phrased "占折扣总额 X%", so a "折扣总额" key would
+            # false-correct that share with the millions-valued total.
             v = _num(dsc.get("total_discount_amount"))
             if v is not None:
-                idx["折扣总额"] = v
+                idx["折扣金额合计"] = v
             v = _num(dsc.get("revenue_share_pct"))
             if v is not None:
                 idx["折扣占营收比"] = v
@@ -578,9 +591,12 @@ class FactBook:
                 v = _num(d.get("amount"))
                 if v is not None:
                     idx[f"{name}折扣额"] = v
+                # Per-type composition share as its own grounded fact — so the
+                # reconciler recognizes "…（占比 28.9%）" as a real fact instead of
+                # letting the total hijack the number (Defect 1 fix (b)).
                 v = _num(d.get("share_pct"))
                 if v is not None:
-                    idx[f"{name}折扣占比"] = v
+                    idx[f"{name}占比"] = v
         return idx
 
     # -----------------------------------------------------------------
