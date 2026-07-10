@@ -1,6 +1,9 @@
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 import Workbench from '../../workbench/index.vue';
+import RecordsPage from '../../records/index.vue';
+import OrdersPage from '../../orders/index.vue';
+import ResourcesPage from '../../resources/index.vue';
 import { resetLogisticsDemoState } from '../../useLogisticsDemoState';
 import { useLogisticsDemoState } from '../../useLogisticsDemoState';
 import ExportConfirmStep from '../ExportConfirmStep.vue';
@@ -8,8 +11,50 @@ import ManualConfirmStep from '../ManualConfirmStep.vue';
 import OrderImportStep from '../OrderImportStep.vue';
 import { MOCK_STORES, MOCK_VEHICLES } from '../../mockData';
 
+const supportPageStubs = {
+  ElAlert: { template: '<div><slot /></div>' },
+  ElButton: { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+  ElCard: { template: '<section><slot /></section>' },
+  ElRadioButton: { template: '<button><slot /></button>' },
+  ElRadioGroup: { template: '<div><slot /></div>' },
+  ElTable: { template: '<section><slot /></section>' },
+  ElTableColumn: { props: ['label'], template: '<span :data-column-label="label" />' },
+  ElTag: { template: '<span><slot /></span>' },
+};
+
 describe('logistics workbench steps', () => {
   beforeEach(() => resetLogisticsDemoState());
+
+  it('renders the scheduling records support page with its core columns', () => {
+    const page = mount(RecordsPage, { global: { stubs: supportPageStubs } });
+
+    expect(page.text()).toContain('调度记录');
+    expect(page.html()).toContain('日期');
+    expect(page.html()).toContain('批次号');
+    expect(page.html()).toContain('门店数');
+    expect(page.html()).toContain('车次数');
+    expect(page.html()).toContain('总里程');
+  });
+
+  it('renders the store and orders support page with its core columns', () => {
+    const page = mount(OrdersPage, { global: { stubs: supportPageStubs } });
+
+    expect(page.text()).toContain('门店与订单');
+    expect(page.html()).toContain('门店编码');
+    expect(page.html()).toContain('门店名称');
+    expect(page.html()).toContain('配送地址');
+    expect(page.html()).toContain('定位状态');
+  });
+
+  it('renders the vehicles and drivers support page with all resource sources', () => {
+    const page = mount(ResourcesPage, { global: { stubs: supportPageStubs } });
+
+    expect(page.text()).toContain('车辆与司机');
+    expect(page.text()).toContain('自有');
+    expect(page.text()).toContain('外协');
+    expect(page.html()).toContain('车牌号');
+    expect(page.html()).toContain('备班司机');
+  });
 
   it('shows one task stage at a time', async () => {
     const wrapper = mount(Workbench, { global: { stubs: { ElButton: false } } });
