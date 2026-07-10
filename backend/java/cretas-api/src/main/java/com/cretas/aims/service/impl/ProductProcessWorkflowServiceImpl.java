@@ -7,6 +7,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
@@ -25,6 +26,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
+    private final ProductTypeRepository productTypeRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -44,6 +46,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String factoryId,
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
+        requireOwningProduct(factoryId, productTypeId);
         validator.validateForDraft(definition);
         Optional<ProductProcessWorkflow> existingDraft = find(
                 factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
@@ -73,6 +76,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Override
     @Transactional
     public ProductProcessWorkflowDTO publish(String factoryId, String productTypeId, Long lockVersion) {
+        requireOwningProduct(factoryId, productTypeId);
         ProductProcessWorkflow draft = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
                 .orElseThrow(() -> new BusinessException(409, "没有可发布的 Workflow 草稿")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
@@ -92,6 +96,15 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             ProductProcessWorkflow.Status status) {
         return repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 factoryId, productTypeId, status);
+    }
+
+    private void requireOwningProduct(String factoryId, String productTypeId) {
+        if (productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).isEmpty()) {
+            throw new BusinessException(400, "Workflow 所属产品不存在或不属于当前工厂")
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_PRODUCT_INVALID")
+                    .withHint("请重新选择当前工厂内的有效产品后再保存或发布 Workflow")
+                    .withSeverity("warning");
+        }
     }
 
     private void assertCurrentVersion(Long requestVersion, ProductProcessWorkflow entity) {

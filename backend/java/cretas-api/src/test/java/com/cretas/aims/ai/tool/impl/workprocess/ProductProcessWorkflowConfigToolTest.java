@@ -62,6 +62,8 @@ class ProductProcessWorkflowConfigToolTest {
                         "edge:self", "process:1", "output:1", "process:1", "input:1"))),
                 List.of(Map.of("op", "UPSERT_EDGE", "edge", edge(
                         "edge:bad-handle", "raw", "missing-output", "process:1", "input:1"))),
+                List.of(Map.of("op", "UPSERT_EDGE", "edge", edge(
+                        "edge:duplicate-input", "raw", "output", "process:1", "input:1"))),
                 List.of(setField("raw", "ports", List.of(port(
                         "bad", "INPUT", "raw", "kg", 0)))),
                 List.of(setField("missing", "name", "ghost")),

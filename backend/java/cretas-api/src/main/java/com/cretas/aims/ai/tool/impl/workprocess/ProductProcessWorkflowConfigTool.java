@@ -9,8 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,7 +102,6 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                     definition, ProductProcessWorkflowDTO.class);
             applyCandidateBatch(candidate, patches);
             workflowValidator.validateForDraft(candidate);
-            validateGraphSemantics(candidate);
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "PREVIEW");
@@ -431,73 +428,6 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         }
         return MATERIAL_NODE_KINDS.contains(kind)
                 && Set.of("name", "skuId", "skuCode", "specification").contains(path);
-    }
-
-    private void validateGraphSemantics(ProductProcessWorkflowDTO definition) {
-        Map<String, ProductProcessWorkflowDTO.Node> nodes = new HashMap<>();
-        definition.getNodes().forEach(node -> nodes.put(node.getId(), node));
-        Map<String, Map<String, Map<?, ?>>> portsByProcess = new HashMap<>();
-
-        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
-            if (!"PROCESS".equals(node.getKind())) continue;
-            Object rawPorts = node.getData() == null ? null : node.getData().get("ports");
-            if (!(rawPorts instanceof List<?> ports)) throw new PatchRejectedException();
-            Map<String, Map<?, ?>> portById = new HashMap<>();
-            for (Object rawPort : ports) {
-                if (!(rawPort instanceof Map<?, ?> port)) throw new PatchRejectedException();
-                String portId = readNonBlankString(port.get("id"));
-                String direction = readNonBlankString(port.get("direction"));
-                String materialNodeId = readNonBlankString(port.get("materialNodeId"));
-                ProductProcessWorkflowDTO.Node material = nodes.get(materialNodeId);
-                if (portId == null || !("INPUT".equals(direction) || "OUTPUT".equals(direction))
-                        || material == null || "PROCESS".equals(material.getKind())
-                        || portById.put(portId, port) != null) {
-                    throw new PatchRejectedException();
-                }
-                Object materialKind = port.get("materialKind");
-                if (materialKind != null && !material.getKind().equals(materialKind)) {
-                    throw new PatchRejectedException();
-                }
-            }
-            portsByProcess.put(node.getId(), portById);
-        }
-
-        Set<String> matchedPorts = new HashSet<>();
-        for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
-            ProductProcessWorkflowDTO.Node source = nodes.get(edge.getSource());
-            ProductProcessWorkflowDTO.Node target = nodes.get(edge.getTarget());
-            if (source == null || target == null || source.getId().equals(target.getId())) {
-                throw new PatchRejectedException();
-            }
-            if ("PROCESS".equals(source.getKind()) && !"PROCESS".equals(target.getKind())) {
-                Map<?, ?> port = portsByProcess.getOrDefault(source.getId(), Map.of())
-                        .get(edge.getSourceHandle());
-                if (port == null || !"OUTPUT".equals(port.get("direction"))
-                        || !target.getId().equals(port.get("materialNodeId"))
-                        || !"input".equals(edge.getTargetHandle())) {
-                    throw new PatchRejectedException();
-                }
-                matchedPorts.add(source.getId() + "::" + edge.getSourceHandle());
-            } else if (!"PROCESS".equals(source.getKind()) && "PROCESS".equals(target.getKind())) {
-                Map<?, ?> port = portsByProcess.getOrDefault(target.getId(), Map.of())
-                        .get(edge.getTargetHandle());
-                if (port == null || !"INPUT".equals(port.get("direction"))
-                        || !source.getId().equals(port.get("materialNodeId"))
-                        || !"output".equals(edge.getSourceHandle())) {
-                    throw new PatchRejectedException();
-                }
-                matchedPorts.add(target.getId() + "::" + edge.getTargetHandle());
-            } else {
-                throw new PatchRejectedException();
-            }
-        }
-
-        portsByProcess.forEach((processId, ports) -> ports.forEach((portId, port) -> {
-            if (port.get("materialNodeId") != null
-                    && !matchedPorts.contains(processId + "::" + portId)) {
-                throw new PatchRejectedException();
-            }
-        }));
     }
 
     private ProductProcessWorkflowDTO.Node findNode(

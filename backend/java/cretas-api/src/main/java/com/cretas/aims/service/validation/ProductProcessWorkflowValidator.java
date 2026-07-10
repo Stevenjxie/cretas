@@ -4,6 +4,8 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -17,6 +19,8 @@ public class ProductProcessWorkflowValidator {
 
     private static final Set<String> NODE_KINDS = Set.of(
             "RAW_MATERIAL", "PROCESS", "SEMI_FINISHED", "FINISHED_GOOD");
+    private static final Set<String> MATERIAL_NODE_KINDS = Set.of(
+            "RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD");
 
     public void validateForDraft(ProductProcessWorkflowDTO definition) {
         if (definition == null) {
@@ -30,6 +34,7 @@ public class ProductProcessWorkflowValidator {
         }
 
         Set<String> nodeIds = new HashSet<>();
+        Map<String, ProductProcessWorkflowDTO.Node> nodesById = new HashMap<>();
         for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
             if (node == null || isBlank(node.getId()) || !NODE_KINDS.contains(node.getKind())) {
                 invalid("存在缺少 ID 或类型无效的 Cell");
@@ -37,6 +42,7 @@ public class ProductProcessWorkflowValidator {
             if (!nodeIds.add(node.getId())) {
                 invalid("Cell ID 不能重复: " + node.getId());
             }
+            nodesById.put(node.getId(), node);
             if (node.getPosition() == null
                     || node.getPosition().getX() == null
                     || node.getPosition().getY() == null) {
@@ -57,6 +63,7 @@ public class ProductProcessWorkflowValidator {
             }
         }
 
+        validateGraphSemantics(definition, nodesById);
         if (definition.getViewport() == null
                 || definition.getViewport().getZoom() == null
                 || definition.getViewport().getZoom() < 0.35D
@@ -79,13 +86,9 @@ public class ProductProcessWorkflowValidator {
         }
 
         Map<String, Integer> degree = new HashMap<>();
-        Set<String> connectedSourceHandles = new HashSet<>();
-        Set<String> connectedTargetHandles = new HashSet<>();
         for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
             degree.merge(edge.getSource(), 1, Integer::sum);
             degree.merge(edge.getTarget(), 1, Integer::sum);
-            connectedSourceHandles.add(edge.getSource() + "::" + edge.getSourceHandle());
-            connectedTargetHandles.add(edge.getTarget() + "::" + edge.getTargetHandle());
         }
 
         for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
@@ -120,14 +123,8 @@ public class ProductProcessWorkflowValidator {
                 }
                 if ("INPUT".equals(direction)) {
                     hasInput = true;
-                    if (!connectedTargetHandles.contains(node.getId() + "::" + portId)) {
-                        invalid("工序投入端口未连接: " + displayName(node));
-                    }
                 } else if ("OUTPUT".equals(direction)) {
                     hasOutput = true;
-                    if (!connectedSourceHandles.contains(node.getId() + "::" + portId)) {
-                        invalid("工序产出端口未连接: " + displayName(node));
-                    }
                 } else {
                     invalid("工序端口方向无效: " + displayName(node));
                 }
@@ -135,6 +132,134 @@ public class ProductProcessWorkflowValidator {
             if (!hasInput || !hasOutput) {
                 invalid("工序必须同时包含投入和产出端口: " + displayName(node));
             }
+        }
+    }
+
+    private void validateGraphSemantics(
+            ProductProcessWorkflowDTO definition,
+            Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
+        Map<String, Map<String, PortBinding>> portsByProcess = new HashMap<>();
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (!"PROCESS".equals(node.getKind())) {
+                continue;
+            }
+            Map<String, Object> data = node.getData() == null ? Map.of() : node.getData();
+            Object rawPorts = data.get("ports");
+            if (!(rawPorts instanceof List<?>)) {
+                invalid("工序必须包含端口列表: " + displayName(node));
+            }
+            List<?> ports = (List<?>) rawPorts;
+
+            Map<String, PortBinding> portsById = new HashMap<>();
+            Map<String, Set<BigInteger>> ordinalsByDirection = Map.of(
+                    "INPUT", new HashSet<>(),
+                    "OUTPUT", new HashSet<>());
+            for (Object rawPort : ports) {
+                if (!(rawPort instanceof Map<?, ?>)) {
+                    invalid("工序端口格式错误: " + displayName(node));
+                }
+                Map<?, ?> port = (Map<?, ?>) rawPort;
+                String portId = asString(port.get("id"));
+                String direction = asString(port.get("direction"));
+                String materialNodeId = asString(port.get("materialNodeId"));
+                if (isBlank(portId) || !("INPUT".equals(direction) || "OUTPUT".equals(direction))) {
+                    invalid("工序端口 ID 或方向无效: " + displayName(node));
+                }
+                if (portsById.containsKey(portId)) {
+                    invalid("工序端口 ID 不能重复: " + portId);
+                }
+                BigInteger ordinal = nonNegativeInteger(port.get("ordinal"));
+                if (ordinal == null || !ordinalsByDirection.get(direction).add(ordinal)) {
+                    invalid("工序端口 ordinal 必须是方向内唯一的非负整数: " + displayName(node));
+                }
+                ProductProcessWorkflowDTO.Node material = nodesById.get(materialNodeId);
+                if (isBlank(materialNodeId)
+                        || material == null
+                        || !MATERIAL_NODE_KINDS.contains(material.getKind())) {
+                    invalid("工序端口必须引用已存在的物料 Cell: " + portId);
+                }
+                Object materialKind = port.get("materialKind");
+                if (materialKind != null && !material.getKind().equals(materialKind)) {
+                    invalid("工序端口物料类型与引用 Cell 不一致: " + portId);
+                }
+                portsById.put(portId, new PortBinding(direction, materialNodeId));
+            }
+            portsByProcess.put(node.getId(), portsById);
+        }
+
+        Map<String, Integer> matchedEdgeCount = new HashMap<>();
+        for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
+            ProductProcessWorkflowDTO.Node source = nodesById.get(edge.getSource());
+            ProductProcessWorkflowDTO.Node target = nodesById.get(edge.getTarget());
+            boolean sourceIsProcess = "PROCESS".equals(source.getKind());
+            boolean targetIsProcess = "PROCESS".equals(target.getKind());
+            if (source.getId().equals(target.getId()) || sourceIsProcess == targetIsProcess) {
+                invalid("连线必须连接一个物料 Cell 和一个工序 Cell: " + edge.getId());
+            }
+
+            String processId;
+            String portId;
+            PortBinding binding;
+            if (sourceIsProcess) {
+                processId = source.getId();
+                portId = edge.getSourceHandle();
+                binding = portsByProcess.getOrDefault(processId, Map.of()).get(portId);
+                if (binding == null
+                        || !"OUTPUT".equals(binding.direction())
+                        || !binding.materialNodeId().equals(target.getId())
+                        || !"input".equals(edge.getTargetHandle())) {
+                    invalid("工序产出连线与端口声明不一致: " + edge.getId());
+                }
+            } else {
+                processId = target.getId();
+                portId = edge.getTargetHandle();
+                binding = portsByProcess.getOrDefault(processId, Map.of()).get(portId);
+                if (binding == null
+                        || !"INPUT".equals(binding.direction())
+                        || !binding.materialNodeId().equals(source.getId())
+                        || !"output".equals(edge.getSourceHandle())) {
+                    invalid("工序投入连线与端口声明不一致: " + edge.getId());
+                }
+            }
+
+            String bindingKey = processId + "::" + portId;
+            if (matchedEdgeCount.merge(bindingKey, 1, Integer::sum) != 1) {
+                invalid("一个工序端口只能对应一条连线: " + portId);
+            }
+        }
+
+        portsByProcess.forEach((processId, ports) -> ports.forEach((portId, binding) -> {
+            if (matchedEdgeCount.getOrDefault(processId + "::" + portId, 0) != 1) {
+                invalid("工序端口必须且只能连接一次: " + portId);
+            }
+        }));
+    }
+
+    private BigInteger nonNegativeInteger(Object value) {
+        if (!(value instanceof Number number)) {
+            return null;
+        }
+        try {
+            BigInteger integer;
+            if (number instanceof BigInteger bigInteger) {
+                integer = bigInteger;
+            } else if (number instanceof BigDecimal bigDecimal) {
+                integer = bigDecimal.toBigIntegerExact();
+            } else if (number instanceof Byte
+                    || number instanceof Short
+                    || number instanceof Integer
+                    || number instanceof Long) {
+                integer = BigInteger.valueOf(number.longValue());
+            } else {
+                double doubleValue = number.doubleValue();
+                if (!Double.isFinite(doubleValue)) {
+                    return null;
+                }
+                integer = BigDecimal.valueOf(doubleValue).toBigIntegerExact();
+            }
+            return integer.signum() < 0 ? null : integer;
+        } catch (ArithmeticException ignored) {
+            return null;
         }
     }
 
@@ -180,7 +305,7 @@ public class ProductProcessWorkflowValidator {
     }
 
     private String asString(Object value) {
-        return value == null ? null : String.valueOf(value);
+        return value instanceof String string ? string : null;
     }
 
     private boolean isBlank(String value) {
@@ -192,5 +317,10 @@ public class ProductProcessWorkflowValidator {
                 .withCode("PRODUCT_PROCESS_WORKFLOW_INVALID")
                 .withHint("请根据提示定位对应 Cell 后再保存或发布")
                 .withSeverity("warning");
+    }
+
+    private record PortBinding(
+            String direction,
+            String materialNodeId) {
     }
 }

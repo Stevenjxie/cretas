@@ -473,8 +473,9 @@ class ProductProcessWorkflowCatalogValidatorTest {
     @Test
     void acceptsSemiFinishedMaterialFeedingMultipleDownstreamProcesses() {
         ProductProcessWorkflowDTO definition = validTwoProcessChain();
-        definition.getNodes().add(processNode(
-                "process:quality", "WP-QUALITY", "in-quality", "out-quality",
+        definition.getNodes().add(processNodeWithInput(
+                "process:quality", "WP-QUALITY", "in-quality",
+                "material:semi-chain", "SEMI_FINISHED", "out-quality",
                 "material:finished-quality", "FINISHED_GOOD"));
         addMaterial(definition, "material:finished-quality", "FINISHED_GOOD", "FG-QUALITY");
         definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
@@ -544,10 +545,12 @@ class ProductProcessWorkflowCatalogValidatorTest {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(new ArrayList<>(List.of(
                 materialNode("material:raw-chain", "RAW_MATERIAL", "Raw Chain", "RM-CHAIN"),
-                processNode("process:cut", "WP-CUT", "in-cut", "out-cut",
+                processNodeWithInput("process:cut", "WP-CUT", "in-cut",
+                        "material:raw-chain", "RAW_MATERIAL", "out-cut",
                         "material:semi-chain", "SEMI_FINISHED"),
                 materialNode("material:semi-chain", "SEMI_FINISHED", "Semi Chain", "SFI-CHAIN"),
-                processNode("process:pack", "WP-PACK", "in-pack", "out-pack",
+                processNodeWithInput("process:pack", "WP-PACK", "in-pack",
+                        "material:semi-chain", "SEMI_FINISHED", "out-pack",
                         "material:finished-chain", "FINISHED_GOOD"),
                 materialNode("material:finished-chain", "FINISHED_GOOD", "Finished Chain", "FG-CHAIN"))));
         definition.setEdges(new ArrayList<>(List.of(
@@ -588,6 +591,29 @@ class ProductProcessWorkflowCatalogValidatorTest {
                         "ordinal", 0)))));
         return new ProductProcessWorkflowDTO.Node(
                 nodeId, "PROCESS", new ProductProcessWorkflowDTO.Position(0D, 0D), data);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ProductProcessWorkflowDTO.Node processNodeWithInput(
+            String nodeId,
+            String workProcessId,
+            String inputPortId,
+            String inputMaterialNodeId,
+            String inputMaterialKind,
+            String outputPortId,
+            String outputMaterialNodeId,
+            String outputMaterialKind) {
+        ProductProcessWorkflowDTO.Node node = processNode(
+                nodeId,
+                workProcessId,
+                inputPortId,
+                outputPortId,
+                outputMaterialNodeId,
+                outputMaterialKind);
+        Map<String, Object> inputPort = ((List<Map<String, Object>>) node.getData().get("ports")).getFirst();
+        inputPort.put("materialNodeId", inputMaterialNodeId);
+        inputPort.put("materialKind", inputMaterialKind);
+        return node;
     }
 
     @SuppressWarnings("unchecked")
