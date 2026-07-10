@@ -73,7 +73,13 @@ public class WorkProcess extends BaseEntity {
     private String outputUnit;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "default_output_material_kind", nullable = false, length = 32)
+    @Column(
+            name = "default_output_material_kind",
+            nullable = false,
+            length = 32,
+            columnDefinition = "VARCHAR(32) DEFAULT 'SEMI_FINISHED' "
+                    + "CHECK (default_output_material_kind IN ('SEMI_FINISHED', 'FINISHED_GOOD'))"
+    )
     private WorkProcessOutputMaterialKind defaultOutputMaterialKind;
 
     /** 标准时薪 (元/小时; null=未配置, 用于逐道人工成本计算, 绝不默认 0) */
