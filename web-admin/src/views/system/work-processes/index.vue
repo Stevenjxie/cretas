@@ -9,8 +9,14 @@ import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
-  type WorkProcessItem, type WorkProcessDuplicateGroup
+  type WorkProcessItem, type WorkProcessDuplicateGroup,
+  type WorkProcessOutputMaterialKind
 } from '@/api/processProduction';
+import {
+  WORK_PROCESS_OUTPUT_KIND_OPTIONS,
+  normalizeOutputMaterialKind,
+  usesSemiFinishedCode,
+} from './workProcessOutputKind';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -33,9 +39,7 @@ const CATEGORIES = [
   '前处理', '加工', '包装', '灭菌', '质检', '存储', '配送', '其他'
 ];
 
-type WorkProcessForm = Partial<WorkProcessItem> & {
-  semiFinishedOutputCode?: string | null;
-};
+type WorkProcessForm = Partial<WorkProcessItem>;
 
 const formData = reactive<WorkProcessForm>({
   id: '',
@@ -48,16 +52,14 @@ const formData = reactive<WorkProcessForm>({
   standardYieldMax: null,
   needsInput: true,
   outputUnit: '',
+  defaultOutputMaterialKind: normalizeOutputMaterialKind(undefined),
   semiFinishedOutputCode: null,
   standardHourlyRate: null
 });
 
-const semiOutputEnabled = computed<boolean>({
-  get: () => Boolean(formData.semiFinishedOutputCode?.trim()),
-  set: (enabled) => {
-    formData.semiFinishedOutputCode = enabled ? (formData.semiFinishedOutputCode || suggestSemiOutputCode()) : null;
-  }
-});
+const showSemiFinishedCode = computed(() => usesSemiFinishedCode(
+  normalizeOutputMaterialKind(formData.defaultOutputMaterialKind),
+));
 
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
 const minPct = computed<number | null>({
@@ -93,10 +95,6 @@ const formRules = {
   semiFinishedOutputCode: [
     {
       validator: (_r: unknown, value: string | null, cb: (e?: Error) => void) => {
-        if (semiOutputEnabled.value && !value?.trim()) {
-          cb(new Error('请输入半成品产出编码'));
-          return;
-        }
         if (value && value.length > 50) {
           cb(new Error('不能超过50个字符'));
           return;
@@ -194,6 +192,7 @@ function handleAdd() {
     id: '', processName: '', processCategory: '',
     unit: 'kg', estimatedMinutes: null, sortOrder: 0,
     standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: '',
+    defaultOutputMaterialKind: normalizeOutputMaterialKind(undefined),
     semiFinishedOutputCode: null,
     standardHourlyRate: null
   });
@@ -203,9 +202,11 @@ function handleAdd() {
 function handleEdit(row: WorkProcessItem) {
   dialogTitle.value = '编辑工序';
   isEditing.value = true;
+  const outputKind = normalizeOutputMaterialKind(row.defaultOutputMaterialKind);
   Object.assign(formData, {
     ...row,
-    semiFinishedOutputCode: semiOutputCodeOf(row)
+    defaultOutputMaterialKind: outputKind,
+    semiFinishedOutputCode: usesSemiFinishedCode(outputKind) ? semiOutputCodeOf(row) : null,
   });
   dialogVisible.value = true;
 }
@@ -216,14 +217,22 @@ async function handleSubmit() {
 
   submitting.value = true;
   try {
-    const semiCode = semiOutputEnabled.value ? normalizeSemiOutputCode(formData.semiFinishedOutputCode) : null;
-    const payload = { ...formData, semiFinishedOutputCode: semiCode };
+    const outputKind = normalizeOutputMaterialKind(formData.defaultOutputMaterialKind);
+    const semiCode = usesSemiFinishedCode(outputKind)
+      ? normalizeSemiOutputCode(formData.semiFinishedOutputCode)
+      : null;
+    const payload = {
+      ...formData,
+      defaultOutputMaterialKind: outputKind,
+      semiFinishedOutputCode: semiCode,
+    };
+    const outputKindLabel = usesSemiFinishedCode(outputKind) ? '半成品' : '成品';
     if (isEditing.value && formData.id) {
       await updateWorkProcess(factoryId.value, formData.id, payload);
-      ElMessage.success(semiCode ? `工序已更新，半成品产出编码：${semiCode}` : '工序已更新，未配置半成品产出');
+      ElMessage.success(`工序已更新，默认产出类型：${outputKindLabel}`);
     } else {
       await createWorkProcess(factoryId.value, payload);
-      ElMessage.success(semiCode ? `工序已创建，半成品产出编码：${semiCode}` : '工序已创建，未配置半成品产出');
+      ElMessage.success(`工序已创建，默认产出类型：${outputKindLabel}`);
     }
     dialogVisible.value = false;
     loadData();
@@ -268,8 +277,19 @@ function handlePageChange(page: number) {
 }
 
 function semiOutputCodeOf(row: WorkProcessItem): string | null {
-  const value = (row as WorkProcessForm).semiFinishedOutputCode;
-  return normalizeSemiOutputCode(value);
+  return normalizeSemiOutputCode(row.semiFinishedOutputCode);
+}
+
+function outputKindOf(row: WorkProcessItem): WorkProcessOutputMaterialKind {
+  return normalizeOutputMaterialKind(row.defaultOutputMaterialKind);
+}
+
+function handleOutputKindChange(kind: WorkProcessOutputMaterialKind): void {
+  const normalizedKind = normalizeOutputMaterialKind(kind);
+  formData.defaultOutputMaterialKind = normalizedKind;
+  if (!usesSemiFinishedCode(normalizedKind)) {
+    formData.semiFinishedOutputCode = null;
+  }
 }
 
 function normalizeSemiOutputCode(value?: string | null): string | null {
@@ -277,14 +297,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
   return trimmed || null;
 }
 
-function suggestSemiOutputCode(): string {
-  const source = formData.processName?.trim() || formData.processCategory?.trim() || 'WIP';
-  const normalized = source
-    .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}-]/gu, '')
-    .toUpperCase();
-  return `${normalized || 'WIP'}-WIP`.slice(0, 50);
-}
 </script>
 
 <template>
@@ -373,12 +385,10 @@ function suggestSemiOutputCode(): string {
           </template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" />
-        <el-table-column label="半成品产出" width="130">
+        <el-table-column label="默认产出类型" width="130">
           <template #default="{ row }">
-            <el-tag v-if="semiOutputCodeOf(row)" type="success" size="small">
-              产半成品
-            </el-tag>
-            <span v-else class="text-muted">-</span>
+            <el-tag v-if="usesSemiFinishedCode(outputKindOf(row))" type="success" size="small">半成品</el-tag>
+            <el-tag v-else size="small">成品</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="标准出成率" width="130">
@@ -461,18 +471,29 @@ function suggestSemiOutputCode(): string {
         <el-form-item label="产出单位">
           <el-input v-model="formData.outputUnit" placeholder="与投入单位不同时填，如 盒/份；留空则同投入单位" />
         </el-form-item>
-        <el-form-item label="本工序产出半成品">
-          <el-switch v-model="semiOutputEnabled" />
-          <span class="form-hint">开启后此工序产出可作半成品入生产库，供二次加工领用</span>
+        <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
+          <el-select
+            v-model="formData.defaultOutputMaterialKind"
+            style="width: 100%"
+            @change="handleOutputKindChange"
+          >
+            <el-option
+              v-for="option in WORK_PROCESS_OUTPUT_KIND_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <span class="form-hint">该工序加入产品 Workflow 后，系统会据此生成半成品或成品 Cell；默认为半成品，报工人员不可修改。</span>
         </el-form-item>
-        <el-form-item v-if="semiOutputEnabled" label="半成品产出编码" prop="semiFinishedOutputCode">
+        <el-form-item v-if="showSemiFinishedCode" label="半成品产出编码" prop="semiFinishedOutputCode">
           <el-input
             v-model="formData.semiFinishedOutputCode"
             maxlength="50"
             show-word-limit
             placeholder="如 LU-ZHI-ZHU-TI 或 熟制猪蹄-WIP"
           />
-          <span class="form-hint">建议按产品/工序命名，保存后报工产出阶段会显示为半成品选项</span>
+          <span class="form-hint">可选；建议按产品/工序命名，供后续半成品识别与领用</span>
         </el-form-item>
         <el-form-item label="标准时薪(元/小时)" prop="standardHourlyRate">
           <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
