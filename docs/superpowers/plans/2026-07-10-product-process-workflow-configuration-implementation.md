@@ -361,7 +361,10 @@ it.each(['add-output-inline', 'add-output-edge'])(
   async (testId) => {
     const wrapper = mount(WorkflowProcessNode, {
       props: { data: processData, selected: true, canWrite: true, skuOptions: [] },
-      global: { stubs: { Handle: true, ElButton: false, ElSelect: true, ElInput: true, ElTag: true } },
+      global: {
+        plugins: [ElementPlus],
+        stubs: { Handle: true },
+      },
     });
     await wrapper.get(`[data-testid="${testId}"]`).trigger('click');
     expect(wrapper.emitted('addOutput')).toHaveLength(1);
@@ -490,7 +493,9 @@ Rules:
 // every output port.materialKind must equal its material node.kind
 // SEMI_FINISHED node SKU must have ProductCategory.SEMI_FINISHED
 // FINISHED_GOOD node SKU must not have ProductCategory.SEMI_FINISHED
-// primary FINISHED_GOOD output SKU must equal the Workflow productTypeId
+// FINISHED_GOOD output SKU may differ from the Workflow productTypeId so one
+// workflow can produce multiple finished-product versions; validate category
+// consistency, factory ownership, and port/node identity instead of SKU equality
 ```
 
 Batch-load WorkProcesses with `findByFactoryIdAndIdIn` to avoid N+1, then load only the distinct output SKU ids with `findByIdIn` and reject any returned ProductType whose `factoryId` differs. Call the new validator after the existing structural `validateForPublish` and before changing draft status.
@@ -532,22 +537,39 @@ git commit -m "feat: validate workflow output catalog bindings"
 ```java
 @Test
 void previewKeepsOnlyWhitelistedWorkflowPatchOperations() {
-    Map<String, Object> result = tool.previewData(Map.of(
-            "patches", List.of(
-                    Map.of("op", "SET_NODE_FIELD", "nodeId", "p1",
-                            "path", "conversionRule.mode", "value", "ACTUAL_WEIGHT"),
-                    Map.of("op", "ACTIVATE_WORKFLOW", "workflowId", 9))));
+    String arguments = objectMapper.writeValueAsString(Map.of(
+        "patches", List.of(
+            Map.of("op", "SET_NODE_FIELD", "nodeId", "p1",
+                "path", "conversionRule.mode", "value", "ACTUAL_WEIGHT"),
+            Map.of("op", "ACTIVATE_WORKFLOW", "workflowId", 9))));
+    ToolCall call = ToolCall.of("preview-1", tool.getToolName(), arguments);
 
-    assertEquals(1, ((List<?>) result.get("patches")).size());
+    Map<String, Object> envelope = objectMapper.readValue(
+        tool.preview(call, Map.of("factoryId", "F006")), new TypeReference<>() {});
+    Map<String, Object> data = (Map<String, Object>) envelope.get("data");
+
+    assertTrue((Boolean) envelope.get("success"));
+    assertEquals(1, ((List<?>) data.get("patches")).size());
 }
 
 @Test
 void executeIsAlwaysRejected() {
-    BusinessException error = assertThrows(BusinessException.class,
-            () -> tool.executeData(Map.of("patches", List.of())));
-    assertEquals("WORKFLOW_AI_PREVIEW_ONLY", error.getErrorCode());
+    ToolCall call = ToolCall.of("execute-1", tool.getToolName(),
+        objectMapper.writeValueAsString(Map.of("patches", List.of())));
+
+    Map<String, Object> envelope = objectMapper.readValue(
+        tool.execute(call, Map.of("factoryId", "F006")), new TypeReference<>() {});
+
+    assertFalse((Boolean) envelope.get("success"));
+    assertEquals("WORKFLOW_AI_PREVIEW_ONLY", envelope.get("errorCode"));
 }
 ```
+
+These tests must call the real public `ToolExecutor.preview(...)` and
+`ToolExecutor.execute(...)` entry points. Do not add production-only helper methods
+such as `previewData` or `executeData` merely to make tests easier.
+The execute rejection must preserve the semantic `errorCode` in the public JSON
+envelope; a generic human-readable error string is not sufficient for this safety boundary.
 
 Controller test: send `moduleCode=product_process_workflow_config` and verify `ToolExecutor.preview(...)` is called, `execute(...)` is never called, and `AIResponse.applied` is false.
 
