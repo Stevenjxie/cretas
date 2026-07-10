@@ -140,6 +140,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
+        normalizeConfiguredUnits(factoryId, req);
         validateCustomFields(factoryId, req);
 
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
@@ -154,6 +155,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<String> warnings = new ArrayList<>();
 
         assertFinishedGoodsSourceAllowed(factoryId, req);
+        assertExternalFeedUnitSupported(req);
 
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
@@ -1491,6 +1493,85 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         return edges;
+    }
+
+    private void normalizeConfiguredUnits(String factoryId, ProcessSheetRowRequest req) {
+        Optional<ProductWorkProcess> configured = productWorkProcessRepo
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(
+                        factoryId, req.getProductTypeId(), req.getProcessOrder());
+        if (configured.isEmpty()) {
+            // Legacy clients only sent one `unit` field. Preserve that established single-unit
+            // contract, but do not allow a new dual-unit payload to bypass configuration.
+            if (req.getInputUnit() == null && req.getOutputUnit() == null) {
+                String legacyUnit = firstNonBlank(req.getUnit(), "kg");
+                req.setInputUnit(legacyUnit);
+                req.setOutputUnit(legacyUnit);
+                req.setUnit(legacyUnit);
+                return;
+            }
+            throw new BusinessException(400, "产品未配置该工序，不能报工")
+                    .withCode("PROCESS_SHEET_PROCESS_NOT_CONFIGURED")
+                    .withHint("请先在产品工序配置中维护本道工序和单位")
+                    .withHintTarget("工序配置");
+        }
+        ProductWorkProcess pwp = configured.get();
+        WorkProcess process = processRepo.findByFactoryIdAndId(factoryId, pwp.getWorkProcessId())
+                .orElseThrow(() -> new BusinessException(409, "工序配置不存在，不能报工")
+                        .withCode("PROCESS_SHEET_WORK_PROCESS_NOT_FOUND")
+                        .withHint("请检查产品工序配置后重试")
+                        .withHintTarget("工序配置"));
+        normalizeConfiguredUnits(req, pwp, process);
+    }
+
+    /**
+     * The client may omit legacy unit fields, but it may not override product-process
+     * and work-process configuration. This boundary runs before stock and cost writes.
+     */
+    static void normalizeConfiguredUnits(ProcessSheetRowRequest req,
+                                         ProductWorkProcess productProcess,
+                                         WorkProcess workProcess) {
+        String inputUnit = firstNonBlank(productProcess.getUnitOverride(), workProcess.getUnit(), "kg");
+        String outputUnit = firstNonBlank(workProcess.getOutputUnit(), inputUnit);
+
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setUnit(outputUnit);
+    }
+
+    private static void assertConfiguredUnit(String suppliedUnit, String configuredUnit, String side) {
+        if (suppliedUnit == null || suppliedUnit.isBlank()
+                || suppliedUnit.trim().equalsIgnoreCase(configuredUnit)) {
+            return;
+        }
+        throw new BusinessException(409, "请求" + side + "单位为“" + suppliedUnit
+                + "”，与工序配置单位“" + configuredUnit + "”不一致")
+                .withCode("PROCESS_SHEET_UNIT_MISMATCH")
+                .withHint("请刷新工序表后按配置单位录入；单位变更请在产品工序配置中维护")
+                .withSeverity("BLOCKING")
+                .withHintTarget("工序配置");
+    }
+
+    /**
+     * The existing SFI/FG services consume feedQuantityKg and only implement kg-to-count
+     * conversion. Arbitrary count-unit feeds must not be silently treated as kilograms.
+     */
+    private static void assertExternalFeedUnitSupported(ProcessSheetRowRequest req) {
+        if (req.getUpstreamSources() == null || req.getUpstreamSources().isEmpty()) {
+            return;
+        }
+        boolean usesExternalStock = req.getUpstreamSources().stream()
+                .anyMatch(ref -> ref.isSemiFinished() || ref.isFinishedGoods());
+        if (usesExternalStock && !"kg".equalsIgnoreCase(requestInputUnit(req))) {
+            throw new BusinessException(409, "常驻半成品/成品库存投料当前只支持 kg 投入单位")
+                    .withCode("PROCESS_SHEET_EXTERNAL_FEED_UNIT_UNSUPPORTED")
+                    .withHint("请先通过配置为 kg 投入单位的换算工序转换后，再使用半成品或成品库存投料")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("inputUnit");
+        }
     }
 
     /**

@@ -381,6 +381,7 @@ public class PrintController {
 
         String productTypeId = null;
         java.math.BigDecimal plannedQty = null;
+        String plannedUnit = null;
         if (productionPlanService != null) {
             try {
                 ProductionPlanDTO plan = productionPlanService.getProductionPlanById(factoryId, planId);
@@ -389,6 +390,7 @@ public class PrintController {
                 p.put("salesOrderNumbers", salesOrderNumbers(plan));
                 productTypeId = plan.getProductTypeId();
                 plannedQty = plan.getPlannedQuantity();
+                plannedUnit = plan.getPlannedUnit();
             } catch (Exception e) {
                 log.warn("printBatchingSheet: plan {} not found: {}", planId, e.getMessage());
                 p.put("planNumber", or(overrides, "planNumber", planId));
@@ -403,16 +405,19 @@ public class PrintController {
 
         // 单锅产能 + 单位 取自 ProductType
         java.math.BigDecimal potCapacity = null;
-        String unit = "-";
+        String unit = plannedUnit;
         if (productTypeRepository != null && productTypeId != null) {
             // 跨租户安全: 按 (id, factoryId) 查, 防 productTypeId 指向别厂产品 (复用项目既有红线修法)
             com.cretas.aims.entity.ProductType pt =
                     productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).orElse(null);
             if (pt != null) {
                 potCapacity = pt.getSinglePotCapacity();
-                if (pt.getUnit() != null) unit = pt.getUnit();
+                if (unit == null || unit.isBlank()) {
+                    unit = pt.getUnit();
+                }
             }
         }
+        if (unit == null || unit.isBlank()) unit = "kg";
         p.put("plannedQuantity", plannedQty != null ? formatQty(plannedQty) : "-");
         p.put("unit", unit);
         p.put("singlePotCapacity", potCapacity != null ? formatQty(potCapacity) : null);

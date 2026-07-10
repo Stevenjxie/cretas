@@ -309,38 +309,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * Resolves the unit attached to ProductionPlan.plannedQuantity.
-     * The first process input unit is authoritative; product unit and kg are fallbacks.
+     * {@code plannedQuantity} is the planned finished-product output, never the
+     * first-process feed quantity.  Raw-material feed is only known after a
+     * recipe/yield calculation or actual reporting, so it must not be guessed
+     * from a sales-order line.
      */
-    static String resolvePlannedUnit(String firstProcessInputUnit, String productUnit, String requestedUnit) {
-        String requested = firstNonBlank(requestedUnit);
-        if (requested != null) return requested;
-        String first = firstNonBlank(firstProcessInputUnit);
-        if (first != null) return first;
-        String product = firstNonBlank(productUnit);
-        return product != null ? product : "kg";
+    static String resolvePlannedOutputUnit(String productUnit) {
+        return productUnit != null && !productUnit.isBlank() ? productUnit.trim() : "kg";
     }
 
-    private String resolvePlannedUnitForPlan(String factoryId, String productTypeId, String requestedUnit) {
-        String firstProcessInputUnit = null;
-        if (productWorkProcessService != null && productTypeId != null) {
-            try {
-                firstProcessInputUnit = productWorkProcessService.listByProduct(factoryId, productTypeId)
-                        .stream()
-                        .sorted(Comparator.comparing(
-                                com.cretas.aims.dto.ProductWorkProcessDTO::getProcessOrder,
-                                Comparator.nullsLast(Integer::compareTo)))
-                        .findFirst()
-                        .map(p -> firstNonBlank(p.getUnitOverride(), p.getDefaultUnit()))
-                        .orElse(null);
-            } catch (RuntimeException ex) {
-                log.warn("解析计划投入单位时读取产品工序失败, factoryId={}, productTypeId={}, err={}",
-                        factoryId, productTypeId, ex.getMessage());
-            }
-        }
+    private String resolvePlannedOutputUnitForProduct(String productTypeId) {
         String productUnit = productTypeId == null ? null
                 : productTypeRepository.findById(productTypeId).map(ProductType::getUnit).orElse(null);
-        return resolvePlannedUnit(firstProcessInputUnit, productUnit, requestedUnit);
+        return resolvePlannedOutputUnit(productUnit);
     }
 
     @Override
@@ -901,7 +882,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
-        request.setPlannedUnit(resolvePlannedUnitForPlan(factoryId, request.getProductTypeId(), request.getPlannedUnit()));
+        request.setPlannedUnit(resolvePlannedOutputUnitForProduct(request.getProductTypeId()));
 
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
@@ -1204,10 +1185,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // P0-12: 校验销售订单来源 + 回填客户名
         validateAndEnrichSalesOrderSource(factoryId, request);
 
-        request.setPlannedUnit(resolvePlannedUnitForPlan(
-                factoryId,
-                request.getProductTypeId() != null ? request.getProductTypeId() : plan.getProductTypeId(),
-                request.getPlannedUnit() != null ? request.getPlannedUnit() : plan.getPlannedUnit()));
+        boolean productChanged = request.getProductTypeId() != null
+                && !request.getProductTypeId().equals(plan.getProductTypeId());
+        request.setPlannedUnit(productChanged || plan.getPlannedUnit() == null
+                ? resolvePlannedOutputUnitForProduct(
+                        request.getProductTypeId() != null ? request.getProductTypeId() : plan.getProductTypeId())
+                : plan.getPlannedUnit());
 
         // 更新计划信息
         productionPlanMapper.updateEntity(plan, request);
@@ -4281,6 +4264,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setPlanNumber(planNumber);
         plan.setProductTypeId(productTypeId);
         plan.setPlannedQuantity(quantity);
+        plan.setPlannedUnit(resolvePlannedOutputUnitForProduct(productTypeId));
         plan.setPlannedDate(plannedDate != null ? plannedDate : java.time.LocalDate.now());
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(submittedBy);

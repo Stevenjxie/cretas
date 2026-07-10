@@ -28,10 +28,24 @@ export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits 
   return { inputUnit, outputUnit };
 }
 
-export function formatPlannedInput(quantity: number | null | undefined, unit: string | null | undefined): string {
-  if (quantity == null || quantity === 0) return '计划投料 —';
+export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
+  if (quantity == null || quantity === 0) return '计划成品 —';
   const normalizedUnit = nonBlank(unit) ?? 'kg';
-  return `计划投料 ${quantity} ${normalizedUnit}`;
+  return `计划成品 ${quantity} ${normalizedUnit}`;
+}
+
+export function formatProcessOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
+  if (quantity == null) return '—';
+  return `产出 ${Number(quantity).toFixed(2)} ${nonBlank(unit) ?? 'kg'}`;
+}
+
+export function formatSourceFeedSummary(sourceCount: number, quantity: number, unit: string | null | undefined): string {
+  if (sourceCount === 0) return '+ 来源批';
+  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${nonBlank(unit) ?? 'kg'}`;
+}
+
+export function formatFeedPlaceholder(unit: string | null | undefined): string {
+  return `投料${nonBlank(unit) ?? 'kg'}`;
 }
 
 export function withProcessSheetUnits<T extends LabelColumn>(

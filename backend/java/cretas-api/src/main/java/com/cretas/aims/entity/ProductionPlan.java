@@ -55,7 +55,7 @@ public class ProductionPlan extends BaseEntity {
     private String productTypeId;
     @Column(name = "planned_quantity", nullable = false, precision = 10, scale = 2)
     private BigDecimal plannedQuantity;
-    /** Unit of plannedQuantity (normally the first process input unit, e.g. kg). */
+    /** Unit snapshot of planned finished-product output quantity. */
     @Column(name = "planned_unit", nullable = false, length = 32)
     private String plannedUnit = "kg";
     @Column(name = "actual_quantity", precision = 10, scale = 2)

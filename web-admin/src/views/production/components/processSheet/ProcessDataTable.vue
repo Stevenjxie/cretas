@@ -22,7 +22,13 @@ import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDe
 import WorkHoursTable from './WorkHoursTable.vue';
 import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 import { isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
-import { resolveProcessSheetUnits, withProcessSheetUnits } from '@/utils/processSheetUnits';
+import {
+  formatFeedPlaceholder,
+  formatProcessOutput,
+  formatSourceFeedSummary,
+  resolveProcessSheetUnits,
+  withProcessSheetUnits,
+} from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // Props & emits
@@ -206,7 +212,10 @@ const ownProcessName = computed(() => props.processLabel || props.processCode);
 /** 上游(前置)工序真实显示名; 链起步道(无上游)兜底通用「上游」。 */
 const upstreamProcessName = computed(() => props.upstreamProcessLabel || '上游');
 const sourceTitle = computed(() => `${upstreamProcessName.value}${isMultiSource.value ? '来源(混批)' : '批次'}`);
-const sourcePickerPlaceholder = computed(() => `选${upstreamProcessName.value}批次/半成品`);
+const supportsExternalStockFeed = computed(() => processUnits.value.inputUnit.toLowerCase() === 'kg');
+const sourcePickerPlaceholder = computed(() => supportsExternalStockFeed.value
+  ? `选${upstreamProcessName.value}批次/半成品`
+  : `选${upstreamProcessName.value}在制批次（常驻半成品/成品仅支持kg投入）`);
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -547,19 +556,19 @@ function formatSettledAt(iso: string | null): string {
 function settledRowSummary(row: SheetRow): string {
   if (isXiuYou.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isSingleUpstream.value) {
     const after = row.fields['after'];
-    return after != null ? `产出 ${Number(after).toFixed(2)} kg` : '—';
+    return formatProcessOutput(after as number | null, processUnits.value.outputUnit);
   }
   if (isQuSheTou.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isShuZhi.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isQidiao.value) {
     const n = calcSumBoxes(row);
@@ -701,7 +710,7 @@ function upstreamWarning(row: SheetRow): string | null {
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
       if (!fg) return null;
       if (isCountUnit(fg.unit)) return countUnitFeedWarning(fg.unit, fg.gramsPerUnit, fgAvailable(fg), usage, '该成品来源');
-      if (usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
+      if (usage > fgAvailable(fg)) return `用量 ${usage}${processUnits.value.inputUnit} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
       return null;
     }
     if (row.upstreamSemiFinished) {
@@ -709,12 +718,12 @@ function upstreamWarning(row: SheetRow): string | null {
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
       if (!sfi) return null;
       if (isCountUnit(sfi.unit)) return countUnitFeedWarning(sfi.unit, sfi.gramsPerUnit, sfiAvailable(sfi), usage, '该半成品来源');
-      if (usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+      if (usage > sfiAvailable(sfi)) return `用量 ${usage}${processUnits.value.inputUnit} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
       return null;
     }
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     if (!inv) return null;
-    if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
+    if (usage > inv.remaining) return `用量 ${usage}${processUnits.value.inputUnit} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`;
   }
   if (isMultiSource.value) {
     const warnings: string[] = [];
@@ -750,7 +759,7 @@ function upstreamWarning(row: SheetRow): string | null {
       }
       const inv = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
       if (inv && usage > inv.remaining) {
-        warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}kg`);
+        warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`);
       }
     }
     return warnings.length ? warnings.join('; ') : null;
@@ -1117,9 +1126,8 @@ let fgLoadSeq = 0;
  * archetype 兜底 (back-compat): 现有混锅道 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 保持显 picker,
  * 保证历史产品工序零回归 —— 即使未配置 flag 也不丢失现有能力。
  */
-const showSfi = computed(() =>
-  props.allowSemiFinishedInjection || supportsUpstreamSources.value,
-);
+const showSfi = computed(() => supportsExternalStockFeed.value
+  && (props.allowSemiFinishedInjection || supportsUpstreamSources.value));
 /** ①c 是否提供「成品库存(FG)」投料选项；必须按产品工序显式开启。 */
 const showFg = computed(() => showSfi.value && props.allowFinishedGoodsSource === true);
 
@@ -1157,7 +1165,7 @@ function dateText(d: string | null | undefined): string {
 function wipLabel(item: ProcessSheetInventoryItem): string {
   const name = item.productTypeName || '在制';
   const parts = [name, item.batchNumber, dateText(item.productionDate),
-    `余${item.remaining}kg`, costText(item.unitPrice)];
+    `余${item.remaining}${item.unit || processUnits.value.inputUnit}`, costText(item.unitPrice)];
   return parts.join(' | ');
 }
 
@@ -1354,7 +1362,7 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
 /** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI / 成品FG)。 */
 function srcRemainingLabel(src: UpstreamRef): string {
   const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
-  if (wip) return `余${wip.remaining}kg`;
+  if (wip) return `余${wip.remaining}${wip.unit || processUnits.value.inputUnit}`;
   const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
   if (fg) return `成品余${fgAvailable(fg)}${fg.unit || 'kg'}`;
   const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
@@ -1629,7 +1637,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
                 <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
-                {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
+                {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
               </el-button>
             </div>
             <!-- Mix expanded inline -->
@@ -1673,7 +1681,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-input-number
                   v-model="src.feedQuantityKg"
                   :min="0" :precision="2"
-                  placeholder="投料kg"
+                  :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                   controls-position="right"
                   size="small" style="width:120px" />
                 <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
@@ -1695,7 +1703,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <template v-if="row.potCount > 1">
                   <div v-for="pi in row.potCount" :key="pi"
                        style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:12px;color:#606266">第{{ pi }}锅(kg):</span>
+                    <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
                     <el-input-number
                       v-model="row.potRawKgs[pi - 1]"
                       :min="0" :precision="2" size="small" style="width:100px" />
@@ -1748,7 +1756,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 style="width:100%" size="small" />
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
-                {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+                {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
@@ -2067,7 +2075,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @click="row.mixExpanded = !row.mixExpanded"
                     style="font-size:12px">
                     <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
-                    {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
+                    {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
                   </el-button>
                 </td>
               </template>
@@ -2114,7 +2122,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
                   <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
-                    {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+                    {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
                   </span>
 
                   <!-- auto: yield -->
@@ -2257,7 +2265,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-input-number
                       v-model="src.feedQuantityKg"
                       :min="0" :precision="2"
-                      placeholder="投料kg"
+                      :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
@@ -2279,7 +2287,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <template v-if="row.potCount > 1">
                       <div v-for="pi in row.potCount" :key="pi"
                            style="display:flex;align-items:center;gap:4px">
-                        <span style="font-size:12px;color:#606266">第{{ pi }}锅(kg):</span>
+                        <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
                         <el-input-number
                           v-model="row.potRawKgs[pi - 1]"
                           :min="0" :precision="2" size="small" style="width:100px" />
@@ -2340,7 +2348,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-input-number
                       v-model="src.feedQuantityKg"
                       :min="0" :precision="2"
-                      placeholder="投料kg"
+                      :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">

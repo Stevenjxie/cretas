@@ -10,14 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class ProductionPlanPlannedUnitTest {
 
     @Test
-    void resolvesPlanQuantityUnitFromFirstProcessThenProductThenLegacyKg() throws Exception {
+    void resolvesPlanQuantityUnitAsFinishedProductOutputUnit() throws Exception {
         Method method = ProductionPlanServiceImpl.class.getDeclaredMethod(
-                "resolvePlannedUnit", String.class, String.class, String.class);
+                "resolvePlannedOutputUnit", String.class);
         method.setAccessible(true);
 
-        assertEquals("kg", method.invoke(null, "kg", "包", null));
-        assertEquals("包", method.invoke(null, null, "包", null));
-        assertEquals("kg", method.invoke(null, null, null, null));
-        assertEquals("盒", method.invoke(null, "kg", "包", "盒"));
+        // A sales-order quantity is finished-product output.  It must not become
+        // the first-process input unit (for example, 400 boxes must not read as 400kg).
+        assertEquals("box", method.invoke(null, "box"));
+        assertEquals("kg", method.invoke(null, (Object) null));
     }
 }

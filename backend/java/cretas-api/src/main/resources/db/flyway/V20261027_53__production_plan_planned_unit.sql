@@ -1,7 +1,13 @@
 -- Make the unit of ProductionPlan.planned_quantity explicit.
--- Existing plans historically used kg as the planning/input unit.
+-- planned_quantity is the planned finished-product output, not raw-material input.
 ALTER TABLE production_plans
     ADD COLUMN IF NOT EXISTS planned_unit VARCHAR(32);
+
+UPDATE production_plans p
+SET planned_unit = COALESCE(NULLIF(btrim(pt.unit), ''), 'kg')
+FROM product_types pt
+WHERE p.product_type_id = pt.id
+  AND (p.planned_unit IS NULL OR btrim(p.planned_unit) = '');
 
 UPDATE production_plans
 SET planned_unit = 'kg'
