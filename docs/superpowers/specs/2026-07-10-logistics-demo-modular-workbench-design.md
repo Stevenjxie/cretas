@@ -132,6 +132,14 @@
 
 实现时将客户地图图片作为本地静态资源保存，不依赖外部 URL。
 
+地图和覆盖层使用同一个固定坐标系：
+
+- 原图坐标系固定为 `1917 × 1165`。
+- 地图容器保持 `1917 / 1165` 宽高比，禁止使用会裁剪图片的 `object-fit: cover`。
+- SVG 使用 `viewBox="0 0 1917 1165"`，门店点、路线节点和道路段都保存原图像素坐标。
+- 每个门店必须定义唯一 `mapAnchor: { x, y }`；实现前逐店核对锚点是否落在客户参考图对应门店上。
+- 响应式缩放只缩放整张图片和 SVG，不重新计算或裁剪坐标。
+
 ### 5.2 地图状态
 
 #### 订单点位状态
@@ -251,6 +259,71 @@ web-admin/src/views/scheduling/logistics/
 
 共享状态由 `useLogisticsDemoState.ts` 提供，四个页面读取同一组 mock 订单、车辆、司机、线路和调度记录，避免各页面数据互相矛盾。
 
+### 8.1 核心数据契约
+
+```ts
+interface MapPoint {
+  x: number;
+  y: number;
+}
+
+interface RoadSegment {
+  fromId: 'DEPOT' | string;
+  toId: 'DEPOT' | string;
+  geometry: MapPoint[];
+  distanceKm: number;
+}
+
+interface RouteTrip {
+  id: string;
+  routeGroupId: string;
+  tripNo: number;
+  vehicleId: string | null;
+  driverId: string | null;
+  storeIds: string[];
+  segmentKeys: string[];
+  geometry: MapPoint[];
+  segmentDistances: number[];
+  totalDistanceKm: number;
+  totalVolumeCbm: number;
+  loadRate: number;
+  status: 'draft' | 'needs_vehicle' | 'needs_route_data' | 'confirmed';
+}
+
+interface ScheduleResult {
+  trips: RouteTrip[];
+  unassignedStoreIds: string[];
+  assignedVehicleCount: number;
+  additionalVehicleCount: number;
+}
+```
+
+页面、线路卡片、地图和导出都读取 `RouteTrip[]`，不再各自计算另一套线路状态。
+
+### 8.2 超载和下一车次
+
+超出容量不能只进入一个仅供展示的 `overflow[]`：
+
+1. 当前车次达到软目标或硬容量后，创建新的 `RouteTrip`。
+2. 优先匹配同区域、容量足够且尚未占用的车辆。
+3. 没有可用车辆时，仍创建下一车次，但 `vehicleId = null`、状态为 `needs_vehicle`。
+4. 原车次的 `storeIds`、门店数、方数和导出数据不得包含已顺延门店。
+5. 顶部同时显示“已匹配车辆数”和“待补车辆数”，不把待补车辆伪装成已存在车辆。
+
+### 8.3 目标装载率规则
+
+目标装载率必须真实影响车次生成：
+
+- `hardCap = vehicle.capacityCbm`，任何车次都不得超过硬容量。
+- `targetCap = hardCap × targetLoadPct / 100`。
+- 按区域和固定司机优先级取得候选门店后，按确定顺序贪心装车。
+- 当前车次已有门店时，如果加入下一家会超过 `targetCap`，关闭当前车次并创建下一车次。
+- 单家门店体积超过 `targetCap` 但不超过 `hardCap` 时，允许该门店单独成车次。
+- 单家门店体积超过 `hardCap` 时进入 `unassignedStoreIds`，阻止确认并提示需要拆单或更大车辆。
+- 调整目标装载率后必须重新生成 `RouteTrip[]`；至少一组测试数据要证明 70%、88%、98% 得到不同车次结果。
+
+固定区域是候选门店分组条件，不等于固定四辆车或固定四条线路。推荐车辆数来自生成后的 `ScheduleResult`。
+
 ## 9. 数据流
 
 ```text
@@ -285,6 +358,11 @@ web-admin/src/views/scheduling/logistics/
 - 分段公里数之和等于总公里数。
 - 人工调序同时更新地图、卡片和导出顺序。
 - 容量超限产生下一车次或待处理门店。
+- 原车次和导出数据不再包含已顺延门店。
+- `neededVehicles` 来源于实际车次和待补车辆，不来源于固定模板数量。
+- 70%、88%、98% 目标装载率生成不同的车次结果。
+- 所有门店 `mapAnchor` 位于 `1917 × 1165` 坐标范围内。
+- 每条线路允许的全部调序组合都能找到对应的双向道路段；缺失时测试必须失败。
 
 ### 11.2 页面验收
 
@@ -311,7 +389,21 @@ web-admin/src/views/scheduling/logistics/
 6. 切换到调度记录、门店与订单、车辆与司机页面。
 7. 截图保存关键状态。
 
-## 12. 非目标
+### 11.4 测试深度声明
+
+- `smoke`：页面、菜单、地图和四个模块能够打开。
+- `medium`：完成订单导入、生成线路、切换线路、调序、确认和 CSV 下载，并核对页面状态变化。
+- 本轮不声明 `deep`：当前无后端持久化、刷新后读回和下游模块真实回读。
+
+构建通过不等于业务测试通过；交付总结必须分别报告单元测试、组件测试、smoke 和 medium 数量。
+
+## 12. 演示数据标识
+
+- 删除页面中的会议讲法、产品路线图和“后续接入”等内部说明。
+- 物流演示租户的全局顶部区域保留低干扰“演示数据”标识，避免 mock 公里数被误认成真实路径规划结果。
+- 标识只说明数据性质，不展示 GPS、算法或商业范围解释。
+
+## 13. 非目标
 
 本轮不实现：
 
