@@ -112,9 +112,12 @@ from smartbi.agent.orchestrator import (
 from smartbi.gold import (
     channel_breakdown,
     daily_trend,
+    discount_summary,
     dish_margin,
     discount_breakdown,
     finance_summary,
+    meal_period_breakdown,
+    order_type_breakdown,
     store_comparison,
     review_dish_issues,
     review_good_tags,
@@ -724,6 +727,7 @@ class ComprehensiveSynthesisEngine:
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
                 "dish_margin": False, "attribution": False, "weather": False,
+                "channel": False, "meal_period": False, "discount": False,
                 "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
@@ -738,6 +742,27 @@ class ComprehensiveSynthesisEngine:
         if _wants_dish_margin:
             plan["dish_margin"] = True
             plan["sales"] = True
+        # 渠道(点餐方式 堂食/外卖/自提) — NOT the payment-channel breakdown
+        # already embedded in "sales" (微信/美团); this is service-mode split.
+        _wants_channel = ("渠道" in ql) or any(
+            k in ql for k in ("堂食", "外卖", "自提", "外送"))
+        if _wants_channel:
+            plan["channel"] = True
+        # 时段(午市/晚市/夜宵). A bare "几点"/"哪个时间" only counts alongside a
+        # revenue/traffic cue (mirrors the weather "哪天" lesson — avoid over-
+        # triggering on a pure time-word with no business context).
+        _wants_meal_period = any(
+            k in ql for k in ("时段", "餐段", "午市", "晚市", "夜宵", "午餐", "晚餐")
+        ) or (
+            any(k in ql for k in ("几点", "哪个时间"))
+            and any(k in ql for k in ("营收", "客流"))
+        )
+        if _wants_meal_period:
+            plan["meal_period"] = True
+        # 折扣（总额/占营收比/构成 — descriptive only, see discount_summary docstring）
+        _wants_discount = any(k in ql for k in ("折扣", "优惠", "满减", "打折"))
+        if _wants_discount:
+            plan["discount"] = True
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -803,8 +828,12 @@ class ComprehensiveSynthesisEngine:
             plan["cross"].append("platform_x_rating")
         # Fallback: holistic question with no explicit dimension → open all.
         # Attribution counts as an explicit dimension, so a pure "哪家店客流拖后腿"
-        # does NOT trip the open-all fallback.
-        if not (plan["review"] or plan["finance"] or plan["sales"] or plan["dish_margin"] or plan["attribution"] or plan["weather"]):
+        # does NOT trip the open-all fallback. channel/meal_period/discount are
+        # explicit dimensions too — a pure "满减花了多少" / "外卖单多不多" must
+        # NOT trip open-all (token bloat, I3).
+        if not (plan["review"] or plan["finance"] or plan["sales"]
+                or plan["dish_margin"] or plan["attribution"] or plan["weather"]
+                or plan["channel"] or plan["meal_period"] or plan["discount"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -823,7 +852,8 @@ class ComprehensiveSynthesisEngine:
             fid_up = (factory_id or "").upper()
             biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
             has_data = any([factbook.review, factbook.finance, factbook.sales,
-                            factbook.dish_margin, factbook.attribution])
+                            factbook.dish_margin, factbook.attribution,
+                            factbook.channel, factbook.meal_period, factbook.discount])
             quality = 2 if not has_data else (4 if grounded_clean else 3)
             q_capped = (question or "")[:500]
             await persist_distillation_sample(
@@ -964,6 +994,18 @@ class ComprehensiveSynthesisEngine:
             tasks["discounts"] = _safe(
                 discount_breakdown(self._pool, factory_id, date_range), "discounts",
             )
+        if plan.get("channel"):
+            tasks["channel_dim"] = _safe(
+                order_type_breakdown(self._pool, factory_id, date_range), "channel_dim",
+            )
+        if plan.get("meal_period"):
+            tasks["meal_period_dim"] = _safe(
+                meal_period_breakdown(self._pool, factory_id, date_range), "meal_period_dim",
+            )
+        if plan.get("discount"):
+            tasks["discount_dim"] = _safe(
+                discount_summary(self._pool, factory_id, date_range), "discount_dim",
+            )
         if plan.get("weather"):
             tasks["weather_sales"] = _safe(
                 daily_trend(self._pool, factory_id, date_range), "weather_sales",
@@ -1052,6 +1094,33 @@ class ComprehensiveSynthesisEngine:
                 }
             else:
                 plan["sales"] = False
+
+        # ---- assemble channel (渠道/点餐方式 堂食/外卖/自提) ----
+        if plan.get("channel"):
+            ch = results.get("channel_dim")
+            if ch and ch.get("order_types"):
+                fb.channel = ch
+            else:
+                plan["channel"] = False
+
+        # ---- assemble meal period (时段 午市/晚市/夜宵) ----
+        if plan.get("meal_period"):
+            mpd = results.get("meal_period_dim")
+            if mpd and mpd.get("meal_periods"):
+                fb.meal_period = mpd
+            else:
+                plan["meal_period"] = False
+
+        # ---- assemble discount (折扣总额/占营收比/构成, descriptive only) ----
+        if plan.get("discount"):
+            dsc = results.get("discount_dim")
+            # Keep the dimension when there's a grounded total (from agg_daily)
+            # OR a per-type composition — the total alone is still valuable even
+            # if agg_discount has no composition rows for this window.
+            if dsc and ((dsc.get("total_discount_amount") or 0) > 0 or dsc.get("discounts")):
+                fb.discount = dsc
+            else:
+                plan["discount"] = False
 
         # ---- cross hints (descriptive relationships, 相关≠因果) ----
         if plan.get("weather"):

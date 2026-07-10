@@ -10,6 +10,11 @@ Composition (filled by ``synthesis_engine._build_factbook`` per the dimension pl
                   review_store_ranking (差评门店) etc.
   - ``finance`` : gold finance_summary (total_revenue / bills / avg_bill / top_stores)
   - ``sales``   : gold top_products / channel_breakdown / discount_breakdown
+  - ``channel``     : gold order_type_breakdown (渠道/点餐方式 堂食/外卖/自提 —
+                  NOT the payment-channel breakdown embedded in ``sales``)
+  - ``meal_period`` : gold meal_period_breakdown (时段 午市/晚市/夜宵)
+  - ``discount``    : gold discount_summary (折扣总额/占营收比/构成, DESCRIPTIVE
+                  only — never a causal "折扣带来了多少营收" claim)
   - ``cross_hints`` : pre-computed cross-relations (VIP×星级, 时段×营收 ...) — these
                   are DESCRIPTIVE relationships only (相关 ≠ 因果).
   - ``notes``   : honest labels (小样本 / 标签语义 / 空数据 next-action).
@@ -82,6 +87,11 @@ class FactBook:
     # traffic-vs-ticket question). See ``compute_store_attribution``.
     attribution: Optional[Dict[str, Any]] = None
     weather: Optional[Dict[str, Any]] = None
+    # 渠道(点餐方式 堂食/外卖/自提) / 时段(午市/晚市/夜宵) / 折扣 dimensions —
+    # gold.order_type_breakdown / gold.meal_period_breakdown / gold.discount_summary.
+    channel: Optional[Dict[str, Any]] = None
+    meal_period: Optional[Dict[str, Any]] = None
+    discount: Optional[Dict[str, Any]] = None
     cross_hints: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     # Echoed window for the prompt header (set by the engine).
@@ -109,6 +119,9 @@ class FactBook:
         self._render_attribution(lines)
         self._render_dish_margin(lines)
         self._render_sales(lines)
+        self._render_channel(lines)
+        self._render_meal_period(lines)
+        self._render_discount(lines)
         self._render_cross(lines)
 
         if self.notes:
@@ -347,6 +360,76 @@ class FactBook:
                 )
         lines.append("")
 
+    def _render_service_mode(
+        self, lines: List[str], data: Optional[Dict[str, Any]],
+        *, items_key: str, name_key: str, header: str,
+    ) -> None:
+        """Shared 渠道/时段 render — honest-null aware (禁止降级).
+
+        When ``revenue_estimated`` is set (money columns missing → estimated
+        from 全店 avg 客单价) the header is marked 估算 and a caveat line is
+        appended, so the number is never presented as a hard fact. When
+        avg_ticket / revenue_pct is None (no basis at all) they are omitted,
+        never rendered as ¥0.00.
+        """
+        if not data:
+            return
+        items = data.get(items_key) or []
+        if not items:
+            return
+        estimated = bool(data.get("revenue_estimated"))
+        suffix = "，营收为估算" if estimated else ""
+        lines.append(f"## {header}{suffix}")
+        for it in items:
+            avg_ticket = it.get("avg_ticket")
+            revenue = it.get("revenue")
+            pct = it.get("revenue_pct")
+            bills = int(it.get("bill_count") or 0)
+            ticket_seg = f"，客单价 ¥{_money(avg_ticket)}" if avg_ticket is not None else ""
+            pct_seg = f"，占比 {pct}%" if pct is not None else ""
+            if revenue is not None and (revenue or not estimated) and avg_ticket is not None:
+                rev_seg = f"营收 {'约' if estimated else ''}¥{_money(revenue)}（订单 {bills:,} 单{pct_seg}）"
+            else:
+                # No groundable money → bill-count structure only (honest-null).
+                rev_seg = f"订单 {bills:,} 单（金额字段缺失，仅按订单数）"
+            lines.append(f"- {it.get(name_key)}：{rev_seg}{ticket_seg}")
+        note = data.get("estimation_note")
+        if estimated and note:
+            lines.append(f"- 注：{note}")
+        lines.append("")
+
+    def _render_channel(self, lines: List[str]) -> None:
+        self._render_service_mode(
+            lines, self.channel, items_key="order_types", name_key="order_type",
+            header="渠道（点餐方式：堂食/外卖/自提，按营业额）",
+        )
+
+    def _render_meal_period(self, lines: List[str]) -> None:
+        self._render_service_mode(
+            lines, self.meal_period, items_key="meal_periods", name_key="meal_period",
+            header="时段（午市/晚市/夜宵，按营业额）",
+        )
+
+    def _render_discount(self, lines: List[str]) -> None:
+        dsc = self.discount
+        if not dsc:
+            return
+        items = dsc.get("discounts") or []
+        total = dsc.get("total_discount_amount")
+        if not items and not total:
+            return
+        share = dsc.get("revenue_share_pct")
+        share_seg = f"，占营收比 {share}%" if share is not None else ""
+        lines.append("## 折扣（总额/构成，描述性数据，非因果——不代表折扣带来了这些营收）")
+        lines.append(f"- 折扣总额 ¥{_money(total)}{share_seg}")
+        if items:
+            seg = "；".join(
+                f"{d.get('discount_name')} ¥{_money(d.get('amount'))}（{d.get('share_pct')}%）"
+                for d in items[:6]
+            )
+            lines.append(f"- 构成：{seg}")
+        lines.append("")
+
     def _render_cross(self, lines: List[str]) -> None:
         if not self.cross_hints:
             return
@@ -452,6 +535,52 @@ class FactBook:
             v = _num(weather.get("rain_vs_sunny_pct"))
             if v is not None:
                 idx["天气影响率"] = v
+
+        # 渠道/时段: 订单数 is always real (grounded); revenue/客单价/占比 are
+        # only indexed when NOT estimated (禁止降级 — an estimated number must
+        # not be hard-enforced by FactReconciler as if it were确定性 truth).
+        for dim, items_key, name_key in (
+            (self.channel, "order_types", "order_type"),
+            (self.meal_period, "meal_periods", "meal_period"),
+        ):
+            dim = dim or {}
+            estimated = bool(dim.get("revenue_estimated"))
+            for it in (dim.get(items_key) or []):
+                name = it.get(name_key)
+                if not name:
+                    continue
+                v = _num(it.get("bill_count"))
+                if v is not None:
+                    idx[f"{name}订单数"] = v
+                # Skip money facts when estimated (not确定性) OR when there is no
+                # money basis at all (avg_ticket None → missing-money honest-null;
+                # never index a confident ¥0 revenue/客单价/占比).
+                if estimated or it.get("avg_ticket") is None:
+                    continue
+                for suffix, key in (("营收", "revenue"), ("客单价", "avg_ticket"),
+                                     ("占比", "revenue_pct")):
+                    v = _num(it.get(key))
+                    if v is not None:
+                        idx[f"{name}{suffix}"] = v
+
+        dsc = self.discount or {}
+        if dsc:
+            v = _num(dsc.get("total_discount_amount"))
+            if v is not None:
+                idx["折扣总额"] = v
+            v = _num(dsc.get("revenue_share_pct"))
+            if v is not None:
+                idx["折扣占营收比"] = v
+            for d in (dsc.get("discounts") or []):
+                name = d.get("discount_name")
+                if not name:
+                    continue
+                v = _num(d.get("amount"))
+                if v is not None:
+                    idx[f"{name}折扣额"] = v
+                v = _num(d.get("share_pct"))
+                if v is not None:
+                    idx[f"{name}折扣占比"] = v
         return idx
 
     # -----------------------------------------------------------------
