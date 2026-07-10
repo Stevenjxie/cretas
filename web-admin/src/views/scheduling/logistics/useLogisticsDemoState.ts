@@ -169,7 +169,7 @@ function assignDriver(driverId: string | null): boolean {
   if (!trip) return false;
 
   if (driverId === null) {
-    const nextTrip = { ...trip, driverId: null, driverName: undefined };
+    const nextTrip: RouteTrip = { ...trip, driverId: null, driverName: undefined };
     replaceTrip({ ...nextTrip, status: statusFor(nextTrip) });
     return true;
   }
