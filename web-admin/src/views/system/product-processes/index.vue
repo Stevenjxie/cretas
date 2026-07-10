@@ -21,7 +21,7 @@ import {
   type ProcessSheetCustomFieldDef
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
-import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
+import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -1062,6 +1062,16 @@ async function saveCustomFieldConfig() {
         <div class="toolbar-left">
           <h2 style="margin: 0">产品-工序配置</h2>
           <el-tag type="info">{{ factoryId }}</el-tag>
+          <el-select
+            v-model="selectedProductId"
+            placeholder="选择要配置的产品"
+            filterable
+            style="width: 320px"
+            :loading="productsLoading"
+            @change="handleProductChange"
+          >
+            <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->
@@ -1075,7 +1085,7 @@ async function saveCustomFieldConfig() {
               @click="handleSave"
               style="margin-left: 8px"
             >
-              保存
+              保存兼容列表
             </el-button>
           </template>
           <el-button
@@ -1088,6 +1098,22 @@ async function saveCustomFieldConfig() {
       </div>
     </el-card>
 
+    <ProductProcessWorkflowEditor
+      class="workflow-section"
+      :factory-id="factoryId || ''"
+      :product-type-id="selectedProductId"
+      :product-name="selectedProductName"
+      :can-write="canWrite"
+    />
+
+    <el-collapse class="legacy-compatibility">
+      <el-collapse-item name="legacy">
+        <template #title>
+          <div class="legacy-title">
+            <span>兼容列表 · 现有报工运行时仍按这里的线性工序链执行</span>
+            <el-tag size="small" type="info">核对 / 兼容维护</el-tag>
+          </div>
+        </template>
     <div class="content-layout">
       <!-- 左：产品选择 (fixed 280px) -->
       <el-card class="product-panel">
@@ -1112,15 +1138,6 @@ async function saveCustomFieldConfig() {
           </el-text>
         </div>
 
-        <WorkProcessAIChatPanel
-          v-if="factoryId && canWrite"
-          :factory-id="factoryId"
-          :product-type-id="selectedProductId"
-          :endpoint="`/${factoryId}/config/v2/ai/chat`"
-          module-code="product_work_process_config"
-          :disabled="!selectedProductId"
-          @apply-draft="handleApplyAIDraft"
-        />
       </el-card>
 
       <!-- 右：C2 — 左右两栏布局 (工序流程 | 可添加工序池) -->
@@ -1348,6 +1365,8 @@ async function saveCustomFieldConfig() {
         </div>
       </el-card>
     </div>
+      </el-collapse-item>
+    </el-collapse>
 
     <!-- 工序成本配置 dialog (报工自动继承) -->
     <el-dialog v-model="costDialogVisible" :title="`工序成本配置 — ${costEditName}`" width="540px">
@@ -1478,6 +1497,11 @@ async function saveCustomFieldConfig() {
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
+.workflow-section { margin-top: 12px; }
+.legacy-compatibility { margin-top: 12px; border: 1px solid #edf2f7; border-radius: 10px; background: #fff; }
+.legacy-compatibility :deep(.el-collapse-item__header) { padding: 0 16px; border-radius: 10px; }
+.legacy-compatibility :deep(.el-collapse-item__content) { padding: 0 16px 16px; }
+.legacy-title { display: flex; align-items: center; gap: 8px; color: #475467; font-weight: 600; }
 
 /* C4 status indicators */
 .dirty-indicator { font-size: 13px; color: #e6a23c; font-weight: 500; }

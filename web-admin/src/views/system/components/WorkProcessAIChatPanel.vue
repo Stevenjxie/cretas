@@ -8,6 +8,17 @@
       <el-tag size="small" type="info">{{ modeLabel }}</el-tag>
     </div>
 
+    <div v-if="quickPrompts.length" class="quick-command-bar">
+      <el-button
+        v-for="prompt in quickPrompts"
+        :key="prompt"
+        size="small"
+        plain
+        :disabled="disabled || loading"
+        @click="runQuickPrompt(prompt)"
+      >{{ prompt }}</el-button>
+    </div>
+
     <div ref="messagesRef" class="chat-messages">
       <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
         <div class="message-content">{{ msg.content }}</div>
@@ -116,10 +127,14 @@ const props = withDefaults(defineProps<{
   moduleCode: string;
   title?: string;
   disabled?: boolean;
+  context?: Record<string, unknown>;
+  quickPrompts?: string[];
 }>(), {
   title: 'AI 配工序',
   productTypeId: '',
   disabled: false,
+  context: () => ({}),
+  quickPrompts: () => [],
 });
 
 const emit = defineEmits<{
@@ -161,6 +176,7 @@ async function send(): Promise<void> {
       moduleCode: props.moduleCode,
       params: {
         productTypeId: props.productTypeId,
+        context: props.context,
       },
     });
     const data = res.data ?? {};
@@ -182,6 +198,11 @@ async function send(): Promise<void> {
     await nextTick();
     scrollMessagesToBottom();
   }
+}
+
+async function runQuickPrompt(prompt: string): Promise<void> {
+  input.value = prompt;
+  await send();
 }
 
 function scrollMessagesToBottom(): void {
@@ -261,6 +282,20 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   gap: 8px;
   max-height: 400px;
   overflow-y: auto;
+}
+
+.quick-command-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quick-command-bar :deep(.el-button) {
+  height: auto;
+  margin-left: 0;
+  padding: 5px 8px;
+  white-space: normal;
+  text-align: left;
 }
 
 .message {
