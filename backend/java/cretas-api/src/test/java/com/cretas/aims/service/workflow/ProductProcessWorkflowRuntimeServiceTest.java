@@ -152,6 +152,52 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
+    void disabledActivationReturnsEmptyWithoutReadingDefinitionOrWritingRuntimeRows() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflowActivation disabled = activation();
+        disabled.setEnabled(false);
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.empty());
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(disabled));
+
+        Optional<List<WorkProcessTaskDTO>> result =
+                service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        assertTrue(result.isEmpty());
+        verifyNoInteractions(workflowRepository, compiler, taskRepository, portRepository);
+        verify(instanceRepository, never()).save(any());
+    }
+
+    @Test
+    void activationRejectsNonPublishedTarget() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflow draft = workflow();
+        draft.setStatus(ProductProcessWorkflow.Status.DRAFT);
+        givenActivationTarget(draft);
+
+        assertThrows(RuntimeException.class,
+                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
+
+        verifyNoInteractions(compiler, taskRepository, portRepository);
+        verify(instanceRepository, never()).save(any());
+    }
+
+    @Test
+    void activationRejectsWrongProductTarget() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflow wrongProduct = workflow();
+        wrongProduct.setProductTypeId("PT-CHICKEN");
+        givenActivationTarget(wrongProduct);
+
+        assertThrows(RuntimeException.class,
+                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
+
+        verifyNoInteractions(compiler, taskRepository, portRepository);
+        verify(instanceRepository, never()).save(any());
+    }
+
+    @Test
     void repeatedCallReturnsExistingTasksWithoutReadingChangedDefinition() {
         givenValidOwnedBatch();
         ProductionWorkflowInstance existing = instance(501L, "old-nodes", "old-edges");
@@ -267,6 +313,15 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .thenReturn(Optional.of(activation()));
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow()));
+    }
+
+    private void givenActivationTarget(ProductProcessWorkflow workflow) {
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.empty());
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(activation()));
+        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+                .thenReturn(Optional.of(workflow));
     }
 
     private void givenFreshRuntimePersistence(boolean persistPorts) {
