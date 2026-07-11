@@ -120,9 +120,16 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
     @Override
     @Transactional
     public PlanSnapshotDto regeneratePlan(String factoryId, String planId) {
+        return regeneratePlan(factoryId, planId, null, null);
+    }
+
+    @Override
+    @Transactional
+    public PlanSnapshotDto regeneratePlan(String factoryId, String planId,
+            RouteOptimizeMode optimizeBy, BigDecimal targetLoadPct) {
         LogisticsPlan plan = loadPlan(factoryId, planId);
         assertPlanNotConfirmed(plan);
-        LogisticsPlan regenerated = routingService.regeneratePlan(factoryId, planId);
+        LogisticsPlan regenerated = routingService.regeneratePlan(factoryId, planId, optimizeBy, targetLoadPct);
         return buildSnapshot(factoryId, regenerated);
     }
 

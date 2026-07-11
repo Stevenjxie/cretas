@@ -73,11 +73,15 @@ public class LogisticsPlanController {
     }
 
     @PostMapping("/plans/{planId}/regenerate")
-    @Operation(summary = "重新生成计划", description = "丢弃当前全部人工调整，重新跑排线算法；已确认计划不可重生成")
+    @Operation(summary = "重新生成计划", description = "丢弃当前全部人工调整，重新跑排线算法；可传优化模式/装载率覆盖；已确认计划不可重生成")
     public ApiResponse<PlanSnapshotDto> regeneratePlan(
             @PathVariable String factoryId,
-            @PathVariable String planId) {
-        return ApiResponse.success("计划已重新生成", planService.regeneratePlan(factoryId, planId));
+            @PathVariable String planId,
+            @RequestBody(required = false) GeneratePlanRequest request) {
+        var optimizeBy = request == null ? null : request.getOptimizeBy();
+        var targetLoadPct = request == null ? null : request.getTargetLoadPct();
+        return ApiResponse.success("计划已重新生成",
+                planService.regeneratePlan(factoryId, planId, optimizeBy, targetLoadPct));
     }
 
     @PutMapping("/plans/{planId}/trips/{tripId}/stops/reorder")

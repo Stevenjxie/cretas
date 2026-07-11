@@ -382,8 +382,16 @@ export function getPlan(factoryId: string, planId: string) {
 }
 
 /** POST /plans/{planId}/regenerate — 重新生成整个草稿（丢弃人工调整） */
-export function regeneratePlan(factoryId: string, planId: string) {
-  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/regenerate`);
+export function regeneratePlan(
+  factoryId: string,
+  planId: string,
+  optimizeBy?: RouteOptimizeMode,
+  targetLoadPct?: number,
+) {
+  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/regenerate`, {
+    optimizeBy,
+    targetLoadPct,
+  });
 }
 
 /** PUT /trips/{tripId}/stops/reorder — 同车次内整体重排停靠顺序（完整有序 storeIds） */

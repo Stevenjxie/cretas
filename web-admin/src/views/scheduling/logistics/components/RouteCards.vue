@@ -153,7 +153,7 @@ function etaTitleFor(tripId: string, i: number): string {
         data-testid="route-late-warning"
         class="late-warning"
       >
-        ⚠️ {{ tripLateCount(trip) }} 家门店预计晚于配送时间，建议调整顺序或改派
+        ⚠️ {{ tripLateCount(trip) }} 家门店预计晚于配送时间（预计到达为估算）。可在「人工确认」拖动调整门店顺序，或为其改派车辆。
       </p>
 
       <div class="store-chain" :aria-label="`线路 ${index + 1} 门店顺序`">

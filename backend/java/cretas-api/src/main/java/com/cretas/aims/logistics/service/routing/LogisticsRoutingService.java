@@ -124,15 +124,31 @@ public class LogisticsRoutingService {
         return planRepository.saveAndFlush(plan);
     }
 
-    /**
-     * 重建计划的车次/停靠点 — 清空该计划下既有车次+停靠点 (软删除), 重跑算法, 重新落库。
-     * 计划本身 (id/planNumber/orderBatchId) 不变, 仅 targetLoadPct 若传参变化会重新生效。
-     */
+    /** 重建计划 — 沿用计划存储的优化模式/装载率 (兼容重载)。 */
     @Transactional
     public LogisticsPlan regeneratePlan(String factoryId, String planId) {
+        return regeneratePlan(factoryId, planId, null, null);
+    }
+
+    /**
+     * 重建计划的车次/停靠点 — 清空该计划下既有车次+停靠点 (软删除), 重跑算法, 重新落库。
+     * 计划本身 (id/planNumber/orderBatchId) 不变。
+     *
+     * @param optimizeBy    若非 null → 覆盖计划优化模式 (时间最快/路程最短) 后重建
+     * @param targetLoadPct 若非 null → 覆盖计划目标装载率后重建
+     */
+    @Transactional
+    public LogisticsPlan regeneratePlan(String factoryId, String planId,
+            RouteOptimizeMode optimizeBy, BigDecimal targetLoadPct) {
         LogisticsPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("LogisticsPlan", "id", planId));
 
+        if (optimizeBy != null) {
+            plan.setOptimizeBy(optimizeBy);
+        }
+        if (targetLoadPct != null) {
+            plan.setTargetLoadPct(targetLoadPct);
+        }
         clearTripsAndStops(planId);
         buildAndPersistTrips(factoryId, plan, plan.getOrderBatchId(), plan.getTargetLoadPct());
         return planRepository.saveAndFlush(plan);

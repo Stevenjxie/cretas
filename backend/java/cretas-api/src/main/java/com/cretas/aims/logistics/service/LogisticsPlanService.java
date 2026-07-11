@@ -46,6 +46,10 @@ public interface LogisticsPlanService {
     /** POST /plans/{planId}/regenerate — 丢弃人工调整，重新跑排线算法。 */
     PlanSnapshotDto regeneratePlan(String factoryId, String planId);
 
+    /** 重新生成 — 覆盖优化模式/装载率 (任一为 null 则沿用计划存储值)。 */
+    PlanSnapshotDto regeneratePlan(String factoryId, String planId,
+            com.cretas.aims.logistics.entity.enums.RouteOptimizeMode optimizeBy, java.math.BigDecimal targetLoadPct);
+
     /**
      * PUT /plans/{planId}/trips/{tripId}/stops/reorder — {@code storeIds} 必须是该车次现有
      * 停靠点集合的一个完整排列（{@code deliveryOrderId} 列表，不是 storeCode）。

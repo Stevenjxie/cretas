@@ -469,7 +469,9 @@ async function setOptimizeMode(mode: RouteOptimizeMode): Promise<void> {
   if (mode !== 'TIME' && mode !== 'DISTANCE') return;
   if (optimizeMode.value === mode) return;
   optimizeMode.value = mode;
-  if (batch.value && plan.value) await generateRoutes();
+  // 已有计划 → 真重建 (regenerate)，不能走 generate (幂等短路不会应用新模式)。
+  if (plan.value) await regeneratePlanAction();
+  else if (batch.value) await generateRoutes();
 }
 
 async function setTargetLoad(value: number): Promise<void> {
@@ -477,7 +479,8 @@ async function setTargetLoad(value: number): Promise<void> {
     throw new RangeError('targetLoadPct must be greater than 0 and at most 100');
   }
   targetLoadPct.value = value;
-  if (batch.value && plan.value) await generateRoutes();
+  if (plan.value) await regeneratePlanAction();
+  else if (batch.value) await generateRoutes();
 }
 
 function selectTrip(tripId: string | null): void {
@@ -640,14 +643,33 @@ async function exportXlsx(): Promise<void> {
   }
 }
 
+function planSignature(trips: PlanSnapshot['trips']): string {
+  return trips.map((t) => `${t.vehicleId ?? '-'}:${t.storeIds.join(',')}`).join('|');
+}
+
 async function regeneratePlanAction(): Promise<void> {
   if (!plan.value) return;
   planLoading.value = true;
   planError.value = null;
+  const before = planSignature(plan.value.trips);
   try {
     const factoryId = requireFactoryId();
-    const res = await apiRegeneratePlan(factoryId, plan.value.id);
+    // 带上当前优化目标 + 装载率 → 后端覆盖存储值并真重建 (不是 generate 幂等短路)。
+    const res = await apiRegeneratePlan(factoryId, plan.value.id, optimizeMode.value, targetLoadPct.value);
     applyPlanSnapshot(res.data);
+    // 反馈: 重新生成是确定性优化, 若方案未变(已是当前优化目标下最优)给出明确提示, 避免"点了没反应"的困惑。
+    const modeLabel = optimizeMode.value === 'TIME' ? '时间最快' : '路程最短';
+    const { ElMessage } = await import('element-plus');
+    if (planSignature(res.data.trips) === before) {
+      ElMessage({
+        message: `已按「${modeLabel}」重新生成 —— 当前已是最优方案，路线无变化。如需改变，可调整目标装载率/优化目标，或在「人工确认」手动调整。`,
+        type: 'info',
+        duration: 6000,
+        showClose: true,
+      });
+    } else {
+      ElMessage({ message: `已按「${modeLabel}」重新生成路线`, type: 'success', duration: 3000 });
+    }
   } catch (err) {
     planError.value = errorMessage(err);
   } finally {
