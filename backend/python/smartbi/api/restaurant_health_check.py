@@ -204,6 +204,7 @@ async def get_health_check_report(
     # 措辞 威慑非处罚 ("请核对是否合理", 非 "存在回扣" 的指控)。riskLevel HIGH
     # (连续 3+ 次同向) → critical(→SMS), MEDIUM → warning(仅站内)。metricKey 按
     # (食材, 供应商) 唯一, 否则第 2 条会 dedup 覆盖第 1 条 (businessEntityId)。
+    supplier_anomaly_unavailable = False
     try:
         from smartbi.gold.price_anomaly import detect_price_anomalies
         anomalies = await detect_price_anomalies(pool, factory_id)
@@ -213,9 +214,15 @@ async def get_health_check_report(
             delta = a.get("deltaPct")
             if delta is None:
                 continue
+            supplier_id = str(a.get("supplierId") or "")
+            # 🔒 F2 (Fable gate): 无 supplier_id 时, detect 按 (食材, supplier_id)
+            # 分组会把不同供应商的 NULL-id 行合并成一条价格序列 → 可能把涨幅
+            # 错误归到最新一行的供应商名下, 在推送里给无辜供应商挂上"回扣"字样。
+            # 无法可靠归因就不推送 (反回扣宁可漏报不可错告)。
+            if not supplier_id:
+                continue
             ingredient = str(a.get("ingredientName") or a.get("normalizedName") or "食材")
             supplier = str(a.get("supplierName") or "供应商")
-            supplier_id = str(a.get("supplierId") or "")
             norm = str(a.get("normalizedName") or ingredient)
             new_price = a.get("newPrice")
             trailing = a.get("trailingAvg")
@@ -238,6 +245,12 @@ async def get_health_check_report(
                 }],
             })
     except Exception:  # noqa: BLE001 — best-effort, 不因供应商异常查询失败拖垮体检
+        # 🔒 F1 (Fable gate): detect 失败 (DB 抖动 / price_anomaly_ack 表缺失) ≠
+        # "本期无异常"。若不区分, 下游桥接会把"缺席"当成"已恢复" → auto-resolve 掉
+        # OPEN 的 supplier_price_anomaly 事件 → 下一轮成功 sweep 又重建 → 重复推送
+        # (flap)。置 unavailable 旗标, 让 Java 桥接跳过对 supplier_price_anomaly:*
+        # 的 auto-resolve, 保留既有事件不动。
+        supplier_anomaly_unavailable = True
         logger.exception("[health-check] supplier price anomaly append failed for %s", factory_id)
 
     # counts from the post-adjustment dicts so the F3 severity cap is reflected.
@@ -270,6 +283,9 @@ async def get_health_check_report(
             "coverage": bundle.coverage,
         },
         "diagnoses": diag_dicts,
+        # 🔒 F1: True 表示供应商进价异常检测本次失败 (非"无异常") → 桥接不应
+        # auto-resolve supplier_price_anomaly:* 事件, 避免 flap 重复推送。
+        "supplierAnomalyUnavailable": supplier_anomaly_unavailable,
     }
 
     # ── 6. cache store ───────────────────────────────────────────

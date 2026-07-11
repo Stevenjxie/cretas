@@ -151,6 +151,9 @@ def test_supplier_price_anomaly_becomes_pushable_diagnosis(client, monkeypatch):
             {"ingredientName": "藤椒", "normalizedName": "藤椒", "supplierName": "网新恒天",
              "supplierId": "S3", "newPrice": 46.0, "trailingAvg": 40.0, "deltaPct": 15.0,
              "direction": "UP", "riskLevel": "HIGH"},  # 连续 → critical
+            {"ingredientName": "青菜", "normalizedName": "青菜", "supplierName": "某供应商",
+             "supplierId": None, "newPrice": 5.0, "trailingAvg": 4.0, "deltaPct": 25.0,
+             "direction": "UP", "riskLevel": "MEDIUM"},  # F2: 无 supplier_id → 不可靠归因 → 跳过
         ]
 
     monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
@@ -164,11 +167,14 @@ def test_supplier_price_anomaly_becomes_pushable_diagnosis(client, monkeypatch):
     assert resp.status_code == 200
     diags = resp.json()["data"]["diagnoses"]
     supplier = [d for d in diags if d["metricKey"].startswith("supplier_price_anomaly:")]
-    assert len(supplier) == 2  # 2 UP kept, DOWN dropped
+    assert len(supplier) == 2  # 2 UP-with-id kept; DOWN dropped; NULL-id dropped
     keys = {d["metricKey"] for d in supplier}
     assert "supplier_price_anomaly:鲈鱼:S1" in keys      # unique per (食材,供应商)
     assert "supplier_price_anomaly:藤椒:S3" in keys
     assert not any("牛肉" in k for k in keys)            # DOWN excluded
+    assert not any("青菜" in k for k in keys)            # F2: NULL supplier_id excluded
+    # F1: detect succeeded → not flagged unavailable
+    assert resp.json()["data"]["supplierAnomalyUnavailable"] is False
     by_key = {d["metricKey"]: d for d in supplier}
     assert by_key["supplier_price_anomaly:鲈鱼:S1"]["severity"] == "warning"   # MEDIUM
     assert by_key["supplier_price_anomaly:藤椒:S3"]["severity"] == "critical"  # HIGH → pushable SMS
