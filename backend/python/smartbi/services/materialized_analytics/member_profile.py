@@ -1,21 +1,22 @@
-"""会员储值 + 画像 — agg_member_tier / agg_member_birth_month /
-agg_member_recharge_daily Gold aggregators.
+"""会员储值 + 画像 — agg_member_tier / agg_member_gender /
+agg_member_birth_month / agg_member_recharge_daily Gold aggregators.
 
 New restaurant analytics dimension: member stored-value + demographic
 profile. NOT full RFM — see gold/queries.py member_profile()'s docstring
 for why (this data source has no per-member consumption event).
 
 Sources:
-  - dim_member (Silver, snapshot grain, V20261006_01)
-  - fact_member_recharge (Silver, daily event grain, V20261006_01)
+  - dim_member (Silver, snapshot grain, V20261007_01)
+  - fact_member_recharge (Silver, daily event grain, V20261007_01)
 Targets:
   - agg_member_tier (Gold, PK (factory_id, store_id, tier))
+  - agg_member_gender (Gold, PK (factory_id, gender))
   - agg_member_birth_month (Gold, PK (factory_id, birth_month))
   - agg_member_recharge_daily (Gold, PK (factory_id, date, store_id, channel))
 
 Mirrors smartbi/services/materialized_analytics/daily_void.py's structure.
 
-⛔ CLOBBER-SAFETY: these materializers touch ONLY the three member_* Gold
+⛔ CLOBBER-SAFETY: these materializers touch ONLY the four member_* Gold
 tables listed above. They must NEVER be called as a side effect of another
 aggregate's materialization (and the member demo-data loader,
 load_member_demo_rest.py, deliberately does NOT call them — see that
@@ -49,6 +50,25 @@ DO UPDATE SET
     total_balance = EXCLUDED.total_balance,
     version       = a.version + 1,
     computed_at   = NOW();
+"""
+
+_AGG_MEMBER_GENDER_UPSERT_SQL = """
+INSERT INTO agg_member_gender AS a (
+    factory_id, gender, member_count, version, computed_at
+)
+SELECT
+    m.factory_id,
+    COALESCE(NULLIF(TRIM(m.gender), ''), '未知') AS gender,
+    COUNT(*)                                       AS member_count,
+    1, NOW()
+FROM dim_member m
+WHERE m.factory_id = $1
+GROUP BY m.factory_id, COALESCE(NULLIF(TRIM(m.gender), ''), '未知')
+ON CONFLICT (factory_id, gender)
+DO UPDATE SET
+    member_count = EXCLUDED.member_count,
+    version      = a.version + 1,
+    computed_at  = NOW();
 """
 
 _AGG_MEMBER_BIRTH_MONTH_UPSERT_SQL = """
@@ -106,7 +126,8 @@ def _rows_affected(status: str) -> int:
 
 
 async def materialize_member_tier_profile(pool: asyncpg.Pool, factory_id: str) -> int:
-    """Upsert agg_member_tier + agg_member_birth_month from dim_member.
+    """Upsert agg_member_tier + agg_member_gender + agg_member_birth_month
+    from dim_member.
 
     Snapshot aggregator — no date range. dim_member is a current-state
     snapshot per card (mirrors the source 卡详情一览 report, which has no
@@ -118,15 +139,20 @@ async def materialize_member_tier_profile(pool: asyncpg.Pool, factory_id: str) -
         factory_id: tenant ID; sets app.factory_id GUC so RLS allows the INSERT.
 
     Returns:
-        Total rows affected across both UPSERTs (parsed from PG command tags).
+        Total rows affected across all three UPSERTs (parsed from PG command tags).
     """
     async with pool.acquire() as conn:
         await conn.execute(
             "SELECT set_config('app.factory_id', $1, false)", factory_id
         )
         tier_status = await conn.execute(_AGG_MEMBER_TIER_UPSERT_SQL, factory_id)
+        gender_status = await conn.execute(_AGG_MEMBER_GENDER_UPSERT_SQL, factory_id)
         birth_status = await conn.execute(_AGG_MEMBER_BIRTH_MONTH_UPSERT_SQL, factory_id)
-    return _rows_affected(tier_status) + _rows_affected(birth_status)
+    return (
+        _rows_affected(tier_status)
+        + _rows_affected(gender_status)
+        + _rows_affected(birth_status)
+    )
 
 
 async def materialize_member_recharge_daily(

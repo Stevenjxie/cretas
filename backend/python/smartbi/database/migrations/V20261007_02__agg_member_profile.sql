@@ -1,22 +1,24 @@
 -- Gold aggregates — 会员储值 + 画像 (member stored-value + demographic profile).
 --
--- Sources: dim_member (V20261006_01, snapshot grain) + fact_member_recharge
--- (V20261006_01, daily event grain). Materialized by
+-- Sources: dim_member (V20261007_01, snapshot grain) + fact_member_recharge
+-- (V20261007_01, daily event grain). Materialized by
 -- smartbi/services/materialized_analytics/member_profile.py. Read by
 -- smartbi.gold.queries.member_profile() via
 -- GET /api/smartbi/gold/member-profile.
 --
--- 🔒 AGGREGATE-ONLY BY CONSTRUCTION: none of these three tables carry a
+-- 🔒 AGGREGATE-ONLY BY CONSTRUCTION: none of these four tables carry a
 -- member-identifying column (no card_no, no name, no phone, no full
--- birthdate — see V20261006_01's header note). They are safe to read
+-- birthdate — see V20261007_01's header note). They are safe to read
 -- row-by-row from the API without any additional RBAC/PII stripping.
+-- The query layer (member_profile()) additionally applies k-anonymity
+-- (k=5) suppression so no cohort smaller than 5 exposes a balance / count.
 --
--- Snapshot vs time-series: agg_member_tier / agg_member_birth_month have NO
--- date dimension (dim_member is a current-state snapshot per card, not a
--- daily fact — mirrors how the source 卡详情一览 report has no event date
--- to bucket by). agg_member_recharge_daily DOES have a date dimension
--- (mirrors agg_daily_void's daily grain) since fact_member_recharge is a
--- true daily event stream.
+-- Snapshot vs time-series: agg_member_tier / agg_member_birth_month /
+-- agg_member_gender have NO date dimension (dim_member is a current-state
+-- snapshot per card, not a daily fact — mirrors how the source 卡详情一览
+-- report has no event date to bucket by). agg_member_recharge_daily DOES
+-- have a date dimension (mirrors agg_daily_void's daily grain) since
+-- fact_member_recharge is a true daily event stream.
 
 CREATE TABLE IF NOT EXISTS agg_member_tier (
     factory_id     VARCHAR(50) NOT NULL,
@@ -39,6 +41,28 @@ CREATE POLICY tenant_isolation ON agg_member_tier FOR ALL
 -- Hot path: "member count + balance totals" (SUM grouped by nothing/tier).
 CREATE INDEX IF NOT EXISTS idx_agg_member_tier_factory
     ON agg_member_tier (factory_id);
+
+
+CREATE TABLE IF NOT EXISTS agg_member_gender (
+    factory_id     VARCHAR(50) NOT NULL,
+    -- gender is a low-cardinality demographic bucket (男/女/未知 in the real
+    -- 二维火 export). '未知' already appears verbatim in the source data, so
+    -- no synthetic sentinel is needed. Storing it satisfies "don't
+    -- store-and-never-use" — dim_member.gender feeds this 性别画像 aggregate.
+    gender         VARCHAR(10) NOT NULL,
+    member_count   INT NOT NULL DEFAULT 0,
+    version        BIGINT NOT NULL DEFAULT 1,
+    computed_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (factory_id, gender)
+);
+ALTER TABLE agg_member_gender ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agg_member_gender FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agg_member_gender;
+CREATE POLICY tenant_isolation ON agg_member_gender FOR ALL
+    USING (factory_id = current_setting('app.factory_id', true))
+    WITH CHECK (factory_id = current_setting('app.factory_id', true));
+CREATE INDEX IF NOT EXISTS idx_agg_member_gender_factory
+    ON agg_member_gender (factory_id);
 
 
 CREATE TABLE IF NOT EXISTS agg_member_birth_month (

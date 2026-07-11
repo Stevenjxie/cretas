@@ -17,6 +17,7 @@ from smartbi.services.materialized_analytics.member_profile import (
     materialize_member_recharge_daily,
     materialize_member_tier_profile,
     _AGG_MEMBER_BIRTH_MONTH_UPSERT_SQL,
+    _AGG_MEMBER_GENDER_UPSERT_SQL,
     _AGG_MEMBER_RECHARGE_DAILY_UPSERT_SQL,
     _AGG_MEMBER_TIER_UPSERT_SQL,
 )
@@ -42,36 +43,41 @@ def _make_pool(execute_return="INSERT 0 12"):
 
 
 @pytest.mark.asyncio
-async def test_tier_profile_returns_sum_of_both_upserts():
-    # set_config + tier upsert + birth_month upsert = 3 execute() calls
-    pool, _ = _make_pool(["SET", "INSERT 0 5", "INSERT 0 3"])
+async def test_tier_profile_returns_sum_of_three_upserts():
+    # set_config + tier + gender + birth_month upserts = 4 execute() calls
+    pool, _ = _make_pool(["SET", "INSERT 0 5", "INSERT 0 3", "INSERT 0 4"])
     affected = await materialize_member_tier_profile(pool, "DEMO_REST")
-    assert affected == 8
+    assert affected == 12
 
 
 @pytest.mark.asyncio
-async def test_tier_profile_executes_both_upsert_sqls_with_factory_id():
-    pool, conn = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0"])
+async def test_tier_profile_executes_all_three_upsert_sqls_with_factory_id():
+    pool, conn = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0", "INSERT 0 0"])
     await materialize_member_tier_profile(pool, "DEMO_REST")
 
     tier_call = None
+    gender_call = None
     birth_call = None
     for call in conn.execute.call_args_list:
         args = call[0]
         if args and _AGG_MEMBER_TIER_UPSERT_SQL in args[0]:
             tier_call = call
+        elif args and _AGG_MEMBER_GENDER_UPSERT_SQL in args[0]:
+            gender_call = call
         elif args and _AGG_MEMBER_BIRTH_MONTH_UPSERT_SQL in args[0]:
             birth_call = call
     assert tier_call is not None, "tier UPSERT SQL was not executed"
+    assert gender_call is not None, "gender UPSERT SQL was not executed"
     assert birth_call is not None, "birth_month UPSERT SQL was not executed"
     assert tier_call[0][1] == "DEMO_REST"
+    assert gender_call[0][1] == "DEMO_REST"
     assert birth_call[0][1] == "DEMO_REST"
 
 
 @pytest.mark.asyncio
 async def test_tier_profile_factory_id_context_is_set():
     """RLS requires app.factory_id GUC before INSERT can target the row."""
-    pool, conn = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0"])
+    pool, conn = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0", "INSERT 0 0"])
     await materialize_member_tier_profile(pool, "DEMO_REST")
 
     found = False
@@ -86,7 +92,7 @@ async def test_tier_profile_factory_id_context_is_set():
 
 @pytest.mark.asyncio
 async def test_tier_profile_pg_no_match_returns_zero():
-    pool, _ = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0"])
+    pool, _ = _make_pool(["SET", "INSERT 0 0", "INSERT 0 0", "INSERT 0 0"])
     affected = await materialize_member_tier_profile(pool, "DEMO_REST")
     assert affected == 0
 

@@ -19,7 +19,7 @@ Why: same reasoning as load_void_demo_rest.py's docstring — DEMO_REST's
 existing Gold aggregates (agg_daily, agg_daily_cost, agg_daily_void, etc.)
 have already been verified/pinned. This script's whole job is loading
 Silver (dim_member / fact_member_recharge) rows — NOT touching Gold.
-Materializing agg_member_tier / agg_member_birth_month /
+Materializing agg_member_tier / agg_member_gender / agg_member_birth_month /
 agg_member_recharge_daily is a SEPARATE, deliberate, reviewed step the
 organizer runs after this script (and after confirming the Silver load
 looks right), via — with the SAME factory_id this script loaded under (see
@@ -451,8 +451,8 @@ async def _run(
     print()
     print(
         "NOTE: this script does NOT call the Gold materializer. If "
-        "agg_member_tier / agg_member_birth_month / agg_member_recharge_daily "
-        "need to reflect these rows, run "
+        "agg_member_tier / agg_member_gender / agg_member_birth_month / "
+        "agg_member_recharge_daily need to reflect these rows, run "
         f"materialize_member_tier_profile(pool, '{factory_id}') and "
         f"materialize_member_recharge_daily(pool, '{factory_id}', date_min, date_max) "
         "as a SEPARATE, deliberate step — see module docstring. "

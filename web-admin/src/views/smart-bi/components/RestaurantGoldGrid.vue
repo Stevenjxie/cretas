@@ -232,7 +232,7 @@
       <el-skeleton v-if="memberLoading" :rows="4" animated />
       <template v-else>
         <div class="rgg-member-detail-grid">
-          <!-- 等级分布 -->
+          <!-- 等级分布 (k-anon: 人数<5 的等级合并入「其他」) -->
           <div class="rgg-member-block">
             <div class="rgg-member-block-title">等级分布</div>
             <div v-if="memberTierDistribution.length" class="rgg-rank-list">
@@ -248,9 +248,30 @@
             <el-empty v-else description="暂无等级数据" :image-size="40" />
           </div>
 
+          <!-- 性别分布 (性别画像, k-anon) -->
+          <div class="rgg-member-block">
+            <div class="rgg-member-block-title">性别分布 <span class="rgg-member-block-hint">(性别画像)</span></div>
+            <div v-if="memberGenderDistribution.length" class="rgg-rank-list">
+              <div v-for="g in memberGenderDistribution" :key="g.gender" class="rgg-rank-item">
+                <span class="rgg-rank-name rgg-chan-name" :title="g.gender">{{ g.gender }}</span>
+                <span class="rgg-rank-bar-wrap">
+                  <span class="rgg-rank-bar rgg-chan-bar" :style="{ width: genderPct(g.memberCount) + '%' }"></span>
+                </span>
+                <span class="rgg-rank-val">{{ g.memberCount }}人</span>
+              </div>
+            </div>
+            <el-empty v-else description="暂无性别数据" :image-size="40" />
+          </div>
+
           <!-- 生日月份分布 (生日营销 hook) -->
           <div class="rgg-member-block">
-            <div class="rgg-member-block-title">生日月份分布 <span class="rgg-member-block-hint">(生日营销参考)</span></div>
+            <div class="rgg-member-block-title">
+              生日月份分布 <span class="rgg-member-block-hint">(生日营销参考)</span>
+            </div>
+            <!-- F4 honesty: 生日覆盖率 — histogram 只含有生日的会员, 不能被读成完整。 -->
+            <div v-if="memberBirthCoveragePct !== null" class="rgg-member-coverage">
+              生日覆盖率 {{ memberBirthCoveragePct.toFixed(0) }}%（{{ memberBirthUnknownCount.toLocaleString() }} 名会员未填生日）
+            </div>
             <div v-if="memberBirthMonthDistribution.length" class="rgg-birth-bars">
               <div v-for="m in memberBirthMonthDistribution" :key="m.birthMonth" class="rgg-birth-bar-col">
                 <div class="rgg-birth-bar-wrap">
@@ -265,6 +286,10 @@
           <!-- 充值趋势 -->
           <div class="rgg-member-block">
             <div class="rgg-member-block-title">充值趋势 (本金/赠送)</div>
+            <!-- F4 honesty: 演示数据源只有 1 家门店有充值记录, 明确披露。 -->
+            <div v-if="memberRechargeTrend.length && memberRechargeStoreCount >= 1" class="rgg-member-coverage">
+              仅 {{ memberRechargeStoreCount }} 家门店有充值记录（部分门店未开通储值）
+            </div>
             <el-table v-if="memberRechargeTrend.length" :data="memberRechargeTrend" size="small" stripe>
               <el-table-column prop="month" label="月份" width="90" />
               <el-table-column label="本金" align="right">
@@ -277,7 +302,7 @@
             <el-empty v-else description="暂无充值趋势数据" :image-size="40" />
           </div>
         </div>
-        <!-- 禁降级: 本维度不是完整 RFM, 明确提示不是复购/流失预测 -->
+        <!-- 禁降级: 本维度不是完整 RFM, 明确提示不是复购/流失预测 + k-anon 说明 -->
         <div class="rgg-void-caveat">{{ memberCaveat }}</div>
       </template>
     </el-card>
@@ -355,8 +380,8 @@ const zoneCaveat = ref('');
 
 // 会员储值 + 画像 (新增维度, greenfield). ⚠️ 不是完整 RFM — 数据源(卡详情/
 // 卡充值报表)无逐笔消费记录, 无法算复购间隔(Recency)/消费频次(Frequency),
-// 仅覆盖储值余额、等级/生日月份分布、充值趋势。独立于其它卡加载: member 500
-// 只降级本区域, 不连累 finance/channel/order-type/void 卡。
+// 仅覆盖储值余额、等级/性别/生日月份分布、充值趋势。后端对人数<5 的分组做
+// k-匿名合并。独立于其它卡加载: member 500 只降级本区域, 不连累其它卡。
 const memberLoading = ref(false);
 const memberError = ref('');
 const memberDataAvailable = ref(false);
@@ -364,8 +389,12 @@ const memberCount = ref(0);
 const memberTotalBalance = ref<number | null>(null);
 const memberNote = ref<string | null>(null);
 const memberTierDistribution = ref<Array<{ tier: string; memberCount: number; totalBalance: number | null }>>([]);
+const memberGenderDistribution = ref<Array<{ gender: string; memberCount: number }>>([]);
 const memberBirthMonthDistribution = ref<Array<{ birthMonth: number; memberCount: number }>>([]);
+const memberBirthUnknownCount = ref(0);
+const memberBirthCoveragePct = ref<number | null>(null);
 const memberRechargeTrend = ref<Array<{ month: string; principal: number | null; bonus: number | null }>>([]);
+const memberRechargeStoreCount = ref(0);
 const memberCaveat = ref('');
 
 const maxTierMemberCount = computed(() =>
@@ -373,6 +402,13 @@ const maxTierMemberCount = computed(() =>
 );
 function tierPct(count: number): number {
   return maxTierMemberCount.value > 0 ? (count / maxTierMemberCount.value) * 100 : 0;
+}
+
+const maxGenderMemberCount = computed(() =>
+  memberGenderDistribution.value.reduce((m, g) => Math.max(m, g.memberCount), 0),
+);
+function genderPct(count: number): number {
+  return maxGenderMemberCount.value > 0 ? (count / maxGenderMemberCount.value) * 100 : 0;
 }
 
 const maxBirthMonthCount = computed(() =>
@@ -575,13 +611,18 @@ async function load() {
     memberTotalBalance.value = members.totalBalance ?? null;
     memberNote.value = members.note ?? null;
     memberTierDistribution.value = members.tierDistribution ?? [];
+    memberGenderDistribution.value = members.genderDistribution ?? [];
     memberBirthMonthDistribution.value = members.birthMonthDistribution ?? [];
+    memberBirthUnknownCount.value = members.birthMonthUnknownCount ?? 0;
+    memberBirthCoveragePct.value = members.birthMonthCoveragePct ?? null;
     memberRechargeTrend.value = members.rechargeTrend ?? [];
+    memberRechargeStoreCount.value = members.rechargeStoreCount ?? 0;
     memberCaveat.value = members.caveat ?? '';
   } catch (e) {
     memberError.value = e instanceof Error ? e.message : '会员数据加载失败';
     memberDataAvailable.value = false;
     memberTierDistribution.value = [];
+    memberGenderDistribution.value = [];
     memberBirthMonthDistribution.value = [];
     memberRechargeTrend.value = [];
   } finally {
@@ -670,6 +711,8 @@ watch(
 .rgg-member-block { display: flex; flex-direction: column; gap: 8px; }
 .rgg-member-block-title { font-size: 13px; font-weight: 600; color: #303133; }
 .rgg-member-block-hint { font-size: 11px; font-weight: 400; color: #909399; }
+/* F4 honesty disclosures — 生日覆盖率 / 充值门店覆盖 */
+.rgg-member-coverage { font-size: 11px; color: #e6a23c; margin: -2px 0 2px; }
 /* 生日月份分布 — mini vertical bar chart (12 months) */
 .rgg-birth-bars { display: flex; align-items: flex-end; gap: 4px; height: 100px; }
 .rgg-birth-bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; height: 100%; }

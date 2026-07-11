@@ -16,8 +16,9 @@
 -- hashed. 生日 (birthdate) is reduced to birth_month (1-12) at ingest time;
 -- day and year are discarded before the row ever reaches this table. This
 -- table holds ZERO fields that identify an individual — the aggregation
--- (agg_member_tier / agg_member_birth_month in V20261006_02) reads from it,
--- but even if this Silver table were exposed directly, no PII would leak.
+-- (agg_member_tier / agg_member_birth_month / agg_member_gender in
+-- V20261007_02) reads from it, but even if this Silver table were exposed
+-- directly, no PII would leak.
 --
 -- Natural key: 发卡日期 in the real export is a full timestamp (e.g.
 -- "2025-01-01 09:20:44", not just a date) — issued one member at a time in
