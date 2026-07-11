@@ -27,6 +27,11 @@ import java.util.stream.Collectors;
  * <p><b>铁律</b>: 相同 {@link Input} → 完全相同 {@link Result}（确定性）；缺一条距离边 →
  * 该车次 {@code NEEDS_ROUTE_DATA} 且 {@code totalDistanceKm=0}，绝不伪造/直线降级公里数。
  *
+ * <p><b>档2 (2026-07-11)</b>: Step C2 跨车次局部搜索 (段迁移 Or-opt + 单单交换) 打破 Step A
+ * 「区域→首个匹配车辆」硬绑定的次优 (一车吃两个不相邻区域 → 宽幅折返)。门禁: 全部有车订单
+ * 必须有坐标, 否则完全跳过, 输出与档1 贪心逐字段一致; 且优化结果全局平面里程没有严格变短或
+ * NEEDS_DRIVER 恶化 → 回退 seed (永不比今天更差)。见 {@link #optimizeAcrossTrips}。
+ *
  * <p>持久化 (Plan/Trip/Stop 落库) 由 {@link LogisticsRoutingService} 负责，本类只产出
  * in-memory 结果，便于脱离 Spring/DB 做算法精确性单测。
  */
@@ -186,28 +191,19 @@ public final class LogisticsRoutingAlgorithm {
         // 与 routeEngine.ts 的 `new Set(groups.keys())` 语义一致。
         Set<String> usedVehicleIds = new LinkedHashSet<>(groups.keySet());
 
-        List<TripResult> trips = new ArrayList<>();
-        int tripNoCounter = 1;
-        // 司机占用窗口跟踪 (硬约束 6) — driverId -> 已分配的时间窗列表
-        Map<String, List<TimeWindow>> driverOccupied = new LinkedHashMap<>();
-
+        // ---------------- Step B/C — 组内稳定装箱 + 逐箱定车 (seed 组合, 贪心) ----------------
+        List<BoxAssign> seedBoxes = new ArrayList<>();
         for (Map.Entry<String, List<OrderInput>> entry : groups.entrySet()) {
             VehicleInput primaryVehicle = vehicleById.get(entry.getKey());
-            List<OrderInput> groupOrders = entry.getValue();
-
-            // ---------------- Step B — 组内稳定装箱 ----------------
-            List<List<OrderInput>> packed = packGroup(groupOrders, primaryVehicle, targetLoadPct);
-
-            // ---------------- Step C/D/E/F — 逐箱定车/定人/组几何/定态 ----------------
+            List<List<OrderInput>> packed = packGroup(entry.getValue(), primaryVehicle, targetLoadPct);
             for (int boxIndex = 0; boxIndex < packed.size(); boxIndex++) {
-                // 车次内门店访问顺序优化：最近邻(种子) + 2-opt(去交叉) —— 让 ①②③ 有合理先后、
-                // 线路不来回穿插 (原顺序是按 区域+编码 排, 地理上会绕)。缺坐标则保持原顺序 (诚实)。
-                List<OrderInput> boxOrders = optimizeRouteOrder(
-                        packed.get(boxIndex), input.coordsByOrderId(), input.depotLng(), input.depotLat());
+                List<OrderInput> boxOrders = packed.get(boxIndex);
                 VehicleInput vehicle;
                 if (boxIndex == 0) {
                     vehicle = primaryVehicle;
                 } else {
+                    // matchesVehicle 只看 体积/重量总量 + 每单区域 + 时间窗覆盖 — 与箱内顺序无关,
+                    // 故先定车后 (finalizeTrips 里) 再做顺序优化, 结果与档1 逐字段一致。
                     vehicle = vehiclesSorted.stream()
                             .filter(v -> !usedVehicleIds.contains(v.vehicleId()))
                             .filter(v -> matchesVehicle(v, boxOrders))
@@ -217,60 +213,466 @@ public final class LogisticsRoutingAlgorithm {
                         usedVehicleIds.add(vehicle.vehicleId());
                     }
                 }
-
-                String driverId = null;
-                if (vehicle != null) {
-                    driverId = assignDriver(vehicle, boxOrders, input, driverOccupied);
-                }
-
-                GeometryResult geometry = assembleGeometry(boxOrders, input.distanceLookup());
-                BigDecimal totalDistanceKm = geometry.missing()
-                        ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-                        : geometry.distances().stream()
-                                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                                .setScale(2, RoundingMode.HALF_UP);
-
-                BigDecimal totalVolumeCbm = boxOrders.stream()
-                        .map(OrderInput::volumeCbm).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal totalWeightKg = boxOrders.stream()
-                        .map(OrderInput::weightKg).reduce(BigDecimal.ZERO, BigDecimal::add);
-
-                BigDecimal loadRate = (vehicle != null && vehicle.capacityCbm().compareTo(BigDecimal.ZERO) > 0)
-                        ? totalVolumeCbm.divide(vehicle.capacityCbm(), 4, RoundingMode.HALF_UP)
-                        : BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
-                BigDecimal weightLoadRate = (vehicle != null && vehicle.maxWeightKg().compareTo(BigDecimal.ZERO) > 0)
-                        ? totalWeightKg.divide(vehicle.maxWeightKg(), 4, RoundingMode.HALF_UP)
-                        : BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
-
-                // Step F 态优先级 (与 routeEngine.ts 一致: 缺边 > 缺车; 本实现增补缺车 > 缺司机 > DRAFT)
-                TripStatus status;
-                if (geometry.missing()) {
-                    status = TripStatus.NEEDS_ROUTE_DATA;
-                } else if (vehicle == null) {
-                    status = TripStatus.NEEDS_VEHICLE;
-                } else if (driverId == null) {
-                    status = TripStatus.NEEDS_DRIVER;
-                } else {
-                    status = TripStatus.DRAFT;
-                }
-
-                trips.add(new TripResult(
-                        tripNoCounter++,
-                        vehicle == null ? null : vehicle.vehicleId(),
-                        driverId,
-                        boxOrders.stream().map(OrderInput::orderId).toList(),
-                        geometry.keys(),
-                        geometry.missing() ? List.of() : geometry.distances(),
-                        totalDistanceKm,
-                        totalVolumeCbm,
-                        totalWeightKg,
-                        loadRate,
-                        weightLoadRate,
-                        status));
+                seedBoxes.add(new BoxAssign(vehicle, boxOrders));
             }
         }
 
+        // ---------------- Step C2 (档2) — 跨车次局部搜索 (打破 Step A 区域→首车硬绑定) ----------------
+        // 门禁: 全部有车订单必须有坐标, 否则完全跳过 → 输出与档1 贪心逐字段一致 (诚实降级, 不猜)。
+        Result seedResult = finalizeTrips(seedBoxes, input, unassigned);
+        List<BoxAssign> optimizedBoxes = optimizeAcrossTrips(seedBoxes, vehiclesSorted, usedVehicleIds, input);
+        if (optimizedBoxes == null) {
+            return seedResult;
+        }
+        Result optimizedResult = finalizeTrips(optimizedBoxes, input, unassigned);
+        // 永不更差: 优化组合最终目标 (平面近似总里程) 没有严格变短, 或司机缺配比 seed 恶化 → 回退 seed。
+        return pickBetterHonestly(seedResult, optimizedResult, input);
+    }
+
+    // ============================================================
+    // Step B2/D/E/F — 对既定「车辆→订单箱」组合做 顺序优化/定人/组几何/定态
+    // ============================================================
+
+    /** 「车辆 → 订单箱」组合中的一箱; vehicle=null 即无可用车 (NEEDS_VEHICLE 车次)。 */
+    private record BoxAssign(VehicleInput vehicle, List<OrderInput> orders) {
+    }
+
+    /**
+     * 对既定组合按档1 语义收尾: 车次内顺序优化 (最近邻+2-opt)、司机分配 (含占用防冲突)、
+     * 几何组装 (缺边诚实降级)、定态、连续 tripNo。对 seed 组合调用时输出与档1 逐字段一致。
+     */
+    private static Result finalizeTrips(List<BoxAssign> boxes, Input input, List<String> unassigned) {
+        List<TripResult> trips = new ArrayList<>();
+        int tripNoCounter = 1;
+        // 司机占用窗口跟踪 (硬约束 6) — driverId -> 已分配的时间窗列表
+        Map<String, List<TimeWindow>> driverOccupied = new LinkedHashMap<>();
+
+        for (BoxAssign box : boxes) {
+            // 车次内门店访问顺序优化：最近邻(种子) + 2-opt(去交叉) —— 让 ①②③ 有合理先后、
+            // 线路不来回穿插 (原顺序是按 区域+编码 排, 地理上会绕)。缺坐标则保持原顺序 (诚实)。
+            List<OrderInput> boxOrders = optimizeRouteOrder(
+                    box.orders(), input.coordsByOrderId(), input.depotLng(), input.depotLat());
+            VehicleInput vehicle = box.vehicle();
+
+            String driverId = null;
+            if (vehicle != null) {
+                driverId = assignDriver(vehicle, boxOrders, input, driverOccupied);
+            }
+
+            GeometryResult geometry = assembleGeometry(boxOrders, input.distanceLookup());
+            BigDecimal totalDistanceKm = geometry.missing()
+                    ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                    : geometry.distances().stream()
+                            .reduce(BigDecimal.ZERO, BigDecimal::add)
+                            .setScale(2, RoundingMode.HALF_UP);
+
+            BigDecimal totalVolumeCbm = boxOrders.stream()
+                    .map(OrderInput::volumeCbm).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal totalWeightKg = boxOrders.stream()
+                    .map(OrderInput::weightKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal loadRate = (vehicle != null && vehicle.capacityCbm().compareTo(BigDecimal.ZERO) > 0)
+                    ? totalVolumeCbm.divide(vehicle.capacityCbm(), 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+            BigDecimal weightLoadRate = (vehicle != null && vehicle.maxWeightKg().compareTo(BigDecimal.ZERO) > 0)
+                    ? totalWeightKg.divide(vehicle.maxWeightKg(), 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+
+            // Step F 态优先级 (与 routeEngine.ts 一致: 缺边 > 缺车; 本实现增补缺车 > 缺司机 > DRAFT)
+            TripStatus status;
+            if (geometry.missing()) {
+                status = TripStatus.NEEDS_ROUTE_DATA;
+            } else if (vehicle == null) {
+                status = TripStatus.NEEDS_VEHICLE;
+            } else if (driverId == null) {
+                status = TripStatus.NEEDS_DRIVER;
+            } else {
+                status = TripStatus.DRAFT;
+            }
+
+            trips.add(new TripResult(
+                    tripNoCounter++,
+                    vehicle == null ? null : vehicle.vehicleId(),
+                    driverId,
+                    boxOrders.stream().map(OrderInput::orderId).toList(),
+                    geometry.keys(),
+                    geometry.missing() ? List.of() : geometry.distances(),
+                    totalDistanceKm,
+                    totalVolumeCbm,
+                    totalWeightKg,
+                    loadRate,
+                    weightLoadRate,
+                    status));
+        }
+
         return new Result(trips, unassigned);
+    }
+
+    // ============================================================
+    // Step C2 (档2) — 跨车次局部搜索: 段迁移 (Or-opt 长度1-3) + 单单交换
+    // ============================================================
+
+    /** 局部搜索安全上限 — 每步严格改进故必然终止, guard 只防御极端病态输入。 */
+    private static final int MAX_CROSS_TRIP_MOVES = 400;
+    private static final double EPS = 1e-9;
+
+    /**
+     * 档2 跨车次优化 — 在 seed 组合 (Step A/B/C 贪心) 之上做确定性 best-improvement 局部搜索,
+     * 打破「区域→首个匹配车辆」硬绑定造成的宽幅折返车次 (一车吃两个不相邻区域):
+     * <ul>
+     *   <li><b>段迁移 (Or-opt)</b>: 把 1-3 个连续订单整段搬到另一辆车 (含尚未启用的空闲车 → 可拆分折返车次)。</li>
+     *   <li><b>单单交换</b>: 两车各出一单互换 (容量顶满、迁移不可行时的补充邻域)。</li>
+     * </ul>
+     * 每步只接受满足全部硬约束 (目标车 serviceAreas 覆盖每单区域 — 区域保持硬约束; 体积 ≤ 目标车
+     * targetLoadPct 软目标容量 — 比硬容量更保守, 不突破用户装载率旋钮; 重量 ≤ maxWeightKg;
+     * 车辆可用时窗覆盖新车次时窗; 一车一箱不变) 且严格缩短全局平面近似总里程 (与档1 车次内 2-opt
+     * 同一把尺) 的移动。司机班次可行性不在移动级检查 — 由 {@link #finalizeTrips} 重新分配 +
+     * {@link #pickBetterHonestly} 的 NEEDS_DRIVER 不回退门禁兜底。
+     *
+     * <p><b>诚实降级</b>: 坐标映射为空、或任一有车订单缺坐标 → 返回 null (完全不动, 输出 = 档1 贪心)。
+     * 无车箱 (NEEDS_VEHICLE) 不参与搜索, 原样透传。新组合产生的新相邻段可能暂缺距离边 →
+     * 沿用档1 B2 车次内重排的既有先例: 车次诚实置 NEEDS_ROUTE_DATA + 0km, 由 service 层高德补边缓存。
+     *
+     * @return 优化后的组合 (顺序: 原组合序, 新启用车箱按 vehicleId 序附尾, 被搬空的箱剔除);
+     *         门禁未过或无任何改进移动 → null (调用方直接用 seed 结果)。
+     */
+    private static List<BoxAssign> optimizeAcrossTrips(List<BoxAssign> seedBoxes, List<VehicleInput> vehiclesSorted,
+            Set<String> usedVehicleIds, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        if (coords == null || coords.isEmpty()) {
+            return null;
+        }
+        for (BoxAssign box : seedBoxes) {
+            if (box.vehicle() == null) {
+                continue;
+            }
+            for (OrderInput o : box.orders()) {
+                if (!coords.containsKey(o.orderId())) {
+                    return null; // 诚实降级: 缺任一坐标 → 完全不动 seed
+                }
+            }
+        }
+
+        double[] depot = {input.depotLng(), input.depotLat()};
+        BigDecimal targetLoadPct = input.targetLoadPct();
+
+        // 工作副本 (深拷贝订单列表, seed 组合保持原样供回退); 无车箱不参与搜索。
+        List<WorkBox> boxes = new ArrayList<>();
+        for (BoxAssign box : seedBoxes) {
+            boxes.add(new WorkBox(box.vehicle(), box.orders()));
+        }
+        // 尚未启用的车辆 → 空候选箱 (vehicleId ASC, 确定性), 允许把折返区段拆到空闲车上。
+        for (VehicleInput v : vehiclesSorted) {
+            if (!usedVehicleIds.contains(v.vehicleId())) {
+                boxes.add(new WorkBox(v, List.of()));
+            }
+        }
+
+        boolean anyMove = false;
+        for (int guard = 0; guard < MAX_CROSS_TRIP_MOVES; guard++) {
+            RelocateMove bestRelocate = findBestRelocate(boxes, coords, depot, targetLoadPct);
+            SwapMove bestSwap = findBestSwap(boxes, coords, depot, targetLoadPct);
+            double relocateDelta = bestRelocate == null ? 0.0 : bestRelocate.delta();
+            double swapDelta = bestSwap == null ? 0.0 : bestSwap.delta();
+            if (relocateDelta >= -EPS && swapDelta >= -EPS) {
+                break; // 无改进移动 → 局部最优, 收敛
+            }
+            if (relocateDelta <= swapDelta) {
+                applyRelocate(boxes, bestRelocate);
+            } else {
+                applySwap(boxes, bestSwap);
+            }
+            anyMove = true;
+        }
+        if (!anyMove) {
+            return null;
+        }
+
+        List<BoxAssign> out = new ArrayList<>();
+        for (WorkBox wb : boxes) {
+            if (wb.orders.isEmpty()) {
+                continue; // 被整箱搬空的车次消失; 从未启用的空候选箱同样剔除
+            }
+            out.add(new BoxAssign(wb.vehicle, wb.orders));
+        }
+        return out;
+    }
+
+    /** 搜索期可变箱 — 维护体积/重量累计, 避免每次候选评估重算总量。 */
+    private static final class WorkBox {
+        final VehicleInput vehicle; // null = NEEDS_VEHICLE 箱, 不参与搜索
+        final List<OrderInput> orders;
+        BigDecimal volume;
+        BigDecimal weight;
+
+        WorkBox(VehicleInput vehicle, List<OrderInput> orders) {
+            this.vehicle = vehicle;
+            this.orders = new ArrayList<>(orders);
+            this.volume = sumVolume(this.orders);
+            this.weight = sumWeight(this.orders);
+        }
+
+        boolean participates() {
+            return vehicle != null;
+        }
+    }
+
+    private record RelocateMove(int fromBox, int start, int len, int toBox, int insertPos, double delta) {
+    }
+
+    private record SwapMove(int boxA, int idxA, int boxB, int idxB, double delta) {
+    }
+
+    /** 全邻域扫描找最优段迁移 (best-improvement, 扫描序 + 严格更优才替换 → 确定性)。 */
+    private static RelocateMove findBestRelocate(List<WorkBox> boxes, Map<String, double[]> coords,
+            double[] depot, BigDecimal targetLoadPct) {
+        RelocateMove best = null;
+        for (int len = 1; len <= 3; len++) {
+            for (int si = 0; si < boxes.size(); si++) {
+                WorkBox src = boxes.get(si);
+                if (!src.participates() || src.orders.size() < len) {
+                    continue;
+                }
+                for (int start = 0; start + len <= src.orders.size(); start++) {
+                    List<OrderInput> segment = src.orders.subList(start, start + len);
+                    BigDecimal segVolume = sumVolume(segment);
+                    BigDecimal segWeight = sumWeight(segment);
+                    double removalDelta = segmentRemovalDelta(src.orders, start, len, coords, depot);
+                    for (int ti = 0; ti < boxes.size(); ti++) {
+                        if (ti == si) {
+                            continue;
+                        }
+                        WorkBox dst = boxes.get(ti);
+                        if (!dst.participates() || !canAccept(dst, segment, segVolume, segWeight, targetLoadPct)) {
+                            continue;
+                        }
+                        int bestPos = -1;
+                        double bestInsertion = Double.MAX_VALUE;
+                        for (int p = 0; p <= dst.orders.size(); p++) {
+                            double ins = segmentInsertionDelta(dst.orders, p, segment, coords, depot);
+                            if (ins < bestInsertion - EPS) {
+                                bestInsertion = ins;
+                                bestPos = p;
+                            }
+                        }
+                        double delta = removalDelta + bestInsertion;
+                        if (delta < -EPS && (best == null || delta < best.delta() - EPS)) {
+                            best = new RelocateMove(si, start, len, ti, bestPos, delta);
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /** 全邻域扫描找最优单单交换 (双向可行性: 区域/容量/重量/时窗都要在交换后的两箱各自成立)。 */
+    private static SwapMove findBestSwap(List<WorkBox> boxes, Map<String, double[]> coords,
+            double[] depot, BigDecimal targetLoadPct) {
+        SwapMove best = null;
+        for (int bi = 0; bi < boxes.size(); bi++) {
+            WorkBox boxA = boxes.get(bi);
+            if (!boxA.participates() || boxA.orders.isEmpty()) {
+                continue;
+            }
+            for (int bj = bi + 1; bj < boxes.size(); bj++) {
+                WorkBox boxB = boxes.get(bj);
+                if (!boxB.participates() || boxB.orders.isEmpty()) {
+                    continue;
+                }
+                for (int ia = 0; ia < boxA.orders.size(); ia++) {
+                    OrderInput a = boxA.orders.get(ia);
+                    for (int ib = 0; ib < boxB.orders.size(); ib++) {
+                        OrderInput b = boxB.orders.get(ib);
+                        if (!swapFeasible(boxA, a, b, targetLoadPct) || !swapFeasible(boxB, b, a, targetLoadPct)) {
+                            continue;
+                        }
+                        double delta = replaceDelta(boxA.orders, ia, b, coords, depot)
+                                + replaceDelta(boxB.orders, ib, a, coords, depot);
+                        if (delta < -EPS && (best == null || delta < best.delta() - EPS)) {
+                            best = new SwapMove(bi, ia, bj, ib, delta);
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private static void applyRelocate(List<WorkBox> boxes, RelocateMove move) {
+        WorkBox src = boxes.get(move.fromBox());
+        WorkBox dst = boxes.get(move.toBox());
+        List<OrderInput> segmentView = src.orders.subList(move.start(), move.start() + move.len());
+        List<OrderInput> segment = new ArrayList<>(segmentView);
+        segmentView.clear();
+        dst.orders.addAll(move.insertPos(), segment);
+        BigDecimal segVolume = sumVolume(segment);
+        BigDecimal segWeight = sumWeight(segment);
+        src.volume = src.volume.subtract(segVolume);
+        src.weight = src.weight.subtract(segWeight);
+        dst.volume = dst.volume.add(segVolume);
+        dst.weight = dst.weight.add(segWeight);
+    }
+
+    private static void applySwap(List<WorkBox> boxes, SwapMove move) {
+        WorkBox boxA = boxes.get(move.boxA());
+        WorkBox boxB = boxes.get(move.boxB());
+        OrderInput a = boxA.orders.get(move.idxA());
+        OrderInput b = boxB.orders.get(move.idxB());
+        boxA.orders.set(move.idxA(), b);
+        boxB.orders.set(move.idxB(), a);
+        boxA.volume = boxA.volume.subtract(a.volumeCbm()).add(b.volumeCbm());
+        boxA.weight = boxA.weight.subtract(a.weightKg()).add(b.weightKg());
+        boxB.volume = boxB.volume.subtract(b.volumeCbm()).add(a.volumeCbm());
+        boxB.weight = boxB.weight.subtract(b.weightKg()).add(a.weightKg());
+    }
+
+    /** 目标箱能否整段收下 segment: 区域(硬)/体积(≤软目标容量)/重量(硬)/车辆时窗覆盖新并集窗。 */
+    private static boolean canAccept(WorkBox dst, List<OrderInput> segment,
+            BigDecimal segVolume, BigDecimal segWeight, BigDecimal targetLoadPct) {
+        for (OrderInput o : segment) {
+            if (!areaMatches(dst.vehicle.serviceAreas(), o.areaCode())) {
+                return false;
+            }
+        }
+        if (dst.volume.add(segVolume).compareTo(softTargetCap(dst.vehicle, targetLoadPct)) > 0) {
+            return false;
+        }
+        if (dst.weight.add(segWeight).compareTo(dst.vehicle.maxWeightKg()) > 0) {
+            return false;
+        }
+        List<OrderInput> hypothetical = new ArrayList<>(dst.orders);
+        hypothetical.addAll(segment);
+        return windowCovers(dst.vehicle.availableFrom(), dst.vehicle.availableTo(), computeTripWindow(hypothetical));
+    }
+
+    /** 交换后 box (出 out、进 in) 是否仍可行 — 区域/体积/重量/时窗四检。 */
+    private static boolean swapFeasible(WorkBox box, OrderInput out, OrderInput in, BigDecimal targetLoadPct) {
+        if (!areaMatches(box.vehicle.serviceAreas(), in.areaCode())) {
+            return false;
+        }
+        if (box.volume.subtract(out.volumeCbm()).add(in.volumeCbm())
+                .compareTo(softTargetCap(box.vehicle, targetLoadPct)) > 0) {
+            return false;
+        }
+        if (box.weight.subtract(out.weightKg()).add(in.weightKg())
+                .compareTo(box.vehicle.maxWeightKg()) > 0) {
+            return false;
+        }
+        List<OrderInput> hypothetical = new ArrayList<>(box.orders);
+        hypothetical.remove(out);
+        hypothetical.add(in);
+        return windowCovers(box.vehicle.availableFrom(), box.vehicle.availableTo(), computeTripWindow(hypothetical));
+    }
+
+    /** 软目标容量 = capacityCbm × targetLoadPct / 100 (与 {@link #packGroup} 同 scale) — 优化期体积上限。 */
+    private static BigDecimal softTargetCap(VehicleInput vehicle, BigDecimal targetLoadPct) {
+        return vehicle.capacityCbm().multiply(targetLoadPct).divide(HUNDRED, 6, RoundingMode.HALF_UP);
+    }
+
+    /** 从开放路径 (DEPOT 起点) 中摘除 route[start..start+len-1] 的平面长度变化 (负 = 变短)。 */
+    private static double segmentRemovalDelta(List<OrderInput> route, int start, int len,
+            Map<String, double[]> coords, double[] depot) {
+        double[] prev = start == 0 ? depot : coords.get(route.get(start - 1).orderId());
+        double removed = planarDist(prev, coords.get(route.get(start).orderId()));
+        for (int k = start; k < start + len - 1; k++) {
+            removed += planarDist(coords.get(route.get(k).orderId()), coords.get(route.get(k + 1).orderId()));
+        }
+        double added = 0.0;
+        if (start + len < route.size()) {
+            double[] next = coords.get(route.get(start + len).orderId());
+            removed += planarDist(coords.get(route.get(start + len - 1).orderId()), next);
+            added = planarDist(prev, next);
+        }
+        return added - removed;
+    }
+
+    /** 把 segment (保持内部顺序) 插入开放路径 position p 的平面长度变化。 */
+    private static double segmentInsertionDelta(List<OrderInput> route, int p, List<OrderInput> segment,
+            Map<String, double[]> coords, double[] depot) {
+        double[] prev = p == 0 ? depot : coords.get(route.get(p - 1).orderId());
+        double added = planarDist(prev, coords.get(segment.get(0).orderId()));
+        for (int k = 0; k < segment.size() - 1; k++) {
+            added += planarDist(coords.get(segment.get(k).orderId()), coords.get(segment.get(k + 1).orderId()));
+        }
+        double removed = 0.0;
+        if (p < route.size()) {
+            double[] next = coords.get(route.get(p).orderId());
+            added += planarDist(coords.get(segment.get(segment.size() - 1).orderId()), next);
+            removed = planarDist(prev, next);
+        }
+        return added - removed;
+    }
+
+    /** 把开放路径 index i 的订单换成 x 的平面长度变化 (位置替换评估; 终序由 finalize 的 NN+2-opt 收拾)。 */
+    private static double replaceDelta(List<OrderInput> route, int i, OrderInput x,
+            Map<String, double[]> coords, double[] depot) {
+        double[] prev = i == 0 ? depot : coords.get(route.get(i - 1).orderId());
+        double[] old = coords.get(route.get(i).orderId());
+        double[] nw = coords.get(x.orderId());
+        double delta = planarDist(prev, nw) - planarDist(prev, old);
+        if (i + 1 < route.size()) {
+            double[] next = coords.get(route.get(i + 1).orderId());
+            delta += planarDist(nw, next) - planarDist(old, next);
+        }
+        return delta;
+    }
+
+    /**
+     * 永不更差门禁: 只有当优化结果 (a) 平面近似全局总里程严格更短, 且 (b) NEEDS_DRIVER 车次数
+     * 不比 seed 多 (跨车搬单可能让新车分不到班次覆盖的司机 — 移动级不查司机, 这里整体兜底),
+     * 才采用优化结果; 否则回退 seed (= 档1 贪心, 今天的行为)。
+     */
+    private static Result pickBetterHonestly(Result seed, Result optimized, Input input) {
+        long seedNeedsDriver = countStatus(seed, TripStatus.NEEDS_DRIVER);
+        long optimizedNeedsDriver = countStatus(optimized, TripStatus.NEEDS_DRIVER);
+        if (optimizedNeedsDriver > seedNeedsDriver) {
+            return seed;
+        }
+        double seedObjective = planarObjective(seed, input);
+        double optimizedObjective = planarObjective(optimized, input);
+        return optimizedObjective < seedObjective - EPS ? optimized : seed;
+    }
+
+    private static long countStatus(Result result, TripStatus status) {
+        return result.trips().stream().filter(t -> t.status() == status).count();
+    }
+
+    /**
+     * 全局平面近似目标 = Σ 每车次开放路径 (DEPOT→s1→...→sk) 平面长度。任一站缺坐标的车次跳过
+     * (只可能是未参与优化的无车箱, seed/optimized 内容一致, 两侧一致跳过 → 比较公平)。
+     */
+    private static double planarObjective(Result result, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        double[] depot = {input.depotLng(), input.depotLat()};
+        double total = 0.0;
+        for (TripResult trip : result.trips()) {
+            boolean allPresent = true;
+            for (String orderId : trip.orderIdsInOrder()) {
+                if (!coords.containsKey(orderId)) {
+                    allPresent = false;
+                    break;
+                }
+            }
+            if (!allPresent) {
+                continue;
+            }
+            double[] prev = depot;
+            for (String orderId : trip.orderIdsInOrder()) {
+                double[] cur = coords.get(orderId);
+                total += planarDist(prev, cur);
+                prev = cur;
+            }
+        }
+        return total;
+    }
+
+    private static BigDecimal sumVolume(List<OrderInput> orders) {
+        return orders.stream().map(OrderInput::volumeCbm).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static BigDecimal sumWeight(List<OrderInput> orders) {
+        return orders.stream().map(OrderInput::weightKg).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     // ============================================================
