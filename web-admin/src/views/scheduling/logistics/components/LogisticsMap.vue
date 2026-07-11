@@ -54,9 +54,11 @@ function depotContent(): string {
   return `<div class="amap-depot"><span class="amap-depot-dot"></span><span class="amap-lbl">配送中心</span></div>`;
 }
 
-function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean): string {
+function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean): string {
   const badge = seq != null ? `<span class="amap-seq">${seq}</span>` : '<span class="amap-store-dot"></span>';
-  return `<div class="amap-store${selected ? ' selected' : ''}">${badge}<span class="amap-lbl">${esc(compactStoreName(store.name))}</span></div>`;
+  // labeled=false（非选中线路的门店）：只显小灰点，不显名字标签，避免全图挤满店名
+  const label = labeled ? `<span class="amap-lbl">${esc(compactStoreName(store.name))}</span>` : '';
+  return `<div class="amap-store${selected ? ' selected' : ''}${labeled ? '' : ' dim'}">${badge}${label}</div>`;
 }
 
 function clearOverlays(): void {
@@ -88,14 +90,16 @@ function renderOverlays(): void {
   });
   overlays.push(depot);
 
-  // 门店 marker
+  // 门店 marker —— 只有「选中线路的门店」或「被点选的门店」才显示名字标签，其余缩成小灰点，避免全图挤满店名
+  const selectedStoreSet = new Set(selectedTrip?.storeIds ?? []);
   props.stores.forEach((store) => {
     if (!Number.isFinite(store.lng) || !Number.isFinite(store.lat)) return;
+    const labeled = selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
     const marker = new AMapRef.Marker({
       position: [store.lng, store.lat],
-      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId),
+      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled),
       offset: new AMapRef.Pixel(-9, -9),
-      zIndex: store.id === props.selectedStoreId ? 160 : 120,
+      zIndex: labeled ? 160 : 90,
     });
     marker.on('click', () => emit('select-store', store.id));
     overlays.push(marker);
@@ -123,15 +127,17 @@ function drawTripRoute(tripId: string, index: number, storePts: [number, number]
   if (!map || !amap) return;
   const AMapRef = amap;
   const selected = tripId === props.selectedTripId;
+  const anySelected = props.selectedTripId != null;
   const color = routeColors[index % routeColors.length];
 
   const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
     if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
+    // 有选中线路时，非选中线路淡化让选中的一目了然
     const line = new AMapRef.Polyline({
       path,
       strokeColor: color,
-      strokeWeight: selected ? 7 : 4,
-      strokeOpacity: selected ? 1 : 0.6,
+      strokeWeight: selected ? 7 : anySelected ? 3 : 4,
+      strokeOpacity: selected ? 1 : anySelected ? 0.22 : 0.6,
       strokeStyle: dashed ? 'dashed' : 'solid',
       lineJoin: 'round',
       lineCap: 'round',
@@ -545,5 +551,14 @@ function routeStyle(index: number): Record<string, string> {
 .amap-store.selected .amap-lbl {
   border-color: #1b65a8;
   color: #1b65a8;
+}
+
+/* 非选中线路的门店：无名字标签，小灰点，弱化避免全图混乱 */
+.amap-store.dim .amap-store-dot {
+  width: 11px;
+  height: 11px;
+  background: #94a3b8;
+  border-width: 2px;
+  opacity: 0.85;
 }
 </style>
