@@ -15,6 +15,7 @@ import {
   type SemiFinishedStockItem,
   type SemiFinishedInventoryFilter,
   type FinishedGoodsStockItem,
+  type WorkflowProcessDescriptor,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
@@ -67,6 +68,12 @@ const props = withDefaults(defineProps<{
   initialRows?: ProcessSheetRowView[];
   /** Layout mode toggled in the drawer header. Default: 'grid'. */
   viewMode?: 'grid' | 'card';
+  /**
+   * 2B Task F2 (additive, fool-proof): 本工序对应的 workflow 端口上下文 (计划产出 SKU/单位 +
+   * 所需原料类型), 仅 workflow-activated 计划的 ProcessSheet.vue 会透传非 null 值; legacy
+   * 计划恒为 null/undefined。只读展示用 —— 不改变 saveRow 请求形状, 不影响任何现有 picker。
+   */
+  workflowContext?: WorkflowProcessDescriptor | null;
 }>(), {
   allowSemiFinishedInjection: false,
   allowMultipleUpstreamSources: false,
@@ -76,6 +83,7 @@ const props = withDefaults(defineProps<{
   ownInventoryItems: () => [],
   initialRows: () => [],
   viewMode: 'grid',
+  workflowContext: null,
 });
 const emit = defineEmits<{
   (e: 'row-saved'): void;
@@ -173,6 +181,29 @@ const supportsUpstreamSources = computed(() =>
 );
 const isMultiSource = computed(() => props.allowMultipleUpstreamSources === true && supportsUpstreamSources.value);
 const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiSource.value);
+
+// -------------------------------------------------------------------------
+// 2B Task F2 (additive, fool-proof Rule 2/3): workflow 端口上下文只读展示。
+// 不改变任何现有 picker / buildRequest / saveRow 逻辑 —— 只在录入区顶部提示
+// "这道工序该产什么(SKU/单位/半成品|成品)" + "需要哪些原料类型", 客户自己填数量/选批次。
+// -------------------------------------------------------------------------
+/** 本工序 workflow 计划产出端口 (null = 无 workflow 上下文, 或该 workflow 任务无产出端口)。 */
+const workflowOutput = computed(() => props.workflowContext?.output ?? null);
+/** 本工序 workflow 声明的原料类型 (仅 RAW_MATERIAL kind, 供领料 picker 旁提示"需要哪些原料")。 */
+const workflowRawInputs = computed(() =>
+  (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
+);
+/** 产出摘要文字: "{品名}（{单位}）" — 品名/单位缺失 (SKU 已失效) 时用 skuId 兜底, 不崩溃。 */
+const workflowOutputLabel = computed(() => {
+  const out = workflowOutput.value;
+  if (!out) return '';
+  const name = out.materialName || `(未命名 SKU: ${out.skuId})`;
+  return out.unit ? `${name}（${out.unit}）` : name;
+});
+/** 需要原料类型摘要文字 (供领料 picker 旁提示)。 */
+const workflowRawInputsLabel = computed(() =>
+  workflowRawInputs.value.map((p) => p.materialName || p.skuId).join('、'),
+);
 /**
  * G1 混批去硬编码: processCode 不属于任何已登记 archetype 且本工序确实显示上游来源选择器
  * (supportsUpstreamSources) —— 真正自定义命名、未映射的新非首道工序。这类工序沿用 熟制
@@ -1420,6 +1451,40 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   <div class="sp-grid-wrap">
 
     <!-- ====================================================================
+         2B Task F2 (additive, fool-proof Rule 2/3/5): workflow 计划产出/所需原料只读展示。
+         仅 workflowContext 非 null (workflow-activated 计划) 时渲染; legacy 计划该 prop 恒为
+         null, 这块整体不出现, 不影响任何现有布局/行为。
+         ==================================================================== -->
+    <el-alert
+      v-if="workflowContext"
+      class="sp-workflow-banner"
+      type="info"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <span v-if="workflowOutput">
+          计划产出：{{ workflowOutputLabel }}
+          <el-tag size="small" :type="workflowOutput.finished ? 'success' : 'warning'" style="margin-left:6px">
+            {{ workflowOutput.finished ? '成品' : '半成品' }}
+          </el-tag>
+        </span>
+        <span v-else style="color:#909399">本工序 workflow 未配置产出端口</span>
+        <span v-if="workflowRawInputsLabel" style="margin-left:12px;color:#606266">
+          需要原料：{{ workflowRawInputsLabel }}
+        </span>
+      </template>
+    </el-alert>
+    <el-alert
+      v-if="workflowOutput && workflowOutput.skuResolved === false"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="error"
+      :closable="false"
+      show-icon
+      title="产出 SKU 已失效，请回 Workflow 配置"
+    />
+
+    <!-- ====================================================================
          CARD LAYOUT
          One card per row. Same row model + editors as the grid, different
          visual wrapper. Expandable labor / mix sections rendered inline.
@@ -2410,6 +2475,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-grid-wrap {
   display: flex;
   flex-direction: column;
+}
+
+/* 2B Task F2: workflow 计划产出/所需原料只读展示条 */
+.sp-workflow-banner {
+  margin-bottom: 8px;
+}
+.sp-workflow-banner-warning {
+  margin-top: -4px;
 }
 
 .sp-table-scroll {

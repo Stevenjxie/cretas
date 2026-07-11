@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { getInventory, getRows, type ProcessSheetInventoryItem, type ProcessSheetRowView } from '@/api/processSheet';
+import {
+  getInventory, getRows, getWorkflowSheetConfig,
+  type ProcessSheetInventoryItem, type ProcessSheetRowView, type WorkflowProcessDescriptor,
+} from '@/api/processSheet';
 import { getProductWorkProcesses, type ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
@@ -59,6 +62,12 @@ type ProcEntry = {
   customFieldSchema: ProcessSheetCustomFieldDef[] | null;
   /** 5988: 本工序是否允许成品库存作投料来源 (透传给 ProcessDataTable 的 allowFinishedGoodsSource prop)。 */
   allowFinishedGoodsSource: boolean;
+  /**
+   * 2B Task F1 (additive): 该道工序对应的 workflow 端口上下文 (计划产出 SKU/单位 + 所需原料类型),
+   * 仅 workflow-activated 计划有值; legacy 计划恒为 undefined/null。透传给 ProcessDataTable 作
+   * 只读展示 (fool-proof Rule 2/3 — 告诉文员要产什么, 不给自由类型选择), 不改变 saveRow 请求形状。
+   */
+  workflowContext?: WorkflowProcessDescriptor | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -110,9 +119,68 @@ const upstreamKeyOf = computed<Record<string, string | null>>(() => {
 });
 
 /**
- * 动态解析产品工序链 (G0 + SP-G A 真自由配置):
+ * 2B Task F1 (additive): workflow 快照 (WorkflowProcessDescriptor[]) → ProcEntry[]。
  *
- * 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
+ * 镜像下方 legacy 分支的 archetype 映射逻辑 (同一 ROLE_TO_ARCHETYPE / 关键词回退规则), 但
+ * 独立成一份函数 —— 不改动、不复用 legacy 分支任何一行代码, 保证 legacy 路径字节不变。
+ *
+ * `customFieldSchema` 后端按 Object 原样返回 (与 WorkProcess.customFieldSchema 同源 JSON);
+ * 仅当运行时确实是数组时才当 ProcessSheetCustomFieldDef[] 使用, 否则按 null 处理 (不用
+ * `as any`, 用运行时 Array.isArray 收窄类型)。
+ */
+function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEntry[] {
+  const sorted = [...descriptors].sort((a, b) => a.processOrder - b.processOrder);
+  const hasRoles = sorted.some((p) => p.defaultCostCategory != null);
+
+  return sorted
+    .map((proc, idx) => {
+      let code: string;
+      if (hasRoles) {
+        code = proc.defaultCostCategory != null
+          ? (ROLE_TO_ARCHETYPE[proc.defaultCostCategory] ?? 'chaoshui')
+          : 'chaoshui';
+      } else {
+        const kw = proc.processName ? nameToConfigCode(proc.processName) : undefined;
+        if (idx === 0) {
+          code = (kw && kw !== 'xiuyou') ? kw : 'xiuyou';
+        } else {
+          code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';
+        }
+      }
+      // allowInjection: 计划产出为半成品/成品作投料来源(即客户显式开启 allowFinishedGoodsSource),
+      // 或本工序自身的 inputs 里已声明半成品/成品端口 (说明该道设计上就吃半成品/成品投料)。
+      const hasUpstreamMaterialInput = proc.inputs.some(
+        (p) => p.materialKind === 'SEMI_FINISHED' || p.materialKind === 'FINISHED_GOOD',
+      );
+      const rawSchema = proc.customFieldSchema;
+      const customFieldSchema = Array.isArray(rawSchema)
+        ? (rawSchema as ProcessSheetCustomFieldDef[])
+        : null;
+      const entry: ProcEntry = {
+        code,
+        order: proc.processOrder,
+        label: proc.processName || `工序${proc.processOrder}`,
+        allowInjection: proc.allowFinishedGoodsSource === true || hasUpstreamMaterialInput,
+        allowMultipleUpstreamSources: proc.allowMultipleUpstreamSources === true,
+        isFirstProcess: idx === 0,
+        customFieldSchema,
+        allowFinishedGoodsSource: proc.allowFinishedGoodsSource === true,
+        workflowContext: proc,
+      };
+      return entry;
+    })
+    .filter((p): p is ProcEntry => !!PROCESS_SHEET_CONFIG[p.code]);
+}
+
+/**
+ * 动态解析产品工序链 (G0 + SP-G A 真自由配置 + 2B Task F1 workflow-awareness):
+ *
+ * 0. Workflow-awareness (2B Task F1, additive): 先探 workflow-config 端点 —— 该计划若绑定
+ *    workflow 批次 (`GET .../process-sheet/workflow-config` 返回非 null), 优先用 workflow
+ *    快照的 ProcessDescriptor[] 建 tabs (见 mapWorkflowProcesses), **不触发**下方 legacy 逻辑。
+ *    探测失败 / 返回 null / 无 processes → 原样落入 legacy 分支 (下方逻辑字节不变)。
+ *
+ * legacy 分支 —— 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
  *
  * 1. Role mode (SP-G A): 若本产品任意工序有非 null 的 defaultCostCategory,
  *    则对每道工序用 ROLE_TO_ARCHETYPE[defaultCostCategory] 映射; 未登记的
@@ -128,6 +196,22 @@ const upstreamKeyOf = computed<Record<string, string | null>>(() => {
  * 失败或 <1 道可录 → 回退切片.
  */
 async function resolveProcesses() {
+  // Step 0 (2B Task F1, additive): workflow-config probe. Independent try/catch so a
+  // failure here always falls through to the untouched legacy branch below.
+  try {
+    const wfResp = await getWorkflowSheetConfig(props.factoryId, props.planId);
+    const wfConfig = wfResp.data;
+    if (wfConfig && Array.isArray(wfConfig.processes) && wfConfig.processes.length > 0) {
+      const mapped = mapWorkflowProcesses(wfConfig.processes);
+      if (mapped.length >= 1) {
+        PROCESSES.value = mapped;
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('[ProcessSheet] getWorkflowSheetConfig 失败, 回退 legacy 工序解析', e);
+  }
+
   try {
     const resp = await getProductWorkProcesses(props.factoryId, props.productTypeId);
     const items = resp.data || [];
@@ -371,6 +455,7 @@ defineExpose({ hasUnsavedRows });
             :is-first-process="proc.isFirstProcess"
             :custom-field-schema="proc.customFieldSchema"
             :allow-finished-goods-source="proc.allowFinishedGoodsSource"
+            :workflow-context="proc.workflowContext ?? null"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"

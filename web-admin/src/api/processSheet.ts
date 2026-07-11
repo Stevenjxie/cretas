@@ -312,6 +312,72 @@ export function getRowHistory(
 }
 
 // =========================================================================
+// 2B Task F1: workflow 快照 → clerk 过程单配置 (mirrors WorkflowClerkSheetConfigDTO Java DTO)
+// =========================================================================
+
+/**
+ * 工序端口 (mirrors WorkflowClerkSheetConfigDTO.PortDescriptor Java DTO).
+ * `materialName`/`unit` 为 null 时说明 skuId 指向的物料/产品已被删除 (skuResolved=false) —
+ * FE 应显示 "SKU 已失效, 请回 Workflow 配置" 提示, 不得崩溃 (fool-proof Rule 5)。
+ */
+export interface WorkflowPortDescriptor {
+  workflowPortId: string;
+  materialKind: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD';
+  skuId: string;
+  materialName: string | null;
+  unit: string | null;
+  required: boolean;
+  /** false = skuId 已无法解析 (物料/产品被删除)。 */
+  skuResolved: boolean;
+  /** 仅 output 端口有意义: materialKind === 'FINISHED_GOOD'。 */
+  finished: boolean;
+}
+
+/**
+ * 单道工序描述符 (mirrors WorkflowClerkSheetConfigDTO.ProcessDescriptor Java DTO).
+ * `output` 为 null 时说明该 workflow 任务无产出端口 (理论不应出现于可报工任务, 防御性)。
+ */
+export interface WorkflowProcessDescriptor {
+  workflowNodeId: string;
+  workProcessId: string;
+  processName: string | null;
+  defaultCostCategory: string | null;
+  processOrder: number;
+  plannedUnit: string | null;
+  allowMultipleUpstreamSources: boolean;
+  allowFinishedGoodsSource: boolean;
+  /** 原样透传 WorkProcess.customFieldSchema (JSON, 与 legacy ProcessSheetCustomFieldDef[] 同源)。 */
+  customFieldSchema: unknown | null;
+  inputs: WorkflowPortDescriptor[];
+  output: WorkflowPortDescriptor | null;
+}
+
+/**
+ * workflow 批次快照投影 (mirrors WorkflowClerkSheetConfigDTO Java DTO).
+ * 计划没有 workflow 批次 (legacy 计划) 时后端 data 为 null, FE 据此回落原
+ * `getProductWorkProcesses` 路径 — additive, 不改变 legacy 行为。
+ */
+export interface WorkflowClerkSheetConfig {
+  workflowBatchId: number;
+  workflowInstanceId: number;
+  productTypeId: string;
+  processes: WorkflowProcessDescriptor[];
+}
+
+/**
+ * 2B Task B2: 该计划关联的 workflow 批次快照投影 (供 ProcessSheet.vue `resolveProcesses()` 消费).
+ * GET /{factoryId}/production-plans/{planId}/process-sheet/workflow-config
+ *
+ * data 为 null = legacy (非 workflow) 计划 — 调用方应回落 `getProductWorkProcesses` 路径不变。
+ */
+export function getWorkflowSheetConfig(
+  factoryId: string,
+  planId: string,
+): Promise<ApiResponse<WorkflowClerkSheetConfig | null>> {
+  return get<WorkflowClerkSheetConfig | null>(`${sheetBase(factoryId, planId)}/workflow-config`);
+}
+
+// =========================================================================
 // Raw material batch (for 修油 首道 原料领料 dropdown)
 // =========================================================================
 
