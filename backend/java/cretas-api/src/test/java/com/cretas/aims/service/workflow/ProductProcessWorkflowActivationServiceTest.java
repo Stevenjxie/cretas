@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,13 +31,15 @@ class ProductProcessWorkflowActivationServiceTest {
     @Mock private ProductProcessWorkflowRepository workflowRepository;
     @Mock private ProductProcessWorkflowValidator validator;
     @Mock private ProductProcessWorkflowCatalogValidator catalogValidator;
+    @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
 
     private ProductProcessWorkflowActivationService service;
 
     @BeforeEach
     void setUp() {
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
-                activationRepository, workflowRepository, validator, catalogValidator, new ObjectMapper());
+                activationRepository, workflowRepository, validator, catalogValidator, compiler,
+                new ObjectMapper());
     }
 
     @Test
@@ -53,6 +56,7 @@ class ProductProcessWorkflowActivationServiceTest {
             entity.setLockVersion(0L);
             return entity;
         });
+        when(compiler.compile(any())).thenReturn(emptyCompiledWorkflow());
 
         ProductProcessWorkflowActivationDTO first = service.activate("F006", 44L, 7001L);
         ProductProcessWorkflowActivationDTO second = service.activate("F006", 44L, 7001L);
@@ -62,6 +66,8 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(activationRepository, times(1)).saveAndFlush(any());
         verify(validator, times(2)).validateForPublish(any());
         verify(catalogValidator, times(2)).validateForPublish(eq("F006"), eq("PT-PIG"), any());
+        // B1: activate() compiles the definition (mocked here) to run the single-output guard.
+        verify(compiler, times(2)).compile(any());
     }
 
     @Test
@@ -75,7 +81,7 @@ class ProductProcessWorkflowActivationServiceTest {
 
         assertEquals("WORKFLOW_NOT_PUBLISHED", error.getErrorCode());
         assertNotNull(error.getActionHint());
-        verifyNoInteractions(validator, catalogValidator, activationRepository);
+        verifyNoInteractions(validator, catalogValidator, activationRepository, compiler);
     }
 
     @Test
@@ -87,7 +93,7 @@ class ProductProcessWorkflowActivationServiceTest {
 
         assertEquals("WORKFLOW_ACTIVATION_PRODUCT_MISMATCH", error.getErrorCode());
         assertNotNull(error.getActionHint());
-        verifyNoInteractions(validator, catalogValidator, activationRepository);
+        verifyNoInteractions(validator, catalogValidator, activationRepository, compiler);
     }
 
     @Test
@@ -101,7 +107,7 @@ class ProductProcessWorkflowActivationServiceTest {
 
         assertEquals(44L, result.getActiveWorkflowId());
         assertEquals(3, result.getActiveDefinitionVersion());
-        verifyNoInteractions(workflowRepository, validator, catalogValidator);
+        verifyNoInteractions(workflowRepository, validator, catalogValidator, compiler);
     }
 
     @Test
@@ -111,7 +117,7 @@ class ProductProcessWorkflowActivationServiceTest {
 
         assertNull(service.get("F006", "PT-NEW"));
 
-        verifyNoInteractions(workflowRepository, validator, catalogValidator);
+        verifyNoInteractions(workflowRepository, validator, catalogValidator, compiler);
     }
 
     @Test
@@ -123,6 +129,7 @@ class ProductProcessWorkflowActivationServiceTest {
         when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
                 .thenReturn(Optional.of(current));
         when(activationRepository.saveAndFlush(current)).thenReturn(current);
+        when(compiler.compile(any())).thenReturn(emptyCompiledWorkflow());
 
         ProductProcessWorkflowActivationDTO result = service.activate("F006", 45L, 7002L);
 
@@ -131,6 +138,45 @@ class ProductProcessWorkflowActivationServiceTest {
         assertEquals(4, result.getActiveDefinitionVersion());
         assertEquals(7002L, result.getActivatedBy());
         verify(activationRepository).saveAndFlush(current);
+    }
+
+    @Test
+    void activateRejectsWorkflowWithNodeHavingMultipleOutputPortsAndNeverPersists() {
+        ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
+        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+                .thenReturn(Optional.of(workflow));
+        when(compiler.compile(any())).thenReturn(multiOutputCompiledWorkflow());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.activate("F006", 44L, 7001L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("WORKFLOW_MULTI_OUTPUT_UNSUPPORTED", error.getErrorCode());
+        assertNotNull(error.getActionHint());
+        verify(validator).validateForPublish(any());
+        verify(catalogValidator).validateForPublish(eq("F006"), eq("PT-PIG"), any());
+        verifyNoInteractions(activationRepository);
+    }
+
+    @Test
+    void activateAcceptsWorkflowWhereEveryReportableNodeHasAtMostOneOutputPort() {
+        ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
+        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+                .thenReturn(Optional.of(workflow));
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.empty());
+        when(activationRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            ProductProcessWorkflowActivation entity = invocation.getArgument(0);
+            entity.setId(91L);
+            entity.setLockVersion(0L);
+            return entity;
+        });
+        when(compiler.compile(any())).thenReturn(singleOutputCompiledWorkflow());
+
+        ProductProcessWorkflowActivationDTO result = service.activate("F006", 44L, 7001L);
+
+        assertEquals(44L, result.getActiveWorkflowId());
+        verify(activationRepository).saveAndFlush(any());
     }
 
     @Test
@@ -209,5 +255,39 @@ class ProductProcessWorkflowActivationServiceTest {
         activation.setActivatedAt(LocalDateTime.of(2026, 7, 11, 10, 0));
         activation.setLockVersion(lockVersion);
         return activation;
+    }
+
+    private CompiledProductProcessWorkflow emptyCompiledWorkflow() {
+        return new CompiledProductProcessWorkflow("[]", "[]", List.of(), List.of());
+    }
+
+    private CompiledProductProcessWorkflow singleOutputCompiledWorkflow() {
+        return new CompiledProductProcessWorkflow(
+                "[{\"id\":\"trim\"}]",
+                "[]",
+                List.of(new CompiledProductProcessWorkflow.CompiledTask(
+                        "trim", "TRIM", 1, "kg", 10, true)),
+                List.of(
+                        compiledPort("trim", "trim-in", "INPUT", 1),
+                        compiledPort("trim", "trim-out", "OUTPUT", 2)));
+    }
+
+    private CompiledProductProcessWorkflow multiOutputCompiledWorkflow() {
+        return new CompiledProductProcessWorkflow(
+                "[{\"id\":\"trim\"}]",
+                "[]",
+                List.of(new CompiledProductProcessWorkflow.CompiledTask(
+                        "trim", "TRIM", 1, "kg", 10, true)),
+                List.of(
+                        compiledPort("trim", "trim-in", "INPUT", 1),
+                        compiledPort("trim", "trim-out-a", "OUTPUT", 2),
+                        compiledPort("trim", "trim-out-b", "OUTPUT", 3)));
+    }
+
+    private CompiledProductProcessWorkflow.CompiledPort compiledPort(
+            String nodeId, String portId, String direction, int ordinal) {
+        return new CompiledProductProcessWorkflow.CompiledPort(
+                nodeId, portId, direction, ordinal, "material-" + portId,
+                "RAW_MATERIAL", "SKU-" + portId, "kg", true, null, null);
     }
 }

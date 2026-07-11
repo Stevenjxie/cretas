@@ -19,6 +19,7 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
+import com.cretas.aims.service.workflow.WorkflowSingleOutputGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -104,6 +105,10 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                         "The batch no longer references the exact published factory/product version"));
 
         CompiledProductProcessWorkflow compiled = compiler.compile(toDefinition(workflow));
+        // B1 defensive mirror: a pre-existing activation must not be able to spawn a
+        // multi-output batch. Fail closed (roll back batch creation) before any
+        // instance/task/port row is persisted. 禁止降级处理 — never silently drop the guard.
+        WorkflowSingleOutputGuard.assertSingleOutputPerReportableTask(compiled);
         ProductionWorkflowInstance instance = instanceRepository.save(
                 ProductionWorkflowInstance.create(
                         factoryId,

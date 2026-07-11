@@ -298,6 +298,22 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
+    void materializeRejectsWorkflowWithNodeHavingMultipleOutputPortsAndPersistsNothing() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        when(compiler.compile(any())).thenReturn(multiOutputCompiledWorkflow());
+
+        com.cretas.aims.exception.BusinessException error = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
+
+        assertEquals("WORKFLOW_MULTI_OUTPUT_UNSUPPORTED", error.getErrorCode());
+        verify(instanceRepository, never()).save(any());
+        verify(taskRepository, never()).save(any());
+        verify(portRepository, never()).save(any());
+    }
+
+    @Test
     void portFailureBubblesOutOfTransactionalBoundaryWithoutBeingSwallowed() throws Exception {
         givenValidOwnedBatch();
         givenEnabledPublishedWorkflow();
@@ -445,6 +461,18 @@ class ProductProcessWorkflowRuntimeServiceTest {
                         compiledPort("inspect-no-report", "inspect-in", "INPUT", 1),
                         compiledPort("pack", "pack-in", "INPUT", 1),
                         compiledPort("pack", "pack-out", "OUTPUT", 2)));
+    }
+
+    private CompiledProductProcessWorkflow multiOutputCompiledWorkflow() {
+        return new CompiledProductProcessWorkflow(
+                "[{\"id\":\"trim\"}]",
+                "[]",
+                List.of(new CompiledProductProcessWorkflow.CompiledTask(
+                        "trim", "TRIM", 1, "kg", 10, true)),
+                List.of(
+                        compiledPort("trim", "trim-in", "INPUT", 1),
+                        compiledPort("trim", "trim-out-a", "OUTPUT", 2),
+                        compiledPort("trim", "trim-out-b", "OUTPUT", 3)));
     }
 
     private CompiledProductProcessWorkflow.CompiledPort compiledPort(

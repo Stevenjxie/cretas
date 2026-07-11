@@ -9,7 +9,10 @@ import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
+import com.cretas.aims.service.workflow.WorkflowSingleOutputGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +35,7 @@ public class ProductProcessWorkflowActivationServiceImpl
     private final ProductProcessWorkflowRepository workflowRepository;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
+    private final ProductProcessWorkflowRuntimeCompiler compiler;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -49,6 +53,12 @@ public class ProductProcessWorkflowActivationServiceImpl
         ProductProcessWorkflowDTO definition = toDefinition(workflow);
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, workflow.getProductTypeId(), definition);
+
+        // B1 MVP guard: reject (never silently degrade) a workflow whose any reportable
+        // PROCESS node declares more than one OUTPUT port. Must run before an activation
+        // row can ever be created/updated (禁止降级处理 — 明确拒绝, 不静默丢弃多余产出).
+        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
+        WorkflowSingleOutputGuard.assertSingleOutputPerReportableTask(compiled);
 
         ProductProcessWorkflowActivation activation = activationRepository
                 .findByFactoryIdAndProductTypeId(factoryId, workflow.getProductTypeId())
