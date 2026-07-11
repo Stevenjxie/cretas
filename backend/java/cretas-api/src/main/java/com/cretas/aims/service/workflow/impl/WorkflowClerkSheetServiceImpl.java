@@ -18,7 +18,6 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
-import com.cretas.aims.service.workflow.WorkflowSingleOutputGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -114,14 +113,11 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         }
         inputs.sort(Comparator.comparing(WorkflowTaskPort::getOrdinal)
                 .thenComparing(WorkflowTaskPort::getWorkflowPortId));
-
-        // Defensive mirror of the B1 MVP single-output guard: reportable workflow tasks
-        // must have already been rejected at activation/materialize if they violate this,
-        // but never silently degrade here either (禁止降级处理).
-        if (outputs.size() > 1) {
-            throw WorkflowSingleOutputGuard.multiOutputUnsupported();
-        }
-        WorkflowTaskPort outputPort = outputs.isEmpty() ? null : outputs.get(0);
+        // 2B.2: 多产出支持 — 按 ordinal 排序投影全部产出端口 (不再抛 single-output guard)。
+        outputs.sort(Comparator.comparing(WorkflowTaskPort::getOrdinal)
+                .thenComparing(WorkflowTaskPort::getWorkflowPortId));
+        List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors =
+                outputs.stream().map(port -> toPortDescriptor(factoryId, port)).toList();
 
         WorkProcess workProcess = workProcessRepository
                 .findByFactoryIdAndId(factoryId, task.getWorkProcessId())
@@ -150,7 +146,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .allowFinishedGoodsSource(allowFinishedGoodsSource)
                 .customFieldSchema(workProcess != null ? workProcess.getCustomFieldSchema() : null)
                 .inputs(inputs.stream().map(port -> toPortDescriptor(factoryId, port)).toList())
-                .output(outputPort != null ? toPortDescriptor(factoryId, outputPort) : null)
+                .output(outputDescriptors.isEmpty() ? null : outputDescriptors.get(0)) // 向后兼容单产出 FE
+                .outputs(outputDescriptors)
                 .build();
     }
 

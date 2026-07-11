@@ -42,7 +42,14 @@ public class WorkflowClerkSheetConfigDTO {
         private Boolean allowFinishedGoodsSource;
         private Object customFieldSchema;
         private List<PortDescriptor> inputs;
+        /**
+         * 首个产出端口。向后兼容单产出 FE (2B); 多产出时 == {@code outputs.get(0)}。
+         */
         private PortDescriptor output;
+        /**
+         * 2B.2: 全部产出端口 (按 ordinal 排序)。单产出时 size==1。多产出时 FE 逐端口录入 N 条产出。
+         */
+        private List<PortDescriptor> outputs;
     }
 
     @Data

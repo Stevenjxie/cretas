@@ -12,7 +12,6 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
-import com.cretas.aims.service.workflow.WorkflowSingleOutputGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -54,11 +53,9 @@ public class ProductProcessWorkflowActivationServiceImpl
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, workflow.getProductTypeId(), definition);
 
-        // B1 MVP guard: reject (never silently degrade) a workflow whose any reportable
-        // PROCESS node declares more than one OUTPUT port. Must run before an activation
-        // row can ever be created/updated (禁止降级处理 — 明确拒绝, 不静默丢弃多余产出).
-        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
-        WorkflowSingleOutputGuard.assertSingleOutputPerReportableTask(compiled);
+        // 2B.2: 多产出已放开 (原 B1 single-output guard 移除)。仍编译一次校验发布版本可编译,
+        // 编译失败即拒绝激活 (禁止降级处理)。
+        compiler.compile(definition);
 
         ProductProcessWorkflowActivation activation = activationRepository
                 .findByFactoryIdAndProductTypeId(factoryId, workflow.getProductTypeId())

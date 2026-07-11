@@ -99,6 +99,33 @@ public class ProcessSheetRowRequest {
      */
     private Map<String, Object> customFields;
 
+    /**
+     * 2B.2 多产出 (fan-out): 一道工序一次报工同时产出多个产品 (如熟成鸡装箱同产 350g/400g,
+     * 筛选同产 合格半成品+不合格损耗)。多产出 = 两组独立事实: input allocations (本请求的
+     * rawMaterialInputs/upstreamSources) + output lines (本字段)。库存按实际 input allocations 扣减
+     * (一次全量, <b>不</b>按重量/数量拆分/推断), 按每条 output line 入库; 血缘经同一份工序报工关联
+     * 每个产出批次到全部实际投入批次。工序不处理成本/成本分摊。
+     *
+     * <p>为空 / size==1 → 走原单产出路径 (向后兼容, F006 现有流不受影响)。多产出时顶层
+     * {@link #outputQuantity} 仅为满足 @NotNull (建议传 Σquantity), 实际逐 output 用各自 quantity。
+     */
+    private List<OutputLine> outputs;
+
+    /**
+     * 2B.2 内部标记 (合成产出行专用, FE 不传): true 表示本行是多产出分解出的产出行。
+     * 用途: 删除/重存按 {@link #multiOutputBaseRowId} 整组级联 (防单行删除留幻库存)。
+     * <b>不</b>用于成本处理 —— 工序不新增/不清空/不覆盖成本字段 (成本由既有机制自行处理)。
+     */
+    private Boolean multiOutputMember;
+
+    /** 2B.2 内部: 多产出组的 base clientRowId (= FE 原始 clientRowId, 各产出行 clientRowId = base#i)。 */
+    private String multiOutputBaseRowId;
+
+    /** 2B.2 本行产出对应的 workflow 产出端口 id (端口身份; 单产出/legacy 可空)。随 payload 持久化供 FE 重载映射。 */
+    private String workflowPortId;
+    /** 2B.2 本行产出对应的 workflow 产出物料 Cell (节点) id。 */
+    private String materialNodeId;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {
@@ -106,6 +133,36 @@ public class ProcessSheetRowRequest {
         private String materialBatchId;
         @NotNull
         private BigDecimal quantity;
+        // 2B.2 端口身份 (多产出/多投入必带, 区分同 SKU 出现在不同端口)。可空 (legacy 单产出/非 workflow)。
+        /** 对应 workflow 投入端口 id。 */
+        private String workflowPortId;
+        /** 对应 workflow 物料 Cell (节点) id。 */
+        private String materialNodeId;
+        /** 该端口物料 SKU (原料 RawMaterialType id)。 */
+        private String skuId;
+    }
+
+    /**
+     * 2B.2 多产出行: 一个产出 = 一个产品 + 数量 (+ 分摊权重)。分解后每个 OutputLine 合成一条普通单产出行。
+     */
+    @Data
+    public static class OutputLine {
+        /** 产出产品 (半成品/成品 ProductType)。 */
+        @NotBlank
+        private String productTypeId;
+        /** 对应 workflow 产出端口 id (B3 逐产出对齐端口类型/单位)。可空 (非 workflow 计划)。 */
+        private String workflowPortId;
+        /** 产出数量 (产出单位, 如 盒/kg) → 直接作为该产出的入库量。 */
+        @NotNull
+        private BigDecimal quantity;
+        /** 产出单位。 */
+        private String unit;
+        /** 产出是否成品 (true → FG, false → 半成品 SFI)。 */
+        private boolean finished;
+        /** 对应 workflow 产出物料 Cell (节点) id (端口身份的另一半, 区分同 SKU 多端口)。 */
+        private String materialNodeId;
+        /** 可选成品重(kg): 若设则 FG 按 kg 入库 (同顶层 productWeight 语义); 多数多产出场景留空按 quantity 入库。 */
+        private BigDecimal productWeight;
     }
 
     /** 混锅上游引用: 上游 WIP 的持久化 batchNumber + 投料量 (kg)。 */
@@ -151,5 +208,13 @@ public class ProcessSheetRowRequest {
          * 默认 false。
          */
         private boolean finishedGoods;
+
+        // 2B.2 端口身份 (多投入合流必带, 区分同 SKU 出现在不同投入端口)。可空 (legacy 单产出/非 workflow)。
+        /** 对应 workflow 投入端口 id。 */
+        private String workflowPortId;
+        /** 对应 workflow 物料 Cell (节点) id。 */
+        private String materialNodeId;
+        /** 该端口物料 SKU (半成品/成品 ProductType id)。 */
+        private String skuId;
     }
 }

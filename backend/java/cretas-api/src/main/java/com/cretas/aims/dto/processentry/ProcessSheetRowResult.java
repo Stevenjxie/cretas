@@ -36,4 +36,30 @@ public class ProcessSheetRowResult {
 
     /** 调料配方缺失 / 超量软预警 / labor rate fallback 等。 */
     private List<String> warnings;
+
+    /**
+     * 2B.2 多产出: 本次报工分解出的各产出批次明细 (单产出时为 null)。FE 重载过程单会拿到 N 行,
+     * 此处仅为即时反馈。顶层 batchId/batchNumber 取首产出为代表。
+     */
+    private List<OutputResult> outputs;
+
+    /** 单个产出的物化结果 (多产出分解)。 */
+    @Data
+    public static class OutputResult {
+        private String clientRowId;
+        /** 端口身份: 对应 workflow 产出端口 id。 */
+        private String workflowPortId;
+        /** 端口身份: 对应 workflow 产出物料 Cell (节点) id。 */
+        private String materialNodeId;
+        /** 产出 SKU (= productTypeId)。 */
+        private String productTypeId;
+        /** 生成的产出批次 id (generatedBatchId)。 */
+        private Long batchId;
+        /** 生成的产出批次号。 */
+        private String batchNumber;
+        private BigDecimal quantity;
+        private String unit;
+        /** 该产出行物化成本 (existing 机制副产, Workflow 不干预成本字段)。 */
+        private BigDecimal rowTotalCost;
+    }
 }
