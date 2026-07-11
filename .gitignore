@@ -53,6 +53,9 @@ temp*
 !**/Template*.vue
 !**/Template*.java
 !**/Template*.ts
+# Negation: 防止 Windows case-insensitive 误杀 Temperature* 类文件 (logistics domain,
+# TemperatureMode.java 被 temp* 静默排除, git status 显示 clean 但文件从未入库)
+!**/Temperature*.java
 !**/template_engine*.go
 !backend/python/smartbi/shared/temporal_comparator.py
 !backend/python/smartbi/services/restaurant/sections/temporal_comparison.py
