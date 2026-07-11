@@ -168,10 +168,10 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                     """);
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource(
-                            "db/flyway/V20261028_07__product_process_workflow_runtime.sql"));
+                            "db/flyway/V20261028_52__product_process_workflow_runtime.sql"));
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource(
-                            "db/flyway/V20261028_08__pin_batch_workflow_selection.sql"));
+                            "db/flyway/V20261028_53__pin_batch_workflow_selection.sql"));
 
             assertEquals(2, scalarInt(connection, """
                     SELECT count(*) FROM information_schema.columns
@@ -294,9 +294,9 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                           product_work_process_id BIGINT NOT NULL, deleted_at TIMESTAMP)
                         """);
                 ScriptUtils.executeSqlScript(setup, new ClassPathResource(
-                        "db/flyway/V20261028_07__product_process_workflow_runtime.sql"));
+                        "db/flyway/V20261028_52__product_process_workflow_runtime.sql"));
                 ScriptUtils.executeSqlScript(setup, new ClassPathResource(
-                        "db/flyway/V20261028_08__pin_batch_workflow_selection.sql"));
+                        "db/flyway/V20261028_53__pin_batch_workflow_selection.sql"));
                 statement.execute("""
                         INSERT INTO product_process_workflows
                           (id, factory_id, product_type_id, definition_version)

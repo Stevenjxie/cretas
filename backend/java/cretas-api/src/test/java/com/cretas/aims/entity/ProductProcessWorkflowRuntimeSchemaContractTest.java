@@ -133,7 +133,7 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
     @Test
     void v56PinsEveryBatchInsertToAnExactWorkflowOrExplicitLegacyDecision() throws Exception {
         String sql = normalizedMigration(
-                "V20261028_08__pin_batch_workflow_selection.sql");
+                "V20261028_53__pin_batch_workflow_selection.sql");
 
         assertContains(sql, "workflow_selection_mode VARCHAR(16) NOT NULL DEFAULT 'LEGACY'",
                 "existing batches must backfill to an explicit legacy decision");
@@ -180,7 +180,7 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
     }
 
     private String normalizedMigration() throws Exception {
-        return normalizedMigration("V20261028_07__product_process_workflow_runtime.sql");
+        return normalizedMigration("V20261028_52__product_process_workflow_runtime.sql");
     }
 
     private String normalizedMigration(String fileName) throws Exception {

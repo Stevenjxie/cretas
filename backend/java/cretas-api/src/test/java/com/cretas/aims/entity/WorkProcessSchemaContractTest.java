@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WorkProcessSchemaContractTest {
 
     private static final String MIGRATION_RESOURCE =
-            "/db/flyway/V20261028_06__work_process_default_output_material_kind.sql";
+            "/db/flyway/V20261028_51__work_process_default_output_material_kind.sql";
 
     @Test
     void migrationGuardsEveryWorkProcessesMutationForFreshDatabases() throws IOException {
