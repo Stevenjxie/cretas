@@ -18,7 +18,9 @@ public enum FactoryType {
     /** 分店/分公司 */
     BRANCH("分店", "隶属于总部的分店或分公司"),
     /** 中央厨房 */
-    CENTRAL_KITCHEN("中央厨房", "集中生产配送的中央厨房");
+    CENTRAL_KITCHEN("中央厨房", "集中生产配送的中央厨房"),
+    /** 物流配送调度中心（独立） — 一加物流排线 MVP (2026-07-11) */
+    LOGISTICS("物流", "独立物流配送调度中心");
 
     private final String displayName;
     private final String description;
@@ -40,7 +42,7 @@ public enum FactoryType {
      * 是否为独立运营组织（无层级关系）
      */
     public boolean isStandalone() {
-        return this == FACTORY || this == RESTAURANT;
+        return this == FACTORY || this == RESTAURANT || this == LOGISTICS;
     }
 
     /**

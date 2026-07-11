@@ -51,7 +51,7 @@ export interface RouteTrip {
   totalDistanceKm: number;
   totalVolumeCbm: number;
   loadRate: number;
-  status: 'draft' | 'needs_vehicle' | 'needs_route_data' | 'confirmed';
+  status: 'draft' | 'needs_vehicle' | 'needs_driver' | 'needs_route_data' | 'confirmed';
 }
 
 export interface ScheduleResult {
