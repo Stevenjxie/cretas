@@ -36,6 +36,25 @@ describe('request workflow conflict ownership', () => {
     expect(elementMocks.notification).not.toHaveBeenCalled();
   });
 
+  it('suppresses the generic JPA optimistic-lock surface only when the workflow editor owns its semantic code', async () => {
+    const promise = request.put('/F006/product-process-workflows/PT-A/draft', {}, {
+      _handledErrorCodes: [
+        'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+        'OPTIMISTIC_LOCK_CONFLICT',
+      ],
+      adapter: rejectingAdapter(409, 'OPTIMISTIC_LOCK_CONFLICT', 'refresh latest data'),
+    } as never);
+
+    await expect(promise).rejects.toEqual(expect.objectContaining<ApiError>({
+      code: 'OPTIMISTIC_LOCK_CONFLICT',
+      status: 409,
+      actionHint: 'refresh latest data',
+    }));
+    await flushAsyncImports();
+
+    expect(elementMocks.notification).not.toHaveBeenCalled();
+  });
+
   it.each([
     [409, 'UNRELATED_RICH_CONFLICT'],
     [422, 'PRODUCT_PROCESS_WORKFLOW_CONFLICT'],

@@ -2,7 +2,10 @@ import { get, post, put } from '@/api/request';
 import type { ProductProcessWorkflowDefinition } from './types';
 
 const workflowConflictConfig = {
-  _handledErrorCodes: ['PRODUCT_PROCESS_WORKFLOW_CONFLICT'],
+  _handledErrorCodes: [
+    'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    'OPTIMISTIC_LOCK_CONFLICT',
+  ],
 };
 
 export function getProductProcessWorkflow(factoryId: string, productTypeId: string) {

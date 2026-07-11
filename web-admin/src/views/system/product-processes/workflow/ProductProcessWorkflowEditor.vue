@@ -1067,9 +1067,8 @@ function isWorkflowConflict(error: unknown): boolean {
     ?? candidate.code
     ?? responseData?.errorCode
     ?? responseData?.code;
-  if (errorCode === 'PRODUCT_PROCESS_WORKFLOW_CONFLICT') return true;
-  const actionHint = candidate.actionHint ?? responseData?.actionHint;
-  return !actionHint && (errorCode == null || String(errorCode) === '409');
+  return errorCode === 'PRODUCT_PROCESS_WORKFLOW_CONFLICT'
+    || errorCode === 'OPTIMISTIC_LOCK_CONFLICT';
 }
 
 async function recoverWorkflowConflict(

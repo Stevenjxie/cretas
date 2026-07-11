@@ -17,14 +17,17 @@ import {
 describe('workflowApi conflict ownership', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('declares only PRODUCT_PROCESS_WORKFLOW_CONFLICT as editor handled for both mutations', () => {
+  it('declares both workflow semantic conflict codes as editor handled for both mutations', () => {
     const definition = { schemaVersion: 1, nodes: [], edges: [] } as unknown as ProductProcessWorkflowDefinition;
 
     saveProductProcessWorkflowDraft('F006', 'PT-A', definition);
     publishProductProcessWorkflow('F006', 'PT-A', 3);
 
     const expectedConfig = {
-      _handledErrorCodes: ['PRODUCT_PROCESS_WORKFLOW_CONFLICT'],
+      _handledErrorCodes: [
+        'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+        'OPTIMISTIC_LOCK_CONFLICT',
+      ],
     };
     expect(requestMocks.put).toHaveBeenCalledWith(
       '/F006/product-process-workflows/PT-A/draft',

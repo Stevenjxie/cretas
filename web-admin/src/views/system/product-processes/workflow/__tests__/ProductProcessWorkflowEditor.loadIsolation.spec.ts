@@ -491,13 +491,20 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(vm.dirty).toBe(false);
   });
 
-  it('copies the exact local draft for a generic Axios 409 without retrying the mutation', async () => {
+  it('copies the exact local draft for a semantic JPA optimistic-lock 409 without retrying the mutation', async () => {
     apiMocks.getProductProcessWorkflow.mockResolvedValue({
       success: true,
       data: definitionFor('PT-A'),
     });
     apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
-      response: { status: 409, data: { message: 'Optimistic lock conflict' } },
+      response: {
+        status: 409,
+        data: {
+          errorCode: 'OPTIMISTIC_LOCK_CONFLICT',
+          message: 'Optimistic lock conflict',
+          actionHint: 'Refresh latest data',
+        },
+      },
     });
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel');
     const writeText = installClipboardMock();
@@ -522,7 +529,10 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
       success: true,
       data: definitionFor('PT-A'),
     });
-    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
     vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
     const writeText = installClipboardMock();
     const wrapper = mountEditor();
@@ -548,7 +558,10 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
       success: true,
       data: definitionFor('PT-A'),
     });
-    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('close');
     const writeText = installClipboardMock();
     const wrapper = mountEditor();
@@ -605,6 +618,45 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(vm.dirty).toBe(true);
   });
 
+  it('opens workflow recovery for the semantic generic JPA optimistic-lock code', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'OPTIMISTIC_LOCK_CONFLICT',
+      actionHint: 'Refresh latest data',
+    });
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue('close');
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 32, y: 16, zoom: 1 });
+
+    await vm.saveDraft();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(vm.dirty).toBe(true);
+  });
+
+  it('does not use a bare 409 status as workflow conflict semantics', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definitionFor('PT-A'),
+    });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    vm.onViewportChangeEnd({ x: 32, y: 16, zoom: 1 });
+
+    await vm.saveDraft();
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled();
+    expect(vm.dirty).toBe(true);
+  });
+
   it('does not reload a conflicted product after the user has switched products', async () => {
     const recoveryChoice = deferred<'confirm'>();
     apiMocks.getProductProcessWorkflow.mockImplementation(
@@ -613,7 +665,10 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
         data: definitionFor(productTypeId),
       }),
     );
-    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
     vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
     const wrapper = mountEditor();
     await flushPromises();
@@ -642,7 +697,10 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
         data: definitionFor(productTypeId),
       }),
     );
-    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
     vi.mocked(ElMessageBox.confirm).mockReturnValue(recoveryChoice.promise);
     const writeText = installClipboardMock();
     const wrapper = mountEditor();
@@ -675,7 +733,10 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
         return Promise.resolve({ success: true, data: definitionFor('PT-B') });
       },
     );
-    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({ status: 409 });
+    apiMocks.saveProductProcessWorkflowDraft.mockRejectedValue({
+      status: 409,
+      code: 'PRODUCT_PROCESS_WORKFLOW_CONFLICT',
+    });
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm');
     const wrapper = mountEditor();
     await flushPromises();

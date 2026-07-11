@@ -484,12 +484,12 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleOptimisticLockException(Exception e) {
         log.warn("乐观锁冲突: {}", e.getMessage());
-        return ApiResponse.errorWithHint(
+        return ApiResponse.errorWithCode(
                 409,
+                "OPTIMISTIC_LOCK_CONFLICT",
                 "数据已被其他用户修改，请刷新后重试",
                 "请刷新页面查看最新数据后再编辑",
-                "warning",
-                null);
+                "warning");
     }
 
     /**
