@@ -46,6 +46,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -509,10 +510,20 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
                 })
                 .toList();
 
+        // 人工调整 (reorder/move) 会产生新的相邻门店对 —— 这些新边可能尚无距离数据。
+        // 复用初次生成的同一套高德补边逻辑 (routingService.resolveEdgeKm)：先查库边, 缺则调高德驾车距离
+        // 并缓存为 MAP_PROVIDER 边; 失败仍返 null → 诚实置 NEEDS_ROUTE_DATA。构建各途经点坐标供补边用。
+        Map<String, double[]> coordsByPoint = new LinkedHashMap<>();
+        coordsByPoint.put("DEPOT", routingService.depotCoord());
+        for (LogisticsStop stop : orderedStops) {
+            LogisticsDeliveryOrder o = orderById.get(stop.getDeliveryOrderId());
+            if (o != null && o.getLongitude() != null && o.getLatitude() != null) {
+                coordsByPoint.put(o.getStoreCode(),
+                        new double[] {o.getLongitude().doubleValue(), o.getLatitude().doubleValue()});
+            }
+        }
         LogisticsRoutingAlgorithm.DistanceLookup lookup = (from, to) ->
-                distanceEdgeRepository.findByFactoryIdAndFromPointIdAndToPointIdAndDeletedAtIsNull(factoryId, from, to)
-                        .map(LogisticsDistanceEdge::getDistanceKm)
-                        .orElse(null);
+                routingService.resolveEdgeKm(factoryId, from, to, coordsByPoint);
 
         LogisticsRoutingAlgorithm.GeometryResult geometry =
                 LogisticsRoutingAlgorithm.assembleGeometry(orderInputs, lookup);
