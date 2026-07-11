@@ -114,7 +114,14 @@ public final class LogisticsRoutingAlgorithm {
     private record TimeWindow(LocalTime start, LocalTime end) {
     }
 
-    private record GeometryResult(List<String> keys, List<BigDecimal> distances, boolean missing) {
+    /**
+     * Public (widened from package-private, Phase 4 2026-07-11) so
+     * {@code com.cretas.aims.logistics.service.LogisticsPlanServiceImpl} can reuse the exact
+     * same geometry/km assembly when recomputing a trip after a human adjustment
+     * (reorder/move), instead of re-implementing distance-edge lookup + honest degradation.
+     * No logic changed — visibility only.
+     */
+    public record GeometryResult(List<String> keys, List<BigDecimal> distances, boolean missing) {
     }
 
     // ============================================================
@@ -374,7 +381,7 @@ public final class LogisticsRoutingAlgorithm {
     // Step E — 几何组装 (DEPOT->s1->s2->... ; 缺边诚实降级)
     // ============================================================
 
-    static GeometryResult assembleGeometry(List<OrderInput> boxOrders, DistanceLookup lookup) {
+    public static GeometryResult assembleGeometry(List<OrderInput> boxOrders, DistanceLookup lookup) {
         List<String> keys = new ArrayList<>();
         List<BigDecimal> distances = new ArrayList<>();
         String prev = "DEPOT";
