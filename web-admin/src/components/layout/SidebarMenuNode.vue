@@ -9,14 +9,7 @@ defineProps<{
   collapsed: boolean;
   iconMap: Record<string, Component>;
   titleForItem: (item: MenuItem) => string;
-  showTimeout: number;
-  hideTimeout: number;
   level: number;
-}>();
-
-const emit = defineEmits<{
-  submenuEnter: [item: MenuItem, event: MouseEvent, level: number];
-  submenuLeave: [item: MenuItem, event: MouseEvent, level: number];
 }>();
 </script>
 
@@ -29,10 +22,6 @@ const emit = defineEmits<{
     v-if="item.children?.length"
     :index="item.path"
     popper-class="app-sidebar-menu-popper"
-    :show-timeout="showTimeout"
-    :hide-timeout="hideTimeout"
-    @mouseenter="emit('submenuEnter', item, $event, level)"
-    @mouseleave="emit('submenuLeave', item, $event, level)"
   >
     <template #title>
       <el-icon v-if="item.icon && iconMap[item.icon]">
@@ -48,11 +37,7 @@ const emit = defineEmits<{
       :collapsed="collapsed"
       :icon-map="iconMap"
       :title-for-item="titleForItem"
-      :show-timeout="showTimeout"
-      :hide-timeout="hideTimeout"
       :level="level + 1"
-      @submenu-enter="(child, event, childLevel) => emit('submenuEnter', child, event, childLevel)"
-      @submenu-leave="(child, event, childLevel) => emit('submenuLeave', child, event, childLevel)"
     />
   </el-sub-menu>
 

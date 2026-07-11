@@ -23,3 +23,10 @@ export function resolveDemoRedirect(query: Record<string, unknown>, tenant?: Dem
   if (tenant === 'logistics') return '/scheduling/logistics/workbench';
   return '/dashboard';
 }
+
+export function resolveLogisticsDemoRoute(path: string, factoryType?: string, factoryId?: string): string | null {
+  if (path === '/dashboard' && factoryType === 'LOGISTICS' && /^DEMO_/.test(factoryId || '')) {
+    return '/scheduling/logistics/workbench';
+  }
+  return null;
+}
