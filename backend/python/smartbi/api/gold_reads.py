@@ -50,6 +50,7 @@ from smartbi.gold import (
     trend_bundle,
     void_audit,
     void_rate,
+    zone_efficiency,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
 from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
@@ -444,6 +445,34 @@ async def get_void_rate(
         return _apply_rbac_strip(combined, _get_role(request))
     except Exception as e:
         logger.exception("void-rate failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/zone-efficiency")
+async def get_zone_efficiency(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    """区域坪效 (in-store dining-zone revenue/efficiency) — revenue + item
+    quantity ranked by 区域名称 (dining zone: 大厅/小桌/中桌/大桌/... — some
+    real-world values are delivery-channel labels, see the query's caveat).
+
+    New restaurant analytics dimension (greenfield). ⚠️ Proxy metric: the
+    source export has no floor-area/seat-count column, so this is revenue +
+    item quantity per named zone, NOT a true revenue-per-square-meter 坪效
+    — see zone_efficiency()'s docstring. revenue/revenue_pct are RBAC
+    price-stripped for roles outside PRICE_VIEW_ROLES (contain "revenue")."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await zone_efficiency(pool, fid, (start, end), top_n=top_n)
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("zone-efficiency failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

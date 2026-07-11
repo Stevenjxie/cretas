@@ -167,13 +167,45 @@
         <div class="rgg-void-caveat">{{ voidCaveat }}</div>
       </template>
     </el-card>
+
+    <!-- 区域坪效 (新增维度, greenfield) — 独立加载 (zoneLoading/zoneError),
+         zone 500 不连累其它卡。数据为营收/数量代理指标 (源数据无场地面积字段,
+         无法算真实元/平米坪效), caveat 诚实转述, 不伪造。 -->
+    <el-card v-if="!loadError" class="rgg-zone-card" shadow="never">
+      <template #header>
+        <div class="rgg-card-header"><el-icon><Grid /></el-icon><span>区域坪效</span></div>
+      </template>
+      <el-skeleton v-if="zoneLoading" :rows="4" animated />
+      <div v-else-if="zoneError" class="rgg-void-inline-error">区域数据加载失败: {{ zoneError }}</div>
+      <div v-else-if="zones.length" class="rgg-rank-list">
+        <div v-for="z in zones" :key="z.zoneName" class="rgg-rank-item">
+          <span class="rgg-rank-name rgg-chan-name" :title="z.zoneName">{{ z.zoneName }}</span>
+          <span class="rgg-rank-bar-wrap">
+            <span class="rgg-rank-bar rgg-zone-bar" :style="{ width: Math.min(z.revenuePct ?? 0, 100) + '%' }"></span>
+          </span>
+          <span class="rgg-rank-pct">{{ formatPct(z.revenuePct) }}</span>
+          <span class="rgg-rank-val">{{ formatMoney(z.revenue) }}</span>
+          <span class="rgg-rank-bills">{{ z.itemQty.toLocaleString() }}件</span>
+        </div>
+        <div class="rgg-est-note">
+          <el-icon><InfoFilled /></el-icon>
+          <span>{{ zoneCaveat }}</span>
+        </div>
+      </div>
+      <!-- 未上传区域销售数据 — 诚实 empty-state -->
+      <el-empty
+        v-else
+        :description="zoneDataAvailable ? '暂无区域销售数据' : (zoneNote || '未上传区域销售数据')"
+        :image-size="60"
+      />
+    </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled, WarningFilled, Search } from '@element-plus/icons-vue';
-import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix, getVoidRate } from '@/api/smartbi/gold';
+import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled, WarningFilled, Search, Grid } from '@element-plus/icons-vue';
+import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix, getVoidRate, getZoneEfficiency } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
 import { buildRevenueInsight } from './revenueInsight';
 import type { ChartWithMeta } from './chartInsight';
@@ -222,6 +254,22 @@ const voidBreakdown = ref<Array<{
   topReason: string | null;
 }>>([]);
 const voidCaveat = ref('');
+
+// 区域坪效 (新增维度, greenfield). revenue/revenuePct 皆含 "revenue" 子串 —
+// RBAC price-strip 对无价格权限角色置 null (与 orderTypes.revenue 同规则),
+// 前端必须诚实处理 null (formatMoney/formatPct 已 null-safe)。独立于上方 3+1
+// 卡加载: zone 500 只降级本卡, 不连累 finance/channel/order-type/void。
+const zoneLoading = ref(false);
+const zoneError = ref('');
+const zoneDataAvailable = ref(false);
+const zoneNote = ref<string | null>(null);
+const zones = ref<Array<{
+  zoneName: string;
+  revenue: number | null;
+  itemQty: number;
+  revenuePct: number | null;
+}>>([]);
+const zoneCaveat = ref('');
 
 const dateLabel = computed(() =>
   props.dateRange ? `${props.dateRange[0]} 至 ${props.dateRange[1]}` : '全部数据',
@@ -385,6 +433,25 @@ async function load() {
   } finally {
     voidLoading.value = false;
   }
+
+  // 区域坪效 — isolated so a 500 (e.g. migration not yet applied) degrades
+  // ONLY this card, leaving every other card intact (MUST-FIX 2 pattern,
+  // same as the void section above).
+  zoneLoading.value = true;
+  zoneError.value = '';
+  try {
+    const zoneResult = await getZoneEfficiency({ factoryId: capturedFactoryId, startDate, endDate, topN: 8 });
+    zoneDataAvailable.value = zoneResult.dataAvailable ?? false;
+    zoneNote.value = zoneResult.note ?? null;
+    zones.value = zoneResult.zones ?? [];
+    zoneCaveat.value = zoneResult.caveat ?? '';
+  } catch (e) {
+    zoneError.value = e instanceof Error ? e.message : '区域数据加载失败';
+    zoneDataAvailable.value = false;
+    zones.value = [];
+  } finally {
+    zoneLoading.value = false;
+  }
 }
 
 // 父组件先探测 Gold 区间再设 dateRange, 故 watch 立即触发首次加载。
@@ -431,6 +498,7 @@ watch(
 .rgg-rank-bar { display: block; height: 100%; background: linear-gradient(90deg, #5470c6, #91cc75); border-radius: 4px; }
 .rgg-chan-bar { background: linear-gradient(90deg, #fac858, #ee6666); }
 .rgg-dine-bar { background: linear-gradient(90deg, #73c0de, #3ba272); }
+.rgg-zone-bar { background: linear-gradient(90deg, #9a60b4, #ea7ccc); }
 .rgg-rank-pct { width: 48px; text-align: right; color: #606266; flex-shrink: 0; }
 .rgg-rank-val { width: 96px; text-align: right; font-weight: 600; color: #303133; flex-shrink: 0; }
 .rgg-rank-bills { width: 56px; text-align: right; color: #909399; font-size: 12px; flex-shrink: 0; }
@@ -446,6 +514,7 @@ watch(
 .rgg-void-inline-error { color: #f56c6c; font-size: 13px; padding: 8px 0; }
 /* 撤单稽核 full-width table */
 .rgg-audit-card { margin-top: 16px; }
+.rgg-zone-card { margin-top: 16px; }
 .rgg-void-unlabeled { color: #909399; }
 .rgg-void-caveat { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.5; }
 .rgg-est-note {
