@@ -3,7 +3,9 @@ package com.cretas.aims.service.alerts.impl;
 import com.cretas.aims.entity.alerts.AlertEvent;
 import com.cretas.aims.entity.alerts.AlertEventStatus;
 import com.cretas.aims.entity.alerts.AlertRule;
+import com.cretas.aims.entity.alerts.AlertSeverity;
 import com.cretas.aims.entity.alerts.AlertType;
+import com.cretas.aims.event.AlertEventCreatedEvent;
 import com.cretas.aims.repository.alerts.AlertEventRepository;
 import com.cretas.aims.repository.alerts.AlertRuleRepository;
 import com.cretas.aims.service.alerts.AlertEngineService;
@@ -11,6 +13,7 @@ import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -56,6 +59,18 @@ public class AlertEngineServiceImpl implements AlertEngineService {
     @Autowired
     private SandboxedSpelEvaluator spelEvaluator;
 
+    /**
+     * 通知派发解耦 — {@link #triggerAlert} 落库成功后发布此事件,
+     * {@code AlertEventNotificationListener} (@Async) 消费并按
+     * {@code rule.notifyRoles} / {@code rule.notifyChannels} 推送
+     * 站内通知 + (HIGH severity) 短信. 见 event/AlertEventNotificationListener.java.
+     *
+     * @since 2026-07-11 (餐饮经营体检预警推送 — 补齐 Phase 2 skeleton 遗留的
+     *        "Sister chat (Phase 2 B-2/B-3): 通知派发" 缺口, 通用于所有 AlertType)
+     */
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
     @Override
     @Transactional
     public List<UUID> triggerAlert(String factoryId, AlertType type,
@@ -96,6 +111,18 @@ public class AlertEngineServiceImpl implements AlertEngineService {
 
                 log.info("AlertEvent created: id={}, factoryId={}, type={}, ruleId={}, severity={}",
                         saved.getId(), factoryId, type, rule.getId(), saved.getSeverity());
+
+                // Notify dispatch is decoupled via event — publish AFTER save so the
+                // listener (which re-loads the entity in its own @Async thread) never
+                // races the transaction. See eventPublisher javadoc above.
+                try {
+                    eventPublisher.publishEvent(new AlertEventCreatedEvent(saved.getId()));
+                } catch (Exception e) {
+                    // Notify dispatch failure must never roll back / block alert
+                    // persistence — the standing alert itself is already durable.
+                    log.error("triggerAlert: publish AlertEventCreatedEvent failed for eventId={}",
+                            saved.getId(), e);
+                }
             } catch (SpelEvaluationFailure e) {
                 log.warn("triggerAlert: rule {} SpEL eval failed — {} (hint: {})",
                         rule.getId(), e.getUserMessage(), e.getActionHint());
@@ -257,10 +284,30 @@ public class AlertEngineServiceImpl implements AlertEngineService {
                 .factoryId(factoryId)
                 .businessEntityType(businessEntityType)
                 .businessEntityId(businessEntityId)
-                .severity(rule.getSeverity())
+                .severity(resolveSeverity(rule, context))
                 .message(message)
                 .status(AlertEventStatus.OPEN)
                 .build();
+    }
+
+    /**
+     * Per-instance severity override — 2026-07-11 (餐饮经营体检预警推送).
+     *
+     * <p>Original design snapshotted {@code rule.getSeverity()} onto every event
+     * (1 severity per rule). Restaurant health-check diagnoses vary in severity
+     * per metric per sweep (critical vs warning) under a SINGLE rule — forcing a
+     * separate rule per severity would fragment notifyRoles/notifyChannels config
+     * for no reason. {@code context.get("severity")} lets a caller pass a real
+     * per-event {@link AlertSeverity} while every existing caller (which never
+     * sets this key) keeps today's rule-snapshot behavior unchanged.
+     *
+     * @return context override if present and valid, else {@code rule.getSeverity()}
+     */
+    private AlertSeverity resolveSeverity(AlertRule rule, Map<String, Object> context) {
+        if (context != null && context.get("severity") instanceof AlertSeverity s) {
+            return s;
+        }
+        return rule.getSeverity();
     }
 
     private String truncateContext(Map<String, Object> context) {

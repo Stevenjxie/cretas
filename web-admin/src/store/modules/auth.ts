@@ -207,38 +207,14 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(userData);
   }
 
-  function applyLogisticsDemoUser() {
-    localStorage.setItem('cretas_access_token', 'demo-logistics-local-token');
-    const now = new Date().toISOString();
-    const userData: User = {
-      id: 9001,
-      username: 'dispatcher_demo_logistics',
-      email: '',
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-      userType: 'factory',
-      factoryUser: {
-        role: 'dispatcher',
-        factoryId: 'DEMO_LOGISTICS',
-        factoryName: '一加物流调度中心',
-        factoryLogoUrl: '',
-        factoryType: 'LOGISTICS',
-        businessDomain: 'LOGISTICS',
-        permissions: [],
-      },
-    } as User;
-    setUser(userData);
-  }
-
   // 演示账号免密登录 (路演扫码). tenant = 'rest' | 'factory' | 'logistics'
+  // 三个 tenant 都走同一条后端路径: POST /api/mobile/auth/demo-login?tenant=...
+  // (Phase 6a, 2026-07-11: logistics 分支原先是前端硬编码的假 token, 现由后端
+  // MobileAuthService.demoLogin("logistics") 签发真实 JWT, 锁定 factoryId=DEMO_LOGISTICS —
+  // 与 rest/factory 完全同构, 不再需要前端特判.)
   async function demoLogin(tenant: DemoTenant): Promise<boolean> {
     loading.value = true;
     try {
-      if (tenant === 'logistics') {
-        applyLogisticsDemoUser();
-        return true;
-      }
       const { demoLogin: demoApi } = await import('@/api/auth');
       const response = await demoApi(tenant);
       if (response.success && response.data) {

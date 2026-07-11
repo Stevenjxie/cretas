@@ -23,6 +23,13 @@ import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDe
 import WorkHoursTable from './WorkHoursTable.vue';
 import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
 import { isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
+import {
+  formatFeedPlaceholder,
+  formatProcessOutput,
+  formatSourceFeedSummary,
+  resolveProcessSheetUnits,
+  withProcessSheetUnits,
+} from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // Props & emits
@@ -55,6 +62,10 @@ const props = withDefaults(defineProps<{
    * 值收集进保存请求的 customFields map。
    */
   customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
+  /** 本工序配置的投入单位（优先产品-工序单位覆盖）。 */
+  inputUnit?: string;
+  /** 本工序配置的产出单位；未配置时沿用投入单位。 */
+  outputUnit?: string | null;
   /** 是否允许本道工序选择成品库存批次作为投料来源。 */
   allowFinishedGoodsSource?: boolean;
   /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
@@ -153,10 +164,19 @@ function isCustomFieldCol(key: string): boolean {
   return customFieldKeySet.value.has(key);
 }
 /** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
+const processUnits = computed(() => resolveProcessSheetUnits({
+  defaultUnit: props.inputUnit,
+  defaultOutputUnit: props.outputUnit,
+  // 老气调配置未填 outputUnit 时，保持既有 kg → 盒口径；显式配置优先。
+  fallbackOutputUnit: props.processCode === 'qidiao' ? '盒' : undefined,
+}));
 const cols = computed(() => [
-  ...(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS),
+  ...withProcessSheetUnits(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS, processUnits.value),
   ...customFieldCols.value,
 ]);
+const firstProcessInputLabel = computed(() =>
+  cols.value.find((col) => col.key === 'outWeight')?.label || `出库数量(${processUnits.value.inputUnit})`,
+);
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
 const isXiuYou = computed(() => props.processCode === 'xiuyou');
 /** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
@@ -223,7 +243,10 @@ const ownProcessName = computed(() => props.processLabel || props.processCode);
 /** 上游(前置)工序真实显示名; 链起步道(无上游)兜底通用「上游」。 */
 const upstreamProcessName = computed(() => props.upstreamProcessLabel || '上游');
 const sourceTitle = computed(() => `${upstreamProcessName.value}${isMultiSource.value ? '来源(混批)' : '批次'}`);
-const sourcePickerPlaceholder = computed(() => `选${upstreamProcessName.value}批次/半成品`);
+const supportsExternalStockFeed = computed(() => processUnits.value.inputUnit.toLowerCase() === 'kg');
+const sourcePickerPlaceholder = computed(() => supportsExternalStockFeed.value
+  ? `选${upstreamProcessName.value}批次/半成品`
+  : `选${upstreamProcessName.value}在制批次（常驻半成品/成品仅支持kg投入）`);
 
 // -------------------------------------------------------------------------
 // Raw material batch options (for 修油 首道)
@@ -564,19 +587,19 @@ function formatSettledAt(iso: string | null): string {
 function settledRowSummary(row: SheetRow): string {
   if (isXiuYou.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isSingleUpstream.value) {
     const after = row.fields['after'];
-    return after != null ? `产出 ${Number(after).toFixed(2)} kg` : '—';
+    return formatProcessOutput(after as number | null, processUnits.value.outputUnit);
   }
   if (isQuSheTou.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isShuZhi.value) {
     const out = row.fields['output'];
-    return out != null ? `产出 ${Number(out).toFixed(2)} kg` : '—';
+    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isQidiao.value) {
     const n = calcSumBoxes(row);
@@ -718,7 +741,7 @@ function upstreamWarning(row: SheetRow): string | null {
       const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
       if (!fg) return null;
       if (isCountUnit(fg.unit)) return countUnitFeedWarning(fg.unit, fg.gramsPerUnit, fgAvailable(fg), usage, '该成品来源');
-      if (usage > fgAvailable(fg)) return `用量 ${usage}kg 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
+      if (usage > fgAvailable(fg)) return `用量 ${usage}${processUnits.value.inputUnit} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
       return null;
     }
     if (row.upstreamSemiFinished) {
@@ -726,12 +749,12 @@ function upstreamWarning(row: SheetRow): string | null {
       const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
       if (!sfi) return null;
       if (isCountUnit(sfi.unit)) return countUnitFeedWarning(sfi.unit, sfi.gramsPerUnit, sfiAvailable(sfi), usage, '该半成品来源');
-      if (usage > sfiAvailable(sfi)) return `用量 ${usage}kg 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+      if (usage > sfiAvailable(sfi)) return `用量 ${usage}${processUnits.value.inputUnit} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
       return null;
     }
     const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
     if (!inv) return null;
-    if (usage > inv.remaining) return `用量 ${usage}kg 超出剩余 ${inv.remaining}kg`;
+    if (usage > inv.remaining) return `用量 ${usage}${processUnits.value.inputUnit} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`;
   }
   if (isMultiSource.value) {
     const warnings: string[] = [];
@@ -767,7 +790,7 @@ function upstreamWarning(row: SheetRow): string | null {
       }
       const inv = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
       if (inv && usage > inv.remaining) {
-        warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}kg`);
+        warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`);
       }
     }
     return warnings.length ? warnings.join('; ') : null;
@@ -848,6 +871,9 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
     finished: wfOutput ? wfOutput.finished === true : props.processCode === 'qidiao',
     outputQuantity: 0,
+    inputUnit: processUnits.value.inputUnit,
+    outputUnit: processUnits.value.outputUnit,
+    unit: processUnits.value.outputUnit,
     seasoningStep: props.processCode === 'shuzhi',
     laborSegments: row.laborSegments.length ? row.laborSegments : undefined,
     potCount: row.potCount > 1 ? row.potCount : undefined,
@@ -874,7 +900,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
     base.inputQuantity = row.rawBatchQty ?? undefined;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
-    base.unit = 'kg';
     // SP-G G3c: 副产 (修油 — 肥油等)
     const bpQty = (row.fields['byproductQty'] as number) ?? 0;
     if (bpQty > 0) {
@@ -888,7 +913,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       const before = (row.fields['before'] as number) ?? totalFeed;
       base.inputQuantity = before;
       base.outputQuantity = (row.fields['after'] as number) ?? 0;
-      base.unit = 'kg';
       const bpQty = (row.fields['byproductQty'] as number) ?? 0;
       if (bpQty > 0) {
         const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
@@ -900,16 +924,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       const inputQty = scrap + output;
       base.inputQuantity = inputQty || totalFeed;
       base.outputQuantity = output;
-      base.unit = 'kg';
     } else if (isShuZhi.value || isGenericUpstream.value) {
       base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
       base.outputQuantity = (row.fields['output'] as number) ?? 0;
-      base.unit = 'kg';
     } else if (isQidiao.value) {
       const actualProd = calcSumBoxes(row);
       base.inputQuantity = (row.fields['usedWeight'] as number) ?? totalFeed;
       base.outputQuantity = actualProd;
-      base.unit = '盒';
       const trimmings = (row.fields['trimmings'] as number) ?? 0;
       if (trimmings > 0) {
         base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
@@ -929,7 +950,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = (row.fields['before'] as number) ?? undefined;
     base.outputQuantity = (row.fields['after'] as number) ?? 0;
-    base.unit = 'kg';
     // SP-G G3c: 副产 (焯水/滚揉 — 肥油等)
     const bpQty = (row.fields['byproductQty'] as number) ?? 0;
     if (bpQty > 0) {
@@ -946,7 +966,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods }];
     base.inputQuantity = inputQty;
     base.outputQuantity = output;
-    base.unit = 'kg';
   } else if (isShuZhi.value || isGenericUpstream.value) {
     const inputQty = (row.fields['input'] as number) ?? 0;
     base.upstreamSources = [{
@@ -957,7 +976,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }];
     base.inputQuantity = inputQty;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
-    base.unit = 'kg';
   } else if (isQidiao.value) {
     // ⭐ outputQuantity = 盒数 (actualProd), NOT kg
     const actualProd = calcSumBoxes(row);
@@ -970,7 +988,6 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     }];
     base.inputQuantity = (row.fields['usedWeight'] as number) ?? undefined;
     base.outputQuantity = actualProd;            // ⭐⭐ 盒数!
-    base.unit = '盒';
     // 副产品: 料头
     const trimmings = (row.fields['trimmings'] as number) ?? 0;
     if (trimmings > 0) {
@@ -1159,9 +1176,8 @@ let fgLoadSeq = 0;
  * archetype 兜底 (back-compat): 现有混锅道 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 保持显 picker,
  * 保证历史产品工序零回归 —— 即使未配置 flag 也不丢失现有能力。
  */
-const showSfi = computed(() =>
-  props.allowSemiFinishedInjection || supportsUpstreamSources.value,
-);
+const showSfi = computed(() => supportsExternalStockFeed.value
+  && (props.allowSemiFinishedInjection || supportsUpstreamSources.value));
 /** ①c 是否提供「成品库存(FG)」投料选项；必须按产品工序显式开启。 */
 const showFg = computed(() => showSfi.value && props.allowFinishedGoodsSource === true);
 
@@ -1199,7 +1215,7 @@ function dateText(d: string | null | undefined): string {
 function wipLabel(item: ProcessSheetInventoryItem): string {
   const name = item.productTypeName || '在制';
   const parts = [name, item.batchNumber, dateText(item.productionDate),
-    `余${item.remaining}kg`, costText(item.unitPrice)];
+    `余${item.remaining}${item.unit || processUnits.value.inputUnit}`, costText(item.unitPrice)];
   return parts.join(' | ');
 }
 
@@ -1396,7 +1412,7 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
 /** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI / 成品FG)。 */
 function srcRemainingLabel(src: UpstreamRef): string {
   const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
-  if (wip) return `余${wip.remaining}kg`;
+  if (wip) return `余${wip.remaining}${wip.unit || processUnits.value.inputUnit}`;
   const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
   if (fg) return `成品余${fgAvailable(fg)}${fg.unit || 'kg'}`;
   const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
@@ -1614,7 +1630,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </span>
             </div>
             <div class="sp-card-field">
-              <label class="sp-card-label">出库重量(kg)</label>
+              <label class="sp-card-label">{{ firstProcessInputLabel }}</label>
               <el-input-number
                 v-model="row.rawBatchQty"
                 :min="0" :precision="2"
@@ -1705,7 +1721,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <label class="sp-card-label">{{ sourceTitle }}</label>
               <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
                 <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
-                {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
+                {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
               </el-button>
             </div>
             <!-- Mix expanded inline -->
@@ -1749,7 +1765,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-input-number
                   v-model="src.feedQuantityKg"
                   :min="0" :precision="2"
-                  placeholder="投料kg"
+                  :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                   controls-position="right"
                   size="small" style="width:120px" />
                 <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
@@ -1771,7 +1787,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <template v-if="row.potCount > 1">
                   <div v-for="pi in row.potCount" :key="pi"
                        style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:12px;color:#606266">第{{ pi }}锅(kg):</span>
+                    <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
                     <el-input-number
                       v-model="row.potRawKgs[pi - 1]"
                       :min="0" :precision="2" size="small" style="width:100px" />
@@ -1824,7 +1840,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 style="width:100%" size="small" />
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
-                {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+                {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
@@ -1906,7 +1922,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <!-- 修油: raw batch + out-weight cols appear before generic cols -->
             <template v-if="isXiuYou">
               <th class="sp-th">原料批次</th>
-              <th class="sp-th sp-th-num">出库重量(kg)</th>
+              <th class="sp-th sp-th-num">{{ firstProcessInputLabel }}</th>
             </template>
 
             <!-- 单来源上游 -->
@@ -2143,7 +2159,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @click="row.mixExpanded = !row.mixExpanded"
                     style="font-size:12px">
                     <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
-                    {{ row.upstreamSources.length === 0 ? '+ 来源批' : `${row.upstreamSources.length} 批 · ${row.upstreamSources.reduce((s,x) => s + (x.feedQuantityKg||0), 0).toFixed(1)}kg` }}
+                    {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
                   </el-button>
                 </td>
               </template>
@@ -2190,7 +2206,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
                   <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
-                    {{ calcReverseInput(row) != null ? calcReverseInput(row)!.toFixed(2) + 'kg' : '—' }}
+                    {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
                   </span>
 
                   <!-- auto: yield -->
@@ -2333,7 +2349,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-input-number
                       v-model="src.feedQuantityKg"
                       :min="0" :precision="2"
-                      placeholder="投料kg"
+                      :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">
@@ -2355,7 +2371,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <template v-if="row.potCount > 1">
                       <div v-for="pi in row.potCount" :key="pi"
                            style="display:flex;align-items:center;gap:4px">
-                        <span style="font-size:12px;color:#606266">第{{ pi }}锅(kg):</span>
+                        <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
                         <el-input-number
                           v-model="row.potRawKgs[pi - 1]"
                           :min="0" :precision="2" size="small" style="width:100px" />
@@ -2416,7 +2432,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     <el-input-number
                       v-model="src.feedQuantityKg"
                       :min="0" :precision="2"
-                      placeholder="投料kg"
+                      :placeholder="formatFeedPlaceholder(processUnits.inputUnit)"
                       controls-position="right"
                       size="small" style="width:120px" />
                     <span v-if="src.sourceBatchNumber" style="font-size:11px;color:#909399">

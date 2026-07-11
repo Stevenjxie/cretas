@@ -19,6 +19,7 @@ const storesById = computed(() => new Map(props.stores.map((store) => [store.id,
 const statusLabels: Record<RouteTrip['status'], string> = {
   draft: '待确认',
   needs_vehicle: '待匹配车辆',
+  needs_driver: '待匹配司机',
   needs_route_data: '缺少路线数据',
   confirmed: '已确认',
 };
@@ -192,6 +193,11 @@ function selectTrip(tripId: string): void {
 .status-needs_vehicle {
   color: #b54708;
   background: #fffaeb;
+}
+
+.status-needs_driver {
+  color: #b54708;
+  background: #fef6ee;
 }
 
 .status-needs_route_data {

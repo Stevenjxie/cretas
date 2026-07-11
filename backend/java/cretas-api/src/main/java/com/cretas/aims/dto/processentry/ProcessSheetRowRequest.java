@@ -51,8 +51,12 @@ public class ProcessSheetRowRequest {
     @NotNull
     private BigDecimal outputQuantity;
 
-    /** 默认 "kg"。 */
+    /** 兼容字段：等同 outputUnit。 */
     private String unit;
+    /** 实际投入单位；空时向后兼容为 unit/kg。 */
+    private String inputUnit;
+    /** 实际产出单位；空时向后兼容为 unit/kg。 */
+    private String outputUnit;
 
     /** 多时段工时, 后端 Σ。 */
     private List<LaborSegment> laborSegments;

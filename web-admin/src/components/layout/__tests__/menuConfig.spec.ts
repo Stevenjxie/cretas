@@ -286,6 +286,10 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       expect(findDescendant('/scheduling', path)!.hideForFactoryTypes).toContain('LOGISTICS');
     }
   });
+
+  it('hides the generic dashboard entry for logistics tenants', () => {
+    expect(findGroup('/dashboard')?.hideForFactoryTypes).toContain('LOGISTICS');
+  });
 });
 
 describe('menuConfig — merged 数据与分析 group (WS4 经营分析合并)', () => {

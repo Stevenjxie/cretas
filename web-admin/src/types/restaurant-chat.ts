@@ -7,6 +7,7 @@
  */
 
 import type { ChartConfig } from '@/api/smartbi/common';
+import type { SynthesisAlert, SynthesisChart } from '@/api/smartbi/restaurant-synthesis';
 
 /** Output from one Python section endpoint (one entry in sections array) */
 export interface SectionPayload {
@@ -30,6 +31,11 @@ export interface ChatTurn {
   sections?: SectionPayload[];
   followUpChips?: string[];
   error?: string;
+  // P2 synthesis (2026-07-11): comprehensive-synthesis charts/alerts.
+  // `content` for a synthesis turn is markdown (rendered via ChatBubble).
+  charts?: SynthesisChart[];
+  alerts?: SynthesisAlert[];
+  source?: string;
 }
 
 /** Request to the unified Java intent endpoint. */

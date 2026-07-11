@@ -308,6 +308,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
+    /**
+     * {@code plannedQuantity} is the planned finished-product output, never the
+     * first-process feed quantity.  Raw-material feed is only known after a
+     * recipe/yield calculation or actual reporting, so it must not be guessed
+     * from a sales-order line.
+     */
+    static String resolvePlannedOutputUnit(String productUnit) {
+        return productUnit != null && !productUnit.isBlank() ? productUnit.trim() : "kg";
+    }
+
+    private String resolvePlannedOutputUnitForProduct(String productTypeId) {
+        String productUnit = productTypeId == null ? null
+                : productTypeRepository.findById(productTypeId).map(ProductType::getUnit).orElse(null);
+        return resolvePlannedOutputUnit(productUnit);
+    }
+
     @Override
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public boolean getSkipProcessReportingDefault(String factoryId) {
@@ -866,6 +882,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
+        request.setPlannedUnit(resolvePlannedOutputUnitForProduct(request.getProductTypeId()));
+
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
 
@@ -1167,6 +1185,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // P0-12: 校验销售订单来源 + 回填客户名
         validateAndEnrichSalesOrderSource(factoryId, request);
 
+        boolean productChanged = request.getProductTypeId() != null
+                && !request.getProductTypeId().equals(plan.getProductTypeId());
+        request.setPlannedUnit(productChanged || plan.getPlannedUnit() == null
+                ? resolvePlannedOutputUnitForProduct(
+                        request.getProductTypeId() != null ? request.getProductTypeId() : plan.getProductTypeId())
+                : plan.getPlannedUnit());
+
         // 更新计划信息
         productionPlanMapper.updateEntity(plan, request);
         plan = productionPlanRepository.save(plan);
@@ -1232,6 +1257,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 复制业务字段
         newPlan.setProductTypeId(source.getProductTypeId());
         newPlan.setPlannedQuantity(source.getPlannedQuantity());
+        newPlan.setPlannedUnit(source.getPlannedUnit() != null ? source.getPlannedUnit() : "kg");
         newPlan.setPlannedDate(source.getPlannedDate());
         newPlan.setExpectedCompletionDate(source.getExpectedCompletionDate());
         newPlan.setPlanType(source.getPlanType());
@@ -4238,6 +4264,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setPlanNumber(planNumber);
         plan.setProductTypeId(productTypeId);
         plan.setPlannedQuantity(quantity);
+        plan.setPlannedUnit(resolvePlannedOutputUnitForProduct(productTypeId));
         plan.setPlannedDate(plannedDate != null ? plannedDate : java.time.LocalDate.now());
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(submittedBy);

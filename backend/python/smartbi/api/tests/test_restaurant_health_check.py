@@ -132,6 +132,59 @@ def test_get_report_no_data_returns_empty_diagnoses_not_error(client, monkeypatc
     assert body["data"]["summary"]["criticalCount"] == 0
 
 
+def test_supplier_price_anomaly_becomes_pushable_diagnosis(client, monkeypatch):
+    """反回扣: UP 进价异常 → pushable warning/critical diagnosis; DOWN skipped."""
+    async def _ok_pool():
+        return object()
+
+    async def _empty_build(self, **kwargs):
+        return _bundle(metrics={}, coverage={})
+
+    async def _fake_anomalies(pool, factory_id, **kwargs):
+        return [
+            {"ingredientName": "鲈鱼", "normalizedName": "鲈鱼", "supplierName": "四通",
+             "supplierId": "S1", "newPrice": 43.2, "trailingAvg": 35.65, "deltaPct": 19.1,
+             "direction": "UP", "riskLevel": "MEDIUM"},
+            {"ingredientName": "牛肉", "normalizedName": "牛肉", "supplierName": "通际名联",
+             "supplierId": "S2", "newPrice": 52.8, "trailingAvg": 65.18, "deltaPct": -19.6,
+             "direction": "DOWN", "riskLevel": "HIGH"},  # 降价 → 非反回扣, 跳过
+            {"ingredientName": "藤椒", "normalizedName": "藤椒", "supplierName": "网新恒天",
+             "supplierId": "S3", "newPrice": 46.0, "trailingAvg": 40.0, "deltaPct": 15.0,
+             "direction": "UP", "riskLevel": "HIGH"},  # 连续 → critical
+            {"ingredientName": "青菜", "normalizedName": "青菜", "supplierName": "某供应商",
+             "supplierId": None, "newPrice": 5.0, "trailingAvg": 4.0, "deltaPct": 25.0,
+             "direction": "UP", "riskLevel": "MEDIUM"},  # F2: 无 supplier_id → 不可靠归因 → 跳过
+        ]
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _empty_build)
+    monkeypatch.setattr("smartbi.gold.price_anomaly.detect_price_anomalies", _fake_anomalies)
+
+    resp = client.get(
+        "/api/smartbi/restaurant/RES_3101_009/health-check-report",
+        headers={"x-test-factory": "RES_3101_009"},
+    )
+    assert resp.status_code == 200
+    diags = resp.json()["data"]["diagnoses"]
+    supplier = [d for d in diags if d["metricKey"].startswith("supplier_price_anomaly:")]
+    assert len(supplier) == 2  # 2 UP-with-id kept; DOWN dropped; NULL-id dropped
+    keys = {d["metricKey"] for d in supplier}
+    assert "supplier_price_anomaly:鲈鱼:S1" in keys      # unique per (食材,供应商)
+    assert "supplier_price_anomaly:藤椒:S3" in keys
+    assert not any("牛肉" in k for k in keys)            # DOWN excluded
+    assert not any("青菜" in k for k in keys)            # F2: NULL supplier_id excluded
+    # F1: detect succeeded → not flagged unavailable
+    assert resp.json()["data"]["supplierAnomalyUnavailable"] is False
+    by_key = {d["metricKey"]: d for d in supplier}
+    assert by_key["supplier_price_anomaly:鲈鱼:S1"]["severity"] == "warning"   # MEDIUM
+    assert by_key["supplier_price_anomaly:藤椒:S3"]["severity"] == "critical"  # HIGH → pushable SMS
+    for d in supplier:
+        assert d["metricNameZh"] == "供应商进价异常"
+        assert "请核对" in d["descriptionZh"] and "回扣" in d["descriptionZh"]  # 威慑非指控
+    # critical count reflects the HIGH-risk supplier anomaly
+    assert resp.json()["data"]["summary"]["criticalCount"] >= 1
+
+
 def test_get_report_cached_returns_cache_hit_flag(client, monkeypatch):
     calls = {"n": 0}
 
@@ -198,3 +251,76 @@ def test_subsector_query_overrides_map(client, monkeypatch):
         headers={"x-test-factory": "RES_3101_009"},
     )
     assert captured["sub_sector"] == "火锅"
+
+
+# ── 🔒 F2: generic tenant (empty sub_sector) must still fire benchmark alerts ──
+
+
+def test_generic_tenant_fires_benchmark_alerts_not_fake_healthy(client, monkeypatch):
+    """A tenant NOT in FACTORY_SUBSECTOR_MAP resolves to sub_sector="". Before
+    F2, DiagnosticsEngine never loaded _common.yaml benchmarks for empty
+    sub_sector → food_cost_ratio=55 (way over [35,45]) fired NOTHING and the
+    summary falsely reported '均无异常'. F2 forces the 通用 benchmark load."""
+    async def _ok_pool():
+        return object()
+
+    async def _fake_build(self, **kwargs):
+        return _bundle(
+            metrics={"food_cost_ratio": 55.0},  # 0-100 scale, way over [35,45]
+            coverage={"food_cost_ratio": "ok"},
+        )
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _fake_build)
+
+    # DEMO_REST_XXX not in FACTORY_SUBSECTOR_MAP, no sub_sector query → "".
+    resp = client.get(
+        "/api/smartbi/restaurant/DEMO_REST_X/health-check-report",
+        headers={"x-test-factory": "DEMO_REST_X"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    codes = {d["metricKey"] for d in data["diagnoses"]}
+    assert "food_cost_ratio" in codes, "generic tenant must get benchmark alerts (F2)"
+    assert data["summary"]["criticalCount"] + data["summary"]["warningCount"] >= 1
+    # generic (通用行业) sub_sector echoed
+    assert data["reportMeta"]["subSector"] == "通用行业"
+
+
+# ── 🔒 F3: benchmark-fallback avg_ticket target → severity cap + estimated ──
+
+
+def test_avg_ticket_estimated_target_caps_severity_and_marks_estimated(client, monkeypatch):
+    """When avg_ticket target came from the 通用 median (no tenant-set goal),
+    a would-be CRITICAL '客单价严重偏低' must be capped to warning + flagged
+    estimated (never a critical accusation against a target nobody set)."""
+    async def _ok_pool():
+        return object()
+
+    async def _fake_build(self, **kwargs):
+        b = _bundle(
+            # -0.30 is well past critical inline threshold (< -0.15)
+            metrics={"avg_ticket_vs_target": -0.30},
+            coverage={"avg_ticket_vs_target": "ok"},
+        )
+        b.avg_ticket_target_estimated = True
+        b.notes["avg_ticket_vs_target"] = "目标=行业通用人均中位数(未配置自定义客单价目标),仅供参考"
+        return b
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _fake_build)
+
+    resp = client.get(
+        "/api/smartbi/restaurant/DEMO_REST_X/health-check-report",
+        headers={"x-test-factory": "DEMO_REST_X"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    diag = next(d for d in data["diagnoses"] if d["metricKey"] == "avg_ticket_vs_target")
+    assert diag["severity"] == "warning", "estimated target must not stay critical"
+    assert diag["status"] != "严重偏低"
+    assert diag.get("estimated") is True
+    assert "未配置自定义客单价目标" in diag["descriptionZh"]
+    # capped diagnosis must not count toward criticalCount
+    assert data["summary"]["criticalCount"] == 0
+    assert data["summary"]["warningCount"] >= 1

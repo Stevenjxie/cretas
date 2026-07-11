@@ -296,6 +296,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 3. 调料 + 人工 + 产出量 —— 逐工序计算 (上游消耗已由 edges 替代).
         BigDecimal lastOutputQty = BigDecimal.ZERO;
         BigDecimal lastYieldOutputQty = BigDecimal.ZERO;
+        String lastOutputUnit = "kg";
         for (StepEntry st : steps) {
             // 3a. 调料成本 (熟制道，使用 RecipeCostCalculator)
             // 写 ProductionReport 行 (costCategory=SEASONING)，让 OrderCostBreakdownService
@@ -351,6 +352,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             if (st.getOutputQuantity() != null && st.getOutputQuantity().signum() > 0) {
                 lastOutputQty = st.getOutputQuantity();
                 lastYieldOutputQty = yieldOutputQuantity(st);
+                lastOutputUnit = outputUnitOf(st);
             }
         }
 
@@ -365,7 +367,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     : BigDecimal.ZERO);
             wipMbId = createWipMaterialBatch(
                     ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
-                    lastOutputQty, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
+                    lastOutputQty, lastOutputUnit, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
         }
         applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -571,8 +573,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         planRepository.save(p);
                     });
         }
-        batch.setUnit(steps == null ? "kg"
-                : steps.stream().findFirst().map(StepEntry::getUnit).filter(u -> u != null).orElse("kg"));
+        batch.setUnit(resolveBatchOutputUnit(steps));
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
         // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
         // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
@@ -650,7 +651,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
     private String createWipMaterialBatch(String factoryId, ProductionBatch batch,
                                            String rawMaterialTypeId, BigDecimal outputQty,
-                                           BigDecimal unitPrice, String warehouseId,
+                                           String outputUnit, BigDecimal unitPrice, String warehouseId,
                                            Long operatorId) {
         String mbId = UUID.randomUUID().toString();
         String mbNumber = "WIP-" + batch.getBatchNumber();
@@ -668,7 +669,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setMaterialTypeId(rawMaterialTypeId);
         mb.setWarehouseId(warehouseId);
         mb.setReceiptQuantity(outputQty);
-        mb.setQuantityUnit("kg");
+        mb.setQuantityUnit(outputUnit);
         mb.setUsedQuantity(BigDecimal.ZERO);
         mb.setReservedQuantity(BigDecimal.ZERO);
         mb.setUnitPrice(unitPrice);
@@ -730,6 +731,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setProcessOrder(st.getProcessOrder());
         report.setOutputQuantity(st.getOutputQuantity());
         report.setInputQuantity(st.getInputQuantity());
+        report.setInputUnit(inputUnitOf(st));
+        report.setOutputUnit(outputUnitOf(st));
         report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
     }
@@ -766,6 +769,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (carryQuantities) {
             report.setOutputQuantity(st.getOutputQuantity());
             report.setInputQuantity(st.getInputQuantity());
+            report.setInputUnit(inputUnitOf(st));
+            report.setOutputUnit(outputUnitOf(st));
         }
         report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
@@ -1149,6 +1154,34 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
     // Utilities
     // ─────────────────────────────────────────────────────────────
+
+    private static String inputUnitOf(StepEntry step) {
+        return firstNonBlank(step.getInputUnit(), step.getUnit(), "kg");
+    }
+
+    private static String outputUnitOf(StepEntry step) {
+        return firstNonBlank(step.getOutputUnit(), step.getUnit(), "kg");
+    }
+
+    private static String resolveBatchOutputUnit(List<StepEntry> steps) {
+        if (steps != null) {
+            for (int i = steps.size() - 1; i >= 0; i--) {
+                StepEntry step = steps.get(i);
+                if (step != null) {
+                    String unit = firstNonBlank(step.getOutputUnit(), step.getUnit());
+                    if (unit != null) return unit;
+                }
+            }
+        }
+        return "kg";
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return null;
+    }
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;

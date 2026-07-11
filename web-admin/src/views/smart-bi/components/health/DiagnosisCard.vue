@@ -25,6 +25,7 @@ const expanded = ref(props.defaultExpanded ?? false);
 const ZERO_ONE_KEYS = new Set([
   'delivery_dependency',
   'channel_collection_rate',
+  'avg_ticket_vs_target',
 ]);
 const RATIO_KEYS = new Set(['cost_rigidity']);
 const DELTA_PP_KEYS = new Set(['review_score_decline']);

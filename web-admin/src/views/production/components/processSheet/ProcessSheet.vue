@@ -9,6 +9,7 @@ import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
+import { formatPlannedOutput } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -37,6 +38,7 @@ const props = defineProps<{
   productTypeId: string;
   productName?: string;
   plannedQuantity?: number;
+  plannedUnit?: string | null;
 }>();
 const emit = defineEmits<{
   (e: 'submitted'): void;
@@ -62,6 +64,9 @@ type ProcEntry = {
   customFieldSchema: ProcessSheetCustomFieldDef[] | null;
   /** 5988: 本工序是否允许成品库存作投料来源 (透传给 ProcessDataTable 的 allowFinishedGoodsSource prop)。 */
   allowFinishedGoodsSource: boolean;
+  /** 本工序配置的投入/产出单位。产出单位为空时由表格沿用投入单位。 */
+  inputUnit: string;
+  outputUnit: string | null;
   /**
    * 2B Task F1 (additive): 该道工序对应的 workflow 端口上下文 (计划产出 SKU/单位 + 所需原料类型),
    * 仅 workflow-activated 计划有值; legacy 计划恒为 undefined/null。透传给 ProcessDataTable 作
@@ -101,9 +106,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -182,6 +187,10 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         isFirstProcess: idx === 0,
         customFieldSchema,
         allowFinishedGoodsSource: proc.allowFinishedGoodsSource === true,
+        // origin/main 合并: config-driven 投入/产出单位。workflow 计划从端口单位取
+        // (投入=首个输入端口单位, 产出=输出端口单位)，与 workflowContext 展示/校验一致。
+        inputUnit: proc.inputs?.[0]?.unit?.trim() || 'kg',
+        outputUnit: proc.output?.unit?.trim() || null,
         workflowContext: proc,
       };
       return entry;
@@ -277,6 +286,8 @@ async function resolveProcesses() {
           isFirstProcess: idx === 0,
           customFieldSchema: it.customFieldSchema ?? null,
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
+          inputUnit: it.unitOverride?.trim() || it.defaultUnit?.trim() || 'kg',
+          outputUnit: it.defaultOutputUnit?.trim() || null,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -420,7 +431,12 @@ defineExpose({ hasUnsavedRows });
         <div style="font-size:15px;font-weight:600;color:#303133">
           逐工序电子表格
           <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
-          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">计划 {{ plannedQuantity }} kg</span>
+          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
+            {{ formatPlannedOutput(plannedQuantity, plannedUnit) }}
+            <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">
+              <span style="margin-left:3px;cursor:help">?</span>
+            </el-tooltip>
+          </span>
         </div>
         <div style="font-size:12px;color:#909399;margin-top:4px">
           每行独立保存 · 保存后自动生成批次号 · 可随时追加
@@ -472,6 +488,8 @@ defineExpose({ hasUnsavedRows });
             :is-first-process="proc.isFirstProcess"
             :custom-field-schema="proc.customFieldSchema"
             :allow-finished-goods-source="proc.allowFinishedGoodsSource"
+            :input-unit="proc.inputUnit"
+            :output-unit="proc.outputUnit"
             :workflow-context="proc.workflowContext ?? null"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"

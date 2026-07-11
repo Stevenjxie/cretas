@@ -262,4 +262,17 @@ public class AliyunSmsNotificationServiceImpl implements NotificationService {
     boolean isSmsEnabled() {
         return smsEnabled;
     }
+
+    /**
+     * Public interface method — {@code AlertEventNotificationListener} (餐饮经营
+     * 体检预警) reads this to decide whether to record an honest "SMS 网关未配置"
+     * audit note instead of silently no-op-ing. Delegates to the same
+     * {@link #smsEnabled} flag {@link #sendSms} already checks.
+     *
+     * @since 2026-07-11
+     */
+    @Override
+    public boolean isSmsAvailable() {
+        return smsEnabled;
+    }
 }

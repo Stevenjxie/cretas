@@ -1187,6 +1187,146 @@ async def finance_summary(
     return result
 
 
+async def period_comparison(pool, factory_id, start, end):
+    """同比(去年同期)/环比(前一等长周期) for 营收 + 加权毛利率, over agg_daily(+agg_daily_cost).
+
+    加权毛利 = 营收 - 食材成本 (镜像 finance_summary.gross_profit); 加权毛利率 = 该值/营收*100。
+    餐饮口径: 这是聚合的加权毛利率, 非单品毛利 (中餐单品用量难固定, 单品不可靠)。
+
+    诚实降级 (禁降级处理): 对比期无营业数据 → available=False, pct=None
+    (绝不返回伪造的 0/100%)。毛利率对比额外要求两侧成本非空 (agg_daily_cost 真租户可能 NULL)。
+
+    营收同比/环比 = 增长率 (%); 毛利率同比/环比 = 百分点差 (个百分点, 从30%到34%=+4)。
+
+    返回:
+      {"revenue": {"current", "yoy_pct", "mom_pct", "yoy_available", "mom_available"},
+       "gross_margin_pct": {同上键, "current" 可能 None}}
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(f"period_comparison: factory_id required (got {factory_id!r})")
+    if start is None or end is None:
+        raise ValueError(f"period_comparison: start/end required (got {start}, {end})")
+    from datetime import timedelta
+
+    def _shift_year(d, years):
+        try:
+            return d.replace(year=d.year - years)
+        except ValueError:  # Feb 29 → 365天近似回退
+            return d - timedelta(days=365 * years)
+
+    span = end - start
+    windows = {
+        "current": (start, end),
+        "mom": (start - timedelta(days=1) - span, start - timedelta(days=1)),
+        "yoy": (_shift_year(start, 1), _shift_year(end, 1)),
+    }
+
+    async def _agg(conn, s, e):
+        row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(a.net_amount), 0)::numeric(18,2) AS revenue,
+                   SUM(c.material_cost)::numeric(18,2)           AS material_cost,
+                   COUNT(c.material_cost)                         AS cost_n,
+                   COUNT(*)                                       AS n_rows
+              FROM agg_daily a
+              LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)
+             WHERE a.factory_id = $1 AND a.date BETWEEN $2 AND $3
+            """,
+            factory_id, s, e,
+        )
+        # 领料成本 — 直接查 silver fact_restaurant_requisition 并 status 过滤
+        # (Fable F1/F2: gold agg_restaurant_daily_totals 被 wastage/stocktaking 日
+        # 污染[req_cost=0 行]且含 DRAFT/REJECTED → 会造 0%-base 假上升+误告; 这里
+        # 只取 SUBMITTED/APPROVED 领料行, 天然 requisition-only 无污染)。
+        # 按 factory-date 聚合, 不与 agg_daily per-store 行 JOIN (否则按门店翻倍)。
+        req_row = await conn.fetchrow(
+            """
+            SELECT SUM(est_cost)::numeric(18,2)  AS req_cost,
+                   COUNT(DISTINCT date)          AS req_n
+              FROM fact_restaurant_requisition
+             WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+               AND status IN ('SUBMITTED', 'APPROVED')
+            """,
+            factory_id, s, e,
+        )
+        rev = Decimal(row["revenue"] or 0)
+        n = int(row["n_rows"] or 0)
+        cost_n = int(row["cost_n"] or 0)
+        mat = row["material_cost"]
+        gm = None
+        # F5: 仅当成本覆盖满窗 (cost_n == n) 才算毛利率 — 全窗营收÷部分窗成本会虚高。
+        if n > 0 and mat is not None and rev != 0 and cost_n == n:
+            gm = (((rev - Decimal(mat)) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        # 领料成本率 = 领料成本 ÷ 营收 * 100 (真实际用料, 反回扣核心信号; 上升=漏损/回扣)。
+        req_cost = req_row["req_cost"] if req_row else None
+        req_n = int(req_row["req_n"] or 0) if req_row else 0
+        cost_ratio = None
+        if n > 0 and req_cost is not None and req_n > 0 and rev != 0:
+            cost_ratio = ((Decimal(req_cost) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return {"n": n, "revenue": rev, "gross_margin_pct": gm, "cost_ratio": cost_ratio}
+
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        # 领料数据采集的全局日期范围 → 判断窗口是否被领料完整覆盖 (窗口跨越采集起点会
+        # undercount 领料成本 → 假的成本率变化 = 反回扣误告; F5-analog for 领料)。
+        req_span = await conn.fetchrow(
+            "SELECT MIN(date) AS d0, MAX(date) AS d1 FROM fact_restaurant_requisition "
+            "WHERE factory_id = $1 AND status IN ('SUBMITTED', 'APPROVED')", factory_id)
+        agg = {k: await _agg(conn, s, e) for k, (s, e) in windows.items()}
+    req_d0 = req_span["d0"] if req_span else None
+    req_d1 = req_span["d1"] if req_span else None
+    # 领料成本率仅在窗口完全落在采集区间内才有效, 否则 None (禁 undercount 误告)。
+    for _k, (_ws, _we) in windows.items():
+        if not (req_d0 is not None and req_d1 is not None and req_d0 <= _ws and _we <= req_d1):
+            agg[_k]["cost_ratio"] = None
+
+    def _growth(cur, base):
+        if base is None or base == 0:
+            return None
+        return float((((cur - base) / abs(base)) * Decimal("100")).quantize(
+            Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+    cur = agg["current"]
+    cur_available = cur["n"] > 0
+    rev_mom = cur_available and agg["mom"]["n"] > 0
+    rev_yoy = cur_available and agg["yoy"]["n"] > 0
+    cur_gm = cur["gross_margin_pct"]
+    gm_mom = cur_gm is not None and agg["mom"]["gross_margin_pct"] is not None
+    gm_yoy = cur_gm is not None and agg["yoy"]["gross_margin_pct"] is not None
+    cur_cr = cur["cost_ratio"]
+    cr_mom = cur_cr is not None and agg["mom"]["cost_ratio"] is not None
+    cr_yoy = cur_cr is not None and agg["yoy"]["cost_ratio"] is not None
+    return {
+        "revenue": {
+            # F1: current 窗无数据 → available False + current None (禁伪造 ¥0)
+            "current": float(cur["revenue"]) if cur_available else None,
+            "available": cur_available,
+            "mom_pct": _growth(cur["revenue"], agg["mom"]["revenue"]) if rev_mom else None,
+            "yoy_pct": _growth(cur["revenue"], agg["yoy"]["revenue"]) if rev_yoy else None,
+            "mom_available": rev_mom,
+            "yoy_available": rev_yoy,
+        },
+        "gross_margin_pct": {
+            "current": float(cur_gm) if cur_gm is not None else None,
+            "mom_pct": round(float(cur_gm) - float(agg["mom"]["gross_margin_pct"]), 1) if gm_mom else None,
+            "yoy_pct": round(float(cur_gm) - float(agg["yoy"]["gross_margin_pct"]), 1) if gm_yoy else None,
+            "mom_available": gm_mom,
+            "yoy_available": gm_yoy,
+        },
+        "cost_ratio": {
+            # 领料成本率 = 领料成本 ÷ 营收 (真实际用料口径, 独立于 POS×配方理论);
+            # 同比/环比 = 百分点差。成本率上升 = 用料/漏损/回扣信号 → 去查 (邓总核心)。
+            "current": float(cur_cr) if cur_cr is not None else None,
+            "mom_pct": round(float(cur_cr) - float(agg["mom"]["cost_ratio"]), 1) if cr_mom else None,
+            "yoy_pct": round(float(cur_cr) - float(agg["yoy"]["cost_ratio"]), 1) if cr_yoy else None,
+            "mom_available": cr_mom,
+            "yoy_available": cr_yoy,
+        },
+    }
+
+
 def _as_decimal(value: Any) -> Optional[Decimal]:
     if value is None:
         return None

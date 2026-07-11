@@ -42,7 +42,9 @@ import java.util.Map;
 @EnableTransactionManagement
 @EnableJpaRepositories(
     basePackages = {
-        "com.cretas.aims.repository"
+        "com.cretas.aims.repository",
+        // 一加物流 logistics MVP bounded context (repositories live outside com.cretas.aims.repository)
+        "com.cretas.aims.logistics.repository"
     },
     excludeFilters = @ComponentScan.Filter(
         type = FilterType.REGEX,
@@ -138,7 +140,9 @@ public class PrimaryDataSourceConfig {
                 // SmartBI entities - include the whole package including postgres subpackage
                 // Since DDL-auto=none, Hibernate won't try to create missing tables.
                 // The postgres entities will be scanned but not used (their repository is excluded)
-                "com.cretas.aims.entity.smartbi"
+                "com.cretas.aims.entity.smartbi",
+                // 一加物流 logistics MVP bounded context (entities live outside com.cretas.aims.entity)
+                "com.cretas.aims.logistics.entity"
             )
             .persistenceUnit("primary")
             .properties(properties)

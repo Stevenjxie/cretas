@@ -614,7 +614,13 @@ async def store_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     if pool is None:
         return {"success": False, "message": "db pool unavailable"}
     try:
-        ans = await resolve_store_margin(pool, factory_id, days=days, top_n=100)
+        # Forward the caller's role: resolve_store_margin gates margin visibility on
+        # role ∈ PRICE_VIEW_ROLES (which includes factory_super_admin). Without this,
+        # role defaulted to None → bool(None) False → EVERY caller (incl. super-admin)
+        # got the masked {"rbac_masked": True} payload, so 门店对比's 毛利率 column was
+        # silently blank for authorized roles.
+        ans = await resolve_store_margin(pool, factory_id, days=days, top_n=100,
+                                         role=_get_role(request))
     except Exception as e:
         logger.exception("[store-margin] failed")
         return {"success": False, "message": str(e)}

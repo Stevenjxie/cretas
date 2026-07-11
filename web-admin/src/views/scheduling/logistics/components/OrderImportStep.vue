@@ -1,99 +1,104 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { StoreOrder } from '../types';
+import type { OrderBatch, PreviewResult } from '@/api/logistics';
 
-const props = defineProps<{ stores: StoreOrder[]; imported: boolean }>();
-const emit = defineEmits<{ (event: 'import-sample'): void }>();
+const props = defineProps<{
+  preview: PreviewResult | null;
+  batch: OrderBatch | null;
+  uploading: boolean;
+  committing: boolean;
+  error: string | null;
+}>();
 
-const validStoreCount = computed(() => props.stores.filter((store) => store.name && store.address && store.window).length);
-const importValidation = ref('可选择 CSV 文件进行本地字段校验。');
+const emit = defineEmits<{
+  (event: 'download-template'): void;
+  (event: 'upload-file', file: File): void;
+  (event: 'commit'): void;
+}>();
 
-const requiredHeaders = ['门店编号', '门店名称', '配送地址', '时间窗'];
+const fileInput = ref<HTMLInputElement | null>(null);
+const selectedFileName = ref('');
 
-function parseCsvLine(line: string): string[] {
-  const values: string[] = [];
-  let value = '';
-  let quoted = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (character === '"') {
-      if (quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (character === ',' && !quoted) {
-      values.push(value.trim());
-      value = '';
-    } else {
-      value += character;
-    }
-  }
-  values.push(value.trim());
-  return values;
-}
+const canCommit = computed(() => Boolean(props.preview) && props.preview!.validRows > 0 && !props.committing);
+const rowErrorPreview = computed(() => (props.preview?.rowErrors ?? []).slice(0, 20));
 
-async function validateCsv(event: Event): Promise<void> {
+function handleFileChange(event: Event): void {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.csv')) {
-    importValidation.value = '请选择 CSV 文件；当前页面仅在浏览器内校验文件。';
-    return;
-  }
-  const lines = (await file.text()).replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
-  const headers = lines[0] ? parseCsvLine(lines[0]) : [];
-  const missing = requiredHeaders.filter((header) => !headers.includes(header));
-  if (missing.length) {
-    importValidation.value = `缺少必填列：${missing.join('、')}`;
-    return;
-  }
-  const rowCount = Math.max(lines.length - 1, 0);
-  const missingValue = lines.slice(1).findIndex((line) => {
-    const values = parseCsvLine(line);
-    return requiredHeaders.some((header) => !values[headers.indexOf(header)]);
-  });
-  if (missingValue >= 0) {
-    const values = parseCsvLine(lines[missingValue + 1]);
-    const missingHeader = requiredHeaders.find((header) => !values[headers.indexOf(header)]);
-    importValidation.value = `第 ${missingValue + 2} 行缺少${missingHeader}`;
-    return;
-  }
-  importValidation.value = rowCount > 0 ? `已读取 ${rowCount} 行，字段校验通过。` : '文件没有可导入的数据行。';
+  selectedFileName.value = file.name;
+  emit('upload-file', file);
 }
 
-function downloadTemplate(): void {
-  const content = '门店编号,门店名称,配送地址,时间窗\nS-001,示例门店,苏州市,09:00-12:00\n';
-  const anchor = document.createElement('a');
-  anchor.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
-  anchor.download = '配送订单导入模板.csv';
-  anchor.click();
-  URL.revokeObjectURL(anchor.href);
+function resetFileInput(): void {
+  selectedFileName.value = '';
+  if (fileInput.value) fileInput.value.value = '';
 }
 </script>
 
 <template>
   <section data-testid="import-step" class="step-panel">
     <div class="panel-heading">
-      <div><p>第一步</p><h2>导入配送订单</h2><span>核对订单字段与配送地址后开始排程。</span></div>
-      <el-button plain @click="downloadTemplate">下载导入模板</el-button>
+      <div><p>第一步</p><h2>导入配送订单</h2><span>上传当天订单文件，系统校验后再提交写入数据库。</span></div>
+      <el-button plain @click="emit('download-template')">下载导入模板</el-button>
     </div>
-    <div class="validation-card">
-      <strong>{{ validStoreCount }} / {{ stores.length }} 家门店信息完整</strong>
-      <span>{{ validStoreCount === 13 ? '13 家门店的订单字段与配送地址已通过校验。' : '请补全缺失的门店信息。' }}</span>
+
+    <div v-if="batch" class="batch-card" data-testid="import-batch-summary">
+      <strong>已导入批次 {{ batch.batchNumber }}</strong>
+      <span>{{ batch.validRows }} / {{ batch.totalRows }} 行有效，业务日期 {{ batch.businessDate }}</span>
     </div>
-    <label class="file-input">选择 CSV 文件<input data-testid="csv-input" type="file" accept=".csv,text/csv" @change="validateCsv"></label>
-    <p data-testid="import-validation" class="import-validation">{{ importValidation }}</p>
-    <p class="persistence-note">文件只在当前浏览器中校验，不会持久化或替换排程数据。</p>
-    <button data-testid="import-orders" class="primary-button" type="button" @click="emit('import-sample')">{{ imported ? '重新导入示例订单' : '导入示例订单' }}</button>
+
+    <label class="file-input">选择订单文件（CSV / Excel）
+      <input
+        ref="fileInput"
+        data-testid="csv-input"
+        type="file"
+        accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        :disabled="uploading"
+        @change="handleFileChange"
+      >
+    </label>
+    <p v-if="selectedFileName" class="selected-file">已选择：{{ selectedFileName }}</p>
+    <p v-if="uploading" data-testid="import-uploading" class="import-status">正在解析文件…</p>
+
+    <div v-if="preview" data-testid="import-preview" class="validation-card">
+      <strong>{{ preview.validRows }} / {{ preview.totalRows }} 行校验通过</strong>
+      <span v-if="preview.errorRows > 0">{{ preview.errorRows }} 行存在字段错误，提交后仅写入有效行。</span>
+      <span v-else>全部行校验通过，可以提交导入。</span>
+      <ul v-if="rowErrorPreview.length" data-testid="import-row-errors" class="row-error-list">
+        <li v-for="(rowError, index) in rowErrorPreview" :key="`${rowError.rowNumber}-${rowError.column}-${index}`">
+          第 {{ rowError.rowNumber }} 行 · {{ rowError.column }}：{{ rowError.message }}
+        </li>
+      </ul>
+      <p v-if="preview.rowErrors.length > rowErrorPreview.length" class="row-error-more">
+        还有 {{ preview.rowErrors.length - rowErrorPreview.length }} 条错误未显示。
+      </p>
+    </div>
+
+    <p v-if="error" data-testid="import-error" class="import-error">{{ error }}</p>
+    <p v-if="!preview && !batch && !uploading" class="empty-hint">尚未导入任何订单文件——下方地图与线路将保持空白，不会使用示例数据。</p>
+
+    <button
+      data-testid="commit-import"
+      class="primary-button"
+      type="button"
+      :disabled="!canCommit"
+      @click="emit('commit'); resetFileInput()"
+    >
+      {{ committing ? '正在提交…' : '提交导入' }}
+    </button>
   </section>
 </template>
 
 <style scoped lang="scss">
 .step-panel { display: grid; gap: 20px; min-height: 340px; padding: 28px; background: #fff; border: 1px solid #eaecf0; border-radius: 12px; }
 .panel-heading { display: flex; justify-content: space-between; gap: 20px; } p { margin: 0 0 6px; color: #1b65a8; font-size: 13px; font-weight: 750; } h2 { margin: 0; color: #101828; } span { color: #667085; line-height: 1.6; }
+.batch-card { display: grid; gap: 4px; padding: 16px 20px; background: #ecfdf3; border-radius: 10px; } .batch-card strong { color: #027a48; font-size: 15px; }
 .validation-card { display: grid; gap: 6px; padding: 20px; background: #f0f7ff; border-radius: 10px; } strong { color: #101828; font-size: 18px; }
+.row-error-list { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 20px; color: #b42318; font-size: 13px; }
+.row-error-more { margin: 0; color: #b42318; font-size: 13px; }
 .primary-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; }
+.primary-button:disabled { background: #98a2b3; cursor: not-allowed; }
 .file-input { display: grid; gap: 8px; width: fit-content; color: #344054; font-size: 14px; font-weight: 650; }
-.import-validation, .persistence-note { margin: 0; color: #475467; font-size: 14px; }
+.selected-file, .import-status, .empty-hint { margin: 0; color: #475467; font-size: 14px; }
+.import-error { margin: 0; padding: 10px 12px; color: #b42318; background: #fef3f2; border-radius: 8px; font-size: 14px; }
 </style>

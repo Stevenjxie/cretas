@@ -222,6 +222,8 @@ export interface ProductWorkProcessItem {
   processName: string;
   processCategory: string;
   defaultUnit: string;
+  /** 工序产出单位；null 表示沿用投入单位。 */
+  defaultOutputUnit?: string | null;
   defaultEstimatedMinutes: number | null;
   /** 默认责任小组长 ID（primary，向后兼容）。null = 未设置；发送 -1 表示清空。 */
   responsibleWorkerId?: number | null;

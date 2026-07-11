@@ -39,6 +39,7 @@ Author: fix/demo-raw-data-consistency worktree
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from datetime import date, timedelta
@@ -63,14 +64,18 @@ ENVS: Dict[str, Dict[str, Any]] = {
             "port": 5432,
             "dbname": "cretas_prod_db",
             "user": "cretas_user",
-            "password": "cretas123",
+            # 2026-06-26 prod DB password rotation (see .claude/rules/db-credentials.md,
+            # gitignored). Real value must come from env; the literal below is the
+            # OLD rotated-out (now dead) password kept only as a harmless fallback so
+            # this never needs a real secret hardcoded in a public tracked file.
+            "password": os.environ.get("DB_PASSWORD", "cretas123"),
         },
         "smartbi": {
             "host": "127.0.0.1",
             "port": 5432,
             "dbname": "smartbi_prod_db",
             "user": "smartbi_user",
-            "password": "smartbi_secure_password_2025",
+            "password": os.environ.get("SMARTBI_DB_PASSWORD", "smartbi_secure_password_2025"),
         },
     },
     "test": {
@@ -711,10 +716,11 @@ def _print_verify_rows(rows: list, tenant_ids: List[str]) -> None:
 # MAIN SEED LOGIC
 # ---------------------------------------------------------------------------
 
-def seed(env: str, end_date: date, dry_run: bool) -> None:
+def seed(env: str, end_date: date, dry_run: bool, tenant: Optional[str] = None) -> None:
     cfg = ENVS[env]
     print(f"\n{'='*60}")
-    print(f"Seeding demo raw tables — env={env}  end={end_date}  dry_run={dry_run}")
+    print(f"Seeding demo raw tables — env={env}  end={end_date}  dry_run={dry_run}"
+          f"  tenant={tenant or 'ALL'}")
     print(f"{'='*60}")
 
     # Clamp end_date to today: never generate future data
@@ -732,7 +738,11 @@ def seed(env: str, end_date: date, dry_run: bool) -> None:
     smartbi_conn = psycopg2.connect(**cfg["smartbi"])
 
     total_rows = 0
-    tenant_ids = list(DEMO_TENANT_IDS)  # order doesn't matter; process all 4
+    if tenant:
+        _assert_demo_tenant(tenant)
+        tenant_ids = [tenant]
+    else:
+        tenant_ids = list(DEMO_TENANT_IDS)  # order doesn't matter; process all 4
 
     for factory_id in sorted(tenant_ids):
         profile = TENANT_PROFILES[factory_id]
@@ -790,8 +800,14 @@ def main() -> None:
     )
     ap.add_argument("--dry-run", action="store_true",
                     help="Print what would be done without writing to DB")
+    ap.add_argument(
+        "--tenant",
+        choices=sorted(DEMO_TENANT_IDS),
+        default=None,
+        help="Restrict to a single demo tenant (default: all 4 demo tenants)",
+    )
     args = ap.parse_args()
-    seed(args.env, args.end, args.dry_run)
+    seed(args.env, args.end, args.dry_run, tenant=args.tenant)
 
 
 if __name__ == "__main__":

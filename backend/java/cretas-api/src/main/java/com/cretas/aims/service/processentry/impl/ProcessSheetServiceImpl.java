@@ -148,6 +148,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
+        normalizeConfiguredUnits(factoryId, req);
         validateCustomFields(factoryId, req);
 
         // 1.6 2B B3: workflow 批次行防呆校验 (产出类型/单位对齐 workflow 端口)。
@@ -167,6 +168,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<String> warnings = new ArrayList<>();
 
         assertFinishedGoodsSourceAllowed(factoryId, req);
+        assertExternalFeedUnitSupported(req);
 
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
@@ -1562,6 +1564,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
+                assertSourceUnit(rawMb, requestInputUnit(req), "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
             }
@@ -1615,11 +1618,114 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                assertSourceUnit(srcMb, requestInputUnit(req), "上游批次");
                 edges.add(new ResolvedEdge(srcMb, nz(ur.getFeedQuantityKg()), "SEMI_FINISHED"));
             }
         }
 
         return edges;
+    }
+
+    private void normalizeConfiguredUnits(String factoryId, ProcessSheetRowRequest req) {
+        Optional<ProductWorkProcess> configured = productWorkProcessRepo
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(
+                        factoryId, req.getProductTypeId(), req.getProcessOrder());
+        if (configured.isEmpty()) {
+            // Legacy clients only sent one `unit` field. Preserve that established single-unit
+            // contract, but do not allow a new dual-unit payload to bypass configuration.
+            if (req.getInputUnit() == null && req.getOutputUnit() == null) {
+                String legacyUnit = firstNonBlank(req.getUnit(), "kg");
+                req.setInputUnit(legacyUnit);
+                req.setOutputUnit(legacyUnit);
+                req.setUnit(legacyUnit);
+                return;
+            }
+            throw new BusinessException(400, "产品未配置该工序，不能报工")
+                    .withCode("PROCESS_SHEET_PROCESS_NOT_CONFIGURED")
+                    .withHint("请先在产品工序配置中维护本道工序和单位")
+                    .withHintTarget("工序配置");
+        }
+        ProductWorkProcess pwp = configured.get();
+        WorkProcess process = processRepo.findByFactoryIdAndId(factoryId, pwp.getWorkProcessId())
+                .orElseThrow(() -> new BusinessException(409, "工序配置不存在，不能报工")
+                        .withCode("PROCESS_SHEET_WORK_PROCESS_NOT_FOUND")
+                        .withHint("请检查产品工序配置后重试")
+                        .withHintTarget("工序配置"));
+        normalizeConfiguredUnits(req, pwp, process);
+    }
+
+    /**
+     * The client may omit legacy unit fields, but it may not override product-process
+     * and work-process configuration. This boundary runs before stock and cost writes.
+     */
+    static void normalizeConfiguredUnits(ProcessSheetRowRequest req,
+                                         ProductWorkProcess productProcess,
+                                         WorkProcess workProcess) {
+        String inputUnit = firstNonBlank(productProcess.getUnitOverride(), workProcess.getUnit(), "kg");
+        String outputUnit = firstNonBlank(workProcess.getOutputUnit(), inputUnit);
+
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setUnit(outputUnit);
+    }
+
+    private static void assertConfiguredUnit(String suppliedUnit, String configuredUnit, String side) {
+        if (suppliedUnit == null || suppliedUnit.isBlank()
+                || suppliedUnit.trim().equalsIgnoreCase(configuredUnit)) {
+            return;
+        }
+        throw new BusinessException(409, "请求" + side + "单位为“" + suppliedUnit
+                + "”，与工序配置单位“" + configuredUnit + "”不一致")
+                .withCode("PROCESS_SHEET_UNIT_MISMATCH")
+                .withHint("请刷新工序表后按配置单位录入；单位变更请在产品工序配置中维护")
+                .withSeverity("BLOCKING")
+                .withHintTarget("工序配置");
+    }
+
+    /**
+     * The existing SFI/FG services consume feedQuantityKg and only implement kg-to-count
+     * conversion. Arbitrary count-unit feeds must not be silently treated as kilograms.
+     */
+    private static void assertExternalFeedUnitSupported(ProcessSheetRowRequest req) {
+        if (req.getUpstreamSources() == null || req.getUpstreamSources().isEmpty()) {
+            return;
+        }
+        boolean usesExternalStock = req.getUpstreamSources().stream()
+                .anyMatch(ref -> ref.isSemiFinished() || ref.isFinishedGoods());
+        if (usesExternalStock && !"kg".equalsIgnoreCase(requestInputUnit(req))) {
+            throw new BusinessException(409, "常驻半成品/成品库存投料当前只支持 kg 投入单位")
+                    .withCode("PROCESS_SHEET_EXTERNAL_FEED_UNIT_UNSUPPORTED")
+                    .withHint("请先通过配置为 kg 投入单位的换算工序转换后，再使用半成品或成品库存投料")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("inputUnit");
+        }
+    }
+
+    /**
+     * 逐工序表格的 RAW / 同计划 WIP 扣减没有通用跨单位换算表；若来源和本道投入单位不同，
+     * 继续以数量相乘会把“只/袋”当 kg，直接污染库存与成本。因此这里明确阻断。
+     * SFI/FG 来源沿用各自既有的严格换算/校验路径，不走这个 MaterialBatch 分支。
+     */
+    private void assertSourceUnit(MaterialBatch source, String expectedUnit, String sourceLabel) {
+        String actualUnit = source == null ? null : source.getQuantityUnit();
+        if (actualUnit == null || actualUnit.isBlank() || expectedUnit == null || expectedUnit.isBlank()
+                || actualUnit.trim().equalsIgnoreCase(expectedUnit.trim())) {
+            return;
+        }
+        throw new BusinessException(409, sourceLabel + "单位为“" + actualUnit + "”，不能按本道投入单位“"
+                + expectedUnit + "”扣减")
+                .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
+                .withHint("请将工序投入单位设为来源批次单位，或先完成明确的单位换算")
+                .withSeverity("BLOCKING")
+                .withHintTarget("inputUnit");
+    }
+
+    private static String requestInputUnit(ProcessSheetRowRequest req) {
+        return firstNonBlank(req.getInputUnit(), req.getUnit(), "kg");
     }
 
     private void ensureRawMaterialWarehouse(String factoryId, String planId, MaterialBatch rawMb) {
@@ -1966,7 +2072,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setInputQuantity(req.getInputQuantity());
         st.setOutputQuantity(req.getOutputQuantity());
         st.setProductWeight(req.getProductWeight());
-        st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
+        String outputUnit = firstNonBlank(req.getOutputUnit(), req.getUnit(), "kg");
+        st.setInputUnit(firstNonBlank(req.getInputUnit(), req.getUnit(), outputUnit));
+        st.setOutputUnit(outputUnit);
+        st.setUnit(outputUnit);
         st.setPotCount(req.getPotCount());
         st.setPotRawKgs(req.getPotRawKgs());
         // 多时段工时 (materializeBatch 优先用此求和)
@@ -2096,6 +2205,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         r.setMaterialized(materialized);
         r.setWarnings(warnings);
         return r;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private static BigDecimal nz(BigDecimal v) {

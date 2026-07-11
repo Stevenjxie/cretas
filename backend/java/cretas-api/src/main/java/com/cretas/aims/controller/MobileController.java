@@ -86,7 +86,7 @@ public class MobileController {
     }
 
     @PostMapping("/auth/demo-login")
-    @Operation(summary = "演示账号免密登录", description = "路演扫码演示用. tenant=rest|factory, 登录配置死的 demo 账号, 写操作被只读锁拦截.")
+    @Operation(summary = "演示账号免密登录", description = "路演扫码演示用. tenant=rest|factory|logistics, 登录配置死的 demo 账号. rest/factory 写操作被只读锁拦截; logistics 在自己租户内可读写排线计划 (JWT factoryId 锁定, 无法跨工厂).")
     @RateLimit(count = 20, period = 60, limitType = LimitType.IP, message = "演示登录请求过于频繁，请稍后再试")
     public ApiResponse<MobileDTO.LoginResponse> demoLogin(
             @RequestParam String tenant,
