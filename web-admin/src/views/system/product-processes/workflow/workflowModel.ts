@@ -13,8 +13,10 @@ import type {
 } from './types';
 
 const GRID_SIZE = 16;
-const LAYER_GAP = 240;
-const BRANCH_GAP = 160;
+// 自动布局间距: 层间(横向)须清得过最宽的工序 Cell(~390px), 同层(纵向)须清得过 Cell 高度,
+// 否则多产出/多分支时 Cell 会叠成一坨(挤在一起)。放宽后各 Cell 有呼吸空间。
+const LAYER_GAP = 440;
+const BRANCH_GAP = 320;
 const CANVAS_ORIGIN = 32;
 
 /**

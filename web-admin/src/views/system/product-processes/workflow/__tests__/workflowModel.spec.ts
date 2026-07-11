@@ -143,12 +143,13 @@ describe('product process workflow model', () => {
     const laidOut = autoLayoutWorkflow(definition);
     const positions = Object.fromEntries(laidOut.nodes.map((node) => [node.id, node.position]));
 
+    // LAYER_GAP=440 / BRANCH_GAP=320 (放宽间距避免多产出/分支 Cell 挤在一起), 结果按 16px 网格吸附
     expect(positions.raw).toEqual({ x: 32, y: 32 });
-    expect(positions.split.x).toBe(272);
-    expect(positions.cookA.x).toBe(512);
-    expect(positions.cookB.x).toBe(512);
-    expect(Math.abs(positions.cookA.y - positions.cookB.y)).toBeGreaterThanOrEqual(160);
-    expect(positions.finished.x).toBe(752);
+    expect(positions.split.x).toBe(480);
+    expect(positions.cookA.x).toBe(912);
+    expect(positions.cookB.x).toBe(912);
+    expect(Math.abs(positions.cookA.y - positions.cookB.y)).toBeGreaterThanOrEqual(320);
+    expect(positions.finished.x).toBe(1360);
   });
 
   it('applies a valid workflow patch immutably and reports a concise summary', () => {

@@ -1344,7 +1344,8 @@ function toggleAI(): void {
 </script>
 
 <style scoped>
-.workflow-editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 720px; }
+/* 画布尽量占满视口高度(放大画布), 兼容列表落到页面最下方 */
+.workflow-editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: calc(100vh - 200px); }
 .workflow-editor.ai-collapsed { grid-template-columns: minmax(0, 1fr) 44px; }
 .workflow-main { min-width: 0; display: flex; flex-direction: column; }
 .workflow-toolbar {
@@ -1357,10 +1358,10 @@ function toggleAI(): void {
 .saved-status { color: #67c23a; font-size: 12px; }
 .stage-note { color: #7a8599; font-size: 11px; }
 .canvas-shell {
-  position: relative; flex: 1; min-height: 660px; overflow: hidden;
+  position: relative; flex: 1; min-height: calc(100vh - 256px); overflow: hidden;
   border: 1px solid #dce8f3; border-top: none; border-radius: 0 0 10px 10px; background: #fbfdff;
 }
-.workflow-canvas { width: 100%; height: 100%; min-height: 660px; }
+.workflow-canvas { width: 100%; height: 100%; min-height: calc(100vh - 256px); }
 .empty-canvas-action { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .empty-canvas-action :deep(.el-button) { pointer-events: auto; }
 .ai-sidebar {
