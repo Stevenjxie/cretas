@@ -17,6 +17,7 @@
 - Runtime compilation reuses `WorkProcessTask.Status`; no `WAITING_INPUT`, `READY`, or parallel reporting state machine is introduced.
 - The runtime snapshot contains execution fields only and excludes canvas position and viewport.
 - `reportingRequired=false` process nodes remain in snapshot topology but do not create `WorkProcessTask` rows.
+- A production plan with `skipProcessReporting=true` remains the highest-priority override and keeps the existing two sentinel tasks; product Workflow activation is not materialized for that batch.
 - The same `workProcessId` may appear in multiple graph nodes; identity and uniqueness use `workflowNodeId`.
 - All factory, product, Workflow, batch, task, and port references are factory-scoped.
 - AI remains configuration-only and cannot publish, activate, spawn, report, or access runtime instances.
@@ -75,7 +76,8 @@ void migrationDefinesRuntimeOwnershipAndLegacyFallbackContracts() throws Excepti
             + "V20261027_55__product_process_workflow_runtime.sql"));
     assertTrue(sql.contains("UNIQUE (factory_id, product_type_id)"));
     assertTrue(sql.contains("UNIQUE (factory_id, production_batch_id)"));
-    assertTrue(sql.contains("UNIQUE (workflow_instance_id, workflow_node_id)"));
+    assertTrue(sql.contains("CREATE UNIQUE INDEX uk_workflow_task_node"));
+    assertTrue(sql.contains("ON work_process_tasks(workflow_instance_id, workflow_node_id)"));
     assertTrue(sql.contains("UNIQUE (task_id, workflow_port_id)"));
     assertTrue(sql.contains("ALTER COLUMN product_work_process_id DROP NOT NULL"));
 }
@@ -134,6 +136,27 @@ ALTER TABLE work_process_tasks
 CREATE UNIQUE INDEX uk_workflow_task_node
   ON work_process_tasks(workflow_instance_id, workflow_node_id)
   WHERE workflow_instance_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE TABLE workflow_task_ports (
+  id BIGSERIAL PRIMARY KEY,
+  factory_id VARCHAR(64) NOT NULL,
+  workflow_instance_id BIGINT NOT NULL REFERENCES production_workflow_instances(id),
+  task_id BIGINT NOT NULL REFERENCES work_process_tasks(id),
+  workflow_port_id VARCHAR(128) NOT NULL,
+  direction VARCHAR(8) NOT NULL CHECK (direction IN ('INPUT','OUTPUT')),
+  ordinal INTEGER NOT NULL,
+  material_node_id VARCHAR(128) NOT NULL,
+  material_kind VARCHAR(32) NOT NULL,
+  sku_id VARCHAR(128) NOT NULL,
+  unit VARCHAR(32) NOT NULL,
+  required BOOLEAN NOT NULL DEFAULT TRUE,
+  conversion_mode VARCHAR(32),
+  conversion_expression VARCHAR(500),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at TIMESTAMP,
+  UNIQUE (task_id, workflow_port_id)
+);
 ```
 
 `WorkflowTaskPort` must store `taskId`, `workflowInstanceId`, `workflowPortId`, `direction`, `ordinal`, `materialNodeId`, `materialKind`, `skuId`, `unit`, `required`, `conversionMode`, and `conversionExpression` with unique `(taskId, workflowPortId)`.
