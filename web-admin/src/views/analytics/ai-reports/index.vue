@@ -193,7 +193,14 @@ function getSeverityType(severity: string) {
       </div>
     </el-card>
 
-    <el-row :gutter="16">
+    <!--
+      Bug 2 fix (web-restaurant-coherence): 报告列表 + 异常检测 both surface
+      manufacturing-flavored content ("生产数据完全缺失" / "零产出预警") which is
+      nonsensical for a restaurant tenant — only the 餐饮运营 AI 快捷分析 shortcut
+      card above is appropriate for them. Hide this factory-oriented row entirely
+      for RESTAURANT tenants (same isRestaurant gate used above).
+    -->
+    <el-row v-if="!isRestaurant" :gutter="16">
       <!-- 报告列表 -->
       <el-col :span="16">
         <el-card class="reports-card">
