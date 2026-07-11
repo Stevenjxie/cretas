@@ -10,4 +10,7 @@ import java.util.List;
 public interface LogisticsVehicleDriverRepository extends JpaRepository<LogisticsVehicleDriver, String> {
 
     List<LogisticsVehicleDriver> findByVehicleIdAndDeletedAtIsNull(String vehicleId);
+
+    /** Phase 2: GET /vehicles 列表批量拉取所有绑定 (避免逐车 N+1 查询)。 */
+    List<LogisticsVehicleDriver> findByFactoryIdAndDeletedAtIsNull(String factoryId);
 }

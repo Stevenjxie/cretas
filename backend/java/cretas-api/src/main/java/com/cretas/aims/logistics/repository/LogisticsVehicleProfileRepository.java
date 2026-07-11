@@ -13,4 +13,7 @@ public interface LogisticsVehicleProfileRepository extends JpaRepository<Logisti
     List<LogisticsVehicleProfile> findByFactoryIdAndActiveTrueAndDeletedAtIsNull(String factoryId);
 
     Optional<LogisticsVehicleProfile> findByVehicleIdAndDeletedAtIsNull(String vehicleId);
+
+    /** Phase 2: GET /vehicles 列表批量拉取 (避免逐车 N+1 查询)。 */
+    List<LogisticsVehicleProfile> findByFactoryId(String factoryId);
 }
