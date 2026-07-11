@@ -322,7 +322,8 @@ let createSkuGeneration = 0;
 let loadGeneration = 0;
 let saveGeneration = 0;
 let publishGeneration = 0;
-let activationGeneration = 0;
+let activationLoadGeneration = 0;
+let activationMutationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 const canEdit = computed(() => (
@@ -521,7 +522,9 @@ function definitionMatchesIdentity(
 }
 
 async function loadActivation(): Promise<void> {
-  const generation = ++activationGeneration;
+  const generation = ++activationLoadGeneration;
+  ++activationMutationGeneration;
+  activationChanging.value = false;
   const identity: WorkflowIdentity = {
     factoryId: props.factoryId,
     productTypeId: props.productTypeId,
@@ -533,13 +536,13 @@ async function loadActivation(): Promise<void> {
       identity.factoryId,
       identity.productTypeId,
     );
-    if (generation !== activationGeneration || !propsMatchIdentity(identity)) return;
+    if (generation !== activationLoadGeneration || !propsMatchIdentity(identity)) return;
     const candidate = response.success ? response.data : null;
     activation.value = candidate && activationMatchesIdentity(candidate, identity)
       ? candidate
       : null;
   } catch (error) {
-    if (generation !== activationGeneration || !propsMatchIdentity(identity)) return;
+    if (generation !== activationLoadGeneration || !propsMatchIdentity(identity)) return;
     console.error('[ProductProcessWorkflow] activation loading failed', error);
     activation.value = null;
   }
@@ -1131,21 +1134,21 @@ async function activateWorkflow(): Promise<void> {
     return;
   }
   if (!isLoadedIdentityCurrent(identity)) return;
-  const generation = ++activationGeneration;
+  const generation = ++activationMutationGeneration;
   activationChanging.value = true;
   try {
     const response = await activateProductProcessWorkflow(identity.factoryId, workflowId);
-    if (generation !== activationGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (generation !== activationMutationGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (!response.success || !response.data
       || !activationMatchesIdentity(response.data, identity)) return;
     activation.value = response.data;
     ElMessage.success(`Workflow v${response.data.activeDefinitionVersion} 已启用`);
   } catch (error) {
-    if (generation === activationGeneration && isLoadedIdentityCurrent(identity)) {
+    if (generation === activationMutationGeneration && isLoadedIdentityCurrent(identity)) {
       console.error('[ProductProcessWorkflow] activation failed', error);
     }
   } finally {
-    if (generation === activationGeneration) activationChanging.value = false;
+    if (generation === activationMutationGeneration) activationChanging.value = false;
   }
 }
 
@@ -1163,7 +1166,7 @@ async function deactivateWorkflow(): Promise<void> {
     return;
   }
   if (!isLoadedIdentityCurrent(identity)) return;
-  const generation = ++activationGeneration;
+  const generation = ++activationMutationGeneration;
   activationChanging.value = true;
   try {
     const response = await deactivateProductProcessWorkflow(
@@ -1171,17 +1174,17 @@ async function deactivateWorkflow(): Promise<void> {
       identity.productTypeId,
       current.lockVersion,
     );
-    if (generation !== activationGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (generation !== activationMutationGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (!response.success || !response.data
       || !activationMatchesIdentity(response.data, identity)) return;
     activation.value = response.data;
     ElMessage.success('Workflow 已停用');
   } catch (error) {
-    if (generation === activationGeneration && isLoadedIdentityCurrent(identity)) {
+    if (generation === activationMutationGeneration && isLoadedIdentityCurrent(identity)) {
       console.error('[ProductProcessWorkflow] deactivation failed', error);
     }
   } finally {
-    if (generation === activationGeneration) activationChanging.value = false;
+    if (generation === activationMutationGeneration) activationChanging.value = false;
   }
 }
 

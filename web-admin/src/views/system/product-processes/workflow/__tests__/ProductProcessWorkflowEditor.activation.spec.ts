@@ -127,6 +127,35 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.get('[data-testid="activation-status"]').text()).toContain('已启用 v4');
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
   });
+
+  it('clears mutation loading when switching products before the old activation finishes', async () => {
+    const staleActivation = deferred<{
+      success: true;
+      data: ProductProcessWorkflowActivation;
+    }>();
+    apiMocks.getProductProcessWorkflow.mockImplementation(
+      (_factoryId: string, productTypeId: string) => Promise.resolve({
+        success: true,
+        data: definition(productTypeId, 'PUBLISHED', productTypeId === 'PT-A' ? 3 : 4,
+          productTypeId === 'PT-A' ? 43 : 44),
+      }),
+    );
+    apiMocks.activateProductProcessWorkflow.mockReturnValueOnce(staleActivation.promise);
+    const wrapper = mountEditor();
+    await flushPromises();
+
+    await wrapper.get('[data-testid="activate-workflow"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="activate-workflow"]').attributes('loading')).toBe('true');
+
+    await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
+    await flushPromises();
+    staleActivation.resolve({ success: true, data: activation('PT-A', 43, 3) });
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="activate-workflow"]').text()).toContain('启用版本 v4');
+    expect(wrapper.get('[data-testid="activate-workflow"]').attributes('loading')).toBe('false');
+  });
 });
 
 function mountEditor() {
