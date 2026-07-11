@@ -21,7 +21,7 @@ public class LogisticsOrderImportRow {
     @ExcelProperty("业务日期")
     private String businessDate;
 
-    @ExcelProperty("门店编码")
+    @ExcelProperty("订单号")
     private String storeCode;
 
     @ExcelProperty("门店名称")
