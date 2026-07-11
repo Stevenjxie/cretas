@@ -3,7 +3,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import mapImage from '@/assets/logistics/suzhou-logistics-map.png';
 import { DEPOT_POINT } from '../mockData';
 import type { MapPoint, RouteTrip, StoreOrder } from '../types';
-import { getAmapKey, loadAmap, type AMapInstance, type AMapNamespace, type AMapOverlay } from '../amapLoader';
+import {
+  getAmapKey,
+  loadAmap,
+  type AMapDriving,
+  type AMapInstance,
+  type AMapLngLat,
+  type AMapNamespace,
+  type AMapOverlay,
+} from '../amapLoader';
 
 const props = defineProps<{
   stores: StoreOrder[];
@@ -29,7 +37,10 @@ const useAmap = ref(Boolean(getAmapKey()));
 const mapEl = ref<HTMLDivElement>();
 let amap: AMapNamespace | null = null;
 let map: AMapInstance | null = null;
+let driving: AMapDriving | null = null;
 let overlays: AMapOverlay[] = [];
+// 每次重绘自增；异步驾车路径回调用它判断自己是否已过期（避免旧回调把线画到新一轮上）。
+let renderToken = 0;
 
 function compactStoreName(name: string): string {
   return name.replace('配送门店 ', '门店 ');
@@ -57,40 +68,16 @@ function clearOverlays(): void {
 
 function renderOverlays(): void {
   if (!map || !amap) return;
-  clearOverlays();
-
   const AMapRef = amap;
+  clearOverlays();
+  const token = ++renderToken; // 本轮标识；异步驾车回调据此判断是否过期
+
   const seqByStore = new Map<string, number>();
   const selectedTrip = props.trips.find((t) => t.id === props.selectedTripId);
   if (selectedTrip) {
     selectedTrip.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1));
   }
   const storeById = new Map(props.stores.map((s) => [s.id, s]));
-
-  // 路线 polyline：配送中心 → 各门店（按 storeIds 顺序）
-  props.trips.forEach((trip, index) => {
-    const path: [number, number][] = [DEPOT_LNGLAT];
-    trip.storeIds.forEach((sid) => {
-      const s = storeById.get(sid);
-      if (s && Number.isFinite(s.lng) && Number.isFinite(s.lat)) {
-        path.push([s.lng, s.lat]);
-      }
-    });
-    if (path.length < 2) return;
-    const selected = trip.id === props.selectedTripId;
-    const line = new AMapRef.Polyline({
-      path,
-      strokeColor: routeColors[index % routeColors.length],
-      strokeWeight: selected ? 7 : 4,
-      strokeOpacity: selected ? 1 : 0.55,
-      lineJoin: 'round',
-      lineCap: 'round',
-      cursor: 'pointer',
-      zIndex: selected ? 90 : 50,
-    });
-    line.on('click', () => emit('select-trip', trip.id));
-    overlays.push(line);
-  });
 
   // 配送中心 marker
   const depot = new AMapRef.Marker({
@@ -116,6 +103,72 @@ function renderOverlays(): void {
 
   map.add(overlays);
   map.setFitView(overlays, false, [48, 48, 48, 48]);
+
+  // 路线：逐车次用高德驾车路径规划画「沿实际道路」的线（异步，失败诚实回落虚线直线）
+  props.trips.forEach((trip, index) => {
+    const storePts: [number, number][] = [];
+    trip.storeIds.forEach((sid) => {
+      const s = storeById.get(sid);
+      if (s && Number.isFinite(s.lng) && Number.isFinite(s.lat)) {
+        storePts.push([s.lng, s.lat]);
+      }
+    });
+    if (!storePts.length) return;
+    drawTripRoute(trip.id, index, storePts, token);
+  });
+}
+
+/** 单条车次路线：优先高德驾车实际道路路径；未就绪/失败 → 虚线直线兜底（诚实标示非实际道路）。 */
+function drawTripRoute(tripId: string, index: number, storePts: [number, number][], token: number): void {
+  if (!map || !amap) return;
+  const AMapRef = amap;
+  const selected = tripId === props.selectedTripId;
+  const color = routeColors[index % routeColors.length];
+
+  const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
+    if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
+    const line = new AMapRef.Polyline({
+      path,
+      strokeColor: color,
+      strokeWeight: selected ? 7 : 4,
+      strokeOpacity: selected ? 1 : 0.6,
+      strokeStyle: dashed ? 'dashed' : 'solid',
+      lineJoin: 'round',
+      lineCap: 'round',
+      cursor: 'pointer',
+      zIndex: selected ? 90 : 50,
+    });
+    line.on('click', () => emit('select-trip', tripId));
+    overlays.push(line);
+    map.add([line]);
+  };
+
+  const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
+  if (!driving) {
+    addLine(straight, true);
+    return;
+  }
+
+  const origin = new AMapRef.LngLat(DEPOT_LNGLAT[0], DEPOT_LNGLAT[1]);
+  const last = storePts[storePts.length - 1];
+  const dest = new AMapRef.LngLat(last[0], last[1]);
+  const waypoints = storePts.slice(0, -1).map(([lng, lat]) => new AMapRef.LngLat(lng, lat));
+
+  driving.search(origin, dest, { waypoints }, (status, result) => {
+    if (token !== renderToken) return; // 过期回调丢弃
+    const steps = result?.routes?.[0]?.steps;
+    if (status === 'complete' && steps && steps.length) {
+      const path: AMapLngLat[] = [];
+      steps.forEach((st) => {
+        if (st.path) path.push(...st.path);
+      });
+      if (path.length >= 2) {
+        addLine(path, false);
+        return;
+      }
+    }
+    addLine(straight, true); // 驾车规划失败 → 诚实回落虚线直线
+  });
 }
 
 onMounted(async () => {
@@ -128,6 +181,14 @@ onMounted(async () => {
       viewMode: '2D',
       lang: 'zh_cn',
     });
+    // 驾车路径规划器（不传 map → 不自动渲染它自己的起终点/路线 UI，我们手绘彩色 polyline）
+    try {
+      driving = new amap.Driving({
+        policy: (amap.DrivingPolicy && amap.DrivingPolicy.LEAST_DISTANCE) || 0,
+      });
+    } catch {
+      driving = null; // 插件不可用 → drawTripRoute 走虚线直线兜底
+    }
     renderOverlays();
   } catch (e) {
     // 无 key / 域名未白名单 / 网络失败 → 诚实回落 SVG 示意图，不阻塞工作台

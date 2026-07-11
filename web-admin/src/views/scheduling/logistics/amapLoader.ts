@@ -16,7 +16,29 @@ export type AMapNamespace = {
   Marker: new (opts: Record<string, unknown>) => AMapOverlay;
   Polyline: new (opts: Record<string, unknown>) => AMapOverlay;
   Pixel: new (x: number, y: number) => unknown;
+  LngLat: new (lng: number, lat: number) => AMapLngLat;
+  Driving: new (opts: Record<string, unknown>) => AMapDriving;
+  DrivingPolicy?: Record<string, number>;
 };
+
+export interface AMapLngLat {
+  getLng(): number;
+  getLat(): number;
+}
+
+/** 驾车路径规划：search(起点, 终点, {waypoints}, cb) → 沿实际道路的 steps[].path。 */
+export interface AMapDriving {
+  search(
+    origin: AMapLngLat,
+    destination: AMapLngLat,
+    opts: { waypoints?: AMapLngLat[] },
+    callback: (status: string, result: AMapDrivingResult) => void,
+  ): void;
+}
+
+export interface AMapDrivingResult {
+  routes?: Array<{ steps?: Array<{ path?: AMapLngLat[] }> }>;
+}
 
 export interface AMapOverlay {
   on(event: string, handler: () => void): void;
@@ -55,7 +77,8 @@ export function loadAmap(): Promise<AMapNamespace> {
 
   amapPromise = new Promise<AMapNamespace>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`;
+    // plugin=AMap.Driving —— 驾车路径规划，画沿实际道路的导航路线（非直线连点）
+    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}&plugin=AMap.Driving`;
     script.async = true;
     script.onerror = () => {
       amapPromise = null; // 允许下次重试
