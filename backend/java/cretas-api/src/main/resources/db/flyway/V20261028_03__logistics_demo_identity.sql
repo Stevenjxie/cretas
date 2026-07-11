@@ -16,6 +16,14 @@
 -- 注意: demoLogin() 走免密登录路径 (MobileAuthServiceImpl.demoLogin), 不校验密码 —
 -- 此 password_hash 仅用于满足 NOT NULL 约束 + 防御性支持该账号走 unifiedLogin 手工登录。
 
+-- prod 的 factories 表有一个历史手工创建的 CHECK 约束 chk_factory_type (未进任何提交迁移,
+-- 所以 CI fresh DB 上不存在该约束 → CI 通过但 prod 部署报 "violates check constraint chk_factory_type")。
+-- 按 feedback_enum_added_db_check_not_widened: additive 放宽, 保留全部既有值 + 新增 LOGISTICS。
+-- DROP IF EXISTS 幂等 (CI 上无此约束则 no-op, 随后 ADD 建立含 LOGISTICS 的约束)。
+ALTER TABLE factories DROP CONSTRAINT IF EXISTS chk_factory_type;
+ALTER TABLE factories ADD CONSTRAINT chk_factory_type
+    CHECK (type IN ('FACTORY','RESTAURANT','HEADQUARTERS','BRANCH','CENTRAL_KITCHEN','LOGISTICS'));
+
 INSERT INTO factories (
     id,
     name,
