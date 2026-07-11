@@ -127,3 +127,41 @@ def test_non_demo_token_does_not_enter_demo_guard():
 
     assert status == 200
     assert app.reached is True
+
+
+def test_demo_token_allows_revenue_report_prepare():
+    # read-analysis POST whose tenant id is in the MIDDLE of the path — matched
+    # by DEMO_WRITE_ALLOW_SUFFIXES, not the startswith prefix list.
+    status, _body, app = _run(
+        "/api/smartbi/DEMO_REST/revenue-report/prepare",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert status == 200
+    assert app.reached is True
+
+
+def test_demo_token_allows_revenue_report_generate():
+    status, _body, app = _run(
+        "/api/smartbi/DEMO_REST/revenue-report/generate",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert status == 200
+    assert app.reached is True
+
+
+def test_demo_token_still_blocks_revenue_report_upload():
+    # /upload is a real ingestion write — must stay blocked even though it shares
+    # the /revenue-report/ path segment.
+    status, body, app = _run(
+        "/api/smartbi/DEMO_REST/revenue-report/upload",
+        method="POST",
+        factory_id="DEMO_REST",
+    )
+
+    assert app.reached is False
+    assert status == 403
+    assert body["code"] == "DEMO_READ_ONLY"

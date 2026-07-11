@@ -50,7 +50,7 @@ from smartbi.gold import (
     trend_bundle,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
-from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id
+from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,22 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
             status_code=403,
             detail=f"factory_id query param {fid!r} doesn't match JWT tenant {tenant!r}",
         )
-    return DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
+    resolved = DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
+    # 🔒 RLS chokepoint fix (2026-07-11): the alias remap rewrites the query's
+    # WHERE factory_id = resolved, but the RLS GUC (app.factory_id) is applied by
+    # the pool setup callback from the ContextVar, which still held the un-remapped
+    # JWT tenant (DEMO_REST). RLS policy `factory_id = current_setting('app.factory_id')`
+    # then filtered out every resolved-tenant row → zero results on kpi-summary /
+    # finance-summary / trend-bundle / daily-trend / data-range / review-*.
+    # store-kpi-dashboard escaped only because compute_store_kpi_dashboard re-set
+    # the ContextVar itself. Re-point the RLS context to the resolved tenant HERE,
+    # at the single chokepoint, so every downstream pool.acquire() sees the matching
+    # GUC. Safe: the JWT-match guard above already ran; `resolved` is either the same
+    # JWT tenant (non-demo → no-op) or the whitelisted DEMO_REST→RES_3101_009 demo
+    # elevation. Per-task ContextVar; middleware resets on request unwind → no leak.
+    if resolved != tenant:
+        set_factory_id(resolved)
+    return resolved
 
 
 def _resolve_tiered_tenant(factory_id: Optional[str]) -> str:
