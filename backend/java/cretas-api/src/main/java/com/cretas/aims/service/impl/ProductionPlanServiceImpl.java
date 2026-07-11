@@ -4071,20 +4071,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   字段, 也无 spawn 后分设头尾责任人的代码。"web/RN 可 updatePlan 分设头尾责任人"不成立 (已删除该 claim)。
         //   头尾分设是后续 (P2): 需 plan 加两字段 + web 头尾责任人选择 UI; 一人兼对六扇门首期够用。
         //   任务级粒度: 操作员可在 WorkProcessTask.start 时自分配 / 主管经 WorkProcessTask.updatePlan 改单个任务的 assignedTo。
-        // fail-soft: spawn 抛异常时不阻塞批次创建.
-        if (workProcessTaskService != null) {
-            try {
-                Long responsibleId = plan.getAssignedSupervisorId();
-                List<WorkProcessTaskDTO> spawnedTasks =
-                        workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId(),
-                                plan.getSkipProcessReporting(), responsibleId, responsibleId);
-                mirrorWorkProcessTasksForRn(factoryId, saved, plan, spawnedTasks);
-                log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
-                        saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
-            } catch (Exception e) {
-                log.warn("转批次 spawn 报工任务失败 (fail-soft, 不阻塞批次创建): batchId={}, err={}", saved.getId(), e.getMessage());
-            }
+        // Workflow selection is pinned at batch insert. Spawn must remain in this transaction and
+        // fail closed so a partially created batch can never retry under a newer activation.
+        if (workProcessTaskService == null) {
+            throw new BusinessException(500, "工序任务服务未初始化，批次创建已回滚")
+                    .withCode("WORK_PROCESS_TASK_SERVICE_UNAVAILABLE")
+                    .withHint("请检查后端服务配置后重试创建批次");
         }
+        Long responsibleId = plan.getAssignedSupervisorId();
+        List<WorkProcessTaskDTO> spawnedTasks =
+                workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId(),
+                        plan.getSkipProcessReporting(), responsibleId, responsibleId);
+        mirrorWorkProcessTasksForRn(factoryId, saved, plan, spawnedTasks);
+        log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
+                saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
 
         // 更新计划状态为 IN_PROGRESS
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);

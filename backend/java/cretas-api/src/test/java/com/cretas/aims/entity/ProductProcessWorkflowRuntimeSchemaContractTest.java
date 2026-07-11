@@ -2,6 +2,8 @@ package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import jakarta.persistence.Column;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
@@ -128,9 +130,50 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
                 "status must remain mutable as a lifecycle field");
     }
 
+    @Test
+    void v56PinsEveryBatchInsertToAnExactWorkflowOrExplicitLegacyDecision() throws Exception {
+        String sql = normalizedMigration(
+                "V20261027_56__pin_batch_workflow_selection.sql");
+
+        assertContains(sql, "workflow_selection_mode VARCHAR(16) NOT NULL DEFAULT 'LEGACY'",
+                "existing batches must backfill to an explicit legacy decision");
+        assertContains(sql, "CONSTRAINT ck_production_batch_workflow_selection CHECK",
+                "workflow mode must require both selected workflow fields");
+        assertContains(sql, "CONSTRAINT fk_production_batch_selected_workflow FOREIGN KEY",
+                "the batch pin must reference an owned exact workflow version");
+        assertContains(sql, "BEFORE INSERT ON production_batches",
+                "all production-batch creation paths must pass through one atomic pin");
+        assertContains(sql, "FOR SHARE",
+                "batch insertion must serialize with concurrent activation changes");
+        assertContains(sql, "NEW.workflow_selection_mode := 'WORKFLOW'",
+                "enabled activation must pin workflow mode");
+        assertContains(sql, "NEW.workflow_selection_mode := 'LEGACY'",
+                "absence of an enabled activation must pin legacy mode");
+    }
+
+    @Test
+    void batchPinColumnsAreDatabaseGeneratedReadOnlyAndFetchedAfterInsert() throws Exception {
+        for (String fieldName : List.of(
+                "workflowSelectionMode", "selectedWorkflowId", "selectedWorkflowVersion")) {
+            Field field = ProductionBatch.class.getDeclaredField(fieldName);
+            Column column = field.getAnnotation(Column.class);
+            Generated generated = field.getAnnotation(Generated.class);
+
+            assertNotNull(column, fieldName + " must declare its database column");
+            assertFalse(column.insertable(), fieldName + " must be populated only by the insert trigger");
+            assertFalse(column.updatable(), fieldName + " must remain immutable after batch creation");
+            assertNotNull(generated, fieldName + " must be fetched back after the insert trigger runs");
+            assertTrue(Arrays.asList(generated.event()).contains(EventType.INSERT),
+                    fieldName + " must be generated on insert");
+        }
+    }
+
     private String normalizedMigration() throws Exception {
-        String sql = Files.readString(Path.of("src/main/resources/db/flyway/"
-                + "V20261027_55__product_process_workflow_runtime.sql"));
+        return normalizedMigration("V20261027_55__product_process_workflow_runtime.sql");
+    }
+
+    private String normalizedMigration(String fileName) throws Exception {
+        String sql = Files.readString(Path.of("src/main/resources/db/flyway/" + fileName));
         return sql.replaceAll("\\s+", " ").trim();
     }
 

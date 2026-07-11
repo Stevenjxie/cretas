@@ -88,6 +88,7 @@ class ProductionPlanCreateBatchValidationTest {
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
+    @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     private ProductionPlanServiceImpl service;
 
@@ -99,6 +100,8 @@ class ProductionPlanCreateBatchValidationTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository, bomService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "workProcessTaskService", workProcessTaskService);
         // 产品名查询默认 stub (成功 path 才会用上)
         lenient().when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.empty());
         lenient().when(productionBatchRepository.existsByFactoryIdAndBatchNumber(any(), any()))

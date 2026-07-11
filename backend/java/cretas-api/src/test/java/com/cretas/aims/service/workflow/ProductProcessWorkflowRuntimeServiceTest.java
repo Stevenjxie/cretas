@@ -67,7 +67,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 factoryRepository,
                 batchRepository,
                 productTypeRepository,
-                activationRepository,
                 workflowRepository,
                 instanceRepository,
                 taskRepository,
@@ -136,11 +135,15 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void inactiveWorkflowReturnsEmptyWithoutWritingRuntimeRows() {
-        givenValidOwnedBatch();
+    void legacyPinnedBatchReturnsEmptyWithoutReadingWorkflowOrWritingRuntimeRows() {
+        ProductionBatch legacy = batch("F006", "PT-PIG");
+        legacy.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
+        when(factoryRepository.existsById("F006")).thenReturn(true);
+        when(batchRepository.findByIdAndFactoryId(901L, "F006"))
+                .thenReturn(Optional.of(legacy));
+        when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(com.cretas.aims.entity.ProductType.class)));
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
-                .thenReturn(Optional.empty());
-        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
                 .thenReturn(Optional.empty());
 
         Optional<List<WorkProcessTaskDTO>> result =
@@ -152,25 +155,24 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void disabledActivationReturnsEmptyWithoutReadingDefinitionOrWritingRuntimeRows() {
+    void incompleteWorkflowPinFailsClosedWithoutReadingDefinitionOrWritingRows() {
         givenValidOwnedBatch();
-        ProductProcessWorkflowActivation disabled = activation();
-        disabled.setEnabled(false);
+        ProductionBatch incomplete = batch("F006", "PT-PIG");
+        incomplete.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        when(batchRepository.findByIdAndFactoryId(901L, "F006"))
+                .thenReturn(Optional.of(incomplete));
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
-                .thenReturn(Optional.of(disabled));
 
-        Optional<List<WorkProcessTaskDTO>> result =
-                service.materializeIfActive("F006", 901L, "PT-PIG");
+        assertThrows(RuntimeException.class,
+                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
 
-        assertTrue(result.isEmpty());
         verifyNoInteractions(workflowRepository, compiler, taskRepository, portRepository);
         verify(instanceRepository, never()).save(any());
     }
 
     @Test
-    void activationRejectsNonPublishedTarget() {
+    void pinnedSelectionRejectsNonPublishedTarget() {
         givenValidOwnedBatch();
         ProductProcessWorkflow draft = workflow();
         draft.setStatus(ProductProcessWorkflow.Status.DRAFT);
@@ -184,7 +186,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void activationRejectsWrongProductTarget() {
+    void pinnedSelectionRejectsWrongProductTarget() {
         givenValidOwnedBatch();
         ProductProcessWorkflow wrongProduct = workflow();
         wrongProduct.setProductTypeId("PT-CHICKEN");
@@ -219,6 +221,49 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
+    void batchMaterializedUnderV1KeepsV1WhenActivationLaterMovesToV2() {
+        givenValidOwnedBatch();
+        ProductionWorkflowInstance v1 = ProductionWorkflowInstance.create(
+                "F006", 901L, "PT-PIG", 41L, 1,
+                "v1-nodes", "v1-edges", java.time.LocalDateTime.of(2026, 7, 11, 9, 0));
+        v1.setId(501L);
+        WorkProcessTask v1Task = task(801L, 501L, "v1-trim", "TRIM", 1);
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(v1));
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
+                "F006", 501L)).thenReturn(List.of(v1Task));
+
+        List<WorkProcessTaskDTO> retry = service
+                .materializeIfActive("F006", 901L, "PT-PIG")
+                .orElseThrow();
+
+        assertEquals(List.of("v1-trim"), retry.stream()
+                .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
+        assertEquals(1, v1.getDefinitionVersion());
+        verifyNoInteractions(activationRepository, workflowRepository, compiler, portRepository);
+    }
+
+    @Test
+    void batchCreatedBeforeActivationCannotAdoptWorkflowOnFirstLaterRetry() {
+        ProductionBatch oldBatch = batch("F006", "PT-PIG");
+        oldBatch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
+        when(factoryRepository.existsById("F006")).thenReturn(true);
+        when(batchRepository.findByIdAndFactoryId(901L, "F006"))
+                .thenReturn(Optional.of(oldBatch));
+        when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(com.cretas.aims.entity.ProductType.class)));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.empty());
+
+        Optional<List<WorkProcessTaskDTO>> retry =
+                service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        assertTrue(retry.isEmpty());
+        verifyNoInteractions(workflowRepository, compiler, taskRepository, portRepository);
+        verify(instanceRepository, never()).save(any());
+    }
+
+    @Test
     void nonReportableNodeRemainsOnlyInSnapshotAndHasNoTaskOrPorts() {
         givenValidOwnedBatch();
         givenEnabledPublishedWorkflow();
@@ -236,15 +281,12 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void exactActivationMustStillPointToSamePublishedVersionAndProduct() {
+    void exactBatchPinMustStillPointToSamePublishedVersionAndProduct() {
         givenValidOwnedBatch();
-        ProductProcessWorkflowActivation activation = activation();
         ProductProcessWorkflow changed = workflow();
         changed.setDefinitionVersion(4);
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
-                .thenReturn(Optional.of(activation));
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(changed));
 
@@ -300,8 +342,12 @@ class ProductProcessWorkflowRuntimeServiceTest {
 
     private void givenValidOwnedBatch() {
         when(factoryRepository.existsById("F006")).thenReturn(true);
+        ProductionBatch batch = batch("F006", "PT-PIG");
+        batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        batch.setSelectedWorkflowId(44L);
+        batch.setSelectedWorkflowVersion(3);
         when(batchRepository.findByIdAndFactoryId(901L, "F006"))
-                .thenReturn(Optional.of(batch("F006", "PT-PIG")));
+                .thenReturn(Optional.of(batch));
         when(productTypeRepository.findByIdAndFactoryId("PT-PIG", "F006"))
                 .thenReturn(Optional.of(org.mockito.Mockito.mock(com.cretas.aims.entity.ProductType.class)));
     }
@@ -309,8 +355,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
     private void givenEnabledPublishedWorkflow() {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
-                .thenReturn(Optional.of(activation()));
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow()));
     }
@@ -318,8 +362,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
     private void givenActivationTarget(ProductProcessWorkflow workflow) {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
-                .thenReturn(Optional.of(activation()));
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow));
     }

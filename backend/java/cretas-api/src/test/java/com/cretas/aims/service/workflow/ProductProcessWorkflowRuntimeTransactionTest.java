@@ -1,7 +1,6 @@
 package com.cretas.aims.service.workflow;
 
 import com.cretas.aims.entity.ProductProcessWorkflow;
-import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
@@ -103,13 +102,9 @@ class ProductProcessWorkflowRuntimeTransactionTest {
         batch.setId(9901L);
         batch.setFactoryId("TX-F001");
         batch.setProductTypeId("TX-PIG");
-
-        ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
-        activation.setFactoryId("TX-F001");
-        activation.setProductTypeId("TX-PIG");
-        activation.setActiveWorkflowId(7701L);
-        activation.setActiveDefinitionVersion(4);
-        activation.setEnabled(true);
+        batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        batch.setSelectedWorkflowId(7701L);
+        batch.setSelectedWorkflowVersion(4);
 
         ProductProcessWorkflow workflow = new ProductProcessWorkflow();
         workflow.setId(7701L);
@@ -127,8 +122,6 @@ class ProductProcessWorkflowRuntimeTransactionTest {
                 .thenReturn(Optional.of(batch));
         when(productTypeRepository.findByIdAndFactoryId("TX-PIG", "TX-F001"))
                 .thenReturn(Optional.of(mock(ProductType.class)));
-        when(activationRepository.findByFactoryIdAndProductTypeId("TX-F001", "TX-PIG"))
-                .thenReturn(Optional.of(activation));
         when(workflowRepository.findByIdAndFactoryId(7701L, "TX-F001"))
                 .thenReturn(Optional.of(workflow));
     }

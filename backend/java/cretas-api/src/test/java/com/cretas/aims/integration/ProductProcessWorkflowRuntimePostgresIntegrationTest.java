@@ -163,6 +163,9 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource(
                             "db/flyway/V20261027_55__product_process_workflow_runtime.sql"));
+            ScriptUtils.executeSqlScript(connection,
+                    new ClassPathResource(
+                            "db/flyway/V20261027_56__pin_batch_workflow_selection.sql"));
 
             assertEquals(2, scalarInt(connection, """
                     SELECT count(*) FROM information_schema.columns
@@ -189,9 +192,52 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                     VALUES (1, 'F', 'P', 1)
                     """);
             statement.execute("""
+                    INSERT INTO product_process_workflow_activations
+                      (factory_id, product_type_id, active_workflow_id,
+                       active_definition_version, enabled)
+                    VALUES ('F', 'P', 1, 1, TRUE)
+                    """);
+            statement.execute("""
                     INSERT INTO production_batches (id, factory_id, product_type_id)
                     VALUES (10, 'F', 'P')
                     """);
+            assertEquals("WORKFLOW", scalarString(connection, """
+                    SELECT workflow_selection_mode FROM production_batches WHERE id = 10
+                    """));
+            assertEquals(1, scalarInt(connection, """
+                    SELECT selected_workflow_version FROM production_batches WHERE id = 10
+                    """));
+            statement.execute("""
+                    INSERT INTO product_process_workflows
+                      (id, factory_id, product_type_id, definition_version)
+                    VALUES (2, 'F', 'P', 2)
+                    """);
+            statement.execute("""
+                    UPDATE product_process_workflow_activations
+                       SET active_workflow_id = 2, active_definition_version = 2
+                     WHERE factory_id = 'F' AND product_type_id = 'P'
+                    """);
+            assertEquals(1, scalarInt(connection, """
+                    SELECT selected_workflow_version FROM production_batches WHERE id = 10
+                    """));
+            statement.execute("""
+                    INSERT INTO production_batches (id, factory_id, product_type_id)
+                    VALUES (11, 'F', 'P')
+                    """);
+            assertEquals(2, scalarInt(connection, """
+                    SELECT selected_workflow_version FROM production_batches WHERE id = 11
+                    """));
+            statement.execute("""
+                    UPDATE product_process_workflow_activations SET enabled = FALSE
+                     WHERE factory_id = 'F' AND product_type_id = 'P'
+                    """);
+            statement.execute("""
+                    INSERT INTO production_batches (id, factory_id, product_type_id)
+                    VALUES (12, 'F', 'P')
+                    """);
+            assertEquals("LEGACY", scalarString(connection, """
+                    SELECT workflow_selection_mode FROM production_batches WHERE id = 12
+                    """));
             statement.execute("""
                     INSERT INTO production_workflow_instances
                       (id, factory_id, production_batch_id, product_type_id, workflow_id,
@@ -219,9 +265,7 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void activationNewBatchSnapshotAndLegacyFallbackRoundTrip() throws Exception {
         Map<Long, ProductionBatch> batches = new LinkedHashMap<>();
-        for (long id = 9101L; id <= 9105L; id++) {
-            batches.put(id, batch(id));
-        }
+        batches.put(9106L, legacyBatch(9106L));
         when(factoryRepository.existsById(FACTORY)).thenReturn(true);
         when(batchRepository.findByIdAndFactoryId(any(Long.class), any(String.class)))
                 .thenAnswer(invocation -> Optional.ofNullable(batches.get(invocation.getArgument(0))));
@@ -232,6 +276,10 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         ProductProcessWorkflowActivationDTO activeV1 =
                 activationService.activate(FACTORY, v1.getId(), 7001L);
         assertEquals(1, activeV1.getActiveDefinitionVersion());
+        batches.put(9101L, workflowBatch(9101L, v1));
+        batches.put(9102L, workflowBatch(9102L, v1));
+        assertTrue(runtimeService.materializeIfActive(FACTORY, 9106L, PRODUCT).isEmpty());
+        assertEquals(null, runtimeService.getRuntime(FACTORY, 9106L));
 
         List<WorkProcessTaskDTO> batchA = taskService.spawnTasks(FACTORY, 9101L, PRODUCT);
         assertEquals(List.of("v1-cook-a", "v1-cook-b", "v1-pack"), batchA.stream()
@@ -250,6 +298,8 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         ProductProcessWorkflowActivationDTO activeV2 =
                 activationService.activate(FACTORY, v2.getId(), 7002L);
         assertEquals(2, activeV2.getActiveDefinitionVersion());
+        batches.put(9103L, workflowBatch(9103L, v2));
+        batches.put(9105L, workflowBatch(9105L, v2));
         List<WorkProcessTaskDTO> batchC = taskService.spawnTasks(FACTORY, 9103L, PRODUCT);
         assertEquals(List.of("v2-cook-a", "v2-cook-b", "v2-pack"), batchC.stream()
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
@@ -257,6 +307,7 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         ProductProcessWorkflowActivationDTO disabled = activationService.deactivate(
                 FACTORY, PRODUCT, activeV2.getLockVersion());
         assertFalse(disabled.getEnabled());
+        batches.put(9104L, legacyBatch(9104L));
         ProductWorkProcess legacy = ProductWorkProcess.builder()
                 .id(8801L)
                 .factoryId(FACTORY)
@@ -394,6 +445,20 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         batch.setId(id);
         batch.setFactoryId(FACTORY);
         batch.setProductTypeId(PRODUCT);
+        return batch;
+    }
+
+    private ProductionBatch legacyBatch(long id) {
+        ProductionBatch batch = batch(id);
+        batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.LEGACY);
+        return batch;
+    }
+
+    private ProductionBatch workflowBatch(long id, ProductProcessWorkflow workflow) {
+        ProductionBatch batch = batch(id);
+        batch.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        batch.setSelectedWorkflowId(workflow.getId());
+        batch.setSelectedWorkflowVersion(workflow.getDefinitionVersion());
         return batch;
     }
 

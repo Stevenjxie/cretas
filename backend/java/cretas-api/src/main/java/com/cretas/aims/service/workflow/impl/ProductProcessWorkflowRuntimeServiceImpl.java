@@ -4,14 +4,12 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
-import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactoryRepository;
-import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -42,7 +40,6 @@ public class ProductProcessWorkflowRuntimeServiceImpl
     private final FactoryRepository factoryRepository;
     private final ProductionBatchRepository batchRepository;
     private final ProductTypeRepository productTypeRepository;
-    private final ProductProcessWorkflowActivationRepository activationRepository;
     private final ProductProcessWorkflowRepository workflowRepository;
     private final ProductionWorkflowInstanceRepository instanceRepository;
     private final WorkProcessTaskRepository taskRepository;
@@ -54,7 +51,6 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             FactoryRepository factoryRepository,
             ProductionBatchRepository batchRepository,
             ProductTypeRepository productTypeRepository,
-            ProductProcessWorkflowActivationRepository activationRepository,
             ProductProcessWorkflowRepository workflowRepository,
             ProductionWorkflowInstanceRepository instanceRepository,
             WorkProcessTaskRepository taskRepository,
@@ -64,7 +60,6 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         this.factoryRepository = factoryRepository;
         this.batchRepository = batchRepository;
         this.productTypeRepository = productTypeRepository;
-        this.activationRepository = activationRepository;
         this.workflowRepository = workflowRepository;
         this.instanceRepository = instanceRepository;
         this.taskRepository = taskRepository;
@@ -88,23 +83,25 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             return Optional.of(loadTaskDtos(factoryId, existing.get().getId()));
         }
 
-        Optional<ProductProcessWorkflowActivation> activationOptional =
-                activationRepository.findByFactoryIdAndProductTypeId(factoryId, productTypeId);
-        if (activationOptional.isEmpty()
-                || !Boolean.TRUE.equals(activationOptional.get().getEnabled())) {
+        if (batch.getWorkflowSelectionMode()
+                != ProductionBatch.WorkflowSelectionMode.WORKFLOW) {
             return Optional.empty();
         }
-
-        ProductProcessWorkflowActivation activation = activationOptional.get();
+        if (batch.getSelectedWorkflowId() == null
+                || batch.getSelectedWorkflowVersion() == null) {
+            throw conflict(
+                    "WORKFLOW_BATCH_SELECTION_INVALID",
+                    "The batch Workflow selection is incomplete");
+        }
         ProductProcessWorkflow workflow = workflowRepository
-                .findByIdAndFactoryId(activation.getActiveWorkflowId(), factoryId)
+                .findByIdAndFactoryId(batch.getSelectedWorkflowId(), factoryId)
                 .filter(candidate -> candidate.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
                 .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
-                .filter(candidate -> activation.getActiveDefinitionVersion()
+                .filter(candidate -> batch.getSelectedWorkflowVersion()
                         .equals(candidate.getDefinitionVersion()))
                 .orElseThrow(() -> conflict(
-                        "WORKFLOW_ACTIVATION_TARGET_INVALID",
-                        "The active Workflow is no longer the exact published factory/product version"));
+                        "WORKFLOW_BATCH_SELECTION_TARGET_INVALID",
+                        "The batch no longer references the exact published factory/product version"));
 
         CompiledProductProcessWorkflow compiled = compiler.compile(toDefinition(workflow));
         ProductionWorkflowInstance instance = instanceRepository.save(

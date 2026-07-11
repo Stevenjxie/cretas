@@ -45,6 +45,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -150,6 +151,9 @@ class ProductionPlanBatchCompletionChainTest {
         when(productionBatchRepository.save(any(ProductionBatch.class))).thenAnswer(inv -> {
             ProductionBatch b = inv.getArgument(0);
             b.setId(777L);
+            b.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+            b.setSelectedWorkflowId(44L);
+            b.setSelectedWorkflowVersion(3);
             return b;
         });
 
@@ -160,6 +164,10 @@ class ProductionPlanBatchCompletionChainTest {
                 "转批次=开始生产, 批次应为 IN_PROGRESS 使逐道报工可见");
         assertNotNull(saved.getStartTime(), "转批次应设置 startTime");
         assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        assertEquals(ProductionBatch.WorkflowSelectionMode.WORKFLOW,
+                saved.getWorkflowSelectionMode());
+        assertEquals(44L, saved.getSelectedWorkflowId());
+        assertEquals(3, saved.getSelectedWorkflowVersion());
 
         // V20261017_01: createBatchFromPlan 改调 6-arg overload (skip + 头尾责任人).
         // pendingPlan 未设 skipProcessReporting → 实体默认 false; 无 supervisor → null/null.
@@ -168,8 +176,8 @@ class ProductionPlanBatchCompletionChainTest {
     }
 
     @Test
-    @DisplayName("转批次: spawnTasks 抛异常 → fail-soft, 批次仍创建成功 (无异常上抛)")
-    void createBatchFromPlan_spawnTasksThrows_failSoft_batchStillCreated() {
+    @DisplayName("createBatchFromPlan: spawn/runtime failure is fail-closed so retry cannot select a newer activation")
+    void createBatchFromPlan_spawnTasksThrows_failClosed() {
         ProductionPlan plan = pendingPlan();
         // R6 (2026-06-14): createBatchFromPlan 改用悲观锁 findByIdForUpdate 取计划。
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
@@ -188,10 +196,8 @@ class ProductionPlanBatchCompletionChainTest {
         doThrow(new com.cretas.aims.exception.BusinessException(404, "无工序模板"))
                 .when(workProcessTaskService).spawnTasks(any(), any(), any(), any(), any(), any());
 
-        ProductionBatch saved = assertDoesNotThrow(() -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID),
-                "spawnTasks 失败必须 fail-soft, 不阻塞批次创建");
-        assertNotNull(saved);
-        assertEquals(ProductionBatchStatus.IN_PROGRESS, saved.getStatus());
+        assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.createBatchFromPlan(FACTORY_ID, PLAN_ID));
         verify(workProcessTaskService, times(1))
                 .spawnTasks(FACTORY_ID, 888L, PRODUCT_TYPE_ID, Boolean.FALSE, null, null);
     }
