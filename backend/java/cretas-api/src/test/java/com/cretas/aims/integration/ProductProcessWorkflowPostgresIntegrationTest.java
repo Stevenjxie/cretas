@@ -145,7 +145,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
             statement.execute("CREATE SCHEMA " + schema);
             statement.execute("SET search_path TO " + schema);
             ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/flyway/V20261027_53__product_process_workflow.sql"));
+                    new ClassPathResource("db/flyway/V20261028_05__product_process_workflow.sql"));
 
             assertEquals(3, scalarInt(connection, """
                     SELECT count(*)
@@ -219,7 +219,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                     """);
 
             ClassPathResource migration = new ClassPathResource(
-                    "db/flyway/V20261027_54__work_process_default_output_material_kind.sql");
+                    "db/flyway/V20261028_06__work_process_default_output_material_kind.sql");
             String migrationSql = new String(
                     migration.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             statement.execute(migrationSql);
