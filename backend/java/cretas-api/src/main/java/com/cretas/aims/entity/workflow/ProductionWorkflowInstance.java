@@ -10,8 +10,10 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import lombok.AccessLevel;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
 import org.hibernate.type.SqlTypes;
@@ -38,33 +40,41 @@ public class ProductionWorkflowInstance extends BaseEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "factory_id", nullable = false, length = 64)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "factory_id", nullable = false, updatable = false, length = 64)
     private String factoryId;
 
-    @Column(name = "production_batch_id", nullable = false)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "production_batch_id", nullable = false, updatable = false)
     private Long productionBatchId;
 
-    @Column(name = "product_type_id", nullable = false, length = 64)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "product_type_id", nullable = false, updatable = false, length = 64)
     private String productTypeId;
 
-    @Column(name = "workflow_id", nullable = false)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "workflow_id", nullable = false, updatable = false)
     private Long workflowId;
 
-    @Column(name = "definition_version", nullable = false)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "definition_version", nullable = false, updatable = false)
     private Integer definitionVersion;
 
+    @Setter(AccessLevel.NONE)
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "nodes_json", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "nodes_json", nullable = false, updatable = false, columnDefinition = "jsonb")
     private String nodesJson;
 
+    @Setter(AccessLevel.NONE)
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "edges_json", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "edges_json", nullable = false, updatable = false, columnDefinition = "jsonb")
     private String edgesJson;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private Status status = Status.ACTIVE;
 
-    @Column(name = "compiled_at", nullable = false)
+    @Setter(AccessLevel.NONE)
+    @Column(name = "compiled_at", nullable = false, updatable = false)
     private LocalDateTime compiledAt = LocalDateTime.now();
 }
