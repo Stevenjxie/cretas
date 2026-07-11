@@ -155,6 +155,16 @@ async def get_health_check_report(
 
     # ── 5. diagnostics ───────────────────────────────────────────
     engine = DiagnosticsEngine(domain="restaurant", sub_sector=resolved_sub_sector)
+    # 🔒 F2: DiagnosticsEngine only auto-loads benchmarks when sub_sector is
+    # truthy. FACTORY_SUBSECTOR_MAP maps just ONE tenant (RES_3101_009), so
+    # every other tenant (incl. DEMO_REST) resolves to "" → benchmark-sourced
+    # metrics (food_cost_ratio / labor_cost_ratio / discount_rate /
+    # ingredient_waste_rate) would silently NEVER fire, and summary would still
+    # claim "均无异常" — a fabricated clean bill of health on a 反回扣 board.
+    # Force the 通用 (_common.yaml) benchmark load so generic tenants DO get
+    # alerted (same grounded 通用 thresholds already accepted for avg_ticket).
+    if not resolved_sub_sector:
+        engine._load_benchmarks()
     diagnoses = engine.run(bundle.metrics)
 
     diag_dicts = []
@@ -167,14 +177,26 @@ async def get_health_check_report(
             dd["descriptionZh"] = f"{base} ({note})" if base else note
         if d.metric_key == "channel_collection_rate" and bundle.channel_collection_estimated:
             dd["estimated"] = True
+        # 🔒 F3: avg_ticket judged against the generic 通用 median (no
+        # tenant-set target) → cap severity at warning (never critical) and mark
+        # estimated. A CRITICAL "客单价严重偏低" against a target nobody set
+        # (e.g. 快餐/奶茶 real ¥20-30 vs national ¥75 median) is a misleading
+        # accusation, not a grounded alert.
+        if d.metric_key == "avg_ticket_vs_target" and bundle.avg_ticket_target_estimated:
+            dd["estimated"] = True
+            if dd.get("severity") == "critical":
+                dd["severity"] = "warning"
+                if dd.get("status") == "严重偏低":
+                    dd["status"] = "偏低"
         # 保证 metricNameZh 不为空
         if not dd.get("metricNameZh"):
             dd["metricNameZh"] = _METRIC_NAME_ZH.get(d.metric_key, d.metric_key)
         diag_dicts.append(dd)
 
-    critical_count = sum(1 for d in diagnoses if d.severity == "critical")
-    warning_count = sum(1 for d in diagnoses if d.severity == "warning")
-    info_count = sum(1 for d in diagnoses if d.severity == "info")
+    # counts from the post-adjustment dicts so the F3 severity cap is reflected.
+    critical_count = sum(1 for dd in diag_dicts if dd.get("severity") == "critical")
+    warning_count = sum(1 for dd in diag_dicts if dd.get("severity") == "warning")
+    info_count = sum(1 for dd in diag_dicts if dd.get("severity") == "info")
 
     checked = sum(1 for v in bundle.coverage.values() if v == "ok")
     coverage_note = _build_coverage_note(bundle.coverage)

@@ -342,7 +342,9 @@ def test_fetch_waste_metrics_computes_rate():
     assert result == {"ingredient_waste_rate": 20.0}
 
 
-def test_fetch_waste_metrics_zero_denom_is_honest_empty():
+def test_fetch_waste_metrics_zero_everything_skips_on_requisition_base():
+    """No requisition cost at all (req=0, waste=0) → F1 skip (領料成本缺失),
+    never a fabricated rate."""
     builder = HealthCheckMetricsBuilder()
     conn = FakeConn()
     conn.add_fetchrow(
@@ -354,7 +356,35 @@ def test_fetch_waste_metrics_zero_denom_is_honest_empty():
     result = _run(builder._fetch_waste_metrics(
         "F001", date(2026, 4, 1), date(2026, 4, 30), smartbi_pool=pool,
     ))
-    assert result == {}
+    assert "ingredient_waste_rate" not in result
+    assert result.get("_skip_reason") == "领料成本缺失,无法计算损耗率"
+
+
+def test_fetch_waste_metrics_no_requisition_base_skips_not_100pct():
+    """🔒 F1: wastage recorded but NO requisition cost (paper requisitions /
+    phased rollout) must SKIP — not collapse to a false 100% waste rate that
+    trips a CRITICAL '损耗率爆表' theft accusation."""
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "agg_restaurant_daily_totals",
+        {"req_cost": 0.0, "waste_cost": 3000.0},  # waste but no requisition base
+    )
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_waste_metrics(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), smartbi_pool=pool,
+    ))
+    # MUST NOT be {"ingredient_waste_rate": 100.0}
+    assert "ingredient_waste_rate" not in result
+    assert result.get("_skip_reason") == "领料成本缺失,无法计算损耗率"
+
+    # and _merge_waste threads the honest reason into coverage
+    metrics: dict = {}
+    coverage: dict = {}
+    builder._merge_waste(metrics, coverage, result)
+    assert "ingredient_waste_rate" not in metrics
+    assert coverage["ingredient_waste_rate"] == "skipped:领料成本缺失,无法计算损耗率"
 
 
 def test_fetch_waste_metrics_no_pool_returns_empty():
@@ -417,7 +447,8 @@ def test_fetch_avg_ticket_vs_target_uses_factory_override():
     conn = FakeConn()
     conn.add_fetchrow(
         "fact_pos_transaction",
-        {"net_sum": 100000.0, "bill_count": 1000},
+        # F3 grain: per-capita — 5000 guests, ¥600000 → ¥120/人
+        {"net_sum": 600000.0, "guest_sum": 5000, "bill_count": 1000},
     )
     conn.add_fetchrow(
         "business_config_overrides",
@@ -428,16 +459,17 @@ def test_fetch_avg_ticket_vs_target_uses_factory_override():
     result = _run(builder._fetch_avg_ticket_vs_target(
         "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
     ))
-    # actual = 100000/1000 = 100; target = 120 (override) → 100/120 - 1 = -0.1667
-    assert result == -0.1667
+    # per-capita actual = 600000/5000 = 120; target = 120 (override, NOT estimate)
+    # → (100% match) delta 0.0, estimated False
+    assert result == (0.0, False)
 
 
-def test_fetch_avg_ticket_vs_target_falls_back_to_benchmark():
+def test_fetch_avg_ticket_vs_target_falls_back_to_benchmark_flags_estimate():
     builder = HealthCheckMetricsBuilder()
     conn = FakeConn()
     conn.add_fetchrow(
         "fact_pos_transaction",
-        {"net_sum": 90000.0, "bill_count": 1000},
+        {"net_sum": 90000.0, "guest_sum": 1000, "bill_count": 400},
     )
     conn.add_fetchrow("business_config_overrides", None)  # no override row
     pool = _make_pool(conn)
@@ -445,15 +477,37 @@ def test_fetch_avg_ticket_vs_target_falls_back_to_benchmark():
     result = _run(builder._fetch_avg_ticket_vs_target(
         "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
     ))
-    # actual = 90000/1000 = 90; target falls back to _common.yaml average_ticket
-    # median = 75.0 → 90/75 - 1 = 0.2
-    assert result == 0.2
+    # per-capita actual = 90000/1000 = 90; target falls back to _common.yaml
+    # average_ticket median = 75.0 → 90/75 - 1 = 0.2; estimated True
+    assert result == (0.2, True)
 
 
 def test_fetch_avg_ticket_vs_target_no_bills_returns_none():
     builder = HealthCheckMetricsBuilder()
     conn = FakeConn()
-    conn.add_fetchrow("fact_pos_transaction", {"net_sum": 0.0, "bill_count": 0})
+    conn.add_fetchrow(
+        "fact_pos_transaction",
+        {"net_sum": 0.0, "guest_sum": 0, "bill_count": 0},
+    )
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_avg_ticket_vs_target(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
+    ))
+    assert result is None
+
+
+def test_fetch_avg_ticket_vs_target_no_headcount_skips():
+    """🔒 F3: bills exist but customer_count is 0/NULL for the whole period →
+    cannot honestly derive a per-capita actual → skip (never compare per-bill
+    spend against a per-capita benchmark)."""
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "fact_pos_transaction",
+        {"net_sum": 40000.0, "guest_sum": 0, "bill_count": 1000},
+    )
+    conn.add_fetchrow("business_config_overrides", None)
     pool = _make_pool(conn)
 
     result = _run(builder._fetch_avg_ticket_vs_target(
@@ -499,7 +553,7 @@ def test_build_includes_avg_ticket_vs_target(monkeypatch):
         return {}
 
     async def _ticket(self, fid, start, end, sub_sector, **kw):
-        return -0.1
+        return (-0.1, False)  # (delta, target_is_estimate)
 
     monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_pos_metrics", _pos)
     monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_review_decline", _review)
@@ -512,6 +566,38 @@ def test_build_includes_avg_ticket_vs_target(monkeypatch):
     ))
     assert bundle.metrics["avg_ticket_vs_target"] == -0.1
     assert bundle.coverage["avg_ticket_vs_target"] == "ok"
+    assert bundle.avg_ticket_target_estimated is False
+    assert "avg_ticket_vs_target" not in bundle.notes
+
+
+def test_build_avg_ticket_estimated_sets_flag_and_note(monkeypatch):
+    """🔒 F3: benchmark-fallback target → bundle flags estimate + adds note."""
+    builder = HealthCheckMetricsBuilder()
+
+    async def _pos(self, fid, start, end, **kw):
+        return {}
+
+    async def _review(self, fid, start, end, **kw):
+        return None
+
+    async def _waste(self, fid, start, end, **kw):
+        return {}
+
+    async def _ticket(self, fid, start, end, sub_sector, **kw):
+        return (-0.25, True)  # benchmark fallback
+
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_pos_metrics", _pos)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_review_decline", _review)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_waste_metrics", _waste)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_avg_ticket_vs_target", _ticket)
+
+    bundle = _run(builder.build(
+        factory_id="F", period="2026-04",
+        finance_metrics={"foodCostRatio": 40.0, "revenueChangePct": 0.0},
+    ))
+    assert bundle.metrics["avg_ticket_vs_target"] == -0.25
+    assert bundle.avg_ticket_target_estimated is True
+    assert "未配置自定义客单价目标" in bundle.notes["avg_ticket_vs_target"]
 
 
 # ── structurally-unavailable metrics — always honest coverage-skip ────

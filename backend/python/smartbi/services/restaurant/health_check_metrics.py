@@ -111,6 +111,10 @@ class HealthCheckBundle:
     upload_id: Optional[int] = None
     channel_collection_estimated: bool = False  # D2 commission-estimate flag
     notes: dict[str, str] = field(default_factory=dict)  # extra per-metric annotations
+    # 🔒 F3: avg_ticket target came from the 通用 benchmark median (no
+    # tenant-configured target) → the diagnosis is against a generic national
+    # per-capita figure, not this店's own goal. Cap its severity + annotate.
+    avg_ticket_target_estimated: bool = False
 
 
 # All metric keys this builder is responsible for (used to default-skip).
@@ -248,18 +252,25 @@ class HealthCheckMetricsBuilder:
 
         # ── 5. avg_ticket_vs_target (gold fact_pos_transaction + config) ──
         try:
-            avg_ticket_delta = await self._fetch_avg_ticket_vs_target(
+            avg_ticket_result = await self._fetch_avg_ticket_vs_target(
                 factory_id, start, end, sub_sector, smartbi_pool=smartbi_pool
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("[health-check] avg_ticket query failed for %s: %s", factory_id, e)
-            avg_ticket_delta = None
+            avg_ticket_result = None
 
-        if avg_ticket_delta is not None:
+        avg_ticket_target_estimated = False
+        if avg_ticket_result is not None:
+            avg_ticket_delta, avg_ticket_target_estimated = avg_ticket_result
             metrics["avg_ticket_vs_target"] = avg_ticket_delta
             coverage["avg_ticket_vs_target"] = "ok"
+            if avg_ticket_target_estimated:
+                # 🔒 F3: no tenant-set target → judged against 通用 median.
+                notes["avg_ticket_vs_target"] = (
+                    "目标=行业通用人均中位数(未配置自定义客单价目标),仅供参考"
+                )
         else:
-            coverage["avg_ticket_vs_target"] = "skipped:无POS订单数据或客单价目标无法确定"
+            coverage["avg_ticket_vs_target"] = "skipped:无POS人头数据或客单价目标无法确定"
 
         # ── 6. structurally-unavailable metrics — honest, never fabricated ──
         # (see module docstring: BOM per-dish cost card not trusted for 中餐;
@@ -276,6 +287,7 @@ class HealthCheckMetricsBuilder:
             upload_id=upload_id,
             channel_collection_estimated=channel_estimated,
             notes=notes,
+            avg_ticket_target_estimated=avg_ticket_target_estimated,
         )
 
     # ── finance ───────────────────────────────────────────────────
@@ -693,7 +705,11 @@ class HealthCheckMetricsBuilder:
             metrics["ingredient_waste_rate"] = float(v)
             coverage["ingredient_waste_rate"] = "ok"
         else:
-            coverage["ingredient_waste_rate"] = "skipped:无领料/损耗数据(Gold层本期无记录)"
+            # honest skip reason threads through from _fetch_waste_metrics
+            # (differentiates "领料成本缺失" vs "本期无记录" — a false 100%
+            # waste rate on a 反回扣 board is a fabricated theft accusation).
+            reason = waste.get("_skip_reason") or "无领料/损耗数据(Gold层本期无记录)"
+            coverage["ingredient_waste_rate"] = f"skipped:{reason}"
 
     async def _fetch_waste_metrics(
         self,
@@ -715,7 +731,15 @@ class HealthCheckMetricsBuilder:
         closest gold-layer equivalent to "food purchased for use" (there is no
         literal purchase-cost column in gold; requisition cost is what actually
         flows into kitchen use, which is what the loss-rate formula is measuring
-        against). Returns {} (honest skip) if no rows in period.
+        against).
+
+        🔒 Grounding guard: requisition cost is the denominator base. When it's
+        absent (req_cost <= 0) but some wastage exists, the naive formula
+        collapses to waste/waste = 100%, which trips the [8,25] benchmark into a
+        CRITICAL "损耗率爆表" — a FABRICATED theft accusation for any tenant
+        rolling out in phases or still recording requisitions on paper. So when
+        req_cost <= 0 we honestly SKIP (never feed 100% to the engine).
+        Returns {} (honest skip) if no rows / no requisition base.
         """
         if smartbi_pool is None:
             return {}
@@ -736,6 +760,10 @@ class HealthCheckMetricsBuilder:
             return {}
         req_cost = float(row["req_cost"])
         waste_cost = float(row["waste_cost"])
+        # 🔒 F1: no requisition base → cannot honestly compute a loss rate.
+        # (waste-only would yield a false 100% → false CRITICAL accusation.)
+        if req_cost <= 0:
+            return {"_skip_reason": "领料成本缺失,无法计算损耗率"}
         denom = req_cost + waste_cost
         if denom <= 0:
             return {}
@@ -751,15 +779,25 @@ class HealthCheckMetricsBuilder:
         sub_sector: str,
         *,
         smartbi_pool: Any = None,
-    ) -> Optional[float]:
-        """actual_avg_ticket (gold fact_pos_transaction, bill grain) vs target
+    ) -> Optional[tuple[float, bool]]:
+        """actual per-capita ticket (gold fact_pos_transaction) vs target
         (business_config_overrides factory-level override, else sub-sector
         benchmark average_ticket median) — mirrors analyzer.py's
         _resolve_target_avg_ticket()/avg_ticket_vs_target Excel-path formula,
         sourced from gold POS instead of an uploaded finance row.
 
-        Returns 0-1 scale delta (actual/target - 1.0), or None (honest skip)
-        when there are no bills in the period or no resolvable target.
+        🔒 F3 grain fix: the benchmark average_ticket (客单价) is a PER-CAPITA
+        figure (¥/人), NOT per-bill. So actual must be SUM(net_amount) /
+        SUM(customer_count), not / bill_count — otherwise a 4-person table
+        looks like a 4× higher "客单价" and the comparison is meaningless
+        (nonsense CRITICAL/healthy). When customer_count is absent (0/NULL for
+        the whole period) we CANNOT honestly convert to per-capita → skip.
+
+        Returns (delta_0_1, target_is_benchmark_estimate) or None (honest skip)
+        when there are no bills, no head-count, or no resolvable target.
+        target_is_benchmark_estimate=True means the target fell back to the
+        generic 通用 median (no tenant-set goal) → caller caps severity +
+        annotates (see build() / API layer).
         """
         if smartbi_pool is None:
             return None
@@ -768,8 +806,9 @@ class HealthCheckMetricsBuilder:
             await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
             row = await conn.fetchrow(
                 """
-                SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2) AS net_sum,
-                       COUNT(*) AS bill_count
+                SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2)   AS net_sum,
+                       COALESCE(SUM(customer_count), 0)::bigint       AS guest_sum,
+                       COUNT(*)                                       AS bill_count
                   FROM fact_pos_transaction
                  WHERE factory_id = $1 AND date BETWEEN $2 AND $3
                 """,
@@ -779,15 +818,23 @@ class HealthCheckMetricsBuilder:
         bill_count = int(row["bill_count"]) if row else 0
         if bill_count <= 0:
             return None
-        actual_avg_ticket = float(row["net_sum"]) / bill_count
+        guest_sum = int(row["guest_sum"]) if row else 0
+        # 🔒 F3: benchmark is per-capita; without head-count we can't honestly
+        # produce a comparable per-capita actual → skip (don't compare per-bill
+        # spend against a per-capita target).
+        if guest_sum <= 0:
+            return None
+        actual_avg_ticket = float(row["net_sum"]) / guest_sum
 
         target = await self._fetch_avg_ticket_target_override(factory_id, smartbi_pool)
+        target_is_estimate = False
         if target is None:
             target = self._benchmark_avg_ticket_median(sub_sector)
+            target_is_estimate = True
         if target is None or target <= 0:
             return None
 
-        return round(actual_avg_ticket / target - 1.0, 4)
+        return round(actual_avg_ticket / target - 1.0, 4), target_is_estimate
 
     async def _fetch_avg_ticket_target_override(
         self, factory_id: str, smartbi_pool: Any
