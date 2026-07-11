@@ -1266,7 +1266,18 @@ async def period_comparison(pool, factory_id, start, end):
 
     async with pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        # 领料数据采集的全局日期范围 → 判断窗口是否被领料完整覆盖 (窗口跨越采集起点会
+        # undercount 领料成本 → 假的成本率变化 = 反回扣误告; F5-analog for 领料)。
+        req_span = await conn.fetchrow(
+            "SELECT MIN(date) AS d0, MAX(date) AS d1 FROM agg_restaurant_daily_totals "
+            "WHERE factory_id = $1", factory_id)
         agg = {k: await _agg(conn, s, e) for k, (s, e) in windows.items()}
+    req_d0 = req_span["d0"] if req_span else None
+    req_d1 = req_span["d1"] if req_span else None
+    # 领料成本率仅在窗口完全落在采集区间内才有效, 否则 None (禁 undercount 误告)。
+    for _k, (_ws, _we) in windows.items():
+        if not (req_d0 is not None and req_d1 is not None and req_d0 <= _ws and _we <= req_d1):
+            agg[_k]["cost_ratio"] = None
 
     def _growth(cur, base):
         if base is None or base == 0:

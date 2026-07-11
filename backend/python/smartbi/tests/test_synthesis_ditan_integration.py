@@ -113,15 +113,19 @@ def test_supplier_anomaly_render_and_grounding():
 
 # ---------------- period_comparison (mocked pool) ----------------
 class _FakeConn:
-    def __init__(self, wd):
+    def __init__(self, wd, req_span=(None, None)):
         self._wd = wd
+        self._req_span = req_span
 
     async def execute(self, *a, **k):
         return None
 
-    async def fetchrow(self, sql, factory_id, s, e):
+    async def fetchrow(self, sql, factory_id, s=None, e=None):
+        # req_span 全局领料日期范围查询 (只有 factory_id, 无 s/e)
+        if "MIN(date)" in sql:
+            return {"d0": self._req_span[0], "d1": self._req_span[1]}
         w = self._wd.get((s, e), {})
-        # period_comparison._agg fires TWO queries per window: agg_daily + 领料成本.
+        # period_comparison._agg fires TWO per-window queries: agg_daily + 领料成本.
         if "agg_restaurant_daily_totals" in sql:
             return {"req_cost": w.get("req_cost"), "req_n": w.get("req_n", 0)}
         return {"revenue": w.get("revenue", 0), "material_cost": w.get("material_cost"),
@@ -159,7 +163,9 @@ async def test_period_comparison_yoy_mom_math():
         (datetime.date(2025, 6, 1), datetime.date(2025, 6, 30)):
             {"revenue": 500, "material_cost": None, "cost_n": 0, "n_rows": 30, "req_cost": None, "req_n": 0},              # no cost, no 领料
     }
-    out = await period_comparison(_FakePool(_FakeConn(wd)), "DEMO_REST", start, end)
+    # 领料采集区间覆盖 current+mom (让 cost_ratio 可算), 不覆盖 yoy(2025) → 同比 None
+    _req_span = (datetime.date(2026, 5, 1), datetime.date(2026, 12, 31))
+    out = await period_comparison(_FakePool(_FakeConn(wd, req_span=_req_span)), "DEMO_REST", start, end)
     assert out["revenue"]["mom_pct"] == 25.0      # (1000-800)/800*100
     assert out["revenue"]["yoy_pct"] == 100.0     # (1000-500)/500*100
     assert out["gross_margin_pct"]["current"] == 70.0
