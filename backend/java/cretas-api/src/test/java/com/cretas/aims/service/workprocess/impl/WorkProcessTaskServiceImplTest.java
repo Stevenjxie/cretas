@@ -66,6 +66,9 @@ class WorkProcessTaskServiceImplTest {
     @Mock
     private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
 
+    @Mock
+    private com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService workflowRuntimeService;
+
     @InjectMocks
     private WorkProcessTaskServiceImpl service;
 
@@ -77,6 +80,8 @@ class WorkProcessTaskServiceImplTest {
     void injectFieldDeps() {
         org.springframework.test.util.ReflectionTestUtils.setField(
                 service, "productionPlanRepository", productionPlanRepository);
+        lenient().when(workflowRuntimeService.materializeIfActive(any(), any(), any()))
+                .thenReturn(Optional.empty());
     }
 
     private static final String FACTORY_ID = "F001";
@@ -513,7 +518,7 @@ class WorkProcessTaskServiceImplTest {
                 .workProcessId("wp-c").processOrder(3).isActive(true).reportingRequired(true).build();
 
         when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
-        when(productWorkProcessRepository
+        lenient().when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2, p3));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
@@ -647,7 +652,7 @@ class WorkProcessTaskServiceImplTest {
         Long tailId = 902L;   // 产出责任人
 
         when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId)).thenReturn(false);
-        when(productWorkProcessRepository
+        lenient().when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of());
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
