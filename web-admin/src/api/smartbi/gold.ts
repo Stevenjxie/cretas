@@ -197,6 +197,37 @@ export async function getDiscountBreakdown(args: DateRangeQuery & { topN?: numbe
   })) as DiscountBreakdown;
 }
 
+/** 堂食 vs 外卖 revenue split (from /order-type-mix, agg_daily_order_type_meal.order_type). */
+export interface OrderTypeMix {
+  factoryId: string;
+  startDate: string | null;
+  endDate: string | null;
+  // Nullable: RBAC price-strip (backend smartbi_compat/_rbac_strip.py) nulls
+  // any leaf key whose name contains "revenue" for roles outside
+  // PRICE_VIEW_ROLES — this also matches "revenue_pct"/"revenue_estimated"
+  // (substring match on the field name, not just the raw amount fields), so
+  // every revenue-named field here must be treated as nullable.
+  totalRevenue: number | null;
+  /** true when per-type revenue is missing at the source and was estimated
+   * from overall avg ticket × bill_count (禁降级: surfaced honestly, never silent). */
+  revenueEstimated: boolean | null;
+  estimationNote: string | null;
+  orderTypes: Array<{
+    orderType: string; // '堂食' | '外卖' | ...
+    revenue: number | null;
+    billCount: number;
+    revenuePct: number | null; // 0-100
+    revenueEstimated: boolean | null;
+  }>;
+}
+
+export async function getOrderTypeMix(args: OptionalDateRangeQuery): Promise<OrderTypeMix> {
+  // Dates optional: omit both = 全部历史 (mirrors getKpiSummary/getFinanceSummary).
+  return (await pythonFetch(`/api/smartbi/gold/order-type-mix?${_qOptional(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as OrderTypeMix;
+}
+
 export async function getKpiSummary(args: OptionalDateRangeQuery): Promise<KpiSummary> {
   // Dates optional: omit both = 全部历史. Existing callers pass concrete dates.
   return (await pythonFetch(`/api/smartbi/gold/kpi-summary?${_qOptional(args)}`, {
