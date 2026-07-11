@@ -50,6 +50,10 @@ export interface RouteTrip {
   storeIds: string[];
   segmentKeys: string[];
   geometry: MapPoint[];
+  /** 后端存好的沿实际道路 polyline (GCJ-02 {lng,lat})；有则地图直接画、免实时调地图 API。 */
+  roadPath?: Array<{ lng: number; lat: number }>;
+  /** 总行驶时长 (分钟)。 */
+  durationMin?: number;
   segmentDistances: number[];
   totalDistanceKm: number;
   totalVolumeCbm: number;

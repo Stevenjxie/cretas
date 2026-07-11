@@ -156,6 +156,8 @@ function toRouteTripView(trip: PlanSnapshot['trips'][number]): RouteTrip {
     storeIds: trip.storeIds,
     segmentKeys: trip.segmentKeys,
     geometry: trip.geometry,
+    roadPath: trip.roadPath,
+    durationMin: trip.totalDurationMin,
     segmentDistances: trip.segmentDistances,
     totalDistanceKm: trip.totalDistanceKm,
     totalVolumeCbm: trip.totalVolumeCbm,

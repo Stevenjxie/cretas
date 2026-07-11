@@ -294,6 +294,12 @@ export interface LogisticsTrip {
   storeIds: string[];
   segmentKeys: string[];
   geometry: MapPoint[];
+  /** 档1-B: 后端存好的沿实际道路 polyline (GCJ-02 {lng,lat})，供地图直接画、免前端实时调地图。 */
+  roadPath?: Array<{ lng: number; lat: number }>;
+  /** 档1-B: 该车次总行驶时长 (分钟)，来自地图 direction。 */
+  totalDurationMin?: number;
+  /** 档1-B: 产出该路线的地图 provider (AMAP/TENCENT/BAIDU)。 */
+  routeProvider?: string;
   segmentDistances: number[];
   totalDistanceKm: number;
   totalVolumeCbm: number;
@@ -312,6 +318,8 @@ export interface LogisticsPlan {
   planDate: string;
   planNumber: string;
   targetLoadPct: number;
+  /** 档1-B: 该计划生成时的优化目标 (TIME 时间最快 / DISTANCE 路程最短)。 */
+  optimizeBy?: RouteOptimizeMode;
   status: PlanStatus;
   distanceSource: DistanceSource;
   totalStores: number;

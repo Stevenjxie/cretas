@@ -118,12 +118,22 @@ function renderOverlays(): void {
       }
     });
     if (!storePts.length) return;
-    drawTripRoute(trip.id, index, storePts, token);
+    drawTripRoute(trip.id, index, storePts, token, trip.roadPath);
   });
 }
 
-/** 单条车次路线：优先高德驾车实际道路路径；未就绪/失败 → 虚线直线兜底（诚实标示非实际道路）。 */
-function drawTripRoute(tripId: string, index: number, storePts: [number, number][], token: number): void {
+/**
+ * 单条车次路线：
+ * 1) 后端存好的 roadPath(GCJ-02 沿路 polyline) → 直接画，不调地图 API(缓存命中，回看零调用)。
+ * 2) 否则实时调高德驾车路径规划(旧路径)；未就绪/失败 → 虚线直线兜底(诚实标示非实际道路)。
+ */
+function drawTripRoute(
+  tripId: string,
+  index: number,
+  storePts: [number, number][],
+  token: number,
+  roadPath?: Array<{ lng: number; lat: number }>,
+): void {
   if (!map || !amap) return;
   const AMapRef = amap;
   const selected = tripId === props.selectedTripId;
@@ -149,6 +159,12 @@ function drawTripRoute(tripId: string, index: number, storePts: [number, number]
     overlays.push(line);
     map.add([line]);
   };
+
+  // 缓存命中：后端已存沿路 roadPath → 直接画，不调地图 driving API（回看旧计划零调用，省额度）
+  if (roadPath && roadPath.length >= 2) {
+    addLine(roadPath.map((p) => [p.lng, p.lat] as [number, number]), false);
+    return;
+  }
 
   const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
   if (!driving) {
