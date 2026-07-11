@@ -388,45 +388,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 2. B3 逐产出对齐 workflow 端口 (workflow 计划; legacy/未注入 → 跳过)
         validateMultiOutputAgainstWorkflow(factoryId, planId, req);
 
-        // 3. 共享投入按产出数量拆分 (物理默认, 不涉成本分摊配置)。同单位场景 (Steve 例子 A 全盒 / D 全 kg) 天然合理。
-        List<BigDecimal> weights = outs.stream()
-                .map(ProcessSheetRowRequest.OutputLine::getQuantity)
-                .toList();
-        BigDecimal totalWeight = weights.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (totalWeight.signum() <= 0) {
-            throw new BusinessException(400, "多产出数量合计必须大于0")
-                    .withCode("PROCESS_SHEET_OUTPUT_QUANTITY_ZERO");
-        }
-
+        // 3. 分解 (per Steve — 不推断投入-产出比例, 不拆分投入):
+        //    input allocations (req.rawMaterialInputs/upstreamSources) 作为独立事实, 由首产出行承载 → 一次全量扣减;
+        //    每条 output line 各自入库 (其余产出行不带投入, 只产出)。所有产出行同 (plan, processCode, processOrder)
+        //    归属同一份工序报工 → 血缘经该报工把每个产出批次关联到全部实际投入批次 (无按重量/数量的比例分配)。
+        //    工序不处理成本 (人工/调料随投入落在首产出行, 计一次不双计)。
         int n = outs.size();
-        List<BigDecimal> rawTotals = req.getRawMaterialInputs() == null ? List.of()
-                : req.getRawMaterialInputs().stream()
-                        .map(ProcessSheetRowRequest.RawInput::getQuantity).toList();
-        List<BigDecimal> upTotals = req.getUpstreamSources() == null ? List.of()
-                : req.getUpstreamSources().stream()
-                        .map(ProcessSheetRowRequest.UpstreamRef::getFeedQuantityKg).toList();
-        List<List<BigDecimal>> rawSplit = splitAcrossOutputs(rawTotals, weights, totalWeight, n);
-        List<List<BigDecimal>> upSplit = splitAcrossOutputs(upTotals, weights, totalWeight, n);
-
-        // 4. 逐产出物化 (每份是一条带分数投入的普通单产出行)
         List<ProcessSheetRowResult.OutputResult> outputResults = new ArrayList<>(n);
-        BigDecimal aggCost = BigDecimal.ZERO;
-        boolean costKnown = true;
         for (int i = 0; i < n; i++) {
             ProcessSheetRowRequest.OutputLine o = outs.get(i);
-            ProcessSheetRowRequest one = synthesizeOutputRequest(req, o, i, rawSplit, upSplit);
-            // 人工/调料只计在首产出 (共享工序成本, 计一次; 其余产出只承担材料分摊)。总额守恒不双计。
-            if (i != 0) {
-                one.setLaborSegments(null);
-                one.setSeasoningStep(false);
-            }
+            boolean carryInputs = (i == 0); // 首产出行承载全部实际投入 + 人工/调料
+            ProcessSheetRowRequest one = synthesizeOutputRequest(req, o, i, carryInputs);
             OneOutputOutcome outcome = materializeOneOutput(factoryId, planId, one, userId, warnings);
             logChange(factoryId, planId, one, "CREATE", null, one, userId);
-            if (outcome.rowTotalCost() != null) {
-                aggCost = aggCost.add(outcome.rowTotalCost());
-            } else {
-                costKnown = false; // 诚实 null: 任一产出成本未知 → 汇总标未知
-            }
             ProcessSheetRowResult.OutputResult or = new ProcessSheetRowResult.OutputResult();
             or.setClientRowId(one.getClientRowId());
             or.setProductTypeId(o.getProductTypeId());
@@ -438,13 +412,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             outputResults.add(or);
         }
 
-        // 5. workflow 任务进度回写一次 (整道工序完成)
+        // 4. workflow 任务进度回写一次 (整道工序完成)
         stampWorkflowTaskIfApplicable(factoryId, planId, req);
 
-        // 6. 汇总结果: 首产出批为代表 + 全部产出明细 (FE 重载过程单会拿到 N 行)
+        // 5. 汇总结果: 首产出批为代表 + 全部产出明细 (FE 重载过程单会拿到 N 行)。工序不处理成本 → 顶层成本 null。
         ProcessSheetRowResult.OutputResult first = outputResults.get(0);
         ProcessSheetRowResult result = buildResult(req, first.getBatchId(), first.getBatchNumber(),
-                null, costKnown ? aggCost : null, null, false, true, warnings);
+                null, null, null, false, true, warnings);
         result.setOutputs(outputResults);
         return result;
     }
@@ -457,13 +431,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             ProcessSheetRowRequest one, Long userId, List<String> warnings) {
         assertExternalFeedUnitSupported(one);
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, one);
-        // 纯半成品(SFI)喂的非成品中间道 → 产出直接入 SFI 库 (同单产出路径 option F)
-        if (!one.isFinished() && isPureStockFed(one)) {
+        // 半成品且 (纯 SFI 喂 或 无真实投入[非首产出行]) → 产出直接入 SFI 库 (product 维度, 无需 material_type_id)。
+        //   多产出: 非首产出行不带投入 (edges 空), 半成品产出走此路径; 成品产出走下方 FG 路径。
+        if (!one.isFinished() && (isPureStockFed(one) || edges.isEmpty())) {
             String anchor = postSfiOutput(factoryId, planId, one, warnings);
             persistRow(factoryId, planId, one, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             return new OneOutputOutcome(null, anchor, null);
         }
-        String rawMaterialTypeId = resolveRawMaterialTypeId(one, edges);
+        // 成品不建 WIP → 无需 material_type_id; 半成品(有投入)从投入派生。
+        String rawMaterialTypeId = one.isFinished() ? null : resolveRawMaterialTypeId(one, edges);
         StepEntry step = buildStepEntry(factoryId, one);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
@@ -481,36 +457,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     /**
-     * 把每条投入总量按各产出权重拆成 N 份, 最后一份 = 总量 − 前面之和 (吃余数, 保证 Σ 精确无精度漂移)。
-     * 返回 outer=每条投入, inner=该投入在各产出上的分量。
+     * 合成第 i 个产出的单产出行 (复制 base + 覆盖产出字段)。
+     *
+     * <p>{@code carryInputs}=true (首产出行): 原样携带全部实际投入 (rawMaterialInputs/upstreamSources) +
+     * 人工/调料 → 一次全量扣减 + 工时计一次。false (其余产出行): 不带投入, 仅产出入库 (投入已由首行承载,
+     * 不重复扣减、不按比例拆分)。血缘经同一 (plan, processCode, processOrder) 报工关联。
      */
-    private List<List<BigDecimal>> splitAcrossOutputs(List<BigDecimal> totals,
-            List<BigDecimal> weights, BigDecimal totalWeight, int n) {
-        List<List<BigDecimal>> result = new ArrayList<>(totals.size());
-        for (BigDecimal total : totals) {
-            BigDecimal base = total == null ? BigDecimal.ZERO : total;
-            List<BigDecimal> parts = new ArrayList<>(n);
-            BigDecimal allocated = BigDecimal.ZERO;
-            for (int i = 0; i < n; i++) {
-                BigDecimal part;
-                if (i == n - 1) {
-                    part = base.subtract(allocated); // 余数, 保证 Σ == 原总量
-                } else {
-                    part = base.multiply(weights.get(i))
-                            .divide(totalWeight, 6, java.math.RoundingMode.HALF_UP);
-                    allocated = allocated.add(part);
-                }
-                parts.add(part);
-            }
-            result.add(parts);
-        }
-        return result;
-    }
-
-    /** 合成第 i 个产出的单产出行 (复制 base + 覆盖产出字段 + 使用拆分后的投入分量)。 */
     private ProcessSheetRowRequest synthesizeOutputRequest(ProcessSheetRowRequest base,
-            ProcessSheetRowRequest.OutputLine o, int i,
-            List<List<BigDecimal>> rawSplit, List<List<BigDecimal>> upSplit) {
+            ProcessSheetRowRequest.OutputLine o, int i, boolean carryInputs) {
         ProcessSheetRowRequest one = new ProcessSheetRowRequest();
         one.setClientRowId(base.getClientRowId() + "#" + i);
         one.setProcessCode(base.getProcessCode());
@@ -526,33 +480,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setOutputUnit(outUnit);
         one.setInputUnit(base.getInputUnit());
         one.setProductWeight(o.getProductWeight());
-        one.setPotCount(base.getPotCount());
-        one.setSeasoningStep(base.isSeasoningStep());
-        one.setLaborSegments(base.getLaborSegments());
         one.setCustomFields(base.getCustomFields());
-        if (base.getRawMaterialInputs() != null) {
-            List<ProcessSheetRowRequest.RawInput> raws = new ArrayList<>();
-            for (int k = 0; k < base.getRawMaterialInputs().size(); k++) {
-                ProcessSheetRowRequest.RawInput br = base.getRawMaterialInputs().get(k);
-                ProcessSheetRowRequest.RawInput nr = new ProcessSheetRowRequest.RawInput();
-                nr.setMaterialBatchId(br.getMaterialBatchId());
-                nr.setQuantity(rawSplit.get(k).get(i));
-                raws.add(nr);
-            }
-            one.setRawMaterialInputs(raws);
-        }
-        if (base.getUpstreamSources() != null) {
-            List<ProcessSheetRowRequest.UpstreamRef> ups = new ArrayList<>();
-            for (int m = 0; m < base.getUpstreamSources().size(); m++) {
-                ProcessSheetRowRequest.UpstreamRef bu = base.getUpstreamSources().get(m);
-                ProcessSheetRowRequest.UpstreamRef nu = new ProcessSheetRowRequest.UpstreamRef();
-                nu.setSourceBatchNumber(bu.getSourceBatchNumber());
-                nu.setFeedQuantityKg(upSplit.get(m).get(i));
-                nu.setSemiFinished(bu.isSemiFinished());
-                nu.setFinishedGoods(bu.isFinishedGoods());
-                ups.add(nu);
-            }
-            one.setUpstreamSources(ups);
+        if (carryInputs) {
+            // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料 (计一次不双计)。
+            one.setPotCount(base.getPotCount());
+            one.setSeasoningStep(base.isSeasoningStep());
+            one.setLaborSegments(base.getLaborSegments());
+            one.setRawMaterialInputs(base.getRawMaterialInputs());
+            one.setUpstreamSources(base.getUpstreamSources());
         }
         return one;
     }
