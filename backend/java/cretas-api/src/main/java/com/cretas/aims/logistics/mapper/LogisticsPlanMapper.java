@@ -132,6 +132,11 @@ public class LogisticsPlanMapper {
                 .status(toWireStatus(trip.getStatus()))
                 .stops(stopDtos)
                 .version(trip.getVersion())
+                // 档4 多趟排班时刻 (nullable — 缺坐标/无车/人工调整后为 null, 诚实不伪造)
+                .plannedDepartMin(trip.getPlannedDepartMin())
+                .returnToDepotMin(trip.getReturnToDepotMin())
+                .lateReturn(trip.getLateReturn())
+                .vehicleTripSeq(trip.getVehicleTripSeq())
                 .build();
     }
 

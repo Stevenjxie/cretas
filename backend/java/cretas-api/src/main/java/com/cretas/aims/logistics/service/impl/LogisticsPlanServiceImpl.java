@@ -604,6 +604,13 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
             trip.setTotalDurationMin(null);
             trip.setRouteProvider(null);
         }
+
+        // ---- 档4: 人工调整 (改站序/换车/换司机) 后计划时刻已失真 → 置 null (诚实不显示过期时刻),
+        // regenerate 时算法整链重推。趟序同置 null (换车后所属链已变)。 ----
+        trip.setPlannedDepartMin(null);
+        trip.setReturnToDepotMin(null);
+        trip.setLateReturn(null);
+        trip.setVehicleTripSeq(null);
         boolean roadPathMissing = trip.getRoadPath() == null || trip.getRoadPath().isEmpty();
         if (roadPathMissing && status != TripStatus.NEEDS_ROUTE_DATA
                 && trip.getVehicleId() != null && !orderedStops.isEmpty()) {

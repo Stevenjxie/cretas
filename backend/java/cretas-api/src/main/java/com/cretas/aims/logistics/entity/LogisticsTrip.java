@@ -147,6 +147,35 @@ public class LogisticsTrip extends BaseEntity {
     @Column(name = "road_path", columnDefinition = "jsonb")
     private List<Map<String, Object>> roadPath;
 
+    /**
+     * 计划出发时刻 (当日分钟, e.g. 480=08:00) — 档4 多趟排班 (V20261028_56)。
+     * Nullable — 仅该车全部车次坐标齐全时由排线算法推演填充; 人工调整后置 null (时刻已失真,
+     * 诚实不显示过期时刻, regenerate 重算)。
+     */
+    @Column(name = "planned_depart_min")
+    private Integer plannedDepartMin;
+
+    /**
+     * 计划回仓时刻 (当日分钟) — 末站卸货 + 回程行驶后回到 DEPOT。与 {@link #plannedDepartMin}
+     * 同生命周期 (档4, V20261028_56)。多趟链上, 下一趟出发 = 本值 + 装货 RELOAD 时间。
+     */
+    @Column(name = "return_to_depot_min")
+    private Integer returnToDepotMin;
+
+    /**
+     * 迟回仓标记 — 计划回仓晚于 min(司机班次结束, 车辆可用截止)。Nullable — 无时刻/无约束时为
+     * null (不是 false — 诚实区分"未知"与"不迟") (档4, V20261028_56)。
+     */
+    @Column(name = "late_return")
+    private Boolean lateReturn;
+
+    /**
+     * 该车当日第几趟 (1-based) — 多趟排班时 2+ 表示回仓补货再出发的后续趟 (档4, V20261028_56)。
+     * Nullable — 与时刻字段同生命周期。
+     */
+    @Column(name = "vehicle_trip_seq")
+    private Integer vehicleTripSeq;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;

@@ -57,4 +57,15 @@ public class TripDto {
     private String status;
     private List<StopDto> stops;
     private Long version;
+    /**
+     * 档4 多趟排班 (车回仓补货再出发) 计划时刻 — 全 nullable (缺坐标/无车/人工调整后为 null,
+     * 诚实不伪造时刻)。当日分钟数, e.g. 480=08:00。
+     */
+    private Integer plannedDepartMin;
+    /** 计划回仓时刻 (当日分钟) — 多趟链下一趟出发 = 本值 + 装货 RELOAD 时间 (20min)。 */
+    private Integer returnToDepotMin;
+    /** 迟回仓 — 计划回仓晚于 min(司机班次结束, 车辆可用截止); null=无时刻/无约束 (区分未知与不迟)。 */
+    private Boolean lateReturn;
+    /** 该车当日第几趟 (1-based); 2+ = 回仓补货再出发的后续趟 (UI 显示 第1趟/第2趟)。 */
+    private Integer vehicleTripSeq;
 }

@@ -40,6 +40,17 @@ import java.util.stream.Collectors;
  * "行驶时间 + 迟到惩罚" (到达模型 mirror 前端 RouteCards.vue tripEtas, 见 {@link #tripTimeCost});
  * DISTANCE (或 null) 保持既有逐字节行为。永不更差门禁按<b>当前生效目标</b>比较。
  *
+ * <p><b>档4 (2026-07-12)</b>: 多趟排班 (车回仓补货再出发) — 打破「一车一活跃车次」硬约束:
+ * 溢出箱在没有另一辆空闲车可用 (今天诚实落 NEEDS_VEHICLE) 时, 若时刻可行 (回仓 ≤ 司机班次结束
+ * ∧ 车辆可用截止), 改挂到<b>同一辆已用车</b>作它的第 2/3/… 趟 (回仓 + {@link #RELOAD_MIN} 装货
+ * 后再出发), 见 {@link #buildMultiTripChains}。每车次产出计划出发/回仓时刻
+ * ({@link TripResult#departMin()}/{@link TripResult#returnToDepotMin()}) + 迟回仓标记
+ * ({@link TripResult#lateReturn()}) + 车内趟序 ({@link TripResult#vehicleTripSeq()}),
+ * 见 {@link #annotateSchedules}。门禁: 无坐标 → 完全跳过 (输出与档3 之前逐字段一致, 时刻字段
+ * 全 null — 诚实不猜); 永不更差 ({@link #pickMultiTripHonestly}): 无车车次数必须严格减少、
+ * 非获救车次司机不恶化、生效目标不变差, 否则回退。已有不同空闲车可接的溢出箱保持今天的
+ * 「另派一辆车」行为 (并行送更准时, 且为已上线 档2 拆分语义 — 多趟只救今天派不出去的箱)。
+ *
  * <p>持久化 (Plan/Trip/Stop 落库) 由 {@link LogisticsRoutingService} 负责，本类只产出
  * in-memory 结果，便于脱离 Spring/DB 做算法精确性单测。
  */
@@ -146,6 +157,16 @@ public final class LogisticsRoutingAlgorithm {
     // 输出模型
     // ============================================================
 
+    /**
+     * 单车次结果。末 4 个字段是 档4 多趟排班时刻 (全 nullable — 仅当该车全部车次坐标齐全时
+     * 由 {@link #annotateSchedules} 填充; 无车/缺坐标 → null, 诚实不猜):
+     * <ul>
+     *   <li>{@code departMin} — 计划出发时刻 (当日分钟, e.g. 480=08:00)。</li>
+     *   <li>{@code returnToDepotMin} — 计划回仓时刻 (末站卸货 + 回程行驶后)。</li>
+     *   <li>{@code lateReturn} — 回仓晚于 司机班次结束/车辆可用截止 (二者较早者)。</li>
+     *   <li>{@code vehicleTripSeq} — 该车当日第几趟 (1-based; 多趟时 2+ = 回仓补货再出发)。</li>
+     * </ul>
+     */
     public record TripResult(
             int tripNo,
             String vehicleId,
@@ -158,7 +179,28 @@ public final class LogisticsRoutingAlgorithm {
             BigDecimal totalWeightKg,
             BigDecimal loadRate,
             BigDecimal weightLoadRate,
-            TripStatus status) {
+            TripStatus status,
+            Integer departMin,
+            Integer returnToDepotMin,
+            Boolean lateReturn,
+            Integer vehicleTripSeq) {
+
+        /** 兼容构造器 — 时刻字段全 null (档4 之前的既有构造形态, 供 service 层/finalize 使用)。 */
+        public TripResult(
+                int tripNo, String vehicleId, String driverId, List<String> orderIdsInOrder,
+                List<String> segmentKeys, List<BigDecimal> segmentDistances, BigDecimal totalDistanceKm,
+                BigDecimal totalVolumeCbm, BigDecimal totalWeightKg, BigDecimal loadRate,
+                BigDecimal weightLoadRate, TripStatus status) {
+            this(tripNo, vehicleId, driverId, orderIdsInOrder, segmentKeys, segmentDistances, totalDistanceKm,
+                    totalVolumeCbm, totalWeightKg, loadRate, weightLoadRate, status, null, null, null, null);
+        }
+
+        /** 拷贝 + 填充 档4 时刻字段。 */
+        TripResult withTiming(Integer departMin, Integer returnToDepotMin, Boolean lateReturn, Integer vehicleTripSeq) {
+            return new TripResult(tripNo, vehicleId, driverId, orderIdsInOrder, segmentKeys, segmentDistances,
+                    totalDistanceKm, totalVolumeCbm, totalWeightKg, loadRate, weightLoadRate, status,
+                    departMin, returnToDepotMin, lateReturn, vehicleTripSeq);
+        }
     }
 
     public record Result(List<TripResult> trips, List<String> unassignedOrderIds) {
@@ -252,12 +294,27 @@ public final class LogisticsRoutingAlgorithm {
         // 门禁: 全部有车订单必须有坐标, 否则完全跳过 → 输出与档1 贪心逐字段一致 (诚实降级, 不猜)。
         Result seedResult = finalizeTrips(seedBoxes, input, unassigned);
         List<BoxAssign> optimizedBoxes = optimizeAcrossTrips(seedBoxes, vehiclesSorted, usedVehicleIds, input);
-        if (optimizedBoxes == null) {
-            return seedResult;
+        List<BoxAssign> winnerBoxes = seedBoxes;
+        Result winnerResult = seedResult;
+        if (optimizedBoxes != null) {
+            Result optimizedResult = finalizeTrips(optimizedBoxes, input, unassigned);
+            // 永不更差: 优化组合最终目标 (平面近似总里程) 没有严格变短, 或司机缺配比 seed 恶化 → 回退 seed。
+            winnerResult = pickBetterHonestly(seedResult, optimizedResult, input);
+            if (winnerResult == optimizedResult) {
+                winnerBoxes = optimizedBoxes;
+            }
         }
-        Result optimizedResult = finalizeTrips(optimizedBoxes, input, unassigned);
-        // 永不更差: 优化组合最终目标 (平面近似总里程) 没有严格变短, 或司机缺配比 seed 恶化 → 回退 seed。
-        return pickBetterHonestly(seedResult, optimizedResult, input);
+
+        // ---------------- 档4 — 多趟排班 (车回仓补货再出发) ----------------
+        // 无车箱 (今天诚实落 NEEDS_VEHICLE) 若时刻可行 → 挂到已用车作第 2/3/… 趟。
+        // 门禁: 无坐标 → buildMultiTripChains/annotateSchedules 都原样返回 (与档3 之前逐字段一致)。
+        Result base = annotateSchedules(winnerResult, input);
+        List<BoxAssign> multiTripBoxes = buildMultiTripChains(winnerBoxes, vehiclesSorted, input);
+        if (multiTripBoxes == null) {
+            return base;
+        }
+        Result multiTrip = annotateSchedules(finalizeTrips(multiTripBoxes, input, unassigned), input);
+        return pickMultiTripHonestly(base, multiTrip, input);
     }
 
     // ============================================================
@@ -277,6 +334,9 @@ public final class LogisticsRoutingAlgorithm {
         int tripNoCounter = 1;
         // 司机占用窗口跟踪 (硬约束 6) — driverId -> 已分配的时间窗列表
         Map<String, List<TimeWindow>> driverOccupied = new LinkedHashMap<>();
+        // 档4: 同车首趟司机 — 多趟链的后续车次复用首趟司机 (司机随车回仓补货再出发,
+        // 时序由 scheduleChain 保证, 不适用送达窗口重叠冲突判定)。档4 之前一车最多一箱 → 恒无命中。
+        Map<String, String> headDriverByVehicle = new LinkedHashMap<>();
 
         for (BoxAssign box : boxes) {
             // 车次内门店访问顺序优化：最近邻(种子) + 2-opt(去交叉) —— 让 ①②③ 有合理先后、
@@ -289,7 +349,14 @@ public final class LogisticsRoutingAlgorithm {
 
             String driverId = null;
             if (vehicle != null) {
-                driverId = assignDriver(vehicle, boxOrders, input, driverOccupied);
+                if (headDriverByVehicle.containsKey(vehicle.vehicleId())) {
+                    // 档4 多趟链第 2+ 趟 — 复用首趟司机 (可能为 null → 该趟同样 NEEDS_DRIVER, 诚实)
+                    driverId = reuseChainDriver(boxOrders, input, driverOccupied,
+                            headDriverByVehicle.get(vehicle.vehicleId()));
+                } else {
+                    driverId = assignDriver(vehicle, boxOrders, input, driverOccupied);
+                    headDriverByVehicle.put(vehicle.vehicleId(), driverId);
+                }
             }
 
             GeometryResult geometry = assembleGeometry(boxOrders, input.distanceLookup());
@@ -918,6 +985,417 @@ public final class LogisticsRoutingAlgorithm {
 
     private static BigDecimal sumWeight(List<OrderInput> orders) {
         return orders.stream().map(OrderInput::weightKg).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    // ============================================================
+    // 档4 (2026-07-12) — 多趟排班: 车回仓补货再出发
+    // ============================================================
+    //
+    // 时刻模型 (每车一条当日时间轴, 分钟):
+    //   首趟出发 = max(车辆 availableFrom, 首趟司机 shiftStart, [有送达窗口时] 最早窗口开始 − 首段行驶);
+    //             全部约束缺失且无窗口 → DEPOT_OPEN_MIN (08:00) 缺省。
+    //   趟内到达(第 i 站) = 出发 + 累计行驶 + i × DWELL_MIN (与档3 tripLatenessMin/前端 tripEtas 同口径)。
+    //   回仓 = 末站到达 + DWELL_MIN(卸货) + 末站→DEPOT 行驶。
+    //   第 k+1 趟出发 = max(第 k 趟回仓 + RELOAD_MIN, [有窗口时] 该趟最早窗口开始 − 首段行驶)。
+    // 可行性 (加挂一趟): 新趟回仓 ≤ min(司机 shiftEnd, 车辆 availableTo) — 任一侧缺失视为无约束。
+    // 行驶时间与档3 同一把尺: 平面近似 km ÷ 28 km/h (真实高德时长在持久化阶段, 算法内不调地图 API)。
+
+    /** 回仓补货装车时间 (分钟) — 同车下一趟出发 ≥ 上一趟回仓 + 本值。 */
+    private static final double RELOAD_MIN = 20.0;
+    /** 完全无时刻约束 (无车辆可用窗/无司机班次/无送达窗口) 时首趟出发缺省 08:00。 */
+    private static final double DEPOT_OPEN_MIN = 480.0;
+
+    /** 一趟的计划时刻 (分钟, 未取整)。 */
+    private record TripTiming(double departMin, double returnMin) {
+    }
+
+    /**
+     * 把无车箱 (今天诚实落 NEEDS_VEHICLE 的溢出箱) 改挂到已用车作它的第 2/3/… 趟。
+     *
+     * <p>宿主候选序 (确定性): 该箱的组 primary 车 (Step A 首匹配重建 — 溢出箱的兄弟箱所在车) 优先,
+     * 其次其余已用车按首箱出现序; 只允许首箱在本箱之前的车 (链序 = 箱列表序)。
+     * 每个宿主必须同时满足: 区域覆盖(硬) / 体积 ≤ 软目标容量 / 重量 ≤ 硬上限 /
+     * 时刻可行 (推演整链, 新趟回仓 ≤ min(司机班次结束, 车辆可用截止))。
+     *
+     * <p>司机按宿主首箱预测 ({@link #predictDriverBinding} — 与 {@link #assignDriver} 同优先序,
+     * 不含跨车占用); 实际分配在 {@link #finalizeTrips} (链上复用首趟司机), 预测偏差由
+     * {@link #annotateSchedules} 用实际司机班次重标 lateReturn + {@link #pickMultiTripHonestly}
+     * 兜底 (诚实可见, 不静默)。
+     *
+     * <p><b>诚实降级</b>: 坐标映射为空 / 本箱或宿主链任一订单缺坐标 → 该箱不救 (保持 NEEDS_VEHICLE);
+     * 一箱都没救成 → 返回 null (调用方直接用 base, 输出与档4 之前逐字段一致)。
+     * 已能派到另一辆空闲车的溢出箱不在此处理 (保持今天的并行分车行为, 见类头 档4 说明)。
+     *
+     * @return 获救后的组合 (箱内容/列表位置不变, 仅无车箱的 vehicle 被填上宿主车); 无可救 → null
+     */
+    private static List<BoxAssign> buildMultiTripChains(List<BoxAssign> boxes,
+            List<VehicleInput> vehiclesSorted, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        if (coords == null || coords.isEmpty()) {
+            return null;
+        }
+        boolean anyRescuable = boxes.stream().anyMatch(b -> b.vehicle() == null && !b.orders().isEmpty());
+        if (!anyRescuable) {
+            return null;
+        }
+
+        RouteOptimizeMode mode = input.effectiveOptimizeBy();
+        double[] depot = {input.depotLng(), input.depotLat()};
+
+        // 宿主链状态: vehicleId -> (首箱下标 / 已排趟的访问顺序 / ready+end 时刻约束 / 坐标齐全)
+        Map<String, Integer> headIndexByVehicle = new LinkedHashMap<>();
+        Map<String, VehicleInput> hostById = new LinkedHashMap<>();
+        Map<String, List<List<OrderInput>>> chainRoutes = new LinkedHashMap<>();
+        Map<String, Double> readyByVehicle = new LinkedHashMap<>();
+        Map<String, Double> endByVehicle = new LinkedHashMap<>();
+        Map<String, Boolean> chainCoordsOk = new LinkedHashMap<>();
+        for (int i = 0; i < boxes.size(); i++) {
+            BoxAssign b = boxes.get(i);
+            if (b.vehicle() == null || b.orders().isEmpty()) {
+                continue;
+            }
+            String vid = b.vehicle().vehicleId();
+            if (headIndexByVehicle.containsKey(vid)) {
+                continue; // 档4 之前一车一箱, 防御分支
+            }
+            headIndexByVehicle.put(vid, i);
+            hostById.put(vid, b.vehicle());
+            List<List<OrderInput>> routes = new ArrayList<>();
+            routes.add(optimizeRouteOrder(b.orders(), coords, depot[0], depot[1], mode));
+            chainRoutes.put(vid, routes);
+            chainCoordsOk.put(vid, allCoordsPresent(b.orders(), coords));
+            DriverBindingInput predicted = predictDriverBinding(b.vehicle(), b.orders(), input);
+            readyByVehicle.put(vid, maxNullable(
+                    parseWindowMinD(b.vehicle().availableFrom()),
+                    predicted == null ? null : parseWindowMinD(predicted.shiftStart())));
+            endByVehicle.put(vid, minNullable(
+                    parseWindowMinD(b.vehicle().availableTo()),
+                    predicted == null ? null : parseWindowMinD(predicted.shiftEnd())));
+        }
+        if (hostById.isEmpty()) {
+            return null;
+        }
+
+        List<BoxAssign> out = new ArrayList<>(boxes);
+        boolean rescued = false;
+        for (int i = 0; i < boxes.size(); i++) {
+            BoxAssign box = boxes.get(i);
+            if (box.vehicle() != null || box.orders().isEmpty()) {
+                continue;
+            }
+            if (!allCoordsPresent(box.orders(), coords)) {
+                continue; // 缺坐标 → 无法推演时刻, 诚实保持 NEEDS_VEHICLE
+            }
+            for (String vid : hostCandidateOrder(box.orders(), vehiclesSorted, hostById)) {
+                if (headIndexByVehicle.get(vid) > i || !chainCoordsOk.get(vid)) {
+                    continue;
+                }
+                VehicleInput host = hostById.get(vid);
+                boolean areasOk = box.orders().stream()
+                        .allMatch(o -> areaMatches(host.serviceAreas(), o.areaCode()));
+                if (!areasOk) {
+                    continue;
+                }
+                if (sumVolume(box.orders()).compareTo(softTargetCap(host, input.targetLoadPct())) > 0
+                        || sumWeight(box.orders()).compareTo(host.maxWeightKg()) > 0) {
+                    continue;
+                }
+                List<List<OrderInput>> candidate = new ArrayList<>(chainRoutes.get(vid));
+                candidate.add(optimizeRouteOrder(box.orders(), coords, depot[0], depot[1], mode));
+                List<TripTiming> timings = scheduleChain(candidate, coords, depot, readyByVehicle.get(vid));
+                Double end = endByVehicle.get(vid);
+                if (end != null && timings.get(timings.size() - 1).returnMin() > end + EPS) {
+                    continue; // 时间不够跑这一趟 → 试下一宿主 / 保持 NEEDS_VEHICLE (诚实)
+                }
+                out.set(i, new BoxAssign(host, box.orders()));
+                chainRoutes.put(vid, candidate);
+                rescued = true;
+                break;
+            }
+        }
+        return rescued ? out : null;
+    }
+
+    /** 宿主候选序: 组 primary 车 (Step A 首匹配重建) 优先, 其次其余已用车按首箱出现序。 */
+    private static List<String> hostCandidateOrder(List<OrderInput> boxOrders,
+            List<VehicleInput> vehiclesSorted, Map<String, VehicleInput> hostById) {
+        List<String> order = new ArrayList<>(hostById.size());
+        VehicleInput primary = findFirstServiceAreaMatch(vehiclesSorted, boxOrders.get(0).areaCode());
+        if (primary != null && hostById.containsKey(primary.vehicleId())) {
+            order.add(primary.vehicleId());
+        }
+        for (String vid : hostById.keySet()) {
+            if (!order.contains(vid)) {
+                order.add(vid);
+            }
+        }
+        return order;
+    }
+
+    /**
+     * 顺序推演一辆车整天的多趟时刻表 (时刻模型见本节头注释)。
+     * 调用方保证每趟 route 非空且坐标齐全。
+     *
+     * @param readyStartMin 首趟最早可出发 (车辆 availableFrom ∨ 首趟司机 shiftStart 取大); null=无约束
+     */
+    private static List<TripTiming> scheduleChain(List<List<OrderInput>> routes,
+            Map<String, double[]> coords, double[] depot, Double readyStartMin) {
+        List<TripTiming> out = new ArrayList<>(routes.size());
+        double prevReturn = 0.0;
+        for (int k = 0; k < routes.size(); k++) {
+            List<OrderInput> route = routes.get(k);
+            double[] prev = depot;
+            double firstLeg = 0.0;
+            double sumLegs = 0.0;
+            for (int i = 0; i < route.size(); i++) {
+                double[] cur = coords.get(route.get(i).orderId());
+                double leg = travelMin(prev, cur);
+                if (i == 0) {
+                    firstLeg = leg;
+                }
+                sumLegs += leg;
+                prev = cur;
+            }
+            double returnLeg = travelMin(prev, depot);
+            Double earliest = earliestWindowStartMin(route);
+            Double ideal = earliest == null ? null : earliest - firstLeg; // 首站正点到 = 窗口开始
+            double depart;
+            if (k == 0) {
+                if (ideal != null) {
+                    depart = readyStartMin == null ? ideal : Math.max(readyStartMin, ideal);
+                } else {
+                    depart = readyStartMin == null ? DEPOT_OPEN_MIN : readyStartMin;
+                }
+            } else {
+                double ready = prevReturn + RELOAD_MIN;
+                depart = ideal == null ? ready : Math.max(ready, ideal);
+            }
+            depart = Math.max(0.0, depart);
+            double ret = depart + sumLegs + route.size() * DWELL_MIN + returnLeg;
+            out.add(new TripTiming(depart, ret));
+            prevReturn = ret;
+        }
+        return out;
+    }
+
+    /**
+     * 给最终结果标注 档4 时刻字段 (departMin / returnToDepotMin / lateReturn / vehicleTripSeq)。
+     * 按车分组 (列表序 = 链序) 推演时间轴; 该车任一车次缺坐标 → 整车全部车次不标 (诚实, 不出半截时刻);
+     * 无车车次恒不标。坐标映射为空 → 原样返回 (档4 之前逐字段一致)。
+     * lateReturn 用<b>实际分配</b>司机的班次结束 (预测偏差在此校正) 与车辆可用截止取早。
+     */
+    private static Result annotateSchedules(Result result, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        if (coords == null || coords.isEmpty()) {
+            return result;
+        }
+        Map<String, OrderInput> orderById = input.orders().stream()
+                .collect(Collectors.toMap(OrderInput::orderId, o -> o, (a, b) -> a));
+        Map<String, VehicleInput> vehicleById = input.vehicles().stream()
+                .collect(Collectors.toMap(VehicleInput::vehicleId, v -> v, (a, b) -> a));
+        double[] depot = {input.depotLng(), input.depotLat()};
+
+        Map<String, List<Integer>> idxByVehicle = new LinkedHashMap<>();
+        for (int i = 0; i < result.trips().size(); i++) {
+            TripResult t = result.trips().get(i);
+            if (t.vehicleId() != null) {
+                idxByVehicle.computeIfAbsent(t.vehicleId(), k -> new ArrayList<>()).add(i);
+            }
+        }
+        if (idxByVehicle.isEmpty()) {
+            return result;
+        }
+
+        List<TripResult> out = new ArrayList<>(result.trips());
+        boolean changed = false;
+        for (Map.Entry<String, List<Integer>> entry : idxByVehicle.entrySet()) {
+            VehicleInput vehicle = vehicleById.get(entry.getKey());
+            if (vehicle == null) {
+                continue;
+            }
+            List<Integer> idxs = entry.getValue();
+            List<List<OrderInput>> routes = new ArrayList<>(idxs.size());
+            boolean ok = true;
+            for (int idx : idxs) {
+                List<OrderInput> route = new ArrayList<>();
+                for (String orderId : out.get(idx).orderIdsInOrder()) {
+                    OrderInput o = orderById.get(orderId);
+                    if (o == null || !coords.containsKey(orderId)) {
+                        ok = false;
+                        break;
+                    }
+                    route.add(o);
+                }
+                if (!ok || route.isEmpty()) {
+                    ok = false;
+                    break;
+                }
+                routes.add(route);
+            }
+            if (!ok) {
+                continue;
+            }
+            DriverBindingInput firstBinding = bindingOf(input, entry.getKey(), out.get(idxs.get(0)).driverId());
+            Double ready = maxNullable(parseWindowMinD(vehicle.availableFrom()),
+                    firstBinding == null ? null : parseWindowMinD(firstBinding.shiftStart()));
+            List<TripTiming> timings = scheduleChain(routes, coords, depot, ready);
+            for (int k = 0; k < idxs.size(); k++) {
+                int idx = idxs.get(k);
+                TripResult trip = out.get(idx);
+                DriverBindingInput binding = bindingOf(input, entry.getKey(), trip.driverId());
+                Double end = minNullable(parseWindowMinD(vehicle.availableTo()),
+                        binding == null ? null : parseWindowMinD(binding.shiftEnd()));
+                TripTiming timing = timings.get(k);
+                boolean late = end != null && timing.returnMin() > end + EPS;
+                out.set(idx, trip.withTiming(
+                        (int) Math.round(timing.departMin()),
+                        (int) Math.round(timing.returnMin()),
+                        late,
+                        k + 1));
+                changed = true;
+            }
+        }
+        return changed ? new Result(out, result.unassignedOrderIds()) : result;
+    }
+
+    /**
+     * 档4 永不更差门禁 — 多趟组合只有同时满足以下才采用, 否则回退 base (= 档4 之前的行为):
+     * <ol>
+     *   <li>无车车次数<b>严格减少</b> (多趟存在的意义 — 救回今天派不出去的箱)。</li>
+     *   <li>非获救车次的司机不恶化 (链上占用登记可能抢走别车原本分到的司机)。</li>
+     *   <li>生效目标 (DISTANCE=平面总里程 / TIME=行驶时间+迟到) 不变差 — 获救只改车辆/司机/时刻,
+     *       不改箱内容与站序, 正常应完全相等, 此检查为防御。</li>
+     *   <li>TIME 模式额外: 迟回仓车次数不变多 (加挂可行性闸已硬防, 此处对预测偏差兜底)。</li>
+     * </ol>
+     */
+    private static Result pickMultiTripHonestly(Result base, Result multiTrip, Input input) {
+        List<TripResult> baseTrips = base.trips();
+        List<TripResult> mtTrips = multiTrip.trips();
+        if (baseTrips.size() != mtTrips.size()) {
+            return base; // 防御: 获救不改车次数
+        }
+        long noVehicleBase = baseTrips.stream().filter(t -> t.vehicleId() == null).count();
+        long noVehicleMt = mtTrips.stream().filter(t -> t.vehicleId() == null).count();
+        if (noVehicleMt >= noVehicleBase) {
+            return base;
+        }
+        for (int i = 0; i < baseTrips.size(); i++) {
+            TripResult b = baseTrips.get(i);
+            TripResult m = mtTrips.get(i);
+            boolean rescuedTrip = b.vehicleId() == null && m.vehicleId() != null;
+            if (!rescuedTrip && b.driverId() != null && m.driverId() == null) {
+                return base; // 非获救车次丢司机 → 回退
+            }
+        }
+        if (globalObjective(multiTrip, input) > globalObjective(base, input) + EPS) {
+            return base;
+        }
+        if (input.effectiveOptimizeBy() == RouteOptimizeMode.TIME
+                && countLateReturn(multiTrip) > countLateReturn(base)) {
+            return base;
+        }
+        return multiTrip;
+    }
+
+    private static long countLateReturn(Result result) {
+        return result.trips().stream().filter(t -> Boolean.TRUE.equals(t.lateReturn())).count();
+    }
+
+    /**
+     * 多趟链第 2+ 趟复用首趟司机 — 同车顺序多趟, 司机随车回仓再出发; 时序由 scheduleChain 保证,
+     * <b>不做</b>送达窗口重叠冲突判定 (那是跨车防双占的语义)。仍登记占用, 防止其它车辆在同时段
+     * 抢走这名司机。首趟司机区域不覆盖本趟订单 → null (该趟 NEEDS_DRIVER, 诚实)。
+     */
+    private static String reuseChainDriver(List<OrderInput> boxOrders, Input input,
+            Map<String, List<TimeWindow>> driverOccupied, String headDriverId) {
+        if (headDriverId == null) {
+            return null;
+        }
+        DriverInfo info = input.driverInfoById().get(headDriverId);
+        if (!regionCovers(info == null ? null : info.serviceAreas(), boxOrders)) {
+            return null;
+        }
+        TimeWindow occupy = effectiveOccupyWindow(computeTripWindow(boxOrders), null, null);
+        driverOccupied.computeIfAbsent(headDriverId, k -> new ArrayList<>()).add(occupy);
+        return headDriverId;
+    }
+
+    /**
+     * 预测某车首趟会分到的司机 binding — 与 {@link #assignDriver} 同优先序 (PRIMARY 优先,
+     * priority ASC, driverId ASC) + 班次/区域检查, 但<b>不含</b>跨车占用冲突 (那要到 finalize 才知道)。
+     * 仅用于加挂可行性的班次上限估算; 实际分配与 lateReturn 标注以 finalize/annotate 为准。
+     */
+    private static DriverBindingInput predictDriverBinding(VehicleInput vehicle,
+            List<OrderInput> headOrders, Input input) {
+        List<DriverBindingInput> bindings = input.driverBindingsByVehicleId()
+                .getOrDefault(vehicle.vehicleId(), List.of());
+        TimeWindow tripWindow = computeTripWindow(headOrders);
+        return bindings.stream()
+                .sorted(Comparator
+                        .comparing((DriverBindingInput d) -> d.role() == DriverRole.PRIMARY ? 0 : 1)
+                        .thenComparing(DriverBindingInput::priority)
+                        .thenComparing(DriverBindingInput::driverId))
+                .filter(b -> windowCovers(b.shiftStart(), b.shiftEnd(), tripWindow))
+                .filter(b -> {
+                    DriverInfo info = input.driverInfoById().get(b.driverId());
+                    return regionCovers(info == null ? null : info.serviceAreas(), headOrders);
+                })
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** 车辆 vehicleId 上 driverId 的 binding (取首个匹配); driverId null / 无绑定 → null。 */
+    private static DriverBindingInput bindingOf(Input input, String vehicleId, String driverId) {
+        if (driverId == null) {
+            return null;
+        }
+        return input.driverBindingsByVehicleId().getOrDefault(vehicleId, List.of()).stream()
+                .filter(b -> driverId.equals(b.driverId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** 车次内最早送达窗口开始 (当日分钟); 无任何可解析窗口 → null (无约束, 诚实不猜)。 */
+    private static Double earliestWindowStartMin(List<OrderInput> route) {
+        Integer earliest = null;
+        for (OrderInput o : route) {
+            Integer s = parseWindowMin(o.windowStart());
+            if (s != null && (earliest == null || s < earliest)) {
+                earliest = s;
+            }
+        }
+        return earliest == null ? null : earliest.doubleValue();
+    }
+
+    private static boolean allCoordsPresent(List<OrderInput> orders, Map<String, double[]> coords) {
+        for (OrderInput o : orders) {
+            if (!coords.containsKey(o.orderId())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** "HH:MM" → 当日分钟 (Double); 空/非法 → null。 */
+    private static Double parseWindowMinD(String hm) {
+        Integer v = parseWindowMin(hm);
+        return v == null ? null : v.doubleValue();
+    }
+
+    /** 两个可空下界取大 — 都 null → null (无约束)。 */
+    private static Double maxNullable(Double a, Double b) {
+        if (a == null) {
+            return b;
+        }
+        return b == null ? a : Math.max(a, b);
+    }
+
+    /** 两个可空上界取小 — 都 null → null (无约束)。 */
+    private static Double minNullable(Double a, Double b) {
+        if (a == null) {
+            return b;
+        }
+        return b == null ? a : Math.min(a, b);
     }
 
     // ============================================================

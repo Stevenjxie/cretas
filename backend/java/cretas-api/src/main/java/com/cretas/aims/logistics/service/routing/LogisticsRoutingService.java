@@ -268,6 +268,11 @@ public class LogisticsRoutingService {
                     .loadRate(tr.loadRate())
                     .weightLoadRate(tr.weightLoadRate())
                     .totalDistanceKm(tr.totalDistanceKm())
+                    // 档4 多趟排班时刻 — 算法推演; 缺坐标/无车时为 null (诚实不伪造)
+                    .plannedDepartMin(tr.departMin())
+                    .returnToDepotMin(tr.returnToDepotMin())
+                    .lateReturn(tr.lateReturn())
+                    .vehicleTripSeq(tr.vehicleTripSeq())
                     .build();
 
             // ---- 档1-B: 道路路线一次计算 + 持久化 (缓存) ----
@@ -432,7 +437,9 @@ public class LogisticsRoutingService {
         LogisticsRoutingAlgorithm.TripResult filled = new LogisticsRoutingAlgorithm.TripResult(
                 tr.tripNo(), tr.vehicleId(), tr.driverId(), tr.orderIdsInOrder(), tr.segmentKeys(),
                 newDistances, total, tr.totalVolumeCbm(), tr.totalWeightKg(), tr.loadRate(), tr.weightLoadRate(),
-                newStatus);
+                newStatus,
+                // 档4 时刻字段原样透传 — 补边只改距离/状态, 不影响时刻推演 (时刻用坐标不用边)
+                tr.departMin(), tr.returnToDepotMin(), tr.lateReturn(), tr.vehicleTripSeq());
         return new AmapFillResult(filled, amapCalls);
     }
 
