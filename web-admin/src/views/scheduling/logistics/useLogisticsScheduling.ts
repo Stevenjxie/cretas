@@ -59,6 +59,7 @@ import type {
   OrderBatch,
   PlanSnapshot,
   PreviewResult,
+  RouteOptimizeMode,
   VehicleProfileUpdate,
 } from '@/api/logistics';
 import { projectLonLat } from './mapProjection';
@@ -192,6 +193,8 @@ const plan = ref<PlanSnapshot | null>(null);
 const planLoading = ref(false);
 const planError = ref<string | null>(null);
 const targetLoadPct = ref(88);
+// 排线优化目标：路程最短(默认) / 时间最快
+const optimizeMode = ref<RouteOptimizeMode>('DISTANCE');
 
 // 调度记录
 const planHistory = ref<PageResponse<LogisticsPlan> | null>(null);
@@ -449,7 +452,7 @@ async function generateRoutes(): Promise<void> {
   planError.value = null;
   try {
     const factoryId = requireFactoryId();
-    const res = await apiGeneratePlan(factoryId, batch.value.id, targetLoadPct.value);
+    const res = await apiGeneratePlan(factoryId, batch.value.id, targetLoadPct.value, optimizeMode.value);
     applyPlanSnapshot(res.data);
     activeStep.value = 'map';
   } catch (err) {
@@ -457,6 +460,14 @@ async function generateRoutes(): Promise<void> {
   } finally {
     planLoading.value = false;
   }
+}
+
+/** 切换排线优化目标(时间最快/路程最短)；若已有计划则立即按新目标重新生成。 */
+async function setOptimizeMode(mode: RouteOptimizeMode): Promise<void> {
+  if (mode !== 'TIME' && mode !== 'DISTANCE') return;
+  if (optimizeMode.value === mode) return;
+  optimizeMode.value = mode;
+  if (batch.value && plan.value) await generateRoutes();
 }
 
 async function setTargetLoad(value: number): Promise<void> {
@@ -717,6 +728,7 @@ function reset(): void {
   selectedTripId.value = null;
   selectedStoreId.value = null;
   targetLoadPct.value = 88;
+  optimizeMode.value = 'DISTANCE';
   importError.value = null;
   ordersError.value = null;
   resourcesError.value = null;
@@ -756,6 +768,8 @@ const state = {
   planLoading,
   planError,
   targetLoadPct,
+  optimizeMode,
+  setOptimizeMode,
   scheduleResult,
   activeTrip,
   exportRows,

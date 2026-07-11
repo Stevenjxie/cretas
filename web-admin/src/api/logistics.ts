@@ -335,9 +335,13 @@ export interface PlanSnapshot extends LogisticsPlan {
   additionalVehicleCount: number;
 }
 
+/** 排线优化目标：TIME=时间最快，DISTANCE=路程最短。后端据此选地图 direction strategy。 */
+export type RouteOptimizeMode = 'TIME' | 'DISTANCE';
+
 export interface GeneratePlanRequest {
   batchId: string;
   targetLoadPct: number;
+  optimizeBy?: RouteOptimizeMode;
 }
 
 /** POST /plans/{planId}/trips/{tripId}/stops/move 请求体 — 把门店移动到另一车次指定位置 */
@@ -348,10 +352,16 @@ export interface MoveStopRequest {
   version?: number;
 }
 
-export function generatePlan(factoryId: string, batchId: string, targetLoadPct: number) {
+export function generatePlan(
+  factoryId: string,
+  batchId: string,
+  targetLoadPct: number,
+  optimizeBy: RouteOptimizeMode = 'DISTANCE',
+) {
   return post<PlanSnapshot>(`/${factoryId}/logistics/plans/generate`, {
     batchId,
     targetLoadPct,
+    optimizeBy,
   } as GeneratePlanRequest);
 }
 
