@@ -20,7 +20,12 @@ function renderMarkdown(text: string): string {
   try {
     return DOMPurify.sanitize(marked.parse(text, { breaks: true, gfm: true }) as string);
   } catch {
-    return text;
+    // marked can throw on pathological input; NEVER feed raw text into v-html
+    // (cached answers are tenant-shared) — HTML-escape so a parse failure cannot
+    // become an XSS vector. (Fable gate F1)
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 }
 

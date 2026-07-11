@@ -1529,15 +1529,17 @@ class ComprehensiveSynthesisEngine:
             supplier = a.get("supplierName") or "未知供应商"
             direction = self._DIRECTION_LABEL.get(a.get("direction") or "", "")
             delta = a.get("deltaPct")
-            delta_text = f"{abs(float(delta))}%" if delta is not None else "?"
+            # F4: deltaPct 是相对"近期均价"(trailing avg) 而非 old→new; 措辞照实说 +
+            # round 到 1 位 (避免 12.3456%)。
+            delta_text = f"{round(abs(float(delta)), 1)}%" if delta is not None else "异常"
             old_price, new_price = a.get("oldPrice"), a.get("newPrice")
             alerts.append({
                 "type": "supplier_price_anomaly",
                 "level": level,
                 "title": f"供应商采购价异常：{name}",
                 "detail": (
-                    f"{supplier}的{name}采购价从¥{_money(old_price)}"
-                    f"{direction}到¥{_money(new_price)}（{delta_text}），"
+                    f"{supplier}的{name}最新采购价¥{_money(new_price)}"
+                    f"（较近期均价{direction}{delta_text}，上次¥{_money(old_price)}），"
                     f"{self._RISK_LABEL[level]}。记录趋势要求解释，非处罚。"
                 ),
             })
@@ -1545,7 +1547,9 @@ class ComprehensiveSynthesisEngine:
         pc = factbook.period_comparison or {}
         cr = pc.get("cost_ratio") or {}
         mom_pct = cr.get("mom_pct")
-        if cr.get("mom_available") and mom_pct is not None and mom_pct > 0:
+        # F3 dead-band: 领料按申请时点 lumpy, +0.1pt 抖动不该拉警报 (免 crying wolf);
+        # 仅环比上升 ≥0.3 个百分点才报, ≥1.0 高风险。
+        if cr.get("mom_available") and mom_pct is not None and mom_pct >= 0.3:
             level = "high" if mom_pct >= self._COST_RATIO_HIGH_THRESHOLD_POINTS else "medium"
             current = cr.get("current")
             current_text = f"（当前{current}%）" if current is not None else ""
