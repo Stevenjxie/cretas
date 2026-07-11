@@ -27,6 +27,14 @@ export interface LaborSegment {
 export interface RawInput {
   materialBatchId: string;
   quantity: number;
+  /**
+   * 2B.2 端口身份 (多产出/多投入必带, 区分同 SKU 出现在不同投入端口)。可空 (legacy 单产出/非 workflow)。
+   */
+  workflowPortId?: string;
+  /** 对应 workflow 物料 Cell (节点) id。 */
+  materialNodeId?: string;
+  /** 该端口物料 SKU (原料 RawMaterialType id)。 */
+  skuId?: string;
 }
 
 /** 上游混锅来源引用, 按真实 batchNumber (mirrors ProcessSheetRowRequest.UpstreamRef) */
@@ -45,6 +53,36 @@ export interface UpstreamRef {
    * consumeForFeedStrict 严格扣减成品 (loud-fail)。与 semiFinished 互斥。默认 false。
    */
   finishedGoods?: boolean;
+
+  // 2B.2 端口身份 (多投入合流必带, 区分同 SKU 出现在不同投入端口)。可空 (legacy 单产出/非 workflow)。
+  /** 对应 workflow 投入端口 id。 */
+  workflowPortId?: string;
+  /** 对应 workflow 物料 Cell (节点) id。 */
+  materialNodeId?: string;
+  /** 该端口物料 SKU (半成品/成品 ProductType id)。 */
+  skuId?: string;
+}
+
+/**
+ * 2B.2 多产出行 (mirrors ProcessSheetRowRequest.OutputLine Java DTO).
+ * 一个产出 = 一个产品 + 数量。产品/端口由 workflow 产出端口固定 (只读, fool-proof Rule 2/3
+ * — 操作员不能自由选产品), 操作员只填数量 (+可选成品重)。
+ */
+export interface OutputLine {
+  /** 产出产品 (半成品/成品 ProductType id)。 */
+  productTypeId: string;
+  /** 对应 workflow 产出端口 id (B3 逐产出对齐端口类型/单位)。可空 (非 workflow 计划)。 */
+  workflowPortId?: string;
+  /** 产出数量 (产出单位, 如 盒/kg) → 直接作为该产出的入库量。 */
+  quantity: number;
+  /** 产出单位。 */
+  unit?: string;
+  /** 产出是否成品 (true → FG, false → 半成品 SFI)。 */
+  finished: boolean;
+  /** 对应 workflow 产出物料 Cell (节点) id (端口身份的另一半, 区分同 SKU 多端口)。 */
+  materialNodeId?: string;
+  /** 可选成品重(kg): 多数多产出场景留空按 quantity 入库。 */
+  productWeight?: number;
 }
 
 /**
@@ -93,6 +131,26 @@ export interface ProcessSheetRowRequest {
   /** SP-G G3a: 包装明细 (来自产品-工序配置, 气调不在此录) */
   packagingDetail?: Array<Record<string, unknown>>;
   /**
+   * 2B.2 多产出 (fan-out): 一道工序一次报工同时产出多个产品 (如熟成鸡装箱同产 350g/400g,
+   * 筛选同产 合格半成品+不合格损耗)。多产出 = 两组独立事实: input allocations (本请求的
+   * rawMaterialInputs/upstreamSources, 一次全量, 不按重量/数量拆分/推断) + output lines
+   * (本字段, 逐产出各自入库)。为空 / size<=1 → 走原单产出路径 (向后兼容, F006 现有流不受影响)。
+   * 多产出时顶层 outputQuantity 仅为满足后端 @NotNull (发 Σquantity), 实际逐 output 用各自 quantity。
+   */
+  outputs?: OutputLine[];
+  /**
+   * 2B.2 内部标记 (合成产出行专用): FE 不发送 —— 仅在 GET rows 重载读回的 payload 中出现,
+   * 标记本行是多产出分解出的产出行 (true)。前端据此按 multiOutputBaseRowId 把 N 个持久化行
+   * 归组显示为一条多产出录入行。
+   */
+  multiOutputMember?: boolean;
+  /** 2B.2 内部: 多产出组的 base clientRowId (= 原始 clientRowId, 各产出行 clientRowId = base#i)。FE 不发送。 */
+  multiOutputBaseRowId?: string;
+  /** 2B.2 本行产出对应的 workflow 产出端口 id (端口身份; 单产出/legacy 可空)。随 payload 持久化供 FE 重载映射。 */
+  workflowPortId?: string;
+  /** 2B.2 本行产出对应的 workflow 产出物料 Cell (节点) id。 */
+  materialNodeId?: string;
+  /**
    * G2: 本工序自定义字段值 (如 {baume: 12.5, remark: "..."})。key 集合受该工序
    * WorkProcess.customFieldSchema 约束 —— 未配置 schema 的工序传任何 key 都会被后端 400 拒绝
    * (见 ProcessSheetServiceImpl#validateCustomFields)。
@@ -122,6 +180,31 @@ export interface ProcessSheetRowResult {
   materialized: boolean;
   /** 软预警: 调料配方缺失 / 超量 / labor rate fallback 等 */
   warnings: string[];
+  /**
+   * 2B.2 多产出: 本次报工分解出的各产出批次明细 (单产出时为 null/undefined)。FE 重载过程单会
+   * 拿到 N 行持久化行, 此处仅为保存后的即时反馈。顶层 batchId/batchNumber 取首产出为代表
+   * (成本相关字段 rowTotalCost/unitPrice/yieldRate 顶层为 null — 工序不处理成本分摊)。
+   */
+  outputs?: OutputResult[] | null;
+}
+
+/** 单个产出的物化结果 (mirrors ProcessSheetRowResult.OutputResult Java DTO)。 */
+export interface OutputResult {
+  clientRowId: string;
+  /** 端口身份: 对应 workflow 产出端口 id。 */
+  workflowPortId: string | null;
+  /** 端口身份: 对应 workflow 产出物料 Cell (节点) id。 */
+  materialNodeId: string | null;
+  /** 产出 SKU (= productTypeId)。 */
+  productTypeId: string;
+  /** 生成的产出批次 id (generatedBatchId)。 */
+  batchId: number | null;
+  /** 生成的产出批次号。 */
+  batchNumber: string | null;
+  quantity: number;
+  unit: string | null;
+  /** 该产出行物化成本 (existing 机制副产, Workflow 不干预成本字段)。 */
+  rowTotalCost: number | null;
 }
 
 /**
@@ -325,6 +408,8 @@ export function getRowHistory(
  */
 export interface WorkflowPortDescriptor {
   workflowPortId: string;
+  /** 2B.2 端口身份: workflow 物料 Cell 节点 id。 */
+  materialNodeId?: string;
   materialKind: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD';
   skuId: string;
   materialName: string | null;
@@ -352,7 +437,13 @@ export interface WorkflowProcessDescriptor {
   /** 原样透传 WorkProcess.customFieldSchema (JSON, 与 legacy ProcessSheetCustomFieldDef[] 同源)。 */
   customFieldSchema: unknown | null;
   inputs: WorkflowPortDescriptor[];
+  /** 首个产出端口。向后兼容单产出 FE; 多产出时 == outputs[0]。 */
   output: WorkflowPortDescriptor | null;
+  /**
+   * 2B.2: 全部产出端口 (按 ordinal 排序)。单产出时 size==1。多产出时 (length>1) FE 逐端口
+   * 录入 N 条产出 (产品只读=端口 SKU, 只填数量) —— 这是"是否多产出"的唯一判据, 不是 toggle。
+   */
+  outputs: WorkflowPortDescriptor[];
 }
 
 /**
