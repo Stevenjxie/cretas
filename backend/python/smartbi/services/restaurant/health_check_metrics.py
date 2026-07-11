@@ -1,6 +1,6 @@
 """G4 — HealthCheckMetricsBuilder.
 
-Aggregates three data sources into one flat ``metrics`` dict for
+Aggregates data sources into one flat ``metrics`` dict for
 ``DiagnosticsEngine.run()``:
 
   1. finance (smart_bi_finance_data, REVENUE/COST) — mirrors Java
@@ -10,18 +10,38 @@ Aggregates three data sources into one flat ``metrics`` dict for
   2. POS (agg_daily_order_type_meal + fact_pos_transaction, gold layer) —
      discount_rate / delivery_dependency / channel_collection_rate.
   3. reviews (smart_bi_dynamic_data JSONB, 大众点评) — 5-star pct MoM change.
+  4. gold totals (agg_restaurant_daily_totals) — ingredient_waste_rate.
+  5. POS bill-grain (fact_pos_transaction) + business_config_overrides —
+     avg_ticket_vs_target (actual avg ticket vs configured/benchmark target).
 
 ⛔ Scale invariants (must NOT be converted):
-  - food_cost_ratio / labor_cost_ratio / discount_rate → 0-100 scale
-    (benchmark YAML ranges are %-scale, e.g. [35,45]).
+  - food_cost_ratio / labor_cost_ratio / discount_rate / ingredient_waste_rate
+    → 0-100 scale (benchmark YAML ranges are %-scale, e.g. [35,45], [8,25]).
   - cost_rigidity / delivery_dependency / channel_collection_rate /
-    review_score_decline → 0-1 scale (inline thresholds, e.g. "< 0.70").
+    review_score_decline / avg_ticket_vs_target → 0-1 scale
+    (inline thresholds, e.g. "< 0.70").
 
 Honest failure: a missing/insufficient source records a ``coverage`` skip
 reason — it never fabricates a metric value. Partial bundles are valid.
+
+🔒 Structurally-unavailable metrics (never computed, always coverage-skipped
+honestly — never fabricated):
+  - channel_gross_margin / gross_margin_per_dish / recipe_coverage_rate:
+    require a per-dish BOM cost card (agg_restaurant_product_cost). Per
+    project grounding rule, 中餐单品成本卡 (per-dish cost for Chinese
+    restaurant menus) is NOT reliable enough to derive a per-dish gross
+    margin judgment from — no fabricated per-dish economics.
+  - table_turnover: formula is total_orders / table_count. table_count
+    (桌台数) has no persisted source anywhere (DB/config) — it can only
+    ever arrive as a manual per-request query param, so this can't be
+    proactively/standing computed today.
+  - stored_value_dependency: stored_value_giveaway (充值赠送) is only ever
+    parsed from uploaded finance Excel (financial_data['current']), never
+    landed into the gold schema — no gold source to pull from yet.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date
@@ -29,6 +49,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Metrics that require a per-dish BOM cost card we don't trust for 中餐
+# (see module docstring). Always coverage-skipped, never computed.
+_BOM_SKIPPED_KEYS = ("channel_gross_margin", "gross_margin_per_dish", "recipe_coverage_rate")
+_BOM_SKIP_REASON = "中餐单品成本卡不可靠,不做单品毛利判断"
+
+# Metrics with no gold/config source today (see module docstring).
+_STRUCTURALLY_UNAVAILABLE: dict[str, str] = {
+    "table_turnover": "桌台数无系统记录,需客户提供",
+    "stored_value_dependency": "储值赠送数据仅存在于财务Excel,尚未接入Gold层",
+}
 
 # Keyword buckets — 1:1 mirror of Java RestaurantFinancialMetricsFetcher.
 _FOOD_KEYWORDS = ("食材", "原材料", "食品", "饮料", "酒水", "菜品")
@@ -204,6 +235,39 @@ class HealthCheckMetricsBuilder:
             coverage["review_score_decline"] = "ok"
         else:
             coverage["review_score_decline"] = "skipped:暂无点评数据"
+
+        # ── 4. ingredient_waste_rate (gold agg_restaurant_daily_totals) ───
+        try:
+            waste_metrics = await self._fetch_waste_metrics(
+                factory_id, start, end, smartbi_pool=smartbi_pool
+            ) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[health-check] waste query failed for %s: %s", factory_id, e)
+            waste_metrics = {}
+        self._merge_waste(metrics, coverage, waste_metrics)
+
+        # ── 5. avg_ticket_vs_target (gold fact_pos_transaction + config) ──
+        try:
+            avg_ticket_delta = await self._fetch_avg_ticket_vs_target(
+                factory_id, start, end, sub_sector, smartbi_pool=smartbi_pool
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[health-check] avg_ticket query failed for %s: %s", factory_id, e)
+            avg_ticket_delta = None
+
+        if avg_ticket_delta is not None:
+            metrics["avg_ticket_vs_target"] = avg_ticket_delta
+            coverage["avg_ticket_vs_target"] = "ok"
+        else:
+            coverage["avg_ticket_vs_target"] = "skipped:无POS订单数据或客单价目标无法确定"
+
+        # ── 6. structurally-unavailable metrics — honest, never fabricated ──
+        # (see module docstring: BOM per-dish cost card not trusted for 中餐;
+        # table_count / stored_value_giveaway have no gold/config source yet)
+        for k in _BOM_SKIPPED_KEYS:
+            coverage[k] = f"skipped:{_BOM_SKIP_REASON}"
+        for k, reason in _STRUCTURALLY_UNAVAILABLE.items():
+            coverage[k] = f"skipped:{reason}"
 
         return HealthCheckBundle(
             metrics=metrics,
@@ -620,3 +684,178 @@ class HealthCheckMetricsBuilder:
         if cur is None or prev is None:
             return None
         return round(cur - prev, 4)
+
+    # ── gold totals (ingredient_waste_rate) ─────────────────────────
+
+    def _merge_waste(self, metrics: dict, coverage: dict, waste: dict) -> None:
+        v = waste.get("ingredient_waste_rate")
+        if v is not None:
+            metrics["ingredient_waste_rate"] = float(v)
+            coverage["ingredient_waste_rate"] = "ok"
+        else:
+            coverage["ingredient_waste_rate"] = "skipped:无领料/损耗数据(Gold层本期无记录)"
+
+    async def _fetch_waste_metrics(
+        self,
+        factory_id: str,
+        start: date,
+        end: date,
+        *,
+        smartbi_pool: Any = None,
+    ) -> dict:
+        """ingredient_waste_rate from agg_restaurant_daily_totals (gold).
+
+        formula: wastage_cost_total / (requisition_cost_total + wastage_cost_total) * 100
+        — mirrors analyzer.py's Excel-path formula (wastage_cost / (food_cost_purchase
+        + wastage_cost) * 100), 0-100 scale matching the waste_loss_rate benchmark
+        range [8, 25].
+
+        requisition_cost_total (领料成本, from fact_restaurant_requisition via
+        restaurant_ops_etl) is used as the food_cost_purchase proxy — it is the
+        closest gold-layer equivalent to "food purchased for use" (there is no
+        literal purchase-cost column in gold; requisition cost is what actually
+        flows into kitchen use, which is what the loss-rate formula is measuring
+        against). Returns {} (honest skip) if no rows in period.
+        """
+        if smartbi_pool is None:
+            return {}
+
+        async with smartbi_pool.acquire() as conn:
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            row = await conn.fetchrow(
+                """
+                SELECT COALESCE(SUM(requisition_cost_total), 0)::numeric(18,2) AS req_cost,
+                       COALESCE(SUM(wastage_cost_total), 0)::numeric(18,2)     AS waste_cost
+                  FROM agg_restaurant_daily_totals
+                 WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+                """,
+                factory_id, start, end,
+            )
+
+        if row is None:
+            return {}
+        req_cost = float(row["req_cost"])
+        waste_cost = float(row["waste_cost"])
+        denom = req_cost + waste_cost
+        if denom <= 0:
+            return {}
+        return {"ingredient_waste_rate": round(waste_cost / denom * 100, 4)}
+
+    # ── avg_ticket_vs_target (gold POS + config/benchmark target) ───
+
+    async def _fetch_avg_ticket_vs_target(
+        self,
+        factory_id: str,
+        start: date,
+        end: date,
+        sub_sector: str,
+        *,
+        smartbi_pool: Any = None,
+    ) -> Optional[float]:
+        """actual_avg_ticket (gold fact_pos_transaction, bill grain) vs target
+        (business_config_overrides factory-level override, else sub-sector
+        benchmark average_ticket median) — mirrors analyzer.py's
+        _resolve_target_avg_ticket()/avg_ticket_vs_target Excel-path formula,
+        sourced from gold POS instead of an uploaded finance row.
+
+        Returns 0-1 scale delta (actual/target - 1.0), or None (honest skip)
+        when there are no bills in the period or no resolvable target.
+        """
+        if smartbi_pool is None:
+            return None
+
+        async with smartbi_pool.acquire() as conn:
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            row = await conn.fetchrow(
+                """
+                SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2) AS net_sum,
+                       COUNT(*) AS bill_count
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+                """,
+                factory_id, start, end,
+            )
+
+        bill_count = int(row["bill_count"]) if row else 0
+        if bill_count <= 0:
+            return None
+        actual_avg_ticket = float(row["net_sum"]) / bill_count
+
+        target = await self._fetch_avg_ticket_target_override(factory_id, smartbi_pool)
+        if target is None:
+            target = self._benchmark_avg_ticket_median(sub_sector)
+        if target is None or target <= 0:
+            return None
+
+        return round(actual_avg_ticket / target - 1.0, 4)
+
+    async def _fetch_avg_ticket_target_override(
+        self, factory_id: str, smartbi_pool: Any
+    ) -> Optional[float]:
+        """Factory-level 'restaurant.avg_ticket_target' override.
+
+        This mirrors the factory-level (Layer 2) lookup of
+        ``shared.dynamic_config_resolver.DynamicConfigResolver`` verbatim —
+        that resolver requires a sync SQLAlchemy ``Session`` while this async
+        builder only holds an asyncpg pool, so the factory-level query is
+        re-implemented here directly against the same table/columns rather
+        than threading a second DB connection type through this class.
+        Store-level overrides (Layer 3) are intentionally not attempted here
+        (this builder has no store_id context yet). Returns None (honest
+        fall-through to benchmark) if no active override row exists.
+        """
+        if smartbi_pool is None:
+            return None
+        async with smartbi_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT config_value
+                  FROM business_config_overrides
+                 WHERE factory_id = $1 AND domain = 'restaurant'
+                   AND config_key = 'restaurant.avg_ticket_target'
+                   AND store_id IS NULL AND deleted_at IS NULL
+                   AND (effective_from IS NULL OR effective_from <= CURRENT_DATE)
+                   AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+                 ORDER BY updated_at DESC LIMIT 1
+                """,
+                factory_id,
+            )
+        if row is None:
+            return None
+        raw = row["config_value"]
+        try:
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            return float(parsed)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning(
+                "[health-check] avg_ticket_target override unparseable for %s: %r",
+                factory_id, raw,
+            )
+            return None
+
+    @staticmethod
+    def _benchmark_avg_ticket_median(sub_sector: str) -> Optional[float]:
+        """Sub-sector benchmark 'average_ticket' median as the fallback target.
+
+        Mirrors ``analyzer.py._benchmark_avg_ticket_median`` (which reads off
+        an already-constructed ``DiagnosticsEngine`` instance held by the
+        caller). This builder doesn't hold a live engine at merge time, so it
+        builds a throwaway one — cheap, YAML-file read only, no DB I/O.
+
+        ``DiagnosticsEngine.__init__`` only auto-loads benchmarks when
+        ``sub_sector`` is truthy (it's built for per-diagnostic threshold
+        lookups where a "通用" tenant has no threshold_source to resolve
+        anyway). ``average_ticket`` isn't a diagnosed metric itself though —
+        it's a target-resolution reference — so ``_common.yaml``'s 通用
+        median must still load even for empty sub_sector. Force it.
+        """
+        from smartbi.shared.diagnostics_engine import DiagnosticsEngine
+
+        engine = DiagnosticsEngine(domain="restaurant", sub_sector=sub_sector)
+        if not sub_sector:
+            engine._load_benchmarks()
+        bm = engine._benchmarks.get("metrics", {}).get("average_ticket", {})
+        median = bm.get("median")
+        return float(median) if median is not None else None

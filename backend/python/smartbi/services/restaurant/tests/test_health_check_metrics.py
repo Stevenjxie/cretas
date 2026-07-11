@@ -6,11 +6,15 @@ injecting fake row sets via monkeypatched private query helpers, and verify:
   - POS ratios stay 0-1 scale (matches inline thresholds)
   - coverage records skip reasons honestly (no fabricated metrics)
   - cost_rigidity only present when revenue declined
+  - ingredient_waste_rate / avg_ticket_vs_target gold-pull additions
+  - structurally-unavailable metrics (BOM/table_turnover/stored_value) are
+    always honestly coverage-skipped, never fabricated
 """
 from __future__ import annotations
 
 import asyncio
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock
 
 from smartbi.services.restaurant.health_check_metrics import (
     HealthCheckBundle,
@@ -21,6 +25,37 @@ from smartbi.services.restaurant.health_check_metrics import (
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+# ── fake asyncpg pool/conn harness (routes fetchrow by SQL substring) ──
+
+
+class FakeConn:
+    def __init__(self):
+        self.executed: list = []
+        self.fetchrow_router: list = []  # (substr, row_or_None)
+
+    def add_fetchrow(self, substr: str, row):
+        self.fetchrow_router.append((substr, row))
+
+    async def execute(self, sql, *args):
+        self.executed.append((sql, args))
+        return "OK"
+
+    async def fetchrow(self, sql, *args):
+        for substr, row in self.fetchrow_router:
+            if substr in sql:
+                return row
+        return None
+
+
+def _make_pool(conn: FakeConn) -> MagicMock:
+    pool = MagicMock()
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    pool.acquire = MagicMock(return_value=ctx)
+    return pool
 
 
 # ── month range resolution (mirror Java RestaurantFinancialMetricsFetcher) ──
@@ -286,3 +321,229 @@ def test_review_score_decline_skip_no_data(monkeypatch):
     assert "review_score_decline" not in bundle.metrics
     assert "暂无点评" in bundle.coverage["review_score_decline"] or \
         bundle.coverage["review_score_decline"].startswith("skipped")
+
+
+# ── ingredient_waste_rate (gold agg_restaurant_daily_totals) ───────────
+
+
+def test_fetch_waste_metrics_computes_rate():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "agg_restaurant_daily_totals",
+        {"req_cost": 8000.0, "waste_cost": 2000.0},
+    )
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_waste_metrics(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), smartbi_pool=pool,
+    ))
+    # 2000 / (8000 + 2000) * 100 = 20.0
+    assert result == {"ingredient_waste_rate": 20.0}
+
+
+def test_fetch_waste_metrics_zero_denom_is_honest_empty():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "agg_restaurant_daily_totals",
+        {"req_cost": 0.0, "waste_cost": 0.0},
+    )
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_waste_metrics(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), smartbi_pool=pool,
+    ))
+    assert result == {}
+
+
+def test_fetch_waste_metrics_no_pool_returns_empty():
+    builder = HealthCheckMetricsBuilder()
+    result = _run(builder._fetch_waste_metrics(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), smartbi_pool=None,
+    ))
+    assert result == {}
+
+
+def test_merge_waste_ok_and_skip():
+    builder = HealthCheckMetricsBuilder()
+    metrics: dict = {}
+    coverage: dict = {}
+    builder._merge_waste(metrics, coverage, {"ingredient_waste_rate": 12.5})
+    assert metrics["ingredient_waste_rate"] == 12.5
+    assert coverage["ingredient_waste_rate"] == "ok"
+
+    metrics2: dict = {}
+    coverage2: dict = {}
+    builder._merge_waste(metrics2, coverage2, {})
+    assert "ingredient_waste_rate" not in metrics2
+    assert coverage2["ingredient_waste_rate"].startswith("skipped")
+
+
+def test_build_includes_ingredient_waste_rate(monkeypatch):
+    """End-to-end: build() wires the gold waste query into bundle.metrics."""
+    builder = HealthCheckMetricsBuilder()
+
+    async def _pos(self, fid, start, end, **kw):
+        return {}
+
+    async def _review(self, fid, start, end, **kw):
+        return None
+
+    async def _waste(self, fid, start, end, **kw):
+        return {"ingredient_waste_rate": 18.0}
+
+    async def _ticket(self, fid, start, end, sub_sector, **kw):
+        return None
+
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_pos_metrics", _pos)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_review_decline", _review)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_waste_metrics", _waste)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_avg_ticket_vs_target", _ticket)
+
+    bundle = _run(builder.build(
+        factory_id="F", period="2026-04",
+        finance_metrics={"foodCostRatio": 40.0, "revenueChangePct": 0.0},
+    ))
+    assert bundle.metrics["ingredient_waste_rate"] == 18.0
+    assert bundle.coverage["ingredient_waste_rate"] == "ok"
+
+
+# ── avg_ticket_vs_target (gold POS + config/benchmark target) ─────────
+
+
+def test_fetch_avg_ticket_vs_target_uses_factory_override():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "fact_pos_transaction",
+        {"net_sum": 100000.0, "bill_count": 1000},
+    )
+    conn.add_fetchrow(
+        "business_config_overrides",
+        {"config_value": "120"},  # asyncpg-as-str JSONB scalar
+    )
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_avg_ticket_vs_target(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
+    ))
+    # actual = 100000/1000 = 100; target = 120 (override) → 100/120 - 1 = -0.1667
+    assert result == -0.1667
+
+
+def test_fetch_avg_ticket_vs_target_falls_back_to_benchmark():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow(
+        "fact_pos_transaction",
+        {"net_sum": 90000.0, "bill_count": 1000},
+    )
+    conn.add_fetchrow("business_config_overrides", None)  # no override row
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_avg_ticket_vs_target(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
+    ))
+    # actual = 90000/1000 = 90; target falls back to _common.yaml average_ticket
+    # median = 75.0 → 90/75 - 1 = 0.2
+    assert result == 0.2
+
+
+def test_fetch_avg_ticket_vs_target_no_bills_returns_none():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow("fact_pos_transaction", {"net_sum": 0.0, "bill_count": 0})
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_avg_ticket_vs_target(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=pool,
+    ))
+    assert result is None
+
+
+def test_fetch_avg_ticket_vs_target_no_pool_returns_none():
+    builder = HealthCheckMetricsBuilder()
+    result = _run(builder._fetch_avg_ticket_vs_target(
+        "F001", date(2026, 4, 1), date(2026, 4, 30), "", smartbi_pool=None,
+    ))
+    assert result is None
+
+
+def test_avg_ticket_target_override_unparseable_returns_none():
+    builder = HealthCheckMetricsBuilder()
+    conn = FakeConn()
+    conn.add_fetchrow("business_config_overrides", {"config_value": "{not json"})
+    pool = _make_pool(conn)
+
+    result = _run(builder._fetch_avg_ticket_target_override("F001", pool))
+    assert result is None
+
+
+def test_benchmark_avg_ticket_median_common_yaml():
+    median = HealthCheckMetricsBuilder._benchmark_avg_ticket_median("")
+    assert median == 75.0  # _common.yaml average_ticket median
+
+
+def test_build_includes_avg_ticket_vs_target(monkeypatch):
+    """End-to-end: build() wires the gold avg-ticket computation into bundle.metrics."""
+    builder = HealthCheckMetricsBuilder()
+
+    async def _pos(self, fid, start, end, **kw):
+        return {}
+
+    async def _review(self, fid, start, end, **kw):
+        return None
+
+    async def _waste(self, fid, start, end, **kw):
+        return {}
+
+    async def _ticket(self, fid, start, end, sub_sector, **kw):
+        return -0.1
+
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_pos_metrics", _pos)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_review_decline", _review)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_waste_metrics", _waste)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_avg_ticket_vs_target", _ticket)
+
+    bundle = _run(builder.build(
+        factory_id="F", period="2026-04",
+        finance_metrics={"foodCostRatio": 40.0, "revenueChangePct": 0.0},
+    ))
+    assert bundle.metrics["avg_ticket_vs_target"] == -0.1
+    assert bundle.coverage["avg_ticket_vs_target"] == "ok"
+
+
+# ── structurally-unavailable metrics — always honest coverage-skip ────
+
+
+def test_build_marks_structurally_unavailable_metrics_skipped(monkeypatch):
+    builder = HealthCheckMetricsBuilder()
+
+    async def _pos(self, fid, start, end, **kw):
+        return {}
+
+    async def _review(self, fid, start, end, **kw):
+        return None
+
+    async def _waste(self, fid, start, end, **kw):
+        return {}
+
+    async def _ticket(self, fid, start, end, sub_sector, **kw):
+        return None
+
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_pos_metrics", _pos)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_review_decline", _review)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_waste_metrics", _waste)
+    monkeypatch.setattr(HealthCheckMetricsBuilder, "_fetch_avg_ticket_vs_target", _ticket)
+
+    bundle = _run(builder.build(factory_id="F", period="2026-04", finance_metrics=None))
+
+    for k in ("channel_gross_margin", "gross_margin_per_dish", "recipe_coverage_rate"):
+        assert k not in bundle.metrics, f"{k} must never be fabricated"
+        assert bundle.coverage[k].startswith("skipped")
+        assert "中餐单品成本卡" in bundle.coverage[k]
+
+    for k in ("table_turnover", "stored_value_dependency"):
+        assert k not in bundle.metrics, f"{k} must never be fabricated"
+        assert bundle.coverage[k].startswith("skipped")

@@ -51,6 +51,8 @@ _METRIC_NAME_ZH = {
     "channel_collection_rate": "渠道收款率",
     "delivery_dependency": "外卖依赖度",
     "review_score_decline": "评分趋势下滑",
+    "ingredient_waste_rate": "食材损耗率",
+    "avg_ticket_vs_target": "客单价达标率",
 }
 
 # Coverage skip → 友好中文短语 (拼 coverageNote)。
@@ -62,6 +64,13 @@ _SKIP_LABEL = {
     "channel_collection_rate": "渠道收款率",
     "delivery_dependency": "外卖依赖度",
     "review_score_decline": "评分趋势",
+    "ingredient_waste_rate": "食材损耗率",
+    "avg_ticket_vs_target": "客单价达标率",
+    "channel_gross_margin": "渠道毛利率",
+    "gross_margin_per_dish": "菜品毛利率",
+    "recipe_coverage_rate": "配方覆盖率",
+    "table_turnover": "翻台率",
+    "stored_value_dependency": "充卡赠送依赖度",
 }
 
 _CACHE_TTL_SECONDS = 300
