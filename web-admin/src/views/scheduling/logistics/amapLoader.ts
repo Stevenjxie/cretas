@@ -51,9 +51,28 @@ export interface AMapInstance {
   destroy(): void;
 }
 
+interface AmapRuntimeConfig {
+  key?: string;
+  securityCode?: string;
+}
+
+/** 运行时注入的高德配置 (index.html 引的 /amap-config.js 里 window.__AMAP_CONFIG__)，优先于构建期 env。 */
+function runtimeAmapConfig(): AmapRuntimeConfig {
+  const cfg = (window as unknown as { __AMAP_CONFIG__?: AmapRuntimeConfig }).__AMAP_CONFIG__;
+  return cfg && typeof cfg === 'object' ? cfg : {};
+}
+
 export function getAmapKey(): string | undefined {
-  const key = import.meta.env.VITE_AMAP_JS_KEY as string | undefined;
+  // 运行时配置优先 (nginx serve, 部署不覆盖)，回落构建期 env (本地开发 / 未配 nginx 时)。
+  const runtimeKey = runtimeAmapConfig().key;
+  const key = (runtimeKey && runtimeKey.trim()) || (import.meta.env.VITE_AMAP_JS_KEY as string | undefined);
   return key && key.trim() ? key.trim() : undefined;
+}
+
+function getAmapSecurityCode(): string | undefined {
+  const runtimeCode = runtimeAmapConfig().securityCode;
+  const code = (runtimeCode && runtimeCode.trim()) || (import.meta.env.VITE_AMAP_JS_SECURITY_CODE as string | undefined);
+  return code && code.trim() ? code.trim() : undefined;
 }
 
 export function loadAmap(): Promise<AMapNamespace> {
@@ -70,7 +89,7 @@ export function loadAmap(): Promise<AMapNamespace> {
     return Promise.reject(new Error('未配置 VITE_AMAP_JS_KEY'));
   }
 
-  const securityCode = import.meta.env.VITE_AMAP_JS_SECURITY_CODE as string | undefined;
+  const securityCode = getAmapSecurityCode();
   if (securityCode && securityCode.trim()) {
     w._AMapSecurityConfig = { securityJsCode: securityCode.trim() };
   }
