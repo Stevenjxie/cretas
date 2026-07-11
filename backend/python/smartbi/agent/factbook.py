@@ -425,6 +425,21 @@ class FactBook:
                 f"同比 {gy}" if gy else "同比 去年同期无数据",
                 f"环比 {gm_}" if gm_ else "环比 无上一周期数据",
             ]))
+        # 领料成本率(真实际用料口径, 反回扣核心) — 有它自己的绝对值(无别处呈现), 故显示
+        # 当前值+变化; 诚实标注口径(领料÷营收/factory级/非盘点rollforward)。
+        cr = pc.get("cost_ratio") or {}
+        if cr.get("current") is not None:
+            cy = _seg(cr.get("yoy_available"), cr.get("yoy_pct"), "个百分点")
+            cm = _seg(cr.get("mom_available"), cr.get("mom_pct"), "个百分点")
+            lines.append(
+                f"- 领料成本率 {cr.get('current')}%（领料成本÷营收，领料申请量×当前单价估算，"
+                "仅含已提交/已审批，与配方理论COGS不同、factory级非逐店、非盘点rollforward）："
+                + "，".join([
+                    f"同比 {cy}" if cy else "同比 去年同期无数据",
+                    f"环比 {cm}" if cm else "环比 无上一周期数据",
+                ])
+                + "。成本率上升=用料/漏损/回扣信号，需查物料与供应商，记录趋势非处罚。"
+            )
         lines.append("")
 
     def _render_supplier_anomaly(self, lines: List[str]) -> None:
@@ -609,6 +624,13 @@ class FactBook:
             idx["加权毛利率同比"] = float(pcg["yoy_pct"])
         if pcg.get("mom_available") and pcg.get("mom_pct") is not None:
             idx["加权毛利率环比"] = float(pcg["mom_pct"])
+        pcc = pc.get("cost_ratio") or {}
+        if pcc.get("current") is not None:
+            idx["领料成本率"] = float(pcc["current"])
+        if pcc.get("yoy_available") and pcc.get("yoy_pct") is not None:
+            idx["领料成本率同比"] = float(pcc["yoy_pct"])
+        if pcc.get("mom_available") and pcc.get("mom_pct") is not None:
+            idx["领料成本率环比"] = float(pcc["mom_pct"])
 
         # 供应商价格异常涨幅 — each anomaly's deltaPct grounded per material name.
         sa = self.supplier_anomaly or {}
