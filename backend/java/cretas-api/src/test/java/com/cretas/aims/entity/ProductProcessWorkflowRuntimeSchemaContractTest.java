@@ -143,8 +143,19 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
                 "the batch pin must reference an owned exact workflow version");
         assertContains(sql, "BEFORE INSERT ON production_batches",
                 "all production-batch creation paths must pass through one atomic pin");
-        assertContains(sql, "FOR SHARE",
-                "batch insertion must serialize with concurrent activation changes");
+        assertContains(sql,
+                "BEFORE INSERT OR UPDATE OR DELETE ON product_process_workflow_activations",
+                "every activation mutation must take the same product-scoped transaction lock");
+        assertContains(sql, "lock_product_process_workflow_activation()",
+                "activation writes must have a dedicated lock trigger function");
+        assertTrue(occurrences(sql, "pg_advisory_xact_lock(hashtextextended(") >= 2,
+                "both activation writes and batch inserts must take a 64-bit transaction lock");
+        assertTrue(
+                sql.indexOf("pg_advisory_xact_lock(hashtextextended(")
+                        < sql.indexOf("SELECT activation.active_workflow_id"),
+                "batch insertion must lock before deciding whether an activation exists");
+        assertFalse(sql.contains("FOR SHARE"),
+                "the advisory lock must not be followed by a reverse-order activation row lock");
         assertContains(sql, "NEW.workflow_selection_mode := 'WORKFLOW'",
                 "enabled activation must pin workflow mode");
         assertContains(sql, "NEW.workflow_selection_mode := 'LEGACY'",
@@ -179,5 +190,9 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
 
     private void assertContains(String sql, String contract, String message) {
         assertTrue(sql.contains(contract), message + "; missing SQL: " + contract);
+    }
+
+    private int occurrences(String value, String needle) {
+        return (value.length() - value.replace(needle, "").length()) / needle.length();
     }
 }

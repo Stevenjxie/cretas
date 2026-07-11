@@ -59,6 +59,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -257,6 +263,119 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                     """));
             assertEquals("23502", invalidPort.getSQLState());
         } finally {
+            dropSchema(schema);
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void advisoryLockMakesActivationAndBatchCommitOrderThePinningDecision() throws Exception {
+        String schema = "workflow_runtime_" + UUID.randomUUID().toString().replace("-", "");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            try (Connection setup = dataSource.getConnection();
+                 Statement statement = setup.createStatement()) {
+                setup.setAutoCommit(true);
+                statement.execute("CREATE SCHEMA " + schema);
+                statement.execute("SET search_path TO " + schema);
+                statement.execute("""
+                        CREATE TABLE product_process_workflows (
+                          id BIGINT PRIMARY KEY, factory_id VARCHAR(64) NOT NULL,
+                          product_type_id VARCHAR(64) NOT NULL, definition_version INTEGER NOT NULL)
+                        """);
+                statement.execute("""
+                        CREATE TABLE production_batches (
+                          id BIGINT PRIMARY KEY, factory_id VARCHAR(64) NOT NULL,
+                          product_type_id VARCHAR(64) NOT NULL)
+                        """);
+                statement.execute("""
+                        CREATE TABLE work_process_tasks (
+                          id BIGINT PRIMARY KEY, factory_id VARCHAR(64) NOT NULL,
+                          product_work_process_id BIGINT NOT NULL, deleted_at TIMESTAMP)
+                        """);
+                ScriptUtils.executeSqlScript(setup, new ClassPathResource(
+                        "db/flyway/V20261027_55__product_process_workflow_runtime.sql"));
+                ScriptUtils.executeSqlScript(setup, new ClassPathResource(
+                        "db/flyway/V20261027_56__pin_batch_workflow_selection.sql"));
+                statement.execute("""
+                        INSERT INTO product_process_workflows
+                          (id, factory_id, product_type_id, definition_version)
+                        VALUES (1, 'F', 'ACTIVATION_FIRST', 1),
+                               (2, 'F', 'BATCH_FIRST', 1)
+                        """);
+            }
+
+            try (Connection activationFirst = transactionalConnection(schema);
+                 Connection blockedBatch = transactionalConnection(schema)) {
+                activationFirst.createStatement().execute("""
+                        INSERT INTO product_process_workflow_activations
+                          (factory_id, product_type_id, active_workflow_id,
+                           active_definition_version, enabled)
+                        VALUES ('F', 'ACTIVATION_FIRST', 1, 1, TRUE)
+                        """);
+
+                CountDownLatch insertStarted = new CountDownLatch(1);
+                Future<?> batchInsert = executor.submit(() -> {
+                    insertStarted.countDown();
+                    try (Statement statement = blockedBatch.createStatement()) {
+                        statement.execute("""
+                                INSERT INTO production_batches (id, factory_id, product_type_id)
+                                VALUES (101, 'F', 'ACTIVATION_FIRST')
+                                """);
+                        blockedBatch.commit();
+                    }
+                    return null;
+                });
+                assertTrue(insertStarted.await(2, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class,
+                        () -> batchInsert.get(250, TimeUnit.MILLISECONDS));
+                activationFirst.commit();
+                batchInsert.get(2, TimeUnit.SECONDS);
+            }
+
+            try (Connection batchFirst = transactionalConnection(schema);
+                 Connection blockedActivation = transactionalConnection(schema)) {
+                batchFirst.createStatement().execute("""
+                        INSERT INTO production_batches (id, factory_id, product_type_id)
+                        VALUES (201, 'F', 'BATCH_FIRST')
+                        """);
+
+                CountDownLatch insertStarted = new CountDownLatch(1);
+                Future<?> activationInsert = executor.submit(() -> {
+                    insertStarted.countDown();
+                    try (Statement statement = blockedActivation.createStatement()) {
+                        statement.execute("""
+                                INSERT INTO product_process_workflow_activations
+                                  (factory_id, product_type_id, active_workflow_id,
+                                   active_definition_version, enabled)
+                                VALUES ('F', 'BATCH_FIRST', 2, 1, TRUE)
+                                """);
+                        blockedActivation.commit();
+                    }
+                    return null;
+                });
+                assertTrue(insertStarted.await(2, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class,
+                        () -> activationInsert.get(250, TimeUnit.MILLISECONDS));
+                batchFirst.commit();
+                activationInsert.get(2, TimeUnit.SECONDS);
+            }
+
+            try (Connection verification = dataSource.getConnection();
+                 Statement statement = verification.createStatement()) {
+                statement.execute("SET search_path TO " + schema);
+                assertEquals("WORKFLOW", scalarString(verification, """
+                        SELECT workflow_selection_mode FROM production_batches WHERE id = 101
+                        """));
+                assertEquals(1, scalarInt(verification, """
+                        SELECT selected_workflow_version FROM production_batches WHERE id = 101
+                        """));
+                assertEquals("LEGACY", scalarString(verification, """
+                        SELECT workflow_selection_mode FROM production_batches WHERE id = 201
+                        """));
+            }
+        } finally {
+            executor.shutdownNow();
             dropSchema(schema);
         }
     }
@@ -499,6 +618,15 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
             statement.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
             statement.execute("SET search_path TO public");
         }
+    }
+
+    private Connection transactionalConnection(String schema) throws SQLException {
+        Connection connection = dataSource.getConnection();
+        connection.setAutoCommit(false);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("SET search_path TO " + schema);
+        }
+        return connection;
     }
 
     private static String requiredEnv(String name) {
