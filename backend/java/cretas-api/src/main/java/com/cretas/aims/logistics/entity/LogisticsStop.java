@@ -12,6 +12,7 @@ import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -86,7 +87,7 @@ public class LogisticsStop extends BaseEntity {
      */
     @Type(JsonBinaryType.class)
     @Column(name = "geometry", columnDefinition = "jsonb")
-    private Map<String, Object> geometry;
+    private List<Map<String, Object>> geometry;
 
     @Version
     @Column(name = "version", nullable = false)

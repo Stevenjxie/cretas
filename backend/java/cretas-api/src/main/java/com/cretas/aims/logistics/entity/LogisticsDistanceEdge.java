@@ -13,6 +13,7 @@ import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -75,7 +76,7 @@ public class LogisticsDistanceEdge extends BaseEntity {
     /** 路径几何 (JSONB, e.g. polyline). Nullable. H2 test 下置 null (同项目既有限制)。 */
     @Type(JsonBinaryType.class)
     @Column(name = "geometry", columnDefinition = "jsonb")
-    private Map<String, Object> geometry;
+    private List<Map<String, Object>> geometry;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 24, nullable = false)
