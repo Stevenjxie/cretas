@@ -131,19 +131,31 @@ try {
   // Step 2/3: navigate to the plan, open 逐道录入 (过程单) drawer.
   // -----------------------------------------------------------------------
   await page.goto(`${APP}/production/plans`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await page.waitForTimeout(2500);
-  const search = page.locator('input[placeholder*="搜索"], input[placeholder*="计划编号"]').first();
-  if (await search.isVisible().catch(() => false)) {
-    await search.fill(planNumber);
-    await page.locator('button').filter({ hasText: /搜索/ }).first().click().catch(() => null);
-    await page.waitForTimeout(1800);
+  // Poll for the plan row (default sort is newest-first so it is on page 1; the status
+  // badges + action buttons hydrate async, so wait for the row to actually carry a
+  // 逐道录入 button before asserting). No search needed.
+  let planRowFound = false;
+  for (let i = 0; i < 20 && !planRowFound; i++) {
+    await page.waitForTimeout(1500);
+    planRowFound = await page.evaluate((pn) => {
+      const rows = [...document.querySelectorAll('.el-table__row')];
+      const row = rows.find((r) => r.textContent.replace(/\s+/g, '').includes(pn.replace(/\s+/g, '')));
+      if (!row) return false;
+      const btn = [...row.querySelectorAll('button,.el-button,a')]
+        .find((b) => b.textContent.trim().includes('逐道录入'));
+      return !!btn;
+    }, planNumber).catch(() => false);
   }
-  const planRow = page.locator('.el-table__row').filter({ hasText: planNumber }).first();
-  const planRowVisible = await planRow.isVisible().catch(() => false);
-  ok(planRowVisible, '计划行在列表中可见', { planNumber });
-  if (!planRowVisible) throw new Error(`plan row not visible for ${planNumber} — check search/plan creation`);
+  ok(planRowFound, '计划行在列表中可见', { planNumber });
+  if (!planRowFound) throw new Error(`plan row not visible for ${planNumber} — check search/plan creation`);
 
-  await planRow.locator('button, .el-button').filter({ hasText: '逐道录入' }).first().click();
+  await page.evaluate((pn) => {
+    const rows = [...document.querySelectorAll('.el-table__row')];
+    const row = rows.find((r) => r.textContent.replace(/\s+/g, '').includes(pn.replace(/\s+/g, '')));
+    const btn = [...row.querySelectorAll('button,.el-button,a')]
+      .find((b) => b.textContent.trim().includes('逐道录入'));
+    btn.click();
+  }, planNumber);
   await page.waitForSelector('.el-drawer__body', { timeout: 15000 });
   await page.waitForTimeout(2200);
   await shot('drawer-opened');

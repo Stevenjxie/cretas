@@ -361,6 +361,8 @@ async function main() {
 
   const plan = await api('POST', `/${FACTORY}/production-plans`, {
     productTypeId: finished.id,
+    plannedQuantity: 100, // 转批次 (createBatchFromPlan) copies plan.plannedQuantity to the
+    // batch; must be > 0 or batch creation rejects with 400 "数量必须大于0".
     plannedDate: today(0),
     expectedCompletionDate: today(2),
     sourceType: 'SAFETY_STOCK',
