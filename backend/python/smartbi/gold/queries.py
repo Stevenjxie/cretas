@@ -2573,3 +2573,259 @@ async def zone_efficiency(
             "外卖/京东/饿了么等），并非实体大厅/包间，对比时请结合门店实际场地情况参考。"
         ),
     }
+
+
+# ── member_profile (会员储值 + 画像) ──────────────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_member_tier +
+# agg_member_gender + agg_member_birth_month (snapshot, materialized from
+# dim_member) + agg_member_recharge_daily (daily, materialized from
+# fact_member_recharge). See smartbi/services/materialized_analytics/
+# member_profile.py.
+#
+# ⛔ NOT FULL RFM: the source (二维火 卡详情一览 + 卡充值统计 exports) has no
+# per-member consumption event — no per-order timestamp tied to a card_no —
+# so recency/frequency cannot be computed. Only stored-value (储值余额/
+# 充值趋势) and demographic profile (等级/性别/生日月份分布) are available.
+# member_rfm.py (smartbi/services/restaurant/member_rfm.py) is a SEPARATE,
+# unrelated analyzer that operates on POS order-level data when a caller
+# supplies it directly — this query does not feed it and does not claim RFM.
+#
+# 🔒 All source tables are aggregate-only by construction (no card_no/name/
+# phone/full-birthdate column exists anywhere in dim_member or
+# fact_member_recharge — see V20261007_01's header note). On TOP of that,
+# this query enforces k-anonymity (k=5): any tier/gender cohort smaller than
+# 5 is merged into an 其他 bucket, and no balance is ever attributable to a
+# cohort < 5 — so a future tenant's 1-member exclusive-tier VIP can't have
+# their exact balance read off the API.
+
+# k-anonymity threshold. Cohorts (tier / gender / birth-month bucket) smaller
+# than this never surface an individually-attributable count or balance.
+_MEMBER_K_ANON = 5
+
+
+def _k_anon_merge_categorical(
+    rows: list,
+    *,
+    label_key: str,
+    other_label: str = "其他",
+    with_balance: bool = False,
+) -> list:
+    """Merge any categorical bucket with member_count < _MEMBER_K_ANON into a
+    single ``其他`` bucket (summing counts, and balances when with_balance).
+
+    If the merged ``其他`` bucket is itself still < k, its total_balance is
+    nulled (belt-and-suspenders: a balance is NEVER attributable to a cohort
+    smaller than k — the count alone, on a generic ``其他`` label, is not
+    individually identifying). Buckets >= k pass through unchanged.
+    Returns big buckets (original order) followed by the ``其他`` bucket, if any.
+    """
+    big: list = []
+    small_count = 0
+    small_balance = 0.0
+    for r in rows:
+        cnt = int(r["member_count"] or 0)
+        entry: Dict[str, Any] = {label_key: r[label_key], "member_count": cnt}
+        if with_balance:
+            entry["total_balance"] = float(r["total_balance"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            big.append(entry)
+        else:
+            small_count += cnt
+            if with_balance:
+                small_balance += float(r["total_balance"] or 0)
+    if small_count > 0:
+        other: Dict[str, Any] = {label_key: other_label, "member_count": small_count}
+        if with_balance:
+            # If even the merged 其他 bucket is < k, suppress the balance.
+            other["total_balance"] = (
+                small_balance if small_count >= _MEMBER_K_ANON else None
+            )
+        big.append(other)
+    return big
+
+
+async def member_profile(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """会员储值 + 画像: tier / gender / birth-month distribution + stored-value
+    totals (snapshot) + recharge trend (date-ranged).
+
+    Honesty guard: data_available=False when the tenant has ZERO
+    agg_member_tier rows (never uploaded 卡详情/卡充值 data) → all snapshot
+    fields are empty/zero and note explains why, rather than a fabricated
+    empty distribution indistinguishable from "uploaded but genuinely no
+    members".
+
+    k-anonymity (k=5): tier_distribution / gender_distribution merge sub-5
+    cohorts into 其他 (and never expose a balance for a sub-5 cohort);
+    birth_month_distribution drops sub-5 month buckets (counted honestly in
+    birth_month_suppressed_count) so no tiny cohort is individually exposed.
+
+    Returns:
+      - data_available: bool — whether the tenant has any member data at all
+      - member_count: snapshot total across all tiers/stores
+      - total_balance: snapshot balance total (nulled if member_count < k)
+      - tier_distribution: [{tier, member_count, total_balance}, ...] (k-anon)
+      - gender_distribution: [{gender, member_count}, ...] (k-anon; 性别画像)
+      - birth_month_distribution: [{birth_month (1-12), member_count}, ...]
+        (k-anon: only buckets >= 5; 生日营销 targeting list)
+      - birth_month_unknown_count: members whose 生日 was blank in the source
+      - birth_month_suppressed_count: members in sub-5 month buckets dropped
+        from the list (for honest coverage math — see below)
+      - birth_month_coverage_pct: % of members with a known birth month
+        (0-100, null when there are no members) — F4 honesty disclosure
+      - recharge_trend: [{month "YYYY-MM", principal, bonus}, ...] over range
+      - recharge_store_count: distinct stores with recharge data in the window
+        (the demo source only has recharge for 1 store — surfaced so the
+        card can disclose "仅部分门店有充值记录")
+      - note: explains why data_available is False, if applicable
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_member_tier WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        tier_rows = await conn.fetch(
+            """
+            SELECT tier,
+                   SUM(member_count)  AS member_count,
+                   SUM(total_balance) AS total_balance
+              FROM agg_member_tier
+             WHERE factory_id = $1
+             GROUP BY tier
+             ORDER BY SUM(member_count) DESC
+            """,
+            factory_id,
+        )
+        gender_rows = await conn.fetch(
+            """
+            SELECT gender, member_count
+              FROM agg_member_gender
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        # NO birth_month filter here — we need the 0 (unknown) bucket too, for
+        # the coverage disclosure (F4). Split known vs unknown in Python.
+        birth_rows = await conn.fetch(
+            """
+            SELECT birth_month, member_count
+              FROM agg_member_birth_month
+             WHERE factory_id = $1
+             ORDER BY birth_month
+            """,
+            factory_id,
+        )
+        recharge_rows = await conn.fetch(
+            f"""
+            SELECT to_char(date, 'YYYY-MM') AS month,
+                   SUM(principal) AS principal,
+                   SUM(bonus)     AS bonus
+              FROM agg_member_recharge_daily
+             WHERE {where}
+             GROUP BY to_char(date, 'YYYY-MM')
+             ORDER BY month
+            """,
+            *params,
+        )
+        recharge_store_row = await conn.fetchrow(
+            f"SELECT COUNT(DISTINCT store_id) AS n FROM agg_member_recharge_daily WHERE {where}",
+            *params,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+
+    # Tier (with balance) + gender — k-anon merge sub-5 cohorts into 其他.
+    tier_distribution = _k_anon_merge_categorical(
+        tier_rows, label_key="tier", with_balance=True
+    )
+    gender_distribution = _k_anon_merge_categorical(
+        gender_rows, label_key="gender", with_balance=False
+    )
+
+    # Birth month: separate the 0 (unknown) sentinel from real months (1-12),
+    # then k-anon-drop sub-5 month buckets (counted in suppressed_count).
+    birth_month_unknown_count = 0
+    known_month_total = 0
+    birth_month_distribution: list = []
+    birth_month_suppressed_count = 0
+    for r in birth_rows:
+        bm = int(r["birth_month"])
+        cnt = int(r["member_count"] or 0)
+        if bm == 0:
+            birth_month_unknown_count += cnt
+            continue
+        known_month_total += cnt
+        if cnt >= _MEMBER_K_ANON:
+            birth_month_distribution.append({"birth_month": bm, "member_count": cnt})
+        else:
+            birth_month_suppressed_count += cnt
+    birth_month_distribution.sort(key=lambda x: x["birth_month"])
+
+    total_birth_members = birth_month_unknown_count + known_month_total
+    birth_month_coverage_pct: Optional[float] = (
+        round(known_month_total / total_birth_members * 100, 1)
+        if total_birth_members > 0
+        else None
+    )
+
+    recharge_trend = [
+        {
+            "month": r["month"],
+            "principal": float(r["principal"] or 0),
+            "bonus": float(r["bonus"] or 0),
+        }
+        for r in recharge_rows
+    ]
+    recharge_store_count = int(recharge_store_row["n"] or 0) if recharge_store_row else 0
+
+    # Top-level totals: sum from the RAW tier rows (pre-merge) so member_count
+    # is the true grand total (the 其他 merge doesn't change the sum).
+    member_count = sum(int(r["member_count"] or 0) for r in tier_rows)
+    raw_total_balance = sum(float(r["total_balance"] or 0) for r in tier_rows)
+    # k-anon on the grand total too: a tenant with < k total members would
+    # otherwise expose the aggregate balance of a tiny cohort.
+    total_balance: Optional[float] = (
+        raw_total_balance if member_count >= _MEMBER_K_ANON else None
+    )
+
+    note: Optional[str] = None if data_available else "未上传会员数据"
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "data_available": data_available,
+        "member_count": member_count,
+        "total_balance": total_balance,
+        "tier_distribution": tier_distribution,
+        "gender_distribution": gender_distribution,
+        "birth_month_distribution": birth_month_distribution,
+        "birth_month_unknown_count": birth_month_unknown_count,
+        "birth_month_suppressed_count": birth_month_suppressed_count,
+        "birth_month_coverage_pct": birth_month_coverage_pct,
+        "recharge_trend": recharge_trend,
+        "recharge_store_count": recharge_store_count,
+        "note": note,
+        "caveat": (
+            "本维度为会员储值与画像统计(非完整 RFM): 数据源(卡详情/卡充值报表)不含"
+            "逐笔消费记录，无法计算复购间隔(Recency)与消费频次(Frequency)，仅覆盖"
+            "储值余额、等级/性别/生日月份分布与充值趋势。为保护会员隐私，人数少于 5 "
+            "的分组已合并入「其他」或不单独展示。"
+        ),
+    }

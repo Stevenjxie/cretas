@@ -134,8 +134,6 @@ export interface VoidRate {
   caveat: string;
 }
 
-/** /api/smartbi/gold/zone-efficiency response (camelCased) — 区域坪效
- * (in-store dining-zone revenue/efficiency). */
 export interface ZoneEfficiency {
   factoryId: string;
   startDate: string | null;
@@ -162,6 +160,57 @@ export interface ZoneEfficiency {
   // revenue-per-square-meter 坪效 (source has no floor-area column); (2)
   // some zone_name values are delivery-channel labels, not physical space.
   caveat: string;
+}
+
+export interface MemberProfile {
+  factoryId: string;
+  startDate: string | null; // only bounds rechargeTrend; tier/gender/birthMonth are all-time snapshots
+  endDate: string | null;
+  // false = tenant has NO member data at all (未上传会员数据) — distinct from
+  // a genuine 0 members. Card shows "未上传会员数据", never a fabricated 0.
+  dataAvailable: boolean;
+  memberCount: number;
+  // null when RBAC price-strip fires OR the tenant has < 5 total members
+  // (k-anonymity — never expose a tiny cohort's aggregate balance).
+  totalBalance: number | null;
+  // k-anonymized: tiers with < 5 members merged into 其他 (其他.totalBalance
+  // is null if that merged bucket is itself < 5).
+  tierDistribution: Array<{
+    tier: string; // may be "其他" (the k-anon merge bucket)
+    memberCount: number;
+    totalBalance: number | null; // RBAC-nulled, OR k-anon-nulled for a sub-5 其他 bucket
+  }>;
+  // 性别画像 — k-anonymized (genders with < 5 members merged into 其他). No
+  // balance dimension.
+  genderDistribution: Array<{ gender: string; memberCount: number }>;
+  // birth_month=0/未知 excluded; k-anon drops month buckets with < 5 members
+  // (their total is in birthMonthSuppressedCount). This list is for 生日营销.
+  birthMonthDistribution: Array<{ birthMonth: number; memberCount: number }>;
+  // F4 honesty: members whose 生日 was blank in the source (~43% in demo data)
+  birthMonthUnknownCount: number;
+  // members in sub-5 month buckets dropped from birthMonthDistribution (k-anon)
+  birthMonthSuppressedCount: number;
+  // % of members with a KNOWN birth month, 0-100; null when zero members.
+  // Show as "生日覆盖率 X%" so the histogram isn't read as complete.
+  birthMonthCoveragePct: number | null;
+  rechargeTrend: Array<{
+    month: string; // "YYYY-MM"
+    principal: number | null; // RBAC-nulled
+    bonus: number | null; // RBAC-nulled
+  }>;
+  // distinct stores with recharge data in the window. The demo source only
+  // has recharge for 1 store → card discloses "仅部分门店有充值记录".
+  rechargeStoreCount: number;
+  note: string | null; // explains why dataAvailable is false, if applicable
+  caveat: string; // honest "this is not full RFM + k-anon" disclaimer — always show it
+}
+
+export async function getMemberProfile(args: OptionalDateRangeQuery): Promise<MemberProfile> {
+  // Dates optional: omit both = 全部历史 for rechargeTrend (tier/birthMonth
+  // are always all-time snapshots regardless of the date args).
+  return (await pythonFetch(`/api/smartbi/gold/member-profile?${_qOptional(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as MemberProfile;
 }
 
 export interface KpiSummary {

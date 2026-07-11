@@ -136,6 +136,29 @@
           :image-size="60"
         />
       </el-card>
+
+      <!-- 会员储值 + 画像 (新增维度, greenfield) — KPI tile. 独立加载
+           (memberLoading/memberError), member 500 不连累其它卡。⚠️ 本维度不是
+           完整 RFM (数据源无逐笔消费记录, 无法算复购间隔/频次) — 明细卡里
+           显式提示。 -->
+      <el-card class="rgg-card" shadow="never">
+        <template #header>
+          <div class="rgg-card-header"><el-icon><User /></el-icon><span>会员储值 + 画像</span></div>
+        </template>
+        <el-skeleton v-if="memberLoading" :rows="3" animated />
+        <div v-else-if="memberError" class="rgg-void-inline-error">会员数据加载失败: {{ memberError }}</div>
+        <div v-else-if="memberDataAvailable" class="rgg-void-kpi">
+          <div class="rgg-void-rate">
+            <span class="rgg-void-rate-val">{{ memberCount.toLocaleString() }}</span>
+            <span class="rgg-void-rate-label">会员数</span>
+          </div>
+          <div class="rgg-void-subs">
+            <div class="rgg-void-sub"><span class="rgg-void-sub-label">储值总额</span><span class="rgg-void-sub-val">{{ formatMoney(memberTotalBalance) }}</span></div>
+          </div>
+        </div>
+        <!-- 未上传会员数据 — 诚实 empty-state -->
+        <el-empty v-else :description="memberNote || '未上传会员数据'" :image-size="60" />
+      </el-card>
     </div>
 
     <!-- 撤单稽核 (操作人 × 门店, 按每百单撤单率排序) — full-width row below the grid.
@@ -199,13 +222,97 @@
         :image-size="60"
       />
     </el-card>
+
+    <!-- 会员画像明细 (等级分布 + 生日月份分布 + 充值趋势) — full-width row.
+         与 KPI 共用同一次 getMemberProfile() 请求。 -->
+    <el-card v-if="!memberError && memberDataAvailable" class="rgg-audit-card" shadow="never">
+      <template #header>
+        <div class="rgg-card-header"><el-icon><User /></el-icon><span>会员画像明细</span></div>
+      </template>
+      <el-skeleton v-if="memberLoading" :rows="4" animated />
+      <template v-else>
+        <div class="rgg-member-detail-grid">
+          <!-- 等级分布 (k-anon: 人数<5 的等级合并入「其他」) -->
+          <div class="rgg-member-block">
+            <div class="rgg-member-block-title">等级分布</div>
+            <div v-if="memberTierDistribution.length" class="rgg-rank-list">
+              <div v-for="t in memberTierDistribution" :key="t.tier" class="rgg-rank-item">
+                <span class="rgg-rank-name rgg-chan-name" :title="t.tier">{{ t.tier }}</span>
+                <span class="rgg-rank-bar-wrap">
+                  <span class="rgg-rank-bar" :style="{ width: tierPct(t.memberCount) + '%' }"></span>
+                </span>
+                <span class="rgg-rank-val">{{ t.memberCount }}人</span>
+                <span class="rgg-rank-pct">{{ formatMoney(t.totalBalance) }}</span>
+              </div>
+            </div>
+            <el-empty v-else description="暂无等级数据" :image-size="40" />
+          </div>
+
+          <!-- 性别分布 (性别画像, k-anon) -->
+          <div class="rgg-member-block">
+            <div class="rgg-member-block-title">性别分布 <span class="rgg-member-block-hint">(性别画像)</span></div>
+            <div v-if="memberGenderDistribution.length" class="rgg-rank-list">
+              <div v-for="g in memberGenderDistribution" :key="g.gender" class="rgg-rank-item">
+                <span class="rgg-rank-name rgg-chan-name" :title="g.gender">{{ g.gender }}</span>
+                <span class="rgg-rank-bar-wrap">
+                  <span class="rgg-rank-bar rgg-chan-bar" :style="{ width: genderPct(g.memberCount) + '%' }"></span>
+                </span>
+                <span class="rgg-rank-val">{{ g.memberCount }}人</span>
+              </div>
+            </div>
+            <el-empty v-else description="暂无性别数据" :image-size="40" />
+          </div>
+
+          <!-- 生日月份分布 (生日营销 hook) -->
+          <div class="rgg-member-block">
+            <div class="rgg-member-block-title">
+              生日月份分布 <span class="rgg-member-block-hint">(生日营销参考)</span>
+            </div>
+            <!-- F4 honesty: 生日覆盖率 — histogram 只含有生日的会员, 不能被读成完整。 -->
+            <div v-if="memberBirthCoveragePct !== null" class="rgg-member-coverage">
+              生日覆盖率 {{ memberBirthCoveragePct.toFixed(0) }}%（{{ memberBirthUnknownCount.toLocaleString() }} 名会员未填生日）
+            </div>
+            <div v-if="memberBirthMonthDistribution.length" class="rgg-birth-bars">
+              <div v-for="m in memberBirthMonthDistribution" :key="m.birthMonth" class="rgg-birth-bar-col">
+                <div class="rgg-birth-bar-wrap">
+                  <div class="rgg-birth-bar" :style="{ height: birthMonthPct(m.memberCount) + '%' }" :title="`${m.birthMonth}月: ${m.memberCount}人`"></div>
+                </div>
+                <span class="rgg-birth-bar-label">{{ m.birthMonth }}月</span>
+              </div>
+            </div>
+            <el-empty v-else description="暂无生日数据" :image-size="40" />
+          </div>
+
+          <!-- 充值趋势 -->
+          <div class="rgg-member-block">
+            <div class="rgg-member-block-title">充值趋势 (本金/赠送)</div>
+            <!-- F4 honesty: 演示数据源只有 1 家门店有充值记录, 明确披露。 -->
+            <div v-if="memberRechargeTrend.length && memberRechargeStoreCount >= 1" class="rgg-member-coverage">
+              仅 {{ memberRechargeStoreCount }} 家门店有充值记录（部分门店未开通储值）
+            </div>
+            <el-table v-if="memberRechargeTrend.length" :data="memberRechargeTrend" size="small" stripe>
+              <el-table-column prop="month" label="月份" width="90" />
+              <el-table-column label="本金" align="right">
+                <template #default="{ row }">{{ formatMoney(row.principal) }}</template>
+              </el-table-column>
+              <el-table-column label="赠送" align="right">
+                <template #default="{ row }">{{ formatMoney(row.bonus) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无充值趋势数据" :image-size="40" />
+          </div>
+        </div>
+        <!-- 禁降级: 本维度不是完整 RFM, 明确提示不是复购/流失预测 + k-anon 说明 -->
+        <div class="rgg-void-caveat">{{ memberCaveat }}</div>
+      </template>
+    </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled, WarningFilled, Search, Grid } from '@element-plus/icons-vue';
-import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix, getVoidRate, getZoneEfficiency } from '@/api/smartbi/gold';
+import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled, WarningFilled, Search, Grid, User } from '@element-plus/icons-vue';
+import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix, getVoidRate, getZoneEfficiency, getMemberProfile } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
 import { buildRevenueInsight } from './revenueInsight';
 import type { ChartWithMeta } from './chartInsight';
@@ -270,6 +377,46 @@ const zones = ref<Array<{
   revenuePct: number | null;
 }>>([]);
 const zoneCaveat = ref('');
+
+// 会员储值 + 画像 (新增维度, greenfield). ⚠️ 不是完整 RFM — 数据源(卡详情/
+// 卡充值报表)无逐笔消费记录, 无法算复购间隔(Recency)/消费频次(Frequency),
+// 仅覆盖储值余额、等级/性别/生日月份分布、充值趋势。后端对人数<5 的分组做
+// k-匿名合并。独立于其它卡加载: member 500 只降级本区域, 不连累其它卡。
+const memberLoading = ref(false);
+const memberError = ref('');
+const memberDataAvailable = ref(false);
+const memberCount = ref(0);
+const memberTotalBalance = ref<number | null>(null);
+const memberNote = ref<string | null>(null);
+const memberTierDistribution = ref<Array<{ tier: string; memberCount: number; totalBalance: number | null }>>([]);
+const memberGenderDistribution = ref<Array<{ gender: string; memberCount: number }>>([]);
+const memberBirthMonthDistribution = ref<Array<{ birthMonth: number; memberCount: number }>>([]);
+const memberBirthUnknownCount = ref(0);
+const memberBirthCoveragePct = ref<number | null>(null);
+const memberRechargeTrend = ref<Array<{ month: string; principal: number | null; bonus: number | null }>>([]);
+const memberRechargeStoreCount = ref(0);
+const memberCaveat = ref('');
+
+const maxTierMemberCount = computed(() =>
+  memberTierDistribution.value.reduce((m, t) => Math.max(m, t.memberCount), 0),
+);
+function tierPct(count: number): number {
+  return maxTierMemberCount.value > 0 ? (count / maxTierMemberCount.value) * 100 : 0;
+}
+
+const maxGenderMemberCount = computed(() =>
+  memberGenderDistribution.value.reduce((m, g) => Math.max(m, g.memberCount), 0),
+);
+function genderPct(count: number): number {
+  return maxGenderMemberCount.value > 0 ? (count / maxGenderMemberCount.value) * 100 : 0;
+}
+
+const maxBirthMonthCount = computed(() =>
+  memberBirthMonthDistribution.value.reduce((m, b) => Math.max(m, b.memberCount), 0),
+);
+function birthMonthPct(count: number): number {
+  return maxBirthMonthCount.value > 0 ? Math.max((count / maxBirthMonthCount.value) * 100, 4) : 4;
+}
 
 const dateLabel = computed(() =>
   props.dateRange ? `${props.dateRange[0]} 至 ${props.dateRange[1]}` : '全部数据',
@@ -452,6 +599,35 @@ async function load() {
   } finally {
     zoneLoading.value = false;
   }
+
+  // 会员储值 + 画像 — isolated so a 500 (e.g. migration not yet applied)
+  // degrades ONLY the member surface, leaving every other card intact.
+  memberLoading.value = true;
+  memberError.value = '';
+  try {
+    const members = await getMemberProfile({ factoryId: capturedFactoryId, startDate, endDate });
+    memberDataAvailable.value = members.dataAvailable ?? false;
+    memberCount.value = members.memberCount ?? 0;
+    memberTotalBalance.value = members.totalBalance ?? null;
+    memberNote.value = members.note ?? null;
+    memberTierDistribution.value = members.tierDistribution ?? [];
+    memberGenderDistribution.value = members.genderDistribution ?? [];
+    memberBirthMonthDistribution.value = members.birthMonthDistribution ?? [];
+    memberBirthUnknownCount.value = members.birthMonthUnknownCount ?? 0;
+    memberBirthCoveragePct.value = members.birthMonthCoveragePct ?? null;
+    memberRechargeTrend.value = members.rechargeTrend ?? [];
+    memberRechargeStoreCount.value = members.rechargeStoreCount ?? 0;
+    memberCaveat.value = members.caveat ?? '';
+  } catch (e) {
+    memberError.value = e instanceof Error ? e.message : '会员数据加载失败';
+    memberDataAvailable.value = false;
+    memberTierDistribution.value = [];
+    memberGenderDistribution.value = [];
+    memberBirthMonthDistribution.value = [];
+    memberRechargeTrend.value = [];
+  } finally {
+    memberLoading.value = false;
+  }
 }
 
 // 父组件先探测 Gold 区间再设 dateRange, 故 watch 立即触发首次加载。
@@ -529,4 +705,18 @@ watch(
   background: #f4f4f5;
   border-radius: 4px;
 }
+/* 会员画像明细 — 3-column detail grid */
+.rgg-member-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 1200px) { .rgg-member-detail-grid { grid-template-columns: 1fr; } }
+.rgg-member-block { display: flex; flex-direction: column; gap: 8px; }
+.rgg-member-block-title { font-size: 13px; font-weight: 600; color: #303133; }
+.rgg-member-block-hint { font-size: 11px; font-weight: 400; color: #909399; }
+/* F4 honesty disclosures — 生日覆盖率 / 充值门店覆盖 */
+.rgg-member-coverage { font-size: 11px; color: #e6a23c; margin: -2px 0 2px; }
+/* 生日月份分布 — mini vertical bar chart (12 months) */
+.rgg-birth-bars { display: flex; align-items: flex-end; gap: 4px; height: 100px; }
+.rgg-birth-bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; height: 100%; }
+.rgg-birth-bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.rgg-birth-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #91cc75, #5470c6); border-radius: 3px 3px 0 0; }
+.rgg-birth-bar-label { font-size: 10px; color: #909399; margin-top: 4px; }
 </style>

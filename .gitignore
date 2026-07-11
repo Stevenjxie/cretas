@@ -290,3 +290,8 @@ data/imports/_index.json
 六扇门工厂数据/
 产品信息_*.xlsx
 产品信息_*.zip
+
+# 演示 ETL 中间产物 — extract_shift_*.py 生成的 JSONL 由真实客户数据 (青花椒等)
+# 时移派生, 含 member-grain / bill-grain 记录, 绝不提交到 public repo (F1, PII 防泄漏).
+# 覆盖 member (卡详情/卡充值) + void (撤单) + billgrain (POS) 等所有 demo ops JSONL.
+backend/python/smartbi/scripts/_demo_rest_*.jsonl
