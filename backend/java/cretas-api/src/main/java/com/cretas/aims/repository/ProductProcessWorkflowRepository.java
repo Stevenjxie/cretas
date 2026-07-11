@@ -7,6 +7,8 @@ import java.util.Optional;
 
 public interface ProductProcessWorkflowRepository extends JpaRepository<ProductProcessWorkflow, Long> {
 
+    Optional<ProductProcessWorkflow> findByIdAndFactoryId(Long id, String factoryId);
+
     Optional<ProductProcessWorkflow> findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
             String factoryId,
             String productTypeId,

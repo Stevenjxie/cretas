@@ -1,0 +1,180 @@
+package com.cretas.aims.service.workflow.impl;
+
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
+import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowActivation;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.OptimisticLockException;
+import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class ProductProcessWorkflowActivationServiceImpl
+        implements ProductProcessWorkflowActivationService {
+
+    private final ProductProcessWorkflowActivationRepository activationRepository;
+    private final ProductProcessWorkflowRepository workflowRepository;
+    private final ProductProcessWorkflowValidator validator;
+    private final ProductProcessWorkflowCatalogValidator catalogValidator;
+    private final ObjectMapper objectMapper;
+
+    @Override
+    @Transactional
+    public ProductProcessWorkflowActivationDTO activate(
+            String factoryId,
+            Long workflowId,
+            Long operatorId) {
+        ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
+                .orElseThrow(this::productMismatch);
+        if (workflow.getStatus() != ProductProcessWorkflow.Status.PUBLISHED) {
+            throw notPublished();
+        }
+
+        ProductProcessWorkflowDTO definition = toDefinition(workflow);
+        validator.validateForPublish(definition);
+        catalogValidator.validateForPublish(factoryId, workflow.getProductTypeId(), definition);
+
+        ProductProcessWorkflowActivation activation = activationRepository
+                .findByFactoryIdAndProductTypeId(factoryId, workflow.getProductTypeId())
+                .orElseGet(ProductProcessWorkflowActivation::new);
+        if (isAlreadyActive(activation, workflow)) {
+            return toDTO(activation);
+        }
+
+        activation.setFactoryId(factoryId);
+        activation.setProductTypeId(workflow.getProductTypeId());
+        activation.setActiveWorkflowId(workflow.getId());
+        activation.setActiveDefinitionVersion(workflow.getDefinitionVersion());
+        activation.setEnabled(true);
+        activation.setActivatedBy(operatorId);
+        activation.setActivatedAt(LocalDateTime.now());
+        return toDTO(save(activation));
+    }
+
+    @Override
+    @Transactional
+    public ProductProcessWorkflowActivationDTO deactivate(
+            String factoryId,
+            String productTypeId,
+            Long expectedLockVersion) {
+        ProductProcessWorkflowActivation activation = findActivation(factoryId, productTypeId);
+        if (expectedLockVersion == null || !expectedLockVersion.equals(activation.getLockVersion())) {
+            throw conflict();
+        }
+        activation.setEnabled(false);
+        return toDTO(save(activation));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductProcessWorkflowActivationDTO get(String factoryId, String productTypeId) {
+        return toDTO(findActivation(factoryId, productTypeId));
+    }
+
+    private ProductProcessWorkflowActivation findActivation(String factoryId, String productTypeId) {
+        return activationRepository.findByFactoryIdAndProductTypeId(factoryId, productTypeId)
+                .orElseThrow(this::productMismatch);
+    }
+
+    private ProductProcessWorkflowActivation save(ProductProcessWorkflowActivation activation) {
+        try {
+            return activationRepository.saveAndFlush(activation);
+        } catch (ObjectOptimisticLockingFailureException | OptimisticLockException
+                 | DataIntegrityViolationException error) {
+            throw conflict(error);
+        }
+    }
+
+    private boolean isAlreadyActive(
+            ProductProcessWorkflowActivation activation,
+            ProductProcessWorkflow workflow) {
+        return activation.getId() != null
+                && Boolean.TRUE.equals(activation.getEnabled())
+                && workflow.getId().equals(activation.getActiveWorkflowId())
+                && workflow.getDefinitionVersion().equals(activation.getActiveDefinitionVersion());
+    }
+
+    private ProductProcessWorkflowDTO toDefinition(ProductProcessWorkflow workflow) {
+        ProductProcessWorkflowDTO dto = new ProductProcessWorkflowDTO();
+        dto.setId(workflow.getId());
+        dto.setFactoryId(workflow.getFactoryId());
+        dto.setProductTypeId(workflow.getProductTypeId());
+        dto.setSchemaVersion(workflow.getSchemaVersion());
+        dto.setStatus(workflow.getStatus().name());
+        dto.setVersion(workflow.getDefinitionVersion());
+        dto.setLockVersion(workflow.getLockVersion());
+        dto.setNodes(readJson(workflow.getNodesJson(),
+                new TypeReference<List<ProductProcessWorkflowDTO.Node>>() {}, "nodes"));
+        dto.setEdges(readJson(workflow.getEdgesJson(),
+                new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() {}, "edges"));
+        dto.setViewport(readJson(workflow.getViewportJson(),
+                new TypeReference<ProductProcessWorkflowDTO.Viewport>() {}, "viewport"));
+        return dto;
+    }
+
+    private <T> T readJson(String json, TypeReference<T> type, String field) {
+        try {
+            return objectMapper.readValue(json, type);
+        } catch (JsonProcessingException error) {
+            throw new BusinessException(500, "Workflow " + field + " data is invalid", error)
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_DATA_INVALID")
+                    .withHint("Reload the workflow definition and publish a corrected version before activation")
+                    .withSeverity("error");
+        }
+    }
+
+    private ProductProcessWorkflowActivationDTO toDTO(ProductProcessWorkflowActivation activation) {
+        ProductProcessWorkflowActivationDTO dto = new ProductProcessWorkflowActivationDTO();
+        dto.setId(activation.getId());
+        dto.setFactoryId(activation.getFactoryId());
+        dto.setProductTypeId(activation.getProductTypeId());
+        dto.setActiveWorkflowId(activation.getActiveWorkflowId());
+        dto.setActiveDefinitionVersion(activation.getActiveDefinitionVersion());
+        dto.setEnabled(activation.getEnabled());
+        dto.setActivatedBy(activation.getActivatedBy());
+        dto.setActivatedAt(activation.getActivatedAt());
+        dto.setLockVersion(activation.getLockVersion());
+        return dto;
+    }
+
+    private BusinessException notPublished() {
+        return new BusinessException(409, "Only a published workflow can be activated")
+                .withCode("WORKFLOW_NOT_PUBLISHED")
+                .withHint("Publish this exact workflow version, then activate it again")
+                .withSeverity("warning");
+    }
+
+    private BusinessException productMismatch() {
+        return new BusinessException(400, "Workflow activation does not belong to this factory and product")
+                .withCode("WORKFLOW_ACTIVATION_PRODUCT_MISMATCH")
+                .withHint("Reload workflows for the current factory and product, then retry")
+                .withSeverity("warning");
+    }
+
+    private BusinessException conflict() {
+        return conflict(null);
+    }
+
+    private BusinessException conflict(Throwable cause) {
+        return new BusinessException(409, "Workflow activation was updated by another operator", cause)
+                .withCode("WORKFLOW_ACTIVATION_CONFLICT")
+                .withHint("Reload the current activation and retry with its latest lockVersion")
+                .withSeverity("warning");
+    }
+}
