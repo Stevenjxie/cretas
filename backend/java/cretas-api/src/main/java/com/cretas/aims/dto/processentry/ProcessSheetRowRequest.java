@@ -101,14 +101,25 @@ public class ProcessSheetRowRequest {
 
     /**
      * 2B.2 多产出 (fan-out): 一道工序一次报工同时产出多个产品 (如熟成鸡装箱同产 350g/400g,
-     * 筛选同产 合格半成品+不合格损耗)。size>1 触发多产出分解 (见 ProcessSheetServiceImpl.saveRow):
-     * 共享投入按各产出 {@link OutputLine#getQuantity() 产出数量} 自动拆分成 N 份 (物理默认, 非成本分摊配置),
-     * 每份走一次普通单产出物料化 → 落 N 行, 下游小结/撤销逐行复用不变。工序只记录结构+数量+批次, 不处理成本分摊。
+     * 筛选同产 合格半成品+不合格损耗)。多产出 = 两组独立事实: input allocations (本请求的
+     * rawMaterialInputs/upstreamSources) + output lines (本字段)。库存按实际 input allocations 扣减
+     * (一次全量, <b>不</b>按重量/数量拆分/推断), 按每条 output line 入库; 血缘经同一份工序报工关联
+     * 每个产出批次到全部实际投入批次。工序不处理成本/成本分摊。
      *
      * <p>为空 / size==1 → 走原单产出路径 (向后兼容, F006 现有流不受影响)。多产出时顶层
      * {@link #outputQuantity} 仅为满足 @NotNull (建议传 Σquantity), 实际逐 output 用各自 quantity。
      */
     private List<OutputLine> outputs;
+
+    /**
+     * 2B.2 内部标记 (合成产出行专用, FE 不传): true 表示本行是多产出分解出的产出行。
+     * 用途: (a) 结转成本诚实 null (工序不处理成本分摊, 不伪造 ¥0/不 N× 膨胀);
+     *       (b) 删除/重存按 {@link #multiOutputBaseRowId} 整组级联 (防单行删除留幻库存)。
+     */
+    private Boolean multiOutputMember;
+
+    /** 2B.2 内部: 多产出组的 base clientRowId (= FE 原始 clientRowId, 各产出行 clientRowId = base#i)。 */
+    private String multiOutputBaseRowId;
 
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data

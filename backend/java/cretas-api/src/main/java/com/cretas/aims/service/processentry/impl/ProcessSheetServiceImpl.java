@@ -146,6 +146,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(403, "无权访问该计划");
         }
 
+        // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
+        //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
+        if (req.getOutputs() != null && req.getOutputs().size() > 1) {
+            return saveMultiOutputRow(factoryId, planId, req, userId);
+        }
+
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
         normalizeConfiguredUnits(factoryId, planId, req);
@@ -169,12 +175,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         assertFinishedGoodsSourceAllowed(factoryId, req);
         assertExternalFeedUnitSupported(req);
-
-        // 2B.2 多产出 (fan-out) 分解: 一次报工 N 个产出 → N 个单产出物料化, 共享投入按产出权重拆分,
-        //   落 N 行 (clientRowId#i)。下方单产出路径完全不改 (F006 现有流不受影响); 下游小结/撤销/成本逐行复用。
-        if (req.getOutputs() != null && req.getOutputs().size() > 1) {
-            return saveMultiOutputRow(factoryId, planId, req, userId, warnings);
-        }
 
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
@@ -360,15 +360,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private record OneOutputOutcome(Long batchId, String batchNumber, BigDecimal rowTotalCost) {}
 
     /**
-     * 多产出报工分解 (🔒 keystone)。共享投入 (rawMaterialInputs/upstreamSources) 按各产出的分摊权重
-     * (allocationWeight 全填则用之, 否则按 quantity) 拆成 N 份 (最后一份吃余数保证 Σ 精确无漂移),
-     * 每份合成一条普通单产出行走 {@link #materializeOneOutput} 物化 → 落 N 行 (clientRowId#i)。
+     * 多产出报工分解 (🔒 keystone)。input allocations (rawMaterialInputs/upstreamSources) + output lines
+     * (req.outputs) 两组独立事实。首产出行 (base#0, carryInputs) 承载全部实际投入 → 一次全量扣减 (不拆分);
+     * 其余产出行 (base#i) 仅按各自 output line 入库。血缘经同一份工序报工关联。工序不处理成本 (多产出行成本诚实 null)。
      *
-     * <p>工序不处理成本分摊 (per Steve): 共享投入按<b>产出数量</b>自动拆分 (物理默认, 非成本分摊配置/字段),
-     * 人工/调料仅计在首产出 (共享工序成本, 计一次不双计, 总额守恒)。下游小结/撤销逐行复用不变。
+     * <p>整组 (base#*) 生命周期: 单行删除级联整组 (防幻库存); 重存先删旧组再建 (见 deleteRow / 组前置删除)。
      */
     private ProcessSheetRowResult saveMultiOutputRow(String factoryId, String planId,
-            ProcessSheetRowRequest req, Long userId, List<String> warnings) {
+            ProcessSheetRowRequest req, Long userId) {
+        List<String> warnings = new ArrayList<>();
         List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
 
         // 1. 逐产出校验 (禁止降级: 缺产品/量<=0 明确报错)
@@ -384,6 +384,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请填写各产出的产出数量");
             }
         }
+
+        // 1b. H3 loud-fail: 多产出报工必须有实际投入 (否则等于凭空产出 → 幻库存)。禁止降级。
+        boolean hasRaw = req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty();
+        boolean hasUpstream = req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+        if (!hasRaw && !hasUpstream) {
+            throw new BusinessException(400, "多产出报工必须有实际投入 (原料或上游半成品), 不能凭空产出")
+                    .withCode("PROCESS_SHEET_MULTI_OUTPUT_NO_INPUT")
+                    .withHint("请先录入本道工序的投入 (领料或上游半成品)");
+        }
+
+        // 1c. 自定义字段校验 (单产出路径在前置做; 多产出这里补做一次, 同 process 同 schema)
+        validateCustomFields(factoryId, req);
+
+        // 1d. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
+        deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
 
         // 2. B3 逐产出对齐 workflow 端口 (workflow 计划; legacy/未注入 → 跳过)
         validateMultiOutputAgainstWorkflow(factoryId, planId, req);
@@ -481,15 +496,43 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setInputUnit(base.getInputUnit());
         one.setProductWeight(o.getProductWeight());
         one.setCustomFields(base.getCustomFields());
+        // 2B.2 标记: 供结转成本诚实 null (工序不处理成本分摊) + 删除/重存整组级联。
+        one.setMultiOutputMember(Boolean.TRUE);
+        one.setMultiOutputBaseRowId(base.getClientRowId());
         if (carryInputs) {
-            // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料 (计一次不双计)。
+            // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料/逐锅原料/副产/留样/包装明细 (随投入落在首行, 计一次)。
+            one.setInputQuantity(base.getInputQuantity());
             one.setPotCount(base.getPotCount());
+            one.setPotRawKgs(base.getPotRawKgs());
             one.setSeasoningStep(base.isSeasoningStep());
             one.setLaborSegments(base.getLaborSegments());
             one.setRawMaterialInputs(base.getRawMaterialInputs());
             one.setUpstreamSources(base.getUpstreamSources());
+            one.setByproducts(base.getByproducts());
+            one.setSampleRetainQuantity(base.getSampleRetainQuantity());
+            one.setPackagingDetail(base.getPackagingDetail());
         }
         return one;
+    }
+
+    /**
+     * 2B.2 B1/B2: 若多产出组 (base#*) 已存在 → 级联删除整组 (供重存前清理)。整组任一行已小结/被下游消耗 →
+     * deleteRow 抛 409 (禁止降级)。base#* 定位: 同 (factory, plan) 下 clientRowId == base 或以 base# 开头。
+     */
+    private void deleteMultiOutputGroupIfPresent(String factoryId, String planId,
+            String baseClientRowId, Long userId) {
+        List<ProcessSheetRow> group = rowRepo.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                .filter(r -> r.getClientRowId() != null
+                        && (r.getClientRowId().equals(baseClientRowId)
+                        || r.getClientRowId().startsWith(baseClientRowId + "#")))
+                .toList();
+        if (group.isEmpty()) {
+            return;
+        }
+        // 逐行走 deleteOneRow 反物化 (含小结/下游消耗守卫 + SFI 冲销), 保证扣减/入库精确反冲。
+        for (ProcessSheetRow r : group) {
+            deleteOneRow(factoryId, planId, r, userId);
+        }
     }
 
     /**
@@ -814,48 +857,66 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(404, "工序行不存在");
         }
 
-        for (ProcessSheetRow row : rows) {
-            // 🔒 G3 防双扣 (同 resaveRow): 已小结入库的行不可删除。删除会逆向物化(软删已扣减的消耗边)
-            // 而原料 usedQuantity 扣减从未反冲 → 账面超扣。完整撤销小结属 Phase 3。
-            if (row.getInterimSettledAt() != null) {
-                throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
-                        .withCode("ROW_INTERIM_SETTLED")
-                        .withHint("已小结入库的工序行不可删除,请通过撤销小结更正")
-                        .withSeverity("BLOCKING");
-            }
-            if (row.getBatchId() != null) {
-                // 查既有 WIP 产出批
-                Optional<MaterialBatch> wipOpt = materialBatchRepo
-                        .findByFactoryIdAndSourceDocTypeAndSourceDocId(
-                                factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
-
-                // 下游消耗守卫 (🔒): 谁消耗了本批的 WIP? 非空 → 拒绝
-                if (wipOpt.isPresent()) {
-                    List<MaterialConsumption> downstream = consumptionRepo
-                            .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
-                    if (!downstream.isEmpty()) {
-                        throw new BusinessException(409,
-                                "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
-                    }
-                }
-
-                // 逆向物化 (软删边/报工/WIP/ProductionBatch)
-                reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
-            } else if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
-                // #1252 中段起步: SAVED_SFI 行 (batchId==null) 的产出已在保存时 SFI IN 入库 → 删除须冲销该入库
-                //   (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝), 否则删行后 SFI 库存虚高 (幽灵)。
-                reverseSfiOutput(factoryId, planId, tryDeserialize(row.getRowPayload()));
-            }
-
-            // SP-G P3: DELETE 操作记录 (before = 被删行 payload, after = null)。
-            ProcessSheetRowRequest beforeReq = tryDeserialize(row.getRowPayload());
-            logChange(factoryId, planId, beforeReq, "DELETE", beforeReq, null, userId,
-                    row.getProcessCode(), row.getClientRowId());
-
-            // 软删行本身
-            row.softDelete();
-            rowRepo.save(row);
+        // 2B.2 B1: 目标若为多产出组成员 → 级联删除整组 (base#*)。防单行删除留幻库存 (投入只在 base#0,
+        //   单删产出行 → 投入反冲但同组其它产出仍在 → 凭空库存)。整组任一行已小结/被下游消耗 → deleteOneRow 抛 409。
+        String baseRowId = multiOutputBaseOf(rows.get(0));
+        List<ProcessSheetRow> targets = (baseRowId != null)
+                ? rowRepo.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                        .filter(r -> r.getClientRowId() != null
+                                && (r.getClientRowId().equals(baseRowId)
+                                || r.getClientRowId().startsWith(baseRowId + "#")))
+                        .toList()
+                : rows;
+        for (ProcessSheetRow row : targets) {
+            deleteOneRow(factoryId, planId, row, userId);
         }
+    }
+
+    /** 返回该行所属多产出组的 base clientRowId; 非多产出行返 null。 */
+    private String multiOutputBaseOf(ProcessSheetRow row) {
+        ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
+        if (req != null && Boolean.TRUE.equals(req.getMultiOutputMember())) {
+            String base = req.getMultiOutputBaseRowId();
+            if (base != null && !base.isBlank()) {
+                return base;
+            }
+            String cid = row.getClientRowId();
+            int idx = cid == null ? -1 : cid.lastIndexOf('#');
+            return idx > 0 ? cid.substring(0, idx) : cid;
+        }
+        return null;
+    }
+
+    /** 单行删除内部体 (无级联; 供 deleteRow 级联 + deleteMultiOutputGroupIfPresent 复用)。 */
+    private void deleteOneRow(String factoryId, String planId, ProcessSheetRow row, Long userId) {
+        // 🔒 G3 防双扣: 已小结入库的行不可删除 (usedQuantity 扣减从未反冲 → 账面超扣)。完整撤销走撤销小结。
+        if (row.getInterimSettledAt() != null) {
+            throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
+                    .withCode("ROW_INTERIM_SETTLED")
+                    .withHint("已小结入库的工序行不可删除,请通过撤销小结更正")
+                    .withSeverity("BLOCKING");
+        }
+        if (row.getBatchId() != null) {
+            Optional<MaterialBatch> wipOpt = materialBatchRepo
+                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                            factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
+            if (wipOpt.isPresent()) {
+                List<MaterialConsumption> downstream = consumptionRepo
+                        .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
+                if (!downstream.isEmpty()) {
+                    throw new BusinessException(409,
+                            "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+                }
+            }
+            reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
+        } else if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
+            reverseSfiOutput(factoryId, planId, tryDeserialize(row.getRowPayload()));
+        }
+        ProcessSheetRowRequest beforeReq = tryDeserialize(row.getRowPayload());
+        logChange(factoryId, planId, beforeReq, "DELETE", beforeReq, null, userId,
+                row.getProcessCode(), row.getClientRowId());
+        row.softDelete();
+        rowRepo.save(row);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -2271,6 +2332,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                                       List<String> warnings) {
         BigDecimal outputQty = req.getOutputQuantity();
         if (outputQty == null || outputQty.signum() <= 0) {
+            return null;
+        }
+        // 2B.2: 多产出行 SFI IN —— 工序不处理成本分摊 → 产出单位成本诚实 null (不伪造 ¥0 污染移动均价)。
+        if (Boolean.TRUE.equals(req.getMultiOutputMember())) {
             return null;
         }
         // 调味/熟制道: 调料桶无法现算 → 诚实 null (禁止只算 labor 降级成非-null 假数据)。

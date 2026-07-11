@@ -682,6 +682,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         if (outputQty == null || outputQty.signum() <= 0) {
             return null;
         }
+        // 2B.2: 多产出行 —— 工序不处理成本分摊 (投入不按产出比例拆分), 故产出单位成本无法诚实归属 → null。
+        //   不伪造 ¥0 (其余产出行), 不把全部投入成本 N× 膨胀到首产出行。投入 COGS 仍记在首产出行 ProductionBatch。
+        if (ur.req != null && Boolean.TRUE.equals(ur.req.getMultiOutputMember())) {
+            return null;
+        }
         BigDecimal baseTotal;
         if (ur.row.getBatchId() != null) {
             // 物化道: ProductionBatch.totalCost 含 原料+调料+人工 (+ 在制 WIP 继承); SFI 投料下面单独补。
