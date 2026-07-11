@@ -1234,6 +1234,18 @@ async def period_comparison(pool, factory_id, start, end):
             """,
             factory_id, s, e,
         )
+        # 领料成本 (真·实际用料口径, 独立于 POS×配方理论) — agg_restaurant_daily_totals
+        # 是 (factory_id, date) 粒度; 单独聚合, 绝不与 agg_daily 的 per-store 行 JOIN
+        # (否则每个门店行都乘一遍 factory-date 领料成本 = 按门店数翻倍)。
+        req_row = await conn.fetchrow(
+            """
+            SELECT SUM(requisition_cost_total)::numeric(18,2) AS req_cost,
+                   COUNT(*)                                    AS req_n
+              FROM agg_restaurant_daily_totals
+             WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+            """,
+            factory_id, s, e,
+        )
         rev = Decimal(row["revenue"] or 0)
         n = int(row["n_rows"] or 0)
         cost_n = int(row["cost_n"] or 0)
@@ -1243,7 +1255,14 @@ async def period_comparison(pool, factory_id, start, end):
         if n > 0 and mat is not None and rev != 0 and cost_n == n:
             gm = (((rev - Decimal(mat)) / rev) * Decimal("100")).quantize(
                 Decimal("0.1"), rounding=ROUND_HALF_UP)
-        return {"n": n, "revenue": rev, "gross_margin_pct": gm}
+        # 领料成本率 = 领料成本 ÷ 营收 * 100 (真实际用料, 反回扣核心信号; 上升=漏损/回扣)。
+        req_cost = req_row["req_cost"] if req_row else None
+        req_n = int(req_row["req_n"] or 0) if req_row else 0
+        cost_ratio = None
+        if n > 0 and req_cost is not None and req_n > 0 and rev != 0:
+            cost_ratio = ((Decimal(req_cost) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return {"n": n, "revenue": rev, "gross_margin_pct": gm, "cost_ratio": cost_ratio}
 
     async with pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
@@ -1262,6 +1281,9 @@ async def period_comparison(pool, factory_id, start, end):
     cur_gm = cur["gross_margin_pct"]
     gm_mom = cur_gm is not None and agg["mom"]["gross_margin_pct"] is not None
     gm_yoy = cur_gm is not None and agg["yoy"]["gross_margin_pct"] is not None
+    cur_cr = cur["cost_ratio"]
+    cr_mom = cur_cr is not None and agg["mom"]["cost_ratio"] is not None
+    cr_yoy = cur_cr is not None and agg["yoy"]["cost_ratio"] is not None
     return {
         "revenue": {
             # F1: current 窗无数据 → available False + current None (禁伪造 ¥0)
@@ -1278,6 +1300,15 @@ async def period_comparison(pool, factory_id, start, end):
             "yoy_pct": round(float(cur_gm) - float(agg["yoy"]["gross_margin_pct"]), 1) if gm_yoy else None,
             "mom_available": gm_mom,
             "yoy_available": gm_yoy,
+        },
+        "cost_ratio": {
+            # 领料成本率 = 领料成本 ÷ 营收 (真实际用料口径, 独立于 POS×配方理论);
+            # 同比/环比 = 百分点差。成本率上升 = 用料/漏损/回扣信号 → 去查 (邓总核心)。
+            "current": float(cur_cr) if cur_cr is not None else None,
+            "mom_pct": round(float(cur_cr) - float(agg["mom"]["cost_ratio"]), 1) if cr_mom else None,
+            "yoy_pct": round(float(cur_cr) - float(agg["yoy"]["cost_ratio"]), 1) if cr_yoy else None,
+            "mom_available": cr_mom,
+            "yoy_available": cr_yoy,
         },
     }
 

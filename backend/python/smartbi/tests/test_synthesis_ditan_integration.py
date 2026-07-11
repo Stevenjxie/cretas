@@ -72,6 +72,8 @@ def test_period_comparison_render_and_degradation():
                     "yoy_available": False, "mom_available": True},
         "gross_margin_pct": {"current": 30.0, "yoy_pct": None, "mom_pct": 1.5,
                              "yoy_available": False, "mom_available": True},
+        "cost_ratio": {"current": 32.0, "yoy_pct": None, "mom_pct": 2.5,
+                       "yoy_available": False, "mom_available": True},
     }
     fb = FactBook(period="x", period_comparison=pc)
     text = fb.to_prompt_text()
@@ -79,10 +81,16 @@ def test_period_comparison_render_and_degradation():
     assert "环比 -3.2%" in text
     assert "同比 去年同期无数据" in text      # honest degradation
     assert "个百分点" in text                 # margin uses points not %
+    assert "领料成本率 32.0%" in text          # 反回扣: 当前值显示
+    assert "环比 +2.5个百分点" in text         # 成本率环比上升
+    assert "非盘点rollforward" in text         # 诚实口径标注
     idx = fb.to_facts_index()
     assert idx["营收环比增长率"] == -3.2
     assert "营收同比增长率" not in idx        # unavailable → not indexed (no fabricated 0)
     assert idx["加权毛利率环比"] == 1.5
+    assert idx["领料成本率"] == 32.0           # grounded
+    assert idx["领料成本率环比"] == 2.5
+    assert "领料成本率同比" not in idx         # unavailable → not indexed
 
 
 def test_supplier_anomaly_render_and_grounding():
@@ -112,7 +120,12 @@ class _FakeConn:
         return None
 
     async def fetchrow(self, sql, factory_id, s, e):
-        return self._wd.get((s, e), {"revenue": 0, "material_cost": None, "cost_n": 0, "n_rows": 0})
+        w = self._wd.get((s, e), {})
+        # period_comparison._agg fires TWO queries per window: agg_daily + 领料成本.
+        if "agg_restaurant_daily_totals" in sql:
+            return {"req_cost": w.get("req_cost"), "req_n": w.get("req_n", 0)}
+        return {"revenue": w.get("revenue", 0), "material_cost": w.get("material_cost"),
+                "cost_n": w.get("cost_n", 0), "n_rows": w.get("n_rows", 0)}
 
 
 class _FakePool:
@@ -140,10 +153,11 @@ async def test_period_comparison_yoy_mom_math():
     mom_end = start - datetime.timedelta(days=1)
     mom_start = mom_end - span
     wd = {
-        (start, end): {"revenue": 1000, "material_cost": 300, "cost_n": 30, "n_rows": 30},        # gm 70%
-        (mom_start, mom_end): {"revenue": 800, "material_cost": 280, "cost_n": 30, "n_rows": 30},  # gm 65%
+        # req_cost = 领料成本 (真实际用料); cost_ratio 当前30% / 上月25% → 环比+5点
+        (start, end): {"revenue": 1000, "material_cost": 300, "cost_n": 30, "n_rows": 30, "req_cost": 300, "req_n": 30},   # gm 70%, cr 30%
+        (mom_start, mom_end): {"revenue": 800, "material_cost": 280, "cost_n": 30, "n_rows": 30, "req_cost": 200, "req_n": 30},  # gm 65%, cr 25%
         (datetime.date(2025, 6, 1), datetime.date(2025, 6, 30)):
-            {"revenue": 500, "material_cost": None, "cost_n": 0, "n_rows": 30},                    # no cost
+            {"revenue": 500, "material_cost": None, "cost_n": 0, "n_rows": 30, "req_cost": None, "req_n": 0},              # no cost, no 领料
     }
     out = await period_comparison(_FakePool(_FakeConn(wd)), "DEMO_REST", start, end)
     assert out["revenue"]["mom_pct"] == 25.0      # (1000-800)/800*100
@@ -152,6 +166,11 @@ async def test_period_comparison_yoy_mom_math():
     assert out["gross_margin_pct"]["mom_pct"] == 5.0          # 70-65 points
     assert out["gross_margin_pct"]["yoy_available"] is False  # yoy has no cost
     assert out["gross_margin_pct"]["yoy_pct"] is None         # honest, no fabrication
+    # 领料成本率 (真实际用料口径, 反回扣): current 30%, 环比 +5 点 (成本率上升=漏损信号)
+    assert out["cost_ratio"]["current"] == 30.0              # 300/1000*100
+    assert out["cost_ratio"]["mom_pct"] == 5.0               # 30 - 25 points
+    assert out["cost_ratio"]["yoy_available"] is False       # yoy 无领料数据
+    assert out["cost_ratio"]["yoy_pct"] is None              # honest, no fabrication
 
 
 @pytest.mark.asyncio
