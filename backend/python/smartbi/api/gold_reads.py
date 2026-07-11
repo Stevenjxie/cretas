@@ -48,6 +48,8 @@ from smartbi.gold import (
     store_review_vs_revenue,
     top_products,
     trend_bundle,
+    void_audit,
+    void_rate,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
 from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
@@ -414,6 +416,34 @@ async def get_staff_ranking(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("staff-ranking failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/void-rate")
+async def get_void_rate(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    """撤单率 + 撤单稽核(操作人/原因 Top N) — order void rate + staff audit.
+
+    New restaurant analytics dimension (greenfield). Combines void_rate()
+    (void_count/bill_count) and void_audit() (staff+reason breakdown) into
+    one response so the frontend card can render both the KPI and the audit
+    table from a single request. No monetary fields — RBAC strip is a no-op
+    here but applied for consistency with every other Gold read endpoint."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        rate_result = await void_rate(pool, fid, (start, end))
+        audit_result = await void_audit(pool, fid, (start, end), top_n=top_n)
+        combined = {**rate_result, **audit_result}
+        return _apply_rbac_strip(combined, _get_role(request))
+    except Exception as e:
+        logger.exception("void-rate failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

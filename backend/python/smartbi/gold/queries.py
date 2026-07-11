@@ -2225,3 +2225,226 @@ async def alert_preview(
         "timeline": timeline,
         "summary": summary,
     }
+
+
+# ── void_rate / void_audit (撤单率 / 撤单稽核) ──────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_daily_void
+# (materialized from fact_pos_void, see
+# smartbi/services/materialized_analytics/daily_void.py). void_rate reads
+# agg_daily's bill_count as the denominator (same Gold table finance_summary
+# / order_type_mix already read for bill totals).
+
+# Min bills in the window before we'll report a 撤单率. Below this, a couple
+# of voids swing the % wildly and could falsely trip "撤单率过高 critical" on a
+# partial/tiny bill load. Skip honestly instead. (Mirrored, deliberately
+# duplicated, in health_check_metrics.py's _VOID_MIN_BILLS — two independent
+# modules, not worth cross-importing a single int.)
+_VOID_MIN_BILLS = 50
+
+
+async def void_rate(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """撤单率 = void_count / bill_count over the given date range.
+
+    Honesty guards (never fabricate a 0% "healthy" for a tenant with no void
+    data):
+      - data_available=False (tenant has ZERO agg_daily_void rows at all) →
+        void_rate=None, note="未上传撤单数据". Distinguishes "never uploaded a
+        撤单报表" from a genuine 0 voids in the window.
+      - bill_count < _VOID_MIN_BILLS → void_rate=None, note explains the
+        sample is too small (avoids a false "撤单率过高" off a couple voids).
+
+    Returns:
+      - void_count, bill_count (raw totals)
+      - void_rate: percentage (0-100 scale, matches discount_rate's scale),
+        None when a guard fires
+      - data_available: bool — whether the tenant has any void data at all
+      - note: explains why void_rate is None, if applicable
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        # All-history availability (NOT date-filtered): does this tenant have
+        # ANY void data? Separates "未上传撤单数据" from "0 voids this window".
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_daily_void WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        void_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(void_count), 0) AS void_count FROM agg_daily_void WHERE {where}",
+            *params,
+        )
+        bill_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(bill_count), 0) AS bill_count FROM agg_daily WHERE {where}",
+            *params,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+    void_count = int(void_row["void_count"] or 0) if void_row else 0
+    bill_count = int(bill_row["bill_count"] or 0) if bill_row else 0
+
+    rate: Optional[Decimal] = None
+    note: Optional[str] = None
+    if not data_available:
+        note = "未上传撤单数据"
+    elif bill_count < _VOID_MIN_BILLS:
+        note = f"订单样本不足(<{_VOID_MIN_BILLS}单)，撤单率不稳定，暂不计算。"
+    else:
+        rate = (Decimal(void_count) / Decimal(bill_count) * Decimal(100)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "void_count": void_count,
+        "bill_count": bill_count,
+        "void_rate": float(rate) if rate is not None else None,
+        "data_available": data_available,
+        "note": note,
+    }
+
+
+async def void_audit(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """撤单稽核: per-(staff, store) void breakdown, top N by void RATE.
+
+    ⚠️ This NAMES employees to the boss — treated as a red-line surface.
+    Two anti-false-accusation designs (per Fable gate SHOULD-FIX 4):
+
+    (a) GROUP BY staff_id (the real surrogate key), NOT the display name.
+        Two different 张伟 at two stores have distinct staff_ids; grouping by
+        the shared display name would MERGE their voids into one inflated row
+        falsely blaming one person. We also surface store_name so a named row
+        is anchored to a specific store.
+
+    (b) Rank by voids-per-100-bills-handled (a RATE), not raw 撤单笔数. Raw
+        count structurally tops whoever AUTHORIZES the most voids (收银主管/
+        店长) — that's authority, not misconduct. Normalizing by each staff's
+        own handled-bill volume (fact_pos_transaction bill count for that
+        staff_id at that store) makes it a fair rate. Unattributed voids
+        (staff_id=0) have no matching bills → rate None → sorted last.
+
+    Data source note: agg_daily_void.staff_id is the POS operator who
+    processed the void, NOT necessarily who caused it — hence the caveat.
+
+    Returns:
+      - total_void_count: sum across the WHOLE range (not just top N)
+      - breakdown: list of {staff_name, store_name, void_count, bills_handled,
+        voids_per_100_bills (None if bills_handled=0), top_reason (None when
+        the '未标注' sentinel is the dominant reason)} ranked by rate desc.
+      - caveat: honest disclaimer about data meaning
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    # Bare column WHERE (no table alias) — reused verbatim inside each CTE,
+    # each of which selects from a single table, so factory_id/date/staff_id
+    # are unambiguous.
+    conds: list = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    params_top = list(params)
+    params_top.append(int(top_n))
+    limit_ph = f"${len(params_top)}"
+
+    async with pool.acquire() as conn:
+        total_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(void_count), 0) AS total FROM agg_daily_void WHERE {where}",
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            WITH ssr AS (   -- voids per (staff, store, reason)
+                SELECT staff_id, store_id, void_reason, SUM(void_count) AS vc
+                  FROM agg_daily_void
+                 WHERE {where}
+                 GROUP BY staff_id, store_id, void_reason
+            ),
+            ss AS (         -- collapse to (staff, store): total voids + dominant reason
+                SELECT staff_id, store_id,
+                       SUM(vc)                                    AS void_count,
+                       (array_agg(void_reason ORDER BY vc DESC))[1] AS top_reason
+                  FROM ssr
+                 GROUP BY staff_id, store_id
+            ),
+            handled AS (    -- bills each staff handled at each store (rate denominator)
+                SELECT staff_id, store_id, COUNT(*) AS bills
+                  FROM fact_pos_transaction
+                 WHERE {where} AND staff_id IS NOT NULL
+                 GROUP BY staff_id, store_id
+            )
+            SELECT CASE WHEN ss.staff_id = 0 THEN '未知'
+                        ELSE COALESCE(st.name, ss.staff_id::text) END AS staff_name,
+                   COALESCE(ds.name, ss.store_id::text)               AS store_name,
+                   ss.void_count                                       AS void_count,
+                   ss.top_reason                                       AS top_reason,
+                   COALESCE(h.bills, 0)                                AS bills
+              FROM ss
+              LEFT JOIN dim_staff st ON st.staff_id = ss.staff_id AND st.factory_id = $1
+              LEFT JOIN dim_store ds ON ds.store_id = ss.store_id AND ds.factory_id = $1
+              LEFT JOIN handled  h  ON h.staff_id  = ss.staff_id AND h.store_id  = ss.store_id
+             ORDER BY CASE WHEN COALESCE(h.bills, 0) > 0
+                           THEN ss.void_count::numeric / h.bills
+                           ELSE -1 END DESC,
+                      ss.void_count DESC
+             LIMIT {limit_ph}
+            """,
+            *params_top,
+        )
+
+    breakdown = []
+    for r in rows:
+        bills = int(r["bills"] or 0)
+        vc = int(r["void_count"])
+        rate = (
+            float((Decimal(vc) / Decimal(bills) * Decimal(100)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP))
+            if bills > 0 else None
+        )
+        breakdown.append({
+            "staff_name": r["staff_name"],
+            "store_name": r["store_name"],
+            "void_count": vc,
+            "bills_handled": bills,
+            "voids_per_100_bills": rate,
+            "top_reason": r["top_reason"] if r["top_reason"] != "未标注" else None,
+        })
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "total_void_count": int(total_row["total"] or 0) if total_row else 0,
+        "breakdown": breakdown,
+        "caveat": (
+            "撤单按 POS 操作人记账(非顾客本人/服务员撤单原因确认); 操作人缺失时归为「未知」。"
+            "「每百单撤单」= 撤单次数 ÷ 该操作人经手订单数 × 100，用于剔除授权量差异"
+            "(收银主管/店长授权撤单本就多，不等于违规); 应按此率而非撤单总数判断。"
+        ),
+    }
