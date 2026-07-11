@@ -220,6 +220,10 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                        then streams it in fixed-size slices, same as the
                        restaurant_ops gold path)
       event: charts  — chart configs
+      event: alerts  — 🔒 反回扣(anti-kickback) alerts (see
+                       ComprehensiveSynthesisEngine.collect_alerts); also
+                       included in the final `done` frame for a client that
+                       only reads `done` (mirrors the `charts` dual-emit).
       event: done    — final summary
       event: error   — on failure
     """
@@ -253,10 +257,13 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 await asyncio.sleep(0.04)
             if resp.charts:
                 yield _sse("charts", resp.charts)
+            if resp.alerts:
+                yield _sse("alerts", resp.alerts)
             yield _sse("done", {
                 "success": True,
                 "answer": answer,
                 "charts": resp.charts,
+                "alerts": resp.alerts,
                 "source": resp.source,
                 "plan": resp.plan,
                 "tokens": resp.tokens,
