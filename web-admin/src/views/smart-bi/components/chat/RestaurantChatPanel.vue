@@ -23,10 +23,14 @@ import ChatTypingIndicator from './ChatTypingIndicator.vue';
 import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
 
+// This panel answers over the store's whole real 经营 dataset (backend derives
+// the tenant from the JWT). It intentionally does NOT read the dashboard's
+// selected upload-Excel — that upload-driven Q&A is a separate surface. The
+// former subSector/uploadId props were passed but ignored, so they are dropped
+// here (and unbound in the parent) to avoid misleading callers. factoryId is
+// kept for potential display use; it is not sent to the API.
 defineProps<{
   factoryId: string;
-  subSector?: string;
-  uploadId?: string;
 }>();
 
 const turns = ref<ChatTurn[]>([]);
@@ -127,31 +131,19 @@ defineExpose({
       <el-button size="small" link @click="clearConversation">清空对话</el-button>
     </div>
 
+    <div class="chat-scope-note">
+      本问答基于全店真实经营数据（评价 / 财务 / 成本率 / 供应商价格），不读取上方所选的上传 Excel。
+    </div>
+
     <div ref="chatContainer" class="chat-body">
       <div v-if="turns.length === 0" class="chat-empty">
         <div class="chat-empty-icon">&#9660;</div>
         <div class="chat-empty-text">
-          问问我 — 例如: "帮我分析成本刚性" / "哪些菜该砍" / "17 家店哪家最差"
+          问问我 — 例如: "这两个月赚钱没利润率多少" / "领料成本率涨了吗" / "有没有供应商偷偷涨价"
         </div>
       </div>
 
-      <ChatBubble v-for="turn in turns" :key="turn.id" :turn="turn">
-        <template #followups>
-          <div
-            v-if="turn.followUpChips && turn.followUpChips.length"
-            class="followup-chips"
-          >
-            <button
-              v-for="chip in turn.followUpChips"
-              :key="chip"
-              class="followup-chip"
-              @click="sendMessage(chip)"
-            >
-              {{ chip }}
-            </button>
-          </div>
-        </template>
-      </ChatBubble>
+      <ChatBubble v-for="turn in turns" :key="turn.id" :turn="turn" />
 
       <ChatTypingIndicator v-if="isTyping" />
     </div>
@@ -204,6 +196,15 @@ defineExpose({
   background: #c9a66b;
   box-shadow: 0 0 8px #c9a66b;
 }
+.chat-scope-note {
+  padding: 8px 20px;
+  background: #f2ece0;
+  border-bottom: 1px solid #e8e1cc;
+  font-family: 'Noto Serif SC', serif;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b6b6b;
+}
 .chat-body {
   flex: 1;
   overflow-y: auto;
@@ -235,42 +236,10 @@ defineExpose({
     opacity: 1;
   }
 }
-.followup-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dotted #d4cdb8;
-}
-.followup-chip {
-  padding: 6px 12px;
-  border: 1px solid #d4cdb8;
-  border-radius: 16px;
-  background: #fefcf6;
-  color: #3d3d3d;
-  font-family: 'Noto Serif SC', serif;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.followup-chip:hover {
-  border-color: #2d4a3e;
-  color: #2d4a3e;
-}
 .chat-input {
   padding: 14px 20px;
   border-top: 1px solid #d4cdb8;
   display: flex;
   gap: 10px;
-}
-.sections-placeholder {
-  padding: 10px;
-  margin-top: 12px;
-  background: #f2ece0;
-  border: 1px dashed #a8a29e;
-  font-family: monospace;
-  font-size: 11px;
-  color: #6b6b6b;
 }
 </style>
