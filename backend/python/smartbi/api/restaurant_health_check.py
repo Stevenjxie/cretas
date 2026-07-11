@@ -193,6 +193,53 @@ async def get_health_check_report(
             dd["metricNameZh"] = _METRIC_NAME_ZH.get(d.metric_key, d.metric_key)
         diag_dicts.append(dd)
 
+    # ── 5b. 反回扣: 供应商进价异常 → pushable standing diagnosis ─────────
+    # DiagnosticsEngine 是 "1 指标 key → 1 阈值" 的标量引擎, 装不下 "N 条
+    # (食材×供应商) 异常事件"。供应商进价异常是 反回扣 的核心采购端信号 (零理论
+    # 依赖 — 只看 agg_supplier_price 真实成交价环比), 且已被合成路径 vetted
+    # (detect_price_anomalies)。这里把它作为独立诊断 append 进 diag_dicts, 让它
+    # 走 #1354 桥接 → standing alert → 推送 (老板/管理员), 而不只停留在 AI 聊天。
+    #
+    # 只报 direction==UP (进价上涨才是虚高/回扣风险; 降价不是反回扣信号)。
+    # 措辞 威慑非处罚 ("请核对是否合理", 非 "存在回扣" 的指控)。riskLevel HIGH
+    # (连续 3+ 次同向) → critical(→SMS), MEDIUM → warning(仅站内)。metricKey 按
+    # (食材, 供应商) 唯一, 否则第 2 条会 dedup 覆盖第 1 条 (businessEntityId)。
+    try:
+        from smartbi.gold.price_anomaly import detect_price_anomalies
+        anomalies = await detect_price_anomalies(pool, factory_id)
+        for a in anomalies:
+            if str(a.get("direction")) != "UP":
+                continue  # 反回扣: 只关注进价上涨
+            delta = a.get("deltaPct")
+            if delta is None:
+                continue
+            ingredient = str(a.get("ingredientName") or a.get("normalizedName") or "食材")
+            supplier = str(a.get("supplierName") or "供应商")
+            supplier_id = str(a.get("supplierId") or "")
+            norm = str(a.get("normalizedName") or ingredient)
+            new_price = a.get("newPrice")
+            trailing = a.get("trailingAvg")
+            is_high = str(a.get("riskLevel")) == "HIGH"
+            desc = (
+                f"{ingredient}（{supplier}）最新进价 {new_price} 元，"
+                f"较近期均价上涨 {abs(float(delta)):.1f}%"
+                + (f"（近期均价 {trailing} 元）" if trailing is not None else "")
+                + "。请核对该供应商报价是否合理、是否偏离合同价，避免虚高进价/回扣。"
+            )
+            diag_dicts.append({
+                "metricKey": f"supplier_price_anomaly:{norm}:{supplier_id}",
+                "metricNameZh": "供应商进价异常",
+                "severity": "critical" if is_high else "warning",
+                "status": "进价上涨",
+                "descriptionZh": desc,
+                "estimated": False,
+                "rxActions": [{
+                    "actionZh": "核对该供应商近期报价与合同价，必要时多方询价比价",
+                }],
+            })
+    except Exception:  # noqa: BLE001 — best-effort, 不因供应商异常查询失败拖垮体检
+        logger.exception("[health-check] supplier price anomaly append failed for %s", factory_id)
+
     # counts from the post-adjustment dicts so the F3 severity cap is reflected.
     critical_count = sum(1 for dd in diag_dicts if dd.get("severity") == "critical")
     warning_count = sum(1 for dd in diag_dicts if dd.get("severity") == "warning")
