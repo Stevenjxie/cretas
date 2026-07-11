@@ -7,14 +7,41 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductProcessWorkflowRuntimeSchemaContractTest {
+
+    @Test
+    void createsCompleteImmutableInstanceThroughNormalJavaApi() {
+        LocalDateTime compiledAt = LocalDateTime.of(2026, 7, 11, 11, 15);
+
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                "F006",
+                101L,
+                "PRODUCT-7",
+                202L,
+                3,
+                "[{\"id\":\"process-1\"}]",
+                "[{\"source\":\"start\",\"target\":\"process-1\"}]",
+                compiledAt);
+
+        assertEquals("F006", instance.getFactoryId());
+        assertEquals(101L, instance.getProductionBatchId());
+        assertEquals("PRODUCT-7", instance.getProductTypeId());
+        assertEquals(202L, instance.getWorkflowId());
+        assertEquals(3, instance.getDefinitionVersion());
+        assertEquals("[{\"id\":\"process-1\"}]", instance.getNodesJson());
+        assertEquals("[{\"source\":\"start\",\"target\":\"process-1\"}]", instance.getEdgesJson());
+        assertEquals(compiledAt, instance.getCompiledAt());
+        assertEquals(ProductionWorkflowInstance.Status.ACTIVE, instance.getStatus());
+    }
 
     @Test
     void migrationDefinesRuntimeOwnershipAndLegacyFallbackContracts() throws Exception {

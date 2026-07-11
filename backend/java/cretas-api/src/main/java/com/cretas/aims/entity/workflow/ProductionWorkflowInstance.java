@@ -13,6 +13,7 @@ import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
@@ -22,6 +23,7 @@ import java.time.LocalDateTime;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "production_workflow_instances",
         uniqueConstraints = @UniqueConstraint(
@@ -77,4 +79,26 @@ public class ProductionWorkflowInstance extends BaseEntity {
     @Setter(AccessLevel.NONE)
     @Column(name = "compiled_at", nullable = false, updatable = false)
     private LocalDateTime compiledAt = LocalDateTime.now();
+
+    public static ProductionWorkflowInstance create(
+            String factoryId,
+            Long productionBatchId,
+            String productTypeId,
+            Long workflowId,
+            Integer definitionVersion,
+            String nodesJson,
+            String edgesJson,
+            LocalDateTime compiledAt) {
+        ProductionWorkflowInstance instance = new ProductionWorkflowInstance();
+        instance.factoryId = factoryId;
+        instance.productionBatchId = productionBatchId;
+        instance.productTypeId = productTypeId;
+        instance.workflowId = workflowId;
+        instance.definitionVersion = definitionVersion;
+        instance.nodesJson = nodesJson;
+        instance.edgesJson = edgesJson;
+        instance.compiledAt = compiledAt;
+        instance.status = Status.ACTIVE;
+        return instance;
+    }
 }
