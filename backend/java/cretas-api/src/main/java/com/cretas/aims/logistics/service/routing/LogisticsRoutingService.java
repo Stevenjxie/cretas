@@ -2,6 +2,7 @@ package com.cretas.aims.logistics.service.routing;
 
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.logistics.entity.LogisticsDeliveryOrder;
+import com.cretas.aims.logistics.entity.LogisticsDistanceEdge;
 import com.cretas.aims.logistics.entity.LogisticsDriver;
 import com.cretas.aims.logistics.entity.LogisticsOrderBatch;
 import com.cretas.aims.logistics.entity.LogisticsPlan;
@@ -10,6 +11,7 @@ import com.cretas.aims.logistics.entity.LogisticsTrip;
 import com.cretas.aims.logistics.entity.LogisticsVehicleDriver;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
+import com.cretas.aims.logistics.entity.enums.DistanceEdgeSource;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
 import com.cretas.aims.logistics.entity.enums.TripStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
@@ -23,6 +25,7 @@ import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,8 +34,10 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -64,6 +69,14 @@ public class LogisticsRoutingService {
     private final LogisticsPlanRepository planRepository;
     private final LogisticsTripRepository tripRepository;
     private final LogisticsStopRepository stopRepository;
+    private final AmapClient amapClient;
+
+    /** 车场 (DEPOT) 坐标 — 用于补齐 NEEDS_ROUTE_DATA 车次的 DEPOT->首站 距离 (Phase 4, 2026-07-11)。 */
+    @Value("${logistics.depot.lng:120.62}")
+    private BigDecimal depotLng;
+
+    @Value("${logistics.depot.lat:31.30}")
+    private BigDecimal depotLat;
 
     /**
      * 生成排线计划 — 若该批次已有非 CANCELLED 计划则直接返回既有计划 (幂等, 见类头说明)。
@@ -191,13 +204,17 @@ public class LogisticsRoutingService {
 
         LogisticsRoutingAlgorithm.Result result = LogisticsRoutingAlgorithm.run(input);
 
+        // ---- Phase 4: 用高德地图补齐 NEEDS_ROUTE_DATA 车次的缺边距离 (诚实降级不变: 失败仍 NEEDS_ROUTE_DATA) ----
+        List<LogisticsRoutingAlgorithm.TripResult> patchedTrips =
+                fillMissingRouteDataViaAmap(factoryId, result.trips(), orderById);
+
         // ---- 落库 Trip + Stop ----
         BigDecimal totalDistanceKm = BigDecimal.ZERO;
         int totalStores = 0;
         boolean needsAction = !result.unassignedOrderIds().isEmpty();
 
         List<LogisticsTrip> savedTrips = new ArrayList<>();
-        for (LogisticsRoutingAlgorithm.TripResult tr : result.trips()) {
+        for (LogisticsRoutingAlgorithm.TripResult tr : patchedTrips) {
             LogisticsTrip trip = LogisticsTrip.builder()
                     .factoryId(factoryId)
                     .planId(plan.getId())
@@ -244,6 +261,120 @@ public class LogisticsRoutingService {
         plan.setTotalTrips(savedTrips.size());
         plan.setTotalDistanceKm(totalDistanceKm.setScale(2, RoundingMode.HALF_UP));
         plan.setStatus(needsAction ? PlanStatus.NEEDS_ACTION : PlanStatus.DRAFT);
+    }
+
+    // ============================================================
+    // Phase 4 — 高德地图补齐缺边 (诚实降级: 任何一步失败都保持 NEEDS_ROUTE_DATA, 绝不伪造 km)
+    // ============================================================
+
+    /** {@link #tryFillTripDistances} 的返回封装 — 携带本次尝试实际发起的高德调用数, 供上层汇总日志。 */
+    private record AmapFillResult(LogisticsRoutingAlgorithm.TripResult trip, int amapCallsMade) {
+    }
+
+    /**
+     * 对算法产出的车次逐一检查: 仅 {@code NEEDS_ROUTE_DATA} 车次尝试用高德地图补齐距离；
+     * 其余车次原样透传。key 未配置时 ({@link AmapClient#isEnabled()} false) 直接跳过整个
+     * 补齐流程 (纯读路径, 零额外查询/DB 开销)。
+     */
+    private List<LogisticsRoutingAlgorithm.TripResult> fillMissingRouteDataViaAmap(
+            String factoryId, List<LogisticsRoutingAlgorithm.TripResult> trips,
+            Map<String, LogisticsDeliveryOrder> orderById) {
+        if (!amapClient.isEnabled()) {
+            return trips;
+        }
+        List<LogisticsRoutingAlgorithm.TripResult> patched = new ArrayList<>(trips.size());
+        int totalAmapCalls = 0;
+        for (LogisticsRoutingAlgorithm.TripResult tr : trips) {
+            if (tr.status() != TripStatus.NEEDS_ROUTE_DATA) {
+                patched.add(tr);
+                continue;
+            }
+            AmapFillResult fillResult = tryFillTripDistances(factoryId, tr, orderById);
+            totalAmapCalls += fillResult.amapCallsMade();
+            patched.add(fillResult.trip());
+        }
+        if (totalAmapCalls > 0) {
+            log.info("logistics.routing.amap fillMissingRouteDataViaAmap factoryId={} amapCalls={}",
+                    factoryId, totalAmapCalls);
+        }
+        return patched;
+    }
+
+    /**
+     * 尝试为单个 {@code NEEDS_ROUTE_DATA} 车次补全全部腿的距离。任一环节失败 (订单缺坐标 /
+     * 高德查询失败) 立即中止并原样返回入参 {@code tr} (车次继续保持 {@code NEEDS_ROUTE_DATA}，
+     * 已成功查到的腿仍会被 upsert 进 {@code logistics_distance_edges} 缓存, 供下次
+     * regenerate 复用, 不浪费已消耗的配额)。
+     */
+    private AmapFillResult tryFillTripDistances(String factoryId, LogisticsRoutingAlgorithm.TripResult tr,
+            Map<String, LogisticsDeliveryOrder> orderById) {
+        List<String> segmentKeys = tr.segmentKeys();
+        if (segmentKeys.isEmpty()) {
+            return new AmapFillResult(tr, 0);
+        }
+
+        // 先解析车次途经的每个 point (DEPOT + 各门店) 的坐标；任一门店订单缺经纬度则整车次放弃 (诚实)。
+        Map<String, double[]> coordsByPoint = new LinkedHashMap<>();
+        coordsByPoint.put("DEPOT", new double[] {depotLng.doubleValue(), depotLat.doubleValue()});
+        for (String orderId : tr.orderIdsInOrder()) {
+            LogisticsDeliveryOrder order = orderById.get(orderId);
+            if (order == null || order.getLongitude() == null || order.getLatitude() == null) {
+                return new AmapFillResult(tr, 0);
+            }
+            coordsByPoint.put(order.getStoreCode(),
+                    new double[] {order.getLongitude().doubleValue(), order.getLatitude().doubleValue()});
+        }
+
+        List<BigDecimal> newDistances = new ArrayList<>(segmentKeys.size());
+        int amapCalls = 0;
+        for (String key : segmentKeys) {
+            String[] parts = key.split("->", 2);
+            if (parts.length != 2) {
+                return new AmapFillResult(tr, amapCalls);
+            }
+            String from = parts[0];
+            String to = parts[1];
+
+            Optional<LogisticsDistanceEdge> cached = distanceEdgeRepository
+                    .findByFactoryIdAndFromPointIdAndToPointIdAndDeletedAtIsNull(factoryId, from, to);
+            if (cached.isPresent()) {
+                newDistances.add(cached.get().getDistanceKm());
+                continue;
+            }
+
+            double[] originCoord = coordsByPoint.get(from);
+            double[] destCoord = coordsByPoint.get(to);
+            if (originCoord == null || destCoord == null) {
+                return new AmapFillResult(tr, amapCalls);
+            }
+
+            amapCalls++;
+            Optional<BigDecimal> distanceKm = amapClient.drivingDistanceKm(
+                    originCoord[0], originCoord[1], destCoord[0], destCoord[1]);
+            if (distanceKm.isEmpty()) {
+                return new AmapFillResult(tr, amapCalls); // 诚实降级: 车次保持 NEEDS_ROUTE_DATA
+            }
+
+            LogisticsDistanceEdge edge = LogisticsDistanceEdge.builder()
+                    .factoryId(factoryId).fromPointId(from).toPointId(to)
+                    .distanceKm(distanceKm.get()).source(DistanceEdgeSource.MAP_PROVIDER)
+                    .build();
+            distanceEdgeRepository.save(edge); // 缓存 — 后续 regenerate / 其它车次复用同一条边不再重复调用
+            newDistances.add(distanceKm.get());
+        }
+
+        BigDecimal total = newDistances.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+        TripStatus newStatus = tr.vehicleId() == null ? TripStatus.NEEDS_VEHICLE
+                : tr.driverId() == null ? TripStatus.NEEDS_DRIVER
+                : TripStatus.DRAFT;
+
+        LogisticsRoutingAlgorithm.TripResult filled = new LogisticsRoutingAlgorithm.TripResult(
+                tr.tripNo(), tr.vehicleId(), tr.driverId(), tr.orderIdsInOrder(), tr.segmentKeys(),
+                newDistances, total, tr.totalVolumeCbm(), tr.totalWeightKg(), tr.loadRate(), tr.weightLoadRate(),
+                newStatus);
+        return new AmapFillResult(filled, amapCalls);
     }
 
     private static BigDecimal nvl(BigDecimal value) {

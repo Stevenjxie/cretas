@@ -29,6 +29,7 @@ import com.cretas.aims.logistics.repository.LogisticsTripRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
 import com.cretas.aims.logistics.service.impl.LogisticsPlanServiceImpl;
+import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.logistics.service.routing.LogisticsRoutingService;
 import com.cretas.aims.repository.VehicleRepository;
 import jakarta.persistence.EntityManager;
@@ -67,7 +68,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims")
 @EnableJpaRepositories(basePackages = "com.cretas.aims")
-@Import({LogisticsRoutingService.class, LogisticsPlanMapper.class, LogisticsPlanServiceImpl.class})
+@Import({LogisticsRoutingService.class, AmapClient.class, LogisticsPlanMapper.class, LogisticsPlanServiceImpl.class})
 @DisplayName("LogisticsPlanServiceImpl — 状态机 + 并发 (@DataJpaTest, H2 PG-compat)")
 class LogisticsPlanServiceImplTest {
 

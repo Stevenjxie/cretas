@@ -11,6 +11,7 @@ import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsOrderBatchRepository;
 import com.cretas.aims.logistics.service.importjob.impl.LogisticsOrderImportServiceImpl;
+import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,9 +29,17 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Phase 2 — service-level test for {@link LogisticsOrderImportServiceImpl} against a real
@@ -65,11 +74,13 @@ class LogisticsOrderImportServiceImplTest {
     @Autowired private LogisticsDeliveryOrderRepository orderRepo;
 
     private final ExcelUtil excelUtil = new ExcelUtil(); // real impl, exercises real EasyExcel read/write
+    // mocked — never hit the real Amap API in tests (per python-java-port.md style mocking convention)
+    private final AmapClient amapClient = mock(AmapClient.class);
     private LogisticsOrderImportServiceImpl service;
 
     private LogisticsOrderImportServiceImpl service() {
         if (service == null) {
-            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil);
+            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil, amapClient);
         }
         return service;
     }
@@ -192,7 +203,7 @@ class LogisticsOrderImportServiceImplTest {
     }
 
     @Test
-    @DisplayName("preview — 同批门店编码重复 → 第二次出现标记错误, 第一次仍有效")
+    @DisplayName("preview — 同批订单号重复 → 第二次出现标记错误, 第一次仍有效")
     void previewDuplicateStoreCode() {
         List<LogisticsOrderImportRow> rows = List.of(validRow("S020", "门店A"), validRow("S020", "门店A-重复"));
         PreviewResultDto result = service().preview(F1, buildFile(rows), 1L);
@@ -203,13 +214,13 @@ class LogisticsOrderImportServiceImplTest {
         assertThat(result.getRows().get(1).isValid()).isFalse();
         assertThat(result.getRows().get(1).getErrors()).anySatisfy(e -> {
             assertThat(e.getRowNumber()).isEqualTo(2);
-            assertThat(e.getColumn()).isEqualTo("门店编码");
+            assertThat(e.getColumn()).isEqualTo("订单号");
             assertThat(e.getMessage()).contains("重复");
         });
     }
 
     @Test
-    @DisplayName("preview — 整行完全重复 (不同门店编码但其余列相同不会误判; 这里用完全相同两行)")
+    @DisplayName("preview — 整行完全重复 (不同订单号但其余列相同不会误判; 这里用完全相同两行)")
     void previewFullRowDuplicate() {
         LogisticsOrderImportRow r1 = validRow("S030", "门店30");
         LogisticsOrderImportRow r2 = validRow("S030", "门店30");
@@ -335,6 +346,58 @@ class LogisticsOrderImportServiceImplTest {
         assertThatThrownBy(() -> service().commit("F-OTHER-FACTORY", preview.getJobId()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("不存在");
+    }
+
+    // ==================== commit: auto-geocode (Phase 4 — Amap integration) ====================
+
+    @Test
+    @DisplayName("commit — 有地址无坐标的订单 → 自动 geocode 成功后 RESOLVED + 落库经纬度")
+    void commitGeocodesUnresolvedOrderWithAddress() {
+        LogisticsOrderImportRow noCoord = row("2026-07-11", "S200", "门店200", "苏州市工业园区200号",
+                "5", "1", "10", "1.0", null, null, null, null, null); // 无经纬度, 有地址
+        PreviewResultDto preview = service().preview(F1, buildFile(List.of(noCoord)), 1L);
+        var beforeOrder = orderRepo.findByFactoryIdAndBatchId(F1, preview.getJobId()).get(0);
+        assertThat(beforeOrder.getLocationStatus()).isEqualTo(LocationStatus.UNRESOLVED);
+
+        when(amapClient.geocode(eq("苏州市工业园区200号")))
+                .thenReturn(Optional.of(new double[] {120.65, 31.32}));
+
+        service().commit(F1, preview.getJobId());
+
+        var afterOrder = orderRepo.findByFactoryIdAndBatchId(F1, preview.getJobId()).get(0);
+        assertThat(afterOrder.getLocationStatus()).isEqualTo(LocationStatus.RESOLVED);
+        assertThat(afterOrder.getLongitude()).isEqualByComparingTo("120.65");
+        assertThat(afterOrder.getLatitude()).isEqualByComparingTo("31.32");
+        verify(amapClient, times(1)).geocode(anyString());
+    }
+
+    @Test
+    @DisplayName("commit — geocode 查询失败/无结果 → 诚实保留 UNRESOLVED, 绝不伪造坐标")
+    void commitLeavesUnresolvedWhenGeocodeFails() {
+        LogisticsOrderImportRow noCoord = row("2026-07-11", "S201", "门店201", "无法识别的地址201",
+                "5", "1", "10", "1.0", null, null, null, null, null);
+        PreviewResultDto preview = service().preview(F1, buildFile(List.of(noCoord)), 1L);
+
+        when(amapClient.geocode(anyString())).thenReturn(Optional.empty());
+
+        service().commit(F1, preview.getJobId());
+
+        var afterOrder = orderRepo.findByFactoryIdAndBatchId(F1, preview.getJobId()).get(0);
+        assertThat(afterOrder.getLocationStatus()).isEqualTo(LocationStatus.UNRESOLVED);
+        assertThat(afterOrder.getLongitude()).isNull();
+        assertThat(afterOrder.getLatitude()).isNull();
+    }
+
+    @Test
+    @DisplayName("commit — 订单已有坐标 → 不调用 geocode (跳过已解析订单)")
+    void commitSkipsGeocodeForAlreadyResolvedOrder() {
+        PreviewResultDto preview = service().preview(F1, buildFile(List.of(validRow("S202", "门店202"))), 1L);
+        var beforeOrder = orderRepo.findByFactoryIdAndBatchId(F1, preview.getJobId()).get(0);
+        assertThat(beforeOrder.getLocationStatus()).isEqualTo(LocationStatus.RESOLVED); // validRow 自带经纬度
+
+        service().commit(F1, preview.getJobId());
+
+        verify(amapClient, never()).geocode(anyString());
     }
 
     // ==================== updateLocation ====================

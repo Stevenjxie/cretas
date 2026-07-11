@@ -15,6 +15,7 @@ import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsOrderBatchRepository;
 import com.cretas.aims.logistics.service.importjob.LogisticsOrderImportService;
+import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.utils.ExcelUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +36,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -57,9 +59,17 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
     private final LogisticsOrderBatchRepository batchRepo;
     private final LogisticsDeliveryOrderRepository deliveryOrderRepo;
     private final ExcelUtil excelUtil;
+    private final AmapClient amapClient;
 
     private static final String SHEET_NAME = "物流订单导入模板";
     private static final int WINDOW_MAX_LEN = 8;
+    /**
+     * 单次 commit 内自动地理编码的最大调用数上限 (spec: ≤ ~50) — 保护
+     * {@code amap.daily-query-budget} 不被单个大批次一次性打光。超出上限的订单诚实保留
+     * {@code UNRESOLVED}, 不猜测/不伪造坐标 (可后续通过 {@link #updateLocation} 手工补录，
+     * 或下次对该批次重新触发地理编码流程)。
+     */
+    private static final int GEOCODE_ON_COMMIT_CAP = 50;
 
     private static final List<DateTimeFormatter> DATE_FORMATTERS = List.of(
             DateTimeFormatter.ofPattern("yyyy-MM-dd"),
@@ -184,7 +194,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
                 errors.add(err(rowNumber, "订单号", "订单号在文件内重复: " + storeCode));
             }
 
-            // 整行完全重复（不仅门店编码，逐列比对）
+            // 整行完全重复（不仅订单号，逐列比对）
             String fullRowKey = String.join("",
                     nz(businessDateRaw), nz(storeCode), nz(storeName), nz(address),
                     nz(raw.getPieces()), nz(raw.getBoxes()), nz(raw.getWeightKg()), nz(raw.getVolumeCbm()),
@@ -348,9 +358,47 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         // status == PREVIEWED
         batch.setStatus(OrderBatchStatus.COMMITTED);
         LogisticsOrderBatch saved = batchRepo.save(batch);
+        geocodeUnresolvedOrders(factoryId, saved.getId());
         log.info("[LogisticsOrderImport] commit factory={} jobId={} → COMMITTED (validRows={})",
                 factoryId, jobId, saved.getValidRows());
         return toDto(saved);
+    }
+
+    /**
+     * 提交时自动地理编码 — 对该批次内有地址但缺经纬度的订单调用高德 geocode, 成功即置
+     * {@code RESOLVED}; 失败 (key 未配置 / 地址无法解析 / 超出单次上限) 一律保持
+     * {@code UNRESOLVED}, 绝不伪造坐标 (对齐 {@link AmapClient} 类头诚实降级铁律)。
+     */
+    private void geocodeUnresolvedOrders(String factoryId, String batchId) {
+        List<LogisticsDeliveryOrder> orders = deliveryOrderRepo.findByFactoryIdAndBatchId(factoryId, batchId);
+        int attempted = 0;
+        int resolved = 0;
+        for (LogisticsDeliveryOrder order : orders) {
+            if (order.getLongitude() != null && order.getLatitude() != null) {
+                continue; // 已有坐标（导入时提供 / 之前已解析）
+            }
+            if (order.getAddress() == null || order.getAddress().isBlank()) {
+                continue; // 无地址可解析
+            }
+            if (attempted >= GEOCODE_ON_COMMIT_CAP) {
+                break; // 单次 commit 预算保护, 剩余诚实保留 UNRESOLVED
+            }
+            attempted++;
+            Optional<double[]> coord = amapClient.geocode(order.getAddress());
+            if (coord.isEmpty()) {
+                continue; // 诚实降级: 保持 UNRESOLVED, 不猜测坐标
+            }
+            double[] lngLat = coord.get();
+            order.setLongitude(BigDecimal.valueOf(lngLat[0]));
+            order.setLatitude(BigDecimal.valueOf(lngLat[1]));
+            order.setLocationStatus(LocationStatus.RESOLVED);
+            deliveryOrderRepo.save(order);
+            resolved++;
+        }
+        if (attempted > 0) {
+            log.info("[LogisticsOrderImport] geocode-on-commit factory={} batch={} attempted={} resolved={}",
+                    factoryId, batchId, attempted, resolved);
+        }
     }
 
     // ==================== 查询 ====================
