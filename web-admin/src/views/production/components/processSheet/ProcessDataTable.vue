@@ -831,13 +831,22 @@ function saveDisabledReason(row: SheetRow): string | null {
 // Build request
 // -------------------------------------------------------------------------
 function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, unknown> {
+  // 2B (BLOCKING fix): when this process carries a workflow output port, `finished`/`unit`
+  // MUST come from the port — not the name-keyword archetype heuristic (processCode === 'qidiao'
+  // / hardcoded 'kg'/'盒' below). Backend ProcessSheetServiceImpl#validateWorkflowRowIfApplicable
+  // 409s (WORKFLOW_ROW_OUTPUT_KIND_MISMATCH / _UNIT_MISMATCH) when the saved row disagrees with
+  // the port, which previously dead-ended the clerk on every save for any workflow whose
+  // finishing process name isn't literally "气调" (or whose output unit isn't 'kg'/'盒').
+  // Legacy rows (workflowContext null/undefined) are completely unaffected — same as before.
+  const wfOutput = props.workflowContext?.output ?? null;
   const base: ProcessSheetRowRequest & Record<string, unknown> = {
     clientRowId: row.clientRowId,
     processCode: props.processCode,
     processOrder: props.processOrder,
     productTypeId: props.productTypeId,
     batchNumber: row.batchNumber ?? undefined,
-    finished: props.processCode === 'qidiao', // ⭐ 气调成品批
+    // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
+    finished: wfOutput ? wfOutput.finished === true : props.processCode === 'qidiao',
     outputQuantity: 0,
     seasoningStep: props.processCode === 'shuzhi',
     laborSegments: row.laborSegments.length ? row.laborSegments : undefined,
@@ -996,6 +1005,16 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       customFields[def.key] = (v === undefined || v === '') ? null : v;
     }
     base.customFields = customFields;
+  }
+
+  // 2B (BLOCKING fix, cont'd): the workflow port's unit is authoritative for the row's
+  // produced-output unit — override whatever the archetype branch above hardcoded ('kg'/'盒')
+  // ONLY when the port declares a non-blank unit. Applied last so it always wins over every
+  // archetype branch's `base.unit = 'kg' | '盒'` assignment above, and only touches the single
+  // top-level `unit` field (the produced-output unit checked by backend B3) — never any
+  // input-side quantity/unit fields inside row_payload.
+  if (wfOutput?.unit) {
+    base.unit = wfOutput.unit;
   }
   return base;
 }

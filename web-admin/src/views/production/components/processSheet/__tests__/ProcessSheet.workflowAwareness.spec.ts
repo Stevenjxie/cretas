@@ -227,4 +227,71 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     expect(tables).toHaveLength(1);
     expect(tables[0].props().workflowContext).toBeNull();
   });
+
+  it('(3) mapWorkflowProcesses maps a finished output to the qidiao archetype, and forces a semi output away from qidiao even when keyword/position mapping would have picked it (BLOCKING fix, Part B)', async () => {
+    getWorkflowSheetConfig.mockResolvedValue({
+      success: true,
+      data: {
+        workflowBatchId: 100,
+        workflowInstanceId: 200,
+        productTypeId: 'PT-1',
+        processes: [
+          {
+            // idx 0, no keyword match -> position-based default 'xiuyou'; output is semi, so the
+            // Part B override never triggers (code was never 'qidiao' to begin with).
+            workflowNodeId: 'N1', workProcessId: 'WP1', processName: '领料',
+            defaultCostCategory: null, processOrder: 1, plannedUnit: 'kg',
+            allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
+            customFieldSchema: null, inputs: [],
+            output: {
+              workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
+              materialName: '领料半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+            },
+          },
+          {
+            // 关键词 "气调" 命中本会映射到 'qidiao' archetype, 但该道 workflow 端口产出实际是半成品
+            // (finished:false) —— 必须被强制拉回非 qidiao archetype, 不能因为工序名像气调就渲染
+            // 成品录入表单 / 把 finished/unit 硬编码成气调那套 (否则该道每次保存都会撞 B3 校验 409)。
+            workflowNodeId: 'N2', workProcessId: 'WP2', processName: '气调',
+            defaultCostCategory: null, processOrder: 2, plannedUnit: 'kg',
+            allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
+            customFieldSchema: null, inputs: [],
+            output: {
+              workflowPortId: 'OUT2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-2',
+              materialName: '气调半成品(实际未完工)', unit: 'kg', required: true, skuResolved: true, finished: false,
+            },
+          },
+          {
+            // 无关键词命中 + 非首道 -> 关键词/位置回退本会映射到 'chaoshui', 但该道 workflow 端口
+            // 产出实际是成品 (finished:true) —— 必须被强制升级为 'qidiao' archetype, 否则文员永远
+            // 存不了这一行 (每次保存撞 WORKFLOW_ROW_OUTPUT_KIND_MISMATCH 409, 这正是本次 BLOCKING
+            // correctness fix 要修的 dead-end)。
+            workflowNodeId: 'N3', workProcessId: 'WP3', processName: '装箱',
+            defaultCostCategory: null, processOrder: 3, plannedUnit: '盒',
+            allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
+            customFieldSchema: null, inputs: [],
+            output: {
+              workflowPortId: 'OUT3', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
+              materialName: '装箱成品', unit: '盒', required: true, skuResolved: true, finished: true,
+            },
+          },
+        ],
+      },
+    });
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    expect(getWorkflowSheetConfig).toHaveBeenCalledWith('F006', 'PLAN-WF-1');
+    const tables = wrapper.findAllComponents(ProcessDataTableStub);
+    expect(tables).toHaveLength(3);
+
+    expect(tables[0].props().processCode).toBe('xiuyou');
+
+    expect(tables[1].props().processCode).not.toBe('qidiao');
+    expect(tables[1].props().processCode).toBe('chaoshui');
+
+    expect(tables[2].props().processCode).toBe('qidiao');
+  });
 });

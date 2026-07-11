@@ -5,6 +5,17 @@
 // plans never receive this prop (stays null via the component's own default), so the banner —
 // and everything else on the row — must render exactly as before (fool-proof-design.md Rule
 // 2/3: tell the clerk what to produce, read-only; no change to saveRow's request shape).
+//
+// BLOCKING correctness fix (adversarial review): `buildRequest()`'s `finished`/`unit` fields
+// used to come ONLY from the name-keyword archetype heuristic (`processCode === 'qidiao'` /
+// hardcoded 'kg'/'盒'), never from the workflow output port — even when workflowContext was
+// present. Backend `ProcessSheetServiceImpl#validateWorkflowRowIfApplicable` validates the saved
+// row's finished/unit against the port and 409s
+// (WORKFLOW_ROW_OUTPUT_KIND_MISMATCH / WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH) on mismatch, dead-ending
+// the clerk on every save for any workflow whose finishing process name isn't literally "气调"
+// (or whose output unit isn't 'kg'/'盒'). The tests below (in the new describe block) prove
+// buildRequest now sources finished/unit from `workflowContext.output` when present, and leaves
+// legacy (workflowContext-less) rows byte-identical to before.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
@@ -12,6 +23,7 @@ import ElementPlus from 'element-plus';
 const getSemiFinishedInventory = vi.fn();
 const getFinishedGoodsInventory = vi.fn();
 const getAvailableRawBatches = vi.fn();
+const saveRow = vi.fn();
 
 vi.mock('@/api/processSheet', async () => {
   const actual = await vi.importActual<typeof import('@/api/processSheet')>('@/api/processSheet');
@@ -20,7 +32,7 @@ vi.mock('@/api/processSheet', async () => {
     getSemiFinishedInventory: (...args: unknown[]) => getSemiFinishedInventory(...args),
     getFinishedGoodsInventory: (...args: unknown[]) => getFinishedGoodsInventory(...args),
     getAvailableRawBatches: (...args: unknown[]) => getAvailableRawBatches(...args),
-    saveRow: vi.fn(),
+    saveRow: (...args: unknown[]) => saveRow(...args),
     deleteRow: vi.fn(),
     getRowHistory: vi.fn().mockResolvedValue({ success: true, data: [] }),
   };
@@ -54,6 +66,68 @@ function mountTable(workflowContext: unknown) {
       stubs: { teleport: true, transition: false },
     },
   });
+}
+
+// -----------------------------------------------------------------------
+// Helpers for the buildRequest (Part A) suite below. Mounts a `chaoshui` (焯水) single-upstream
+// archetype table — deliberately NOT 'qidiao' — so the "even when processCode is a non-qidiao
+// archetype" assertion in the task is meaningful. Drives the real card-view UI (add row → select
+// source → fill before/after → click save) rather than reaching into private component internals,
+// mirroring how ProcessSheet.vue actually drives ProcessDataTable in production.
+// -----------------------------------------------------------------------
+type MountOpts = { workflowContext?: unknown };
+
+function mountChaoshuiTable({ workflowContext = null }: MountOpts = {}) {
+  return mount(ProcessDataTable, {
+    props: {
+      factoryId: 'F006',
+      planId: 'PLAN-1',
+      processCode: 'chaoshui', // 焯水: single-upstream archetype, NOT the finished-goods 'qidiao' one
+      processOrder: 2,
+      processLabel: '焯水',
+      allowMultipleUpstreamSources: false,
+      productTypeId: 'PT-1',
+      upstreamItems: [],
+      ownInventoryItems: [],
+      initialRows: [],
+      viewMode: 'card',
+      workflowContext,
+    },
+    global: {
+      plugins: [ElementPlus],
+      stubs: { teleport: true, transition: false },
+    },
+  });
+}
+
+async function clickAddRow(wrapper: ReturnType<typeof mountChaoshuiTable>) {
+  const btn = wrapper.findAll('button').find((b) => b.text().includes('新增行'));
+  if (!btn) throw new Error('找不到「+ 新增行」按钮');
+  await btn.trigger('click');
+  await flushPromises();
+}
+
+async function selectUpstreamSource(wrapper: ReturnType<typeof mountChaoshuiTable>, compositeKey: string) {
+  const select = wrapper.findComponent({ name: 'ElSelect' });
+  if (!select.exists()) throw new Error('找不到来源批次下拉 (ElSelect)');
+  select.vm.$emit('change', compositeKey);
+  await flushPromises();
+}
+
+async function setNumberField(wrapper: ReturnType<typeof mountChaoshuiTable>, labelText: string, value: number) {
+  const field = wrapper.findAll('.sp-card-field').find((f) => f.text().includes(labelText));
+  if (!field) throw new Error(`找不到字段: ${labelText}`);
+  const input = field.findComponent({ name: 'ElInputNumber' });
+  if (!input.exists()) throw new Error(`字段 ${labelText} 内找不到 ElInputNumber`);
+  input.vm.$emit('update:model-value', value);
+  await flushPromises();
+}
+
+async function clickSave(wrapper: ReturnType<typeof mountChaoshuiTable>) {
+  const btn = wrapper.findAll('button').find((b) => b.text().trim() === '保存');
+  if (!btn) throw new Error('找不到「保存」按钮 (saveDisabledReason 未清空?)');
+  await btn.trigger('click');
+  await flushPromises();
 }
 
 describe('ProcessDataTable.vue workflow-planned-output banner (2B Task F2)', () => {
@@ -132,5 +206,110 @@ describe('ProcessDataTable.vue workflow-planned-output banner (2B Task F2)', () 
     expect(text).not.toContain('计划产出');
     expect(text).not.toContain('需要原料');
     expect(text).not.toContain('SKU 已失效');
+  });
+});
+
+describe('ProcessDataTable.vue buildRequest sources finished/unit from the workflow output port (BLOCKING fix, Part A)', () => {
+  beforeEach(() => {
+    getSemiFinishedInventory.mockReset();
+    getFinishedGoodsInventory.mockReset();
+    getAvailableRawBatches.mockReset();
+    saveRow.mockReset();
+    getSemiFinishedInventory.mockResolvedValue({ success: true, data: [] });
+    getFinishedGoodsInventory.mockResolvedValue({ success: true, data: [] });
+    getAvailableRawBatches.mockResolvedValue({ success: true, data: [] });
+    saveRow.mockResolvedValue({
+      success: true,
+      data: { clientRowId: 'CR-1', batchNumber: 'WIP-NEW-1', materialized: true, warnings: [] },
+    });
+  });
+
+  it('(1) workflow output finished=true, unit="盒": the built request has finished:true, unit:"盒" even though processCode ("chaoshui") is a non-qidiao archetype', async () => {
+    const wrapper = mountChaoshuiTable({
+      workflowContext: {
+        workflowNodeId: 'N1',
+        workProcessId: 'WP1',
+        processName: '气调包装(自定义命名不含气调二字)',
+        defaultCostCategory: null,
+        processOrder: 2,
+        plannedUnit: '盒',
+        allowMultipleUpstreamSources: false,
+        allowFinishedGoodsSource: false,
+        customFieldSchema: null,
+        inputs: [],
+        output: {
+          workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
+          materialName: '卤猪蹄成品', unit: '盒', required: true, skuResolved: true, finished: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(kg)', 10);
+    await setNumberField(wrapper, '产出(kg)', 8);
+    await clickSave(wrapper);
+
+    expect(saveRow).toHaveBeenCalledTimes(1);
+    const [factoryId, planId, req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(factoryId).toBe('F006');
+    expect(planId).toBe('PLAN-1');
+    expect(req.processCode).toBe('chaoshui'); // confirms the non-qidiao archetype premise
+    expect(req.finished).toBe(true);
+    expect(req.unit).toBe('盒');
+  });
+
+  it('(2) workflow output finished=false, unit="只" (semi-finished): the built request has finished:false, unit:"只"', async () => {
+    const wrapper = mountChaoshuiTable({
+      workflowContext: {
+        workflowNodeId: 'N1',
+        workProcessId: 'WP1',
+        processName: '焯水',
+        defaultCostCategory: null,
+        processOrder: 2,
+        plannedUnit: '只',
+        allowMultipleUpstreamSources: false,
+        allowFinishedGoodsSource: false,
+        customFieldSchema: null,
+        inputs: [],
+        output: {
+          workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
+          materialName: '焯水半成品', unit: '只', required: true, skuResolved: true, finished: false,
+        },
+      },
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(kg)', 5);
+    await setNumberField(wrapper, '产出(kg)', 4);
+    await clickSave(wrapper);
+
+    expect(saveRow).toHaveBeenCalledTimes(1);
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(req.finished).toBe(false);
+    expect(req.unit).toBe('只');
+  });
+
+  it('(4) legacy (workflowContext null): buildRequest is byte-identical to the pre-fix archetype heuristic (finished:false, unit:"kg" for a non-qidiao archetype)', async () => {
+    const wrapper = mountChaoshuiTable({ workflowContext: null });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(kg)', 10);
+    await setNumberField(wrapper, '产出(kg)', 8);
+    await clickSave(wrapper);
+
+    expect(saveRow).toHaveBeenCalledTimes(1);
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    // Pre-fix legacy behavior: finished only ever true for processCode === 'qidiao'; unit
+    // hardcoded 'kg' for the isSingleUpstream (chaoshui/gunrou) branch. Zero regression.
+    expect(req.finished).toBe(false);
+    expect(req.unit).toBe('kg');
+    expect(req.inputQuantity).toBe(10);
+    expect(req.outputQuantity).toBe(8);
   });
 });
