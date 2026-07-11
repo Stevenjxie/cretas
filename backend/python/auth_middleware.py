@@ -103,6 +103,15 @@ DEMO_WRITE_ALLOW_PREFIXES = (
     "/api/smartbi/chart/",
     "/api/classifier/",
 )
+# Read-analysis POSTs whose route carries the tenant id in the MIDDLE of the path
+# (`/api/smartbi/{factory_id}/revenue-report/...`), so a static startswith prefix
+# can't match. These compute + return/stream a report from the tenant's own data;
+# they do NOT mutate tenant data. `/upload` (real ingestion write) is deliberately
+# NOT here and stays blocked. Matched by exact path suffix.
+DEMO_WRITE_ALLOW_SUFFIXES = (
+    "/revenue-report/prepare",    # LLM-tool path: metadata + download_url
+    "/revenue-report/generate",   # web-UI path: streams xlsx
+)
 
 
 class JWTAuthMiddleware:
@@ -282,6 +291,8 @@ class JWTAuthMiddleware:
             _method = scope.get("method", "GET")
             if _method not in ("GET", "HEAD", "OPTIONS") and not any(
                 path.startswith(p) for p in DEMO_WRITE_ALLOW_PREFIXES
+            ) and not any(
+                path.endswith(s) for s in DEMO_WRITE_ALLOW_SUFFIXES
             ):
                 await self._send_json_response(send, 403, {
                     "success": False, "code": "DEMO_READ_ONLY",
