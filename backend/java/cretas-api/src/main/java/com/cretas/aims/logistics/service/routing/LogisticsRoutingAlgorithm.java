@@ -1,6 +1,7 @@
 package com.cretas.aims.logistics.service.routing;
 
 import com.cretas.aims.logistics.entity.enums.DriverRole;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import com.cretas.aims.logistics.entity.enums.TripStatus;
 
 import java.math.BigDecimal;
@@ -14,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -31,6 +34,11 @@ import java.util.stream.Collectors;
  * 「区域→首个匹配车辆」硬绑定的次优 (一车吃两个不相邻区域 → 宽幅折返)。门禁: 全部有车订单
  * 必须有坐标, 否则完全跳过, 输出与档1 贪心逐字段一致; 且优化结果全局平面里程没有严格变短或
  * NEEDS_DRIVER 恶化 → 回退 seed (永不比今天更差)。见 {@link #optimizeAcrossTrips}。
+ *
+ * <p><b>档3 (2026-07-12)</b>: 目标模式感知 — {@link Input#optimizeBy()} 为
+ * {@link RouteOptimizeMode#TIME} 时, 车次内 2-opt 与跨车次搜索的目标从"平面总里程"换成
+ * "行驶时间 + 迟到惩罚" (到达模型 mirror 前端 RouteCards.vue tripEtas, 见 {@link #tripTimeCost});
+ * DISTANCE (或 null) 保持既有逐字节行为。永不更差门禁按<b>当前生效目标</b>比较。
  *
  * <p>持久化 (Plan/Trip/Stop 落库) 由 {@link LogisticsRoutingService} 负责，本类只产出
  * in-memory 结果，便于脱离 Spring/DB 做算法精确性单测。
@@ -96,7 +104,10 @@ public final class LogisticsRoutingAlgorithm {
             // 为空或某门店缺坐标 → 该箱保持原(区域+编码)顺序 (诚实, 不猜)。
             Map<String, double[]> coordsByOrderId,
             double depotLng,
-            double depotLat) {
+            double depotLat,
+            // 优化目标 (档3, 2026-07-12): TIME=行驶时间+迟到惩罚, DISTANCE=平面总里程 (默认)。
+            // null → DISTANCE (兼容既有调用点 — 行为与加模式之前逐字段一致)。
+            RouteOptimizeMode optimizeBy) {
 
         /** 兼容构造器：不带坐标 → 不做最近邻排序 (保持原顺序)。供不需要顺序优化的调用/测试使用。 */
         public Input(
@@ -107,7 +118,27 @@ public final class LogisticsRoutingAlgorithm {
                 DistanceLookup distanceLookup,
                 BigDecimal targetLoadPct) {
             this(orders, vehicles, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct,
-                    Map.of(), 0.0, 0.0);
+                    Map.of(), 0.0, 0.0, null);
+        }
+
+        /** 兼容构造器：带坐标不带模式 → DISTANCE (加 optimizeBy 之前的既有语义, 既有调用/测试不变)。 */
+        public Input(
+                List<OrderInput> orders,
+                List<VehicleInput> vehicles,
+                Map<String, List<DriverBindingInput>> driverBindingsByVehicleId,
+                Map<String, DriverInfo> driverInfoById,
+                DistanceLookup distanceLookup,
+                BigDecimal targetLoadPct,
+                Map<String, double[]> coordsByOrderId,
+                double depotLng,
+                double depotLat) {
+            this(orders, vehicles, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct,
+                    coordsByOrderId, depotLng, depotLat, null);
+        }
+
+        /** 生效优化模式 — null 诚实回落 DISTANCE (今天的行为)。 */
+        public RouteOptimizeMode effectiveOptimizeBy() {
+            return optimizeBy == null ? RouteOptimizeMode.DISTANCE : optimizeBy;
         }
     }
 
@@ -250,8 +281,10 @@ public final class LogisticsRoutingAlgorithm {
         for (BoxAssign box : boxes) {
             // 车次内门店访问顺序优化：最近邻(种子) + 2-opt(去交叉) —— 让 ①②③ 有合理先后、
             // 线路不来回穿插 (原顺序是按 区域+编码 排, 地理上会绕)。缺坐标则保持原顺序 (诚实)。
+            // TIME 模式: 2-opt 目标换成 行驶时间+迟到惩罚 (按送达窗口重排, 见 tripTimeCost)。
             List<OrderInput> boxOrders = optimizeRouteOrder(
-                    box.orders(), input.coordsByOrderId(), input.depotLng(), input.depotLat());
+                    box.orders(), input.coordsByOrderId(), input.depotLng(), input.depotLat(),
+                    input.effectiveOptimizeBy());
             VehicleInput vehicle = box.vehicle();
 
             String driverId = null;
@@ -355,6 +388,7 @@ public final class LogisticsRoutingAlgorithm {
 
         double[] depot = {input.depotLng(), input.depotLat()};
         BigDecimal targetLoadPct = input.targetLoadPct();
+        RouteOptimizeMode mode = input.effectiveOptimizeBy();
 
         // 工作副本 (深拷贝订单列表, seed 组合保持原样供回退); 无车箱不参与搜索。
         List<WorkBox> boxes = new ArrayList<>();
@@ -370,8 +404,8 @@ public final class LogisticsRoutingAlgorithm {
 
         boolean anyMove = false;
         for (int guard = 0; guard < MAX_CROSS_TRIP_MOVES; guard++) {
-            RelocateMove bestRelocate = findBestRelocate(boxes, coords, depot, targetLoadPct);
-            SwapMove bestSwap = findBestSwap(boxes, coords, depot, targetLoadPct);
+            RelocateMove bestRelocate = findBestRelocate(boxes, coords, depot, targetLoadPct, mode);
+            SwapMove bestSwap = findBestSwap(boxes, coords, depot, targetLoadPct, mode);
             double relocateDelta = bestRelocate == null ? 0.0 : bestRelocate.delta();
             double swapDelta = bestSwap == null ? 0.0 : bestSwap.delta();
             if (relocateDelta >= -EPS && swapDelta >= -EPS) {
@@ -423,9 +457,14 @@ public final class LogisticsRoutingAlgorithm {
     private record SwapMove(int boxA, int idxA, int boxB, int idxB, double delta) {
     }
 
-    /** 全邻域扫描找最优段迁移 (best-improvement, 扫描序 + 严格更优才替换 → 确定性)。 */
+    /**
+     * 全邻域扫描找最优段迁移 (best-improvement, 扫描序 + 严格更优才替换 → 确定性)。
+     * DISTANCE 模式用 O(1) 端点增量 (与档2 上线时逐位一致); TIME 模式迟到惩罚非局部 (段前移动
+     * 改变后续所有到达时刻) → 整条路径重评 (tripTimeCost), 规模小 (车次内几站) 可承受。
+     */
     private static RelocateMove findBestRelocate(List<WorkBox> boxes, Map<String, double[]> coords,
-            double[] depot, BigDecimal targetLoadPct) {
+            double[] depot, BigDecimal targetLoadPct, RouteOptimizeMode mode) {
+        boolean timeMode = mode == RouteOptimizeMode.TIME;
         RelocateMove best = null;
         for (int len = 1; len <= 3; len++) {
             for (int si = 0; si < boxes.size(); si++) {
@@ -437,7 +476,10 @@ public final class LogisticsRoutingAlgorithm {
                     List<OrderInput> segment = src.orders.subList(start, start + len);
                     BigDecimal segVolume = sumVolume(segment);
                     BigDecimal segWeight = sumWeight(segment);
-                    double removalDelta = segmentRemovalDelta(src.orders, start, len, coords, depot);
+                    double removalDelta = timeMode
+                            ? tripTimeCost(listWithoutSegment(src.orders, start, len), coords, depot)
+                                    - tripTimeCost(src.orders, coords, depot)
+                            : segmentRemovalDelta(src.orders, start, len, coords, depot);
                     for (int ti = 0; ti < boxes.size(); ti++) {
                         if (ti == si) {
                             continue;
@@ -449,7 +491,10 @@ public final class LogisticsRoutingAlgorithm {
                         int bestPos = -1;
                         double bestInsertion = Double.MAX_VALUE;
                         for (int p = 0; p <= dst.orders.size(); p++) {
-                            double ins = segmentInsertionDelta(dst.orders, p, segment, coords, depot);
+                            double ins = timeMode
+                                    ? tripTimeCost(listWithSegmentAt(dst.orders, p, segment), coords, depot)
+                                            - tripTimeCost(dst.orders, coords, depot)
+                                    : segmentInsertionDelta(dst.orders, p, segment, coords, depot);
                             if (ins < bestInsertion - EPS) {
                                 bestInsertion = ins;
                                 bestPos = p;
@@ -466,9 +511,13 @@ public final class LogisticsRoutingAlgorithm {
         return best;
     }
 
-    /** 全邻域扫描找最优单单交换 (双向可行性: 区域/容量/重量/时窗都要在交换后的两箱各自成立)。 */
+    /**
+     * 全邻域扫描找最优单单交换 (双向可行性: 区域/容量/重量/时窗都要在交换后的两箱各自成立)。
+     * DISTANCE 模式用 O(1) 位置替换增量; TIME 模式整条路径重评 (迟到惩罚非局部, 同 relocate)。
+     */
     private static SwapMove findBestSwap(List<WorkBox> boxes, Map<String, double[]> coords,
-            double[] depot, BigDecimal targetLoadPct) {
+            double[] depot, BigDecimal targetLoadPct, RouteOptimizeMode mode) {
+        boolean timeMode = mode == RouteOptimizeMode.TIME;
         SwapMove best = null;
         for (int bi = 0; bi < boxes.size(); bi++) {
             WorkBox boxA = boxes.get(bi);
@@ -487,8 +536,16 @@ public final class LogisticsRoutingAlgorithm {
                         if (!swapFeasible(boxA, a, b, targetLoadPct) || !swapFeasible(boxB, b, a, targetLoadPct)) {
                             continue;
                         }
-                        double delta = replaceDelta(boxA.orders, ia, b, coords, depot)
-                                + replaceDelta(boxB.orders, ib, a, coords, depot);
+                        double delta;
+                        if (timeMode) {
+                            delta = tripTimeCost(listWithReplacement(boxA.orders, ia, b), coords, depot)
+                                    - tripTimeCost(boxA.orders, coords, depot)
+                                    + tripTimeCost(listWithReplacement(boxB.orders, ib, a), coords, depot)
+                                    - tripTimeCost(boxB.orders, coords, depot);
+                        } else {
+                            delta = replaceDelta(boxA.orders, ia, b, coords, depot)
+                                    + replaceDelta(boxB.orders, ib, a, coords, depot);
+                        }
                         if (delta < -EPS && (best == null || delta < best.delta() - EPS)) {
                             best = new SwapMove(bi, ia, bj, ib, delta);
                         }
@@ -619,8 +676,9 @@ public final class LogisticsRoutingAlgorithm {
     }
 
     /**
-     * 永不更差门禁: 只有当优化结果 (a) 平面近似全局总里程严格更短, 且 (b) NEEDS_DRIVER 车次数
-     * 不比 seed 多 (跨车搬单可能让新车分不到班次覆盖的司机 — 移动级不查司机, 这里整体兜底),
+     * 永不更差门禁: 只有当优化结果 (a) 按<b>当前生效目标</b> (DISTANCE=平面总里程 /
+     * TIME=行驶时间+迟到惩罚) 严格更优, 且 (b) NEEDS_DRIVER 车次数不比 seed 多
+     * (跨车搬单可能让新车分不到班次覆盖的司机 — 移动级不查司机, 这里整体兜底),
      * 才采用优化结果; 否则回退 seed (= 档1 贪心, 今天的行为)。
      */
     private static Result pickBetterHonestly(Result seed, Result optimized, Input input) {
@@ -629,9 +687,17 @@ public final class LogisticsRoutingAlgorithm {
         if (optimizedNeedsDriver > seedNeedsDriver) {
             return seed;
         }
-        double seedObjective = planarObjective(seed, input);
-        double optimizedObjective = planarObjective(optimized, input);
+        double seedObjective = globalObjective(seed, input);
+        double optimizedObjective = globalObjective(optimized, input);
         return optimizedObjective < seedObjective - EPS ? optimized : seed;
+    }
+
+    /** 按生效模式的全局目标 — DISTANCE: 平面总里程 (度, 相对比较); TIME: 行驶时间+迟到惩罚 (分钟)。 */
+    private static double globalObjective(Result result, Input input) {
+        if (input.effectiveOptimizeBy() == RouteOptimizeMode.TIME) {
+            return timeObjective(result, input);
+        }
+        return planarObjective(result, input);
     }
 
     private static long countStatus(Result result, TripStatus status) {
@@ -665,6 +731,185 @@ public final class LogisticsRoutingAlgorithm {
             }
         }
         return total;
+    }
+
+    // ============================================================
+    // TIME 模式目标 — 行驶时间 + 迟到惩罚 (档3, 2026-07-12)
+    // ============================================================
+    //
+    // 到达模型与前端 RouteCards.vue tripEtas 同一口径 (预估, 非承诺):
+    //   出发 = (车次内最早送达窗口开始) − 首段行驶时间; 无任何可解析窗口 → 无迟到约束。
+    //   到达(第 i 站) = 出发 + 累计行驶时间 + i × DWELL_MIN (每站卸货停留)。
+    //   迟到(站) = max(0, 到达 − 窗口结束); 无窗口结束的站不计迟到 (诚实, 不猜)。
+    // 行驶时间是平面近似里程 ÷ 城市均速的估算 (真实高德时长在持久化阶段才有, 算法内不调地图 API)。
+
+    /** 平面近似 度→km 换算 (纬度修正后 1° ≈ 111 km) — 与测试合成 lookup 同一常数。 */
+    private static final double KM_PER_DEGREE = 111.0;
+    /** 城市配送均速 (km/h) — 行驶时间估算用。 */
+    private static final double URBAN_SPEED_KMH = 28.0;
+    /** 每站卸货停留 (分钟) — mirror 前端 RouteCards.vue DWELL_MIN。 */
+    private static final double DWELL_MIN = 10.0;
+    /** 迟到权重 — 足够大让"守住窗口"支配目标, 其次才最小化行驶时间。 */
+    private static final double LATENESS_WEIGHT = 1000.0;
+    /** "HH:MM" 宽松解析 (mirror 前端 parseHm, 接受 8:00) — 解析失败 → null (无窗口, 不猜)。 */
+    private static final Pattern WINDOW_PATTERN = Pattern.compile("^(\\d{1,2}):(\\d{2})$");
+
+    /** 两点间行驶时间估算 (分钟) = 平面近似 km ÷ 城市均速 × 60。 */
+    private static double travelMin(double[] p, double[] q) {
+        return planarDist(p, q) * KM_PER_DEGREE / URBAN_SPEED_KMH * 60.0;
+    }
+
+    /**
+     * TIME 模式单车次成本 = 总行驶时间(分钟) + LATENESS_WEIGHT × 总迟到(分钟)。
+     * 车次内无任何可解析窗口开始 → 迟到按 0 (无约束), 退化为纯行驶时间最小化。
+     * 调用方保证 route 内每站坐标齐全 (与档2 平面目标同一门禁)。
+     */
+    private static double tripTimeCost(List<OrderInput> route, Map<String, double[]> coords, double[] depot) {
+        if (route.isEmpty()) {
+            return 0.0;
+        }
+        double[] legMin = new double[route.size()];
+        double totalTravel = 0.0;
+        double[] prev = depot;
+        for (int i = 0; i < route.size(); i++) {
+            double[] cur = coords.get(route.get(i).orderId());
+            legMin[i] = travelMin(prev, cur);
+            totalTravel += legMin[i];
+            prev = cur;
+        }
+        return totalTravel + LATENESS_WEIGHT * tripLatenessMin(route, legMin);
+    }
+
+    /** 按到达模型算车次总迟到分钟 — legMin[i] = 第 i 段行驶时间 (前一站/DEPOT → 第 i 站)。 */
+    private static double tripLatenessMin(List<OrderInput> route, double[] legMin) {
+        Integer earliestStart = null;
+        for (OrderInput o : route) {
+            Integer s = parseWindowMin(o.windowStart());
+            if (s != null && (earliestStart == null || s < earliestStart)) {
+                earliestStart = s;
+            }
+        }
+        if (earliestStart == null) {
+            return 0.0; // 无可解析窗口 → 无迟到约束
+        }
+        double depart = earliestStart - legMin[0];
+        double lateness = 0.0;
+        double cumTravel = 0.0;
+        for (int i = 0; i < route.size(); i++) {
+            cumTravel += legMin[i];
+            double arrival = depart + cumTravel + i * DWELL_MIN;
+            Integer end = parseWindowMin(route.get(i).windowEnd());
+            if (end != null) {
+                lateness += Math.max(0.0, arrival - end);
+            }
+        }
+        return lateness;
+    }
+
+    /** 宽松 "H:MM"/"HH:MM" → 当日分钟; 空/格式非法/越界 → null (视为无窗口)。 */
+    private static Integer parseWindowMin(String hm) {
+        if (hm == null || hm.isBlank()) {
+            return null;
+        }
+        Matcher m = WINDOW_PATTERN.matcher(hm.trim());
+        if (!m.matches()) {
+            return null;
+        }
+        int h = Integer.parseInt(m.group(1));
+        int min = Integer.parseInt(m.group(2));
+        if (h > 23 || min > 59) {
+            return null;
+        }
+        return h * 60 + min;
+    }
+
+    /** TIME 模式全局目标 = Σ 每车次 tripTimeCost。缺坐标车次跳过 (同 planarObjective 的公平比较语义)。 */
+    private static double timeObjective(Result result, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        Map<String, OrderInput> orderById = input.orders().stream()
+                .collect(Collectors.toMap(OrderInput::orderId, o -> o, (a, b) -> a));
+        double[] depot = {input.depotLng(), input.depotLat()};
+        double total = 0.0;
+        for (TripResult trip : result.trips()) {
+            List<OrderInput> route = new ArrayList<>(trip.orderIdsInOrder().size());
+            boolean allPresent = true;
+            for (String orderId : trip.orderIdsInOrder()) {
+                OrderInput o = orderById.get(orderId);
+                if (o == null || !coords.containsKey(orderId)) {
+                    allPresent = false;
+                    break;
+                }
+                route.add(o);
+            }
+            if (!allPresent) {
+                continue;
+            }
+            total += tripTimeCost(route, coords, depot);
+        }
+        return total;
+    }
+
+    /**
+     * 供测试断言用 (包内可见): 按 TIME 到达模型 计算整个排线结果的总迟到分钟数
+     * (不乘权重, 不含行驶时间)。缺坐标车次跳过 — 与目标口径一致。
+     */
+    static double totalLatenessMin(Result result, Input input) {
+        Map<String, double[]> coords = input.coordsByOrderId();
+        Map<String, OrderInput> orderById = input.orders().stream()
+                .collect(Collectors.toMap(OrderInput::orderId, o -> o, (a, b) -> a));
+        double[] depot = {input.depotLng(), input.depotLat()};
+        double total = 0.0;
+        for (TripResult trip : result.trips()) {
+            List<OrderInput> route = new ArrayList<>(trip.orderIdsInOrder().size());
+            boolean allPresent = true;
+            for (String orderId : trip.orderIdsInOrder()) {
+                OrderInput o = orderById.get(orderId);
+                if (o == null || !coords.containsKey(orderId)) {
+                    allPresent = false;
+                    break;
+                }
+                route.add(o);
+            }
+            if (!allPresent || route.isEmpty()) {
+                continue;
+            }
+            double[] legMin = new double[route.size()];
+            double[] prev = depot;
+            for (int i = 0; i < route.size(); i++) {
+                double[] cur = coords.get(route.get(i).orderId());
+                legMin[i] = travelMin(prev, cur);
+                prev = cur;
+            }
+            total += tripLatenessMin(route, legMin);
+        }
+        return total;
+    }
+
+    /** route 摘除 [start, start+len) 段后的拷贝 (TIME 模式 relocate 候选评估用)。 */
+    private static List<OrderInput> listWithoutSegment(List<OrderInput> route, int start, int len) {
+        List<OrderInput> out = new ArrayList<>(route.size() - len);
+        for (int i = 0; i < route.size(); i++) {
+            if (i < start || i >= start + len) {
+                out.add(route.get(i));
+            }
+        }
+        return out;
+    }
+
+    /** segment (保持内部顺序) 插到 route 位置 p 后的拷贝 (TIME 模式 relocate 候选评估用)。 */
+    private static List<OrderInput> listWithSegmentAt(List<OrderInput> route, int p, List<OrderInput> segment) {
+        List<OrderInput> out = new ArrayList<>(route.size() + segment.size());
+        out.addAll(route.subList(0, p));
+        out.addAll(segment);
+        out.addAll(route.subList(p, route.size()));
+        return out;
+    }
+
+    /** route 位置 i 换成 x 后的拷贝 (TIME 模式 swap 候选评估用)。 */
+    private static List<OrderInput> listWithReplacement(List<OrderInput> route, int i, OrderInput x) {
+        List<OrderInput> out = new ArrayList<>(route);
+        out.set(i, x);
+        return out;
     }
 
     private static BigDecimal sumVolume(List<OrderInput> orders) {
@@ -741,9 +986,18 @@ public final class LogisticsRoutingAlgorithm {
      * 车次内访问顺序优化：最近邻(种子) + 2-opt(局部搜索去交叉)。产出有合理先后、线路不穿插的顺序。
      * 任一门店缺坐标 (或坐标映射为空) → 原样返回，保持原(区域+编码)顺序 (诚实降级，不猜)。
      * 优化基于纬度修正的平面近似距离 (只决定顺序)；每站/总里程仍走 assembleGeometry 的真实高德边。
+     *
+     * <p>TIME 模式 (档3): 2-opt 目标换成 行驶时间+迟到惩罚 ({@link #tripTimeCost}) — 会为守住
+     * 送达窗口牺牲部分里程 (e.g. 先跑远端紧窗店再回近端松窗店)。迟到惩罚非局部 (反转改变后续
+     * 全部到达时刻) → 整条路径重评; 且 2 站车次也参与 (顺序影响到达时刻)。永不更差:
+     * 结果按 TIME 目标不优于原(区域+编码)顺序 → 回退原顺序。DISTANCE 模式逐字节保持既有行为。
      */
     static List<OrderInput> optimizeRouteOrder(
-            List<OrderInput> box, Map<String, double[]> coordsByOrderId, double depotLng, double depotLat) {
+            List<OrderInput> box, Map<String, double[]> coordsByOrderId, double depotLng, double depotLat,
+            RouteOptimizeMode mode) {
+        if (mode == RouteOptimizeMode.TIME) {
+            return optimizeRouteOrderByTime(box, coordsByOrderId, depotLng, depotLat);
+        }
         List<OrderInput> route = orderByNearestNeighbor(box, coordsByOrderId, depotLng, depotLat);
         if (route.size() <= 2 || coordsByOrderId == null || coordsByOrderId.isEmpty()) {
             return route;
@@ -766,6 +1020,49 @@ public final class LogisticsRoutingAlgorithm {
                     }
                 }
             }
+        }
+        return route;
+    }
+
+    /**
+     * TIME 模式车次内顺序优化 — 最近邻种子 + 全评估 2-opt (目标 = tripTimeCost)。
+     * 坐标门禁与 DISTANCE 模式一致 (缺任一坐标 → 保持原顺序); 2 站也优化 (到达时刻依赖顺序)。
+     */
+    private static List<OrderInput> optimizeRouteOrderByTime(
+            List<OrderInput> box, Map<String, double[]> coordsByOrderId, double depotLng, double depotLat) {
+        if (box.size() <= 1 || coordsByOrderId == null || coordsByOrderId.isEmpty()) {
+            return box;
+        }
+        for (OrderInput o : box) {
+            if (!coordsByOrderId.containsKey(o.orderId())) {
+                return box;
+            }
+        }
+        double[] depot = {depotLng, depotLat};
+        // 拷贝防御: size<=2 时 orderByNearestNeighbor 直接返回 box 本身, 2-opt 不可原地改调用方列表。
+        List<OrderInput> route = new ArrayList<>(
+                orderByNearestNeighbor(box, coordsByOrderId, depotLng, depotLat));
+        double cost = tripTimeCost(route, coordsByOrderId, depot);
+        boolean improved = true;
+        int guard = 0;
+        while (improved && guard++ < 60) {
+            improved = false;
+            for (int i = 0; i < route.size() - 1; i++) {
+                for (int j = i + 1; j < route.size(); j++) {
+                    reverseSegment(route, i, j);
+                    double newCost = tripTimeCost(route, coordsByOrderId, depot);
+                    if (newCost < cost - EPS) {
+                        cost = newCost;
+                        improved = true;
+                    } else {
+                        reverseSegment(route, i, j); // 无改进 → 复原
+                    }
+                }
+            }
+        }
+        // 永不更差 (TIME 目标): 最近邻种子对窗口无感, 极端窗口分布下可能劣于原(区域+编码)顺序。
+        if (tripTimeCost(box, coordsByOrderId, depot) < cost - EPS) {
+            return box;
         }
         return route;
     }

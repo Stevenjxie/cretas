@@ -241,7 +241,7 @@ public class LogisticsRoutingService {
 
         LogisticsRoutingAlgorithm.Input input = new LogisticsRoutingAlgorithm.Input(
                 orderInputs, vehicleInputs, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct,
-                coordsByOrderId, depotLng.doubleValue(), depotLat.doubleValue());
+                coordsByOrderId, depotLng.doubleValue(), depotLat.doubleValue(), plan.getOptimizeBy());
 
         LogisticsRoutingAlgorithm.Result result = LogisticsRoutingAlgorithm.run(input);
 
