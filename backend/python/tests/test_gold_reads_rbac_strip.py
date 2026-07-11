@@ -59,10 +59,14 @@ def test_gold_extra_keys_documented():
     """Document the contract: these camelCase/underscored money fields are
     the ones the shared ``_MONEY_PATTERN`` doesn't catch in current Gold
     responses (``avg_bill_value`` / ``avg_per_capita`` + the /trend-bundle
-    weekday/weekend average-revenue keys). Adding a new money key to Gold
-    responses requires also updating this set."""
+    weekday/weekend average-revenue keys + the /member-profile 储值/充值
+    money keys). Adding a new money key to Gold responses requires also
+    updating this set."""
     assert _GOLD_EXTRA_MONEY_KEYS == frozenset(
-        {"avg_bill_value", "avg_per_capita", "weekdayAvg", "weekendAvg"}
+        {
+            "avg_bill_value", "avg_per_capita", "weekdayAvg", "weekendAvg",
+            "total_balance", "principal", "bonus",
+        }
     )
 
 

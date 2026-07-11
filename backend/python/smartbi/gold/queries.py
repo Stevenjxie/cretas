@@ -2573,3 +2573,149 @@ async def zone_efficiency(
             "外卖/京东/饿了么等），并非实体大厅/包间，对比时请结合门店实际场地情况参考。"
         ),
     }
+
+
+# ── member_profile (会员储值 + 画像) ──────────────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_member_tier +
+# agg_member_birth_month (snapshot, materialized from dim_member) +
+# agg_member_recharge_daily (daily, materialized from fact_member_recharge).
+# See smartbi/services/materialized_analytics/member_profile.py.
+#
+# ⛔ NOT FULL RFM: the source (二维火 卡详情一览 + 卡充值统计 exports) has no
+# per-member consumption event — no per-order timestamp tied to a card_no —
+# so recency/frequency cannot be computed. Only stored-value (储值余额/
+# 充值趋势) and demographic profile (等级分布/生日月份分布) are available.
+# member_rfm.py (smartbi/services/restaurant/member_rfm.py) is a SEPARATE,
+# unrelated analyzer that operates on POS order-level data when a caller
+# supplies it directly — this query does not feed it and does not claim RFM.
+#
+# 🔒 All three source tables are aggregate-only by construction (no card_no/
+# name/phone/full-birthdate column exists anywhere in dim_member or
+# fact_member_recharge — see V20261006_01's header note), so this query
+# needs no additional PII stripping before returning to the API layer.
+
+
+async def member_profile(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """会员储值 + 画像: tier distribution + birth-month histogram + stored-value
+    totals (snapshot) + recharge trend (date-ranged).
+
+    Honesty guard: data_available=False when the tenant has ZERO
+    agg_member_tier rows (never uploaded 卡详情/卡充值 data) → all snapshot
+    fields are empty/zero and note explains why, rather than a fabricated
+    empty distribution indistinguishable from "uploaded but genuinely no
+    members".
+
+    Returns:
+      - data_available: bool — whether the tenant has any member data at all
+      - member_count, total_balance: snapshot totals across all tiers/stores
+      - tier_distribution: [{tier, member_count, total_balance}, ...]
+      - birth_month_distribution: [{birth_month (1-12), member_count}, ...]
+        (birth_month=0/"未知" rows excluded from this list — it's meant for
+        生日营销 targeting, where an unknown month is not actionable; the
+        count is still included in member_count via the snapshot total)
+      - recharge_trend: [{month "YYYY-MM", principal, bonus}, ...] over the
+        given date_range (independent of the snapshot fields above — a
+        tenant can have recharge history with no current dim_member rows,
+        or vice versa)
+      - note: explains why data_available is False, if applicable
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_member_tier WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        tier_rows = await conn.fetch(
+            """
+            SELECT tier,
+                   SUM(member_count)  AS member_count,
+                   SUM(total_balance) AS total_balance
+              FROM agg_member_tier
+             WHERE factory_id = $1
+             GROUP BY tier
+             ORDER BY SUM(member_count) DESC
+            """,
+            factory_id,
+        )
+        birth_rows = await conn.fetch(
+            """
+            SELECT birth_month, member_count
+              FROM agg_member_birth_month
+             WHERE factory_id = $1 AND birth_month BETWEEN 1 AND 12
+             ORDER BY birth_month
+            """,
+            factory_id,
+        )
+        recharge_rows = await conn.fetch(
+            f"""
+            SELECT to_char(date, 'YYYY-MM') AS month,
+                   SUM(principal) AS principal,
+                   SUM(bonus)     AS bonus
+              FROM agg_member_recharge_daily
+             WHERE {where}
+             GROUP BY to_char(date, 'YYYY-MM')
+             ORDER BY month
+            """,
+            *params,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+
+    tier_distribution = [
+        {
+            "tier": r["tier"],
+            "member_count": int(r["member_count"] or 0),
+            "total_balance": float(r["total_balance"] or 0),
+        }
+        for r in tier_rows
+    ]
+    birth_month_distribution = [
+        {"birth_month": int(r["birth_month"]), "member_count": int(r["member_count"] or 0)}
+        for r in birth_rows
+    ]
+    recharge_trend = [
+        {
+            "month": r["month"],
+            "principal": float(r["principal"] or 0),
+            "bonus": float(r["bonus"] or 0),
+        }
+        for r in recharge_rows
+    ]
+
+    member_count = sum(t["member_count"] for t in tier_distribution)
+    total_balance = sum(t["total_balance"] for t in tier_distribution)
+
+    note: Optional[str] = None if data_available else "未上传会员数据"
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "data_available": data_available,
+        "member_count": member_count,
+        "total_balance": total_balance,
+        "tier_distribution": tier_distribution,
+        "birth_month_distribution": birth_month_distribution,
+        "recharge_trend": recharge_trend,
+        "note": note,
+        "caveat": (
+            "本维度为会员储值与画像统计(非完整 RFM): 数据源(卡详情/卡充值报表)不含"
+            "逐笔消费记录，无法计算复购间隔(Recency)与消费频次(Frequency)，仅覆盖"
+            "储值余额、等级/生日月份分布与充值趋势。"
+        ),
+    }

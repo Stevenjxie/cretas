@@ -30,6 +30,7 @@ from smartbi.gold import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    member_profile,
     order_type_mix,
     review_city_ranking,
     review_complaints,
@@ -85,6 +86,14 @@ _GOLD_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
     # not matched by the shared _MONEY_PATTERN, so strip them here too.
     "weekdayAvg",
     "weekendAvg",
+    # member-profile (会员储值+画像) 储值余额/充值本金/赠送金 — "balance" /
+    # "principal" / "bonus" aren't matched by the shared _MONEY_PATTERN
+    # (which targets price/amount/revenue/cost/... substrings), so strip
+    # them here too. member_count / tier / birth_month are NOT money and
+    # stay visible.
+    "total_balance",
+    "principal",
+    "bonus",
 })
 
 
@@ -473,6 +482,34 @@ async def get_zone_efficiency(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("zone-efficiency failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/member-profile")
+async def get_member_profile(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史 (仅影响充值趋势, 等级/生日月份分布为全量快照)"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+):
+    """会员储值 + 画像 — member stored-value + demographic profile.
+
+    New restaurant analytics dimension (greenfield). NOT full RFM — the
+    source (卡详情/卡充值 exports) has no per-member consumption event, so
+    recency/frequency cannot be computed; only stored-value totals + tier/
+    birth-month distribution (snapshot) + recharge trend (date-ranged) are
+    available. See member_profile()'s docstring for the full caveat.
+
+    🔒 Aggregate-only response — every field here is a count/sum, never an
+    individual member row (no card_no/name/phone/birthdate ever returned)."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await member_profile(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("member-profile failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

@@ -134,8 +134,6 @@ export interface VoidRate {
   caveat: string;
 }
 
-/** /api/smartbi/gold/zone-efficiency response (camelCased) — 区域坪效
- * (in-store dining-zone revenue/efficiency). */
 export interface ZoneEfficiency {
   factoryId: string;
   startDate: string | null;
@@ -162,6 +160,40 @@ export interface ZoneEfficiency {
   // revenue-per-square-meter 坪效 (source has no floor-area column); (2)
   // some zone_name values are delivery-channel labels, not physical space.
   caveat: string;
+}
+
+export interface MemberProfile {
+  factoryId: string;
+  startDate: string | null; // only bounds recheargeTrend; tier/birthMonth are all-time snapshots
+  endDate: string | null;
+  // false = tenant has NO member data at all (未上传会员数据) — distinct from
+  // a genuine 0 members. Card shows "未上传会员数据", never a fabricated 0.
+  dataAvailable: boolean;
+  memberCount: number;
+  totalBalance: number | null; // RBAC price-strip nulls this for non price-view roles
+  tierDistribution: Array<{
+    tier: string;
+    memberCount: number;
+    totalBalance: number | null; // RBAC-nulled alongside totalBalance above
+  }>;
+  // birth_month=0/未知 rows excluded — this list is for 生日营销 targeting,
+  // where an unknown month isn't actionable.
+  birthMonthDistribution: Array<{ birthMonth: number; memberCount: number }>;
+  rechargeTrend: Array<{
+    month: string; // "YYYY-MM"
+    principal: number | null; // RBAC-nulled
+    bonus: number | null; // RBAC-nulled
+  }>;
+  note: string | null; // explains why dataAvailable is false, if applicable
+  caveat: string; // honest "this is not full RFM" disclaimer — always show it
+}
+
+export async function getMemberProfile(args: OptionalDateRangeQuery): Promise<MemberProfile> {
+  // Dates optional: omit both = 全部历史 for rechargeTrend (tier/birthMonth
+  // are always all-time snapshots regardless of the date args).
+  return (await pythonFetch(`/api/smartbi/gold/member-profile?${_qOptional(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as MemberProfile;
 }
 
 export interface KpiSummary {
