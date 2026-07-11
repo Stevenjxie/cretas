@@ -1335,7 +1335,7 @@ public final class LogisticsRoutingAlgorithm {
                         .comparing((DriverBindingInput d) -> d.role() == DriverRole.PRIMARY ? 0 : 1)
                         .thenComparing(DriverBindingInput::priority)
                         .thenComparing(DriverBindingInput::driverId))
-                .filter(b -> windowCovers(b.shiftStart(), b.shiftEnd(), tripWindow))
+                .filter(b -> driverShiftFeasible(b.shiftStart(), b.shiftEnd(), tripWindow))
                 .filter(b -> {
                     DriverInfo info = input.driverInfoById().get(b.driverId());
                     return regionCovers(info == null ? null : info.serviceAreas(), headOrders);
@@ -1660,7 +1660,7 @@ public final class LogisticsRoutingAlgorithm {
         TimeWindow tripWindow = computeTripWindow(boxOrders);
 
         for (DriverBindingInput binding : sortedBindings) {
-            if (!windowCovers(binding.shiftStart(), binding.shiftEnd(), tripWindow)) {
+            if (!driverShiftFeasible(binding.shiftStart(), binding.shiftEnd(), tripWindow)) {
                 continue;
             }
             DriverInfo info = input.driverInfoById().get(binding.driverId());
@@ -1740,6 +1740,24 @@ public final class LogisticsRoutingAlgorithm {
         LocalTime s = LocalTime.parse(rangeStart);
         LocalTime e = LocalTime.parse(rangeEnd);
         return !s.isAfter(required.start()) && !e.isBefore(required.end());
+    }
+
+    /**
+     * 司机班次可行性 —— 班次与送达窗口<b>重叠</b>即可 (不要求 shiftStart ≤ 窗口起点)。
+     * 理由: 货车等司机上班才发车, 送达窗口起点早于班次起点无妨 (车 08:30 发、08:50 到店仍在 08:00-11:00 内)。
+     * 窗口起点/终点无约束时放行; 早于窗口起点开班或晚到导致的迟到由 lateness 软信号处理, 不阻断分配 (更智能, 减少假 NEEDS_DRIVER)。
+     */
+    private static boolean driverShiftFeasible(String shiftStart, String shiftEnd, TimeWindow tripWindow) {
+        if (tripWindow == null) {
+            return true;
+        }
+        if (shiftStart == null || shiftStart.isBlank() || shiftEnd == null || shiftEnd.isBlank()) {
+            return true;
+        }
+        LocalTime s = LocalTime.parse(shiftStart);
+        LocalTime e = LocalTime.parse(shiftEnd);
+        // 区间重叠: shift[s,e] ∩ window[start,end] ≠ ∅  ⇔  s ≤ end ∧ e ≥ start
+        return !s.isAfter(tripWindow.end()) && !e.isBefore(tripWindow.start());
     }
 
     /** 司机/车辆实际占用的窗口 — 优先用车次所需窗口 (更精确); 否则退化到 shift 窗; 都未知则用全天占位 (保守, 防止误判"不冲突")。 */
