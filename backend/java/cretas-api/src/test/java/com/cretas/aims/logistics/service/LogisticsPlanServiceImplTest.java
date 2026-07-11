@@ -30,6 +30,7 @@ import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
 import com.cretas.aims.logistics.service.impl.LogisticsPlanServiceImpl;
 import com.cretas.aims.logistics.service.routing.AmapClient;
+import com.cretas.aims.logistics.service.routing.RouteProviderChain;
 import com.cretas.aims.logistics.service.routing.LogisticsRoutingService;
 import com.cretas.aims.repository.VehicleRepository;
 import jakarta.persistence.EntityManager;
@@ -68,7 +69,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims")
 @EnableJpaRepositories(basePackages = "com.cretas.aims")
-@Import({LogisticsRoutingService.class, AmapClient.class, LogisticsPlanMapper.class, LogisticsPlanServiceImpl.class})
+// RouteProviderChain (档1-B): 真 bean, 但测试环境 amap/tencent/baidu key 全空 → 整链禁用 →
+// 路线规划零调用, 行为与引入前完全一致 (TencentMapClient/BaiduMapClient 未 @Import,
+// 链只收到 AmapClient 一个 provider — 配置里未注册的名字启动时跳过)。
+@Import({LogisticsRoutingService.class, AmapClient.class, RouteProviderChain.class,
+        LogisticsPlanMapper.class, LogisticsPlanServiceImpl.class})
 @DisplayName("LogisticsPlanServiceImpl — 状态机 + 并发 (@DataJpaTest, H2 PG-compat)")
 class LogisticsPlanServiceImplTest {
 

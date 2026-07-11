@@ -15,6 +15,7 @@ import com.cretas.aims.logistics.entity.LogisticsTrip;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import com.cretas.aims.logistics.entity.enums.TripStatus;
 import com.cretas.aims.logistics.mapper.LogisticsPlanMapper;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
@@ -26,6 +27,7 @@ import com.cretas.aims.logistics.repository.LogisticsTripRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
 import com.cretas.aims.logistics.service.LogisticsPlanService;
+import com.cretas.aims.logistics.service.routing.DrivingRoute;
 import com.cretas.aims.logistics.service.routing.LogisticsRoutingAlgorithm;
 import com.cretas.aims.logistics.service.routing.LogisticsRoutingService;
 import com.cretas.aims.repository.VehicleRepository;
@@ -49,6 +51,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -88,8 +91,9 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
 
     @Override
     @Transactional
-    public PlanSnapshotDto generatePlan(String factoryId, String batchId, BigDecimal targetLoadPct) {
-        LogisticsPlan plan = routingService.generatePlan(factoryId, batchId, targetLoadPct);
+    public PlanSnapshotDto generatePlan(String factoryId, String batchId, BigDecimal targetLoadPct,
+            RouteOptimizeMode optimizeBy) {
+        LogisticsPlan plan = routingService.generatePlan(factoryId, batchId, targetLoadPct, optimizeBy);
         return buildSnapshot(factoryId, plan);
     }
 
@@ -149,7 +153,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
         renumberSequential(reordered);
 
         Map<String, LogisticsDeliveryOrder> orderById = loadOrdersForBatch(factoryId, plan.getOrderBatchId());
-        recomputeTrip(factoryId, trip, reordered, orderById);
+        recomputeTrip(factoryId, trip, reordered, orderById, plan.getOptimizeBy(), true);
         tripRepository.save(trip);
 
         recomputePlanTotals(factoryId, plan);
@@ -235,7 +239,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
                 : Math.max(0, Math.min(request.getTargetIndex(), targetFinal.size()));
         targetFinal.add(insertAt, movingStop);
         renumberSequential(targetFinal);
-        recomputeTrip(factoryId, targetTrip, targetFinal, orderById);
+        recomputeTrip(factoryId, targetTrip, targetFinal, orderById, plan.getOptimizeBy(), true);
         tripRepository.save(targetTrip);
 
         List<LogisticsStop> sourceRemaining = stopRepository.findByTripIdAndDeletedAtIsNullOrderBySequenceNo(tripId).stream()
@@ -245,7 +249,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
             tripRepository.delete(sourceTrip); // @SQLDelete → 软删除，避免遗留空车次
         } else {
             renumberSequential(sourceRemaining);
-            recomputeTrip(factoryId, sourceTrip, sourceRemaining, orderById);
+            recomputeTrip(factoryId, sourceTrip, sourceRemaining, orderById, plan.getOptimizeBy(), true);
             tripRepository.save(sourceTrip);
         }
 
@@ -316,7 +320,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
             }
         }
 
-        recomputeTrip(factoryId, trip, stops, orderById);
+        recomputeTrip(factoryId, trip, stops, orderById, plan.getOptimizeBy(), false);
         tripRepository.save(trip);
         recomputePlanTotals(factoryId, plan);
         planRepository.save(plan);
@@ -370,7 +374,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
             trip.setDriverId(driverId);
         }
 
-        recomputeTrip(factoryId, trip, stops, orderById);
+        recomputeTrip(factoryId, trip, stops, orderById, plan.getOptimizeBy(), false);
         tripRepository.save(trip);
         recomputePlanTotals(factoryId, plan);
         planRepository.save(plan);
@@ -493,9 +497,16 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
      * 重算一个车次的距离/体积/重量/装载率/状态 —— 几何组装 100% 复用
      * {@link LogisticsRoutingAlgorithm#assembleGeometry}（同一段代码，同一套缺边诚实降级规则），
      * 不在这里重新实现 km/status 逻辑。
+     *
+     * <p><b>道路路线缓存维护 (档1-B)</b>：{@code stopsChanged=true} (reorder/move) 时旧折线
+     * 已失真 → 先清空 (绝不给前端画过期的错误路线)，随后与"车次已定车但尚无折线"的情况一起
+     * 走同一条补算路径 (多提供商链, 见 {@link LogisticsRoutingService#computeRoadRoute})：
+     * 成功 → 折线/时长/总里程以 direction 结果为单一事实源；失败 → 无折线 + 保持边距离和
+     * (诚实降级)。{@code stopsChanged=false} (setVehicle/setDriver) 且已有折线 → 不动、
+     * 不浪费地图配额 (道路路线与车辆/司机无关)。
      */
     private void recomputeTrip(String factoryId, LogisticsTrip trip, List<LogisticsStop> orderedStops,
-            Map<String, LogisticsDeliveryOrder> orderById) {
+            Map<String, LogisticsDeliveryOrder> orderById, RouteOptimizeMode optimizeBy, boolean stopsChanged) {
         List<LogisticsRoutingAlgorithm.OrderInput> orderInputs = orderedStops.stream()
                 .map(stop -> {
                     LogisticsDeliveryOrder o = orderById.get(stop.getDeliveryOrderId());
@@ -579,6 +590,24 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
         trip.setLoadRate(loadRate);
         trip.setWeightLoadRate(weightLoadRate);
         trip.setStatus(status);
+
+        // ---- 档1-B: 道路路线缓存维护 (见方法头注释; roadPath 列, 不动 SVG 语义的 geometry 列) ----
+        if (stopsChanged) {
+            trip.setRoadPath(null);
+            trip.setTotalDurationMin(null);
+            trip.setRouteProvider(null);
+        }
+        boolean roadPathMissing = trip.getRoadPath() == null || trip.getRoadPath().isEmpty();
+        if (roadPathMissing && status != TripStatus.NEEDS_ROUTE_DATA
+                && trip.getVehicleId() != null && !orderedStops.isEmpty()) {
+            List<LogisticsDeliveryOrder> visitOrders = orderedStops.stream()
+                    .map(s -> orderById.get(s.getDeliveryOrderId()))
+                    .toList();
+            Optional<DrivingRoute> road = routingService.computeRoadRoute(optimizeBy, visitOrders);
+            if (road.isPresent()) {
+                LogisticsRoutingService.applyRoadRoute(trip, road.get());
+            }
+        }
     }
 
     /**
@@ -698,6 +727,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
                 .targetLoadPct(p.getTargetLoadPct())
                 .status(p.getStatus())
                 .distanceSource(p.getDistanceSource())
+                .optimizeBy(p.getOptimizeBy())
                 .totalStores(p.getTotalStores())
                 .totalTrips(p.getTotalTrips())
                 .totalDistanceKm(p.getTotalDistanceKm())

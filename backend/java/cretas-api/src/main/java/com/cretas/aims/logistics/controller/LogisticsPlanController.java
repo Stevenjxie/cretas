@@ -42,12 +42,14 @@ public class LogisticsPlanController {
     private final LogisticsPlanService planService;
 
     @PostMapping("/plans/generate")
-    @Operation(summary = "生成排线计划", description = "对已提交批次跑确定性排线算法；同批次幂等（已有非取消计划直接返回）")
+    @Operation(summary = "生成排线计划", description = "对已提交批次跑确定性排线算法；同批次幂等（已有非取消计划直接返回）；"
+            + "optimizeBy 二选一: TIME=时间最快 / DISTANCE=路程最短 (缺省 DISTANCE)")
     public ApiResponse<PlanSnapshotDto> generatePlan(
             @PathVariable String factoryId,
             @RequestBody GeneratePlanRequest request) {
         return ApiResponse.success("计划已生成",
-                planService.generatePlan(factoryId, request.getBatchId(), request.getTargetLoadPct()));
+                planService.generatePlan(factoryId, request.getBatchId(), request.getTargetLoadPct(),
+                        request.getOptimizeBy()));
     }
 
     @GetMapping("/plans")
