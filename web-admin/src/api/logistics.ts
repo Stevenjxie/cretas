@@ -300,6 +300,14 @@ export interface LogisticsTrip {
   totalDurationMin?: number;
   /** 档1-B: 产出该路线的地图 provider (AMAP/TENCENT/BAIDU)。 */
   routeProvider?: string;
+  /** 多车次: 该车次计划出发时刻 (自 00:00 的分钟数，480=08:00)。 */
+  plannedDepartMin?: number;
+  /** 多车次: 预计返回仓库时刻 (分钟)。 */
+  returnToDepotMin?: number;
+  /** 多车次: 预计返仓晚于司机班次/车辆可用截止 (迟到回仓)。null=无约束/未知。 */
+  lateReturn?: boolean;
+  /** 多车次: 同一辆车当天的第几趟 (1-based)。 */
+  vehicleTripSeq?: number;
   segmentDistances: number[];
   totalDistanceKm: number;
   totalVolumeCbm: number;

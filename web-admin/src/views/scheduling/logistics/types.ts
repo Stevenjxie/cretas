@@ -54,6 +54,14 @@ export interface RouteTrip {
   roadPath?: Array<{ lng: number; lat: number }>;
   /** 总行驶时长 (分钟)。 */
   durationMin?: number;
+  /** 多车次: 计划出发时刻 (分钟, 480=08:00)。 */
+  plannedDepartMin?: number;
+  /** 多车次: 预计返仓时刻 (分钟)。 */
+  returnToDepotMin?: number;
+  /** 多车次: 迟到回仓 (晚于司机班次/车可用截止)。 */
+  lateReturn?: boolean;
+  /** 多车次: 同车当天第几趟 (1-based)。 */
+  vehicleTripSeq?: number;
   segmentDistances: number[];
   totalDistanceKm: number;
   totalVolumeCbm: number;

@@ -146,6 +146,14 @@ function etaTitleFor(tripId: string, i: number): string {
       <div class="vehicle-row">
         <span class="field-label">车辆</span>
         <strong>{{ vehicleLabel(trip) }}</strong>
+        <span v-if="trip.vehicleTripSeq && trip.vehicleTripSeq > 1" class="trip-seq" data-testid="trip-seq">该车第 {{ trip.vehicleTripSeq }} 趟 · 回仓补货</span>
+      </div>
+
+      <div v-if="trip.plannedDepartMin != null" class="schedule-row" data-testid="trip-schedule">
+        <span class="sched-item">🚚 出发 {{ fmtHm(trip.plannedDepartMin) }}</span>
+        <span v-if="trip.returnToDepotMin != null" class="sched-item" :class="{ late: trip.lateReturn }">
+          🏭 返仓 {{ fmtHm(trip.returnToDepotMin) }}<span v-if="trip.lateReturn"> · 迟到回仓</span>
+        </span>
       </div>
 
       <p
@@ -322,6 +330,38 @@ function etaTitleFor(tripId: string, i: number): string {
 
 .field-label {
   color: #344054;
+}
+
+.trip-seq {
+  padding: 2px 8px;
+  color: #7c3aed;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 999px;
+}
+
+.schedule-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 2px;
+}
+
+.sched-item {
+  padding: 3px 9px;
+  color: #344054;
+  font-size: 12.5px;
+  font-weight: 650;
+  background: #f4f6f9;
+  border-radius: 8px;
+}
+
+.sched-item.late {
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
 }
 
 .store-chain {
