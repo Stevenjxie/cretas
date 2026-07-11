@@ -39,8 +39,13 @@
         <div class="eyebrow">工序 Cell</div>
         <div class="process-name">{{ data.processName }}</div>
       </div>
-      <el-tag v-if="inputPorts.length > 1" size="small" type="success">{{ inputPorts.length }} 入自动混合</el-tag>
-      <el-tag v-if="outputPorts.length > 1" size="small" type="warning">{{ outputPorts.length }} 出</el-tag>
+    </div>
+
+    <div class="system-inference" data-testid="system-inference">
+      <span class="system-inference-badge">
+        系统研判 · {{ inputPorts.length }} 入{{ inputPorts.length > 1 ? '（多来源合流）' : '' }} · {{ outputPorts.length }} 出{{ outputPorts.length > 1 ? '（同时多产出）' : '' }}
+      </span>
+      <span class="system-inference-hint">增删左右的来源/产出 Cell 后自动更新</span>
     </div>
 
     <section class="port-section">
@@ -84,7 +89,7 @@
     </section>
 
     <section class="conversion-section">
-      <div class="section-title"><span>投入产出数量关系</span></div>
+      <div class="section-title"><span>投入产出数量关系（可人工调整）</span></div>
       <div class="conversion-row">
         <el-select
           class="nodrag nowheel"
@@ -101,14 +106,16 @@
         <el-input
           v-if="data.conversionRule.mode !== 'ACTUAL_WEIGHT'"
           class="nodrag"
+          data-testid="conversion-expression-input"
           :model-value="data.conversionRule.expression"
           :disabled="!canWrite"
           size="small"
-          placeholder="例：投入 = 产出1 + 产出2"
+          :placeholder="conversionPlaceholder"
           @input="(expression: string) => emit('update', { conversionRule: { ...data.conversionRule, expression } })"
         />
       </div>
-      <div class="conversion-example">示例：200 {{ inputPorts[0]?.unit || '-' }} → 180 {{ outputPorts[0]?.unit || '-' }}，报工记录实际数量</div>
+      <div class="conversion-sentence" data-testid="conversion-sentence">{{ semanticSentence }}</div>
+      <div class="conversion-example" data-testid="conversion-sample">{{ sampleLine }}</div>
     </section>
 
     <div class="reporting-row nodrag">
@@ -129,7 +136,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
-import type { ConversionMode, ProcessNodeData } from './types';
+import type { ConversionMode, ProcessNodeData, ProcessPort } from './types';
 
 const props = defineProps<{
   data: ProcessNodeData;
@@ -152,6 +159,62 @@ const outputPorts = computed(() => props.data.ports.filter((port) => port.direct
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };
 }
+
+function portDisplayName(port: ProcessPort | undefined, fallback: string): string {
+  return port?.materialName || fallback;
+}
+
+// 数量关系表达式输入框的 placeholder：SUM_OUTPUTS 用真实产出物料名拼出提示公式
+const conversionPlaceholder = computed(() => {
+  const mode = props.data.conversionRule.mode;
+  if (mode === 'SUM_OUTPUTS') {
+    if (outputPorts.value.length > 0) {
+      const names = outputPorts.value.map((port, index) => portDisplayName(port, `产出${index + 1}`));
+      return `投入 = ${names.join(' + ')}`;
+    }
+    return '例：投入 = 产出1 + 产出2';
+  }
+  if (mode === 'FIXED_RATIO') {
+    return '例：1 只 = 1 只 / 100:90';
+  }
+  return '例：自定义公式，如 (产出1 + 产出2) * 0.95';
+});
+
+// 语义句：把 mode + 真实投入/产出物料名 + 用户填写的 expression 组成一句可读的关系描述（只读展示，非表单）
+const semanticSentence = computed(() => {
+  const { mode, expression } = props.data.conversionRule;
+  if (mode === 'ACTUAL_WEIGHT') {
+    const inName = portDisplayName(inputPorts.value[0], '（投入由上游带入）');
+    const inUnit = inputPorts.value[0]?.unit || props.data.inputUnit || '-';
+    const outName = portDisplayName(outputPorts.value[0], '（产出待选 SKU）');
+    const outUnit = outputPorts.value[0]?.unit || props.data.outputUnit || '-';
+    return `按实际称重 —— 投入 ${inName}（${inUnit}）→ 产出 ${outName}（${outUnit}），报工记录实际投入/产出`;
+  }
+  if (mode === 'FIXED_RATIO') {
+    return `固定比例：${expression || '待填，例：1 只 = 1 只 / 100:90'}`;
+  }
+  if (mode === 'SUM_OUTPUTS') {
+    if (outputPorts.value.length === 0) {
+      return '投入 = 各产出之和（暂无产出 Cell）';
+    }
+    const names = outputPorts.value.map((port, index) => portDisplayName(port, `产出${index + 1}`));
+    return `投入 = ${names.join(' + ')}（多产出按各自实际数量）`;
+  }
+  return `自定义：${expression || '待填公式'}`;
+});
+
+// 样例：只读的说明性示例, 用真实物料名/单位举例, 不是可编辑输入
+const sampleLine = computed(() => {
+  const isMultiOutput = props.data.conversionRule.mode === 'SUM_OUTPUTS' || outputPorts.value.length > 1;
+  if (isMultiOutput) {
+    return '样例：投入 = Σ 各产出（如 242kg = 36kg + 200kg）';
+  }
+  const inName = portDisplayName(inputPorts.value[0], '投入物料');
+  const inUnit = inputPorts.value[0]?.unit || props.data.inputUnit || '-';
+  const outName = portDisplayName(outputPorts.value[0], '产出物料');
+  const outUnit = outputPorts.value[0]?.unit || props.data.outputUnit || '-';
+  return `样例：投入 ${inName} 200${inUnit} → 产出 ${outName} ~180${outUnit}（实际称重）`;
+});
 </script>
 
 <style scoped>
@@ -166,12 +229,16 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
 .eyebrow { color: #7a8599; font-size: 11px; }
 .process-name { color: #1a2332; font-size: 15px; font-weight: 700; }
+.system-inference { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.system-inference-badge { width: fit-content; padding: 2px 8px; border-radius: 999px; background: #eef6ff; color: #1b65a8; font-size: 11px; font-weight: 650; }
+.system-inference-hint { color: #9aa5b8; font-size: 10px; }
 .port-section, .conversion-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .conversion-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px; }
-.conversion-example { margin-top: 6px; color: #8a95a8; font-size: 11px; }
+.conversion-sentence { margin-top: 8px; color: #475467; font-size: 12px; line-height: 1.5; }
+.conversion-example { margin-top: 4px; color: #8a95a8; font-size: 11px; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

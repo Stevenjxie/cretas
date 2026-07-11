@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import { defineComponent, h } from 'vue';
 import WorkflowProcessNode from '../WorkflowProcessNode.vue';
-import type { ProcessNodeData } from '../types';
+import type { ProcessNodeData, ProcessPort } from '../types';
 
 const processData: ProcessNodeData = {
   workProcessId: 'WP-CUT',
@@ -46,10 +46,10 @@ const PositionedHandleStub = defineComponent({
   },
 });
 
-function mountNode(selected = true) {
+function mountNode(selected = true, data: ProcessNodeData = processData) {
   return mount(WorkflowProcessNode, {
     props: {
-      data: processData,
+      data,
       selected,
       canWrite: true,
     },
@@ -58,6 +58,13 @@ function mountNode(selected = true) {
       stubs: { Handle: PositionedHandleStub },
     },
   });
+}
+
+function withPorts(overrides: Partial<ProcessNodeData>): ProcessNodeData {
+  return {
+    ...processData,
+    ...overrides,
+  };
 }
 
 describe('WorkflowProcessNode output gestures', () => {
@@ -148,5 +155,142 @@ describe('WorkflowProcessNode output gestures', () => {
 
     const edgeLeftFromNodeRight = -edgeRight - 28;
     expect(edgeLeftFromNodeRight).toBeLessThanOrEqual(0);
+  });
+});
+
+describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
+  it('shows a single-in/single-out 系统研判 line without the multi-source/multi-output suffixes', () => {
+    const wrapper = mountNode();
+    const badge = wrapper.get('[data-testid="system-inference"]');
+
+    expect(badge.text()).toContain('系统研判');
+    expect(badge.text()).toContain('1 入');
+    expect(badge.text()).toContain('1 出');
+    expect(badge.text()).not.toContain('多来源合流');
+    expect(badge.text()).not.toContain('同时多产出');
+    expect(badge.text()).toContain('增删左右的来源/产出 Cell 后自动更新');
+  });
+
+  it('reflects multi-input/multi-output port counts with the 合流/多产出 suffixes', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', materialName: '猪前腿肉', unit: 'kg', ordinal: 0 },
+      { id: 'in-2', direction: 'INPUT', materialName: '猪五花肉', unit: 'kg', ordinal: 1 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '腌制猪肉', unit: 'kg', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '猪皮下脚料', unit: 'kg', ordinal: 1 },
+      { id: 'out-3', direction: 'OUTPUT', materialName: '肉汁', unit: 'kg', ordinal: 2 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+    const badge = wrapper.get('[data-testid="system-inference"]');
+
+    expect(badge.text()).toContain('2 入（多来源合流）');
+    expect(badge.text()).toContain('3 出（同时多产出）');
+  });
+
+  it('keeps the conversion mode select present and editable', () => {
+    const wrapper = mountNode();
+
+    const select = wrapper.get('.conversion-row .el-select');
+    expect(select.exists()).toBe(true);
+    expect(select.classes()).not.toContain('is-disabled');
+  });
+
+  it('shows a name-based placeholder on the expression input for SUM_OUTPUTS', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'kg', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '肥肉出品', unit: 'kg', ordinal: 1 },
+    ];
+    const wrapper = mountNode(true, withPorts({
+      ports,
+      conversionRule: { mode: 'SUM_OUTPUTS', expression: null },
+    }));
+
+    const input = wrapper.get('[data-testid="conversion-expression-input"]');
+    expect(input.attributes('placeholder')).toBe('投入 = 瘦肉出品 + 肥肉出品');
+  });
+
+  it('renders the ACTUAL_WEIGHT semantic sentence using real material names + units', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: 'kg', ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '分割肉', unit: 'kg', ordinal: 0 },
+    ];
+    const wrapper = mountNode(true, withPorts({
+      ports,
+      conversionRule: { mode: 'ACTUAL_WEIGHT' },
+    }));
+
+    const sentence = wrapper.get('[data-testid="conversion-sentence"]').text();
+    expect(sentence).toContain('按实际称重');
+    expect(sentence).toContain('整猪');
+    expect(sentence).toContain('分割肉');
+    expect(sentence).toContain('kg');
+    expect(sentence).toContain('报工记录实际投入/产出');
+  });
+
+  it('renders the FIXED_RATIO semantic sentence from the user expression, with a fallback hint when empty', () => {
+    const withExpr = mountNode(true, withPorts({
+      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 1 只' },
+    }));
+    expect(withExpr.get('[data-testid="conversion-sentence"]').text()).toBe('固定比例：1 只 = 1 只');
+
+    const withoutExpr = mountNode(true, withPorts({
+      conversionRule: { mode: 'FIXED_RATIO', expression: null },
+    }));
+    expect(withoutExpr.get('[data-testid="conversion-sentence"]').text()).toContain('固定比例');
+    expect(withoutExpr.get('[data-testid="conversion-sentence"]').text()).toContain('待填');
+  });
+
+  it('renders the SUM_OUTPUTS semantic sentence listing every output material name', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'kg', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '肥肉出品', unit: 'kg', ordinal: 1 },
+    ];
+    const wrapper = mountNode(true, withPorts({
+      ports,
+      conversionRule: { mode: 'SUM_OUTPUTS', expression: null },
+    }));
+
+    const sentence = wrapper.get('[data-testid="conversion-sentence"]').text();
+    expect(sentence).toContain('投入 = 瘦肉出品 + 肥肉出品');
+    expect(sentence).toContain('按各自实际数量');
+  });
+
+  it('renders the FORMULA semantic sentence from the user expression', () => {
+    const wrapper = mountNode(true, withPorts({
+      conversionRule: { mode: 'FORMULA', expression: '(产出1 + 产出2) * 0.95' },
+    }));
+
+    expect(wrapper.get('[data-testid="conversion-sentence"]').text()).toBe('自定义：(产出1 + 产出2) * 0.95');
+  });
+
+  it('renders a labeled 样例 line derived from real material names, not an editable field', () => {
+    const wrapper = mountNode();
+    const sample = wrapper.get('[data-testid="conversion-sample"]');
+
+    expect(sample.text()).toContain('样例');
+    expect(sample.element.tagName.toLowerCase()).not.toBe('input');
+    expect(sample.find('input').exists()).toBe(false);
+  });
+
+  it('renders a multi-output 样例 line when there are 2+ output ports', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'kg', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '肥肉出品', unit: 'kg', ordinal: 1 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+
+    expect(wrapper.get('[data-testid="conversion-sample"]').text()).toContain('样例：投入 = Σ 各产出');
+  });
+
+  it('keeps P1 guarantees intact: no SKU picker on the process Cell, units stay read-only chips', () => {
+    const wrapper = mountNode();
+
+    expect(wrapper.find('.sku-select').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="material-sku-select"]').exists()).toBe(false);
+    expect(wrapper.find('.unit-select').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="input-unit-chip"]').text()).toBe('kg');
+    expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
   });
 });
