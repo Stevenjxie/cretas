@@ -3,6 +3,7 @@ package com.cretas.aims.logistics.entity;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.logistics.entity.enums.PlanDistanceSource;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -54,6 +55,9 @@ public class LogisticsPlan extends BaseEntity {
         if (distanceSource == null) {
             distanceSource = PlanDistanceSource.MAINTAINED_MATRIX;
         }
+        if (optimizeBy == null) {
+            optimizeBy = RouteOptimizeMode.DISTANCE;
+        }
         if (totalStores == null) {
             totalStores = 0;
         }
@@ -88,6 +92,14 @@ public class LogisticsPlan extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "distance_source", length = 24, nullable = false)
     private PlanDistanceSource distanceSource;
+
+    /**
+     * 排线优化模式 (时间最快/路程最短) — 生成时由调度员选择, {@code regeneratePlan} 复用本值
+     * 保证口径一致 (V20261028_54, 档1-B)。列 nullable (旧数据无值), 读侧 null 按 DISTANCE 处理。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "optimize_by", length = 16)
+    private RouteOptimizeMode optimizeBy;
 
     @Column(name = "total_stores", nullable = false)
     private Integer totalStores;

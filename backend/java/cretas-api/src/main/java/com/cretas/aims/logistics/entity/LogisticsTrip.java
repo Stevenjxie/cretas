@@ -111,9 +111,28 @@ public class LogisticsTrip extends BaseEntity {
     private BigDecimal totalDistanceKm;
 
     /**
+     * 全程预计时长 (分钟, scale=2)。Nullable — 只有地图 provider 路线规划成功才有值
+     * (V20261028_54, 档1-B); 边距离回落路径没有时长数据, 保持 null (诚实, 不伪造)。
+     */
+    @Column(name = "total_duration_min", precision = 10, scale = 2)
+    private BigDecimal totalDurationMin;
+
+    /**
+     * 产出 {@link #geometry} 路线的地图 provider (AMAP/TENCENT/BAIDU)。Nullable —
+     * 与 {@code totalDurationMin} 同生命周期, 供排查"这条线是谁画的" (V20261028_54, 档1-B)。
+     */
+    @Column(name = "route_provider", length = 16)
+    private String routeProvider;
+
+    /**
      * 车次几何轨迹 (JSONB, e.g. polyline / waypoints). Nullable — Phase 3 排线算法写入。
      * H2 PG-compat test 下置 null (同项目 jsonb round-trip 既有限制, 见
      * {@code SemiFinishedInventoryRepositoryTest} 注释)。
+     *
+     * <p>档1-B (2026-07-11) 起: 生成/重生成/人工调整时调用地图 provider 计算一次道路折线并
+     * 持久化于此 (每点 {@code {"lng":..,"lat":..}}, GCJ-02) — 查看计划零地图 API 调用 (缓存即本列)。
+     * ⚠️ 类型必须保持 {@code List<Map<String,Object>>} (JSONB 数组): 曾因映射成 Map 触发 500
+     * (2026-07-11 部署事故 #5), 不得改回对象映射。
      */
     @Type(JsonBinaryType.class)
     @Column(name = "geometry", columnDefinition = "jsonb")

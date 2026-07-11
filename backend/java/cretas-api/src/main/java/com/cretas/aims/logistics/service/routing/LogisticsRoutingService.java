@@ -13,6 +13,7 @@ import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.DistanceEdgeSource;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import com.cretas.aims.logistics.entity.enums.TripStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsDistanceEdgeRepository;
@@ -70,6 +71,7 @@ public class LogisticsRoutingService {
     private final LogisticsTripRepository tripRepository;
     private final LogisticsStopRepository stopRepository;
     private final AmapClient amapClient;
+    private final RouteProviderChain routeProviderChain;
 
     /** 车场 (DEPOT) 坐标 — 用于补齐 NEEDS_ROUTE_DATA 车次的 DEPOT->首站 距离 (Phase 4, 2026-07-11)。 */
     @Value("${logistics.depot.lng:120.62}")
@@ -79,10 +81,22 @@ public class LogisticsRoutingService {
     private BigDecimal depotLat;
 
     /**
-     * 生成排线计划 — 若该批次已有非 CANCELLED 计划则直接返回既有计划 (幂等, 见类头说明)。
+     * 生成排线计划 (兼容重载, 优化模式默认 DISTANCE=路程最短) — 见 4 参主方法。
      */
     @Transactional
     public LogisticsPlan generatePlan(String factoryId, String orderBatchId, BigDecimal targetLoadPct) {
+        return generatePlan(factoryId, orderBatchId, targetLoadPct, RouteOptimizeMode.DISTANCE);
+    }
+
+    /**
+     * 生成排线计划 — 若该批次已有非 CANCELLED 计划则直接返回既有计划 (幂等, 见类头说明)。
+     *
+     * @param optimizeBy 排线优化模式 (时间最快/路程最短); null 按 DISTANCE 处理。存于计划上,
+     *                   {@link #regeneratePlan} 复用, 保证重生成与初次生成口径一致 (档1-B)。
+     */
+    @Transactional
+    public LogisticsPlan generatePlan(String factoryId, String orderBatchId, BigDecimal targetLoadPct,
+            RouteOptimizeMode optimizeBy) {
         List<LogisticsPlan> existingPlans = planRepository.findByFactoryIdOrderByPlanDateDesc(factoryId);
         for (LogisticsPlan candidate : existingPlans) {
             if (orderBatchId.equals(candidate.getOrderBatchId()) && candidate.getStatus() != PlanStatus.CANCELLED) {
@@ -102,6 +116,7 @@ public class LogisticsRoutingService {
                 .planDate(batch.getBusinessDate())
                 .planNumber("PLAN-" + batch.getBatchNumber())
                 .targetLoadPct(targetLoadPct)
+                .optimizeBy(optimizeBy == null ? RouteOptimizeMode.DISTANCE : optimizeBy)
                 .build();
         plan = planRepository.saveAndFlush(plan);
 
@@ -238,6 +253,22 @@ public class LogisticsRoutingService {
                     .weightLoadRate(tr.weightLoadRate())
                     .totalDistanceKm(tr.totalDistanceKm())
                     .build();
+
+            // ---- 档1-B: 道路路线一次计算 + 持久化 (缓存) ----
+            // 条件: 已定车 + 有门店 + 非缺边态 (缺边态维持既有 NEEDS_ROUTE_DATA 语义, 不叠加口径)。
+            // 成功: 折线/时长/总里程互相一致 (同一次 direction 结果 = 单一事实源), 之后查看计划
+            // 直接读 geometry 列, 零地图 API 调用。失败: 保持边距离 + 空折线 (诚实降级)。
+            if (tr.vehicleId() != null && !tr.orderIdsInOrder().isEmpty()
+                    && tr.status() != TripStatus.NEEDS_ROUTE_DATA) {
+                List<LogisticsDeliveryOrder> visitOrders = tr.orderIdsInOrder().stream()
+                        .map(orderById::get)
+                        .toList();
+                Optional<DrivingRoute> road = computeRoadRoute(plan.getOptimizeBy(), visitOrders);
+                if (road.isPresent()) {
+                    applyRoadRoute(trip, road.get());
+                }
+            }
+
             trip = tripRepository.save(trip);
             savedTrips.add(trip);
 
@@ -260,7 +291,9 @@ public class LogisticsRoutingService {
                 stopRepository.save(stop);
             }
 
-            totalDistanceKm = totalDistanceKm.add(tr.totalDistanceKm());
+            // 道路路线成功时 trip.totalDistanceKm 已被 direction 结果覆盖 (单一事实源),
+            // 计划总里程必须累加 trip 实体上的最终值, 而非算法边距离原值。
+            totalDistanceKm = totalDistanceKm.add(trip.getTotalDistanceKm());
             totalStores += tr.orderIdsInOrder().size();
             if (tr.status() != TripStatus.DRAFT) {
                 needsAction = true;
@@ -392,6 +425,67 @@ public class LogisticsRoutingService {
      */
     public double[] depotCoord() {
         return new double[] {depotLng.doubleValue(), depotLat.doubleValue()};
+    }
+
+    // ============================================================
+    // 档1-B — 道路路线计算 (多提供商 fallback 链) + 车次持久化 (缓存)
+    // ============================================================
+
+    /**
+     * 为一个车次计算完整道路路线: DEPOT → 门店 (访问顺序) → 末站, 走多提供商 fallback 链
+     * ({@link RouteProviderChain}, 默认 AMAP→TENCENT→BAIDU)。
+     *
+     * <p>诚实降级: 链整体未启用 / 任一门店缺经纬度 / 全部 provider 失败 →
+     * {@link Optional#empty()} — 调用方保持既有边距离口径 + 空折线, 绝不伪造。
+     *
+     * @param optimizeBy         优化模式; null 按 DISTANCE
+     * @param ordersInVisitOrder 车次门店订单, 按访问顺序 (含 null 元素 = 订单缺失 → empty)
+     */
+    public Optional<DrivingRoute> computeRoadRoute(RouteOptimizeMode optimizeBy,
+            List<LogisticsDeliveryOrder> ordersInVisitOrder) {
+        if (ordersInVisitOrder == null || ordersInVisitOrder.isEmpty() || !routeProviderChain.anyEnabled()) {
+            return Optional.empty();
+        }
+        List<double[]> points = new ArrayList<>(ordersInVisitOrder.size());
+        for (LogisticsDeliveryOrder order : ordersInVisitOrder) {
+            if (order == null || order.getLongitude() == null || order.getLatitude() == null) {
+                return Optional.empty(); // 缺坐标 → 无法规划, 诚实放弃整车次路线
+            }
+            points.add(new double[] {order.getLongitude().doubleValue(), order.getLatitude().doubleValue()});
+        }
+        double[] dest = points.get(points.size() - 1);
+        List<double[]> waypoints = points.subList(0, points.size() - 1);
+        return routeProviderChain.drivingRoute(
+                depotLng.doubleValue(), depotLat.doubleValue(), waypoints, dest[0], dest[1],
+                optimizeBy == null ? RouteOptimizeMode.DISTANCE : optimizeBy);
+    }
+
+    /**
+     * 把 direction 结果落到车次实体: 折线 (JSONB {@code [{"lng":..,"lat":..},...]}) +
+     * 时长 (分钟) + 总里程 (以 direction 里程覆盖边距离和, 保证"画的线/里程/时长"三者
+     * 出自同一次规划 = 单一事实源) + provider 标识。
+     */
+    public static void applyRoadRoute(LogisticsTrip trip, DrivingRoute route) {
+        trip.setGeometry(polylineToGeometry(route.polyline()));
+        trip.setTotalDurationMin(route.durationMin());
+        trip.setTotalDistanceKm(route.distanceKm());
+        trip.setRouteProvider(route.provider());
+    }
+
+    /**
+     * {@code {lng,lat}} 点串 → JSONB 持久化形状 {@code List<Map<String,Object>>}
+     * (每点 {@code {"lng":..,"lat":..}})。⚠️ 必须保持 List-of-Map — geometry 列是 JSONB
+     * 数组, 曾因映射成对象触发 500 (见 {@link LogisticsTrip#getGeometry()} 注释)。
+     */
+    public static List<Map<String, Object>> polylineToGeometry(List<double[]> polyline) {
+        List<Map<String, Object>> geometry = new ArrayList<>(polyline.size());
+        for (double[] point : polyline) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("lng", point[0]);
+            entry.put("lat", point[1]);
+            geometry.add(entry);
+        }
+        return geometry;
     }
 
     /**
