@@ -43,162 +43,210 @@
       </div>
     </div>
 
-    <!-- RFM 客群分层 (hero) -->
-    <el-card class="cma-card cma-hero" shadow="never">
-      <template #header>
-        <div class="cma-card-header"><el-icon><TrendCharts /></el-icon><span>RFM 客群分层</span></div>
-      </template>
-      <el-skeleton v-if="rfmLoading" :rows="6" animated />
-      <div v-else-if="rfmError" class="cma-inline-error">加载 RFM 数据失败: {{ rfmError }}</div>
-      <template v-else-if="rfmDataAvailable && rfmTierDistribution.length">
-        <!-- 规则洞察 (0 LLM, 从真实数字算出; 数据不足不渲染, 不编) -->
-        <div v-if="rfmInsight" class="cma-insight">
-          <el-icon class="cma-insight-icon"><MagicStick /></el-icon>
-          <span>{{ rfmInsight }}</span>
-        </div>
-        <div ref="rfmBarChartRef" class="cma-chart" style="height: 360px"></div>
-      </template>
-      <el-empty v-else :description="rfmNote || '暂无会员消费数据'" :image-size="60" />
-    </el-card>
+    <div class="cma-layout">
+      <div class="cma-main">
+        <!-- RFM 客群分层 (hero) -->
+        <el-card class="cma-card cma-hero" shadow="never">
+          <template #header>
+            <div class="cma-card-header">
+              <span class="cma-card-header-left"><el-icon><TrendCharts /></el-icon><span>RFM 客群分层</span></span>
+              <el-button size="small" text @click="focusChart('rfm-tier')">🎯 聚焦</el-button>
+            </div>
+          </template>
+          <el-skeleton v-if="rfmLoading" :rows="6" animated />
+          <div v-else-if="rfmError" class="cma-inline-error">加载 RFM 数据失败: {{ rfmError }}</div>
+          <template v-else-if="rfmDataAvailable && rfmTierDistribution.length">
+            <!-- 规则洞察 (0 LLM, 从真实数字算出; 数据不足不渲染, 不编) -->
+            <div v-if="rfmInsight" class="cma-insight">
+              <el-icon class="cma-insight-icon"><MagicStick /></el-icon>
+              <span>{{ rfmInsight }}</span>
+            </div>
+            <div ref="rfmBarChartRef" class="cma-chart" style="height: 360px"></div>
+            <ChartInsights
+              :bullets="rfmTierBullets"
+              chart-key="rfm-tier"
+              chart-title="RFM 客群分层"
+              :data-summary="rfmTierSummaryStr"
+              @focus="focusChart"
+            />
+          </template>
+          <el-empty v-else :description="rfmNote || '暂无会员消费数据'" :image-size="60" />
+        </el-card>
 
-    <!-- RFM 三维散点 (hero) -->
-    <el-card class="cma-card cma-hero" shadow="never">
-      <template #header>
-        <div class="cma-card-header"><el-icon><Grid /></el-icon><span>RFM 三维分布 (R × F × M)</span></div>
-      </template>
-      <el-skeleton v-if="rfmLoading" :rows="6" animated />
-      <div v-else-if="rfmError" class="cma-inline-error">加载 RFM 散点数据失败: {{ rfmError }}</div>
-      <template v-else-if="rfmDataAvailable && rfmScatter.length">
-        <div ref="rfmScatterChartRef" class="cma-chart" style="height: 380px"></div>
-        <div v-if="rfmScatterSuppressedCount > 0" class="cma-est-note">
-          <el-icon><InfoFilled /></el-icon>
-          <span>另有 {{ rfmScatterSuppressedCount }} 位会员因群体过小(&lt;5)已隐去(隐私保护)</span>
-        </div>
-      </template>
-      <el-empty v-else description="暂无 RFM 散点数据" :image-size="60" />
-    </el-card>
+        <!-- RFM 三维散点 (hero) -->
+        <el-card class="cma-card cma-hero" shadow="never">
+          <template #header>
+            <div class="cma-card-header">
+              <span class="cma-card-header-left"><el-icon><Grid /></el-icon><span>RFM 三维分布 (R × F × M)</span></span>
+              <el-button size="small" text @click="focusChart('rfm-scatter')">🎯 聚焦</el-button>
+            </div>
+          </template>
+          <el-skeleton v-if="rfmLoading" :rows="6" animated />
+          <div v-else-if="rfmError" class="cma-inline-error">加载 RFM 散点数据失败: {{ rfmError }}</div>
+          <template v-else-if="rfmDataAvailable && rfmScatter.length">
+            <div ref="rfmScatterChartRef" class="cma-chart" style="height: 380px"></div>
+            <div v-if="rfmScatterSuppressedCount > 0" class="cma-est-note">
+              <el-icon><InfoFilled /></el-icon>
+              <span>另有 {{ rfmScatterSuppressedCount }} 位会员因群体过小(&lt;5)已隐去(隐私保护)</span>
+            </div>
+            <ChartInsights
+              :bullets="scatterBullets"
+              chart-key="rfm-scatter"
+              chart-title="RFM 三维分布"
+              :data-summary="scatterSummaryStr"
+              @focus="focusChart"
+            />
+          </template>
+          <el-empty v-else description="暂无 RFM 散点数据" :image-size="60" />
+        </el-card>
 
-    <!-- RFM 诚实披露 (非完整 RFM 说明) -->
-    <div v-if="!rfmError && rfmDataAvailable && rfmCaveat" class="cma-caveat">{{ rfmCaveat }}</div>
+        <!-- RFM 诚实披露 (非完整 RFM 说明) -->
+        <div v-if="!rfmError && rfmDataAvailable && rfmCaveat" class="cma-caveat">{{ rfmCaveat }}</div>
 
-    <!-- 会员生命周期 -->
-    <el-card class="cma-card" shadow="never">
-      <template #header>
-        <div class="cma-card-header"><el-icon><PieChart /></el-icon><span>会员生命周期</span></div>
-      </template>
-      <el-skeleton v-if="rfmLoading" :rows="4" animated />
-      <div v-else-if="rfmError" class="cma-inline-error">加载生命周期数据失败: {{ rfmError }}</div>
-      <template v-else-if="rfmDataAvailable && lifecycleDistribution.length">
-        <div class="cma-lifecycle-grid">
-          <div ref="lifecycleChartRef" class="cma-chart" style="height: 260px"></div>
-          <el-table :data="lifecycleDistribution" size="small" stripe class="cma-lifecycle-table">
-            <el-table-column prop="lifecycleStage" label="阶段" />
-            <el-table-column label="人数" align="right">
-              <template #default="{ row }">{{ row.memberCount.toLocaleString() }}</template>
-            </el-table-column>
-            <el-table-column label="储值余额" align="right">
-              <template #default="{ row }">{{ formatMoney(row.totalBalance) }}</template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div class="cma-caveat-inline">此为当前快照 (非趋势), 阶段划分基于最近消费时间距今长短。</div>
-      </template>
-      <el-empty v-else :description="rfmNote || '暂无生命周期数据'" :image-size="60" />
-    </el-card>
+        <!-- 会员生命周期 -->
+        <el-card class="cma-card" shadow="never">
+          <template #header>
+            <div class="cma-card-header">
+              <span class="cma-card-header-left"><el-icon><PieChart /></el-icon><span>会员生命周期</span></span>
+              <el-button size="small" text @click="focusChart('lifecycle')">🎯 聚焦</el-button>
+            </div>
+          </template>
+          <el-skeleton v-if="rfmLoading" :rows="4" animated />
+          <div v-else-if="rfmError" class="cma-inline-error">加载生命周期数据失败: {{ rfmError }}</div>
+          <template v-else-if="rfmDataAvailable && lifecycleDistribution.length">
+            <div class="cma-lifecycle-grid">
+              <div ref="lifecycleChartRef" class="cma-chart" style="height: 260px"></div>
+              <el-table :data="lifecycleDistribution" size="small" stripe class="cma-lifecycle-table">
+                <el-table-column prop="lifecycleStage" label="阶段" />
+                <el-table-column label="人数" align="right">
+                  <template #default="{ row }">{{ row.memberCount.toLocaleString() }}</template>
+                </el-table-column>
+                <el-table-column label="储值余额" align="right">
+                  <template #default="{ row }">{{ formatMoney(row.totalBalance) }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <div class="cma-caveat-inline">此为当前快照 (非趋势), 阶段划分基于最近消费时间距今长短。</div>
+            <ChartInsights
+              :bullets="lifecycleBulletsComputed"
+              chart-key="lifecycle"
+              chart-title="会员生命周期"
+              :data-summary="lifecycleSummaryStr"
+              @focus="focusChart"
+            />
+          </template>
+          <el-empty v-else :description="rfmNote || '暂无生命周期数据'" :image-size="60" />
+        </el-card>
 
-    <!-- 会员画像 (从 经营驾驶舱 迁移过来 — 等级/性别/生日/充值) -->
-    <el-card class="cma-card" shadow="never">
-      <template #header>
-        <div class="cma-card-header"><el-icon><User /></el-icon><span>会员画像</span></div>
-      </template>
-      <el-skeleton v-if="profileLoading" :rows="4" animated />
-      <div v-else-if="profileError" class="cma-inline-error">会员画像加载失败: {{ profileError }}</div>
-      <template v-else-if="profileDataAvailable">
-        <div class="cma-profile-kpi">
-          <div class="cma-kpi">
-            <span class="cma-kpi-val">{{ profileMemberCount.toLocaleString() }}</span>
-            <span class="cma-kpi-label">会员数</span>
-          </div>
-          <div class="cma-kpi">
-            <span class="cma-kpi-val">{{ formatMoney(profileTotalBalance) }}</span>
-            <span class="cma-kpi-label">储值总额</span>
-          </div>
-        </div>
-
-        <div class="cma-member-detail-grid">
-          <!-- 等级分布 (k-anon: 人数<5 的等级合并入「其他」) -->
-          <div class="cma-member-block">
-            <div class="cma-member-block-title">等级分布</div>
-            <div v-if="memberTierDistribution.length" class="cma-rank-list">
-              <div v-for="t in memberTierDistribution" :key="t.tier" class="cma-rank-item">
-                <span class="cma-rank-name" :title="t.tier">{{ t.tier }}</span>
-                <span class="cma-rank-bar-wrap">
-                  <span class="cma-rank-bar" :style="{ width: tierPct(t.memberCount) + '%' }"></span>
-                </span>
-                <span class="cma-rank-val">{{ t.memberCount }}人</span>
-                <span class="cma-rank-pct">{{ formatMoney(t.totalBalance) }}</span>
+        <!-- 会员画像 (从 经营驾驶舱 迁移过来 — 等级/性别/生日/充值) -->
+        <el-card class="cma-card" shadow="never">
+          <template #header>
+            <div class="cma-card-header">
+              <span class="cma-card-header-left"><el-icon><User /></el-icon><span>会员画像</span></span>
+              <el-button size="small" text @click="focusChart('profile')">🎯 聚焦</el-button>
+            </div>
+          </template>
+          <el-skeleton v-if="profileLoading" :rows="4" animated />
+          <div v-else-if="profileError" class="cma-inline-error">会员画像加载失败: {{ profileError }}</div>
+          <template v-else-if="profileDataAvailable">
+            <div class="cma-profile-kpi">
+              <div class="cma-kpi">
+                <span class="cma-kpi-val">{{ profileMemberCount.toLocaleString() }}</span>
+                <span class="cma-kpi-label">会员数</span>
+              </div>
+              <div class="cma-kpi">
+                <span class="cma-kpi-val">{{ formatMoney(profileTotalBalance) }}</span>
+                <span class="cma-kpi-label">储值总额</span>
               </div>
             </div>
-            <el-empty v-else description="暂无等级数据" :image-size="40" />
-          </div>
 
-          <!-- 性别分布 -->
-          <div class="cma-member-block">
-            <div class="cma-member-block-title">性别分布 <span class="cma-member-block-hint">(性别画像)</span></div>
-            <div v-if="memberGenderDistribution.length" class="cma-rank-list">
-              <div v-for="g in memberGenderDistribution" :key="g.gender" class="cma-rank-item">
-                <span class="cma-rank-name" :title="g.gender">{{ g.gender }}</span>
-                <span class="cma-rank-bar-wrap">
-                  <span class="cma-rank-bar cma-chan-bar" :style="{ width: genderPct(g.memberCount) + '%' }"></span>
-                </span>
-                <span class="cma-rank-val">{{ g.memberCount }}人</span>
-              </div>
-            </div>
-            <el-empty v-else description="暂无性别数据" :image-size="40" />
-          </div>
-
-          <!-- 生日月份分布 (生日营销 hook) -->
-          <div class="cma-member-block">
-            <div class="cma-member-block-title">
-              生日月份分布 <span class="cma-member-block-hint">(生日营销参考)</span>
-            </div>
-            <div v-if="memberBirthCoveragePct !== null" class="cma-member-coverage">
-              生日覆盖率 {{ memberBirthCoveragePct.toFixed(0) }}%（{{ memberBirthUnknownCount.toLocaleString() }} 名会员未填生日）
-            </div>
-            <div v-if="memberBirthMonthDistribution.length" class="cma-birth-bars">
-              <div v-for="m in memberBirthMonthDistribution" :key="m.birthMonth" class="cma-birth-bar-col">
-                <div class="cma-birth-bar-wrap">
-                  <div class="cma-birth-bar" :style="{ height: birthMonthPct(m.memberCount) + '%' }" :title="`${m.birthMonth}月: ${m.memberCount}人`"></div>
+            <div class="cma-member-detail-grid">
+              <!-- 等级分布 (k-anon: 人数<5 的等级合并入「其他」) -->
+              <div class="cma-member-block">
+                <div class="cma-member-block-title">等级分布</div>
+                <div v-if="memberTierDistribution.length" class="cma-rank-list">
+                  <div v-for="t in memberTierDistribution" :key="t.tier" class="cma-rank-item">
+                    <span class="cma-rank-name" :title="t.tier">{{ t.tier }}</span>
+                    <span class="cma-rank-bar-wrap">
+                      <span class="cma-rank-bar" :style="{ width: tierPct(t.memberCount) + '%' }"></span>
+                    </span>
+                    <span class="cma-rank-val">{{ t.memberCount }}人</span>
+                    <span class="cma-rank-pct">{{ formatMoney(t.totalBalance) }}</span>
+                  </div>
                 </div>
-                <span class="cma-birth-bar-label">{{ m.birthMonth }}月</span>
+                <el-empty v-else description="暂无等级数据" :image-size="40" />
+              </div>
+
+              <!-- 性别分布 -->
+              <div class="cma-member-block">
+                <div class="cma-member-block-title">性别分布 <span class="cma-member-block-hint">(性别画像)</span></div>
+                <div v-if="memberGenderDistribution.length" class="cma-rank-list">
+                  <div v-for="g in memberGenderDistribution" :key="g.gender" class="cma-rank-item">
+                    <span class="cma-rank-name" :title="g.gender">{{ g.gender }}</span>
+                    <span class="cma-rank-bar-wrap">
+                      <span class="cma-rank-bar cma-chan-bar" :style="{ width: genderPct(g.memberCount) + '%' }"></span>
+                    </span>
+                    <span class="cma-rank-val">{{ g.memberCount }}人</span>
+                  </div>
+                </div>
+                <el-empty v-else description="暂无性别数据" :image-size="40" />
+              </div>
+
+              <!-- 生日月份分布 (生日营销 hook) -->
+              <div class="cma-member-block">
+                <div class="cma-member-block-title">
+                  生日月份分布 <span class="cma-member-block-hint">(生日营销参考)</span>
+                </div>
+                <div v-if="memberBirthCoveragePct !== null" class="cma-member-coverage">
+                  生日覆盖率 {{ memberBirthCoveragePct.toFixed(0) }}%（{{ memberBirthUnknownCount.toLocaleString() }} 名会员未填生日）
+                </div>
+                <div v-if="memberBirthMonthDistribution.length" class="cma-birth-bars">
+                  <div v-for="m in memberBirthMonthDistribution" :key="m.birthMonth" class="cma-birth-bar-col">
+                    <div class="cma-birth-bar-wrap">
+                      <div class="cma-birth-bar" :style="{ height: birthMonthPct(m.memberCount) + '%' }" :title="`${m.birthMonth}月: ${m.memberCount}人`"></div>
+                    </div>
+                    <span class="cma-birth-bar-label">{{ m.birthMonth }}月</span>
+                  </div>
+                </div>
+                <el-empty v-else description="暂无生日数据" :image-size="40" />
+              </div>
+
+              <!-- 充值趋势 -->
+              <div class="cma-member-block">
+                <div class="cma-member-block-title">充值趋势 (本金/赠送)</div>
+                <div v-if="memberRechargeTrend.length && memberRechargeStoreCount >= 1" class="cma-member-coverage">
+                  仅 {{ memberRechargeStoreCount }} 家门店有充值记录（部分门店未开通储值）
+                </div>
+                <el-table v-if="memberRechargeTrend.length" :data="memberRechargeTrend" size="small" stripe>
+                  <el-table-column prop="month" label="月份" width="90" />
+                  <el-table-column label="本金" align="right">
+                    <template #default="{ row }">{{ formatMoney(row.principal) }}</template>
+                  </el-table-column>
+                  <el-table-column label="赠送" align="right">
+                    <template #default="{ row }">{{ formatMoney(row.bonus) }}</template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="暂无充值趋势数据" :image-size="40" />
               </div>
             </div>
-            <el-empty v-else description="暂无生日数据" :image-size="40" />
-          </div>
+            <!-- 禁降级: 本维度不是完整 RFM (画像层), 明确提示 + k-anon 说明 -->
+            <div class="cma-caveat-inline">{{ profileCaveat }}</div>
+            <ChartInsights
+              :bullets="profileBulletsComputed"
+              chart-key="profile"
+              chart-title="会员画像"
+              :data-summary="profileSummaryStr"
+              @focus="focusChart"
+            />
+          </template>
+          <el-empty v-else :description="profileNote || '未上传会员数据'" :image-size="60" />
+        </el-card>
+      </div>
 
-          <!-- 充值趋势 -->
-          <div class="cma-member-block">
-            <div class="cma-member-block-title">充值趋势 (本金/赠送)</div>
-            <div v-if="memberRechargeTrend.length && memberRechargeStoreCount >= 1" class="cma-member-coverage">
-              仅 {{ memberRechargeStoreCount }} 家门店有充值记录（部分门店未开通储值）
-            </div>
-            <el-table v-if="memberRechargeTrend.length" :data="memberRechargeTrend" size="small" stripe>
-              <el-table-column prop="month" label="月份" width="90" />
-              <el-table-column label="本金" align="right">
-                <template #default="{ row }">{{ formatMoney(row.principal) }}</template>
-              </el-table-column>
-              <el-table-column label="赠送" align="right">
-                <template #default="{ row }">{{ formatMoney(row.bonus) }}</template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-else description="暂无充值趋势数据" :image-size="40" />
-          </div>
-        </div>
-        <!-- 禁降级: 本维度不是完整 RFM (画像层), 明确提示 + k-anon 说明 -->
-        <div class="cma-caveat-inline">{{ profileCaveat }}</div>
-      </template>
-      <el-empty v-else :description="profileNote || '未上传会员数据'" :image-size="60" />
-    </el-card>
+      <div class="cma-side">
+        <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="会员分析" />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -218,6 +266,19 @@ import echarts from '@/utils/echarts';
 import type { ECharts as EChartsInstance } from 'echarts/core';
 import { getMemberRfm, getMemberProfile, type MemberRfm, type MemberProfile } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
+import ChartInsights from '@/views/smart-bi/components/analysis/ChartInsights.vue';
+import AnalysisChatPanel from '@/views/smart-bi/components/analysis/AnalysisChatPanel.vue';
+import {
+  memberRfmTierBullets,
+  memberRfmTierSummary,
+  lifecycleBullets,
+  lifecycleSummary,
+  rfmScatterBullets,
+  rfmScatterSummary,
+  memberProfileBullets,
+  memberProfileSummary,
+  type AnalysisChartContext,
+} from '@/views/smart-bi/components/analysis/analysisBullets';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
@@ -429,6 +490,47 @@ function loadAll() {
 }
 
 // ============================================================
+// 混合式图表分析(bullets + AI 解读 + 整页 AI 分析面板) — 2026-07-12
+// 每张图: 确定性 bullets (analysisBullets.ts, 0 LLM) + ChartInsights.vue
+// 承载的按需 AI 解读。页面级 AnalysisChatPanel 消费同一批 dataSummary 作为
+// 聚焦上下文 (grounding trick) — 全部真实数字来自上面已加载的 refs, 不编造。
+// ============================================================
+const rfmTierBullets = computed(() => memberRfmTierBullets(rfmTierDistribution.value));
+const rfmTierSummaryStr = computed(() => memberRfmTierSummary(rfmTierDistribution.value));
+
+const scatterBullets = computed(() => rfmScatterBullets(rfmScatter.value, rfmScatterSuppressedCount.value));
+const scatterSummaryStr = computed(() => rfmScatterSummary(rfmScatter.value, rfmScatterSuppressedCount.value));
+
+const lifecycleBulletsComputed = computed(() => lifecycleBullets(lifecycleDistribution.value));
+const lifecycleSummaryStr = computed(() => lifecycleSummary(lifecycleDistribution.value));
+
+const profileBulletsInput = computed(() => ({
+  memberCount: profileMemberCount.value,
+  totalBalance: profileTotalBalance.value,
+  tierDistribution: memberTierDistribution.value,
+  genderDistribution: memberGenderDistribution.value,
+  birthMonthDistribution: memberBirthMonthDistribution.value,
+  birthMonthCoveragePct: memberBirthCoveragePct.value,
+  birthMonthUnknownCount: memberBirthUnknownCount.value,
+  rechargeTrend: memberRechargeTrend.value,
+  rechargeStoreCount: memberRechargeStoreCount.value,
+}));
+const profileBulletsComputed = computed(() => memberProfileBullets(profileBulletsInput.value));
+const profileSummaryStr = computed(() => memberProfileSummary(profileBulletsInput.value));
+
+const analysisContexts = computed<AnalysisChartContext[]>(() => [
+  { key: 'rfm-tier', title: 'RFM 客群分层', dataSummary: rfmTierSummaryStr.value },
+  { key: 'rfm-scatter', title: 'RFM 三维分布', dataSummary: scatterSummaryStr.value },
+  { key: 'lifecycle', title: '会员生命周期', dataSummary: lifecycleSummaryStr.value },
+  { key: 'profile', title: '会员画像', dataSummary: profileSummaryStr.value },
+]);
+
+const analysisChatPanelRef = ref<InstanceType<typeof AnalysisChatPanel> | null>(null);
+function focusChart(key: string) {
+  analysisChatPanelRef.value?.setFocus(key);
+}
+
+// ============================================================
 // ECharts — RFM 客群分层横向柱状图 / RFM 三维散点 / 生命周期环形图
 // ============================================================
 const rfmBarChartRef = ref<HTMLDivElement | null>(null);
@@ -628,9 +730,17 @@ onBeforeUnmount(() => {
 .cma-kpi-dormant { color: #e6a23c; }
 .cma-kpi-churned { color: #909399; }
 
+/* 主列(图表卡片) + 侧列(AI 分析面板) 响应式布局 */
+.cma-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+@media (max-width: 1280px) { .cma-layout { grid-template-columns: 1fr; } }
+.cma-main { min-width: 0; }
+.cma-side { position: sticky; top: 16px; }
+@media (max-width: 1280px) { .cma-side { position: static; } }
+
 .cma-card { margin-bottom: 16px; }
 .cma-hero { min-height: 120px; }
-.cma-card-header { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.cma-card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; }
+.cma-card-header-left { display: flex; align-items: center; gap: 6px; }
 .cma-chart { width: 100%; }
 .cma-inline-error { color: #f56c6c; font-size: 13px; padding: 8px 0; }
 
