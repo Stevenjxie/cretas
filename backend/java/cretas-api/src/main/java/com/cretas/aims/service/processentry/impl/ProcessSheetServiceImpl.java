@@ -148,7 +148,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
-        normalizeConfiguredUnits(factoryId, req);
+        normalizeConfiguredUnits(factoryId, planId, req);
         validateCustomFields(factoryId, req);
 
         // 1.6 2B B3: workflow 批次行防呆校验 (产出类型/单位对齐 workflow 端口)。
@@ -1626,11 +1626,17 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return edges;
     }
 
-    private void normalizeConfiguredUnits(String factoryId, ProcessSheetRowRequest req) {
+    private void normalizeConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
         Optional<ProductWorkProcess> configured = productWorkProcessRepo
                 .findByFactoryIdAndProductTypeIdAndProcessOrder(
                         factoryId, req.getProductTypeId(), req.getProcessOrder());
         if (configured.isEmpty()) {
+            // 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
+            // 单位以 workflow 端口投影为准。命中 workflow 描述符即用其投入/产出单位归一化(支持 kg→盒 双单位),
+            // 不再因"未配置工序"拒绝。产出单位/类型另由 validateWorkflowRowIfApplicable(B3) 对齐端口。
+            if (applyWorkflowConfiguredUnits(factoryId, planId, req)) {
+                return;
+            }
             // Legacy clients only sent one `unit` field. Preserve that established single-unit
             // contract, but do not allow a new dual-unit payload to bypass configuration.
             if (req.getInputUnit() == null && req.getOutputUnit() == null) {
@@ -1652,6 +1658,57 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请检查产品工序配置后重试")
                         .withHintTarget("工序配置"));
         normalizeConfiguredUnits(req, pwp, process);
+    }
+
+    /**
+     * 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
+     * 但报工单位需要以 workflow 端口投影为准 —— 例如成品包装工序 kg(半成品) → 盒(成品) 的换算行。
+     *
+     * <p>命中当前 processOrder 的 workflow 描述符即用其投入/产出端口单位归一化 req, 返回 {@code true}
+     * (跳过"未配置工序"拒绝)。非 workflow 计划 / 该工序无描述符 → 返回 {@code false}, 交回 legacy/未配置
+     * 分支处理。产出 kind/unit 另由 {@link #validateWorkflowRowIfApplicable} (B3) 对齐端口。
+     */
+    private boolean applyWorkflowConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null || planId == null || req.getProcessOrder() == null) {
+            return false;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            // workflow 端口/SKU 失效等明确业务错误应上抛让文员看到, 不静默降级到 legacy。
+            throw be;
+        } catch (Exception e) {
+            log.warn("[2B] applyWorkflowConfiguredUnits 读取 workflow 配置失败, 回落 legacy 分支: "
+                    + "factory={} plan={} err={}", factoryId, planId, e.getMessage());
+            return false;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return false; // 非 workflow 计划 → legacy 分支
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor = config.getProcesses().stream()
+                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .findFirst()
+                .orElse(null);
+        if (descriptor == null || descriptor.getOutput() == null) {
+            return false; // workflow 计划但本道工序无产出描述符 → legacy 分支
+        }
+        String outputUnit = firstNonBlank(descriptor.getOutput().getUnit(),
+                descriptor.getPlannedUnit(), req.getOutputUnit(), req.getUnit(), "kg");
+        String inputUnit = firstNonBlank(
+                (descriptor.getInputs() != null && !descriptor.getInputs().isEmpty())
+                        ? descriptor.getInputs().get(0).getUnit() : null,
+                req.getInputUnit(), outputUnit);
+
+        // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setUnit(outputUnit);
+        return true;
     }
 
     /**
