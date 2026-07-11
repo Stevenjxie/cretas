@@ -108,6 +108,32 @@ export interface DiscountBreakdown {
   }>;
 }
 
+/** /api/smartbi/gold/void-rate response (camelCased) — 撤单率 / 撤单稽核. */
+export interface VoidRate {
+  factoryId: string;
+  startDate: string | null;
+  endDate: string | null;
+  voidCount: number;
+  billCount: number;
+  // percentage, 0-100 scale; null when a guard fires (no void data uploaded,
+  // or bills < min-denominator). Show note/empty-state, never a fabricated 0%.
+  voidRate: number | null;
+  // false = tenant has NO void data at all (未上传撤单数据) — distinct from a
+  // genuine 0 voids in the window. Card shows "未上传撤单数据", not "0.00%".
+  dataAvailable: boolean;
+  note: string | null; // explains why voidRate is null, if applicable
+  totalVoidCount: number; // sum across the whole range (not just the breakdown top N)
+  breakdown: Array<{
+    staffName: string;
+    storeName: string; // anchors a named row to a specific store (avoids merging同名 staff)
+    voidCount: number;
+    billsHandled: number; // bills this staff handled at this store (rate denominator)
+    voidsPer100Bills: number | null; // RATE not raw count; null when billsHandled=0
+    topReason: string | null; // dominant 撤单原因; null = 未标注
+  }>;
+  caveat: string;
+}
+
 export interface KpiSummary {
   factoryId: string;
   startDate: string;
@@ -226,6 +252,12 @@ export async function getOrderTypeMix(args: OptionalDateRangeQuery): Promise<Ord
   return (await pythonFetch(`/api/smartbi/gold/order-type-mix?${_qOptional(args)}`, {
     timeoutMs: PYTHON_LLM_TIMEOUT_MS,
   })) as OrderTypeMix;
+}
+
+export async function getVoidRate(args: DateRangeQuery & { topN?: number }): Promise<VoidRate> {
+  return (await pythonFetch(`/api/smartbi/gold/void-rate?${_q(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as VoidRate;
 }
 
 export async function getKpiSummary(args: OptionalDateRangeQuery): Promise<KpiSummary> {

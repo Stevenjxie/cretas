@@ -48,6 +48,23 @@ metrics:
     playbook: discount_rate_high
     description_zh: 折扣金额占折前营收的比例
 
+  void_rate:
+    name_zh: 撤单率
+    name_en: Order Void Rate
+    formula: void_count / bill_count
+    threshold_inline:
+      healthy: "< 3"
+      warning: ">= 3 and < 6"
+      critical: ">= 6"
+    higher_is_worse: true
+    playbook: void_rate_high
+    description_zh: 撤单订单数占开单总数的比例 (0-100 分制)
+    notes: |
+      新增维度 (2026-07 greenfield). 阈值为运营经验值 (POS 撤单率一般管控在
+      3% 以内, 超过 6% 通常提示排班/培训/流程问题), 非第三方行业报告数据 —
+      不同于 discount_rate 等有正式行业报告引用的 metric, 使用时按经验阈值
+      对待, 不作为精确行业基准宣称。
+
   table_turnover:
     name_zh: 翻台率
     name_en: Table Turnover

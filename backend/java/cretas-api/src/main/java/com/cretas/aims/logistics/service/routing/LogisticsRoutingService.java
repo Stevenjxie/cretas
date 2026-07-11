@@ -377,6 +377,48 @@ public class LogisticsRoutingService {
         return new AmapFillResult(filled, amapCalls);
     }
 
+    /**
+     * DEPOT 车场坐标 {@code {lng, lat}} — 供人工调整 (reorder/move) 后重算构建 coords 映射。
+     */
+    public double[] depotCoord() {
+        return new double[] {depotLng.doubleValue(), depotLat.doubleValue()};
+    }
+
+    /**
+     * 解析单条边距离 (供人工调整后 {@code recomputeTrip} 复用初次生成的同一套高德补边逻辑)：
+     * 先查已落库边 (含之前缓存的 {@code MAP_PROVIDER})，缺则用高德驾车距离补齐并缓存为 {@code MAP_PROVIDER} 边。
+     * 任一环节失败 (amap 未启用 / 坐标缺失 / 高德查询失败) 返回 {@code null} → 调用方诚实置 NEEDS_ROUTE_DATA，绝不伪造 km。
+     *
+     * @param coordsByPoint pointId(DEPOT/storeCode) -> {@code {lng, lat}}；缺坐标的点无法补边
+     */
+    @Transactional
+    public BigDecimal resolveEdgeKm(String factoryId, String fromPointId, String toPointId,
+            Map<String, double[]> coordsByPoint) {
+        Optional<LogisticsDistanceEdge> cached = distanceEdgeRepository
+                .findByFactoryIdAndFromPointIdAndToPointIdAndDeletedAtIsNull(factoryId, fromPointId, toPointId);
+        if (cached.isPresent()) {
+            return cached.get().getDistanceKm();
+        }
+        if (!amapClient.isEnabled()) {
+            return null;
+        }
+        double[] origin = coordsByPoint.get(fromPointId);
+        double[] dest = coordsByPoint.get(toPointId);
+        if (origin == null || dest == null) {
+            return null;
+        }
+        Optional<BigDecimal> km = amapClient.drivingDistanceKm(origin[0], origin[1], dest[0], dest[1]);
+        if (km.isEmpty()) {
+            return null;
+        }
+        LogisticsDistanceEdge edge = LogisticsDistanceEdge.builder()
+                .factoryId(factoryId).fromPointId(fromPointId).toPointId(toPointId)
+                .distanceKm(km.get()).source(DistanceEdgeSource.MAP_PROVIDER)
+                .build();
+        distanceEdgeRepository.save(edge);
+        return km.get();
+    }
+
     private static BigDecimal nvl(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
     }

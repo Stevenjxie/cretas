@@ -8,15 +8,16 @@ Aggregates data sources into one flat ``metrics`` dict for
      rigidity. Either injected by the caller (``finance_metrics``) or queried
      directly via asyncpg.
   2. POS (agg_daily_order_type_meal + fact_pos_transaction, gold layer) —
-     discount_rate / delivery_dependency / channel_collection_rate.
+     discount_rate / delivery_dependency / channel_collection_rate /
+     void_rate (agg_daily_void — new 撤单率 dimension, greenfield).
   3. reviews (smart_bi_dynamic_data JSONB, 大众点评) — 5-star pct MoM change.
   4. gold totals (agg_restaurant_daily_totals) — ingredient_waste_rate.
   5. POS bill-grain (fact_pos_transaction) + business_config_overrides —
      avg_ticket_vs_target (actual avg ticket vs configured/benchmark target).
 
 ⛔ Scale invariants (must NOT be converted):
-  - food_cost_ratio / labor_cost_ratio / discount_rate / ingredient_waste_rate
-    → 0-100 scale (benchmark YAML ranges are %-scale, e.g. [35,45], [8,25]).
+  - food_cost_ratio / labor_cost_ratio / discount_rate / ingredient_waste_rate /
+    void_rate → 0-100 scale (benchmark YAML ranges are %-scale, e.g. [35,45], [8,25]).
   - cost_rigidity / delivery_dependency / channel_collection_rate /
     review_score_decline / avg_ticket_vs_target → 0-1 scale
     (inline thresholds, e.g. "< 0.70").
@@ -119,8 +120,14 @@ class HealthCheckBundle:
 
 # All metric keys this builder is responsible for (used to default-skip).
 _FINANCE_KEYS = ("food_cost_ratio", "labor_cost_ratio", "cost_rigidity")
-_POS_KEYS = ("discount_rate", "delivery_dependency", "channel_collection_rate")
+_POS_KEYS = ("discount_rate", "delivery_dependency", "channel_collection_rate", "void_rate")
 _REVIEW_KEYS = ("review_score_decline",)
+
+# Min bills in the window before we'll assert a 撤单率 diagnosis. Below this,
+# a couple voids swing the % and could falsely trip "撤单率过高 critical".
+# (Mirrors gold/queries.py:_VOID_MIN_BILLS — deliberately duplicated across the
+# two independent modules rather than cross-importing a single int.)
+_VOID_MIN_BILLS = 50
 
 
 def _resolve_month_range(raw: Optional[str]) -> tuple[date, date]:
@@ -223,7 +230,12 @@ class HealthCheckMetricsBuilder:
         channel_estimated = bool(pos_metrics.pop("_channel_estimated", False))
         if pos_metrics.get("_channel_note"):
             notes["channel_collection_rate"] = str(pos_metrics.pop("_channel_note"))
+        void_skip_reason = pos_metrics.pop("_void_skip_reason", None)
         self._merge_pos(metrics, coverage, pos_metrics)
+        # Override the generic "无 POS 数据" skip with the specific void reason
+        # (未上传撤单报表 vs 订单样本不足) so the diagnosis is honest about WHY.
+        if "void_rate" not in metrics and void_skip_reason:
+            coverage["void_rate"] = f"skipped:{void_skip_reason}"
 
         # ── 3. reviews ────────────────────────────────────────────
         try:
@@ -505,7 +517,8 @@ class HealthCheckMetricsBuilder:
                 """
                 SELECT COALESCE(SUM(gross_amount), 0)::numeric(18,2)    AS gross,
                        COALESCE(SUM(discount_amount), 0)::numeric(18,2) AS discount,
-                       COALESCE(SUM(net_amount), 0)::numeric(18,2)      AS net
+                       COALESCE(SUM(net_amount), 0)::numeric(18,2)      AS net,
+                       COUNT(*)                                          AS bills
                   FROM fact_pos_transaction
                  WHERE factory_id = $1 AND date BETWEEN $2 AND $3
                 """,
@@ -526,8 +539,40 @@ class HealthCheckMetricsBuilder:
         gross = float(txn["gross"]) if txn else 0.0
         discount = float(txn["discount"]) if txn else 0.0
         net = float(txn["net"]) if txn else 0.0
+        bills = int(txn["bills"]) if txn else 0
         if gross > 0:
             out["discount_rate"] = round(discount / gross * 100, 4)  # 0-100 scale
+
+        # void_rate (新增, 撤单率) from fact_pos_void. Two honesty guards so we
+        # never assert "撤单率 0% 健康" as fact for a tenant that simply never
+        # uploaded a 撤单报表, and never trip a false "撤单率过高" off a tiny
+        # bill sample:
+        #   (1) tenant has ZERO fact_pos_void rows at all → coverage-skip
+        #       "未上传撤单报表" (NOT a computed 0%).
+        #   (2) bills < _VOID_MIN_BILLS in window → skip "订单样本不足".
+        async with smartbi_pool.acquire() as conn:
+            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            avail_row = await conn.fetchrow(
+                "SELECT EXISTS(SELECT 1 FROM fact_pos_void WHERE factory_id = $1) AS has_data",
+                factory_id,
+            )
+            has_void_data = bool(avail_row["has_data"]) if avail_row else False
+            if has_void_data and bills >= _VOID_MIN_BILLS:
+                void_row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(*) AS voids
+                      FROM fact_pos_void
+                     WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+                    """,
+                    factory_id, start, end,
+                )
+                voids = int(void_row["voids"]) if void_row else 0
+                out["void_rate"] = round(voids / bills * 100, 4)  # 0-100 scale
+        if "void_rate" not in out:
+            out["_void_skip_reason"] = (
+                "未上传撤单报表" if not has_void_data
+                else f"订单样本不足(<{_VOID_MIN_BILLS}单)"
+            )
 
         # channel_collection_rate (D2 estimate): (revenue - est_commission)/revenue.
         if net > 0:

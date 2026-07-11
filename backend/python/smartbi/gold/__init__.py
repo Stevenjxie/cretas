@@ -42,6 +42,8 @@ from smartbi.gold.queries import (
     store_comparison,
     top_products,
     trend_bundle,
+    void_audit,
+    void_rate,
 )
 from smartbi.gold.review_queries import (
     review_city_ranking,
@@ -111,6 +113,8 @@ __all__ = [
     "store_review_vs_revenue",
     "top_products",
     "trend_bundle",
+    "void_audit",
+    "void_rate",
     "run_silver_dual_write",
     "silver_dual_write_enabled",
 ]
