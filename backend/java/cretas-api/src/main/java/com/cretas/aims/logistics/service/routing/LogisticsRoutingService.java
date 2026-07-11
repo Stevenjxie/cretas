@@ -199,8 +199,18 @@ public class LogisticsRoutingService {
                         .map(edge -> edge.getDistanceKm())
                         .orElse(null);
 
+        // 门店坐标映射 (orderId -> {lng, lat}) 供算法做车次内最近邻访问顺序优化；缺坐标的门店不入表 → 该箱不重排。
+        Map<String, double[]> coordsByOrderId = new HashMap<>();
+        for (LogisticsDeliveryOrder o : orders) {
+            if (o.getLongitude() != null && o.getLatitude() != null) {
+                coordsByOrderId.put(o.getId(),
+                        new double[] {o.getLongitude().doubleValue(), o.getLatitude().doubleValue()});
+            }
+        }
+
         LogisticsRoutingAlgorithm.Input input = new LogisticsRoutingAlgorithm.Input(
-                orderInputs, vehicleInputs, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct);
+                orderInputs, vehicleInputs, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct,
+                coordsByOrderId, depotLng.doubleValue(), depotLat.doubleValue());
 
         LogisticsRoutingAlgorithm.Result result = LogisticsRoutingAlgorithm.run(input);
 

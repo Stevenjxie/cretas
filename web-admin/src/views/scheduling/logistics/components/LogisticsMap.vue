@@ -139,6 +139,7 @@ function drawTripRoute(tripId: string, index: number, storePts: [number, number]
       strokeWeight: selected ? 7 : anySelected ? 3 : 4,
       strokeOpacity: selected ? 1 : anySelected ? 0.22 : 0.6,
       strokeStyle: dashed ? 'dashed' : 'solid',
+      showDir: selected, // 选中线路画行驶方向箭头（配送中心→①→②→…），一眼看清先后与方向
       lineJoin: 'round',
       lineCap: 'round',
       cursor: 'pointer',

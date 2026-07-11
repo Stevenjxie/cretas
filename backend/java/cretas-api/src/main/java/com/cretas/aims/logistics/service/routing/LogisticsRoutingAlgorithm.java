@@ -86,7 +86,24 @@ public final class LogisticsRoutingAlgorithm {
             Map<String, List<DriverBindingInput>> driverBindingsByVehicleId,
             Map<String, DriverInfo> driverInfoById,
             DistanceLookup distanceLookup,
-            BigDecimal targetLoadPct) {
+            BigDecimal targetLoadPct,
+            // 车次内门店访问顺序做「最近邻」优化用的坐标 (orderId -> {lng, lat})；
+            // 为空或某门店缺坐标 → 该箱保持原(区域+编码)顺序 (诚实, 不猜)。
+            Map<String, double[]> coordsByOrderId,
+            double depotLng,
+            double depotLat) {
+
+        /** 兼容构造器：不带坐标 → 不做最近邻排序 (保持原顺序)。供不需要顺序优化的调用/测试使用。 */
+        public Input(
+                List<OrderInput> orders,
+                List<VehicleInput> vehicles,
+                Map<String, List<DriverBindingInput>> driverBindingsByVehicleId,
+                Map<String, DriverInfo> driverInfoById,
+                DistanceLookup distanceLookup,
+                BigDecimal targetLoadPct) {
+            this(orders, vehicles, driverBindingsByVehicleId, driverInfoById, distanceLookup, targetLoadPct,
+                    Map.of(), 0.0, 0.0);
+        }
     }
 
     // ============================================================
@@ -183,7 +200,10 @@ public final class LogisticsRoutingAlgorithm {
 
             // ---------------- Step C/D/E/F — 逐箱定车/定人/组几何/定态 ----------------
             for (int boxIndex = 0; boxIndex < packed.size(); boxIndex++) {
-                List<OrderInput> boxOrders = packed.get(boxIndex);
+                // 车次内门店访问顺序优化：最近邻(种子) + 2-opt(去交叉) —— 让 ①②③ 有合理先后、
+                // 线路不来回穿插 (原顺序是按 区域+编码 排, 地理上会绕)。缺坐标则保持原顺序 (诚实)。
+                List<OrderInput> boxOrders = optimizeRouteOrder(
+                        packed.get(boxIndex), input.coordsByOrderId(), input.depotLng(), input.depotLat());
                 VehicleInput vehicle;
                 if (boxIndex == 0) {
                     vehicle = primaryVehicle;
@@ -309,6 +329,118 @@ public final class LogisticsRoutingAlgorithm {
             packed.add(current);
         }
         return packed;
+    }
+
+    // ============================================================
+    // Step B2 — 车次内门店访问顺序：从配送中心出发的最近邻 (贪心)
+    // ============================================================
+
+    /**
+     * 车次内访问顺序优化：最近邻(种子) + 2-opt(局部搜索去交叉)。产出有合理先后、线路不穿插的顺序。
+     * 任一门店缺坐标 (或坐标映射为空) → 原样返回，保持原(区域+编码)顺序 (诚实降级，不猜)。
+     * 优化基于纬度修正的平面近似距离 (只决定顺序)；每站/总里程仍走 assembleGeometry 的真实高德边。
+     */
+    static List<OrderInput> optimizeRouteOrder(
+            List<OrderInput> box, Map<String, double[]> coordsByOrderId, double depotLng, double depotLat) {
+        List<OrderInput> route = orderByNearestNeighbor(box, coordsByOrderId, depotLng, depotLat);
+        if (route.size() <= 2 || coordsByOrderId == null || coordsByOrderId.isEmpty()) {
+            return route;
+        }
+        for (OrderInput o : route) {
+            if (!coordsByOrderId.containsKey(o.orderId())) {
+                return route;
+            }
+        }
+        // 2-opt：反复反转能缩短总路径的区段，直到无改进 (开放路径，起点固定为配送中心)。
+        boolean improved = true;
+        int guard = 0;
+        while (improved && guard++ < 60) {
+            improved = false;
+            for (int i = 0; i < route.size() - 1; i++) {
+                for (int j = i + 1; j < route.size(); j++) {
+                    if (twoOptDelta(route, coordsByOrderId, depotLng, depotLat, i, j) < -1e-9) {
+                        reverseSegment(route, i, j);
+                        improved = true;
+                    }
+                }
+            }
+        }
+        return route;
+    }
+
+    /** 反转 route[i..j] 对开放路径总长的变化量 (负 = 更短)。对称距离下内部段长度不变，只比较两端接边。 */
+    private static double twoOptDelta(List<OrderInput> route, Map<String, double[]> coords,
+            double depotLng, double depotLat, int i, int j) {
+        double[] prev = i == 0 ? new double[] {depotLng, depotLat} : coords.get(route.get(i - 1).orderId());
+        double[] a = coords.get(route.get(i).orderId());
+        double[] b = coords.get(route.get(j).orderId());
+        double oldLen = planarDist(prev, a);
+        double newLen = planarDist(prev, b);
+        if (j + 1 < route.size()) {
+            double[] next = coords.get(route.get(j + 1).orderId());
+            oldLen += planarDist(b, next);
+            newLen += planarDist(a, next);
+        }
+        return newLen - oldLen;
+    }
+
+    private static void reverseSegment(List<OrderInput> route, int i, int j) {
+        while (i < j) {
+            OrderInput tmp = route.get(i);
+            route.set(i, route.get(j));
+            route.set(j, tmp);
+            i++;
+            j--;
+        }
+    }
+
+    private static double planarDist(double[] p, double[] q) {
+        return Math.sqrt(planarDistanceSq(p[0], p[1], q[0], q[1]));
+    }
+
+    /**
+     * 把一箱门店按「从配送中心出发、每次去最近的下一个门店」重排 (最近邻种子)。
+     */
+    private static List<OrderInput> orderByNearestNeighbor(
+            List<OrderInput> box, Map<String, double[]> coordsByOrderId, double depotLng, double depotLat) {
+        if (box.size() <= 2 || coordsByOrderId == null || coordsByOrderId.isEmpty()) {
+            return box;
+        }
+        for (OrderInput o : box) {
+            if (!coordsByOrderId.containsKey(o.orderId())) {
+                return box; // 有门店缺坐标 → 不重排
+            }
+        }
+        List<OrderInput> remaining = new ArrayList<>(box);
+        List<OrderInput> ordered = new ArrayList<>(box.size());
+        double curLng = depotLng;
+        double curLat = depotLat;
+        while (!remaining.isEmpty()) {
+            OrderInput best = null;
+            double bestDist = Double.MAX_VALUE;
+            for (OrderInput o : remaining) {
+                double[] c = coordsByOrderId.get(o.orderId());
+                double dist = planarDistanceSq(curLng, curLat, c[0], c[1]);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = o;
+                }
+            }
+            ordered.add(best);
+            remaining.remove(best);
+            double[] bc = coordsByOrderId.get(best.orderId());
+            curLng = bc[0];
+            curLat = bc[1];
+        }
+        return ordered;
+    }
+
+    /** 纬度修正的平面平方距离 (经度按 cos(lat) 压缩)；只用于最近邻比较，不是真实里程。 */
+    private static double planarDistanceSq(double lng1, double lat1, double lng2, double lat2) {
+        double meanLatRad = Math.toRadians((lat1 + lat2) / 2.0);
+        double dx = (lng2 - lng1) * Math.cos(meanLatRad);
+        double dy = lat2 - lat1;
+        return dx * dx + dy * dy;
     }
 
     // ============================================================
