@@ -125,6 +125,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
 
+    /**
+     * 2B B3 (clerk-path workflow 联通) — 若计划关联 workflow 批次, 用 workflow 端口投影校验本行产出 (防呆:
+     * 产出类型 半成品/成品 与单位必须对齐 workflow 配置, 不对则 loud-fail)。required=false: 单测/未注入 → 跳过,
+     * legacy (非 workflow) 计划 service 返回 null → 不校验, 现有 clerk 路径行为不变 (additive)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -141,6 +149,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
         validateCustomFields(factoryId, req);
+
+        // 1.6 2B B3: workflow 批次行防呆校验 (产出类型/单位对齐 workflow 端口)。
+        //     与 validateCustomFields 同置于 upsert 查重之前 → 覆盖 create + re-save 两条路径, 早于任何写入。
+        //     legacy 计划 (无 workflow 批次) → getWorkflowSheetConfig 返回 null → 直接放行, 现有路径不变。
+        validateWorkflowRowIfApplicable(factoryId, planId, req);
 
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
@@ -212,6 +225,75 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(),
                 unitPrice(mat.getRowTotalCost(), req.getOutputQuantity()), false, true, warnings);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2B B3: workflow 批次行防呆校验 (clerk-path 报工联通)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 若该计划关联一个 workflow 批次, 用 workflow 端口投影校验本行产出对齐 (防呆, 禁止降级):
+     * <ul>
+     *   <li>产出类型 半成品/成品 必须与 workflow 输出端口一致 (finished 标志)</li>
+     *   <li>产出单位 必须与端口单位一致 (两侧都有值时)</li>
+     * </ul>
+     * legacy 计划 (service 返回 null) / 未注入 (单测) / DRAFT 行 (无产出) → 放行, 现有路径不变。
+     * 产出 SKU (productType) 的严格对齐留待 FE 产出 SKU 回填经 E2E 确认后再收紧, 避免误阻断 (MVP)。
+     */
+    private void validateWorkflowRowIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null) {
+            return; // 单测/未注入
+        }
+        // DRAFT 行 (产出<=0) 尚无产出, 不校验产出类型/单位
+        if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
+            return;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            throw be; // e.g. WORKFLOW_MULTI_OUTPUT_UNSUPPORTED — 必须 surface, 不静默降级
+        } catch (Exception e) {
+            log.warn("2B B3 workflow 行校验读取配置失败, 跳过校验 (不阻断保存): planId={}, err={}",
+                    planId, e.getMessage());
+            return;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return; // legacy 计划 — 不校验
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                config.getProcesses().stream()
+                        .filter(p -> p.getProcessOrder() != null
+                                && p.getProcessOrder().equals(req.getProcessOrder()))
+                        .findFirst()
+                        .orElse(null);
+        if (desc == null || desc.getOutput() == null) {
+            return; // 该道不在 workflow 图中 (不硬阻断; FE 只暴露 workflow 工序)
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor out = desc.getOutput();
+        String processName = desc.getProcessName() != null ? desc.getProcessName() : "";
+        String outputName = out.getMaterialName() != null ? out.getMaterialName() : "";
+
+        boolean expectFinished = Boolean.TRUE.equals(out.getFinished());
+        if (req.isFinished() != expectFinished) {
+            throw new BusinessException(409, "本工序【" + processName + "】应产出"
+                    + (expectFinished ? "成品" : "半成品") + "「" + outputName + "」，当前产出类型不符")
+                    .withCode("WORKFLOW_ROW_OUTPUT_KIND_MISMATCH")
+                    .withHint(expectFinished
+                            ? "请在成品道录入产出，或回 Workflow 配置核对本道产出类型"
+                            : "本道产出应为半成品，请勿按成品录入");
+        }
+
+        String expectUnit = out.getUnit();
+        String actualUnit = req.getUnit();
+        if (expectUnit != null && !expectUnit.isBlank()
+                && actualUnit != null && !actualUnit.isBlank()
+                && !expectUnit.equals(actualUnit)) {
+            throw new BusinessException(409, "本工序【" + processName + "】产出单位应为「"
+                    + expectUnit + "」，当前为「" + actualUnit + "」")
+                    .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
+                    .withHint("请按 Workflow 配置的单位录入产出数量");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
