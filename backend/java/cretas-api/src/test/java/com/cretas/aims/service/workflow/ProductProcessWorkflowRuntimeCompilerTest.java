@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -40,8 +41,16 @@ class ProductProcessWorkflowRuntimeCompilerTest {
                 .map(CompiledProductProcessWorkflow.CompiledTask::processOrder)
                 .toList());
         assertFalse(compiled.nodesJson().contains("position"));
-        assertFalse(compiled.edgesJson().contains("viewport"));
-        assertEquals(7, objectMapper.readTree(compiled.nodesJson()).size());
+        JsonNode runtimeNodes = objectMapper.readTree(compiled.nodesJson());
+        assertEquals(7, runtimeNodes.size());
+        assertTrue(runtimeNodes.findValues("viewport").isEmpty());
+        assertTrue(runtimeNodes.findValues("position").isEmpty());
+        JsonNode cookA = runtimeNode(runtimeNodes, "cook-a");
+        assertEquals("COOK", cookA.path("data").path("workProcessId").asText());
+        assertEquals("ACTUAL_WEIGHT",
+                cookA.path("data").path("conversionRule").path("mode").asText());
+        assertEquals(2, cookA.path("data").path("ports").size());
+        assertEdgesSnapshotMatchesDefinition(definition, compiled.edgesJson());
         assertEquals(List.of("in-raw", "out-cooked"),
                 compiled.portsFor("cook-a").stream()
                         .map(CompiledProductProcessWorkflow.CompiledPort::workflowPortId)
@@ -155,6 +164,59 @@ class ProductProcessWorkflowRuntimeCompilerTest {
                 BusinessException.class, () -> compiler.compile(definition));
 
         assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
+    }
+
+    @Test
+    void rejectsStringReportingRequiredWithRuntimeFieldContext() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        processData(definition, "cut").put("reportingRequired", "false");
+
+        assertRuntimeInvalid(definition, "cut", "data.reportingRequired");
+    }
+
+    @Test
+    void rejectsStringAndOutOfRangeStandardTimeWithRuntimeFieldContext() {
+        for (Object invalid : List.of("12", (long) Integer.MAX_VALUE + 1L)) {
+            ProductProcessWorkflowDTO definition = linearWorkflow();
+            processData(definition, "cut").put("standardTime", invalid);
+
+            assertRuntimeInvalid(definition, "cut", "data.standardTime");
+        }
+    }
+
+    @Test
+    void rejectsMalformedConversionRuleAndWrongFieldTypesWithRuntimeFieldContext() {
+        ProductProcessWorkflowDTO nonObject = linearWorkflow();
+        processData(nonObject, "cut").put("conversionRule", "ACTUAL_WEIGHT");
+        assertRuntimeInvalid(nonObject, "cut", "data.conversionRule");
+
+        ProductProcessWorkflowDTO wrongMode = linearWorkflow();
+        processData(wrongMode, "cut").put(
+                "conversionRule", Map.of("mode", 7));
+        assertRuntimeInvalid(wrongMode, "cut", "data.conversionRule.mode");
+
+        ProductProcessWorkflowDTO wrongExpression = linearWorkflow();
+        processData(wrongExpression, "cut").put(
+                "conversionRule", Map.of("mode", "FORMULA", "expression", true));
+        assertRuntimeInvalid(wrongExpression, "cut", "data.conversionRule.expression");
+    }
+
+    @Test
+    void rejectsFractionalAndOutOfRangePortOrdinalWithRuntimeFieldContext() {
+        for (Object invalid : List.of(0.5D, Long.MAX_VALUE)) {
+            ProductProcessWorkflowDTO definition = linearWorkflow();
+            processPorts(definition, "cut").getFirst().put("ordinal", invalid);
+
+            assertRuntimeInvalid(definition, "cut", "data.ports[0].ordinal");
+        }
+    }
+
+    @Test
+    void rejectsMalformedMaterialSkuWithMaterialNodeAndFieldContext() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        materialData(definition, "raw").put("skuId", 101);
+
+        assertRuntimeInvalid(definition, "raw", "data.skuId");
     }
 
     private ProductProcessWorkflowDTO repeatedBranchedWorkflow() {
@@ -297,5 +359,46 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         return definition.getNodes().stream()
                 .filter(node -> nodeId.equals(node.getId()))
                 .findFirst().orElseThrow().getData();
+    }
+
+    private void assertRuntimeInvalid(
+            ProductProcessWorkflowDTO definition,
+            String nodeId,
+            String fieldPath) {
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> compiler.compile(definition));
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_RUNTIME_INVALID", error.getErrorCode());
+        assertTrue(error.getMessage().contains(nodeId), error.getMessage());
+        assertTrue(error.getMessage().contains(fieldPath), error.getMessage());
+        assertTrue(error.getActionHint().contains(nodeId), error.getActionHint());
+        assertTrue(error.getActionHint().contains(fieldPath), error.getActionHint());
+    }
+
+    private void assertEdgesSnapshotMatchesDefinition(
+            ProductProcessWorkflowDTO definition,
+            String edgesJson) throws Exception {
+        JsonNode runtimeEdges = objectMapper.readTree(edgesJson);
+        assertTrue(runtimeEdges.isArray());
+        assertEquals(definition.getEdges().size(), runtimeEdges.size());
+        for (int index = 0; index < definition.getEdges().size(); index++) {
+            ProductProcessWorkflowDTO.Edge expected = definition.getEdges().get(index);
+            JsonNode actual = runtimeEdges.get(index);
+            assertEquals(expected.getId(), actual.path("id").asText());
+            assertEquals(expected.getSource(), actual.path("source").asText());
+            assertEquals(expected.getSourceHandle(), actual.path("sourceHandle").asText());
+            assertEquals(expected.getTarget(), actual.path("target").asText());
+            assertEquals(expected.getTargetHandle(), actual.path("targetHandle").asText());
+            assertEquals(5, actual.size());
+            assertFalse(actual.has("viewport"));
+        }
+    }
+
+    private JsonNode runtimeNode(JsonNode runtimeNodes, String nodeId) {
+        for (JsonNode runtimeNode : runtimeNodes) {
+            if (nodeId.equals(runtimeNode.path("id").asText())) {
+                return runtimeNode;
+            }
+        }
+        throw new AssertionError("Missing runtime node: " + nodeId);
     }
 }

@@ -1,16 +1,16 @@
 package com.cretas.aims.service.workflow;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -29,6 +29,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
     }
 
     public CompiledProductProcessWorkflow compile(ProductProcessWorkflowDTO definition) {
+        ParsedExecutionData parsedExecutionData = parseExecutionData(definition);
         validator.validateForPublish(definition);
 
         Map<String, ProductProcessWorkflowDTO.Node> nodesById = indexNodes(definition);
@@ -43,15 +44,17 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 continue;
             }
             processOrder++;
-            ProcessNodeData processData = objectMapper.convertValue(
-                    node.getData(), ProcessNodeData.class);
+            ProcessNodeData processData = parsedExecutionData.processNodes().get(nodeId);
             String plannedUnit = processData.outputUnit();
             if (plannedUnit == null || plannedUnit.isBlank()) {
                 plannedUnit = processData.ports().stream()
                         .filter(port -> "OUTPUT".equals(port.direction()))
                         .map(DeclaredPort::unit)
                         .findFirst()
-                        .orElseThrow();
+                        .orElseThrow(() -> runtimeInvalid(
+                                nodeId,
+                                "data.outputUnit",
+                                "no output unit is available"));
             }
             boolean reportingRequired = !Boolean.FALSE.equals(processData.reportingRequired());
             tasks.add(new CompiledProductProcessWorkflow.CompiledTask(
@@ -61,7 +64,12 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     plannedUnit,
                     processData.standardTime(),
                     reportingRequired));
-            appendPorts(nodeId, processData, nodesById, ports);
+            appendPorts(
+                    nodeId,
+                    processData,
+                    nodesById,
+                    parsedExecutionData.materialNodes(),
+                    ports);
         }
 
         return new CompiledProductProcessWorkflow(
@@ -76,6 +84,154 @@ public class ProductProcessWorkflowRuntimeCompiler {
         Map<String, ProductProcessWorkflowDTO.Node> nodesById = new HashMap<>();
         definition.getNodes().forEach(node -> nodesById.put(node.getId(), node));
         return nodesById;
+    }
+
+    private ParsedExecutionData parseExecutionData(ProductProcessWorkflowDTO definition) {
+        Map<String, ProcessNodeData> processNodes = new HashMap<>();
+        Map<String, MaterialNodeData> materialNodes = new HashMap<>();
+        if (definition == null || definition.getNodes() == null) {
+            return new ParsedExecutionData(processNodes, materialNodes);
+        }
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (node == null || node.getId() == null || node.getKind() == null) {
+                continue;
+            }
+            if ("PROCESS".equals(node.getKind())) {
+                processNodes.put(node.getId(), parseProcessNode(node));
+            } else if (List.of("RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD")
+                    .contains(node.getKind())) {
+                materialNodes.put(node.getId(), parseMaterialNode(node));
+            }
+        }
+        return new ParsedExecutionData(processNodes, materialNodes);
+    }
+
+    private ProcessNodeData parseProcessNode(ProductProcessWorkflowDTO.Node node) {
+        String nodeId = node.getId();
+        Map<String, Object> data = node.getData();
+        if (data == null) {
+            throw runtimeInvalid(nodeId, "data", "must be an object");
+        }
+        String workProcessId = requiredString(data.get("workProcessId"), nodeId,
+                "data.workProcessId");
+        String outputUnit = optionalString(data.get("outputUnit"), nodeId,
+                "data.outputUnit");
+        Integer standardTime = optionalInteger(data.get("standardTime"), nodeId,
+                "data.standardTime");
+        Boolean reportingRequired = optionalBoolean(data.get("reportingRequired"), nodeId,
+                "data.reportingRequired");
+        ConversionRule conversionRule = parseConversionRule(data.get("conversionRule"), nodeId);
+        List<DeclaredPort> ports = parsePorts(data.get("ports"), nodeId);
+        return new ProcessNodeData(
+                workProcessId,
+                outputUnit,
+                standardTime,
+                reportingRequired,
+                ports,
+                conversionRule);
+    }
+
+    private MaterialNodeData parseMaterialNode(ProductProcessWorkflowDTO.Node node) {
+        Map<String, Object> data = node.getData();
+        if (data == null) {
+            throw runtimeInvalid(node.getId(), "data", "must be an object");
+        }
+        return new MaterialNodeData(requiredString(
+                data.get("skuId"), node.getId(), "data.skuId"));
+    }
+
+    private ConversionRule parseConversionRule(Object rawValue, String nodeId) {
+        if (rawValue == null) {
+            return new ConversionRule(null, null);
+        }
+        if (!(rawValue instanceof Map<?, ?> rule)) {
+            throw runtimeInvalid(nodeId, "data.conversionRule", "must be an object");
+        }
+        return new ConversionRule(
+                optionalString(rule.get("mode"), nodeId, "data.conversionRule.mode"),
+                optionalString(
+                        rule.get("expression"), nodeId, "data.conversionRule.expression"));
+    }
+
+    private List<DeclaredPort> parsePorts(Object rawValue, String nodeId) {
+        if (!(rawValue instanceof List<?> rawPorts)) {
+            throw runtimeInvalid(nodeId, "data.ports", "must be an array");
+        }
+        List<DeclaredPort> ports = new ArrayList<>(rawPorts.size());
+        for (int index = 0; index < rawPorts.size(); index++) {
+            String path = "data.ports[" + index + "]";
+            Object rawPort = rawPorts.get(index);
+            if (!(rawPort instanceof Map<?, ?> port)) {
+                throw runtimeInvalid(nodeId, path, "must be an object");
+            }
+            ports.add(new DeclaredPort(
+                    requiredString(port.get("id"), nodeId, path + ".id"),
+                    requiredString(port.get("direction"), nodeId, path + ".direction"),
+                    requiredString(
+                            port.get("materialNodeId"), nodeId, path + ".materialNodeId"),
+                    requiredString(port.get("unit"), nodeId, path + ".unit"),
+                    requiredInteger(port.get("ordinal"), nodeId, path + ".ordinal")));
+        }
+        return List.copyOf(ports);
+    }
+
+    private String requiredString(Object value, String nodeId, String fieldPath) {
+        String parsed = optionalString(value, nodeId, fieldPath);
+        if (parsed == null || parsed.isBlank()) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be a non-blank string");
+        }
+        return parsed;
+    }
+
+    private String optionalString(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof String string)) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be a string");
+        }
+        return string;
+    }
+
+    private Boolean optionalBoolean(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Boolean booleanValue)) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be a boolean");
+        }
+        return booleanValue;
+    }
+
+    private Integer optionalInteger(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            return null;
+        }
+        return strictInteger(value, nodeId, fieldPath);
+    }
+
+    private Integer requiredInteger(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be an integer");
+        }
+        return strictInteger(value, nodeId, fieldPath);
+    }
+
+    private Integer strictInteger(Object value, String nodeId, String fieldPath) {
+        BigInteger integer;
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            integer = BigInteger.valueOf(((Number) value).longValue());
+        } else if (value instanceof BigInteger bigInteger) {
+            integer = bigInteger;
+        } else {
+            throw runtimeInvalid(nodeId, fieldPath, "must be an integral number");
+        }
+        if (integer.compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0
+                || integer.compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) {
+            throw runtimeInvalid(nodeId, fieldPath, "is outside the 32-bit integer range");
+        }
+        return integer.intValue();
     }
 
     private List<String> topologicalNodeIds(ProductProcessWorkflowDTO definition) {
@@ -112,7 +268,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
         }
 
         if (ordered.size() != definition.getNodes().size()) {
-            throw new IllegalArgumentException("Workflow contains a cycle");
+            throw runtimeInvalid("<workflow>", "graph", "contains a cycle");
         }
         return ordered;
     }
@@ -121,14 +277,25 @@ public class ProductProcessWorkflowRuntimeCompiler {
             String workflowNodeId,
             ProcessNodeData processData,
             Map<String, ProductProcessWorkflowDTO.Node> nodesById,
+            Map<String, MaterialNodeData> materialNodes,
             List<CompiledProductProcessWorkflow.CompiledPort> result) {
         ConversionRule conversionRule = processData.conversionRule() == null
                 ? new ConversionRule(null, null)
                 : processData.conversionRule();
-        for (DeclaredPort declaredPort : processData.ports()) {
+        for (int index = 0; index < processData.ports().size(); index++) {
+            DeclaredPort declaredPort = processData.ports().get(index);
             ProductProcessWorkflowDTO.Node materialNode = nodesById.get(declaredPort.materialNodeId());
-            MaterialNodeData materialData = objectMapper.convertValue(
-                    materialNode.getData(), MaterialNodeData.class);
+            if (materialNode == null) {
+                throw runtimeInvalid(
+                        workflowNodeId,
+                        "data.ports[" + index + "].materialNodeId",
+                        "references missing material node " + declaredPort.materialNodeId());
+            }
+            MaterialNodeData materialData = materialNodes.get(materialNode.getId());
+            if (materialData == null) {
+                throw runtimeInvalid(
+                        materialNode.getId(), "data.skuId", "material data was not parsed");
+            }
             result.add(new CompiledProductProcessWorkflow.CompiledPort(
                     workflowNodeId,
                     declaredPort.id(),
@@ -158,8 +325,33 @@ public class ProductProcessWorkflowRuntimeCompiler {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Unable to serialize workflow runtime snapshot", exception);
+            throw runtimeInvalid(
+                    "<workflow>", "snapshot", "could not be serialized", exception);
         }
+    }
+
+    private BusinessException runtimeInvalid(
+            String nodeId,
+            String fieldPath,
+            String reason) {
+        return runtimeInvalid(nodeId, fieldPath, reason, null);
+    }
+
+    private BusinessException runtimeInvalid(
+            String nodeId,
+            String fieldPath,
+            String reason,
+            Throwable cause) {
+        String message = "Workflow runtime data invalid at node " + nodeId
+                + ", field " + fieldPath + ": " + reason;
+        BusinessException exception = cause == null
+                ? new BusinessException(400, message)
+                : new BusinessException(400, message, cause);
+        return exception
+                .withCode("PRODUCT_PROCESS_WORKFLOW_RUNTIME_INVALID")
+                .withHint("Return to Workflow configuration and fix node " + nodeId
+                        + ", field " + fieldPath + " before activation")
+                .withSeverity("warning");
     }
 
     private record RuntimeNode(
@@ -168,7 +360,6 @@ public class ProductProcessWorkflowRuntimeCompiler {
             Map<String, Object> data) {
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
     private record ProcessNodeData(
             String workProcessId,
             String outputUnit,
@@ -178,24 +369,25 @@ public class ProductProcessWorkflowRuntimeCompiler {
             ConversionRule conversionRule) {
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
     private record DeclaredPort(
             String id,
             String direction,
             String materialNodeId,
-            String materialKind,
             String unit,
             Integer ordinal) {
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
     private record MaterialNodeData(
             String skuId) {
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
     private record ConversionRule(
             String mode,
             String expression) {
+    }
+
+    private record ParsedExecutionData(
+            Map<String, ProcessNodeData> processNodes,
+            Map<String, MaterialNodeData> materialNodes) {
     }
 }
