@@ -11,6 +11,7 @@ import smartbi.api.synthesis as syn
 class _FakeResponse:
     answer = "净赚约219万，利润率22.2%。"
     charts = [{"type": "bar"}]
+    alerts: list = []
     source = "thin_restate"
     plan = {"intent": "profit"}
     tokens = 123
@@ -20,6 +21,7 @@ class _FakeResponse:
         return {
             "answer": self.answer,
             "charts": self.charts,
+            "alerts": self.alerts,
             "source": self.source,
             "plan": self.plan,
             "tokens": self.tokens,

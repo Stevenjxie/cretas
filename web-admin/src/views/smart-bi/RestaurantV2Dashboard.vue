@@ -2072,11 +2072,10 @@ function formatCurrency(v?: number): string {
       :append-to-body="true"
       :destroy-on-close="false"
     >
-      <RestaurantChatPanel
-        :factory-id="factoryId || ''"
-        :sub-sector="subSector"
-        :upload-id="selectedUploadId != null ? String(selectedUploadId) : undefined"
-      />
+      <!-- The chat panel answers over whole-store data (backend derives the
+           tenant from JWT); it deliberately ignores subSector / the selected
+           upload Excel, so those are not bound here (F2: synthesis-only). -->
+      <RestaurantChatPanel :factory-id="factoryId || ''" />
     </el-drawer>
 
     <!-- Week 6 Template Surfacing: show analysis results for this page -->
