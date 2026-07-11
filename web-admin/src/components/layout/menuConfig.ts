@@ -361,6 +361,18 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/crm/member-analysis', title: '会员分析', icon: '', module: 'analytics' },
     ]
+  },
+  {
+    // 运营分析 (2026-07-12): 撤单稽核 + 区域坪效, 从 经营驾驶舱(RestaurantGoldGrid)
+    // 迁出的独立顶级组 (驾驶舱瘦身)。与 /crm 同一批 hybrid bullet-point analysis
+    // pattern (确定性 bullets + AI 解读 + 整页分析面板), 同一套门控 (会员储值/
+    // 撤单金额同样敏感)。Scope-minimal: 只加这一个新顶级组, 不重排其它模块。
+    path: '/ops', title: '运营分析', icon: 'Operation', module: 'analytics',
+    hideForFactoryTypes: ['FACTORY'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+    children: [
+      { path: '/ops/operations-analysis', title: '运营分析', icon: '', module: 'analytics' },
+    ]
   }
 ];
 
@@ -379,6 +391,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/hr': 120,
   '/equipment': 130,
   '/restaurant': 140,
+  '/ops': 143,
   '/crm': 145,
 };
 

@@ -18,7 +18,7 @@
  * builders here as they wire up the hybrid bullet-point analysis pattern.
  */
 
-import type { MemberRfm, MemberProfile } from '@/api/smartbi/gold';
+import type { MemberRfm, MemberProfile, VoidRate, ZoneEfficiency } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
 
 /**
@@ -354,4 +354,132 @@ export function memberProfileSummary(profile: MemberProfileBulletsInput): string
   }
 
   return parts.length ? parts.join('；') : '暂无数据';
+}
+
+// ============================================================
+// 撤单稽核 (void-rate + breakdown) — 运营分析 page (2026-07-12)
+// ============================================================
+
+export interface VoidRateBulletsInput {
+  voidRate: number | null;
+  voidCount: number;
+  billCount: number;
+  breakdown: VoidRate['breakdown'];
+}
+
+export function voidRateBullets(input: VoidRateBulletsInput): string[] {
+  const bullets: string[] = [];
+
+  if (input.voidRate != null) {
+    bullets.push(
+      `撤单率 ${input.voidRate.toFixed(2)}%，共 ${input.voidCount} 单撤单（开单总数 ${input.billCount.toLocaleString()}）`,
+    );
+  }
+
+  const rated = (input.breakdown ?? []).filter((b) => b.voidsPer100Bills != null && b.voidCount > 0);
+  if (rated.length) {
+    const top = [...rated].sort((a, b) => (b.voidsPer100Bills as number) - (a.voidsPer100Bills as number))[0];
+    const reasonNote = top.topReason ? `，主要原因: ${top.topReason}` : '';
+    bullets.push(
+      `${top.staffName}（${top.storeName}）每百单撤单率最高，达 ${(top.voidsPer100Bills as number).toFixed(2)}${reasonNote}`,
+    );
+  }
+
+  // 按操作人「主要撤单原因」加权 voidCount 汇总的近似值 (breakdown 只给逐人主要原因,
+  // 非逐笔撤单明细) — 找出最常见原因, 诚实标注为近似, 不假装逐单精确统计。
+  const reasoned = (input.breakdown ?? []).filter((b) => b.topReason && b.voidCount > 0);
+  if (reasoned.length) {
+    const counts = new Map<string, number>();
+    for (const row of reasoned) {
+      const reason = row.topReason as string;
+      counts.set(reason, (counts.get(reason) ?? 0) + row.voidCount);
+    }
+    const [topReason, topReasonCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    bullets.push(`最常见撤单原因为「${topReason}」，涉及约 ${topReasonCount} 单（按操作人主要原因汇总的近似值）`);
+  }
+
+  return bullets;
+}
+
+export function voidRateSummary(input: VoidRateBulletsInput): string {
+  if (input.voidRate == null) return '暂无数据';
+  const parts = [`撤单率${input.voidRate.toFixed(2)}%(${input.voidCount}/${input.billCount}单)`];
+
+  const rated = (input.breakdown ?? [])
+    .filter((b) => b.voidsPer100Bills != null)
+    .sort((a, b) => (b.voidsPer100Bills as number) - (a.voidsPer100Bills as number))
+    .slice(0, 6);
+  if (rated.length) {
+    parts.push(
+      '操作人: ' +
+        rated
+          .map(
+            (b) =>
+              `${b.staffName}(${b.storeName})每百单${(b.voidsPer100Bills as number).toFixed(2)}${b.topReason ? `/${b.topReason}` : ''}`,
+          )
+          .join(' / '),
+    );
+  }
+
+  return parts.join('；');
+}
+
+// ============================================================
+// 区域坪效 (zone revenue/item-qty proxy) — 运营分析 page (2026-07-12)
+// ============================================================
+
+export interface ZoneEfficiencyBulletsInput {
+  totalRevenue: number | null;
+  totalItemQty: number;
+  zones: ZoneEfficiency['zones'];
+}
+
+export function zoneEfficiencyBullets(input: ZoneEfficiencyBulletsInput): string[] {
+  const valid = (input.zones ?? []).filter((z) => z.itemQty > 0 || (z.revenue != null && z.revenue > 0));
+  if (!valid.length) return [];
+  const bullets: string[] = [];
+
+  // 营收最高区域 (revenue 对无价格权限角色被 RBAC 置 null — 全体一致置空, 不会部分置空)
+  const byRevenue = valid.filter((z) => z.revenue != null).sort((a, b) => (b.revenue as number) - (a.revenue as number));
+  if (byRevenue.length) {
+    const top = byRevenue[0];
+    const pct = top.revenuePct != null ? `，占比 ${top.revenuePct.toFixed(1)}%` : '';
+    bullets.push(`${top.zoneName}营收最高，达 ${fmtMoney(top.revenue)}${pct}`);
+  }
+
+  // 销售数量最高区域 (itemQty 从不 RBAC-脱敏) — 若与营收最高区域不同才单独提及
+  const byQty = [...valid].sort((a, b) => b.itemQty - a.itemQty);
+  const topQty = byQty[0];
+  if (topQty && (!byRevenue.length || topQty.zoneName !== byRevenue[0].zoneName)) {
+    bullets.push(`${topQty.zoneName}销售数量最高，共 ${topQty.itemQty.toLocaleString()} 件`);
+  }
+
+  if (valid.length > 1) {
+    bullets.push(
+      input.totalRevenue != null
+        ? `共 ${valid.length} 个区域/渠道有销售记录，合计营收 ${fmtMoney(input.totalRevenue)}`
+        : `共 ${valid.length} 个区域/渠道有销售记录`,
+    );
+  }
+
+  return bullets;
+}
+
+export function zoneEfficiencySummary(input: ZoneEfficiencyBulletsInput): string {
+  const valid = (input.zones ?? []).filter((z) => z.itemQty > 0 || (z.revenue != null && z.revenue > 0));
+  if (!valid.length) return '暂无数据';
+
+  const sorted = [...valid].sort((a, b) => {
+    if (a.revenue != null && b.revenue != null) return b.revenue - a.revenue;
+    return b.itemQty - a.itemQty;
+  });
+
+  return sorted
+    .slice(0, 8)
+    .map((z) => {
+      const rev = fmtMoney(z.revenue);
+      const pct = z.revenuePct != null ? `(${z.revenuePct.toFixed(1)}%)` : '';
+      return `${z.zoneName}:${rev ?? '—'}${pct}/${z.itemQty}件`;
+    })
+    .join(' / ');
 }

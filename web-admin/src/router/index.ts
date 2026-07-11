@@ -6,6 +6,7 @@ import { setupRouterGuards } from './guards';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
+import opsRoutes from './modules/ops';
 import { buildHubRedirect } from './analysisHubRedirect';
 
 const platformAdminOnlyRoles = ['platform_admin'];
@@ -1966,7 +1967,10 @@ const businessRoutes: RouteRecordRaw[] = [
       ...smartBIRoutes,
 
       // CRM 会员与营销 (P0 — 会员分析; 导入自模块)
-      ...crmRoutes
+      ...crmRoutes,
+
+      // 运营分析 (撤单稽核 + 区域坪效; 导入自模块)
+      ...opsRoutes
     ]
   },
 

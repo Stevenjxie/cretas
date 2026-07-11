@@ -18,6 +18,10 @@ import {
   rfmScatterSummary,
   memberProfileBullets,
   memberProfileSummary,
+  voidRateBullets,
+  voidRateSummary,
+  zoneEfficiencyBullets,
+  zoneEfficiencySummary,
   splitMarkdownBullets,
 } from '../analysisBullets';
 
@@ -153,6 +157,85 @@ describe('memberProfileBullets / memberProfileSummary', () => {
     const summary = memberProfileSummary(profile);
     expect(summary).toContain('7477');
     expect(summary).toContain('黄金卡3000人');
+  });
+});
+
+describe('voidRateBullets / voidRateSummary', () => {
+  it('empty/null voidRate → []/暂无数据', () => {
+    expect(voidRateBullets({ voidRate: null, voidCount: 0, billCount: 0, breakdown: [] })).toEqual([]);
+    expect(voidRateSummary({ voidRate: null, voidCount: 0, billCount: 0, breakdown: [] })).toBe('暂无数据');
+  });
+
+  it('reports the overall rate + top offending operator + most common reason', () => {
+    const input = {
+      voidRate: 2.35,
+      voidCount: 47,
+      billCount: 2000,
+      breakdown: [
+        { staffName: '张三', storeName: '门店A', voidCount: 20, billsHandled: 400, voidsPer100Bills: 5.0, topReason: '点错单' },
+        { staffName: '李四', storeName: '门店B', voidCount: 10, billsHandled: 800, voidsPer100Bills: 1.25, topReason: '客户取消' },
+        { staffName: '王五', storeName: '门店A', voidCount: 17, billsHandled: 300, voidsPer100Bills: 5.67, topReason: '点错单' },
+      ],
+    };
+    const bullets = voidRateBullets(input);
+    expect(bullets.some((b) => b.includes('2.35%'))).toBe(true);
+    expect(bullets.some((b) => b.includes('王五') && b.includes('5.67'))).toBe(true); // highest rate wins, not highest raw count
+    expect(bullets.some((b) => b.includes('点错单'))).toBe(true); // 20+17=37 > 客户取消's 10
+
+    const summary = voidRateSummary(input);
+    expect(summary).toContain('2.35%');
+    expect(summary).toContain('王五(门店A)');
+  });
+
+  it('never fabricates a rate/reason bullet when data is absent', () => {
+    const input = {
+      voidRate: null,
+      voidCount: 0,
+      billCount: 0,
+      breakdown: [{ staffName: '赵六', storeName: '门店C', voidCount: 0, billsHandled: 0, voidsPer100Bills: null, topReason: null }],
+    };
+    expect(voidRateBullets(input)).toEqual([]);
+  });
+});
+
+describe('zoneEfficiencyBullets / zoneEfficiencySummary', () => {
+  it('empty → []/暂无数据', () => {
+    expect(zoneEfficiencyBullets({ totalRevenue: null, totalItemQty: 0, zones: [] })).toEqual([]);
+    expect(zoneEfficiencySummary({ totalRevenue: null, totalItemQty: 0, zones: [] })).toBe('暂无数据');
+  });
+
+  it('highlights the top-revenue zone and a distinct top-quantity zone', () => {
+    const input = {
+      totalRevenue: 500000,
+      totalItemQty: 9000,
+      zones: [
+        { zoneName: '一楼大厅', revenue: 300000, itemQty: 4000, revenuePct: 60 },
+        { zoneName: '二楼包间', revenue: 150000, itemQty: 4500, revenuePct: 30 },
+        { zoneName: '外卖', revenue: 50000, itemQty: 500, revenuePct: 10 },
+      ],
+    };
+    const bullets = zoneEfficiencyBullets(input);
+    expect(bullets.some((b) => b.includes('一楼大厅') && b.includes('60.0%'))).toBe(true);
+    expect(bullets.some((b) => b.includes('二楼包间') && b.includes('4,500'))).toBe(true);
+
+    const summary = zoneEfficiencySummary(input);
+    expect(summary).toContain('一楼大厅');
+    expect(summary).toContain('/4000件');
+  });
+
+  it('falls back to item-qty ranking and omits revenue bullets when revenue is RBAC-nulled', () => {
+    const input = {
+      totalRevenue: null,
+      totalItemQty: 300,
+      zones: [
+        { zoneName: 'A区', revenue: null, itemQty: 200, revenuePct: null },
+        { zoneName: 'B区', revenue: null, itemQty: 100, revenuePct: null },
+      ],
+    };
+    const bullets = zoneEfficiencyBullets(input);
+    expect(bullets.join(' ')).not.toContain('¥0');
+    expect(bullets.join(' ')).not.toContain('营收最高');
+    expect(bullets.some((b) => b.includes('A区') && b.includes('数量最高'))).toBe(true);
   });
 });
 
