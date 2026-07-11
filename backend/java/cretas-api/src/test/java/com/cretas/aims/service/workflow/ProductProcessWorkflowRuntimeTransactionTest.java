@@ -49,7 +49,10 @@ import static org.mockito.Mockito.when;
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
-@EntityScan(basePackages = "com.cretas.aims.entity")
+// Broadened from "com.cretas.aims.entity" to the root package after origin/main added
+// sibling entity packages (e.g. com.cretas.aims.logistics.entity) whose repositories the
+// JPA slice wires; @EntityScan only registers @Entity classes, mirroring the real app.
+@EntityScan(basePackages = "com.cretas.aims")
 @Import({
         ProductProcessWorkflowRuntimeServiceImpl.class,
         ProductProcessWorkflowRuntimeCompiler.class,
