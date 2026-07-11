@@ -25,17 +25,23 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.alibaba.excel.annotation.ExcelProperty;
+
 import java.io.ByteArrayInputStream;
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -89,7 +95,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
     @Transactional
     public PreviewResultDto preview(String factoryId, MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) {
-            throw new BusinessException(400, "请上传订单文件").withHint("请选择一个 .xlsx 文件后重试");
+            throw new BusinessException(400, "请上传订单文件").withHint("请选择一个 .xlsx 或 .csv 文件后重试");
         }
 
         byte[] bytes;
@@ -103,12 +109,14 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
 
         List<LogisticsOrderImportRow> rawRows;
         try {
-            rawRows = excelUtil.importFromExcel(new ByteArrayInputStream(bytes), LogisticsOrderImportRow.class);
+            rawRows = parseRows(file, bytes);
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("[LogisticsOrderImport] Excel 解析失败 factory={} filename={}",
+            log.error("[LogisticsOrderImport] 文件解析失败 factory={} filename={}",
                     factoryId, file.getOriginalFilename(), e);
-            throw new BusinessException(400, "Excel 解析失败: " + e.getMessage())
-                    .withHint("请确认使用后端下载的模板，且未破坏表头");
+            throw new BusinessException(400, "文件解析失败: " + e.getMessage())
+                    .withHint("请确认使用后端下载的模板，且未破坏表头（支持 .xlsx / .csv）");
         }
 
         if (rawRows.isEmpty()) {
@@ -560,6 +568,126 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
 
     private static String nz(String s) {
         return s == null ? "" : s;
+    }
+
+    // ==================== 文件解析 (.xlsx / .csv) ====================
+
+    /**
+     * 按文件扩展名分发解析：{@code .csv} 走内置 quote-aware CSV 解析，其余(默认 {@code .xlsx})走 EasyExcel。
+     * 两条路径都产出同一份 {@link LogisticsOrderImportRow} 列表，后续校验/落库逻辑与格式无关。
+     */
+    private List<LogisticsOrderImportRow> parseRows(MultipartFile file, byte[] bytes) {
+        String name = file.getOriginalFilename();
+        String lower = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".csv")) {
+            return parseCsv(bytes);
+        }
+        return excelUtil.importFromExcel(new ByteArrayInputStream(bytes), LogisticsOrderImportRow.class);
+    }
+
+    /**
+     * CSV → {@code List<LogisticsOrderImportRow>}。表头按 {@link ExcelProperty} 标签匹配字段(与 Excel 模板
+     * 表头一致、列序可变)，未识别的列忽略。UTF-8(容忍 BOM)，支持带引号字段(内含逗号/换行/双引号转义)。
+     */
+    private static List<LogisticsOrderImportRow> parseCsv(byte[] bytes) {
+        String content = new String(bytes, StandardCharsets.UTF_8);
+        if (content.startsWith("﻿")) {
+            content = content.substring(1); // strip UTF-8 BOM
+        }
+        List<List<String>> table = splitCsv(content);
+        if (table.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // @ExcelProperty 标签 -> 字段
+        Map<String, Field> labelToField = new HashMap<>();
+        for (Field f : LogisticsOrderImportRow.class.getDeclaredFields()) {
+            ExcelProperty ep = f.getAnnotation(ExcelProperty.class);
+            if (ep != null && ep.value().length > 0 && !ep.value()[0].isBlank()) {
+                f.setAccessible(true);
+                labelToField.put(ep.value()[0].trim(), f);
+            }
+        }
+        // 列序号 -> 字段
+        List<String> header = table.get(0);
+        Map<Integer, Field> colToField = new HashMap<>();
+        for (int c = 0; c < header.size(); c++) {
+            String h = header.get(c) == null ? "" : header.get(c).trim();
+            Field f = labelToField.get(h);
+            if (f != null) {
+                colToField.put(c, f);
+            }
+        }
+        if (colToField.isEmpty()) {
+            throw new BusinessException(400, "CSV 表头无法识别")
+                    .withHint("请使用后端下载的模板表头（业务日期/订单号/门店名称/... ），或改用 .xlsx");
+        }
+
+        List<LogisticsOrderImportRow> rows = new ArrayList<>();
+        for (int r = 1; r < table.size(); r++) {
+            List<String> cols = table.get(r);
+            if (cols.stream().allMatch(s -> s == null || s.isBlank())) {
+                continue; // 跳过整行空白
+            }
+            LogisticsOrderImportRow row = new LogisticsOrderImportRow();
+            for (Map.Entry<Integer, Field> e : colToField.entrySet()) {
+                int idx = e.getKey();
+                if (idx < cols.size()) {
+                    try {
+                        e.getValue().set(row, cols.get(idx));
+                    } catch (IllegalAccessException ignore) {
+                        // setAccessible(true) 已放开，理论不可达
+                    }
+                }
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /**
+     * 最小 RFC-4180 CSV 解析：支持双引号字段(内含逗号/换行/{@code ""} 转义)，行分隔 {@code \n}(容忍 {@code \r\n})。
+     */
+    private static List<List<String>> splitCsv(String content) {
+        List<List<String>> table = new ArrayList<>();
+        List<String> cur = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean inQuotes = false;
+        for (int i = 0; i < content.length(); i++) {
+            char ch = content.charAt(i);
+            if (inQuotes) {
+                if (ch == '"') {
+                    if (i + 1 < content.length() && content.charAt(i + 1) == '"') {
+                        field.append('"');
+                        i++; // 转义的双引号
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    field.append(ch);
+                }
+            } else if (ch == '"') {
+                inQuotes = true;
+            } else if (ch == ',') {
+                cur.add(field.toString());
+                field.setLength(0);
+            } else if (ch == '\r') {
+                // 忽略，行结束由 \n 处理
+            } else if (ch == '\n') {
+                cur.add(field.toString());
+                field.setLength(0);
+                table.add(cur);
+                cur = new ArrayList<>();
+            } else {
+                field.append(ch);
+            }
+        }
+        // 文件末尾无换行时补最后一格/行
+        if (field.length() > 0 || !cur.isEmpty()) {
+            cur.add(field.toString());
+            table.add(cur);
+        }
+        return table;
     }
 
     private static String sha256Hex(byte[] bytes) {
