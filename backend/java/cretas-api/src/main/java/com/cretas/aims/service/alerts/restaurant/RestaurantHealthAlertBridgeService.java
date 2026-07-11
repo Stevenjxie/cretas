@@ -131,6 +131,12 @@ public class RestaurantHealthAlertBridgeService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> diagnoses = (List<Map<String, Object>>) data.getOrDefault("diagnoses", List.of());
 
+        // 🔒 F1 (Fable gate): 供应商进价异常检测本次失败 (非"无异常") 时, Python 置此
+        // 旗标。此时诊断列表里不会有 supplier_price_anomaly:*, 但那是"查不到"不是
+        // "已恢复" —— 不能 auto-resolve 掉既有事件, 否则下一轮成功 sweep 会重建 → flap
+        // 重复推送。据此在下面 auto-resolve 阶段跳过 supplier_price_anomaly:* 前缀。
+        boolean supplierAnomalyUnavailable = Boolean.TRUE.equals(data.get("supplierAnomalyUnavailable"));
+
         AlertRule rule = ensureDefaultRule(factoryId);
         result.put("available", true);
         result.put("period", period);
@@ -193,10 +199,16 @@ public class RestaurantHealthAlertBridgeService {
 
         int resolved = 0;
         for (AlertEvent e : openEvents) {
-            if (e.getBusinessEntityId() != null && !currentMetricKeys.contains(e.getBusinessEntityId())) {
-                alertEngineService.resolve(e.getId(), null); // null = 系统自动清除
-                resolved++;
+            String beid = e.getBusinessEntityId();
+            if (beid == null || currentMetricKeys.contains(beid)) {
+                continue;
             }
+            // F1: 供应商异常检测失败时, 缺席 ≠ 恢复 → 不解决 supplier_price_anomaly:*
+            if (supplierAnomalyUnavailable && beid.startsWith("supplier_price_anomaly:")) {
+                continue;
+            }
+            alertEngineService.resolve(e.getId(), null); // null = 系统自动清除
+            resolved++;
         }
 
         log.info("[RestaurantHealthAlertBridgeService] factoryId={} period={} diagnoses={} created={} refreshed={} resolved={}",

@@ -132,6 +132,59 @@ def test_get_report_no_data_returns_empty_diagnoses_not_error(client, monkeypatc
     assert body["data"]["summary"]["criticalCount"] == 0
 
 
+def test_supplier_price_anomaly_becomes_pushable_diagnosis(client, monkeypatch):
+    """反回扣: UP 进价异常 → pushable warning/critical diagnosis; DOWN skipped."""
+    async def _ok_pool():
+        return object()
+
+    async def _empty_build(self, **kwargs):
+        return _bundle(metrics={}, coverage={})
+
+    async def _fake_anomalies(pool, factory_id, **kwargs):
+        return [
+            {"ingredientName": "鲈鱼", "normalizedName": "鲈鱼", "supplierName": "四通",
+             "supplierId": "S1", "newPrice": 43.2, "trailingAvg": 35.65, "deltaPct": 19.1,
+             "direction": "UP", "riskLevel": "MEDIUM"},
+            {"ingredientName": "牛肉", "normalizedName": "牛肉", "supplierName": "通际名联",
+             "supplierId": "S2", "newPrice": 52.8, "trailingAvg": 65.18, "deltaPct": -19.6,
+             "direction": "DOWN", "riskLevel": "HIGH"},  # 降价 → 非反回扣, 跳过
+            {"ingredientName": "藤椒", "normalizedName": "藤椒", "supplierName": "网新恒天",
+             "supplierId": "S3", "newPrice": 46.0, "trailingAvg": 40.0, "deltaPct": 15.0,
+             "direction": "UP", "riskLevel": "HIGH"},  # 连续 → critical
+            {"ingredientName": "青菜", "normalizedName": "青菜", "supplierName": "某供应商",
+             "supplierId": None, "newPrice": 5.0, "trailingAvg": 4.0, "deltaPct": 25.0,
+             "direction": "UP", "riskLevel": "MEDIUM"},  # F2: 无 supplier_id → 不可靠归因 → 跳过
+        ]
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _empty_build)
+    monkeypatch.setattr("smartbi.gold.price_anomaly.detect_price_anomalies", _fake_anomalies)
+
+    resp = client.get(
+        "/api/smartbi/restaurant/RES_3101_009/health-check-report",
+        headers={"x-test-factory": "RES_3101_009"},
+    )
+    assert resp.status_code == 200
+    diags = resp.json()["data"]["diagnoses"]
+    supplier = [d for d in diags if d["metricKey"].startswith("supplier_price_anomaly:")]
+    assert len(supplier) == 2  # 2 UP-with-id kept; DOWN dropped; NULL-id dropped
+    keys = {d["metricKey"] for d in supplier}
+    assert "supplier_price_anomaly:鲈鱼:S1" in keys      # unique per (食材,供应商)
+    assert "supplier_price_anomaly:藤椒:S3" in keys
+    assert not any("牛肉" in k for k in keys)            # DOWN excluded
+    assert not any("青菜" in k for k in keys)            # F2: NULL supplier_id excluded
+    # F1: detect succeeded → not flagged unavailable
+    assert resp.json()["data"]["supplierAnomalyUnavailable"] is False
+    by_key = {d["metricKey"]: d for d in supplier}
+    assert by_key["supplier_price_anomaly:鲈鱼:S1"]["severity"] == "warning"   # MEDIUM
+    assert by_key["supplier_price_anomaly:藤椒:S3"]["severity"] == "critical"  # HIGH → pushable SMS
+    for d in supplier:
+        assert d["metricNameZh"] == "供应商进价异常"
+        assert "请核对" in d["descriptionZh"] and "回扣" in d["descriptionZh"]  # 威慑非指控
+    # critical count reflects the HIGH-risk supplier anomaly
+    assert resp.json()["data"]["summary"]["criticalCount"] >= 1
+
+
 def test_get_report_cached_returns_cache_hit_flag(client, monkeypatch):
     calls = {"n": 0}
 
