@@ -432,8 +432,8 @@ class FactBook:
             cy = _seg(cr.get("yoy_available"), cr.get("yoy_pct"), "个百分点")
             cm = _seg(cr.get("mom_available"), cr.get("mom_pct"), "个百分点")
             lines.append(
-                f"- 领料成本率 {cr.get('current')}%（领料成本÷营收，真实际用料口径，"
-                "与配方理论COGS不同、factory级非逐店、领料口径非盘点rollforward）："
+                f"- 领料成本率 {cr.get('current')}%（领料成本÷营收，领料申请量×当前单价估算，"
+                "仅含已提交/已审批，与配方理论COGS不同、factory级非逐店、非盘点rollforward）："
                 + "，".join([
                     f"同比 {cy}" if cy else "同比 去年同期无数据",
                     f"环比 {cm}" if cm else "环比 无上一周期数据",

@@ -1234,15 +1234,18 @@ async def period_comparison(pool, factory_id, start, end):
             """,
             factory_id, s, e,
         )
-        # 领料成本 (真·实际用料口径, 独立于 POS×配方理论) — agg_restaurant_daily_totals
-        # 是 (factory_id, date) 粒度; 单独聚合, 绝不与 agg_daily 的 per-store 行 JOIN
-        # (否则每个门店行都乘一遍 factory-date 领料成本 = 按门店数翻倍)。
+        # 领料成本 — 直接查 silver fact_restaurant_requisition 并 status 过滤
+        # (Fable F1/F2: gold agg_restaurant_daily_totals 被 wastage/stocktaking 日
+        # 污染[req_cost=0 行]且含 DRAFT/REJECTED → 会造 0%-base 假上升+误告; 这里
+        # 只取 SUBMITTED/APPROVED 领料行, 天然 requisition-only 无污染)。
+        # 按 factory-date 聚合, 不与 agg_daily per-store 行 JOIN (否则按门店翻倍)。
         req_row = await conn.fetchrow(
             """
-            SELECT SUM(requisition_cost_total)::numeric(18,2) AS req_cost,
-                   COUNT(*)                                    AS req_n
-              FROM agg_restaurant_daily_totals
+            SELECT SUM(est_cost)::numeric(18,2)  AS req_cost,
+                   COUNT(DISTINCT date)          AS req_n
+              FROM fact_restaurant_requisition
              WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+               AND status IN ('SUBMITTED', 'APPROVED')
             """,
             factory_id, s, e,
         )
@@ -1269,8 +1272,8 @@ async def period_comparison(pool, factory_id, start, end):
         # 领料数据采集的全局日期范围 → 判断窗口是否被领料完整覆盖 (窗口跨越采集起点会
         # undercount 领料成本 → 假的成本率变化 = 反回扣误告; F5-analog for 领料)。
         req_span = await conn.fetchrow(
-            "SELECT MIN(date) AS d0, MAX(date) AS d1 FROM agg_restaurant_daily_totals "
-            "WHERE factory_id = $1", factory_id)
+            "SELECT MIN(date) AS d0, MAX(date) AS d1 FROM fact_restaurant_requisition "
+            "WHERE factory_id = $1 AND status IN ('SUBMITTED', 'APPROVED')", factory_id)
         agg = {k: await _agg(conn, s, e) for k, (s, e) in windows.items()}
     req_d0 = req_span["d0"] if req_span else None
     req_d1 = req_span["d1"] if req_span else None

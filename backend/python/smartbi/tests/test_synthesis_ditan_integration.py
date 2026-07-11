@@ -126,7 +126,7 @@ class _FakeConn:
             return {"d0": self._req_span[0], "d1": self._req_span[1]}
         w = self._wd.get((s, e), {})
         # period_comparison._agg fires TWO per-window queries: agg_daily + 领料成本.
-        if "agg_restaurant_daily_totals" in sql:
+        if "fact_restaurant_requisition" in sql:
             return {"req_cost": w.get("req_cost"), "req_n": w.get("req_n", 0)}
         return {"revenue": w.get("revenue", 0), "material_cost": w.get("material_cost"),
                 "cost_n": w.get("cost_n", 0), "n_rows": w.get("n_rows", 0)}
